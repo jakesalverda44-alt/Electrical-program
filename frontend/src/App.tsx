@@ -6,6 +6,8 @@ import LoginPage from './features/auth/LoginPage';
 import AppShell from './features/layout/AppShell';
 import DashboardPage from './features/dashboard/DashboardPage';
 import ElecPipelinePage from './features/pipeline/ElecPipelinePage';
+import GenPipelinePage from './features/gen-pipeline/GenPipelinePage';
+import SalesByRepPage from './features/sales-by-rep/SalesByRepPage';
 import Toast from './components/Toast';
 import api from './api/client';
 import { Bid, Gen, WonJob, Activity } from './types';
@@ -62,10 +64,9 @@ export default function App() {
   const handleNewBid = useCallback((bid: Bid) => {
     setBids(prev => [bid, ...prev]);
     triggerFlash(bid.id);
-    showToast({ title: 'Bid added to pipeline', sub: bid.name });
-  }, [triggerFlash, showToast]);
+  }, [triggerFlash]);
 
-  const genProposalCount  = gens.filter(g => g.stage !== 'awarded').length;
+  const genProposalCount  = gens.filter(g => g.stage !== 'awarded' && g.stage !== 'declined').length;
   const elecProposalCount = bids.filter(b => b.stage === 'due' || b.stage === 'submitted').length;
   const genProjectCount   = gens.filter(g => g.stage === 'awarded').length;
   const elecProjectCount  = bids.filter(b => b.stage === 'awarded').length;
@@ -101,14 +102,23 @@ export default function App() {
       case 'elec-proposals':
         return (
           <ElecPipelinePage
-            bids={bids}
-            setBids={setBids}
-            setWonJobs={setWonJobs}
-            showToast={showToast}
-            onOpenPreconstruction={id => { setView('preconstruction'); }}
+            bids={bids} setBids={setBids}
+            setWonJobs={setWonJobs} showToast={showToast}
+            onOpenPreconstruction={() => setView('preconstruction')}
             flashId={flashId}
           />
         );
+      case 'gen-proposals':
+        return (
+          <GenPipelinePage
+            gens={gens} setGens={setGens}
+            setWonJobs={setWonJobs} showToast={showToast}
+            onOpenBuilder={() => setView('builder')}
+            flashId={flashId}
+          />
+        );
+      case 'sales-by-rep':
+        return <SalesByRepPage wonJobs={wonJobs}/>;
       default:
         return <StubPage title={view.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}/>;
     }

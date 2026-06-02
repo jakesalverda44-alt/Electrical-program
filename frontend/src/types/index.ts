@@ -29,7 +29,7 @@ export interface Gen {
   kw: number;
   amount: number;
   tax: number;
-  stage: 'building' | 'sent' | 'awarded';
+  stage: 'building' | 'sent' | 'awarded' | 'declined';
   built_on: string;
   addons: number;
   salesperson_name: string;
