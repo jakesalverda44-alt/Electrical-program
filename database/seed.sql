@@ -1,5 +1,5 @@
 -- User accounts only — all business data (bids, proposals, won jobs) is entered through the app.
 -- Password for both accounts: password123
 INSERT INTO users (name, email, password_hash, role) VALUES
-  ('Jake Salverda', 'jake@accuratepower.com', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uP/eWAjNG', 'manager'),
-  ('David Marsh',   'david@accuratepower.com', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uP/eWAjNG', 'salesperson');
+  ('Jake Salverda', 'jake@accuratepower.com', '$2a$10$bVgY0qNe1eCh8sKHdWUdhuZdlwclq/SQ8RD.ALbDD/LccoKo6DXrS', 'manager'),
+  ('David Marsh',   'david@accuratepower.com', '$2a$10$bVgY0qNe1eCh8sKHdWUdhuZdlwclq/SQ8RD.ALbDD/LccoKo6DXrS', 'salesperson');
