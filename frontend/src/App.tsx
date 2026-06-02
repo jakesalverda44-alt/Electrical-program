@@ -10,13 +10,7 @@ import api from './api/client';
 import { Bid, Gen, WonJob, Activity } from './types';
 
 function StubPage({ title }: { title: string }) {
-  return (
-    <div className="scroll view-enter">
-      <div style={{ padding: 32, color: 'var(--text2)', fontSize: 15 }}>
-        <b>{title}</b> — coming soon
-      </div>
-    </div>
-  );
+  return <div className="scroll view-enter"><div style={{ padding:32, color:'var(--text2)' }}>{title} — coming soon</div></div>;
 }
 
 export default function App() {
@@ -35,14 +29,12 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     setLoading(true);
-    api.get('/dashboard')
-      .then(r => {
-        setBids(r.data.bids);
-        setGens(r.data.gens);
-        setWonJobs(r.data.wonJobs);
-        setActivity(r.data.activity);
-      })
-      .finally(() => setLoading(false));
+    api.get('/dashboard').then(r => {
+      setBids(r.data.bids);
+      setGens(r.data.gens);
+      setWonJobs(r.data.wonJobs);
+      setActivity(r.data.activity);
+    }).finally(() => setLoading(false));
   }, [user]);
 
   const handleLogin = async (email: string, password: string) => {
@@ -68,23 +60,12 @@ export default function App() {
   }
 
   const renderView = () => {
-    if (loading) {
-      return (
-        <div className="scroll view-enter">
-          <div style={{ padding: 32, color: 'var(--text3)' }}>Loading…</div>
-        </div>
-      );
-    }
+    if (loading) return <div className="scroll view-enter"><div style={{ padding:32, color:'var(--text3)' }}>Loading…</div></div>;
     switch (view) {
       case 'dashboard':
-        return (
-          <DashboardPage
-            bids={bids} gens={gens} wonJobs={wonJobs} activity={activity}
-            onNav={setView} onNewProposal={() => setView('builder')}
-          />
-        );
+        return <DashboardPage bids={bids} gens={gens} wonJobs={wonJobs} activity={activity} onNav={setView} onNewProposal={() => setView('builder')}/>;
       default:
-        return <StubPage title={view.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}/>;
+        return <StubPage title={view}/>;
     }
   };
 
@@ -99,7 +80,7 @@ export default function App() {
         elecProposalCount={elecProposalCount}
         genProjectCount={genProjectCount}
         elecProjectCount={elecProjectCount}
-        newIncoming={0}
+        newIncoming={2}
         dashFilter={dashFilter}
         onDashFilter={setDashFilter}
         onNewProposal={() => setView('builder')}

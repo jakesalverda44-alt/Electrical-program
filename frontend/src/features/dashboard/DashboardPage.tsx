@@ -38,7 +38,8 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, onNav, on
     const d = new Date(j.date_won); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
   });
   const thisYear = wonJobs.filter(j => new Date(j.date_won).getFullYear() === now.getFullYear());
-  const monthVal = sum(thisMonth), yearVal = sum(thisYear);
+  const sumWon = (a: WonJob[]) => a.reduce((s, x) => s + Number(x.value), 0);
+  const monthVal = sumWon(thisMonth), yearVal = sumWon(thisYear);
   const avgDeal  = thisYear.length ? Math.round(yearVal / thisYear.length) : 0;
 
   return (
@@ -82,7 +83,7 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, onNav, on
             <div className="comm-reps">
               {['Jake Salverda','David Marsh'].map(rep => {
                 const repJobs = thisYear.filter(j => j.salesperson_name === rep);
-                const repVal  = sum(repJobs);
+                const repVal  = sumWon(repJobs);
                 const repPct  = yearVal ? Math.round((repVal/yearVal)*100) : 0;
                 return (
                   <div className="rep-row" key={rep}>
