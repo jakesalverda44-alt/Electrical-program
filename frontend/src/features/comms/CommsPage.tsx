@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Gen, Activity, Toast } from '../../types';
+import api from '../../api/client';
 
 type CommKind = 'note' | 'call' | 'email' | 'meeting' | 'bid' | 'award' | 'system';
 
@@ -62,9 +63,30 @@ interface Props {
 const BLANK_FORM = { kind: 'note' as CommKind, linkedId: '', subject: '', body: '' };
 
 export default function CommsPage({ bids, gens, activity, showToast, userName }: Props) {
-  const [entries, setEntries] = useState<CommEntry[]>(() =>
-    activity.map((a, i) => activityToEntry(a, i))
-  );
+  const systemEntries = useMemo(() => activity.map((a, i) => activityToEntry(a, i)), [activity]);
+  const [persisted, setPersisted] = useState<CommEntry[]>([]);
+
+  useEffect(() => {
+    api.get('/comms').then(r => {
+      const rows: CommEntry[] = r.data.map((row: Record<string, string>) => ({
+        id: row.id,
+        kind: row.kind as CommKind,
+        div: row.div as CommEntry['div'],
+        subject: row.subject,
+        body: row.body ?? '',
+        linkedId: row.linked_id ?? '',
+        linkedName: row.linked_name ?? '',
+        author: row.author,
+        ts: row.created_at,
+      }));
+      setPersisted(rows);
+    }).catch(() => {});
+  }, []);
+
+  const entries = useMemo(() => {
+    const ids = new Set(persisted.map(e => e.id));
+    return [...persisted, ...systemEntries.filter(e => !ids.has(e.id))];
+  }, [persisted, systemEntries]);
   const [filterKind, setFilterKind] = useState<CommKind | 'all'>('all');
   const [filterDiv,  setFilterDiv]  = useState<'all' | 'elec' | 'gen' | 'general'>('all');
   const [search,     setSearch]     = useState('');
@@ -90,25 +112,28 @@ export default function CommsPage({ bids, gens, activity, showToast, userName }:
       .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
   }, [entries, filterKind, filterDiv, search]);
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     if (!form.subject.trim()) { showToast({ title: 'Subject required' }); return; }
     const opt = linkOptions.find(o => o.id === form.linkedId);
     const div: CommEntry['div'] = form.linkedId.startsWith('bid:') ? 'elec' : form.linkedId.startsWith('gen:') ? 'gen' : 'general';
-    const entry: CommEntry = {
-      id: Date.now().toString(),
-      kind: form.kind,
-      div,
-      subject: form.subject.trim(),
-      body: form.body.trim(),
-      linkedId: form.linkedId,
-      linkedName: opt?.name ?? '',
-      author: userName,
-      ts: new Date().toISOString(),
-    };
-    setEntries(prev => [entry, ...prev]);
-    setForm(BLANK_FORM);
-    setAddOpen(false);
-    showToast({ title: `${KIND_META[form.kind].label} logged` });
+    try {
+      const { data } = await api.post('/comms', {
+        kind: form.kind, div, subject: form.subject.trim(), body: form.body.trim(),
+        linked_id: form.linkedId || null, linked_name: opt?.name || null,
+      });
+      const entry: CommEntry = {
+        id: data.id, kind: data.kind, div: data.div,
+        subject: data.subject, body: data.body ?? '',
+        linkedId: data.linked_id ?? '', linkedName: data.linked_name ?? '',
+        author: data.author, ts: data.created_at,
+      };
+      setPersisted(prev => [entry, ...prev]);
+      setForm(BLANK_FORM);
+      setAddOpen(false);
+      showToast({ title: `${KIND_META[form.kind].label} logged` });
+    } catch {
+      showToast({ title: 'Failed to save', sub: 'Please try again' });
+    }
   };
 
   const INPUT = {

@@ -58,11 +58,15 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast,
     setOverCol(null);
   };
 
-  const handleStageFromDrawer = (stage: ElecStageKey) => {
+  const handleStageFromDrawer = (stage: ElecStageKey, extra?: { loss_reason?: string; competitor?: string }) => {
     if (!detail) return;
-    moveToStage(detail.id, stage);
-    // Keep drawer open but update local state optimistically
+    moveToStage(detail.id, stage, extra);
     setDetail(prev => prev ? { ...prev, stage } : prev);
+  };
+
+  const handleBidEdited = (updated: Bid) => {
+    setBids(prev => prev.map(b => b.id === updated.id ? updated : b));
+    setDetail(updated);
   };
 
   const handleAdded = (bid: Bid) => {
@@ -231,6 +235,7 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast,
           onCancelLost={cancelLost}
           onClose={() => setDetail(null)}
           onOpenPreconstruction={id => { setDetail(null); onOpenPreconstruction(id); }}
+          onBidEdited={handleBidEdited}
         />
       )}
 

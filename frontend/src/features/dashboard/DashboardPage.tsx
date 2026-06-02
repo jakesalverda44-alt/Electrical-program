@@ -20,7 +20,7 @@ interface Props {
 }
 
 export default function DashboardPage({ bids, gens, wonJobs, activity, repNames, onNav, onNewProposal }: Props) {
-  const sum = (a: { amount: number }[]) => a.reduce((s, x) => s + Number(x.amount), 0);
+  const sum = (a: { amount: number | null }[]) => a.reduce((s, x) => s + Number(x.amount ?? 0), 0);
 
   const elecActive = bids.filter(b => b.stage === 'due' || b.stage === 'submitted');
   const genActive  = gens.filter(g => g.stage === 'building' || g.stage === 'sent');

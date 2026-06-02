@@ -81,4 +81,40 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
+  const { phase } = req.body;
+  const valid = ['scheduled','ordered','delivered','install','startup','complete'];
+  if (!valid.includes(phase)) return res.status(400).json({ error: 'Invalid phase' });
+  const { rows } = await pool.query(
+    'UPDATE generator_proposals SET gen_install_phase=$1, updated_at=now() WHERE id=$2 RETURNING *',
+    [phase, req.params.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  res.json(rows[0]);
+});
+
+router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { customer, loc, mfr, model, kw, amount, tax, addons } = req.body;
+  const fields: string[] = [];
+  const vals: unknown[] = [];
+  let i = 1;
+  if (customer !== undefined) { fields.push(`customer=$${i++}`); vals.push(customer.trim()); }
+  if (loc      !== undefined) { fields.push(`loc=$${i++}`);      vals.push(loc.trim() || '—'); }
+  if (mfr      !== undefined) { fields.push(`mfr=$${i++}`);      vals.push(mfr); }
+  if (model    !== undefined) { fields.push(`model=$${i++}`);    vals.push(model); }
+  if (kw       !== undefined) { fields.push(`kw=$${i++}`);       vals.push(Number(kw)); }
+  if (amount   !== undefined) { fields.push(`amount=$${i++}`);   vals.push(Number(amount)); }
+  if (tax      !== undefined) { fields.push(`tax=$${i++}`);      vals.push(Number(tax)); }
+  if (addons   !== undefined) { fields.push(`addons=$${i++}`);   vals.push(Number(addons)); }
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+  fields.push(`updated_at=now()`);
+  vals.push(req.params.id);
+  const { rows } = await pool.query(
+    `UPDATE generator_proposals SET ${fields.join(',')} WHERE id=$${i} RETURNING *`,
+    vals
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  res.json(rows[0]);
+});
+
 export default router;

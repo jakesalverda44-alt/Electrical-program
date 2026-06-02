@@ -20,9 +20,10 @@ interface Props {
   showToast: (t: Toast) => void;
   onOpenBuilder: () => void;
   flashId: string | null;
+  onEditGen: (gen: import('../../types').Gen) => void;
 }
 
-export default function GenPipelinePage({ gens, setGens, setWonJobs, showToast, onOpenBuilder, flashId }: Props) {
+export default function GenPipelinePage({ gens, setGens, setWonJobs, showToast, onOpenBuilder, flashId, onEditGen }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   const [detail, setDetail] = useState<Gen | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -210,7 +211,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, showToast, 
           onStage={handleStageFromDrawer}
           onCancelDeclined={cancelDeclined}
           onClose={() => setDetail(null)}
-          onOpenBuilder={() => { setDetail(null); onOpenBuilder(); }}
+          onEditGen={g => { setDetail(null); onEditGen(g); }}
         />
       )}
     </div>

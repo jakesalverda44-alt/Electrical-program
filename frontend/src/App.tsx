@@ -49,6 +49,7 @@ export default function App() {
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
   const [intakeCount, setIntakeCount] = useState(2); // 2 pending demo items on first load
+  const [editGen, setEditGen] = useState<import('./types').Gen | null>(null);
 
   const triggerFlash = useCallback((id: string) => {
     setFlashId(id);
@@ -136,7 +137,8 @@ export default function App() {
           <GenPipelinePage
             gens={gens} setGens={setGens}
             setWonJobs={setWonJobs} showToast={showToast}
-            onOpenBuilder={() => setView('builder')}
+            onOpenBuilder={() => { setEditGen(null); setView('builder'); }}
+            onEditGen={g => { setEditGen(g); setView('builder'); }}
             flashId={flashId}
           />
         );
@@ -155,7 +157,8 @@ export default function App() {
           <BuilderPage
             setGens={setGens}
             showToast={showToast}
-            onSaved={() => setView('gen-proposals')}
+            onSaved={() => { setEditGen(null); setView('gen-proposals'); }}
+            editGen={editGen}
           />
         );
       case 'preconstruction':

@@ -12,12 +12,15 @@ export interface Bid {
   gc: string;
   due: string;
   due_days: number;
-  amount: number;
+  amount: number | null;
   sheets: number;
   contact: string;
   stage: 'due' | 'submitted' | 'awarded' | 'lost';
   salesperson_name: string;
   salesperson_id?: string;
+  elec_project_phase?: string;
+  loss_reason?: string;
+  competitor?: string;
 }
 
 export interface Gen {
@@ -34,6 +37,7 @@ export interface Gen {
   addons: number;
   salesperson_name: string;
   salesperson_id?: string;
+  gen_install_phase?: string;
 }
 
 export interface WonJob {

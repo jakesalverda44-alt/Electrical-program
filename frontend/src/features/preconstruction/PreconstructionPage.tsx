@@ -27,7 +27,7 @@ export default function PreconstructionPage({ bids, pcData, onPcUpdate, onBidUpd
 
   const openWorkspace = (bid: Bid) => {
     if (!pcData[bid.id]) {
-      onPcUpdate(bid.id, blankWorkspace(bid.id, bid.name, bid.amount));
+      onPcUpdate(bid.id, blankWorkspace(bid.id, bid.name, bid.amount ?? 0));
     }
     setActiveBidId(bid.id);
   };
@@ -98,7 +98,7 @@ export default function PreconstructionPage({ bids, pcData, onPcUpdate, onBidUpd
                     </div>
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <span className="num" style={{ fontSize: 15, fontWeight: 900, color: 'var(--text)' }}>{money(bid.amount)}</span>
+                      <span className="num" style={{ fontSize: 15, fontWeight: 900, color: 'var(--text)' }}>{money(bid.amount ?? 0)}</span>
                       <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>
                         {ws ? `Step: ${ws.step}` : 'Not started'}
                       </span>

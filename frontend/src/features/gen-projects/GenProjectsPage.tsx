@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import { Gen, Toast } from '../../types';
+import api from '../../api/client';
 
 const PHASES = [
   { key: 'scheduled',  label: 'Scheduled',        color: '#7C8AA3' },
@@ -35,7 +36,7 @@ export default function GenProjectsPage({ gens, showToast }: Props) {
   const awarded = useMemo(() => gens.filter(g => g.stage === 'awarded'), [gens]);
 
   const [states, setStates] = useState<Record<string, ProjectState>>(() =>
-    Object.fromEntries(awarded.map(g => [g.id, { phase: 'scheduled', installDate: '', notes: '' }]))
+    Object.fromEntries(awarded.map(g => [g.id, { phase: (g.gen_install_phase as PhaseKey) || 'scheduled', installDate: '', notes: '' }]))
   );
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filterPhase, setFilterPhase] = useState<PhaseKey | 'all'>('all');
@@ -51,6 +52,7 @@ export default function GenProjectsPage({ gens, showToast }: Props) {
     setStates(prev => ({ ...prev, [id]: { ...(prev[id] ?? { phase: 'scheduled', installDate: '', notes: '' }), phase } }));
     const label = PHASES.find(p => p.key === phase)?.label ?? phase;
     showToast({ title: 'Phase updated', sub: label });
+    api.patch(`/gens/${id}/phase`, { phase }).catch(() => {});
   };
 
   const setField = (id: string, key: keyof ProjectState, val: string) =>

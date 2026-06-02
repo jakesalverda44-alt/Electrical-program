@@ -11,10 +11,10 @@ interface Props {
   onStage: (stage: GenStageKey) => void;
   onCancelDeclined: () => void;
   onClose: () => void;
-  onOpenBuilder: () => void;
+  onEditGen: (gen: Gen) => void;
 }
 
-export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onOpenBuilder }: Props) {
+export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen }: Props) {
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined';
 
   return (
@@ -82,9 +82,9 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             <button
               className="btn amber"
               style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
-              onClick={() => { onClose(); onOpenBuilder(); }}
+              onClick={() => { onClose(); onEditGen(gen); }}
             >
-              <Icon name="doc" size={15} stroke={1.9}/>Open in Proposal Builder
+              <Icon name="doc" size={15} stroke={1.9}/>Edit in Proposal Builder
             </button>
           )}
         </div>

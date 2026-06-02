@@ -12,6 +12,7 @@ interface Props {
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
   showToast: (t: Toast) => void;
   onSaved: () => void;
+  editGen?: Gen | null;
 }
 
 type Screen = 'builder' | 'preview';
@@ -51,8 +52,21 @@ function Section({ title, icon, children }: { title: string; icon: string; child
   );
 }
 
-export default function BuilderPage({ setGens, showToast, onSaved }: Props) {
-  const [form, setForm] = useState<GenForm>(blankGenForm());
+function genToForm(g: Gen): GenForm {
+  const blank = blankGenForm();
+  const [city, state] = (g.loc || '').split(',').map(s => s.trim());
+  return {
+    ...blank,
+    customer: g.customer || '',
+    city: city || '',
+    state: state || '',
+    brand: (g.mfr === 'Kohler' || g.mfr === 'Generac') ? g.mfr : 'Kohler',
+    size: g.model || blank.size,
+  };
+}
+
+export default function BuilderPage({ setGens, showToast, onSaved, editGen }: Props) {
+  const [form, setForm] = useState<GenForm>(() => editGen ? genToForm(editGen) : blankGenForm());
   const [screen, setScreen] = useState<Screen>('builder');
   const [proposalNo] = useState(() => genProposalNo(form.brand, form.coolingType));
   const [saving, setSaving] = useState(false);
@@ -82,11 +96,16 @@ export default function BuilderPage({ setGens, showToast, onSaved }: Props) {
         amount:     totals.total,
         tax:        totals.tax,
         addons:     (form.smm ? 1 : 0) + (form.surgePro ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0),
-        stage:      'building',
       };
-      const r = await api.post('/gens', payload);
-      setGens(prev => [r.data, ...prev]);
-      showToast({ title: 'Proposal saved', sub: `${form.customer} added to Gen pipeline` });
+      if (editGen) {
+        const r = await api.patch(`/gens/${editGen.id}`, payload);
+        setGens(prev => prev.map(g => g.id === editGen.id ? r.data : g));
+        showToast({ title: 'Proposal updated', sub: form.customer });
+      } else {
+        const r = await api.post('/gens', { ...payload, stage: 'building' });
+        setGens(prev => [r.data, ...prev]);
+        showToast({ title: 'Proposal saved', sub: `${form.customer} added to Gen pipeline` });
+      }
       onSaved();
     } catch {
       showToast({ title: 'Save failed', sub: 'Please try again' });

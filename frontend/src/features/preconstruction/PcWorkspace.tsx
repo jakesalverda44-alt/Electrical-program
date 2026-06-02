@@ -1,7 +1,8 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Toast } from '../../types';
 import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey } from './constants';
+import api from '../../api/client';
 
 interface Props {
   ws: PcWorkspace;
@@ -51,6 +52,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [aiResults, setAiResults] = useState<Record<string, unknown> | null>(null);
+  const [historicalCosts, setHistoricalCosts] = useState<Array<Record<string,unknown>>>([]);
+  const [bidIntel, setBidIntel] = useState<Record<string,unknown> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const wsRef = useRef(ws);
   wsRef.current = ws;
@@ -69,24 +74,47 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     if (idx < STEP_ORDER.length - 1) set({ step: STEP_ORDER[idx + 1] });
   };
 
-  const runAI = () => {
+  const pollForResults = () => {
+    pollRef.current = setTimeout(async () => {
+      try {
+        const { data } = await api.get(`/preconstruction/${bid.id}/results`);
+        if (data?.status === 'complete') {
+          setAiResults(data);
+          set(prev => ({ aiRunning: false, aiDone: true, aiLog: [...(prev.aiLog ?? []), '✓ Analysis complete — see Takeoff Review tab.'] }));
+        } else if (data?.status === 'error') {
+          set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), '✗ Analysis failed. Check server logs.'] }));
+        } else {
+          pollForResults(); // still running
+        }
+      } catch {
+        set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), '✗ Could not reach server.'] }));
+      }
+    }, 3000);
+  };
+
+  useEffect(() => {
+    if (ws.aiDone && !aiResults) {
+      api.get(`/preconstruction/${bid.id}/results`).then(r => { if (r.data) setAiResults(r.data); }).catch(() => {});
+    }
+    return () => { if (pollRef.current) clearTimeout(pollRef.current); };
+  }, [bid.id]);
+
+  useEffect(() => {
+    api.get('/preconstruction/costs').then(r => setHistoricalCosts(r.data || [])).catch(() => {});
+    api.get(`/preconstruction/intelligence/${bid.id}`).then(r => setBidIntel(r.data)).catch(() => {});
+  }, [bid.id]);
+
+  const runAI = async () => {
     if (wsRef.current.aiRunning || wsRef.current.aiDone) return;
-    set({ aiRunning: true, aiLog: ['Analyzing plan sheets…'] });
-    const steps: [number, string][] = [
-      [800,  'Identifying electrical service equipment…'],
-      [1600, 'Counting branch circuit runs…'],
-      [2400, 'Extracting lighting fixture schedule…'],
-      [3200, 'Cross-referencing panel schedules…'],
-      [4200, 'Generating takeoff summary…'],
-    ];
-    steps.forEach(([delay, msg]) => {
-      setTimeout(() => {
-        set(prev => ({ aiLog: [...(prev.aiLog ?? []), msg] }));
-      }, delay);
-    });
-    setTimeout(() => {
-      set(prev => ({ aiRunning: false, aiDone: true, aiLog: [...(prev.aiLog ?? []), '✓ Takeoff complete — review results in Takeoff Review tab.'] }));
-    }, 4800);
+    set({ aiRunning: true, aiLog: ['Connecting to AI analysis engine…'] });
+    try {
+      await api.post('/preconstruction/analyze', { bidId: bid.id });
+      set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Analyzing bid scope and specifications…', 'Identifying materials and labor requirements…', 'Generating risk assessment…'] }));
+      pollForResults();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to start analysis';
+      set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${msg}`] }));
+    }
   };
 
   const addRfi = () => {
@@ -221,43 +249,70 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           </div>
         );
 
-      case 'takeoff':
+      case 'takeoff': {
+        const scope = (aiResults?.scope as Array<{id:string;category:string;items:string[];estimatedHours:number}>) ?? [];
+        const materials = (aiResults?.materials as Array<{item:string;qty:number;unit:string;estimatedCost:number}>) ?? [];
+        const labor = aiResults?.labor_estimate as {totalHours?:number;estimatedLaborCost?:number;notes?:string} | undefined;
         return (
           <div style={{ padding: '20px 24px' }}>
             {!ws.aiDone ? (
               <div style={{ padding: 48, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
                 Run the AI Takeoff in the Bid Builder tab first.
               </div>
+            ) : !aiResults ? (
+              <div style={{ padding: 48, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Loading results…</div>
             ) : (
-              <div className="panel">
-                <div className="panel-hdr"><span className="panel-title">Takeoff Results</span></div>
-                <table className="ctable">
-                  <thead><tr><th>Category</th><th style={{ textAlign: 'right' }}>Count</th><th>Notes</th></tr></thead>
-                  <tbody>
-                    {[
-                      ['200A Service Entrance', '1', 'Main disconnect panel'],
-                      ['100A Sub-panel', '3', 'Kitchen, HVAC, lighting'],
-                      ['20A Branch Circuits', '48', 'General purpose + dedicated'],
-                      ['15A Branch Circuits', '22', 'Lighting circuits'],
-                      ['Duplex Receptacles', '186', 'Standard + GFCI'],
-                      ['Single-Pole Switches', '94', 'Standard + 3-way'],
-                      ['Fluorescent Fixtures', '112', 'Troffer 2x4'],
-                      ['LED Downlights', '38', '6" recessed'],
-                      ['Exit Signs', '14', 'Emergency battery backup'],
-                      ['Emergency Lights', '22', 'Twin-head halogen'],
-                    ].map(([cat, cnt, note]) => (
-                      <tr key={cat}>
-                        <td className="nm">{cat}</td>
-                        <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{cnt}</td>
-                        <td className="sub">{note}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {labor && (
+                  <div className="panel">
+                    <div className="panel-hdr"><span className="panel-title">Labor Estimate</span></div>
+                    <div style={{ padding: '14px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                      <div><div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Total Hours</div><div className="num" style={{ fontSize: 22, fontWeight: 900 }}>{labor.totalHours ?? '—'}</div></div>
+                      <div><div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Est. Labor Cost</div><div className="num" style={{ fontSize: 22, fontWeight: 900, color: 'var(--green)' }}>${(labor.estimatedLaborCost ?? 0).toLocaleString()}</div></div>
+                      {labor.notes && <div style={{ gridColumn: '1 / -1', fontSize: 12.5, color: 'var(--text3)', fontWeight: 600 }}>{labor.notes}</div>}
+                    </div>
+                  </div>
+                )}
+                {scope.length > 0 && (
+                  <div className="panel">
+                    <div className="panel-hdr"><span className="panel-title">Scope Breakdown</span></div>
+                    <table className="ctable">
+                      <thead><tr><th>Category</th><th>Key Items</th><th style={{ textAlign: 'right' }}>Est. Hours</th></tr></thead>
+                      <tbody>
+                        {scope.map(s => (
+                          <tr key={s.id}>
+                            <td className="nm">{s.id}. {s.category}</td>
+                            <td className="sub">{s.items.slice(0, 2).join(', ')}{s.items.length > 2 ? ` +${s.items.length - 2} more` : ''}</td>
+                            <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{s.estimatedHours}h</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {materials.length > 0 && (
+                  <div className="panel">
+                    <div className="panel-hdr"><span className="panel-title">Key Materials</span></div>
+                    <table className="ctable">
+                      <thead><tr><th>Item</th><th style={{ textAlign: 'right' }}>Qty</th><th>Unit</th><th style={{ textAlign: 'right' }}>Est. Cost</th></tr></thead>
+                      <tbody>
+                        {materials.map((m, i) => (
+                          <tr key={i}>
+                            <td className="nm">{m.item}</td>
+                            <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{m.qty}</td>
+                            <td className="sub">{m.unit}</td>
+                            <td className="num" style={{ textAlign: 'right' }}>${m.estimatedCost.toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
           </div>
         );
+      }
 
       case 'scope':
         return (
@@ -395,26 +450,26 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         return (
           <div style={{ padding: '20px 24px' }}>
             <div className="panel">
-              <div className="panel-hdr"><span className="panel-title">Historical Cost Comps</span></div>
-              <table className="ctable">
-                <thead><tr><th>Project</th><th>Year</th><th style={{ textAlign: 'right' }}>Contract Value</th><th style={{ textAlign: 'right' }}>$/SF</th></tr></thead>
-                <tbody>
-                  {[
-                    ['Sarasota Medical Annex',   '2024', '$385,000', '$18.40'],
-                    ['Lakewood Commons Phase 1', '2024', '$298,000', '$16.80'],
-                    ['Venice Retail Center',     '2023', '$412,000', '$19.20'],
-                    ['North Port Office',        '2023', '$215,000', '$14.60'],
-                    ['Bradenton Warehouse',      '2022', '$178,000', '$11.20'],
-                  ].map(([p, y, v, sf]) => (
-                    <tr key={p}>
-                      <td className="nm">{p}</td>
-                      <td className="sub">{y}</td>
-                      <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{v}</td>
-                      <td className="num" style={{ textAlign: 'right' }}>{sf}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="panel-hdr"><span className="panel-title">Historical Cost Comps — Awarded Jobs</span></div>
+              {historicalCosts.length === 0 ? (
+                <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
+                  No awarded jobs yet. Win bids to build your historical cost database.
+                </div>
+              ) : (
+                <table className="ctable">
+                  <thead><tr><th>Project</th><th>GC</th><th>Year</th><th style={{ textAlign: 'right' }}>Contract Value</th></tr></thead>
+                  <tbody>
+                    {historicalCosts.map((row, i) => (
+                      <tr key={i}>
+                        <td className="nm">{String(row.name)}</td>
+                        <td className="sub">{String(row.gc)}</td>
+                        <td className="sub">{String(row.year ?? '—')}</td>
+                        <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>${Math.round(Number(row.amount)).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         );
@@ -432,20 +487,40 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 </span>
               </div>
               <div style={{ padding: '16px 20px' }}>
-                {[
-                  { label: 'Recommended Markup', val: '18–22%', sub: 'Based on similar scope + market conditions' },
-                  { label: 'Competitor Activity', val: 'Moderate', sub: '3–4 subs likely bidding this scope' },
-                  { label: 'Bid Win Probability', val: '62%', sub: 'Based on GC relationship + past wins' },
-                  { label: 'Key Risk Factors', val: 'Schedule', sub: 'Tight 8-month timeline may impact labor cost' },
-                ].map(item => (
-                  <div key={item.label} style={{ marginBottom: 18, paddingBottom: 18, borderBottom: '1px solid var(--border)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>{item.label}</span>
-                      <span style={{ fontSize: 14, fontWeight: 900, color: 'var(--text)' }}>{item.val}</span>
+                {bidIntel ? (
+                  <>
+                    {[
+                      {
+                        label: `Win Rate with ${String(bidIntel.gc)}`,
+                        val: bidIntel.gcWinRate != null ? `${bidIntel.gcWinRate}%` : 'No history',
+                        sub: `${bidIntel.gcWins ?? 0} won · ${bidIntel.gcLosses ?? 0} lost with this GC`,
+                      },
+                      {
+                        label: 'Overall Company Win Rate',
+                        val: bidIntel.overallWinRate != null ? `${bidIntel.overallWinRate}%` : 'No data',
+                        sub: 'Across all electrical bids submitted',
+                      },
+                      ...(bidIntel.gcAvgWonAmount ? [{
+                        label: 'Avg Won Contract (this GC)',
+                        val: `$${Math.round(Number(bidIntel.gcAvgWonAmount)).toLocaleString()}`,
+                        sub: 'Average value of won bids with this GC',
+                      }] : []),
+                    ].map(item => (
+                      <div key={item.label} style={{ marginBottom: 18, paddingBottom: 18, borderBottom: '1px solid var(--border)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>{item.label}</span>
+                          <span style={{ fontSize: 14, fontWeight: 900, color: 'var(--text)' }}>{item.val}</span>
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{item.sub}</div>
+                      </div>
+                    ))}
+                    <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginTop: 8 }}>
+                      Intelligence improves as more bids are entered and outcomes recorded.
                     </div>
-                    <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{item.sub}</div>
-                  </div>
-                ))}
+                  </>
+                ) : (
+                  <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Loading intelligence data…</div>
+                )}
               </div>
             </div>
           </div>

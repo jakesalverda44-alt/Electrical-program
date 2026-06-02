@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Toast } from '../../types';
+import api from '../../api/client';
 
 const PHASES = [
   { key: 'signed',      label: 'Contract Signed', color: '#7C8AA3' },
@@ -34,7 +35,7 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
   const awarded = useMemo(() => bids.filter(b => b.stage === 'awarded'), [bids]);
 
   const [states, setStates] = useState<Record<string, ProjectState>>(() =>
-    Object.fromEntries(awarded.map(b => [b.id, { phase: 'signed', notes: '' }]))
+    Object.fromEntries(awarded.map(b => [b.id, { phase: (b.elec_project_phase as PhaseKey) || 'signed', notes: '' }]))
   );
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filterPhase, setFilterPhase] = useState<PhaseKey | 'all'>('all');
@@ -46,9 +47,10 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
   );
 
   const setPhase = (id: string, phase: PhaseKey) => {
-    setStates(prev => ({ ...prev, [id]: { ...prev[id], phase } }));
+    setStates(prev => ({ ...prev, [id]: { ...(prev[id] ?? { phase: 'signed', notes: '' }), phase } }));
     const label = PHASES.find(p => p.key === phase)?.label ?? phase;
     showToast({ title: 'Phase updated', sub: label });
+    api.patch(`/bids/${id}/phase`, { phase }).catch(() => {});
   };
 
   const setNotes = (id: string, notes: string) =>
@@ -198,7 +200,7 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
                         <PhaseChip phase={st.phase}/>
-                        <span className="num" style={{ fontSize: 16, fontWeight: 900, color: 'var(--text)' }}>{money(bid.amount)}</span>
+                        <span className="num" style={{ fontSize: 16, fontWeight: 900, color: 'var(--text)' }}>{money(bid.amount ?? 0)}</span>
                         <Icon name={expanded ? 'minus' : 'plus'} size={16} stroke={2}/>
                       </div>
                     </div>
@@ -222,7 +224,7 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
                       onClick={e => e.stopPropagation()}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
                         {[
-                          ['Contract Value', moneyFull(bid.amount)],
+                          ['Contract Value', moneyFull(bid.amount ?? 0)],
                           ['Contact',        bid.contact || '—'],
                           ['Plan Sheets',    bid.sheets ? `${bid.sheets} sheets` : '—'],
                         ].map(([k, v]) => (

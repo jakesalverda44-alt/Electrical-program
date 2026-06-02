@@ -68,8 +68,8 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
 
     // Update stage
     const { rows } = await client.query(
-      'UPDATE bids SET stage=$1, updated_at=now() WHERE id=$2 RETURNING *',
-      [stage, req.params.id]
+      'UPDATE bids SET stage=$1, loss_reason=$3, competitor=$4, updated_at=now() WHERE id=$2 RETURNING *',
+      [stage, req.params.id, stage === 'lost' ? (req.body.loss_reason || null) : null, stage === 'lost' ? (req.body.competitor || null) : null]
     );
 
     // If transitioning TO awarded (not already awarded), create won-job record
@@ -106,6 +106,41 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
   } finally {
     client.release();
   }
+});
+
+router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
+  const { phase } = req.body;
+  const valid = ['signed','rough','inspection','trim','final','complete'];
+  if (!valid.includes(phase)) return res.status(400).json({ error: 'Invalid phase' });
+  const { rows } = await pool.query(
+    'UPDATE bids SET elec_project_phase=$1, updated_at=now() WHERE id=$2 RETURNING *',
+    [phase, req.params.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  res.json(withDueDays(rows[0]));
+});
+
+router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { name, gc, loc, amount, due, sheets, contact } = req.body;
+  const fields: string[] = [];
+  const vals: unknown[] = [];
+  let i = 1;
+  if (name    !== undefined) { fields.push(`name=$${i++}`);    vals.push(name.trim()); }
+  if (gc      !== undefined) { fields.push(`gc=$${i++}`);      vals.push(gc.trim()); }
+  if (loc     !== undefined) { fields.push(`loc=$${i++}`);     vals.push(loc.trim() || '—'); }
+  if (amount  !== undefined) { fields.push(`amount=$${i++}`);  vals.push(amount === '' || amount === null ? null : Number(amount)); }
+  if (due     !== undefined) { fields.push(`due=$${i++}`);     vals.push(formatDue(due)); }
+  if (sheets  !== undefined) { fields.push(`sheets=$${i++}`);  vals.push(Number(sheets) || null); }
+  if (contact !== undefined) { fields.push(`contact=$${i++}`); vals.push(contact.trim()); }
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+  fields.push(`updated_at=now()`);
+  vals.push(req.params.id);
+  const { rows } = await pool.query(
+    `UPDATE bids SET ${fields.join(',')} WHERE id=$${i} RETURNING *`,
+    vals
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  res.json(withDueDays(rows[0]));
 });
 
 export default router;

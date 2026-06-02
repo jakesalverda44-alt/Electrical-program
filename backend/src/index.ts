@@ -9,6 +9,8 @@ import bidsRouter from './routes/bids';
 import gensRouter from './routes/gens';
 import wonJobsRouter from './routes/wonJobs';
 import usersRouter from './routes/users';
+import commsRouter from './routes/comms';
+import preconRouter from './routes/preconstruction';
 
 dotenv.config();
 
@@ -22,6 +24,8 @@ app.use('/api/bids', bidsRouter);
 app.use('/api/gens', gensRouter);
 app.use('/api/won-jobs', wonJobsRouter);
 app.use('/api/users', usersRouter);
+app.use('/api/comms', commsRouter);
+app.use('/api/preconstruction', preconRouter);
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 

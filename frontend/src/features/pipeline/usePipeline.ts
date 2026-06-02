@@ -13,7 +13,7 @@ interface UsePipelineProps {
 export function usePipeline({ bids, setBids, setWonJobs, showToast }: UsePipelineProps) {
   const [pendingLost, setPendingLost] = useState<string | null>(null);
 
-  const moveToStage = useCallback(async (id: string, stage: ElecStageKey) => {
+  const moveToStage = useCallback(async (id: string, stage: ElecStageKey, extra?: { loss_reason?: string; competitor?: string }) => {
     // Confirmation guard for Lost
     if (stage === 'lost' && pendingLost !== id) {
       setPendingLost(id);
@@ -26,7 +26,7 @@ export function usePipeline({ bids, setBids, setWonJobs, showToast }: UsePipelin
     setBids(list => list.map(b => b.id === id ? { ...b, stage } : b));
 
     try {
-      const { data } = await api.patch(`/bids/${id}/stage`, { stage });
+      const { data } = await api.patch(`/bids/${id}/stage`, { stage, ...extra });
       // Sync with server response (due_days may be recalculated)
       setBids(list => list.map(b => b.id === id ? { ...data.bid, stage } : b));
 
