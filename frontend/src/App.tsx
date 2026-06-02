@@ -8,6 +8,10 @@ import DashboardPage from './features/dashboard/DashboardPage';
 import ElecPipelinePage from './features/pipeline/ElecPipelinePage';
 import GenPipelinePage from './features/gen-pipeline/GenPipelinePage';
 import SalesByRepPage from './features/sales-by-rep/SalesByRepPage';
+import IntakeInboxPage from './features/intake/IntakeInboxPage';
+import BuilderPage from './features/builder/BuilderPage';
+import PreconstructionPage from './features/preconstruction/PreconstructionPage';
+import { PcWorkspace } from './features/preconstruction/constants';
 import Toast from './components/Toast';
 import api from './api/client';
 import { Bid, Gen, WonJob, Activity } from './types';
@@ -36,6 +40,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [flashId, setFlashId] = useState<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
 
   const triggerFlash = useCallback((id: string) => {
     setFlashId(id);
@@ -65,6 +70,14 @@ export default function App() {
     setBids(prev => [bid, ...prev]);
     triggerFlash(bid.id);
   }, [triggerFlash]);
+
+  const handlePcUpdate = useCallback((bidId: string, ws: PcWorkspace) => {
+    setPcData(prev => ({ ...prev, [bidId]: ws }));
+  }, []);
+
+  const handleBidUpdated = useCallback((updated: Bid) => {
+    setBids(prev => prev.map(b => b.id === updated.id ? updated : b));
+  }, []);
 
   const genProposalCount  = gens.filter(g => g.stage !== 'awarded' && g.stage !== 'declined').length;
   const elecProposalCount = bids.filter(b => b.stage === 'due' || b.stage === 'submitted').length;
@@ -119,6 +132,31 @@ export default function App() {
         );
       case 'sales-by-rep':
         return <SalesByRepPage wonJobs={wonJobs}/>;
+      case 'intake':
+        return (
+          <IntakeInboxPage
+            onBidAccepted={(bid) => { setBids(prev => [bid, ...prev]); setView('elec-proposals'); }}
+            showToast={showToast}
+          />
+        );
+      case 'builder':
+        return (
+          <BuilderPage
+            setGens={setGens}
+            showToast={showToast}
+            onSaved={() => setView('gen-proposals')}
+          />
+        );
+      case 'preconstruction':
+        return (
+          <PreconstructionPage
+            bids={bids}
+            pcData={pcData}
+            onPcUpdate={handlePcUpdate}
+            onBidUpdated={handleBidUpdated}
+            showToast={showToast}
+          />
+        );
       default:
         return <StubPage title={view.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}/>;
     }
