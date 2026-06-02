@@ -13,6 +13,8 @@ import BuilderPage from './features/builder/BuilderPage';
 import PreconstructionPage from './features/preconstruction/PreconstructionPage';
 import ElecProjectsPage from './features/elec-projects/ElecProjectsPage';
 import GenProjectsPage from './features/gen-projects/GenProjectsPage';
+import ContactsPage from './features/contacts/ContactsPage';
+import ReportingPage from './features/reporting/ReportingPage';
 import { PcWorkspace } from './features/preconstruction/constants';
 import Toast from './components/Toast';
 import api from './api/client';
@@ -163,6 +165,10 @@ export default function App() {
         return <ElecProjectsPage bids={bids} showToast={showToast}/>;
       case 'gen-projects':
         return <GenProjectsPage gens={gens} showToast={showToast}/>;
+      case 'contacts':
+        return <ContactsPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
+      case 'reporting':
+        return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
       default:
         return <StubPage title={view.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}/>;
     }
