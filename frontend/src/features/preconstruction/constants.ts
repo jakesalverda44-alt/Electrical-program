@@ -1,6 +1,6 @@
 export const PC_STEPS = [
   { key: 'intake',    label: 'Intake',          short: '1' },
-  { key: 'takeoff',   label: 'Takeoff',         short: '2' },
+  { key: 'takeoff',   label: 'Plan Review',     short: '2' },
   { key: 'scope',     label: 'Scope of Work',   short: '3' },
   { key: 'estimate',  label: 'Estimate',        short: '4' },
   { key: 'review',    label: 'Internal Review', short: '5' },
@@ -14,7 +14,7 @@ export const PC_TABS = [
   { key: 'overview',   label: 'Overview'          },
   { key: 'files',      label: 'Files'             },
   { key: 'bid',        label: 'Bid Builder'       },
-  { key: 'takeoff',    label: 'Takeoff Review'    },
+  { key: 'takeoff',    label: 'Plan Review'       },
   { key: 'scope',      label: 'Scope of Work'     },
   { key: 'rfis',       label: 'RFIs'              },
   { key: 'proposal',   label: 'Proposal'          },
