@@ -48,11 +48,22 @@ function StepTracker({ current }: { current: PcStepKey }) {
   );
 }
 
+const ELEC_INCLUDE = /^E\d|electrical|one.?line|panel.?sched|equip.?sched/i;
+const EXCLUDE_ONLY = /^(A|S|C|L|M)\d/i;
+function isElecSheet(name: string) {
+  const base = name.replace(/\.[^.]+$/, '');
+  if (ELEC_INCLUDE.test(base)) return true;
+  if (EXCLUDE_ONLY.test(base)) return false;
+  return true;
+}
+
 export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, showToast }: Props) {
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileObjectsRef = useRef<File[]>([]);
   const [aiResults, setAiResults] = useState<Record<string, unknown> | null>(null);
+  const [analysisTab, setAnalysisTab] = useState<'agent1'|'agent2'|'agent3'|'raw'>('agent1');
   const [historicalCosts, setHistoricalCosts] = useState<Array<Record<string,unknown>>>([]);
   const [bidIntel, setBidIntel] = useState<Record<string,unknown> | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -74,17 +85,27 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     if (idx < STEP_ORDER.length - 1) set({ step: STEP_ORDER[idx + 1] });
   };
 
-  const pollForResults = () => {
+  const pollForResults = (startMs = Date.now(), shownAgent2 = false, shownAgent3 = false) => {
     pollRef.current = setTimeout(async () => {
       try {
         const { data } = await api.get(`/preconstruction/${bid.id}/results`);
+        const elapsed = Date.now() - startMs;
+        let nextA2 = shownAgent2, nextA3 = shownAgent3;
+        if (!shownAgent2 && (elapsed > 90_000 || data?.status === 'agent1_complete' || data?.status === 'agent2_running')) {
+          set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Agent 2 of 3: Building scope & estimate…'] }));
+          nextA2 = true;
+        }
+        if (!shownAgent3 && (elapsed > 150_000 || data?.status === 'agent2_complete' || data?.status === 'agent3_running')) {
+          set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Agent 3 of 3: Running QA review & risk assessment…'] }));
+          nextA3 = true;
+        }
         if (data?.status === 'complete') {
           setAiResults(data);
-          set(prev => ({ aiRunning: false, aiDone: true, aiLog: [...(prev.aiLog ?? []), '✓ Analysis complete — see Takeoff Review tab.'] }));
+          set(prev => ({ aiRunning: false, aiDone: true, aiLog: [...(prev.aiLog ?? []), '✓ Analysis complete — see Plan Review tab.'] }));
         } else if (data?.status === 'error') {
           set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), '✗ Analysis failed. Check server logs.'] }));
         } else {
-          pollForResults(); // still running
+          pollForResults(startMs, nextA2, nextA3);
         }
       } catch {
         set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), '✗ Could not reach server.'] }));
@@ -106,11 +127,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
   const runAI = async () => {
     if (wsRef.current.aiRunning || wsRef.current.aiDone) return;
-    set({ aiRunning: true, aiLog: ['Connecting to AI analysis engine…'] });
+    const elecFiles = fileObjectsRef.current.filter(f => isElecSheet(f.name));
+    set({ aiRunning: true, aiLog: [`Uploading ${fileObjectsRef.current.length} file(s) (${elecFiles.length} electrical sheet${elecFiles.length !== 1 ? 's' : ''} identified)…`] });
     try {
-      await api.post('/preconstruction/analyze', { bidId: bid.id });
-      set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Analyzing bid scope and specifications…', 'Identifying materials and labor requirements…', 'Generating risk assessment…'] }));
-      pollForResults();
+      const formData = new FormData();
+      formData.append('bidId', bid.id);
+      fileObjectsRef.current.forEach(f => formData.append('files', f));
+      await api.post('/preconstruction/analyze', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Agent 1 of 3: Reading plans & extracting drawing data (1–2 min)…'] }));
+      pollForResults(Date.now());
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to start analysis';
       set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${msg}`] }));
@@ -142,6 +167,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
+    fileObjectsRef.current = [...fileObjectsRef.current, ...files];
     const newFiles = files.map(f => ({
       id: Date.now().toString() + f.name,
       name: f.name,
@@ -186,37 +212,55 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           </div>
         );
 
-      case 'files':
+      case 'files': {
+        const elecCount = fileObjectsRef.current.filter(f => isElecSheet(f.name)).length;
+        const totalCount = fileObjectsRef.current.length;
         return (
           <div style={{ padding: '20px 24px' }}>
-            <div style={{ marginBottom: 16 }}>
-              <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={handleFileUpload}/>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" style={{ display: 'none' }} onChange={handleFileUpload}/>
               <button className="btn ghost" onClick={() => fileInputRef.current?.click()} style={{ fontSize: 13 }}>
                 <Icon name="cloudup" size={14} stroke={1.9}/> Upload Files
               </button>
+              {totalCount > 0 && (
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text3)' }}>
+                  {totalCount} file{totalCount !== 1 ? 's' : ''} uploaded · <span style={{ color: 'var(--blue)' }}>{elecCount} electrical sheet{elecCount !== 1 ? 's' : ''}</span> identified
+                </span>
+              )}
             </div>
             {ws.files.length === 0 ? (
               <div className="panel-empty" style={{ padding: 48, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
-                No files uploaded yet
+                No files uploaded yet. Upload PDF plan sheets to enable AI analysis.
               </div>
             ) : (
               <div className="panel">
                 <table className="ctable">
-                  <thead><tr><th>File</th><th>Type</th><th>Size</th></tr></thead>
+                  <thead><tr><th>File</th><th>Type</th><th>Size</th><th>Sheet Type</th></tr></thead>
                   <tbody>
-                    {ws.files.map(f => (
-                      <tr key={f.id}>
-                        <td className="nm"><Icon name="file" size={13} stroke={1.8}/> {f.name}</td>
-                        <td><span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'var(--blue-soft)', color: 'var(--blue)', textTransform: 'uppercase' }}>{f.type}</span></td>
-                        <td className="sub">{f.size}</td>
-                      </tr>
-                    ))}
+                    {ws.files.map(f => {
+                      const elec = isElecSheet(f.name);
+                      return (
+                        <tr key={f.id}>
+                          <td className="nm"><Icon name="file" size={13} stroke={1.8}/> {f.name}</td>
+                          <td><span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'var(--blue-soft)', color: 'var(--blue)', textTransform: 'uppercase' }}>{f.type}</span></td>
+                          <td className="sub">{f.size}</td>
+                          <td>
+                            <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 5, textTransform: 'uppercase',
+                              background: elec ? 'var(--green-soft)' : 'var(--surface2)',
+                              color: elec ? 'var(--green)' : 'var(--text3)' }}>
+                              {elec ? 'Electrical' : 'Other'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
           </div>
         );
+      }
 
       case 'bid':
         return (
@@ -232,7 +276,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               </div>
               <div style={{ padding: '16px 20px' }}>
                 <p style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 14, lineHeight: 1.6 }}>
-                  Upload plan sheets in the Files tab, then run the AI engine to automatically count devices, circuits, and fixtures.
+                  Upload electrical plan sheets in the Files tab, then run the 3-agent AI pipeline: Agent 1 reads drawings, Agent 2 builds scope & estimate, Agent 3 runs QA review. Results appear in the Plan Review tab.
                 </p>
                 <button className="btn" onClick={runAI} disabled={ws.aiRunning || ws.aiDone} style={{ fontSize: 13, marginBottom: ws.aiLog.length ? 16 : 0 }}>
                   <Icon name="spark" size={14} stroke={1.9}/>
@@ -250,65 +294,75 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         );
 
       case 'takeoff': {
-        const scope = (aiResults?.scope as Array<{id:string;category:string;items:string[];estimatedHours:number}>) ?? [];
-        const materials = (aiResults?.materials as Array<{item:string;qty:number;unit:string;estimatedCost:number}>) ?? [];
-        const labor = aiResults?.labor_estimate as {totalHours?:number;estimatedLaborCost?:number;notes?:string} | undefined;
+        const agent1 = aiResults?.agent1_output as string | undefined;
+        const agent2 = aiResults?.agent2_output as string | undefined;
+        const agent3 = aiResults?.agent3_output as string | undefined;
+        const ANALYSIS_TABS = [
+          { key: 'agent1' as const, label: 'Drawing Analysis',   output: agent1 },
+          { key: 'agent2' as const, label: 'Scope & Estimate',   output: agent2 },
+          { key: 'agent3' as const, label: 'QA Review & Risk',   output: agent3 },
+          { key: 'raw'    as const, label: 'Raw Data',           output: aiResults ? JSON.stringify(aiResults, null, 2) : undefined },
+        ];
+        const exportMarkdown = () => {
+          const parts = [
+            `# Plan Review — ${bid.name}\n`,
+            agent1 ? `## Drawing Analysis\n${agent1}` : '',
+            agent2 ? `## Scope & Estimate\n${agent2}` : '',
+            agent3 ? `## QA Review & Risk\n${agent3}` : '',
+          ].filter(Boolean).join('\n\n');
+          const blob = new Blob([parts], { type: 'text/markdown' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = `${bid.name.replace(/\s+/g,'-')}-analysis.md`;
+          a.click(); URL.revokeObjectURL(url);
+        };
         return (
           <div style={{ padding: '20px 24px' }}>
             {!ws.aiDone ? (
               <div style={{ padding: 48, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
-                Run the AI Takeoff in the Bid Builder tab first.
+                Run AI Takeoff in the Bid Builder tab first.
               </div>
             ) : !aiResults ? (
               <div style={{ padding: 48, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Loading results…</div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {labor && (
-                  <div className="panel">
-                    <div className="panel-hdr"><span className="panel-title">Labor Estimate</span></div>
-                    <div style={{ padding: '14px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                      <div><div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Total Hours</div><div className="num" style={{ fontSize: 22, fontWeight: 900 }}>{labor.totalHours ?? '—'}</div></div>
-                      <div><div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Est. Labor Cost</div><div className="num" style={{ fontSize: 22, fontWeight: 900, color: 'var(--green)' }}>${(labor.estimatedLaborCost ?? 0).toLocaleString()}</div></div>
-                      {labor.notes && <div style={{ gridColumn: '1 / -1', fontSize: 12.5, color: 'var(--text3)', fontWeight: 600 }}>{labor.notes}</div>}
-                    </div>
+              <>
+                {/* Sub-tab bar */}
+                <div style={{ display: 'flex', gap: 2, marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 0, alignItems: 'center' }}>
+                  {ANALYSIS_TABS.map(t => (
+                    <button key={t.key} onClick={() => setAnalysisTab(t.key)}
+                      style={{ border: 'none', cursor: 'pointer', font: 'inherit', fontSize: 12.5, fontWeight: 700,
+                        padding: '8px 14px', background: 'transparent',
+                        color: analysisTab === t.key ? 'var(--text)' : 'var(--text3)',
+                        borderBottom: analysisTab === t.key ? '2px solid var(--blue)' : '2px solid transparent',
+                        whiteSpace: 'nowrap' }}>
+                      {t.label}
+                      {!t.output && t.key !== 'raw' && <span style={{ marginLeft: 4, fontSize: 10, color: 'var(--text3)' }}>—</span>}
+                    </button>
+                  ))}
+                  <button onClick={exportMarkdown}
+                    style={{ marginLeft: 'auto', border: '1px solid var(--border2)', borderRadius: 7, cursor: 'pointer',
+                      font: 'inherit', fontSize: 12, fontWeight: 700, padding: '5px 12px',
+                      background: 'var(--surface2)', color: 'var(--text2)' }}>
+                    ↓ Export
+                  </button>
+                </div>
+                {/* Sub-tab content */}
+                {ANALYSIS_TABS.map(t => t.key === analysisTab && (
+                  <div key={t.key}>
+                    {t.output ? (
+                      <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '14px 16px',
+                        fontFamily: 'monospace', fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.7,
+                        whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '60vh', overflowY: 'auto' }}>
+                        {t.output}
+                      </div>
+                    ) : (
+                      <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
+                        No output yet for this agent.
+                      </div>
+                    )}
                   </div>
-                )}
-                {scope.length > 0 && (
-                  <div className="panel">
-                    <div className="panel-hdr"><span className="panel-title">Scope Breakdown</span></div>
-                    <table className="ctable">
-                      <thead><tr><th>Category</th><th>Key Items</th><th style={{ textAlign: 'right' }}>Est. Hours</th></tr></thead>
-                      <tbody>
-                        {scope.map(s => (
-                          <tr key={s.id}>
-                            <td className="nm">{s.id}. {s.category}</td>
-                            <td className="sub">{s.items.slice(0, 2).join(', ')}{s.items.length > 2 ? ` +${s.items.length - 2} more` : ''}</td>
-                            <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{s.estimatedHours}h</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                {materials.length > 0 && (
-                  <div className="panel">
-                    <div className="panel-hdr"><span className="panel-title">Key Materials</span></div>
-                    <table className="ctable">
-                      <thead><tr><th>Item</th><th style={{ textAlign: 'right' }}>Qty</th><th>Unit</th><th style={{ textAlign: 'right' }}>Est. Cost</th></tr></thead>
-                      <tbody>
-                        {materials.map((m, i) => (
-                          <tr key={i}>
-                            <td className="nm">{m.item}</td>
-                            <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{m.qty}</td>
-                            <td className="sub">{m.unit}</td>
-                            <td className="num" style={{ textAlign: 'right' }}>${m.estimatedCost.toLocaleString()}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+                ))}
+              </>
             )}
           </div>
         );
