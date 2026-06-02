@@ -11,6 +11,8 @@ import wonJobsRouter from './routes/wonJobs';
 import usersRouter from './routes/users';
 import commsRouter from './routes/comms';
 import preconRouter from './routes/preconstruction';
+import projectsRouter from './routes/projects';
+import documentsRouter from './routes/documents';
 
 dotenv.config();
 
@@ -26,6 +28,8 @@ app.use('/api/won-jobs', wonJobsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/comms', commsRouter);
 app.use('/api/preconstruction', preconRouter);
+app.use('/api/projects', projectsRouter);
+app.use('/api/documents', documentsRouter);
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
