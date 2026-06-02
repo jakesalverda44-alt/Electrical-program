@@ -2,7 +2,7 @@
   "name": "electrical-crm",
   "private": true,
   "scripts": {
-    "build": "cd frontend && npm install && npm run build && cd ../backend && npm install && npm run build",
+    "build": "cd frontend && npm install --include=dev && npm run build && cd ../backend && npm install --include=dev && npm run build",
     "install:all": "cd frontend && npm install && cd ../backend && npm install",
     "dev:backend": "cd backend && npm run dev",
     "dev:frontend": "cd frontend && npm run dev"
