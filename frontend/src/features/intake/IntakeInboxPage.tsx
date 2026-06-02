@@ -115,9 +115,10 @@ function confBadge(level: 'high' | 'medium' | 'low') {
 interface Props {
   onBidAccepted: (bid: Bid) => void;
   showToast: (t: Toast) => void;
+  onPendingChange?: (count: number) => void;
 }
 
-export default function IntakeInboxPage({ onBidAccepted, showToast }: Props) {
+export default function IntakeInboxPage({ onBidAccepted, showToast, onPendingChange }: Props) {
   const [items, setItems] = useState<IntakeItem[]>(DEMO_ITEMS);
   const [selected, setSelected] = useState<IntakeItem | null>(null);
   const [editing, setEditing] = useState<Partial<IntakeItem['fields']>>({});
@@ -152,7 +153,11 @@ export default function IntakeInboxPage({ onBidAccepted, showToast }: Props) {
         stage:   'due',
       });
       const newBid: Bid = r.data;
-      setItems(prev => prev.map(i => i.id === selected.id ? { ...i, status: 'accepted' } : i));
+      setItems(prev => {
+        const next = prev.map(i => i.id === selected.id ? { ...i, status: 'accepted' as const } : i);
+        onPendingChange?.(next.filter(i => i.status === 'pending').length);
+        return next;
+      });
       onBidAccepted(newBid);
       showToast({ title: 'Bid accepted', sub: `${f.bidName} added to pipeline` });
       setSelected(null);
@@ -165,7 +170,11 @@ export default function IntakeInboxPage({ onBidAccepted, showToast }: Props) {
 
   const handleReject = () => {
     if (!selected) return;
-    setItems(prev => prev.map(i => i.id === selected.id ? { ...i, status: 'rejected' } : i));
+    setItems(prev => {
+      const next = prev.map(i => i.id === selected.id ? { ...i, status: 'rejected' as const } : i);
+      onPendingChange?.(next.filter(i => i.status === 'pending').length);
+      return next;
+    });
     showToast({ title: 'Bid declined', sub: rejectReason });
     setSelected(null);
     setRejectOpen(false);

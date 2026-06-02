@@ -43,10 +43,12 @@ export default function App() {
   const [gens, setGens] = useState<Gen[]>([]);
   const [wonJobs, setWonJobs] = useState<WonJob[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
+  const [repNames, setRepNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [flashId, setFlashId] = useState<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
+  const [intakeCount, setIntakeCount] = useState(2); // 2 pending demo items on first load
 
   const triggerFlash = useCallback((id: string) => {
     setFlashId(id);
@@ -57,12 +59,13 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     setLoading(true);
-    api.get('/dashboard')
-      .then(r => {
-        setBids(r.data.bids);
-        setGens(r.data.gens);
-        setWonJobs(r.data.wonJobs);
-        setActivity(r.data.activity);
+    Promise.all([api.get('/dashboard'), api.get('/users')])
+      .then(([dash, users]) => {
+        setBids(dash.data.bids);
+        setGens(dash.data.gens);
+        setWonJobs(dash.data.wonJobs);
+        setActivity(dash.data.activity);
+        setRepNames(users.data.map((u: { name: string }) => u.name));
       })
       .finally(() => setLoading(false));
   }, [user]);
@@ -115,6 +118,7 @@ export default function App() {
         return (
           <DashboardPage
             bids={bids} gens={gens} wonJobs={wonJobs} activity={activity}
+            repNames={repNames}
             onNav={setView} onNewProposal={() => setView('builder')}
           />
         );
@@ -143,6 +147,7 @@ export default function App() {
           <IntakeInboxPage
             onBidAccepted={(bid) => { setBids(prev => [bid, ...prev]); setView('elec-proposals'); }}
             showToast={showToast}
+            onPendingChange={setIntakeCount}
           />
         );
       case 'builder':
@@ -191,7 +196,7 @@ export default function App() {
         elecProposalCount={elecProposalCount}
         genProjectCount={genProjectCount}
         elecProjectCount={elecProjectCount}
-        newIncoming={0}
+        newIncoming={intakeCount}
         dashFilter={dashFilter}
         onDashFilter={setDashFilter}
         onNewProposal={() => setView('builder')}

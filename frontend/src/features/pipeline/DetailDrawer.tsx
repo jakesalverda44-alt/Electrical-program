@@ -84,10 +84,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
             </button>
           )}
 
-          <div className="dtl-hint">
-            <Icon name="clip" size={14} stroke={1.8}/>
-            AI plan-set extraction connects here once wired to the backend.
-          </div>
+
         </div>
       </div>
     </div>

@@ -23,6 +23,18 @@ function withDueDays(row: Record<string, unknown>) {
   return { ...row, due_days: parseDueDays(String(row.due || '')) };
 }
 
+// Accept ISO "YYYY-MM-DD" from date picker OR legacy "Mon D" text
+function formatDue(raw: string | undefined): string {
+  if (!raw?.trim()) return 'TBD';
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(raw.trim());
+  if (iso) {
+    const [, m, d] = raw.split('-');
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${months[parseInt(m)-1]} ${parseInt(d)}`;
+  }
+  return raw.trim();
+}
+
 router.get('/', requireAuth, async (_req, res) => {
   const { rows } = await pool.query('SELECT * FROM bids ORDER BY created_at DESC');
   res.json(rows.map(withDueDays));
@@ -35,7 +47,7 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const { rows } = await pool.query(
     `INSERT INTO bids (name, gc, loc, amount, due, salesperson_id, salesperson_name)
      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [name.trim(), gc.trim(), (loc||'').trim()||'—', Number(amount)||0, (due||'').trim()||'TBD', user.id, user.name]
+    [name.trim(), gc.trim(), (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), user.id, user.name]
   );
   res.json(withDueDays(rows[0]));
 });

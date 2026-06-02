@@ -14,11 +14,12 @@ interface Props {
   gens: Gen[];
   wonJobs: WonJob[];
   activity: Activity[];
+  repNames?: string[];
   onNav: (v: string) => void;
   onNewProposal: () => void;
 }
 
-export default function DashboardPage({ bids, gens, wonJobs, activity, onNav, onNewProposal }: Props) {
+export default function DashboardPage({ bids, gens, wonJobs, activity, repNames, onNav, onNewProposal }: Props) {
   const sum = (a: { amount: number }[]) => a.reduce((s, x) => s + Number(x.amount), 0);
 
   const elecActive = bids.filter(b => b.stage === 'due' || b.stage === 'submitted');
@@ -81,7 +82,7 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, onNav, on
           </div>
           <div className="comm-right">
             <div className="comm-reps">
-              {['Jake Salverda','David Marsh'].map(rep => {
+              {(repNames && repNames.length > 0 ? repNames : ['Jake Salverda','David Marsh']).map(rep => {
                 const repJobs = thisYear.filter(j => j.salesperson_name === rep);
                 const repVal  = sumWon(repJobs);
                 const repPct  = yearVal ? Math.round((repVal/yearVal)*100) : 0;

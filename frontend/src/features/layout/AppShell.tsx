@@ -55,10 +55,10 @@ export default function AppShell({
       { id: 'dashboard',      label: 'Sales Dashboard',      icon: 'dashboard' },
       { id: 'gen-proposals',  label: 'Generator Proposals',  icon: 'bolt', tone: 'amber', count: genProposalCount },
       { id: 'elec-proposals', label: 'Electrical Proposals', icon: 'pipeline', count: elecProposalCount },
+      { id: 'intake',         label: 'Intake Inbox',         icon: 'bell', count: newIncoming },
       { id: 'sales-by-rep',   label: 'Sales by Rep',         icon: 'trend' },
     ]},
     { group: 'Preconstruction', items: [
-      { id: 'intake',          label: 'Intake Inbox',    icon: 'bell',    count: 2 },
       { id: 'preconstruction', label: 'Preconstruction', icon: 'sparkle' },
     ]},
     { group: 'Projects', items: [

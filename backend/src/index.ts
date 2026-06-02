@@ -8,6 +8,7 @@ import dashboardRouter from './routes/dashboard';
 import bidsRouter from './routes/bids';
 import gensRouter from './routes/gens';
 import wonJobsRouter from './routes/wonJobs';
+import usersRouter from './routes/users';
 
 dotenv.config();
 
@@ -20,6 +21,7 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/bids', bidsRouter);
 app.use('/api/gens', gensRouter);
 app.use('/api/won-jobs', wonJobsRouter);
+app.use('/api/users', usersRouter);
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 

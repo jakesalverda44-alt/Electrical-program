@@ -58,12 +58,12 @@ export default function AddBidModal({ onClose, onAdded }: Props) {
             </div>
             <div className="field-row">
               <div className="field">
-                <label>Bid amount (USD)</label>
-                <input className="num" type="number" value={f.amount} onChange={set('amount')} placeholder="0" min="0"/>
+                <label>Bid amount (USD) <span style={{fontWeight:400,color:'var(--text3)'}}>— optional</span></label>
+                <input className="num" type="number" value={f.amount} onChange={set('amount')} placeholder="Assign after submission" min="0"/>
               </div>
               <div className="field">
                 <label>Due date</label>
-                <input value={f.due} onChange={set('due')} placeholder="Jun 12"/>
+                <input type="date" value={f.due} onChange={set('due')}/>
               </div>
             </div>
             {error && <div className="login-error">{error}</div>}
