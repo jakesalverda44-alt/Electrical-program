@@ -15,6 +15,8 @@ import ElecProjectsPage from './features/elec-projects/ElecProjectsPage';
 import GenProjectsPage from './features/gen-projects/GenProjectsPage';
 import ContactsPage from './features/contacts/ContactsPage';
 import ReportingPage from './features/reporting/ReportingPage';
+import CommsPage from './features/comms/CommsPage';
+import DocsPage from './features/docs/DocsPage';
 import { PcWorkspace } from './features/preconstruction/constants';
 import Toast from './components/Toast';
 import api from './api/client';
@@ -169,6 +171,10 @@ export default function App() {
         return <ContactsPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
       case 'reporting':
         return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
+      case 'comms':
+        return <CommsPage bids={bids} gens={gens} activity={activity} showToast={showToast} userName={user.name}/>;
+      case 'docs':
+        return <DocsPage bids={bids} gens={gens} showToast={showToast} userName={user.name}/>;
       default:
         return <StubPage title={view.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}/>;
     }
