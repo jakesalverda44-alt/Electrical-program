@@ -65,6 +65,8 @@ function genToForm(g: Gen): GenForm {
     size: g.model || blank.size,
     jobType: 'new-install',
     removalFee: 500,
+    attn: '',
+    discountType: '$',
   };
 }
 
@@ -138,6 +140,9 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
           <Section title="Customer & Site" icon="building">
             <Field label="Customer Name">
               <input style={INPUT_STYLE} value={form.customer} onChange={e => set('customer', e.target.value)} placeholder="Full name or company"/>
+            </Field>
+            <Field label="Attention / Contact">
+              <input style={INPUT_STYLE} value={form.attn} onChange={e => set('attn', e.target.value)} placeholder="Contact person"/>
             </Field>
             <Field label="Address">
               <input style={INPUT_STYLE} value={form.address} onChange={e => set('address', e.target.value)} placeholder="Street address"/>
@@ -251,8 +256,20 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
             <Field label="Startup">
               <input type="number" min={0} style={INPUT_STYLE} value={form.startup} onChange={e => set('startup', Number(e.target.value))}/>
             </Field>
-            <Field label="Discount ($)">
-              <input type="number" min={0} style={INPUT_STYLE} value={form.discount} onChange={e => set('discount', Number(e.target.value))}/>
+            <Field label={`Discount (${form.discountType === '%' ? '%' : '$'})`}>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input type="number" min={0} style={{ ...INPUT_STYLE, flex: 1 }} value={form.discount} onChange={e => set('discount', Number(e.target.value))}/>
+                <div style={{ display: 'flex', borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)', flexShrink: 0 }}>
+                  {(['$', '%'] as const).map(t => (
+                    <button key={t} onClick={() => set('discountType', t)}
+                      style={{ padding: '0 10px', fontSize: 12, fontWeight: 700, border: 'none', cursor: 'pointer',
+                        background: form.discountType === t ? 'var(--accent)' : 'var(--surface)',
+                        color: form.discountType === t ? '#fff' : 'var(--text2)' }}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </Field>
             <Field label="Tax Rate (%)">
               <input type="number" min={0} max={20} step={0.1} style={INPUT_STYLE} value={form.taxRate} onChange={e => set('taxRate', Number(e.target.value))}/>
@@ -305,7 +322,7 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
               <div style={{ height: 1, background: 'var(--border)', margin: '10px 0' }}/>
               {totals.discountAmt > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 5, color: 'var(--red, #E06A6A)' }}>
-                  <span>Discount</span>
+                  <span>Discount{form.discountType === '%' ? ` (${form.discount}%)` : ''}</span>
                   <span className="num">−{fmt(totals.discountAmt)}</span>
                 </div>
               )}

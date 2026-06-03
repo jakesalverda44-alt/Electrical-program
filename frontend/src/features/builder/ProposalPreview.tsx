@@ -193,13 +193,13 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
                   <td style={{ padding: '5px 8px', fontWeight: 700, color: ACCENT, fontSize: 10 }} colSpan={2}>{proposalNo}</td>
                 </tr>
                 <tr style={{ background: BLUE_M }}>
-                  <td style={{ padding: '4px 8px', fontWeight: 700, color: GRAY_M, fontSize: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>Attn</td>
+                  <td style={{ padding: '4px 8px', fontWeight: 700, color: GRAY_M, fontSize: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>Attn / Contact</td>
                   <td style={{ padding: '4px 8px', fontWeight: 700, color: GRAY_M, fontSize: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>Phone</td>
                   <td style={{ padding: '4px 8px', fontWeight: 700, color: GRAY_M, fontSize: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>Email</td>
                   <td style={{ padding: '4px 8px' }}/>
                 </tr>
                 <tr style={{ background: BLUE_L }}>
-                  <td style={{ padding: '5px 8px' }}>{form.customer || '—'}</td>
+                  <td style={{ padding: '5px 8px' }}>{form.attn || form.customer || '—'}</td>
                   <td style={{ padding: '5px 8px' }}>{form.phone || '—'}</td>
                   <td style={{ padding: '5px 8px' }}>{form.email || '—'}</td>
                   <td style={{ padding: '5px 8px' }}/>
@@ -240,13 +240,11 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
               <tbody>
                 {[
                   {
-                    n: '1',
                     title: `APT to provide a ${form.brand} ${form.size} Generator — ${form.ats} ATS`,
                     desc: `The ${form.brand} Advantage: High Quality Power — advanced voltage/frequency regulation with ultra-low harmonic distortion protects electronics. Extraordinary Reliability — 5-year/2,000-hour warranty. Powerful Performance — Exclusive Power Boost; starts 5-ton A/C. Corrosion-Proof Enclosure — impact-resistant to -34°C. Fast Response. Quiet Operation.`,
                     shade: false,
                   },
                   {
-                    n: '2',
                     title: form.jobType === 'swap-out'
                       ? 'Scope of Work — Generator Replacement (Swap-Out)'
                       : 'Scope of Work — Home Standby Generator Installation',
@@ -255,43 +253,34 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
                       : 'Furnish and install a permanently mounted home standby generator and ATS on a code-compliant pad. Complete all electrical connections, integrate ATS for automatic transfer during outages. Includes grounding, bonding, utility coordination, startup, testing, and commissioning per 2026 NEC.',
                     shade: true,
                   },
-                  {
-                    n: '3',
+                  ...(form.smm ? [{
                     title: 'Smart Management Module(s)',
-                    desc: form.smm
-                      ? 'Provide and install SMM(s) for load management and permitting compliance per manufacturer specs and codes.'
-                      : 'Not applicable for this installation.',
+                    desc: 'Provide and install SMM(s) for load management and permitting compliance per manufacturer specs and codes.',
                     shade: false,
-                  },
-                  {
-                    n: '4',
+                  }] : []),
+                  ...(form.surgePro ? [{
                     title: 'Whole-Home Surge Protectors',
-                    desc: form.surgePro
-                      ? 'Provide and install a whole-home surge protective device at the electrical service equipment per manufacturer requirements and local codes.'
-                      : 'Not applicable for this installation.',
+                    desc: 'Provide and install a whole-home surge protective device at the electrical service equipment per manufacturer requirements and local codes.',
                     shade: true,
-                  },
+                  }] : []),
                   {
-                    n: '5',
                     title: "5-Year Manufacturer's Comprehensive Warranty",
                     desc: "APT provides the full 5-year manufacturer's comprehensive warranty on this installation.",
                     shade: false,
                   },
                   {
-                    n: '6',
                     title: 'Permit Fees & Sales Tax Included',
                     desc: 'All required permit fees and applicable Florida sales tax are included in this proposal.',
                     shade: true,
                   },
                   {
-                    n: '7',
                     title: form.jobType === 'swap-out' ? 'Gas — Existing Connections' : 'Gas Installation — Not Included',
                     desc: form.jobType === 'swap-out'
                       ? 'Gas reconnection to the existing supply line is included. New gas line installation is NOT included in this proposal.'
                       : 'Gas installation and connections are NOT included in this proposal.',
                     shade: false,
                   },
-                ].map(row => (
+                ].map((row, idx) => ({ ...row, n: String(idx + 1) })).map(row => (
                   <tr key={row.n} style={{ background: row.shade ? '#F8FAFC' : '#fff', verticalAlign: 'top', borderBottom: '1px solid #E5E7EB' }}>
                     <td style={{ padding: '7px 6px', width: 20, fontWeight: 800, color: ACCENT, textAlign: 'center' }}>{row.n}</td>
                     <td style={{ padding: '7px 6px', width: '30%', fontWeight: 700, color: '#1B3A6B', lineHeight: '13px' }}>{row.title}</td>

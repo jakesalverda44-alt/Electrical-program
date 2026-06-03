@@ -40,7 +40,7 @@ function buildContacts(bids: Bid[], gens: Gen[], wonJobs: WonJob[]): Contact[] {
         id: key, name: b.gc, type: 'gc', company: b.gc,
         phone: '', email: '', loc: b.loc,
         bids: 1, gens: 0,
-        wonValue: wonJobs.filter(j => j.proposal_type === 'Electrical').reduce((s, j) => s, 0),
+        wonValue: 0,
       });
     }
   });

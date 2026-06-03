@@ -2,7 +2,7 @@ import { DEFAULT_PRICES, LC_MODELS, GEN_SPECS, GenForm } from './genData';
 
 export function blankGenForm(): GenForm {
   return {
-    customer: '', address: '', city: '', state: 'FL', zip: '', phone: '', email: '',
+    customer: '', attn: '', address: '', city: '', state: 'FL', zip: '', phone: '', email: '',
     brand: 'Kohler', coolingType: 'air-cooled', size: '14KW',
     ats: '200A', fuel: 'Natural Gas',
     pad: true, smm: true, surgePro: false, battery: false, extraWire: 0,
@@ -10,7 +10,7 @@ export function blankGenForm(): GenForm {
     labor: DEFAULT_PRICES.labor,
     permit: DEFAULT_PRICES.permit,
     startup: DEFAULT_PRICES.startup,
-    discount: 0, taxRate: 7,
+    discount: 0, discountType: '$',  taxRate: 7,
     notes: '',
     includeBreakdown: false,
     jobType: 'new-install',
@@ -80,7 +80,9 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const startupAmt = g.coolingType === 'liquid-cooled' ? DEFAULT_PRICES.startupLC : Number(g.startup);
 
   const subtotal   = genP + padAmt + smmTotal + surgeTotal + batteryAmt + extraWireAmt + extraATS + lcATS + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
-  const discountAmt = Number(g.discount) || 0;
+  const discountAmt = g.discountType === '%'
+    ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
+    : (Number(g.discount) || 0);
   const taxable    = subtotal - discountAmt;
   const tax        = Math.round(taxable * (Number(g.taxRate) / 100));
   const total      = taxable + tax;

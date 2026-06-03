@@ -232,8 +232,7 @@ export default function ReportingPage({ bids, gens, wonJobs }: Props) {
                     <th style={{ textAlign: 'right' }}>Active Bids</th>
                     <th style={{ textAlign: 'right' }}>Jobs Won</th>
                     <th style={{ textAlign: 'right' }}>Won Value</th>
-                    <th style={{ textAlign: 'right' }}>Win Rate</th>
-                    <th style={{ minWidth: 120 }}>Win Rate</th>
+                    <th style={{ textAlign: 'right', minWidth: 120 }}>Win Rate</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -243,9 +242,9 @@ export default function ReportingPage({ bids, gens, wonJobs }: Props) {
                       <td className="num" style={{ textAlign: 'right' }}>{r.activeBids + r.activeGens}</td>
                       <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{r.won}</td>
                       <td className="num" style={{ textAlign: 'right', fontWeight: 800, color: 'var(--green)' }}>{moneyFull(r.wonValue)}</td>
-                      <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{r.winRate}%</td>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span className="num" style={{ fontWeight: 800, minWidth: 36, textAlign: 'right' }}>{r.winRate}%</span>
                           <BAR pct={r.winRate} color={r.winRate >= 60 ? 'var(--green)' : r.winRate >= 40 ? 'var(--amber)' : 'var(--red, #E06A6A)'}/>
                         </div>
                       </td>

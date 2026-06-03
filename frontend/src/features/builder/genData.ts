@@ -231,6 +231,7 @@ export const GEN_SPEC_DETAIL: Record<string, Record<string, GenSpecDetail>> = {
 
 export interface GenForm {
   customer: string;
+  attn: string;
   address: string;
   city: string;
   state: string;
@@ -255,6 +256,7 @@ export interface GenForm {
   permit: number;
   startup: number;
   discount: number;
+  discountType: '%' | '$';
   taxRate: number;
   notes: string;
   includeBreakdown: boolean;
