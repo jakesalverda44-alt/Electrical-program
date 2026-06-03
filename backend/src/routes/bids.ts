@@ -1,6 +1,8 @@
 import { Router } from 'express';
+import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { requireAuth, AuthRequest } from '../middleware/auth';
+import { getSetting } from '../db/getSetting';
 
 const router = Router();
 
@@ -35,6 +37,45 @@ function formatDue(raw: string | undefined): string {
   return raw.trim();
 }
 
+async function sendBidNotification(bid: Record<string, unknown>, addedBy: { name: string }) {
+  const [enabled, emailsJson, apiKey, fromAddress, fromName, frontendUrl] = await Promise.all([
+    getSetting('bid_notify_enabled'),
+    getSetting('bid_notify_emails'),
+    getSetting('email_resend_api_key'),
+    getSetting('email_from_address'),
+    getSetting('email_from_name'),
+    getSetting('frontend_url'),
+  ]);
+  if (enabled === 'false' || !apiKey) return;
+  let emails: string[] = [];
+  try { emails = JSON.parse(emailsJson || '[]'); } catch { return; }
+  if (!emails.length) return;
+
+  const dueStr = bid.due ? String(bid.due) : 'TBD';
+  const amt = bid.amount ? '$' + Number(bid.amount).toLocaleString() : '—';
+  const base = (frontendUrl || 'https://electrical-program.onrender.com').replace(/\/$/, '');
+
+  const resend = new Resend(apiKey);
+  await resend.emails.send({
+    from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
+    to: emails,
+    subject: `New Bid — ${bid.name}`,
+    html: `<div style="font-family:sans-serif;max-width:520px">
+      <h2 style="margin:0 0 16px">New Bid Added</h2>
+      <table style="border-collapse:collapse;width:100%">
+        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5;width:130px">Job</td><td style="padding:8px 12px">${bid.name}</td></tr>
+        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">General Contractor</td><td style="padding:8px 12px">${bid.gc}</td></tr>
+        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Location</td><td style="padding:8px 12px">${bid.loc}</td></tr>
+        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Due Date</td><td style="padding:8px 12px">${dueStr}</td></tr>
+        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Est. Value</td><td style="padding:8px 12px">${amt}</td></tr>
+        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Added By</td><td style="padding:8px 12px">${addedBy.name}</td></tr>
+      </table>
+      <p style="margin:20px 0 0"><a href="${base}" style="background:#4D8DF7;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700">Open Pipeline →</a></p>
+    </div>`,
+    text: `New Bid: ${bid.name}\nGC: ${bid.gc}\nLocation: ${bid.loc}\nDue: ${dueStr}\nEst. Value: ${amt}\nAdded by: ${addedBy.name}\n\n${base}`,
+  });
+}
+
 router.get('/', requireAuth, async (_req, res) => {
   const { rows } = await pool.query('SELECT * FROM bids ORDER BY created_at DESC');
   res.json(rows.map(withDueDays));
@@ -49,6 +90,7 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
     [name.trim(), gc.trim(), (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), user.id, user.name]
   );
+  sendBidNotification(rows[0], user).catch(() => {});
   res.json(withDueDays(rows[0]));
 });
 

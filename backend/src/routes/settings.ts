@@ -25,6 +25,8 @@ const ALLOWED_KEYS = [
   'ai_anthropic_key', 'ai_model', 'ai_max_tokens', 'ai_temperature',
   // AI permissions
   'ai_enabled', 'ai_analysis_enabled', 'ai_daily_limit_per_user', 'ai_role_permissions',
+  // Bid notifications
+  'bid_notify_enabled', 'bid_notify_emails',
   // Notifications
   'notifications_json',
   // Security

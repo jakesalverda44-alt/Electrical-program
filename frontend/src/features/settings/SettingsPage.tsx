@@ -747,26 +747,59 @@ const NOTIF_EVENTS = [
   { key: 'job_lost',          label: 'Job Lost / Declined', desc: 'When a proposal is declined.' },
 ];
 
+function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return (
+    <button onClick={onToggle}
+      style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', transition: 'background .2s',
+        background: on ? 'var(--blue)' : 'var(--border2)', position: 'relative', flexShrink: 0 }}>
+      <span style={{ position: 'absolute', top: 3, left: on ? 22 : 3, width: 18, height: 18,
+        borderRadius: '50%', background: '#fff', transition: 'left .2s', display: 'block' }}/>
+    </button>
+  );
+}
+
 function NotificationsSection({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
   const parsePrefs = (): Record<string, boolean> => {
     try { return JSON.parse(settings.notifications_json || '{}'); } catch { return {}; }
   };
-  const [prefs, setPrefs] = useState<Record<string, boolean>>(parsePrefs);
-  const [orig,  setOrig]  = useState(JSON.stringify(parsePrefs()));
-  const [saving, setSaving] = useState(false);
-  const [saved,  setSaved]  = useState(false);
+  const parseEmails = (): string[] => {
+    try { return JSON.parse(settings.bid_notify_emails || '[]'); } catch { return []; }
+  };
+
+  const [prefs,   setPrefs]   = useState<Record<string, boolean>>(parsePrefs);
+  const [orig,    setOrig]    = useState(JSON.stringify(parsePrefs()));
+  const [bidOn,   setBidOn]   = useState(settings.bid_notify_enabled !== 'false');
+  const [emails,  setEmails]  = useState<string[]>(parseEmails);
+  const [emailIn, setEmailIn] = useState('');
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
 
   useEffect(() => {
     const p = parsePrefs(); setPrefs(p); setOrig(JSON.stringify(p));
+    setBidOn(settings.bid_notify_enabled !== 'false');
+    setEmails(parseEmails());
   }, [settings]);
 
-  const hasChanges = JSON.stringify(prefs) !== orig;
-  const toggle = (k: string) => setPrefs(p => ({ ...p, [k]: !p[k] }));
+  const origBidOn     = settings.bid_notify_enabled !== 'false';
+  const origEmails    = JSON.stringify(parseEmails());
+  const hasChanges    = JSON.stringify(prefs) !== orig || bidOn !== origBidOn || JSON.stringify(emails) !== origEmails;
+  const toggle        = (k: string) => setPrefs(p => ({ ...p, [k]: !p[k] }));
+
+  const addEmail = () => {
+    const v = emailIn.trim().toLowerCase();
+    if (!v || emails.includes(v)) return;
+    setEmails(prev => [...prev, v]);
+    setEmailIn('');
+  };
 
   const save = async () => {
     setSaving(true);
     try {
-      await api.put('/settings', { notifications_json: JSON.stringify(prefs) });
+      await api.put('/settings', {
+        notifications_json:  JSON.stringify(prefs),
+        bid_notify_enabled:  bidOn ? 'true' : 'false',
+        bid_notify_emails:   JSON.stringify(emails),
+      });
       setOrig(JSON.stringify(prefs)); onSaved();
       setSaved(true); setTimeout(() => setSaved(false), 3000);
     } finally { setSaving(false); }
@@ -774,7 +807,47 @@ function NotificationsSection({ settings, onSaved }: { settings: AppSettings; on
 
   return (
     <div>
-      <SectionTitle title="Notifications" sub="Choose which events send you an email notification."/>
+      <SectionTitle title="Notifications" sub="Choose which events trigger email notifications."/>
+
+      {/* New bid email team */}
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 2 }}>New Bid Notification</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)' }}>Email the team list below whenever a new electrical bid is added to the pipeline.</div>
+          </div>
+          <Toggle on={bidOn} onToggle={() => setBidOn(o => !o)}/>
+        </div>
+
+        {/* Email chip list */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+          <input
+            type="email"
+            value={emailIn}
+            onChange={e => setEmailIn(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addEmail())}
+            placeholder="estimator@accuratepower.com"
+            style={{ flex: 1, height: 38, padding: '0 12px', borderRadius: 9, border: '1px solid var(--border2)',
+              background: 'var(--surface)', color: 'var(--text)', fontSize: 13, outline: 'none' }}
+          />
+          <button className="btn ghost" onClick={addEmail} style={{ height: 38, padding: '0 16px' }}>Add</button>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {emails.map(em => (
+            <span key={em} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600,
+              background: 'var(--blue-soft)', color: 'var(--blue)', border: '1px solid rgba(77,141,247,.25)',
+              borderRadius: 20, padding: '4px 10px 4px 12px' }}>
+              {em}
+              <button onClick={() => setEmails(prev => prev.filter(x => x !== em))}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--blue)', fontSize: 15, lineHeight: 1, padding: 0, display: 'flex' }}>×</button>
+            </span>
+          ))}
+          {emails.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>No recipients added yet.</span>}
+        </div>
+      </div>
+
+      {/* Proposal/job event toggles */}
+      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 10 }}>Proposal &amp; Job Events</div>
       <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '4px 0', marginBottom: 20 }}>
         {NOTIF_EVENTS.map((ev, i) => (
           <div key={ev.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: i < NOTIF_EVENTS.length - 1 ? '1px solid var(--border)' : 'none' }}>
@@ -782,17 +855,12 @@ function NotificationsSection({ settings, onSaved }: { settings: AppSettings; on
               <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 2 }}>{ev.label}</div>
               <div style={{ fontSize: 12, color: 'var(--text3)' }}>{ev.desc}</div>
             </div>
-            <button onClick={() => toggle(ev.key)}
-              style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', transition: 'background .2s',
-                background: prefs[ev.key] ? 'var(--accent)' : 'var(--border2)', position: 'relative', flexShrink: 0 }}>
-              <span style={{ position: 'absolute', top: 3, left: prefs[ev.key] ? 22 : 3, width: 18, height: 18,
-                borderRadius: '50%', background: '#fff', transition: 'left .2s', display: 'block' }}/>
-            </button>
+            <Toggle on={!!prefs[ev.key]} onToggle={() => toggle(ev.key)}/>
           </div>
         ))}
       </div>
       <div style={{ background: '#FFFBEB', border: '1px solid #FCD34D', borderRadius: 10, padding: '12px 16px', fontSize: 13, color: '#92400E', marginBottom: 20 }}>
-        Notification delivery requires email settings to be configured. Notifications are sent to your Reply-To address.
+        Notification delivery requires email settings to be configured under <strong>Integrations → Email Delivery</strong>.
       </div>
       <SaveBar onSave={save} saving={saving} saved={saved} hasChanges={hasChanges}/>
     </div>
