@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import Icon from '../../components/Icon';
 import SearchBox from '../../components/SearchBox';
 import aptLogo from '../../assets/apt-logo.png';
@@ -79,8 +79,30 @@ export default function AppShell({
     ]},
   ];
 
+  const [moreOpen, setMoreOpen] = useState(false);
+
   const tb = TB[view] || TB['dashboard'];
   const initials = user.name.split(' ').map(w => w[0]).join('').slice(0, 2);
+
+  const mobileBottomNav = [
+    { id: 'dashboard',      label: 'Dashboard',  icon: 'dashboard', count: 0 },
+    { id: 'gen-proposals',  label: 'Generator',  icon: 'bolt',      count: genProposalCount, amber: true },
+    { id: 'elec-proposals', label: 'Electrical', icon: 'pipeline',  count: elecProposalCount },
+    { id: 'gen-projects',   label: 'Projects',   icon: 'checkc',    count: 0 },
+  ];
+
+  const mobileMoreNav = [
+    { id: 'intake',          label: 'Intake Inbox',       icon: 'bell',    count: newIncoming },
+    { id: 'sales-by-rep',    label: 'Sales by Rep',       icon: 'trend',   count: 0 },
+    { id: 'preconstruction', label: 'Preconstruction',    icon: 'sparkle', count: 0 },
+    { id: 'elec-projects',   label: 'Elec. Projects',     icon: 'checkc',  count: elecProjectCount },
+    { id: 'builder',         label: 'Proposal Builder',   icon: 'doc',     count: 0 },
+    { id: 'comms',           label: 'Communications',     icon: 'bell',    count: 0 },
+    { id: 'docs',            label: 'Documents',          icon: 'clip',    count: 0 },
+    { id: 'reporting',       label: 'Reporting',          icon: 'trend',   count: 0 },
+    { id: 'contacts',        label: 'Contacts',           icon: 'users',   count: 0 },
+    { id: 'admin',           label: 'Settings',           icon: 'gear',    count: 0 },
+  ];
 
   const renderActions = () => {
     if (view === 'dashboard' || view === 'gen-proposals')
@@ -154,6 +176,40 @@ export default function AppShell({
         )}
         {children}
       </div>
+
+      {/* Mobile bottom navigation */}
+      <nav className="mobile-nav">
+        {mobileBottomNav.map(it => (
+          <button key={it.id} className={'mobile-nav-btn' + (view === it.id ? ' active' + (it.amber ? ' amber' : '') : '')} onClick={() => onNav(it.id)}>
+            <div style={{ position: 'relative', display: 'inline-flex' }}>
+              <Icon name={it.icon} size={22} stroke={1.8}/>
+              {it.count > 0 && <span className="mobile-nav-badge">{it.count}</span>}
+            </div>
+            <span>{it.label}</span>
+          </button>
+        ))}
+        <button className={'mobile-nav-btn mobile-nav-more' + (moreOpen ? ' active' : '')} onClick={() => setMoreOpen(o => !o)}>
+          <Icon name="gear" size={22} stroke={1.8}/>
+          <span>More</span>
+        </button>
+      </nav>
+
+      {/* More drawer */}
+      {moreOpen && (
+        <>
+          <div className="mobile-more-overlay" onClick={() => setMoreOpen(false)}/>
+          <div className="mobile-more-sheet">
+            <div className="mobile-more-handle"/>
+            {mobileMoreNav.map(it => (
+              <button key={it.id} className="mobile-more-item" onClick={() => { onNav(it.id); setMoreOpen(false); }}>
+                <span className="mobile-more-item-ic"><Icon name={it.icon} size={20} stroke={1.8}/></span>
+                {it.label}
+                {it.count > 0 && <span className="mobile-nav-badge" style={{ position: 'static', marginLeft: 'auto' }}>{it.count}</span>}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
