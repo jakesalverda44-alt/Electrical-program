@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Toast } from '../../types';
 import api from '../../api/client';
@@ -36,6 +36,7 @@ const WORKSPACE_TABS = [
   { key: 'field-notes',    label: 'Field Notes'    },
   { key: 'schedule',       label: 'Schedule'       },
   { key: 'closeout',       label: 'Closeout'       },
+  { key: 'docs',           label: 'Documents'      },
 ] as const;
 type WsTab = typeof WORKSPACE_TABS[number]['key'];
 
@@ -45,6 +46,7 @@ interface FieldNote    { id: string; note_date: string|null; author: string; not
 interface ProjectRfi   { id: string; rfi_number: string; question: string; submitted_to: string; submitted_date: string|null; due_date: string|null; status: 'open'|'answered'|'closed'; answer: string; }
 interface PayApp       { id: string; number: number; period: string; scheduled_value: number; pct_complete: number; amount_billed: number; status: 'draft'|'submitted'|'approved'|'paid'; }
 interface KeyMaterial  { id: string; name: string; supplier: string; po_number: string; order_date: string; eta: string; status: 'pending'|'ordered'|'delivered'; }
+interface ProjDoc   { id: string; name: string; display_name: string; category: string; file_size: number; file_type: string; uploaded_by: string; created_at: string; }
 
 // ── Helpers ──────────────────────────────────────────────────────
 function money(n: number) {
@@ -81,9 +83,10 @@ interface ProjData {
   payApps:  PayApp[];
   keyMats:  KeyMaterial[];
   closeout: Record<string,unknown>;
+  docs:     ProjDoc[];
 }
 const emptyData = (): ProjData => ({
-  cos:[], fns:[], rfis:[], overview:{}, schedule:{}, payApps:[], keyMats:[], closeout:{},
+  cos:[], fns:[], rfis:[], overview:{}, schedule:{}, payApps:[], keyMats:[], closeout:{}, docs:[],
 });
 
 interface Props { bids: Bid[]; showToast: (t: Toast) => void; }
@@ -107,7 +110,7 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
 
   const loadProject = useCallback(async (id: string) => {
     if (projData[id]) return; // already loaded
-    const [coRes, fnRes, rfiRes, ovRes, schRes, paRes, kmRes, clRes] = await Promise.allSettled([
+    const [coRes, fnRes, rfiRes, ovRes, schRes, paRes, kmRes, clRes, docRes] = await Promise.allSettled([
       api.get(`/projects/elec/${id}/change-orders`),
       api.get(`/projects/elec/${id}/field-notes`),
       api.get(`/projects/elec/${id}/rfis`),
@@ -116,6 +119,7 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
       api.get(`/projects/elec/${id}/section/pay-apps`),
       api.get(`/projects/elec/${id}/section/key-materials`),
       api.get(`/projects/elec/${id}/section/closeout`),
+      api.get('/documents'),
     ]);
     setProjData(prev => ({
       ...prev,
@@ -128,6 +132,7 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
         payApps:  (paRes.status==='fulfilled' && paRes.value.data?.items) ? paRes.value.data.items : [],
         keyMats:  (kmRes.status==='fulfilled' && kmRes.value.data?.items) ? kmRes.value.data.items : [],
         closeout: clRes.status==='fulfilled'  ? clRes.value.data  : {},
+        docs: docRes.status==='fulfilled' ? (docRes.value.data as ProjDoc[]).filter(d => (d as any).linked_id === id) : [],
       },
     }));
   }, [projData]);
@@ -216,7 +221,7 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
               const coApprovedVal = approvedCOs.reduce((s,c)=>s+Number(c.amount),0);
 
               return (
-                <div key={bid.id} className="panel" style={{ padding:'18px 22px' }}>
+                <div key={bid.id} className="panel" style={{ padding:'18px 22px', cursor:'pointer' }} onClick={() => openWorkspace(bid.id)}>
                   <div style={{ display:'flex', alignItems:'flex-start', gap:16 }}>
                     <div style={{ flex:1, minWidth:0 }}>
                       <div style={{ fontSize:16, fontWeight:800, color:'var(--text)', marginBottom:6 }}>
@@ -268,11 +273,6 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
                       <span className="num" style={{ fontSize:17, fontWeight:900, color:'var(--text)' }}>
                         {moneyFull(bid.amount??0)}
                       </span>
-                      <button className="btn ghost"
-                        onClick={() => openWorkspace(bid.id)}
-                        style={{ fontSize:13, fontWeight:700, display:'flex', alignItems:'center', gap:6 }}>
-                        Open Workspace <Icon name="arrow" size={13} stroke={2}/>
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -856,6 +856,9 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
         );
       }
 
+      case 'docs':
+        return <DocsTab id={id} docs={data.docs} onDocsChange={docs => onDataChange({ docs })} showToast={showToast} bid={bid}/>;
+
       default: return null;
     }
   };
@@ -916,6 +919,94 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
       <div style={{ flex:1, overflowY:'auto', padding:'24px 28px' }}>
         {renderTab()}
       </div>
+    </div>
+  );
+}
+
+function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
+  id: string; docs: ProjDoc[]; onDocsChange: (d: ProjDoc[]) => void;
+  showToast: (t: Toast) => void; bid: Bid;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const upload = async (files: File[]) => {
+    if (!files.length) return;
+    setUploading(true);
+    try {
+      const newDocs: ProjDoc[] = [];
+      for (const f of files) {
+        const form = new FormData();
+        form.append('file', f);
+        form.append('linked_id', id);
+        form.append('linked_name', bid.name);
+        form.append('div', 'elec');
+        form.append('category', 'other');
+        const res = await api.post('/documents', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+        newDocs.push(res.data);
+      }
+      onDocsChange([...newDocs, ...docs]);
+      showToast({ title: `${newDocs.length} file${newDocs.length > 1 ? 's' : ''} uploaded` });
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const download = (doc: ProjDoc) => {
+    const token = localStorage.getItem('token');
+    fetch(`/api/documents/${doc.id}/download`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.blob())
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = doc.display_name || doc.name;
+        a.click(); URL.revokeObjectURL(url);
+      })
+      .catch(() => showToast({ title: 'Download failed' }));
+  };
+
+  const remove = async (docId: string) => {
+    await api.delete(`/documents/${docId}`).catch(() => {});
+    onDocsChange(docs.filter(d => d.id !== docId));
+    showToast({ title: 'Document removed' });
+  };
+
+  const fmtSize = (b: number) => b >= 1048576 ? (b/1048576).toFixed(1)+' MB' : Math.round(b/1024)+' KB';
+  const extOf = (name: string) => (name.split('.').pop() ?? 'FILE').toUpperCase();
+
+  return (
+    <div>
+      <input ref={fileRef} type="file" multiple style={{ display:'none' }}
+        onChange={e => upload(Array.from(e.target.files ?? []))}/>
+      <div style={{ marginBottom:16 }}>
+        <button className="btn ghost" onClick={() => fileRef.current?.click()} disabled={uploading} style={{ fontSize:13 }}>
+          <Icon name="cloudup" size={14} stroke={1.9}/> {uploading ? 'Uploading…' : 'Upload Files'}
+        </button>
+      </div>
+      {docs.length === 0 ? (
+        <Empty text="No documents uploaded for this project yet"/>
+      ) : (
+        <div className="panel">
+          <table className="ctable">
+            <thead><tr><th>File</th><th>Type</th><th>Size</th><th>Uploaded</th><th></th></tr></thead>
+            <tbody>
+              {docs.map(doc => (
+                <tr key={doc.id}>
+                  <td className="nm"><Icon name="file" size={13} stroke={1.8}/> {doc.display_name || doc.name}</td>
+                  <td><span style={{ fontSize:10, fontWeight:800, padding:'2px 7px', borderRadius:5, background:'var(--blue-soft)', color:'var(--blue)', textTransform:'uppercase' }}>{extOf(doc.name)}</span></td>
+                  <td className="sub">{fmtSize(doc.file_size)}</td>
+                  <td className="sub">{new Date(doc.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</td>
+                  <td style={{ display:'flex', gap:6 }}>
+                    <button onClick={() => download(doc)} style={{ border:'none', background:'none', cursor:'pointer', color:'var(--blue)', padding:4, borderRadius:6 }} title="Download"><Icon name="cloud" size={13} stroke={1.8}/></button>
+                    <button onClick={() => remove(doc.id)} style={{ border:'none', background:'none', cursor:'pointer', color:'var(--text3)', padding:4, borderRadius:6 }} title="Remove"><Icon name="x" size={13} stroke={2}/></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

@@ -4,6 +4,8 @@ import { Bid } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
 import api from '../../api/client';
 
+interface QualResult { score: number; reasons: string[]; gcWinRate: number | null; gcWon: number; gcLost: number; dueDays: number; }
+
 function moneyFull(n: number | null) {
   if (n == null) return '—';
   return '$' + Math.round(n).toLocaleString('en-US');
@@ -25,6 +27,18 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
   const isTerminal = bid.stage === 'awarded' || bid.stage === 'lost';
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [qualifying, setQualifying] = useState(false);
+  const [qualResult, setQualResult] = useState<QualResult | null>(null);
+
+  const runQualify = async () => {
+    setQualifying(true);
+    try {
+      const { data } = await api.get(`/bids/${bid.id}/qualify`);
+      setQualResult(data);
+    } finally {
+      setQualifying(false);
+    }
+  };
   const [lossReason, setLossReason] = useState(LOSS_REASONS[0]);
   const [competitor, setCompetitor] = useState('');
   const [form, setForm] = useState({
@@ -171,6 +185,48 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                 <div className="dtl-row"><span className="dtl-k">Salesperson</span><span className="dtl-v">{bid.salesperson_name}</span></div>
                 {bid.loss_reason && <div className="dtl-row"><span className="dtl-k">Loss Reason</span><span className="dtl-v">{bid.loss_reason}</span></div>}
                 {bid.competitor && <div className="dtl-row"><span className="dtl-k">Awarded To</span><span className="dtl-v">{bid.competitor}</span></div>}
+              </div>
+
+              {/* Bid qualification score */}
+              <div style={{ marginTop: 12 }}>
+                {qualResult ? (
+                  <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '14px 16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Bid Score</span>
+                      <button onClick={() => setQualResult(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text3)', padding: 2 }}>
+                        <Icon name="x" size={13} stroke={2}/>
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                      <div style={{
+                        width: 52, height: 52, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 20, fontWeight: 900, flexShrink: 0,
+                        background: qualResult.score >= 7 ? 'var(--green-soft)' : qualResult.score >= 5 ? 'var(--amber-soft)' : 'rgba(224,106,106,.12)',
+                        color: qualResult.score >= 7 ? 'var(--green)' : qualResult.score >= 5 ? 'var(--amber)' : '#E06A6A',
+                      }}>
+                        {qualResult.score}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)' }}>
+                          {qualResult.score >= 8 ? 'Strong bid' : qualResult.score >= 6 ? 'Moderate' : qualResult.score >= 4 ? 'Challenging' : 'Low priority'}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: 'var(--text3)', fontWeight: 600 }}>out of 10</div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                      {qualResult.reasons.map((r, i) => (
+                        <div key={i} style={{ fontSize: 12, color: 'var(--text2)', fontWeight: 600, display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                          <span style={{ color: 'var(--text3)', marginTop: 1 }}>·</span>{r}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <button className="btn ghost" disabled={qualifying} onClick={runQualify}
+                    style={{ width: '100%', justifyContent: 'center', fontSize: 12.5 }}>
+                    <Icon name="spark" size={13} stroke={2}/>{qualifying ? 'Scoring…' : 'Score This Bid'}
+                  </button>
+                )}
               </div>
 
               {!isTerminal && (

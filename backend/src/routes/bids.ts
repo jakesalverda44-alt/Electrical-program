@@ -108,6 +108,68 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+// Bid qualification score — computed from historical data, no AI key needed
+router.get('/:id/qualify', requireAuth, async (req, res) => {
+  const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1', [req.params.id]);
+  if (!bidRows.length) return res.status(404).json({ error: 'Not found' });
+  const bid = bidRows[0];
+
+  // GC win/loss history
+  const { rows: gcHistory } = await pool.query(
+    `SELECT stage FROM bids WHERE gc=$1 AND id!=$2`,
+    [bid.gc, bid.id]
+  );
+  const gcWon  = gcHistory.filter(r => r.stage === 'awarded').length;
+  const gcLost = gcHistory.filter(r => r.stage === 'lost').length;
+  const gcTotal = gcWon + gcLost;
+  const gcWinRate = gcTotal > 0 ? gcWon / gcTotal : null;
+
+  // Overall company win rate
+  const { rows: allHistory } = await pool.query(
+    `SELECT stage FROM bids WHERE stage IN ('awarded','lost') AND id!=$1`, [bid.id]
+  );
+  const totalWon  = allHistory.filter(r => r.stage === 'awarded').length;
+  const totalLost = allHistory.filter(r => r.stage === 'lost').length;
+  const overallRate = (totalWon + totalLost) > 0 ? totalWon / (totalWon + totalLost) : 0.5;
+
+  // Amount score — sweet spot $200K–$2M
+  const amt = Number(bid.amount ?? 0);
+  let amtScore = 5;
+  if (amt >= 200_000 && amt <= 2_000_000) amtScore = 10;
+  else if (amt >= 100_000 && amt <= 3_000_000) amtScore = 7;
+  else if (amt > 0) amtScore = 4;
+
+  // Due days score — more time = better
+  const { rows: [fresh] } = await pool.query('SELECT due FROM bids WHERE id=$1', [req.params.id]);
+  const MONTHS: Record<string,number> = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+  const m = /([A-Za-z]{3})[A-Za-z]*\s+(\d{1,2})/.exec(String(fresh?.due || ''));
+  let dueDays = 14;
+  if (m) {
+    const mo = MONTHS[m[1].slice(0,3).toLowerCase()];
+    if (mo !== undefined) {
+      const today = new Date(); today.setHours(0,0,0,0);
+      let d = new Date(today.getFullYear(), mo, parseInt(m[2]));
+      if (d < today) d = new Date(today.getFullYear()+1, mo, parseInt(m[2]));
+      dueDays = Math.round((d.getTime() - today.getTime()) / 86400000);
+    }
+  }
+  const timeScore = dueDays >= 21 ? 10 : dueDays >= 10 ? 7 : dueDays >= 5 ? 4 : 2;
+
+  // Composite score (0–10)
+  const gcScore = gcWinRate !== null ? Math.round(gcWinRate * 10) : Math.round(overallRate * 10);
+  const score = Math.round((gcScore * 0.4 + amtScore * 0.35 + timeScore * 0.25));
+  const capped = Math.min(10, Math.max(1, score));
+
+  const reasons: string[] = [];
+  if (gcWinRate !== null) reasons.push(`${Math.round(gcWinRate*100)}% win rate with ${bid.gc} (${gcWon}W / ${gcLost}L)`);
+  else reasons.push(`No prior history with ${bid.gc}`);
+  reasons.push(`Contract value ${amt >= 200_000 && amt <= 2_000_000 ? 'in sweet spot' : 'outside typical range'} ($${Math.round(amt).toLocaleString()})`);
+  reasons.push(`${dueDays} days until due — ${dueDays >= 14 ? 'adequate time' : dueDays >= 7 ? 'tight timeline' : 'very tight'}`);
+  if (overallRate > 0) reasons.push(`Company overall win rate: ${Math.round(overallRate*100)}%`);
+
+  res.json({ score: capped, reasons, gcWinRate: gcWinRate !== null ? Math.round(gcWinRate*100) : null, gcWon, gcLost, dueDays });
+});
+
 router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
   const { phase } = req.body;
   const valid = ['signed','rough','inspection','trim','final','complete'];

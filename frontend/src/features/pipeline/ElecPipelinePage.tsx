@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, WonJob, Toast } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
@@ -25,6 +25,8 @@ interface Props {
 
 export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast, onOpenPreconstruction, flashId }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
+  const [filterRep, setFilterRep] = useState<string>('all');
+  const repNames = useMemo(() => Array.from(new Set(bids.map(b => b.salesperson_name).filter(Boolean))).sort(), [bids]);
   const [detail, setDetail] = useState<Bid | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -39,9 +41,11 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast,
   const activeValue = sum(bids.filter(b => b.stage === 'due' || b.stage === 'submitted'));
 
   const applyFilter = (list: Bid[]): Bid[] => {
-    if (filter === 'urgent') return list.filter(b => b.due_days <= 7);
-    if (filter === 'large')  return list.filter(b => Number(b.amount) >= 500_000);
-    return list;
+    let r = list;
+    if (filter === 'urgent') r = r.filter(b => b.due_days <= 7);
+    if (filter === 'large')  r = r.filter(b => Number(b.amount) >= 500_000);
+    if (filterRep !== 'all') r = r.filter(b => b.salesperson_name === filterRep);
+    return r;
   };
 
   // Drag handlers
@@ -92,6 +96,17 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast,
         <button className={'chip' + (filter === 'all'    ? ' active' : '')} onClick={() => setFilter('all')}>All</button>
         <button className={'chip' + (filter === 'urgent' ? ' active' : '')} onClick={() => setFilter('urgent')}>Due ≤ 7d</button>
         <button className={'chip' + (filter === 'large'  ? ' active' : '')} onClick={() => setFilter('large')}>&gt; $500K</button>
+        {repNames.length > 1 && (
+          <>
+            <div style={{ width:1, height:20, background:'var(--border)', margin:'0 4px' }}/>
+            <button className={'chip' + (filterRep === 'all' ? ' active' : '')} onClick={() => setFilterRep('all')}>All Reps</button>
+            {repNames.map(r => (
+              <button key={r} className={'chip' + (filterRep === r ? ' active' : '')} onClick={() => setFilterRep(r)}>
+                {r.split(' ')[0]}
+              </button>
+            ))}
+          </>
+        )}
         <span className="spacer"/>
         <span className="pipe-summary">
           Active value <b>{money(activeValue)}</b> · {activeCount} open

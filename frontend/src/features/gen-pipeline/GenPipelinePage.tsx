@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import { Gen, WonJob, Toast } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
@@ -28,6 +28,8 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, showToast, 
   const [detail, setDetail] = useState<Gen | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<string | null>(null);
+  const [filterRep, setFilterRep] = useState<string>('all');
+  const repNames = useMemo(() => Array.from(new Set(gens.map(g => g.salesperson_name).filter(Boolean))).sort(), [gens]);
 
   const { moveToStage, advance, pendingDeclined, cancelDeclined } = useGenPipeline({
     gens, setGens, setWonJobs, showToast,
@@ -38,8 +40,10 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, showToast, 
   const activeValue = sum(gens.filter(g => g.stage === 'building' || g.stage === 'sent'));
 
   const applyFilter = (list: Gen[]): Gen[] => {
-    if (filter === 'large') return list.filter(g => Number(g.amount) >= 100_000);
-    return list;
+    let r = list;
+    if (filter === 'large') r = r.filter(g => Number(g.amount) >= 100_000);
+    if (filterRep !== 'all') r = r.filter(g => g.salesperson_name === filterRep);
+    return r;
   };
 
   const onDragStart = (e: React.DragEvent, id: string) => {
@@ -76,6 +80,17 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, showToast, 
       <div className="pipe-toolbar">
         <button className={'chip' + (filter === 'all'   ? ' active' : '')} onClick={() => setFilter('all')}>All</button>
         <button className={'chip' + (filter === 'large' ? ' active' : '')} onClick={() => setFilter('large')}>&gt; $100K</button>
+        {repNames.length > 1 && (
+          <>
+            <div style={{ width:1, height:20, background:'var(--border)', margin:'0 4px' }}/>
+            <button className={'chip' + (filterRep === 'all' ? ' active' : '')} onClick={() => setFilterRep('all')}>All Reps</button>
+            {repNames.map(r => (
+              <button key={r} className={'chip' + (filterRep === r ? ' active' : '')} onClick={() => setFilterRep(r)}>
+                {r.split(' ')[0]}
+              </button>
+            ))}
+          </>
+        )}
         <span className="spacer"/>
         <span className="pipe-summary">
           Active value <b>{money(activeValue)}</b> · {activeCount} open

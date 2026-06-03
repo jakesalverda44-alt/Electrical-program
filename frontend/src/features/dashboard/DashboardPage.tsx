@@ -49,12 +49,12 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
         {/* Stat cards */}
         <div className="stats" style={{ gridTemplateColumns: 'repeat(4,1fr)', padding: 0 }}>
           {[
-            { label: 'Total Open Pipeline', val: money(total),   sub: `${elecActive.length + genActive.length} active opportunities`, ic: 'trend',    tone: 'blue' },
-            { label: 'Electrical Value',    val: money(elecVal), sub: `${elecActive.length} active bids`,                             ic: 'pipeline', tone: 'blue' },
-            { label: 'Generator Value',     val: money(genVal),  sub: `${genActive.length} active proposals`,                         ic: 'bolt',     tone: 'amber' },
-            { label: 'Win Rate',            val: winRate + '%',  sub: `${elecWon} won · ${elecLost} lost`,                            ic: 'spark',    tone: 'green' },
+            { label: 'Total Open Pipeline', val: money(total),   sub: `${elecActive.length + genActive.length} active opportunities`, ic: 'trend',    tone: 'blue',  nav: 'elec-proposals' },
+            { label: 'Electrical Value',    val: money(elecVal), sub: `${elecActive.length} active bids`,                             ic: 'pipeline', tone: 'blue',  nav: 'elec-proposals' },
+            { label: 'Generator Value',     val: money(genVal),  sub: `${genActive.length} active proposals`,                         ic: 'bolt',     tone: 'amber', nav: 'gen-proposals'  },
+            { label: 'Win Rate',            val: winRate + '%',  sub: `${elecWon} won · ${elecLost} lost`,                            ic: 'spark',    tone: 'green', nav: 'sales-by-rep'   },
           ].map(s => (
-            <div className="stat" key={s.label}>
+            <div className="stat" key={s.label} onClick={() => onNav(s.nav)} style={{ cursor: 'pointer' }}>
               <div className="stat-top">
                 <span className="stat-label">{s.label}</span>
                 <span className={'stat-ic ' + s.tone}><Icon name={s.ic} size={17} stroke={1.9}/></span>
