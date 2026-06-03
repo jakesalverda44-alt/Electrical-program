@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import { GenForm } from './genData';
 import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo } from './genCalc';
 import ProposalPreview from './ProposalPreview';
+import SendProposalModal from './SendProposalModal';
 import api from '../../api/client';
 import { Gen, WonJob, Toast } from '../../types';
 
@@ -75,6 +76,8 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
   const [screen, setScreen] = useState<Screen>('builder');
   const [proposalNo] = useState(() => genProposalNo(form.brand, form.coolingType));
   const [saving, setSaving] = useState(false);
+  const [showSend, setShowSend] = useState(false);
+  const [savedGenId, setSavedGenId] = useState<string | null>(editGen?.id ?? null);
   const [benchmarks, setBenchmarks] = useState<Array<{ min: number; max: number; avgAmount: number | null; avgPerKw: number | null; count: number }>>([]);
 
   useEffect(() => {
@@ -118,6 +121,7 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
       } else {
         const r = await api.post('/gens', { ...payload, stage: 'building' });
         setGens(prev => [r.data, ...prev]);
+        setSavedGenId(r.data.id);
         showToast({ title: 'Proposal saved', sub: `${form.customer} added to Gen pipeline` });
       }
       onSaved();
@@ -368,7 +372,29 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
                 <button className="btn" onClick={handleSave} disabled={saving} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
                   <Icon name="check" size={14} stroke={2.2}/> {saving ? 'Saving…' : 'Save to Pipeline'}
                 </button>
+                {savedGenId && (
+                  <button className="btn" onClick={() => setShowSend(true)}
+                    style={{ fontSize: 13, background: 'var(--navy, #1B3A6B)', borderColor: 'var(--navy, #1B3A6B)', color: '#fff' }}>
+                    <Icon name="send" size={14} stroke={2} style={{ color: '#fff' }}/> Send to Customer
+                  </button>
+                )}
               </div>
+
+              {showSend && savedGenId && (
+                <SendProposalModal
+                  genId={savedGenId}
+                  defaultEmail={form.email}
+                  proposalNo={proposalNo}
+                  total={fmt(totals.total)}
+                  deposit={fmt(totals.deposit)}
+                  onSent={updatedGen => {
+                    setGens(prev => prev.map(g => g.id === updatedGen.id ? updatedGen : g));
+                    setShowSend(false);
+                    showToast({ title: 'Proposal sent', sub: `Email delivered to ${form.email}` });
+                  }}
+                  onClose={() => setShowSend(false)}
+                />
+              )}
             </div>
           </div>
         </div>

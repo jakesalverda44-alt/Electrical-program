@@ -17,6 +17,7 @@ import ContactsPage from './features/contacts/ContactsPage';
 import ReportingPage from './features/reporting/ReportingPage';
 import CommsPage from './features/comms/CommsPage';
 import DocsPage from './features/docs/DocsPage';
+import ProposalPublicPage from './pages/ProposalPublicPage';
 import { PcWorkspace } from './features/preconstruction/constants';
 import Toast from './components/Toast';
 import api from './api/client';
@@ -122,6 +123,7 @@ export default function App() {
       <>
         <Routes>
           <Route path="/login" element={<LoginPage onLogin={handleLogin}/>}/>
+          <Route path="/p/:token" element={<ProposalPublicPage/>}/>
           <Route path="*" element={<Navigate to="/login" replace/>}/>
         </Routes>
         {toast && <Toast toast={toast}/>}

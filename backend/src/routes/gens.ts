@@ -1,6 +1,10 @@
 import { Router } from 'express';
+import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { requireAuth, AuthRequest } from '../middleware/auth';
+import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
+
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 const router = Router();
 
@@ -149,6 +153,78 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   }
 
   res.json({ gen, wonJob });
+});
+
+// ── Send proposal email ──────────────────────────────────────────────────────
+router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
+  const { to, subject, note, proposalNo, total, deposit } = req.body;
+  if (!to) return res.status(400).json({ error: 'Recipient email required' });
+
+  const { rows } = await pool.query(
+    `UPDATE generator_proposals
+     SET sent_at = now(), stage = CASE WHEN stage = 'building' THEN 'sent' ELSE stage END, updated_at = now()
+     WHERE id = $1
+     RETURNING *`,
+    [req.params.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  const gen = rows[0];
+
+  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const link = `${baseUrl}/p/${gen.proposal_token}`;
+
+  if (!resend) {
+    console.warn('[email] RESEND_API_KEY not set — skipping send, returning link:', link);
+    return res.json({ gen, link, skipped: true });
+  }
+
+  try {
+    await resend.emails.send({
+      from: 'proposals@accuratepowerandtechnology.com',
+      replyTo: 'jakes@accuratepowerandtechnology.com',
+      to,
+      subject: subject || `Your Generator Proposal — ${proposalNo}`,
+      html: proposalEmailHtml({ customerName: gen.customer, proposalNo, total, deposit, link, senderNote: note }),
+      text: proposalEmailText({ customerName: gen.customer, proposalNo, total, link }),
+    });
+  } catch (err) {
+    console.error('[email] Resend error:', err);
+    return res.status(502).json({ error: 'Email delivery failed' });
+  }
+
+  res.json({ gen, link });
+});
+
+// ── Public: view proposal by token (no auth) ────────────────────────────────
+router.get('/p/:token', async (req, res) => {
+  const { rows } = await pool.query(
+    `UPDATE generator_proposals
+     SET viewed_at = COALESCE(viewed_at, now())
+     WHERE proposal_token = $1
+     RETURNING *`,
+    [req.params.token]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
+  res.json(rows[0]);
+});
+
+// ── Public: sign proposal by token (no auth) ────────────────────────────────
+router.post('/p/:token/sign', async (req, res) => {
+  const { signatureData } = req.body;
+  if (!signatureData) return res.status(400).json({ error: 'Signature required' });
+
+  const { rows } = await pool.query(
+    `UPDATE generator_proposals
+     SET signed_at = COALESCE(signed_at, now()),
+         signature_data = $1,
+         stage = CASE WHEN stage != 'declined' THEN 'signed' ELSE stage END,
+         updated_at = now()
+     WHERE proposal_token = $2
+     RETURNING id, customer, stage, signed_at`,
+    [signatureData, req.params.token]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
+  res.json({ ok: true, gen: rows[0] });
 });
 
 export default router;

@@ -32,12 +32,16 @@ export interface Gen {
   kw: number;
   amount: number;
   tax: number;
-  stage: 'building' | 'sent' | 'awarded' | 'declined';
+  stage: 'building' | 'sent' | 'awarded' | 'declined' | 'signed';
   built_on: string;
   addons: number;
   salesperson_name: string;
   salesperson_id?: string;
   gen_install_phase?: string;
+  proposal_token?: string;
+  sent_at?: string;
+  viewed_at?: string;
+  signed_at?: string;
 }
 
 export interface WonJob {
