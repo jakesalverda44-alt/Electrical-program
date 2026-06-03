@@ -175,7 +175,9 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
             <PageHeader proposalNo={proposalNo}/>
 
             <SectionHeading title="PROPOSAL"/>
-            <div style={{ textAlign: 'center', fontSize: 11, color: GRAY_M, marginTop: -10, marginBottom: 14 }}>Generator Installation Agreement</div>
+            <div style={{ textAlign: 'center', fontSize: 11, color: GRAY_M, marginTop: -10, marginBottom: 14 }}>
+              {form.jobType === 'swap-out' ? 'Generator Replacement Agreement' : 'Generator Installation Agreement'}
+            </div>
 
             {/* Customer info grid */}
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 9, marginBottom: 14, border: '1px solid #BFDBFE' }}>
@@ -245,8 +247,12 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
                   },
                   {
                     n: '2',
-                    title: 'Scope of Work — Home Standby Generator Installation',
-                    desc: 'Furnish and install a permanently mounted home standby generator and ATS on a code-compliant pad. Complete all electrical connections, integrate ATS for automatic transfer during outages. Includes grounding, bonding, utility coordination, startup, testing, and commissioning per 2026 NEC.',
+                    title: form.jobType === 'swap-out'
+                      ? 'Scope of Work — Generator Replacement (Swap-Out)'
+                      : 'Scope of Work — Home Standby Generator Installation',
+                    desc: form.jobType === 'swap-out'
+                      ? `Disconnect and remove the existing generator unit. Install the replacement ${form.brand} ${form.size} generator on the existing pad (or new pad if selected). Reconnect all existing electrical connections and ATS. Complete all grounding, bonding, utility coordination, startup, testing, and commissioning per 2026 NEC. Existing generator will be disposed of or removed from site per removal/disposal fee.`
+                      : 'Furnish and install a permanently mounted home standby generator and ATS on a code-compliant pad. Complete all electrical connections, integrate ATS for automatic transfer during outages. Includes grounding, bonding, utility coordination, startup, testing, and commissioning per 2026 NEC.',
                     shade: true,
                   },
                   {
@@ -279,8 +285,10 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
                   },
                   {
                     n: '7',
-                    title: 'Gas Installation — Not Included',
-                    desc: 'Gas installation and connections are NOT included in this proposal.',
+                    title: form.jobType === 'swap-out' ? 'Gas — Existing Connections' : 'Gas Installation — Not Included',
+                    desc: form.jobType === 'swap-out'
+                      ? 'Gas reconnection to the existing supply line is included. New gas line installation is NOT included in this proposal.'
+                      : 'Gas installation and connections are NOT included in this proposal.',
                     shade: false,
                   },
                 ].map(row => (
@@ -326,7 +334,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
                     { label: 'Permit Fee', tax: '', amt: totals.permitAmt, show: true },
                     { label: 'Startup & Commissioning', tax: '', amt: totals.startupAmt, show: true },
                     ...(totals.liftAmt > 0 ? [{ label: form.liftType === 'lull' ? 'Lull' : 'Crane', tax: '', amt: totals.liftAmt, show: true }] : []),
-                    ...(totals.removalFee > 0 ? [{ label: 'Removal / Haul-Off', tax: '', amt: totals.removalFee, show: true }] : []),
+                    ...(totals.removalFee > 0 ? [{ label: form.jobType === 'swap-out' ? 'Removal / Disposal of Existing Generator' : 'Removal / Haul-Off', tax: '', amt: totals.removalFee, show: true }] : []),
                     ...(totals.lcATS > 0 ? [{ label: `LC ATS (${form.lcATS})`, tax: '', amt: totals.lcATS, show: true }] : []),
                   ].filter(r => r.show).map((r, i) => (
                     <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : GRAY_L, borderBottom: '1px solid #E5E7EB' }}>

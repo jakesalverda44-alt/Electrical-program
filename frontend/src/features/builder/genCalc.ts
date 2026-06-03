@@ -13,6 +13,8 @@ export function blankGenForm(): GenForm {
     discount: 0, taxRate: 7,
     notes: '',
     includeBreakdown: false,
+    jobType: 'new-install',
+    removalFee: 500,
   };
 }
 
@@ -72,7 +74,7 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const extraATS   = Number(g.additionalATS) * DEFAULT_PRICES.additionalATS;
   const lcATS      = g.lcATS === '150A' ? DEFAULT_PRICES.atsLC_150 : g.lcATS === '200A' ? DEFAULT_PRICES.atsLC_200 : 0;
   const liftAmt    = g.liftType === 'lull' ? DEFAULT_PRICES.lull : g.liftType === 'crane' ? DEFAULT_PRICES.crane : 0;
-  const removalFee = g.removal ? 500 : 0;
+  const removalFee = g.jobType === 'swap-out' ? (Number(g.removalFee) || 0) : (g.removal ? 500 : 0);
   const laborAmt   = Number(g.labor);
   const permitAmt  = Number(g.permit);
   const startupAmt = g.coolingType === 'liquid-cooled' ? DEFAULT_PRICES.startupLC : Number(g.startup);

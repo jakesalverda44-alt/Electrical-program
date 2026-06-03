@@ -258,4 +258,6 @@ export interface GenForm {
   taxRate: number;
   notes: string;
   includeBreakdown: boolean;
+  jobType: 'new-install' | 'swap-out';
+  removalFee: number;
 }

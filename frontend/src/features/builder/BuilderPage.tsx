@@ -62,6 +62,8 @@ function genToForm(g: Gen): GenForm {
     state: state || '',
     brand: (g.mfr === 'Kohler' || g.mfr === 'Generac') ? g.mfr : 'Kohler',
     size: g.model || blank.size,
+    jobType: 'new-install',
+    removalFee: 500,
   };
 }
 
@@ -182,23 +184,38 @@ export default function BuilderPage({ setGens, showToast, onSaved, editGen }: Pr
                 <option value="LP">LP / Propane</option>
               </select>
             </Field>
-            <div/>
+            <Field label="Job Type">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
+                {(['new-install', 'swap-out'] as const).map(jt => (
+                  <button key={jt} onClick={() => set('jobType', jt)}
+                    style={{ padding: '9px 0', fontSize: 12, fontWeight: 700, border: 'none', cursor: 'pointer',
+                      background: form.jobType === jt ? 'var(--accent)' : 'var(--surface)',
+                      color: form.jobType === jt ? '#fff' : 'var(--text2)' }}>
+                    {jt === 'new-install' ? 'New Install' : 'Swap-Out'}
+                  </button>
+                ))}
+              </div>
+            </Field>
           </Section>
 
           {/* Section 3: Installation Options */}
           <Section title="Installation Options" icon="gear">
             {([
-              ['pad',      'Concrete Pad'],
+              ['pad',      form.jobType === 'swap-out' ? 'Concrete Pad (new)' : 'Concrete Pad'],
               ['smm',      'SMM Maintenance'],
               ['surgePro', 'SurgeProtector Pro'],
               ['battery',  'Battery Maintainer'],
-              ['removal',  'Removal / Haul-Off'],
             ] as [keyof GenForm, string][]).map(([k, label]) => (
               <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, gridColumn: '1' }}>
                 <input type="checkbox" checked={!!form[k]} onChange={e => set(k, e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
                 {label}
               </label>
             ))}
+            {form.jobType === 'swap-out' && (
+              <Field label="Removal / Disposal Fee ($)">
+                <input type="number" min={0} style={INPUT_STYLE} value={form.removalFee} onChange={e => set('removalFee', Number(e.target.value))}/>
+              </Field>
+            )}
             <Field label="Extra Wire (ft)">
               <input type="number" min={0} style={INPUT_STYLE} value={form.extraWire} onChange={e => set('extraWire', Number(e.target.value))}/>
             </Field>
