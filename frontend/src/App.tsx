@@ -213,7 +213,7 @@ export default function App() {
       case 'gen-projects':
         return <GenProjectsPage gens={gens} showToast={showToast}/>;
       case 'contacts':
-        return <ContactsPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
+        return <ContactsPage showToast={showToast}/>;
       case 'reporting':
         return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
       case 'comms':

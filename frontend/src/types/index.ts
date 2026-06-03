@@ -72,3 +72,30 @@ export interface Toast {
   sub?: string;
   action?: { label: string; onClick: () => void };
 }
+
+export interface Customer {
+  id: string;
+  name: string;
+  type: 'gc' | 'customer' | 'other';
+  company?: string;
+  contact_name?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  notes?: string;
+  owner_id?: string | null;
+  bid_count?: number;
+  gen_count?: number;
+  created_at?: string;
+}
+
+export interface CustomerDetail {
+  customer: Customer;
+  bids: Bid[];
+  gens: Gen[];
+  wonJobs: WonJob[];
+  communications: { id: string; kind: string; subject: string; body: string; author: string; created_at: string }[];
+}

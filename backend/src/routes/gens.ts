@@ -4,6 +4,7 @@ import { pool } from '../db/pool';
 import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
 import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
 import { getSetting } from './settings';
+import { upsertCustomer } from './customers';
 
 const router = Router();
 
@@ -44,9 +45,18 @@ router.get('/benchmark', requireAuth, async (_req, res) => {
 
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
-  const { rows } = scope
-    ? await pool.query('SELECT * FROM generator_proposals WHERE salesperson_id = $1 ORDER BY created_at DESC', [scope])
-    : await pool.query('SELECT * FROM generator_proposals ORDER BY created_at DESC');
+  const params: unknown[] = [];
+  let sql = 'SELECT * FROM generator_proposals';
+  if (scope) { params.push(scope); sql += ` WHERE salesperson_id = $${params.length}`; }
+  sql += ' ORDER BY created_at DESC';
+  // Opt-in pagination: ?limit=N&offset=M. Omitted → return all rows (backward compatible).
+  if (req.query.limit !== undefined) {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit)) || 50, 1), 200);
+    const offset = Math.max(parseInt(String(req.query.offset)) || 0, 0);
+    params.push(limit, offset);
+    sql += ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
+  }
+  const { rows } = await pool.query(sql, params);
   res.json(rows);
 });
 
@@ -54,11 +64,12 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const { customer, loc, mfr, model, kw, amount, tax, addons } = req.body;
   if (!customer?.trim()) return res.status(400).json({ error: 'Customer required' });
   const user = req.user!;
+  const customerId = await upsertCustomer(customer, 'customer');
   const { rows } = await pool.query(
-    `INSERT INTO generator_proposals (customer, loc, mfr, model, kw, amount, tax, addons, salesperson_id, salesperson_name)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+    `INSERT INTO generator_proposals (customer, loc, mfr, model, kw, amount, tax, addons, salesperson_id, salesperson_name, customer_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
     [customer.trim(), (loc || '').trim() || '—', mfr, model, Number(kw) || 0,
-     Number(amount) || 0, Number(tax) || 0, Number(addons) || 0, user.id, user.name]
+     Number(amount) || 0, Number(tax) || 0, Number(addons) || 0, user.id, user.name, customerId]
   );
   res.json(rows[0]);
 });

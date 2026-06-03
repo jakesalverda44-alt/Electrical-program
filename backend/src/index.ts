@@ -3,8 +3,10 @@ import cors from 'cors';
 import helmet from 'helmet';
 import path from 'path';
 import dotenv from 'dotenv';
+import { pinoHttp } from 'pino-http';
 import { runMigrations } from './migrate';
 import { pool } from './db/pool';
+import { logger } from './utils/logger';
 import { requireAuth, AuthRequest } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
@@ -13,6 +15,7 @@ import gensRouter from './routes/gens';
 import wonJobsRouter from './routes/wonJobs';
 import usersRouter from './routes/users';
 import commsRouter from './routes/comms';
+import customersRouter from './routes/customers';
 import preconRouter from './routes/preconstruction';
 import projectsRouter from './routes/projects';
 import documentsRouter from './routes/documents';
@@ -42,6 +45,7 @@ app.use(cors({
   },
 }));
 app.use(express.json());
+app.use(pinoHttp({ logger, autoLogging: { ignore: req => req.url === '/api/health' } }));
 
 app.use('/api/auth', authRouter);
 app.use('/api/dashboard', dashboardRouter);
@@ -50,6 +54,7 @@ app.use('/api/gens', gensRouter);
 app.use('/api/won-jobs', wonJobsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/comms', commsRouter);
+app.use('/api/customers', customersRouter);
 app.use('/api/preconstruction', preconRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/documents', documentsRouter);
@@ -78,13 +83,20 @@ if (process.env.NODE_ENV === 'production') {
   app.get('*', (_req, res) => res.sendFile(path.join(staticPath, 'index.html')));
 }
 
+// Global error handler — catches anything forwarded via asyncHandler / next(err).
+app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  logger.error({ err, path: req.path }, 'Unhandled request error');
+  if (res.headersSent) return;
+  res.status(500).json({ error: 'Server error' });
+});
+
 const port = Number(process.env.PORT) || 3001;
 
 runMigrations()
   .then(() => {
-    app.listen(port, () => console.log(`Backend running on :${port}`));
+    app.listen(port, () => logger.info(`Backend running on :${port}`));
   })
   .catch(err => {
-    console.error('Migration failed, aborting startup:', err);
+    logger.error({ err }, 'Migration failed, aborting startup');
     process.exit(1);
   });

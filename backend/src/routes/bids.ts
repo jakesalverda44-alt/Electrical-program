@@ -5,6 +5,7 @@ import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
 import { getSetting } from '../db/getSetting';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { escapeHtml } from '../utils/escapeHtml';
+import { upsertCustomer } from './customers';
 
 const router = Router();
 
@@ -49,9 +50,18 @@ async function sendBidNotification(bid: Record<string, unknown>, addedBy: { name
 
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
-  const { rows } = scope
-    ? await pool.query('SELECT * FROM bids WHERE salesperson_id = $1 ORDER BY created_at DESC', [scope])
-    : await pool.query('SELECT * FROM bids ORDER BY created_at DESC');
+  const params: unknown[] = [];
+  let sql = 'SELECT * FROM bids';
+  if (scope) { params.push(scope); sql += ` WHERE salesperson_id = $${params.length}`; }
+  sql += ' ORDER BY created_at DESC';
+  // Opt-in pagination: ?limit=N&offset=M. Omitted → return all rows (backward compatible).
+  if (req.query.limit !== undefined) {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit)) || 50, 1), 200);
+    const offset = Math.max(parseInt(String(req.query.offset)) || 0, 0);
+    params.push(limit, offset);
+    sql += ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
+  }
+  const { rows } = await pool.query(sql, params);
   res.json(rows.map(withDueDays));
 });
 
@@ -72,10 +82,11 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const { name, gc, loc, amount, due, notes } = req.body;
   if (!name?.trim() || !gc?.trim()) return res.status(400).json({ error: 'Name and GC required' });
   const user = req.user!;
+  const customerId = await upsertCustomer(gc, 'gc');
   const { rows } = await pool.query(
-    `INSERT INTO bids (name, gc, loc, amount, due, notes, salesperson_id, salesperson_name)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [name.trim(), gc.trim(), (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), notes?.trim() || null, user.id, user.name]
+    `INSERT INTO bids (name, gc, loc, amount, due, notes, salesperson_id, salesperson_name, customer_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [name.trim(), gc.trim(), (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), notes?.trim() || null, user.id, user.name, customerId]
   );
   sendBidNotification(rows[0], user).catch(() => {});
   res.json(withDueDays(rows[0]));
