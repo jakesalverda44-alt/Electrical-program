@@ -547,3 +547,61 @@ button{font-family:inherit}
   .stats { grid-template-columns: 1fr !important; }
   .nav-btn { min-width: 46px; padding: 5px 6px; font-size: 9px; }
 }
+
+/* ── Progress bar animation (PcWorkspace AI) ── */
+@keyframes pcprogress {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+/* ── Mobile: builder & proposal ── */
+@media (max-width: 768px) {
+  /* Builder two-column → stacked */
+  .builder-layout { flex-direction: column !important; overflow-y: auto !important; }
+  .builder-form  { width: 100% !important; max-height: none !important; border-right: none !important; border-bottom: 1px solid var(--border); }
+  .builder-preview { display: none; }
+
+  /* Settings sidebar → horizontal scrolling tabs */
+  .settings-layout { flex-direction: column !important; }
+  .settings-sidebar { width: 100% !important; max-height: none !important; border-right: none !important; border-bottom: 1px solid var(--border); padding: 8px 12px !important; display: flex !important; flex-direction: row !important; overflow-x: auto !important; gap: 4px !important; }
+  .settings-sidebar > div { flex-direction: row !important; gap: 4px !important; }
+  .settings-nav-btn { white-space: nowrap; min-width: auto !important; padding: 8px 14px !important; border-radius: 20px !important; font-size: 12px !important; }
+  .settings-content { padding: 16px !important; }
+
+  /* Gen pipeline board → single column */
+  .gen-board { flex-direction: column !important; overflow-x: hidden !important; }
+  .gen-col { min-width: 0 !important; width: 100% !important; border-right: none !important; border-bottom: 1px solid var(--border); max-height: 320px; }
+
+  /* Preconstruction workspace */
+  .pc-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .pc-tab-btn { white-space: nowrap; flex-shrink: 0; }
+  .pc-step-tracker { overflow-x: auto; }
+
+  /* Login card full-width on small screens */
+  .login-card { width: calc(100vw - 32px) !important; }
+
+  /* Toast full-width */
+  .toast { flex-wrap: wrap; gap: 8px; }
+
+  /* Dashboard */
+  .dash-grid { grid-template-columns: 1fr !important; }
+
+  /* Tables — hide less important columns */
+  .ctable .hide-mobile { display: none !important; }
+
+  /* Topbar tighter */
+  .topbar { padding: 0 14px !important; }
+  .page-title { font-size: 17px !important; }
+
+  /* Drawers full screen */
+  .drawer { width: 100vw !important; right: 0 !important; }
+}
+
+@media (max-width: 480px) {
+  .field-row3 { grid-template-columns: 1fr !important; }
+  .stats { grid-template-columns: 1fr !important; }
+  .split { flex-direction: column !important; }
+  .split-card { min-width: 0 !important; }
+  .btn { font-size: 13px !important; padding: 0 14px !important; }
+  .page-title { font-size: 15px !important; letter-spacing: -.3px !important; }
+}

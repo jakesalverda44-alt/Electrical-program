@@ -141,7 +141,7 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
 
   return (
     <div className="scroll view-enter">
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, padding: '20px 28px 40px', alignItems: 'start' }}>
+      <div className="builder-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, padding: '20px 28px 40px', alignItems: 'start' }}>
         <div>
           {/* Section 1: Customer & Site */}
           <Section title="Customer & Site" icon="building">

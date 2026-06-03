@@ -68,6 +68,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const fileObjectsRef = useRef<File[]>([]);
   const [aiResults, setAiResults] = useState<Record<string, unknown> | null>(null);
   const [analysisTab, setAnalysisTab] = useState<'agent1'|'agent2'|'agent3'|'raw'>('agent1');
+  const [copied, setCopied] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const [historicalCosts, setHistoricalCosts] = useState<Array<Record<string,unknown>>>([]);
   const [bidIntel, setBidIntel] = useState<Record<string,unknown> | null>(null);
   const pollRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -216,8 +218,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     showToast({ title: 'Project created!', sub: `${bid.name} moved to Electrical Projects` });
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
+  const addFiles = (files: File[]) => {
+    if (!files.length) return;
     fileObjectsRef.current = [...fileObjectsRef.current, ...files];
     const newFiles = files.map(f => ({
       id: Date.now().toString() + f.name,
@@ -226,7 +228,23 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       size: f.size > 1024 * 1024 ? (f.size / 1024 / 1024).toFixed(1) + ' MB' : Math.round(f.size / 1024) + ' KB',
     }));
     set({ files: [...ws.files, ...newFiles] });
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    addFiles(Array.from(e.target.files ?? []));
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setDragOver(false);
+    addFiles(Array.from(e.dataTransfer.files));
+  };
+
+  const copyToClipboard = (text: string, key: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(key);
+      setTimeout(() => setCopied(null), 2000);
+    });
   };
 
   const tab = ws.activeTab;
@@ -268,20 +286,30 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         const totalCount = fileObjectsRef.current.length;
         return (
           <div style={{ padding: '20px 24px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-              <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" style={{ display: 'none' }} onChange={handleFileUpload}/>
-              <button className="btn ghost" onClick={() => fileInputRef.current?.click()} style={{ fontSize: 13 }}>
-                <Icon name="cloudup" size={14} stroke={1.9}/> Upload Files
-              </button>
+            <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" style={{ display: 'none' }} onChange={handleFileUpload}/>
+            {/* Drag-and-drop zone */}
+            <div
+              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              style={{ border: `2px dashed ${dragOver ? 'var(--blue)' : 'var(--border2)'}`, borderRadius: 12, padding: '28px 20px',
+                textAlign: 'center', cursor: 'pointer', marginBottom: 16, transition: 'border-color .15s, background .15s',
+                background: dragOver ? 'var(--blue-soft)' : 'var(--surface2)' }}>
+              <Icon name="cloudup" size={28} stroke={1.6}/>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)', marginTop: 10, marginBottom: 4 }}>
+                Drop plan sheets here or click to browse
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text3)' }}>PDF, JPG, PNG — electrical sheets auto-detected</div>
               {totalCount > 0 && (
-                <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text3)' }}>
-                  {totalCount} file{totalCount !== 1 ? 's' : ''} uploaded · <span style={{ color: 'var(--blue)' }}>{elecCount} electrical sheet{elecCount !== 1 ? 's' : ''}</span> identified
-                </span>
+                <div style={{ marginTop: 10, fontSize: 12.5, fontWeight: 700, color: 'var(--text3)' }}>
+                  {totalCount} file{totalCount !== 1 ? 's' : ''} · <span style={{ color: 'var(--blue)' }}>{elecCount} electrical sheet{elecCount !== 1 ? 's' : ''} identified</span>
+                </div>
               )}
             </div>
             {ws.files.length === 0 ? (
-              <div className="panel-empty" style={{ padding: 48, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
-                No files uploaded yet. Upload PDF plan sheets to enable AI analysis.
+              <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
+                No files uploaded yet.
               </div>
             ) : (
               <div className="panel">
@@ -340,11 +368,28 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     {ws.aiDone ? 'Takeoff Complete' : ws.aiRunning ? 'Running…' : 'Run AI Takeoff'}
                   </button>
                 )}
+                {ws.aiRunning && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ height: 4, background: 'var(--border2)', borderRadius: 2, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: '60%', background: 'var(--blue)', borderRadius: 2,
+                        animation: 'pcprogress 2.5s ease-in-out infinite alternate' }}/>
+                    </div>
+                  </div>
+                )}
                 {ws.aiLog.length > 0 && (
                   <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px', fontFamily: 'monospace', fontSize: 12, color: 'var(--text2)', lineHeight: 1.8 }}>
-                    {ws.aiLog.map((line, i) => <div key={i}>{line}</div>)}
+                    {ws.aiLog.map((line, i) => (
+                      <div key={i} style={{ color: line.startsWith('✓') ? 'var(--green)' : line.startsWith('✗') ? 'var(--red)' : 'var(--text2)' }}>
+                        {line}
+                      </div>
+                    ))}
                     {ws.aiRunning && <div style={{ color: 'var(--blue)' }}>▌</div>}
                   </div>
+                )}
+                {ws.aiDone && (
+                  <button className="btn ghost" onClick={() => set({ activeTab: 'takeoff' })} style={{ fontSize: 13, marginTop: 10 }}>
+                    View Results <Icon name="arrow" size={13} stroke={2}/>
+                  </button>
                 )}
               </div>
             </div>
@@ -417,10 +462,20 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 {ANALYSIS_TABS.map(t => t.key === analysisTab && (
                   <div key={t.key}>
                     {t.output ? (
-                      <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '14px 16px',
-                        fontFamily: 'monospace', fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.7,
-                        whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '60vh', overflowY: 'auto' }}>
-                        {t.output}
+                      <div style={{ position: 'relative' }}>
+                        <button
+                          onClick={() => copyToClipboard(t.output!, t.key)}
+                          style={{ position: 'absolute', top: 10, right: 10, zIndex: 2, border: '1px solid var(--border2)',
+                            borderRadius: 7, background: 'var(--surface)', color: copied === t.key ? 'var(--green)' : 'var(--text3)',
+                            fontSize: 11, fontWeight: 700, padding: '4px 10px', cursor: 'pointer' }}>
+                          {copied === t.key ? '✓ Copied' : 'Copy'}
+                        </button>
+                        <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '14px 16px',
+                          fontFamily: t.key === 'raw' ? 'monospace' : 'inherit', fontSize: t.key === 'raw' ? 12 : 13,
+                          color: 'var(--text2)', lineHeight: 1.75,
+                          whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '65vh', overflowY: 'auto' }}>
+                          {t.output}
+                        </div>
                       </div>
                     ) : (
                       <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
@@ -672,7 +727,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       </div>
 
       {/* Tab strip */}
-      <div style={{ display: 'flex', gap: 2, padding: '0 24px', borderBottom: '1px solid var(--border)', background: 'var(--panel)', overflowX: 'auto' }}>
+      <div className="pc-tabs" style={{ display: 'flex', gap: 2, padding: '0 24px', borderBottom: '1px solid var(--border)', background: 'var(--panel)', overflowX: 'auto' }}>
         {PC_TABS.map(t => (
           <button key={t.key} onClick={() => onUpdate({ ...ws, activeTab: t.key as PcTabKey })} style={{
             border: 'none', cursor: 'pointer', font: 'inherit', fontSize: 13, fontWeight: 700,
