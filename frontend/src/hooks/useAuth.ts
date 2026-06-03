@@ -4,6 +4,21 @@ import { User } from '../types';
 
 export function useAuth() {
   const [user, setUser] = useState<User | null>(() => {
+    // Handle ?mstoken=... redirect from Microsoft OAuth
+    const params = new URLSearchParams(window.location.search);
+    const msToken = params.get('mstoken');
+    if (msToken) {
+      // Decode the JWT payload to get user info (no verify needed — same JWT secret, already trusted)
+      try {
+        const payload = JSON.parse(atob(msToken.split('.')[1])) as User & { exp: number };
+        if (payload.exp * 1000 > Date.now()) {
+          localStorage.setItem('crm_token', msToken);
+          localStorage.setItem('crm_user', JSON.stringify({ id: payload.id, name: payload.name, email: payload.email, role: payload.role }));
+          window.history.replaceState({}, '', '/');
+          return { id: payload.id, name: payload.name, email: payload.email, role: payload.role };
+        }
+      } catch { /* bad token, fall through */ }
+    }
     const s = localStorage.getItem('crm_user');
     return s ? JSON.parse(s) : null;
   });

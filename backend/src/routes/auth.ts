@@ -32,6 +32,98 @@ router.get('/me', requireAuth, (req: AuthRequest, res) => {
   res.json(req.user);
 });
 
+// ── Microsoft OAuth (Entra ID / Azure AD) ─────────────────────────────────────
+
+const MS_CLIENT_ID     = () => process.env.MICROSOFT_CLIENT_ID     || '';
+const MS_CLIENT_SECRET = () => process.env.MICROSOFT_CLIENT_SECRET || '';
+const MS_TENANT_ID     = () => process.env.MICROSOFT_TENANT_ID     || 'common';
+
+function msRedirectUri() {
+  const base = process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://electrical-program.onrender.com';
+  // Use the backend path (same origin in production, backend port in dev)
+  return base.replace(/\/$/, '') + '/api/auth/microsoft/callback';
+}
+
+// Step 1 — redirect to Microsoft login
+router.get('/microsoft', (_req, res) => {
+  const clientId = MS_CLIENT_ID();
+  if (!clientId) return res.status(503).send('Microsoft login not configured. Add MICROSOFT_CLIENT_ID to environment.');
+  const params = new URLSearchParams({
+    client_id:     clientId,
+    response_type: 'code',
+    redirect_uri:  msRedirectUri(),
+    response_mode: 'query',
+    scope:         'openid email profile User.Read',
+    prompt:        'select_account',
+  });
+  res.redirect(`https://login.microsoftonline.com/${MS_TENANT_ID()}/oauth2/v2.0/authorize?${params}`);
+});
+
+// Step 2 — Microsoft redirects back with ?code=...
+router.get('/microsoft/callback', async (req, res) => {
+  const { code, error, error_description } = req.query as Record<string, string>;
+  const frontendBase = process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://electrical-program.onrender.com';
+
+  if (error) {
+    console.error('[ms-oauth]', error, error_description);
+    return res.redirect(`${frontendBase}/login?error=${encodeURIComponent('Microsoft login failed: ' + (error_description || error))}`);
+  }
+  if (!code) return res.redirect(`${frontendBase}/login?error=missing_code`);
+
+  try {
+    // Exchange code for tokens
+    const tokenRes = await fetch(`https://login.microsoftonline.com/${MS_TENANT_ID()}/oauth2/v2.0/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id:     MS_CLIENT_ID(),
+        client_secret: MS_CLIENT_SECRET(),
+        code,
+        grant_type:    'authorization_code',
+        redirect_uri:  msRedirectUri(),
+        scope:         'openid email profile User.Read',
+      }),
+    });
+    const tokens = await tokenRes.json() as Record<string, string>;
+    if (tokens.error) throw new Error(tokens.error_description || tokens.error);
+
+    // Decode ID token to get email (no need to verify — we just exchanged a code with Microsoft directly)
+    const idTokenParts = tokens.id_token?.split('.');
+    if (!idTokenParts || idTokenParts.length < 2) throw new Error('Invalid id_token');
+    const claims = JSON.parse(Buffer.from(idTokenParts[1], 'base64url').toString()) as Record<string, string>;
+    const email = (claims.email || claims.preferred_username || '').toLowerCase();
+    const name  = claims.name || email;
+
+    if (!email) throw new Error('No email in Microsoft token');
+
+    // Look up user by email
+    const { rows } = await pool.query(
+      'SELECT * FROM users WHERE LOWER(email)=$1 AND status!=\'inactive\'',
+      [email]
+    );
+    if (!rows.length) {
+      return res.redirect(`${frontendBase}/login?error=${encodeURIComponent(`No account found for ${email}. Contact an administrator to be added.`)}`);
+    }
+    const user = rows[0];
+
+    // Update last_login
+    await pool.query('UPDATE users SET last_login=now() WHERE id=$1', [user.id]);
+
+    // Issue app JWT
+    const appToken = jwt.sign(
+      { id: user.id, name: user.name, email: user.email, role: user.role },
+      process.env.JWT_SECRET || 'dev_secret',
+      { expiresIn: '7d' }
+    );
+
+    // Redirect to frontend with token
+    res.redirect(`${frontendBase}/?mstoken=${appToken}`);
+  } catch (err) {
+    console.error('[ms-oauth] callback error:', err);
+    res.redirect(`${frontendBase}/login?error=${encodeURIComponent('Microsoft login failed. Please try again.')}`);
+  }
+});
+
 // Password reset — generates a short-lived token and emails a reset link
 router.post('/forgot-password', async (req, res) => {
   const { email } = req.body;
