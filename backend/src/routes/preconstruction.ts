@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, requireAIPermission, AuthRequest } from '../middleware/auth';
 import Anthropic from '@anthropic-ai/sdk';
 import multer from 'multer';
 
@@ -677,7 +677,7 @@ router.put('/:bidId/workspace', requireAuth, async (req, res) => {
 });
 
 // GET results for a bid
-router.get('/:bidId/results', requireAuth, async (req, res) => {
+router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), async (req, res) => {
   const { rows } = await pool.query(
     'SELECT * FROM takeoff_results WHERE bid_id=$1',
     [req.params.bidId]
@@ -737,7 +737,7 @@ router.get('/intelligence/:bidId', requireAuth, async (req, res) => {
 });
 
 // POST analyze — 3-agent sequential pipeline
-router.post('/analyze', requireAuth, upload.array('files', 50), async (req: AuthRequest, res) => {
+router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload.array('files', 50), async (req: AuthRequest, res) => {
   const bidId = req.body.bidId;
   if (!bidId) return res.status(400).json({ error: 'bidId required' });
 
@@ -756,6 +756,12 @@ router.post('/analyze', requireAuth, upload.array('files', 50), async (req: Auth
     ON CONFLICT (bid_id) DO UPDATE SET status='running', created_at=now(),
       agent1_output=NULL, agent2_output=NULL, agent3_output=NULL
   `, [bidId]);
+
+  // Log AI usage for rate limiting and audit
+  await pool.query(
+    `INSERT INTO activity (kind, div, text, user_id) VALUES ('ai_analysis','preconstruction',$1,$2)`,
+    [`Plan analysis for ${bidRows[0].name || bidId} (${files.length} files) by ${req.user?.name}`, req.user?.id]
+  ).catch(() => {}); // non-fatal
 
   // Count electrical sheets for immediate response
   const electricalCount = files.filter(f => isElectricalSheet(f.originalname)).length || files.length;

@@ -85,4 +85,15 @@ router.delete('/:id', requireAuth, async (req: AuthRequest, res) => {
   res.json({ ok: true });
 });
 
+// Set per-user AI permission override
+router.put('/:id/ai-override', requireAuth, async (req: AuthRequest, res) => {
+  const override = req.body; // e.g. { run_analysis: false } or { suspended: true } or null to clear
+  const { rows } = await pool.query(
+    `UPDATE users SET ai_override=$1 WHERE id=$2 RETURNING id, ai_override`,
+    [override === null ? null : JSON.stringify(override), req.params.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  res.json({ ok: true, ai_override: rows[0].ai_override });
+});
+
 export default router;

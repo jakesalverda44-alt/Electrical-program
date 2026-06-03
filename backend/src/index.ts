@@ -3,6 +3,8 @@ import cors from 'cors';
 import path from 'path';
 import dotenv from 'dotenv';
 import { runMigrations } from './migrate';
+import { pool } from './db/pool';
+import { requireAuth, AuthRequest } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
 import bidsRouter from './routes/bids';
@@ -32,6 +34,20 @@ app.use('/api/preconstruction', preconRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/settings', settingsRouter);
+
+// AI usage today — per-user analysis count for the current day
+app.get('/api/ai/usage/today', requireAuth, async (_req: AuthRequest, res) => {
+  const today = new Date().toISOString().split('T')[0];
+  const { rows } = await pool.query(`
+    SELECT u.id, u.name, u.role, COUNT(a.id)::int AS count
+    FROM users u
+    LEFT JOIN activity a ON a.user_id = u.id AND a.kind = 'ai_analysis' AND a.created_at::date = $1::date
+    WHERE u.status = 'active'
+    GROUP BY u.id, u.name, u.role
+    ORDER BY count DESC
+  `, [today]);
+  res.json(rows);
+});
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
