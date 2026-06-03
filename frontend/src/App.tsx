@@ -51,7 +51,7 @@ export default function App() {
   const [flashId, setFlashId] = useState<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
-  const [intakeCount, setIntakeCount] = useState(2); // 2 pending demo items on first load
+  const [intakeCount, setIntakeCount] = useState(0);
   const [editGen, setEditGen] = useState<import('./types').Gen | null>(null);
   const { settings, reload: reloadSettings } = useAppSettings(!!user);
 

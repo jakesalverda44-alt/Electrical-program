@@ -22,71 +22,7 @@ interface IntakeItem {
   };
 }
 
-const DEMO_ITEMS: IntakeItem[] = [
-  {
-    id: 'i1',
-    from: 'estimating@brconstruction.com',
-    subject: 'ITB – Lakewood Ranch Medical Expansion',
-    received: '2026-06-02T09:14:00',
-    status: 'pending',
-    body: `Good morning,\n\nPlease find attached the invitation to bid for the Lakewood Ranch Medical Campus Expansion project. We are requesting pricing on Division 16 Electrical only.\n\nBid Due: June 14th, 2026 at 2:00 PM\nLocation: 8330 Lakewood Ranch Blvd, Lakewood Ranch, FL 34202\nGeneral Contractor: BR Construction Group\nEstimated Value: $420,000 – $480,000\nPlan Sheets: 48 sheets\n\nPlease confirm receipt and your intent to bid.\n\nBest,\nMark Ellison\nPre-Construction Manager\nBR Construction Group\n(941) 555-0147`,
-    fields: {
-      bidName: 'Lakewood Ranch Medical Expansion',
-      loc: 'Lakewood Ranch, FL',
-      gc: 'BR Construction Group',
-      due: '2026-06-14',
-      contact: 'Mark Ellison · (941) 555-0147',
-      amount: 450000,
-      sheets: 48,
-      confidence: {
-        bidName: 'high', loc: 'high', gc: 'high', due: 'high',
-        contact: 'high', amount: 'medium', sheets: 'high',
-      },
-    },
-  },
-  {
-    id: 'i2',
-    from: 'bids@suncoastdev.net',
-    subject: 'Bid Request – Osprey Commons Phase 2',
-    received: '2026-06-01T15:42:00',
-    status: 'pending',
-    body: `Hi team,\n\nWe'd like to invite Accurate Power & Technology to bid on Phase 2 of Osprey Commons, a mixed-use development in Osprey, FL. Electrical scope includes site lighting, panel upgrades, and tenant fit-outs.\n\nBid deadline is June 20, 2026. Please pick up drawings from our office or request digital copies.\n\nEstimated electrical budget is roughly $280K based on Phase 1 actuals.\n\nContact me with any questions.\n\nSarah Nguyen\nSuncoast Development\n(941) 555-0211`,
-    fields: {
-      bidName: 'Osprey Commons Phase 2',
-      loc: 'Osprey, FL',
-      gc: 'Suncoast Development',
-      due: '2026-06-20',
-      contact: 'Sarah Nguyen · (941) 555-0211',
-      amount: 280000,
-      sheets: 0,
-      confidence: {
-        bidName: 'high', loc: 'high', gc: 'high', due: 'high',
-        contact: 'high', amount: 'low', sheets: 'low',
-      },
-    },
-  },
-  {
-    id: 'i3',
-    from: 'procurement@gulfcoastbuilders.com',
-    subject: 'Electrical Sub Needed – Siesta Village Retail',
-    received: '2026-05-30T11:05:00',
-    status: 'accepted',
-    body: `To Whom It May Concern,\n\nGulf Coast Builders is seeking electrical subcontractor pricing for the Siesta Village Retail Center project in Sarasota. Bid documents are available via our ftp portal.\n\nBid Date: June 10, 2026\nPlans: 32 sheets\nLocation: 1200 Stickney Point Rd, Sarasota, FL 34231\n\nRegards,\nProcurement Team\nGulf Coast Builders`,
-    fields: {
-      bidName: 'Siesta Village Retail Center',
-      loc: 'Sarasota, FL',
-      gc: 'Gulf Coast Builders',
-      due: '2026-06-10',
-      contact: 'Procurement Team',
-      amount: 0,
-      sheets: 32,
-      confidence: {
-        bidName: 'high', loc: 'high', gc: 'high', due: 'high',
-        contact: 'medium', amount: 'low', sheets: 'high',
-      },
-    },
-  },
-];
+const DEMO_ITEMS: IntakeItem[] = [];
 
 const REJECT_REASONS = [
   'Capacity — too busy',
