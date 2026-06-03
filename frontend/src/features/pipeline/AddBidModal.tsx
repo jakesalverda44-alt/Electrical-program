@@ -9,11 +9,11 @@ interface Props {
 }
 
 export default function AddBidModal({ onClose, onAdded }: Props) {
-  const [f, setF] = useState({ name: '', gc: '', loc: '', amount: '', due: '' });
+  const [f, setF] = useState({ name: '', gc: '', loc: '', amount: '', due: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setF(prev => ({ ...prev, [k]: e.target.value }));
 
   const ok = f.name.trim() && f.gc.trim();
@@ -65,6 +65,11 @@ export default function AddBidModal({ onClose, onAdded }: Props) {
                 <label>Due date</label>
                 <input type="date" value={f.due} onChange={set('due')}/>
               </div>
+            </div>
+            <div className="field">
+              <label>Notes <span style={{fontWeight:400,color:'var(--text3)'}}>— optional</span></label>
+              <textarea value={f.notes} onChange={set('notes')} placeholder="Scope details, contacts, special requirements…"
+                rows={3} style={{ resize: 'vertical', minHeight: 72 }}/>
             </div>
             {error && <div className="login-error">{error}</div>}
           </div>

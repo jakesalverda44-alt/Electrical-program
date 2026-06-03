@@ -82,13 +82,13 @@ router.get('/', requireAuth, async (_req, res) => {
 });
 
 router.post('/', requireAuth, async (req: AuthRequest, res) => {
-  const { name, gc, loc, amount, due } = req.body;
+  const { name, gc, loc, amount, due, notes } = req.body;
   if (!name?.trim() || !gc?.trim()) return res.status(400).json({ error: 'Name and GC required' });
   const user = req.user!;
   const { rows } = await pool.query(
-    `INSERT INTO bids (name, gc, loc, amount, due, salesperson_id, salesperson_name)
-     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [name.trim(), gc.trim(), (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), user.id, user.name]
+    `INSERT INTO bids (name, gc, loc, amount, due, notes, salesperson_id, salesperson_name)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [name.trim(), gc.trim(), (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), notes?.trim() || null, user.id, user.name]
   );
   sendBidNotification(rows[0], user).catch(() => {});
   res.json(withDueDays(rows[0]));
