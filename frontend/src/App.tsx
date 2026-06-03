@@ -179,6 +179,7 @@ export default function App() {
         return (
           <BuilderPage
             setGens={setGens}
+            setWonJobs={setWonJobs}
             showToast={showToast}
             onSaved={() => { setEditGen(null); setView('gen-proposals'); }}
             editGen={editGen}

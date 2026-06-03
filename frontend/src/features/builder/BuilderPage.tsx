@@ -4,12 +4,13 @@ import { GenForm } from './genData';
 import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo } from './genCalc';
 import ProposalPreview from './ProposalPreview';
 import api from '../../api/client';
-import { Gen, Toast } from '../../types';
+import { Gen, WonJob, Toast } from '../../types';
 
 function fmt(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 
 interface Props {
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
+  setWonJobs?: (fn: (prev: WonJob[]) => WonJob[]) => void;
   showToast: (t: Toast) => void;
   onSaved: () => void;
   editGen?: Gen | null;
@@ -67,7 +68,7 @@ function genToForm(g: Gen): GenForm {
   };
 }
 
-export default function BuilderPage({ setGens, showToast, onSaved, editGen }: Props) {
+export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, editGen }: Props) {
   const [form, setForm] = useState<GenForm>(() => editGen ? genToForm(editGen) : blankGenForm());
   const [screen, setScreen] = useState<Screen>('builder');
   const [proposalNo] = useState(() => genProposalNo(form.brand, form.coolingType));
@@ -106,7 +107,11 @@ export default function BuilderPage({ setGens, showToast, onSaved, editGen }: Pr
       };
       if (editGen) {
         const r = await api.patch(`/gens/${editGen.id}`, payload);
-        setGens(prev => prev.map(g => g.id === editGen.id ? r.data : g));
+        const updatedGen: Gen = r.data.gen ?? r.data;
+        setGens(prev => prev.map(g => g.id === editGen.id ? updatedGen : g));
+        if (r.data.wonJob && setWonJobs) {
+          setWonJobs(prev => prev.map(w => w.proposal_id === editGen.id ? r.data.wonJob : w));
+        }
         showToast({ title: 'Proposal updated', sub: form.customer });
       } else {
         const r = await api.post('/gens', { ...payload, stage: 'building' });

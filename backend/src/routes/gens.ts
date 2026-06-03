@@ -136,7 +136,19 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
     vals
   );
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
-  res.json(rows[0]);
+  const gen = rows[0];
+
+  // If amount changed on an awarded gen, keep won_jobs in sync
+  let wonJob = null;
+  if (amount !== undefined && gen.stage === 'awarded') {
+    const { rows: wj } = await pool.query(
+      `UPDATE won_jobs SET value=$1 WHERE proposal_id=$2 RETURNING *`,
+      [Number(amount), gen.id]
+    );
+    wonJob = wj[0] || null;
+  }
+
+  res.json({ gen, wonJob });
 });
 
 export default router;
