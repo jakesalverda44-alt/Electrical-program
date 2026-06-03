@@ -75,16 +75,14 @@ export default function DocsPage({ bids, gens, showToast, userName }: Props) {
       const opt = linkOptions.find(o => o.id === uploadForm.linkedId);
       const newDocs: Doc[] = [];
       for (const f of pendingFiles) {
-        const res = await api.post('/documents', {
-          name:        f.name,
-          display_name: uploadForm.name.trim() || f.name,
-          category:    uploadForm.category,
-          file_size:   f.size,
-          file_type:   f.type || extOf(f.name),
-          linked_id:   uploadForm.linkedId ? uploadForm.linkedId.split(':')[1] ?? null : null,
-          linked_name: opt?.name ?? null,
-          div:         opt?.div ?? 'general',
-        });
+        const form = new FormData();
+        form.append('file', f);
+        form.append('display_name', uploadForm.name.trim() || f.name);
+        form.append('category', uploadForm.category);
+        form.append('linked_id', uploadForm.linkedId ? (uploadForm.linkedId.split(':')[1] ?? '') : '');
+        form.append('linked_name', opt?.name ?? '');
+        form.append('div', opt?.div ?? 'general');
+        const res = await api.post('/documents', form, { headers: { 'Content-Type': 'multipart/form-data' } });
         newDocs.push(res.data);
       }
       setDocs(prev => [...newDocs, ...prev]);
@@ -95,6 +93,21 @@ export default function DocsPage({ bids, gens, showToast, userName }: Props) {
     } finally {
       setUploading(false);
     }
+  };
+
+  const downloadDoc = (doc: Doc) => {
+    const token = localStorage.getItem('token');
+    const a = document.createElement('a');
+    a.href = `/api/documents/${doc.id}/download`;
+    // include auth token via fetch + blob for authenticated download
+    fetch(`/api/documents/${doc.id}/download`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.blob())
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        a.href = url; a.download = doc.display_name;
+        a.click(); URL.revokeObjectURL(url);
+      })
+      .catch(() => showToast({ title: 'Download failed' }));
   };
 
   const deleteDoc = async (id: string) => {
@@ -353,7 +366,7 @@ export default function DocsPage({ bids, gens, showToast, userName }: Props) {
                 ))}
 
                 <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <button className="btn ghost" onClick={() => showToast({ title: 'Download started', sub: selected.display_name })} style={{ fontSize: 13 }}>
+                  <button className="btn ghost" onClick={() => downloadDoc(selected)} style={{ fontSize: 13 }}>
                     <Icon name="cloud" size={14} stroke={1.9}/> Download
                   </button>
                   <button className="btn ghost" onClick={() => deleteDoc(selected.id)}

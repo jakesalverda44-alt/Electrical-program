@@ -652,6 +652,30 @@ async function runPipeline(
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
+// GET all workspaces (for restoring state on app load)
+router.get('/workspaces', requireAuth, async (_req, res) => {
+  const { rows } = await pool.query('SELECT * FROM bid_workspaces');
+  res.json(rows);
+});
+
+// PUT workspace (upsert)
+router.put('/:bidId/workspace', requireAuth, async (req, res) => {
+  const { bidId } = req.params;
+  const { step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated } = req.body;
+  const { rows } = await pool.query(
+    `INSERT INTO bid_workspaces (bid_id, step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())
+     ON CONFLICT (bid_id) DO UPDATE SET
+       step=$2, active_tab=$3, notes=$4, scope=$5, rfis=$6, files=$7,
+       ai_done=$8, proposal_generated=$9, updated_at=now()
+     RETURNING *`,
+    [bidId, step||'intake', active_tab||'overview', notes||'',
+     JSON.stringify(scope||{}), JSON.stringify(rfis||[]), JSON.stringify(files||[]),
+     !!ai_done, !!proposal_generated]
+  );
+  res.json(rows[0]);
+});
+
 // GET results for a bid
 router.get('/:bidId/results', requireAuth, async (req, res) => {
   const { rows } = await pool.query(

@@ -66,10 +66,29 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [analysisTab, setAnalysisTab] = useState<'agent1'|'agent2'|'agent3'|'raw'>('agent1');
   const [historicalCosts, setHistoricalCosts] = useState<Array<Record<string,unknown>>>([]);
   const [bidIntel, setBidIntel] = useState<Record<string,unknown> | null>(null);
-  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const wsRef = useRef(ws);
   wsRef.current = ws;
+
+  // Auto-save workspace to DB 800ms after last change (skip ephemeral fields)
+  useEffect(() => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      api.put(`/preconstruction/${bid.id}/workspace`, {
+        step: ws.step,
+        active_tab: ws.activeTab,
+        notes: ws.notes,
+        scope: ws.scope,
+        rfis: ws.rfis,
+        files: ws.files,
+        ai_done: ws.aiDone,
+        proposal_generated: ws.proposalGenerated,
+      }).catch(() => {});
+    }, 800);
+    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
+  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated]);
 
   function set(patchOrFn: Partial<PcWorkspace> | ((prev: PcWorkspace) => Partial<PcWorkspace>)) {
     const current = wsRef.current;

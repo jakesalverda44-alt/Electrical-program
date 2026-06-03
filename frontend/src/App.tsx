@@ -60,13 +60,36 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     setLoading(true);
-    Promise.all([api.get('/dashboard'), api.get('/users')])
-      .then(([dash, users]) => {
-        setBids(dash.data.bids);
+    Promise.all([api.get('/dashboard'), api.get('/users'), api.get('/preconstruction/workspaces')])
+      .then(([dash, users, workspaces]) => {
+        const bidsData: Bid[] = dash.data.bids;
+        setBids(bidsData);
         setGens(dash.data.gens);
         setWonJobs(dash.data.wonJobs);
         setActivity(dash.data.activity);
         setRepNames(users.data.map((u: { name: string }) => u.name));
+        // Restore persisted workspace state
+        const restored: Record<string, PcWorkspace> = {};
+        for (const row of (workspaces.data as Array<Record<string, unknown>>)) {
+          const bid = bidsData.find(b => b.id === row.bid_id);
+          if (!bid) continue;
+          restored[bid.id] = {
+            bidId:             bid.id,
+            bidName:           bid.name,
+            amount:            bid.amount ?? 0,
+            step:              (row.step as PcWorkspace['step']) || 'intake',
+            activeTab:         (row.active_tab as PcWorkspace['activeTab']) || 'overview',
+            notes:             (row.notes as string) || '',
+            scope:             (row.scope as Record<string, string>) || {},
+            rfis:              (row.rfis as PcWorkspace['rfis']) || [],
+            files:             (row.files as PcWorkspace['files']) || [],
+            aiDone:            !!(row.ai_done),
+            proposalGenerated: !!(row.proposal_generated),
+            aiRunning:         false,
+            aiLog:             [],
+          };
+        }
+        setPcData(restored);
       })
       .finally(() => setLoading(false));
   }, [user]);
