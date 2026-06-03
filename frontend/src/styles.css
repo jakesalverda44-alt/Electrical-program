@@ -28,7 +28,7 @@ button{font-family:inherit}
 
 /* ── App shell ─────────────────────────────────────────── */
 .app{display:flex;height:100vh;height:100dvh;width:100%}
-.sidebar{width:248px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:20px 14px}
+.sidebar{width:248px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:20px 14px;overflow-y:auto}
 .logo{display:flex;align-items:center;gap:12px;padding:2px 4px 18px;margin-bottom:6px;border-bottom:1px solid var(--border)}
 .logo-img{width:100%;display:block;border-radius:12px;background:#F7F4EC}
 .logo-mark{width:40px;height:40px;border-radius:11px;background:linear-gradient(150deg,#4D8DF7,#2E5FC0);color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 6px 16px rgba(77,141,247,.35)}
