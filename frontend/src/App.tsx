@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from './hooks/useAuth';
 import { useToast } from './hooks/useToast';
 import { useAppSettings } from './hooks/useAppSettings';
@@ -40,8 +40,12 @@ export default function App() {
   const { user, login, logout } = useAuth();
   const { toast, showToast } = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const [view, setView] = useState('dashboard');
+  // The active view is derived from the URL so pages are bookmarkable and the
+  // browser back/forward buttons work. setView simply navigates.
+  const view = location.pathname.replace(/^\/+/, '').split('/')[0] || 'dashboard';
+  const setView = useCallback((v: string) => navigate('/' + v), [navigate]);
   const [dashFilter, setDashFilter] = useState('all');
   const [bids, setBids] = useState<Bid[]>([]);
   const [gens, setGens] = useState<Gen[]>([]);
@@ -103,7 +107,7 @@ export default function App() {
 
   const handleLogin = async (email: string, password: string) => {
     await login(email, password);
-    navigate('/');
+    navigate('/dashboard');
   };
 
   const handleNewBid = useCallback((bid: Bid) => {
@@ -152,6 +156,7 @@ export default function App() {
           <DashboardPage
             bids={bids} gens={gens} wonJobs={wonJobs} activity={activity}
             repNames={repNames}
+            userName={user.name} userRole={user.role}
             onNav={setView} onNewProposal={() => setView('builder')}
           />
         );
@@ -231,7 +236,7 @@ export default function App() {
     }
   };
 
-  return (
+  const shell = (
     <>
       <AppShell
         view={view}
@@ -254,5 +259,17 @@ export default function App() {
       </AppShell>
       {toast && <Toast toast={toast}/>}
     </>
+  );
+
+  return (
+    <Routes>
+      {/* Public proposal stays reachable even when signed in */}
+      <Route path="/p/:token" element={<ProposalPublicPage/>}/>
+      {/* Auth pages are meaningless when already signed in */}
+      <Route path="/login" element={<Navigate to="/dashboard" replace/>}/>
+      <Route path="/reset-password" element={<Navigate to="/dashboard" replace/>}/>
+      {/* Everything else renders the app shell; the view is read from the path */}
+      <Route path="*" element={shell}/>
+    </Routes>
   );
 }

@@ -1,6 +1,54 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
+import api from '../../api/client';
 import { Bid, Gen, WonJob, Activity } from '../../types';
+
+// Roles that see company-wide figures; everyone else sees their own scoped data.
+const MANAGER_ROLES = ['owner', 'administrator', 'sales_manager'];
+
+interface DueTask { id: string; title: string; due_date?: string | null; linked_name?: string | null; status: string; }
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+}
+
+// Compact dashboard widget: the current user's open follow-ups that are due today or overdue.
+function FollowupsDue({ onNav }: { onNav: (v: string) => void }) {
+  const [tasks, setTasks] = useState<DueTask[]>([]);
+  useEffect(() => {
+    api.get('/tasks', { params: { status: 'open' } })
+      .then(({ data }) => setTasks(data))
+      .catch(() => { /* non-fatal */ });
+  }, []);
+
+  const today = new Date(new Date().toDateString());
+  const due = tasks.filter(t => t.due_date && new Date(t.due_date + 'T00:00:00') <= today);
+  if (due.length === 0) return null;
+
+  return (
+    <div style={{ margin: '0 0 18px', padding: '14px 18px', background: 'rgba(245,158,11,.10)', border: '1px solid rgba(245,158,11,.28)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 14 }}>
+      <span style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(245,158,11,.16)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <Icon name="checkc" size={18} stroke={2} style={{ color: '#D97706' }}/>
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: '#B45309', marginBottom: 4 }}>
+          {due.length} Follow-up{due.length !== 1 ? 's' : ''} due
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {due.slice(0, 4).map(t => (
+            <span key={t.id} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', padding: '2px 8px', background: 'var(--surface2)', borderRadius: 6 }}>
+              {t.title}{t.linked_name ? ` · ${t.linked_name}` : ''}
+            </span>
+          ))}
+        </div>
+      </div>
+      <button className="btn ghost" onClick={() => onNav('followups')} style={{ fontSize: 12, flexShrink: 0, color: '#B45309', borderColor: '#D97706' }}>
+        View
+      </button>
+    </div>
+  );
+}
 
 function money(n: number) {
   if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2).replace(/\.?0+$/, '') + 'M';
@@ -15,11 +63,17 @@ interface Props {
   wonJobs: WonJob[];
   activity: Activity[];
   repNames?: string[];
+  userName?: string;
+  userRole?: string;
   onNav: (v: string) => void;
   onNewProposal: () => void;
 }
 
-export default function DashboardPage({ bids, gens, wonJobs, activity, repNames, onNav, onNewProposal }: Props) {
+export default function DashboardPage({ bids, gens, wonJobs, activity, repNames, userName, userRole, onNav, onNewProposal }: Props) {
+  const isManager = !userRole || MANAGER_ROLES.includes(userRole);
+  const firstName = (userName || '').split(' ')[0];
+  // Reps see their own scoped data (enforced server-side); label it accordingly.
+  const scopeWord = isManager ? '' : 'My ';
   const sum = (a: { amount: number | null }[]) => a.reduce((s, x) => s + Number(x.amount ?? 0), 0);
 
   const elecActive = bids.filter(b => b.stage === 'due' || b.stage === 'submitted');
@@ -54,10 +108,23 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
   return (
     <div className="scroll view-enter">
       <div className="dash">
+        {/* Personalized greeting */}
+        {firstName && (
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--text)' }}>{greeting()}, {firstName}</div>
+            <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 2 }}>
+              {isManager ? 'Company-wide pipeline and performance.' : 'Here are your deals and what needs attention today.'}
+            </div>
+          </div>
+        )}
+
+        {/* Follow-ups due today / overdue */}
+        <FollowupsDue onNav={onNav}/>
+
         {/* Stat cards */}
         <div className="stats" style={{ gridTemplateColumns: 'repeat(4,1fr)', padding: 0 }}>
           {[
-            { label: 'Total Open Pipeline', val: money(total),   sub: `${elecActive.length + genActive.length} active opportunities`, ic: 'trend',    tone: 'blue',  nav: 'elec-proposals' },
+            { label: scopeWord + 'Open Pipeline', val: money(total),   sub: `${elecActive.length + genActive.length} active opportunities`, ic: 'trend',    tone: 'blue',  nav: 'elec-proposals' },
             { label: 'Electrical Value',    val: money(elecVal), sub: `${elecActive.length} active bids`,                             ic: 'pipeline', tone: 'blue',  nav: 'elec-proposals' },
             { label: 'Generator Value',     val: money(genVal),  sub: `${genActive.length} active proposals`,                         ic: 'bolt',     tone: 'amber', nav: 'gen-proposals'  },
             { label: 'Win Rate',            val: winRate + '%',  sub: `${elecWon} won · ${elecLost} lost`,                            ic: 'spark',    tone: 'green', nav: 'sales-by-rep'   },
