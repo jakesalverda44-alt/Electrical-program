@@ -3,8 +3,7 @@ import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
-
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+import { getSetting } from './settings';
 
 const router = Router();
 
@@ -170,18 +169,27 @@ router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
   const gen = rows[0];
 
-  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const [apiKey, fromAddress, fromName, replyTo, frontendUrl] = await Promise.all([
+    getSetting('email_resend_api_key'),
+    getSetting('email_from_address'),
+    getSetting('email_from_name'),
+    getSetting('email_reply_to'),
+    getSetting('frontend_url'),
+  ]);
+
+  const baseUrl = frontendUrl || process.env.FRONTEND_URL || 'http://localhost:5173';
   const link = `${baseUrl}/p/${gen.proposal_token}`;
 
-  if (!resend) {
-    console.warn('[email] RESEND_API_KEY not set — skipping send, returning link:', link);
+  if (!apiKey) {
+    console.warn('[email] No API key configured — skipping send, returning link:', link);
     return res.json({ gen, link, skipped: true });
   }
 
+  const resend = new Resend(apiKey);
   try {
     await resend.emails.send({
-      from: 'proposals@accuratepowerandtechnology.com',
-      replyTo: 'jakes@accuratepowerandtechnology.com',
+      from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
+      replyTo: replyTo || undefined,
       to,
       subject: subject || `Your Generator Proposal — ${proposalNo}`,
       html: proposalEmailHtml({ customerName: gen.customer, proposalNo, total, deposit, link, senderNote: note }),

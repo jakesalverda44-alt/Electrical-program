@@ -13,6 +13,7 @@ import commsRouter from './routes/comms';
 import preconRouter from './routes/preconstruction';
 import projectsRouter from './routes/projects';
 import documentsRouter from './routes/documents';
+import settingsRouter from './routes/settings';
 
 dotenv.config();
 
@@ -30,6 +31,7 @@ app.use('/api/comms', commsRouter);
 app.use('/api/preconstruction', preconRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/documents', documentsRouter);
+app.use('/api/settings', settingsRouter);
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 

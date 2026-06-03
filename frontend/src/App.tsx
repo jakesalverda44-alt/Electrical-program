@@ -18,6 +18,7 @@ import ReportingPage from './features/reporting/ReportingPage';
 import CommsPage from './features/comms/CommsPage';
 import DocsPage from './features/docs/DocsPage';
 import ProposalPublicPage from './pages/ProposalPublicPage';
+import SettingsPage from './features/settings/SettingsPage';
 import { PcWorkspace } from './features/preconstruction/constants';
 import Toast from './components/Toast';
 import api from './api/client';
@@ -209,6 +210,8 @@ export default function App() {
         return <CommsPage bids={bids} gens={gens} activity={activity} showToast={showToast} userName={user.name}/>;
       case 'docs':
         return <DocsPage bids={bids} gens={gens} showToast={showToast} userName={user.name}/>;
+      case 'admin':
+        return <SettingsPage/>;
       default:
         return <StubPage title={view.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}/>;
     }
