@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, WonJob, Toast } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
@@ -21,15 +21,21 @@ interface Props {
   showToast: (t: Toast) => void;
   onOpenPreconstruction: (id: string) => void;
   flashId: string | null;
+  openAddBid?: boolean;
+  onAddBidHandled?: () => void;
 }
 
-export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast, onOpenPreconstruction, flashId }: Props) {
+export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast, onOpenPreconstruction, flashId, openAddBid, onAddBidHandled }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   const [filterRep, setFilterRep] = useState<string>('all');
   const repNames = useMemo(() => Array.from(new Set(bids.map(b => b.salesperson_name).filter(Boolean))).sort(), [bids]);
   const [detail, setDetail] = useState<Bid | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (openAddBid) { setShowAdd(true); onAddBidHandled?.(); }
+  }, [openAddBid]);
   const [overCol, setOverCol] = useState<string | null>(null);
 
   const { moveToStage, advance, pendingLost, cancelLost } = usePipeline({

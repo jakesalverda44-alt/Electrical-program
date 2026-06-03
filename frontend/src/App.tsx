@@ -52,6 +52,7 @@ export default function App() {
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
   const [intakeCount, setIntakeCount] = useState(0);
+  const [openAddBid, setOpenAddBid] = useState(false);
   const [editGen, setEditGen] = useState<import('./types').Gen | null>(null);
   const { settings, reload: reloadSettings } = useAppSettings(!!user);
 
@@ -159,6 +160,8 @@ export default function App() {
             setWonJobs={setWonJobs} showToast={showToast}
             onOpenPreconstruction={() => setView('preconstruction')}
             flashId={flashId}
+            openAddBid={openAddBid}
+            onAddBidHandled={() => setOpenAddBid(false)}
           />
         );
       case 'gen-proposals':
@@ -239,7 +242,7 @@ export default function App() {
         dashFilter={dashFilter}
         onDashFilter={setDashFilter}
         onNewProposal={() => setView('builder')}
-        onNewBid={() => setView('elec-proposals')}
+        onNewBid={() => { setView('elec-proposals'); setOpenAddBid(true); }}
         bids={bids} gens={gens}
       >
         {renderView()}
