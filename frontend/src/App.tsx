@@ -126,6 +126,7 @@ export default function App() {
       <>
         <Routes>
           <Route path="/login" element={<LoginPage onLogin={handleLogin}/>}/>
+          <Route path="/reset-password" element={<LoginPage onLogin={handleLogin}/>}/>
           <Route path="/p/:token" element={<ProposalPublicPage/>}/>
           <Route path="*" element={<Navigate to="/login" replace/>}/>
         </Routes>
@@ -168,6 +169,7 @@ export default function App() {
             onOpenBuilder={() => { setEditGen(null); setView('builder'); }}
             onEditGen={g => { setEditGen(g); setView('builder'); }}
             flashId={flashId}
+            onNav={setView}
           />
         );
       case 'sales-by-rep':
@@ -199,6 +201,8 @@ export default function App() {
             onPcUpdate={handlePcUpdate}
             onBidUpdated={handleBidUpdated}
             showToast={showToast}
+            userRole={user?.role}
+            settings={settings}
           />
         );
       case 'elec-projects':

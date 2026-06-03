@@ -21,9 +21,10 @@ interface Props {
   onOpenBuilder: () => void;
   flashId: string | null;
   onEditGen: (gen: import('../../types').Gen) => void;
+  onNav?: (v: string) => void;
 }
 
-export default function GenPipelinePage({ gens, setGens, setWonJobs, showToast, onOpenBuilder, flashId, onEditGen }: Props) {
+export default function GenPipelinePage({ gens, setGens, setWonJobs, showToast, onOpenBuilder, flashId, onEditGen, onNav }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   const [detail, setDetail] = useState<Gen | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -32,7 +33,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, showToast, 
   const repNames = useMemo(() => Array.from(new Set(gens.map(g => g.salesperson_name).filter(Boolean))).sort(), [gens]);
 
   const { moveToStage, advance, pendingDeclined, cancelDeclined } = useGenPipeline({
-    gens, setGens, setWonJobs, showToast,
+    gens, setGens, setWonJobs, showToast, onNav,
   });
 
   const sum = (list: Gen[]) => list.reduce((s, g) => s + Number(g.amount), 0);

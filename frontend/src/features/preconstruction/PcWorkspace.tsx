@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import { Bid, Toast } from '../../types';
 import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey } from './constants';
 import api from '../../api/client';
+import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
 
 interface Props {
   ws: PcWorkspace;
@@ -11,6 +12,8 @@ interface Props {
   onBack: () => void;
   onConverted: (bid: Bid) => void;
   showToast: (t: Toast) => void;
+  userRole?: string;
+  settings?: AppSettings;
 }
 
 const STEP_ORDER: PcStepKey[] = ['intake','takeoff','scope','estimate','review','proposal','submitted'];
@@ -57,7 +60,7 @@ function isElecSheet(name: string) {
   return true;
 }
 
-export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, showToast }: Props) {
+export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, showToast, userRole, settings }: Props) {
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
   const [rfiSuggesting, setRfiSuggesting] = useState(false);
@@ -326,10 +329,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 <p style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 14, lineHeight: 1.6 }}>
                   Upload electrical plan sheets in the Files tab, then run the 3-agent AI pipeline: Agent 1 reads drawings, Agent 2 builds scope & estimate, Agent 3 runs QA review. Results appear in the Plan Review tab.
                 </p>
-                <button className="btn" onClick={runAI} disabled={ws.aiRunning || ws.aiDone} style={{ fontSize: 13, marginBottom: ws.aiLog.length ? 16 : 0 }}>
-                  <Icon name="spark" size={14} stroke={1.9}/>
-                  {ws.aiDone ? 'Takeoff Complete' : ws.aiRunning ? 'Running…' : 'Run AI Takeoff'}
-                </button>
+                {settings && userRole && !checkAIPermission('run_analysis', userRole, settings) ? (
+                  <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', fontSize: 13, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <Icon name="shield" size={16} stroke={1.8}/>
+                    AI analysis is not enabled for your role. Contact an administrator.
+                  </div>
+                ) : (
+                  <button className="btn" onClick={runAI} disabled={ws.aiRunning || ws.aiDone} style={{ fontSize: 13, marginBottom: ws.aiLog.length ? 16 : 0 }}>
+                    <Icon name="spark" size={14} stroke={1.9}/>
+                    {ws.aiDone ? 'Takeoff Complete' : ws.aiRunning ? 'Running…' : 'Run AI Takeoff'}
+                  </button>
+                )}
                 {ws.aiLog.length > 0 && (
                   <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px', fontFamily: 'monospace', fontSize: 12, color: 'var(--text2)', lineHeight: 1.8 }}>
                     {ws.aiLog.map((line, i) => <div key={i}>{line}</div>)}
@@ -342,6 +352,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         );
 
       case 'takeoff': {
+        if (settings && userRole && !checkAIPermission('view_results', userRole, settings)) {
+          return (
+            <div style={{ padding: '40px 24px', textAlign: 'center', color: 'var(--text3)' }}>
+              <Icon name="shield" size={32} stroke={1.5}/>
+              <div style={{ fontSize: 15, fontWeight: 700, marginTop: 12, color: 'var(--text2)' }}>Access Restricted</div>
+              <div style={{ fontSize: 13, marginTop: 6 }}>AI analysis results are not available for your role.</div>
+            </div>
+          );
+        }
         const agent1 = aiResults?.agent1_output as string | undefined;
         const agent2 = aiResults?.agent2_output as string | undefined;
         const agent3 = aiResults?.agent3_output as string | undefined;

@@ -8,9 +8,10 @@ interface UseGenPipelineProps {
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
   showToast: (t: Toast) => void;
+  onNav?: (v: string) => void;
 }
 
-export function useGenPipeline({ gens, setGens, setWonJobs, showToast }: UseGenPipelineProps) {
+export function useGenPipeline({ gens, setGens, setWonJobs, showToast, onNav }: UseGenPipelineProps) {
   const [pendingDeclined, setPendingDeclined] = useState<string | null>(null);
 
   const moveToStage = useCallback(async (id: string, stage: GenStageKey) => {
@@ -34,15 +35,16 @@ export function useGenPipeline({ gens, setGens, setWonJobs, showToast }: UseGenP
         });
         const money = (n: number) => '$' + Math.round(n).toLocaleString('en-US');
         showToast({
-          title: 'Job won',
+          title: '🎉 Job won!',
           sub: `${data.wonJob.salesperson_name} · ${money(data.wonJob.value)} · ${data.wonJob.customer}`,
+          action: onNav ? { label: 'View in Projects →', onClick: () => onNav('gen-projects') } : undefined,
         });
       }
     } catch {
       if (prev) setGens(list => list.map(g => g.id === id ? prev : g));
       showToast({ title: 'Failed to update stage', sub: 'Changes reverted' });
     }
-  }, [gens, setGens, setWonJobs, showToast, pendingDeclined]);
+  }, [gens, setGens, setWonJobs, showToast, pendingDeclined, onNav]);
 
   const advance = useCallback((id: string) => {
     const ORDER: GenStageKey[] = ['building', 'sent', 'awarded'];

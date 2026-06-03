@@ -34,6 +34,13 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
   const overdue = bids.filter(b => (b.stage === 'due' || b.stage === 'submitted') && b.due_days < 0);
   const recentGens = gens.slice(0, 4);
 
+  // Proposal status tracking
+  const sentGens    = gens.filter(g => g.sent_at && g.stage !== 'awarded' && g.stage !== 'declined');
+  const viewedGens  = sentGens.filter(g => g.viewed_at);
+  const signedGens  = gens.filter(g => g.stage === 'signed');
+  const awaitingReply = sentGens.filter(g => !g.viewed_at);
+  const viewedNotSigned = viewedGens.filter(g => g.stage !== 'signed');
+
   // Sales summary
   const now = new Date();
   const thisMonth = wonJobs.filter(j => {
@@ -193,6 +200,62 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
                     <div style={{ textAlign:'right' }}><div className="di-amt num">{money(Number(g.amount))}</div><div className="di-when">{g.built_on}</div></div>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panel-hdr">
+                <span className="panel-title">
+                  <span className="pt-ic" style={{ background:'#F0FDF4', color:'#16A34A' }}><Icon name="doc" size={15} stroke={1.8}/></span>
+                  Proposal Pipeline
+                </span>
+                <button className="panel-link" onClick={() => onNav('gen-proposals')}>View all <Icon name="arrow" size={13} stroke={2}/></button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 0, borderBottom: '1px solid var(--border)' }}>
+                {[
+                  { label: 'Sent',    val: sentGens.length,         color: '#3B82F6', bg: '#EFF6FF' },
+                  { label: 'Viewed',  val: viewedNotSigned.length,  color: '#F59E0B', bg: '#FFFBEB' },
+                  { label: 'Signed',  val: signedGens.length,       color: '#16A34A', bg: '#F0FDF4' },
+                ].map(s => (
+                  <div key={s.label} style={{ padding: '14px 0', textAlign: 'center', borderRight: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: 22, fontWeight: 900, color: s.color }}>{s.val}</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="panel-body">
+                {awaitingReply.length > 0 && (
+                  <div style={{ padding: '10px 16px', background: '#FFF7ED', borderBottom: '1px solid var(--border)', fontSize: 12, color: '#92400E', fontWeight: 600 }}>
+                    {awaitingReply.length} proposal{awaitingReply.length !== 1 ? 's' : ''} sent — awaiting customer view
+                  </div>
+                )}
+                {viewedNotSigned.length > 0 && viewedNotSigned.map(g => (
+                  <div className="recent-item" key={g.id} onClick={() => onNav('gen-proposals')} style={{ cursor: 'pointer' }}>
+                    <div className="recent-ic" style={{ background: '#FFFBEB', color: '#F59E0B' }}><Icon name="eye" size={16} stroke={1.8}/></div>
+                    <div className="di-main">
+                      <div className="di-name">{g.customer}</div>
+                      <div className="di-sub">Viewed · awaiting signature</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div className="di-amt num" style={{ fontSize: 12 }}>{money(Number(g.amount))}</div>
+                    </div>
+                  </div>
+                ))}
+                {signedGens.slice(0, 3).map(g => (
+                  <div className="recent-item" key={g.id} onClick={() => onNav('gen-proposals')} style={{ cursor: 'pointer' }}>
+                    <div className="recent-ic" style={{ background: '#F0FDF4', color: '#16A34A' }}><Icon name="check" size={16} stroke={2.2}/></div>
+                    <div className="di-main">
+                      <div className="di-name">{g.customer}</div>
+                      <div className="di-sub">Signed — pending award</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div className="di-amt num" style={{ fontSize: 12 }}>{money(Number(g.amount))}</div>
+                    </div>
+                  </div>
+                ))}
+                {sentGens.length === 0 && (
+                  <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>No active proposals sent yet.</div>
+                )}
               </div>
             </div>
 

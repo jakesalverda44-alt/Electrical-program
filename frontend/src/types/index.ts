@@ -70,4 +70,5 @@ export interface Activity {
 export interface Toast {
   title: string;
   sub?: string;
+  action?: { label: string; onClick: () => void };
 }
