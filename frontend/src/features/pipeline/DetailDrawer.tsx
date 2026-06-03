@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { Bid } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
@@ -29,6 +29,17 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
   const [saving, setSaving] = useState(false);
   const [qualifying, setQualifying] = useState(false);
   const [qualResult, setQualResult] = useState<QualResult | null>(null);
+  const [winProb, setWinProb] = useState<{ pct: number; label: string } | null>(null);
+
+  useEffect(() => {
+    api.get(`/bids/${bid.id}/qualify`).then(({ data }) => {
+      const pct = data.gcWinRate !== null ? data.gcWinRate : Math.round((data.score / 10) * 100);
+      const label = data.gcWinRate !== null
+        ? `${pct}% with ${bid.gc} (${data.gcWon}W / ${data.gcLost}L)`
+        : `${pct}% est. — no prior history with ${bid.gc}`;
+      setWinProb({ pct, label });
+    }).catch(() => {});
+  }, [bid.id]);
 
   const runQualify = async () => {
     setQualifying(true);
@@ -172,6 +183,20 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                       Confirm Lost
                     </button>
                   </div>
+                </div>
+              )}
+
+              {winProb && (
+                <div style={{ marginBottom: 12, padding: '10px 14px', background: 'var(--surface2)', borderRadius: 9 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Win Probability</span>
+                    <span style={{ fontSize: 13, fontWeight: 900, color: winProb.pct >= 60 ? 'var(--green)' : winProb.pct >= 40 ? 'var(--amber)' : '#E06A6A' }}>{winProb.pct}%</span>
+                  </div>
+                  <div style={{ height: 5, background: 'var(--border2)', borderRadius: 3, overflow: 'hidden', marginBottom: 5 }}>
+                    <div style={{ height: '100%', width: winProb.pct + '%', borderRadius: 3, transition: 'width .4s',
+                      background: winProb.pct >= 60 ? 'var(--green)' : winProb.pct >= 40 ? 'var(--amber)' : '#E06A6A' }}/>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>{winProb.label}</div>
                 </div>
               )}
 

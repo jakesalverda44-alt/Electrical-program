@@ -37,6 +37,7 @@ const WORKSPACE_TABS = [
   { key: 'schedule',       label: 'Schedule'       },
   { key: 'closeout',       label: 'Closeout'       },
   { key: 'docs',           label: 'Documents'      },
+  { key: 'comms',          label: 'Comms'          },
 ] as const;
 type WsTab = typeof WORKSPACE_TABS[number]['key'];
 
@@ -47,6 +48,7 @@ interface ProjectRfi   { id: string; rfi_number: string; question: string; submi
 interface PayApp       { id: string; number: number; period: string; scheduled_value: number; pct_complete: number; amount_billed: number; status: 'draft'|'submitted'|'approved'|'paid'; }
 interface KeyMaterial  { id: string; name: string; supplier: string; po_number: string; order_date: string; eta: string; status: 'pending'|'ordered'|'delivered'; }
 interface ProjDoc   { id: string; name: string; display_name: string; category: string; file_size: number; file_type: string; uploaded_by: string; created_at: string; }
+interface ProjComm  { id: string; kind: string; subject: string; body: string; author: string; created_at: string; }
 
 // ── Helpers ──────────────────────────────────────────────────────
 function money(n: number) {
@@ -84,9 +86,10 @@ interface ProjData {
   keyMats:  KeyMaterial[];
   closeout: Record<string,unknown>;
   docs:     ProjDoc[];
+  comms:    ProjComm[];
 }
 const emptyData = (): ProjData => ({
-  cos:[], fns:[], rfis:[], overview:{}, schedule:{}, payApps:[], keyMats:[], closeout:{}, docs:[],
+  cos:[], fns:[], rfis:[], overview:{}, schedule:{}, payApps:[], keyMats:[], closeout:{}, docs:[], comms:[],
 });
 
 interface Props { bids: Bid[]; showToast: (t: Toast) => void; }
@@ -110,7 +113,7 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
 
   const loadProject = useCallback(async (id: string) => {
     if (projData[id]) return; // already loaded
-    const [coRes, fnRes, rfiRes, ovRes, schRes, paRes, kmRes, clRes, docRes] = await Promise.allSettled([
+    const [coRes, fnRes, rfiRes, ovRes, schRes, paRes, kmRes, clRes, docRes, commRes] = await Promise.allSettled([
       api.get(`/projects/elec/${id}/change-orders`),
       api.get(`/projects/elec/${id}/field-notes`),
       api.get(`/projects/elec/${id}/rfis`),
@@ -120,6 +123,7 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
       api.get(`/projects/elec/${id}/section/key-materials`),
       api.get(`/projects/elec/${id}/section/closeout`),
       api.get('/documents'),
+      api.get('/comms'),
     ]);
     setProjData(prev => ({
       ...prev,
@@ -132,7 +136,8 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
         payApps:  (paRes.status==='fulfilled' && paRes.value.data?.items) ? paRes.value.data.items : [],
         keyMats:  (kmRes.status==='fulfilled' && kmRes.value.data?.items) ? kmRes.value.data.items : [],
         closeout: clRes.status==='fulfilled'  ? clRes.value.data  : {},
-        docs: docRes.status==='fulfilled' ? (docRes.value.data as ProjDoc[]).filter(d => (d as any).linked_id === id) : [],
+        docs:     docRes.status==='fulfilled'  ? (docRes.value.data as ProjDoc[]).filter(d => (d as any).linked_id === id) : [],
+        comms:    commRes.status==='fulfilled' ? (commRes.value.data as ProjComm[]).filter(c => (c as any).linked_id === id) : [],
       },
     }));
   }, [projData]);
@@ -859,6 +864,9 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
       case 'docs':
         return <DocsTab id={id} docs={data.docs} onDocsChange={docs => onDataChange({ docs })} showToast={showToast} bid={bid}/>;
 
+      case 'comms':
+        return <CommsTab id={id} comms={data.comms} onCommsChange={comms => onDataChange({ comms })} showToast={showToast} bid={bid}/>;
+
       default: return null;
     }
   };
@@ -1005,6 +1013,91 @@ function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CommsTab({ id, comms, onCommsChange, showToast, bid }: {
+  id: string; comms: ProjComm[]; onCommsChange: (c: ProjComm[]) => void;
+  showToast: (t: Toast) => void; bid: Bid;
+}) {
+  const [form, setForm] = useState({ kind: 'note', subject: '', body: '' });
+  const [saving, setSaving] = useState(false);
+
+  const KIND_OPTS = [
+    { key: 'note',  label: 'Note'  },
+    { key: 'email', label: 'Email' },
+    { key: 'call',  label: 'Call'  },
+    { key: 'meeting', label: 'Meeting' },
+  ];
+  const KIND_COLOR: Record<string,string> = { note:'var(--blue)', email:'var(--amber)', call:'var(--green)', meeting:'#9B6DFF' };
+
+  const submit = async () => {
+    if (!form.subject.trim()) return;
+    setSaving(true);
+    try {
+      const { data } = await api.post('/comms', {
+        kind: form.kind, subject: form.subject, body: form.body,
+        linked_id: id, linked_name: bid.name, div: 'elec',
+      });
+      onCommsChange([data, ...comms]);
+      setForm({ kind: 'note', subject: '', body: '' });
+      showToast({ title: 'Communication logged' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="panel" style={{ marginBottom: 16, padding: '16px 18px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10, marginBottom: 10 }}>
+          <div>
+            <FL>Type</FL>
+            <select value={form.kind} onChange={e => setForm(f => ({ ...f, kind: e.target.value }))} style={INPUT as React.CSSProperties}>
+              {KIND_OPTS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <FL>Subject</FL>
+            <input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))}
+              placeholder="What happened?" style={INPUT as React.CSSProperties}
+              onKeyDown={e => e.key === 'Enter' && !e.shiftKey && submit()}/>
+          </div>
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <FL>Notes (optional)</FL>
+          <textarea value={form.body} onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
+            placeholder="Additional details…" style={{ ...INPUT as React.CSSProperties, height: 60, resize: 'vertical' }}/>
+        </div>
+        <button className="btn" onClick={submit} disabled={saving || !form.subject.trim()} style={{ fontSize: 13 }}>
+          <Icon name="plus" size={14} stroke={2.2}/> {saving ? 'Saving…' : 'Log Communication'}
+        </button>
+      </div>
+
+      {comms.length === 0 ? <Empty text="No communications logged for this project yet"/> : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {comms.map(c => (
+            <div key={c.id} style={{ padding: '12px 16px', background: 'var(--surface2)', borderRadius: 10,
+              borderLeft: `3px solid ${KIND_COLOR[c.kind] ?? 'var(--border2)'}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: c.body ? 6 : 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 800, padding: '2px 7px', borderRadius: 5,
+                    background: (KIND_COLOR[c.kind] ?? 'var(--border2)') + '22',
+                    color: KIND_COLOR[c.kind] ?? 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                    {c.kind}
+                  </span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{c.subject}</span>
+                </div>
+                <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, flexShrink: 0, marginLeft: 8 }}>
+                  {new Date(c.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {c.author}
+                </span>
+              </div>
+              {c.body && <div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{c.body}</div>}
+            </div>
+          ))}
         </div>
       )}
     </div>

@@ -60,6 +60,7 @@ function isElecSheet(name: string) {
 export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, showToast }: Props) {
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
+  const [rfiSuggesting, setRfiSuggesting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fileObjectsRef = useRef<File[]>([]);
   const [aiResults, setAiResults] = useState<Record<string, unknown> | null>(null);
@@ -166,6 +167,34 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     const rfi = { id: Date.now().toString(), question: newRfi.trim(), submitted: false, answer: '' };
     set({ rfis: [...ws.rfis, rfi] });
     setNewRfi('');
+  };
+
+  const suggestRfis = () => {
+    const scopeText = Object.values(ws.scope).join(' ').toLowerCase();
+    const existing = new Set(ws.rfis.map(r => r.question.toLowerCase().slice(0, 30)));
+    const SUGGESTIONS: { keywords: string[]; question: string }[] = [
+      { keywords: ['service','distribution','panel','switchboard'],  question: 'What is the available fault current at the utility service point?' },
+      { keywords: ['service','distribution','panel','meter'],        question: 'Confirm service entrance rating and metering configuration with utility.' },
+      { keywords: ['lighting','fixture','led'],                      question: 'Are lighting fixture submittals required prior to rough-in?' },
+      { keywords: ['generator','transfer','ats'],                    question: 'What is the intended load profile for the generator? Confirm ATS type (open vs. closed transition).' },
+      { keywords: ['fire alarm','fa','smoke'],                       question: 'Who is the fire alarm system designer of record? Is a separate permit required?' },
+      { keywords: ['data','low voltage','cat','network'],            question: 'What is the structured cabling category requirement (Cat6 / Cat6A)? Who terminates?' },
+      { keywords: ['conduit','raceway','underground','duct bank'],   question: 'Confirm conduit type and burial depth requirements for underground runs.' },
+      { keywords: ['motor','mechanical','hvac','equipment'],         question: 'Confirm motor HP, voltage, and phase for all mechanical equipment to ensure proper circuit sizing.' },
+      { keywords: ['parking','site','exterior','pole'],              question: 'Is a photometric plan required for exterior lighting? Confirm pole base details.' },
+      { keywords: ['rough','inspection','trim'],                     question: 'What is the AHJ inspection sequence (rough-in, above-ceiling, final)?' },
+    ];
+    setRfiSuggesting(true);
+    setTimeout(() => {
+      const matched = SUGGESTIONS.filter(s =>
+        s.keywords.some(k => scopeText.includes(k)) &&
+        !existing.has(s.question.toLowerCase().slice(0, 30))
+      );
+      const toAdd = (matched.length ? matched : SUGGESTIONS.slice(0, 3)).slice(0, 5);
+      const newRfis = toAdd.map(s => ({ id: Date.now().toString() + Math.random(), question: s.question, submitted: false, answer: '' }));
+      set({ rfis: [...ws.rfis, ...newRfis] });
+      setRfiSuggesting(false);
+    }, 600);
   };
 
   const submitRfi = (id: string) => {
@@ -419,6 +448,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 onKeyDown={e => e.key === 'Enter' && addRfi()}/>
               <button className="btn" onClick={addRfi} style={{ fontSize: 13 }}>
                 <Icon name="plus" size={14} stroke={2.2}/> Add RFI
+              </button>
+              <button className="btn ghost" onClick={suggestRfis} disabled={rfiSuggesting} style={{ fontSize: 13, color: 'var(--blue)' }}>
+                <Icon name="sparkle" size={14} stroke={1.9}/> {rfiSuggesting ? 'Thinking…' : 'Suggest RFIs'}
               </button>
             </div>
             {ws.rfis.length === 0 ? (
