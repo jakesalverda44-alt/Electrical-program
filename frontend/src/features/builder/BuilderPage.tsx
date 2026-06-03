@@ -183,14 +183,7 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
                 {['100A','150A','200A','400A'].map(a => <option key={a} value={a}>{a}</option>)}
               </select>
             </Field>
-            <Field label="Fuel Type">
-              <select style={SELECT_STYLE} value={form.fuel} onChange={e => set('fuel', e.target.value)}>
-                <option value="Natural Gas">Natural Gas</option>
-                <option value="LP">LP / Propane</option>
-              </select>
-            </Field>
-            <Field label="Job Type">
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
+            <Field label="Job Type">              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
                 {(['new-install', 'swap-out'] as const).map(jt => (
                   <button key={jt} onClick={() => set('jobType', jt)}
                     style={{ padding: '9px 0', fontSize: 12, fontWeight: 700, border: 'none', cursor: 'pointer',
@@ -209,7 +202,7 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
               ['pad',      form.jobType === 'swap-out' ? 'Concrete Pad (new)' : 'Concrete Pad'],
               ['smm',      'SMM Maintenance'],
               ['surgePro', 'SurgeProtector Pro'],
-              ['battery',  'Battery Maintainer'],
+              ['battery',  'Battery'],
             ] as [keyof GenForm, string][]).map(([k, label]) => (
               <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, gridColumn: '1' }}>
                 <input type="checkbox" checked={!!form[k]} onChange={e => set(k, e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
