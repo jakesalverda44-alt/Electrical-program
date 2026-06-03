@@ -2,7 +2,12 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  role: 'salesperson' | 'manager' | 'accounting';
+  phone?: string;
+  job_title?: string;
+  role: 'owner' | 'administrator' | 'sales_manager' | 'salesperson' | 'estimator' | 'project_manager' | 'technician' | 'accounting' | 'read_only';
+  status?: 'active' | 'inactive';
+  last_login?: string;
+  created_at?: string;
 }
 
 export interface Bid {

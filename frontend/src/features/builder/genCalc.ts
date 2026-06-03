@@ -1,16 +1,24 @@
 import { DEFAULT_PRICES, LC_MODELS, GEN_SPECS, GenForm } from './genData';
 
-export function blankGenForm(): GenForm {
+interface DefaultOverrides {
+  gen_default_labor?: string;
+  gen_default_permit?: string;
+  gen_default_startup?: string;
+  gen_default_tax_rate?: string;
+}
+
+export function blankGenForm(overrides?: DefaultOverrides): GenForm {
   return {
     customer: '', attn: '', address: '', city: '', state: 'FL', zip: '', phone: '', email: '',
     brand: 'Kohler', coolingType: 'air-cooled', size: '14KW',
     ats: '200A', fuel: 'Natural Gas',
     pad: true, smm: true, surgePro: false, battery: false, extraWire: 0,
     liftType: 'none', removal: false, additionalATS: 0, lcATS: 'none',
-    labor: DEFAULT_PRICES.labor,
-    permit: DEFAULT_PRICES.permit,
-    startup: DEFAULT_PRICES.startup,
-    discount: 0, discountType: '$',  taxRate: 7,
+    labor:   Number(overrides?.gen_default_labor)    || DEFAULT_PRICES.labor,
+    permit:  Number(overrides?.gen_default_permit)   || DEFAULT_PRICES.permit,
+    startup: Number(overrides?.gen_default_startup)  || DEFAULT_PRICES.startup,
+    discount: 0, discountType: '$',
+    taxRate:  Number(overrides?.gen_default_tax_rate) || 7,
     notes: '',
     includeBreakdown: false,
     jobType: 'new-install',

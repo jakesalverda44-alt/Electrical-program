@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from './hooks/useAuth';
 import { useToast } from './hooks/useToast';
+import { useAppSettings } from './hooks/useAppSettings';
 import LoginPage from './features/auth/LoginPage';
 import AppShell from './features/layout/AppShell';
 import DashboardPage from './features/dashboard/DashboardPage';
@@ -52,6 +53,7 @@ export default function App() {
   const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
   const [intakeCount, setIntakeCount] = useState(2); // 2 pending demo items on first load
   const [editGen, setEditGen] = useState<import('./types').Gen | null>(null);
+  const { settings, reload: reloadSettings } = useAppSettings(!!user);
 
   const triggerFlash = useCallback((id: string) => {
     setFlashId(id);
@@ -186,6 +188,7 @@ export default function App() {
             showToast={showToast}
             onSaved={() => { setEditGen(null); setView('gen-proposals'); }}
             editGen={editGen}
+            appSettings={settings}
           />
         );
       case 'preconstruction':
@@ -211,7 +214,7 @@ export default function App() {
       case 'docs':
         return <DocsPage bids={bids} gens={gens} showToast={showToast} userName={user.name}/>;
       case 'admin':
-        return <SettingsPage/>;
+        return <SettingsPage settings={settings} onSettingsSaved={reloadSettings}/>;
       default:
         return <StubPage title={view.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}/>;
     }

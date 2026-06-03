@@ -5,14 +5,34 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-// All settings routes require auth (manager/accounting only in a real system — simplified here)
+const MASKED_KEYS = ['email_resend_api_key', 'ai_anthropic_key'];
+
+const ALLOWED_KEYS = [
+  // Email
+  'email_resend_api_key', 'email_from_address', 'email_from_name', 'email_reply_to', 'frontend_url',
+  // Company
+  'company_name', 'company_address', 'company_city', 'company_state', 'company_zip',
+  'company_phone', 'company_email', 'company_website',
+  'company_license_ec', 'company_license_cfc', 'company_license_li',
+  // Proposal defaults
+  'gen_default_labor', 'gen_default_permit', 'gen_default_startup', 'gen_default_tax_rate',
+  'gen_default_pad', 'gen_default_smm', 'gen_default_surge_pro', 'gen_default_battery',
+  'gen_default_extra_wire', 'gen_default_lull', 'gen_default_crane',
+  // Generator pricing table (JSON blob)
+  'gen_pricing_table',
+  // AI
+  'ai_anthropic_key', 'ai_model', 'ai_max_tokens', 'ai_temperature',
+  // Notifications
+  'notifications_json',
+  // Security
+  'security_session_timeout',
+];
 
 router.get('/', requireAuth, async (_req, res) => {
   const { rows } = await pool.query('SELECT key, value FROM app_settings ORDER BY key');
-  // Never expose the raw API key — mask it
   const masked = rows.map(r => ({
     key: r.key,
-    value: r.key === 'email_resend_api_key' && r.value
+    value: MASKED_KEYS.includes(r.key) && r.value
       ? '••••••••' + r.value.slice(-4)
       : r.value,
   }));
@@ -21,28 +41,19 @@ router.get('/', requireAuth, async (_req, res) => {
 
 router.put('/', requireAuth, async (req: AuthRequest, res) => {
   const updates: Record<string, string> = req.body;
-  const allowedKeys = [
-    'email_resend_api_key',
-    'email_from_address',
-    'email_from_name',
-    'email_reply_to',
-    'frontend_url',
-  ];
-
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    for (const key of allowedKeys) {
-      if (key in updates) {
-        // If the value is the masked placeholder, skip (user didn't change it)
-        const val = updates[key];
-        if (key === 'email_resend_api_key' && val.startsWith('••••••••')) continue;
-        await client.query(
-          `INSERT INTO app_settings (key, value) VALUES ($1, $2)
-           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-          [key, val.trim()]
-        );
-      }
+    for (const key of ALLOWED_KEYS) {
+      if (!(key in updates)) continue;
+      const val = updates[key];
+      // Skip masked placeholders — user didn't change it
+      if (MASKED_KEYS.includes(key) && val.startsWith('••••••••')) continue;
+      await client.query(
+        `INSERT INTO app_settings (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [key, val.trim()]
+      );
     }
     await client.query('COMMIT');
     res.json({ ok: true });
@@ -85,7 +96,6 @@ router.post('/test-email', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-// Helper used by other routes to get a single setting value
 export async function getSetting(key: string): Promise<string> {
   const { rows } = await pool.query('SELECT value FROM app_settings WHERE key = $1', [key]);
   return rows[0]?.value ?? '';

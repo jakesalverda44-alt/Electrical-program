@@ -2,6 +2,7 @@ import React from 'react';
 import { GenForm } from './genData';
 import { GenTotals, genPriceRows, genModelNo } from './genCalc';
 import { GEN_SPEC_DETAIL } from './genData';
+import { AppSettings, DEFAULT_APP_SETTINGS } from '../../hooks/useAppSettings';
 
 function fmt(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 function fmtDec(n: number) { return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -20,24 +21,25 @@ interface Props {
   totals: GenTotals;
   proposalNo: string;
   onBack: () => void;
+  appSettings?: AppSettings;
 }
 
 // ── Shared layout helpers ────────────────────────────────────────────────────
 
-function PageHeader({ proposalNo }: { proposalNo: string }) {
+function PageHeader({ proposalNo, companyName, phone, licLine }: { proposalNo: string; companyName: string; phone?: string; licLine?: string }) {
   return (
     <div style={{ background: NAVY, padding: '10px 20px 0', marginBottom: 0, position: 'relative' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 10 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 900, color: '#fff', letterSpacing: '-0.3px' }}>
-            Accurate Power <span style={{ color: GOLD }}>&</span> Technology, Inc.
+            {companyName}
           </div>
-          <div style={{ fontSize: 9.5, color: '#93C5FD', marginTop: 2 }}>
-            Eustis, FL &nbsp;352.735.8285 &nbsp;·&nbsp; Sarasota, FL &nbsp;941.867.6580
-          </div>
-          <div style={{ fontSize: 9, color: '#4A6A8A', marginTop: 1 }}>
-            EC13007737 &nbsp;·&nbsp; CFC1430965 &nbsp;·&nbsp; LI45063
-          </div>
+          {phone && (
+            <div style={{ fontSize: 9.5, color: '#93C5FD', marginTop: 2 }}>{phone}</div>
+          )}
+          {licLine && (
+            <div style={{ fontSize: 9, color: '#4A6A8A', marginTop: 1 }}>{licLine}</div>
+          )}
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 8, color: '#4A6A8A', textTransform: 'uppercase', letterSpacing: '.08em' }}>Proposal No.</div>
@@ -134,7 +136,10 @@ function SpecTable({ header, rows }: { header: string; rows: [string, string, st
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
-export default function ProposalPreview({ form, totals, proposalNo, onBack }: Props) {
+export default function ProposalPreview({ form, totals, proposalNo, onBack, appSettings }: Props) {
+  const co = appSettings ?? DEFAULT_APP_SETTINGS;
+  const companyName = co.company_name || 'Accurate Power & Technology';
+  const licLine = [co.company_license_ec, co.company_license_cfc, co.company_license_li].filter(Boolean).join(' · ');
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   const spec = GEN_SPEC_DETAIL[form.brand]?.[form.size];
   const addrDisplay = [form.address, [form.city, form.state, form.zip].filter(Boolean).join(', ')].filter(Boolean).join('  |  ');
@@ -172,7 +177,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
 
           {/* ═══ PAGE 1 — COVER ════════════════════════════════════════════ */}
           <div style={pageStyle}>
-            <PageHeader proposalNo={proposalNo}/>
+            <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine}/>
 
             <SectionHeading title="PROPOSAL"/>
             <div style={{ textAlign: 'center', fontSize: 11, color: GRAY_M, marginTop: -10, marginBottom: 14 }}>
@@ -231,7 +236,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
 
             {/* Intro */}
             <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 12 }}>
-              Accurate Power &amp; Technology, Inc. proposes to furnish all labor and material necessary to provide the scope of work described in this proposal. Our price is in accordance with the <strong>2026 National Electrical Code</strong>, the Bid Documents, and the following qualifications: EC13007737 · CFC1430965 · LI45063.{' '}
+              {companyName} proposes to furnish all labor and material necessary to provide the scope of work described in this proposal. Our price is in accordance with the <strong>2026 National Electrical Code</strong>, the Bid Documents, and the following qualifications: {licLine || 'Licensed & Insured'}.{' '}
               <strong>THIS PROPOSAL AND ALL MATERIAL COSTS ARE VALID FOR 30 DAYS.</strong>
             </p>
 
@@ -300,7 +305,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
           {/* ═══ PAGE 2 (OPTIONAL) — PRICE BREAKDOWN ══════════════════════ */}
           {form.includeBreakdown && (
             <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
-              <PageHeader proposalNo={proposalNo}/>
+              <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine}/>
               <SectionHeading title="PRICE BREAKDOWN"/>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 9, marginBottom: 10 }}>
                 <thead>
@@ -359,7 +364,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
           {/* ═══ SPEC SHEET ════════════════════════════════════════════════ */}
           {spec && (
             <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
-              <PageHeader proposalNo={proposalNo}/>
+              <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine}/>
               <SectionHeading title={`${form.brand} ${form.size} Generator — Product Specifications`}/>
               <div style={{ textAlign: 'center', fontSize: 10, fontWeight: 700, color: '#1B3A6B', marginTop: -10, marginBottom: 14 }}>Model: {spec.model}</div>
 
@@ -424,7 +429,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
 
           {/* ═══ SALES AGREEMENT — PAGE 1 ══════════════════════════════════ */}
           <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
-            <PageHeader proposalNo={proposalNo}/>
+            <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine}/>
             <SectionHeading title="SALES AGREEMENT"/>
 
             <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 10 }}>
@@ -451,7 +456,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
 
           {/* ═══ SALES AGREEMENT — PAGE 2 ══════════════════════════════════ */}
           <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
-            <PageHeader proposalNo={proposalNo}/>
+            <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine}/>
             <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, textAlign: 'center', marginTop: 16, marginBottom: 4 }}>SALES AGREEMENT (continued)</div>
             <div style={{ height: 2, background: ACCENT, marginBottom: 14 }}/>
 
@@ -486,7 +491,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack }: Pr
 
           {/* ═══ EXHIBIT A — DISCLOSURES ═══════════════════════════════════ */}
           <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
-            <PageHeader proposalNo={proposalNo}/>
+            <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine}/>
             <SectionHeading title="EXHIBIT A — DISCLOSURES"/>
 
             <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 8 }}>
