@@ -1,11 +1,24 @@
 import { Router } from 'express';
 import { Resend } from 'resend';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
 import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
 import { getSetting } from './settings';
 
 const router = Router();
+
+// Restricted (rep) users may only act on their own proposals. Returns the row if allowed,
+// or sends the appropriate 403/404 and returns null.
+async function loadOwnedGen(req: AuthRequest, res: import('express').Response) {
+  const { rows } = await pool.query('SELECT * FROM generator_proposals WHERE id=$1', [req.params.id]);
+  if (!rows.length) { res.status(404).json({ error: 'Not found' }); return null; }
+  const scope = ownScopeId(req.user!);
+  if (scope && rows[0].salesperson_id !== scope) {
+    res.status(403).json({ error: 'You do not have access to this proposal' });
+    return null;
+  }
+  return rows[0];
+}
 
 router.get('/benchmark', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(
@@ -29,8 +42,11 @@ router.get('/benchmark', requireAuth, async (_req, res) => {
   res.json(result);
 });
 
-router.get('/', requireAuth, async (_req, res) => {
-  const { rows } = await pool.query('SELECT * FROM generator_proposals ORDER BY created_at DESC');
+router.get('/', requireAuth, async (req: AuthRequest, res) => {
+  const scope = ownScopeId(req.user!);
+  const { rows } = scope
+    ? await pool.query('SELECT * FROM generator_proposals WHERE salesperson_id = $1 ORDER BY created_at DESC', [scope])
+    : await pool.query('SELECT * FROM generator_proposals ORDER BY created_at DESC');
   res.json(rows);
 });
 
@@ -51,6 +67,7 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
   const { stage } = req.body;
   const valid = ['building', 'sent', 'awarded', 'declined'];
   if (!valid.includes(stage)) return res.status(400).json({ error: 'Invalid stage' });
+  if (!(await loadOwnedGen(req, res))) return;
 
   const client = await pool.connect();
   try {
@@ -110,6 +127,7 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
   const { phase } = req.body;
   const valid = ['scheduled','ordered','delivered','install','startup','complete'];
   if (!valid.includes(phase)) return res.status(400).json({ error: 'Invalid phase' });
+  if (!(await loadOwnedGen(req, res))) return;
   const { rows } = await pool.query(
     'UPDATE generator_proposals SET gen_install_phase=$1, updated_at=now() WHERE id=$2 RETURNING *',
     [phase, req.params.id]
@@ -119,6 +137,7 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
 });
 
 router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
+  if (!(await loadOwnedGen(req, res))) return;
   const { customer, loc, mfr, model, kw, amount, tax, addons } = req.body;
   const fields: string[] = [];
   const vals: unknown[] = [];
@@ -158,6 +177,7 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
 router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
   const { to, subject, note, proposalNo, total, deposit } = req.body;
   if (!to) return res.status(400).json({ error: 'Recipient email required' });
+  if (!(await loadOwnedGen(req, res))) return;
 
   const { rows } = await pool.query(
     `UPDATE generator_proposals

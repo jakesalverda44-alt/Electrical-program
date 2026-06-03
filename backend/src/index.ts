@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import path from 'path';
 import dotenv from 'dotenv';
 import { runMigrations } from './migrate';
@@ -20,7 +21,26 @@ import settingsRouter from './routes/settings';
 dotenv.config();
 
 const app = express();
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
+
+// Security headers. In production the frontend is served from the same origin as the
+// API, so the default CSP is fine; disable it in dev where Vite runs on a separate port.
+app.use(helmet({ contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false }));
+
+// CORS allowlist. Comma-separated origins from CORS_ORIGIN/FRONTEND_URL.
+// In production the SPA is same-origin (served by this process), so cross-origin requests
+// are only allowed for explicitly configured origins — never a blanket '*'.
+const allowedOrigins = (process.env.CORS_ORIGIN || process.env.FRONTEND_URL || '')
+  .split(',').map(o => o.trim().replace(/\/$/, '')).filter(Boolean);
+if (process.env.NODE_ENV !== 'production' && !allowedOrigins.length) {
+  allowedOrigins.push('http://localhost:3000', 'http://localhost:5173');
+}
+app.use(cors({
+  origin(origin, cb) {
+    // Allow same-origin / non-browser requests (no Origin header) and configured origins.
+    if (!origin || allowedOrigins.includes(origin.replace(/\/$/, ''))) return cb(null, true);
+    cb(new Error('Not allowed by CORS'));
+  },
+}));
 app.use(express.json());
 
 app.use('/api/auth', authRouter);

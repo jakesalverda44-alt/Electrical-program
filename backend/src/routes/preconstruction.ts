@@ -466,7 +466,7 @@ async function runPipeline(
       const resp = await client.messages.create({
         model: 'claude-opus-4-5',
         max_tokens: 8192,
-        system: AGENT1_SYSTEM,
+        system: [{ type: 'text', text: AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: contentBlocks }],
       });
       agent1Output = extractText(resp);
@@ -507,7 +507,7 @@ async function runPipeline(
         const bResp = await client.messages.create({
           model: 'claude-opus-4-5',
           max_tokens: 8192,
-          system: AGENT1_SYSTEM,
+          system: [{ type: 'text', text: AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: contentBlocks }],
         });
         const bText = extractText(bResp);
@@ -587,7 +587,7 @@ async function runPipeline(
     const resp = await client.messages.create({
       model: 'claude-sonnet-4-5',
       max_tokens: 4096,
-      system: AGENT2_SYSTEM,
+      system: [{ type: 'text', text: AGENT2_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
         content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${agent1Output}`,
@@ -614,7 +614,7 @@ async function runPipeline(
     const resp = await client.messages.create({
       model: 'claude-sonnet-4-5',
       max_tokens: 4096,
-      system: AGENT3_SYSTEM,
+      system: [{ type: 'text', text: AGENT3_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
         content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${agent1Output}\n\n---\n\nESTIMATOR OUTPUT:\n\n${agent2Output}`,

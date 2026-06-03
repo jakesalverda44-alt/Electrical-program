@@ -1,41 +1,12 @@
 import { Router } from 'express';
 import { Resend } from 'resend';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
 import { getSetting } from '../db/getSetting';
+import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
+import { escapeHtml } from '../utils/escapeHtml';
 
 const router = Router();
-
-// Parse "Mon D" or "Mon DD" due string → days from today
-function parseDueDays(str: string): number {
-  const MONTHS: Record<string, number> = {
-    jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11
-  };
-  const m = /([A-Za-z]{3})[A-Za-z]*\s+(\d{1,2})/.exec(str || '');
-  if (!m) return 14;
-  const mo = MONTHS[m[1].slice(0, 3).toLowerCase()];
-  if (mo === undefined) return 14;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  let d = new Date(today.getFullYear(), mo, parseInt(m[2]));
-  if (d < today) d = new Date(today.getFullYear() + 1, mo, parseInt(m[2]));
-  return Math.round((d.getTime() - today.getTime()) / 86400000);
-}
-
-function withDueDays(row: Record<string, unknown>) {
-  return { ...row, due_days: parseDueDays(String(row.due || '')) };
-}
-
-// Accept ISO "YYYY-MM-DD" from date picker OR legacy "Mon D" text
-function formatDue(raw: string | undefined): string {
-  if (!raw?.trim()) return 'TBD';
-  const iso = /^\d{4}-\d{2}-\d{2}$/.test(raw.trim());
-  if (iso) {
-    const [, m, d] = raw.split('-');
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    return `${months[parseInt(m)-1]} ${parseInt(d)}`;
-  }
-  return raw.trim();
-}
 
 async function sendBidNotification(bid: Record<string, unknown>, addedBy: { name: string }) {
   const [enabled, emailsJson, apiKey, fromAddress, fromName, frontendUrl] = await Promise.all([
@@ -63,12 +34,12 @@ async function sendBidNotification(bid: Record<string, unknown>, addedBy: { name
     html: `<div style="font-family:sans-serif;max-width:520px">
       <h2 style="margin:0 0 16px">New Bid Added</h2>
       <table style="border-collapse:collapse;width:100%">
-        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5;width:130px">Job</td><td style="padding:8px 12px">${bid.name}</td></tr>
-        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">General Contractor</td><td style="padding:8px 12px">${bid.gc}</td></tr>
-        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Location</td><td style="padding:8px 12px">${bid.loc}</td></tr>
-        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Due Date</td><td style="padding:8px 12px">${dueStr}</td></tr>
-        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Est. Value</td><td style="padding:8px 12px">${amt}</td></tr>
-        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Added By</td><td style="padding:8px 12px">${addedBy.name}</td></tr>
+        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5;width:130px">Job</td><td style="padding:8px 12px">${escapeHtml(bid.name)}</td></tr>
+        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">General Contractor</td><td style="padding:8px 12px">${escapeHtml(bid.gc)}</td></tr>
+        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Location</td><td style="padding:8px 12px">${escapeHtml(bid.loc)}</td></tr>
+        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Due Date</td><td style="padding:8px 12px">${escapeHtml(dueStr)}</td></tr>
+        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Est. Value</td><td style="padding:8px 12px">${escapeHtml(amt)}</td></tr>
+        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Added By</td><td style="padding:8px 12px">${escapeHtml(addedBy.name)}</td></tr>
       </table>
       <p style="margin:20px 0 0"><a href="${base}" style="background:#4D8DF7;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700">Open Pipeline →</a></p>
     </div>`,
@@ -76,10 +47,26 @@ async function sendBidNotification(bid: Record<string, unknown>, addedBy: { name
   });
 }
 
-router.get('/', requireAuth, async (_req, res) => {
-  const { rows } = await pool.query('SELECT * FROM bids ORDER BY created_at DESC');
+router.get('/', requireAuth, async (req: AuthRequest, res) => {
+  const scope = ownScopeId(req.user!);
+  const { rows } = scope
+    ? await pool.query('SELECT * FROM bids WHERE salesperson_id = $1 ORDER BY created_at DESC', [scope])
+    : await pool.query('SELECT * FROM bids ORDER BY created_at DESC');
   res.json(rows.map(withDueDays));
 });
+
+// Restricted (rep) users may only act on their own bids. Returns the bid row if allowed,
+// or sends the appropriate 403/404 and returns null.
+async function loadOwnedBid(req: AuthRequest, res: import('express').Response) {
+  const { rows } = await pool.query('SELECT * FROM bids WHERE id=$1', [req.params.id]);
+  if (!rows.length) { res.status(404).json({ error: 'Not found' }); return null; }
+  const scope = ownScopeId(req.user!);
+  if (scope && rows[0].salesperson_id !== scope) {
+    res.status(403).json({ error: 'You do not have access to this bid' });
+    return null;
+  }
+  return rows[0];
+}
 
 router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const { name, gc, loc, amount, due, notes } = req.body;
@@ -98,6 +85,7 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
   const { stage } = req.body;
   const valid = ['due', 'submitted', 'awarded', 'lost'];
   if (!valid.includes(stage)) return res.status(400).json({ error: 'Invalid stage' });
+  if (!(await loadOwnedBid(req, res))) return;
 
   const client = await pool.connect();
   try {
@@ -151,10 +139,9 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
 });
 
 // Bid qualification score — computed from historical data, no AI key needed
-router.get('/:id/qualify', requireAuth, async (req, res) => {
-  const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1', [req.params.id]);
-  if (!bidRows.length) return res.status(404).json({ error: 'Not found' });
-  const bid = bidRows[0];
+router.get('/:id/qualify', requireAuth, async (req: AuthRequest, res) => {
+  const bid = await loadOwnedBid(req, res);
+  if (!bid) return;
 
   // GC win/loss history
   const { rows: gcHistory } = await pool.query(
@@ -182,19 +169,7 @@ router.get('/:id/qualify', requireAuth, async (req, res) => {
   else if (amt > 0) amtScore = 4;
 
   // Due days score — more time = better
-  const { rows: [fresh] } = await pool.query('SELECT due FROM bids WHERE id=$1', [req.params.id]);
-  const MONTHS: Record<string,number> = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
-  const m = /([A-Za-z]{3})[A-Za-z]*\s+(\d{1,2})/.exec(String(fresh?.due || ''));
-  let dueDays = 14;
-  if (m) {
-    const mo = MONTHS[m[1].slice(0,3).toLowerCase()];
-    if (mo !== undefined) {
-      const today = new Date(); today.setHours(0,0,0,0);
-      let d = new Date(today.getFullYear(), mo, parseInt(m[2]));
-      if (d < today) d = new Date(today.getFullYear()+1, mo, parseInt(m[2]));
-      dueDays = Math.round((d.getTime() - today.getTime()) / 86400000);
-    }
-  }
+  const dueDays = parseDueDays(String(bid.due || ''));
   const timeScore = dueDays >= 21 ? 10 : dueDays >= 10 ? 7 : dueDays >= 5 ? 4 : 2;
 
   // Composite score (0–10)
@@ -216,6 +191,7 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
   const { phase } = req.body;
   const valid = ['signed','rough','inspection','trim','final','complete'];
   if (!valid.includes(phase)) return res.status(400).json({ error: 'Invalid phase' });
+  if (!(await loadOwnedBid(req, res))) return;
   const { rows } = await pool.query(
     'UPDATE bids SET elec_project_phase=$1, updated_at=now() WHERE id=$2 RETURNING *',
     [phase, req.params.id]
@@ -225,6 +201,7 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
 });
 
 router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
+  if (!(await loadOwnedBid(req, res))) return;
   const { name, gc, loc, amount, due, sheets, contact } = req.body;
   const fields: string[] = [];
   const vals: unknown[] = [];

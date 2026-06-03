@@ -1,14 +1,24 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import rateLimit from 'express-rate-limit';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, AuthRequest, JWT_SECRET, TOKEN_TTL } from '../middleware/auth';
 import { Resend } from 'resend';
 import { getSetting } from '../db/getSetting';
 
 const router = Router();
 
-router.post('/login', async (req, res) => {
+// Throttle credential endpoints to slow brute-force / enumeration attacks.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please try again in a few minutes.' },
+});
+
+router.post('/login', authLimiter, async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
   try {
@@ -19,8 +29,8 @@ router.post('/login', async (req, res) => {
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
     const token = jwt.sign(
       { id: user.id, name: user.name, email: user.email, role: user.role },
-      process.env.JWT_SECRET || 'dev_secret',
-      { expiresIn: '7d' }
+      JWT_SECRET,
+      { expiresIn: TOKEN_TTL }
     );
     res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
   } catch (err) {
@@ -112,8 +122,8 @@ router.get('/microsoft/callback', async (req, res) => {
     // Issue app JWT
     const appToken = jwt.sign(
       { id: user.id, name: user.name, email: user.email, role: user.role },
-      process.env.JWT_SECRET || 'dev_secret',
-      { expiresIn: '7d' }
+      JWT_SECRET,
+      { expiresIn: TOKEN_TTL }
     );
 
     // Redirect to frontend with token
@@ -125,7 +135,7 @@ router.get('/microsoft/callback', async (req, res) => {
 });
 
 // Password reset — generates a short-lived token and emails a reset link
-router.post('/forgot-password', async (req, res) => {
+router.post('/forgot-password', authLimiter, async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Email required' });
   const { rows } = await pool.query('SELECT id, name FROM users WHERE email=$1', [email.toLowerCase()]);
@@ -135,7 +145,7 @@ router.post('/forgot-password', async (req, res) => {
 
   const token = jwt.sign(
     { id: user.id, purpose: 'reset' },
-    process.env.JWT_SECRET || 'dev_secret',
+    JWT_SECRET,
     { expiresIn: '1h' }
   );
   await pool.query('UPDATE users SET reset_token=$1, reset_token_expires=now()+interval\'1 hour\' WHERE id=$2', [token, user.id]);
@@ -162,11 +172,11 @@ router.post('/forgot-password', async (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/reset-password', async (req, res) => {
+router.post('/reset-password', authLimiter, async (req, res) => {
   const { token, password } = req.body;
-  if (!token || !password || password.length < 6) return res.status(400).json({ error: 'Token and password (min 6 chars) required' });
+  if (!token || !password || password.length < 8) return res.status(400).json({ error: 'Token and password (min 8 chars) required' });
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET || 'dev_secret') as { id: string; purpose: string };
+    const payload = jwt.verify(token, JWT_SECRET) as { id: string; purpose: string };
     if (payload.purpose !== 'reset') return res.status(400).json({ error: 'Invalid token' });
     const { rows } = await pool.query(
       'SELECT id FROM users WHERE id=$1 AND reset_token=$2 AND reset_token_expires > now()',

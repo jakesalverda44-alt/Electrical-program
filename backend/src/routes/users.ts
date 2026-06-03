@@ -63,8 +63,8 @@ router.put('/:id', requireAuth, async (req: AuthRequest, res) => {
 
 router.put('/:id/password', requireAuth, async (req: AuthRequest, res) => {
   const { password } = req.body;
-  if (!password || password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  if (!password || password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
   const hash = await bcrypt.hash(password, 10);
   const { rows } = await pool.query(

@@ -7,11 +7,30 @@ export interface AuthRequest extends Request {
   user?: { id: string; name: string; email: string; role: string };
 }
 
+// Single source of truth for the signing/verification secret.
+// In production a real secret is mandatory; the dev fallback only applies outside production.
+export const JWT_SECRET: string = (() => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('JWT_SECRET environment variable is required in production.');
+    }
+    return 'dev_secret';
+  }
+  return secret;
+})();
+
+// How long an issued access token stays valid (kept short; refresh tokens are a Phase 2 item).
+export const TOKEN_TTL = '12h';
+
+// Re-exported from utils/scope so route handlers can keep importing it from the middleware.
+export { ownScopeId } from '../utils/scope';
+
 export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const payload = jwt.verify(header.slice(7), process.env.JWT_SECRET || 'dev_secret') as any;
+    const payload = jwt.verify(header.slice(7), JWT_SECRET) as any;
     req.user = payload;
     next();
   } catch {
