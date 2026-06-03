@@ -242,6 +242,10 @@ export default function BuilderPage({ setGens, showToast, onSaved, editGen }: Pr
             <Field label="Tax Rate (%)">
               <input type="number" min={0} max={20} step={0.1} style={INPUT_STYLE} value={form.taxRate} onChange={e => set('taxRate', Number(e.target.value))}/>
             </Field>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+              <input type="checkbox" checked={!!form.includeBreakdown} onChange={e => set('includeBreakdown', e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
+              Include Price Breakdown Page
+            </label>
             <div style={{ gridColumn: '1 / -1' }}>
               <Field label="Notes">
                 <textarea style={{ ...INPUT_STYLE, height: 72, resize: 'vertical' }} value={form.notes} onChange={e => set('notes', e.target.value)} placeholder="Additional terms or notes…"/>

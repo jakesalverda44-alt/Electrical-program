@@ -12,6 +12,7 @@ export function blankGenForm(): GenForm {
     startup: DEFAULT_PRICES.startup,
     discount: 0, taxRate: 7,
     notes: '',
+    includeBreakdown: false,
   };
 }
 
