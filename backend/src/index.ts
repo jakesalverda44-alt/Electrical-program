@@ -40,12 +40,18 @@ const allowedOrigins = (process.env.CORS_ORIGIN || process.env.FRONTEND_URL || '
 if (process.env.NODE_ENV !== 'production' && !allowedOrigins.length) {
   allowedOrigins.push('http://localhost:3000', 'http://localhost:5173');
 }
-app.use(cors({
-  origin(origin, cb) {
-    // Allow same-origin / non-browser requests (no Origin header) and configured origins.
-    if (!origin || allowedOrigins.includes(origin.replace(/\/$/, ''))) return cb(null, true);
-    cb(new Error('Not allowed by CORS'));
-  },
+// Same-origin requests are always allowed: the SPA is served by this process, and Vite
+// tags its module/style assets with `crossorigin`, so even same-origin asset and API
+// requests carry an Origin header and must pass this check. Genuine cross-origin callers
+// are limited to the configured allowlist. Unknown origins are denied without a 500 (the
+// browser blocks them client-side from the absent CORS header).
+app.use(cors((req, cb) => {
+  const origin = req.headers.origin;
+  if (!origin) return cb(null, { origin: true });          // non-browser / same-origin navigation
+  let sameOrigin = false;
+  try { sameOrigin = new URL(origin).host === req.headers.host; } catch { /* malformed Origin */ }
+  if (sameOrigin || allowedOrigins.includes(origin.replace(/\/$/, ''))) return cb(null, { origin: true });
+  cb(null, { origin: false });
 }));
 app.use(express.json());
 app.use(pinoHttp({ logger, autoLogging: { ignore: req => req.url === '/api/health' } }));
