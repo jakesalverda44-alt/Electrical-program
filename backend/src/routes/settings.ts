@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Resend } from 'resend';
 import { pool } from '../db/pool';
+import { getSetting } from '../db/getSetting';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 
 const router = Router();
@@ -22,6 +23,8 @@ const ALLOWED_KEYS = [
   'gen_pricing_table',
   // AI
   'ai_anthropic_key', 'ai_model', 'ai_max_tokens', 'ai_temperature',
+  // AI permissions
+  'ai_enabled', 'ai_analysis_enabled', 'ai_daily_limit_per_user', 'ai_role_permissions',
   // Notifications
   'notifications_json',
   // Security
@@ -96,9 +99,6 @@ router.post('/test-email', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-export async function getSetting(key: string): Promise<string> {
-  const { rows } = await pool.query('SELECT value FROM app_settings WHERE key = $1', [key]);
-  return rows[0]?.value ?? '';
-}
+export { getSetting };
 
 export default router;

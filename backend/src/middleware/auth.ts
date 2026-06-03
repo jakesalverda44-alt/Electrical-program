@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { pool } from '../db/pool';
-import { getSetting } from '../routes/settings';
+import { getSetting } from '../db/getSetting';
 
 export interface AuthRequest extends Request {
   user?: { id: string; name: string; email: string; role: string };
