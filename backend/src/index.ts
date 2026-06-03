@@ -7,6 +7,7 @@ import { pinoHttp } from 'pino-http';
 import { runMigrations } from './migrate';
 import { pool } from './db/pool';
 import { logger } from './utils/logger';
+import { startReminderScheduler } from './notifications/engine';
 import { requireAuth, AuthRequest } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
@@ -16,6 +17,8 @@ import wonJobsRouter from './routes/wonJobs';
 import usersRouter from './routes/users';
 import commsRouter from './routes/comms';
 import customersRouter from './routes/customers';
+import tasksRouter from './routes/tasks';
+import notificationsRouter from './routes/notifications';
 import preconRouter from './routes/preconstruction';
 import projectsRouter from './routes/projects';
 import documentsRouter from './routes/documents';
@@ -55,6 +58,8 @@ app.use('/api/won-jobs', wonJobsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/comms', commsRouter);
 app.use('/api/customers', customersRouter);
+app.use('/api/tasks', tasksRouter);
+app.use('/api/notifications', notificationsRouter);
 app.use('/api/preconstruction', preconRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/documents', documentsRouter);
@@ -95,6 +100,7 @@ const port = Number(process.env.PORT) || 3001;
 runMigrations()
   .then(() => {
     app.listen(port, () => logger.info(`Backend running on :${port}`));
+    startReminderScheduler();
   })
   .catch(err => {
     logger.error({ err }, 'Migration failed, aborting startup');

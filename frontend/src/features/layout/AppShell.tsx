@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Icon from '../../components/Icon';
 import SearchBox from '../../components/SearchBox';
+import NotificationBell from '../../components/NotificationBell';
 import aptLogo from '../../assets/apt-logo.png';
 import { Bid, Gen, User } from '../../types';
 
@@ -21,6 +22,7 @@ interface Props {
   genProjectCount?: number;
   elecProjectCount?: number;
   newIncoming?: number;
+  followupCount?: number;
   dashFilter?: string;
   onDashFilter?: (f: string) => void;
   onNewProposal?: () => void;
@@ -41,6 +43,7 @@ const TB: Record<string, { title: string; sub: string | null }> = {
   preconstruction: { title: 'Preconstruction',       sub: 'AI-assisted bid development & proposal workflow' },
   builder:         { title: 'Proposal Builder',      sub: null },
   comms:           { title: 'Communications',        sub: 'Email timeline, notes & follow-ups' },
+  followups:       { title: 'Follow-ups',            sub: 'Tasks & reminders · Stay on top of every deal' },
   docs:            { title: 'Documents',             sub: 'Plan sets, contracts & attachments' },
   reporting:       { title: 'Reporting',             sub: 'Pipeline analytics · Win rates · Forecast' },
   contacts:        { title: 'Contacts',              sub: 'General contractors & manufacturer reps' },
@@ -50,6 +53,7 @@ const TB: Record<string, { title: string; sub: string | null }> = {
 export default function AppShell({
   view, onNav, user, onLogout, children,
   genProposalCount = 0, elecProposalCount = 0, genProjectCount = 0, elecProjectCount = 0, newIncoming = 0,
+  followupCount = 0,
   dashFilter = 'all', onDashFilter, onNewProposal, onNewBid, onOpenImport,
   bids = [], gens = [],
 }: Props) {
@@ -69,9 +73,10 @@ export default function AppShell({
       { id: 'elec-projects',  label: 'Electrical Projects', icon: 'checkc', count: elecProjectCount },
     ]},
     { group: 'Workspace', items: [
-      { id: 'builder', label: 'Proposal Builder', icon: 'doc' },
-      { id: 'comms',   label: 'Communications',   icon: 'bell' },
-      { id: 'docs',    label: 'Documents',         icon: 'clip' },
+      { id: 'followups', label: 'Follow-ups',      icon: 'checkc', count: followupCount },
+      { id: 'builder',   label: 'Proposal Builder', icon: 'doc' },
+      { id: 'comms',     label: 'Communications',   icon: 'bell' },
+      { id: 'docs',      label: 'Documents',         icon: 'clip' },
     ]},
     { group: 'Insights', items: [
       { id: 'reporting', label: 'Reporting', icon: 'trend' },
@@ -92,6 +97,7 @@ export default function AppShell({
   ];
 
   const mobileMoreNav = [
+    { id: 'followups',       label: 'Follow-ups',         icon: 'checkc',  count: followupCount },
     { id: 'intake',          label: 'Intake Inbox',       icon: 'bell',    count: newIncoming },
     { id: 'sales-by-rep',    label: 'Sales by Rep',       icon: 'trend',   count: 0 },
     { id: 'preconstruction', label: 'Preconstruction',    icon: 'sparkle', count: 0 },
@@ -169,7 +175,7 @@ export default function AppShell({
             </div>
             <div className="top-right">
               <SearchBox bids={bids} gens={gens} onNav={onNav}/>
-              <button className="icon-btn"><Icon name="bell" size={18} stroke={1.8}/><span className="dot"/></button>
+              <NotificationBell authenticated onNav={onNav}/>
               {renderActions()}
             </div>
           </header>

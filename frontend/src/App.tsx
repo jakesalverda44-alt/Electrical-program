@@ -18,6 +18,7 @@ import ContactsPage from './features/contacts/ContactsPage';
 import ReportingPage from './features/reporting/ReportingPage';
 import CommsPage from './features/comms/CommsPage';
 import DocsPage from './features/docs/DocsPage';
+import FollowupsPage from './features/followups/FollowupsPage';
 import ProposalPublicPage from './pages/ProposalPublicPage';
 import SettingsPage from './features/settings/SettingsPage';
 import { PcWorkspace } from './features/preconstruction/constants';
@@ -53,6 +54,7 @@ export default function App() {
   const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
   const [intakeCount, setIntakeCount] = useState(0);
   const [openAddBid, setOpenAddBid] = useState(false);
+  const [followupCount, setFollowupCount] = useState(0);
   const [editGen, setEditGen] = useState<import('./types').Gen | null>(null);
   const { settings, reload: reloadSettings } = useAppSettings(!!user);
 
@@ -216,6 +218,8 @@ export default function App() {
         return <ContactsPage showToast={showToast}/>;
       case 'reporting':
         return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
+      case 'followups':
+        return <FollowupsPage showToast={showToast} onCountChange={setFollowupCount}/>;
       case 'comms':
         return <CommsPage bids={bids} gens={gens} activity={activity} showToast={showToast} userName={user.name}/>;
       case 'docs':
@@ -239,6 +243,7 @@ export default function App() {
         genProjectCount={genProjectCount}
         elecProjectCount={elecProjectCount}
         newIncoming={intakeCount}
+        followupCount={followupCount}
         dashFilter={dashFilter}
         onDashFilter={setDashFilter}
         onNewProposal={() => setView('builder')}
