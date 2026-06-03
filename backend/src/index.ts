@@ -8,7 +8,7 @@ import { runMigrations } from './migrate';
 import { pool } from './db/pool';
 import { logger } from './utils/logger';
 import { startReminderScheduler } from './notifications/engine';
-import { requireAuth, AuthRequest } from './middleware/auth';
+import { requireAuth, AuthRequest, initJwtSecret } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
 import bidsRouter from './routes/bids';
@@ -98,7 +98,8 @@ app.use((err: Error, req: express.Request, res: express.Response, _next: express
 const port = Number(process.env.PORT) || 3001;
 
 runMigrations()
-  .then(() => {
+  .then(async () => {
+    await initJwtSecret();
     app.listen(port, () => logger.info(`Backend running on :${port}`));
     startReminderScheduler();
   })

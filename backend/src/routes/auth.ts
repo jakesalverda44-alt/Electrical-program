@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest, JWT_SECRET, TOKEN_TTL } from '../middleware/auth';
+import { requireAuth, AuthRequest, getJwtSecret, TOKEN_TTL } from '../middleware/auth';
 import { Resend } from 'resend';
 import { getSetting } from '../db/getSetting';
 
@@ -29,7 +29,7 @@ router.post('/login', authLimiter, async (req, res) => {
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
     const token = jwt.sign(
       { id: user.id, name: user.name, email: user.email, role: user.role },
-      JWT_SECRET,
+      getJwtSecret(),
       { expiresIn: TOKEN_TTL }
     );
     res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
@@ -122,7 +122,7 @@ router.get('/microsoft/callback', async (req, res) => {
     // Issue app JWT
     const appToken = jwt.sign(
       { id: user.id, name: user.name, email: user.email, role: user.role },
-      JWT_SECRET,
+      getJwtSecret(),
       { expiresIn: TOKEN_TTL }
     );
 
@@ -145,7 +145,7 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
 
   const token = jwt.sign(
     { id: user.id, purpose: 'reset' },
-    JWT_SECRET,
+    getJwtSecret(),
     { expiresIn: '1h' }
   );
   await pool.query('UPDATE users SET reset_token=$1, reset_token_expires=now()+interval\'1 hour\' WHERE id=$2', [token, user.id]);
@@ -176,7 +176,7 @@ router.post('/reset-password', authLimiter, async (req, res) => {
   const { token, password } = req.body;
   if (!token || !password || password.length < 8) return res.status(400).json({ error: 'Token and password (min 8 chars) required' });
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { id: string; purpose: string };
+    const payload = jwt.verify(token, getJwtSecret()) as { id: string; purpose: string };
     if (payload.purpose !== 'reset') return res.status(400).json({ error: 'Invalid token' });
     const { rows } = await pool.query(
       'SELECT id FROM users WHERE id=$1 AND reset_token=$2 AND reset_token_expires > now()',
