@@ -6,6 +6,10 @@ ALTER TABLE users
   ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
+-- Migrate legacy role names before applying new constraint
+UPDATE users SET role = 'owner'         WHERE role = 'manager';
+UPDATE users SET role = 'administrator' WHERE role = 'admin';
+
 -- Drop old role constraint and add expanded one
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN (
