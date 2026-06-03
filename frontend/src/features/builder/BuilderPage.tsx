@@ -197,7 +197,14 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
             </Field>
             <Field label="Job Type">              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
                 {(['new-install', 'swap-out'] as const).map(jt => (
-                  <button key={jt} onClick={() => set('jobType', jt)}
+                  <button key={jt} onClick={() => {
+                    set('jobType', jt);
+                    if (jt === 'swap-out') {
+                      setForm(f => ({ ...f, jobType: 'swap-out', pad: false, labor: 1500, permit: 475 }));
+                    } else {
+                      setForm(f => ({ ...f, jobType: 'new-install', labor: s.gen_default_labor ? Number(s.gen_default_labor) : 3000, permit: s.gen_default_permit ? Number(s.gen_default_permit) : 1250 }));
+                    }
+                  }}
                     style={{ padding: '9px 0', fontSize: 12, fontWeight: 700, border: 'none', cursor: 'pointer',
                       background: form.jobType === jt ? 'var(--accent)' : 'var(--surface)',
                       color: form.jobType === jt ? '#fff' : 'var(--text2)' }}>
@@ -206,6 +213,12 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
                 ))}
               </div>
             </Field>
+            {form.jobType === 'swap-out' && (
+              <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 9, padding: '10px 14px', fontSize: 12, color: '#92400E', fontWeight: 700 }}>
+                SWAP-OUT INSTALLATION<br/>
+                <span style={{ fontWeight: 500, fontSize: 11 }}>Remove existing generator · Install on existing pad · Use existing ATS</span>
+              </div>
+            )}
           </Section>
 
           {/* Section 3: Installation Options */}

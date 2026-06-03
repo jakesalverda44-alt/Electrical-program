@@ -236,8 +236,10 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
 
             {/* Intro */}
             <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 12 }}>
-              {companyName} proposes to furnish all labor and material necessary to provide the scope of work described in this proposal. Our price is in accordance with the <strong>2026 National Electrical Code</strong>, the Bid Documents, and the following qualifications: {licLine || 'Licensed & Insured'}.{' '}
-              <strong>THIS PROPOSAL AND ALL MATERIAL COSTS ARE VALID FOR 30 DAYS.</strong>
+              {form.jobType === 'swap-out'
+                ? <>{companyName} proposes to furnish all labor and material necessary to remove the existing generator and install a new {form.brand} {form.size} generator on your existing pad with existing transfer switch integration. Our price is in accordance with the <strong>2026 National Electrical Code</strong>, the Bid Documents, and the following qualifications: {licLine || 'Licensed & Insured'}. <strong>THIS PROPOSAL AND ALL MATERIAL COSTS ARE VALID FOR 30 DAYS.</strong></>
+                : <>{companyName} proposes to furnish all labor and material necessary to provide the scope of work described in this proposal. Our price is in accordance with the <strong>2026 National Electrical Code</strong>, the Bid Documents, and the following qualifications: {licLine || 'Licensed & Insured'}. <strong>THIS PROPOSAL AND ALL MATERIAL COSTS ARE VALID FOR 30 DAYS.</strong></>
+              }
             </p>
 
             {/* Scope of work table */}
@@ -245,16 +247,16 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
               <tbody>
                 {[
                   {
-                    title: `APT to provide a ${form.brand} ${form.size} Generator — ${form.ats} ATS`,
+                    title: `APT to provide a ${form.brand} ${form.size} Generator — ${form.jobType === 'swap-out' ? 'Existing ' : ''}${form.ats} ATS`,
                     desc: `The ${form.brand} Advantage: High Quality Power — advanced voltage/frequency regulation with ultra-low harmonic distortion protects electronics. Extraordinary Reliability — 5-year/2,000-hour warranty. Powerful Performance — Exclusive Power Boost; starts 5-ton A/C. Corrosion-Proof Enclosure — impact-resistant to -34°C. Fast Response. Quiet Operation.`,
                     shade: false,
                   },
                   {
                     title: form.jobType === 'swap-out'
-                      ? 'Scope of Work — Generator Replacement (Swap-Out)'
+                      ? 'Scope of Work — Generator Swap-Out Installation'
                       : 'Scope of Work — Home Standby Generator Installation',
                     desc: form.jobType === 'swap-out'
-                      ? `Disconnect and remove the existing generator unit. Install the replacement ${form.brand} ${form.size} generator on the existing pad (or new pad if selected). Reconnect all existing electrical connections and ATS. Complete all grounding, bonding, utility coordination, startup, testing, and commissioning per 2026 NEC. Existing generator will be disposed of or removed from site per removal/disposal fee.`
+                      ? 'Remove existing generator and disconnect from electrical system. Furnish and install a new permanently mounted home standby generator on the existing code-compliant pad. Integrate electrical connections with existing ATS. Complete grounding, bonding, startup, testing, and commissioning per 2026 NEC.'
                       : 'Furnish and install a permanently mounted home standby generator and ATS on a code-compliant pad. Complete all electrical connections, integrate ATS for automatic transfer during outages. Includes grounding, bonding, utility coordination, startup, testing, and commissioning per 2026 NEC.',
                     shade: true,
                   },
