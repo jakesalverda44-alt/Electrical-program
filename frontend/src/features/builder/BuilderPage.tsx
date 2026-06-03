@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { GenForm } from './genData';
 import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo } from './genCalc';
@@ -70,6 +70,11 @@ export default function BuilderPage({ setGens, showToast, onSaved, editGen }: Pr
   const [screen, setScreen] = useState<Screen>('builder');
   const [proposalNo] = useState(() => genProposalNo(form.brand, form.coolingType));
   const [saving, setSaving] = useState(false);
+  const [benchmarks, setBenchmarks] = useState<Array<{ min: number; max: number; avgAmount: number | null; avgPerKw: number | null; count: number }>>([]);
+
+  useEffect(() => {
+    api.get('/gens/benchmark').then(r => setBenchmarks(r.data)).catch(() => {});
+  }, []);
 
   const set = (key: keyof GenForm, val: unknown) => setForm(prev => {
     const next = { ...prev, [key]: val };
@@ -297,6 +302,28 @@ export default function BuilderPage({ setGens, showToast, onSaved, editGen }: Pr
                 <span>50% Deposit</span>
                 <span className="num">{fmt(totals.deposit)}</span>
               </div>
+
+              {/* Price benchmark flag */}
+              {(() => {
+                const kw = parseInt(form.size) || 0;
+                const b = benchmarks.find(bk => kw >= bk.min && kw < bk.max);
+                if (!b || !b.avgAmount || b.count < 2) return null;
+                const pct = ((totals.total - b.avgAmount) / b.avgAmount) * 100;
+                if (Math.abs(pct) < 15) return null;
+                const high = pct > 0;
+                return (
+                  <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8,
+                    background: high ? 'rgba(224,106,106,.1)' : 'var(--amber-soft)',
+                    border: `1px solid ${high ? 'rgba(224,106,106,.25)' : 'rgba(224,165,59,.25)'}` }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: high ? '#E06A6A' : 'var(--amber)', marginBottom: 3 }}>
+                      {high ? '▲' : '▼'} {Math.abs(Math.round(pct))}% {high ? 'above' : 'below'} avg
+                    </div>
+                    <div style={{ fontSize: 11.5, color: 'var(--text3)', fontWeight: 600 }}>
+                      Avg for {kw}kW range: {fmt(b.avgAmount)} ({b.count} sold)
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <button className="btn" onClick={() => setScreen('preview')} style={{ fontSize: 13 }}>

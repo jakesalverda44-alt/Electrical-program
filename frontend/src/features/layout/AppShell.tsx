@@ -2,7 +2,7 @@ import React from 'react';
 import Icon from '../../components/Icon';
 import SearchBox from '../../components/SearchBox';
 import aptLogo from '../../assets/apt-logo.png';
-import { User } from '../../types';
+import { Bid, Gen, User } from '../../types';
 
 type View = string;
 
@@ -26,6 +26,8 @@ interface Props {
   onNewProposal?: () => void;
   onNewBid?: () => void;
   onOpenImport?: () => void;
+  bids?: Bid[];
+  gens?: Gen[];
 }
 
 const TB: Record<string, { title: string; sub: string | null }> = {
@@ -49,6 +51,7 @@ export default function AppShell({
   view, onNav, user, onLogout, children,
   genProposalCount = 0, elecProposalCount = 0, genProjectCount = 0, elecProjectCount = 0, newIncoming = 0,
   dashFilter = 'all', onDashFilter, onNewProposal, onNewBid, onOpenImport,
+  bids = [], gens = [],
 }: Props) {
   const nav: NavGroup[] = [
     { group: 'Sales', items: [
@@ -143,7 +146,7 @@ export default function AppShell({
               )}
             </div>
             <div className="top-right">
-              <SearchBox/>
+              <SearchBox bids={bids} gens={gens} onNav={onNav}/>
               <button className="icon-btn"><Icon name="bell" size={18} stroke={1.8}/><span className="dot"/></button>
               {renderActions()}
             </div>

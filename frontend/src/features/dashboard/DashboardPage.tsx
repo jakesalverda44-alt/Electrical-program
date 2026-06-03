@@ -31,6 +31,7 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
   const winRate = Math.round((elecWon / Math.max(1, elecWon + elecLost)) * 100);
   const pct = total ? Math.round((elecVal / total) * 100) : 50;
   const dueSoon = bids.filter(b => b.stage === 'due').sort((a, b) => a.due_days - b.due_days);
+  const overdue = bids.filter(b => (b.stage === 'due' || b.stage === 'submitted') && b.due_days < 0);
   const recentGens = gens.slice(0, 4);
 
   // Sales summary
@@ -99,6 +100,28 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
           </div>
         </div>
 
+              {overdue.length > 0 && (
+                <div style={{ margin: '0 0 18px', padding: '14px 18px', background: 'rgba(224,106,106,.10)', border: '1px solid rgba(224,106,106,.25)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <span style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(224,106,106,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <Icon name="clock" size={18} stroke={2} style={{ color: '#E06A6A' }}/>
+                  </span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: '#E06A6A', marginBottom: 4 }}>
+                      {overdue.length} Overdue Bid{overdue.length !== 1 ? 's' : ''}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {overdue.map(b => (
+                        <span key={b.id} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', padding: '2px 8px', background: 'var(--surface2)', borderRadius: 6 }}>
+                          {b.name} <span style={{ color: '#E06A6A' }}>({Math.abs(b.due_days)}d overdue)</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <button className="btn ghost" onClick={() => onNav('elec-proposals')} style={{ fontSize: 12, flexShrink: 0, color: '#E06A6A', borderColor: '#E06A6A' }}>
+                    View Pipeline
+                  </button>
+                </div>
+              )}
         <div className="dash-grid">
           {/* Left column */}
           <div style={{ display:'flex', flexDirection:'column', gap:18 }}>

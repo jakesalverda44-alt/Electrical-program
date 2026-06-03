@@ -495,3 +495,55 @@ button{font-family:inherit}
 
 /* ── Salesperson rep chip on card ── */
 .bcard-rep{display:flex;align-items:center;gap:5px;color:var(--text3);font-size:12px}
+
+/* ── Mobile responsive ───────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .app { flex-direction: column; height: auto; min-height: 100vh; }
+
+  .sidebar {
+    width: 100%; height: auto; flex-direction: row; flex-wrap: wrap;
+    padding: 8px 10px; gap: 4px; border-right: none;
+    border-bottom: 1px solid var(--border); overflow-x: auto;
+  }
+  .logo { display: none; }
+  .nav-group { display: contents; }
+  .nav-label { display: none; }
+  .nav-btn {
+    flex-direction: column; gap: 2px; font-size: 10px; padding: 6px 10px;
+    min-width: 56px; height: auto; border-radius: 10px;
+  }
+  .nav-btn svg { width: 18px; height: 18px; }
+  .side-spacer { display: none; }
+  .side-user { margin-left: auto; }
+
+  .main { min-width: 0; }
+  .topbar { height: auto; padding: 10px 14px; flex-wrap: wrap; gap: 8px; }
+  .top-left { flex: 1 1 100%; }
+  .top-right { flex: 1; justify-content: flex-end; }
+  .page-title { font-size: 16px; }
+  .page-sub { display: none; }
+
+  .scroll { padding: 0; }
+  .board { display: flex !important; flex-direction: column !important; gap: 0 !important; overflow-x: hidden !important; }
+  .col { min-width: 0 !important; border-right: none !important; border-bottom: 1px solid var(--border); }
+  .col-body { max-height: 320px; overflow-y: auto; }
+
+  .stats { grid-template-columns: 1fr 1fr !important; }
+  .dash { padding: 12px !important; gap: 12px !important; }
+  .dash-grid { grid-template-columns: 1fr !important; }
+  .comm-band { flex-direction: column !important; }
+  .comm-stats { grid-template-columns: 1fr 1fr !important; }
+  .comm-right { display: none; }
+
+  .panel { border-radius: 10px; }
+  .ctable { font-size: 12px; }
+  .ctable th, .ctable td { padding: 8px 10px; }
+
+  .drawer { width: 100% !important; max-height: 90vh; overflow-y: auto; }
+  .drawer-overlay { align-items: flex-end !important; }
+}
+
+@media (max-width: 480px) {
+  .stats { grid-template-columns: 1fr !important; }
+  .nav-btn { min-width: 46px; padding: 5px 6px; font-size: 9px; }
+}

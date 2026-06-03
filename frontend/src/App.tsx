@@ -227,6 +227,7 @@ export default function App() {
         onDashFilter={setDashFilter}
         onNewProposal={() => setView('builder')}
         onNewBid={() => setView('elec-proposals')}
+        bids={bids} gens={gens}
       >
         {renderView()}
       </AppShell>
