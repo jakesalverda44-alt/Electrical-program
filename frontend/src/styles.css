@@ -16,7 +16,10 @@
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
-body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;-webkit-font-smoothing:antialiased;overflow:hidden}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;-webkit-font-smoothing:antialiased;overflow-x:hidden;overflow-y:hidden}
+@media (max-width: 768px) {
+  html,body{height:auto!important;min-height:100%;overflow-y:auto!important}
+}
 .num{font-family:var(--mono);font-feature-settings:"tnum"}
 button{font-family:inherit}
 ::-webkit-scrollbar{width:10px;height:10px}
@@ -498,9 +501,6 @@ button{font-family:inherit}
 
 /* ── Mobile responsive ───────────────────────────────────────────── */
 @media (max-width: 768px) {
-  /* Fix the fundamental scroll lockout */
-  html, body { height: auto !important; min-height: 100%; overflow-x: hidden !important; overflow-y: auto !important; }
-
   /* App shell — stack vertically, full height via min-height */
   .app { flex-direction: column; height: auto; min-height: 100dvh; min-height: 100vh; padding-bottom: 64px; }
 
