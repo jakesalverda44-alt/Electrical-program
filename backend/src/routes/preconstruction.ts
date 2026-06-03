@@ -3,6 +3,7 @@ import { pool } from '../db/pool';
 import { requireAuth, requireAIPermission, AuthRequest } from '../middleware/auth';
 import Anthropic from '@anthropic-ai/sdk';
 import multer from 'multer';
+import AdmZip from 'adm-zip';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -744,7 +745,31 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1', [bidId]);
   if (!bidRows.length) return res.status(404).json({ error: 'Bid not found' });
 
-  const files = (req.files as Express.Multer.File[]) ?? [];
+  const rawFiles = (req.files as Express.Multer.File[]) ?? [];
+
+  // Expand any zip archives into their constituent PDF/image files
+  const files: Express.Multer.File[] = [];
+  for (const f of rawFiles) {
+    if (f.originalname.toLowerCase().endsWith('.zip')) {
+      try {
+        const zip = new AdmZip(f.buffer);
+        for (const entry of zip.getEntries()) {
+          if (entry.isDirectory) continue;
+          const n = entry.name.toLowerCase();
+          if (!n.endsWith('.pdf') && !n.endsWith('.jpg') && !n.endsWith('.jpeg') && !n.endsWith('.png')) continue;
+          files.push({
+            ...f,
+            originalname: entry.name,
+            buffer: entry.getData(),
+            size: entry.header.size,
+            mimetype: n.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg',
+          });
+        }
+      } catch { /* corrupt or unreadable zip — skip */ }
+    } else {
+      files.push(f);
+    }
+  }
 
   if (!process.env.ANTHROPIC_API_KEY) {
     return res.status(503).json({ error: 'AI analysis not configured. Set ANTHROPIC_API_KEY environment variable.' });

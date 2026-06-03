@@ -286,7 +286,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         const totalCount = fileObjectsRef.current.length;
         return (
           <div style={{ padding: '20px 24px' }}>
-            <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" style={{ display: 'none' }} onChange={handleFileUpload}/>
+            <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.zip" style={{ display: 'none' }} onChange={handleFileUpload}/>
             {/* Drag-and-drop zone */}
             <div
               onDragOver={e => { e.preventDefault(); setDragOver(true); }}
@@ -300,7 +300,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)', marginTop: 10, marginBottom: 4 }}>
                 Drop plan sheets here or click to browse
               </div>
-              <div style={{ fontSize: 12, color: 'var(--text3)' }}>PDF, JPG, PNG — electrical sheets auto-detected</div>
+              <div style={{ fontSize: 12, color: 'var(--text3)' }}>PDF, JPG, PNG, ZIP — electrical sheets auto-detected</div>
               {totalCount > 0 && (
                 <div style={{ marginTop: 10, fontSize: 12.5, fontWeight: 700, color: 'var(--text3)' }}>
                   {totalCount} file{totalCount !== 1 ? 's' : ''} · <span style={{ color: 'var(--blue)' }}>{elecCount} electrical sheet{elecCount !== 1 ? 's' : ''} identified</span>
