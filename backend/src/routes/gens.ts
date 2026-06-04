@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { Resend } from 'resend';
+import multer from 'multer';
 import { pool } from '../db/pool';
 import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
 import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
@@ -7,6 +8,7 @@ import { getSetting } from './settings';
 import { upsertCustomer } from './customers';
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
 // Restricted (rep) users may only act on their own proposals. Returns the row if allowed,
 // or sends the appropriate 403/404 and returns null.
@@ -264,6 +266,37 @@ router.post('/p/:token/sign', async (req, res) => {
   );
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
   res.json({ ok: true, gen: rows[0] });
+});
+
+// ── Public: auto-save a signed-proposal PDF (no auth) ───────────────────────────
+// Token-scoped and tightly bounded: the proposal must be signed, and only one
+// signed PDF is ever stored (idempotent), so this public endpoint can't be abused
+// to pile up files.
+router.post('/p/:token/proposal-pdf', upload.single('file'), async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: 'file required' });
+
+  const { rows } = await pool.query(
+    'SELECT id, customer, signed_at FROM generator_proposals WHERE proposal_token = $1',
+    [req.params.token]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
+  const gen = rows[0];
+  if (!gen.signed_at) return res.status(409).json({ error: 'Proposal is not signed' });
+
+  const { rows: existing } = await pool.query(
+    `SELECT 1 FROM documents WHERE linked_id = $1 AND category = 'contract' AND name LIKE 'Signed Proposal%' LIMIT 1`,
+    [gen.id]
+  );
+  if (existing.length) return res.json({ ok: true, skipped: true });
+
+  const name = `Signed Proposal - ${gen.customer}.pdf`;
+  await pool.query(
+    `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
+     VALUES ($1,$2,'gen',$3,$3,'contract',$4,'application/pdf','Customer signature',$5)`,
+    [gen.id, gen.customer, name, file.size, file.buffer.toString('base64')]
+  );
+  res.json({ ok: true });
 });
 
 export default router;
