@@ -70,20 +70,22 @@ router.get('/:id', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const ownFilter = (col = 'salesperson_id') => scope ? ` AND ${col} = $2` : '';
   const args = (id: string) => scope ? [id, scope] : [id];
 
-  const [bidsR, gensR, wonR, commsR] = await Promise.all([
+  const [bidsR, gensR, wonR] = await Promise.all([
     pool.query(`SELECT * FROM bids WHERE customer_id = $1${ownFilter()} ORDER BY created_at DESC`, args(req.params.id)),
     pool.query(`SELECT * FROM generator_proposals WHERE customer_id = $1${ownFilter()} ORDER BY created_at DESC`, args(req.params.id)),
     pool.query(`SELECT * FROM won_jobs WHERE customer = $1${ownFilter()} ORDER BY date_won DESC`, args(cust[0].name)),
-    pool.query('SELECT * FROM communications WHERE linked_name = $1 ORDER BY created_at DESC LIMIT 50', [cust[0].name]),
   ]);
 
-  // Documents across this customer's jobs (bids + generator proposals) and the customer itself.
-  const docIds = [req.params.id, ...bidsR.rows.map(b => b.id), ...gensR.rows.map(g => g.id)];
-  const [docsR, tasksR] = await Promise.all([
+  // Ids/names spanning the customer and all its jobs, so documents and
+  // communications attached to a specific bid/proposal surface on the hub too.
+  const linkIds = [req.params.id, ...bidsR.rows.map(b => b.id), ...gensR.rows.map(g => g.id)];
+  const linkNames = [cust[0].name, ...bidsR.rows.map(b => b.name), ...gensR.rows.map(g => g.customer)];
+
+  const [docsR, tasksR, commsR] = await Promise.all([
     pool.query(
       `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, created_at
        FROM documents WHERE linked_id = ANY($1::text[]) ORDER BY created_at DESC`,
-      [docIds]
+      [linkIds]
     ),
     pool.query(
       `SELECT t.*, u.name AS assigned_to_name
@@ -91,6 +93,12 @@ router.get('/:id', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
        WHERE t.linked_id = $1 OR t.linked_name = $2
        ORDER BY (t.status = 'done'), t.due_date NULLS LAST, t.created_at DESC`,
       [req.params.id, cust[0].name]
+    ),
+    pool.query(
+      `SELECT * FROM communications
+       WHERE linked_id = ANY($1::text[]) OR linked_name = ANY($2::text[])
+       ORDER BY created_at DESC LIMIT 100`,
+      [linkIds, linkNames]
     ),
   ]);
 

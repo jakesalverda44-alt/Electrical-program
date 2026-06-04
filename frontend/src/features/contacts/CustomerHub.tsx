@@ -116,7 +116,8 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole 
   const [taskTitle, setTaskTitle] = useState('');
   const [taskDue, setTaskDue] = useState('');
   const [commOpen, setCommOpen] = useState(false);
-  const [comm, setComm] = useState({ kind: 'call', subject: '', body: '' });
+  const [comm, setComm] = useState({ kind: 'call', subject: '', body: '', project: 'general' });
+  const [collapsedComm, setCollapsedComm] = useState<Set<string>>(new Set());
   const fileInput = useRef<HTMLInputElement>(null);
   const [docCategory, setDocCategory] = useState('plans');
 
@@ -157,10 +158,46 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole 
 
   const logComm = async () => {
     if (!comm.subject.trim()) return;
-    await api.post('/comms', { kind: comm.kind, subject: comm.subject.trim(), body: comm.body.trim(), linked_id: id, linked_name: c.name, div: isGc ? 'elec' : 'gen' });
-    setComm({ kind: 'call', subject: '', body: '' }); setCommOpen(false); load();
+    // Resolve which project (or the company itself) this message is about.
+    let linkedId = id, linkedName = c.name;
+    if (comm.project.startsWith('bid:')) {
+      const b = detail.bids.find(x => 'bid:' + x.id === comm.project);
+      if (b) { linkedId = b.id; linkedName = b.name; }
+    } else if (comm.project.startsWith('gen:')) {
+      const g = detail.gens.find(x => 'gen:' + x.id === comm.project);
+      if (g) { linkedId = g.id; linkedName = g.customer; }
+    }
+    await api.post('/comms', { kind: comm.kind, subject: comm.subject.trim(), body: comm.body.trim(), linked_id: linkedId, linked_name: linkedName, div: isGc ? 'elec' : 'gen' });
+    setComm({ kind: 'call', subject: '', body: '', project: comm.project }); setCommOpen(false); load();
     showToast?.({ title: 'Communication logged' });
   };
+
+  // Group the communication timeline by project (bids/gens), with a General bucket.
+  const commProjectOf = (m: CustomerDetail['communications'][number]) => {
+    const b = detail.bids.find(x => x.id === m.linked_id) || detail.bids.find(x => x.name === m.linked_name && m.linked_name !== c.name);
+    if (b) return { key: 'bid:' + b.id, label: b.name };
+    const g = detail.gens.find(x => x.id === m.linked_id);
+    if (g) return { key: 'gen:' + g.id, label: `${g.mfr || ''} ${g.model || ''}`.trim() || 'Generator' };
+    return { key: 'general', label: 'General / Company' };
+  };
+  const commGroups = (() => {
+    const map = new Map<string, { label: string; items: CustomerDetail['communications'] }>();
+    for (const m of detail.communications) {
+      const g = commProjectOf(m);
+      if (!map.has(g.key)) map.set(g.key, { label: g.label, items: [] });
+      map.get(g.key)!.items.push(m);
+    }
+    return [...map.entries()].sort((a, b) => {
+      if (a[0] === 'general') return 1;
+      if (b[0] === 'general') return -1;
+      return new Date(b[1].items[0].created_at).getTime() - new Date(a[1].items[0].created_at).getTime();
+    });
+  })();
+  const projectOpts = [
+    { val: 'general', label: 'General / company-level' },
+    ...detail.bids.map(b => ({ val: 'bid:' + b.id, label: b.name })),
+    ...detail.gens.map(g => ({ val: 'gen:' + g.id, label: `${g.mfr || ''} ${g.model || ''}`.trim() || 'Generator' })),
+  ];
 
   const uploadDoc = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -322,22 +359,38 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole 
                     <select style={{ ...inputStyle, width: 110 }} value={comm.kind} onChange={e => setComm(s => ({ ...s, kind: e.target.value }))}>
                       <option value="call">Call</option><option value="email">Email</option><option value="meeting">Meeting</option><option value="note">Note</option>
                     </select>
-                    <input style={{ ...inputStyle, flex: 1 }} placeholder="Subject" value={comm.subject} onChange={e => setComm(s => ({ ...s, subject: e.target.value }))}/>
+                    <select style={{ ...inputStyle, flex: 1 }} value={comm.project} onChange={e => setComm(s => ({ ...s, project: e.target.value }))} title="Which project is this about?">
+                      {projectOpts.map(o => <option key={o.val} value={o.val}>{o.label}</option>)}
+                    </select>
                   </div>
+                  <input style={inputStyle} placeholder="Subject" value={comm.subject} onChange={e => setComm(s => ({ ...s, subject: e.target.value }))}/>
                   <textarea style={{ ...inputStyle, minHeight: 56, resize: 'vertical', fontFamily: 'inherit' }} placeholder="Notes…" value={comm.body} onChange={e => setComm(s => ({ ...s, body: e.target.value }))}/>
                   <button className="btn" onClick={logComm} disabled={!comm.subject.trim()} style={{ alignSelf: 'flex-start' }}>Save</button>
                 </div>
               )}
-              {detail.communications.length === 0 ? <Empty>No communications logged.</Empty> : detail.communications.map(m => (
-                <div key={m.id} style={{ padding: '10px 16px', borderTop: '1px solid var(--border)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{m.subject}</span>
-                    <span style={{ fontSize: 11, color: 'var(--text3)', flexShrink: 0 }}>{fmtDate(m.created_at)}</span>
+              {detail.communications.length === 0 ? <Empty>No communications logged.</Empty> : commGroups.map(([key, group]) => {
+                const open = !collapsedComm.has(key);
+                return (
+                  <div key={key} style={{ borderTop: '1px solid var(--border)' }}>
+                    <button onClick={() => setCollapsedComm(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; })}
+                      style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 16px', border: 'none', background: 'var(--surface2)', cursor: 'pointer', textAlign: 'left' }}>
+                      <Icon name="arrow" size={12} stroke={2.4} style={{ transform: open ? 'rotate(90deg)' : 'none', color: 'var(--text3)' }}/>
+                      <span style={{ fontSize: 12.5, fontWeight: 800, color: 'var(--text)' }}>{group.label}</span>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)' }}>· {group.items.length}</span>
+                    </button>
+                    {open && group.items.map(m => (
+                      <div key={m.id} style={{ padding: '9px 16px 9px 30px', borderTop: '1px solid var(--border)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{m.subject}</span>
+                          <span style={{ fontSize: 11, color: 'var(--text3)', flexShrink: 0 }}>{fmtDate(m.created_at)}</span>
+                        </div>
+                        {m.body && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 3, lineHeight: 1.5 }}>{m.body}</div>}
+                        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3, textTransform: 'capitalize' }}>{m.kind}{m.author ? ` · ${m.author}` : ''}</div>
+                      </div>
+                    ))}
                   </div>
-                  {m.body && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 3, lineHeight: 1.5 }}>{m.body}</div>}
-                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3, textTransform: 'capitalize' }}>{m.kind}{m.author ? ` · ${m.author}` : ''}</div>
-                </div>
-              ))}
+                );
+              })}
             </Section>
 
             {/* Documents */}

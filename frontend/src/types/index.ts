@@ -100,7 +100,7 @@ export interface CustomerDetail {
   bids: Bid[];
   gens: Gen[];
   wonJobs: WonJob[];
-  communications: { id: string; kind: string; subject: string; body: string; author: string; created_at: string }[];
+  communications: { id: string; kind: string; subject: string; body: string; author: string; created_at: string; linked_id: string | null; linked_name: string | null }[];
   documents: { id: string; linked_id: string | null; linked_name: string | null; div: string; name: string; display_name: string; category: string; file_size: number; file_type: string; uploaded_by: string; created_at: string }[];
   tasks: { id: string; title: string; notes?: string; due_date?: string | null; status: 'open' | 'done'; linked_name?: string | null; assigned_to_name?: string | null; created_at: string }[];
 }
