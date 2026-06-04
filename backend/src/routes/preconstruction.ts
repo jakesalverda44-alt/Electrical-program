@@ -8,9 +8,46 @@ import AdmZip from 'adm-zip';
 import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM } from '../ai/prompts';
 import { callWithRetry } from '../ai/retry';
 import { asyncHandler } from '../utils/asyncHandler';
+import { logger } from '../utils/logger';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+
+interface AIConfig {
+  model: string;
+  maxTokens: number;
+  temperature: number;
+}
+
+const DEFAULT_AI_MODEL = 'claude-sonnet-4-5';
+const DEFAULT_MAX_TOKENS = 4096;
+const DEFAULT_TEMPERATURE = 0.3;
+
+function parseNumberSetting(value: string, fallback: number, min: number, max: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+async function loadAIConfig(): Promise<AIConfig> {
+  const [modelSetting, maxTokensSetting, temperatureSetting] = await Promise.all([
+    getSetting('ai_model'),
+    getSetting('ai_max_tokens'),
+    getSetting('ai_temperature'),
+  ]);
+  return {
+    model: (modelSetting || process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim(),
+    maxTokens: parseNumberSetting(maxTokensSetting || process.env.AI_MAX_TOKENS || '', DEFAULT_MAX_TOKENS, 256, 8192),
+    temperature: parseNumberSetting(temperatureSetting || process.env.AI_TEMPERATURE || '', DEFAULT_TEMPERATURE, 0, 1),
+  };
+}
+
+function describeAIError(err: unknown): string {
+  const e = err as { message?: string; status?: number; error?: { message?: string }; response?: { data?: { error?: string; message?: string } } };
+  const status = e.status ? `Anthropic ${e.status}` : 'AI request failed';
+  const detail = e.error?.message || e.response?.data?.error || e.response?.data?.message || e.message || 'Unknown error';
+  return `${status}: ${detail}`;
+}
 
 // ── Electrical sheet filter ────────────────────────────────────────────────────
 const ELEC_INCLUDE = /^E\d|electrical|one.?line|panel.?sched|equip.?sched/i;
@@ -36,7 +73,8 @@ function extractText(response: Anthropic.Message): string {
 async function runPipeline(
   bidId: string,
   files: Express.Multer.File[],
-  client: Anthropic
+  client: Anthropic,
+  config: AIConfig
 ): Promise<void> {
   let agent1Output = '';
   let agent2Output = '';
@@ -81,8 +119,9 @@ async function runPipeline(
       });
 
       const resp = await callWithRetry(() => client.messages.create({
-        model: 'claude-opus-4-5',
-        max_tokens: 8192,
+        model: config.model,
+        max_tokens: config.maxTokens,
+        temperature: config.temperature,
         system: [{ type: 'text', text: AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: contentBlocks }],
       }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
@@ -122,8 +161,9 @@ async function runPipeline(
         });
 
         const bResp = await callWithRetry(() => client.messages.create({
-          model: 'claude-opus-4-5',
-          max_tokens: 8192,
+          model: config.model,
+          max_tokens: config.maxTokens,
+          temperature: config.temperature,
           system: [{ type: 'text', text: AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: contentBlocks }],
         }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
@@ -190,10 +230,11 @@ async function runPipeline(
       [agent1Output, bidId]
     );
   } catch (err) {
-    console.error('[takeoff] Agent 1 failed:', err);
+    const message = `Agent 1 failed: ${describeAIError(err)}`;
+    logger.error({ err, bidId }, 'Takeoff Agent 1 failed');
     await pool.query(
       `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
-      [`Agent 1 failed: ${(err as Error).message}`, bidId]
+      [message, bidId]
     );
     return;
   }
@@ -202,8 +243,9 @@ async function runPipeline(
   try {
     await updateStatus('agent2_running');
     const resp = await callWithRetry(() => client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 4096,
+      model: config.model,
+      max_tokens: config.maxTokens,
+      temperature: config.temperature,
       system: [{ type: 'text', text: AGENT2_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
@@ -217,10 +259,11 @@ async function runPipeline(
       [agent2Output, bidId]
     );
   } catch (err) {
-    console.error('[takeoff] Agent 2 failed:', err);
+    const message = `Agent 2 failed: ${describeAIError(err)}`;
+    logger.error({ err, bidId }, 'Takeoff Agent 2 failed');
     await pool.query(
       `UPDATE takeoff_results SET status='error', agent2_output=$1 WHERE bid_id=$2`,
-      [`Agent 2 failed: ${(err as Error).message}`, bidId]
+      [message, bidId]
     );
     return;
   }
@@ -229,8 +272,9 @@ async function runPipeline(
   try {
     await updateStatus('agent3_running');
     const resp = await callWithRetry(() => client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 4096,
+      model: config.model,
+      max_tokens: config.maxTokens,
+      temperature: config.temperature,
       system: [{ type: 'text', text: AGENT3_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
@@ -260,10 +304,11 @@ async function runPipeline(
       bidId,
     ]);
   } catch (err) {
-    console.error('[takeoff] Agent 3 failed:', err);
+    const message = `Agent 3 failed: ${describeAIError(err)}`;
+    logger.error({ err, bidId }, 'Takeoff Agent 3 failed');
     await pool.query(
       `UPDATE takeoff_results SET status='error', agent3_output=$1 WHERE bid_id=$2`,
-      [`Agent 3 failed: ${(err as Error).message}`, bidId]
+      [message, bidId]
     );
   }
 }
@@ -388,11 +433,12 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
     }
   }
 
-  // Prefer the key configured in Settings → AI; fall back to the env var.
-  const apiKey = (await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY;
+  // Prefer the key configured in Settings -> AI; fall back to the env var.
+  const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
   if (!apiKey) {
-    return res.status(503).json({ error: 'AI analysis not configured. Add an Anthropic API key in Settings → AI (or set ANTHROPIC_API_KEY).' });
+    return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI or set ANTHROPIC_API_KEY in Render.' });
   }
+  const aiConfig = await loadAIConfig();
 
   // Mark as running
   await pool.query(`
@@ -419,8 +465,14 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   });
 
   const client = new Anthropic({ apiKey });
-  runPipeline(bidId, files, client).catch(err => {
-    console.error('[takeoff] Pipeline error:', err);
+  logger.info({ bidId, model: aiConfig.model, maxTokens: aiConfig.maxTokens }, 'AI takeoff pipeline started');
+  runPipeline(bidId, files, client, aiConfig).catch(async err => {
+    const message = `Pipeline failed: ${describeAIError(err)}`;
+    logger.error({ err, bidId }, 'Takeoff pipeline failed');
+    await pool.query(
+      `UPDATE takeoff_results SET status='error', raw_response=$1 WHERE bid_id=$2`,
+      [message, bidId]
+    ).catch(dbErr => logger.error({ err: dbErr, bidId }, 'Could not persist takeoff pipeline failure'));
   });
 }));
 

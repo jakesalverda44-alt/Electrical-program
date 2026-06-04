@@ -60,6 +60,16 @@ function isElecSheet(name: string) {
   return true;
 }
 
+function analysisErrorMessage(data: Record<string, unknown> | null | undefined) {
+  const parts = [
+    data?.agent1_output,
+    data?.agent2_output,
+    data?.agent3_output,
+    data?.raw_response,
+  ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+  return parts[0] || 'Analysis failed. Check server logs.';
+}
+
 export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, showToast, userRole, settings }: Props) {
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
@@ -128,7 +138,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           setAiResults(data);
           set(prev => ({ aiRunning: false, aiDone: true, aiLog: [...(prev.aiLog ?? []), '✓ Analysis complete — see Plan Review tab.'] }));
         } else if (data?.status === 'error') {
-          set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), '✗ Analysis failed. Check server logs.'] }));
+          setAiResults(data);
+          set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${analysisErrorMessage(data)}`] }));
         } else {
           pollForResults(startMs, nextA2, nextA3);
         }

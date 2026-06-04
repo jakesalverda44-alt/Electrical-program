@@ -26,9 +26,14 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
     finally { setSaving(false); }
   };
 
-  const MODELS = [
-    'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001',
+  const MODEL_OPTIONS = [
+    'claude-sonnet-4-5',
+    'claude-opus-4-5',
+    'claude-haiku-4-5',
   ];
+  const models = vals.ai_model && !MODEL_OPTIONS.includes(vals.ai_model)
+    ? [vals.ai_model, ...MODEL_OPTIONS]
+    : MODEL_OPTIONS;
 
   return (
     <div>
@@ -44,7 +49,7 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 20px' }}>
         <Field label="Model">
           <select style={{ ...inputStyle, appearance: 'none' }} value={vals.ai_model} onChange={set('ai_model')}>
-            {MODELS.map(m => <option key={m} value={m}>{m}</option>)}
+            {models.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
         </Field>
         <Field label="Max Tokens">
