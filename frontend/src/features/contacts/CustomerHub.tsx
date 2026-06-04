@@ -49,9 +49,69 @@ const EDIT_FIELDS: [keyof Customer, string][] = [
   ['address', 'Address'], ['city', 'City'], ['state', 'State'], ['zip', 'Zip'],
 ];
 
-export default function CustomerHub({ id, onBack, showToast, onNewBid }: { id: string; onBack: () => void; showToast?: (t: Toast) => void; onNewBid?: (gc: string) => void }) {
+const MANAGER_ROLES = ['owner', 'administrator', 'sales_manager'];
+
+// Pick duplicate customer records and merge them into the current one.
+function MergeModal({ targetId, targetName, onClose, onMerged }: { targetId: string; targetName: string; onClose: () => void; onMerged: (n: number) => void }) {
+  const [all, setAll] = useState<Customer[]>([]);
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [merging, setMerging] = useState(false);
+
+  useEffect(() => { api.get('/customers').then(({ data }) => setAll(data)); }, []);
+
+  const options = all.filter(c => c.id !== targetId &&
+    (!query || c.name.toLowerCase().includes(query.toLowerCase()) || (c.company || '').toLowerCase().includes(query.toLowerCase())));
+  const toggle = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const merge = async () => {
+    if (!selected.size) return;
+    setMerging(true);
+    try {
+      const { data } = await api.post(`/customers/${targetId}/merge`, { sourceIds: [...selected] });
+      onMerged(data.merged);
+    } finally { setMerging(false); }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: 'var(--surface)', borderRadius: 14, width: 480, maxWidth: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 15, fontWeight: 900, color: 'var(--text)' }}>Merge duplicates into {targetName}</div>
+          <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 3 }}>Selected customers' bids, proposals, jobs, documents, follow-ups, and communications move into <b>{targetName}</b>, and the duplicates are deleted. This can't be undone.</div>
+        </div>
+        <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+          <input style={{ ...inputStyle }} placeholder="Search customers to merge in…" value={query} onChange={e => setQuery(e.target.value)} autoFocus/>
+        </div>
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {options.length === 0 ? <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>No other customers.</div> :
+            options.map(c => (
+              <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderTop: '1px solid var(--border)', cursor: 'pointer' }}>
+                <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)}/>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{c.name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)' }}>{TYPE_LABEL[c.type]}{c.company ? ` · ${c.company}` : ''} · {(c.bid_count ?? 0)} bids · {(c.gen_count ?? 0)} props</div>
+                </div>
+              </label>
+            ))}
+        </div>
+        <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn" onClick={merge} disabled={!selected.size || merging}
+            style={{ background: 'var(--red)', borderColor: 'var(--red)' }}>
+            {merging ? 'Merging…' : `Merge ${selected.size || ''} into this`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole }: { id: string; onBack: () => void; showToast?: (t: Toast) => void; onNewBid?: (gc: string) => void; userRole?: string }) {
   const [detail, setDetail] = useState<CustomerDetail | null>(null);
   const [editing, setEditing] = useState(false);
+  const [merging, setMerging] = useState(false);
   const [form, setForm] = useState<Partial<Customer>>({});
   const [taskTitle, setTaskTitle] = useState('');
   const [taskDue, setTaskDue] = useState('');
@@ -69,6 +129,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid }: { id: s
 
   const c = detail.customer;
   const isGc = c.type === 'gc';
+  const canMerge = MANAGER_ROLES.includes(userRole || '');
   const openBids = detail.bids.filter(b => b.stage === 'due' || b.stage === 'submitted');
   const awarded = detail.bids.filter(b => b.stage === 'awarded');
   const lost = detail.bids.filter(b => b.stage === 'lost');
@@ -182,6 +243,11 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid }: { id: s
               {onNewBid && (
                 <button className="btn" onClick={() => onNewBid(c.name)} style={{ fontSize: 12.5 }}>
                   <Icon name="plus" size={13} stroke={2.4}/>New Bid
+                </button>
+              )}
+              {canMerge && (
+                <button className="btn ghost" onClick={() => setMerging(true)} style={{ fontSize: 12.5 }} title="Merge duplicate customer records into this one">
+                  <Icon name="users" size={13} stroke={2}/>Merge
                 </button>
               )}
               <button className="btn ghost" onClick={() => { setForm(c); setEditing(e => !e); }} style={{ fontSize: 12.5 }}>
@@ -302,6 +368,11 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid }: { id: s
           </div>
         </div>
       </div>
+
+      {merging && (
+        <MergeModal targetId={id} targetName={c.name} onClose={() => setMerging(false)}
+          onMerged={n => { setMerging(false); load(); showToast?.({ title: `Merged ${n} duplicate${n !== 1 ? 's' : ''}`, sub: `into ${c.name}` }); }}/>
+      )}
     </div>
   );
 }

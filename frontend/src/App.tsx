@@ -229,7 +229,7 @@ export default function App() {
       case 'gen-projects':
         return <GenProjectsPage gens={gens} showToast={showToast}/>;
       case 'contacts':
-        return <ContactsPage showToast={showToast} onNewBid={openNewBid}/>;
+        return <ContactsPage showToast={showToast} onNewBid={openNewBid} userRole={user.role}/>;
       case 'reporting':
         return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
       case 'followups':

@@ -137,4 +137,47 @@ router.patch('/:id', requireAuth, validateBody(customerSchema.partial()), asyncH
   res.json(rows[0]);
 }));
 
+// Merge one or more duplicate customers into this one (the canonical record).
+// Managers only. Re-points every reference (bids, proposals, won jobs, documents,
+// follow-ups, communications) to the target, then deletes the sources — all in a
+// single transaction so it can't leave records half-moved.
+router.post('/:id/merge', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  if (ownScopeId(req.user!)) return res.status(403).json({ error: 'Only managers can merge customers' });
+  const targetId = req.params.id;
+  const sourceIds: string[] = Array.isArray(req.body.sourceIds) ? req.body.sourceIds.filter((x: unknown) => typeof x === 'string') : [];
+  if (!sourceIds.length) return res.status(400).json({ error: 'sourceIds required' });
+  if (sourceIds.includes(targetId)) return res.status(400).json({ error: 'Cannot merge a customer into itself' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: tgt } = await client.query('SELECT id, name FROM customers WHERE id = $1', [targetId]);
+    if (!tgt.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Target customer not found' }); }
+    const targetName = tgt[0].name as string;
+    const { rows: srcs } = await client.query('SELECT id, name FROM customers WHERE id = ANY($1::uuid[])', [sourceIds]);
+
+    for (const src of srcs) {
+      // Foreign-key references
+      await client.query('UPDATE bids SET customer_id = $1, gc = $2 WHERE customer_id = $3', [targetId, targetName, src.id]);
+      await client.query('UPDATE generator_proposals SET customer_id = $1, customer = $2 WHERE customer_id = $3', [targetId, targetName, src.id]);
+      // Name- and id-based references
+      await client.query('UPDATE won_jobs SET customer = $1 WHERE customer = $2', [targetName, src.name]);
+      await client.query('UPDATE communications SET linked_id = $1 WHERE linked_id = $2', [targetId, src.id]);
+      await client.query('UPDATE communications SET linked_name = $1 WHERE linked_name = $2', [targetName, src.name]);
+      await client.query('UPDATE tasks SET linked_id = $1, linked_name = $2 WHERE linked_id = $3', [targetId, targetName, src.id]);
+      await client.query('UPDATE tasks SET linked_name = $1 WHERE linked_name = $2', [targetName, src.name]);
+      await client.query('UPDATE documents SET linked_id = $1, linked_name = $2 WHERE linked_id = $3', [targetId, targetName, src.id]);
+      await client.query('UPDATE documents SET linked_name = $1 WHERE linked_name = $2', [targetName, src.name]);
+      await client.query('DELETE FROM customers WHERE id = $1', [src.id]);
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, merged: srcs.length, into: targetName });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}));
+
 export default router;
