@@ -248,6 +248,23 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     set({ files: [...ws.files, ...newFiles] });
   };
 
+  const removeFile = (id: string, name: string) => {
+    let removed = false;
+    fileObjectsRef.current = fileObjectsRef.current.filter(f => {
+      if (!removed && f.name === name) {
+        removed = true;
+        return false;
+      }
+      return true;
+    });
+    set({ files: ws.files.filter(f => f.id !== id) });
+  };
+
+  const clearFiles = () => {
+    fileObjectsRef.current = [];
+    set({ files: [] });
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     addFiles(Array.from(e.target.files ?? []));
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -331,8 +348,19 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               </div>
             ) : (
               <div className="panel">
+                <div className="panel-hdr">
+                  <span className="panel-title">
+                    <span className="pt-ic" style={{ background: 'var(--blue-soft)', color: 'var(--blue)' }}>
+                      <Icon name="file" size={15} stroke={1.8}/>
+                    </span>
+                    Uploaded Plan Files
+                  </span>
+                  <button className="btn ghost" onClick={clearFiles} style={{ height: 30, fontSize: 12, padding: '0 10px', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)' }}>
+                    <Icon name="x" size={13} stroke={2}/>Clear All
+                  </button>
+                </div>
                 <table className="ctable">
-                  <thead><tr><th>File</th><th>Type</th><th>Size</th><th>Sheet Type</th></tr></thead>
+                  <thead><tr><th>File</th><th>Type</th><th>Size</th><th>Sheet Type</th><th></th></tr></thead>
                   <tbody>
                     {ws.files.map(f => {
                       const elec = isElecSheet(f.name);
@@ -347,6 +375,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                               color: elec ? 'var(--green)' : 'var(--text3)' }}>
                               {elec ? 'Electrical' : 'Other'}
                             </span>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              title="Remove file"
+                              onClick={() => removeFile(f.id, f.name)}
+                              style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text3)', padding: 4, borderRadius: 6 }}
+                            >
+                              <Icon name="x" size={13} stroke={2}/>
+                            </button>
                           </td>
                         </tr>
                       );
