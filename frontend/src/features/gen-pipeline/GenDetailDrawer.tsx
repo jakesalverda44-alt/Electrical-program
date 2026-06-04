@@ -2,8 +2,13 @@ import React from 'react';
 import Icon from '../../components/Icon';
 import { Gen } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
+import GenFiles from './GenFiles';
 
 function moneyFull(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
+function fmtTs(ts?: string | null) {
+  if (!ts) return null;
+  return new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
 
 interface Props {
   gen: Gen;
@@ -52,6 +57,31 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             })}
           </div>
 
+          {/* Lifecycle timeline with real timestamps */}
+          <div className="dtl-stage-label" style={{ marginTop: 16 }}>Lifecycle</div>
+          <div style={{ marginBottom: 4 }}>
+            {[
+              { label: 'Built',   done: true,                   when: gen.built_on || null },
+              { label: 'Sent',    done: !!gen.sent_at,          when: fmtTs(gen.sent_at) },
+              { label: 'Viewed',  done: !!gen.viewed_at,        when: fmtTs(gen.viewed_at) },
+              { label: 'Signed',  done: !!gen.signed_at,        when: fmtTs(gen.signed_at) },
+              { label: 'Awarded', done: gen.stage === 'awarded', when: gen.stage === 'awarded' ? 'Marked awarded' : null },
+            ].map((s, i, arr) => (
+              <div key={s.label} style={{ display: 'flex', gap: 10, alignItems: 'stretch' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <span style={{ width: 12, height: 12, borderRadius: '50%', flexShrink: 0, marginTop: 2,
+                    background: s.done ? 'var(--green)' : 'transparent',
+                    border: '2px solid ' + (s.done ? 'var(--green)' : 'var(--border2)') }}/>
+                  {i < arr.length - 1 && <span style={{ width: 2, flex: 1, minHeight: 14, background: s.done ? 'var(--green)' : 'var(--border)' }}/>}
+                </div>
+                <div style={{ paddingBottom: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: s.done ? 'var(--text)' : 'var(--text3)' }}>{s.label}</div>
+                  {s.when && <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>{s.when}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+
           {pendingDeclined && (
             <div className="lost-confirm">
               <Icon name="x" size={14} stroke={2}/>
@@ -78,15 +108,28 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             <div className="dtl-row"><span className="dtl-k">Salesperson</span><span className="dtl-v">{gen.salesperson_name}</span></div>
           </div>
 
+          {gen.proposal_token && (
+            <button
+              className="btn ghost"
+              style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
+              onClick={() => window.open(`${window.location.origin}/p/${gen.proposal_token}`, '_blank', 'noopener')}
+            >
+              <Icon name="eye" size={15} stroke={1.9}/>View customer proposal
+            </button>
+          )}
+
           {!isTerminal && (
             <button
               className="btn amber"
-              style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
+              style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
               onClick={() => { onClose(); onEditGen(gen); }}
             >
               <Icon name="doc" size={15} stroke={1.9}/>Edit in Proposal Builder
             </button>
           )}
+
+          {/* File attachments for this job — proposal, PO, permit, signed contract, delivery/startup, photos */}
+          <GenFiles genId={gen.id} genCustomer={gen.customer}/>
         </div>
       </div>
     </div>
