@@ -26,6 +26,14 @@ import settingsRouter from './routes/settings';
 
 dotenv.config();
 
+process.on('unhandledRejection', err => {
+  logger.error({ err }, 'Unhandled promise rejection');
+});
+
+process.on('uncaughtException', err => {
+  logger.fatal({ err }, 'Uncaught exception');
+});
+
 const app = express();
 
 // Security headers. In production the frontend is served from the same origin as the
@@ -95,10 +103,19 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Global error handler — catches anything forwarded via asyncHandler / next(err).
-app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((err: Error & { code?: string; status?: number; statusCode?: number }, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   logger.error({ err, path: req.path }, 'Unhandled request error');
   if (res.headersSent) return;
-  res.status(500).json({ error: 'Server error' });
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'File is too large. Please upload a smaller file.' });
+  }
+  if (err.name === 'SyntaxError' && 'body' in err) {
+    return res.status(400).json({ error: 'Invalid JSON request body' });
+  }
+  const status = err.status || err.statusCode || 500;
+  res.status(status >= 400 && status < 600 ? status : 500).json({
+    error: status === 500 ? 'Server error' : err.message,
+  });
 });
 
 const port = Number(process.env.PORT) || 3001;

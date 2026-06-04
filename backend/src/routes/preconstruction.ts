@@ -7,6 +7,7 @@ import multer from 'multer';
 import AdmZip from 'adm-zip';
 import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM } from '../ai/prompts';
 import { callWithRetry } from '../ai/retry';
+import { asyncHandler } from '../utils/asyncHandler';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -354,7 +355,7 @@ router.get('/intelligence/:bidId', requireAuth, async (req, res) => {
 });
 
 // POST analyze — 3-agent sequential pipeline
-router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload.array('files', 50), async (req: AuthRequest, res) => {
+router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload.array('files', 50), asyncHandler(async (req: AuthRequest, res) => {
   const bidId = req.body.bidId;
   if (!bidId) return res.status(400).json({ error: 'bidId required' });
 
@@ -421,6 +422,6 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   runPipeline(bidId, files, client).catch(err => {
     console.error('[takeoff] Pipeline error:', err);
   });
-});
+}));
 
 export default router;

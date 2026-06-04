@@ -6,6 +6,8 @@ import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
 import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
 import { getSetting } from './settings';
 import { upsertCustomer } from './customers';
+import { asyncHandler } from '../utils/asyncHandler';
+import { logger } from '../utils/logger';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -272,7 +274,7 @@ router.post('/p/:token/sign', async (req, res) => {
 // Token-scoped and tightly bounded: the proposal must be signed, and only one
 // signed PDF is ever stored (idempotent), so this public endpoint can't be abused
 // to pile up files.
-router.post('/p/:token/proposal-pdf', upload.single('file'), async (req, res) => {
+router.post('/p/:token/proposal-pdf', upload.single('file'), asyncHandler(async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'file required' });
 
@@ -291,12 +293,21 @@ router.post('/p/:token/proposal-pdf', upload.single('file'), async (req, res) =>
   if (existing.length) return res.json({ ok: true, skipped: true });
 
   const name = `Signed Proposal - ${gen.customer}.pdf`;
-  await pool.query(
-    `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
-     VALUES ($1,$2,'gen',$3,$3,'contract',$4,'application/pdf','Customer signature',$5)`,
-    [gen.id, gen.customer, name, file.size, file.buffer.toString('base64')]
-  );
-  res.json({ ok: true });
-});
+  logger.info({ genId: gen.id, fileSize: file.size }, 'Signed proposal PDF upload started');
+  try {
+    await pool.query(
+      `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
+       VALUES ($1,$2,'gen',$3,$3,'contract',$4,'application/pdf','Customer signature',$5)`,
+      [gen.id, gen.customer, name, file.size, file.buffer.toString('base64')]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, genId: gen.id }, 'Signed proposal PDF upload failed');
+    if ((err as { code?: string; column?: string }).code === '42703' && (err as { column?: string }).column === 'file_data') {
+      return res.status(500).json({ error: 'Document storage is not ready. Run database migrations and try again.' });
+    }
+    throw err;
+  }
+}));
 
 export default router;

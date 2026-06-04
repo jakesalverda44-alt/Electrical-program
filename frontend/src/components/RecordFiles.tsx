@@ -40,6 +40,7 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
   const [loading, setLoading] = useState(true);
   const [category, setCategory] = useState(div === 'elec' ? 'plans' : 'other');
   const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
@@ -55,6 +56,7 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
+    setError('');
     try {
       const form = new FormData();
       form.append('file', file);
@@ -65,6 +67,9 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
       form.append('display_name', file.name);
       const { data } = await api.post('/documents', form);
       setDocs(prev => [data, ...prev]);
+    } catch (err: unknown) {
+      const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setError(message || 'Upload failed. Please try again.');
     } finally {
       setUploading(false);
       if (fileInput.current) fileInput.current.value = '';
@@ -103,6 +108,11 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
           <Icon name="plus" size={14} stroke={2.4}/>{uploading ? 'Uploading…' : 'Add file'}
         </button>
       </div>
+      {error && (
+        <div style={{ margin: '-4px 0 10px', padding: '8px 10px', borderRadius: 8, background: '#FEF2F2', color: '#DC2626', fontSize: 12.5, fontWeight: 600 }}>
+          {error}
+        </div>
+      )}
 
       {loading ? (
         <div style={{ fontSize: 12.5, color: 'var(--text3)', padding: '8px 0' }}>Loading…</div>
