@@ -227,7 +227,7 @@ export default function App() {
       case 'elec-projects':
         return <ElecProjectsPage bids={bids} showToast={showToast}/>;
       case 'gen-projects':
-        return <GenProjectsPage gens={gens} showToast={showToast}/>;
+        return <GenProjectsPage gens={gens} setGens={setGens} showToast={showToast}/>;
       case 'contacts':
         return <ContactsPage showToast={showToast} onNewBid={openNewBid} userRole={user.role}/>;
       case 'reporting':

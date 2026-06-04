@@ -140,7 +140,7 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
 
 router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
   const { phase } = req.body;
-  const valid = ['scheduled','ordered','delivered','install','startup','complete'];
+  const valid = ['deposit', 'engineering', 'permitting', 'scheduling', 'installation', 'inspection', 'startup', 'complete'];
   if (!valid.includes(phase)) return res.status(400).json({ error: 'Invalid phase' });
   if (!(await loadOwnedGen(req, res))) return;
   const { rows } = await pool.query(
@@ -260,7 +260,7 @@ router.post('/p/:token/sign', async (req, res) => {
     `UPDATE generator_proposals
      SET signed_at = COALESCE(signed_at, now()),
          signature_data = $1,
-         stage = CASE WHEN stage != 'declined' THEN 'signed' ELSE stage END,
+         stage = CASE WHEN stage IN ('declined','awarded') THEN stage ELSE 'sent' END,
          updated_at = now()
      WHERE proposal_token = $2
      RETURNING id, customer, stage, signed_at`,

@@ -22,9 +22,13 @@ function money(n: number) {
 }
 function moneyFull(n: number) { return '$'+Math.round(n).toLocaleString('en-US'); }
 
-interface Props { gens: Gen[]; showToast: (t: Toast) => void; }
+interface Props {
+  gens: Gen[];
+  setGens: (fn: (prev: Gen[]) => Gen[]) => void;
+  showToast: (t: Toast) => void;
+}
 
-export default function GenProjectsPage({ gens, showToast }: Props) {
+export default function GenProjectsPage({ gens, setGens, showToast }: Props) {
   const awarded = useMemo(() => gens.filter(g => g.stage === 'awarded'), [gens]);
 
   // Normalise phase: map old values forward, default to 'deposit'
@@ -44,10 +48,19 @@ export default function GenProjectsPage({ gens, showToast }: Props) {
   const [overCol, setOverCol] = useState<PhaseKey|null>(null);
   const [detail,  setDetail]  = useState<Gen|null>(null);
 
-  const movePhase = (id: string, phase: PhaseKey) => {
+  const movePhase = async (id: string, phase: PhaseKey) => {
+    const prevPhase = phases[id] ?? 'deposit';
     setPhases(prev => ({ ...prev, [id]: phase }));
-    api.patch(`/gens/${id}/phase`, { phase }).catch(() => {});
-    showToast({ title: 'Phase updated', sub: PHASES.find(p=>p.key===phase)?.label });
+    try {
+      const { data } = await api.patch(`/gens/${id}/phase`, { phase });
+      setGens(prev => prev.map(g => g.id === id ? data : g));
+      setDetail(d => d?.id === id ? data : d);
+      showToast({ title: 'Phase updated', sub: PHASES.find(p=>p.key===phase)?.label });
+    } catch (err: unknown) {
+      setPhases(prev => ({ ...prev, [id]: prevPhase }));
+      const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      showToast({ title: 'Phase update failed', sub: message || 'Changes reverted' });
+    }
   };
 
   const advancePhase = (id: string) => {
