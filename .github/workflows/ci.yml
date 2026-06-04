@@ -1,14 +1,36 @@
 name: CI
 
+# Runs the same checks we run by hand — typecheck, tests, build — on every push
+# and pull request, plus a smoke test that boots the server against a real
+# Postgres and hits /api/health.
 on:
   push:
     branches: ['**']
   pull_request:
 
+# Cancel an in-progress run when newer commits land on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
-    name: Backend (typecheck, test, build)
+    name: Backend (typecheck · test · build · smoke)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: electrical_crm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: backend
@@ -17,13 +39,36 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm install --include=dev
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Smoke test (boot server, hit /api/health)
+        env:
+          NODE_ENV: development
+          PORT: 3001
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_NAME: electrical_crm
+          DB_USER: postgres
+          DB_PASS: postgres
+          REMINDERS_DISABLED: 'true'
+        run: |
+          node dist/index.js & SERVER_PID=$!
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3001/api/health > /dev/null; then
+              echo "Server healthy after ${i} attempt(s)"; ok=1; break
+            fi
+            sleep 2
+          done
+          kill "$SERVER_PID" 2>/dev/null || true
+          if [ "$ok" -ne 1 ]; then echo "Server never became healthy"; exit 1; fi
 
   frontend:
-    name: Frontend (typecheck, test, build)
+    name: Frontend (typecheck · test · build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -33,7 +78,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm install --include=dev
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
