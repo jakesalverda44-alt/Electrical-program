@@ -58,6 +58,17 @@ function Section({ title, icon, children }: { title: string; icon: string; child
 
 function genToForm(g: Gen): GenForm {
   const blank = blankGenForm();
+  let saved: Partial<GenForm> | null | undefined;
+  try {
+    saved = typeof g.form_data === 'string'
+      ? JSON.parse(g.form_data) as Partial<GenForm>
+      : (g.form_data as Partial<GenForm> | null | undefined);
+  } catch {
+    saved = null;
+  }
+  if (saved && typeof saved === 'object') {
+    return { ...blank, ...saved };
+  }
   const [city, state] = (g.loc || '').split(',').map(s => s.trim());
   return {
     ...blank,
@@ -77,7 +88,7 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
   const s = appSettings ?? DEFAULT_APP_SETTINGS;
   const [form, setForm] = useState<GenForm>(() => editGen ? genToForm(editGen) : blankGenForm(s));
   const [screen, setScreen] = useState<Screen>('builder');
-  const [proposalNo] = useState(() => genProposalNo(form.brand, form.coolingType));
+  const [proposalNo] = useState(() => editGen?.proposal_no || genProposalNo(form.brand, form.coolingType));
   const [saving, setSaving] = useState(false);
   const [showSend, setShowSend] = useState(false);
   const [savedGenId, setSavedGenId] = useState<string | null>(editGen?.id ?? null);
@@ -112,6 +123,9 @@ export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, e
         amount:     totals.total,
         tax:        totals.tax,
         addons:     (form.smm ? 1 : 0) + (form.surgePro ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0),
+        proposal_no: proposalNo,
+        form_data:   form,
+        totals_data: totals,
       };
       if (editGen) {
         const r = await api.patch(`/gens/${editGen.id}`, payload);

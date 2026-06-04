@@ -47,6 +47,9 @@ export interface Gen {
   salesperson_id?: string;
   gen_install_phase?: string;
   proposal_token?: string;
+  proposal_no?: string;
+  form_data?: Record<string, unknown> | string | null;
+  totals_data?: Record<string, unknown> | string | null;
   sent_at?: string;
   viewed_at?: string;
   signed_at?: string;

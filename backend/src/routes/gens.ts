@@ -65,15 +65,23 @@ router.get('/', requireAuth, async (req: AuthRequest, res) => {
 });
 
 router.post('/', requireAuth, async (req: AuthRequest, res) => {
-  const { customer, loc, mfr, model, kw, amount, tax, addons } = req.body;
+  const { customer, loc, mfr, model, kw, amount, tax, addons, proposal_no, form_data, totals_data } = req.body;
   if (!customer?.trim()) return res.status(400).json({ error: 'Customer required' });
   const user = req.user!;
   const customerId = await upsertCustomer(customer, 'customer');
   const { rows } = await pool.query(
-    `INSERT INTO generator_proposals (customer, loc, mfr, model, kw, amount, tax, addons, salesperson_id, salesperson_name, customer_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    `INSERT INTO generator_proposals (
+       customer, loc, mfr, model, kw, amount, tax, addons,
+       proposal_no, form_data, totals_data,
+       salesperson_id, salesperson_name, customer_id
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14) RETURNING *`,
     [customer.trim(), (loc || '').trim() || '—', mfr, model, Number(kw) || 0,
-     Number(amount) || 0, Number(tax) || 0, Number(addons) || 0, user.id, user.name, customerId]
+     Number(amount) || 0, Number(tax) || 0, Number(addons) || 0,
+     proposal_no || null,
+     form_data !== undefined ? JSON.stringify(form_data) : null,
+     totals_data !== undefined ? JSON.stringify(totals_data) : null,
+     user.id, user.name, customerId]
   );
   res.json(rows[0]);
 });
@@ -153,7 +161,7 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
 
 router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (!(await loadOwnedGen(req, res))) return;
-  const { customer, loc, mfr, model, kw, amount, tax, addons } = req.body;
+  const { customer, loc, mfr, model, kw, amount, tax, addons, proposal_no, form_data, totals_data } = req.body;
   const fields: string[] = [];
   const vals: unknown[] = [];
   let i = 1;
@@ -165,6 +173,9 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (amount   !== undefined) { fields.push(`amount=$${i++}`);   vals.push(Number(amount)); }
   if (tax      !== undefined) { fields.push(`tax=$${i++}`);      vals.push(Number(tax)); }
   if (addons   !== undefined) { fields.push(`addons=$${i++}`);   vals.push(Number(addons)); }
+  if (proposal_no !== undefined) { fields.push(`proposal_no=$${i++}`); vals.push(proposal_no || null); }
+  if (form_data   !== undefined) { fields.push(`form_data=$${i++}::jsonb`); vals.push(JSON.stringify(form_data)); }
+  if (totals_data !== undefined) { fields.push(`totals_data=$${i++}::jsonb`); vals.push(JSON.stringify(totals_data)); }
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
   fields.push(`updated_at=now()`);
   vals.push(req.params.id);
