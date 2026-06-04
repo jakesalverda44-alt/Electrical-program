@@ -58,6 +58,7 @@ export default function App() {
   const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
   const [intakeCount, setIntakeCount] = useState(0);
   const [openAddBid, setOpenAddBid] = useState(false);
+  const [addBidGc, setAddBidGc] = useState<string | undefined>(undefined);
   const [followupCount, setFollowupCount] = useState(0);
   const [editGen, setEditGen] = useState<import('./types').Gen | null>(null);
   const { settings, reload: reloadSettings } = useAppSettings(!!user);
@@ -123,6 +124,13 @@ export default function App() {
     setBids(prev => prev.map(b => b.id === updated.id ? updated : b));
   }, []);
 
+  // Open the add-bid flow, optionally pre-filling the GC (e.g. from a customer hub).
+  const openNewBid = useCallback((gc?: string) => {
+    setAddBidGc(gc);
+    setView('elec-proposals');
+    setOpenAddBid(true);
+  }, [setView]);
+
   const genProposalCount  = gens.filter(g => g.stage !== 'awarded' && g.stage !== 'declined').length;
   const elecProposalCount = bids.filter(b => b.stage === 'due' || b.stage === 'submitted').length;
   const genProjectCount   = gens.filter(g => g.stage === 'awarded').length;
@@ -168,7 +176,8 @@ export default function App() {
             onOpenPreconstruction={() => setView('preconstruction')}
             flashId={flashId}
             openAddBid={openAddBid}
-            onAddBidHandled={() => setOpenAddBid(false)}
+            onAddBidHandled={() => { setOpenAddBid(false); setAddBidGc(undefined); }}
+            initialGc={addBidGc}
           />
         );
       case 'gen-proposals':
@@ -220,7 +229,7 @@ export default function App() {
       case 'gen-projects':
         return <GenProjectsPage gens={gens} showToast={showToast}/>;
       case 'contacts':
-        return <ContactsPage showToast={showToast}/>;
+        return <ContactsPage showToast={showToast} onNewBid={openNewBid}/>;
       case 'reporting':
         return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
       case 'followups':
@@ -252,7 +261,7 @@ export default function App() {
         dashFilter={dashFilter}
         onDashFilter={setDashFilter}
         onNewProposal={() => setView('builder')}
-        onNewBid={() => { setView('elec-proposals'); setOpenAddBid(true); }}
+        onNewBid={() => openNewBid()}
         bids={bids} gens={gens}
       >
         {renderView()}

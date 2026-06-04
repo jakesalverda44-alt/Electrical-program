@@ -8,6 +8,7 @@ type FilterType = Customer['type'] | 'all';
 
 interface Props {
   showToast?: (t: Toast) => void;
+  onNewBid?: (gc: string) => void;
 }
 
 function moneyFull(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
@@ -88,7 +89,7 @@ function AddCustomerForm({ onCreated, onCancel }: { onCreated: (c: Customer) => 
   );
 }
 
-export default function ContactsPage({ showToast }: Props) {
+export default function ContactsPage({ showToast, onNewBid }: Props) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [query, setQuery] = useState('');
   const [filterType, setFilterType] = useState<FilterType>('all');
@@ -122,7 +123,7 @@ export default function ContactsPage({ showToast }: Props) {
 
   // Selecting a customer opens the full-screen hub; coming back refreshes the list.
   if (selectedId) {
-    return <CustomerHub id={selectedId} onBack={() => { setSelectedId(null); load(); }} showToast={showToast}/>;
+    return <CustomerHub id={selectedId} onBack={() => { setSelectedId(null); load(); }} showToast={showToast} onNewBid={onNewBid}/>;
   }
 
   return (

@@ -49,7 +49,7 @@ const EDIT_FIELDS: [keyof Customer, string][] = [
   ['address', 'Address'], ['city', 'City'], ['state', 'State'], ['zip', 'Zip'],
 ];
 
-export default function CustomerHub({ id, onBack, showToast }: { id: string; onBack: () => void; showToast?: (t: Toast) => void }) {
+export default function CustomerHub({ id, onBack, showToast, onNewBid }: { id: string; onBack: () => void; showToast?: (t: Toast) => void; onNewBid?: (gc: string) => void }) {
   const [detail, setDetail] = useState<CustomerDetail | null>(null);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<Partial<Customer>>({});
@@ -133,7 +133,8 @@ export default function CustomerHub({ id, onBack, showToast }: { id: string; onB
 
   // ── Left column sections (electrical-first for GCs, generator-first otherwise) ──
   const bidsSection = (
-    <Section key="bids" title="Open Bids" count={openBids.length}>
+    <Section key="bids" title="Open Bids" count={openBids.length}
+      action={onNewBid && <button className="panel-link" onClick={() => onNewBid(c.name)}>New bid +</button>}>
       {openBids.length === 0 ? <Empty>No open bids.</Empty> : openBids.map(b => (
         <Row key={b.id} primary={b.name} secondary={`${b.loc || ''}${b.due ? ' · due ' + b.due : ''}`}
           right={<div><div className="num" style={{ fontSize: 13, fontWeight: 700 }}>{b.amount != null ? money(Number(b.amount)) : '—'}</div><div style={{ marginTop: 2 }}>{stageBadge(b.stage)}</div></div>}/>
@@ -177,9 +178,16 @@ export default function CustomerHub({ id, onBack, showToast }: { id: string; onB
                 {(c.city || c.state) ? ` · ${[c.city, c.state].filter(Boolean).join(', ')}` : ''}
               </div>
             </div>
-            <button className="btn ghost" onClick={() => { setForm(c); setEditing(e => !e); }} style={{ flexShrink: 0, fontSize: 12.5 }}>
-              <Icon name={editing ? 'x' : 'gear'} size={13} stroke={2}/>{editing ? 'Cancel' : 'Edit'}
-            </button>
+            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+              {onNewBid && (
+                <button className="btn" onClick={() => onNewBid(c.name)} style={{ fontSize: 12.5 }}>
+                  <Icon name="plus" size={13} stroke={2.4}/>New Bid
+                </button>
+              )}
+              <button className="btn ghost" onClick={() => { setForm(c); setEditing(e => !e); }} style={{ fontSize: 12.5 }}>
+                <Icon name={editing ? 'x' : 'gear'} size={13} stroke={2}/>{editing ? 'Cancel' : 'Edit'}
+              </button>
+            </div>
           </div>
 
           {editing && (
