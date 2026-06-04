@@ -73,7 +73,7 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast,
   const handleStageFromDrawer = (stage: ElecStageKey, extra?: { loss_reason?: string; competitor?: string }) => {
     if (!detail) return;
     moveToStage(detail.id, stage, extra);
-    setDetail(prev => prev ? { ...prev, stage } : prev);
+    setDetail(prev => prev ? { ...prev, stage, ...(stage === 'lost' ? extra : { loss_reason: undefined, competitor: undefined }) } : prev);
   };
 
   const handleBidEdited = (updated: Bid) => {

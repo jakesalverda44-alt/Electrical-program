@@ -23,7 +23,10 @@ export function usePipeline({ bids, setBids, setWonJobs, showToast }: UsePipelin
 
     // Optimistic update
     const prev = bids.find(b => b.id === id);
-    setBids(list => list.map(b => b.id === id ? { ...b, stage } : b));
+    const optimisticPatch = stage === 'lost'
+      ? { stage, ...extra }
+      : { stage, loss_reason: undefined, competitor: undefined };
+    setBids(list => list.map(b => b.id === id ? { ...b, ...optimisticPatch } : b));
 
     try {
       const { data } = await api.patch(`/bids/${id}/stage`, { stage, ...extra });
