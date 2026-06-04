@@ -651,11 +651,12 @@ button{font-family:inherit}
     display: flex; align-items: flex-end;
   }
   .mobile-more-sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 301;
     width: 100%;
     background: var(--panel);
     border-radius: 20px 20px 0 0;
     padding: 16px 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
-    max-height: 80vh;
+    max-height: 80vh; max-height: 80dvh;
     overflow-y: auto;
   }
   .mobile-more-handle {
