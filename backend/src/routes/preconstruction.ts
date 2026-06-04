@@ -7,6 +7,7 @@ import multer from 'multer';
 import AdmZip from 'adm-zip';
 import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM } from '../ai/prompts';
 import { callWithRetry } from '../ai/retry';
+import { parseAIJSON } from '../ai/json';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
 
@@ -67,6 +68,12 @@ function extractText(response: Anthropic.Message): string {
     .filter((b): b is Anthropic.TextBlock => b.type === 'text')
     .map(b => b.text)
     .join('\n');
+}
+
+function compactOutput(text: string, max = 500): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  if (oneLine.length <= max) return oneLine;
+  return `${oneLine.slice(0, max)}...`;
 }
 
 // ── Background pipeline ───────────────────────────────────────────────────────
@@ -168,10 +175,8 @@ async function runPipeline(
           messages: [{ role: 'user', content: contentBlocks }],
         }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
-        const bMatch = bText.match(/\{[\s\S]*\}/);
-        if (bMatch) {
-          try { batchResults.push(JSON.parse(bMatch[0])); } catch { /* skip bad batch */ }
-        }
+        const parsed = parseAIJSON(bText);
+        if (parsed) batchResults.push(parsed);
       }
 
       // Merge batch results
@@ -205,25 +210,19 @@ async function runPipeline(
     }
 
     // Validate JSON
-    const jsonMatch = agent1Output.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
+    const parsedAgent1 = parseAIJSON(agent1Output);
+    if (!parsedAgent1) {
+      const stopHint = agent1Output.trim().startsWith('```') || agent1Output.trim().startsWith('{')
+        ? 'Agent 1 returned JSON that could not be parsed. The response may have been cut off. Try fewer sheets or increase AI Max Tokens in Settings > AI.'
+        : 'Agent 1 did not return JSON.';
       await pool.query(
         `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
-        [agent1Output, bidId]
-      );
-      console.error('[takeoff] Agent 1 returned no JSON');
-      return;
-    }
-    try {
-      agent1JSON = JSON.parse(jsonMatch[0]);
-    } catch {
-      await pool.query(
-        `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
-        [agent1Output, bidId]
+        [`${stopHint}\n\nRaw preview: ${compactOutput(agent1Output)}`, bidId]
       );
       console.error('[takeoff] Agent 1 JSON parse failed');
       return;
     }
+    agent1JSON = parsedAgent1;
 
     await pool.query(
       `UPDATE takeoff_results SET status='agent1_complete', agent1_output=$1 WHERE bid_id=$2`,
@@ -293,7 +292,7 @@ async function runPipeline(
     `, [agent3Output, agent1Output, bidId]);
 
     // Also persist structured fields from agent1 JSON for backward compatibility
-    const a1 = JSON.parse(agent1Output.match(/\{[\s\S]*\}/)?.[0] ?? '{}') as Record<string, unknown>;
+    const a1 = parseAIJSON(agent1Output) ?? {};
     await pool.query(`
       UPDATE takeoff_results SET
         scope=$1, materials=$2
@@ -431,6 +430,9 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
     } else {
       files.push(f);
     }
+  }
+  if (!files.length) {
+    return res.status(400).json({ error: 'Upload at least one plan file before running AI analysis. Re-add the files in the Files tab, then try again.' });
   }
 
   // Prefer the key configured in Settings -> AI; fall back to the env var.

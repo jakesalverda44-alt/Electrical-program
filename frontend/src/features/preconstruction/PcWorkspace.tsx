@@ -67,7 +67,10 @@ function analysisErrorMessage(data: Record<string, unknown> | null | undefined) 
     data?.agent3_output,
     data?.raw_response,
   ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
-  return parts[0] || 'Analysis failed. Check server logs.';
+  const first = parts[0];
+  if (!first) return 'Analysis failed. Check server logs.';
+  if (first.length <= 700) return first;
+  return `${first.slice(0, 700)}...`;
 }
 
 export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, showToast, userRole, settings }: Props) {
@@ -164,6 +167,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const runAI = async () => {
     if (wsRef.current.aiRunning || wsRef.current.aiDone) return;
     const elecFiles = fileObjectsRef.current.filter(f => isElecSheet(f.name));
+    if (!fileObjectsRef.current.length) {
+      set({ aiLog: ['✗ Upload or re-add plan files in the Files tab before running AI analysis. Saved file names from a previous session cannot be re-sent to AI.'] });
+      return;
+    }
     set({ aiRunning: true, aiLog: [`Uploading ${fileObjectsRef.current.length} file(s) (${elecFiles.length} electrical sheet${elecFiles.length !== 1 ? 's' : ''} identified)…`] });
     try {
       const formData = new FormData();
