@@ -1,11 +1,14 @@
 import { Router } from 'express';
 import { pool } from '../db/pool';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/', requireAuth, async (_req, res) => {
-  const { rows } = await pool.query('SELECT * FROM won_jobs ORDER BY date_won DESC');
+router.get('/', requireAuth, async (req: AuthRequest, res) => {
+  const scope = ownScopeId(req.user!);
+  const { rows } = scope
+    ? await pool.query('SELECT * FROM won_jobs WHERE salesperson_id = $1 ORDER BY date_won DESC', [scope])
+    : await pool.query('SELECT * FROM won_jobs ORDER BY date_won DESC');
   res.json(rows);
 });
 

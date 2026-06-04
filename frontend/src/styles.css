@@ -27,8 +27,8 @@ button{font-family:inherit}
 ::-webkit-scrollbar-thumb:hover{background:#3f5d7a}
 
 /* ── App shell ─────────────────────────────────────────── */
-.app{display:flex;height:100vh;width:100vw}
-.sidebar{width:248px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:20px 14px}
+.app{display:flex;height:100vh;height:100dvh;width:100%}
+.sidebar{width:248px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:20px 14px;overflow-y:auto}
 .logo{display:flex;align-items:center;gap:12px;padding:2px 4px 18px;margin-bottom:6px;border-bottom:1px solid var(--border)}
 .logo-img{width:100%;display:block;border-radius:12px;background:#F7F4EC}
 .logo-mark{width:40px;height:40px;border-radius:11px;background:linear-gradient(150deg,#4D8DF7,#2E5FC0);color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 6px 16px rgba(77,141,247,.35)}
@@ -431,7 +431,7 @@ button{font-family:inherit}
 
 
 /* ── Login page ── */
-.login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg)}
+.login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;min-height:100dvh;background:var(--bg)}
 .login-card{width:380px;background:var(--panel);border:1px solid var(--border);border-radius:var(--r);padding:32px;box-shadow:var(--shadow)}
 .login-logo{margin-bottom:24px}.login-logo img{width:100%;border-radius:10px;background:#F7F4EC}
 .login-title{font-size:17px;font-weight:700;color:var(--text);margin-bottom:20px}
@@ -462,7 +462,7 @@ button{font-family:inherit}
 @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 
 /* ── Login page ── */
-.login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg)}
+.login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;min-height:100dvh;background:var(--bg)}
 .login-card{width:380px;background:var(--panel);border:1px solid var(--border);border-radius:var(--r);padding:32px;box-shadow:var(--shadow)}
 .login-logo{margin-bottom:24px}.login-logo img{width:100%;border-radius:10px;background:#F7F4EC}
 .login-title{font-size:17px;font-weight:700;color:var(--text);margin-bottom:20px}
@@ -651,11 +651,12 @@ button{font-family:inherit}
     display: flex; align-items: flex-end;
   }
   .mobile-more-sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 301;
     width: 100%;
     background: var(--panel);
     border-radius: 20px 20px 0 0;
     padding: 16px 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
-    max-height: 80vh;
+    max-height: 80vh; max-height: 80dvh;
     overflow-y: auto;
   }
   .mobile-more-handle {

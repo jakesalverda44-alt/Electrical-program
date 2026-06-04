@@ -23,18 +23,20 @@ interface Props {
   flashId: string | null;
   openAddBid?: boolean;
   onAddBidHandled?: () => void;
+  initialGc?: string;
 }
 
-export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast, onOpenPreconstruction, flashId, openAddBid, onAddBidHandled }: Props) {
+export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast, onOpenPreconstruction, flashId, openAddBid, onAddBidHandled, initialGc }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   const [filterRep, setFilterRep] = useState<string>('all');
   const repNames = useMemo(() => Array.from(new Set(bids.map(b => b.salesperson_name).filter(Boolean))).sort(), [bids]);
   const [detail, setDetail] = useState<Bid | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [addGc, setAddGc] = useState<string | undefined>(undefined);
   const [dragId, setDragId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (openAddBid) { setShowAdd(true); onAddBidHandled?.(); }
+    if (openAddBid) { setAddGc(initialGc); setShowAdd(true); onAddBidHandled?.(); }
   }, [openAddBid]);
   const [overCol, setOverCol] = useState<string | null>(null);
 
@@ -265,6 +267,7 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast,
         <AddBidModal
           onClose={() => setShowAdd(false)}
           onAdded={handleAdded}
+          initialGc={addGc}
         />
       )}
     </div>

@@ -6,10 +6,15 @@ import multer from 'multer';
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
-// List all documents — exclude file_data to keep response small
-router.get('/', requireAuth, async (_req, res) => {
+// List documents. Optional ?linked_id= filters to one record (e.g. a generator).
+// file_data is excluded to keep responses small.
+router.get('/', requireAuth, async (req, res) => {
+  const { linked_id } = req.query as { linked_id?: string };
+  const where = linked_id ? 'WHERE linked_id = $1' : '';
+  const params = linked_id ? [linked_id] : [];
   const { rows } = await pool.query(
-    'SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at FROM documents ORDER BY created_at DESC'
+    `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at FROM documents ${where} ORDER BY created_at DESC`,
+    params
   );
   res.json(rows);
 });

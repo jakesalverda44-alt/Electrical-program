@@ -1,11 +1,27 @@
 import { Router } from 'express';
 import { Resend } from 'resend';
+import multer from 'multer';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
 import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
 import { getSetting } from './settings';
+import { upsertCustomer } from './customers';
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+
+// Restricted (rep) users may only act on their own proposals. Returns the row if allowed,
+// or sends the appropriate 403/404 and returns null.
+async function loadOwnedGen(req: AuthRequest, res: import('express').Response) {
+  const { rows } = await pool.query('SELECT * FROM generator_proposals WHERE id=$1', [req.params.id]);
+  if (!rows.length) { res.status(404).json({ error: 'Not found' }); return null; }
+  const scope = ownScopeId(req.user!);
+  if (scope && rows[0].salesperson_id !== scope) {
+    res.status(403).json({ error: 'You do not have access to this proposal' });
+    return null;
+  }
+  return rows[0];
+}
 
 router.get('/benchmark', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(
@@ -29,8 +45,20 @@ router.get('/benchmark', requireAuth, async (_req, res) => {
   res.json(result);
 });
 
-router.get('/', requireAuth, async (_req, res) => {
-  const { rows } = await pool.query('SELECT * FROM generator_proposals ORDER BY created_at DESC');
+router.get('/', requireAuth, async (req: AuthRequest, res) => {
+  const scope = ownScopeId(req.user!);
+  const params: unknown[] = [];
+  let sql = 'SELECT * FROM generator_proposals';
+  if (scope) { params.push(scope); sql += ` WHERE salesperson_id = $${params.length}`; }
+  sql += ' ORDER BY created_at DESC';
+  // Opt-in pagination: ?limit=N&offset=M. Omitted → return all rows (backward compatible).
+  if (req.query.limit !== undefined) {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit)) || 50, 1), 200);
+    const offset = Math.max(parseInt(String(req.query.offset)) || 0, 0);
+    params.push(limit, offset);
+    sql += ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
+  }
+  const { rows } = await pool.query(sql, params);
   res.json(rows);
 });
 
@@ -38,11 +66,12 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const { customer, loc, mfr, model, kw, amount, tax, addons } = req.body;
   if (!customer?.trim()) return res.status(400).json({ error: 'Customer required' });
   const user = req.user!;
+  const customerId = await upsertCustomer(customer, 'customer');
   const { rows } = await pool.query(
-    `INSERT INTO generator_proposals (customer, loc, mfr, model, kw, amount, tax, addons, salesperson_id, salesperson_name)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+    `INSERT INTO generator_proposals (customer, loc, mfr, model, kw, amount, tax, addons, salesperson_id, salesperson_name, customer_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
     [customer.trim(), (loc || '').trim() || '—', mfr, model, Number(kw) || 0,
-     Number(amount) || 0, Number(tax) || 0, Number(addons) || 0, user.id, user.name]
+     Number(amount) || 0, Number(tax) || 0, Number(addons) || 0, user.id, user.name, customerId]
   );
   res.json(rows[0]);
 });
@@ -51,6 +80,7 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
   const { stage } = req.body;
   const valid = ['building', 'sent', 'awarded', 'declined'];
   if (!valid.includes(stage)) return res.status(400).json({ error: 'Invalid stage' });
+  if (!(await loadOwnedGen(req, res))) return;
 
   const client = await pool.connect();
   try {
@@ -110,6 +140,7 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
   const { phase } = req.body;
   const valid = ['scheduled','ordered','delivered','install','startup','complete'];
   if (!valid.includes(phase)) return res.status(400).json({ error: 'Invalid phase' });
+  if (!(await loadOwnedGen(req, res))) return;
   const { rows } = await pool.query(
     'UPDATE generator_proposals SET gen_install_phase=$1, updated_at=now() WHERE id=$2 RETURNING *',
     [phase, req.params.id]
@@ -119,6 +150,7 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
 });
 
 router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
+  if (!(await loadOwnedGen(req, res))) return;
   const { customer, loc, mfr, model, kw, amount, tax, addons } = req.body;
   const fields: string[] = [];
   const vals: unknown[] = [];
@@ -158,6 +190,7 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
 router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
   const { to, subject, note, proposalNo, total, deposit } = req.body;
   if (!to) return res.status(400).json({ error: 'Recipient email required' });
+  if (!(await loadOwnedGen(req, res))) return;
 
   const { rows } = await pool.query(
     `UPDATE generator_proposals
@@ -233,6 +266,37 @@ router.post('/p/:token/sign', async (req, res) => {
   );
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
   res.json({ ok: true, gen: rows[0] });
+});
+
+// ── Public: auto-save a signed-proposal PDF (no auth) ───────────────────────────
+// Token-scoped and tightly bounded: the proposal must be signed, and only one
+// signed PDF is ever stored (idempotent), so this public endpoint can't be abused
+// to pile up files.
+router.post('/p/:token/proposal-pdf', upload.single('file'), async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: 'file required' });
+
+  const { rows } = await pool.query(
+    'SELECT id, customer, signed_at FROM generator_proposals WHERE proposal_token = $1',
+    [req.params.token]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
+  const gen = rows[0];
+  if (!gen.signed_at) return res.status(409).json({ error: 'Proposal is not signed' });
+
+  const { rows: existing } = await pool.query(
+    `SELECT 1 FROM documents WHERE linked_id = $1 AND category = 'contract' AND name LIKE 'Signed Proposal%' LIMIT 1`,
+    [gen.id]
+  );
+  if (existing.length) return res.json({ ok: true, skipped: true });
+
+  const name = `Signed Proposal - ${gen.customer}.pdf`;
+  await pool.query(
+    `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
+     VALUES ($1,$2,'gen',$3,$3,'contract',$4,'application/pdf','Customer signature',$5)`,
+    [gen.id, gen.customer, name, file.size, file.buffer.toString('base64')]
+  );
+  res.json({ ok: true });
 });
 
 export default router;

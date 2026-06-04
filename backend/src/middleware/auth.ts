@@ -1,17 +1,62 @@
 import { Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
+import { logger } from '../utils/logger';
 
 export interface AuthRequest extends Request {
   user?: { id: string; name: string; email: string; role: string };
 }
 
+// The signing/verification secret. Resolved at startup via initJwtSecret().
+// Outside production a dev fallback is available immediately so tests/local work.
+let jwtSecret: string | null = process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'dev_secret' : null);
+
+export function getJwtSecret(): string {
+  if (!jwtSecret) throw new Error('JWT secret not initialized — call initJwtSecret() at startup.');
+  return jwtSecret;
+}
+
+/**
+ * Resolve the JWT secret at startup, preferring the JWT_SECRET env var. If it is
+ * not set, generate a strong secret once and persist it in app_settings so it is
+ * reused across restarts/deploys (keeping sessions stable) rather than falling back
+ * to a publicly-known default. This guarantees the service starts even when the env
+ * var is missing, instead of crashing and taking the whole site down.
+ * Call once after migrations have run (app_settings must exist).
+ */
+export async function initJwtSecret(): Promise<void> {
+  if (process.env.JWT_SECRET) { jwtSecret = process.env.JWT_SECRET; return; }
+  try {
+    const generated = crypto.randomBytes(48).toString('base64url');
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('jwt_secret', $1) ON CONFLICT (key) DO NOTHING`,
+      [generated]
+    );
+    const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'jwt_secret'`);
+    jwtSecret = rows[0]?.value || generated;
+    if (process.env.NODE_ENV === 'production') {
+      logger.warn('JWT_SECRET is not set; using a generated secret persisted in app_settings. Set JWT_SECRET in your environment as a best practice.');
+    }
+  } catch (err) {
+    // Last resort: an ephemeral per-process secret so the app still serves.
+    jwtSecret = jwtSecret || crypto.randomBytes(48).toString('base64url');
+    logger.error({ err }, 'Could not load/persist jwt_secret; using an ephemeral secret for this process');
+  }
+}
+
+// How long an issued access token stays valid (kept short; refresh tokens are a Phase 2 item).
+export const TOKEN_TTL = '12h';
+
+// Re-exported from utils/scope so route handlers can keep importing it from the middleware.
+export { ownScopeId } from '../utils/scope';
+
 export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const payload = jwt.verify(header.slice(7), process.env.JWT_SECRET || 'dev_secret') as any;
+    const payload = jwt.verify(header.slice(7), getJwtSecret()) as any;
     req.user = payload;
     next();
   } catch {

@@ -26,6 +26,9 @@ export interface Bid {
   elec_project_phase?: string;
   loss_reason?: string;
   competitor?: string;
+  created_at?: string;
+  submitted_at?: string;
+  awarded_at?: string;
 }
 
 export interface Gen {
@@ -71,4 +74,33 @@ export interface Toast {
   title: string;
   sub?: string;
   action?: { label: string; onClick: () => void };
+}
+
+export interface Customer {
+  id: string;
+  name: string;
+  type: 'gc' | 'customer' | 'other';
+  company?: string;
+  contact_name?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  notes?: string;
+  owner_id?: string | null;
+  bid_count?: number;
+  gen_count?: number;
+  created_at?: string;
+}
+
+export interface CustomerDetail {
+  customer: Customer;
+  bids: Bid[];
+  gens: Gen[];
+  wonJobs: WonJob[];
+  communications: { id: string; kind: string; subject: string; body: string; author: string; created_at: string; linked_id: string | null; linked_name: string | null }[];
+  documents: { id: string; linked_id: string | null; linked_name: string | null; div: string; name: string; display_name: string; category: string; file_size: number; file_type: string; uploaded_by: string; created_at: string }[];
+  tasks: { id: string; title: string; notes?: string; due_date?: string | null; status: 'open' | 'done'; linked_name?: string | null; assigned_to_name?: string | null; created_at: string }[];
 }

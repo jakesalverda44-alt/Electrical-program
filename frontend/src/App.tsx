@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from './hooks/useAuth';
 import { useToast } from './hooks/useToast';
 import { useAppSettings } from './hooks/useAppSettings';
@@ -18,6 +18,7 @@ import ContactsPage from './features/contacts/ContactsPage';
 import ReportingPage from './features/reporting/ReportingPage';
 import CommsPage from './features/comms/CommsPage';
 import DocsPage from './features/docs/DocsPage';
+import FollowupsPage from './features/followups/FollowupsPage';
 import ProposalPublicPage from './pages/ProposalPublicPage';
 import SettingsPage from './features/settings/SettingsPage';
 import { PcWorkspace } from './features/preconstruction/constants';
@@ -39,8 +40,12 @@ export default function App() {
   const { user, login, logout } = useAuth();
   const { toast, showToast } = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const [view, setView] = useState('dashboard');
+  // The active view is derived from the URL so pages are bookmarkable and the
+  // browser back/forward buttons work. setView simply navigates.
+  const view = location.pathname.replace(/^\/+/, '').split('/')[0] || 'dashboard';
+  const setView = useCallback((v: string) => navigate('/' + v), [navigate]);
   const [dashFilter, setDashFilter] = useState('all');
   const [bids, setBids] = useState<Bid[]>([]);
   const [gens, setGens] = useState<Gen[]>([]);
@@ -53,6 +58,8 @@ export default function App() {
   const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
   const [intakeCount, setIntakeCount] = useState(0);
   const [openAddBid, setOpenAddBid] = useState(false);
+  const [addBidGc, setAddBidGc] = useState<string | undefined>(undefined);
+  const [followupCount, setFollowupCount] = useState(0);
   const [editGen, setEditGen] = useState<import('./types').Gen | null>(null);
   const { settings, reload: reloadSettings } = useAppSettings(!!user);
 
@@ -101,7 +108,7 @@ export default function App() {
 
   const handleLogin = async (email: string, password: string) => {
     await login(email, password);
-    navigate('/');
+    navigate('/dashboard');
   };
 
   const handleNewBid = useCallback((bid: Bid) => {
@@ -116,6 +123,13 @@ export default function App() {
   const handleBidUpdated = useCallback((updated: Bid) => {
     setBids(prev => prev.map(b => b.id === updated.id ? updated : b));
   }, []);
+
+  // Open the add-bid flow, optionally pre-filling the GC (e.g. from a customer hub).
+  const openNewBid = useCallback((gc?: string) => {
+    setAddBidGc(gc);
+    setView('elec-proposals');
+    setOpenAddBid(true);
+  }, [setView]);
 
   const genProposalCount  = gens.filter(g => g.stage !== 'awarded' && g.stage !== 'declined').length;
   const elecProposalCount = bids.filter(b => b.stage === 'due' || b.stage === 'submitted').length;
@@ -150,6 +164,7 @@ export default function App() {
           <DashboardPage
             bids={bids} gens={gens} wonJobs={wonJobs} activity={activity}
             repNames={repNames}
+            userName={user.name} userRole={user.role}
             onNav={setView} onNewProposal={() => setView('builder')}
           />
         );
@@ -161,7 +176,8 @@ export default function App() {
             onOpenPreconstruction={() => setView('preconstruction')}
             flashId={flashId}
             openAddBid={openAddBid}
-            onAddBidHandled={() => setOpenAddBid(false)}
+            onAddBidHandled={() => { setOpenAddBid(false); setAddBidGc(undefined); }}
+            initialGc={addBidGc}
           />
         );
       case 'gen-proposals':
@@ -213,9 +229,11 @@ export default function App() {
       case 'gen-projects':
         return <GenProjectsPage gens={gens} showToast={showToast}/>;
       case 'contacts':
-        return <ContactsPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
+        return <ContactsPage showToast={showToast} onNewBid={openNewBid} userRole={user.role}/>;
       case 'reporting':
         return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
+      case 'followups':
+        return <FollowupsPage showToast={showToast} onCountChange={setFollowupCount}/>;
       case 'comms':
         return <CommsPage bids={bids} gens={gens} activity={activity} showToast={showToast} userName={user.name}/>;
       case 'docs':
@@ -227,7 +245,7 @@ export default function App() {
     }
   };
 
-  return (
+  const shell = (
     <>
       <AppShell
         view={view}
@@ -239,15 +257,28 @@ export default function App() {
         genProjectCount={genProjectCount}
         elecProjectCount={elecProjectCount}
         newIncoming={intakeCount}
+        followupCount={followupCount}
         dashFilter={dashFilter}
         onDashFilter={setDashFilter}
         onNewProposal={() => setView('builder')}
-        onNewBid={() => { setView('elec-proposals'); setOpenAddBid(true); }}
+        onNewBid={() => openNewBid()}
         bids={bids} gens={gens}
       >
         {renderView()}
       </AppShell>
       {toast && <Toast toast={toast}/>}
     </>
+  );
+
+  return (
+    <Routes>
+      {/* Public proposal stays reachable even when signed in */}
+      <Route path="/p/:token" element={<ProposalPublicPage/>}/>
+      {/* Auth pages are meaningless when already signed in */}
+      <Route path="/login" element={<Navigate to="/dashboard" replace/>}/>
+      <Route path="/reset-password" element={<Navigate to="/dashboard" replace/>}/>
+      {/* Everything else renders the app shell; the view is read from the path */}
+      <Route path="*" element={shell}/>
+    </Routes>
   );
 }

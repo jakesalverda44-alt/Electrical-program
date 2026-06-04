@@ -70,7 +70,7 @@ function ResetPasswordView({ token, onDone }: { token: string; onDone: () => voi
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (password !== confirm) { setError('Passwords do not match'); return; }
-    if (password.length < 6) { setError('Password must be at least 6 characters'); return; }
+    if (password.length < 8) { setError('Password must be at least 8 characters'); return; }
     setLoading(true);
     try {
       await api.post('/auth/reset-password', { token, password });
@@ -96,7 +96,7 @@ function ResetPasswordView({ token, onDone }: { token: string; onDone: () => voi
       <form onSubmit={submit} className="login-form">
         <div className="field">
           <label>New Password</label>
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Min 6 characters" required autoFocus/>
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Min 8 characters" required autoFocus/>
         </div>
         <div className="field">
           <label>Confirm Password</label>

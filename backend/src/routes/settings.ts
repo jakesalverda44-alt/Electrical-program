@@ -33,14 +33,19 @@ const ALLOWED_KEYS = [
   'security_session_timeout',
 ];
 
+// Internal keys that must never be exposed through the API.
+const INTERNAL_KEYS = ['jwt_secret'];
+
 router.get('/', requireAuth, async (_req, res) => {
   const { rows } = await pool.query('SELECT key, value FROM app_settings ORDER BY key');
-  const masked = rows.map(r => ({
-    key: r.key,
-    value: MASKED_KEYS.includes(r.key) && r.value
-      ? '••••••••' + r.value.slice(-4)
-      : r.value,
-  }));
+  const masked = rows
+    .filter(r => !INTERNAL_KEYS.includes(r.key))
+    .map(r => ({
+      key: r.key,
+      value: MASKED_KEYS.includes(r.key) && r.value
+        ? '••••••••' + r.value.slice(-4)
+        : r.value,
+    }));
   res.json(masked);
 });
 
