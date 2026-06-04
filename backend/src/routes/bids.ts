@@ -238,4 +238,34 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   res.json(withDueDays(rows[0]));
 });
 
+router.delete('/:id', requireAuth, async (req: AuthRequest, res) => {
+  const bid = await loadOwnedBid(req, res);
+  if (!bid) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM project_change_orders WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM project_field_notes WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM project_rfis WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM project_sections WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM documents WHERE linked_id=$1', [req.params.id]);
+    await client.query('DELETE FROM communications WHERE linked_id=$1', [req.params.id]);
+    await client.query('DELETE FROM tasks WHERE linked_id=$1', [req.params.id]);
+    await client.query('DELETE FROM notifications WHERE link_id=$1', [req.params.id]);
+    await client.query('DELETE FROM won_jobs WHERE proposal_id=$1', [req.params.id]);
+    await client.query('DELETE FROM bid_workspaces WHERE bid_id=$1', [req.params.id]);
+    await client.query('DELETE FROM takeoff_results WHERE bid_id=$1', [req.params.id]);
+    await client.query('DELETE FROM bids WHERE id=$1', [req.params.id]);
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
 export default router;

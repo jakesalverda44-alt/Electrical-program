@@ -26,9 +26,10 @@ interface Props {
   onClose: () => void;
   onOpenPreconstruction: (id: string) => void;
   onBidEdited: (bid: Bid) => void;
+  onDelete: (bid: Bid) => void;
 }
 
-export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, onClose, onOpenPreconstruction, onBidEdited }: Props) {
+export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, onClose, onOpenPreconstruction, onBidEdited, onDelete }: Props) {
   const isTerminal = bid.stage === 'awarded' || bid.stage === 'lost';
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -284,15 +285,23 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                     </div>
                   </div>
                 ) : (
-                  <button className="btn ghost" disabled={qualifying} onClick={runQualify}
-                    style={{ width: '100%', justifyContent: 'center', fontSize: 12.5 }}>
-                    <Icon name="spark" size={13} stroke={2}/>{qualifying ? 'Scoring…' : 'Score This Bid'}
-                  </button>
-                )}
-              </div>
+              <button className="btn ghost" disabled={qualifying} onClick={runQualify}
+                style={{ width: '100%', justifyContent: 'center', fontSize: 12.5 }}>
+                <Icon name="spark" size={13} stroke={2}/>{qualifying ? 'Scoring…' : 'Score This Bid'}
+              </button>
+            )}
+          </div>
 
-              {!isTerminal && (
-                <button
+          <button
+            className="btn ghost"
+            style={{ width: '100%', justifyContent: 'center', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', marginTop: 8 }}
+            onClick={() => onDelete(bid)}
+          >
+            <Icon name="x" size={14} stroke={2}/>Delete Bid
+          </button>
+
+          {!isTerminal && (
+            <button
                   className="btn ghost"
                   style={{ width: '100%', justifyContent: 'center', color: 'var(--blue)', marginTop: 4 }}
                   onClick={() => { onClose(); onOpenPreconstruction(bid.id); }}

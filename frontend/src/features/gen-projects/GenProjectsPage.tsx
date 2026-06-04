@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
-import { Gen, Toast } from '../../types';
+import { Gen, Toast, WonJob } from '../../types';
 import api from '../../api/client';
 
 const PHASES = [
@@ -25,10 +25,11 @@ function moneyFull(n: number) { return '$'+Math.round(n).toLocaleString('en-US')
 interface Props {
   gens: Gen[];
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
+  setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
   showToast: (t: Toast) => void;
 }
 
-export default function GenProjectsPage({ gens, setGens, showToast }: Props) {
+export default function GenProjectsPage({ gens, setGens, setWonJobs, showToast }: Props) {
   const awarded = useMemo(() => gens.filter(g => g.stage === 'awarded'), [gens]);
 
   // Normalise phase: map old values forward, default to 'deposit'
@@ -67,6 +68,24 @@ export default function GenProjectsPage({ gens, setGens, showToast }: Props) {
     const cur = phases[id] ?? 'deposit';
     const idx = PHASES.findIndex(p => p.key === cur);
     if (idx < PHASES.length - 1) movePhase(id, PHASES[idx+1].key);
+  };
+
+  const deleteProject = async (gen: Gen) => {
+    if (!window.confirm(`Delete generator project "${gen.customer}" and its linked files/testing data? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/gens/${gen.id}`);
+      setGens(prev => prev.filter(g => g.id !== gen.id));
+      setWonJobs(prev => prev.filter(w => w.proposal_id !== gen.id));
+      setPhases(prev => {
+        const next = { ...prev };
+        delete next[gen.id];
+        return next;
+      });
+      setDetail(null);
+      showToast({ title: 'Generator project deleted', sub: gen.customer });
+    } catch {
+      showToast({ title: 'Delete failed', sub: 'Please try again' });
+    }
   };
 
   const totalValue  = awarded.reduce((s,g)=>s+Number(g.amount),0);
@@ -242,6 +261,12 @@ export default function GenProjectsPage({ gens, setGens, showToast }: Props) {
                 <div style={{ fontSize:13, fontWeight:700, color:'var(--text)' }}>{v}</div>
               </div>
             ))}
+
+            <button className="btn ghost"
+              style={{ width: '100%', justifyContent: 'center', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', margin: '4px 0 16px' }}
+              onClick={() => deleteProject(detail)}>
+              <Icon name="x" size={14} stroke={2}/>Delete Project
+            </button>
 
             {/* Phase selector */}
             <div style={{ marginTop:20 }}>

@@ -17,9 +17,10 @@ interface Props {
   onCancelDeclined: () => void;
   onClose: () => void;
   onEditGen: (gen: Gen) => void;
+  onDelete: (gen: Gen) => void;
 }
 
-export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen }: Props) {
+export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDelete }: Props) {
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined';
 
   return (
@@ -117,6 +118,14 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
               <Icon name="eye" size={15} stroke={1.9}/>View customer proposal
             </button>
           )}
+
+          <button
+            className="btn ghost"
+            style={{ width: '100%', justifyContent: 'center', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', marginTop: 8 }}
+            onClick={() => onDelete(gen)}
+          >
+            <Icon name="x" size={14} stroke={2}/>Delete Proposal
+          </button>
 
           {!isTerminal && (
             <button

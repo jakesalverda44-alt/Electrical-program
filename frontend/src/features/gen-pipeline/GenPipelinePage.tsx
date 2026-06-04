@@ -4,6 +4,7 @@ import { Gen, WonJob, Toast } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
 import { useGenPipeline } from './useGenPipeline';
 import GenDetailDrawer from './GenDetailDrawer';
+import api from '../../api/client';
 
 function money(n: number) {
   if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2).replace(/\.?0+$/, '') + 'M';
@@ -64,6 +65,19 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, showToast, 
     if (!detail) return;
     moveToStage(detail.id, stage);
     setDetail(prev => prev ? { ...prev, stage } : prev);
+  };
+
+  const handleDelete = async (gen: Gen) => {
+    if (!window.confirm(`Delete "${gen.customer}" and its linked project/files/testing data? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/gens/${gen.id}`);
+      setGens(prev => prev.filter(g => g.id !== gen.id));
+      setWonJobs(prev => prev.filter(w => w.proposal_id !== gen.id));
+      setDetail(null);
+      showToast({ title: 'Generator proposal deleted', sub: gen.customer });
+    } catch {
+      showToast({ title: 'Delete failed', sub: 'Please try again' });
+    }
   };
 
   const genBadge = (g: Gen) => {
@@ -228,6 +242,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, showToast, 
           onCancelDeclined={cancelDeclined}
           onClose={() => setDetail(null)}
           onEditGen={g => { setDetail(null); onEditGen(g); }}
+          onDelete={handleDelete}
         />
       )}
     </div>

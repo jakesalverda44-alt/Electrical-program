@@ -199,6 +199,34 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   res.json({ gen, wonJob });
 });
 
+router.delete('/:id', requireAuth, async (req: AuthRequest, res) => {
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM project_change_orders WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM project_field_notes WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM project_rfis WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM project_sections WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM documents WHERE linked_id=$1', [req.params.id]);
+    await client.query('DELETE FROM communications WHERE linked_id=$1', [req.params.id]);
+    await client.query('DELETE FROM tasks WHERE linked_id=$1', [req.params.id]);
+    await client.query('DELETE FROM notifications WHERE link_id=$1', [req.params.id]);
+    await client.query('DELETE FROM won_jobs WHERE proposal_id=$1', [req.params.id]);
+    await client.query('DELETE FROM generator_proposals WHERE id=$1', [req.params.id]);
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
 // ── Send proposal email ──────────────────────────────────────────────────────
 router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
   const { to, subject, note, proposalNo, total, deposit } = req.body;

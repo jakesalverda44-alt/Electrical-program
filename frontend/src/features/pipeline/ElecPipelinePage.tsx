@@ -5,6 +5,7 @@ import { ELEC_STAGES, ElecStageKey } from './constants';
 import { usePipeline } from './usePipeline';
 import DetailDrawer from './DetailDrawer';
 import AddBidModal from './AddBidModal';
+import api from '../../api/client';
 
 function money(n: number) {
   if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2).replace(/\.?0+$/, '') + 'M';
@@ -79,6 +80,19 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast,
   const handleBidEdited = (updated: Bid) => {
     setBids(prev => prev.map(b => b.id === updated.id ? updated : b));
     setDetail(updated);
+  };
+
+  const handleDelete = async (bid: Bid) => {
+    if (!window.confirm(`Delete "${bid.name}" and its linked project/files/testing data? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/bids/${bid.id}`);
+      setBids(prev => prev.filter(b => b.id !== bid.id));
+      setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
+      setDetail(null);
+      showToast({ title: 'Bid deleted', sub: bid.name });
+    } catch {
+      showToast({ title: 'Delete failed', sub: 'Please try again' });
+    }
   };
 
   const handleAdded = (bid: Bid) => {
@@ -259,6 +273,7 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast,
           onClose={() => setDetail(null)}
           onOpenPreconstruction={id => { setDetail(null); onOpenPreconstruction(id); }}
           onBidEdited={handleBidEdited}
+          onDelete={handleDelete}
         />
       )}
 
