@@ -75,7 +75,6 @@ export default function AppShell({
     { group: 'Workspace', items: [
       { id: 'followups', label: 'Follow-ups',      icon: 'checkc', count: followupCount },
       { id: 'builder',   label: 'Proposal Builder', icon: 'doc' },
-      { id: 'comms',     label: 'Communications',   icon: 'bell' },
       { id: 'docs',      label: 'Documents',         icon: 'clip' },
     ]},
     { group: 'Insights', items: [
@@ -103,7 +102,6 @@ export default function AppShell({
     { id: 'preconstruction', label: 'Preconstruction',    icon: 'sparkle', count: 0 },
     { id: 'elec-projects',   label: 'Elec. Projects',     icon: 'checkc',  count: elecProjectCount },
     { id: 'builder',         label: 'Proposal Builder',   icon: 'doc',     count: 0 },
-    { id: 'comms',           label: 'Communications',     icon: 'bell',    count: 0 },
     { id: 'docs',            label: 'Documents',          icon: 'clip',    count: 0 },
     { id: 'reporting',       label: 'Reporting',          icon: 'trend',   count: 0 },
     { id: 'contacts',        label: 'Contacts',           icon: 'users',   count: 0 },

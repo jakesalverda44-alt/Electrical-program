@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
-import { Customer, CustomerDetail, Toast } from '../../types';
+import CustomerHub from './CustomerHub';
+import { Customer, Toast } from '../../types';
 
 type FilterType = Customer['type'] | 'all';
 
@@ -87,105 +88,6 @@ function AddCustomerForm({ onCreated, onCancel }: { onCreated: (c: Customer) => 
   );
 }
 
-function DetailPanel({ id, onClose, onSaved }: { id: string; onClose: () => void; onSaved: (c: Customer) => void }) {
-  const [detail, setDetail] = useState<CustomerDetail | null>(null);
-  const [edit, setEdit] = useState<Partial<Customer>>({});
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setDetail(null); setDirty(false);
-    api.get(`/customers/${id}`).then(({ data }) => { setDetail(data); setEdit(data.customer); });
-  }, [id]);
-
-  const setField = (k: keyof Customer, v: string) => { setEdit(prev => ({ ...prev, [k]: v })); setDirty(true); };
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      const { data } = await api.patch(`/customers/${id}`, edit);
-      setDirty(false); onSaved(data);
-    } finally { setSaving(false); }
-  };
-
-  if (!detail) return (
-    <div className="panel" style={{ alignSelf: 'start', position: 'sticky', top: 16 }}>
-      <div style={{ padding: 24, color: 'var(--text3)', fontSize: 13 }}>Loading…</div>
-    </div>
-  );
-
-  const c = detail.customer;
-  const wonValue = detail.wonJobs.reduce((s, j) => s + Number(j.value), 0);
-
-  return (
-    <div className="panel" style={{ alignSelf: 'start', position: 'sticky', top: 16 }}>
-      <div className="panel-hdr">
-        <span className="panel-title">Customer Detail</span>
-        <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text3)', padding: 4 }}>
-          <Icon name="x" size={16} stroke={2}/>
-        </button>
-      </div>
-      <div style={{ padding: '16px 18px', maxHeight: '70vh', overflowY: 'auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18 }}>
-          <span className="avatar" style={{ width: 44, height: 44, fontSize: 16 }}>{initials(c.name)}</span>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text)' }}>{c.name}</div>
-            <div style={{ marginTop: 4 }}><TypePill type={c.type}/></div>
-          </div>
-        </div>
-
-        {EDIT_FIELDS.map(([k, label]) => (
-          <div key={k} style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>{label}</div>
-            <input style={inputStyle} value={String(edit[k] ?? '')} onChange={e => setField(k, e.target.value)}/>
-          </div>
-        ))}
-
-        {dirty && (
-          <button className="btn" style={{ width: '100%', marginTop: 4 }} onClick={save} disabled={saving}>
-            {saving ? 'Saving…' : 'Save Changes'}
-          </button>
-        )}
-
-        <div style={{ height: 1, background: 'var(--border)', margin: '16px 0' }}/>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
-          <Stat label="Bids" val={String(detail.bids.length)}/>
-          <Stat label="Proposals" val={String(detail.gens.length)}/>
-          <Stat label="Won" val={moneyFull(wonValue)} color="var(--green)"/>
-        </div>
-
-        <LinkedList title="Bids" items={detail.bids.map(b => ({ id: b.id, primary: b.name, secondary: `${b.stage} · ${b.amount ? moneyFull(Number(b.amount)) : '—'}` }))}/>
-        <LinkedList title="Generator Proposals" items={detail.gens.map(g => ({ id: g.id, primary: `${g.mfr || ''} ${g.model || ''}`.trim() || 'Proposal', secondary: `${g.stage} · ${moneyFull(Number(g.amount))}` }))}/>
-        <LinkedList title="Communications" items={detail.communications.map(m => ({ id: m.id, primary: m.subject, secondary: `${m.kind} · ${m.author}` }))}/>
-      </div>
-    </div>
-  );
-}
-
-function Stat({ label, val, color }: { label: string; val: string; color?: string }) {
-  return (
-    <div>
-      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</div>
-      <div className="num" style={{ fontSize: 18, fontWeight: 900, color }}>{val}</div>
-    </div>
-  );
-}
-
-function LinkedList({ title, items }: { title: string; items: { id: string; primary: string; secondary: string }[] }) {
-  if (!items.length) return null;
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>{title}</div>
-      {items.map(it => (
-        <div key={it.id} style={{ padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{it.primary}</div>
-          <div style={{ fontSize: 11.5, color: 'var(--text3)', textTransform: 'capitalize' }}>{it.secondary}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export default function ContactsPage({ showToast }: Props) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [query, setQuery] = useState('');
@@ -218,10 +120,10 @@ export default function ContactsPage({ showToast }: Props) {
     showToast?.({ title: 'Customer added', sub: c.name });
   };
 
-  const handleSaved = (c: Customer) => {
-    setCustomers(prev => prev.map(x => x.id === c.id ? { ...x, ...c } : x));
-    showToast?.({ title: 'Customer saved', sub: c.name });
-  };
+  // Selecting a customer opens the full-screen hub; coming back refreshes the list.
+  if (selectedId) {
+    return <CustomerHub id={selectedId} onBack={() => { setSelectedId(null); load(); }} showToast={showToast}/>;
+  }
 
   return (
     <div className="scroll view-enter">
@@ -245,7 +147,7 @@ export default function ContactsPage({ showToast }: Props) {
 
         {adding && <AddCustomerForm onCreated={handleCreated} onCancel={() => setAdding(false)}/>}
 
-        <div style={{ display: 'grid', gridTemplateColumns: selectedId ? '1fr 360px' : '1fr', gap: 16 }}>
+        <div>
           <div className="panel">
             <div className="panel-hdr">
               <span className="panel-title">
@@ -309,10 +211,6 @@ export default function ContactsPage({ showToast }: Props) {
               </table>
             )}
           </div>
-
-          {selectedId && (
-            <DetailPanel id={selectedId} onClose={() => setSelectedId(null)} onSaved={handleSaved}/>
-          )}
         </div>
       </div>
     </div>

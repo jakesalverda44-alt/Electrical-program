@@ -77,12 +77,31 @@ router.get('/:id', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
     pool.query('SELECT * FROM communications WHERE linked_name = $1 ORDER BY created_at DESC LIMIT 50', [cust[0].name]),
   ]);
 
+  // Documents across this customer's jobs (bids + generator proposals) and the customer itself.
+  const docIds = [req.params.id, ...bidsR.rows.map(b => b.id), ...gensR.rows.map(g => g.id)];
+  const [docsR, tasksR] = await Promise.all([
+    pool.query(
+      `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, created_at
+       FROM documents WHERE linked_id = ANY($1::text[]) ORDER BY created_at DESC`,
+      [docIds]
+    ),
+    pool.query(
+      `SELECT t.*, u.name AS assigned_to_name
+       FROM tasks t LEFT JOIN users u ON u.id = t.assigned_to
+       WHERE t.linked_id = $1 OR t.linked_name = $2
+       ORDER BY (t.status = 'done'), t.due_date NULLS LAST, t.created_at DESC`,
+      [req.params.id, cust[0].name]
+    ),
+  ]);
+
   res.json({
     customer: cust[0],
     bids: bidsR.rows.map(withDueDays),
     gens: gensR.rows,
     wonJobs: wonR.rows,
     communications: commsR.rows,
+    documents: docsR.rows,
+    tasks: tasksR.rows,
   });
 }));
 
