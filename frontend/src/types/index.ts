@@ -26,6 +26,9 @@ export interface Bid {
   elec_project_phase?: string;
   loss_reason?: string;
   competitor?: string;
+  created_at?: string;
+  submitted_at?: string;
+  awarded_at?: string;
 }
 
 export interface Gen {

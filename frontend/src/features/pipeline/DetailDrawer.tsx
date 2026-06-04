@@ -3,12 +3,17 @@ import Icon from '../../components/Icon';
 import { Bid } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
 import api from '../../api/client';
+import RecordFiles from '../../components/RecordFiles';
 
 interface QualResult { score: number; reasons: string[]; gcWinRate: number | null; gcWon: number; gcLost: number; dueDays: number; }
 
 function moneyFull(n: number | null) {
   if (n == null) return '—';
   return '$' + Math.round(n).toLocaleString('en-US');
+}
+function fmtTs(ts?: string | null) {
+  if (!ts) return null;
+  return new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 const LOSS_REASONS = ['Budget','Competitor','No Award','Scope Change','Timeline','Relationship','Other'];
@@ -159,6 +164,38 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                 })}
               </div>
 
+              {/* Lifecycle timeline with real timestamps */}
+              <div className="dtl-stage-label" style={{ marginTop: 16 }}>Lifecycle</div>
+              <div style={{ marginBottom: 4 }}>
+                {(() => {
+                  const steps: { label: string; done: boolean; when: string | null; lost?: boolean }[] = [
+                    { label: 'Added',     done: true, when: fmtTs(bid.created_at) },
+                    { label: 'Submitted', done: bid.stage === 'submitted' || bid.stage === 'awarded', when: fmtTs(bid.submitted_at) },
+                  ];
+                  if (bid.stage === 'lost') {
+                    steps.push({ label: 'Lost', done: true, lost: true, when: bid.loss_reason ? `Reason: ${bid.loss_reason}` : null });
+                  } else {
+                    steps.push({ label: 'Awarded', done: bid.stage === 'awarded', when: fmtTs(bid.awarded_at) });
+                  }
+                  return steps.map((s, i, arr) => {
+                    const dot = s.lost ? 'var(--red)' : 'var(--green)';
+                    return (
+                      <div key={s.label} style={{ display: 'flex', gap: 10, alignItems: 'stretch' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                          <span style={{ width: 12, height: 12, borderRadius: '50%', flexShrink: 0, marginTop: 2,
+                            background: s.done ? dot : 'transparent', border: '2px solid ' + (s.done ? dot : 'var(--border2)') }}/>
+                          {i < arr.length - 1 && <span style={{ width: 2, flex: 1, minHeight: 14, background: s.done ? 'var(--green)' : 'var(--border)' }}/>}
+                        </div>
+                        <div style={{ paddingBottom: 12 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: s.done ? 'var(--text)' : 'var(--text3)' }}>{s.label}</div>
+                          {s.when && <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>{s.when}</div>}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+
               {pendingLost && (
                 <div className="lost-confirm" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700 }}>
@@ -263,6 +300,10 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                   <Icon name="sparkle" size={14} stroke={2}/>Open in Preconstruction
                 </button>
               )}
+
+              {/* File attachments for this bid — plans, bid invite, addenda, award paperwork */}
+              <RecordFiles linkedId={bid.id} linkedName={bid.name} div="elec"
+                emptyHint="No files yet. Attach plan sets, the bid invite, addenda, scope docs, or award paperwork."/>
             </>
           )}
         </div>

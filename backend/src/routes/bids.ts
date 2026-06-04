@@ -107,9 +107,12 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     if (!cur.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Not found' }); }
     const bid = cur[0];
 
-    // Update stage
+    // Update stage; stamp lifecycle timestamps the first time each is reached.
     const { rows } = await client.query(
-      'UPDATE bids SET stage=$1, loss_reason=$3, competitor=$4, updated_at=now() WHERE id=$2 RETURNING *',
+      `UPDATE bids SET stage=$1, loss_reason=$3, competitor=$4, updated_at=now(),
+         submitted_at = CASE WHEN $1 IN ('submitted','awarded') THEN COALESCE(submitted_at, now()) ELSE submitted_at END,
+         awarded_at   = CASE WHEN $1 = 'awarded' THEN COALESCE(awarded_at, now()) ELSE awarded_at END
+       WHERE id=$2 RETURNING *`,
       [stage, req.params.id, stage === 'lost' ? (req.body.loss_reason || null) : null, stage === 'lost' ? (req.body.competitor || null) : null]
     );
 

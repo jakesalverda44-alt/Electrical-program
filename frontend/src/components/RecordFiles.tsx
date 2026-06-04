@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import Icon from '../../components/Icon';
-import api from '../../api/client';
+import Icon from './Icon';
+import api from '../api/client';
 
 interface Doc {
   id: string;
@@ -15,9 +15,9 @@ interface Doc {
 const CATEGORIES: { value: string; label: string }[] = [
   { value: 'proposal', label: 'Proposal' },
   { value: 'contract', label: 'Signed Contract' },
+  { value: 'plans',    label: 'Plans' },
   { value: 'permit',   label: 'Permit' },
   { value: 'invoice',  label: 'Invoice / PO' },
-  { value: 'plans',    label: 'Plans' },
   { value: 'other',    label: 'Other (delivery, startup, photos…)' },
 ];
 const CAT_LABEL: Record<string, string> = Object.fromEntries(CATEGORIES.map(c => [c.value, c.label]));
@@ -32,20 +32,22 @@ function fmtDate(ts: string) {
   return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-/** File attachments tied to a single generator record (proposal, PO, permit, signed contract, photos…). */
-export default function GenFiles({ genId, genCustomer }: { genId: string; genCustomer: string }) {
+/** File attachments tied to a single record (generator or electrical bid). */
+export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
+  linkedId: string; linkedName: string; div: 'gen' | 'elec'; emptyHint?: string;
+}) {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [loading, setLoading] = useState(true);
-  const [category, setCategory] = useState('other');
+  const [category, setCategory] = useState(div === 'elec' ? 'plans' : 'other');
   const [uploading, setUploading] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
     setLoading(true);
-    api.get('/documents', { params: { linked_id: genId } })
+    api.get('/documents', { params: { linked_id: linkedId } })
       .then(({ data }) => setDocs(data))
       .finally(() => setLoading(false));
-  }, [genId]);
+  }, [linkedId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -56,9 +58,9 @@ export default function GenFiles({ genId, genCustomer }: { genId: string; genCus
     try {
       const form = new FormData();
       form.append('file', file);
-      form.append('linked_id', genId);
-      form.append('linked_name', genCustomer);
-      form.append('div', 'gen');
+      form.append('linked_id', linkedId);
+      form.append('linked_name', linkedName);
+      form.append('div', div);
       form.append('category', category);
       form.append('display_name', file.name);
       const { data } = await api.post('/documents', form);
@@ -89,28 +91,23 @@ export default function GenFiles({ genId, genCustomer }: { genId: string; genCus
 
   return (
     <div className="dtl-section" style={{ marginTop: 18 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <span className="dtl-stage-label" style={{ margin: 0 }}>Files · {docs.length}</span>
-      </div>
+      <div className="dtl-stage-label" style={{ marginBottom: 10 }}>Files · {docs.length}</div>
 
-      {/* Upload control */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
         <select value={category} onChange={e => setCategory(e.target.value)}
           style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 8, padding: '8px 10px', outline: 'none' }}>
           {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
         </select>
         <input ref={fileInput} type="file" onChange={onPick} style={{ display: 'none' }}/>
-        <button className="btn" disabled={uploading} onClick={() => fileInput.current?.click()}
-          style={{ flexShrink: 0 }}>
+        <button className="btn" disabled={uploading} onClick={() => fileInput.current?.click()} style={{ flexShrink: 0 }}>
           <Icon name="plus" size={14} stroke={2.4}/>{uploading ? 'Uploading…' : 'Add file'}
         </button>
       </div>
 
-      {/* List */}
       {loading ? (
         <div style={{ fontSize: 12.5, color: 'var(--text3)', padding: '8px 0' }}>Loading…</div>
       ) : docs.length === 0 ? (
-        <div style={{ fontSize: 12.5, color: 'var(--text3)', padding: '8px 0' }}>No files yet. Attach the proposal, PO, permit, signed contract, delivery/startup docs, or photos.</div>
+        <div style={{ fontSize: 12.5, color: 'var(--text3)', padding: '8px 0' }}>{emptyHint || 'No files yet.'}</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {docs.map(d => (

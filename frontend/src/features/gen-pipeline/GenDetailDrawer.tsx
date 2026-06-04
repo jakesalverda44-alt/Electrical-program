@@ -2,7 +2,7 @@ import React from 'react';
 import Icon from '../../components/Icon';
 import { Gen } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
-import GenFiles from './GenFiles';
+import RecordFiles from '../../components/RecordFiles';
 
 function moneyFull(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 function fmtTs(ts?: string | null) {
@@ -129,7 +129,8 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           )}
 
           {/* File attachments for this job — proposal, PO, permit, signed contract, delivery/startup, photos */}
-          <GenFiles genId={gen.id} genCustomer={gen.customer}/>
+          <RecordFiles linkedId={gen.id} linkedName={gen.customer} div="gen"
+            emptyHint="No files yet. Attach the proposal, PO, permit, signed contract, delivery/startup docs, or photos."/>
         </div>
       </div>
     </div>
