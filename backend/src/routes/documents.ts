@@ -73,16 +73,21 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
     logger.info({ documentId: rows[0]?.id, fileName: file.originalname, fileSize: file.size }, 'Document upload saved');
     res.json(rows[0]);
 
-    // Fire-and-forget: push to correct Drive subfolder if bid is linked
-    const folderColumn = CATEGORY_TO_FOLDER[category];
-    if (folderColumn && linked_id && div === 'elec') {
+    // Fire-and-forget: push to Drive if a bid is linked. Route to the category
+    // subfolder when it exists (awarded projects); otherwise fall back to the
+    // job folder root so plans/proposals land there during the bid stage.
+    if (linked_id && div === 'elec') {
+      const folderColumn = CATEGORY_TO_FOLDER[category];
       (async () => {
         try {
+          const cols = folderColumn
+            ? `${folderColumn} AS sub_folder_id, drive_job_folder_id`
+            : `drive_job_folder_id`;
           const { rows: bidRows } = await pool.query(
-            `SELECT ${folderColumn} AS folder_id FROM bids WHERE id=$1`,
+            `SELECT ${cols} FROM bids WHERE id=$1`,
             [linked_id],
           );
-          const folderId = bidRows[0]?.folder_id;
+          const folderId = bidRows[0]?.sub_folder_id || bidRows[0]?.drive_job_folder_id;
           if (!folderId) return;
           await uploadFile(
             display_name?.trim() || file.originalname,

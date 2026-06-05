@@ -103,33 +103,15 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   );
   sendBidNotification(rows[0], user).catch(() => {});
 
-  // Fire-and-forget Drive folder setup — never blocks the CRM response
+  // Fire-and-forget Drive folder setup — never blocks the CRM response.
+  // During the bid stage we only create the GC + job folder; the project
+  // subfolders (Submittals, RFIs, Change Orders, …) are created on award.
   const newBid = rows[0];
   (async () => {
     try {
       const jobFolderId = await createJobFolder(newBid.name, newBid.gc, ESTIMATING_ACTIVE_BIDS_ROOT);
       if (!jobFolderId) return;
-      const subfolders = await createSubfolders(jobFolderId);
-      await pool.query(
-        `UPDATE bids SET
-           drive_job_folder_id=$1,
-           drive_plans_folder_id=$2, drive_estimates_folder_id=$3,
-           drive_photos_folder_id=$4, drive_contracts_folder_id=$5,
-           drive_submittals_folder_id=$6, drive_rfis_folder_id=$7,
-           drive_change_orders_folder_id=$8
-         WHERE id=$9`,
-        [
-          jobFolderId,
-          subfolders['Plans & Specs'] || null,
-          subfolders['Estimates & Scope Extractions'] || null,
-          subfolders['Photos'] || null,
-          subfolders['Contract & Invoices'] || null,
-          subfolders['Submittals'] || null,
-          subfolders['RFIs'] || null,
-          subfolders['Change Orders'] || null,
-          newBid.id,
-        ],
-      );
+      await pool.query(`UPDATE bids SET drive_job_folder_id=$1 WHERE id=$2`, [jobFolderId, newBid.id]);
     } catch (err) {
       console.error('[drive] Bid folder setup failed:', err);
     }
@@ -221,6 +203,36 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
       });
       // Awarded = job is starting, not finished — folder stays in Active Projects.
       // Folder moves to Completed Projects only when the job is closed out.
+      //
+      // Now that the job is a real project, create the project subfolders inside
+      // the job folder. Skip if they already exist (older bids made them at bid time).
+      if (bid.drive_job_folder_id && !bid.drive_plans_folder_id) {
+        (async () => {
+          try {
+            const subfolders = await createSubfolders(bid.drive_job_folder_id);
+            await pool.query(
+              `UPDATE bids SET
+                 drive_plans_folder_id=$1, drive_estimates_folder_id=$2,
+                 drive_photos_folder_id=$3, drive_contracts_folder_id=$4,
+                 drive_submittals_folder_id=$5, drive_rfis_folder_id=$6,
+                 drive_change_orders_folder_id=$7
+               WHERE id=$8`,
+              [
+                subfolders['Plans & Specs'] || null,
+                subfolders['Estimates & Scope Extractions'] || null,
+                subfolders['Photos'] || null,
+                subfolders['Contract & Invoices'] || null,
+                subfolders['Submittals'] || null,
+                subfolders['RFIs'] || null,
+                subfolders['Change Orders'] || null,
+                bid.id,
+              ],
+            );
+          } catch (err) {
+            console.error('[drive] Awarded subfolder creation failed:', err);
+          }
+        })();
+      }
     }
     res.json({ bid: withDueDays(rows[0]), wonJob });
   } catch (err) {

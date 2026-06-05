@@ -88,7 +88,9 @@ router.post('/backfill-drive', asyncHandler(async (_req, res) => {
         results.errors.push(`${bid.name}: Drive not configured or createJobFolder returned null`);
         continue;
       }
-      const subfolders = await createSubfolders(jobFolderId);
+      // Project subfolders only for awarded/closed jobs; bids stay folder-only.
+      const isProject = bid.stage === 'awarded' || !!bid.closed_at;
+      const subfolders = isProject ? await createSubfolders(jobFolderId) : {};
       await pool.query(
         `UPDATE bids SET
            drive_job_folder_id=$1,
