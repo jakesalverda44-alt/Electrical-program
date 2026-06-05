@@ -54,20 +54,54 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
   }, 'Document upload started');
 
   try {
-    // When Cloudinary is configured, upload there and store only the URL.
-    // If Cloudinary rejects the file (e.g. over the account's size limit) or
-    // isn't configured, fall back to base64 in Postgres so the upload still
-    // succeeds and the file still gets pushed to Google Drive below.
+    // Resolve the target Drive folder for linked electrical bids. Route to the
+    // category subfolder when it exists (e.g. Plans), else the job folder root.
+    let driveFolderId: string | null = null;
+    if (linked_id && div === 'elec') {
+      const folderColumn = CATEGORY_TO_FOLDER[category];
+      const cols = folderColumn
+        ? `${folderColumn} AS sub_folder_id, drive_job_folder_id`
+        : `drive_job_folder_id`;
+      const { rows: bidRows } = await pool.query(`SELECT ${cols} FROM bids WHERE id=$1`, [linked_id]);
+      driveFolderId = bidRows[0]?.sub_folder_id || bidRows[0]?.drive_job_folder_id || null;
+    }
+
+    // Primary app storage: Cloudinary, for files within its size limit.
     let storageUrl: string | null = null;
     if (isCloudStorageConfigured()) {
       try {
         storageUrl = await uploadToCloud(file.buffer, file.originalname, file.mimetype);
       } catch (cloudErr) {
         logger.warn({ err: cloudErr, fileName: file.originalname, fileSize: file.size },
-          '[cloudStorage] upload rejected — falling back to database storage');
+          '[cloudStorage] upload rejected — using Drive/DB fallback');
       }
     }
-    const fileData = storageUrl ? null : file.buffer.toString('base64');
+
+    // Push to Google Drive. When Cloudinary already stored the file we do this
+    // in the background (don't block the response). Otherwise we await it so a
+    // large file still lands in Drive and we can link to it — avoiding a
+    // multi-megabyte base64 blob in Postgres (which can crash the request).
+    const driveName = display_name?.trim() || file.originalname;
+    const driveMime = file.mimetype || 'application/octet-stream';
+    let driveFileId: string | null = null;
+    if (driveFolderId && storageUrl) {
+      uploadFile(driveName, driveMime, file.buffer, driveFolderId)
+        .catch(err => logger.error({ err, linked_id, category }, '[drive] background upload failed'));
+    } else if (driveFolderId) {
+      try {
+        driveFileId = await uploadFile(driveName, driveMime, file.buffer, driveFolderId);
+      } catch (err) {
+        logger.error({ err, linked_id, category }, '[drive] upload failed');
+      }
+    }
+
+    // What to persist for app-side viewing/download, in order of preference:
+    //   1) Cloudinary URL  2) Drive view link  3) base64 in Postgres (small only).
+    let fileData: string | null = null;
+    if (!storageUrl) {
+      if (driveFileId) storageUrl = `https://drive.google.com/file/d/${driveFileId}/view`;
+      else fileData = file.buffer.toString('base64');
+    }
 
     const { rows } = await pool.query(
       `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, storage_url, file_data)
@@ -79,34 +113,6 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
     );
     logger.info({ documentId: rows[0]?.id, fileName: file.originalname, fileSize: file.size }, 'Document upload saved');
     res.json(rows[0]);
-
-    // Fire-and-forget: push to Drive if a bid is linked. Route to the category
-    // subfolder when it exists (awarded projects); otherwise fall back to the
-    // job folder root so plans/proposals land there during the bid stage.
-    if (linked_id && div === 'elec') {
-      const folderColumn = CATEGORY_TO_FOLDER[category];
-      (async () => {
-        try {
-          const cols = folderColumn
-            ? `${folderColumn} AS sub_folder_id, drive_job_folder_id`
-            : `drive_job_folder_id`;
-          const { rows: bidRows } = await pool.query(
-            `SELECT ${cols} FROM bids WHERE id=$1`,
-            [linked_id],
-          );
-          const folderId = bidRows[0]?.sub_folder_id || bidRows[0]?.drive_job_folder_id;
-          if (!folderId) return;
-          await uploadFile(
-            display_name?.trim() || file.originalname,
-            file.mimetype || 'application/octet-stream',
-            file.buffer,
-            folderId,
-          );
-        } catch (err) {
-          logger.error({ err, linked_id, category }, '[drive] Document upload to Drive failed');
-        }
-      })();
-    }
   } catch (err) {
     logger.error({ err, linked_id, fileName: file.originalname }, 'Document upload failed');
     if ((err as { code?: string; column?: string }).code === '42703' && (err as { column?: string }).column === 'file_data') {
