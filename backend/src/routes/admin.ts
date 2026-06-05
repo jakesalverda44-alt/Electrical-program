@@ -2,6 +2,14 @@ import { Router } from 'express';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
+import {
+  getOrCreateGcFolder,
+  createJobFolder,
+  createSubfolders,
+  moveFolder,
+  ACTIVE_PROJECTS_ROOT,
+  COMPLETED_PROJECTS_ROOT,
+} from '../services/googleDrive';
 
 const router = Router();
 
@@ -45,6 +53,66 @@ router.get('/audit', asyncHandler(async (req, res) => {
     params
   );
   res.json(rows);
+}));
+
+// Backfill Google Drive folders for all existing bids that don't have one yet.
+// POST /api/admin/backfill-drive
+// Returns { processed, skipped, errors } — runs synchronously so the response
+// carries the full result (may take a minute for large pipelines).
+router.post('/backfill-drive', asyncHandler(async (_req, res) => {
+  const { rows: bids } = await pool.query(
+    `SELECT id, name, gc, stage FROM bids
+     WHERE deleted_at IS NULL AND drive_job_folder_id IS NULL
+     ORDER BY created_at ASC`,
+  );
+
+  const results = { processed: 0, skipped: 0, errors: [] as string[] };
+
+  for (const bid of bids) {
+    try {
+      const [gcFolderId, jobFolderId] = await Promise.all([
+        getOrCreateGcFolder(bid.gc),
+        createJobFolder(bid.name, bid.gc),
+      ]);
+      if (!jobFolderId) {
+        results.skipped++;
+        results.errors.push(`${bid.name}: Drive not configured or createJobFolder returned null`);
+        continue;
+      }
+      const subfolders = await createSubfolders(jobFolderId);
+      await pool.query(
+        `UPDATE bids SET
+           drive_gc_folder_id=$1, drive_job_folder_id=$2,
+           drive_plans_folder_id=$3, drive_estimates_folder_id=$4,
+           drive_photos_folder_id=$5, drive_contracts_folder_id=$6,
+           drive_submittals_folder_id=$7, drive_rfis_folder_id=$8,
+           drive_change_orders_folder_id=$9
+         WHERE id=$10`,
+        [
+          gcFolderId,
+          jobFolderId,
+          subfolders['Plans & Specs'] || null,
+          subfolders['Estimates & Scope Extractions'] || null,
+          subfolders['Photos'] || null,
+          subfolders['Contract & Invoices'] || null,
+          subfolders['Submittals'] || null,
+          subfolders['RFIs'] || null,
+          subfolders['Change Orders'] || null,
+          bid.id,
+        ],
+      );
+      // Awarded bids belong in Completed Projects
+      if (bid.stage === 'awarded') {
+        await moveFolder(jobFolderId, ACTIVE_PROJECTS_ROOT, COMPLETED_PROJECTS_ROOT);
+      }
+      results.processed++;
+    } catch (err) {
+      results.errors.push(`${bid.name}: ${(err as Error).message}`);
+      results.skipped++;
+    }
+  }
+
+  res.json(results);
 }));
 
 export default router;
