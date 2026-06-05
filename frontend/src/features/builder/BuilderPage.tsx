@@ -149,7 +149,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
   };
 
   if (screen === 'preview') {
-    return <ProposalPreview form={form} totals={totals} proposalNo={proposalNo} onBack={() => setScreen('builder')} appSettings={s}/>;
+    return <ProposalPreview form={form} totals={totals} proposalNo={proposalNo} onBack={() => setScreen('builder')} appSettings={s} genId={savedGenId ?? undefined}/>;
   }
 
   return (

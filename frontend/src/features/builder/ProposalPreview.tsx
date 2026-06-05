@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import { GenForm } from './genData';
 import { GenTotals, genPriceRows, genModelNo } from './genCalc';
 import { GEN_SPEC_DETAIL } from './genData';
 import { AppSettings, DEFAULT_APP_SETTINGS } from '../../hooks/useAppSettings';
+import api from '../../api/client';
 
 function fmt(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 function fmtDec(n: number) { return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -22,6 +23,7 @@ interface Props {
   proposalNo: string;
   onBack: () => void;
   appSettings?: AppSettings;
+  genId?: string;
 }
 
 // ── Shared layout helpers ────────────────────────────────────────────────────
@@ -136,8 +138,47 @@ function SpecTable({ header, rows }: { header: string; rows: [string, string, st
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
-export default function ProposalPreview({ form, totals, proposalNo, onBack, appSettings }: Props) {
+export default function ProposalPreview({ form, totals, proposalNo, onBack, appSettings, genId }: Props) {
   const co = appSettings ?? DEFAULT_APP_SETTINGS;
+  const previewRef = useRef<HTMLDivElement>(null);
+  const [savingDrive, setSavingDrive] = useState(false);
+  const [driveSaved, setDriveSaved] = useState(false);
+
+  const handleSaveToDrive = async () => {
+    if (!genId || !previewRef.current) return;
+    setSavingDrive(true);
+    setDriveSaved(false);
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+      ]);
+      const canvas = await html2canvas(previewRef.current, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
+      const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const imgH = canvas.height * (pageW / canvas.width);
+      const imgData = canvas.toDataURL('image/png');
+      let heightLeft = imgH;
+      let position = 0;
+      pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
+      heightLeft -= pageH;
+      while (heightLeft > 0) {
+        position = heightLeft - imgH;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
+        heightLeft -= pageH;
+      }
+      const formData = new FormData();
+      formData.append('file', pdf.output('blob'), `Proposal - ${form.customer}.pdf`);
+      await api.post(`/gens/${genId}/drive-proposal`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setDriveSaved(true);
+    } catch {
+      alert('Failed to save to Drive. Please try again.');
+    } finally {
+      setSavingDrive(false);
+    }
+  };
   const companyName = co.company_name || 'Accurate Power & Technology';
   const licLine = [co.company_license_ec, co.company_license_cfc, co.company_license_li].filter(Boolean).join(' · ');
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
@@ -169,10 +210,20 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
       <div className="pipe-toolbar no-print">
         <button className="btn ghost" onClick={onBack} style={{ fontSize: 13 }}>← Back to Builder</button>
         <span className="spacer"/>
+        {genId && (
+          <button
+            className="btn ghost"
+            onClick={handleSaveToDrive}
+            disabled={savingDrive || driveSaved}
+            style={{ fontSize: 13, color: driveSaved ? 'var(--green)' : undefined }}
+          >
+            {savingDrive ? 'Saving…' : driveSaved ? '✓ Saved to Drive' : 'Save to Drive'}
+          </button>
+        )}
         <button className="btn" onClick={() => window.print()} style={{ fontSize: 13 }}>Print / Save PDF</button>
       </div>
 
-      <div className="preview-doc" style={{ maxWidth: 780, margin: '16px auto 40px', background: '#fff', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+      <div className="preview-doc" ref={previewRef} style={{ maxWidth: 780, margin: '16px auto 40px', background: '#fff', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
         <div style={docStyle}>
 
           {/* ═══ PAGE 1 — COVER ════════════════════════════════════════════ */}

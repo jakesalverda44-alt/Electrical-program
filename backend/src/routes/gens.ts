@@ -201,6 +201,22 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+// Save a proposal PDF snapshot directly to Drive Generator Proposals folder.
+router.post('/:id/drive-proposal', requireAuth, upload.single('file'), asyncHandler(async (req: AuthRequest, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: 'file required' });
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+  const driveDate = new Date().toISOString().split('T')[0];
+  uploadFile(
+    `Proposal — ${gen.customer} — ${driveDate}.pdf`,
+    'application/pdf',
+    file.buffer,
+    GENERATOR_PROPOSALS_FOLDER,
+  ).catch(err => console.error('[drive] Proposal PDF upload failed:', err));
+  res.json({ ok: true });
+}));
+
 // Mark an awarded generator job as closed/complete.
 router.post('/:id/close', requireAuth, async (req: AuthRequest, res) => {
   const gen = await loadOwnedGen(req, res);
