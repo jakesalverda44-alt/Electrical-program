@@ -311,9 +311,45 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                 </button>
               )}
 
-              {/* File attachments for this bid — plans, bid invite, addenda, award paperwork */}
+              {/* Google Drive folder links — shown when folders were auto-created on bid creation */}
+              {bid.drive_job_folder_id && (
+                <div className="dtl-section" style={{ marginTop: 16 }}>
+                  <div className="dtl-stage-label" style={{ marginBottom: 8 }}>Google Drive Folders</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {[
+                      { label: 'Plans & Specs',               id: bid.drive_plans_folder_id },
+                      { label: 'Estimates & Scope',           id: bid.drive_estimates_folder_id },
+                      { label: 'Change Orders',               id: bid.drive_change_orders_folder_id },
+                      { label: 'Submittals',                  id: bid.drive_submittals_folder_id },
+                      { label: 'RFIs',                        id: bid.drive_rfis_folder_id },
+                      { label: 'Photos',                      id: bid.drive_photos_folder_id },
+                      { label: 'Contract & Invoices',         id: bid.drive_contracts_folder_id },
+                      { label: 'All Job Files',               id: bid.drive_job_folder_id },
+                    ].filter(f => f.id).map(f => (
+                      <a
+                        key={f.label}
+                        href={`https://drive.google.com/drive/folders/${f.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 6,
+                          fontSize: 13, color: 'var(--blue)', textDecoration: 'none',
+                          padding: '4px 0',
+                        }}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        {f.label}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* File attachments — contracts, change orders, invoices, photos (smaller files) */}
               <RecordFiles linkedId={bid.id} linkedName={bid.name} div="elec"
-                emptyHint="No files yet. Attach plan sets, the bid invite, addenda, scope docs, or award paperwork."/>
+                emptyHint="Upload contracts, change orders, invoices, and photos here. Add large plan sets directly in the Drive folder above."/>
             </>
           )}
         </div>

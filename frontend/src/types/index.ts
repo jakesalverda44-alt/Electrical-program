@@ -29,6 +29,15 @@ export interface Bid {
   created_at?: string;
   submitted_at?: string;
   awarded_at?: string;
+  drive_job_folder_id?: string;
+  drive_plans_folder_id?: string;
+  drive_estimates_folder_id?: string;
+  drive_photos_folder_id?: string;
+  drive_contracts_folder_id?: string;
+  drive_gc_folder_id?: string;
+  drive_submittals_folder_id?: string;
+  drive_rfis_folder_id?: string;
+  drive_change_orders_folder_id?: string;
 }
 
 export interface Gen {
