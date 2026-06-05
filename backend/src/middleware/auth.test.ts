@@ -5,7 +5,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../db/getSetting', () => ({ getSetting: vi.fn() }));
 vi.mock('../db/pool', () => ({ pool: { query: vi.fn() } }));
 
-import { requireRole, requireAdmin, isPrivileged, requireAIPermission } from './auth';
+import jwt from 'jsonwebtoken';
+import { requireRole, requireAdmin, isPrivileged, requireAIPermission, requireAuth, getJwtSecret, DEFAULT_ORG_ID } from './auth';
 import { getSetting } from '../db/getSetting';
 
 type Res = {
@@ -71,6 +72,26 @@ describe('requireRole', () => {
     const next = vi.fn();
     requireAdmin(req, res as any, next);
     expect(next).toHaveBeenCalledOnce();
+  });
+});
+
+describe('requireAuth — org scoping', () => {
+  it('preserves an org_id claim from the token', () => {
+    const token = jwt.sign({ id: '1', role: 'owner', org_id: 'org-9' }, getJwtSecret());
+    const req: any = { headers: { authorization: `Bearer ${token}` } };
+    const next = vi.fn();
+    requireAuth(req, mockRes() as any, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.user.org_id).toBe('org-9');
+  });
+
+  it('defaults legacy tokens (no org claim) to the default org', () => {
+    const token = jwt.sign({ id: '1', role: 'owner' }, getJwtSecret());
+    const req: any = { headers: { authorization: `Bearer ${token}` } };
+    const next = vi.fn();
+    requireAuth(req, mockRes() as any, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.user.org_id).toBe(DEFAULT_ORG_ID);
   });
 });
 

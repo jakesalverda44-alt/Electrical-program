@@ -4,9 +4,10 @@ import jwt from 'jsonwebtoken';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { logger } from '../utils/logger';
+import { DEFAULT_ORG_ID } from '../utils/scope';
 
 export interface AuthRequest extends Request {
-  user?: { id: string; name: string; email: string; role: string };
+  user?: { id: string; name: string; email: string; role: string; org_id: string };
 }
 
 // The signing/verification secret. Resolved at startup via initJwtSecret().
@@ -49,15 +50,18 @@ export async function initJwtSecret(): Promise<void> {
 // How long an issued access token stays valid (kept short; refresh tokens are a Phase 2 item).
 export const TOKEN_TTL = '12h';
 
-// Re-exported from utils/scope so route handlers can keep importing it from the middleware.
-export { ownScopeId } from '../utils/scope';
+// Re-exported from utils/scope so route handlers can keep importing tenant/scope
+// helpers from the middleware.
+export { ownScopeId, orgScope, DEFAULT_ORG_ID } from '../utils/scope';
 
 export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const payload = jwt.verify(header.slice(7), getJwtSecret()) as any;
-    req.user = payload;
+    // Tokens minted before multi-tenancy lack an org claim; resolve them to the
+    // default organization so existing sessions keep working after deploy.
+    req.user = { ...payload, org_id: payload.org_id ?? DEFAULT_ORG_ID };
     next();
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
