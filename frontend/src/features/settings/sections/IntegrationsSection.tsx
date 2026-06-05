@@ -17,6 +17,10 @@ function GoogleDriveCard() {
   const [result, setResult] = useState<{ processed: number; skipped: number; errors: string[] } | null>(null);
   const [err, setErr] = useState('');
 
+  const [fixing, setFixing] = useState(false);
+  const [fixResult, setFixResult] = useState<{ moved: number; skipped: number; errors: string[] } | null>(null);
+  const [fixErr, setFixErr] = useState('');
+
   const run = async () => {
     if (!confirm('This will create Google Drive folders for every bid that does not have one yet. Continue?')) return;
     setRunning(true);
@@ -29,6 +33,21 @@ function GoogleDriveCard() {
       setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Request failed');
     } finally {
       setRunning(false);
+    }
+  };
+
+  const fixAwarded = async () => {
+    if (!confirm('This will move all awarded (in-progress) job folders from Completed Projects back to Active Projects. Continue?')) return;
+    setFixing(true);
+    setFixErr('');
+    setFixResult(null);
+    try {
+      const { data } = await api.post('/admin/fix-drive-awarded', {}, { timeout: 300_000 });
+      setFixResult(data);
+    } catch (e: unknown) {
+      setFixErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Request failed');
+    } finally {
+      setFixing(false);
     }
   };
 
@@ -66,6 +85,33 @@ function GoogleDriveCard() {
           </div>
         )}
         {err && <div style={{ marginTop: 8, fontSize: 12, color: '#DC2626' }}>{err}</div>}
+
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>One-time Fix</div>
+          <button
+            className="btn ghost"
+            disabled={fixing}
+            onClick={fixAwarded}
+            style={{ fontSize: 12, padding: '6px 12px' }}
+          >
+            {fixing ? 'Moving folders…' : 'Move awarded jobs → Active Projects'}
+          </button>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5 }}>
+            Fixes awarded (in-progress) jobs that were incorrectly placed in Completed Projects.
+          </div>
+          {fixResult && (
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text3)' }}>
+              <span style={{ color: '#065F46', fontWeight: 700 }}>{fixResult.moved} folders moved</span>
+              {fixResult.skipped > 0 && <span style={{ marginLeft: 8, color: '#92400E' }}>{fixResult.skipped} skipped</span>}
+              {fixResult.errors.length > 0 && (
+                <div style={{ marginTop: 6, color: '#DC2626' }}>
+                  {fixResult.errors.slice(0, 5).map((e, i) => <div key={i}>{e}</div>)}
+                </div>
+              )}
+            </div>
+          )}
+          {fixErr && <div style={{ marginTop: 8, fontSize: 12, color: '#DC2626' }}>{fixErr}</div>}
+        </div>
       </div>
     </div>
   );

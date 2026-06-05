@@ -6,6 +6,9 @@ import {
   getOrCreateGcFolder,
   createJobFolder,
   createSubfolders,
+  moveFolder,
+  ACTIVE_PROJECTS_ROOT,
+  COMPLETED_PROJECTS_ROOT,
 } from '../services/googleDrive';
 
 const router = Router();
@@ -100,6 +103,32 @@ router.post('/backfill-drive', asyncHandler(async (_req, res) => {
       );
       // Awarded = active job in progress — folder stays in Active Projects.
       results.processed++;
+    } catch (err) {
+      results.errors.push(`${bid.name}: ${(err as Error).message}`);
+      results.skipped++;
+    }
+  }
+
+  res.json(results);
+}));
+
+// Move awarded (in-progress) job folders back to Active Projects.
+// Fixes the one-time backfill that incorrectly placed them in Completed Projects.
+// POST /api/admin/fix-drive-awarded
+router.post('/fix-drive-awarded', asyncHandler(async (_req, res) => {
+  const { rows: bids } = await pool.query(
+    `SELECT id, name, drive_job_folder_id FROM bids
+     WHERE stage = 'awarded' AND closed_at IS NULL
+       AND deleted_at IS NULL AND drive_job_folder_id IS NOT NULL
+     ORDER BY created_at ASC`,
+  );
+
+  const results = { moved: 0, skipped: 0, errors: [] as string[] };
+
+  for (const bid of bids) {
+    try {
+      await moveFolder(bid.drive_job_folder_id, COMPLETED_PROJECTS_ROOT, ACTIVE_PROJECTS_ROOT);
+      results.moved++;
     } catch (err) {
       results.errors.push(`${bid.name}: ${(err as Error).message}`);
       results.skipped++;
