@@ -76,6 +76,12 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
     }
   };
 
+  const handleClosed = (bid: Bid) => {
+    setBids(prev => prev.filter(b => b.id !== bid.id));
+    setDetail(null);
+    showToast({ title: 'Job closed', sub: `${bid.name} moved to Completed Projects` });
+  };
+
   const handleAdded = (bid: Bid) => {
     setBids(prev => [bid, ...prev]);
     showToast({ title: 'Bid added to pipeline', sub: bid.name });
@@ -214,6 +220,7 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
           onOpenPreconstruction={id => { setDetail(null); onOpenPreconstruction(id); }}
           onBidEdited={handleBidEdited}
           onDelete={handleDelete}
+          onClosed={handleClosed}
         />
       )}
 

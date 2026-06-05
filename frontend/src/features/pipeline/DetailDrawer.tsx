@@ -25,15 +25,17 @@ interface Props {
   onOpenPreconstruction: (id: string) => void;
   onBidEdited: (bid: Bid) => void;
   onDelete: (bid: Bid) => void;
+  onClosed: (bid: Bid) => void;
 }
 
-export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, onClose, onOpenPreconstruction, onBidEdited, onDelete }: Props) {
+export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, onClose, onOpenPreconstruction, onBidEdited, onDelete, onClosed }: Props) {
   const isTerminal = bid.stage === 'awarded' || bid.stage === 'lost';
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [qualifying, setQualifying] = useState(false);
   const [qualResult, setQualResult] = useState<QualResult | null>(null);
   const [winProb, setWinProb] = useState<{ pct: number; label: string } | null>(null);
+  const [closingJob, setClosingJob] = useState(false);
 
   useEffect(() => {
     api.get(`/bids/${bid.id}/qualify`).then(({ data }) => {
@@ -86,6 +88,17 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
       setEditMode(false);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCloseJob = async () => {
+    if (!window.confirm(`Mark "${bid.name}" as closed/complete? This will move the Drive folder to Completed Projects and remove it from the active pipeline.`)) return;
+    setClosingJob(true);
+    try {
+      const { data } = await api.post(`/bids/${bid.id}/close`);
+      onClosed(data);
+    } finally {
+      setClosingJob(false);
     }
   };
 
@@ -175,6 +188,9 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                     steps.push({ label: 'Lost', done: true, lost: true, when: bid.loss_reason ? `Reason: ${bid.loss_reason}` : null });
                   } else {
                     steps.push({ label: 'Awarded', done: bid.stage === 'awarded', when: fmtTs(bid.awarded_at) });
+                    if (bid.stage === 'awarded') {
+                      steps.push({ label: 'Closed', done: !!bid.closed_at, when: fmtTs(bid.closed_at) });
+                    }
                   }
                   return steps.map((s, i, arr) => {
                     const dot = s.lost ? 'var(--red)' : 'var(--green)';
@@ -292,6 +308,17 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
               </button>
             )}
           </div>
+
+          {bid.stage === 'awarded' && !bid.closed_at && (
+            <button
+              className="btn ghost"
+              style={{ width: '100%', justifyContent: 'center', color: 'var(--green)', borderColor: 'rgba(52,197,136,.4)', marginTop: 8 }}
+              disabled={closingJob}
+              onClick={handleCloseJob}
+            >
+              <Icon name="check" size={14} stroke={2.2}/>{closingJob ? 'Closing…' : 'Close Job'}
+            </button>
+          )}
 
           <button
             className="btn ghost"

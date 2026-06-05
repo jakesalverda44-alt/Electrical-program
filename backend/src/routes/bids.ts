@@ -13,6 +13,9 @@ import {
   getOrCreateGcFolder,
   createJobFolder,
   createSubfolders,
+  moveFolder,
+  ACTIVE_PROJECTS_ROOT,
+  COMPLETED_PROJECTS_ROOT,
 } from '../services/googleDrive';
 
 const router = Router();
@@ -59,7 +62,7 @@ async function sendBidNotification(bid: Record<string, unknown>, addedBy: { name
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
   const params: unknown[] = [];
-  const where: string[] = ['deleted_at IS NULL'];
+  const where: string[] = ['deleted_at IS NULL', 'closed_at IS NULL'];
   if (scope) { params.push(scope); where.push(`salesperson_id = $${params.length}`); }
   let sql = `SELECT * FROM bids WHERE ${where.join(' AND ')}`;
   sql += ' ORDER BY created_at DESC';
@@ -214,6 +217,35 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
   } finally {
     client.release();
   }
+});
+
+// Mark an awarded job as closed/complete. Moves Drive folder to Completed Projects.
+router.post('/:id/close', requireAuth, async (req: AuthRequest, res) => {
+  const bid = await loadOwnedBid(req, res);
+  if (!bid) return;
+  if (bid.stage !== 'awarded') return res.status(400).json({ error: 'Only awarded jobs can be closed' });
+  if (bid.closed_at) return res.status(400).json({ error: 'Job is already closed' });
+
+  const { rows } = await pool.query(
+    `UPDATE bids SET closed_at = now(), updated_at = now() WHERE id = $1 RETURNING *`,
+    [bid.id],
+  );
+  // Best-effort: mark the linked project complete
+  pool.query(`UPDATE projects SET status = 'complete' WHERE id = $1`, [bid.id]).catch(() => {});
+
+  await writeAudit(req, {
+    action: 'close', entityType: 'bid', entityId: bid.id,
+    summary: `Closed job "${bid.name}" (${bid.gc})`,
+    before: { closed_at: null }, after: { closed_at: rows[0].closed_at },
+  });
+
+  // Fire-and-forget: move Drive folder to Completed Projects
+  if (bid.drive_job_folder_id) {
+    moveFolder(bid.drive_job_folder_id, ACTIVE_PROJECTS_ROOT, COMPLETED_PROJECTS_ROOT)
+      .catch(err => console.error('[drive] moveFolder on close failed:', err));
+  }
+
+  res.json(withDueDays(rows[0]));
 });
 
 // Bid qualification score — computed from historical data, no AI key needed

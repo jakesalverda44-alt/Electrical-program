@@ -38,6 +38,7 @@ export interface Bid {
   drive_submittals_folder_id?: string;
   drive_rfis_folder_id?: string;
   drive_change_orders_folder_id?: string;
+  closed_at?: string;
 }
 
 export interface Gen {
