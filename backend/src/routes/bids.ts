@@ -3,6 +3,7 @@ import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
+import { ensureProject, setProjectDeleted } from '../utils/project';
 import { getSetting } from '../db/getSetting';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { escapeHtml } from '../utils/escapeHtml';
@@ -129,6 +130,12 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
         [bid.salesperson_name, bid.name, bid.id, bid.amount, bid.salesperson_id || null]
       );
       wonJob = wj[0] || null;
+
+      // Awarded work becomes a first-class project (shares the bid id).
+      await ensureProject(client, {
+        id: bid.id, sourceType: 'elec', customerId: bid.customer_id,
+        name: bid.name, contractValue: bid.amount,
+      });
 
       await client.query(
         `INSERT INTO activity (kind, div, text)
@@ -258,6 +265,7 @@ router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) =
     await client.query('BEGIN');
     await client.query('UPDATE bids SET deleted_at=now() WHERE id=$1', [req.params.id]);
     await client.query('UPDATE won_jobs SET deleted_at=now() WHERE proposal_id=$1', [req.params.id]);
+    await setProjectDeleted(client, req.params.id, true);
     await client.query('COMMIT');
     await writeAudit(req, {
       action: 'delete', entityType: 'bid', entityId: bid.id,
@@ -278,6 +286,7 @@ router.post('/:id/restore', requireAuth, requireAdmin, async (req: AuthRequest, 
   const { rows } = await pool.query('UPDATE bids SET deleted_at=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING *', [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: 'Not found in Trash' });
   await pool.query('UPDATE won_jobs SET deleted_at=NULL WHERE proposal_id=$1', [req.params.id]);
+  await setProjectDeleted(pool, req.params.id, false);
   await writeAudit(req, { action: 'restore', entityType: 'bid', entityId: req.params.id, summary: `Restored bid "${rows[0].name}"` });
   res.json(withDueDays(rows[0]));
 });
@@ -300,6 +309,7 @@ router.delete('/:id/purge', requireAuth, requireAdmin, async (req: AuthRequest, 
     await client.query('DELETE FROM won_jobs WHERE proposal_id=$1', [req.params.id]);
     await client.query('DELETE FROM bid_workspaces WHERE bid_id=$1', [req.params.id]);
     await client.query('DELETE FROM takeoff_results WHERE bid_id=$1', [req.params.id]);
+    await client.query('DELETE FROM projects WHERE id=$1', [req.params.id]);
     await client.query('DELETE FROM bids WHERE id=$1', [req.params.id]);
     await client.query('COMMIT');
     await writeAudit(req, { action: 'purge', entityType: 'bid', entityId: req.params.id, summary: `Permanently deleted bid "${existing[0].name}"` });

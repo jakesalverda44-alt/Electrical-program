@@ -4,6 +4,16 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
+// ── Project (the awarded-work entity; id == source bid/gen id) ──
+router.get('/:id', requireAuth, async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT * FROM projects WHERE id=$1 AND deleted_at IS NULL',
+    [req.params.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Project not found' });
+  res.json(rows[0]);
+});
+
 // ── Change Orders ──────────────────────────────────────────────
 router.get('/:type/:id/change-orders', requireAuth, async (req, res) => {
   const { rows } = await pool.query(

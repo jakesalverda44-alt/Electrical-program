@@ -9,6 +9,7 @@ import { upsertCustomer } from './customers';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
 import { writeAudit } from '../utils/audit';
+import { ensureProject, setProjectDeleted } from '../utils/project';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -122,6 +123,10 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
         [gen.salesperson_name, gen.customer, gen.id, gen.amount, gen.salesperson_id || null]
       );
       wonJob = wj[0] || null;
+      await ensureProject(client, {
+        id: gen.id, sourceType: 'gen', customerId: gen.customer_id,
+        name: gen.customer, contractValue: gen.amount,
+      });
       await client.query(
         `INSERT INTO activity (kind, div, text) VALUES ('awarded','gen',$1)`,
         [`${gen.customer} awarded — ${gen.salesperson_name}`]
@@ -218,6 +223,7 @@ router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) =
     await client.query('BEGIN');
     await client.query('UPDATE generator_proposals SET deleted_at=now() WHERE id=$1', [req.params.id]);
     await client.query('UPDATE won_jobs SET deleted_at=now() WHERE proposal_id=$1', [req.params.id]);
+    await setProjectDeleted(client, req.params.id, true);
     await client.query('COMMIT');
     await writeAudit(req, {
       action: 'delete', entityType: 'gen', entityId: gen.id,
@@ -238,6 +244,7 @@ router.post('/:id/restore', requireAuth, requireAdmin, async (req: AuthRequest, 
   const { rows } = await pool.query('UPDATE generator_proposals SET deleted_at=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING *', [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: 'Not found in Trash' });
   await pool.query('UPDATE won_jobs SET deleted_at=NULL WHERE proposal_id=$1', [req.params.id]);
+  await setProjectDeleted(pool, req.params.id, false);
   await writeAudit(req, { action: 'restore', entityType: 'gen', entityId: req.params.id, summary: `Restored generator proposal "${rows[0].customer}"` });
   res.json(rows[0]);
 });
@@ -258,6 +265,7 @@ router.delete('/:id/purge', requireAuth, requireAdmin, async (req: AuthRequest, 
     await client.query('DELETE FROM tasks WHERE linked_id=$1', [req.params.id]);
     await client.query('DELETE FROM notifications WHERE link_id=$1', [req.params.id]);
     await client.query('DELETE FROM won_jobs WHERE proposal_id=$1', [req.params.id]);
+    await client.query('DELETE FROM projects WHERE id=$1', [req.params.id]);
     await client.query('DELETE FROM generator_proposals WHERE id=$1', [req.params.id]);
     await client.query('COMMIT');
     await writeAudit(req, { action: 'purge', entityType: 'gen', entityId: req.params.id, summary: `Permanently deleted generator proposal "${existing[0].customer}"` });
