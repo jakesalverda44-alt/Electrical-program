@@ -124,13 +124,19 @@ app.use((err: Error & { code?: string; status?: number; statusCode?: number }, r
 
 const port = Number(process.env.PORT) || 3001;
 
-runMigrations()
-  .then(async () => {
-    await initJwtSecret();
-    app.listen(port, () => logger.info(`Backend running on :${port}`));
-    startReminderScheduler();
-  })
-  .catch(err => {
-    logger.error({ err }, 'Migration failed, aborting startup');
-    process.exit(1);
-  });
+export { app };
+
+// Only boot (migrate + listen) when run directly — importing the app for tests
+// must not start the server or touch the database.
+if (require.main === module) {
+  runMigrations()
+    .then(async () => {
+      await initJwtSecret();
+      app.listen(port, () => logger.info(`Backend running on :${port}`));
+      startReminderScheduler();
+    })
+    .catch(err => {
+      logger.error({ err }, 'Migration failed, aborting startup');
+      process.exit(1);
+    });
+}
