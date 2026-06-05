@@ -54,9 +54,12 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
   }, 'Document upload started');
 
   try {
-    // Prefer cloud storage (Cloudinary) when configured — avoids storing large
-    // base64 blobs in Postgres and handles files of any size reliably.
-    const storageUrl = await uploadToCloud(file.buffer, file.originalname, file.mimetype);
+    // When Cloudinary is configured, upload there and store only the URL.
+    // If not configured, fall back to base64 in Postgres (small files only).
+    let storageUrl: string | null = null;
+    if (isCloudStorageConfigured()) {
+      storageUrl = await uploadToCloud(file.buffer, file.originalname, file.mimetype);
+    }
     const fileData = storageUrl ? null : file.buffer.toString('base64');
 
     const { rows } = await pool.query(
