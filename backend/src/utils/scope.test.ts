@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ownScopeId } from './scope';
+import { ownScopeId, orgScope, DEFAULT_ORG_ID } from './scope';
 
 describe('ownScopeId (managers see all, reps see own)', () => {
   it('restricts a salesperson to their own id', () => {
@@ -16,5 +16,16 @@ describe('ownScopeId (managers see all, reps see own)', () => {
   it('treats unknown roles as full visibility (fail-open for non-reps)', () => {
     expect(ownScopeId({ id: 'u', role: 'read_only' })).toBeNull();
     expect(ownScopeId({ id: 'u', role: 'technician' })).toBeNull();
+  });
+});
+
+describe('orgScope (multi-tenancy foundation)', () => {
+  it('returns the user org_id when present', () => {
+    expect(orgScope({ org_id: 'org-7' })).toBe('org-7');
+  });
+
+  it('falls back to the default org for legacy tokens without an org claim', () => {
+    expect(orgScope({})).toBe(DEFAULT_ORG_ID);
+    expect(orgScope(undefined)).toBe(DEFAULT_ORG_ID);
   });
 });

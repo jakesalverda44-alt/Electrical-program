@@ -4,6 +4,7 @@ import { Bid, Toast } from '../../types';
 import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey } from './constants';
 import api from '../../api/client';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
+import { moneyFull } from '../../lib/money';
 
 interface Props {
   ws: PcWorkspace;
@@ -58,6 +59,19 @@ function isElecSheet(name: string) {
   if (ELEC_INCLUDE.test(base)) return true;
   if (EXCLUDE_ONLY.test(base)) return false;
   return true;
+}
+
+function analysisErrorMessage(data: Record<string, unknown> | null | undefined) {
+  const parts = [
+    data?.agent1_output,
+    data?.agent2_output,
+    data?.agent3_output,
+    data?.raw_response,
+  ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+  const first = parts[0];
+  if (!first) return 'Analysis failed. Check server logs.';
+  if (first.length <= 700) return first;
+  return `${first.slice(0, 700)}...`;
 }
 
 export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, showToast, userRole, settings }: Props) {
@@ -128,7 +142,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           setAiResults(data);
           set(prev => ({ aiRunning: false, aiDone: true, aiLog: [...(prev.aiLog ?? []), '✓ Analysis complete — see Plan Review tab.'] }));
         } else if (data?.status === 'error') {
-          set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), '✗ Analysis failed. Check server logs.'] }));
+          setAiResults(data);
+          set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${analysisErrorMessage(data)}`] }));
         } else {
           pollForResults(startMs, nextA2, nextA3);
         }
@@ -153,6 +168,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const runAI = async () => {
     if (wsRef.current.aiRunning || wsRef.current.aiDone) return;
     const elecFiles = fileObjectsRef.current.filter(f => isElecSheet(f.name));
+    if (!fileObjectsRef.current.length) {
+      set({ aiLog: ['✗ Upload or re-add plan files in the Files tab before running AI analysis. Saved file names from a previous session cannot be re-sent to AI.'] });
+      return;
+    }
     set({ aiRunning: true, aiLog: [`Uploading ${fileObjectsRef.current.length} file(s) (${elecFiles.length} electrical sheet${elecFiles.length !== 1 ? 's' : ''} identified)…`] });
     try {
       const formData = new FormData();
@@ -230,6 +249,23 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     set({ files: [...ws.files, ...newFiles] });
   };
 
+  const removeFile = (id: string, name: string) => {
+    let removed = false;
+    fileObjectsRef.current = fileObjectsRef.current.filter(f => {
+      if (!removed && f.name === name) {
+        removed = true;
+        return false;
+      }
+      return true;
+    });
+    set({ files: ws.files.filter(f => f.id !== id) });
+  };
+
+  const clearFiles = () => {
+    fileObjectsRef.current = [];
+    set({ files: [] });
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     addFiles(Array.from(e.target.files ?? []));
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -256,7 +292,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           <div style={{ padding: '20px 24px' }}>
             <div className="stats" style={{ gridTemplateColumns: 'repeat(3,1fr)', padding: 0, marginBottom: 20 }}>
               {[
-                { label: 'Est. Contract Value', val: '$' + Math.round(ws.amount).toLocaleString('en-US'), tone: 'green' },
+                { label: 'Est. Contract Value', val: moneyFull(ws.amount), tone: 'green' },
                 { label: 'Step Progress',        val: `${STEP_ORDER.indexOf(ws.step) + 1} / ${STEP_ORDER.length}`, tone: 'blue'  },
                 { label: 'RFIs Open',            val: String(ws.rfis.filter(r => !r.submitted).length), tone: 'amber' },
               ].map(s => (
@@ -313,8 +349,19 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               </div>
             ) : (
               <div className="panel">
+                <div className="panel-hdr">
+                  <span className="panel-title">
+                    <span className="pt-ic" style={{ background: 'var(--blue-soft)', color: 'var(--blue)' }}>
+                      <Icon name="file" size={15} stroke={1.8}/>
+                    </span>
+                    Uploaded Plan Files
+                  </span>
+                  <button className="btn ghost" onClick={clearFiles} style={{ height: 30, fontSize: 12, padding: '0 10px', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)' }}>
+                    <Icon name="x" size={13} stroke={2}/>Clear All
+                  </button>
+                </div>
                 <table className="ctable">
-                  <thead><tr><th>File</th><th>Type</th><th>Size</th><th>Sheet Type</th></tr></thead>
+                  <thead><tr><th>File</th><th>Type</th><th>Size</th><th>Sheet Type</th><th></th></tr></thead>
                   <tbody>
                     {ws.files.map(f => {
                       const elec = isElecSheet(f.name);
@@ -329,6 +376,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                               color: elec ? 'var(--green)' : 'var(--text3)' }}>
                               {elec ? 'Electrical' : 'Other'}
                             </span>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              title="Remove file"
+                              onClick={() => removeFile(f.id, f.name)}
+                              style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text3)', padding: 4, borderRadius: 6 }}
+                            >
+                              <Icon name="x" size={13} stroke={2}/>
+                            </button>
                           </td>
                         </tr>
                       );
@@ -643,7 +699,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                         <td className="nm">{String(row.name)}</td>
                         <td className="sub">{String(row.gc)}</td>
                         <td className="sub">{String(row.year ?? '—')}</td>
-                        <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>${Math.round(Number(row.amount)).toLocaleString()}</td>
+                        <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{moneyFull(Number(row.amount))}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -662,7 +718,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   <span className="pt-ic" style={{ background: 'var(--blue-soft)', color: 'var(--blue)' }}>
                     <Icon name="sparkle" size={15} stroke={1.8}/>
                   </span>
-                  Bid Intelligence
+                  Win-Rate Insights
                 </span>
               </div>
               <div style={{ padding: '16px 20px' }}>
@@ -681,7 +737,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       },
                       ...(bidIntel.gcAvgWonAmount ? [{
                         label: 'Avg Won Contract (this GC)',
-                        val: `$${Math.round(Number(bidIntel.gcAvgWonAmount)).toLocaleString()}`,
+                        val: moneyFull(Number(bidIntel.gcAvgWonAmount)),
                         sub: 'Average value of won bids with this GC',
                       }] : []),
                     ].map(item => (
@@ -694,11 +750,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       </div>
                     ))}
                     <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginTop: 8 }}>
-                      Intelligence improves as more bids are entered and outcomes recorded.
+                      These win-rate stats improve as more bids are entered and outcomes recorded.
                     </div>
                   </>
                 ) : (
-                  <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Loading intelligence data…</div>
+                  <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Loading win-rate insights…</div>
                 )}
               </div>
             </div>

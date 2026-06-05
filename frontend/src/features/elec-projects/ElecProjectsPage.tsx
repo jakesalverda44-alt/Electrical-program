@@ -1,7 +1,9 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
-import { Bid, Toast } from '../../types';
+import { Bid, WonJob, Toast } from '../../types';
+import { useShowToast } from '../../contexts/AppContext';
 import api from '../../api/client';
+import { moneyFull, moneyShort as money } from '../../lib/money';
 
 // ── Phase → Status mapping ───────────────────────────────────────
 const FIELD_PHASES = new Set(['rough','inspection','trim','final']);
@@ -51,12 +53,6 @@ interface ProjDoc   { id: string; name: string; display_name: string; category: 
 interface ProjComm  { id: string; kind: string; subject: string; body: string; author: string; created_at: string; }
 
 // ── Helpers ──────────────────────────────────────────────────────
-function money(n: number) {
-  if (n >= 1_000_000) return '$' + (n/1_000_000).toFixed(2).replace(/\.?0+$/,'')+'M';
-  if (n >= 1_000)     return '$' + (n/1_000).toFixed(1).replace(/\.0$/,'')+'K';
-  return '$'+Math.round(n);
-}
-function moneyFull(n: number) { return '$'+Math.round(n).toLocaleString('en-US'); }
 function fmtDate(s: string|null) {
   if (!s) return '—';
   return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
@@ -92,9 +88,14 @@ const emptyData = (): ProjData => ({
   cos:[], fns:[], rfis:[], overview:{}, schedule:{}, payApps:[], keyMats:[], closeout:{}, docs:[], comms:[],
 });
 
-interface Props { bids: Bid[]; showToast: (t: Toast) => void; }
+interface Props {
+  bids: Bid[];
+  setBids: (fn: (prev: Bid[]) => Bid[]) => void;
+  setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
+}
 
-export default function ElecProjectsPage({ bids, showToast }: Props) {
+export default function ElecProjectsPage({ bids, setBids, setWonJobs }: Props) {
+  const showToast = useShowToast();
   const awarded = useMemo(() => bids.filter(b => b.stage === 'awarded'), [bids]);
 
   // Phase state (persisted via API)
@@ -154,6 +155,24 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
     showToast({ title: 'Status updated', sub: STATUS_META[phaseStatus(phase)].label });
   };
 
+  const deleteProject = async (bid: Bid) => {
+    if (!window.confirm(`Delete electrical project "${bid.name}" and its linked files/testing data? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/bids/${bid.id}`);
+      setBids(prev => prev.filter(b => b.id !== bid.id));
+      setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
+      setSelectedId(null);
+      setProjData(prev => {
+        const next = { ...prev };
+        delete next[bid.id];
+        return next;
+      });
+      showToast({ title: 'Electrical project deleted', sub: bid.name });
+    } catch {
+      showToast({ title: 'Delete failed', sub: 'Please try again' });
+    }
+  };
+
   const updateProjData = (id: string, patch: Partial<ProjData>) =>
     setProjData(prev => ({ ...prev, [id]: { ...(prev[id] ?? emptyData()), ...patch } }));
 
@@ -171,6 +190,7 @@ export default function ElecProjectsPage({ bids, showToast }: Props) {
       onTabChange={setActiveTab}
       onPhaseChange={phase => setPhase(selectedBid.id, phase)}
       onDataChange={patch => updateProjData(selectedBid.id, patch)}
+      onDelete={() => deleteProject(selectedBid)}
       showToast={showToast}
     />;
   }
@@ -302,10 +322,11 @@ interface WsProps {
   onTabChange: (t: WsTab) => void;
   onPhaseChange: (p: ElecPhase) => void;
   onDataChange: (patch: Partial<ProjData>) => void;
+  onDelete: () => void;
   showToast: (t: Toast) => void;
 }
 
-function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseChange, onDataChange, showToast }: WsProps) {
+function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseChange, onDataChange, onDelete, showToast }: WsProps) {
   const id     = bid.id;
   const status = phaseStatus(phase);
   const smeta  = STATUS_META[status];
@@ -908,6 +929,11 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
           <span className="num" style={{ fontSize:18, fontWeight:900, color:'var(--text)', flexShrink:0 }}>
             {moneyFull(bid.amount??0)}
           </span>
+          <button className="btn ghost"
+            style={{ height: 32, fontSize: 12, padding: '0 10px', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', flexShrink: 0 }}
+            onClick={onDelete}>
+            <Icon name="x" size={13} stroke={2}/>Delete
+          </button>
         </div>
         {/* Tab bar */}
         <div style={{ display:'flex', overflowX:'auto' }}>

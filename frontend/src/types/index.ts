@@ -47,6 +47,9 @@ export interface Gen {
   salesperson_id?: string;
   gen_install_phase?: string;
   proposal_token?: string;
+  proposal_no?: string;
+  form_data?: Record<string, unknown> | string | null;
+  totals_data?: Record<string, unknown> | string | null;
   sent_at?: string;
   viewed_at?: string;
   signed_at?: string;
@@ -60,6 +63,11 @@ export interface WonJob {
   proposal_type: 'Electrical' | 'Generator';
   value: number;
   date_won: string;
+  commission_rate?: number | null;
+  commission_amount?: number | null;
+  commission_status?: 'earned' | 'paid';
+  commission_earned_at?: string | null;
+  commission_paid_at?: string | null;
 }
 
 export interface Activity {

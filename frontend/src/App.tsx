@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
-import { useAuth } from './hooks/useAuth';
+import { useAuth, isPrivileged } from './hooks/useAuth';
 import { useToast } from './hooks/useToast';
 import { useAppSettings } from './hooks/useAppSettings';
 import LoginPage from './features/auth/LoginPage';
@@ -23,6 +23,7 @@ import ProposalPublicPage from './pages/ProposalPublicPage';
 import SettingsPage from './features/settings/SettingsPage';
 import { PcWorkspace } from './features/preconstruction/constants';
 import Toast from './components/Toast';
+import { AppProviders } from './contexts/AppContext';
 import api from './api/client';
 import { Bid, Gen, WonJob, Activity } from './types';
 
@@ -164,7 +165,7 @@ export default function App() {
           <DashboardPage
             bids={bids} gens={gens} wonJobs={wonJobs} activity={activity}
             repNames={repNames}
-            userName={user.name} userRole={user.role}
+            dashFilter={dashFilter}
             onNav={setView} onNewProposal={() => setView('builder')}
           />
         );
@@ -172,7 +173,7 @@ export default function App() {
         return (
           <ElecPipelinePage
             bids={bids} setBids={setBids}
-            setWonJobs={setWonJobs} showToast={showToast}
+            setWonJobs={setWonJobs}
             onOpenPreconstruction={() => setView('preconstruction')}
             flashId={flashId}
             openAddBid={openAddBid}
@@ -184,7 +185,7 @@ export default function App() {
         return (
           <GenPipelinePage
             gens={gens} setGens={setGens}
-            setWonJobs={setWonJobs} showToast={showToast}
+            setWonJobs={setWonJobs}
             onOpenBuilder={() => { setEditGen(null); setView('builder'); }}
             onEditGen={g => { setEditGen(g); setView('builder'); }}
             flashId={flashId}
@@ -192,12 +193,11 @@ export default function App() {
           />
         );
       case 'sales-by-rep':
-        return <SalesByRepPage wonJobs={wonJobs}/>;
+        return <SalesByRepPage wonJobs={wonJobs} userRole={user.role}/>;
       case 'intake':
         return (
           <IntakeInboxPage
             onBidAccepted={(bid) => { setBids(prev => [bid, ...prev]); setView('elec-proposals'); }}
-            showToast={showToast}
             onPendingChange={setIntakeCount}
           />
         );
@@ -206,10 +206,8 @@ export default function App() {
           <BuilderPage
             setGens={setGens}
             setWonJobs={setWonJobs}
-            showToast={showToast}
             onSaved={() => { setEditGen(null); setView('gen-proposals'); }}
             editGen={editGen}
-            appSettings={settings}
           />
         );
       case 'preconstruction':
@@ -219,38 +217,43 @@ export default function App() {
             pcData={pcData}
             onPcUpdate={handlePcUpdate}
             onBidUpdated={handleBidUpdated}
-            showToast={showToast}
-            userRole={user?.role}
-            settings={settings}
           />
         );
       case 'elec-projects':
-        return <ElecProjectsPage bids={bids} showToast={showToast}/>;
+        return <ElecProjectsPage bids={bids} setBids={setBids} setWonJobs={setWonJobs}/>;
       case 'gen-projects':
-        return <GenProjectsPage gens={gens} showToast={showToast}/>;
+        return <GenProjectsPage gens={gens} setGens={setGens} setWonJobs={setWonJobs}/>;
       case 'contacts':
-        return <ContactsPage showToast={showToast} onNewBid={openNewBid} userRole={user.role}/>;
+        return <ContactsPage onNewBid={openNewBid}/>;
       case 'reporting':
         return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
       case 'followups':
-        return <FollowupsPage showToast={showToast} onCountChange={setFollowupCount}/>;
+        return <FollowupsPage onCountChange={setFollowupCount}/>;
       case 'comms':
-        return <CommsPage bids={bids} gens={gens} activity={activity} showToast={showToast} userName={user.name}/>;
+        return <CommsPage bids={bids} gens={gens} activity={activity}/>;
       case 'docs':
-        return <DocsPage bids={bids} gens={gens} showToast={showToast} userName={user.name}/>;
+        return <DocsPage bids={bids} gens={gens}/>;
       case 'admin':
-        return <SettingsPage settings={settings} onSettingsSaved={reloadSettings}/>;
+        if (!isPrivileged(user)) {
+          return (
+            <div className="scroll view-enter">
+              <div style={{ padding: 32, color: 'var(--text2)', fontSize: 15 }}>
+                <b>Settings</b> — you don’t have permission to view this page. Contact an owner or administrator.
+              </div>
+            </div>
+          );
+        }
+        return <SettingsPage/>;
       default:
         return <StubPage title={view.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}/>;
     }
   };
 
   const shell = (
-    <>
+    <AppProviders user={user} showToast={showToast} settings={settings} reloadSettings={reloadSettings}>
       <AppShell
         view={view}
         onNav={setView}
-        user={user}
         onLogout={logout}
         genProposalCount={genProposalCount}
         elecProposalCount={elecProposalCount}
@@ -267,7 +270,7 @@ export default function App() {
         {renderView()}
       </AppShell>
       {toast && <Toast toast={toast}/>}
-    </>
+    </AppProviders>
   );
 
   return (

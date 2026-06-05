@@ -2,10 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { Customer, CustomerDetail, Toast } from '../../types';
+import { moneyFull as money, moneyShort } from '../../lib/money';
 
-const money = (n: number) => '$' + Math.round(n || 0).toLocaleString('en-US');
-const moneyShort = (n: number) => n >= 1_000_000 ? '$' + (n / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M'
-  : n >= 1000 ? '$' + (n / 1000).toFixed(0) + 'K' : '$' + Math.round(n || 0);
 const initials = (name: string) => name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
 const fmtDate = (ts?: string | null) => ts ? new Date(ts.length <= 10 ? ts + 'T00:00:00' : ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
 const fmtSize = (n: number) => !n ? '' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : (n / 1048576).toFixed(1) + ' MB';

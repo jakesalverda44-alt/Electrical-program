@@ -19,7 +19,7 @@ export const PC_TABS = [
   { key: 'rfis',       label: 'RFIs'              },
   { key: 'proposal',   label: 'Proposal'          },
   { key: 'costs',      label: 'Historical Costs'  },
-  { key: 'intel',      label: 'Bid Intelligence'  },
+  { key: 'intel',      label: 'Win-Rate Insights' },
 ] as const;
 
 export type PcTabKey = typeof PC_TABS[number]['key'];

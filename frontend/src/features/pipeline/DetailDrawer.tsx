@@ -4,13 +4,11 @@ import { Bid } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
 import api from '../../api/client';
 import RecordFiles from '../../components/RecordFiles';
+import { moneyFull as fmtMoney } from '../../lib/money';
 
 interface QualResult { score: number; reasons: string[]; gcWinRate: number | null; gcWon: number; gcLost: number; dueDays: number; }
 
-function moneyFull(n: number | null) {
-  if (n == null) return '—';
-  return '$' + Math.round(n).toLocaleString('en-US');
-}
+const moneyFull = (n: number | null) => n == null ? '—' : fmtMoney(n);
 function fmtTs(ts?: string | null) {
   if (!ts) return null;
   return new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -26,9 +24,10 @@ interface Props {
   onClose: () => void;
   onOpenPreconstruction: (id: string) => void;
   onBidEdited: (bid: Bid) => void;
+  onDelete: (bid: Bid) => void;
 }
 
-export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, onClose, onOpenPreconstruction, onBidEdited }: Props) {
+export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, onClose, onOpenPreconstruction, onBidEdited, onDelete }: Props) {
   const isTerminal = bid.stage === 'awarded' || bid.stage === 'lost';
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -226,7 +225,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
               {winProb && (
                 <div style={{ marginBottom: 12, padding: '10px 14px', background: 'var(--surface2)', borderRadius: 9 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Win Probability</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Historical Win Rate</span>
                     <span style={{ fontSize: 13, fontWeight: 900, color: winProb.pct >= 60 ? 'var(--green)' : winProb.pct >= 40 ? 'var(--amber)' : '#E06A6A' }}>{winProb.pct}%</span>
                   </div>
                   <div style={{ height: 5, background: 'var(--border2)', borderRadius: 3, overflow: 'hidden', marginBottom: 5 }}>
@@ -282,17 +281,28 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                         </div>
                       ))}
                     </div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                      A heuristic from your win-rate history with this GC and the bid timeline — not a prediction.
+                    </div>
                   </div>
                 ) : (
-                  <button className="btn ghost" disabled={qualifying} onClick={runQualify}
-                    style={{ width: '100%', justifyContent: 'center', fontSize: 12.5 }}>
-                    <Icon name="spark" size={13} stroke={2}/>{qualifying ? 'Scoring…' : 'Score This Bid'}
-                  </button>
-                )}
-              </div>
+              <button className="btn ghost" disabled={qualifying} onClick={runQualify}
+                style={{ width: '100%', justifyContent: 'center', fontSize: 12.5 }}>
+                <Icon name="spark" size={13} stroke={2}/>{qualifying ? 'Scoring…' : 'Score This Bid'}
+              </button>
+            )}
+          </div>
 
-              {!isTerminal && (
-                <button
+          <button
+            className="btn ghost"
+            style={{ width: '100%', justifyContent: 'center', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', marginTop: 8 }}
+            onClick={() => onDelete(bid)}
+          >
+            <Icon name="x" size={14} stroke={2}/>Delete Bid
+          </button>
+
+          {!isTerminal && (
+            <button
                   className="btn ghost"
                   style={{ width: '100%', justifyContent: 'center', color: 'var(--blue)', marginTop: 4 }}
                   onClick={() => { onClose(); onOpenPreconstruction(bid.id); }}

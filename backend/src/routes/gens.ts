@@ -1,19 +1,24 @@
 import { Router } from 'express';
 import { Resend } from 'resend';
-import multer from 'multer';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
+import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
 import { getSetting } from './settings';
 import { upsertCustomer } from './customers';
+import { asyncHandler } from '../utils/asyncHandler';
+import { logger } from '../utils/logger';
+import { writeAudit } from '../utils/audit';
+import { ensureProject, setProjectDeleted } from '../utils/project';
+import { commissionRate, commissionAmount } from '../utils/commission';
+import { pdfUpload } from '../utils/upload';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+const upload = pdfUpload;
 
 // Restricted (rep) users may only act on their own proposals. Returns the row if allowed,
 // or sends the appropriate 403/404 and returns null.
 async function loadOwnedGen(req: AuthRequest, res: import('express').Response) {
-  const { rows } = await pool.query('SELECT * FROM generator_proposals WHERE id=$1', [req.params.id]);
+  const { rows } = await pool.query('SELECT * FROM generator_proposals WHERE id=$1 AND deleted_at IS NULL', [req.params.id]);
   if (!rows.length) { res.status(404).json({ error: 'Not found' }); return null; }
   const scope = ownScopeId(req.user!);
   if (scope && rows[0].salesperson_id !== scope) {
@@ -25,7 +30,7 @@ async function loadOwnedGen(req: AuthRequest, res: import('express').Response) {
 
 router.get('/benchmark', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(
-    `SELECT kw, amount FROM generator_proposals WHERE stage = 'awarded' AND kw > 0 AND amount > 0`
+    `SELECT kw, amount FROM generator_proposals WHERE stage = 'awarded' AND kw > 0 AND amount > 0 AND deleted_at IS NULL`
   );
   const BRACKETS = [
     { label: 'Under 20kW',   min: 0,   max: 20   },
@@ -48,8 +53,9 @@ router.get('/benchmark', requireAuth, async (_req, res) => {
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
   const params: unknown[] = [];
-  let sql = 'SELECT * FROM generator_proposals';
-  if (scope) { params.push(scope); sql += ` WHERE salesperson_id = $${params.length}`; }
+  const where: string[] = ['deleted_at IS NULL'];
+  if (scope) { params.push(scope); where.push(`salesperson_id = $${params.length}`); }
+  let sql = `SELECT * FROM generator_proposals WHERE ${where.join(' AND ')}`;
   sql += ' ORDER BY created_at DESC';
   // Opt-in pagination: ?limit=N&offset=M. Omitted → return all rows (backward compatible).
   if (req.query.limit !== undefined) {
@@ -63,15 +69,23 @@ router.get('/', requireAuth, async (req: AuthRequest, res) => {
 });
 
 router.post('/', requireAuth, async (req: AuthRequest, res) => {
-  const { customer, loc, mfr, model, kw, amount, tax, addons } = req.body;
+  const { customer, loc, mfr, model, kw, amount, tax, addons, proposal_no, form_data, totals_data } = req.body;
   if (!customer?.trim()) return res.status(400).json({ error: 'Customer required' });
   const user = req.user!;
   const customerId = await upsertCustomer(customer, 'customer');
   const { rows } = await pool.query(
-    `INSERT INTO generator_proposals (customer, loc, mfr, model, kw, amount, tax, addons, salesperson_id, salesperson_name, customer_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    `INSERT INTO generator_proposals (
+       customer, loc, mfr, model, kw, amount, tax, addons,
+       proposal_no, form_data, totals_data,
+       salesperson_id, salesperson_name, customer_id
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14) RETURNING *`,
     [customer.trim(), (loc || '').trim() || '—', mfr, model, Number(kw) || 0,
-     Number(amount) || 0, Number(tax) || 0, Number(addons) || 0, user.id, user.name, customerId]
+     Number(amount) || 0, Number(tax) || 0, Number(addons) || 0,
+     proposal_no || null,
+     form_data !== undefined ? JSON.stringify(form_data) : null,
+     totals_data !== undefined ? JSON.stringify(totals_data) : null,
+     user.id, user.name, customerId]
   );
   res.json(rows[0]);
 });
@@ -102,14 +116,21 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
 
     let wonJob = null;
     if (stage === 'awarded' && gen.stage !== 'awarded') {
+      const rate = await commissionRate();
       const { rows: wj } = await client.query(
-        `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, salesperson_id)
-         VALUES ($1,$2,$3,'Generator',$4,$5)
+        `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, salesperson_id,
+                                commission_rate, commission_amount, commission_status, commission_earned_at)
+         VALUES ($1,$2,$3,'Generator',$4,$5,$6,$7,'earned',now())
          ON CONFLICT (proposal_id) DO NOTHING
          RETURNING *`,
-        [gen.salesperson_name, gen.customer, gen.id, gen.amount, gen.salesperson_id || null]
+        [gen.salesperson_name, gen.customer, gen.id, gen.amount, gen.salesperson_id || null,
+         rate, commissionAmount(gen.amount, rate)]
       );
       wonJob = wj[0] || null;
+      await ensureProject(client, {
+        id: gen.id, sourceType: 'gen', customerId: gen.customer_id,
+        name: gen.customer, contractValue: gen.amount,
+      });
       await client.query(
         `INSERT INTO activity (kind, div, text) VALUES ('awarded','gen',$1)`,
         [`${gen.customer} awarded — ${gen.salesperson_name}`]
@@ -126,6 +147,13 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     }
 
     await client.query('COMMIT');
+    if (stage === 'awarded' && gen.stage !== 'awarded') {
+      await writeAudit(req, {
+        action: 'award', entityType: 'gen', entityId: gen.id,
+        summary: `Awarded generator proposal "${gen.customer}" — $${Number(gen.amount || 0).toLocaleString()}`,
+        before: { stage: gen.stage }, after: { stage: 'awarded', value: gen.amount },
+      });
+    }
     res.json({ gen: rows[0], wonJob });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -138,7 +166,7 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
 
 router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
   const { phase } = req.body;
-  const valid = ['scheduled','ordered','delivered','install','startup','complete'];
+  const valid = ['deposit', 'engineering', 'permitting', 'scheduling', 'installation', 'inspection', 'startup', 'complete'];
   if (!valid.includes(phase)) return res.status(400).json({ error: 'Invalid phase' });
   if (!(await loadOwnedGen(req, res))) return;
   const { rows } = await pool.query(
@@ -151,7 +179,7 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
 
 router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (!(await loadOwnedGen(req, res))) return;
-  const { customer, loc, mfr, model, kw, amount, tax, addons } = req.body;
+  const { customer, loc, mfr, model, kw, amount, tax, addons, proposal_no, form_data, totals_data } = req.body;
   const fields: string[] = [];
   const vals: unknown[] = [];
   let i = 1;
@@ -163,6 +191,9 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (amount   !== undefined) { fields.push(`amount=$${i++}`);   vals.push(Number(amount)); }
   if (tax      !== undefined) { fields.push(`tax=$${i++}`);      vals.push(Number(tax)); }
   if (addons   !== undefined) { fields.push(`addons=$${i++}`);   vals.push(Number(addons)); }
+  if (proposal_no !== undefined) { fields.push(`proposal_no=$${i++}`); vals.push(proposal_no || null); }
+  if (form_data   !== undefined) { fields.push(`form_data=$${i++}::jsonb`); vals.push(JSON.stringify(form_data)); }
+  if (totals_data !== undefined) { fields.push(`totals_data=$${i++}::jsonb`); vals.push(JSON.stringify(totals_data)); }
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
   fields.push(`updated_at=now()`);
   vals.push(req.params.id);
@@ -173,17 +204,89 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
   const gen = rows[0];
 
-  // If amount changed on an awarded gen, keep won_jobs in sync
+  // If amount changed on an awarded gen, keep won_jobs (and the unpaid
+  // commission, at its existing rate) in sync.
   let wonJob = null;
   if (amount !== undefined && gen.stage === 'awarded') {
     const { rows: wj } = await pool.query(
-      `UPDATE won_jobs SET value=$1 WHERE proposal_id=$2 RETURNING *`,
+      `UPDATE won_jobs
+       SET value = $1,
+           commission_amount = CASE WHEN commission_status = 'paid'
+             THEN commission_amount
+             ELSE ROUND($1 * COALESCE(commission_rate, 0) / 100, 2) END
+       WHERE proposal_id = $2 RETURNING *`,
       [Number(amount), gen.id]
     );
     wonJob = wj[0] || null;
   }
 
   res.json({ gen, wonJob });
+});
+
+// Soft delete — moves the proposal (and its won-job record) to the Trash.
+router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE generator_proposals SET deleted_at=now() WHERE id=$1', [req.params.id]);
+    await client.query('UPDATE won_jobs SET deleted_at=now() WHERE proposal_id=$1', [req.params.id]);
+    await setProjectDeleted(client, req.params.id, true);
+    await client.query('COMMIT');
+    await writeAudit(req, {
+      action: 'delete', entityType: 'gen', entityId: gen.id,
+      summary: `Moved generator proposal "${gen.customer}" to Trash`, before: gen,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// Restore a trashed proposal (and its won-job record).
+router.post('/:id/restore', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const { rows } = await pool.query('UPDATE generator_proposals SET deleted_at=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING *', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found in Trash' });
+  await pool.query('UPDATE won_jobs SET deleted_at=NULL WHERE proposal_id=$1', [req.params.id]);
+  await setProjectDeleted(pool, req.params.id, false);
+  await writeAudit(req, { action: 'restore', entityType: 'gen', entityId: req.params.id, summary: `Restored generator proposal "${rows[0].customer}"` });
+  res.json(rows[0]);
+});
+
+// Permanently delete a trashed proposal and dependent records (admin only).
+router.delete('/:id/purge', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const { rows: existing } = await pool.query('SELECT id, customer FROM generator_proposals WHERE id=$1 AND deleted_at IS NOT NULL', [req.params.id]);
+  if (!existing.length) return res.status(404).json({ error: 'Not found in Trash' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM project_change_orders WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM project_field_notes WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM project_rfis WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM project_sections WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM documents WHERE linked_id=$1', [req.params.id]);
+    await client.query('DELETE FROM communications WHERE linked_id=$1', [req.params.id]);
+    await client.query('DELETE FROM tasks WHERE linked_id=$1', [req.params.id]);
+    await client.query('DELETE FROM notifications WHERE link_id=$1', [req.params.id]);
+    await client.query('DELETE FROM won_jobs WHERE proposal_id=$1', [req.params.id]);
+    await client.query('DELETE FROM projects WHERE id=$1', [req.params.id]);
+    await client.query('DELETE FROM generator_proposals WHERE id=$1', [req.params.id]);
+    await client.query('COMMIT');
+    await writeAudit(req, { action: 'purge', entityType: 'gen', entityId: req.params.id, summary: `Permanently deleted generator proposal "${existing[0].customer}"` });
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
 });
 
 // ── Send proposal email ──────────────────────────────────────────────────────
@@ -241,7 +344,7 @@ router.get('/p/:token', async (req, res) => {
   const { rows } = await pool.query(
     `UPDATE generator_proposals
      SET viewed_at = COALESCE(viewed_at, now())
-     WHERE proposal_token = $1
+     WHERE proposal_token = $1 AND deleted_at IS NULL
      RETURNING *`,
     [req.params.token]
   );
@@ -258,9 +361,9 @@ router.post('/p/:token/sign', async (req, res) => {
     `UPDATE generator_proposals
      SET signed_at = COALESCE(signed_at, now()),
          signature_data = $1,
-         stage = CASE WHEN stage != 'declined' THEN 'signed' ELSE stage END,
+         stage = CASE WHEN stage IN ('declined','awarded') THEN stage ELSE 'sent' END,
          updated_at = now()
-     WHERE proposal_token = $2
+     WHERE proposal_token = $2 AND deleted_at IS NULL
      RETURNING id, customer, stage, signed_at`,
     [signatureData, req.params.token]
   );
@@ -272,12 +375,12 @@ router.post('/p/:token/sign', async (req, res) => {
 // Token-scoped and tightly bounded: the proposal must be signed, and only one
 // signed PDF is ever stored (idempotent), so this public endpoint can't be abused
 // to pile up files.
-router.post('/p/:token/proposal-pdf', upload.single('file'), async (req, res) => {
+router.post('/p/:token/proposal-pdf', upload.single('file'), asyncHandler(async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'file required' });
 
   const { rows } = await pool.query(
-    'SELECT id, customer, signed_at FROM generator_proposals WHERE proposal_token = $1',
+    'SELECT id, customer, signed_at FROM generator_proposals WHERE proposal_token = $1 AND deleted_at IS NULL',
     [req.params.token]
   );
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
@@ -291,12 +394,21 @@ router.post('/p/:token/proposal-pdf', upload.single('file'), async (req, res) =>
   if (existing.length) return res.json({ ok: true, skipped: true });
 
   const name = `Signed Proposal - ${gen.customer}.pdf`;
-  await pool.query(
-    `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
-     VALUES ($1,$2,'gen',$3,$3,'contract',$4,'application/pdf','Customer signature',$5)`,
-    [gen.id, gen.customer, name, file.size, file.buffer.toString('base64')]
-  );
-  res.json({ ok: true });
-});
+  logger.info({ genId: gen.id, fileSize: file.size }, 'Signed proposal PDF upload started');
+  try {
+    await pool.query(
+      `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
+       VALUES ($1,$2,'gen',$3,$3,'contract',$4,'application/pdf','Customer signature',$5)`,
+      [gen.id, gen.customer, name, file.size, file.buffer.toString('base64')]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, genId: gen.id }, 'Signed proposal PDF upload failed');
+    if ((err as { code?: string; column?: string }).code === '42703' && (err as { column?: string }).column === 'file_data') {
+      return res.status(500).json({ error: 'Document storage is not ready. Run database migrations and try again.' });
+    }
+    throw err;
+  }
+}));
 
 export default router;

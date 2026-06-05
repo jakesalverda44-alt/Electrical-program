@@ -23,8 +23,18 @@ import preconRouter from './routes/preconstruction';
 import projectsRouter from './routes/projects';
 import documentsRouter from './routes/documents';
 import settingsRouter from './routes/settings';
+import adminRouter from './routes/admin';
+import intakeRouter from './routes/intake';
 
 dotenv.config();
+
+process.on('unhandledRejection', err => {
+  logger.error({ err }, 'Unhandled promise rejection');
+});
+
+process.on('uncaughtException', err => {
+  logger.fatal({ err }, 'Uncaught exception');
+});
 
 const app = express();
 
@@ -70,6 +80,8 @@ app.use('/api/preconstruction', preconRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/admin', adminRouter);
+app.use('/api/intake', intakeRouter);
 
 // AI usage today — per-user analysis count for the current day
 app.get('/api/ai/usage/today', requireAuth, async (_req: AuthRequest, res) => {
@@ -95,21 +107,36 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Global error handler — catches anything forwarded via asyncHandler / next(err).
-app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((err: Error & { code?: string; status?: number; statusCode?: number }, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   logger.error({ err, path: req.path }, 'Unhandled request error');
   if (res.headersSent) return;
-  res.status(500).json({ error: 'Server error' });
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'File is too large. Please upload a smaller file.' });
+  }
+  if (err.name === 'SyntaxError' && 'body' in err) {
+    return res.status(400).json({ error: 'Invalid JSON request body' });
+  }
+  const status = err.status || err.statusCode || 500;
+  res.status(status >= 400 && status < 600 ? status : 500).json({
+    error: status === 500 ? 'Server error' : err.message,
+  });
 });
 
 const port = Number(process.env.PORT) || 3001;
 
-runMigrations()
-  .then(async () => {
-    await initJwtSecret();
-    app.listen(port, () => logger.info(`Backend running on :${port}`));
-    startReminderScheduler();
-  })
-  .catch(err => {
-    logger.error({ err }, 'Migration failed, aborting startup');
-    process.exit(1);
-  });
+export { app };
+
+// Only boot (migrate + listen) when run directly — importing the app for tests
+// must not start the server or touch the database.
+if (require.main === module) {
+  runMigrations()
+    .then(async () => {
+      await initJwtSecret();
+      app.listen(port, () => logger.info(`Backend running on :${port}`));
+      startReminderScheduler();
+    })
+    .catch(err => {
+      logger.error({ err }, 'Migration failed, aborting startup');
+      process.exit(1);
+    });
+}

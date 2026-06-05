@@ -1,7 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
-import { Gen, Toast } from '../../types';
+import { Gen, WonJob } from '../../types';
 import api from '../../api/client';
+import { moneyFull, moneyShort as money } from '../../lib/money';
+import { useShowToast } from '../../contexts/AppContext';
 
 const PHASES = [
   { key: 'deposit',      label: 'Deposit',      color: '#7C8AA3' },
@@ -15,16 +17,14 @@ const PHASES = [
 ] as const;
 type PhaseKey = typeof PHASES[number]['key'];
 
-function money(n: number) {
-  if (n >= 1_000_000) return '$' + (n/1_000_000).toFixed(2).replace(/\.?0+$/,'')+'M';
-  if (n >= 1_000)     return '$' + (n/1_000).toFixed(1).replace(/\.0$/,'')+'K';
-  return '$'+Math.round(n);
+interface Props {
+  gens: Gen[];
+  setGens: (fn: (prev: Gen[]) => Gen[]) => void;
+  setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
 }
-function moneyFull(n: number) { return '$'+Math.round(n).toLocaleString('en-US'); }
 
-interface Props { gens: Gen[]; showToast: (t: Toast) => void; }
-
-export default function GenProjectsPage({ gens, showToast }: Props) {
+export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
+  const showToast = useShowToast();
   const awarded = useMemo(() => gens.filter(g => g.stage === 'awarded'), [gens]);
 
   // Normalise phase: map old values forward, default to 'deposit'
@@ -44,16 +44,43 @@ export default function GenProjectsPage({ gens, showToast }: Props) {
   const [overCol, setOverCol] = useState<PhaseKey|null>(null);
   const [detail,  setDetail]  = useState<Gen|null>(null);
 
-  const movePhase = (id: string, phase: PhaseKey) => {
+  const movePhase = async (id: string, phase: PhaseKey) => {
+    const prevPhase = phases[id] ?? 'deposit';
     setPhases(prev => ({ ...prev, [id]: phase }));
-    api.patch(`/gens/${id}/phase`, { phase }).catch(() => {});
-    showToast({ title: 'Phase updated', sub: PHASES.find(p=>p.key===phase)?.label });
+    try {
+      const { data } = await api.patch(`/gens/${id}/phase`, { phase });
+      setGens(prev => prev.map(g => g.id === id ? data : g));
+      setDetail(d => d?.id === id ? data : d);
+      showToast({ title: 'Phase updated', sub: PHASES.find(p=>p.key===phase)?.label });
+    } catch (err: unknown) {
+      setPhases(prev => ({ ...prev, [id]: prevPhase }));
+      const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      showToast({ title: 'Phase update failed', sub: message || 'Changes reverted' });
+    }
   };
 
   const advancePhase = (id: string) => {
     const cur = phases[id] ?? 'deposit';
     const idx = PHASES.findIndex(p => p.key === cur);
     if (idx < PHASES.length - 1) movePhase(id, PHASES[idx+1].key);
+  };
+
+  const deleteProject = async (gen: Gen) => {
+    if (!window.confirm(`Delete generator project "${gen.customer}" and its linked files/testing data? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/gens/${gen.id}`);
+      setGens(prev => prev.filter(g => g.id !== gen.id));
+      setWonJobs(prev => prev.filter(w => w.proposal_id !== gen.id));
+      setPhases(prev => {
+        const next = { ...prev };
+        delete next[gen.id];
+        return next;
+      });
+      setDetail(null);
+      showToast({ title: 'Generator project deleted', sub: gen.customer });
+    } catch {
+      showToast({ title: 'Delete failed', sub: 'Please try again' });
+    }
   };
 
   const totalValue  = awarded.reduce((s,g)=>s+Number(g.amount),0);
@@ -229,6 +256,12 @@ export default function GenProjectsPage({ gens, showToast }: Props) {
                 <div style={{ fontSize:13, fontWeight:700, color:'var(--text)' }}>{v}</div>
               </div>
             ))}
+
+            <button className="btn ghost"
+              style={{ width: '100%', justifyContent: 'center', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', margin: '4px 0 16px' }}
+              onClick={() => deleteProject(detail)}>
+              <Icon name="x" size={14} stroke={2}/>Delete Project
+            </button>
 
             {/* Phase selector */}
             <div style={{ marginTop:20 }}>
