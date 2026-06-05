@@ -60,21 +60,28 @@ interface Props {
   repNames?: string[];
   userName?: string;
   userRole?: string;
+  /** Division filter from the header tabs: 'all' | 'elec' | 'gen'. */
+  dashFilter?: string;
   onNav: (v: string) => void;
   onNewProposal: () => void;
 }
 
-export default function DashboardPage({ bids, gens, wonJobs, activity, repNames, userName, userRole, onNav, onNewProposal }: Props) {
+export default function DashboardPage({ bids, gens, wonJobs, activity, repNames, userName, userRole, dashFilter = 'all', onNav, onNewProposal }: Props) {
   const isManager = !userRole || MANAGER_ROLES.includes(userRole);
   const firstName = (userName || '').split(' ')[0];
   // Reps see their own scoped data (enforced server-side); label it accordingly.
   const scopeWord = isManager ? '' : 'My ';
   const sum = (a: { amount: number | null }[]) => a.reduce((s, x) => s + Number(x.amount ?? 0), 0);
 
+  // Division filter from the header tabs.
+  const showElec = dashFilter !== 'gen';
+  const showGen  = dashFilter !== 'elec';
+
   const elecActive = bids.filter(b => b.stage === 'due' || b.stage === 'submitted');
   const genActive  = gens.filter(g => g.stage === 'building' || g.stage === 'sent');
   const elecVal = sum(elecActive), genVal = sum(genActive);
-  const total = elecVal + genVal;
+  const total = (showElec ? elecVal : 0) + (showGen ? genVal : 0);
+  const activeCount = (showElec ? elecActive.length : 0) + (showGen ? genActive.length : 0);
   const elecWon  = bids.filter(b => b.stage === 'awarded').length;
   const elecLost = bids.filter(b => b.stage === 'lost').length;
   const winRate = Math.round((elecWon / Math.max(1, elecWon + elecLost)) * 100);
@@ -90,12 +97,15 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
   const awaitingReply = sentGens.filter(g => !g.viewed_at);
   const viewedNotSigned = viewedGens.filter(g => g.stage !== 'signed');
 
-  // Sales summary
+  // Sales summary — scoped to the selected division.
+  const fWon = dashFilter === 'elec' ? wonJobs.filter(j => j.proposal_type === 'Electrical')
+             : dashFilter === 'gen'  ? wonJobs.filter(j => j.proposal_type === 'Generator')
+             : wonJobs;
   const now = new Date();
-  const thisMonth = wonJobs.filter(j => {
+  const thisMonth = fWon.filter(j => {
     const d = new Date(j.date_won); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
   });
-  const thisYear = wonJobs.filter(j => new Date(j.date_won).getFullYear() === now.getFullYear());
+  const thisYear = fWon.filter(j => new Date(j.date_won).getFullYear() === now.getFullYear());
   const sumWon = (a: WonJob[]) => a.reduce((s, x) => s + Number(x.value), 0);
   const monthVal = sumWon(thisMonth), yearVal = sumWon(thisYear);
   const avgDeal  = thisYear.length ? Math.round(yearVal / thisYear.length) : 0;
@@ -117,13 +127,16 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
         <FollowupsDue onNav={onNav}/>
 
         {/* Stat cards */}
-        <div className="stats" style={{ gridTemplateColumns: 'repeat(4,1fr)', padding: 0 }}>
-          {[
-            { label: scopeWord + 'Open Pipeline', val: money(total),   sub: `${elecActive.length + genActive.length} active opportunities`, ic: 'trend',    tone: 'blue',  nav: 'elec-proposals' },
-            { label: 'Electrical Value',    val: money(elecVal), sub: `${elecActive.length} active bids`,                             ic: 'pipeline', tone: 'blue',  nav: 'elec-proposals' },
-            { label: 'Generator Value',     val: money(genVal),  sub: `${genActive.length} active proposals`,                         ic: 'bolt',     tone: 'amber', nav: 'gen-proposals'  },
-            { label: 'Win Rate',            val: winRate + '%',  sub: `${elecWon} won · ${elecLost} lost`,                            ic: 'spark',    tone: 'green', nav: 'sales-by-rep'   },
-          ].map(s => (
+        {(() => {
+        const statCards = [
+          { label: scopeWord + 'Open Pipeline', val: money(total), sub: `${activeCount} active opportunities`, ic: 'trend', tone: 'blue', nav: showGen && !showElec ? 'gen-proposals' : 'elec-proposals' },
+          ...(showElec ? [{ label: 'Electrical Value', val: money(elecVal), sub: `${elecActive.length} active bids`,      ic: 'pipeline', tone: 'blue',  nav: 'elec-proposals' }] : []),
+          ...(showGen  ? [{ label: 'Generator Value',  val: money(genVal),  sub: `${genActive.length} active proposals`, ic: 'bolt',     tone: 'amber', nav: 'gen-proposals'  }] : []),
+          ...(showElec ? [{ label: 'Win Rate',         val: winRate + '%',  sub: `${elecWon} won · ${elecLost} lost`,    ic: 'spark',    tone: 'green', nav: 'sales-by-rep'   }] : []),
+        ];
+        return (
+        <div className="stats" style={{ gridTemplateColumns: `repeat(${statCards.length},1fr)`, padding: 0 }}>
+          {statCards.map(s => (
             <div className="stat" key={s.label} onClick={() => onNav(s.nav)} style={{ cursor: 'pointer' }}>
               <div className="stat-top">
                 <span className="stat-label">{s.label}</span>
@@ -134,6 +147,7 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
             </div>
           ))}
         </div>
+        ); })()}
 
         {/* Sales summary band */}
         <div className="comm-band">
@@ -169,7 +183,7 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
           </div>
         </div>
 
-              {overdue.length > 0 && (
+              {showElec && overdue.length > 0 && (
                 <div style={{ margin: '0 0 18px', padding: '14px 18px', background: 'rgba(224,106,106,.10)', border: '1px solid rgba(224,106,106,.25)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 14 }}>
                   <span style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(224,106,106,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                     <Icon name="clock" size={18} stroke={2} style={{ color: '#E06A6A' }}/>
@@ -194,6 +208,7 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
         <div className="dash-grid">
           {/* Left column */}
           <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
+            {showElec && (
             <div className="panel">
               <div className="panel-hdr">
                 <span className="panel-title">
@@ -219,6 +234,7 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
                 })}
               </div>
             </div>
+            )}
 
             <div className="panel">
               <div className="panel-hdr">
@@ -246,6 +262,7 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
 
           {/* Right column */}
           <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
+            {showGen && (<>
             <div className="panel">
               <div className="panel-hdr">
                 <span className="panel-title">
@@ -320,6 +337,7 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
                 )}
               </div>
             </div>
+            </>)}
 
             <div className="panel">
               <div className="panel-hdr">

@@ -165,6 +165,7 @@ export default function App() {
             bids={bids} gens={gens} wonJobs={wonJobs} activity={activity}
             repNames={repNames}
             userName={user.name} userRole={user.role}
+            dashFilter={dashFilter}
             onNav={setView} onNewProposal={() => setView('builder')}
           />
         );
