@@ -244,18 +244,22 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
                 </span>
               </div>
               <div className="split">
+                {showElec && (
                 <div className="split-card">
                   <div className="sc-top"><span className="sc-tag" style={{ background:'var(--blue)' }}/> Electrical Bids</div>
                   <div className="sc-val num">{money(elecVal)}</div>
                   <div className="sc-sub">{elecActive.length} active · {money(sum(bids.filter(b=>b.stage==='awarded')))} awarded</div>
-                  <div className="sc-bar"><i style={{ width:pct+'%', background:'var(--blue)' }}/><i style={{ width:(100-pct)+'%', background:'var(--amber)' }}/></div>
+                  {dashFilter === 'all' && <div className="sc-bar"><i style={{ width:pct+'%', background:'var(--blue)' }}/><i style={{ width:(100-pct)+'%', background:'var(--amber)' }}/></div>}
                 </div>
+                )}
+                {showGen && (
                 <div className="split-card">
                   <div className="sc-top"><span className="sc-tag" style={{ background:'var(--amber)' }}/> Generators</div>
                   <div className="sc-val num">{money(genVal)}</div>
                   <div className="sc-sub">{genActive.length} active · {money(sum(gens.filter(g=>g.stage==='awarded')))} awarded</div>
-                  <div className="sc-bar"><i style={{ width:(100-pct)+'%', background:'var(--amber)' }}/><i style={{ width:pct+'%', background:'var(--surface3)' }}/></div>
+                  {dashFilter === 'all' && <div className="sc-bar"><i style={{ width:(100-pct)+'%', background:'var(--amber)' }}/><i style={{ width:pct+'%', background:'var(--surface3)' }}/></div>}
                 </div>
+                )}
               </div>
             </div>
           </div>
