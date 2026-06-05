@@ -13,9 +13,6 @@ import {
   getOrCreateGcFolder,
   createJobFolder,
   createSubfolders,
-  moveFolder,
-  ACTIVE_PROJECTS_ROOT,
-  COMPLETED_PROJECTS_ROOT,
 } from '../services/googleDrive';
 
 const router = Router();
@@ -206,11 +203,8 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
         summary: `Awarded bid "${bid.name}" (${bid.gc}) — $${Number(bid.amount || 0).toLocaleString()}`,
         before: { stage: bid.stage }, after: { stage: 'awarded', value: bid.amount },
       });
-      // Fire-and-forget: move job folder from Active to Completed Projects in Drive
-      if (bid.drive_job_folder_id) {
-        moveFolder(bid.drive_job_folder_id, ACTIVE_PROJECTS_ROOT, COMPLETED_PROJECTS_ROOT)
-          .catch(err => console.error('[drive] moveFolder on award failed:', err));
-      }
+      // Awarded = job is starting, not finished — folder stays in Active Projects.
+      // Folder moves to Completed Projects only when the job is closed out.
     }
     res.json({ bid: withDueDays(rows[0]), wonJob });
   } catch (err) {

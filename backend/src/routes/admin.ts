@@ -6,9 +6,6 @@ import {
   getOrCreateGcFolder,
   createJobFolder,
   createSubfolders,
-  moveFolder,
-  ACTIVE_PROJECTS_ROOT,
-  COMPLETED_PROJECTS_ROOT,
 } from '../services/googleDrive';
 
 const router = Router();
@@ -101,10 +98,7 @@ router.post('/backfill-drive', asyncHandler(async (_req, res) => {
           bid.id,
         ],
       );
-      // Awarded bids belong in Completed Projects
-      if (bid.stage === 'awarded') {
-        await moveFolder(jobFolderId, ACTIVE_PROJECTS_ROOT, COMPLETED_PROJECTS_ROOT);
-      }
+      // Awarded = active job in progress — folder stays in Active Projects.
       results.processed++;
     } catch (err) {
       results.errors.push(`${bid.name}: ${(err as Error).message}`);
