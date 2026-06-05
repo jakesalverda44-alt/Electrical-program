@@ -10,6 +10,7 @@ import { parseAIJSON } from '../ai/json';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
 import { drawingUpload } from '../utils/upload';
+import { uploadFile } from '../services/googleDrive';
 
 const router = Router();
 const upload = drawingUpload;
@@ -302,6 +303,34 @@ async function runPipeline(
       JSON.stringify(a1.lighting ?? []),
       bidId,
     ]);
+
+    // Fire-and-forget: upload scope extraction JSON to Drive
+    (async () => {
+      try {
+        const { rows: bidRows } = await pool.query(
+          'SELECT name, drive_estimates_folder_id FROM bids WHERE id=$1',
+          [bidId],
+        );
+        if (!bidRows.length || !bidRows[0].drive_estimates_folder_id) return;
+        const bid = bidRows[0];
+        const date = new Date().toISOString().split('T')[0];
+        const payload = {
+          job: bid.name,
+          generated: date,
+          drawing_analysis: parseAIJSON(agent1Output) ?? agent1Output,
+          scope_and_estimate: agent2Output,
+          qc_review: agent3Output,
+        };
+        await uploadFile(
+          `Scope — ${bid.name} — ${date}.json`,
+          'application/json',
+          Buffer.from(JSON.stringify(payload, null, 2)),
+          bid.drive_estimates_folder_id,
+        );
+      } catch (err) {
+        console.error('[drive] Scope JSON upload failed:', err);
+      }
+    })();
   } catch (err) {
     const message = `Agent 3 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 3 failed');
