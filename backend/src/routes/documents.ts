@@ -55,10 +55,17 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
 
   try {
     // When Cloudinary is configured, upload there and store only the URL.
-    // If not configured, fall back to base64 in Postgres (small files only).
+    // If Cloudinary rejects the file (e.g. over the account's size limit) or
+    // isn't configured, fall back to base64 in Postgres so the upload still
+    // succeeds and the file still gets pushed to Google Drive below.
     let storageUrl: string | null = null;
     if (isCloudStorageConfigured()) {
-      storageUrl = await uploadToCloud(file.buffer, file.originalname, file.mimetype);
+      try {
+        storageUrl = await uploadToCloud(file.buffer, file.originalname, file.mimetype);
+      } catch (cloudErr) {
+        logger.warn({ err: cloudErr, fileName: file.originalname, fileSize: file.size },
+          '[cloudStorage] upload rejected — falling back to database storage');
+      }
     }
     const fileData = storageUrl ? null : file.buffer.toString('base64');
 
