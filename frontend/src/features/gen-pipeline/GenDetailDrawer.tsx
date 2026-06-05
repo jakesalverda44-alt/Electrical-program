@@ -3,8 +3,8 @@ import Icon from '../../components/Icon';
 import { Gen } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
 import RecordFiles from '../../components/RecordFiles';
+import { moneyFull } from '../../lib/money';
 
-function moneyFull(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 function fmtTs(ts?: string | null) {
   if (!ts) return null;
   return new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });

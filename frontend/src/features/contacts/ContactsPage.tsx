@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import api from '../../api/client';
 import CustomerHub from './CustomerHub';
 import { Customer, Toast } from '../../types';
+import { moneyFull } from '../../lib/money';
 
 type FilterType = Customer['type'] | 'all';
 
@@ -12,7 +13,6 @@ interface Props {
   userRole?: string;
 }
 
-function moneyFull(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 function initials(name: string) { return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(); }
 
 const TYPE_LABELS: Record<Customer['type'], { label: string; color: string; bg: string }> = {

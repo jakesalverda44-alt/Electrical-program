@@ -4,13 +4,11 @@ import { Bid } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
 import api from '../../api/client';
 import RecordFiles from '../../components/RecordFiles';
+import { moneyFull as fmtMoney } from '../../lib/money';
 
 interface QualResult { score: number; reasons: string[]; gcWinRate: number | null; gcWon: number; gcLost: number; dueDays: number; }
 
-function moneyFull(n: number | null) {
-  if (n == null) return '—';
-  return '$' + Math.round(n).toLocaleString('en-US');
-}
+const moneyFull = (n: number | null) => n == null ? '—' : fmtMoney(n);
 function fmtTs(ts?: string | null) {
   if (!ts) return null;
   return new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });

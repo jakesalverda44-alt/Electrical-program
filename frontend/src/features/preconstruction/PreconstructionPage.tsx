@@ -4,6 +4,7 @@ import { Bid, Toast } from '../../types';
 import { PcWorkspace, blankWorkspace, PC_STEPS } from './constants';
 import PcWorkspaceView from './PcWorkspace';
 import { AppSettings } from '../../hooks/useAppSettings';
+import { moneyShort as money } from '../../lib/money';
 
 const STEP_ORDER = PC_STEPS.map(s => s.key);
 
@@ -17,11 +18,6 @@ interface Props {
   settings?: AppSettings;
 }
 
-function money(n: number) {
-  if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2).replace(/\.?0+$/, '') + 'M';
-  if (n >= 1_000)     return '$' + (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
-  return '$' + n;
-}
 
 export default function PreconstructionPage({ bids, pcData, onPcUpdate, onBidUpdated, showToast, userRole, settings }: Props) {
   const [activeBidId, setActiveBidId] = React.useState<string | null>(null);

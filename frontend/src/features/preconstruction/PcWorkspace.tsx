@@ -4,6 +4,7 @@ import { Bid, Toast } from '../../types';
 import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey } from './constants';
 import api from '../../api/client';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
+import { moneyFull } from '../../lib/money';
 
 interface Props {
   ws: PcWorkspace;
@@ -291,7 +292,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           <div style={{ padding: '20px 24px' }}>
             <div className="stats" style={{ gridTemplateColumns: 'repeat(3,1fr)', padding: 0, marginBottom: 20 }}>
               {[
-                { label: 'Est. Contract Value', val: '$' + Math.round(ws.amount).toLocaleString('en-US'), tone: 'green' },
+                { label: 'Est. Contract Value', val: moneyFull(ws.amount), tone: 'green' },
                 { label: 'Step Progress',        val: `${STEP_ORDER.indexOf(ws.step) + 1} / ${STEP_ORDER.length}`, tone: 'blue'  },
                 { label: 'RFIs Open',            val: String(ws.rfis.filter(r => !r.submitted).length), tone: 'amber' },
               ].map(s => (
@@ -698,7 +699,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                         <td className="nm">{String(row.name)}</td>
                         <td className="sub">{String(row.gc)}</td>
                         <td className="sub">{String(row.year ?? '—')}</td>
-                        <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>${Math.round(Number(row.amount)).toLocaleString()}</td>
+                        <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{moneyFull(Number(row.amount))}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -736,7 +737,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       },
                       ...(bidIntel.gcAvgWonAmount ? [{
                         label: 'Avg Won Contract (this GC)',
-                        val: `$${Math.round(Number(bidIntel.gcAvgWonAmount)).toLocaleString()}`,
+                        val: moneyFull(Number(bidIntel.gcAvgWonAmount)),
                         sub: 'Average value of won bids with this GC',
                       }] : []),
                     ].map(item => (

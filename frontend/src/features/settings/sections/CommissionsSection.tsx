@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import api from '../../../api/client';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, inputStyle } from '../shared';
+import { moneyFull } from '../../../lib/money';
 
 export function CommissionsSection({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
   const [rate, setRate] = useState(settings.commission_default_rate ?? '3');
@@ -32,8 +33,8 @@ export function CommissionsSection({ settings, onSaved }: { settings: AppSetting
       </Field>
 
       <div style={{ fontSize: 12.5, color: 'var(--text3)', lineHeight: 1.6, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', maxWidth: 520 }}>
-        Example: a <b>$100,000</b> contract at <b>{Number(rate) || 0}%</b> earns a commission of{' '}
-        <b>${(Math.round(100000 * (Number(rate) || 0)) / 100).toLocaleString()}</b>.
+        Example: a <b>{moneyFull(100000)}</b> contract at <b>{Number(rate) || 0}%</b> earns a commission of{' '}
+        <b>{moneyFull(100000 * (Number(rate) || 0) / 100)}</b>.
         Mark commissions paid from the <b>Sales by Rep</b> page.
       </div>
 

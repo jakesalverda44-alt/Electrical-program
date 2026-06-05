@@ -6,12 +6,7 @@ import { usePipeline } from './usePipeline';
 import DetailDrawer from './DetailDrawer';
 import AddBidModal from './AddBidModal';
 import api from '../../api/client';
-
-function money(n: number) {
-  if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2).replace(/\.?0+$/, '') + 'M';
-  if (n >= 1_000)     return '$' + (n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1).replace(/\.0$/, '') + 'K';
-  return '$' + n;
-}
+import { moneyShort as money } from '../../lib/money';
 
 type Filter = 'all' | 'urgent' | 'large';
 

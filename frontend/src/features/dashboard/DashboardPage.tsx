@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { Bid, Gen, WonJob, Activity } from '../../types';
+import { moneyFull, moneyShort as money } from '../../lib/money';
 
 // Roles that see company-wide figures; everyone else sees their own scoped data.
 const MANAGER_ROLES = ['owner', 'administrator', 'sales_manager'];
@@ -50,12 +51,6 @@ function FollowupsDue({ onNav }: { onNav: (v: string) => void }) {
   );
 }
 
-function money(n: number) {
-  if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2).replace(/\.?0+$/, '') + 'M';
-  if (n >= 1_000) return '$' + (n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1).replace(/\.0$/, '') + 'K';
-  return '$' + n;
-}
-function moneyFull(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 
 interface Props {
   bids: Bid[];

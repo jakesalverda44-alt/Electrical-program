@@ -4,6 +4,7 @@ import Icon from '../../../components/Icon';
 import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, Toggle, RolePill, inputStyle, initials, timeAgo, ROLE_OPTIONS, ROLE_LABELS, ROLE_COLORS } from '../shared';
+import { currencySymbol } from '../../../lib/money';
 
 export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
   const keys = ['gen_default_labor','gen_default_permit','gen_default_startup','gen_default_tax_rate',
@@ -28,18 +29,19 @@ export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSe
     finally { setSaving(false); }
   };
 
+  const cur = currencySymbol();
   const fields: [string, string, string][] = [
-    ['gen_default_labor',     'Labor & Installation',     '$'],
-    ['gen_default_permit',    'Permit Fee',               '$'],
-    ['gen_default_startup',   'Startup & Commissioning',  '$'],
+    ['gen_default_labor',     'Labor & Installation',     cur],
+    ['gen_default_permit',    'Permit Fee',               cur],
+    ['gen_default_startup',   'Startup & Commissioning',  cur],
     ['gen_default_tax_rate',  'Tax Rate',                 '%'],
-    ['gen_default_pad',       'Concrete Pad',             '$'],
-    ['gen_default_smm',       'SMM (Preventative Maint.)', '$'],
-    ['gen_default_surge_pro', 'Surge Protector Pro',      '$'],
-    ['gen_default_battery',   'Battery Maintainer',       '$'],
-    ['gen_default_extra_wire','Extra Wire (per ft)',       '$'],
-    ['gen_default_lull',      'Lull',                     '$'],
-    ['gen_default_crane',     'Crane',                    '$'],
+    ['gen_default_pad',       'Concrete Pad',             cur],
+    ['gen_default_smm',       'SMM (Preventative Maint.)', cur],
+    ['gen_default_surge_pro', 'Surge Protector Pro',      cur],
+    ['gen_default_battery',   'Battery Maintainer',       cur],
+    ['gen_default_extra_wire','Extra Wire (per ft)',       cur],
+    ['gen_default_lull',      'Lull',                     cur],
+    ['gen_default_crane',     'Crane',                    cur],
   ];
 
   return (

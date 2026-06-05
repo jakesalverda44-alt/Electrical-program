@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import Icon from '../../components/Icon';
 import { Bid, Toast, WonJob } from '../../types';
 import api from '../../api/client';
+import { moneyFull, moneyShort as money } from '../../lib/money';
 
 // ── Phase → Status mapping ───────────────────────────────────────
 const FIELD_PHASES = new Set(['rough','inspection','trim','final']);
@@ -51,12 +52,6 @@ interface ProjDoc   { id: string; name: string; display_name: string; category: 
 interface ProjComm  { id: string; kind: string; subject: string; body: string; author: string; created_at: string; }
 
 // ── Helpers ──────────────────────────────────────────────────────
-function money(n: number) {
-  if (n >= 1_000_000) return '$' + (n/1_000_000).toFixed(2).replace(/\.?0+$/,'')+'M';
-  if (n >= 1_000)     return '$' + (n/1_000).toFixed(1).replace(/\.0$/,'')+'K';
-  return '$'+Math.round(n);
-}
-function moneyFull(n: number) { return '$'+Math.round(n).toLocaleString('en-US'); }
 function fmtDate(s: string|null) {
   if (!s) return '—';
   return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});

@@ -1,13 +1,14 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import api from '../../../api/client';
 import { SectionTitle, timeAgo } from '../shared';
+import { moneyFull } from '../../../lib/money';
 
 interface TrashBid { id: string; name: string; gc: string; amount: number | null; stage: string; deleted_at: string }
 interface TrashGen { id: string; customer: string; amount: number | null; stage: string; deleted_at: string }
 interface TrashDoc { id: string; name: string; display_name?: string; linked_name?: string; category: string; file_size?: number; deleted_at: string }
 interface TrashData { bids: TrashBid[]; gens: TrashGen[]; documents: TrashDoc[] }
 
-const money = (n: number | null | undefined) => n != null ? '$' + Number(n).toLocaleString() : '—';
+const money = (n: number | null | undefined) => n != null ? moneyFull(Number(n)) : '—';
 
 export function TrashSection() {
   const [data, setData] = useState<TrashData>({ bids: [], gens: [], documents: [] });

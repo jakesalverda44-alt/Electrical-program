@@ -1,13 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Gen, WonJob } from '../../types';
+import { moneyFull, moneyShort as money } from '../../lib/money';
 
-function moneyFull(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
-function money(n: number) {
-  if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2).replace(/\.?0+$/, '') + 'M';
-  if (n >= 1_000)     return '$' + (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
-  return '$' + Math.round(n);
-}
 const sumVal = (arr: WonJob[]) => arr.reduce((s, j) => s + Number(j.value), 0);
 const sumAmt = (arr: Bid[])    => arr.reduce((s, b) => s + Number(b.amount), 0);
 const sumGen = (arr: Gen[])    => arr.reduce((s, g) => s + Number(g.amount), 0);

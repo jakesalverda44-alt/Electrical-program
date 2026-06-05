@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import api from '../../api/client';
 import { Bid, WonJob, Toast } from '../../types';
 import { ElecStageKey } from './constants';
+import { moneyFull } from '../../lib/money';
 
 interface UsePipelineProps {
   bids: Bid[];
@@ -39,10 +40,9 @@ export function usePipeline({ bids, setBids, setWonJobs, showToast }: UsePipelin
           if (exists) return list;
           return [data.wonJob, ...list];
         });
-        const money = (n: number) => '$' + Math.round(n).toLocaleString('en-US');
         showToast({
           title: 'Job won',
-          sub: `${data.wonJob.salesperson_name} · ${money(data.wonJob.value)} · ${data.wonJob.customer}`,
+          sub: `${data.wonJob.salesperson_name} · ${moneyFull(data.wonJob.value)} · ${data.wonJob.customer}`,
         });
       }
     } catch {

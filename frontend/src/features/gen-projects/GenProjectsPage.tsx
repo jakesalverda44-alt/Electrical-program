@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import { Gen, Toast, WonJob } from '../../types';
 import api from '../../api/client';
+import { moneyFull, moneyShort as money } from '../../lib/money';
 
 const PHASES = [
   { key: 'deposit',      label: 'Deposit',      color: '#7C8AA3' },
@@ -14,13 +15,6 @@ const PHASES = [
   { key: 'complete',     label: 'Complete',     color: '#34C588' },
 ] as const;
 type PhaseKey = typeof PHASES[number]['key'];
-
-function money(n: number) {
-  if (n >= 1_000_000) return '$' + (n/1_000_000).toFixed(2).replace(/\.?0+$/,'')+'M';
-  if (n >= 1_000)     return '$' + (n/1_000).toFixed(1).replace(/\.0$/,'')+'K';
-  return '$'+Math.round(n);
-}
-function moneyFull(n: number) { return '$'+Math.round(n).toLocaleString('en-US'); }
 
 interface Props {
   gens: Gen[];

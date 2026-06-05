@@ -30,6 +30,8 @@ const ALLOWED_KEYS = [
   'commission_default_rate',
   // Bid notifications
   'bid_notify_enabled', 'bid_notify_emails',
+  // Localization
+  'currency_code',
   // Notifications
   'notifications_json',
   // Security

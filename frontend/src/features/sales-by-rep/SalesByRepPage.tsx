@@ -4,8 +4,8 @@ import { WonJob } from '../../types';
 import { isPrivileged } from '../../hooks/useAuth';
 import api from '../../api/client';
 import WonReports from './WonReports';
+import { moneyFull } from '../../lib/money';
 
-function moneyFull(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 const sumVal = (arr: WonJob[]) => arr.reduce((s, j) => s + Number(j.value), 0);
 const sumComm = (arr: WonJob[]) => arr.reduce((s, j) => s + Number(j.commission_amount || 0), 0);
 
