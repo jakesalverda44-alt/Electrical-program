@@ -17,7 +17,12 @@ function configure() {
   });
 }
 
-/** Upload a file buffer to Cloudinary. Returns the secure URL, or null on failure. */
+/**
+ * Upload a file buffer to Cloudinary.
+ * Returns the secure URL on success.
+ * Throws if Cloudinary is configured but the upload fails.
+ * Returns null if Cloudinary is not configured (caller falls back to DB).
+ */
 export async function uploadToCloud(
   buffer: Buffer,
   filename: string,
@@ -26,23 +31,25 @@ export async function uploadToCloud(
   if (!isCloudStorageConfigured()) return null;
   configure();
 
-  return new Promise((resolve) => {
+  const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
         resource_type: 'raw',
         folder: 'crm-documents',
         use_filename: true,
         unique_filename: true,
-        type: 'upload',
-        // Preserve original filename in the public_id slug
-        public_id: `crm-documents/${Date.now()}-${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`,
       },
-      (err, result) => {
-        if (err) {
-          console.error('[cloudStorage] Upload failed:', err);
-          resolve(null);
+      (error, result) => {
+        if (error) {
+          console.error('[cloudStorage] Cloudinary upload error:', JSON.stringify(error));
+          reject(new Error(`Cloudinary upload failed: ${error.message}`));
+        } else if (!result?.secure_url) {
+          reject(new Error('Cloudinary returned no URL'));
         } else {
-          resolve(result?.secure_url ?? null);
+          console.log(`[cloudStorage] Uploaded "${safeName}" → ${result.secure_url}`);
+          resolve(result.secure_url);
         }
       },
     );
@@ -55,7 +62,6 @@ export async function deleteFromCloud(storageUrl: string): Promise<void> {
   if (!isCloudStorageConfigured() || !storageUrl) return;
   configure();
   try {
-    // Extract public_id from the URL: everything after /upload/ and before the extension
     const match = storageUrl.match(/\/upload\/(?:v\d+\/)?(.+)$/);
     if (!match) return;
     const publicId = match[1].replace(/\.[^/.]+$/, '');
