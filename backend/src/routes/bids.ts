@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { Resend } from 'resend';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
+import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { getSetting } from '../db/getSetting';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { escapeHtml } from '../utils/escapeHtml';
@@ -238,7 +238,7 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   res.json(withDueDays(rows[0]));
 });
 
-router.delete('/:id', requireAuth, async (req: AuthRequest, res) => {
+router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const bid = await loadOwnedBid(req, res);
   if (!bid) return;
 

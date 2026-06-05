@@ -4,6 +4,7 @@ import SearchBox from '../../components/SearchBox';
 import NotificationBell from '../../components/NotificationBell';
 import aptLogo from '../../assets/apt-logo.png';
 import { Bid, Gen, User } from '../../types';
+import { isPrivileged } from '../../hooks/useAuth';
 
 type View = string;
 
@@ -84,6 +85,7 @@ export default function AppShell({
   ];
 
   const [moreOpen, setMoreOpen] = useState(false);
+  const canAdmin = isPrivileged(user);
 
   const tb = TB[view] || TB['dashboard'];
   const initials = user.name.split(' ').map(w => w[0]).join('').slice(0, 2);
@@ -105,7 +107,7 @@ export default function AppShell({
     { id: 'docs',            label: 'Documents',          icon: 'clip',    count: 0 },
     { id: 'reporting',       label: 'Reporting',          icon: 'trend',   count: 0 },
     { id: 'contacts',        label: 'Contacts',           icon: 'users',   count: 0 },
-    { id: 'admin',           label: 'Settings',           icon: 'gear',    count: 0 },
+    ...(canAdmin ? [{ id: 'admin', label: 'Settings', icon: 'gear', count: 0 }] : []),
   ];
 
   const renderActions = () => {
@@ -148,7 +150,9 @@ export default function AppShell({
           </div>
         ))}
         <div className="side-spacer"/>
-        <button className="nav-btn" onClick={() => onNav('admin')}><Icon name="gear" size={18} stroke={1.8}/>Settings</button>
+        {canAdmin && (
+          <button className="nav-btn" onClick={() => onNav('admin')}><Icon name="gear" size={18} stroke={1.8}/>Settings</button>
+        )}
         <div className="side-user" onClick={onLogout} style={{ cursor: 'pointer' }} title="Sign out">
           <span className="avatar">{initials}</span>
           <span className="side-user-txt"><b>{user.name}</b><small>{user.role}</small></span>

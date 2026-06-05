@@ -1,12 +1,15 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, requireAdmin, isPrivileged, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
 const SAFE_COLS = 'id, name, email, phone, job_title, role, status, last_login, created_at';
 
+// Read stays open to any authenticated user — the app loads the directory at
+// startup to resolve rep names and populate assignment dropdowns. Only safe,
+// non-secret columns are returned.
 router.get('/', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT ${SAFE_COLS} FROM users ORDER BY name`
@@ -14,7 +17,7 @@ router.get('/', requireAuth, async (_req, res) => {
   res.json(rows);
 });
 
-router.post('/', requireAuth, async (req: AuthRequest, res) => {
+router.post('/', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const { name, email, phone = '', job_title = '', role = 'salesperson', password } = req.body;
   if (!name?.trim() || !email?.trim() || !password) {
     return res.status(400).json({ error: 'Name, email, and password are required' });
@@ -35,7 +38,7 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.put('/:id', requireAuth, async (req: AuthRequest, res) => {
+router.put('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const { name, email, phone, job_title, role, status } = req.body;
   const fields: string[] = [];
   const vals: unknown[] = [];
@@ -61,7 +64,11 @@ router.put('/:id', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+// Admins may reset anyone's password; a regular user may change only their own.
 router.put('/:id/password', requireAuth, async (req: AuthRequest, res) => {
+  if (!isPrivileged(req.user) && req.user!.id !== req.params.id) {
+    return res.status(403).json({ error: 'You can only change your own password.' });
+  }
   const { password } = req.body;
   if (!password || password.length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
@@ -76,7 +83,7 @@ router.put('/:id/password', requireAuth, async (req: AuthRequest, res) => {
 });
 
 // Soft delete — sets status to inactive
-router.delete('/:id', requireAuth, async (req: AuthRequest, res) => {
+router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const { rows } = await pool.query(
     `UPDATE users SET status='inactive' WHERE id=$1 RETURNING id`,
     [req.params.id]
@@ -86,7 +93,7 @@ router.delete('/:id', requireAuth, async (req: AuthRequest, res) => {
 });
 
 // Set per-user AI permission override
-router.put('/:id/ai-override', requireAuth, async (req: AuthRequest, res) => {
+router.put('/:id/ai-override', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const override = req.body; // e.g. { run_analysis: false } or { suspended: true } or null to clear
   const { rows } = await pool.query(
     `UPDATE users SET ai_override=$1 WHERE id=$2 RETURNING id, ai_override`,

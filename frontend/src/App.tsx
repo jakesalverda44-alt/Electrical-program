@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
-import { useAuth } from './hooks/useAuth';
+import { useAuth, isPrivileged } from './hooks/useAuth';
 import { useToast } from './hooks/useToast';
 import { useAppSettings } from './hooks/useAppSettings';
 import LoginPage from './features/auth/LoginPage';
@@ -239,6 +239,15 @@ export default function App() {
       case 'docs':
         return <DocsPage bids={bids} gens={gens} showToast={showToast} userName={user.name}/>;
       case 'admin':
+        if (!isPrivileged(user)) {
+          return (
+            <div className="scroll view-enter">
+              <div style={{ padding: 32, color: 'var(--text2)', fontSize: 15 }}>
+                <b>Settings</b> — you don’t have permission to view this page. Contact an owner or administrator.
+              </div>
+            </div>
+          );
+        }
         return <SettingsPage settings={settings} onSettingsSaved={reloadSettings}/>;
       default:
         return <StubPage title={view.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}/>;

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
 import multer from 'multer';
 import { logger } from '../utils/logger';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -71,7 +71,7 @@ router.get('/:id/download', requireAuth, asyncHandler(async (req, res) => {
   res.send(buf);
 }));
 
-router.delete('/:id', requireAuth, asyncHandler(async (req, res) => {
+router.delete('/:id', requireAuth, requireAdmin, asyncHandler(async (req, res) => {
   await pool.query('DELETE FROM documents WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
 }));

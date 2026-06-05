@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
+import { requireAuth, AuthRequest, ownScopeId, isPrivileged } from '../middleware/auth';
 import { validateBody } from '../utils/validate';
 import { withDueDays } from '../utils/dueDate';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -146,11 +146,12 @@ router.patch('/:id', requireAuth, validateBody(customerSchema.partial()), asyncH
 }));
 
 // Merge one or more duplicate customers into this one (the canonical record).
-// Managers only. Re-points every reference (bids, proposals, won jobs, documents,
+// Owner/administrator only — this is a destructive operation that deletes the
+// source records. Re-points every reference (bids, proposals, won jobs, documents,
 // follow-ups, communications) to the target, then deletes the sources — all in a
 // single transaction so it can't leave records half-moved.
 router.post('/:id/merge', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
-  if (ownScopeId(req.user!)) return res.status(403).json({ error: 'Only managers can merge customers' });
+  if (!isPrivileged(req.user)) return res.status(403).json({ error: 'Only an owner or administrator can merge customers' });
   const targetId = req.params.id;
   const sourceIds: string[] = Array.isArray(req.body.sourceIds) ? req.body.sourceIds.filter((x: unknown) => typeof x === 'string') : [];
   if (!sourceIds.length) return res.status(400).json({ error: 'sourceIds required' });

@@ -64,6 +64,33 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   }
 }
 
+// Roles with full administrative rights: user management, settings writes, and
+// destructive deletes. `manager` is the legacy name for an admin-equivalent role
+// and is treated as privileged so existing accounts are not locked out.
+export const PRIVILEGED_ROLES = ['owner', 'administrator', 'manager'] as const;
+
+export function isPrivileged(user?: { role?: string }): boolean {
+  return !!user?.role && (PRIVILEGED_ROLES as readonly string[]).includes(user.role);
+}
+
+/**
+ * Authorization guard. Use AFTER requireAuth. Rejects with 403 unless the
+ * authenticated user's role is in the allowed list. Without this, authenticated
+ * users could reach privileged endpoints (e.g. create an owner account).
+ */
+export function requireRole(...roles: string[]) {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'You do not have permission to perform this action.' });
+    }
+    next();
+  };
+}
+
+// Convenience guard for the standard owner/administrator/manager privilege set.
+export const requireAdmin = requireRole(...PRIVILEGED_ROLES);
+
 type AIPermission = 'run_analysis' | 'view_results' | 'manage_settings';
 
 const DEFAULT_ROLE_PERMISSIONS: Record<string, Record<AIPermission, boolean>> = {
@@ -134,8 +161,11 @@ export function requireAIPermission(permission: AIPermission) {
 
       next();
     } catch (err) {
-      console.error('[ai-permission]', err);
-      next(); // fail open to avoid breaking non-AI flows
+      // Fail CLOSED: a failure while evaluating an authorization decision must
+      // deny access, never grant it. (Previously this called next(), which let
+      // a transient DB error bypass the entire AI permission check.)
+      logger.error({ err }, '[ai-permission] permission check failed; denying access');
+      return res.status(500).json({ error: 'Could not verify AI permissions. Please try again.' });
     }
   };
 }
@@ -154,7 +184,11 @@ async function checkDailyLimit(userId: string, next: NextFunction, res: Response
       return res.status(429).json({ error: `Daily AI analysis limit (${limit} per day) reached. Try again tomorrow.` });
     }
     next();
-  } catch {
-    next(); // fail open
+  } catch (err) {
+    // The daily limit is a soft quota, not an authorization boundary (the
+    // run_analysis permission was already granted above), so a transient error
+    // here fails open rather than blocking legitimate work.
+    logger.warn({ err }, '[ai-permission] daily limit check failed; allowing this request');
+    next();
   }
 }

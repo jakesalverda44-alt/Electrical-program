@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { Resend } from 'resend';
 import multer from 'multer';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
+import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
 import { getSetting } from './settings';
 import { upsertCustomer } from './customers';
@@ -199,7 +199,7 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   res.json({ gen, wonJob });
 });
 
-router.delete('/:id', requireAuth, async (req: AuthRequest, res) => {
+router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const gen = await loadOwnedGen(req, res);
   if (!gen) return;
 

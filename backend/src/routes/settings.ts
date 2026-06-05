@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
@@ -49,7 +49,7 @@ router.get('/', requireAuth, async (_req, res) => {
   res.json(masked);
 });
 
-router.put('/', requireAuth, async (req: AuthRequest, res) => {
+router.put('/', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const updates: Record<string, string> = req.body;
   const client = await pool.connect();
   try {
@@ -76,7 +76,7 @@ router.put('/', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.post('/test-email', requireAuth, async (req: AuthRequest, res) => {
+router.post('/test-email', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const { to } = req.body;
   if (!to) return res.status(400).json({ error: 'Recipient required' });
 
