@@ -9,6 +9,8 @@ import {
   moveJobToStage,
   jobFolderName,
   renameFolder,
+  BID_SUBFOLDER_NAMES,
+  SUBFOLDER_NAMES,
   ESTIMATING_ACTIVE_BIDS_ROOT,
   ESTIMATING_SUBMITTED_BIDS_ROOT,
   ACTIVE_PROJECTS_ROOT,
@@ -90,9 +92,10 @@ router.post('/backfill-drive', asyncHandler(async (_req, res) => {
         results.errors.push(`${bid.name}: Drive not configured or createJobFolder returned null`);
         continue;
       }
-      // Project subfolders only for awarded/closed jobs; bids stay folder-only.
+      // Bids get Plans + Bid Proposals; awarded/closed jobs get the full set.
       const isProject = bid.stage === 'awarded' || !!bid.closed_at;
-      const subfolders = isProject ? await createSubfolders(jobFolderId) : {};
+      const names = isProject ? SUBFOLDER_NAMES : BID_SUBFOLDER_NAMES;
+      const subfolders = await createSubfolders(jobFolderId, names);
       await pool.query(
         `UPDATE bids SET
            drive_job_folder_id=$1,
@@ -103,8 +106,8 @@ router.post('/backfill-drive', asyncHandler(async (_req, res) => {
          WHERE id=$9`,
         [
           jobFolderId,
-          subfolders['Plans & Specs'] || null,
-          subfolders['Estimates & Scope Extractions'] || null,
+          subfolders['Plans'] || null,
+          subfolders['Bid Proposals'] || null,
           subfolders['Photos'] || null,
           subfolders['Contract & Invoices'] || null,
           subfolders['Submittals'] || null,

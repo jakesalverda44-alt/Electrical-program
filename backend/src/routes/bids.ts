@@ -14,6 +14,8 @@ import {
   createSubfolders,
   moveJobToStage,
   jobFolderName,
+  BID_SUBFOLDER_NAMES,
+  AWARD_SUBFOLDER_NAMES,
   ESTIMATING_ACTIVE_BIDS_ROOT,
   ESTIMATING_SUBMITTED_BIDS_ROOT,
   ACTIVE_PROJECTS_ROOT,
@@ -105,14 +107,18 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   sendBidNotification(rows[0], user).catch(() => {});
 
   // Fire-and-forget Drive folder setup — never blocks the CRM response.
-  // During the bid stage we only create the GC + job folder; the project
-  // subfolders (Submittals, RFIs, Change Orders, …) are created on award.
+  // At the bid stage the job folder gets two subfolders: Plans + Bid Proposals.
+  // The remaining project subfolders are created on award.
   const newBid = rows[0];
   (async () => {
     try {
       const jobFolderId = await createJobFolder(jobFolderName(newBid.name, newBid.loc), newBid.gc, ESTIMATING_ACTIVE_BIDS_ROOT);
       if (!jobFolderId) return;
-      await pool.query(`UPDATE bids SET drive_job_folder_id=$1 WHERE id=$2`, [jobFolderId, newBid.id]);
+      const subs = await createSubfolders(jobFolderId, BID_SUBFOLDER_NAMES);
+      await pool.query(
+        `UPDATE bids SET drive_job_folder_id=$1, drive_plans_folder_id=$2, drive_estimates_folder_id=$3 WHERE id=$4`,
+        [jobFolderId, subs['Plans'] || null, subs['Bid Proposals'] || null, newBid.id],
+      );
     } catch (err) {
       console.error('[drive] Bid folder setup failed:', err);
     }
@@ -205,22 +211,20 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
       // Awarded = job is starting, not finished — folder stays in Active Projects.
       // Folder moves to Completed Projects only when the job is closed out.
       //
-      // Now that the job is a real project, create the project subfolders inside
-      // the job folder. Skip if they already exist (older bids made them at bid time).
-      if (bid.drive_job_folder_id && !bid.drive_plans_folder_id) {
+      // Now that the job is a real project, add the remaining project subfolders
+      // (Plans + Bid Proposals already exist from the bid stage). Skip if already
+      // created (guard against re-award).
+      if (bid.drive_job_folder_id && !bid.drive_submittals_folder_id) {
         (async () => {
           try {
-            const subfolders = await createSubfolders(bid.drive_job_folder_id);
+            const subfolders = await createSubfolders(bid.drive_job_folder_id, AWARD_SUBFOLDER_NAMES);
             await pool.query(
               `UPDATE bids SET
-                 drive_plans_folder_id=$1, drive_estimates_folder_id=$2,
-                 drive_photos_folder_id=$3, drive_contracts_folder_id=$4,
-                 drive_submittals_folder_id=$5, drive_rfis_folder_id=$6,
-                 drive_change_orders_folder_id=$7
-               WHERE id=$8`,
+                 drive_photos_folder_id=$1, drive_contracts_folder_id=$2,
+                 drive_submittals_folder_id=$3, drive_rfis_folder_id=$4,
+                 drive_change_orders_folder_id=$5
+               WHERE id=$6`,
               [
-                subfolders['Plans & Specs'] || null,
-                subfolders['Estimates & Scope Extractions'] || null,
                 subfolders['Photos'] || null,
                 subfolders['Contract & Invoices'] || null,
                 subfolders['Submittals'] || null,

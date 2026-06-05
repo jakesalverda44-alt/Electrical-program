@@ -11,15 +11,14 @@ export const COMPLETED_GENERATOR_JOBS_ROOT  = '1-H8fn_ZdZgsu0W-8GKAbZ-nSp83ftaGC
 
 export const GEN_SUBFOLDER_NAMES = ['Engineering', 'Permit', 'Contract', 'Invoices'];
 
-export const SUBFOLDER_NAMES = [
-  'Plans & Specs',
-  'Estimates & Scope Extractions',
-  'Submittals',
-  'RFIs',
-  'Change Orders',
-  'Photos',
-  'Contract & Invoices',
-];
+// Bid-stage subfolders — created when a bid is first added (Plans + Bid Proposals).
+export const BID_SUBFOLDER_NAMES = ['Plans', 'Bid Proposals'];
+
+// Project subfolders — added when a bid is awarded and becomes a real project.
+export const AWARD_SUBFOLDER_NAMES = ['Submittals', 'RFIs', 'Change Orders', 'Photos', 'Contract & Invoices'];
+
+// Full set (bid + award) — used by backfill for awarded/closed jobs.
+export const SUBFOLDER_NAMES = [...BID_SUBFOLDER_NAMES, ...AWARD_SUBFOLDER_NAMES];
 
 function getCredentials(): Record<string, unknown> | null {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
