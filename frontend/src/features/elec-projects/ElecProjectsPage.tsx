@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
-import { Bid, Toast, WonJob } from '../../types';
+import { Bid, WonJob, Toast } from '../../types';
+import { useShowToast } from '../../contexts/AppContext';
 import api from '../../api/client';
 import { moneyFull, moneyShort as money } from '../../lib/money';
 
@@ -91,10 +92,10 @@ interface Props {
   bids: Bid[];
   setBids: (fn: (prev: Bid[]) => Bid[]) => void;
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
-  showToast: (t: Toast) => void;
 }
 
-export default function ElecProjectsPage({ bids, setBids, setWonJobs, showToast }: Props) {
+export default function ElecProjectsPage({ bids, setBids, setWonJobs }: Props) {
+  const showToast = useShowToast();
   const awarded = useMemo(() => bids.filter(b => b.stage === 'awarded'), [bids]);
 
   // Phase state (persisted via API)

@@ -1,12 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
-import { Gen, WonJob, Toast } from '../../types';
+import { Gen, WonJob } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
 import { useGenPipeline } from './useGenPipeline';
 import GenDetailDrawer from './GenDetailDrawer';
 import api from '../../api/client';
 import { moneyShort as money } from '../../lib/money';
 import PipelineBoard from '../../components/PipelineBoard';
+import { useShowToast } from '../../contexts/AppContext';
 
 type Filter = 'all' | 'large';
 
@@ -14,14 +15,14 @@ interface Props {
   gens: Gen[];
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
-  showToast: (t: Toast) => void;
   onOpenBuilder: () => void;
   flashId: string | null;
   onEditGen: (gen: import('../../types').Gen) => void;
   onNav?: (v: string) => void;
 }
 
-export default function GenPipelinePage({ gens, setGens, setWonJobs, showToast, onOpenBuilder, flashId, onEditGen, onNav }: Props) {
+export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuilder, flashId, onEditGen, onNav }: Props) {
+  const showToast = useShowToast();
   const [filter, setFilter] = useState<Filter>('all');
   const [detail, setDetail] = useState<Gen | null>(null);
   const [filterRep, setFilterRep] = useState<string>('all');

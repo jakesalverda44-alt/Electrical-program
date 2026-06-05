@@ -2,15 +2,14 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import CustomerHub from './CustomerHub';
-import { Customer, Toast } from '../../types';
+import { Customer } from '../../types';
 import { moneyFull } from '../../lib/money';
+import { useUser, useShowToast } from '../../contexts/AppContext';
 
 type FilterType = Customer['type'] | 'all';
 
 interface Props {
-  showToast?: (t: Toast) => void;
   onNewBid?: (gc: string) => void;
-  userRole?: string;
 }
 
 function initials(name: string) { return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(); }
@@ -90,7 +89,9 @@ function AddCustomerForm({ onCreated, onCancel }: { onCreated: (c: Customer) => 
   );
 }
 
-export default function ContactsPage({ showToast, onNewBid, userRole }: Props) {
+export default function ContactsPage({ onNewBid }: Props) {
+  const showToast = useShowToast();
+  const userRole = useUser().role;
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [query, setQuery] = useState('');
   const [filterType, setFilterType] = useState<FilterType>('all');

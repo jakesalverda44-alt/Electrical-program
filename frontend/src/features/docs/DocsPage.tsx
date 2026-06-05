@@ -1,7 +1,8 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import Icon from '../../components/Icon';
-import { Bid, Gen, Toast } from '../../types';
+import { Bid, Gen } from '../../types';
 import api from '../../api/client';
+import { useShowToast } from '../../contexts/AppContext';
 
 type DocCategory = 'plans' | 'contract' | 'proposal' | 'permit' | 'invoice' | 'other';
 
@@ -39,11 +40,12 @@ function fmtDate(iso: string) {
 function extOf(name: string) { return (name.split('.').pop() ?? 'FILE').toUpperCase(); }
 const EXT_ICON: Record<string, string> = { PDF:'doc', DWG:'building', DOCX:'doc', XLSX:'dollar', PNG:'file', JPG:'file' };
 
-interface Props { bids: Bid[]; gens: Gen[]; showToast: (t: Toast) => void; userName: string; }
+interface Props { bids: Bid[]; gens: Gen[]; }
 
 const BLANK = { category: 'other' as DocCategory, linkedId: '', name: '' };
 
-export default function DocsPage({ bids, gens, showToast, userName }: Props) {
+export default function DocsPage({ bids, gens }: Props) {
+  const showToast = useShowToast();
   const fileInput = useRef<HTMLInputElement>(null);
   const [docs,         setDocs]         = useState<Doc[]>([]);
   const [loading,      setLoading]      = useState(true);

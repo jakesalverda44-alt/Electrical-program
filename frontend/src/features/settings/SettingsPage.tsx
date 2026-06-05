@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import Icon from '../../components/Icon';
-import { AppSettings } from '../../hooks/useAppSettings';
+import { useSettings } from '../../contexts/AppContext';
 import { inputStyle } from './shared';
 import { CompanySection } from './sections/CompanySection';
 import { UsersSection } from './sections/UsersSection';
@@ -16,10 +16,6 @@ import { TrashSection } from './sections/TrashSection';
 import { AuditSection } from './sections/AuditSection';
 import { CommissionsSection } from './sections/CommissionsSection';
 
-interface Props {
-  settings: AppSettings;
-  onSettingsSaved: () => void;
-}
 
 type SectionId = 'company' | 'proposal-defaults' | 'gen-pricing' | 'users' | 'email' | 'ai' | 'ai-permissions' | 'integrations' | 'notifications' | 'security' | 'trash' | 'audit' | 'commissions';
 
@@ -47,7 +43,9 @@ const NAV: { group: string; items: { id: SectionId; label: string; icon: string 
   ]},
 ];
 
-export default function SettingsPage({ settings, onSettingsSaved }: Props) {
+export default function SettingsPage() {
+  const { settings, reloadSettings } = useSettings();
+  const onSettingsSaved = reloadSettings;
   const [active, setActive] = useState<SectionId>('company');
   const [search, setSearch] = useState('');
 

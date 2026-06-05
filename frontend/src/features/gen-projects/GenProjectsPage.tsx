@@ -1,8 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
-import { Gen, Toast, WonJob } from '../../types';
+import { Gen, WonJob } from '../../types';
 import api from '../../api/client';
 import { moneyFull, moneyShort as money } from '../../lib/money';
+import { useShowToast } from '../../contexts/AppContext';
 
 const PHASES = [
   { key: 'deposit',      label: 'Deposit',      color: '#7C8AA3' },
@@ -20,10 +21,10 @@ interface Props {
   gens: Gen[];
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
-  showToast: (t: Toast) => void;
 }
 
-export default function GenProjectsPage({ gens, setGens, setWonJobs, showToast }: Props) {
+export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
+  const showToast = useShowToast();
   const awarded = useMemo(() => gens.filter(g => g.stage === 'awarded'), [gens]);
 
   // Normalise phase: map old values forward, default to 'deposit'

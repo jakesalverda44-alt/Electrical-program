@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Icon from '../../components/Icon';
-import { Bid, Toast } from '../../types';
+import { Bid } from '../../types';
 import api from '../../api/client';
+import { useShowToast } from '../../contexts/AppContext';
 
 interface IntakeItem {
   id: string;
@@ -33,7 +34,6 @@ const BLANK = { name: '', gc: '', loc: '', contact: '', amount: '', sheets: '', 
 
 interface Props {
   onBidAccepted: (bid: Bid) => void;
-  showToast: (t: Toast) => void;
   onPendingChange?: (count: number) => void;
 }
 
@@ -43,7 +43,8 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 9, padding: '8px 10px', outline: 'none',
 };
 
-export default function IntakeInboxPage({ onBidAccepted, showToast, onPendingChange }: Props) {
+export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Props) {
+  const showToast = useShowToast();
   const [items, setItems] = useState<IntakeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<IntakeItem | null>(null);

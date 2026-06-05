@@ -5,18 +5,16 @@ import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo } from './genCa
 import ProposalPreview from './ProposalPreview';
 import SendProposalModal from './SendProposalModal';
 import api from '../../api/client';
-import { Gen, WonJob, Toast } from '../../types';
-import { AppSettings, DEFAULT_APP_SETTINGS } from '../../hooks/useAppSettings';
+import { Gen, WonJob } from '../../types';
+import { useSettings, useShowToast } from '../../contexts/AppContext';
 
 function fmt(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 
 interface Props {
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
   setWonJobs?: (fn: (prev: WonJob[]) => WonJob[]) => void;
-  showToast: (t: Toast) => void;
   onSaved: () => void;
   editGen?: Gen | null;
-  appSettings?: AppSettings;
 }
 
 type Screen = 'builder' | 'preview';
@@ -84,8 +82,9 @@ function genToForm(g: Gen): GenForm {
   };
 }
 
-export default function BuilderPage({ setGens, setWonJobs, showToast, onSaved, editGen, appSettings }: Props) {
-  const s = appSettings ?? DEFAULT_APP_SETTINGS;
+export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: Props) {
+  const showToast = useShowToast();
+  const { settings: s } = useSettings();
   const [form, setForm] = useState<GenForm>(() => editGen ? genToForm(editGen) : blankGenForm(s));
   const [screen, setScreen] = useState<Screen>('builder');
   const [proposalNo] = useState(() => editGen?.proposal_no || genProposalNo(form.brand, form.coolingType));

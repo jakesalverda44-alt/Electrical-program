@@ -3,8 +3,9 @@ import Icon from '../../components/Icon';
 import SearchBox from '../../components/SearchBox';
 import NotificationBell from '../../components/NotificationBell';
 import aptLogo from '../../assets/apt-logo.png';
-import { Bid, Gen, User } from '../../types';
+import { Bid, Gen } from '../../types';
 import { isPrivileged } from '../../hooks/useAuth';
+import { useUser } from '../../contexts/AppContext';
 
 type View = string;
 
@@ -14,7 +15,6 @@ interface NavGroup { group: string; items: NavItem[]; }
 interface Props {
   view: View;
   onNav: (v: string) => void;
-  user: User;
   onLogout: () => void;
   children: React.ReactNode;
   topbarExtra?: React.ReactNode;
@@ -52,12 +52,13 @@ const TB: Record<string, { title: string; sub: string | null }> = {
 };
 
 export default function AppShell({
-  view, onNav, user, onLogout, children,
+  view, onNav, onLogout, children,
   genProposalCount = 0, elecProposalCount = 0, genProjectCount = 0, elecProjectCount = 0, newIncoming = 0,
   followupCount = 0,
   dashFilter = 'all', onDashFilter, onNewProposal, onNewBid, onOpenImport,
   bids = [], gens = [],
 }: Props) {
+  const user = useUser();
   const nav: NavGroup[] = [
     { group: 'Sales', items: [
       { id: 'dashboard',      label: 'Sales Dashboard',      icon: 'dashboard' },

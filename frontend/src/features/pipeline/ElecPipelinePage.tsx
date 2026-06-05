@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import Icon from '../../components/Icon';
-import { Bid, WonJob, Toast } from '../../types';
+import { Bid, WonJob } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
 import { usePipeline } from './usePipeline';
 import DetailDrawer from './DetailDrawer';
@@ -8,6 +8,7 @@ import AddBidModal from './AddBidModal';
 import api from '../../api/client';
 import { moneyShort as money } from '../../lib/money';
 import PipelineBoard from '../../components/PipelineBoard';
+import { useShowToast } from '../../contexts/AppContext';
 
 type Filter = 'all' | 'urgent' | 'large';
 
@@ -15,7 +16,6 @@ interface Props {
   bids: Bid[];
   setBids: (fn: (prev: Bid[]) => Bid[]) => void;
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
-  showToast: (t: Toast) => void;
   onOpenPreconstruction: (id: string) => void;
   flashId: string | null;
   openAddBid?: boolean;
@@ -23,7 +23,8 @@ interface Props {
   initialGc?: string;
 }
 
-export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast, onOpenPreconstruction, flashId, openAddBid, onAddBidHandled, initialGc }: Props) {
+export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPreconstruction, flashId, openAddBid, onAddBidHandled, initialGc }: Props) {
+  const showToast = useShowToast();
   const [filter, setFilter] = useState<Filter>('all');
   const [filterRep, setFilterRep] = useState<string>('all');
   const repNames = useMemo(() => Array.from(new Set(bids.map(b => b.salesperson_name).filter(Boolean))).sort(), [bids]);

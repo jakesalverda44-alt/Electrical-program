@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
-import { Toast } from '../../types';
+import { useShowToast } from '../../contexts/AppContext';
 
 interface Task {
   id: string;
@@ -16,7 +16,6 @@ interface Task {
 }
 
 interface Props {
-  showToast?: (t: Toast) => void;
   onCountChange?: (n: number) => void;
 }
 
@@ -37,7 +36,8 @@ function dueMeta(due?: string | null): { label: string; color: string } {
   return { label: `Due in ${days}d`, color: 'var(--text2)' };
 }
 
-export default function FollowupsPage({ showToast, onCountChange }: Props) {
+export default function FollowupsPage({ onCountChange }: Props) {
+  const showToast = useShowToast();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState('');

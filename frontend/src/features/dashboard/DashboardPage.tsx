@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { Bid, Gen, WonJob, Activity } from '../../types';
 import { moneyFull, moneyShort as money } from '../../lib/money';
+import { useUser } from '../../contexts/AppContext';
 
 // Roles that see company-wide figures; everyone else sees their own scoped data.
 const MANAGER_ROLES = ['owner', 'administrator', 'sales_manager'];
@@ -58,17 +59,16 @@ interface Props {
   wonJobs: WonJob[];
   activity: Activity[];
   repNames?: string[];
-  userName?: string;
-  userRole?: string;
   /** Division filter from the header tabs: 'all' | 'elec' | 'gen'. */
   dashFilter?: string;
   onNav: (v: string) => void;
   onNewProposal: () => void;
 }
 
-export default function DashboardPage({ bids, gens, wonJobs, activity, repNames, userName, userRole, dashFilter = 'all', onNav, onNewProposal }: Props) {
-  const isManager = !userRole || MANAGER_ROLES.includes(userRole);
-  const firstName = (userName || '').split(' ')[0];
+export default function DashboardPage({ bids, gens, wonJobs, activity, repNames, dashFilter = 'all', onNav, onNewProposal }: Props) {
+  const user = useUser();
+  const isManager = MANAGER_ROLES.includes(user.role);
+  const firstName = user.name.split(' ')[0];
   // Reps see their own scoped data (enforced server-side); label it accordingly.
   const scopeWord = isManager ? '' : 'My ';
   const sum = (a: { amount: number | null }[]) => a.reduce((s, x) => s + Number(x.amount ?? 0), 0);
