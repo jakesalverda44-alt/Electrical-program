@@ -7,6 +7,7 @@ import DetailDrawer from './DetailDrawer';
 import AddBidModal from './AddBidModal';
 import api from '../../api/client';
 import { moneyShort as money } from '../../lib/money';
+import PipelineBoard from '../../components/PipelineBoard';
 
 type Filter = 'all' | 'urgent' | 'large';
 
@@ -29,12 +30,10 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast,
   const [detail, setDetail] = useState<Bid | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [addGc, setAddGc] = useState<string | undefined>(undefined);
-  const [dragId, setDragId] = useState<string | null>(null);
 
   useEffect(() => {
     if (openAddBid) { setAddGc(initialGc); setShowAdd(true); onAddBidHandled?.(); }
   }, [openAddBid]);
-  const [overCol, setOverCol] = useState<string | null>(null);
 
   const { moveToStage, advance, pendingLost, cancelLost } = usePipeline({
     bids, setBids, setWonJobs, showToast,
@@ -50,20 +49,6 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast,
     if (filter === 'large')  r = r.filter(b => Number(b.amount) >= 500_000);
     if (filterRep !== 'all') r = r.filter(b => b.salesperson_name === filterRep);
     return r;
-  };
-
-  // Drag handlers
-  const onDragStart = (e: React.DragEvent, id: string) => {
-    setDragId(id);
-    e.dataTransfer.effectAllowed = 'move';
-    try { e.dataTransfer.setData('text/plain', id); } catch (_) {}
-  };
-  const onDrop = (e: React.DragEvent, stageKey: ElecStageKey) => {
-    e.preventDefault();
-    const id = dragId || e.dataTransfer.getData('text/plain');
-    if (id) moveToStage(id, stageKey);
-    setDragId(null);
-    setOverCol(null);
   };
 
   const handleStageFromDrawer = (stage: ElecStageKey, extra?: { loss_reason?: string; competitor?: string }) => {
@@ -131,132 +116,91 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, showToast,
       </div>
 
       {/* Board */}
-      <div className="board" style={{ gridTemplateColumns: `repeat(${ELEC_STAGES.length}, 1fr)` }}>
-        {ELEC_STAGES.map(st => {
-          const allInCol = bids.filter(b => b.stage === st.key);
-          const visible  = applyFilter(allInCol);
-          const isOver   = overCol === st.key;
+      <PipelineBoard<Bid>
+        stages={ELEC_STAGES}
+        items={bids}
+        getId={b => b.id}
+        getStage={b => b.stage}
+        getAmount={b => Number(b.amount)}
+        applyFilter={applyFilter}
+        flashId={flashId}
+        onMoveToStage={(id, stageKey) => moveToStage(id, stageKey as ElecStageKey)}
+        onOpenDetail={b => setDetail(b)}
+        renderEmptyAction={stageKey => stageKey === 'due'
+          ? <button className="btn ghost" style={{ fontSize: 12, height: 32, padding: '0 12px' }} onClick={() => setShowAdd(true)}>
+              <Icon name="plus" size={14} stroke={2.2}/>New Bid
+            </button>
+          : null}
+        renderCard={b => {
+          const next = ELEC_STAGES.find(s => {
+            const idx = ELEC_STAGES.findIndex(x => x.key === b.stage);
+            return ELEC_STAGES.indexOf(s) === idx + 1 && s.key !== 'lost';
+          });
+          const isPendingLost = pendingLost === b.id;
 
           return (
-            <div
-              key={st.key}
-              className={'col' + (isOver ? ' drag-over' : '')}
-              onDragOver={e => { e.preventDefault(); if (overCol !== st.key) setOverCol(st.key); }}
-              onDragLeave={e => { if (e.currentTarget === e.target) setOverCol(null); }}
-              onDrop={e => onDrop(e, st.key)}
-            >
-              <div className="col-hdr">
-                <span className="col-title">
-                  <span className="dot" style={{ background: st.color }}/>
-                  {st.label}
-                  <span className="col-cnt">{allInCol.length}</span>
+            <>
+              {/* Advance button */}
+              {next && (
+                <div className="bcard-adv">
+                  <button
+                    className="adv-btn"
+                    title={`Move to ${next.label}`}
+                    onClick={e => { e.stopPropagation(); advance(b.id); }}
+                  >
+                    <Icon name="arrow" size={15} stroke={2.2}/>
+                  </button>
+                </div>
+              )}
+
+              <div className="bcard-name">{b.name}</div>
+
+              <div className="bcard-meta1">
+                <Icon name="building" size={13} stroke={1.8}/>{b.gc}
+              </div>
+              <div className="bcard-loc">
+                <Icon name="pin" size={12} stroke={1.8}/>{b.loc}
+              </div>
+              <div className="bcard-foot">
+                <span className="bcard-amt num">{money(Number(b.amount))}</span>
+                {dueBadge(b)}
+              </div>
+              <div className="bcard-row">
+                <span><Icon name="clip" size={12} stroke={1.8}/>{b.sheets} sheets</span>
+                <span className="bcard-rep" title={b.salesperson_name}>
+                  <span className="avatar" style={{ width: 20, height: 20, fontSize: 9, flexShrink: 0 }}>
+                    {initials(b.salesperson_name || '?')}
+                  </span>
+                  {b.salesperson_name?.split(' ')[0]}
                 </span>
-                <span className="col-total num">{money(sum(allInCol))}</span>
               </div>
 
-              <div className="col-body">
-                {/* Empty state */}
-                {allInCol.length === 0 && (
-                  <div className="col-empty">
-                    {st.key === 'due'
-                      ? <button className="btn ghost" style={{ fontSize: 12, height: 32, padding: '0 12px' }} onClick={() => setShowAdd(true)}>
-                          <Icon name="plus" size={14} stroke={2.2}/>New Bid
-                        </button>
-                      : isOver ? 'Drop here' : 'Drag a card here'
-                    }
-                  </div>
-                )}
+              {/* Lost confirmation inline on card */}
+              {isPendingLost && (
+                <div className="lost-confirm" onClick={e => e.stopPropagation()}>
+                  <span>Mark as lost?</span>
+                  <button className="btn ghost" style={{ height: 24, fontSize: 11, padding: '0 8px' }} onClick={cancelLost}>No</button>
+                  <button className="btn" style={{ height: 24, fontSize: 11, padding: '0 8px', background: 'var(--red)', borderColor: 'var(--red)' }}
+                    onClick={() => moveToStage(b.id, 'lost')}>Yes, lost</button>
+                </div>
+              )}
 
-                {/* Filter empty state */}
-                {allInCol.length > 0 && visible.length === 0 && (
-                  <div className="col-empty" style={{ color: 'var(--text3)', fontSize: 12 }}>
-                    No matches for this filter
-                  </div>
-                )}
-
-                {visible.map(b => {
-                  const next = ELEC_STAGES.find(s => {
-                    const idx = ELEC_STAGES.findIndex(x => x.key === b.stage);
-                    return ELEC_STAGES.indexOf(s) === idx + 1 && s.key !== 'lost';
-                  });
-                  const isPendingLost = pendingLost === b.id;
-
-                  return (
-                    <div
-                      key={b.id}
-                      className={'bcard' + (flashId === b.id ? ' flash' : '') + (dragId === b.id ? ' dragging' : '')}
-                      draggable
-                      onDragStart={e => onDragStart(e, b.id)}
-                      onDragEnd={() => { setDragId(null); setOverCol(null); }}
-                      onClick={() => setDetail(b)}
-                    >
-                      <span className="bcard-accent" style={{ background: st.color }}/>
-
-                      {/* Advance button */}
-                      {next && (
-                        <div className="bcard-adv">
-                          <button
-                            className="adv-btn"
-                            title={`Move to ${next.label}`}
-                            onClick={e => { e.stopPropagation(); advance(b.id); }}
-                          >
-                            <Icon name="arrow" size={15} stroke={2.2}/>
-                          </button>
-                        </div>
-                      )}
-
-                      <div className="bcard-name">{b.name}</div>
-
-                      <div className="bcard-meta1">
-                        <Icon name="building" size={13} stroke={1.8}/>{b.gc}
-                      </div>
-                      <div className="bcard-loc">
-                        <Icon name="pin" size={12} stroke={1.8}/>{b.loc}
-                      </div>
-                      <div className="bcard-foot">
-                        <span className="bcard-amt num">{money(Number(b.amount))}</span>
-                        {dueBadge(b)}
-                      </div>
-                      <div className="bcard-row">
-                        <span><Icon name="clip" size={12} stroke={1.8}/>{b.sheets} sheets</span>
-                        <span className="bcard-rep" title={b.salesperson_name}>
-                          <span className="avatar" style={{ width: 20, height: 20, fontSize: 9, flexShrink: 0 }}>
-                            {initials(b.salesperson_name || '?')}
-                          </span>
-                          {b.salesperson_name?.split(' ')[0]}
-                        </span>
-                      </div>
-
-                      {/* Lost confirmation inline on card */}
-                      {isPendingLost && (
-                        <div className="lost-confirm" onClick={e => e.stopPropagation()}>
-                          <span>Mark as lost?</span>
-                          <button className="btn ghost" style={{ height: 24, fontSize: 11, padding: '0 8px' }} onClick={cancelLost}>No</button>
-                          <button className="btn" style={{ height: 24, fontSize: 11, padding: '0 8px', background: 'var(--red)', borderColor: 'var(--red)' }}
-                            onClick={() => moveToStage(b.id, 'lost')}>Yes, lost</button>
-                        </div>
-                      )}
-
-                      {/* Preconstruction shortcut */}
-                      {b.stage !== 'awarded' && b.stage !== 'lost' && (
-                        <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
-                          <button
-                            className="btn ghost"
-                            style={{ height: 28, fontSize: 11, padding: '0 10px', width: '100%', justifyContent: 'center', color: 'var(--blue)' }}
-                            onClick={e => { e.stopPropagation(); onOpenPreconstruction(b.id); }}
-                          >
-                            <Icon name="sparkle" size={12} stroke={2}/>Open in Preconstruction
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+              {/* Preconstruction shortcut */}
+              {b.stage !== 'awarded' && b.stage !== 'lost' && (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+                  <button
+                    className="btn ghost"
+                    style={{ height: 28, fontSize: 11, padding: '0 10px', width: '100%', justifyContent: 'center', color: 'var(--blue)' }}
+                    onClick={e => { e.stopPropagation(); onOpenPreconstruction(b.id); }}
+                  >
+                    <Icon name="sparkle" size={12} stroke={2}/>Open in Preconstruction
+                  </button>
+                </div>
+              )}
+            </>
           );
-        })}
-      </div>
+        }}
+      />
 
       {/* Detail drawer */}
       {detail && (
