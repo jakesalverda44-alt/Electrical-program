@@ -116,8 +116,10 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
         `UPDATE bids SET
            drive_gc_folder_id=$1, drive_job_folder_id=$2,
            drive_plans_folder_id=$3, drive_estimates_folder_id=$4,
-           drive_photos_folder_id=$5, drive_contracts_folder_id=$6
-         WHERE id=$7`,
+           drive_photos_folder_id=$5, drive_contracts_folder_id=$6,
+           drive_submittals_folder_id=$7, drive_rfis_folder_id=$8,
+           drive_change_orders_folder_id=$9
+         WHERE id=$10`,
         [
           gcFolderId,
           jobFolderId,
@@ -125,6 +127,9 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
           subfolders['Estimates & Scope Extractions'] || null,
           subfolders['Photos'] || null,
           subfolders['Contract & Invoices'] || null,
+          subfolders['Submittals'] || null,
+          subfolders['RFIs'] || null,
+          subfolders['Change Orders'] || null,
           newBid.id,
         ],
       );

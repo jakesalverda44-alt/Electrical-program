@@ -5,6 +5,19 @@ import { logger } from '../utils/logger';
 import { asyncHandler } from '../utils/asyncHandler';
 import { writeAudit } from '../utils/audit';
 import { documentUpload } from '../utils/upload';
+import { uploadFile } from '../services/googleDrive';
+
+const CATEGORY_TO_FOLDER: Record<string, string> = {
+  plans:         'drive_plans_folder_id',
+  permit:        'drive_plans_folder_id',
+  contract:      'drive_contracts_folder_id',
+  invoice:       'drive_contracts_folder_id',
+  proposal:      'drive_estimates_folder_id',
+  change_order:  'drive_change_orders_folder_id',
+  submittal:     'drive_submittals_folder_id',
+  rfi:           'drive_rfis_folder_id',
+  photo:         'drive_photos_folder_id',
+};
 
 const router = Router();
 const upload = documentUpload;
@@ -51,6 +64,29 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
     );
     logger.info({ documentId: rows[0]?.id, fileName: file.originalname, fileSize: file.size }, 'Document upload saved');
     res.json(rows[0]);
+
+    // Fire-and-forget: push to correct Drive subfolder if bid is linked
+    const folderColumn = CATEGORY_TO_FOLDER[category];
+    if (folderColumn && linked_id && div === 'elec') {
+      (async () => {
+        try {
+          const { rows: bidRows } = await pool.query(
+            `SELECT ${folderColumn} AS folder_id FROM bids WHERE id=$1`,
+            [linked_id],
+          );
+          const folderId = bidRows[0]?.folder_id;
+          if (!folderId) return;
+          await uploadFile(
+            display_name?.trim() || file.originalname,
+            file.mimetype || 'application/octet-stream',
+            file.buffer,
+            folderId,
+          );
+        } catch (err) {
+          logger.error({ err, linked_id, category }, '[drive] Document upload to Drive failed');
+        }
+      })();
+    }
   } catch (err) {
     logger.error({ err, linked_id, fileName: file.originalname }, 'Document upload failed');
     if ((err as { code?: string; column?: string }).code === '42703' && (err as { column?: string }).column === 'file_data') {

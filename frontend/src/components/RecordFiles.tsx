@@ -13,12 +13,16 @@ interface Doc {
 }
 
 const CATEGORIES: { value: string; label: string }[] = [
-  { value: 'proposal', label: 'Proposal' },
-  { value: 'contract', label: 'Signed Contract' },
-  { value: 'plans',    label: 'Plans' },
-  { value: 'permit',   label: 'Permit' },
-  { value: 'invoice',  label: 'Invoice / PO' },
-  { value: 'other',    label: 'Other (delivery, startup, photos…)' },
+  { value: 'plans',         label: 'Plans & Specs' },
+  { value: 'contract',      label: 'Signed Contract' },
+  { value: 'proposal',      label: 'Proposal / Estimate' },
+  { value: 'change_order',  label: 'Change Order' },
+  { value: 'submittal',     label: 'Submittal' },
+  { value: 'rfi',           label: 'RFI' },
+  { value: 'photo',         label: 'Photo' },
+  { value: 'permit',        label: 'Permit' },
+  { value: 'invoice',       label: 'Invoice / PO' },
+  { value: 'other',         label: 'Other' },
 ];
 const CAT_LABEL: Record<string, string> = Object.fromEntries(CATEGORIES.map(c => [c.value, c.label]));
 
