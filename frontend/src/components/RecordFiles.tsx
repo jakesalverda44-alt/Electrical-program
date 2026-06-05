@@ -13,12 +13,16 @@ interface Doc {
 }
 
 const CATEGORIES: { value: string; label: string }[] = [
-  { value: 'proposal', label: 'Proposal' },
-  { value: 'contract', label: 'Signed Contract' },
-  { value: 'plans',    label: 'Plans' },
-  { value: 'permit',   label: 'Permit' },
-  { value: 'invoice',  label: 'Invoice / PO' },
-  { value: 'other',    label: 'Other (delivery, startup, photos…)' },
+  { value: 'plans',         label: 'Plans & Specs' },
+  { value: 'contract',      label: 'Signed Contract' },
+  { value: 'proposal',      label: 'Proposal / Estimate' },
+  { value: 'change_order',  label: 'Change Order' },
+  { value: 'submittal',     label: 'Submittal' },
+  { value: 'rfi',           label: 'RFI' },
+  { value: 'photo',         label: 'Photo' },
+  { value: 'permit',        label: 'Permit' },
+  { value: 'invoice',       label: 'Invoice / PO' },
+  { value: 'other',         label: 'Other' },
 ];
 const CAT_LABEL: Record<string, string> = Object.fromEntries(CATEGORIES.map(c => [c.value, c.label]));
 
@@ -40,6 +44,7 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
   const [loading, setLoading] = useState(true);
   const [category, setCategory] = useState(div === 'elec' ? 'plans' : 'other');
   const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
@@ -54,7 +59,13 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
   const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > 50 * 1024 * 1024) {
+      setError('File exceeds 50 MB limit. Please upload a smaller file.');
+      if (fileInput.current) fileInput.current.value = '';
+      return;
+    }
     setUploading(true);
+    setError('');
     try {
       const form = new FormData();
       form.append('file', file);
@@ -63,8 +74,16 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
       form.append('div', div);
       form.append('category', category);
       form.append('display_name', file.name);
-      const { data } = await api.post('/documents', form);
+      const { data } = await api.post('/documents', form, { timeout: 120_000 });
       setDocs(prev => [data, ...prev]);
+    } catch (err: unknown) {
+      const isTimeout = (err as { code?: string })?.code === 'ECONNABORTED';
+      const serverMsg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setError(
+        isTimeout
+          ? 'Upload timed out — file may be too large for the server. Try a smaller file.'
+          : serverMsg || 'Upload failed. Please try again.',
+      );
     } finally {
       setUploading(false);
       if (fileInput.current) fileInput.current.value = '';
@@ -103,6 +122,11 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
           <Icon name="plus" size={14} stroke={2.4}/>{uploading ? 'Uploading…' : 'Add file'}
         </button>
       </div>
+      {error && (
+        <div style={{ margin: '-4px 0 10px', padding: '8px 10px', borderRadius: 8, background: '#FEF2F2', color: '#DC2626', fontSize: 12.5, fontWeight: 600 }}>
+          {error}
+        </div>
+      )}
 
       {loading ? (
         <div style={{ fontSize: 12.5, color: 'var(--text3)', padding: '8px 0' }}>Loading…</div>

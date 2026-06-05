@@ -29,6 +29,15 @@ export interface Bid {
   created_at?: string;
   submitted_at?: string;
   awarded_at?: string;
+  drive_job_folder_id?: string;
+  drive_plans_folder_id?: string;
+  drive_estimates_folder_id?: string;
+  drive_photos_folder_id?: string;
+  drive_contracts_folder_id?: string;
+  drive_gc_folder_id?: string;
+  drive_submittals_folder_id?: string;
+  drive_rfis_folder_id?: string;
+  drive_change_orders_folder_id?: string;
 }
 
 export interface Gen {
@@ -47,6 +56,9 @@ export interface Gen {
   salesperson_id?: string;
   gen_install_phase?: string;
   proposal_token?: string;
+  proposal_no?: string;
+  form_data?: Record<string, unknown> | string | null;
+  totals_data?: Record<string, unknown> | string | null;
   sent_at?: string;
   viewed_at?: string;
   signed_at?: string;
@@ -60,6 +72,11 @@ export interface WonJob {
   proposal_type: 'Electrical' | 'Generator';
   value: number;
   date_won: string;
+  commission_rate?: number | null;
+  commission_amount?: number | null;
+  commission_status?: 'earned' | 'paid';
+  commission_earned_at?: string | null;
+  commission_paid_at?: string | null;
 }
 
 export interface Activity {

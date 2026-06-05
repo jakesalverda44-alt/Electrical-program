@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
+import { writeAudit } from '../utils/audit';
 
 const router = Router();
 
@@ -25,8 +26,12 @@ const ALLOWED_KEYS = [
   'ai_anthropic_key', 'ai_model', 'ai_max_tokens', 'ai_temperature',
   // AI permissions
   'ai_enabled', 'ai_analysis_enabled', 'ai_daily_limit_per_user', 'ai_role_permissions',
+  // Commissions
+  'commission_default_rate',
   // Bid notifications
   'bid_notify_enabled', 'bid_notify_emails',
+  // Localization
+  'currency_code',
   // Notifications
   'notifications_json',
   // Security
@@ -49,8 +54,9 @@ router.get('/', requireAuth, async (_req, res) => {
   res.json(masked);
 });
 
-router.put('/', requireAuth, async (req: AuthRequest, res) => {
+router.put('/', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const updates: Record<string, string> = req.body;
+  const changedKeys: string[] = [];
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -64,8 +70,16 @@ router.put('/', requireAuth, async (req: AuthRequest, res) => {
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
         [key, val.trim()]
       );
+      changedKeys.push(key);
     }
     await client.query('COMMIT');
+    if (changedKeys.length) {
+      // Record which settings changed; never log secret values.
+      await writeAudit(req, {
+        action: 'update', entityType: 'settings', entityId: null,
+        summary: `Updated settings: ${changedKeys.join(', ')}`, after: { keys: changedKeys },
+      });
+    }
     res.json({ ok: true });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -76,7 +90,7 @@ router.put('/', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.post('/test-email', requireAuth, async (req: AuthRequest, res) => {
+router.post('/test-email', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const { to } = req.body;
   if (!to) return res.status(400).json({ error: 'Recipient required' });
 

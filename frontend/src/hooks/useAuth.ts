@@ -2,6 +2,14 @@ import { useState, useCallback } from 'react';
 import api from '../api/client';
 import { User } from '../types';
 
+// Roles with administrative rights (mirror of the backend PRIVILEGED_ROLES).
+// Used for UI gating only — the server is the real authorization boundary.
+export const PRIVILEGED_ROLES = ['owner', 'administrator', 'manager'];
+
+export function isPrivileged(user?: { role?: string } | null): boolean {
+  return !!user?.role && PRIVILEGED_ROLES.includes(user.role);
+}
+
 export function useAuth() {
   const [user, setUser] = useState<User | null>(() => {
     // Handle ?mstoken=... redirect from Microsoft OAuth

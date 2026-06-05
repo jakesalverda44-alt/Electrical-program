@@ -1,8 +1,8 @@
 import React from 'react';
 import Icon from '../../components/Icon';
 import { WonJob } from '../../types';
+import { moneyFull } from '../../lib/money';
 
-function moneyFull(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 const sumVal = (arr: WonJob[]) => arr.reduce((s, j) => s + Number(j.value), 0);
 
 interface Props {

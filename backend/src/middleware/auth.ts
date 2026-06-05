@@ -4,9 +4,10 @@ import jwt from 'jsonwebtoken';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { logger } from '../utils/logger';
+import { DEFAULT_ORG_ID } from '../utils/scope';
 
 export interface AuthRequest extends Request {
-  user?: { id: string; name: string; email: string; role: string };
+  user?: { id: string; name: string; email: string; role: string; org_id: string };
 }
 
 // The signing/verification secret. Resolved at startup via initJwtSecret().
@@ -49,20 +50,50 @@ export async function initJwtSecret(): Promise<void> {
 // How long an issued access token stays valid (kept short; refresh tokens are a Phase 2 item).
 export const TOKEN_TTL = '12h';
 
-// Re-exported from utils/scope so route handlers can keep importing it from the middleware.
-export { ownScopeId } from '../utils/scope';
+// Re-exported from utils/scope so route handlers can keep importing tenant/scope
+// helpers from the middleware.
+export { ownScopeId, orgScope, DEFAULT_ORG_ID } from '../utils/scope';
 
 export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const payload = jwt.verify(header.slice(7), getJwtSecret()) as any;
-    req.user = payload;
+    // Tokens minted before multi-tenancy lack an org claim; resolve them to the
+    // default organization so existing sessions keep working after deploy.
+    req.user = { ...payload, org_id: payload.org_id ?? DEFAULT_ORG_ID };
     next();
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
 }
+
+// Roles with full administrative rights: user management, settings writes, and
+// destructive deletes. `manager` is the legacy name for an admin-equivalent role
+// and is treated as privileged so existing accounts are not locked out.
+export const PRIVILEGED_ROLES = ['owner', 'administrator', 'manager'] as const;
+
+export function isPrivileged(user?: { role?: string }): boolean {
+  return !!user?.role && (PRIVILEGED_ROLES as readonly string[]).includes(user.role);
+}
+
+/**
+ * Authorization guard. Use AFTER requireAuth. Rejects with 403 unless the
+ * authenticated user's role is in the allowed list. Without this, authenticated
+ * users could reach privileged endpoints (e.g. create an owner account).
+ */
+export function requireRole(...roles: string[]) {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'You do not have permission to perform this action.' });
+    }
+    next();
+  };
+}
+
+// Convenience guard for the standard owner/administrator/manager privilege set.
+export const requireAdmin = requireRole(...PRIVILEGED_ROLES);
 
 type AIPermission = 'run_analysis' | 'view_results' | 'manage_settings';
 
@@ -134,8 +165,11 @@ export function requireAIPermission(permission: AIPermission) {
 
       next();
     } catch (err) {
-      console.error('[ai-permission]', err);
-      next(); // fail open to avoid breaking non-AI flows
+      // Fail CLOSED: a failure while evaluating an authorization decision must
+      // deny access, never grant it. (Previously this called next(), which let
+      // a transient DB error bypass the entire AI permission check.)
+      logger.error({ err }, '[ai-permission] permission check failed; denying access');
+      return res.status(500).json({ error: 'Could not verify AI permissions. Please try again.' });
     }
   };
 }
@@ -154,7 +188,11 @@ async function checkDailyLimit(userId: string, next: NextFunction, res: Response
       return res.status(429).json({ error: `Daily AI analysis limit (${limit} per day) reached. Try again tomorrow.` });
     }
     next();
-  } catch {
-    next(); // fail open
+  } catch (err) {
+    // The daily limit is a soft quota, not an authorization boundary (the
+    // run_analysis permission was already granted above), so a transient error
+    // here fails open rather than blocking legitimate work.
+    logger.warn({ err }, '[ai-permission] daily limit check failed; allowing this request');
+    next();
   }
 }

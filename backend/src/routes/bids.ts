@@ -1,11 +1,22 @@
 import { Router } from 'express';
 import { Resend } from 'resend';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
+import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
+import { writeAudit } from '../utils/audit';
+import { ensureProject, setProjectDeleted } from '../utils/project';
+import { commissionRate, commissionAmount } from '../utils/commission';
 import { getSetting } from '../db/getSetting';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { escapeHtml } from '../utils/escapeHtml';
 import { upsertCustomer } from './customers';
+import {
+  getOrCreateGcFolder,
+  createJobFolder,
+  createSubfolders,
+  moveFolder,
+  ACTIVE_PROJECTS_ROOT,
+  COMPLETED_PROJECTS_ROOT,
+} from '../services/googleDrive';
 
 const router = Router();
 
@@ -51,8 +62,9 @@ async function sendBidNotification(bid: Record<string, unknown>, addedBy: { name
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
   const params: unknown[] = [];
-  let sql = 'SELECT * FROM bids';
-  if (scope) { params.push(scope); sql += ` WHERE salesperson_id = $${params.length}`; }
+  const where: string[] = ['deleted_at IS NULL'];
+  if (scope) { params.push(scope); where.push(`salesperson_id = $${params.length}`); }
+  let sql = `SELECT * FROM bids WHERE ${where.join(' AND ')}`;
   sql += ' ORDER BY created_at DESC';
   // Opt-in pagination: ?limit=N&offset=M. Omitted → return all rows (backward compatible).
   if (req.query.limit !== undefined) {
@@ -68,7 +80,7 @@ router.get('/', requireAuth, async (req: AuthRequest, res) => {
 // Restricted (rep) users may only act on their own bids. Returns the bid row if allowed,
 // or sends the appropriate 403/404 and returns null.
 async function loadOwnedBid(req: AuthRequest, res: import('express').Response) {
-  const { rows } = await pool.query('SELECT * FROM bids WHERE id=$1', [req.params.id]);
+  const { rows } = await pool.query('SELECT * FROM bids WHERE id=$1 AND deleted_at IS NULL', [req.params.id]);
   if (!rows.length) { res.status(404).json({ error: 'Not found' }); return null; }
   const scope = ownScopeId(req.user!);
   if (scope && rows[0].salesperson_id !== scope) {
@@ -89,7 +101,44 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
     [name.trim(), gc.trim(), (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), notes?.trim() || null, user.id, user.name, customerId]
   );
   sendBidNotification(rows[0], user).catch(() => {});
-  res.json(withDueDays(rows[0]));
+
+  // Fire-and-forget Drive folder setup — never blocks the CRM response
+  const newBid = rows[0];
+  (async () => {
+    try {
+      const [gcFolderId, jobFolderId] = await Promise.all([
+        getOrCreateGcFolder(newBid.gc),
+        createJobFolder(newBid.name, newBid.gc),
+      ]);
+      if (!jobFolderId) return;
+      const subfolders = await createSubfolders(jobFolderId);
+      await pool.query(
+        `UPDATE bids SET
+           drive_gc_folder_id=$1, drive_job_folder_id=$2,
+           drive_plans_folder_id=$3, drive_estimates_folder_id=$4,
+           drive_photos_folder_id=$5, drive_contracts_folder_id=$6,
+           drive_submittals_folder_id=$7, drive_rfis_folder_id=$8,
+           drive_change_orders_folder_id=$9
+         WHERE id=$10`,
+        [
+          gcFolderId,
+          jobFolderId,
+          subfolders['Plans & Specs'] || null,
+          subfolders['Estimates & Scope Extractions'] || null,
+          subfolders['Photos'] || null,
+          subfolders['Contract & Invoices'] || null,
+          subfolders['Submittals'] || null,
+          subfolders['RFIs'] || null,
+          subfolders['Change Orders'] || null,
+          newBid.id,
+        ],
+      );
+    } catch (err) {
+      console.error('[drive] Bid folder setup failed:', err);
+    }
+  })();
+
+  res.json(withDueDays(newBid));
 });
 
 router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
@@ -119,14 +168,23 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     // If transitioning TO awarded (not already awarded), create won-job record
     let wonJob = null;
     if (stage === 'awarded' && bid.stage !== 'awarded') {
+      const rate = await commissionRate();
       const { rows: wj } = await client.query(
-        `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, salesperson_id)
-         VALUES ($1,$2,$3,'Electrical',$4,$5)
+        `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, salesperson_id,
+                                commission_rate, commission_amount, commission_status, commission_earned_at)
+         VALUES ($1,$2,$3,'Electrical',$4,$5,$6,$7,'earned',now())
          ON CONFLICT (proposal_id) DO NOTHING
          RETURNING *`,
-        [bid.salesperson_name, bid.name, bid.id, bid.amount, bid.salesperson_id || null]
+        [bid.salesperson_name, bid.name, bid.id, bid.amount, bid.salesperson_id || null,
+         rate, commissionAmount(bid.amount, rate)]
       );
       wonJob = wj[0] || null;
+
+      // Awarded work becomes a first-class project (shares the bid id).
+      await ensureProject(client, {
+        id: bid.id, sourceType: 'elec', customerId: bid.customer_id,
+        name: bid.name, contractValue: bid.amount,
+      });
 
       await client.query(
         `INSERT INTO activity (kind, div, text)
@@ -142,6 +200,18 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     }
 
     await client.query('COMMIT');
+    if (stage === 'awarded' && bid.stage !== 'awarded') {
+      await writeAudit(req, {
+        action: 'award', entityType: 'bid', entityId: bid.id,
+        summary: `Awarded bid "${bid.name}" (${bid.gc}) — $${Number(bid.amount || 0).toLocaleString()}`,
+        before: { stage: bid.stage }, after: { stage: 'awarded', value: bid.amount },
+      });
+      // Fire-and-forget: move job folder from Active to Completed Projects in Drive
+      if (bid.drive_job_folder_id) {
+        moveFolder(bid.drive_job_folder_id, ACTIVE_PROJECTS_ROOT, COMPLETED_PROJECTS_ROOT)
+          .catch(err => console.error('[drive] moveFolder on award failed:', err));
+      }
+    }
     res.json({ bid: withDueDays(rows[0]), wonJob });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -159,7 +229,7 @@ router.get('/:id/qualify', requireAuth, async (req: AuthRequest, res) => {
 
   // GC win/loss history
   const { rows: gcHistory } = await pool.query(
-    `SELECT stage FROM bids WHERE gc=$1 AND id!=$2`,
+    `SELECT stage FROM bids WHERE gc=$1 AND id!=$2 AND deleted_at IS NULL`,
     [bid.gc, bid.id]
   );
   const gcWon  = gcHistory.filter(r => r.stage === 'awarded').length;
@@ -169,7 +239,7 @@ router.get('/:id/qualify', requireAuth, async (req: AuthRequest, res) => {
 
   // Overall company win rate
   const { rows: allHistory } = await pool.query(
-    `SELECT stage FROM bids WHERE stage IN ('awarded','lost') AND id!=$1`, [bid.id]
+    `SELECT stage FROM bids WHERE stage IN ('awarded','lost') AND id!=$1 AND deleted_at IS NULL`, [bid.id]
   );
   const totalWon  = allHistory.filter(r => r.stage === 'awarded').length;
   const totalLost = allHistory.filter(r => r.stage === 'lost').length;
@@ -236,6 +306,75 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   );
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
   res.json(withDueDays(rows[0]));
+});
+
+// Soft delete — moves the bid (and its won-job revenue record) to the Trash.
+// Recoverable via /restore; permanently removed by /purge or the retention job.
+router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const bid = await loadOwnedBid(req, res);
+  if (!bid) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE bids SET deleted_at=now() WHERE id=$1', [req.params.id]);
+    await client.query('UPDATE won_jobs SET deleted_at=now() WHERE proposal_id=$1', [req.params.id]);
+    await setProjectDeleted(client, req.params.id, true);
+    await client.query('COMMIT');
+    await writeAudit(req, {
+      action: 'delete', entityType: 'bid', entityId: bid.id,
+      summary: `Moved bid "${bid.name}" (${bid.gc}) to Trash`, before: bid,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// Restore a trashed bid (and its won-job record).
+router.post('/:id/restore', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const { rows } = await pool.query('UPDATE bids SET deleted_at=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING *', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found in Trash' });
+  await pool.query('UPDATE won_jobs SET deleted_at=NULL WHERE proposal_id=$1', [req.params.id]);
+  await setProjectDeleted(pool, req.params.id, false);
+  await writeAudit(req, { action: 'restore', entityType: 'bid', entityId: req.params.id, summary: `Restored bid "${rows[0].name}"` });
+  res.json(withDueDays(rows[0]));
+});
+
+// Permanently delete a trashed bid and all dependent records (admin only).
+router.delete('/:id/purge', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const { rows: existing } = await pool.query('SELECT id, name FROM bids WHERE id=$1 AND deleted_at IS NOT NULL', [req.params.id]);
+  if (!existing.length) return res.status(404).json({ error: 'Not found in Trash' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM project_change_orders WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM project_field_notes WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM project_rfis WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM project_sections WHERE project_id=$1', [req.params.id]);
+    await client.query('DELETE FROM documents WHERE linked_id=$1', [req.params.id]);
+    await client.query('DELETE FROM communications WHERE linked_id=$1', [req.params.id]);
+    await client.query('DELETE FROM tasks WHERE linked_id=$1', [req.params.id]);
+    await client.query('DELETE FROM notifications WHERE link_id=$1', [req.params.id]);
+    await client.query('DELETE FROM won_jobs WHERE proposal_id=$1', [req.params.id]);
+    await client.query('DELETE FROM bid_workspaces WHERE bid_id=$1', [req.params.id]);
+    await client.query('DELETE FROM takeoff_results WHERE bid_id=$1', [req.params.id]);
+    await client.query('DELETE FROM projects WHERE id=$1', [req.params.id]);
+    await client.query('DELETE FROM bids WHERE id=$1', [req.params.id]);
+    await client.query('COMMIT');
+    await writeAudit(req, { action: 'purge', entityType: 'bid', entityId: req.params.id, summary: `Permanently deleted bid "${existing[0].name}"` });
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
 });
 
 export default router;

@@ -5,10 +5,20 @@ import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, Toggle, RolePill, inputStyle, initials, timeAgo, ROLE_OPTIONS, ROLE_LABELS, ROLE_COLORS } from '../shared';
 
+const CURRENCY_OPTIONS = [
+  { code: 'USD', label: 'US Dollar' },
+  { code: 'CAD', label: 'Canadian Dollar' },
+  { code: 'EUR', label: 'Euro' },
+  { code: 'GBP', label: 'British Pound' },
+  { code: 'AUD', label: 'Australian Dollar' },
+  { code: 'MXN', label: 'Mexican Peso' },
+];
+
 export function CompanySection({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
   const keys = ['company_name','company_address','company_city','company_state','company_zip',
                  'company_phone','company_email','company_website',
-                 'company_license_ec','company_license_cfc','company_license_li'];
+                 'company_license_ec','company_license_cfc','company_license_li',
+                 'currency_code'];
   const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(keys.map(k => [k, (settings as any)[k] ?? ''])));
   const [orig, setOrig] = useState(vals);
   const [saving, setSaving] = useState(false);
@@ -49,6 +59,12 @@ export function CompanySection({ settings, onSaved }: { settings: AppSettings; o
         <div style={{ gridColumn: '1 / -1' }}>
           <Field label="Website"><input style={inputStyle} value={vals.company_website} onChange={set('company_website')} placeholder="https://accuratepowerandtechnology.com"/></Field>
         </div>
+        <Field label="Currency">
+          <select style={{ ...inputStyle, cursor: 'pointer' }} value={vals.currency_code || 'USD'}
+            onChange={e => setVals(p => ({ ...p, currency_code: e.target.value }))}>
+            {CURRENCY_OPTIONS.map(c => <option key={c.code} value={c.code}>{c.code} — {c.label}</option>)}
+          </select>
+        </Field>
       </div>
       <div style={{ marginTop: 8, marginBottom: 4, fontSize: 13, fontWeight: 700, color: 'var(--text3)' }}>License Numbers</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 20px' }}>

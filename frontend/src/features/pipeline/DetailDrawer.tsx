@@ -4,13 +4,11 @@ import { Bid } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
 import api from '../../api/client';
 import RecordFiles from '../../components/RecordFiles';
+import { moneyFull as fmtMoney } from '../../lib/money';
 
 interface QualResult { score: number; reasons: string[]; gcWinRate: number | null; gcWon: number; gcLost: number; dueDays: number; }
 
-function moneyFull(n: number | null) {
-  if (n == null) return '—';
-  return '$' + Math.round(n).toLocaleString('en-US');
-}
+const moneyFull = (n: number | null) => n == null ? '—' : fmtMoney(n);
 function fmtTs(ts?: string | null) {
   if (!ts) return null;
   return new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -26,9 +24,10 @@ interface Props {
   onClose: () => void;
   onOpenPreconstruction: (id: string) => void;
   onBidEdited: (bid: Bid) => void;
+  onDelete: (bid: Bid) => void;
 }
 
-export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, onClose, onOpenPreconstruction, onBidEdited }: Props) {
+export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, onClose, onOpenPreconstruction, onBidEdited, onDelete }: Props) {
   const isTerminal = bid.stage === 'awarded' || bid.stage === 'lost';
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -226,7 +225,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
               {winProb && (
                 <div style={{ marginBottom: 12, padding: '10px 14px', background: 'var(--surface2)', borderRadius: 9 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Win Probability</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Historical Win Rate</span>
                     <span style={{ fontSize: 13, fontWeight: 900, color: winProb.pct >= 60 ? 'var(--green)' : winProb.pct >= 40 ? 'var(--amber)' : '#E06A6A' }}>{winProb.pct}%</span>
                   </div>
                   <div style={{ height: 5, background: 'var(--border2)', borderRadius: 3, overflow: 'hidden', marginBottom: 5 }}>
@@ -282,17 +281,28 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                         </div>
                       ))}
                     </div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                      A heuristic from your win-rate history with this GC and the bid timeline — not a prediction.
+                    </div>
                   </div>
                 ) : (
-                  <button className="btn ghost" disabled={qualifying} onClick={runQualify}
-                    style={{ width: '100%', justifyContent: 'center', fontSize: 12.5 }}>
-                    <Icon name="spark" size={13} stroke={2}/>{qualifying ? 'Scoring…' : 'Score This Bid'}
-                  </button>
-                )}
-              </div>
+              <button className="btn ghost" disabled={qualifying} onClick={runQualify}
+                style={{ width: '100%', justifyContent: 'center', fontSize: 12.5 }}>
+                <Icon name="spark" size={13} stroke={2}/>{qualifying ? 'Scoring…' : 'Score This Bid'}
+              </button>
+            )}
+          </div>
 
-              {!isTerminal && (
-                <button
+          <button
+            className="btn ghost"
+            style={{ width: '100%', justifyContent: 'center', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', marginTop: 8 }}
+            onClick={() => onDelete(bid)}
+          >
+            <Icon name="x" size={14} stroke={2}/>Delete Bid
+          </button>
+
+          {!isTerminal && (
+            <button
                   className="btn ghost"
                   style={{ width: '100%', justifyContent: 'center', color: 'var(--blue)', marginTop: 4 }}
                   onClick={() => { onClose(); onOpenPreconstruction(bid.id); }}
@@ -301,9 +311,45 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                 </button>
               )}
 
-              {/* File attachments for this bid — plans, bid invite, addenda, award paperwork */}
+              {/* Google Drive folder links — shown when folders were auto-created on bid creation */}
+              {bid.drive_job_folder_id && (
+                <div className="dtl-section" style={{ marginTop: 16 }}>
+                  <div className="dtl-stage-label" style={{ marginBottom: 8 }}>Google Drive Folders</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {[
+                      { label: 'Plans & Specs',               id: bid.drive_plans_folder_id },
+                      { label: 'Estimates & Scope',           id: bid.drive_estimates_folder_id },
+                      { label: 'Change Orders',               id: bid.drive_change_orders_folder_id },
+                      { label: 'Submittals',                  id: bid.drive_submittals_folder_id },
+                      { label: 'RFIs',                        id: bid.drive_rfis_folder_id },
+                      { label: 'Photos',                      id: bid.drive_photos_folder_id },
+                      { label: 'Contract & Invoices',         id: bid.drive_contracts_folder_id },
+                      { label: 'All Job Files',               id: bid.drive_job_folder_id },
+                    ].filter(f => f.id).map(f => (
+                      <a
+                        key={f.label}
+                        href={`https://drive.google.com/drive/folders/${f.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 6,
+                          fontSize: 13, color: 'var(--blue)', textDecoration: 'none',
+                          padding: '4px 0',
+                        }}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        {f.label}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* File attachments — contracts, change orders, invoices, photos (smaller files) */}
               <RecordFiles linkedId={bid.id} linkedName={bid.name} div="elec"
-                emptyHint="No files yet. Attach plan sets, the bid invite, addenda, scope docs, or award paperwork."/>
+                emptyHint="Upload contracts, change orders, invoices, and photos here. Add large plan sets directly in the Drive folder above."/>
             </>
           )}
         </div>

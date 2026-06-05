@@ -3,13 +3,53 @@ import { pool } from '../db/pool';
 import { requireAuth, requireAIPermission, AuthRequest } from '../middleware/auth';
 import { getSetting } from '../db/getSetting';
 import Anthropic from '@anthropic-ai/sdk';
-import multer from 'multer';
 import AdmZip from 'adm-zip';
 import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM } from '../ai/prompts';
 import { callWithRetry } from '../ai/retry';
+import { parseAIJSON } from '../ai/json';
+import { asyncHandler } from '../utils/asyncHandler';
+import { logger } from '../utils/logger';
+import { drawingUpload } from '../utils/upload';
+import { uploadFile } from '../services/googleDrive';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+const upload = drawingUpload;
+
+interface AIConfig {
+  model: string;
+  maxTokens: number;
+  temperature: number;
+}
+
+const DEFAULT_AI_MODEL = 'claude-sonnet-4-5';
+const DEFAULT_MAX_TOKENS = 4096;
+const DEFAULT_TEMPERATURE = 0.3;
+
+function parseNumberSetting(value: string, fallback: number, min: number, max: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+async function loadAIConfig(): Promise<AIConfig> {
+  const [modelSetting, maxTokensSetting, temperatureSetting] = await Promise.all([
+    getSetting('ai_model'),
+    getSetting('ai_max_tokens'),
+    getSetting('ai_temperature'),
+  ]);
+  return {
+    model: (modelSetting || process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim(),
+    maxTokens: parseNumberSetting(maxTokensSetting || process.env.AI_MAX_TOKENS || '', DEFAULT_MAX_TOKENS, 256, 8192),
+    temperature: parseNumberSetting(temperatureSetting || process.env.AI_TEMPERATURE || '', DEFAULT_TEMPERATURE, 0, 1),
+  };
+}
+
+function describeAIError(err: unknown): string {
+  const e = err as { message?: string; status?: number; error?: { message?: string }; response?: { data?: { error?: string; message?: string } } };
+  const status = e.status ? `Anthropic ${e.status}` : 'AI request failed';
+  const detail = e.error?.message || e.response?.data?.error || e.response?.data?.message || e.message || 'Unknown error';
+  return `${status}: ${detail}`;
+}
 
 // ── Electrical sheet filter ────────────────────────────────────────────────────
 const ELEC_INCLUDE = /^E\d|electrical|one.?line|panel.?sched|equip.?sched/i;
@@ -31,11 +71,18 @@ function extractText(response: Anthropic.Message): string {
     .join('\n');
 }
 
+function compactOutput(text: string, max = 500): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  if (oneLine.length <= max) return oneLine;
+  return `${oneLine.slice(0, max)}...`;
+}
+
 // ── Background pipeline ───────────────────────────────────────────────────────
 async function runPipeline(
   bidId: string,
   files: Express.Multer.File[],
-  client: Anthropic
+  client: Anthropic,
+  config: AIConfig
 ): Promise<void> {
   let agent1Output = '';
   let agent2Output = '';
@@ -80,8 +127,9 @@ async function runPipeline(
       });
 
       const resp = await callWithRetry(() => client.messages.create({
-        model: 'claude-opus-4-5',
-        max_tokens: 8192,
+        model: config.model,
+        max_tokens: config.maxTokens,
+        temperature: config.temperature,
         system: [{ type: 'text', text: AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: contentBlocks }],
       }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
@@ -121,16 +169,15 @@ async function runPipeline(
         });
 
         const bResp = await callWithRetry(() => client.messages.create({
-          model: 'claude-opus-4-5',
-          max_tokens: 8192,
+          model: config.model,
+          max_tokens: config.maxTokens,
+          temperature: config.temperature,
           system: [{ type: 'text', text: AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: contentBlocks }],
         }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
-        const bMatch = bText.match(/\{[\s\S]*\}/);
-        if (bMatch) {
-          try { batchResults.push(JSON.parse(bMatch[0])); } catch { /* skip bad batch */ }
-        }
+        const parsed = parseAIJSON(bText);
+        if (parsed) batchResults.push(parsed);
       }
 
       // Merge batch results
@@ -164,35 +211,30 @@ async function runPipeline(
     }
 
     // Validate JSON
-    const jsonMatch = agent1Output.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
+    const parsedAgent1 = parseAIJSON(agent1Output);
+    if (!parsedAgent1) {
+      const stopHint = agent1Output.trim().startsWith('```') || agent1Output.trim().startsWith('{')
+        ? 'Agent 1 returned JSON that could not be parsed. The response may have been cut off. Try fewer sheets or increase AI Max Tokens in Settings > AI.'
+        : 'Agent 1 did not return JSON.';
       await pool.query(
         `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
-        [agent1Output, bidId]
-      );
-      console.error('[takeoff] Agent 1 returned no JSON');
-      return;
-    }
-    try {
-      agent1JSON = JSON.parse(jsonMatch[0]);
-    } catch {
-      await pool.query(
-        `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
-        [agent1Output, bidId]
+        [`${stopHint}\n\nRaw preview: ${compactOutput(agent1Output)}`, bidId]
       );
       console.error('[takeoff] Agent 1 JSON parse failed');
       return;
     }
+    agent1JSON = parsedAgent1;
 
     await pool.query(
       `UPDATE takeoff_results SET status='agent1_complete', agent1_output=$1 WHERE bid_id=$2`,
       [agent1Output, bidId]
     );
   } catch (err) {
-    console.error('[takeoff] Agent 1 failed:', err);
+    const message = `Agent 1 failed: ${describeAIError(err)}`;
+    logger.error({ err, bidId }, 'Takeoff Agent 1 failed');
     await pool.query(
       `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
-      [`Agent 1 failed: ${(err as Error).message}`, bidId]
+      [message, bidId]
     );
     return;
   }
@@ -201,8 +243,9 @@ async function runPipeline(
   try {
     await updateStatus('agent2_running');
     const resp = await callWithRetry(() => client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 4096,
+      model: config.model,
+      max_tokens: config.maxTokens,
+      temperature: config.temperature,
       system: [{ type: 'text', text: AGENT2_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
@@ -216,10 +259,11 @@ async function runPipeline(
       [agent2Output, bidId]
     );
   } catch (err) {
-    console.error('[takeoff] Agent 2 failed:', err);
+    const message = `Agent 2 failed: ${describeAIError(err)}`;
+    logger.error({ err, bidId }, 'Takeoff Agent 2 failed');
     await pool.query(
       `UPDATE takeoff_results SET status='error', agent2_output=$1 WHERE bid_id=$2`,
-      [`Agent 2 failed: ${(err as Error).message}`, bidId]
+      [message, bidId]
     );
     return;
   }
@@ -228,8 +272,9 @@ async function runPipeline(
   try {
     await updateStatus('agent3_running');
     const resp = await callWithRetry(() => client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 4096,
+      model: config.model,
+      max_tokens: config.maxTokens,
+      temperature: config.temperature,
       system: [{ type: 'text', text: AGENT3_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
@@ -248,7 +293,7 @@ async function runPipeline(
     `, [agent3Output, agent1Output, bidId]);
 
     // Also persist structured fields from agent1 JSON for backward compatibility
-    const a1 = JSON.parse(agent1Output.match(/\{[\s\S]*\}/)?.[0] ?? '{}') as Record<string, unknown>;
+    const a1 = parseAIJSON(agent1Output) ?? {};
     await pool.query(`
       UPDATE takeoff_results SET
         scope=$1, materials=$2
@@ -258,11 +303,40 @@ async function runPipeline(
       JSON.stringify(a1.lighting ?? []),
       bidId,
     ]);
+
+    // Fire-and-forget: upload scope extraction JSON to Drive
+    (async () => {
+      try {
+        const { rows: bidRows } = await pool.query(
+          'SELECT name, drive_estimates_folder_id FROM bids WHERE id=$1',
+          [bidId],
+        );
+        if (!bidRows.length || !bidRows[0].drive_estimates_folder_id) return;
+        const bid = bidRows[0];
+        const date = new Date().toISOString().split('T')[0];
+        const payload = {
+          job: bid.name,
+          generated: date,
+          drawing_analysis: parseAIJSON(agent1Output) ?? agent1Output,
+          scope_and_estimate: agent2Output,
+          qc_review: agent3Output,
+        };
+        await uploadFile(
+          `Scope — ${bid.name} — ${date}.json`,
+          'application/json',
+          Buffer.from(JSON.stringify(payload, null, 2)),
+          bid.drive_estimates_folder_id,
+        );
+      } catch (err) {
+        console.error('[drive] Scope JSON upload failed:', err);
+      }
+    })();
   } catch (err) {
-    console.error('[takeoff] Agent 3 failed:', err);
+    const message = `Agent 3 failed: ${describeAIError(err)}`;
+    logger.error({ err, bidId }, 'Takeoff Agent 3 failed');
     await pool.query(
       `UPDATE takeoff_results SET status='error', agent3_output=$1 WHERE bid_id=$2`,
-      [`Agent 3 failed: ${(err as Error).message}`, bidId]
+      [message, bidId]
     );
   }
 }
@@ -308,7 +382,7 @@ router.get('/costs', requireAuth, async (_req, res) => {
     SELECT b.name, b.amount, b.sheets, b.gc, b.loc,
            EXTRACT(YEAR FROM b.updated_at) as year
     FROM bids b
-    WHERE b.stage = 'awarded' AND b.amount IS NOT NULL
+    WHERE b.stage = 'awarded' AND b.amount IS NOT NULL AND b.deleted_at IS NULL
     ORDER BY b.updated_at DESC
     LIMIT 20
   `);
@@ -317,7 +391,7 @@ router.get('/costs', requireAuth, async (_req, res) => {
 
 // GET bid intelligence stats
 router.get('/intelligence/:bidId', requireAuth, async (req, res) => {
-  const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1', [req.params.bidId]);
+  const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1 AND deleted_at IS NULL', [req.params.bidId]);
   if (!bidRows.length) return res.status(404).json({ error: 'Bid not found' });
   const bid = bidRows[0];
 
@@ -327,14 +401,14 @@ router.get('/intelligence/:bidId', requireAuth, async (req, res) => {
       COUNT(*) FILTER (WHERE stage='lost') as lost,
       COUNT(*) FILTER (WHERE stage IN ('awarded','lost')) as total,
       AVG(amount) FILTER (WHERE stage='awarded') as avg_won_amount
-    FROM bids WHERE gc=$1
+    FROM bids WHERE gc=$1 AND deleted_at IS NULL
   `, [bid.gc]);
 
   const { rows: overall } = await pool.query(`
     SELECT
       COUNT(*) FILTER (WHERE stage='awarded') as won,
       COUNT(*) FILTER (WHERE stage='lost') as lost
-    FROM bids
+    FROM bids WHERE deleted_at IS NULL
   `);
 
   const gc = gcStats[0];
@@ -354,11 +428,11 @@ router.get('/intelligence/:bidId', requireAuth, async (req, res) => {
 });
 
 // POST analyze — 3-agent sequential pipeline
-router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload.array('files', 50), async (req: AuthRequest, res) => {
+router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload.array('files', 50), asyncHandler(async (req: AuthRequest, res) => {
   const bidId = req.body.bidId;
   if (!bidId) return res.status(400).json({ error: 'bidId required' });
 
-  const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1', [bidId]);
+  const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1 AND deleted_at IS NULL', [bidId]);
   if (!bidRows.length) return res.status(404).json({ error: 'Bid not found' });
 
   const rawFiles = (req.files as Express.Multer.File[]) ?? [];
@@ -386,12 +460,16 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
       files.push(f);
     }
   }
-
-  // Prefer the key configured in Settings → AI; fall back to the env var.
-  const apiKey = (await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return res.status(503).json({ error: 'AI analysis not configured. Add an Anthropic API key in Settings → AI (or set ANTHROPIC_API_KEY).' });
+  if (!files.length) {
+    return res.status(400).json({ error: 'Upload at least one plan file before running AI analysis. Re-add the files in the Files tab, then try again.' });
   }
+
+  // Prefer the key configured in Settings -> AI; fall back to the env var.
+  const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!apiKey) {
+    return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI or set ANTHROPIC_API_KEY in Render.' });
+  }
+  const aiConfig = await loadAIConfig();
 
   // Mark as running
   await pool.query(`
@@ -418,9 +496,15 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   });
 
   const client = new Anthropic({ apiKey });
-  runPipeline(bidId, files, client).catch(err => {
-    console.error('[takeoff] Pipeline error:', err);
+  logger.info({ bidId, model: aiConfig.model, maxTokens: aiConfig.maxTokens }, 'AI takeoff pipeline started');
+  runPipeline(bidId, files, client, aiConfig).catch(async err => {
+    const message = `Pipeline failed: ${describeAIError(err)}`;
+    logger.error({ err, bidId }, 'Takeoff pipeline failed');
+    await pool.query(
+      `UPDATE takeoff_results SET status='error', raw_response=$1 WHERE bid_id=$2`,
+      [message, bidId]
+    ).catch(dbErr => logger.error({ err: dbErr, bidId }, 'Could not persist takeoff pipeline failure'));
   });
-});
+}));
 
 export default router;

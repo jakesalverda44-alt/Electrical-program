@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import Icon from '../../components/Icon';
-import { Bid, Gen, Activity, Toast } from '../../types';
+import { Bid, Gen, Activity } from '../../types';
+import { useShowToast } from '../../contexts/AppContext';
 import api from '../../api/client';
 
 type CommKind = 'note' | 'call' | 'email' | 'meeting' | 'bid' | 'award' | 'system';
@@ -56,13 +57,12 @@ interface Props {
   bids:     Bid[];
   gens:     Gen[];
   activity: Activity[];
-  showToast: (t: Toast) => void;
-  userName:  string;
 }
 
 const BLANK_FORM = { kind: 'note' as CommKind, linkedId: '', subject: '', body: '' };
 
-export default function CommsPage({ bids, gens, activity, showToast, userName }: Props) {
+export default function CommsPage({ bids, gens, activity }: Props) {
+  const showToast = useShowToast();
   const systemEntries = useMemo(() => activity.map((a, i) => activityToEntry(a, i)), [activity]);
   const [persisted, setPersisted] = useState<CommEntry[]>([]);
 

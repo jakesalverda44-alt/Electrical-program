@@ -28,7 +28,7 @@ router.post('/login', authLimiter, async (req, res) => {
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
     const token = jwt.sign(
-      { id: user.id, name: user.name, email: user.email, role: user.role },
+      { id: user.id, name: user.name, email: user.email, role: user.role, org_id: user.org_id },
       getJwtSecret(),
       { expiresIn: TOKEN_TTL }
     );
@@ -121,7 +121,7 @@ router.get('/microsoft/callback', async (req, res) => {
 
     // Issue app JWT
     const appToken = jwt.sign(
-      { id: user.id, name: user.name, email: user.email, role: user.role },
+      { id: user.id, name: user.name, email: user.email, role: user.role, org_id: user.org_id },
       getJwtSecret(),
       { expiresIn: TOKEN_TTL }
     );

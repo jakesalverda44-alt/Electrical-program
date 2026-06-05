@@ -1,9 +1,10 @@
 import React from 'react';
 import Icon from '../../components/Icon';
-import { Bid, Toast } from '../../types';
+import { Bid } from '../../types';
 import { PcWorkspace, blankWorkspace, PC_STEPS } from './constants';
 import PcWorkspaceView from './PcWorkspace';
-import { AppSettings } from '../../hooks/useAppSettings';
+import { moneyShort as money } from '../../lib/money';
+import { useUser, useShowToast, useSettings } from '../../contexts/AppContext';
 
 const STEP_ORDER = PC_STEPS.map(s => s.key);
 
@@ -12,18 +13,14 @@ interface Props {
   pcData: Record<string, PcWorkspace>;
   onPcUpdate: (bidId: string, ws: PcWorkspace) => void;
   onBidUpdated: (bid: Bid) => void;
-  showToast: (t: Toast) => void;
-  userRole?: string;
-  settings?: AppSettings;
 }
 
-function money(n: number) {
-  if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2).replace(/\.?0+$/, '') + 'M';
-  if (n >= 1_000)     return '$' + (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
-  return '$' + n;
-}
 
-export default function PreconstructionPage({ bids, pcData, onPcUpdate, onBidUpdated, showToast, userRole, settings }: Props) {
+export default function PreconstructionPage({ bids, pcData, onPcUpdate, onBidUpdated }: Props) {
+  const user = useUser();
+  const showToast = useShowToast();
+  const { settings } = useSettings();
+  const userRole = user.role;
   const [activeBidId, setActiveBidId] = React.useState<string | null>(null);
 
   const activeBids = bids.filter(b => b.stage === 'due' || b.stage === 'submitted');

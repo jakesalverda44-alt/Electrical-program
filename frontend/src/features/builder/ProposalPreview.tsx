@@ -543,9 +543,18 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
 
       <style>{`
         @media print {
-          .no-print { display: none !important; }
+          .no-print,
+          .sidebar,
+          .topbar,
+          .mobile-nav,
+          .mobile-more-overlay,
+          .mobile-more-sheet,
+          .toast-wrap { display: none !important; }
           .page-break { page-break-before: always; }
           .preview-doc { border: none !important; border-radius: 0 !important; margin: 0 !important; max-width: 100% !important; }
+          .app,
+          .main,
+          .scroll { display: block !important; height: auto !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; }
           @page { margin: 0.55in; size: letter; }
           body { background: white !important; }
         }
