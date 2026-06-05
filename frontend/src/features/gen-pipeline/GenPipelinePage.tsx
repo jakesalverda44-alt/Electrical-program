@@ -34,7 +34,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
 
   const sum = (list: Gen[]) => list.reduce((s, g) => s + Number(g.amount), 0);
   const activeCount = gens.filter(g => g.stage !== 'awarded' && g.stage !== 'declined').length;
-  const activeValue = sum(gens.filter(g => g.stage === 'building' || g.stage === 'sent'));
+  const activeValue = sum(gens.filter(g => g.stage === 'building' || g.stage === 'sent' || g.stage === 'signed'));
 
   const applyFilter = (list: Gen[]): Gen[] => {
     let r = list;
@@ -71,6 +71,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
   const genBadge = (g: Gen) => {
     if (g.stage === 'building') return <span className="badge urgent">Building</span>;
     if (g.stage === 'sent')     return <span className="badge normal"><Icon name="arrow" size={11} stroke={2.2}/>Sent</span>;
+    if (g.stage === 'signed')   return <span className="badge" style={{ background: 'rgba(139,92,246,.15)', color: '#8B5CF6' }}><Icon name="check" size={11} stroke={2.2}/>Signed</span>;
     if (g.stage === 'awarded')  return <span className="badge won"><Icon name="check" size={11} stroke={2.4}/>Awarded</span>;
     return <span className="badge lost">Declined</span>;
   };
@@ -117,7 +118,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
             </button>
           : null}
         renderCard={g => {
-          const ORDER: GenStageKey[] = ['building', 'sent', 'awarded'];
+          const ORDER: GenStageKey[] = ['building', 'sent', 'signed', 'awarded'];
           const idx = ORDER.indexOf(g.stage as GenStageKey);
           const hasNext = idx >= 0 && idx < ORDER.length - 1;
           const isPendingDeclined = pendingDeclined === g.id;

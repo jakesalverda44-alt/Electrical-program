@@ -102,7 +102,7 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
 
 router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
   const { stage } = req.body;
-  const valid = ['building', 'sent', 'awarded', 'declined'];
+  const valid = ['building', 'sent', 'signed', 'awarded', 'declined'];
   if (!valid.includes(stage)) return res.status(400).json({ error: 'Invalid stage' });
   if (!(await loadOwnedGen(req, res))) return;
 
@@ -147,7 +147,7 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
       );
     } else if (stage !== gen.stage) {
       const labels: Record<string, string> = {
-        building: 'Building', sent: 'Proposal Sent', declined: 'Declined',
+        building: 'Building', sent: 'Proposal Sent', signed: 'Signed', declined: 'Declined',
       };
       await client.query(
         `INSERT INTO activity (kind, div, text) VALUES ($1,'gen',$2)`,
@@ -164,32 +164,35 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
         before: { stage: gen.stage }, after: { stage: 'awarded', value: gen.amount },
       });
       // Fire-and-forget: create customer folder + subfolders in Active Generator Jobs
-      (async () => {
-        try {
-          const customerFolderId = await createCustomerFolder(gen.customer, ACTIVE_GENERATOR_JOBS_ROOT);
-          if (!customerFolderId) return;
-          const subs = await createSubfolders(customerFolderId, GEN_SUBFOLDER_NAMES);
-          await pool.query(
-            `UPDATE generator_proposals SET
-               drive_job_folder_id=$1,
-               drive_engineering_folder_id=$2,
-               drive_permit_folder_id=$3,
-               drive_contract_folder_id=$4,
-               drive_invoices_folder_id=$5
-             WHERE id=$6`,
-            [
-              customerFolderId,
-              subs['Engineering'] || null,
-              subs['Permit'] || null,
-              subs['Contract'] || null,
-              subs['Invoices'] || null,
-              gen.id,
-            ],
-          );
-        } catch (err) {
-          console.error('[drive] Gen folder setup failed:', err);
-        }
-      })();
+      // Skip if signing already created the folder
+      if (!gen.drive_job_folder_id) {
+        (async () => {
+          try {
+            const customerFolderId = await createCustomerFolder(gen.customer, ACTIVE_GENERATOR_JOBS_ROOT);
+            if (!customerFolderId) return;
+            const subs = await createSubfolders(customerFolderId, GEN_SUBFOLDER_NAMES);
+            await pool.query(
+              `UPDATE generator_proposals SET
+                 drive_job_folder_id=$1,
+                 drive_engineering_folder_id=$2,
+                 drive_permit_folder_id=$3,
+                 drive_contract_folder_id=$4,
+                 drive_invoices_folder_id=$5
+               WHERE id=$6`,
+              [
+                customerFolderId,
+                subs['Engineering'] || null,
+                subs['Permit'] || null,
+                subs['Contract'] || null,
+                subs['Invoices'] || null,
+                gen.id,
+              ],
+            );
+          } catch (err) {
+            console.error('[drive] Gen folder setup failed:', err);
+          }
+        })();
+      }
     }
     res.json({ gen: rows[0], wonJob });
   } catch (err) {
@@ -441,14 +444,46 @@ router.post('/p/:token/sign', async (req, res) => {
     `UPDATE generator_proposals
      SET signed_at = COALESCE(signed_at, now()),
          signature_data = $1,
-         stage = CASE WHEN stage IN ('declined','awarded') THEN stage ELSE 'sent' END,
+         stage = CASE WHEN stage IN ('declined','awarded') THEN stage ELSE 'signed' END,
          updated_at = now()
      WHERE proposal_token = $2 AND deleted_at IS NULL
-     RETURNING id, customer, stage, signed_at`,
+     RETURNING id, customer, stage, signed_at, drive_job_folder_id`,
     [signatureData, req.params.token]
   );
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
-  res.json({ ok: true, gen: rows[0] });
+  const gen = rows[0];
+
+  // Fire-and-forget: create Active Generator Jobs folder + subfolders on first sign
+  if (!gen.drive_job_folder_id) {
+    (async () => {
+      try {
+        const customerFolderId = await createCustomerFolder(gen.customer, ACTIVE_GENERATOR_JOBS_ROOT);
+        if (!customerFolderId) return;
+        const subs = await createSubfolders(customerFolderId, GEN_SUBFOLDER_NAMES);
+        await pool.query(
+          `UPDATE generator_proposals SET
+             drive_job_folder_id=$1,
+             drive_engineering_folder_id=$2,
+             drive_permit_folder_id=$3,
+             drive_contract_folder_id=$4,
+             drive_invoices_folder_id=$5
+           WHERE id=$6`,
+          [
+            customerFolderId,
+            subs['Engineering'] || null,
+            subs['Permit'] || null,
+            subs['Contract'] || null,
+            subs['Invoices'] || null,
+            gen.id,
+          ],
+        );
+      } catch (err) {
+        console.error('[drive] Sign: folder creation failed:', err);
+      }
+    })();
+  }
+
+  res.json({ ok: true, gen });
 });
 
 // ── Public: auto-save a signed-proposal PDF (no auth) ───────────────────────────
@@ -476,20 +511,25 @@ router.post('/p/:token/proposal-pdf', upload.single('file'), asyncHandler(async 
   const name = `Signed Proposal - ${gen.customer}.pdf`;
   logger.info({ genId: gen.id, fileSize: file.size }, 'Signed proposal PDF upload started');
   try {
+    // Re-fetch to pick up drive_contract_folder_id set by the sign route
+    const { rows: fresh } = await pool.query(
+      'SELECT drive_contract_folder_id FROM generator_proposals WHERE id=$1',
+      [gen.id]
+    );
+    const contractFolderId = fresh[0]?.drive_contract_folder_id ?? null;
+
     await pool.query(
       `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
        VALUES ($1,$2,'gen',$3,$3,'contract',$4,'application/pdf','Customer signature',$5)`,
       [gen.id, gen.customer, name, file.size, file.buffer.toString('base64')]
     );
 
-    // Fire-and-forget: upload to Drive Generator Proposals folder
+    // Upload signed contract to Contract subfolder in Active Generator Jobs; fall back to Generator Proposals
     const driveDate = new Date().toISOString().split('T')[0];
-    uploadFile(
-      `Proposal — ${gen.customer} — ${driveDate}.pdf`,
-      'application/pdf',
-      file.buffer,
-      GENERATOR_PROPOSALS_FOLDER,
-    ).catch(err => console.error('[drive] Generator PDF upload failed:', err));
+    const driveName = `Signed Contract — ${gen.customer} — ${driveDate}.pdf`;
+    const driveTarget = contractFolderId ?? GENERATOR_PROPOSALS_FOLDER;
+    uploadFile(driveName, 'application/pdf', file.buffer, driveTarget)
+      .catch(err => console.error('[drive] Signed contract upload failed:', err));
 
     res.json({ ok: true });
   } catch (err) {

@@ -23,7 +23,7 @@ interface Props {
 }
 
 export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDelete, onClosed }: Props) {
-  const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined';
+  const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed';
   const [closingJob, setClosingJob] = useState(false);
 
   const handleCloseJob = async () => {
