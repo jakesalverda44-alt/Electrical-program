@@ -76,6 +76,11 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
   // Division filter from the header tabs.
   const showElec = dashFilter !== 'gen';
   const showGen  = dashFilter !== 'elec';
+  // Activity feed scoped to the division (preconstruction is electrical work,
+  // so it stays visible in Electrical mode).
+  const fActivity = dashFilter === 'all' ? activity
+    : dashFilter === 'gen' ? activity.filter(a => a.div === 'gen')
+    : activity.filter(a => a.div !== 'gen');
 
   const elecActive = bids.filter(b => b.stage === 'due' || b.stage === 'submitted');
   const genActive  = gens.filter(g => g.stage === 'building' || g.stage === 'sent');
@@ -351,7 +356,8 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
                 </span>
               </div>
               <div className="panel-body">
-                {activity.slice(0, 6).map(a => (
+                {fActivity.length === 0 && <div className="panel-empty">No recent activity</div>}
+                {fActivity.slice(0, 6).map(a => (
                   <div className="act-item" key={a.id}>
                     <div className={'act-ic ' + a.kind}>
                       <Icon name={a.kind==='awarded'?'check':a.kind==='lost'?'x':a.kind==='built'?'bolt':a.kind==='sent'?'arrow':'plus'} size={16} stroke={2}/>
