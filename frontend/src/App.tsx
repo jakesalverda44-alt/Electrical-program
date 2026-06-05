@@ -192,7 +192,7 @@ export default function App() {
           />
         );
       case 'sales-by-rep':
-        return <SalesByRepPage wonJobs={wonJobs}/>;
+        return <SalesByRepPage wonJobs={wonJobs} userRole={user.role}/>;
       case 'intake':
         return (
           <IntakeInboxPage

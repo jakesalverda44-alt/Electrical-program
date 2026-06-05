@@ -10,6 +10,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
 import { writeAudit } from '../utils/audit';
 import { ensureProject, setProjectDeleted } from '../utils/project';
+import { commissionRate, commissionAmount } from '../utils/commission';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -115,12 +116,15 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
 
     let wonJob = null;
     if (stage === 'awarded' && gen.stage !== 'awarded') {
+      const rate = await commissionRate();
       const { rows: wj } = await client.query(
-        `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, salesperson_id)
-         VALUES ($1,$2,$3,'Generator',$4,$5)
+        `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, salesperson_id,
+                                commission_rate, commission_amount, commission_status, commission_earned_at)
+         VALUES ($1,$2,$3,'Generator',$4,$5,$6,$7,'earned',now())
          ON CONFLICT (proposal_id) DO NOTHING
          RETURNING *`,
-        [gen.salesperson_name, gen.customer, gen.id, gen.amount, gen.salesperson_id || null]
+        [gen.salesperson_name, gen.customer, gen.id, gen.amount, gen.salesperson_id || null,
+         rate, commissionAmount(gen.amount, rate)]
       );
       wonJob = wj[0] || null;
       await ensureProject(client, {
@@ -200,11 +204,17 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
   const gen = rows[0];
 
-  // If amount changed on an awarded gen, keep won_jobs in sync
+  // If amount changed on an awarded gen, keep won_jobs (and the unpaid
+  // commission, at its existing rate) in sync.
   let wonJob = null;
   if (amount !== undefined && gen.stage === 'awarded') {
     const { rows: wj } = await pool.query(
-      `UPDATE won_jobs SET value=$1 WHERE proposal_id=$2 RETURNING *`,
+      `UPDATE won_jobs
+       SET value = $1,
+           commission_amount = CASE WHEN commission_status = 'paid'
+             THEN commission_amount
+             ELSE ROUND($1 * COALESCE(commission_rate, 0) / 100, 2) END
+       WHERE proposal_id = $2 RETURNING *`,
       [Number(amount), gen.id]
     );
     wonJob = wj[0] || null;

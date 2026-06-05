@@ -14,13 +14,14 @@ import { NotificationsSection } from './sections/NotificationsSection';
 import { SecuritySection } from './sections/SecuritySection';
 import { TrashSection } from './sections/TrashSection';
 import { AuditSection } from './sections/AuditSection';
+import { CommissionsSection } from './sections/CommissionsSection';
 
 interface Props {
   settings: AppSettings;
   onSettingsSaved: () => void;
 }
 
-type SectionId = 'company' | 'proposal-defaults' | 'gen-pricing' | 'users' | 'email' | 'ai' | 'ai-permissions' | 'integrations' | 'notifications' | 'security' | 'trash' | 'audit';
+type SectionId = 'company' | 'proposal-defaults' | 'gen-pricing' | 'users' | 'email' | 'ai' | 'ai-permissions' | 'integrations' | 'notifications' | 'security' | 'trash' | 'audit' | 'commissions';
 
 const NAV: { group: string; items: { id: SectionId; label: string; icon: string }[] }[] = [
   { group: 'Organization', items: [
@@ -30,6 +31,7 @@ const NAV: { group: string; items: { id: SectionId; label: string; icon: string 
   { group: 'Proposals', items: [
     { id: 'proposal-defaults', label: 'Defaults',       icon: 'doc'      },
     { id: 'gen-pricing',       label: 'Gen Pricing',    icon: 'zap'      },
+    { id: 'commissions',       label: 'Commissions',    icon: 'dollar'   },
   ]},
   { group: 'Integrations', items: [
     { id: 'email',            label: 'Email Delivery',  icon: 'send'     },
@@ -95,6 +97,7 @@ export default function SettingsPage({ settings, onSettingsSaved }: Props) {
           {active === 'users'             && <UsersSection/>}
           {active === 'proposal-defaults' && <ProposalDefaultsSection settings={settings} onSaved={onSettingsSaved}/>}
           {active === 'gen-pricing'       && <GenPricingSection  settings={settings} onSaved={onSettingsSaved}/>}
+          {active === 'commissions'       && <CommissionsSection settings={settings} onSaved={onSettingsSaved}/>}
           {active === 'email'             && <EmailSection       settings={settings} onSaved={onSettingsSaved}/>}
           {active === 'ai'                && <AISection          settings={settings} onSaved={onSettingsSaved}/>}
           {active === 'ai-permissions'    && <AIPermissionsSection settings={settings} onSaved={onSettingsSaved}/>}

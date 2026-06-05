@@ -4,6 +4,7 @@ import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
 import { ensureProject, setProjectDeleted } from '../utils/project';
+import { commissionRate, commissionAmount } from '../utils/commission';
 import { getSetting } from '../db/getSetting';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { escapeHtml } from '../utils/escapeHtml';
@@ -122,12 +123,15 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     // If transitioning TO awarded (not already awarded), create won-job record
     let wonJob = null;
     if (stage === 'awarded' && bid.stage !== 'awarded') {
+      const rate = await commissionRate();
       const { rows: wj } = await client.query(
-        `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, salesperson_id)
-         VALUES ($1,$2,$3,'Electrical',$4,$5)
+        `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, salesperson_id,
+                                commission_rate, commission_amount, commission_status, commission_earned_at)
+         VALUES ($1,$2,$3,'Electrical',$4,$5,$6,$7,'earned',now())
          ON CONFLICT (proposal_id) DO NOTHING
          RETURNING *`,
-        [bid.salesperson_name, bid.name, bid.id, bid.amount, bid.salesperson_id || null]
+        [bid.salesperson_name, bid.name, bid.id, bid.amount, bid.salesperson_id || null,
+         rate, commissionAmount(bid.amount, rate)]
       );
       wonJob = wj[0] || null;
 

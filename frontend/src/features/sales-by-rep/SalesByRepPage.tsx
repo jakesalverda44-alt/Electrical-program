@@ -1,28 +1,45 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { WonJob } from '../../types';
+import { isPrivileged } from '../../hooks/useAuth';
+import api from '../../api/client';
 import WonReports from './WonReports';
 
 function moneyFull(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 const sumVal = (arr: WonJob[]) => arr.reduce((s, j) => s + Number(j.value), 0);
+const sumComm = (arr: WonJob[]) => arr.reduce((s, j) => s + Number(j.commission_amount || 0), 0);
 
 interface Props {
   wonJobs: WonJob[];
+  userRole?: string;
 }
 
-export default function SalesByRepPage({ wonJobs }: Props) {
+export default function SalesByRepPage({ wonJobs, userRole }: Props) {
   const [tab,   setTab]   = useState<'records' | 'reports'>('records');
   const [fRep,  setFRep]  = useState('all');
   const [fType, setFType] = useState('all');
+  const canManage = isPrivileged({ role: userRole });
+
+  // Local copy so the paid/earned toggle reflects immediately.
+  const [rows, setRows] = useState<WonJob[]>(wonJobs);
+  useEffect(() => setRows(wonJobs), [wonJobs]);
+
+  const togglePaid = async (j: WonJob) => {
+    if (!canManage) return;
+    const next = j.commission_status === 'paid' ? 'earned' : 'paid';
+    setRows(prev => prev.map(r => r.id === j.id ? { ...r, commission_status: next } : r));
+    try { await api.patch(`/won-jobs/${j.id}/commission`, { status: next }); }
+    catch { setRows(prev => prev.map(r => r.id === j.id ? { ...r, commission_status: j.commission_status } : r)); }
+  };
 
   // Dynamic salesperson list from data
   const salespeople = useMemo(
-    () => Array.from(new Set(wonJobs.map(j => j.salesperson_name))).sort(),
-    [wonJobs]
+    () => Array.from(new Set(rows.map(j => j.salesperson_name))).sort(),
+    [rows]
   );
 
   // Filter to salesperson scope first (used for stats + reports)
-  const scoped = fRep !== 'all' ? wonJobs.filter(j => j.salesperson_name === fRep) : wonJobs;
+  const scoped = fRep !== 'all' ? rows.filter(j => j.salesperson_name === fRep) : rows;
 
   // Then filter by type for the table
   const records = [...(fType !== 'all' ? scoped.filter(j => j.proposal_type === fType) : scoped)]
@@ -75,8 +92,8 @@ export default function SalesByRepPage({ wonJobs }: Props) {
         {/* Stat cards */}
         <div className="stats" style={{ gridTemplateColumns: 'repeat(4,1fr)', padding: 0, marginBottom: 18 }}>
           {[
-            { label: 'Won This Month', val: moneyFull(sumVal(thisMonth)), sub: `${thisMonth.length} job${thisMonth.length !== 1 ? 's' : ''} won`,    tone: 'green' },
             { label: 'Won This Year',  val: moneyFull(total),             sub: `${scoped.length} job${scoped.length !== 1 ? 's' : ''} won`,           tone: 'blue'  },
+            { label: 'Commission YTD', val: moneyFull(sumComm(scoped)),   sub: `${moneyFull(sumComm(scoped.filter(j => j.commission_status !== 'paid')))} unpaid`, tone: 'green' },
             { label: 'Jobs Won YTD',   val: String(scoped.length),        sub: 'across both divisions',                                               tone: 'amber' },
             { label: 'Avg Deal Size',  val: moneyFull(avg),               sub: 'per won job',                                                         tone: 'green' },
           ].map(s => (
@@ -122,6 +139,8 @@ export default function SalesByRepPage({ wonJobs }: Props) {
                     <th>Customer</th>
                     <th>Type</th>
                     <th style={{ textAlign: 'right' }}>Contract Value</th>
+                    <th style={{ textAlign: 'right' }}>Commission</th>
+                    <th>Status</th>
                     <th>Date Won</th>
                   </tr>
                 </thead>
@@ -141,6 +160,25 @@ export default function SalesByRepPage({ wonJobs }: Props) {
                         </span>
                       </td>
                       <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{moneyFull(Number(j.value))}</td>
+                      <td className="num" style={{ textAlign: 'right', fontWeight: 700 }}>
+                        {j.commission_amount != null ? moneyFull(Number(j.commission_amount)) : '—'}
+                        {j.commission_rate != null && <span style={{ color: 'var(--text3)', fontWeight: 600, fontSize: 11 }}> ({Number(j.commission_rate)}%)</span>}
+                      </td>
+                      <td>
+                        {(() => {
+                          const paid = j.commission_status === 'paid';
+                          const style: React.CSSProperties = {
+                            fontSize: '10.5px', fontWeight: 800, padding: '2px 8px', borderRadius: 5,
+                            textTransform: 'uppercase', letterSpacing: '.04em',
+                            background: paid ? 'var(--green-soft)' : 'var(--amber-soft)',
+                            color: paid ? 'var(--green)' : 'var(--amber)',
+                            cursor: canManage ? 'pointer' : 'default', border: 'none',
+                          };
+                          return canManage
+                            ? <button style={style} onClick={() => togglePaid(j)} title="Click to toggle paid/earned">{paid ? 'Paid' : 'Earned'}</button>
+                            : <span style={style}>{paid ? 'Paid' : 'Earned'}</span>;
+                        })()}
+                      </td>
                       <td className="sub">{formatDate(j.date_won)}</td>
                     </tr>
                   ))}

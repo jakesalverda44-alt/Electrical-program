@@ -63,6 +63,11 @@ export interface WonJob {
   proposal_type: 'Electrical' | 'Generator';
   value: number;
   date_won: string;
+  commission_rate?: number | null;
+  commission_amount?: number | null;
+  commission_status?: 'earned' | 'paid';
+  commission_earned_at?: string | null;
+  commission_paid_at?: string | null;
 }
 
 export interface Activity {
