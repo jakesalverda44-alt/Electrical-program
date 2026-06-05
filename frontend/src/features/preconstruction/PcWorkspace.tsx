@@ -718,7 +718,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   <span className="pt-ic" style={{ background: 'var(--blue-soft)', color: 'var(--blue)' }}>
                     <Icon name="sparkle" size={15} stroke={1.8}/>
                   </span>
-                  Bid Intelligence
+                  Win-Rate Insights
                 </span>
               </div>
               <div style={{ padding: '16px 20px' }}>
@@ -750,11 +750,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       </div>
                     ))}
                     <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginTop: 8 }}>
-                      Intelligence improves as more bids are entered and outcomes recorded.
+                      These win-rate stats improve as more bids are entered and outcomes recorded.
                     </div>
                   </>
                 ) : (
-                  <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Loading intelligence data…</div>
+                  <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Loading win-rate insights…</div>
                 )}
               </div>
             </div>

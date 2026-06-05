@@ -225,7 +225,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
               {winProb && (
                 <div style={{ marginBottom: 12, padding: '10px 14px', background: 'var(--surface2)', borderRadius: 9 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Win Probability</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Historical Win Rate</span>
                     <span style={{ fontSize: 13, fontWeight: 900, color: winProb.pct >= 60 ? 'var(--green)' : winProb.pct >= 40 ? 'var(--amber)' : '#E06A6A' }}>{winProb.pct}%</span>
                   </div>
                   <div style={{ height: 5, background: 'var(--border2)', borderRadius: 3, overflow: 'hidden', marginBottom: 5 }}>
@@ -280,6 +280,9 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                           <span style={{ color: 'var(--text3)', marginTop: 1 }}>·</span>{r}
                         </div>
                       ))}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                      A heuristic from your win-rate history with this GC and the bid timeline — not a prediction.
                     </div>
                   </div>
                 ) : (
