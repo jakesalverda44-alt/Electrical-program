@@ -37,12 +37,12 @@ function GoogleDriveCard() {
   };
 
   const fixAwarded = async () => {
-    if (!confirm('This will move all awarded (in-progress) job folders from Completed Projects back to Active Projects. Continue?')) return;
+    if (!confirm('This will move all existing job folders into the correct stage folder (Active Bids, Submitted Bids, Active Projects, or Completed Projects) with GC name hierarchy. Continue?')) return;
     setFixing(true);
     setFixErr('');
     setFixResult(null);
     try {
-      const { data } = await api.post('/admin/fix-drive-awarded', {}, { timeout: 300_000 });
+      const { data } = await api.post('/admin/reorganize-drive', {}, { timeout: 300_000 });
       setFixResult(data);
     } catch (e: unknown) {
       setFixErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Request failed');
@@ -94,10 +94,10 @@ function GoogleDriveCard() {
             onClick={fixAwarded}
             style={{ fontSize: 12, padding: '6px 12px' }}
           >
-            {fixing ? 'Moving folders…' : 'Move awarded jobs → Active Projects'}
+            {fixing ? 'Reorganizing…' : 'Reorganize all Drive folders'}
           </button>
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5 }}>
-            Fixes awarded (in-progress) jobs that were incorrectly placed in Completed Projects.
+            Moves all existing job folders into the correct stage folder with GC name hierarchy.
           </div>
           {fixResult && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text3)' }}>

@@ -3,10 +3,11 @@ import { pool } from '../db/pool';
 import { requireAuth, requireAdmin } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import {
-  getOrCreateGcFolder,
   createJobFolder,
   createSubfolders,
-  moveFolder,
+  moveJobToStage,
+  ESTIMATING_ACTIVE_BIDS_ROOT,
+  ESTIMATING_SUBMITTED_BIDS_ROOT,
   ACTIVE_PROJECTS_ROOT,
   COMPLETED_PROJECTS_ROOT,
 } from '../services/googleDrive';
@@ -56,24 +57,28 @@ router.get('/audit', asyncHandler(async (req, res) => {
 }));
 
 // Backfill Google Drive folders for all existing bids that don't have one yet.
+// Places each bid in the correct stage folder with GC hierarchy.
 // POST /api/admin/backfill-drive
-// Returns { processed, skipped, errors } — runs synchronously so the response
-// carries the full result (may take a minute for large pipelines).
 router.post('/backfill-drive', asyncHandler(async (_req, res) => {
   const { rows: bids } = await pool.query(
-    `SELECT id, name, gc, stage FROM bids
+    `SELECT id, name, gc, stage, closed_at FROM bids
      WHERE deleted_at IS NULL AND drive_job_folder_id IS NULL
      ORDER BY created_at ASC`,
   );
+
+  const stageRoot = (stage: string, closed: boolean) => {
+    if (closed) return COMPLETED_PROJECTS_ROOT;
+    if (stage === 'awarded') return ACTIVE_PROJECTS_ROOT;
+    if (stage === 'submitted' || stage === 'lost') return ESTIMATING_SUBMITTED_BIDS_ROOT;
+    return ESTIMATING_ACTIVE_BIDS_ROOT;
+  };
 
   const results = { processed: 0, skipped: 0, errors: [] as string[] };
 
   for (const bid of bids) {
     try {
-      const [gcFolderId, jobFolderId] = await Promise.all([
-        getOrCreateGcFolder(bid.gc),
-        createJobFolder(bid.name, bid.gc),
-      ]);
+      const rootId = stageRoot(bid.stage, !!bid.closed_at);
+      const jobFolderId = await createJobFolder(bid.name, bid.gc, rootId);
       if (!jobFolderId) {
         results.skipped++;
         results.errors.push(`${bid.name}: Drive not configured or createJobFolder returned null`);
@@ -82,14 +87,13 @@ router.post('/backfill-drive', asyncHandler(async (_req, res) => {
       const subfolders = await createSubfolders(jobFolderId);
       await pool.query(
         `UPDATE bids SET
-           drive_gc_folder_id=$1, drive_job_folder_id=$2,
-           drive_plans_folder_id=$3, drive_estimates_folder_id=$4,
-           drive_photos_folder_id=$5, drive_contracts_folder_id=$6,
-           drive_submittals_folder_id=$7, drive_rfis_folder_id=$8,
-           drive_change_orders_folder_id=$9
-         WHERE id=$10`,
+           drive_job_folder_id=$1,
+           drive_plans_folder_id=$2, drive_estimates_folder_id=$3,
+           drive_photos_folder_id=$4, drive_contracts_folder_id=$5,
+           drive_submittals_folder_id=$6, drive_rfis_folder_id=$7,
+           drive_change_orders_folder_id=$8
+         WHERE id=$9`,
         [
-          gcFolderId,
           jobFolderId,
           subfolders['Plans & Specs'] || null,
           subfolders['Estimates & Scope Extractions'] || null,
@@ -101,7 +105,6 @@ router.post('/backfill-drive', asyncHandler(async (_req, res) => {
           bid.id,
         ],
       );
-      // Awarded = active job in progress — folder stays in Active Projects.
       results.processed++;
     } catch (err) {
       results.errors.push(`${bid.name}: ${(err as Error).message}`);
@@ -112,22 +115,29 @@ router.post('/backfill-drive', asyncHandler(async (_req, res) => {
   res.json(results);
 }));
 
-// Move awarded (in-progress) job folders back to Active Projects.
-// Fixes the one-time backfill that incorrectly placed them in Completed Projects.
-// POST /api/admin/fix-drive-awarded
-router.post('/fix-drive-awarded', asyncHandler(async (_req, res) => {
+// Move all existing job folders to the correct stage root with GC hierarchy.
+// Fixes folders created by old backfill (flat Active Projects, wrong stage).
+// POST /api/admin/reorganize-drive
+router.post('/reorganize-drive', asyncHandler(async (_req, res) => {
   const { rows: bids } = await pool.query(
-    `SELECT id, name, drive_job_folder_id FROM bids
-     WHERE stage = 'awarded' AND closed_at IS NULL
-       AND deleted_at IS NULL AND drive_job_folder_id IS NOT NULL
+    `SELECT id, name, gc, stage, closed_at, drive_job_folder_id FROM bids
+     WHERE deleted_at IS NULL AND drive_job_folder_id IS NOT NULL
      ORDER BY created_at ASC`,
   );
+
+  const stageRoot = (stage: string, closed: boolean) => {
+    if (closed) return COMPLETED_PROJECTS_ROOT;
+    if (stage === 'awarded') return ACTIVE_PROJECTS_ROOT;
+    if (stage === 'submitted' || stage === 'lost') return ESTIMATING_SUBMITTED_BIDS_ROOT;
+    return ESTIMATING_ACTIVE_BIDS_ROOT;
+  };
 
   const results = { moved: 0, skipped: 0, errors: [] as string[] };
 
   for (const bid of bids) {
     try {
-      await moveFolder(bid.drive_job_folder_id, COMPLETED_PROJECTS_ROOT, ACTIVE_PROJECTS_ROOT);
+      const destRoot = stageRoot(bid.stage, !!bid.closed_at);
+      await moveJobToStage(bid.drive_job_folder_id, bid.gc, destRoot);
       results.moved++;
     } catch (err) {
       results.errors.push(`${bid.name}: ${(err as Error).message}`);

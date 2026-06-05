@@ -1,10 +1,11 @@
 import { google } from 'googleapis';
 import { Readable } from 'stream';
 
-const GC_RELATIONSHIPS_ROOT          = '1TuBiAIXefVdtsmEBWIThdpjKZ081viZQ';
-export const ACTIVE_PROJECTS_ROOT    = '1Zn6eCS4QNf55G6hYRuffjmDgIqcY7fJI';
-export const COMPLETED_PROJECTS_ROOT = '1sKlj94D7kofCxK9Nxv50TLQNNlzxUJre';
-export const GENERATOR_PROPOSALS_FOLDER = '1FnUR5HJw3HunDBQR2I0-1ktk76L_GQih';
+export const ESTIMATING_ACTIVE_BIDS_ROOT    = '1hB2rjfRI40sTVgfzAMTu1Pb5APsDVxgy';
+export const ESTIMATING_SUBMITTED_BIDS_ROOT = '1jiu8eGDMZSmpCABQRaAk8VufHOpaNzjJ';
+export const ACTIVE_PROJECTS_ROOT           = '1Zn6eCS4QNf55G6hYRuffjmDgIqcY7fJI';
+export const COMPLETED_PROJECTS_ROOT        = '1sKlj94D7kofCxK9Nxv50TLQNNlzxUJre';
+export const GENERATOR_PROPOSALS_FOLDER     = '1FnUR5HJw3HunDBQR2I0-1ktk76L_GQih';
 
 export const SUBFOLDER_NAMES = [
   'Plans & Specs',
@@ -42,32 +43,41 @@ function getDriveClient() {
   }
 }
 
-export async function getOrCreateGcFolder(gcName: string): Promise<string | null> {
+/** Find or create a named subfolder inside parentId. */
+async function getOrCreateSubfolder(name: string, parentId: string): Promise<string | null> {
   const drive = getDriveClient();
   if (!drive) return null;
   try {
-    const q = `name = ${JSON.stringify(gcName)} and mimeType = 'application/vnd.google-apps.folder' and '${GC_RELATIONSHIPS_ROOT}' in parents and trashed = false`;
+    const q = `name = ${JSON.stringify(name)} and mimeType = 'application/vnd.google-apps.folder' and '${parentId}' in parents and trashed = false`;
     const { data } = await drive.files.list({ q, fields: 'files(id)', pageSize: 1 });
     if (data.files?.length) return data.files[0].id!;
-
     const { data: created } = await drive.files.create({
-      requestBody: { name: gcName, mimeType: 'application/vnd.google-apps.folder', parents: [GC_RELATIONSHIPS_ROOT] },
+      requestBody: { name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
       fields: 'id',
     });
     return created.id ?? null;
   } catch (err) {
-    console.error('[drive] getOrCreateGcFolder failed:', err);
+    console.error(`[drive] getOrCreateSubfolder "${name}" failed:`, err);
     return null;
   }
 }
 
-export async function createJobFolder(jobName: string, gcName: string): Promise<string | null> {
+/**
+ * Create a job folder under rootId / gcName / jobName.
+ * Returns the job folder ID, or null if Drive is not configured.
+ */
+export async function createJobFolder(
+  jobName: string,
+  gcName: string,
+  rootId: string,
+): Promise<string | null> {
   const drive = getDriveClient();
   if (!drive) return null;
   try {
-    const name = `${jobName} — ${gcName}`;
+    const gcFolderId = await getOrCreateSubfolder(gcName, rootId);
+    if (!gcFolderId) return null;
     const { data } = await drive.files.create({
-      requestBody: { name, mimeType: 'application/vnd.google-apps.folder', parents: [ACTIVE_PROJECTS_ROOT] },
+      requestBody: { name: jobName, mimeType: 'application/vnd.google-apps.folder', parents: [gcFolderId] },
       fields: 'id',
     });
     return data.id ?? null;
@@ -95,6 +105,45 @@ export async function createSubfolders(parentId: string): Promise<Record<string,
   return result;
 }
 
+/** Move a file to a new parent folder, auto-detecting and removing all current parents. */
+async function moveToParent(fileId: string, newParentId: string): Promise<void> {
+  const drive = getDriveClient();
+  if (!drive) return;
+  try {
+    const { data } = await drive.files.get({ fileId, fields: 'parents' });
+    const currentParents = (data.parents ?? []).join(',');
+    await drive.files.update({
+      fileId,
+      addParents: newParentId,
+      removeParents: currentParents || undefined,
+      fields: 'id, parents',
+    });
+  } catch (err) {
+    console.error(`[drive] moveToParent "${fileId}" → "${newParentId}" failed:`, err);
+    throw err;
+  }
+}
+
+/**
+ * Move a job folder to destRootId / gcName, creating the GC subfolder if needed.
+ * Used for all stage transitions and job close.
+ */
+export async function moveJobToStage(
+  jobFolderId: string,
+  gcName: string,
+  destRootId: string,
+): Promise<void> {
+  const drive = getDriveClient();
+  if (!drive) return;
+  try {
+    const gcSubfolderId = await getOrCreateSubfolder(gcName, destRootId);
+    if (!gcSubfolderId) return;
+    await moveToParent(jobFolderId, gcSubfolderId);
+  } catch (err) {
+    console.error(`[drive] moveJobToStage "${jobFolderId}" failed:`, err);
+  }
+}
+
 export async function uploadFile(
   name: string,
   mimeType: string,
@@ -114,24 +163,5 @@ export async function uploadFile(
   } catch (err) {
     console.error(`[drive] uploadFile "${name}" failed:`, err);
     return null;
-  }
-}
-
-export async function moveFolder(
-  fileId: string,
-  fromParentId: string,
-  toParentId: string,
-): Promise<void> {
-  const drive = getDriveClient();
-  if (!drive) return;
-  try {
-    await drive.files.update({
-      fileId,
-      addParents: toParentId,
-      removeParents: fromParentId,
-      fields: 'id, parents',
-    });
-  } catch (err) {
-    console.error(`[drive] moveFolder "${fileId}" failed:`, err);
   }
 }

@@ -10,10 +10,11 @@ import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { escapeHtml } from '../utils/escapeHtml';
 import { upsertCustomer } from './customers';
 import {
-  getOrCreateGcFolder,
   createJobFolder,
   createSubfolders,
-  moveFolder,
+  moveJobToStage,
+  ESTIMATING_ACTIVE_BIDS_ROOT,
+  ESTIMATING_SUBMITTED_BIDS_ROOT,
   ACTIVE_PROJECTS_ROOT,
   COMPLETED_PROJECTS_ROOT,
 } from '../services/googleDrive';
@@ -106,22 +107,18 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const newBid = rows[0];
   (async () => {
     try {
-      const [gcFolderId, jobFolderId] = await Promise.all([
-        getOrCreateGcFolder(newBid.gc),
-        createJobFolder(newBid.name, newBid.gc),
-      ]);
+      const jobFolderId = await createJobFolder(newBid.name, newBid.gc, ESTIMATING_ACTIVE_BIDS_ROOT);
       if (!jobFolderId) return;
       const subfolders = await createSubfolders(jobFolderId);
       await pool.query(
         `UPDATE bids SET
-           drive_gc_folder_id=$1, drive_job_folder_id=$2,
-           drive_plans_folder_id=$3, drive_estimates_folder_id=$4,
-           drive_photos_folder_id=$5, drive_contracts_folder_id=$6,
-           drive_submittals_folder_id=$7, drive_rfis_folder_id=$8,
-           drive_change_orders_folder_id=$9
-         WHERE id=$10`,
+           drive_job_folder_id=$1,
+           drive_plans_folder_id=$2, drive_estimates_folder_id=$3,
+           drive_photos_folder_id=$4, drive_contracts_folder_id=$5,
+           drive_submittals_folder_id=$6, drive_rfis_folder_id=$7,
+           drive_change_orders_folder_id=$8
+         WHERE id=$9`,
         [
-          gcFolderId,
           jobFolderId,
           subfolders['Plans & Specs'] || null,
           subfolders['Estimates & Scope Extractions'] || null,
@@ -200,6 +197,22 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     }
 
     await client.query('COMMIT');
+
+    // Fire-and-forget: move Drive folder to the correct stage location
+    if (bid.drive_job_folder_id && stage !== bid.stage) {
+      const stageRoots: Record<string, string> = {
+        due:       ESTIMATING_ACTIVE_BIDS_ROOT,
+        submitted: ESTIMATING_SUBMITTED_BIDS_ROOT,
+        awarded:   ACTIVE_PROJECTS_ROOT,
+        // lost: no move — folder stays in Submitted Bids
+      };
+      const destRoot = stageRoots[stage];
+      if (destRoot) {
+        moveJobToStage(bid.drive_job_folder_id, bid.gc, destRoot)
+          .catch(err => console.error('[drive] moveJobToStage on stage change failed:', err));
+      }
+    }
+
     if (stage === 'awarded' && bid.stage !== 'awarded') {
       await writeAudit(req, {
         action: 'award', entityType: 'bid', entityId: bid.id,
@@ -239,10 +252,10 @@ router.post('/:id/close', requireAuth, async (req: AuthRequest, res) => {
     before: { closed_at: null }, after: { closed_at: rows[0].closed_at },
   });
 
-  // Fire-and-forget: move Drive folder to Completed Projects
+  // Fire-and-forget: move Drive folder to Completed Projects / GC Name
   if (bid.drive_job_folder_id) {
-    moveFolder(bid.drive_job_folder_id, ACTIVE_PROJECTS_ROOT, COMPLETED_PROJECTS_ROOT)
-      .catch(err => console.error('[drive] moveFolder on close failed:', err));
+    moveJobToStage(bid.drive_job_folder_id, bid.gc, COMPLETED_PROJECTS_ROOT)
+      .catch(err => console.error('[drive] moveJobToStage on close failed:', err));
   }
 
   res.json(withDueDays(rows[0]));
