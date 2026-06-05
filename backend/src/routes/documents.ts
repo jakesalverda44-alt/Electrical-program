@@ -6,6 +6,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { writeAudit } from '../utils/audit';
 import { documentUpload } from '../utils/upload';
 import { uploadFile } from '../services/googleDrive';
+import { uploadToCloud, deleteFromCloud, isCloudStorageConfigured } from '../utils/cloudStorage';
 
 const CATEGORY_TO_FOLDER: Record<string, string> = {
   plans:         'drive_plans_folder_id',
@@ -53,14 +54,18 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
   }, 'Document upload started');
 
   try {
-    const fileData = file.buffer.toString('base64');
+    // Prefer cloud storage (Cloudinary) when configured — avoids storing large
+    // base64 blobs in Postgres and handles files of any size reliably.
+    const storageUrl = await uploadToCloud(file.buffer, file.originalname, file.mimetype);
+    const fileData = storageUrl ? null : file.buffer.toString('base64');
+
     const { rows } = await pool.query(
-      `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, storage_url, file_data)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        RETURNING id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at`,
       [linked_id || null, linked_name || null, div || 'general', file.originalname,
        display_name?.trim() || file.originalname, category || 'other',
-       file.size, file.mimetype || '', req.user!.name, fileData]
+       file.size, file.mimetype || '', req.user!.name, storageUrl || null, fileData]
     );
     logger.info({ documentId: rows[0]?.id, fileName: file.originalname, fileSize: file.size }, 'Document upload saved');
     res.json(rows[0]);
@@ -98,9 +103,16 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
 
 // Download a document's file
 router.get('/:id/download', requireAuth, asyncHandler(async (req, res) => {
-  const { rows } = await pool.query('SELECT name, file_type, file_data FROM documents WHERE id=$1 AND deleted_at IS NULL', [req.params.id]);
+  const { rows } = await pool.query(
+    'SELECT name, file_type, file_data, storage_url FROM documents WHERE id=$1 AND deleted_at IS NULL',
+    [req.params.id],
+  );
   if (!rows[0]) return res.status(404).json({ error: 'not found' });
-  const { name, file_type, file_data } = rows[0];
+  const { name, file_type, file_data, storage_url } = rows[0];
+
+  // Cloud-stored file: redirect directly to Cloudinary URL
+  if (storage_url) return res.redirect(storage_url as string);
+
   if (!file_data) return res.status(404).json({ error: 'no file data' });
   const buf = Buffer.from(file_data as string, 'base64');
   res.setHeader('Content-Type', (file_type as string) || 'application/octet-stream');
@@ -111,7 +123,7 @@ router.get('/:id/download', requireAuth, asyncHandler(async (req, res) => {
 // Soft delete — moves the document to the Trash (recoverable via /restore).
 router.delete('/:id', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res) => {
   const { rows } = await pool.query(
-    'UPDATE documents SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id, name, linked_name',
+    'UPDATE documents SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id, name, linked_name, storage_url',
     [req.params.id]
   );
   if (!rows.length) return res.status(404).json({ error: 'not found' });
