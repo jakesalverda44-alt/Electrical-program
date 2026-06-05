@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
-import multer from 'multer';
 import { logger } from '../utils/logger';
 import { asyncHandler } from '../utils/asyncHandler';
 import { writeAudit } from '../utils/audit';
+import { documentUpload } from '../utils/upload';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+const upload = documentUpload;
 
 // List documents. Optional ?linked_id= filters to one record (e.g. a generator).
 // file_data is excluded to keep responses small.

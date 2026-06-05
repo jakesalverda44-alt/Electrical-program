@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { Resend } from 'resend';
-import multer from 'multer';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
@@ -11,9 +10,10 @@ import { logger } from '../utils/logger';
 import { writeAudit } from '../utils/audit';
 import { ensureProject, setProjectDeleted } from '../utils/project';
 import { commissionRate, commissionAmount } from '../utils/commission';
+import { pdfUpload } from '../utils/upload';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+const upload = pdfUpload;
 
 // Restricted (rep) users may only act on their own proposals. Returns the row if allowed,
 // or sends the appropriate 403/404 and returns null.

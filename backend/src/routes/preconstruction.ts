@@ -3,16 +3,16 @@ import { pool } from '../db/pool';
 import { requireAuth, requireAIPermission, AuthRequest } from '../middleware/auth';
 import { getSetting } from '../db/getSetting';
 import Anthropic from '@anthropic-ai/sdk';
-import multer from 'multer';
 import AdmZip from 'adm-zip';
 import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM } from '../ai/prompts';
 import { callWithRetry } from '../ai/retry';
 import { parseAIJSON } from '../ai/json';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
+import { drawingUpload } from '../utils/upload';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+const upload = drawingUpload;
 
 interface AIConfig {
   model: string;

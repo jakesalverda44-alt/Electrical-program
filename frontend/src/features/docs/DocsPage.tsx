@@ -90,6 +90,9 @@ export default function DocsPage({ bids, gens, showToast, userName }: Props) {
       setUploadForm(BLANK);
       showToast({ title: `${newDocs.length} file${newDocs.length > 1 ? 's' : ''} uploaded` });
       if (fileInput.current) fileInput.current.value = '';
+    } catch (err: unknown) {
+      const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      showToast({ title: message || 'Upload failed. Please try again.' });
     } finally {
       setUploading(false);
     }
