@@ -10,6 +10,7 @@ interface Doc {
   file_size: number;
   uploaded_by: string;
   created_at: string;
+  storage_url?: string;
 }
 
 const CATEGORIES: { value: string; label: string }[] = [
@@ -91,6 +92,10 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
   };
 
   const download = (doc: Doc) => {
+    if (doc.storage_url) {
+      window.open(doc.storage_url, '_blank');
+      return;
+    }
     const token = localStorage.getItem('crm_token');
     fetch(`/api/documents/${doc.id}/download`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
       .then(r => r.blob())
