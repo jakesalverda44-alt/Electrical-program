@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import Icon from '../../components/Icon';
 import { Gen } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
 import RecordFiles from '../../components/RecordFiles';
 import { moneyFull } from '../../lib/money';
+import api from '../../api/client';
 
 function fmtTs(ts?: string | null) {
   if (!ts) return null;
@@ -18,10 +19,23 @@ interface Props {
   onClose: () => void;
   onEditGen: (gen: Gen) => void;
   onDelete: (gen: Gen) => void;
+  onClosed: (gen: Gen) => void;
 }
 
-export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDelete }: Props) {
+export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDelete, onClosed }: Props) {
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined';
+  const [closingJob, setClosingJob] = useState(false);
+
+  const handleCloseJob = async () => {
+    if (!window.confirm(`Mark "${gen.customer}" as closed/complete? This will move the Drive folder to Completed Generator Jobs and remove it from the active pipeline.`)) return;
+    setClosingJob(true);
+    try {
+      const { data } = await api.post(`/gens/${gen.id}/close`);
+      onClosed(data);
+    } finally {
+      setClosingJob(false);
+    }
+  };
 
   return (
     <div className="drawer-overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
@@ -58,29 +72,35 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             })}
           </div>
 
-          {/* Lifecycle timeline with real timestamps */}
+          {/* Lifecycle timeline */}
           <div className="dtl-stage-label" style={{ marginTop: 16 }}>Lifecycle</div>
           <div style={{ marginBottom: 4 }}>
-            {[
-              { label: 'Built',   done: true,                   when: gen.built_on || null },
-              { label: 'Sent',    done: !!gen.sent_at,          when: fmtTs(gen.sent_at) },
-              { label: 'Viewed',  done: !!gen.viewed_at,        when: fmtTs(gen.viewed_at) },
-              { label: 'Signed',  done: !!gen.signed_at,        when: fmtTs(gen.signed_at) },
-              { label: 'Awarded', done: gen.stage === 'awarded', when: gen.stage === 'awarded' ? 'Marked awarded' : null },
-            ].map((s, i, arr) => (
-              <div key={s.label} style={{ display: 'flex', gap: 10, alignItems: 'stretch' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  <span style={{ width: 12, height: 12, borderRadius: '50%', flexShrink: 0, marginTop: 2,
-                    background: s.done ? 'var(--green)' : 'transparent',
-                    border: '2px solid ' + (s.done ? 'var(--green)' : 'var(--border2)') }}/>
-                  {i < arr.length - 1 && <span style={{ width: 2, flex: 1, minHeight: 14, background: s.done ? 'var(--green)' : 'var(--border)' }}/>}
+            {(() => {
+              const steps: { label: string; done: boolean; when: string | null }[] = [
+                { label: 'Built',   done: true,                   when: gen.built_on || null },
+                { label: 'Sent',    done: !!gen.sent_at,          when: fmtTs(gen.sent_at) },
+                { label: 'Viewed',  done: !!gen.viewed_at,        when: fmtTs(gen.viewed_at) },
+                { label: 'Signed',  done: !!gen.signed_at,        when: fmtTs(gen.signed_at) },
+                { label: 'Awarded', done: gen.stage === 'awarded', when: gen.stage === 'awarded' ? 'Marked awarded' : null },
+              ];
+              if (gen.stage === 'awarded') {
+                steps.push({ label: 'Closed', done: !!gen.closed_at, when: fmtTs(gen.closed_at) });
+              }
+              return steps.map((s, i, arr) => (
+                <div key={s.label} style={{ display: 'flex', gap: 10, alignItems: 'stretch' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <span style={{ width: 12, height: 12, borderRadius: '50%', flexShrink: 0, marginTop: 2,
+                      background: s.done ? 'var(--green)' : 'transparent',
+                      border: '2px solid ' + (s.done ? 'var(--green)' : 'var(--border2)') }}/>
+                    {i < arr.length - 1 && <span style={{ width: 2, flex: 1, minHeight: 14, background: s.done ? 'var(--green)' : 'var(--border)' }}/>}
+                  </div>
+                  <div style={{ paddingBottom: 12 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: s.done ? 'var(--text)' : 'var(--text3)' }}>{s.label}</div>
+                    {s.when && <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>{s.when}</div>}
+                  </div>
                 </div>
-                <div style={{ paddingBottom: 12 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: s.done ? 'var(--text)' : 'var(--text3)' }}>{s.label}</div>
-                  {s.when && <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>{s.when}</div>}
-                </div>
-              </div>
-            ))}
+              ));
+            })()}
           </div>
 
           {pendingDeclined && (
@@ -119,6 +139,17 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             </button>
           )}
 
+          {gen.stage === 'awarded' && !gen.closed_at && (
+            <button
+              className="btn ghost"
+              style={{ width: '100%', justifyContent: 'center', color: 'var(--green)', borderColor: 'rgba(52,197,136,.4)', marginTop: 8 }}
+              disabled={closingJob}
+              onClick={handleCloseJob}
+            >
+              <Icon name="check" size={14} stroke={2.2}/>{closingJob ? 'Closing…' : 'Close Job'}
+            </button>
+          )}
+
           <button
             className="btn ghost"
             style={{ width: '100%', justifyContent: 'center', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', marginTop: 8 }}
@@ -137,7 +168,35 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             </button>
           )}
 
-          {/* File attachments for this job — proposal, PO, permit, signed contract, delivery/startup, photos */}
+          {/* Google Drive folder links — shown when folders were auto-created on award */}
+          {gen.drive_job_folder_id && (
+            <div className="dtl-section" style={{ marginTop: 16 }}>
+              <div className="dtl-stage-label" style={{ marginBottom: 8 }}>Google Drive Folders</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {[
+                  { label: 'Engineering', id: gen.drive_engineering_folder_id },
+                  { label: 'Permit',      id: gen.drive_permit_folder_id },
+                  { label: 'Contract',    id: gen.drive_contract_folder_id },
+                  { label: 'Invoices',    id: gen.drive_invoices_folder_id },
+                  { label: 'All Job Files', id: gen.drive_job_folder_id },
+                ].filter(f => f.id).map(f => (
+                  <a
+                    key={f.label}
+                    href={`https://drive.google.com/drive/folders/${f.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--blue)', textDecoration: 'none', padding: '4px 0' }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    {f.label}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
           <RecordFiles linkedId={gen.id} linkedName={gen.customer} div="gen"
             emptyHint="No files yet. Attach the proposal, PO, permit, signed contract, delivery/startup docs, or photos."/>
         </div>

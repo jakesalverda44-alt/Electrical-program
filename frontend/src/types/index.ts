@@ -63,6 +63,12 @@ export interface Gen {
   sent_at?: string;
   viewed_at?: string;
   signed_at?: string;
+  drive_job_folder_id?: string;
+  drive_engineering_folder_id?: string;
+  drive_permit_folder_id?: string;
+  drive_contract_folder_id?: string;
+  drive_invoices_folder_id?: string;
+  closed_at?: string;
 }
 
 export interface WonJob {

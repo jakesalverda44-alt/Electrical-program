@@ -49,6 +49,12 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
     setDetail(prev => prev ? { ...prev, stage } : prev);
   };
 
+  const handleClosed = (gen: Gen) => {
+    setGens(prev => prev.filter(g => g.id !== gen.id));
+    setDetail(null);
+    showToast({ title: 'Generator job closed', sub: gen.customer });
+  };
+
   const handleDelete = async (gen: Gen) => {
     if (!window.confirm(`Delete "${gen.customer}" and its linked project/files/testing data? This cannot be undone.`)) return;
     try {
@@ -186,6 +192,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
           onClose={() => setDetail(null)}
           onEditGen={g => { setDetail(null); onEditGen(g); }}
           onDelete={handleDelete}
+          onClosed={handleClosed}
         />
       )}
     </div>

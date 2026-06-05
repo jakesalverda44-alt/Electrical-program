@@ -11,7 +11,16 @@ import { writeAudit } from '../utils/audit';
 import { ensureProject, setProjectDeleted } from '../utils/project';
 import { commissionRate, commissionAmount } from '../utils/commission';
 import { pdfUpload } from '../utils/upload';
-import { uploadFile, GENERATOR_PROPOSALS_FOLDER } from '../services/googleDrive';
+import {
+  uploadFile,
+  createCustomerFolder,
+  createSubfolders,
+  moveJobToStage,
+  GENERATOR_PROPOSALS_FOLDER,
+  ACTIVE_GENERATOR_JOBS_ROOT,
+  COMPLETED_GENERATOR_JOBS_ROOT,
+  GEN_SUBFOLDER_NAMES,
+} from '../services/googleDrive';
 
 const router = Router();
 const upload = pdfUpload;
@@ -54,7 +63,7 @@ router.get('/benchmark', requireAuth, async (_req, res) => {
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
   const params: unknown[] = [];
-  const where: string[] = ['deleted_at IS NULL'];
+  const where: string[] = ['deleted_at IS NULL', 'closed_at IS NULL'];
   if (scope) { params.push(scope); where.push(`salesperson_id = $${params.length}`); }
   let sql = `SELECT * FROM generator_proposals WHERE ${where.join(' AND ')}`;
   sql += ' ORDER BY created_at DESC';
@@ -154,6 +163,33 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
         summary: `Awarded generator proposal "${gen.customer}" — $${Number(gen.amount || 0).toLocaleString()}`,
         before: { stage: gen.stage }, after: { stage: 'awarded', value: gen.amount },
       });
+      // Fire-and-forget: create customer folder + subfolders in Active Generator Jobs
+      (async () => {
+        try {
+          const customerFolderId = await createCustomerFolder(gen.customer, ACTIVE_GENERATOR_JOBS_ROOT);
+          if (!customerFolderId) return;
+          const subs = await createSubfolders(customerFolderId, GEN_SUBFOLDER_NAMES);
+          await pool.query(
+            `UPDATE generator_proposals SET
+               drive_job_folder_id=$1,
+               drive_engineering_folder_id=$2,
+               drive_permit_folder_id=$3,
+               drive_contract_folder_id=$4,
+               drive_invoices_folder_id=$5
+             WHERE id=$6`,
+            [
+              customerFolderId,
+              subs['Engineering'] || null,
+              subs['Permit'] || null,
+              subs['Contract'] || null,
+              subs['Invoices'] || null,
+              gen.id,
+            ],
+          );
+        } catch (err) {
+          console.error('[drive] Gen folder setup failed:', err);
+        }
+      })();
     }
     res.json({ gen: rows[0], wonJob });
   } catch (err) {
@@ -163,6 +199,33 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
   } finally {
     client.release();
   }
+});
+
+// Mark an awarded generator job as closed/complete.
+router.post('/:id/close', requireAuth, async (req: AuthRequest, res) => {
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+  if (gen.stage !== 'awarded') return res.status(400).json({ error: 'Only awarded jobs can be closed' });
+  if (gen.closed_at) return res.status(400).json({ error: 'Job is already closed' });
+
+  const { rows } = await pool.query(
+    `UPDATE generator_proposals SET closed_at = now(), updated_at = now() WHERE id = $1 RETURNING *`,
+    [gen.id],
+  );
+  pool.query(`UPDATE projects SET status = 'complete' WHERE id = $1`, [gen.id]).catch(() => {});
+
+  await writeAudit(req, {
+    action: 'close', entityType: 'gen', entityId: gen.id,
+    summary: `Closed generator job "${gen.customer}"`,
+    before: { closed_at: null }, after: { closed_at: rows[0].closed_at },
+  });
+
+  if (gen.drive_job_folder_id) {
+    moveJobToStage(gen.drive_job_folder_id, gen.customer, COMPLETED_GENERATOR_JOBS_ROOT)
+      .catch(err => console.error('[drive] moveJobToStage on gen close failed:', err));
+  }
+
+  res.json(rows[0]);
 });
 
 router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {

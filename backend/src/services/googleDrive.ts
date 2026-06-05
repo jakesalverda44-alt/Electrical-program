@@ -6,6 +6,10 @@ export const ESTIMATING_SUBMITTED_BIDS_ROOT = '1jiu8eGDMZSmpCABQRaAk8VufHOpaNzjJ
 export const ACTIVE_PROJECTS_ROOT           = '1Zn6eCS4QNf55G6hYRuffjmDgIqcY7fJI';
 export const COMPLETED_PROJECTS_ROOT        = '1sKlj94D7kofCxK9Nxv50TLQNNlzxUJre';
 export const GENERATOR_PROPOSALS_FOLDER     = '1FnUR5HJw3HunDBQR2I0-1ktk76L_GQih';
+export const ACTIVE_GENERATOR_JOBS_ROOT     = '1PhG-nYeRMxCwYpiRsmSS6NkzW-aaJx8k';
+export const COMPLETED_GENERATOR_JOBS_ROOT  = '1-H8fn_ZdZgsu0W-8GKAbZ-nSp83ftaGC';
+
+export const GEN_SUBFOLDER_NAMES = ['Engineering', 'Permit', 'Contract', 'Invoices'];
 
 export const SUBFOLDER_NAMES = [
   'Plans & Specs',
@@ -77,11 +81,21 @@ export async function createJobFolder(
   return data.id ?? null;
 }
 
-export async function createSubfolders(parentId: string): Promise<Record<string, string>> {
+/**
+ * Find or create a named folder directly inside rootId (no intermediate parent).
+ * Used for generator jobs where the hierarchy is rootId / customerName.
+ */
+export async function createCustomerFolder(customerName: string, rootId: string): Promise<string | null> {
+  const drive = getDriveClient();
+  if (!drive) return null;
+  return getOrCreateSubfolder(customerName, rootId);
+}
+
+export async function createSubfolders(parentId: string, names: string[] = SUBFOLDER_NAMES): Promise<Record<string, string>> {
   const drive = getDriveClient();
   if (!drive) return {};
   const result: Record<string, string> = {};
-  for (const name of SUBFOLDER_NAMES) {
+  for (const name of names) {
     try {
       const { data } = await drive.files.create({
         requestBody: { name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },

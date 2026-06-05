@@ -21,6 +21,14 @@ function GoogleDriveCard() {
   const [fixResult, setFixResult] = useState<{ moved: number; skipped: number; errors: string[] } | null>(null);
   const [fixErr, setFixErr] = useState('');
 
+  const [genRunning, setGenRunning] = useState(false);
+  const [genResult, setGenResult] = useState<{ processed: number; skipped: number; errors: string[] } | null>(null);
+  const [genErr, setGenErr] = useState('');
+
+  const [genFixing, setGenFixing] = useState(false);
+  const [genFixResult, setGenFixResult] = useState<{ moved: number; skipped: number; errors: string[] } | null>(null);
+  const [genFixErr, setGenFixErr] = useState('');
+
   const run = async () => {
     if (!confirm('This will create Google Drive folders for every bid that does not have one yet. Continue?')) return;
     setRunning(true);
@@ -33,6 +41,36 @@ function GoogleDriveCard() {
       setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Request failed');
     } finally {
       setRunning(false);
+    }
+  };
+
+  const runGen = async () => {
+    if (!confirm('This will create Google Drive folders for every awarded generator job that does not have one yet. Continue?')) return;
+    setGenRunning(true);
+    setGenErr('');
+    setGenResult(null);
+    try {
+      const { data } = await api.post('/admin/backfill-gen-drive', {}, { timeout: 300_000 });
+      setGenResult(data);
+    } catch (e: unknown) {
+      setGenErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Request failed');
+    } finally {
+      setGenRunning(false);
+    }
+  };
+
+  const fixGen = async () => {
+    if (!confirm('This will move all existing generator job folders into the correct root folder (Active or Completed Generator Jobs). Continue?')) return;
+    setGenFixing(true);
+    setGenFixErr('');
+    setGenFixResult(null);
+    try {
+      const { data } = await api.post('/admin/reorganize-gen-drive', {}, { timeout: 300_000 });
+      setGenFixResult(data);
+    } catch (e: unknown) {
+      setGenFixErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Request failed');
+    } finally {
+      setGenFixing(false);
     }
   };
 
@@ -111,6 +149,55 @@ function GoogleDriveCard() {
             </div>
           )}
           {fixErr && <div style={{ marginTop: 8, fontSize: 12, color: '#DC2626' }}>{fixErr}</div>}
+        </div>
+
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Generator Jobs</div>
+          <button
+            className="btn"
+            disabled={genRunning}
+            onClick={runGen}
+            style={{ fontSize: 12, padding: '6px 12px' }}
+          >
+            {genRunning ? 'Creating folders…' : 'Backfill generator jobs'}
+          </button>
+          {genResult && (
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text3)' }}>
+              <span style={{ color: '#065F46', fontWeight: 700 }}>{genResult.processed} folders created</span>
+              {genResult.skipped > 0 && <span style={{ marginLeft: 8, color: '#92400E' }}>{genResult.skipped} skipped</span>}
+              {genResult.errors.length > 0 && (
+                <div style={{ marginTop: 6, color: '#DC2626' }}>
+                  {genResult.errors.slice(0, 5).map((e, i) => <div key={i}>{e}</div>)}
+                  {genResult.errors.length > 5 && <div>…and {genResult.errors.length - 5} more</div>}
+                </div>
+              )}
+            </div>
+          )}
+          {genErr && <div style={{ marginTop: 8, fontSize: 12, color: '#DC2626' }}>{genErr}</div>}
+
+          <button
+            className="btn ghost"
+            disabled={genFixing}
+            onClick={fixGen}
+            style={{ fontSize: 12, padding: '6px 12px', marginTop: 8 }}
+          >
+            {genFixing ? 'Reorganizing…' : 'Reorganize generator folders'}
+          </button>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5 }}>
+            Moves generator job folders into Active or Completed Generator Jobs based on close status.
+          </div>
+          {genFixResult && (
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text3)' }}>
+              <span style={{ color: '#065F46', fontWeight: 700 }}>{genFixResult.moved} folders moved</span>
+              {genFixResult.skipped > 0 && <span style={{ marginLeft: 8, color: '#92400E' }}>{genFixResult.skipped} skipped</span>}
+              {genFixResult.errors.length > 0 && (
+                <div style={{ marginTop: 6, color: '#DC2626' }}>
+                  {genFixResult.errors.slice(0, 5).map((e, i) => <div key={i}>{e}</div>)}
+                </div>
+              )}
+            </div>
+          )}
+          {genFixErr && <div style={{ marginTop: 8, fontSize: 12, color: '#DC2626' }}>{genFixErr}</div>}
         </div>
       </div>
     </div>

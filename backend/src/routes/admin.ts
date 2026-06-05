@@ -4,12 +4,16 @@ import { requireAuth, requireAdmin } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import {
   createJobFolder,
+  createCustomerFolder,
   createSubfolders,
   moveJobToStage,
   ESTIMATING_ACTIVE_BIDS_ROOT,
   ESTIMATING_SUBMITTED_BIDS_ROOT,
   ACTIVE_PROJECTS_ROOT,
   COMPLETED_PROJECTS_ROOT,
+  ACTIVE_GENERATOR_JOBS_ROOT,
+  COMPLETED_GENERATOR_JOBS_ROOT,
+  GEN_SUBFOLDER_NAMES,
 } from '../services/googleDrive';
 
 const router = Router();
@@ -141,6 +145,79 @@ router.post('/reorganize-drive', asyncHandler(async (_req, res) => {
       results.moved++;
     } catch (err) {
       results.errors.push(`${bid.name}: ${(err as Error).message}`);
+      results.skipped++;
+    }
+  }
+
+  res.json(results);
+}));
+
+// Backfill Google Drive folders for awarded generator jobs without folders.
+// POST /api/admin/backfill-gen-drive
+router.post('/backfill-gen-drive', asyncHandler(async (_req, res) => {
+  const { rows: gens } = await pool.query(
+    `SELECT id, customer, stage, closed_at FROM generator_proposals
+     WHERE deleted_at IS NULL AND drive_job_folder_id IS NULL AND stage = 'awarded'
+     ORDER BY created_at ASC`,
+  );
+
+  const results = { processed: 0, skipped: 0, errors: [] as string[] };
+
+  for (const gen of gens) {
+    try {
+      const rootId = gen.closed_at ? COMPLETED_GENERATOR_JOBS_ROOT : ACTIVE_GENERATOR_JOBS_ROOT;
+      const customerFolderId = await createCustomerFolder(gen.customer, rootId);
+      if (!customerFolderId) {
+        results.skipped++;
+        results.errors.push(`${gen.customer}: Drive not configured or createCustomerFolder returned null`);
+        continue;
+      }
+      const subs = await createSubfolders(customerFolderId, GEN_SUBFOLDER_NAMES);
+      await pool.query(
+        `UPDATE generator_proposals SET
+           drive_job_folder_id=$1,
+           drive_engineering_folder_id=$2,
+           drive_permit_folder_id=$3,
+           drive_contract_folder_id=$4,
+           drive_invoices_folder_id=$5
+         WHERE id=$6`,
+        [
+          customerFolderId,
+          subs['Engineering'] || null,
+          subs['Permit'] || null,
+          subs['Contract'] || null,
+          subs['Invoices'] || null,
+          gen.id,
+        ],
+      );
+      results.processed++;
+    } catch (err) {
+      results.errors.push(`${gen.customer}: ${(err as Error).message}`);
+      results.skipped++;
+    }
+  }
+
+  res.json(results);
+}));
+
+// Move all existing gen job folders to the correct root (active vs completed).
+// POST /api/admin/reorganize-gen-drive
+router.post('/reorganize-gen-drive', asyncHandler(async (_req, res) => {
+  const { rows: gens } = await pool.query(
+    `SELECT id, customer, stage, closed_at, drive_job_folder_id FROM generator_proposals
+     WHERE deleted_at IS NULL AND drive_job_folder_id IS NOT NULL
+     ORDER BY created_at ASC`,
+  );
+
+  const results = { moved: 0, skipped: 0, errors: [] as string[] };
+
+  for (const gen of gens) {
+    try {
+      const destRoot = gen.closed_at ? COMPLETED_GENERATOR_JOBS_ROOT : ACTIVE_GENERATOR_JOBS_ROOT;
+      await moveJobToStage(gen.drive_job_folder_id, gen.customer, destRoot);
+      results.moved++;
+    } catch (err) {
+      results.errors.push(`${gen.customer}: ${(err as Error).message}`);
       results.skipped++;
     }
   }
