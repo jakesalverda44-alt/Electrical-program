@@ -43,23 +43,18 @@ function getDriveClient() {
   }
 }
 
-/** Find or create a named subfolder inside parentId. */
+/** Find or create a named subfolder inside parentId. Throws on API error. */
 async function getOrCreateSubfolder(name: string, parentId: string): Promise<string | null> {
   const drive = getDriveClient();
   if (!drive) return null;
-  try {
-    const q = `name = ${JSON.stringify(name)} and mimeType = 'application/vnd.google-apps.folder' and '${parentId}' in parents and trashed = false`;
-    const { data } = await drive.files.list({ q, fields: 'files(id)', pageSize: 1 });
-    if (data.files?.length) return data.files[0].id!;
-    const { data: created } = await drive.files.create({
-      requestBody: { name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
-      fields: 'id',
-    });
-    return created.id ?? null;
-  } catch (err) {
-    console.error(`[drive] getOrCreateSubfolder "${name}" failed:`, err);
-    return null;
-  }
+  const q = `name = ${JSON.stringify(name)} and mimeType = 'application/vnd.google-apps.folder' and '${parentId}' in parents and trashed = false`;
+  const { data } = await drive.files.list({ q, fields: 'files(id)', pageSize: 1 });
+  if (data.files?.length) return data.files[0].id!;
+  const { data: created } = await drive.files.create({
+    requestBody: { name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
+    fields: 'id',
+  });
+  return created.id ?? null;
 }
 
 /**
@@ -73,18 +68,13 @@ export async function createJobFolder(
 ): Promise<string | null> {
   const drive = getDriveClient();
   if (!drive) return null;
-  try {
-    const gcFolderId = await getOrCreateSubfolder(gcName, rootId);
-    if (!gcFolderId) return null;
-    const { data } = await drive.files.create({
-      requestBody: { name: jobName, mimeType: 'application/vnd.google-apps.folder', parents: [gcFolderId] },
-      fields: 'id',
-    });
-    return data.id ?? null;
-  } catch (err) {
-    console.error('[drive] createJobFolder failed:', err);
-    return null;
-  }
+  const gcFolderId = await getOrCreateSubfolder(gcName, rootId);
+  if (!gcFolderId) return null;
+  const { data } = await drive.files.create({
+    requestBody: { name: jobName, mimeType: 'application/vnd.google-apps.folder', parents: [gcFolderId] },
+    fields: 'id',
+  });
+  return data.id ?? null;
 }
 
 export async function createSubfolders(parentId: string): Promise<Record<string, string>> {
@@ -135,13 +125,9 @@ export async function moveJobToStage(
 ): Promise<void> {
   const drive = getDriveClient();
   if (!drive) return;
-  try {
-    const gcSubfolderId = await getOrCreateSubfolder(gcName, destRootId);
-    if (!gcSubfolderId) return;
-    await moveToParent(jobFolderId, gcSubfolderId);
-  } catch (err) {
-    console.error(`[drive] moveJobToStage "${jobFolderId}" failed:`, err);
-  }
+  const gcSubfolderId = await getOrCreateSubfolder(gcName, destRootId);
+  if (!gcSubfolderId) return;
+  await moveToParent(jobFolderId, gcSubfolderId);
 }
 
 export async function uploadFile(
