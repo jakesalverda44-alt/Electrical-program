@@ -7,6 +7,8 @@ import {
   createCustomerFolder,
   createSubfolders,
   moveJobToStage,
+  jobFolderName,
+  renameFolder,
   ESTIMATING_ACTIVE_BIDS_ROOT,
   ESTIMATING_SUBMITTED_BIDS_ROOT,
   ACTIVE_PROJECTS_ROOT,
@@ -65,7 +67,7 @@ router.get('/audit', asyncHandler(async (req, res) => {
 // POST /api/admin/backfill-drive
 router.post('/backfill-drive', asyncHandler(async (_req, res) => {
   const { rows: bids } = await pool.query(
-    `SELECT id, name, gc, stage, closed_at FROM bids
+    `SELECT id, name, gc, loc, stage, closed_at FROM bids
      WHERE deleted_at IS NULL AND drive_job_folder_id IS NULL
      ORDER BY created_at ASC`,
   );
@@ -82,7 +84,7 @@ router.post('/backfill-drive', asyncHandler(async (_req, res) => {
   for (const bid of bids) {
     try {
       const rootId = stageRoot(bid.stage, !!bid.closed_at);
-      const jobFolderId = await createJobFolder(bid.name, bid.gc, rootId);
+      const jobFolderId = await createJobFolder(jobFolderName(bid.name, bid.loc), bid.gc, rootId);
       if (!jobFolderId) {
         results.skipped++;
         results.errors.push(`${bid.name}: Drive not configured or createJobFolder returned null`);
@@ -126,7 +128,7 @@ router.post('/backfill-drive', asyncHandler(async (_req, res) => {
 // POST /api/admin/reorganize-drive
 router.post('/reorganize-drive', asyncHandler(async (_req, res) => {
   const { rows: bids } = await pool.query(
-    `SELECT id, name, gc, stage, closed_at, drive_job_folder_id FROM bids
+    `SELECT id, name, gc, loc, stage, closed_at, drive_job_folder_id FROM bids
      WHERE deleted_at IS NULL AND drive_job_folder_id IS NOT NULL
      ORDER BY created_at ASC`,
   );
@@ -144,6 +146,8 @@ router.post('/reorganize-drive', asyncHandler(async (_req, res) => {
     try {
       const destRoot = stageRoot(bid.stage, !!bid.closed_at);
       await moveJobToStage(bid.drive_job_folder_id, bid.gc, destRoot);
+      // Rename to the "Job Name — Location" convention.
+      await renameFolder(bid.drive_job_folder_id, jobFolderName(bid.name, bid.loc));
       results.moved++;
     } catch (err) {
       results.errors.push(`${bid.name}: ${(err as Error).message}`);

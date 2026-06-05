@@ -13,6 +13,7 @@ import {
   createJobFolder,
   createSubfolders,
   moveJobToStage,
+  jobFolderName,
   ESTIMATING_ACTIVE_BIDS_ROOT,
   ESTIMATING_SUBMITTED_BIDS_ROOT,
   ACTIVE_PROJECTS_ROOT,
@@ -109,7 +110,7 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const newBid = rows[0];
   (async () => {
     try {
-      const jobFolderId = await createJobFolder(newBid.name, newBid.gc, ESTIMATING_ACTIVE_BIDS_ROOT);
+      const jobFolderId = await createJobFolder(jobFolderName(newBid.name, newBid.loc), newBid.gc, ESTIMATING_ACTIVE_BIDS_ROOT);
       if (!jobFolderId) return;
       await pool.query(`UPDATE bids SET drive_job_folder_id=$1 WHERE id=$2`, [jobFolderId, newBid.id]);
     } catch (err) {

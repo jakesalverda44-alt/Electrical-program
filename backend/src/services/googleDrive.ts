@@ -47,6 +47,19 @@ function getDriveClient() {
   }
 }
 
+/** Build the job folder name: "Job Name — Location" (location omitted when blank). */
+export function jobFolderName(name: string, loc?: string | null): string {
+  const cleanLoc = (loc || '').trim();
+  return cleanLoc && cleanLoc !== '—' ? `${name} — ${cleanLoc}` : name;
+}
+
+/** Rename a folder by ID. No-op if Drive is not configured. Throws on API error. */
+export async function renameFolder(folderId: string, newName: string): Promise<void> {
+  const drive = getDriveClient();
+  if (!drive) return;
+  await drive.files.update({ fileId: folderId, requestBody: { name: newName }, fields: 'id' });
+}
+
 /** Find or create a named subfolder inside parentId. Throws on API error. */
 async function getOrCreateSubfolder(name: string, parentId: string): Promise<string | null> {
   const drive = getDriveClient();
