@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
+import { writeAudit } from '../utils/audit';
 import { getSetting } from '../db/getSetting';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { escapeHtml } from '../utils/escapeHtml';
@@ -51,8 +52,9 @@ async function sendBidNotification(bid: Record<string, unknown>, addedBy: { name
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
   const params: unknown[] = [];
-  let sql = 'SELECT * FROM bids';
-  if (scope) { params.push(scope); sql += ` WHERE salesperson_id = $${params.length}`; }
+  const where: string[] = ['deleted_at IS NULL'];
+  if (scope) { params.push(scope); where.push(`salesperson_id = $${params.length}`); }
+  let sql = `SELECT * FROM bids WHERE ${where.join(' AND ')}`;
   sql += ' ORDER BY created_at DESC';
   // Opt-in pagination: ?limit=N&offset=M. Omitted → return all rows (backward compatible).
   if (req.query.limit !== undefined) {
@@ -68,7 +70,7 @@ router.get('/', requireAuth, async (req: AuthRequest, res) => {
 // Restricted (rep) users may only act on their own bids. Returns the bid row if allowed,
 // or sends the appropriate 403/404 and returns null.
 async function loadOwnedBid(req: AuthRequest, res: import('express').Response) {
-  const { rows } = await pool.query('SELECT * FROM bids WHERE id=$1', [req.params.id]);
+  const { rows } = await pool.query('SELECT * FROM bids WHERE id=$1 AND deleted_at IS NULL', [req.params.id]);
   if (!rows.length) { res.status(404).json({ error: 'Not found' }); return null; }
   const scope = ownScopeId(req.user!);
   if (scope && rows[0].salesperson_id !== scope) {
@@ -142,6 +144,13 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     }
 
     await client.query('COMMIT');
+    if (stage === 'awarded' && bid.stage !== 'awarded') {
+      await writeAudit(req, {
+        action: 'award', entityType: 'bid', entityId: bid.id,
+        summary: `Awarded bid "${bid.name}" (${bid.gc}) — $${Number(bid.amount || 0).toLocaleString()}`,
+        before: { stage: bid.stage }, after: { stage: 'awarded', value: bid.amount },
+      });
+    }
     res.json({ bid: withDueDays(rows[0]), wonJob });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -159,7 +168,7 @@ router.get('/:id/qualify', requireAuth, async (req: AuthRequest, res) => {
 
   // GC win/loss history
   const { rows: gcHistory } = await pool.query(
-    `SELECT stage FROM bids WHERE gc=$1 AND id!=$2`,
+    `SELECT stage FROM bids WHERE gc=$1 AND id!=$2 AND deleted_at IS NULL`,
     [bid.gc, bid.id]
   );
   const gcWon  = gcHistory.filter(r => r.stage === 'awarded').length;
@@ -169,7 +178,7 @@ router.get('/:id/qualify', requireAuth, async (req: AuthRequest, res) => {
 
   // Overall company win rate
   const { rows: allHistory } = await pool.query(
-    `SELECT stage FROM bids WHERE stage IN ('awarded','lost') AND id!=$1`, [bid.id]
+    `SELECT stage FROM bids WHERE stage IN ('awarded','lost') AND id!=$1 AND deleted_at IS NULL`, [bid.id]
   );
   const totalWon  = allHistory.filter(r => r.stage === 'awarded').length;
   const totalLost = allHistory.filter(r => r.stage === 'lost').length;
@@ -238,10 +247,45 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   res.json(withDueDays(rows[0]));
 });
 
+// Soft delete — moves the bid (and its won-job revenue record) to the Trash.
+// Recoverable via /restore; permanently removed by /purge or the retention job.
 router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const bid = await loadOwnedBid(req, res);
   if (!bid) return;
 
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE bids SET deleted_at=now() WHERE id=$1', [req.params.id]);
+    await client.query('UPDATE won_jobs SET deleted_at=now() WHERE proposal_id=$1', [req.params.id]);
+    await client.query('COMMIT');
+    await writeAudit(req, {
+      action: 'delete', entityType: 'bid', entityId: bid.id,
+      summary: `Moved bid "${bid.name}" (${bid.gc}) to Trash`, before: bid,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// Restore a trashed bid (and its won-job record).
+router.post('/:id/restore', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const { rows } = await pool.query('UPDATE bids SET deleted_at=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING *', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found in Trash' });
+  await pool.query('UPDATE won_jobs SET deleted_at=NULL WHERE proposal_id=$1', [req.params.id]);
+  await writeAudit(req, { action: 'restore', entityType: 'bid', entityId: req.params.id, summary: `Restored bid "${rows[0].name}"` });
+  res.json(withDueDays(rows[0]));
+});
+
+// Permanently delete a trashed bid and all dependent records (admin only).
+router.delete('/:id/purge', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const { rows: existing } = await pool.query('SELECT id, name FROM bids WHERE id=$1 AND deleted_at IS NOT NULL', [req.params.id]);
+  if (!existing.length) return res.status(404).json({ error: 'Not found in Trash' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -258,6 +302,7 @@ router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) =
     await client.query('DELETE FROM takeoff_results WHERE bid_id=$1', [req.params.id]);
     await client.query('DELETE FROM bids WHERE id=$1', [req.params.id]);
     await client.query('COMMIT');
+    await writeAudit(req, { action: 'purge', entityType: 'bid', entityId: req.params.id, summary: `Permanently deleted bid "${existing[0].name}"` });
     res.json({ ok: true });
   } catch (err) {
     await client.query('ROLLBACK');

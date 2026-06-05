@@ -8,6 +8,7 @@ import { getSetting } from './settings';
 import { upsertCustomer } from './customers';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
+import { writeAudit } from '../utils/audit';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -15,7 +16,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 
 // Restricted (rep) users may only act on their own proposals. Returns the row if allowed,
 // or sends the appropriate 403/404 and returns null.
 async function loadOwnedGen(req: AuthRequest, res: import('express').Response) {
-  const { rows } = await pool.query('SELECT * FROM generator_proposals WHERE id=$1', [req.params.id]);
+  const { rows } = await pool.query('SELECT * FROM generator_proposals WHERE id=$1 AND deleted_at IS NULL', [req.params.id]);
   if (!rows.length) { res.status(404).json({ error: 'Not found' }); return null; }
   const scope = ownScopeId(req.user!);
   if (scope && rows[0].salesperson_id !== scope) {
@@ -27,7 +28,7 @@ async function loadOwnedGen(req: AuthRequest, res: import('express').Response) {
 
 router.get('/benchmark', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(
-    `SELECT kw, amount FROM generator_proposals WHERE stage = 'awarded' AND kw > 0 AND amount > 0`
+    `SELECT kw, amount FROM generator_proposals WHERE stage = 'awarded' AND kw > 0 AND amount > 0 AND deleted_at IS NULL`
   );
   const BRACKETS = [
     { label: 'Under 20kW',   min: 0,   max: 20   },
@@ -50,8 +51,9 @@ router.get('/benchmark', requireAuth, async (_req, res) => {
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
   const params: unknown[] = [];
-  let sql = 'SELECT * FROM generator_proposals';
-  if (scope) { params.push(scope); sql += ` WHERE salesperson_id = $${params.length}`; }
+  const where: string[] = ['deleted_at IS NULL'];
+  if (scope) { params.push(scope); where.push(`salesperson_id = $${params.length}`); }
+  let sql = `SELECT * FROM generator_proposals WHERE ${where.join(' AND ')}`;
   sql += ' ORDER BY created_at DESC';
   // Opt-in pagination: ?limit=N&offset=M. Omitted → return all rows (backward compatible).
   if (req.query.limit !== undefined) {
@@ -136,6 +138,13 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     }
 
     await client.query('COMMIT');
+    if (stage === 'awarded' && gen.stage !== 'awarded') {
+      await writeAudit(req, {
+        action: 'award', entityType: 'gen', entityId: gen.id,
+        summary: `Awarded generator proposal "${gen.customer}" — $${Number(gen.amount || 0).toLocaleString()}`,
+        before: { stage: gen.stage }, after: { stage: 'awarded', value: gen.amount },
+      });
+    }
     res.json({ gen: rows[0], wonJob });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -199,10 +208,44 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   res.json({ gen, wonJob });
 });
 
+// Soft delete — moves the proposal (and its won-job record) to the Trash.
 router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const gen = await loadOwnedGen(req, res);
   if (!gen) return;
 
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE generator_proposals SET deleted_at=now() WHERE id=$1', [req.params.id]);
+    await client.query('UPDATE won_jobs SET deleted_at=now() WHERE proposal_id=$1', [req.params.id]);
+    await client.query('COMMIT');
+    await writeAudit(req, {
+      action: 'delete', entityType: 'gen', entityId: gen.id,
+      summary: `Moved generator proposal "${gen.customer}" to Trash`, before: gen,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// Restore a trashed proposal (and its won-job record).
+router.post('/:id/restore', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const { rows } = await pool.query('UPDATE generator_proposals SET deleted_at=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING *', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found in Trash' });
+  await pool.query('UPDATE won_jobs SET deleted_at=NULL WHERE proposal_id=$1', [req.params.id]);
+  await writeAudit(req, { action: 'restore', entityType: 'gen', entityId: req.params.id, summary: `Restored generator proposal "${rows[0].customer}"` });
+  res.json(rows[0]);
+});
+
+// Permanently delete a trashed proposal and dependent records (admin only).
+router.delete('/:id/purge', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const { rows: existing } = await pool.query('SELECT id, customer FROM generator_proposals WHERE id=$1 AND deleted_at IS NOT NULL', [req.params.id]);
+  if (!existing.length) return res.status(404).json({ error: 'Not found in Trash' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -217,6 +260,7 @@ router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) =
     await client.query('DELETE FROM won_jobs WHERE proposal_id=$1', [req.params.id]);
     await client.query('DELETE FROM generator_proposals WHERE id=$1', [req.params.id]);
     await client.query('COMMIT');
+    await writeAudit(req, { action: 'purge', entityType: 'gen', entityId: req.params.id, summary: `Permanently deleted generator proposal "${existing[0].customer}"` });
     res.json({ ok: true });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -282,7 +326,7 @@ router.get('/p/:token', async (req, res) => {
   const { rows } = await pool.query(
     `UPDATE generator_proposals
      SET viewed_at = COALESCE(viewed_at, now())
-     WHERE proposal_token = $1
+     WHERE proposal_token = $1 AND deleted_at IS NULL
      RETURNING *`,
     [req.params.token]
   );
@@ -301,7 +345,7 @@ router.post('/p/:token/sign', async (req, res) => {
          signature_data = $1,
          stage = CASE WHEN stage IN ('declined','awarded') THEN stage ELSE 'sent' END,
          updated_at = now()
-     WHERE proposal_token = $2
+     WHERE proposal_token = $2 AND deleted_at IS NULL
      RETURNING id, customer, stage, signed_at`,
     [signatureData, req.params.token]
   );
@@ -318,7 +362,7 @@ router.post('/p/:token/proposal-pdf', upload.single('file'), asyncHandler(async 
   if (!file) return res.status(400).json({ error: 'file required' });
 
   const { rows } = await pool.query(
-    'SELECT id, customer, signed_at FROM generator_proposals WHERE proposal_token = $1',
+    'SELECT id, customer, signed_at FROM generator_proposals WHERE proposal_token = $1 AND deleted_at IS NULL',
     [req.params.token]
   );
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });

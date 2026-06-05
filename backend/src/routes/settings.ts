@@ -3,6 +3,7 @@ import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
+import { writeAudit } from '../utils/audit';
 
 const router = Router();
 
@@ -51,6 +52,7 @@ router.get('/', requireAuth, async (_req, res) => {
 
 router.put('/', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const updates: Record<string, string> = req.body;
+  const changedKeys: string[] = [];
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -64,8 +66,16 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
         [key, val.trim()]
       );
+      changedKeys.push(key);
     }
     await client.query('COMMIT');
+    if (changedKeys.length) {
+      // Record which settings changed; never log secret values.
+      await writeAudit(req, {
+        action: 'update', entityType: 'settings', entityId: null,
+        summary: `Updated settings: ${changedKeys.join(', ')}`, after: { keys: changedKeys },
+      });
+    }
     res.json({ ok: true });
   } catch (err) {
     await client.query('ROLLBACK');

@@ -7,8 +7,8 @@ const router = Router();
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
   const { rows } = scope
-    ? await pool.query('SELECT * FROM won_jobs WHERE salesperson_id = $1 ORDER BY date_won DESC', [scope])
-    : await pool.query('SELECT * FROM won_jobs ORDER BY date_won DESC');
+    ? await pool.query('SELECT * FROM won_jobs WHERE deleted_at IS NULL AND salesperson_id = $1 ORDER BY date_won DESC', [scope])
+    : await pool.query('SELECT * FROM won_jobs WHERE deleted_at IS NULL ORDER BY date_won DESC');
   res.json(rows);
 });
 

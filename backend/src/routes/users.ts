@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, isPrivileged, AuthRequest } from '../middleware/auth';
+import { writeAudit } from '../utils/audit';
 
 const router = Router();
 
@@ -30,6 +31,10 @@ router.post('/', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
        RETURNING ${SAFE_COLS}`,
       [name.trim(), email.toLowerCase().trim(), phone.trim(), job_title.trim(), role, hash]
     );
+    await writeAudit(req, {
+      action: 'create', entityType: 'user', entityId: rows[0].id,
+      summary: `Created user ${rows[0].email} (${role})`, after: { name: rows[0].name, email: rows[0].email, role },
+    });
     res.json(rows[0]);
   } catch (err: any) {
     if (err.code === '23505') return res.status(409).json({ error: 'Email already in use' });
@@ -52,11 +57,21 @@ router.put('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
   vals.push(req.params.id);
   try {
+    // Capture the prior role/status so privilege changes are visible in the audit trail.
+    const { rows: prior } = await pool.query('SELECT role, status FROM users WHERE id=$1', [req.params.id]);
     const { rows } = await pool.query(
       `UPDATE users SET ${fields.join(',')} WHERE id=$${i} RETURNING ${SAFE_COLS}`,
       vals
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    const roleChanged = role !== undefined && prior[0] && prior[0].role !== role;
+    await writeAudit(req, {
+      action: roleChanged ? 'role_change' : 'update', entityType: 'user', entityId: req.params.id,
+      summary: roleChanged
+        ? `Changed ${rows[0].email} role: ${prior[0].role} → ${role}`
+        : `Updated user ${rows[0].email}`,
+      before: prior[0], after: { role: rows[0].role, status: rows[0].status },
+    });
     res.json(rows[0]);
   } catch (err: any) {
     if (err.code === '23505') return res.status(409).json({ error: 'Email already in use' });
@@ -79,16 +94,21 @@ router.put('/:id/password', requireAuth, async (req: AuthRequest, res) => {
     [hash, req.params.id]
   );
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  await writeAudit(req, {
+    action: 'password_reset', entityType: 'user', entityId: req.params.id,
+    summary: req.user!.id === req.params.id ? 'Changed own password' : `Reset password for user ${req.params.id}`,
+  });
   res.json({ ok: true });
 });
 
 // Soft delete — sets status to inactive
 router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const { rows } = await pool.query(
-    `UPDATE users SET status='inactive' WHERE id=$1 RETURNING id`,
+    `UPDATE users SET status='inactive' WHERE id=$1 RETURNING id, email`,
     [req.params.id]
   );
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  await writeAudit(req, { action: 'delete', entityType: 'user', entityId: req.params.id, summary: `Deactivated user ${rows[0].email}` });
   res.json({ ok: true });
 });
 
@@ -100,6 +120,10 @@ router.put('/:id/ai-override', requireAuth, requireAdmin, async (req: AuthReques
     [override === null ? null : JSON.stringify(override), req.params.id]
   );
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  await writeAudit(req, {
+    action: 'ai_override', entityType: 'user', entityId: req.params.id,
+    summary: `Updated AI access override`, after: rows[0].ai_override,
+  });
   res.json({ ok: true, ai_override: rows[0].ai_override });
 });
 

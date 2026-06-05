@@ -4,6 +4,7 @@ import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
 import multer from 'multer';
 import { logger } from '../utils/logger';
 import { asyncHandler } from '../utils/asyncHandler';
+import { writeAudit } from '../utils/audit';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -12,7 +13,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 
 // file_data is excluded to keep responses small.
 router.get('/', requireAuth, asyncHandler(async (req, res) => {
   const { linked_id } = req.query as { linked_id?: string };
-  const where = linked_id ? 'WHERE linked_id = $1' : '';
+  const where = linked_id ? 'WHERE deleted_at IS NULL AND linked_id = $1' : 'WHERE deleted_at IS NULL';
   const params = linked_id ? [linked_id] : [];
   const { rows } = await pool.query(
     `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at FROM documents ${where} ORDER BY created_at DESC`,
@@ -61,7 +62,7 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
 
 // Download a document's file
 router.get('/:id/download', requireAuth, asyncHandler(async (req, res) => {
-  const { rows } = await pool.query('SELECT name, file_type, file_data FROM documents WHERE id=$1', [req.params.id]);
+  const { rows } = await pool.query('SELECT name, file_type, file_data FROM documents WHERE id=$1 AND deleted_at IS NULL', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'not found' });
   const { name, file_type, file_data } = rows[0];
   if (!file_data) return res.status(404).json({ error: 'no file data' });
@@ -71,8 +72,33 @@ router.get('/:id/download', requireAuth, asyncHandler(async (req, res) => {
   res.send(buf);
 }));
 
-router.delete('/:id', requireAuth, requireAdmin, asyncHandler(async (req, res) => {
-  await pool.query('DELETE FROM documents WHERE id=$1', [req.params.id]);
+// Soft delete — moves the document to the Trash (recoverable via /restore).
+router.delete('/:id', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res) => {
+  const { rows } = await pool.query(
+    'UPDATE documents SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id, name, linked_name',
+    [req.params.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'not found' });
+  await writeAudit(req, { action: 'delete', entityType: 'document', entityId: req.params.id, summary: `Moved document "${rows[0].name}" to Trash` });
+  res.json({ ok: true });
+}));
+
+// Restore a trashed document.
+router.post('/:id/restore', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res) => {
+  const { rows } = await pool.query(
+    'UPDATE documents SET deleted_at=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at',
+    [req.params.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Not found in Trash' });
+  await writeAudit(req, { action: 'restore', entityType: 'document', entityId: req.params.id, summary: `Restored document "${rows[0].name}"` });
+  res.json(rows[0]);
+}));
+
+// Permanently delete a trashed document (admin only).
+router.delete('/:id/purge', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res) => {
+  const { rows } = await pool.query('DELETE FROM documents WHERE id=$1 AND deleted_at IS NOT NULL RETURNING name', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found in Trash' });
+  await writeAudit(req, { action: 'purge', entityType: 'document', entityId: req.params.id, summary: `Permanently deleted document "${rows[0].name}"` });
   res.json({ ok: true });
 }));
 

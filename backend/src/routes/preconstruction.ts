@@ -353,7 +353,7 @@ router.get('/costs', requireAuth, async (_req, res) => {
     SELECT b.name, b.amount, b.sheets, b.gc, b.loc,
            EXTRACT(YEAR FROM b.updated_at) as year
     FROM bids b
-    WHERE b.stage = 'awarded' AND b.amount IS NOT NULL
+    WHERE b.stage = 'awarded' AND b.amount IS NOT NULL AND b.deleted_at IS NULL
     ORDER BY b.updated_at DESC
     LIMIT 20
   `);
@@ -362,7 +362,7 @@ router.get('/costs', requireAuth, async (_req, res) => {
 
 // GET bid intelligence stats
 router.get('/intelligence/:bidId', requireAuth, async (req, res) => {
-  const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1', [req.params.bidId]);
+  const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1 AND deleted_at IS NULL', [req.params.bidId]);
   if (!bidRows.length) return res.status(404).json({ error: 'Bid not found' });
   const bid = bidRows[0];
 
@@ -372,14 +372,14 @@ router.get('/intelligence/:bidId', requireAuth, async (req, res) => {
       COUNT(*) FILTER (WHERE stage='lost') as lost,
       COUNT(*) FILTER (WHERE stage IN ('awarded','lost')) as total,
       AVG(amount) FILTER (WHERE stage='awarded') as avg_won_amount
-    FROM bids WHERE gc=$1
+    FROM bids WHERE gc=$1 AND deleted_at IS NULL
   `, [bid.gc]);
 
   const { rows: overall } = await pool.query(`
     SELECT
       COUNT(*) FILTER (WHERE stage='awarded') as won,
       COUNT(*) FILTER (WHERE stage='lost') as lost
-    FROM bids
+    FROM bids WHERE deleted_at IS NULL
   `);
 
   const gc = gcStats[0];
@@ -403,7 +403,7 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   const bidId = req.body.bidId;
   if (!bidId) return res.status(400).json({ error: 'bidId required' });
 
-  const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1', [bidId]);
+  const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1 AND deleted_at IS NULL', [bidId]);
   if (!bidRows.length) return res.status(404).json({ error: 'Bid not found' });
 
   const rawFiles = (req.files as Express.Multer.File[]) ?? [];

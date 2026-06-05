@@ -23,6 +23,7 @@ import preconRouter from './routes/preconstruction';
 import projectsRouter from './routes/projects';
 import documentsRouter from './routes/documents';
 import settingsRouter from './routes/settings';
+import adminRouter from './routes/admin';
 
 dotenv.config();
 
@@ -78,6 +79,7 @@ app.use('/api/preconstruction', preconRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/admin', adminRouter);
 
 // AI usage today — per-user analysis count for the current day
 app.get('/api/ai/usage/today', requireAuth, async (_req: AuthRequest, res) => {

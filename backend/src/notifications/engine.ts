@@ -4,6 +4,7 @@ import { getSetting } from '../db/getSetting';
 import { logger } from '../utils/logger';
 import { escapeHtml } from '../utils/escapeHtml';
 import { parseDueDays } from '../utils/dueDate';
+import { purgeExpired } from '../utils/audit';
 import {
   ReminderType, getReminderPrefs, resolveRecipients, ownerAdminIds,
 } from './prefs';
@@ -72,6 +73,7 @@ export async function runReminderScan(): Promise<void> {
       const { rows } = await pool.query(
         `SELECT id, customer, salesperson_id, viewed_at FROM generator_proposals
          WHERE viewed_at IS NOT NULL AND signed_at IS NULL AND stage <> 'declined'
+           AND deleted_at IS NULL
            AND viewed_at < now() - ($1 || ' days')::interval`,
         [String(days)]
       );
@@ -91,7 +93,7 @@ export async function runReminderScan(): Promise<void> {
     if (cfg.app || cfg.email) {
       const within = cfg.days ?? 3;
       const { rows } = await pool.query(
-        `SELECT id, name, due, salesperson_id FROM bids WHERE stage IN ('due','submitted')`
+        `SELECT id, name, due, salesperson_id FROM bids WHERE stage IN ('due','submitted') AND deleted_at IS NULL`
       );
       for (const b of rows) {
         const dd = parseDueDays(String(b.due || ''));
@@ -162,6 +164,12 @@ export function startReminderScheduler(): void {
     running = true;
     try { await runReminderScan(); }
     catch (err) { logger.error({ err }, '[reminders] scan failed'); }
+    // Retention: purge expired audit rows and trashed records (best-effort).
+    try {
+      const months = parseInt((await getSetting('audit_retention_months')) || '12');
+      const purged = await purgeExpired(months);
+      if (Object.keys(purged).length) logger.info({ purged, months }, '[retention] purged expired records');
+    } catch (err) { logger.error({ err }, '[retention] purge failed'); }
     finally { running = false; }
   };
   setTimeout(tick, 30_000);               // first run shortly after startup

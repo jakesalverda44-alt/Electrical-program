@@ -5,6 +5,7 @@ import { requireAuth, AuthRequest, ownScopeId, isPrivileged } from '../middlewar
 import { validateBody } from '../utils/validate';
 import { withDueDays } from '../utils/dueDate';
 import { asyncHandler } from '../utils/asyncHandler';
+import { writeAudit } from '../utils/audit';
 
 const router = Router();
 
@@ -52,8 +53,8 @@ router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const { rows } = await pool.query(
     `SELECT c.*,
-            (SELECT COUNT(*) FROM bids b WHERE b.customer_id = c.id)::int AS bid_count,
-            (SELECT COUNT(*) FROM generator_proposals g WHERE g.customer_id = c.id)::int AS gen_count
+            (SELECT COUNT(*) FROM bids b WHERE b.customer_id = c.id AND b.deleted_at IS NULL)::int AS bid_count,
+            (SELECT COUNT(*) FROM generator_proposals g WHERE g.customer_id = c.id AND g.deleted_at IS NULL)::int AS gen_count
      FROM customers c ${clause} ORDER BY c.name ASC`,
     params
   );
@@ -71,9 +72,9 @@ router.get('/:id', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const args = (id: string) => scope ? [id, scope] : [id];
 
   const [bidsR, gensR, wonR] = await Promise.all([
-    pool.query(`SELECT * FROM bids WHERE customer_id = $1${ownFilter()} ORDER BY created_at DESC`, args(req.params.id)),
-    pool.query(`SELECT * FROM generator_proposals WHERE customer_id = $1${ownFilter()} ORDER BY created_at DESC`, args(req.params.id)),
-    pool.query(`SELECT * FROM won_jobs WHERE customer = $1${ownFilter()} ORDER BY date_won DESC`, args(cust[0].name)),
+    pool.query(`SELECT * FROM bids WHERE deleted_at IS NULL AND customer_id = $1${ownFilter()} ORDER BY created_at DESC`, args(req.params.id)),
+    pool.query(`SELECT * FROM generator_proposals WHERE deleted_at IS NULL AND customer_id = $1${ownFilter()} ORDER BY created_at DESC`, args(req.params.id)),
+    pool.query(`SELECT * FROM won_jobs WHERE deleted_at IS NULL AND customer = $1${ownFilter()} ORDER BY date_won DESC`, args(cust[0].name)),
   ]);
 
   // Ids/names spanning the customer and all its jobs, so documents and
@@ -84,7 +85,7 @@ router.get('/:id', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const [docsR, tasksR, commsR] = await Promise.all([
     pool.query(
       `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, created_at
-       FROM documents WHERE linked_id = ANY($1::text[]) ORDER BY created_at DESC`,
+       FROM documents WHERE deleted_at IS NULL AND linked_id = ANY($1::text[]) ORDER BY created_at DESC`,
       [linkIds]
     ),
     pool.query(
@@ -180,6 +181,11 @@ router.post('/:id/merge', requireAuth, asyncHandler(async (req: AuthRequest, res
       await client.query('DELETE FROM customers WHERE id = $1', [src.id]);
     }
     await client.query('COMMIT');
+    await writeAudit(req, {
+      action: 'merge', entityType: 'customer', entityId: targetId,
+      summary: `Merged ${srcs.length} customer(s) into "${targetName}"`,
+      before: { sources: srcs.map(s => ({ id: s.id, name: s.name })) },
+    });
     res.json({ ok: true, merged: srcs.length, into: targetName });
   } catch (err) {
     await client.query('ROLLBACK');
