@@ -59,6 +59,11 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
   const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > 50 * 1024 * 1024) {
+      setError('File exceeds 50 MB limit. Please upload a smaller file.');
+      if (fileInput.current) fileInput.current.value = '';
+      return;
+    }
     setUploading(true);
     setError('');
     try {
@@ -69,11 +74,16 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
       form.append('div', div);
       form.append('category', category);
       form.append('display_name', file.name);
-      const { data } = await api.post('/documents', form);
+      const { data } = await api.post('/documents', form, { timeout: 120_000 });
       setDocs(prev => [data, ...prev]);
     } catch (err: unknown) {
-      const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setError(message || 'Upload failed. Please try again.');
+      const isTimeout = (err as { code?: string })?.code === 'ECONNABORTED';
+      const serverMsg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setError(
+        isTimeout
+          ? 'Upload timed out — file may be too large for the server. Try a smaller file.'
+          : serverMsg || 'Upload failed. Please try again.',
+      );
     } finally {
       setUploading(false);
       if (fileInput.current) fileInput.current.value = '';

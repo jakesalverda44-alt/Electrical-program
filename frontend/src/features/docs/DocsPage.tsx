@@ -81,6 +81,10 @@ export default function DocsPage({ bids, gens }: Props) {
       const opt = linkOptions.find(o => o.id === uploadForm.linkedId);
       const newDocs: Doc[] = [];
       for (const f of pendingFiles) {
+        if (f.size > 50 * 1024 * 1024) {
+          showToast({ title: `"${f.name}" exceeds 50 MB — skipped` });
+          continue;
+        }
         const form = new FormData();
         form.append('file', f);
         form.append('display_name', uploadForm.name.trim() || f.name);
@@ -88,7 +92,7 @@ export default function DocsPage({ bids, gens }: Props) {
         form.append('linked_id', uploadForm.linkedId ? (uploadForm.linkedId.split(':')[1] ?? '') : '');
         form.append('linked_name', opt?.name ?? '');
         form.append('div', opt?.div ?? 'general');
-        const res = await api.post('/documents', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+        const res = await api.post('/documents', form, { timeout: 120_000 });
         newDocs.push(res.data);
       }
       setDocs(prev => [...newDocs, ...prev]);
