@@ -11,6 +11,7 @@ import { writeAudit } from '../utils/audit';
 import { ensureProject, setProjectDeleted } from '../utils/project';
 import { commissionRate, commissionAmount } from '../utils/commission';
 import { pdfUpload } from '../utils/upload';
+import { uploadFile, GENERATOR_PROPOSALS_FOLDER } from '../services/googleDrive';
 
 const router = Router();
 const upload = pdfUpload;
@@ -401,6 +402,16 @@ router.post('/p/:token/proposal-pdf', upload.single('file'), asyncHandler(async 
        VALUES ($1,$2,'gen',$3,$3,'contract',$4,'application/pdf','Customer signature',$5)`,
       [gen.id, gen.customer, name, file.size, file.buffer.toString('base64')]
     );
+
+    // Fire-and-forget: upload to Drive Generator Proposals folder
+    const driveDate = new Date().toISOString().split('T')[0];
+    uploadFile(
+      `Proposal — ${gen.customer} — ${driveDate}.pdf`,
+      'application/pdf',
+      file.buffer,
+      GENERATOR_PROPOSALS_FOLDER,
+    ).catch(err => console.error('[drive] Generator PDF upload failed:', err));
+
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err, genId: gen.id }, 'Signed proposal PDF upload failed');

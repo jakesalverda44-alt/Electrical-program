@@ -16,8 +16,11 @@ export class UnsupportedFileTypeError extends Error {
 
 // Documents hub: plans, contracts, proposals, permits, invoices, photos, etc.
 const DOCUMENT_EXTS = new Set([
-  '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic',
-  '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt', '.zip', '.dwg', '.dxf',
+  '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.tif', '.tiff',
+  '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt', '.rtf',
+  '.ppt', '.pptx',
+  '.zip', '.dwg', '.dxf', '.dwf', '.dwfx', '.rvt',
+  '.eml', '.msg',
 ]);
 
 // AI takeoff input: drawing sets, images, and zip archives (expanded server-side).

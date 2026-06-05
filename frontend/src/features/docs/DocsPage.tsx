@@ -4,7 +4,7 @@ import { Bid, Gen } from '../../types';
 import api from '../../api/client';
 import { useShowToast } from '../../contexts/AppContext';
 
-type DocCategory = 'plans' | 'contract' | 'proposal' | 'permit' | 'invoice' | 'other';
+type DocCategory = 'plans' | 'contract' | 'proposal' | 'permit' | 'invoice' | 'other' | 'change_order' | 'submittal' | 'rfi' | 'photo';
 
 interface Doc {
   id: string;
@@ -21,12 +21,16 @@ interface Doc {
 }
 
 const CAT_META: Record<DocCategory, { label: string; color: string; bg: string }> = {
-  plans:    { label: 'Plans',    color: 'var(--blue)',                    bg: 'var(--blue-soft)'  },
-  contract: { label: 'Contract', color: 'var(--green)',                   bg: 'var(--green-soft)' },
-  proposal: { label: 'Proposal', color: 'var(--amber)',                   bg: 'var(--amber-soft)' },
-  permit:   { label: 'Permit',   color: '#F2854F',                        bg: 'rgba(242,133,79,.12)' },
-  invoice:  { label: 'Invoice',  color: 'var(--green)',                   bg: 'var(--green-soft)' },
-  other:    { label: 'Other',    color: 'var(--text3)',                   bg: 'var(--surface2)'   },
+  plans:        { label: 'Plans & Specs',      color: 'var(--blue)',    bg: 'var(--blue-soft)'          },
+  contract:     { label: 'Contract',           color: 'var(--green)',   bg: 'var(--green-soft)'         },
+  proposal:     { label: 'Proposal/Estimate',  color: 'var(--amber)',   bg: 'var(--amber-soft)'         },
+  change_order: { label: 'Change Order',       color: '#E06A6A',        bg: 'rgba(224,106,106,.12)'     },
+  submittal:    { label: 'Submittal',          color: '#7C3AED',        bg: 'rgba(124,58,237,.1)'       },
+  rfi:          { label: 'RFI',               color: '#0891B2',        bg: 'rgba(8,145,178,.1)'        },
+  photo:        { label: 'Photo',             color: '#D97706',        bg: 'rgba(217,119,6,.1)'        },
+  permit:       { label: 'Permit',            color: '#F2854F',        bg: 'rgba(242,133,79,.12)'      },
+  invoice:      { label: 'Invoice / PO',      color: 'var(--green)',   bg: 'var(--green-soft)'         },
+  other:        { label: 'Other',             color: 'var(--text3)',   bg: 'var(--surface2)'           },
 };
 
 function fmtSize(bytes: number) {
@@ -77,6 +81,10 @@ export default function DocsPage({ bids, gens }: Props) {
       const opt = linkOptions.find(o => o.id === uploadForm.linkedId);
       const newDocs: Doc[] = [];
       for (const f of pendingFiles) {
+        if (f.size > 50 * 1024 * 1024) {
+          showToast({ title: `"${f.name}" exceeds 50 MB — skipped` });
+          continue;
+        }
         const form = new FormData();
         form.append('file', f);
         form.append('display_name', uploadForm.name.trim() || f.name);
@@ -84,7 +92,7 @@ export default function DocsPage({ bids, gens }: Props) {
         form.append('linked_id', uploadForm.linkedId ? (uploadForm.linkedId.split(':')[1] ?? '') : '');
         form.append('linked_name', opt?.name ?? '');
         form.append('div', opt?.div ?? 'general');
-        const res = await api.post('/documents', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+        const res = await api.post('/documents', form, { timeout: 120_000 });
         newDocs.push(res.data);
       }
       setDocs(prev => [...newDocs, ...prev]);

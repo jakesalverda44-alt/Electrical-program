@@ -9,6 +9,14 @@ import { getSetting } from '../db/getSetting';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { escapeHtml } from '../utils/escapeHtml';
 import { upsertCustomer } from './customers';
+import {
+  getOrCreateGcFolder,
+  createJobFolder,
+  createSubfolders,
+  moveFolder,
+  ACTIVE_PROJECTS_ROOT,
+  COMPLETED_PROJECTS_ROOT,
+} from '../services/googleDrive';
 
 const router = Router();
 
@@ -93,7 +101,44 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
     [name.trim(), gc.trim(), (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), notes?.trim() || null, user.id, user.name, customerId]
   );
   sendBidNotification(rows[0], user).catch(() => {});
-  res.json(withDueDays(rows[0]));
+
+  // Fire-and-forget Drive folder setup — never blocks the CRM response
+  const newBid = rows[0];
+  (async () => {
+    try {
+      const [gcFolderId, jobFolderId] = await Promise.all([
+        getOrCreateGcFolder(newBid.gc),
+        createJobFolder(newBid.name, newBid.gc),
+      ]);
+      if (!jobFolderId) return;
+      const subfolders = await createSubfolders(jobFolderId);
+      await pool.query(
+        `UPDATE bids SET
+           drive_gc_folder_id=$1, drive_job_folder_id=$2,
+           drive_plans_folder_id=$3, drive_estimates_folder_id=$4,
+           drive_photos_folder_id=$5, drive_contracts_folder_id=$6,
+           drive_submittals_folder_id=$7, drive_rfis_folder_id=$8,
+           drive_change_orders_folder_id=$9
+         WHERE id=$10`,
+        [
+          gcFolderId,
+          jobFolderId,
+          subfolders['Plans & Specs'] || null,
+          subfolders['Estimates & Scope Extractions'] || null,
+          subfolders['Photos'] || null,
+          subfolders['Contract & Invoices'] || null,
+          subfolders['Submittals'] || null,
+          subfolders['RFIs'] || null,
+          subfolders['Change Orders'] || null,
+          newBid.id,
+        ],
+      );
+    } catch (err) {
+      console.error('[drive] Bid folder setup failed:', err);
+    }
+  })();
+
+  res.json(withDueDays(newBid));
 });
 
 router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
@@ -161,6 +206,11 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
         summary: `Awarded bid "${bid.name}" (${bid.gc}) — $${Number(bid.amount || 0).toLocaleString()}`,
         before: { stage: bid.stage }, after: { stage: 'awarded', value: bid.amount },
       });
+      // Fire-and-forget: move job folder from Active to Completed Projects in Drive
+      if (bid.drive_job_folder_id) {
+        moveFolder(bid.drive_job_folder_id, ACTIVE_PROJECTS_ROOT, COMPLETED_PROJECTS_ROOT)
+          .catch(err => console.error('[drive] moveFolder on award failed:', err));
+      }
     }
     res.json({ bid: withDueDays(rows[0]), wonJob });
   } catch (err) {
