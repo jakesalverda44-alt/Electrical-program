@@ -93,19 +93,30 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
 
   const download = (doc: Doc) => {
     if (doc.storage_url) {
-      window.open(doc.storage_url, '_blank');
+      // Use a real anchor click so popup blockers can't interfere
+      const a = document.createElement('a');
+      a.href = doc.storage_url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
       return;
     }
     const token = localStorage.getItem('crm_token');
     fetch(`/api/documents/${doc.id}/download`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      .then(r => r.blob())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.blob();
+      })
       .then(blob => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url; a.download = doc.display_name;
         document.body.appendChild(a); a.click(); a.remove();
         URL.revokeObjectURL(url);
-      });
+      })
+      .catch(() => setError('Download failed — please re-upload this file.'));
   };
 
   const remove = async (doc: Doc) => {

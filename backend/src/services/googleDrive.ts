@@ -164,16 +164,11 @@ export async function uploadFile(
 ): Promise<string | null> {
   const drive = getDriveClient();
   if (!drive) return null;
-  try {
-    const body = typeof content === 'string' ? Readable.from([content]) : Readable.from([content]);
-    const { data } = await drive.files.create({
-      requestBody: { name, mimeType, parents: [parentId] },
-      media: { mimeType, body },
-      fields: 'id',
-    });
-    return data.id ?? null;
-  } catch (err) {
-    console.error(`[drive] uploadFile "${name}" failed:`, err);
-    return null;
-  }
+  const body = Readable.from([content]);
+  const { data } = await drive.files.create({
+    requestBody: { name, mimeType, parents: [parentId] },
+    media: { mimeType, body },
+    fields: 'id',
+  });
+  return data.id ?? null;
 }

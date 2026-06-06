@@ -77,21 +77,18 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
       }
     }
 
-    // Push to Google Drive. When Cloudinary already stored the file we do this
-    // in the background (don't block the response). Otherwise we await it so a
-    // large file still lands in Drive and we can link to it — avoiding a
-    // multi-megabyte base64 blob in Postgres (which can crash the request).
+    // Push to Google Drive whenever a folder is available. Always awaited so
+    // errors surface in logs and Drive upload is confirmed before we respond.
     const driveName = display_name?.trim() || file.originalname;
     const driveMime = file.mimetype || 'application/octet-stream';
     let driveFileId: string | null = null;
-    if (driveFolderId && storageUrl) {
-      uploadFile(driveName, driveMime, file.buffer, driveFolderId)
-        .catch(err => logger.error({ err, linked_id, category }, '[drive] background upload failed'));
-    } else if (driveFolderId) {
+    if (driveFolderId) {
       try {
         driveFileId = await uploadFile(driveName, driveMime, file.buffer, driveFolderId);
+        if (driveFileId) logger.info({ driveFileId, linked_id, category, fileName: driveName }, '[drive] upload succeeded');
+        else logger.warn({ linked_id, category, fileName: driveName }, '[drive] upload returned null — Drive may not be configured');
       } catch (err) {
-        logger.error({ err, linked_id, category }, '[drive] upload failed');
+        logger.error({ err, linked_id, category, fileName: driveName }, '[drive] upload failed');
       }
     }
 
