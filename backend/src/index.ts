@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Router } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import path from 'path';
@@ -7,6 +7,7 @@ import { pinoHttp } from 'pino-http';
 import { runMigrations } from './migrate';
 import { pool } from './db/pool';
 import { logger } from './utils/logger';
+import { asyncHandler } from './utils/asyncHandler';
 import { startReminderScheduler } from './notifications/engine';
 import { requireAuth, AuthRequest, initJwtSecret } from './middleware/auth';
 import authRouter from './routes/auth';
@@ -38,26 +39,16 @@ process.on('uncaughtException', err => {
 
 const app = express();
 
-// Security headers. In production the frontend is served from the same origin as the
-// API, so the default CSP is fine; disable it in dev where Vite runs on a separate port.
 app.use(helmet({ contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false }));
 
-// CORS allowlist. Comma-separated origins from CORS_ORIGIN/FRONTEND_URL.
-// In production the SPA is same-origin (served by this process), so cross-origin requests
-// are only allowed for explicitly configured origins — never a blanket '*'.
 const allowedOrigins = (process.env.CORS_ORIGIN || process.env.FRONTEND_URL || '')
   .split(',').map(o => o.trim().replace(/\/$/, '')).filter(Boolean);
 if (process.env.NODE_ENV !== 'production' && !allowedOrigins.length) {
   allowedOrigins.push('http://localhost:3000', 'http://localhost:5173');
 }
-// Same-origin requests are always allowed: the SPA is served by this process, and Vite
-// tags its module/style assets with `crossorigin`, so even same-origin asset and API
-// requests carry an Origin header and must pass this check. Genuine cross-origin callers
-// are limited to the configured allowlist. Unknown origins are denied without a 500 (the
-// browser blocks them client-side from the absent CORS header).
 app.use(cors((req, cb) => {
   const origin = req.headers.origin;
-  if (!origin) return cb(null, { origin: true });          // non-browser / same-origin navigation
+  if (!origin) return cb(null, { origin: true });
   let sameOrigin = false;
   try { sameOrigin = new URL(origin).host === req.headers.host; } catch { /* malformed Origin */ }
   if (sameOrigin || allowedOrigins.includes(origin.replace(/\/$/, ''))) return cb(null, { origin: true });
@@ -83,8 +74,7 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/intake', intakeRouter);
 
-// AI usage today — per-user analysis count for the current day
-app.get('/api/ai/usage/today', requireAuth, async (_req: AuthRequest, res) => {
+app.get('/api/ai/usage/today', requireAuth, asyncHandler(async (_req: AuthRequest, res) => {
   const today = new Date().toISOString().split('T')[0];
   const { rows } = await pool.query(`
     SELECT u.id, u.name, u.role, COUNT(a.id)::int AS count
@@ -95,18 +85,16 @@ app.get('/api/ai/usage/today', requireAuth, async (_req: AuthRequest, res) => {
     ORDER BY count DESC
   `, [today]);
   res.json(rows);
-});
+}));
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
-// Serve compiled React app in production
 if (process.env.NODE_ENV === 'production') {
   const staticPath = path.join(__dirname, '../../frontend/dist');
   app.use(express.static(staticPath));
   app.get('*', (_req, res) => res.sendFile(path.join(staticPath, 'index.html')));
 }
 
-// Global error handler — catches anything forwarded via asyncHandler / next(err).
 app.use((err: Error & { code?: string; status?: number; statusCode?: number }, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   logger.error({ err, path: req.path }, 'Unhandled request error');
   if (res.headersSent) return;
@@ -126,8 +114,6 @@ const port = Number(process.env.PORT) || 3001;
 
 export { app };
 
-// Only boot (migrate + listen) when run directly — importing the app for tests
-// must not start the server or touch the database.
 if (require.main === module) {
   runMigrations()
     .then(async () => {
