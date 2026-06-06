@@ -106,23 +106,26 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   );
   sendBidNotification(rows[0], user).catch(() => {});
 
-  // Fire-and-forget Drive folder setup — never blocks the CRM response.
-  // At the bid stage the job folder gets two subfolders: Plans + Bid Proposals.
-  // The remaining project subfolders are created on award.
+  // Await Drive folder setup before responding so that folder IDs are written to
+  // the DB by the time the client receives the new bid. This prevents a race where
+  // an immediately-uploaded file finds null folder IDs and skips Drive routing.
+  // Drive failure must not block bid creation — we catch and continue.
   const newBid = rows[0];
-  (async () => {
-    try {
-      const jobFolderId = await createJobFolder(jobFolderName(newBid.name, newBid.loc), newBid.gc, ESTIMATING_ACTIVE_BIDS_ROOT);
-      if (!jobFolderId) return;
+  try {
+    const jobFolderId = await createJobFolder(jobFolderName(newBid.name, newBid.loc), newBid.gc, ESTIMATING_ACTIVE_BIDS_ROOT);
+    if (jobFolderId) {
       const subs = await createSubfolders(jobFolderId, BID_SUBFOLDER_NAMES);
       await pool.query(
         `UPDATE bids SET drive_job_folder_id=$1, drive_plans_folder_id=$2, drive_estimates_folder_id=$3 WHERE id=$4`,
         [jobFolderId, subs['Plans'] || null, subs['Bid Proposals'] || null, newBid.id],
       );
-    } catch (err) {
-      console.error('[drive] Bid folder setup failed:', err);
+      newBid.drive_job_folder_id = jobFolderId;
+      newBid.drive_plans_folder_id = subs['Plans'] || null;
+      newBid.drive_estimates_folder_id = subs['Bid Proposals'] || null;
     }
-  })();
+  } catch (err) {
+    console.error('[drive] Bid folder setup failed:', err);
+  }
 
   res.json(withDueDays(newBid));
 });
