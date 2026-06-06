@@ -35,9 +35,14 @@ function getDriveClient() {
   const credentials = getCredentials();
   if (!credentials) return null;
   try {
+    // GOOGLE_IMPERSONATE_EMAIL enables domain-wide delegation so the service
+    // account acts as a real user — required for file uploads to My Drive
+    // (service accounts have no personal storage quota of their own).
+    const subject = process.env.GOOGLE_IMPERSONATE_EMAIL || undefined;
     const auth = new google.auth.GoogleAuth({
       credentials,
       scopes: ['https://www.googleapis.com/auth/drive'],
+      clientOptions: subject ? { subject } : undefined,
     });
     return google.drive({ version: 'v3', auth });
   } catch (err) {
