@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { Bid } from '../../types';
@@ -13,14 +13,6 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
   const [f, setF] = useState({ name: '', gc: initialGc ?? '', loc: '', amount: '', due: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [gcOptions, setGcOptions] = useState<string[]>([]);
-
-  // Suggest general contractors from history as the user types.
-  useEffect(() => {
-    api.get('/customers', { params: { type: 'gc' } })
-      .then(({ data }) => setGcOptions((data as { name: string }[]).map(c => c.name)))
-      .catch(() => { /* suggestions are optional */ });
-  }, []);
 
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setF(prev => ({ ...prev, [k]: e.target.value }));
@@ -58,11 +50,7 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
             <div className="field-row">
               <div className="field">
                 <label>General contractor</label>
-                <input value={f.gc} onChange={set('gc')} placeholder="Start typing — suggests from history" required
-                  list="gc-suggestions" autoComplete="off"/>
-                <datalist id="gc-suggestions">
-                  {gcOptions.map(n => <option key={n} value={n}/>)}
-                </datalist>
+                <input value={f.gc} onChange={set('gc')} placeholder="e.g. Brasfield & Gorrie" required autoComplete="off"/>
               </div>
               <div className="field">
                 <label>Location</label>
