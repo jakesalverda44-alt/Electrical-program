@@ -64,6 +64,7 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
         : `drive_job_folder_id`;
       const { rows: bidRows } = await pool.query(`SELECT ${cols} FROM bids WHERE id=$1`, [linked_id]);
       driveFolderId = bidRows[0]?.sub_folder_id || bidRows[0]?.drive_job_folder_id || null;
+      logger.info({ linked_id, div, category, driveFolderId, sub_folder_id: bidRows[0]?.sub_folder_id, drive_job_folder_id: bidRows[0]?.drive_job_folder_id }, '[drive] folder lookup result');
     }
 
     // Primary app storage: Cloudinary, for files within its size limit.
