@@ -10,7 +10,7 @@ import { parseAIJSON } from '../ai/json';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
 import { drawingUpload } from '../utils/upload';
-import { uploadFile } from '../services/googleDrive';
+import { uploadFile, getFileMedia } from '../services/googleDrive';
 
 const router = Router();
 const upload = drawingUpload;
@@ -460,8 +460,65 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
       files.push(f);
     }
   }
+  // Also pull in any documents already attached to this bid
+  const rawDocIds = req.body.document_ids;
+  const docIds: string[] = Array.isArray(rawDocIds)
+    ? (rawDocIds as string[]).filter(Boolean)
+    : (typeof rawDocIds === 'string' && rawDocIds.trim()) ? [rawDocIds.trim()] : [];
+
+  for (const docId of docIds) {
+    try {
+      const { rows: docRows } = await pool.query(
+        'SELECT name, file_type, file_data, storage_url FROM documents WHERE id=$1 AND deleted_at IS NULL',
+        [docId]
+      );
+      const doc = docRows[0];
+      if (!doc) continue;
+
+      const fname = doc.name as string;
+      const ftype = (doc.file_type as string) || 'application/octet-stream';
+      let buf: Buffer | null = null;
+
+      if (doc.file_data) {
+        buf = Buffer.from(doc.file_data as string, 'base64');
+      } else if (doc.storage_url) {
+        const driveMatch = (doc.storage_url as string).match(/\/file\/d\/([^/?#]+)/);
+        if (driveMatch) {
+          const media = await getFileMedia(driveMatch[1]);
+          if (media) {
+            buf = await new Promise<Buffer>((resolve, reject) => {
+              const chunks: Buffer[] = [];
+              media.stream.on('data', (c: Buffer) => chunks.push(c));
+              media.stream.on('end', () => resolve(Buffer.concat(chunks)));
+              media.stream.on('error', reject);
+            });
+          }
+        } else {
+          const resp = await fetch(doc.storage_url as string);
+          if (resp.ok) buf = Buffer.from(await resp.arrayBuffer());
+        }
+      }
+
+      if (!buf) continue;
+      files.push({
+        fieldname: 'files',
+        originalname: fname,
+        encoding: '7bit',
+        mimetype: ftype,
+        buffer: buf,
+        size: buf.length,
+        stream: undefined,
+        destination: '',
+        filename: fname,
+        path: '',
+      } as unknown as Express.Multer.File);
+    } catch (err) {
+      logger.warn({ err, docId }, '[takeoff] could not load document, skipping');
+    }
+  }
+
   if (!files.length) {
-    return res.status(400).json({ error: 'Upload at least one plan file before running AI analysis. Re-add the files in the Files tab, then try again.' });
+    return res.status(400).json({ error: 'Upload at least one plan file, or select files from Project Files, before running AI analysis.' });
   }
 
   // Prefer the key configured in Settings -> AI; fall back to the env var.
