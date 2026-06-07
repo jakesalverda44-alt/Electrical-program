@@ -123,7 +123,7 @@ export default function ProposalPublicPage() {
             </div>
           ` : ''}
           <div style="font-size:13px;color:#64748b;line-height:1.7;border-top:1px solid #e2e8f0;padding-top:20px;">
-            <p style="margin:0 0 12px;">Accurate Power &amp; Technology, Inc. proposes to furnish all labor and material necessary to complete this generator installation. Our price is in accordance with the <strong>2026 National Electrical Code</strong>. <strong>This proposal is valid for 30 days.</strong></p>
+            <p style="margin:0 0 12px;">Accurate Power &amp; Technology, Inc. proposes to furnish all labor and material necessary to complete this generator installation. Our price is in accordance with the <strong>${new Date().getFullYear()} National Electrical Code</strong>. <strong>This proposal is valid for ${form?.validDays ?? 30} days.</strong></p>
             <p style="margin:0;">By signing below, you acknowledge and agree to all terms and conditions of this proposal and the attached Sales Agreement, including the 50% deposit due at signing, non-refundability of the deposit, and all applicable disclosures.</p>
           </div>
           <div style="margin-top:28px;border-top:1px solid #e2e8f0;padding-top:20px;">
@@ -233,7 +233,7 @@ export default function ProposalPublicPage() {
               <p style={{ margin: '0 0 12px' }}>
                 Accurate Power &amp; Technology, Inc. proposes to furnish all labor and material necessary to complete
                 this generator installation. Our price is in accordance with the <strong>{new Date().getFullYear()} National Electrical Code</strong>.{' '}
-                <strong>This proposal is valid for 30 days.</strong>
+                <strong>This proposal is valid for {(form as Partial<GenForm>)?.validDays ?? 30} days.</strong>
               </p>
               <p style={{ margin: 0 }}>
                 By signing below, you acknowledge and agree to all terms and conditions of this proposal and the attached
