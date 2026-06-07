@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import SignatureCanvas from 'react-signature-canvas';
 import { GenForm } from '../features/builder/genData';
 import { GenTotals, genPriceRows } from '../features/builder/genCalc';
+import ProposalPreview from '../features/builder/ProposalPreview';
 
 interface GenData {
   id: string;
@@ -22,10 +23,6 @@ interface GenData {
 
 const API = import.meta.env.VITE_API_URL || '/api';
 
-function esc(s: string) {
-  return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
-}
-
 function parseSnapshot<T extends object>(raw: unknown): Partial<T> | null {
   if (!raw) return null;
   if (typeof raw === 'string') {
@@ -41,8 +38,11 @@ export default function ProposalPublicPage() {
   const [signing, setSigning] = useState(false);
   const [signError, setSignError] = useState('');
   const [cleared, setCleared] = useState(false);
+  const [signedSig, setSignedSig] = useState<string | null>(null);
+  const [signedDate, setSignedDate] = useState<string>('');
   const sigRef = useRef<SignatureCanvas>(null);
   const sigWrapRef = useRef<HTMLDivElement>(null);
+  const contractRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch(`${API}/gens/p/${token}`)
@@ -57,6 +57,7 @@ export default function ProposalPublicPage() {
   const handleSign = async () => {
     if (!sigRef.current || sigRef.current.isEmpty()) return;
     setSigning(true);
+    setSignError('');
     const signatureData = sigRef.current.toDataURL('image/png');
     try {
       const res = await fetch(`${API}/gens/p/${token}/sign`, {
@@ -65,10 +66,14 @@ export default function ProposalPublicPage() {
         body: JSON.stringify({ signatureData }),
       });
       if (!res.ok) throw new Error();
+      // Embed the signature into the on-page contract, let it paint, then rasterize
+      // the FULL signed sales agreement to a PDF and archive it to the job's Drive folder.
+      const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      setSignedSig(signatureData);
+      setSignedDate(today);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
+      await saveSignedPdf();
       setStatus('signed');
-      // Best-effort: snapshot a signed PDF into the job's files. Signing already
-      // succeeded, so any failure here is non-fatal and silently ignored.
-      if (gen) void saveSignedPdf(signatureData, gen);
     } catch {
       setSignError('Something went wrong. Please try again or call us directly.');
     } finally {
@@ -76,87 +81,35 @@ export default function ProposalPublicPage() {
     }
   };
 
-  // Render a self-contained signed copy, rasterize to a PDF, and upload it.
-  // jspdf/html2canvas are loaded on demand so they never weigh down the main app.
-  const saveSignedPdf = async (signatureData: string, g: GenData) => {
+  // Rasterize the full signed contract (already rendered on the page) to a multi-page
+  // PDF and upload it. jspdf/html2canvas load on demand. Non-fatal on failure —
+  // signing itself already succeeded server-side.
+  const saveSignedPdf = async () => {
+    if (!contractRef.current) return;
     try {
       const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
         import('html2canvas'),
         import('jspdf'),
       ]);
-      const money = (n: number) => '$' + Math.round(n).toLocaleString('en-US');
-      const form = parseSnapshot<GenForm>(g.form_data);
-      const totals = parseSnapshot<GenTotals>(g.totals_data);
-      const addr = form ? [form.address, form.city, form.state, form.zip].filter(Boolean).join(', ') : '';
-      const node = document.createElement('div');
-      node.style.cssText = 'position:fixed;left:-99999px;top:0;width:760px;background:#fff;font-family:Arial,Helvetica,sans-serif;color:#1e293b;';
-      node.innerHTML = `
-        <div style="background:#1B3A6B;padding:20px 28px;">
-          <div style="font-size:13px;color:#C9A84C;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Generator Proposal</div>
-          <div style="font-size:22px;font-weight:900;color:#fff;">${esc(g.customer)}</div>
-          ${g.proposal_no ? `<div style="font-size:12px;color:#C9A84C;margin-top:4px;">Proposal ${esc(g.proposal_no)}</div>` : ''}
-        </div>
-        <div style="padding:24px 28px;">
-          ${form ? `
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;background:#f8fafc;border:1px solid #e2e8f0;padding:14px;border-radius:8px;">
-              <div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;">Attention</div><div style="font-size:13px;font-weight:700;">${esc(form.attn || g.customer)}</div></div>
-              <div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;">Phone</div><div style="font-size:13px;font-weight:700;">${esc(form.phone || '—')}</div></div>
-              <div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;">Email</div><div style="font-size:13px;font-weight:700;">${esc(form.email || '—')}</div></div>
-              <div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;">Address</div><div style="font-size:13px;font-weight:700;">${esc(addr || '—')}</div></div>
-            </div>
-          ` : ''}
-          <div style="display:flex;gap:32px;margin-bottom:24px;">
-            <div><div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;">Generator</div><div style="font-size:15px;font-weight:800;">${esc(g.mfr)} ${g.kw}kW</div></div>
-            <div><div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;">Model</div><div style="font-size:15px;font-weight:800;">${esc(g.model || '—')}</div></div>
-            <div><div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;">Total</div><div style="font-size:22px;font-weight:800;color:#1B3A6B;">${money(g.amount || 0)}</div></div>
-          </div>
-          ${form && totals ? `
-            <div style="border-top:1px solid #e2e8f0;padding-top:16px;margin-bottom:20px;">
-              ${genPriceRows(form as GenForm, totals as GenTotals, money).map(r => `
-                <div style="display:flex;justify-content:space-between;font-size:12px;color:#475569;margin-bottom:6px;">
-                  <span>${esc(r.label)}</span><strong>${esc(r.amount)}</strong>
-                </div>
-              `).join('')}
-              ${Number(totals.discountAmt || 0) > 0 ? `<div style="display:flex;justify-content:space-between;font-size:12px;color:#b91c1c;margin-bottom:6px;"><span>Discount</span><strong>-${money(Number(totals.discountAmt))}</strong></div>` : ''}
-              <div style="display:flex;justify-content:space-between;font-size:12px;color:#475569;margin-bottom:6px;"><span>Tax</span><strong>${money(Number(totals.tax || g.tax || 0))}</strong></div>
-              <div style="display:flex;justify-content:space-between;font-size:18px;color:#1B3A6B;border-top:2px solid #1B3A6B;padding-top:10px;margin-top:10px;"><strong>Total</strong><strong>${money(Number(totals.total || g.amount || 0))}</strong></div>
-            </div>
-          ` : ''}
-          <div style="font-size:13px;color:#64748b;line-height:1.7;border-top:1px solid #e2e8f0;padding-top:20px;">
-            <p style="margin:0 0 12px;">Accurate Power &amp; Technology, Inc. proposes to furnish all labor and material necessary to complete this generator installation. Our price is in accordance with the <strong>${new Date().getFullYear()} National Electrical Code</strong>. <strong>This proposal is valid for ${form?.validDays ?? 30} days.</strong></p>
-            <p style="margin:0;">By signing below, you acknowledge and agree to all terms and conditions of this proposal and the attached Sales Agreement, including the 50% deposit due at signing, non-refundability of the deposit, and all applicable disclosures.</p>
-          </div>
-          <div style="margin-top:28px;border-top:1px solid #e2e8f0;padding-top:20px;">
-            <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;margin-bottom:8px;">Accepted &amp; Signed</div>
-            <img src="${signatureData}" style="height:90px;display:block;margin-bottom:6px;"/>
-            <div style="font-size:13px;color:#1e293b;font-weight:700;">${esc(g.customer)}</div>
-            <div style="font-size:12px;color:#64748b;">Signed ${esc(new Date().toLocaleString('en-US'))}</div>
-          </div>
-        </div>`;
-      document.body.appendChild(node);
-      try {
-        const canvas = await html2canvas(node, { scale: 2, backgroundColor: '#ffffff' });
-        const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
-        const pageW = pdf.internal.pageSize.getWidth();
-        const pageH = pdf.internal.pageSize.getHeight();
-        const imgH = canvas.height * (pageW / canvas.width);
-        const imgData = canvas.toDataURL('image/png');
-        let heightLeft = imgH;
-        let position = 0;
+      const canvas = await html2canvas(contractRef.current, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
+      const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const imgH = canvas.height * (pageW / canvas.width);
+      const imgData = canvas.toDataURL('image/png');
+      let heightLeft = imgH;
+      let position = 0;
+      pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
+      heightLeft -= pageH;
+      while (heightLeft > 0) {
+        position = heightLeft - imgH;
+        pdf.addPage();
         pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
         heightLeft -= pageH;
-        while (heightLeft > 0) {
-          position = heightLeft - imgH;
-          pdf.addPage();
-          pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-          heightLeft -= pageH;
-        }
-        const form = new FormData();
-        form.append('file', pdf.output('blob'), `Signed Proposal - ${g.customer}.pdf`);
-        await fetch(`${API}/gens/p/${token}/proposal-pdf`, { method: 'POST', body: form });
-      } finally {
-        node.remove();
       }
+      const fd = new FormData();
+      fd.append('file', pdf.output('blob'), `Signed Contract - ${gen?.customer ?? 'Customer'}.pdf`);
+      await fetch(`${API}/gens/p/${token}/proposal-pdf`, { method: 'POST', body: fd });
     } catch {
       /* non-fatal */
     }
@@ -243,6 +196,20 @@ export default function ProposalPublicPage() {
             </div>
           </div>
         </div>
+
+        {/* Full sales contract — the actual document the customer is signing */}
+        {form && totals && gen && (
+          <div ref={contractRef} style={{ marginBottom: 28, borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,.08)', background: '#fff' }}>
+            <ProposalPreview
+              embed
+              form={form as GenForm}
+              totals={totals as GenTotals}
+              proposalNo={gen.proposal_no || ''}
+              signatureImage={signedSig ?? undefined}
+              signedDate={signedDate || undefined}
+            />
+          </div>
+        )}
 
         {/* Signature section */}
         {status === 'signed' ? (
