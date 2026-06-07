@@ -27,9 +27,9 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
   };
 
   const MODEL_OPTIONS = [
-    'claude-sonnet-4-5',
-    'claude-opus-4-5',
-    'claude-haiku-4-5',
+    'claude-sonnet-4-6',
+    'claude-opus-4-8',
+    'claude-haiku-4-5-20251001',
   ];
   const models = vals.ai_model && !MODEL_OPTIONS.includes(vals.ai_model)
     ? [vals.ai_model, ...MODEL_OPTIONS]
