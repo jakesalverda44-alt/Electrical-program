@@ -38,6 +38,7 @@ const WORKSPACE_TABS = [
   { key: 'field-notes',    label: 'Field Notes'    },
   { key: 'schedule',       label: 'Schedule'       },
   { key: 'closeout',       label: 'Closeout'       },
+  { key: 'photos',         label: 'Photos'         },
   { key: 'docs',           label: 'Documents'      },
   { key: 'comms',          label: 'Comms'          },
 ] as const;
@@ -51,6 +52,7 @@ interface PayApp       { id: string; number: number; period: string; scheduled_v
 interface KeyMaterial  { id: string; name: string; supplier: string; po_number: string; order_date: string; eta: string; status: 'pending'|'ordered'|'delivered'; }
 interface ProjDoc   { id: string; name: string; display_name: string; category: string; file_size: number; file_type: string; uploaded_by: string; created_at: string; }
 interface ProjComm  { id: string; kind: string; subject: string; body: string; author: string; created_at: string; }
+interface DrivePhoto { id: string; name: string; mimeType: string; webViewLink?: string; thumbnailLink?: string; size?: string; createdTime?: string; }
 
 // ── Helpers ──────────────────────────────────────────────────────
 function fmtDate(s: string|null) {
@@ -83,9 +85,10 @@ interface ProjData {
   closeout: Record<string,unknown>;
   docs:     ProjDoc[];
   comms:    ProjComm[];
+  photos:   DrivePhoto[];
 }
 const emptyData = (): ProjData => ({
-  cos:[], fns:[], rfis:[], overview:{}, schedule:{}, payApps:[], keyMats:[], closeout:{}, docs:[], comms:[],
+  cos:[], fns:[], rfis:[], overview:{}, schedule:{}, payApps:[], keyMats:[], closeout:{}, docs:[], comms:[], photos:[],
 });
 
 interface Props {
@@ -114,7 +117,7 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs }: Props) {
 
   const loadProject = useCallback(async (id: string) => {
     if (projData[id]) return; // already loaded
-    const [coRes, fnRes, rfiRes, ovRes, schRes, paRes, kmRes, clRes, docRes, commRes] = await Promise.allSettled([
+    const [coRes, fnRes, rfiRes, ovRes, schRes, paRes, kmRes, clRes, docRes, commRes, photoRes] = await Promise.allSettled([
       api.get(`/projects/elec/${id}/change-orders`),
       api.get(`/projects/elec/${id}/field-notes`),
       api.get(`/projects/elec/${id}/rfis`),
@@ -125,6 +128,7 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs }: Props) {
       api.get(`/projects/elec/${id}/section/closeout`),
       api.get('/documents'),
       api.get('/comms'),
+      api.get(`/bids/${id}/photos`),
     ]);
     setProjData(prev => ({
       ...prev,
@@ -139,6 +143,7 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs }: Props) {
         closeout: clRes.status==='fulfilled'  ? clRes.value.data  : {},
         docs:     docRes.status==='fulfilled'  ? (docRes.value.data as ProjDoc[]).filter(d => (d as any).linked_id === id) : [],
         comms:    commRes.status==='fulfilled' ? (commRes.value.data as ProjComm[]).filter(c => (c as any).linked_id === id) : [],
+        photos:   photoRes.status==='fulfilled' ? photoRes.value.data as DrivePhoto[] : [],
       },
     }));
   }, [projData]);
@@ -882,6 +887,8 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
         );
       }
 
+      case 'photos':
+        return <PhotosTab bid={bid} photos={data.photos} onPhotosChange={photos => onDataChange({ photos })} showToast={showToast}/>;
       case 'docs':
         return <DocsTab id={id} docs={data.docs} onDocsChange={docs => onDataChange({ docs })} showToast={showToast} bid={bid}/>;
 
@@ -953,6 +960,119 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
       <div style={{ flex:1, overflowY:'auto', padding:'24px 28px' }}>
         {renderTab()}
       </div>
+    </div>
+  );
+}
+
+function PhotosTab({ bid, photos, onPhotosChange, showToast }: {
+  bid: Bid; photos: DrivePhoto[];
+  onPhotosChange: (p: DrivePhoto[]) => void;
+  showToast: (t: Toast) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [lightbox, setLightbox] = useState<DrivePhoto | null>(null);
+
+  const isImage = (m: string) => m.startsWith('image/');
+  const fmtSize = (s?: string) => {
+    if (!s) return '';
+    const n = parseInt(s);
+    return isNaN(n) ? '' : n >= 1048576 ? ` · ${(n/1048576).toFixed(1)} MB` : ` · ${Math.round(n/1024)} KB`;
+  };
+  const fmtDate = (s?: string) => s ? new Date(s).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+
+  const upload = async (files: File[]) => {
+    if (!files.length) return;
+    setUploading(true);
+    try {
+      for (const f of files) {
+        const form = new FormData();
+        form.append('file', f);
+        form.append('linked_id', bid.id);
+        form.append('linked_name', bid.name);
+        form.append('div', 'elec');
+        form.append('category', 'photos');
+        await api.post('/documents', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      }
+      // Refresh photos list from Drive
+      const { data } = await api.get(`/bids/${bid.id}/photos`);
+      onPhotosChange(data);
+      showToast({ title: `${files.length} photo${files.length > 1 ? 's' : ''} uploaded` });
+    } catch {
+      showToast({ title: 'Upload failed', sub: 'Try again' });
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  return (
+    <div>
+      <input ref={fileRef} type="file" multiple accept="image/*,video/*" style={{ display:'none' }}
+        onChange={e => upload(Array.from(e.target.files ?? []))}/>
+
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+        <div style={{ fontSize:13, color:'var(--text3)', fontWeight:600 }}>
+          {photos.length > 0 ? `${photos.length} photo${photos.length !== 1 ? 's' : ''} from Drive` : 'No photos in Drive folder yet'}
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          {bid.drive_photos_folder_id && (
+            <a href={`https://drive.google.com/drive/folders/${bid.drive_photos_folder_id}`} target="_blank" rel="noreferrer"
+              className="btn ghost" style={{ fontSize:12, height:34, padding:'0 12px', textDecoration:'none', display:'inline-flex', alignItems:'center', gap:6 }}>
+              <Icon name="cloud" size={13} stroke={1.8}/>Open Drive Folder
+            </a>
+          )}
+          <button className="btn ghost" onClick={() => fileRef.current?.click()} disabled={uploading} style={{ fontSize:12, height:34, padding:'0 12px' }}>
+            <Icon name="cloudup" size={13} stroke={1.9}/>{uploading ? 'Uploading…' : 'Upload Photos'}
+          </button>
+        </div>
+      </div>
+
+      {photos.length === 0 ? (
+        <div style={{ padding:'48px 0', textAlign:'center', border:'1.5px dashed var(--border2)', borderRadius:12 }}>
+          <div style={{ width:52, height:52, borderRadius:14, background:'var(--surface2)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 14px' }}>
+            <Icon name="clip" size={22} stroke={1.6} style={{ color:'var(--text3)' }}/>
+          </div>
+          <div style={{ fontSize:13.5, fontWeight:700, color:'var(--text2)', marginBottom:5 }}>No photos yet</div>
+          <div style={{ fontSize:12.5, color:'var(--text3)', fontWeight:600 }}>
+            Upload photos here or add them directly to the Drive folder.
+          </div>
+        </div>
+      ) : (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(160px, 1fr))', gap:12 }}>
+          {photos.map(p => (
+            <div key={p.id}
+              onClick={() => p.webViewLink ? window.open(p.webViewLink, '_blank') : undefined}
+              style={{ cursor: p.webViewLink ? 'pointer' : 'default',
+                background:'var(--surface)', border:'1px solid var(--border)', borderRadius:12,
+                overflow:'hidden', transition:'border-color .15s, transform .15s',
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border2)'; (e.currentTarget as HTMLElement).style.transform = 'translateY(-2px)'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.transform = 'translateY(0)'; }}>
+              {/* Thumbnail area */}
+              <div style={{ height:120, background:'var(--surface2)', display:'flex', alignItems:'center', justifyContent:'center', position:'relative' }}>
+                {isImage(p.mimeType) ? (
+                  <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', background:'var(--surface3)' }}>
+                    <Icon name="clip" size={28} stroke={1.4} style={{ color:'var(--blue)', opacity:.6 }}/>
+                  </div>
+                ) : (
+                  <Icon name="clip" size={28} stroke={1.4} style={{ color:'var(--text3)' }}/>
+                )}
+                {isImage(p.mimeType) && (
+                  <div style={{ position:'absolute', top:6, right:6, background:'var(--blue-soft)', borderRadius:6, padding:'2px 6px', fontSize:10, fontWeight:800, color:'var(--blue)' }}>
+                    IMG
+                  </div>
+                )}
+              </div>
+              {/* Info */}
+              <div style={{ padding:'10px 11px 11px' }}>
+                <div style={{ fontSize:12, fontWeight:700, color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', marginBottom:3 }} title={p.name}>{p.name}</div>
+                <div style={{ fontSize:11, color:'var(--text3)', fontWeight:600 }}>{fmtDate(p.createdTime)}{fmtSize(p.size)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
