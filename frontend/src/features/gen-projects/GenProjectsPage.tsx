@@ -1,9 +1,86 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import Icon from '../../components/Icon';
-import { Gen, WonJob } from '../../types';
+import DriveImage from '../../components/DriveImage';
+import { Gen, WonJob, Toast } from '../../types';
 import api from '../../api/client';
 import { moneyFull, moneyShort as money } from '../../lib/money';
 import { useShowToast } from '../../contexts/AppContext';
+
+interface DrivePhoto { id: string; name: string; mimeType: string; webViewLink?: string; size?: string; createdTime?: string; }
+
+// Job-site photos for a generator project, pulled from the Drive "Photos" subfolder.
+function GenPhotos({ gen, showToast }: { gen: Gen; showToast: (t: Toast) => void }) {
+  const [photos, setPhotos] = useState<DrivePhoto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const isImage = (m: string) => m.startsWith('image/');
+
+  const load = () => {
+    setLoading(true);
+    api.get(`/gens/${gen.id}/photos`)
+      .then(({ data }) => setPhotos(data))
+      .catch(() => setPhotos([]))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, [gen.id]);
+
+  const upload = async (files: File[]) => {
+    if (!files.length) return;
+    setUploading(true);
+    try {
+      for (const f of files) {
+        const form = new FormData();
+        form.append('file', f);
+        form.append('linked_id', gen.id);
+        form.append('linked_name', gen.customer);
+        form.append('div', 'gen');
+        form.append('category', 'photo');
+        await api.post('/documents', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      }
+      load();
+      showToast({ title: `${files.length} photo${files.length > 1 ? 's' : ''} uploaded` });
+    } catch {
+      showToast({ title: 'Upload failed', sub: 'Try again' });
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 20 }}>
+      <input ref={fileRef} type="file" multiple accept="image/*,video/*" style={{ display: 'none' }}
+        onChange={e => upload(Array.from(e.target.files ?? []))}/>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+          Photos{photos.length ? ` · ${photos.length}` : ''}
+        </div>
+        <button className="btn ghost" onClick={() => fileRef.current?.click()} disabled={uploading}
+          style={{ fontSize: 11, height: 28, padding: '0 10px' }}>
+          <Icon name="cloudup" size={12} stroke={1.9}/>{uploading ? 'Uploading…' : 'Upload'}
+        </button>
+      </div>
+      {loading ? (
+        <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, padding: '8px 0' }}>Loading photos…</div>
+      ) : photos.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, padding: '14px', textAlign: 'center', border: '1.5px dashed var(--border2)', borderRadius: 10 }}>
+          No photos yet. Upload here or add to the Drive folder.
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          {photos.map(p => (
+            <div key={p.id} onClick={() => p.webViewLink && window.open(p.webViewLink, '_blank')}
+              style={{ cursor: p.webViewLink ? 'pointer' : 'default', borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border)' }}>
+              <DriveImage fileId={p.id} alt={p.name} height={84} isImage={isImage(p.mimeType)}/>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const PHASES = [
   { key: 'deposit',      label: 'Deposit',      color: '#7C8AA3' },
@@ -283,6 +360,9 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
                 })}
               </div>
             </div>
+
+            {/* Job-site photos */}
+            <GenPhotos gen={detail} showToast={showToast}/>
           </div>
         </div>
       )}
