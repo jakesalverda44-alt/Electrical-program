@@ -133,7 +133,7 @@ function UserModal({ mode, user, onClose, onSaved }: { mode: 'add' | 'edit'; use
           <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text3)', padding: 4 }}><Icon name="x" size={16} stroke={2}/></button>
         </div>
         <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
-          {error && <div style={{ background: '#FEF2F2', color: '#DC2626', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 13, fontWeight: 600 }}>{error}</div>}
+          {error && <div style={{ background: 'rgba(224,106,106,.12)', color: 'var(--red)', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 13, fontWeight: 600 }}>{error}</div>}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
             <Field label="Name"><input style={inputStyle} value={name} onChange={e => setName(e.target.value)}/></Field>
             <Field label="Email"><input style={inputStyle} type="email" value={email} onChange={e => setEmail(e.target.value)}/></Field>
@@ -164,7 +164,7 @@ function UserModal({ mode, user, onClose, onSaved }: { mode: 'add' | 'edit'; use
         <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, justifyContent: 'space-between' }}>
           {mode === 'edit' && user && (
             <button onClick={deactivate}
-              style={{ padding: '9px 16px', border: '1px solid var(--border2)', background: 'none', borderRadius: 9, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: user.status === 'inactive' ? 'var(--green)' : '#DC2626' }}>
+              style={{ padding: '9px 16px', border: '1px solid var(--border2)', background: 'none', borderRadius: 9, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: user.status === 'inactive' ? 'var(--green)' : 'var(--red)' }}>
               {user.status === 'inactive' ? 'Reactivate' : 'Deactivate'}
             </button>
           )}
@@ -180,6 +180,3 @@ function UserModal({ mode, user, onClose, onSaved }: { mode: 'add' | 'edit'; use
     </div>
   );
 }
-
-// ── PROPOSAL DEFAULTS ─────────────────────────────────────────────────────────
-
