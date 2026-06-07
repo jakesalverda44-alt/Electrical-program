@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import Anthropic from '@anthropic-ai/sdk';
 import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
@@ -6,6 +7,7 @@ import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
 import { getSetting } from './settings';
 import { upsertCustomer } from './customers';
 import { asyncHandler } from '../utils/asyncHandler';
+import { parseAIJSON } from '../ai/json';
 import { logger } from '../utils/logger';
 import { writeAudit } from '../utils/audit';
 import { ensureProject, setProjectDeleted } from '../utils/project';
@@ -373,6 +375,187 @@ router.delete('/:id/purge', requireAuth, requireAdmin, async (req: AuthRequest, 
     client.release();
   }
 });
+
+// ── AI: build proposal from site visit notes ────────────────────────────────
+
+const GEN_PRICES: Record<string, Record<string, Record<string, number>>> = {
+  'air-cooled': {
+    Kohler:  { '14KW': 5800, '20KW': 6700, '26KW': 8200 },
+    Generac: { '14KW': 5600, '18KW': 6450, '22KW': 7150, '24KW': 7575, '26KW': 8000, '28KW': 9300 },
+  },
+  'liquid-cooled': {
+    Kohler:  { '24KW': 17549, '30KW': 19999, '38KW': 22449, '48KW': 25209, '60KW': 27759, '80KW': 34089, '100KW': 41129 },
+    Generac: { '32KW': 19203, '40KW': 21734, '48KW': 22914, '60KW': 25212 },
+  },
+};
+
+const ADDON_P = {
+  smm: 250, surgePro: 395, pad: 485, battery: 185, emPanel: 495, gasLine: 500,
+  additionalATS: 1000, extraWire: 25,
+  padLC_small: 800, padLC_large: 1200, startupLC: 1595,
+  lull: 1100, crane: 1800, atsLC_150: 1000, atsLC_200: 1000,
+  labor: 3000, permit: 1250, startup: 695,
+};
+
+function calcFormTotals(g: Record<string, unknown>) {
+  const coolingType = String(g.coolingType || 'air-cooled');
+  const brand = String(g.brand || 'Kohler');
+  const size = String(g.size || '14KW');
+  const genP = GEN_PRICES[coolingType]?.[brand]?.[size] ?? 0;
+  const padAmt = g.pad ? (coolingType === 'liquid-cooled'
+    ? (parseInt(size) >= 60 ? ADDON_P.padLC_large : ADDON_P.padLC_small)
+    : ADDON_P.pad) : 0;
+  const smmTotal    = g.smm      ? ADDON_P.smm      : 0;
+  const surgeTotal  = g.surgePro ? ADDON_P.surgePro  : 0;
+  const batteryAmt  = g.battery  ? ADDON_P.battery   : 0;
+  const emPanelAmt  = g.emPanel  ? ADDON_P.emPanel   : 0;
+  const gasLineAmt  = (g.jobType === 'swap-out' && g.gasLine) ? ADDON_P.gasLine : 0;
+  const extraWireAmt = Number(g.extraWire || 0) * ADDON_P.extraWire;
+  const extraATS    = Number(g.additionalATS || 0) * ADDON_P.additionalATS;
+  const lcATS       = g.lcATS === '150A' ? ADDON_P.atsLC_150 : g.lcATS === '200A' ? ADDON_P.atsLC_200 : 0;
+  const liftAmt     = g.liftType === 'lull' ? ADDON_P.lull : g.liftType === 'crane' ? ADDON_P.crane : 0;
+  const removalFee  = g.jobType === 'swap-out' ? (Number(g.removalFee) || 0) : (g.removal ? 500 : 0);
+  const laborAmt    = Number(g.labor)   || ADDON_P.labor;
+  const permitAmt   = Number(g.permit)  || ADDON_P.permit;
+  const startupAmt  = coolingType === 'liquid-cooled' ? ADDON_P.startupLC : (Number(g.startup) || ADDON_P.startup);
+  const subtotal    = genP + padAmt + smmTotal + surgeTotal + batteryAmt + emPanelAmt + gasLineAmt + extraWireAmt + extraATS + lcATS + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
+  const discountAmt = g.discountType === '%'
+    ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
+    : (Number(g.discount) || 0);
+  const taxable     = subtotal - discountAmt;
+  const tax         = Math.round(taxable * ((Number(g.taxRate) || 7) / 100));
+  const total       = taxable + tax;
+  const deposit     = Math.round(total * ((Number(g.depositPct) || 50) / 100));
+  return { genP, padAmt, smmTotal, surgeTotal, extraATS, lcATS, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxable, tax, total, deposit };
+}
+
+const BUILD_FROM_NOTES_SYSTEM = `You are an expert generator installation estimator. Extract a proposal form (GenForm) from field site visit notes.
+
+Return ONLY a valid JSON object. No markdown fences, no explanation, no extra text.
+
+FIELD REFERENCE — include every field in your output:
+
+String fields (use empty string "" if not mentioned):
+  customer  — customer or company name
+  attn      — contact person name
+  address   — street address
+  city      — city
+  state     — state abbreviation (default: "FL")
+  zip       — zip code
+  phone     — phone number
+  email     — email address
+  notes     — any extra install notes to include in the proposal
+
+Enum fields:
+  brand       — "Kohler" | "Generac"  (default: "Kohler")
+  coolingType — "air-cooled" | "liquid-cooled"  (default: "air-cooled")
+  size        — must match brand+coolingType:
+                air-cooled Kohler:    "14KW" "20KW" "26KW"
+                air-cooled Generac:   "14KW" "18KW" "22KW" "24KW" "26KW" "28KW"
+                liquid-cooled Kohler: "24KW" "30KW" "38KW" "48KW" "60KW" "80KW" "100KW"
+                liquid-cooled Generac:"32KW" "40KW" "48KW" "60KW"
+  fuel        — "Natural Gas" | "LP"  (default: "Natural Gas")
+  ats         — "100A" | "150A" | "200A" | "400A"  (default: "200A")
+  jobType     — "new-install" | "swap-out"  (default: "new-install")
+  liftType    — "none" | "lull" | "crane"  (default: "none")
+  lcATS       — "none" | "150A" | "200A"  (default: "none")
+  discountType— "$" | "%"  (default: "$")
+
+Boolean fields (true/false):
+  pad       — concrete pad needed  (default: true)
+  smm       — SMM maintenance plan  (default: true)
+  surgePro  — surge protector  (default: false)
+  battery   — battery maintainer — ALWAYS true when jobType is "new-install"
+  emPanel   — EM panel  (default: false)
+  gasLine   — gas line disconnect & reconnect — only applies to swap-out jobs  (default: false)
+  removal   — remove existing unit  (default: false)
+  includeBreakdown — (default: false)
+
+Numeric fields:
+  extraWire     — extra wire in feet  (default: 0)
+  additionalATS — extra ATS units  (default: 0)
+  removalFee    — removal fee in dollars  (default: 500)
+  labor         — labor cost  (default: 3000)
+  permit        — permit cost  (default: 1250)
+  startup       — startup cost  (default: 695)
+  discount      — discount amount  (default: 0)
+  taxRate       — tax rate percent  (default: 7)
+  validDays     — proposal valid days  (default: 30)
+  depositPct    — deposit percent  (default: 50)
+
+RULES:
+1. If a field is not mentioned in the notes, use the default shown above.
+2. battery MUST be true whenever jobType is "new-install", regardless of what the notes say.
+3. Choose the closest valid size; if ambiguous pick the next size up.
+4. Return the JSON object only — no markdown, no explanation.`;
+
+router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { notes } = req.body as { notes?: string };
+  if (!notes?.trim()) return res.status(400).json({ error: 'notes required' });
+
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+
+  const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!apiKey) return res.status(503).json({ error: 'Anthropic API key not configured. Add it in Settings > AI or set ANTHROPIC_API_KEY.' });
+
+  const client = new Anthropic({ apiKey });
+  const message = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 2048,
+    system: BUILD_FROM_NOTES_SYSTEM,
+    messages: [{ role: 'user', content: notes.trim() }],
+  });
+
+  const text = message.content[0]?.type === 'text' ? message.content[0].text : '';
+  const parsed = parseAIJSON(text);
+  if (!parsed) return res.status(422).json({ error: 'AI returned an unrecognizable response. Please try again.' });
+
+  // Normalize fuel: coerce any propane synonym to the stored enum value 'LP'
+  if (parsed.fuel && String(parsed.fuel).toLowerCase() !== 'natural gas') {
+    parsed.fuel = 'LP';
+  }
+
+  // Merge AI output over safe defaults
+  const form: Record<string, unknown> = {
+    customer: '', attn: '', address: '', city: '', state: 'FL', zip: '', phone: '', email: '',
+    brand: 'Kohler', coolingType: 'air-cooled', size: '14KW',
+    ats: '200A', fuel: 'Natural Gas', jobType: 'new-install', liftType: 'none', lcATS: 'none',
+    pad: true, smm: true, surgePro: false, battery: true, emPanel: false, gasLine: false,
+    removal: false, extraWire: 0, additionalATS: 0, removalFee: 500,
+    labor: ADDON_P.labor, permit: ADDON_P.permit, startup: ADDON_P.startup,
+    discount: 0, discountType: '$', taxRate: 7, validDays: 30, depositPct: 50,
+    notes: '', includeBreakdown: false,
+    ...parsed,
+  };
+  // Always enforce battery=true on new-install regardless of AI output
+  form.battery = form.jobType === 'swap-out' ? (parsed.battery ?? true) : true;
+
+  const totals = calcFormTotals(form);
+  const addons = (form.smm ? 1 : 0) + (form.surgePro ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0) + (form.emPanel ? 1 : 0) + (form.gasLine ? 1 : 0);
+
+  // Stage: set to 'building' only if not already in a more advanced stage
+  const advancedStages = ['sent', 'signed', 'awarded'];
+  const stageClause = advancedStages.includes(gen.stage) ? '' : `, stage = 'building'`;
+
+  const { rows } = await pool.query(
+    `UPDATE generator_proposals
+     SET form_data = $1::jsonb, totals_data = $2::jsonb,
+         mfr = $3, model = $4, kw = $5,
+         amount = $6, tax = $7, addons = $8,
+         updated_at = now()${stageClause}
+     WHERE id = $9
+     RETURNING *`,
+    [
+      JSON.stringify(form), JSON.stringify(totals),
+      String(form.brand), String(form.size), parseInt(String(form.size)),
+      totals.total, totals.tax, addons,
+      gen.id,
+    ],
+  );
+
+  res.json(rows[0]);
+}));
 
 // ── Send proposal email ──────────────────────────────────────────────────────
 router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {

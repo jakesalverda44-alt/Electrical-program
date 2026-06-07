@@ -9,7 +9,7 @@ describe('calcGenTotals', () => {
 
     // Subtotal is the sum of all line items
     const lineSum =
-      t.genP + t.padAmt + t.smmTotal + t.surgeTotal + t.batteryAmt + t.extraWireAmt +
+      t.genP + t.padAmt + t.smmTotal + t.surgeTotal + t.batteryAmt + t.emPanelAmt + t.gasLineAmt + t.extraWireAmt +
       t.extraATS + t.lcATS + t.liftAmt + t.removalFee + t.laborAmt + t.permitAmt + t.startupAmt;
     expect(t.subtotal).toBe(lineSum);
 

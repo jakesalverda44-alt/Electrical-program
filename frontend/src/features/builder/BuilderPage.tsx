@@ -121,7 +121,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
         kw:         parseInt(form.size),
         amount:     totals.total,
         tax:        totals.tax,
-        addons:     (form.smm ? 1 : 0) + (form.surgePro ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0),
+        addons:     (form.smm ? 1 : 0) + (form.surgePro ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0) + (form.emPanel ? 1 : 0),
         proposal_no: proposalNo,
         form_data:   form,
         totals_data: totals,
@@ -215,7 +215,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                     if (jt === 'swap-out') {
                       setForm(f => ({ ...f, jobType: 'swap-out', pad: false, labor: 1500, permit: 475 }));
                     } else {
-                      setForm(f => ({ ...f, jobType: 'new-install', labor: s.gen_default_labor ? Number(s.gen_default_labor) : 3000, permit: s.gen_default_permit ? Number(s.gen_default_permit) : 1250 }));
+                      setForm(f => ({ ...f, jobType: 'new-install', gasLine: false, labor: s.gen_default_labor ? Number(s.gen_default_labor) : 3000, permit: s.gen_default_permit ? Number(s.gen_default_permit) : 1250 }));
                     }
                   }}
                     style={{ padding: '9px 0', fontSize: 12, fontWeight: 700, border: 'none', cursor: 'pointer',
@@ -241,12 +241,19 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
               ['smm',      'SMM Maintenance'],
               ['surgePro', 'SurgeProtector Pro'],
               ['battery',  'Battery'],
+              ['emPanel',  'EM Panel'],
             ] as [keyof GenForm, string][]).map(([k, label]) => (
               <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, gridColumn: '1' }}>
                 <input type="checkbox" checked={!!form[k]} onChange={e => set(k, e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
                 {label}
               </label>
             ))}
+            {form.jobType === 'swap-out' && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, gridColumn: '1' }}>
+                <input type="checkbox" checked={!!form.gasLine} onChange={e => set('gasLine', e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
+                Gas Line Disconnect &amp; Reconnect
+              </label>
+            )}
             {form.jobType === 'swap-out' && (
               <Field label="Removal / Disposal Fee ($)">
                 <input type="number" min={0} style={INPUT_STYLE} value={form.removalFee} onChange={e => set('removalFee', Number(e.target.value))}/>
@@ -345,8 +352,10 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 ...(totals.padAmt     ? [{ label: 'Pad',         val: totals.padAmt     }] : []),
                 ...(totals.smmTotal   ? [{ label: 'SMM',         val: totals.smmTotal   }] : []),
                 ...(totals.surgeTotal ? [{ label: 'Surge Pro',   val: totals.surgeTotal }] : []),
-                ...(totals.batteryAmt ? [{ label: 'Battery',     val: totals.batteryAmt }] : []),
-                ...(totals.liftAmt    ? [{ label: 'Lift',        val: totals.liftAmt    }] : []),
+                ...(totals.batteryAmt  ? [{ label: 'Battery',    val: totals.batteryAmt  }] : []),
+                ...(totals.emPanelAmt  ? [{ label: 'EM Panel',   val: totals.emPanelAmt  }] : []),
+                ...(totals.gasLineAmt  ? [{ label: 'Gas Line',   val: totals.gasLineAmt  }] : []),
+                ...(totals.liftAmt     ? [{ label: 'Lift',       val: totals.liftAmt     }] : []),
                 ...(totals.lcATS      ? [{ label: 'LC ATS',      val: totals.lcATS      }] : []),
                 ...(totals.extraATS   ? [{ label: 'Extra ATS',   val: totals.extraATS   }] : []),
                 { label: 'Labor',        val: totals.laborAmt   },

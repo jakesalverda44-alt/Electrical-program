@@ -5,6 +5,7 @@ import { GEN_STAGES, GenStageKey } from './constants';
 import RecordFiles from '../../components/RecordFiles';
 import { moneyFull } from '../../lib/money';
 import api from '../../api/client';
+import BuildFromNotesModal from '../builder/BuildFromNotesModal';
 
 function fmtTs(ts?: string | null) {
   if (!ts) return null;
@@ -25,6 +26,7 @@ interface Props {
 export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDelete, onClosed }: Props) {
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed';
   const [closingJob, setClosingJob] = useState(false);
+  const [showBuildNotes, setShowBuildNotes] = useState(false);
 
   const handleCloseJob = async () => {
     if (!window.confirm(`Mark "${gen.customer}" as closed/complete? This will move the Drive folder to Completed Generator Jobs and remove it from the active pipeline.`)) return;
@@ -139,6 +141,16 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             </button>
           )}
 
+          {!isTerminal && (
+            <button
+              className="btn ghost"
+              style={{ width: '100%', justifyContent: 'center', marginTop: 8, color: 'var(--blue)', borderColor: 'rgba(59,130,246,.4)' }}
+              onClick={() => setShowBuildNotes(true)}
+            >
+              <Icon name="bolt" size={14} stroke={2}/>Build from Site Notes
+            </button>
+          )}
+
           {gen.stage === 'awarded' && !gen.closed_at && (
             <button
               className="btn ghost"
@@ -201,6 +213,18 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             emptyHint="No files yet. Attach the proposal, PO, permit, signed contract, delivery/startup docs, or photos."/>
         </div>
       </div>
+
+      {showBuildNotes && (
+        <BuildFromNotesModal
+          genId={gen.id}
+          onClose={() => setShowBuildNotes(false)}
+          onSuccess={updatedGen => {
+            setShowBuildNotes(false);
+            onClose();
+            onEditGen(updatedGen);
+          }}
+        />
+      )}
     </div>
   );
 }
