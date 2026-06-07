@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import SearchBox from '../../components/SearchBox';
 import NotificationBell from '../../components/NotificationBell';
+import ProfileModal from '../../components/ProfileModal';
 import aptLogo from '../../assets/apt-logo.png';
-import { Bid, Gen } from '../../types';
+import { Bid, Gen, User } from '../../types';
 import { isPrivileged } from '../../hooks/useAuth';
 import { useUser } from '../../contexts/AppContext';
 
@@ -31,6 +32,7 @@ interface Props {
   onOpenImport?: () => void;
   bids?: Bid[];
   gens?: Gen[];
+  showToast?: (t: { title: string; sub?: string }) => void;
 }
 
 const TB: Record<string, { title: string; sub: string | null }> = {
@@ -57,9 +59,30 @@ export default function AppShell({
   genProposalCount = 0, elecProposalCount = 0, genProjectCount = 0, elecProjectCount = 0, newIncoming = 0,
   followupCount = 0,
   dashFilter = 'all', onDashFilter, onNewProposal, onNewBid, onOpenImport,
-  bids = [], gens = [],
+  bids = [], gens = [], showToast,
 }: Props) {
   const user = useUser();
+  const [profileDropOpen, setProfileDropOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileTab, setProfileTab] = useState<'profile' | 'password'>('profile');
+  const [localUser, setLocalUser] = useState<User>(user);
+  const dropRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { setLocalUser(user); }, [user]);
+
+  useEffect(() => {
+    if (!profileDropOpen) return;
+    const h = (e: MouseEvent) => { if (dropRef.current && !dropRef.current.contains(e.target as Node)) setProfileDropOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [profileDropOpen]);
+
+  const openProfile = (tab: 'profile' | 'password') => {
+    setProfileTab(tab);
+    setProfileDropOpen(false);
+    setProfileOpen(true);
+  };
+
   const nav: NavGroup[] = [
     { group: 'Sales', items: [
       { id: 'dashboard',      label: 'Sales Dashboard',      icon: 'dashboard' },
@@ -157,9 +180,40 @@ export default function AppShell({
         {canAdmin && (
           <button className="nav-btn" onClick={() => onNav('admin')}><Icon name="gear" size={18} stroke={1.8}/>Settings</button>
         )}
-        <div className="side-user" onClick={onLogout} style={{ cursor: 'pointer' }} title="Sign out">
-          <span className="avatar">{initials}</span>
-          <span className="side-user-txt"><b>{user.name}</b><small>{user.role}</small></span>
+        <div ref={dropRef} style={{ position: 'relative' }}>
+          <div className="side-user" onClick={() => setProfileDropOpen(o => !o)} style={{ cursor: 'pointer' }} title="Account">
+            <span className="avatar">{localUser.name.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase()}</span>
+            <span className="side-user-txt"><b>{localUser.name}</b><small>{localUser.role.replace(/_/g,' ')}</small></span>
+            <Icon name="arrow" size={12} stroke={2} style={{ color: 'var(--text3)', marginLeft: 'auto', transform: profileDropOpen ? 'rotate(-90deg)' : 'rotate(90deg)', transition: 'transform .15s' }}/>
+          </div>
+          {profileDropOpen && (
+            <div style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, right: 0,
+              background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 11,
+              boxShadow: '0 8px 24px rgba(0,0,0,.28)', overflow: 'hidden', zIndex: 50 }}>
+              {[
+                { label: 'Edit Profile', icon: 'gear', action: () => openProfile('profile') },
+                { label: 'Change Password', icon: 'gear', action: () => openProfile('password') },
+              ].map(item => (
+                <button key={item.label} onClick={item.action}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 14px',
+                    border: 'none', background: 'none', cursor: 'pointer', font: 'inherit',
+                    fontSize: 13, fontWeight: 600, color: 'var(--text)', textAlign: 'left' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface3)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
+                  <Icon name={item.icon as any} size={14} stroke={1.8} style={{ color: 'var(--text3)' }}/>{item.label}
+                </button>
+              ))}
+              <div style={{ height: 1, background: 'var(--border)', margin: '0 10px' }}/>
+              <button onClick={() => { setProfileDropOpen(false); onLogout(); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 14px',
+                  border: 'none', background: 'none', cursor: 'pointer', font: 'inherit',
+                  fontSize: 13, fontWeight: 600, color: 'var(--red)', textAlign: 'left' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(224,106,106,.08)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
+                <Icon name="x" size={14} stroke={2} style={{ color: 'var(--red)' }}/>Sign Out
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -223,5 +277,14 @@ export default function AppShell({
         </>
       )}
     </div>
+
+    {profileOpen && (
+      <ProfileModal
+        user={localUser}
+        onClose={() => setProfileOpen(false)}
+        onSaved={updated => { setLocalUser(updated); }}
+        showToast={showToast}
+      />
+    )}
   );
 }
