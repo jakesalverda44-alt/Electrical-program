@@ -58,7 +58,7 @@ interface DrivePhoto { id: string; name: string; mimeType: string; webViewLink?:
 // ── Helpers ──────────────────────────────────────────────────────
 function fmtDate(s: string|null) {
   if (!s) return '—';
-  return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  return new Date(s.split('T')[0]+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
 }
 
 const INPUT: React.CSSProperties = {
