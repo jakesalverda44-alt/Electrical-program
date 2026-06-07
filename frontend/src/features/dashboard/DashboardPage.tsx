@@ -102,18 +102,28 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
   const awaitingReply = sentGens.filter(g => !g.viewed_at);
   const viewedNotSigned = viewedGens.filter(g => g.stage !== 'signed');
 
-  // Sales summary — scoped to the selected division.
+  // Sales summary — scoped to the selected division + date range.
+  const [salesRange, setSalesRange] = useState<'30d'|'90d'|'ytd'|'all'>('ytd');
   const fWon = dashFilter === 'elec' ? wonJobs.filter(j => j.proposal_type === 'Electrical')
              : dashFilter === 'gen'  ? wonJobs.filter(j => j.proposal_type === 'Generator')
              : wonJobs;
   const now = new Date();
+  const rangeWon = fWon.filter(j => {
+    const d = new Date(j.date_won);
+    if (salesRange === '30d') return (now.getTime() - d.getTime()) <= 30 * 86400000;
+    if (salesRange === '90d') return (now.getTime() - d.getTime()) <= 90 * 86400000;
+    if (salesRange === 'ytd') return d.getFullYear() === now.getFullYear();
+    return true;
+  });
   const thisMonth = fWon.filter(j => {
     const d = new Date(j.date_won); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
   });
   const thisYear = fWon.filter(j => new Date(j.date_won).getFullYear() === now.getFullYear());
   const sumWon = (a: WonJob[]) => a.reduce((s, x) => s + Number(x.value), 0);
+  const rangeVal = sumWon(rangeWon);
   const monthVal = sumWon(thisMonth), yearVal = sumWon(thisYear);
-  const avgDeal  = thisYear.length ? Math.round(yearVal / thisYear.length) : 0;
+  const avgDeal  = rangeWon.length ? Math.round(rangeVal / rangeWon.length) : 0;
+  const RANGE_LABELS: Record<string, string> = { '30d': 'Last 30d', '90d': 'Last 90d', ytd: 'YTD', all: 'All time' };
 
   return (
     <div className="scroll view-enter">
@@ -157,10 +167,24 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
         {/* Sales summary band */}
         <div className="comm-band">
           <div className="comm-stats">
+            {/* Range filter chips */}
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+              {(['30d','90d','ytd','all'] as const).map(r => (
+                <button key={r} onClick={() => setSalesRange(r)}
+                  style={{ fontSize: 11, fontWeight: 800, padding: '3px 9px', borderRadius: 20,
+                    border: '1px solid', cursor: 'pointer', fontFamily: 'inherit',
+                    borderColor: salesRange === r ? 'var(--blue)' : 'var(--border2)',
+                    background: salesRange === r ? 'var(--blue-soft)' : 'transparent',
+                    color: salesRange === r ? 'var(--blue)' : 'var(--text3)',
+                  }}>
+                  {RANGE_LABELS[r]}
+                </button>
+              ))}
+            </div>
             {[
+              { label: `Won · ${RANGE_LABELS[salesRange]}`, val: moneyFull(rangeVal) },
               { label: 'Won This Month', val: moneyFull(monthVal) },
-              { label: 'Won This Year',  val: moneyFull(yearVal)  },
-              { label: 'Jobs Won YTD',   val: String(thisYear.length) },
+              { label: 'Jobs Won',       val: String(rangeWon.length) },
               { label: 'Avg Deal Size',  val: moneyFull(avgDeal)  },
             ].map(s => (
               <div className="comm-stat" key={s.label}>
