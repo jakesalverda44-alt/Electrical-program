@@ -208,6 +208,12 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 {['100A','150A','200A','400A'].map(a => <option key={a} value={a}>{a}</option>)}
               </select>
             </Field>
+            <Field label="Fuel Type">
+              <select style={SELECT_STYLE} value={form.fuel} onChange={e => set('fuel', e.target.value)}>
+                <option value="Natural Gas">Natural Gas</option>
+                <option value="LP">Propane / LP</option>
+              </select>
+            </Field>
             <Field label="Job Type">              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
                 {(['new-install', 'swap-out'] as const).map(jt => (
                   <button key={jt} onClick={() => {

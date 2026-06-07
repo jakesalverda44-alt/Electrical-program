@@ -453,7 +453,8 @@ Enum fields:
                 air-cooled Generac:   "14KW" "18KW" "22KW" "24KW" "26KW" "28KW"
                 liquid-cooled Kohler: "24KW" "30KW" "38KW" "48KW" "60KW" "80KW" "100KW"
                 liquid-cooled Generac:"32KW" "40KW" "48KW" "60KW"
-  fuel        — "Natural Gas" | "Propane"  (default: "Natural Gas")
+  fuel        — "Natural Gas" | "LP"  (default: "Natural Gas")
+                (use "LP" for propane, liquid propane, LP gas, or any propane reference)
   ats         — "100A" | "150A" | "200A" | "400A"  (default: "200A")
   jobType     — "new-install" | "swap-out"  (default: "new-install")
   liftType    — "none" | "lull" | "crane"  (default: "none")
@@ -509,7 +510,12 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   const parsed = parseAIJSON(text);
   if (!parsed) return res.status(422).json({ error: 'AI returned an unrecognizable response. Please try again.' });
 
-  // Fill in defaults for any fields the AI omitted
+  // Normalize fuel: coerce any propane synonym to the stored enum value 'LP'
+  if (parsed.fuel && String(parsed.fuel).toLowerCase() !== 'natural gas') {
+    parsed.fuel = 'LP';
+  }
+
+  // Merge AI output over safe defaults
   const form: Record<string, unknown> = {
     customer: '', attn: '', address: '', city: '', state: 'FL', zip: '', phone: '', email: '',
     brand: 'Kohler', coolingType: 'air-cooled', size: '14KW',
@@ -520,9 +526,9 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
     discount: 0, discountType: '$', taxRate: 7, validDays: 30, depositPct: 50,
     notes: '', includeBreakdown: false,
     ...parsed,
-    // Always enforce battery=true on new-install regardless of AI output
-    battery: parsed.jobType === 'swap-out' ? (parsed.battery ?? true) : true,
   };
+  // Always enforce battery=true on new-install regardless of AI output
+  form.battery = form.jobType === 'swap-out' ? (parsed.battery ?? true) : true;
 
   const totals = calcFormTotals(form);
   const addons = (form.smm ? 1 : 0) + (form.surgePro ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0) + (form.emPanel ? 1 : 0);
