@@ -935,7 +935,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
             })}
           </div>
           <span className="num" style={{ fontSize:18, fontWeight:900, color:'var(--text)', flexShrink:0 }}>
-            {moneyFull(bid.amount??0)}
+            {moneyFull(contractVal + coApproved)}
           </span>
           <button className="btn ghost"
             style={{ height: 32, fontSize: 12, padding: '0 10px', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', flexShrink: 0 }}
