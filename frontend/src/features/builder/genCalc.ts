@@ -5,6 +5,8 @@ interface DefaultOverrides {
   gen_default_permit?: string;
   gen_default_startup?: string;
   gen_default_tax_rate?: string;
+  gen_default_deposit_pct?: string;
+  gen_default_valid_days?: string;
 }
 
 export function blankGenForm(overrides?: DefaultOverrides): GenForm {
@@ -23,7 +25,8 @@ export function blankGenForm(overrides?: DefaultOverrides): GenForm {
     includeBreakdown: false,
     jobType: 'new-install',
     removalFee: 500,
-    validDays: 30,
+    validDays:  Number(overrides?.gen_default_valid_days)  || 30,
+    depositPct: Number(overrides?.gen_default_deposit_pct) || 50,
   };
 }
 
@@ -95,7 +98,7 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const taxable    = subtotal - discountAmt;
   const tax        = Math.round(taxable * (Number(g.taxRate) / 100));
   const total      = taxable + tax;
-  const deposit    = Math.round(total * 0.5);
+  const deposit    = Math.round(total * ((Number(g.depositPct) || 50) / 100));
 
   return { genP, padAmt, smmTotal, surgeTotal, extraATS, lcATS, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, extraWireAmt, subtotal, discountAmt, taxable, tax, total, deposit };
 }
