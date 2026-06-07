@@ -98,11 +98,6 @@ async function runPipeline(
   // ── Agent 1 ─────────────────────────────────────────────────────────────────
   if (resumeAgent1Output) {
     agent1Output = resumeAgent1Output;
-    const parsed = parseAIJSON(agent1Output);
-    if (!parsed) {
-      await pool.query(`UPDATE takeoff_results SET status='error', agent1_output='Saved Agent 1 output could not be parsed. Run a fresh analysis.' WHERE bid_id=$1`, [bidId]);
-      return;
-    }
     await updateStatus('agent1_complete');
   } else try {
     // Filter to electrical sheets
@@ -452,7 +447,9 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   let resumeAgent1Output: string | undefined;
   if (resume) {
     const { rows: prev } = await pool.query(
-      'SELECT agent1_output FROM takeoff_results WHERE bid_id=$1',
+      `SELECT agent1_output FROM takeoff_results WHERE bid_id=$1
+       AND status IN ('agent1_complete','agent2_running','agent2_complete','agent3_running','complete','error')
+       AND agent1_output IS NOT NULL AND length(agent1_output) > 50`,
       [bidId]
     );
     resumeAgent1Output = prev[0]?.agent1_output || undefined;
