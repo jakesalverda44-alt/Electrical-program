@@ -126,6 +126,39 @@ router.get('/:id/download', requireAuth, asyncHandler(async (req, res) => {
   res.send(buf);
 }));
 
+// View a document inline (browser preview) regardless of where it's stored.
+// Drive view links aren't publicly accessible, so Drive-stored files stream through
+// the service account; DB-stored files stream from base64; other URLs redirect.
+router.get('/:id/view', requireAuth, asyncHandler(async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT name, file_type, file_data, storage_url FROM documents WHERE id=$1 AND deleted_at IS NULL',
+    [req.params.id]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'not found' });
+  const { name, file_type, file_data, storage_url } = rows[0];
+
+  if (storage_url) {
+    const m = /\/file\/d\/([^/]+)/.exec(storage_url as string);
+    if (m) {
+      const media = await getFileMedia(m[1]);
+      if (media) {
+        res.setHeader('Content-Type', media.mimeType);
+        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(name as string)}"`);
+        media.stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
+        return media.stream.pipe(res);
+      }
+    }
+    return res.redirect(storage_url as string);
+  }
+  if (file_data) {
+    const buf = Buffer.from(file_data as string, 'base64');
+    res.setHeader('Content-Type', (file_type as string) || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(name as string)}"`);
+    return res.send(buf);
+  }
+  res.status(404).json({ error: 'no file data' });
+}));
+
 // Proxy a Drive file's bytes through the backend (the service account is authenticated;
 // the browser is not). Used for in-app image previews. Any authenticated staff user may
 // read — acceptable for an internal CRM.
