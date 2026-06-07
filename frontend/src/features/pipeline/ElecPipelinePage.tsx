@@ -49,7 +49,7 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
     if (filter === 'urgent') r = r.filter(b => b.due_days <= 7);
     if (filter === 'large')  r = r.filter(b => Number(b.amount) >= 500_000);
     if (filterRep !== 'all') r = r.filter(b => b.salesperson_name === filterRep);
-    return r;
+    return r.slice().sort((a, b) => a.due_days - b.due_days);
   };
 
   const handleStageFromDrawer = (stage: ElecStageKey, extra?: { loss_reason?: string; competitor?: string }) => {
