@@ -14,7 +14,7 @@ export function blankGenForm(overrides?: DefaultOverrides): GenForm {
     customer: '', attn: '', address: '', city: '', state: 'FL', zip: '', phone: '', email: '',
     brand: 'Kohler', coolingType: 'air-cooled', size: '14KW',
     ats: '200A', fuel: 'Natural Gas',
-    pad: true, smm: true, surgePro: false, battery: false, extraWire: 0,
+    pad: true, smm: true, surgePro: false, battery: true, emPanel: false, extraWire: 0,
     liftType: 'none', removal: false, additionalATS: 0, lcATS: 'none',
     labor:   Number(overrides?.gen_default_labor)    || DEFAULT_PRICES.labor,
     permit:  Number(overrides?.gen_default_permit)   || DEFAULT_PRICES.permit,
@@ -65,6 +65,7 @@ export interface GenTotals {
   permitAmt: number;
   startupAmt: number;
   batteryAmt: number;
+  emPanelAmt: number;
   extraWireAmt: number;
   subtotal: number;
   discountAmt: number;
@@ -82,6 +83,7 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const smmTotal   = g.smm ? DEFAULT_PRICES.smm : 0;
   const surgeTotal = g.surgePro ? DEFAULT_PRICES.surgePro : 0;
   const batteryAmt = g.battery ? DEFAULT_PRICES.battery : 0;
+  const emPanelAmt = g.emPanel ? DEFAULT_PRICES.emPanel : 0;
   const extraWireAmt = Number(g.extraWire) * DEFAULT_PRICES.extraWire;
   const extraATS   = Number(g.additionalATS) * DEFAULT_PRICES.additionalATS;
   const lcATS      = g.lcATS === '150A' ? DEFAULT_PRICES.atsLC_150 : g.lcATS === '200A' ? DEFAULT_PRICES.atsLC_200 : 0;
@@ -91,7 +93,7 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const permitAmt  = Number(g.permit);
   const startupAmt = g.coolingType === 'liquid-cooled' ? DEFAULT_PRICES.startupLC : Number(g.startup);
 
-  const subtotal   = genP + padAmt + smmTotal + surgeTotal + batteryAmt + extraWireAmt + extraATS + lcATS + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
+  const subtotal   = genP + padAmt + smmTotal + surgeTotal + batteryAmt + emPanelAmt + extraWireAmt + extraATS + lcATS + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
   const discountAmt = g.discountType === '%'
     ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
     : (Number(g.discount) || 0);
@@ -100,7 +102,7 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const total      = taxable + tax;
   const deposit    = Math.round(total * ((Number(g.depositPct) || 50) / 100));
 
-  return { genP, padAmt, smmTotal, surgeTotal, extraATS, lcATS, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, extraWireAmt, subtotal, discountAmt, taxable, tax, total, deposit };
+  return { genP, padAmt, smmTotal, surgeTotal, extraATS, lcATS, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, extraWireAmt, subtotal, discountAmt, taxable, tax, total, deposit };
 }
 
 export function genPriceRows(g: GenForm, t: GenTotals, fmt: (n: number) => string) {
@@ -110,6 +112,7 @@ export function genPriceRows(g: GenForm, t: GenTotals, fmt: (n: number) => strin
   if (t.smmTotal)    rows.push({ label: 'SMM (Preventative Maintenance)', amount: fmt(t.smmTotal) });
   if (t.surgeTotal)  rows.push({ label: 'SurgeProtector Pro', amount: fmt(t.surgeTotal) });
   if (t.batteryAmt)  rows.push({ label: 'Battery Maintainer', amount: fmt(t.batteryAmt) });
+  if (t.emPanelAmt)  rows.push({ label: 'EM Panel', amount: fmt(t.emPanelAmt) });
   if (t.extraWireAmt) rows.push({ label: `Extra Wire (${g.extraWire} ft)`, amount: fmt(t.extraWireAmt) });
   if (t.extraATS)    rows.push({ label: `Additional ATS (${g.additionalATS})`, amount: fmt(t.extraATS) });
   if (t.lcATS)       rows.push({ label: `LC ATS (${g.lcATS})`, amount: fmt(t.lcATS) });
