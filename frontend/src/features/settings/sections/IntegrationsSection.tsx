@@ -95,7 +95,7 @@ function GoogleDriveCard() {
       <div style={{ flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
           <span style={{ fontWeight: 800, fontSize: 14, color: 'var(--text)' }}>Google Drive</span>
-          <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: '#D1FAE5', color: '#065F46', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+          <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'var(--green-soft)', color: 'var(--green)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
             Active
           </span>
         </div>
@@ -112,17 +112,17 @@ function GoogleDriveCard() {
         </button>
         {result && (
           <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text3)' }}>
-            <span style={{ color: '#065F46', fontWeight: 700 }}>{result.processed} folders created</span>
-            {result.skipped > 0 && <span style={{ marginLeft: 8, color: '#92400E' }}>{result.skipped} skipped</span>}
+            <span style={{ color: 'var(--green)', fontWeight: 700 }}>{result.processed} folders created</span>
+            {result.skipped > 0 && <span style={{ marginLeft: 8, color: 'var(--amber)' }}>{result.skipped} skipped</span>}
             {result.errors.length > 0 && (
-              <div style={{ marginTop: 6, color: '#DC2626' }}>
+              <div style={{ marginTop: 6, color: 'var(--red)' }}>
                 {result.errors.slice(0, 5).map((e, i) => <div key={i}>{e}</div>)}
                 {result.errors.length > 5 && <div>…and {result.errors.length - 5} more</div>}
               </div>
             )}
           </div>
         )}
-        {err && <div style={{ marginTop: 8, fontSize: 12, color: '#DC2626' }}>{err}</div>}
+        {err && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)' }}>{err}</div>}
 
         <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>One-time Fix</div>
@@ -139,16 +139,16 @@ function GoogleDriveCard() {
           </div>
           {fixResult && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text3)' }}>
-              <span style={{ color: '#065F46', fontWeight: 700 }}>{fixResult.moved} folders moved</span>
-              {fixResult.skipped > 0 && <span style={{ marginLeft: 8, color: '#92400E' }}>{fixResult.skipped} skipped</span>}
+              <span style={{ color: 'var(--green)', fontWeight: 700 }}>{fixResult.moved} folders moved</span>
+              {fixResult.skipped > 0 && <span style={{ marginLeft: 8, color: 'var(--amber)' }}>{fixResult.skipped} skipped</span>}
               {fixResult.errors.length > 0 && (
-                <div style={{ marginTop: 6, color: '#DC2626' }}>
+                <div style={{ marginTop: 6, color: 'var(--red)' }}>
                   {fixResult.errors.slice(0, 5).map((e, i) => <div key={i}>{e}</div>)}
                 </div>
               )}
             </div>
           )}
-          {fixErr && <div style={{ marginTop: 8, fontSize: 12, color: '#DC2626' }}>{fixErr}</div>}
+          {fixErr && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)' }}>{fixErr}</div>}
         </div>
 
         <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
@@ -163,17 +163,17 @@ function GoogleDriveCard() {
           </button>
           {genResult && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text3)' }}>
-              <span style={{ color: '#065F46', fontWeight: 700 }}>{genResult.processed} folders created</span>
-              {genResult.skipped > 0 && <span style={{ marginLeft: 8, color: '#92400E' }}>{genResult.skipped} skipped</span>}
+              <span style={{ color: 'var(--green)', fontWeight: 700 }}>{genResult.processed} folders created</span>
+              {genResult.skipped > 0 && <span style={{ marginLeft: 8, color: 'var(--amber)' }}>{genResult.skipped} skipped</span>}
               {genResult.errors.length > 0 && (
-                <div style={{ marginTop: 6, color: '#DC2626' }}>
+                <div style={{ marginTop: 6, color: 'var(--red)' }}>
                   {genResult.errors.slice(0, 5).map((e, i) => <div key={i}>{e}</div>)}
                   {genResult.errors.length > 5 && <div>…and {genResult.errors.length - 5} more</div>}
                 </div>
               )}
             </div>
           )}
-          {genErr && <div style={{ marginTop: 8, fontSize: 12, color: '#DC2626' }}>{genErr}</div>}
+          {genErr && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)' }}>{genErr}</div>}
 
           <button
             className="btn ghost"
@@ -188,16 +188,16 @@ function GoogleDriveCard() {
           </div>
           {genFixResult && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text3)' }}>
-              <span style={{ color: '#065F46', fontWeight: 700 }}>{genFixResult.moved} folders moved</span>
-              {genFixResult.skipped > 0 && <span style={{ marginLeft: 8, color: '#92400E' }}>{genFixResult.skipped} skipped</span>}
+              <span style={{ color: 'var(--green)', fontWeight: 700 }}>{genFixResult.moved} folders moved</span>
+              {genFixResult.skipped > 0 && <span style={{ marginLeft: 8, color: 'var(--amber)' }}>{genFixResult.skipped} skipped</span>}
               {genFixResult.errors.length > 0 && (
-                <div style={{ marginTop: 6, color: '#DC2626' }}>
+                <div style={{ marginTop: 6, color: 'var(--red)' }}>
                   {genFixResult.errors.slice(0, 5).map((e, i) => <div key={i}>{e}</div>)}
                 </div>
               )}
             </div>
           )}
-          {genFixErr && <div style={{ marginTop: 8, fontSize: 12, color: '#DC2626' }}>{genFixErr}</div>}
+          {genFixErr && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)' }}>{genFixErr}</div>}
         </div>
       </div>
     </div>
@@ -228,6 +228,3 @@ export function IntegrationsSection() {
     </div>
   );
 }
-
-// ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
-
