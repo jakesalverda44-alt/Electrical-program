@@ -8,14 +8,35 @@ const router = Router();
 
 const SAFE_COLS = 'id, name, email, phone, job_title, role, status, last_login, created_at';
 
-// Read stays open to any authenticated user — the app loads the directory at
-// startup to resolve rep names and populate assignment dropdowns. Only safe,
-// non-secret columns are returned.
 router.get('/', requireAuth, async (_req, res) => {
-  const { rows } = await pool.query(
-    `SELECT ${SAFE_COLS} FROM users ORDER BY name`
-  );
+  const { rows } = await pool.query(`SELECT ${SAFE_COLS} FROM users ORDER BY name`);
   res.json(rows);
+});
+
+// Self-service profile update — any authenticated user can update their own safe fields.
+// Must be registered before /:id so Express matches /me first.
+router.put('/me', requireAuth, async (req: AuthRequest, res) => {
+  const { name, email, phone, job_title } = req.body;
+  const fields: string[] = [];
+  const vals: unknown[] = [];
+  let i = 1;
+  if (name      !== undefined) { fields.push(`name=$${i++}`);      vals.push(name.trim()); }
+  if (email     !== undefined) { fields.push(`email=$${i++}`);     vals.push(email.toLowerCase().trim()); }
+  if (phone     !== undefined) { fields.push(`phone=$${i++}`);     vals.push(phone.trim()); }
+  if (job_title !== undefined) { fields.push(`job_title=$${i++}`); vals.push(job_title.trim()); }
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+  vals.push(req.user!.id);
+  try {
+    const { rows } = await pool.query(
+      `UPDATE users SET ${fields.join(',')} WHERE id=$${i} RETURNING ${SAFE_COLS}`,
+      vals
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(rows[0]);
+  } catch (err: any) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Email already in use' });
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 router.post('/', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
@@ -57,7 +78,6 @@ router.put('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
   vals.push(req.params.id);
   try {
-    // Capture the prior role/status so privilege changes are visible in the audit trail.
     const { rows: prior } = await pool.query('SELECT role, status FROM users WHERE id=$1', [req.params.id]);
     const { rows } = await pool.query(
       `UPDATE users SET ${fields.join(',')} WHERE id=$${i} RETURNING ${SAFE_COLS}`,
@@ -79,7 +99,6 @@ router.put('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   }
 });
 
-// Admins may reset anyone's password; a regular user may change only their own.
 router.put('/:id/password', requireAuth, async (req: AuthRequest, res) => {
   if (!isPrivileged(req.user) && req.user!.id !== req.params.id) {
     return res.status(403).json({ error: 'You can only change your own password.' });
@@ -101,7 +120,6 @@ router.put('/:id/password', requireAuth, async (req: AuthRequest, res) => {
   res.json({ ok: true });
 });
 
-// Soft delete — sets status to inactive
 router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const { rows } = await pool.query(
     `UPDATE users SET status='inactive' WHERE id=$1 RETURNING id, email`,
@@ -112,9 +130,8 @@ router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) =
   res.json({ ok: true });
 });
 
-// Set per-user AI permission override
 router.put('/:id/ai-override', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
-  const override = req.body; // e.g. { run_analysis: false } or { suspended: true } or null to clear
+  const override = req.body;
   const { rows } = await pool.query(
     `UPDATE users SET ai_override=$1 WHERE id=$2 RETURNING id, ai_override`,
     [override === null ? null : JSON.stringify(override), req.params.id]
