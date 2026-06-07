@@ -288,8 +288,8 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             {/* Intro */}
             <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 12 }}>
               {form.jobType === 'swap-out'
-                ? <>{companyName} proposes to furnish all labor and material necessary to remove the existing generator and install a new {form.brand} {form.size} generator on your existing pad with existing transfer switch integration. Our price is in accordance with the <strong>2026 National Electrical Code</strong>, the Bid Documents, and the following qualifications: {licLine || 'Licensed & Insured'}. <strong>THIS PROPOSAL AND ALL MATERIAL COSTS ARE VALID FOR 30 DAYS.</strong></>
-                : <>{companyName} proposes to furnish all labor and material necessary to provide the scope of work described in this proposal. Our price is in accordance with the <strong>2026 National Electrical Code</strong>, the Bid Documents, and the following qualifications: {licLine || 'Licensed & Insured'}. <strong>THIS PROPOSAL AND ALL MATERIAL COSTS ARE VALID FOR 30 DAYS.</strong></>
+                ? <>{companyName} proposes to furnish all labor and material necessary to remove the existing generator and install a new {form.brand} {form.size} generator on your existing pad with existing transfer switch integration. Our price is in accordance with the <strong>{new Date().getFullYear()} National Electrical Code</strong>, the Bid Documents, and the following qualifications: {licLine || 'Licensed & Insured'}. <strong>THIS PROPOSAL AND ALL MATERIAL COSTS ARE VALID FOR {form.validDays ?? 30} DAYS.</strong></>
+                : <>{companyName} proposes to furnish all labor and material necessary to provide the scope of work described in this proposal. Our price is in accordance with the <strong>{new Date().getFullYear()} National Electrical Code</strong>, the Bid Documents, and the following qualifications: {licLine || 'Licensed & Insured'}. <strong>THIS PROPOSAL AND ALL MATERIAL COSTS ARE VALID FOR {form.validDays ?? 30} DAYS.</strong></>
               }
             </p>
 
@@ -564,7 +564,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             {[
               "APT does not guarantee any homeowner's insurance discount.",
               'Scheduled installation dates may be postponed due to weather or severe storm conditions.',
-              'All quoted materials are valid for 30 days and may increase without warning.',
+              `All quoted materials are valid for ${form.validDays ?? 30} days and may increase without warning.`,
               "In the event of a named hurricane threatening Buyer's location, APT will make reasonable accommodations to install before the storm's arrival, including evenings and weekends.",
               'APT installs generators in order by date of initial payment.',
               "Individual generator units carry their own warranties. Manufacturer's warranties can be extended up to five (5) years on most generators.",
@@ -585,7 +585,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
 
             <div style={{ marginTop: 20, height: 1, background: '#E5E7EB' }}/>
             <div style={{ marginTop: 8, fontSize: 8, color: GRAY_M, textAlign: 'center' }}>
-              This proposal is valid for 30 days. Accurate Power &amp; Technology, Inc. · Licensed &amp; Insured · FL
+              This proposal is valid for {form.validDays ?? 30} days. Accurate Power &amp; Technology, Inc. · Licensed &amp; Insured · FL
             </div>
           </div>
 
