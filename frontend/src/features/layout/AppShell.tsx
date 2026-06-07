@@ -52,6 +52,7 @@ const TB: Record<string, { title: string; sub: string | null }> = {
   calendar:        { title: 'Calendar',              sub: 'Bid due dates · Won jobs · Project milestones' },
   contacts:        { title: 'Contacts',              sub: 'General contractors & manufacturer reps' },
   admin:           { title: 'Admin',                 sub: 'Users, roles & system configuration' },
+  'gen-leads':     { title: 'Generator Leads',       sub: 'Lead tracking · Generator division' },
 };
 
 export default function AppShell({
@@ -87,6 +88,7 @@ export default function AppShell({
     { group: 'Sales', items: [
       { id: 'dashboard',      label: 'Sales Dashboard',      icon: 'dashboard' },
       { id: 'gen-proposals',  label: 'Generator Proposals',  icon: 'bolt', tone: 'amber', count: genProposalCount },
+      { id: 'gen-leads',      label: 'Generator Leads',      icon: 'users', tone: 'amber' },
       { id: 'elec-proposals', label: 'Electrical Proposals', icon: 'pipeline', count: elecProposalCount },
       { id: 'intake',         label: 'Intake Inbox',         icon: 'bell', count: newIncoming },
       { id: 'sales-by-rep',   label: 'Sales by Rep',         icon: 'trend' },

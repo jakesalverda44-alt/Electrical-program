@@ -19,6 +19,7 @@ import ReportingPage from './features/reporting/ReportingPage';
 import CommsPage from './features/comms/CommsPage';
 import DocsPage from './features/docs/DocsPage';
 import FollowupsPage from './features/followups/FollowupsPage';
+import LeadsPage from './features/leads/LeadsPage';
 import CalendarPage from './features/calendar/CalendarPage';
 import ProposalPublicPage from './pages/ProposalPublicPage';
 import SettingsPage from './features/settings/SettingsPage';
@@ -230,6 +231,8 @@ export default function App() {
         return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
       case 'calendar':
         return <CalendarPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
+      case 'gen-leads':
+        return <LeadsPage onNav={setView} onEditGen={g => { setEditGen(g); setView('builder'); }}/>;
       case 'followups':
         return <FollowupsPage onCountChange={setFollowupCount}/>;
       case 'comms':
