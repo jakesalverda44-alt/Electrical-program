@@ -128,7 +128,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     if (idx < STEP_ORDER.length - 1) set({ step: STEP_ORDER[idx + 1] });
   };
 
-  const pollForResults = (startMs = Date.now(), shownAgent2 = false, shownAgent3 = false) => {
+  const pollForResults = (startMs = Date.now(), shownAgent2 = false, shownAgent3 = false, failStreak = 0) => {
     pollRef.current = setTimeout(async () => {
       try {
         const { data } = await api.get(`/preconstruction/${bid.id}/results`);
@@ -149,10 +149,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           setAiResults(data);
           set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${analysisErrorMessage(data)}`] }));
         } else {
-          pollForResults(startMs, nextA2, nextA3);
+          pollForResults(startMs, nextA2, nextA3, 0);
         }
       } catch {
-        set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), '✗ Could not reach server.'] }));
+        // Retry up to 5 times before giving up — handles transient connection drops
+        if (failStreak < 5) {
+          pollForResults(startMs, shownAgent2, shownAgent3, failStreak + 1);
+        } else {
+          set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), '✗ Could not reach server after several retries. The analysis may still be running — check the Plan Review tab in a minute.'] }));
+        }
       }
     }, 3000);
   };
