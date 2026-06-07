@@ -68,11 +68,21 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
     }
   };
 
+  const daysSince = (ts?: string) => ts ? Math.floor((Date.now() - new Date(ts).getTime()) / 86400000) : 0;
+
   const genBadge = (g: Gen) => {
     if (g.stage === 'building') return <span className="badge urgent">Building</span>;
-    if (g.stage === 'sent')     return <span className="badge normal"><Icon name="arrow" size={11} stroke={2.2}/>Sent</span>;
-    if (g.stage === 'signed')   return <span className="badge" style={{ background: 'rgba(139,92,246,.15)', color: '#8B5CF6' }}><Icon name="check" size={11} stroke={2.2}/>Signed</span>;
-    if (g.stage === 'awarded')  return <span className="badge won"><Icon name="check" size={11} stroke={2.4}/>Awarded</span>;
+    if (g.stage === 'sent') {
+      const age = daysSince(g.sent_at);
+      if (age >= 30) return (
+        <span className="badge" style={{ background: 'var(--orange-soft)', color: 'var(--orange)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <Icon name="clock" size={11} stroke={2}/>Stale · {age}d
+        </span>
+      );
+      return <span className="badge normal"><Icon name="arrow" size={11} stroke={2.2}/>Sent</span>;
+    }
+    if (g.stage === 'signed')  return <span className="badge" style={{ background: 'rgba(139,92,246,.15)', color: '#8B5CF6' }}><Icon name="check" size={11} stroke={2.2}/>Signed</span>;
+    if (g.stage === 'awarded') return <span className="badge won"><Icon name="check" size={11} stroke={2.4}/>Awarded</span>;
     return <span className="badge lost">Declined</span>;
   };
 
