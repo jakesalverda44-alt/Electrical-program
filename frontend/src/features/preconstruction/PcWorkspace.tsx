@@ -184,7 +184,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     const hasUploaded = fileObjectsRef.current.length > 0;
     const hasSelected = selectedDocIds.size > 0;
     if (!hasUploaded && !hasSelected) {
-      set({ aiLog: ['✗ Upload plan files or select from Project Files before running AI analysis.'] });
+      const msg = ws.files.length > 0
+        ? '✗ Files from a previous session can\'t be re-sent automatically. Go to the Files tab and check the boxes under "From Project Files" to include them, or re-upload the plan files.'
+        : '✗ Upload plan files or select from Project Files before running AI analysis.';
+      set({ aiLog: [msg] });
       return;
     }
     const totalCount = fileObjectsRef.current.length + selectedDocIds.size;
@@ -264,6 +267,27 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       size: f.size > 1024 * 1024 ? (f.size / 1024 / 1024).toFixed(1) + ' MB' : Math.round(f.size / 1024) + ' KB',
     }));
     set({ files: [...ws.files, ...newFiles] });
+
+    // Persist to Documents so files survive page refresh
+    Promise.all(files.map(f => {
+      const fd = new FormData();
+      fd.append('file', f);
+      fd.append('linked_id', bid.id);
+      fd.append('linked_name', bid.name);
+      fd.append('div', 'elec');
+      fd.append('category', 'plans');
+      fd.append('display_name', f.name);
+      return api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+    })).then(() => {
+      api.get(`/documents?linked_id=${bid.id}`).then(r => {
+        setProjectDocs((r.data || []).filter((d: ProjectDoc) => {
+          const t = (d.file_type || '').toLowerCase();
+          const n = (d.name || '').toLowerCase();
+          return t === 'application/pdf' || t.startsWith('image/')
+            || n.endsWith('.pdf') || n.endsWith('.jpg') || n.endsWith('.jpeg') || n.endsWith('.png');
+        }));
+      }).catch(() => {});
+    }).catch(() => {});
   };
 
   const removeFile = (id: string, name: string) => {
