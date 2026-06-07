@@ -68,6 +68,7 @@ export interface Gen {
   drive_permit_folder_id?: string;
   drive_contract_folder_id?: string;
   drive_invoices_folder_id?: string;
+  drive_photos_folder_id?: string;
   closed_at?: string;
 }
 
