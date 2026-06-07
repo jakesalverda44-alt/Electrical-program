@@ -31,9 +31,11 @@ const NAV: { group: string; items: { id: SectionId; label: string; icon: string 
   ]},
   { group: 'Integrations', items: [
     { id: 'email',            label: 'Email Delivery',  icon: 'send'     },
-    { id: 'ai',               label: 'AI',              icon: 'cpu'      },
-    { id: 'ai-permissions',   label: 'AI Permissions',  icon: 'shield'   },
     { id: 'integrations',     label: 'Integrations',    icon: 'link'     },
+  ]},
+  { group: 'AI', items: [
+    { id: 'ai',               label: 'AI Configuration', icon: 'cpu'     },
+    { id: 'ai-permissions',   label: 'AI Permissions',   icon: 'shield'  },
   ]},
   { group: 'System', items: [
     { id: 'notifications',    label: 'Notifications',   icon: 'bell'     },
