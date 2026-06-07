@@ -91,6 +91,21 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
     }
   };
 
+  // Open inline in a new tab. Opens the tab synchronously (user gesture) to dodge
+  // popup blockers, then points it at the blob once fetched.
+  const view = async (doc: Doc) => {
+    const w = window.open('', '_blank');
+    try {
+      const res = await api.get(`/documents/${doc.id}/view`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      if (w) w.location.href = url; else window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      if (w) w.close();
+      setError('Preview failed — try downloading instead.');
+    }
+  };
+
   const download = (doc: Doc) => {
     if (doc.storage_url) {
       // Use a real anchor click so popup blockers can't interfere
@@ -159,7 +174,10 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
                   {CAT_LABEL[d.category] || d.category}{d.file_size ? ` · ${fmtSize(d.file_size)}` : ''} · {fmtDate(d.created_at)}
                 </div>
               </div>
-              <button title="Download" onClick={() => download(d)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--blue)', padding: 4, flexShrink: 0 }}>
+              <button title="View" onClick={() => view(d)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--blue)', padding: 4, flexShrink: 0 }}>
+                <Icon name="eye" size={15} stroke={1.9}/>
+              </button>
+              <button title="Download" onClick={() => download(d)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text2)', padding: 4, flexShrink: 0 }}>
                 <Icon name="arrow" size={15} stroke={2}/>
               </button>
               <button title="Delete" onClick={() => remove(d)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text3)', padding: 4, flexShrink: 0 }}>
