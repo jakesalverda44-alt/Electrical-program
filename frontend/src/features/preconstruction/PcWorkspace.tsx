@@ -74,6 +74,8 @@ function analysisErrorMessage(data: Record<string, unknown> | null | undefined) 
   return `${first.slice(0, 700)}...`;
 }
 
+interface ProjectDoc { id: string; name: string; display_name: string; category: string; file_type: string; }
+
 export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, showToast, userRole, settings }: Props) {
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
@@ -86,6 +88,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [dragOver, setDragOver] = useState(false);
   const [historicalCosts, setHistoricalCosts] = useState<Array<Record<string,unknown>>>([]);
   const [bidIntel, setBidIntel] = useState<Record<string,unknown> | null>(null);
+  const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
+  const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
   const pollRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -163,20 +167,33 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   useEffect(() => {
     api.get('/preconstruction/costs').then(r => setHistoricalCosts(r.data || [])).catch(() => {});
     api.get(`/preconstruction/intelligence/${bid.id}`).then(r => setBidIntel(r.data)).catch(() => {});
+    api.get(`/documents?linked_id=${bid.id}`).then(r => {
+      const docs: ProjectDoc[] = (r.data || []).filter((d: ProjectDoc) => {
+        const t = (d.file_type || '').toLowerCase();
+        const n = (d.name || '').toLowerCase();
+        return t === 'application/pdf' || t.startsWith('image/')
+          || n.endsWith('.pdf') || n.endsWith('.jpg') || n.endsWith('.jpeg') || n.endsWith('.png');
+      });
+      setProjectDocs(docs);
+    }).catch(() => {});
   }, [bid.id]);
 
   const runAI = async () => {
     if (wsRef.current.aiRunning || wsRef.current.aiDone) return;
     const elecFiles = fileObjectsRef.current.filter(f => isElecSheet(f.name));
-    if (!fileObjectsRef.current.length) {
-      set({ aiLog: ['✗ Upload or re-add plan files in the Files tab before running AI analysis. Saved file names from a previous session cannot be re-sent to AI.'] });
+    const hasUploaded = fileObjectsRef.current.length > 0;
+    const hasSelected = selectedDocIds.size > 0;
+    if (!hasUploaded && !hasSelected) {
+      set({ aiLog: ['✗ Upload plan files or select from Project Files before running AI analysis.'] });
       return;
     }
-    set({ aiRunning: true, aiLog: [`Uploading ${fileObjectsRef.current.length} file(s) (${elecFiles.length} electrical sheet${elecFiles.length !== 1 ? 's' : ''} identified)…`] });
+    const totalCount = fileObjectsRef.current.length + selectedDocIds.size;
+    set({ aiRunning: true, aiLog: [`Sending ${totalCount} file(s) (${elecFiles.length} electrical sheet${elecFiles.length !== 1 ? 's' : ''} identified)…`] });
     try {
       const formData = new FormData();
       formData.append('bidId', bid.id);
       fileObjectsRef.current.forEach(f => formData.append('files', f));
+      selectedDocIds.forEach(id => formData.append('document_ids', id));
       await api.post('/preconstruction/analyze', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Agent 1 of 3: Reading plans & extracting drawing data (1–2 min)…'] }));
       pollForResults(Date.now());
@@ -391,6 +408,51 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     })}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {/* Files already attached to this bid in the Documents tab */}
+            {projectDocs.length > 0 && (
+              <div className="panel" style={{ marginTop: 16 }}>
+                <div className="panel-hdr">
+                  <span className="panel-title">
+                    <span className="pt-ic" style={{ background: 'var(--blue-soft)', color: 'var(--blue)' }}>
+                      <Icon name="file" size={15} stroke={1.8}/>
+                    </span>
+                    From Project Files
+                  </span>
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>
+                    {selectedDocIds.size > 0 ? `${selectedDocIds.size} selected` : 'Select to include in takeoff'}
+                  </span>
+                </div>
+                <div style={{ padding: '4px 0' }}>
+                  {projectDocs.map(d => {
+                    const checked = selectedDocIds.has(d.id);
+                    const elec = isElecSheet(d.name);
+                    return (
+                      <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', cursor: 'pointer',
+                        background: checked ? 'var(--blue-soft)' : 'transparent', transition: 'background .1s' }}>
+                        <input type="checkbox" checked={checked}
+                          onChange={e => setSelectedDocIds(prev => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(d.id); else next.delete(d.id);
+                            return next;
+                          })}
+                          style={{ width: 15, height: 15, accentColor: 'var(--blue)', cursor: 'pointer', flexShrink: 0 }}
+                        />
+                        <Icon name="file" size={13} stroke={1.8}/>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {d.display_name || d.name}
+                        </span>
+                        <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 5, textTransform: 'uppercase', flexShrink: 0,
+                          background: elec ? 'var(--green-soft)' : 'var(--surface2)',
+                          color: elec ? 'var(--green)' : 'var(--text3)' }}>
+                          {elec ? 'Electrical' : d.category}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
