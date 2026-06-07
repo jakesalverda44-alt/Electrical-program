@@ -220,9 +220,12 @@ async function runPipeline(
     // Validate JSON
     const parsedAgent1 = parseAIJSON(agent1Output);
     if (!parsedAgent1) {
-      const stopHint = agent1Output.trim().startsWith('```') || agent1Output.trim().startsWith('{')
-        ? 'Agent 1 returned JSON that could not be parsed. The response may have been cut off. Try fewer sheets or increase AI Max Tokens in Settings > AI.'
-        : 'Agent 1 did not return JSON.';
+      const looksLikeJSON = agent1Output.trim().startsWith('```') || agent1Output.trim().startsWith('{');
+      const stopHint = looksLikeJSON
+        ? `Agent 1 output was cut off before the JSON closed — the response exceeded the Max Tokens limit. ` +
+          `This job has too many sheets for ${config.maxTokens.toLocaleString()} tokens. ` +
+          `Go to Settings → Plan Analysis · AI Takeoff and raise Max Tokens to 64000, then run again.`
+        : 'Agent 1 did not return JSON. Check that the uploaded files are readable electrical plan PDFs.';
       await pool.query(
         `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
         [`${stopHint}\n\nRaw preview: ${compactOutput(agent1Output)}`, bidId]
