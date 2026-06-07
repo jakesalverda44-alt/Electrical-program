@@ -190,7 +190,7 @@ export default function ProposalPublicPage() {
               </p>
               <p style={{ margin: 0 }}>
                 By signing below, you acknowledge and agree to all terms and conditions of this proposal and the attached
-                Sales Agreement, including the 50% deposit due at signing, non-refundability of the deposit, and all
+                Sales Agreement, including the {(form as Partial<GenForm>)?.depositPct ?? 50}% deposit due at signing, non-refundability of the deposit, and all
                 applicable disclosures.
               </p>
             </div>
