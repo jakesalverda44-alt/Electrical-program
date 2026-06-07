@@ -9,7 +9,8 @@ import { currencySymbol } from '../../../lib/money';
 export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
   const keys = ['gen_default_labor','gen_default_permit','gen_default_startup','gen_default_tax_rate',
                  'gen_default_pad','gen_default_smm','gen_default_surge_pro','gen_default_battery',
-                 'gen_default_extra_wire','gen_default_lull','gen_default_crane'];
+                 'gen_default_extra_wire','gen_default_lull','gen_default_crane',
+                 'gen_default_deposit_pct','gen_default_valid_days'];
   const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(keys.map(k => [k, (settings as any)[k] ?? ''])));
   const [orig, setOrig] = useState(vals);
   const [saving, setSaving] = useState(false);
@@ -42,6 +43,8 @@ export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSe
     ['gen_default_extra_wire','Extra Wire (per ft)',       cur],
     ['gen_default_lull',      'Lull',                     cur],
     ['gen_default_crane',     'Crane',                    cur],
+    ['gen_default_deposit_pct','Deposit',                 '%'],
+    ['gen_default_valid_days', 'Proposal Valid For',      'days'],
   ];
 
   return (
@@ -58,6 +61,3 @@ export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSe
     </div>
   );
 }
-
-// ── GEN PRICING ───────────────────────────────────────────────────────────────
-
