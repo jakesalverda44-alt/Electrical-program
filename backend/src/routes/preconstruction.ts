@@ -133,13 +133,13 @@ async function runPipeline(
         text: 'Analyze all uploaded electrical plans and provide your complete Drawing Analyzer output following your output format exactly. Return JSON only.',
       });
 
-      const resp = await callWithRetry(() => client.messages.create({
+      const resp = await callWithRetry(() => client.messages.stream({
         model: config.model,
         max_tokens: config.maxTokens,
         temperature: config.temperature,
         system: [{ type: 'text', text: AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: contentBlocks }],
-      }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
+      }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
       agent1Output = extractText(resp);
 
     } else {
@@ -175,13 +175,13 @@ async function runPipeline(
           text: `Analyze batch ${bi + 1} of ${batches.length} electrical plan files and provide Drawing Analyzer JSON output. Return JSON only.`,
         });
 
-        const bResp = await callWithRetry(() => client.messages.create({
+        const bResp = await callWithRetry(() => client.messages.stream({
           model: config.model,
           max_tokens: config.maxTokens,
           temperature: config.temperature,
           system: [{ type: 'text', text: AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: contentBlocks }],
-        }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
+        }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
         const parsed = parseAIJSON(bText);
         if (parsed) batchResults.push(parsed);
@@ -252,7 +252,7 @@ async function runPipeline(
   // ── Agent 2 ─────────────────────────────────────────────────────────────────
   try {
     await updateStatus('agent2_running');
-    const resp = await callWithRetry(() => client.messages.create({
+    const resp = await callWithRetry(() => client.messages.stream({
       model: config.modelText,
       max_tokens: config.maxTokens,
       temperature: config.temperature,
@@ -261,7 +261,7 @@ async function runPipeline(
         role: 'user',
         content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${agent1Output}`,
       }],
-    }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
+    }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
     agent2Output = extractText(resp);
 
     await pool.query(
@@ -281,7 +281,7 @@ async function runPipeline(
   // ── Agent 3 ─────────────────────────────────────────────────────────────────
   try {
     await updateStatus('agent3_running');
-    const resp = await callWithRetry(() => client.messages.create({
+    const resp = await callWithRetry(() => client.messages.stream({
       model: config.modelText,
       max_tokens: config.maxTokens,
       temperature: config.temperature,
@@ -290,7 +290,7 @@ async function runPipeline(
         role: 'user',
         content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${agent1Output}\n\n---\n\nESTIMATOR OUTPUT:\n\n${agent2Output}`,
       }],
-    }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
+    }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
     agent3Output = extractText(resp);
 
     // Final write — all three complete
