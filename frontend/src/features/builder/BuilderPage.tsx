@@ -307,6 +307,9 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
             <Field label="Tax Rate (%)">
               <input type="number" min={0} max={20} step={0.1} style={INPUT_STYLE} value={form.taxRate} onChange={e => set('taxRate', Number(e.target.value))}/>
             </Field>
+            <Field label="Proposal Valid For (days)">
+              <input type="number" min={1} max={365} style={INPUT_STYLE} value={form.validDays} onChange={e => set('validDays', Number(e.target.value))}/>
+            </Field>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
               <input type="checkbox" checked={!!form.includeBreakdown} onChange={e => set('includeBreakdown', e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
               Include Price Breakdown Page
