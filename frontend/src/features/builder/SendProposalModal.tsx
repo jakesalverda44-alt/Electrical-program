@@ -42,7 +42,7 @@ export default function SendProposalModal({ genId, defaultEmail, proposalNo, tot
             <Icon name="send" size={16} stroke={2} style={{ color: '#fff' }}/>
             <span style={{ color: '#fff', fontWeight: 800, fontSize: 15 }}>Send Proposal</span>
           </div>
-          <button onClick={onClose} style={{ border: 'none', background: 'none', color: '#93C5FD', cursor: 'pointer', padding: 4 }}>
+          <button onClick={onClose} style={{ border: 'none', background: 'none', color: 'rgba(255,255,255,.7)', cursor: 'pointer', padding: 4 }}>
             <Icon name="x" size={16} stroke={2}/>
           </button>
         </div>
@@ -87,7 +87,7 @@ export default function SendProposalModal({ genId, defaultEmail, proposalNo, tot
             </div>
 
             {status === 'error' && (
-              <div style={{ background: '#FEF2F2', color: '#DC2626', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 13, fontWeight: 600 }}>
+              <div style={{ background: 'rgba(224,106,106,.12)', color: 'var(--red)', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 13, fontWeight: 600 }}>
                 {errMsg}
               </div>
             )}
