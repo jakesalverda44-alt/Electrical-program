@@ -26,7 +26,7 @@ const REMINDER_DEFAULTS: ReminderPrefs = {
 
 const REMINDER_TYPES: { key: string; label: string; desc: string; hasDays: boolean }[] = [
   { key: 'followup_due',             label: 'Follow-up due',            desc: 'When a follow-up task reaches its due date.', hasDays: false },
-  { key: 'proposal_viewed_unsigned', label: 'Proposal viewed, not signed', desc: 'When a customer opens a proposal but hasn’t signed after N days.', hasDays: true },
+  { key: 'proposal_viewed_unsigned', label: 'Proposal viewed, not signed', desc: 'When a customer opens a proposal but hasn't signed after N days.', hasDays: true },
   { key: 'bid_due_soon',             label: 'Bid due soon',             desc: 'When a bid is within N days of its due date.', hasDays: true },
 ];
 
@@ -210,13 +210,10 @@ export function NotificationsSection({ settings, onSaved }: { settings: AppSetti
         </div>
       </Field>
 
-      <div style={{ background: '#FFFBEB', border: '1px solid #FCD34D', borderRadius: 10, padding: '12px 16px', fontSize: 13, color: '#92400E', margin: '20px 0' }}>
+      <div style={{ background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.3)', borderRadius: 10, padding: '12px 16px', fontSize: 13, color: 'var(--amber)', margin: '20px 0' }}>
         Email delivery requires email settings to be configured under <strong>Integrations → Email Delivery</strong>.
       </div>
       <SaveBar onSave={save} saving={saving} saved={saved} hasChanges={hasChanges}/>
     </div>
   );
 }
-
-// ── AI PERMISSIONS ────────────────────────────────────────────────────────────
-
