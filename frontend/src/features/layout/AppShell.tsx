@@ -87,8 +87,8 @@ export default function AppShell({
   const nav: NavGroup[] = [
     { group: 'Sales', items: [
       { id: 'dashboard',      label: 'Sales Dashboard',      icon: 'dashboard' },
-      { id: 'gen-proposals',  label: 'Generator Proposals',  icon: 'bolt', tone: 'amber', count: genProposalCount },
       { id: 'gen-leads',      label: 'Generator Leads',      icon: 'users', tone: 'amber' },
+      { id: 'gen-proposals',  label: 'Generator Proposals',  icon: 'bolt', tone: 'amber', count: genProposalCount },
       { id: 'elec-proposals', label: 'Electrical Proposals', icon: 'pipeline', count: elecProposalCount },
       { id: 'intake',         label: 'Intake Inbox',         icon: 'bell', count: newIncoming },
       { id: 'sales-by-rep',   label: 'Sales by Rep',         icon: 'trend' },
