@@ -47,6 +47,7 @@ const TB: Record<string, { title: string; sub: string | null }> = {
   followups:       { title: 'Follow-ups',            sub: 'Tasks & reminders · Stay on top of every deal' },
   docs:            { title: 'Documents',             sub: 'Plan sets, contracts & attachments' },
   reporting:       { title: 'Reporting',             sub: 'Pipeline analytics · Win rates · Forecast' },
+  calendar:        { title: 'Calendar',              sub: 'Bid due dates · Won jobs · Project milestones' },
   contacts:        { title: 'Contacts',              sub: 'General contractors & manufacturer reps' },
   admin:           { title: 'Admin',                 sub: 'Users, roles & system configuration' },
 };
@@ -81,6 +82,7 @@ export default function AppShell({
     ]},
     { group: 'Insights', items: [
       { id: 'reporting', label: 'Reporting', icon: 'trend' },
+      { id: 'calendar',  label: 'Calendar',  icon: 'clock' },
       { id: 'contacts',  label: 'Contacts',  icon: 'users' },
     ]},
   ];
