@@ -1102,17 +1102,32 @@ function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
     }
   };
 
-  const download = (doc: ProjDoc) => {
-    const token = localStorage.getItem('token');
-    fetch(`/api/documents/${doc.id}/download`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.blob())
-      .then(blob => {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = doc.display_name || doc.name;
-        a.click(); URL.revokeObjectURL(url);
-      })
-      .catch(() => showToast({ title: 'Download failed' }));
+  // Open inline in a new tab. Opens the tab synchronously (user gesture) before the
+  // async fetch so popup blockers don't kill it.
+  const view = async (doc: ProjDoc) => {
+    const w = window.open('', '_blank');
+    try {
+      const res = await api.get(`/documents/${doc.id}/view`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      if (w) w.location.href = url; else window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      if (w) w.close();
+      showToast({ title: 'Preview failed', sub: 'Try downloading instead' });
+    }
+  };
+
+  const download = async (doc: ProjDoc) => {
+    try {
+      const res = await api.get(`/documents/${doc.id}/download`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = doc.display_name || doc.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      showToast({ title: 'Download failed' });
+    }
   };
 
   const remove = async (docId: string) => {
@@ -1147,7 +1162,8 @@ function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
                   <td className="sub">{fmtSize(doc.file_size)}</td>
                   <td className="sub">{new Date(doc.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</td>
                   <td style={{ display:'flex', gap:6 }}>
-                    <button onClick={() => download(doc)} style={{ border:'none', background:'none', cursor:'pointer', color:'var(--blue)', padding:4, borderRadius:6 }} title="Download"><Icon name="cloud" size={13} stroke={1.8}/></button>
+                    <button onClick={() => view(doc)} style={{ border:'none', background:'none', cursor:'pointer', color:'var(--blue)', padding:4, borderRadius:6 }} title="View"><Icon name="eye" size={14} stroke={1.9}/></button>
+                    <button onClick={() => download(doc)} style={{ border:'none', background:'none', cursor:'pointer', color:'var(--text2)', padding:4, borderRadius:6 }} title="Download"><Icon name="cloud" size={13} stroke={1.8}/></button>
                     <button onClick={() => remove(doc.id)} style={{ border:'none', background:'none', cursor:'pointer', color:'var(--text3)', padding:4, borderRadius:6 }} title="Remove"><Icon name="x" size={13} stroke={2}/></button>
                   </td>
                 </tr>
