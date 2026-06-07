@@ -21,9 +21,15 @@ interface Props {
   form: GenForm;
   totals: GenTotals;
   proposalNo: string;
-  onBack: () => void;
+  onBack?: () => void;
   appSettings?: AppSettings;
   genId?: string;
+  /** Embed mode: render only the document (no toolbar/back/print) — used by the public signing page. */
+  embed?: boolean;
+  /** Customer signature image (data URL). When present, the signature block shows it. */
+  signatureImage?: string;
+  /** Date the customer signed (display string). */
+  signedDate?: string;
 }
 
 // ── Shared layout helpers ────────────────────────────────────────────────────
@@ -62,7 +68,7 @@ function SectionHeading({ title }: { title: string }) {
   );
 }
 
-function SigBlock() {
+function SigBlock({ signatureImage, signedDate, buyerName }: { signatureImage?: string; signedDate?: string; buyerName?: string }) {
   const line = { height: 1, background: '#D1D5DB', marginBottom: 4 };
   const lbl = { fontSize: 9, color: GRAY_M, fontWeight: 600 as const };
   const cell: React.CSSProperties = { padding: '8px 12px', flex: 1 };
@@ -79,15 +85,24 @@ function SigBlock() {
       <div style={{ width: 1, background: '#E5E7EB' }}/>
       <div style={cell}>
         <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, marginBottom: 6 }}>"BUYER"</div>
+        {/* Buyer printed name */}
+        <div style={{ minHeight: 14 }}>{buyerName && <span style={{ fontSize: 11, fontWeight: 700, color: GRAY_D }}>{buyerName}</span>}</div>
         <div style={line}/>
         <div style={lbl}>Name</div>
         <div style={{ height: 10 }}/>
         <div style={{ display: 'flex', gap: 16 }}>
           <div style={{ flex: 1 }}>
+            {/* Captured signature image, when signed */}
+            {signatureImage
+              ? <img src={signatureImage} alt="Buyer signature" style={{ height: 34, maxWidth: '100%', objectFit: 'contain', display: 'block', marginBottom: 2 }}/>
+              : <div style={{ height: 34 }}/>}
             <div style={line}/>
             <div style={lbl}>Signature</div>
           </div>
           <div style={{ flex: 1 }}>
+            <div style={{ minHeight: 34, display: 'flex', alignItems: 'flex-end' }}>
+              {signedDate && <span style={{ fontSize: 10, color: GRAY_D, marginBottom: 2 }}>{signedDate}</span>}
+            </div>
             <div style={line}/>
             <div style={lbl}>Date</div>
           </div>
@@ -138,7 +153,7 @@ function SpecTable({ header, rows }: { header: string; rows: [string, string, st
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
-export default function ProposalPreview({ form, totals, proposalNo, onBack, appSettings, genId }: Props) {
+export default function ProposalPreview({ form, totals, proposalNo, onBack, appSettings, genId, embed, signatureImage, signedDate }: Props) {
   const co = appSettings ?? DEFAULT_APP_SETTINGS;
   const previewRef = useRef<HTMLDivElement>(null);
   const [savingDrive, setSavingDrive] = useState(false);
@@ -205,8 +220,9 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
   };
 
   return (
-    <div className="scroll view-enter">
-      {/* Toolbar */}
+    <div className={embed ? 'proposal-embed' : 'scroll view-enter'}>
+      {/* Toolbar — hidden in embed (public signing) mode */}
+      {!embed && (
       <div className="pipe-toolbar no-print">
         <button className="btn ghost" onClick={onBack} style={{ fontSize: 13 }}>← Back to Builder</button>
         <span className="spacer"/>
@@ -222,6 +238,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
         )}
         <button className="btn" onClick={() => window.print()} style={{ fontSize: 13 }}>Print / Save PDF</button>
       </div>
+      )}
 
       <div className="preview-doc" ref={previewRef} style={{ maxWidth: 780, margin: '16px auto 40px', background: '#fff', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
         <div style={docStyle}>
@@ -539,7 +556,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, marginBottom: 14 }}>
               <strong>In Witness Whereof</strong>, the parties have executed this Agreement on the day and year first written above.
             </p>
-            <SigBlock/>
+            <SigBlock signatureImage={signatureImage} signedDate={signedDate} buyerName={form.customer}/>
           </div>
 
           {/* ═══ EXHIBIT A — DISCLOSURES ═══════════════════════════════════ */}
