@@ -229,6 +229,9 @@ H. Coordination & Closeout
 
 Use professional electrical contractor language suitable for customer proposals.
 
+ECFECI FLAGGING
+For service and distribution equipment (switchboards, switchgear, panelboards, transformers, ATS, disconnects) and for the lighting package (fixtures, controls, exit signs, emergency units), flag each line item as ECFECI — meaning the Electrical Contractor both furnishes and installs. Use the label "ECFECI" explicitly on those line items so the downstream formatter can identify them without guessing. Items where the owner or GC furnishes equipment should be labeled "OCFECI" (Owner Furnishes, EC Installs) or "NIC" as appropriate.
+
 EXCLUSIONS
 Generate exclusions for:
 - Utility primary work
