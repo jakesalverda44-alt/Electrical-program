@@ -85,7 +85,8 @@ async function runPipeline(
   bidId: string,
   files: Express.Multer.File[],
   client: Anthropic,
-  config: AIConfig
+  config: AIConfig,
+  resumeAgent1Output?: string  // if provided, skip Agent 1 and reuse saved output
 ): Promise<void> {
   let agent1Output = '';
   let agent2Output = '';
@@ -95,7 +96,15 @@ async function runPipeline(
     pool.query(`UPDATE takeoff_results SET status=$1 WHERE bid_id=$2`, [status, bidId]);
 
   // ── Agent 1 ─────────────────────────────────────────────────────────────────
-  try {
+  if (resumeAgent1Output) {
+    agent1Output = resumeAgent1Output;
+    const parsed = parseAIJSON(agent1Output);
+    if (!parsed) {
+      await pool.query(`UPDATE takeoff_results SET status='error', agent1_output='Saved Agent 1 output could not be parsed. Run a fresh analysis.' WHERE bid_id=$1`, [bidId]);
+      return;
+    }
+    await updateStatus('agent1_complete');
+  } else try {
     // Filter to electrical sheets
     const electricalFiles = files.filter(f => isElectricalSheet(f.originalname));
     const filesToSend = electricalFiles.length > 0 ? electricalFiles : files;
@@ -240,7 +249,7 @@ async function runPipeline(
       [message, bidId]
     );
     return;
-  }
+  } // end Agent 1 else-try
 
   // ── Agent 2 ─────────────────────────────────────────────────────────────────
   try {
@@ -438,6 +447,17 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1 AND deleted_at IS NULL', [bidId]);
   if (!bidRows.length) return res.status(404).json({ error: 'Bid not found' });
 
+  // Check for resume mode — reuse saved Agent 1 output, skip re-reading plans
+  const resume = req.body.resume === 'true' || req.body.resume === true;
+  let resumeAgent1Output: string | undefined;
+  if (resume) {
+    const { rows: prev } = await pool.query(
+      'SELECT agent1_output FROM takeoff_results WHERE bid_id=$1',
+      [bidId]
+    );
+    resumeAgent1Output = prev[0]?.agent1_output || undefined;
+  }
+
   const rawFiles = (req.files as Express.Multer.File[]) ?? [];
 
   // Expand any zip archives into their constituent PDF/image files
@@ -520,7 +540,7 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
     }
   }
 
-  if (!files.length) {
+  if (!files.length && !resumeAgent1Output) {
     return res.status(400).json({ error: 'Upload at least one plan file, or select files from Project Files, before running AI analysis.' });
   }
 
@@ -531,12 +551,18 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   }
   const aiConfig = await loadAIConfig();
 
-  // Mark as running
-  await pool.query(`
-    INSERT INTO takeoff_results (bid_id, status) VALUES ($1, 'running')
-    ON CONFLICT (bid_id) DO UPDATE SET status='running', created_at=now(),
-      agent1_output=NULL, agent2_output=NULL, agent3_output=NULL
-  `, [bidId]);
+  // Mark as running — preserve agent1_output when resuming
+  if (resumeAgent1Output) {
+    await pool.query(`
+      UPDATE takeoff_results SET status='running', agent2_output=NULL, agent3_output=NULL WHERE bid_id=$1
+    `, [bidId]);
+  } else {
+    await pool.query(`
+      INSERT INTO takeoff_results (bid_id, status) VALUES ($1, 'running')
+      ON CONFLICT (bid_id) DO UPDATE SET status='running', created_at=now(),
+        agent1_output=NULL, agent2_output=NULL, agent3_output=NULL
+    `, [bidId]);
+  }
 
   // Log AI usage for rate limiting and audit
   await pool.query(
@@ -550,14 +576,15 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   // Respond immediately, run pipeline in background
   res.json({
     status: 'running',
-    message: 'Analysis started',
+    message: resumeAgent1Output ? 'Resuming from Agent 2 — plan data already saved' : 'Analysis started',
     totalFiles: files.length,
     electricalSheets: electricalCount,
+    resumed: !!resumeAgent1Output,
   });
 
   const client = new Anthropic({ apiKey });
-  logger.info({ bidId, model: aiConfig.model, maxTokens: aiConfig.maxTokens }, 'AI takeoff pipeline started');
-  runPipeline(bidId, files, client, aiConfig).catch(async err => {
+  logger.info({ bidId, model: aiConfig.model, maxTokens: aiConfig.maxTokens, resumed: !!resumeAgent1Output }, 'AI takeoff pipeline started');
+  runPipeline(bidId, files, client, aiConfig, resumeAgent1Output).catch(async err => {
     const message = `Pipeline failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff pipeline failed');
     await pool.query(

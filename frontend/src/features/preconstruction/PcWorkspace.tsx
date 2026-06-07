@@ -163,9 +163,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   };
 
   useEffect(() => {
-    if (ws.aiDone && !aiResults) {
-      api.get(`/preconstruction/${bid.id}/results`).then(r => { if (r.data) setAiResults(r.data); }).catch(() => {});
-    }
+    // Always load — partial results from a failed run may exist
+    api.get(`/preconstruction/${bid.id}/results`).then(r => { if (r.data) setAiResults(r.data); }).catch(() => {});
     return () => { if (pollRef.current) clearTimeout(pollRef.current); };
   }, [bid.id]);
 
@@ -209,6 +208,25 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       pollForResults(Date.now());
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to start analysis';
+      set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${msg}`] }));
+    }
+  };
+
+  const resumeAI = async () => {
+    if (wsRef.current.aiRunning || wsRef.current.aiDone) return;
+    set({ aiRunning: true, aiLog: ['Resuming from Agent 2 — reusing saved plan analysis…'] });
+    try {
+      const formData = new FormData();
+      formData.append('bidId', bid.id);
+      formData.append('resume', 'true');
+      const { data } = await api.post('/preconstruction/analyze', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const startMsg = data.resumed
+        ? 'Agent 2 of 3: Building scope & estimate…'
+        : 'Agent 1 of 3: Reading plans & extracting drawing data (1–2 min)…';
+      set(prev => ({ aiLog: [...(prev.aiLog ?? []), startMsg] }));
+      pollForResults(Date.now(), !!data.resumed, false);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to resume analysis';
       set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${msg}`] }));
     }
   };
@@ -512,10 +530,18 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     AI analysis is not enabled for your role. Contact an administrator.
                   </div>
                 ) : (
-                  <button className="btn" onClick={runAI} disabled={ws.aiRunning || ws.aiDone} style={{ fontSize: 13, marginBottom: ws.aiLog.length ? 16 : 0 }}>
-                    <Icon name="spark" size={14} stroke={1.9}/>
-                    {ws.aiDone ? 'Takeoff Complete' : ws.aiRunning ? 'Running…' : 'Run AI Takeoff'}
-                  </button>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: ws.aiLog.length ? 16 : 0 }}>
+                    <button className="btn" onClick={runAI} disabled={ws.aiRunning || ws.aiDone} style={{ fontSize: 13 }}>
+                      <Icon name="spark" size={14} stroke={1.9}/>
+                      {ws.aiDone ? 'Takeoff Complete' : ws.aiRunning ? 'Running…' : 'Run AI Takeoff'}
+                    </button>
+                    {!ws.aiRunning && !ws.aiDone && !!aiResults?.agent1_output && (
+                      <button className="btn ghost" onClick={resumeAI} style={{ fontSize: 13, color: 'var(--blue)' }}
+                        title="Skip re-reading plans — reuse saved Agent 1 output and run Agents 2 & 3 only">
+                        <Icon name="arrow" size={14} stroke={2}/> Resume from Agent 2
+                      </button>
+                    )}
+                  </div>
                 )}
                 {ws.aiRunning && (
                   <div style={{ marginBottom: 12 }}>
@@ -579,9 +605,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         };
         return (
           <div style={{ padding: '20px 24px' }}>
-            {!ws.aiDone ? (
+            {!aiResults?.agent1_output && !aiResults?.agent2_output ? (
               <div style={{ padding: 48, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
-                Run AI Takeoff in the Bid Builder tab first.
+                {ws.aiRunning ? 'Analysis running…' : 'Run AI Takeoff in the Bid Builder tab first.'}
               </div>
             ) : !aiResults ? (
               <div style={{ padding: 48, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Loading results…</div>
