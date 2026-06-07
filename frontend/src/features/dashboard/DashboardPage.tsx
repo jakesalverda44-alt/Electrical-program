@@ -31,10 +31,10 @@ function FollowupsDue({ onNav }: { onNav: (v: string) => void }) {
   return (
     <div style={{ margin: '0 0 18px', padding: '14px 18px', background: 'rgba(245,158,11,.10)', border: '1px solid rgba(245,158,11,.28)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 14 }}>
       <span style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(245,158,11,.16)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-        <Icon name="checkc" size={18} stroke={2} style={{ color: '#D97706' }}/>
+        <Icon name="checkc" size={18} stroke={2} style={{ color: 'var(--amber)' }}/>
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 800, color: '#B45309', marginBottom: 4 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--amber)', marginBottom: 4 }}>
           {due.length} Follow-up{due.length !== 1 ? 's' : ''} due
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -45,7 +45,7 @@ function FollowupsDue({ onNav }: { onNav: (v: string) => void }) {
           ))}
         </div>
       </div>
-      <button className="btn ghost" onClick={() => onNav('followups')} style={{ fontSize: 12, flexShrink: 0, color: '#B45309', borderColor: '#D97706' }}>
+      <button className="btn ghost" onClick={() => onNav('followups')} style={{ fontSize: 12, flexShrink: 0, color: 'var(--amber)', borderColor: 'var(--amber)' }}>
         View
       </button>
     </div>
@@ -294,16 +294,16 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
             <div className="panel">
               <div className="panel-hdr">
                 <span className="panel-title">
-                  <span className="pt-ic" style={{ background:'#F0FDF4', color:'#16A34A' }}><Icon name="doc" size={15} stroke={1.8}/></span>
+                  <span className="pt-ic" style={{ background:'var(--green-soft)', color:'var(--green)' }}><Icon name="doc" size={15} stroke={1.8}/></span>
                   Proposal Pipeline
                 </span>
                 <button className="panel-link" onClick={() => onNav('gen-proposals')}>View all <Icon name="arrow" size={13} stroke={2}/></button>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 0, borderBottom: '1px solid var(--border)' }}>
                 {[
-                  { label: 'Sent',    val: sentGens.length,         color: '#3B82F6', bg: '#EFF6FF' },
-                  { label: 'Viewed',  val: viewedNotSigned.length,  color: '#F59E0B', bg: '#FFFBEB' },
-                  { label: 'Signed',  val: signedGens.length,       color: '#16A34A', bg: '#F0FDF4' },
+                  { label: 'Sent',   val: sentGens.length,        color: 'var(--blue)'  },
+                  { label: 'Viewed', val: viewedNotSigned.length, color: 'var(--amber)' },
+                  { label: 'Signed', val: signedGens.length,      color: 'var(--green)' },
                 ].map(s => (
                   <div key={s.label} style={{ padding: '14px 0', textAlign: 'center', borderRight: '1px solid var(--border)' }}>
                     <div style={{ fontSize: 22, fontWeight: 900, color: s.color }}>{s.val}</div>
@@ -313,13 +313,13 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
               </div>
               <div className="panel-body">
                 {awaitingReply.length > 0 && (
-                  <div style={{ padding: '10px 16px', background: '#FFF7ED', borderBottom: '1px solid var(--border)', fontSize: 12, color: '#92400E', fontWeight: 600 }}>
+                  <div style={{ padding: '10px 16px', background: 'var(--amber-soft)', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--amber)', fontWeight: 600 }}>
                     {awaitingReply.length} proposal{awaitingReply.length !== 1 ? 's' : ''} sent — awaiting customer view
                   </div>
                 )}
                 {viewedNotSigned.length > 0 && viewedNotSigned.map(g => (
                   <div className="recent-item" key={g.id} onClick={() => onNav('gen-proposals')} style={{ cursor: 'pointer' }}>
-                    <div className="recent-ic" style={{ background: '#FFFBEB', color: '#F59E0B' }}><Icon name="eye" size={16} stroke={1.8}/></div>
+                    <div className="recent-ic" style={{ background: 'var(--amber-soft)', color: 'var(--amber)' }}><Icon name="eye" size={16} stroke={1.8}/></div>
                     <div className="di-main">
                       <div className="di-name">{g.customer}</div>
                       <div className="di-sub">Viewed · awaiting signature</div>
@@ -331,7 +331,7 @@ export default function DashboardPage({ bids, gens, wonJobs, activity, repNames,
                 ))}
                 {signedGens.slice(0, 3).map(g => (
                   <div className="recent-item" key={g.id} onClick={() => onNav('gen-proposals')} style={{ cursor: 'pointer' }}>
-                    <div className="recent-ic" style={{ background: '#F0FDF4', color: '#16A34A' }}><Icon name="check" size={16} stroke={2.2}/></div>
+                    <div className="recent-ic" style={{ background: 'var(--green-soft)', color: 'var(--green)' }}><Icon name="check" size={16} stroke={2.2}/></div>
                     <div className="di-main">
                       <div className="di-name">{g.customer}</div>
                       <div className="di-sub">Signed — pending award</div>
