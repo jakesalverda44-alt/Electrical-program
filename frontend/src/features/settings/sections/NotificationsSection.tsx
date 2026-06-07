@@ -26,7 +26,7 @@ const REMINDER_DEFAULTS: ReminderPrefs = {
 
 const REMINDER_TYPES: { key: string; label: string; desc: string; hasDays: boolean }[] = [
   { key: 'followup_due',             label: 'Follow-up due',            desc: 'When a follow-up task reaches its due date.', hasDays: false },
-  { key: 'proposal_viewed_unsigned', label: 'Proposal viewed, not signed', desc: 'When a customer opens a proposal but hasn't signed after N days.', hasDays: true },
+  { key: 'proposal_viewed_unsigned', label: 'Proposal viewed, not signed', desc: "When a customer opens a proposal but hasn't signed after N days.", hasDays: true },
   { key: 'bid_due_soon',             label: 'Bid due soon',             desc: 'When a bid is within N days of its due date.', hasDays: true },
 ];
 
