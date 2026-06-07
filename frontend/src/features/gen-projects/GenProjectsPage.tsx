@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import Icon from '../../components/Icon';
 import DriveImage from '../../components/DriveImage';
+import RecordFiles from '../../components/RecordFiles';
 import { Gen, WonJob, Toast } from '../../types';
 import api from '../../api/client';
 import { moneyFull, moneyShort as money } from '../../lib/money';
@@ -360,6 +361,9 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
                 })}
               </div>
             </div>
+
+            {/* Files — contracts, permits, invoices, plans (viewable in-app) */}
+            <RecordFiles linkedId={detail.id} linkedName={detail.customer} div="gen" emptyHint="No files yet. Upload contracts, permits, or invoices."/>
 
             {/* Job-site photos */}
             <GenPhotos gen={detail} showToast={showToast}/>
