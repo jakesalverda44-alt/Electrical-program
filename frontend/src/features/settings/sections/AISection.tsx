@@ -39,7 +39,7 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
     <div>
       <SectionTitle title="AI Configuration" sub="Settings for the Anthropic Claude AI used in plan analysis and proposal generation."/>
 
-      <div style={{ background: '#FFFBEB', border: '1px solid #FCD34D', borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 13, color: '#92400E', lineHeight: 1.6 }}>
+      <div style={{ background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.3)', borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 13, color: 'var(--amber)', lineHeight: 1.6 }}>
         <strong>⚠️ Security Note:</strong> Do not add your Anthropic API key until you are in the final testing phase. The system operates without it — AI features will return a graceful "unavailable" response until the key is set.
       </div>
 
@@ -63,6 +63,3 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
     </div>
   );
 }
-
-// ── INTEGRATIONS ──────────────────────────────────────────────────────────────
-
