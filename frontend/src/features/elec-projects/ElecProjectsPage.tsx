@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
+import DriveImage from '../../components/DriveImage';
 import { Bid, WonJob, Toast } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
 import api from '../../api/client';
@@ -991,7 +992,7 @@ function PhotosTab({ bid, photos, onPhotosChange, showToast }: {
         form.append('linked_id', bid.id);
         form.append('linked_name', bid.name);
         form.append('div', 'elec');
-        form.append('category', 'photos');
+        form.append('category', 'photo');
         await api.post('/documents', form, { headers: { 'Content-Type': 'multipart/form-data' } });
       }
       // Refresh photos list from Drive
@@ -1050,17 +1051,11 @@ function PhotosTab({ bid, photos, onPhotosChange, showToast }: {
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border2)'; (e.currentTarget as HTMLElement).style.transform = 'translateY(-2px)'; }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.transform = 'translateY(0)'; }}>
               {/* Thumbnail area */}
-              <div style={{ height:120, background:'var(--surface2)', display:'flex', alignItems:'center', justifyContent:'center', position:'relative' }}>
-                {isImage(p.mimeType) ? (
-                  <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', background:'var(--surface3)' }}>
-                    <Icon name="clip" size={28} stroke={1.4} style={{ color:'var(--blue)', opacity:.6 }}/>
-                  </div>
-                ) : (
-                  <Icon name="clip" size={28} stroke={1.4} style={{ color:'var(--text3)' }}/>
-                )}
-                {isImage(p.mimeType) && (
-                  <div style={{ position:'absolute', top:6, right:6, background:'var(--blue-soft)', borderRadius:6, padding:'2px 6px', fontSize:10, fontWeight:800, color:'var(--blue)' }}>
-                    IMG
+              <div style={{ position:'relative' }}>
+                <DriveImage fileId={p.id} alt={p.name} height={120} isImage={isImage(p.mimeType)}/>
+                {!isImage(p.mimeType) && (
+                  <div style={{ position:'absolute', top:6, right:6, background:'var(--surface)', borderRadius:6, padding:'2px 6px', fontSize:10, fontWeight:800, color:'var(--text3)' }}>
+                    FILE
                   </div>
                 )}
               </div>
