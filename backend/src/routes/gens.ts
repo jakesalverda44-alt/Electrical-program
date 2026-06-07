@@ -16,6 +16,8 @@ import {
   createCustomerFolder,
   createSubfolders,
   moveJobToStage,
+  listFolderFiles,
+  ensureSubfolder,
   GENERATOR_PROPOSALS_FOLDER,
   ACTIVE_GENERATOR_JOBS_ROOT,
   COMPLETED_GENERATOR_JOBS_ROOT,
@@ -37,6 +39,23 @@ async function loadOwnedGen(req: AuthRequest, res: import('express').Response) {
   }
   return rows[0];
 }
+
+// List photos from the gen job's Drive "Photos" subfolder. Lazily creates the folder
+// on older jobs that predate the Photos subfolder.
+router.get('/:id/photos', requireAuth, async (req: AuthRequest, res) => {
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+  let photosFolderId: string | null = gen.drive_photos_folder_id || null;
+  if (!photosFolderId && gen.drive_job_folder_id) {
+    photosFolderId = await ensureSubfolder('Photos', gen.drive_job_folder_id);
+    if (photosFolderId) {
+      await pool.query('UPDATE generator_proposals SET drive_photos_folder_id=$1 WHERE id=$2', [photosFolderId, gen.id]);
+    }
+  }
+  if (!photosFolderId) return res.json([]);
+  const files = await listFolderFiles(photosFolderId);
+  res.json(files);
+});
 
 router.get('/benchmark', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(
