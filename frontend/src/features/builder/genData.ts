@@ -15,6 +15,7 @@ export const DEFAULT_PRICES = {
   pad: 485,
   battery: 185,
   emPanel: 495,
+  gasLine: 500,
   labor: 3000,
   permit: 1250,
   startup: 695,
@@ -249,6 +250,7 @@ export interface GenForm {
   surgePro: boolean;
   battery: boolean;
   emPanel: boolean;
+  gasLine: boolean;
   extraWire: number;
   liftType: 'none' | 'lull' | 'crane';
   removal: boolean;

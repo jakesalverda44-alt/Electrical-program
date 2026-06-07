@@ -208,12 +208,6 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 {['100A','150A','200A','400A'].map(a => <option key={a} value={a}>{a}</option>)}
               </select>
             </Field>
-            <Field label="Fuel Type">
-              <select style={SELECT_STYLE} value={form.fuel} onChange={e => set('fuel', e.target.value)}>
-                <option value="Natural Gas">Natural Gas</option>
-                <option value="LP">Propane / LP</option>
-              </select>
-            </Field>
             <Field label="Job Type">              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
                 {(['new-install', 'swap-out'] as const).map(jt => (
                   <button key={jt} onClick={() => {
@@ -221,7 +215,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                     if (jt === 'swap-out') {
                       setForm(f => ({ ...f, jobType: 'swap-out', pad: false, labor: 1500, permit: 475 }));
                     } else {
-                      setForm(f => ({ ...f, jobType: 'new-install', labor: s.gen_default_labor ? Number(s.gen_default_labor) : 3000, permit: s.gen_default_permit ? Number(s.gen_default_permit) : 1250 }));
+                      setForm(f => ({ ...f, jobType: 'new-install', gasLine: false, labor: s.gen_default_labor ? Number(s.gen_default_labor) : 3000, permit: s.gen_default_permit ? Number(s.gen_default_permit) : 1250 }));
                     }
                   }}
                     style={{ padding: '9px 0', fontSize: 12, fontWeight: 700, border: 'none', cursor: 'pointer',
@@ -254,6 +248,12 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 {label}
               </label>
             ))}
+            {form.jobType === 'swap-out' && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, gridColumn: '1' }}>
+                <input type="checkbox" checked={!!form.gasLine} onChange={e => set('gasLine', e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
+                Gas Line Disconnect &amp; Reconnect
+              </label>
+            )}
             {form.jobType === 'swap-out' && (
               <Field label="Removal / Disposal Fee ($)">
                 <input type="number" min={0} style={INPUT_STYLE} value={form.removalFee} onChange={e => set('removalFee', Number(e.target.value))}/>
@@ -354,6 +354,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 ...(totals.surgeTotal ? [{ label: 'Surge Pro',   val: totals.surgeTotal }] : []),
                 ...(totals.batteryAmt  ? [{ label: 'Battery',    val: totals.batteryAmt  }] : []),
                 ...(totals.emPanelAmt  ? [{ label: 'EM Panel',   val: totals.emPanelAmt  }] : []),
+                ...(totals.gasLineAmt  ? [{ label: 'Gas Line',   val: totals.gasLineAmt  }] : []),
                 ...(totals.liftAmt     ? [{ label: 'Lift',       val: totals.liftAmt     }] : []),
                 ...(totals.lcATS      ? [{ label: 'LC ATS',      val: totals.lcATS      }] : []),
                 ...(totals.extraATS   ? [{ label: 'Extra ATS',   val: totals.extraATS   }] : []),

@@ -390,7 +390,7 @@ const GEN_PRICES: Record<string, Record<string, Record<string, number>>> = {
 };
 
 const ADDON_P = {
-  smm: 250, surgePro: 395, pad: 485, battery: 185, emPanel: 495,
+  smm: 250, surgePro: 395, pad: 485, battery: 185, emPanel: 495, gasLine: 500,
   additionalATS: 1000, extraWire: 25,
   padLC_small: 800, padLC_large: 1200, startupLC: 1595,
   lull: 1100, crane: 1800, atsLC_150: 1000, atsLC_200: 1000,
@@ -409,6 +409,7 @@ function calcFormTotals(g: Record<string, unknown>) {
   const surgeTotal  = g.surgePro ? ADDON_P.surgePro  : 0;
   const batteryAmt  = g.battery  ? ADDON_P.battery   : 0;
   const emPanelAmt  = g.emPanel  ? ADDON_P.emPanel   : 0;
+  const gasLineAmt  = (g.jobType === 'swap-out' && g.gasLine) ? ADDON_P.gasLine : 0;
   const extraWireAmt = Number(g.extraWire || 0) * ADDON_P.extraWire;
   const extraATS    = Number(g.additionalATS || 0) * ADDON_P.additionalATS;
   const lcATS       = g.lcATS === '150A' ? ADDON_P.atsLC_150 : g.lcATS === '200A' ? ADDON_P.atsLC_200 : 0;
@@ -417,7 +418,7 @@ function calcFormTotals(g: Record<string, unknown>) {
   const laborAmt    = Number(g.labor)   || ADDON_P.labor;
   const permitAmt   = Number(g.permit)  || ADDON_P.permit;
   const startupAmt  = coolingType === 'liquid-cooled' ? ADDON_P.startupLC : (Number(g.startup) || ADDON_P.startup);
-  const subtotal    = genP + padAmt + smmTotal + surgeTotal + batteryAmt + emPanelAmt + extraWireAmt + extraATS + lcATS + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
+  const subtotal    = genP + padAmt + smmTotal + surgeTotal + batteryAmt + emPanelAmt + gasLineAmt + extraWireAmt + extraATS + lcATS + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
   const discountAmt = g.discountType === '%'
     ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
     : (Number(g.discount) || 0);
@@ -425,7 +426,7 @@ function calcFormTotals(g: Record<string, unknown>) {
   const tax         = Math.round(taxable * ((Number(g.taxRate) || 7) / 100));
   const total       = taxable + tax;
   const deposit     = Math.round(total * ((Number(g.depositPct) || 50) / 100));
-  return { genP, padAmt, smmTotal, surgeTotal, extraATS, lcATS, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, extraWireAmt, subtotal, discountAmt, taxable, tax, total, deposit };
+  return { genP, padAmt, smmTotal, surgeTotal, extraATS, lcATS, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxable, tax, total, deposit };
 }
 
 const BUILD_FROM_NOTES_SYSTEM = `You are an expert generator installation estimator. Extract a proposal form (GenForm) from field site visit notes.
@@ -454,7 +455,6 @@ Enum fields:
                 liquid-cooled Kohler: "24KW" "30KW" "38KW" "48KW" "60KW" "80KW" "100KW"
                 liquid-cooled Generac:"32KW" "40KW" "48KW" "60KW"
   fuel        — "Natural Gas" | "LP"  (default: "Natural Gas")
-                (use "LP" for propane, liquid propane, LP gas, or any propane reference)
   ats         — "100A" | "150A" | "200A" | "400A"  (default: "200A")
   jobType     — "new-install" | "swap-out"  (default: "new-install")
   liftType    — "none" | "lull" | "crane"  (default: "none")
@@ -467,6 +467,7 @@ Boolean fields (true/false):
   surgePro  — surge protector  (default: false)
   battery   — battery maintainer — ALWAYS true when jobType is "new-install"
   emPanel   — EM panel  (default: false)
+  gasLine   — gas line disconnect & reconnect — only applies to swap-out jobs  (default: false)
   removal   — remove existing unit  (default: false)
   includeBreakdown — (default: false)
 
@@ -520,7 +521,7 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
     customer: '', attn: '', address: '', city: '', state: 'FL', zip: '', phone: '', email: '',
     brand: 'Kohler', coolingType: 'air-cooled', size: '14KW',
     ats: '200A', fuel: 'Natural Gas', jobType: 'new-install', liftType: 'none', lcATS: 'none',
-    pad: true, smm: true, surgePro: false, battery: true, emPanel: false,
+    pad: true, smm: true, surgePro: false, battery: true, emPanel: false, gasLine: false,
     removal: false, extraWire: 0, additionalATS: 0, removalFee: 500,
     labor: ADDON_P.labor, permit: ADDON_P.permit, startup: ADDON_P.startup,
     discount: 0, discountType: '$', taxRate: 7, validDays: 30, depositPct: 50,
@@ -531,7 +532,7 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   form.battery = form.jobType === 'swap-out' ? (parsed.battery ?? true) : true;
 
   const totals = calcFormTotals(form);
-  const addons = (form.smm ? 1 : 0) + (form.surgePro ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0) + (form.emPanel ? 1 : 0);
+  const addons = (form.smm ? 1 : 0) + (form.surgePro ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0) + (form.emPanel ? 1 : 0) + (form.gasLine ? 1 : 0);
 
   // Stage: set to 'building' only if not already in a more advanced stage
   const advancedStages = ['sent', 'signed', 'awarded'];
