@@ -283,7 +283,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                 </tr>
                 <tr style={{ background: BLUE_L }}>
                   <td style={{ padding: '5px 8px' }} colSpan={2}>{addrDisplay || '—'}</td>
-                  <td style={{ padding: '5px 8px' }} colSpan={2}>50% due at signing</td>
+                  <td style={{ padding: '5px 8px' }} colSpan={2}>{form.depositPct ?? 50}% due at signing</td>
                 </tr>
                 <tr style={{ background: BLUE_L }}>
                   <td style={{ padding: '4px 8px', color: GRAY_M, fontSize: 8.5 }} colSpan={2}>Date: {today}</td>
@@ -586,7 +586,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
               'APT installs generators in order by date of initial payment.',
               "Individual generator units carry their own warranties. Manufacturer's warranties can be extended up to five (5) years on most generators.",
               'Installation typically takes thirty (30) days from permit approval and material receipt.',
-              'Payment schedule: 50% deposit at signing; 50% of remaining balance after electrical completion; remainder at startup and final inspection.',
+              `Payment schedule: ${form.depositPct ?? 50}% deposit at signing; 50% of remaining balance after electrical completion; remainder at startup and final inspection.`,
               'All contractors are paid at completion; proof of payment available on request.',
               'Invoices and Commencement Notices MUST be signed before work begins.',
               "Warning — Florida's Construction Law allows unpaid contractors, subcontractors, and material suppliers to file Liens against your property.",
