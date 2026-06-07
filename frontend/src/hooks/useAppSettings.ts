@@ -36,9 +36,10 @@ export interface AppSettings {
   email_from_name: string;
   email_reply_to: string;
   frontend_url: string;
-  // AI
+  // AI — Plan Analysis / Takeoff
   ai_anthropic_key: string;
   ai_model: string;
+  ai_takeoff_agent23_model: string;
   ai_max_tokens: string;
   ai_temperature: string;
   // AI permissions
@@ -69,7 +70,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   gen_default_lull: '1100', gen_default_crane: '1800',
   gen_default_deposit_pct: '50', gen_default_valid_days: '30', gen_pricing_table: '',
   email_resend_api_key: '', email_from_address: '', email_from_name: '', email_reply_to: '', frontend_url: '',
-  ai_anthropic_key: '', ai_model: 'claude-sonnet-4-6', ai_max_tokens: '4096', ai_temperature: '0.3',
+  ai_anthropic_key: '', ai_model: 'claude-sonnet-4-6', ai_takeoff_agent23_model: 'claude-haiku-4-5-20251001', ai_max_tokens: '16000', ai_temperature: '0.3',
   ai_enabled: 'true', ai_analysis_enabled: 'true', ai_daily_limit_per_user: '10', ai_role_permissions: '',
   commission_default_rate: '3',
   currency_code: 'USD',

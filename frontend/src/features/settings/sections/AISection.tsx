@@ -1,19 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import api from '../../../api/client';
-import Icon from '../../../components/Icon';
-import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
-import { Field, SectionTitle, SaveBar, Toggle, RolePill, inputStyle, initials, timeAgo, ROLE_OPTIONS, ROLE_LABELS, ROLE_COLORS } from '../shared';
+import { Field, SectionTitle, SaveBar, inputStyle } from '../shared';
 
 export function AISection({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
-  const keys = ['ai_anthropic_key','ai_model','ai_max_tokens','ai_temperature'];
-  const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(keys.map(k => [k, (settings as any)[k] ?? ''])));
+  const keys = ['ai_anthropic_key','ai_model','ai_takeoff_agent23_model','ai_max_tokens','ai_temperature'];
+  const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(keys.map(k => [k, (settings as unknown as Record<string,string>)[k] ?? ''])));
   const [orig, setOrig] = useState(vals);
   const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
 
   useEffect(() => {
-    const fresh = Object.fromEntries(keys.map(k => [k, (settings as any)[k] ?? '']));
+    const fresh = Object.fromEntries(keys.map(k => [k, (settings as unknown as Record<string,string>)[k] ?? '']));
     setVals(fresh); setOrig(fresh);
   }, [settings]);
 
@@ -26,39 +24,51 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
     finally { setSaving(false); }
   };
 
-  const MODEL_OPTIONS = [
-    'claude-sonnet-4-6',
-    'claude-opus-4-8',
-    'claude-haiku-4-5-20251001',
-  ];
-  const models = vals.ai_model && !MODEL_OPTIONS.includes(vals.ai_model)
-    ? [vals.ai_model, ...MODEL_OPTIONS]
-    : MODEL_OPTIONS;
+  const VISION_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'];
+  const TEXT_MODELS   = ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8'];
+
+  const visionModels = vals.ai_model && !VISION_MODELS.includes(vals.ai_model)
+    ? [vals.ai_model, ...VISION_MODELS] : VISION_MODELS;
+  const textModels = vals.ai_takeoff_agent23_model && !TEXT_MODELS.includes(vals.ai_takeoff_agent23_model)
+    ? [vals.ai_takeoff_agent23_model, ...TEXT_MODELS] : TEXT_MODELS;
 
   return (
     <div>
-      <SectionTitle title="AI Configuration" sub="Settings for the Anthropic Claude AI used in plan analysis and proposal generation."/>
+      <SectionTitle
+        title="Plan Analysis · AI Takeoff"
+        sub="Settings for the 3-agent AI pipeline used to analyze commercial electrical plans and generate scope/estimates."
+      />
 
       <div style={{ background: 'var(--blue-soft)', border: '1px solid rgba(77,141,247,.25)', borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 13, color: 'var(--blue)', lineHeight: 1.6 }}>
-        <strong>API Key:</strong> Required for plan analysis and AI extraction features. Your key from <strong>console.anthropic.com</strong>. If left blank, AI features return a graceful "unavailable" response.
+        <strong>API Key:</strong> Required for plan analysis. Get your key from <strong>console.anthropic.com</strong>. If left blank, AI features return a graceful "unavailable" response.
       </div>
 
-      <Field label="Anthropic API Key" desc="Your key from console.anthropic.com. Leave blank until ready for testing.">
+      <Field label="Anthropic API Key" desc="Your key from console.anthropic.com.">
         <input type="password" style={inputStyle} value={vals.ai_anthropic_key} onChange={set('ai_anthropic_key')} placeholder="sk-ant-••••••••••"/>
       </Field>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 20px' }}>
-        <Field label="Model">
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 20px' }}>
+        <Field label="Agent 1 — Vision Model" desc="Reads plan drawings. Smarter model = better extraction.">
           <select style={{ ...inputStyle, appearance: 'none' }} value={vals.ai_model} onChange={set('ai_model')}>
-            {models.map(m => <option key={m} value={m}>{m}</option>)}
+            {visionModels.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
         </Field>
-        <Field label="Max Tokens">
-          <input type="number" style={inputStyle} value={vals.ai_max_tokens} onChange={set('ai_max_tokens')} min={256} max={8192}/>
+        <Field label="Agents 2 & 3 — Text Model" desc="Scope, estimate & QA review. Haiku is fast and cost-effective.">
+          <select style={{ ...inputStyle, appearance: 'none' }} value={vals.ai_takeoff_agent23_model} onChange={set('ai_takeoff_agent23_model')}>
+            {textModels.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
         </Field>
-        <Field label="Temperature (0–1)">
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 20px' }}>
+        <Field label="Max Tokens" desc="Max output tokens per agent call (256–64000).">
+          <input type="number" style={inputStyle} value={vals.ai_max_tokens} onChange={set('ai_max_tokens')} min={256} max={64000}/>
+        </Field>
+        <Field label="Temperature (0–1)" desc="0 = deterministic, 1 = creative. 0.3 recommended for plan analysis.">
           <input type="number" style={inputStyle} value={vals.ai_temperature} onChange={set('ai_temperature')} min={0} max={1} step={0.1}/>
         </Field>
       </div>
+
       <SaveBar onSave={save} saving={saving} saved={saved} hasChanges={hasChanges}/>
     </div>
   );

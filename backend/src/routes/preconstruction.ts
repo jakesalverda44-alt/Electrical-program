@@ -16,7 +16,8 @@ const router = Router();
 const upload = drawingUpload;
 
 interface AIConfig {
-  model: string;
+  model: string;      // Agent 1 — vision model (reads plan images/PDFs)
+  modelText: string;  // Agents 2 & 3 — text-only model (scope, estimate, QA)
   maxTokens: number;
   temperature: number;
 }
@@ -32,13 +33,15 @@ function parseNumberSetting(value: string, fallback: number, min: number, max: n
 }
 
 async function loadAIConfig(): Promise<AIConfig> {
-  const [modelSetting, maxTokensSetting, temperatureSetting] = await Promise.all([
+  const [modelSetting, modelTextSetting, maxTokensSetting, temperatureSetting] = await Promise.all([
     getSetting('ai_model'),
+    getSetting('ai_takeoff_agent23_model'),
     getSetting('ai_max_tokens'),
     getSetting('ai_temperature'),
   ]);
   return {
-    model: (modelSetting || process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim(),
+    model:     (modelSetting     || process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim(),
+    modelText: (modelTextSetting || 'claude-haiku-4-5-20251001').trim(),
     maxTokens: parseNumberSetting(maxTokensSetting || process.env.AI_MAX_TOKENS || '', DEFAULT_MAX_TOKENS, 256, 64000),
     temperature: parseNumberSetting(temperatureSetting || process.env.AI_TEMPERATURE || '', DEFAULT_TEMPERATURE, 0, 1),
   };
@@ -243,7 +246,7 @@ async function runPipeline(
   try {
     await updateStatus('agent2_running');
     const resp = await callWithRetry(() => client.messages.create({
-      model: config.model,
+      model: config.modelText,
       max_tokens: config.maxTokens,
       temperature: config.temperature,
       system: [{ type: 'text', text: AGENT2_SYSTEM, cache_control: { type: 'ephemeral' } }],
@@ -272,7 +275,7 @@ async function runPipeline(
   try {
     await updateStatus('agent3_running');
     const resp = await callWithRetry(() => client.messages.create({
-      model: config.model,
+      model: config.modelText,
       max_tokens: config.maxTokens,
       temperature: config.temperature,
       system: [{ type: 'text', text: AGENT3_SYSTEM, cache_control: { type: 'ephemeral' } }],
