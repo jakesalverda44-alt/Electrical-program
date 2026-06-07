@@ -276,15 +276,14 @@ export default function AppShell({
           </div>
         </>
       )}
+      {profileOpen && (
+        <ProfileModal
+          user={localUser}
+          onClose={() => setProfileOpen(false)}
+          onSaved={updated => { setLocalUser(updated); }}
+          showToast={showToast}
+        />
+      )}
     </div>
-
-    {profileOpen && (
-      <ProfileModal
-        user={localUser}
-        onClose={() => setProfileOpen(false)}
-        onSaved={updated => { setLocalUser(updated); }}
-        showToast={showToast}
-      />
-    )}
   );
 }
