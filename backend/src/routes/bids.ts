@@ -20,6 +20,7 @@ import {
   ESTIMATING_ACTIVE_BIDS_ROOT,
   ESTIMATING_SUBMITTED_BIDS_ROOT,
   ACTIVE_PROJECTS_ROOT,
+  listFolderFiles,
   COMPLETED_PROJECTS_ROOT,
 } from '../services/googleDrive';
 
@@ -372,6 +373,15 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   );
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
   res.json(withDueDays(rows[0]));
+});
+
+// List files from the Drive Photos folder for this project.
+router.get('/:id/photos', requireAuth, async (req: AuthRequest, res) => {
+  const bid = await loadOwnedBid(req, res);
+  if (!bid) return;
+  if (!bid.drive_photos_folder_id) return res.json([]);
+  const files = await listFolderFiles(bid.drive_photos_folder_id);
+  res.json(files);
 });
 
 // Soft delete — moves the bid (and its won-job revenue record) to the Trash.
