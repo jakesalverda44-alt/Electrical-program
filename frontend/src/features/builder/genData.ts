@@ -262,4 +262,5 @@ export interface GenForm {
   includeBreakdown: boolean;
   jobType: 'new-install' | 'swap-out';
   removalFee: number;
+  validDays: number;
 }
