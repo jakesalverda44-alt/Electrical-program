@@ -1,8 +1,12 @@
 import { Router } from 'express';
+import Anthropic from '@anthropic-ai/sdk';
 import { pool } from '../db/pool';
 import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
+import { getSetting } from './settings';
+import { parseAIJSON } from '../ai/json';
+import { screenshotUpload } from '../utils/upload';
 
 const router = Router();
 
@@ -80,6 +84,78 @@ async function fireAndLogWebhook(
     [lead.id, kind, text]
   ).catch(e => logger.error({ err: e }, 'lead_activity insert failed'));
 }
+
+const KOHLER_EXTRACT_SYSTEM = `You are extracting customer information from a Kohler dealer portal lead screenshot. Extract and return ONLY a valid JSON object with exactly these fields: name, email, phone, address, city, state, zip, notes. Put any generator interest details or additional info in the notes field. Use null for any field not visible in the screenshot. Return nothing except the raw JSON object — no markdown, no explanation, no backticks.`;
+
+// POST /api/leads/from-screenshot  (must be before /:id routes)
+router.post('/from-screenshot', requireAuth, screenshotUpload.single('screenshot'), asyncHandler(async (req: AuthRequest, res) => {
+  if (!req.file) { res.status(400).json({ error: 'No screenshot uploaded' }); return; }
+
+  const apiKey = await getSetting('ai_anthropic_key').catch(() => null) || process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) { res.status(503).json({ error: 'Anthropic API key not configured. Add it in Settings > AI or set ANTHROPIC_API_KEY.' }); return; }
+
+  // Claude vision supports jpeg, png, gif, webp — treat heic as jpeg as a best-effort
+  const rawMime = req.file.mimetype;
+  const SUPPORTED_MIMES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const;
+  type SupportedMime = typeof SUPPORTED_MIMES[number];
+  const mediaType: SupportedMime = (SUPPORTED_MIMES as readonly string[]).includes(rawMime)
+    ? (rawMime as SupportedMime)
+    : 'image/jpeg';
+
+  const base64 = req.file.buffer.toString('base64');
+
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const client = new Anthropic({ apiKey });
+    const message = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      system: KOHLER_EXTRACT_SYSTEM,
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } }],
+      }],
+    });
+    const text = message.content[0]?.type === 'text' ? message.content[0].text : '';
+    parsed = parseAIJSON(text);
+  } catch (err) {
+    logger.error({ err }, 'Claude screenshot extraction failed');
+    res.status(400).json({ error: 'Could not extract lead data from screenshot' });
+    return;
+  }
+
+  if (!parsed || !parsed.name) {
+    res.status(400).json({ error: 'Could not extract lead data from screenshot' });
+    return;
+  }
+
+  // Build a single address string from parts
+  const addrParts = [parsed.address, parsed.city, parsed.state, parsed.zip].filter(Boolean);
+  const fullAddress = addrParts.length ? addrParts.join(', ') : null;
+
+  const { rows } = await pool.query(
+    `INSERT INTO leads
+       (name, email, phone, address, source, contact_method, interest_level, notes,
+        salesperson_id, salesperson_name)
+     VALUES ($1,$2,$3,$4,'kohler','phone','unknown',$5,$6,$7)
+     RETURNING *`,
+    [
+      String(parsed.name).trim(),
+      parsed.email || null,
+      parsed.phone || null,
+      fullAddress,
+      parsed.notes || null,
+      req.user!.id,
+      req.user!.name,
+    ]
+  );
+  const lead = rows[0];
+
+  // Fire-and-forget automation webhook
+  fireAndLogWebhook(lead, lead.stage, lead.contact_method).catch(() => {});
+
+  res.status(201).json({ lead, extracted: parsed });
+}));
 
 // GET /api/leads
 router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {

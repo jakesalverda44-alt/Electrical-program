@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { Lead } from '../../types';
@@ -29,6 +30,7 @@ function followUpMeta(d?: string | null): { label: string; color: string } | nul
 }
 
 export default function LeadsPage({ onNav, onEditGen }: Props) {
+  const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [stageFilter, setStageFilter] = useState<LeadStageKey | 'all'>('all');
@@ -99,6 +101,13 @@ export default function LeadsPage({ onNav, onEditGen }: Props) {
               </button>
             ))}
           </div>
+          <button
+            className="btn ghost"
+            style={{ fontSize: 13, color: 'var(--blue)', borderColor: 'rgba(59,130,246,.4)' }}
+            onClick={() => navigate('/leads/kohler-intake')}
+          >
+            <Icon name="bolt" size={14} stroke={2}/>Kohler Intake
+          </button>
           <button className="btn amber" style={{ fontSize: 13 }} onClick={() => setShowAdd(true)}>
             <Icon name="plus" size={15} stroke={2.4}/>Add Lead
           </button>

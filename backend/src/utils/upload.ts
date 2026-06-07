@@ -59,3 +59,15 @@ export const drawingUpload = multer({
   limits: { fileSize: 50 * MB, files: 50 },
   fileFilter: extensionFilter(DRAWING_EXTS),
 });
+
+const SCREENSHOT_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic']);
+
+/** Lead screenshot intake: images only, 10MB, filtered by MIME type. */
+export const screenshotUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * MB },
+  fileFilter: (_req, file, cb) => {
+    if (SCREENSHOT_MIMES.has(file.mimetype)) cb(null, true);
+    else cb(new UnsupportedFileTypeError(file.originalname || 'file'));
+  },
+});
