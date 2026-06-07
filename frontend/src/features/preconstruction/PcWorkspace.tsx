@@ -180,7 +180,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
   const runAI = async () => {
     if (wsRef.current.aiRunning || wsRef.current.aiDone) return;
-    const elecFiles = fileObjectsRef.current.filter(f => isElecSheet(f.name));
+    const elecUploaded = fileObjectsRef.current.filter(f => isElecSheet(f.name)).length;
+    const elecSelected = projectDocs.filter(d => selectedDocIds.has(d.id) && isElecSheet(d.name)).length;
+    const elecCount = elecUploaded + elecSelected;
     const hasUploaded = fileObjectsRef.current.length > 0;
     const hasSelected = selectedDocIds.size > 0;
     if (!hasUploaded && !hasSelected) {
@@ -191,7 +193,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       return;
     }
     const totalCount = fileObjectsRef.current.length + selectedDocIds.size;
-    set({ aiRunning: true, aiLog: [`Sending ${totalCount} file(s) (${elecFiles.length} electrical sheet${elecFiles.length !== 1 ? 's' : ''} identified)…`] });
+    set({ aiRunning: true, aiLog: [`Sending ${totalCount} file(s) (${elecCount} electrical sheet${elecCount !== 1 ? 's' : ''} identified)…`] });
     try {
       const formData = new FormData();
       formData.append('bidId', bid.id);
