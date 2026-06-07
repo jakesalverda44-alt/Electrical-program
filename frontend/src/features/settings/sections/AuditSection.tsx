@@ -13,14 +13,14 @@ interface AuditRow {
 }
 
 const ACTION_COLORS: Record<string, { bg: string; color: string }> = {
-  award:          { bg: '#D1FAE5', color: '#065F46' },
-  delete:         { bg: '#FEE2E2', color: '#991B1B' },
-  purge:          { bg: '#FECACA', color: '#7F1D1D' },
-  restore:        { bg: '#DBEAFE', color: '#1E40AF' },
-  merge:          { bg: '#EDE9FE', color: '#5B21B6' },
-  role_change:    { bg: '#FEF3C7', color: '#92400E' },
-  password_reset: { bg: '#FEF3C7', color: '#92400E' },
-  ai_override:    { bg: '#E0F2FE', color: '#075985' },
+  award:          { bg: 'var(--green-soft)',       color: 'var(--green)' },
+  delete:         { bg: 'rgba(224,106,106,.14)',   color: 'var(--red)'   },
+  purge:          { bg: 'rgba(224,106,106,.22)',   color: 'var(--red)'   },
+  restore:        { bg: 'var(--blue-soft)',        color: 'var(--blue)'  },
+  merge:          { bg: 'rgba(139,92,246,.14)',    color: '#A78BFA'      },
+  role_change:    { bg: 'var(--amber-soft)',       color: 'var(--amber)' },
+  password_reset: { bg: 'var(--amber-soft)',       color: 'var(--amber)' },
+  ai_override:    { bg: 'rgba(77,141,247,.12)',    color: 'var(--blue)'  },
 };
 
 export function AuditSection() {
@@ -62,7 +62,7 @@ export function AuditSection() {
       ) : (
         <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
           {rows.map((r, i) => {
-            const c = ACTION_COLORS[r.action] ?? { bg: '#F3F4F6', color: '#374151' };
+            const c = ACTION_COLORS[r.action] ?? { bg: 'var(--surface2)', color: 'var(--text2)' };
             return (
               <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
                 borderTop: i ? '1px solid var(--border)' : 'none' }}>
