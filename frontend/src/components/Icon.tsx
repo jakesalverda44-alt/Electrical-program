@@ -30,6 +30,9 @@ const ICON_PATHS: Record<string, string> = {
   sparkle: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>',
   file: '<path d="M6 2h8l4 4v16H6zM14 2v4h4"/>',
   edit: '<path d="M4 20h4l11-11a2 2 0 0 0-3-3L5 17z"/>',
+  phone: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2A19.9 19.9 0 0 1 3.1 4.2 2 2 0 0 1 5.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L9 9.9a16 16 0 0 0 6.1 6.1l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.5 2.9.7a2 2 0 0 1 1.6 2z"/>',
+  'chevron-down': '<path d="M6 9l6 6 6-6"/>',
+  eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
 };
 
 interface IconProps {

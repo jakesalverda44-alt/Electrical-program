@@ -120,6 +120,34 @@ export interface Customer {
   created_at?: string;
 }
 
+export interface Lead {
+  id: string;
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  source: 'web' | 'phone' | 'referral' | 'kohler' | 'other';
+  contact_method: 'email' | 'phone';
+  interest_level: 'unknown' | 'warm' | 'hot' | 'not-interested';
+  stage: 'new' | 'contacted' | 'vetting' | 'quoted' | 'site-scheduled' | 'site-complete' | 'proposal-sent' | 'won' | 'lost';
+  notes?: string | null;
+  site_notes?: string | null;
+  quoted_range?: string | null;
+  follow_up_date?: string | null;
+  linked_gen_id?: string | null;
+  salesperson_name?: string | null;
+  salesperson_id?: string | null;
+  created_at?: string;
+}
+
+export interface LeadActivity {
+  id: string;
+  lead_id: string;
+  kind: string;
+  text: string;
+  created_at: string;
+}
+
 export interface CustomerDetail {
   customer: Customer;
   bids: Bid[];

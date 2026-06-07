@@ -27,6 +27,7 @@ import documentsRouter from './routes/documents';
 import settingsRouter from './routes/settings';
 import adminRouter from './routes/admin';
 import intakeRouter from './routes/intake';
+import leadsRouter from './routes/leads';
 
 dotenv.config();
 
@@ -74,6 +75,7 @@ app.use('/api/documents', documentsRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/intake', intakeRouter);
+app.use('/api/leads', leadsRouter);
 
 app.get('/api/ai/usage/today', requireAuth, asyncHandler(async (_req: AuthRequest, res) => {
   const today = new Date().toISOString().split('T')[0];

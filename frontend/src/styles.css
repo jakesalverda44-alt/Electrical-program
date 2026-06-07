@@ -898,6 +898,9 @@ button{font-family:inherit}
 }
 .toast { animation: toastIn .32s var(--ease-spring); }
 
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.8s linear infinite; }
+
 /* ── Due date widget — hot state glow ───────────────────────────── */
 .due-date.hot { box-shadow: 0 0 0 3px rgba(242,133,79,.15); }
 

@@ -19,6 +19,8 @@ import ReportingPage from './features/reporting/ReportingPage';
 import CommsPage from './features/comms/CommsPage';
 import DocsPage from './features/docs/DocsPage';
 import FollowupsPage from './features/followups/FollowupsPage';
+import LeadsPage from './features/leads/LeadsPage';
+import KohlerIntakePage from './features/leads/KohlerIntakePage';
 import CalendarPage from './features/calendar/CalendarPage';
 import ProposalPublicPage from './pages/ProposalPublicPage';
 import SettingsPage from './features/settings/SettingsPage';
@@ -145,6 +147,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage onLogin={handleLogin}/>}/>
           <Route path="/reset-password" element={<LoginPage onLogin={handleLogin}/>}/>
           <Route path="/p/:token" element={<ProposalPublicPage/>}/>
+          <Route path="/leads/kohler-intake" element={<Navigate to="/login" replace/>}/>
           <Route path="*" element={<Navigate to="/login" replace/>}/>
         </Routes>
         {toast && <Toast toast={toast}/>}
@@ -230,6 +233,8 @@ export default function App() {
         return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
       case 'calendar':
         return <CalendarPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
+      case 'gen-leads':
+        return <LeadsPage onNav={setView} onEditGen={g => { setEditGen(g); setView('builder'); }}/>;
       case 'followups':
         return <FollowupsPage onCountChange={setFollowupCount}/>;
       case 'comms':
@@ -281,6 +286,8 @@ export default function App() {
     <Routes>
       {/* Public proposal stays reachable even when signed in */}
       <Route path="/p/:token" element={<ProposalPublicPage/>}/>
+      {/* Standalone mobile page — no AppShell, no sidebar */}
+      <Route path="/leads/kohler-intake" element={<KohlerIntakePage/>}/>
       {/* Auth pages are meaningless when already signed in */}
       <Route path="/login" element={<Navigate to="/dashboard" replace/>}/>
       <Route path="/reset-password" element={<Navigate to="/dashboard" replace/>}/>
