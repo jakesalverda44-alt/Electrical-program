@@ -451,7 +451,7 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   if (resume) {
     const { rows: prev } = await pool.query(
       `SELECT agent1_output FROM takeoff_results WHERE bid_id=$1
-       AND status IN ('agent1_complete','agent2_running','agent2_complete','agent3_running','complete','error')
+       AND status IN ('agent1_complete','agent2_running','agent2_complete','agent3_running','complete')
        AND agent1_output IS NOT NULL AND length(agent1_output) > 50`,
       [bidId]
     );
