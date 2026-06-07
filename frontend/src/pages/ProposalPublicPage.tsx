@@ -39,8 +39,10 @@ export default function ProposalPublicPage() {
   const [gen,    setGen]    = useState<GenData | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'signed' | 'error'>('loading');
   const [signing, setSigning] = useState(false);
+  const [signError, setSignError] = useState('');
   const [cleared, setCleared] = useState(false);
   const sigRef = useRef<SignatureCanvas>(null);
+  const sigWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch(`${API}/gens/p/${token}`)
@@ -68,7 +70,7 @@ export default function ProposalPublicPage() {
       // succeeded, so any failure here is non-fatal and silently ignored.
       if (gen) void saveSignedPdf(signatureData, gen);
     } catch {
-      alert('Something went wrong. Please try again or contact us.');
+      setSignError('Something went wrong. Please try again or call us directly.');
     } finally {
       setSigning(false);
     }
@@ -90,9 +92,9 @@ export default function ProposalPublicPage() {
       node.style.cssText = 'position:fixed;left:-99999px;top:0;width:760px;background:#fff;font-family:Arial,Helvetica,sans-serif;color:#1e293b;';
       node.innerHTML = `
         <div style="background:#1B3A6B;padding:20px 28px;">
-          <div style="font-size:13px;color:#93C5FD;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Generator Proposal</div>
+          <div style="font-size:13px;color:#C9A84C;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Generator Proposal</div>
           <div style="font-size:22px;font-weight:900;color:#fff;">${esc(g.customer)}</div>
-          ${g.proposal_no ? `<div style="font-size:12px;color:#93C5FD;margin-top:4px;">Proposal ${esc(g.proposal_no)}</div>` : ''}
+          ${g.proposal_no ? `<div style="font-size:12px;color:#C9A84C;margin-top:4px;">Proposal ${esc(g.proposal_no)}</div>` : ''}
         </div>
         <div style="padding:24px 28px;">
           ${form ? `
@@ -170,20 +172,24 @@ export default function ProposalPublicPage() {
   const priceRows = form && totals ? genPriceRows(form as GenForm, totals as GenTotals, fmt) : [];
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f4f6f9', fontFamily: 'Arial, sans-serif' }}>
+    <div style={{ minHeight: '100vh', background: '#f4f6f9', fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif' }}>
       {/* Nav bar */}
-      <div style={{ background: '#1B3A6B', padding: '14px 24px', display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div style={{ fontWeight: 900, fontSize: 17, color: '#fff' }}>Accurate Power &amp; Technology</div>
-        <div style={{ height: 3, width: 40, background: '#D4AF37', borderRadius: 2, marginLeft: 4 }}/>
+      <div style={{ background: '#1B3A6B', padding: '12px 24px', display: 'flex', alignItems: 'center', gap: 14 }}>
+        <img src="/apt-logo.png" alt="APT" style={{ height: 36, borderRadius: 6, background: '#fff', padding: '3px 6px', objectFit: 'contain' }}
+          onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}/>
+        <div>
+          <div style={{ fontWeight: 900, fontSize: 15, color: '#fff', lineHeight: 1.2 }}>Accurate Power &amp; Technology</div>
+          <div style={{ fontSize: 11, color: '#93C5FD', fontWeight: 600 }}>Licensed Electrical Contractor · EC13007737</div>
+        </div>
       </div>
 
       <div style={{ maxWidth: 760, margin: '0 auto', padding: '32px 16px 60px' }}>
         {/* Proposal card */}
         <div style={{ background: '#fff', borderRadius: 12, boxShadow: '0 2px 12px rgba(0,0,0,.08)', overflow: 'hidden', marginBottom: 28 }}>
           <div style={{ background: '#1B3A6B', padding: '20px 28px' }}>
-            <div style={{ fontSize: 13, color: '#93C5FD', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Generator Proposal</div>
+            <div style={{ fontSize: 13, color: '#C9A84C', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Generator Proposal</div>
             <div style={{ fontSize: 22, fontWeight: 900, color: '#fff' }}>{gen?.customer}</div>
-            {gen?.proposal_no && <div style={{ fontSize: 12, color: '#93C5FD', marginTop: 4 }}>Proposal {gen.proposal_no}</div>}
+            {gen?.proposal_no && <div style={{ fontSize: 12, color: '#C9A84C', marginTop: 4 }}>Proposal {gen.proposal_no}</div>}
           </div>
           <div style={{ padding: '24px 28px' }}>
             {form && (
@@ -226,7 +232,7 @@ export default function ProposalPublicPage() {
             <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.7, borderTop: '1px solid #e2e8f0', paddingTop: 20 }}>
               <p style={{ margin: '0 0 12px' }}>
                 Accurate Power &amp; Technology, Inc. proposes to furnish all labor and material necessary to complete
-                this generator installation. Our price is in accordance with the <strong>2026 National Electrical Code</strong>.{' '}
+                this generator installation. Our price is in accordance with the <strong>{new Date().getFullYear()} National Electrical Code</strong>.{' '}
                 <strong>This proposal is valid for 30 days.</strong>
               </p>
               <p style={{ margin: 0 }}>
@@ -240,14 +246,18 @@ export default function ProposalPublicPage() {
 
         {/* Signature section */}
         {status === 'signed' ? (
-          <div style={{ background: '#F0FDF4', border: '1px solid #86EFAC', borderRadius: 12, padding: '28px', textAlign: 'center' }}>
-            <div style={{ fontSize: 36, marginBottom: 10 }}>✅</div>
-            <div style={{ fontSize: 20, fontWeight: 900, color: '#166534', marginBottom: 6 }}>Proposal Accepted</div>
-            <div style={{ fontSize: 14, color: '#166534' }}>
-              Thank you, {gen?.customer}! We have received your signature and will be in touch shortly to schedule your installation.
+          <div style={{ background: '#fff', border: '1px solid #d1fae5', borderRadius: 12, padding: '36px 28px', textAlign: 'center', boxShadow: '0 2px 12px rgba(0,0,0,.06)' }}>
+            <div style={{ width: 56, height: 56, borderRadius: '50%', background: '#d1fae5', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: 26 }}>
+              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#16a34a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
             </div>
-            <div style={{ marginTop: 20, fontSize: 13, color: '#4ade80' }}>
-              Questions? Reply to the email we sent or call us directly.
+            <div style={{ fontSize: 22, fontWeight: 900, color: '#1e293b', marginBottom: 8 }}>Proposal Accepted</div>
+            <div style={{ fontSize: 14, color: '#475569', lineHeight: 1.6, maxWidth: 400, margin: '0 auto' }}>
+              Thank you, {gen?.customer}. We have received your signature and will be in touch shortly to schedule your installation.
+            </div>
+            <div style={{ marginTop: 20, fontSize: 13, color: '#64748b', paddingTop: 16, borderTop: '1px solid #f1f5f9' }}>
+              Questions? Reply to our email or call us directly.
             </div>
           </div>
         ) : (
@@ -257,22 +267,28 @@ export default function ProposalPublicPage() {
               Draw your signature below using your mouse or finger, then click <strong>Accept &amp; Sign</strong>.
             </div>
 
-            <div style={{ border: '2px solid #e2e8f0', borderRadius: 9, overflow: 'hidden', marginBottom: 14, background: '#fafafa' }}>
+            <div ref={sigWrapRef} style={{ border: '2px solid #e2e8f0', borderRadius: 9, overflow: 'hidden', marginBottom: 14, background: '#fafafa' }}>
               <SignatureCanvas
                 ref={sigRef}
                 penColor="#1B3A6B"
-                canvasProps={{ width: 700, height: 160, style: { width: '100%', height: 160, display: 'block' } }}
-                onBegin={() => setCleared(false)}
+                canvasProps={{ style: { width: '100%', height: 160, display: 'block' } }}
+                onBegin={() => { setCleared(false); setSignError(''); }}
               />
             </div>
 
+            {signError && (
+              <div style={{ marginBottom: 14, padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, fontSize: 13, color: '#991b1b', fontWeight: 600 }}>
+                {signError}
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: 10, justifyContent: 'space-between', alignItems: 'center' }}>
-              <button onClick={() => { sigRef.current?.clear(); setCleared(true); }}
+              <button onClick={() => { sigRef.current?.clear(); setCleared(true); setSignError(''); }}
                 style={{ fontSize: 13, fontWeight: 600, color: '#64748b', background: 'none', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 16px', cursor: 'pointer' }}>
                 Clear
               </button>
               <button onClick={handleSign} disabled={signing}
-                style={{ background: '#1B3A6B', color: '#fff', border: 'none', borderRadius: 9, padding: '12px 32px', fontWeight: 800, fontSize: 15, cursor: signing ? 'not-allowed' : 'pointer', opacity: signing ? .7 : 1 }}>
+                style={{ background: '#1B3A6B', color: '#fff', border: 'none', borderRadius: 9, padding: '12px 32px', fontWeight: 800, fontSize: 15, cursor: signing ? 'not-allowed' : 'pointer', opacity: signing ? .7 : 1, display: 'flex', alignItems: 'center', gap: 8 }}>
                 {signing ? 'Saving…' : 'Accept & Sign'}
               </button>
             </div>
