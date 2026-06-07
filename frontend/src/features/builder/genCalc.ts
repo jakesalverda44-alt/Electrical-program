@@ -23,6 +23,7 @@ export function blankGenForm(overrides?: DefaultOverrides): GenForm {
     includeBreakdown: false,
     jobType: 'new-install',
     removalFee: 500,
+    validDays: 30,
   };
 }
 
