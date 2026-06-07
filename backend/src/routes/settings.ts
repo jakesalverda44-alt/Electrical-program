@@ -10,35 +10,24 @@ const router = Router();
 const MASKED_KEYS = ['email_resend_api_key', 'ai_anthropic_key'];
 
 const ALLOWED_KEYS = [
-  // Email
   'email_resend_api_key', 'email_from_address', 'email_from_name', 'email_reply_to', 'frontend_url',
-  // Company
   'company_name', 'company_address', 'company_city', 'company_state', 'company_zip',
   'company_phone', 'company_email', 'company_website',
   'company_license_ec', 'company_license_cfc', 'company_license_li',
-  // Proposal defaults
   'gen_default_labor', 'gen_default_permit', 'gen_default_startup', 'gen_default_tax_rate',
   'gen_default_pad', 'gen_default_smm', 'gen_default_surge_pro', 'gen_default_battery',
   'gen_default_extra_wire', 'gen_default_lull', 'gen_default_crane',
-  // Generator pricing table (JSON blob)
+  'gen_default_deposit_pct', 'gen_default_valid_days',
   'gen_pricing_table',
-  // AI
   'ai_anthropic_key', 'ai_model', 'ai_max_tokens', 'ai_temperature',
-  // AI permissions
   'ai_enabled', 'ai_analysis_enabled', 'ai_daily_limit_per_user', 'ai_role_permissions',
-  // Commissions
   'commission_default_rate',
-  // Bid notifications
   'bid_notify_enabled', 'bid_notify_emails',
-  // Localization
   'currency_code',
-  // Notifications
   'notifications_json',
-  // Security
   'security_session_timeout',
 ];
 
-// Internal keys that must never be exposed through the API.
 const INTERNAL_KEYS = ['jwt_secret'];
 
 router.get('/', requireAuth, async (_req, res) => {
@@ -63,7 +52,6 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
     for (const key of ALLOWED_KEYS) {
       if (!(key in updates)) continue;
       const val = updates[key];
-      // Skip masked placeholders — user didn't change it
       if (MASKED_KEYS.includes(key) && val.startsWith('••••••••')) continue;
       await client.query(
         `INSERT INTO app_settings (key, value) VALUES ($1, $2)
@@ -74,7 +62,6 @@ router.put('/', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
     }
     await client.query('COMMIT');
     if (changedKeys.length) {
-      // Record which settings changed; never log secret values.
       await writeAudit(req, {
         action: 'update', entityType: 'settings', entityId: null,
         summary: `Updated settings: ${changedKeys.join(', ')}`, after: { keys: changedKeys },
