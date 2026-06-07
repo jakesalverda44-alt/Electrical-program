@@ -128,13 +128,13 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
               value: analysisEnabled, set: setAnalysisEnabled, danger: !analysisEnabled,
             },
           ].map(item => (
-            <div key={item.label} style={{ border: `1px solid ${item.danger ? '#FCA5A5' : 'var(--border)'}`, borderRadius: 12, padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: item.danger ? '#FEF2F2' : 'var(--surface)' }}>
+            <div key={item.label} style={{ border: `1px solid ${item.danger ? 'rgba(224,106,106,.35)' : 'var(--border)'}`, borderRadius: 12, padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: item.danger ? 'rgba(224,106,106,.10)' : 'var(--surface)' }}>
               <div>
-                <div style={{ fontWeight: 700, fontSize: 14, color: item.danger ? '#991B1B' : 'var(--text)', marginBottom: 2 }}>{item.label}</div>
-                <div style={{ fontSize: 12, color: item.danger ? '#B91C1C' : 'var(--text3)' }}>{item.desc}</div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: item.danger ? 'var(--red)' : 'var(--text)', marginBottom: 2 }}>{item.label}</div>
+                <div style={{ fontSize: 12, color: item.danger ? 'var(--red)' : 'var(--text3)', opacity: item.danger ? .8 : 1 }}>{item.desc}</div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 11, fontWeight: 800, color: item.value ? 'var(--green)' : '#DC2626', textTransform: 'uppercase' }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: item.value ? 'var(--green)' : 'var(--red)', textTransform: 'uppercase' }}>
                   {item.value ? 'ON' : 'OFF'}
                 </span>
                 <button onClick={() => item.set(!item.value)}
@@ -233,7 +233,7 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
                   const ov = overrides[u.id] ?? null;
                   const isSuspended = ov?.suspended === true;
                   return (
-                    <tr key={u.id} style={{ borderBottom: i < users.length - 1 ? '1px solid var(--border)' : 'none', background: isSuspended ? '#FEF2F2' : i % 2 === 0 ? 'var(--surface)' : 'var(--surface2)', opacity: overrideSaving?.startsWith(u.id) ? 0.6 : 1 }}>
+                    <tr key={u.id} style={{ borderBottom: i < users.length - 1 ? '1px solid var(--border)' : 'none', background: isSuspended ? 'rgba(224,106,106,.10)' : i % 2 === 0 ? 'var(--surface)' : 'var(--surface2)', opacity: overrideSaving?.startsWith(u.id) ? 0.6 : 1 }}>
                       <td style={{ padding: '12px 16px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                           <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, color: '#fff', flexShrink: 0 }}>
@@ -308,7 +308,7 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
                         <td style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text)' }}>{row.name}</td>
                         <td style={{ padding: '12px 16px' }}><RolePill role={row.role}/></td>
                         <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                          <span style={{ fontWeight: 800, color: pct >= 100 ? '#DC2626' : pct >= 80 ? '#D97706' : 'var(--text)' }}>{row.count}</span>
+                          <span style={{ fontWeight: 800, color: pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--text)' }}>{row.count}</span>
                         </td>
                         <td style={{ padding: '12px 16px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -330,6 +330,3 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
     </div>
   );
 }
-
-// ── SECURITY ──────────────────────────────────────────────────────────────────
-
