@@ -39,8 +39,8 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
     <div>
       <SectionTitle title="AI Configuration" sub="Settings for the Anthropic Claude AI used in plan analysis and proposal generation."/>
 
-      <div style={{ background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.3)', borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 13, color: 'var(--amber)', lineHeight: 1.6 }}>
-        <strong>⚠️ Security Note:</strong> Do not add your Anthropic API key until you are in the final testing phase. The system operates without it — AI features will return a graceful "unavailable" response until the key is set.
+      <div style={{ background: 'var(--blue-soft)', border: '1px solid rgba(77,141,247,.25)', borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 13, color: 'var(--blue)', lineHeight: 1.6 }}>
+        <strong>API Key:</strong> Required for plan analysis and AI extraction features. Your key from <strong>console.anthropic.com</strong>. If left blank, AI features return a graceful "unavailable" response.
       </div>
 
       <Field label="Anthropic API Key" desc="Your key from console.anthropic.com. Leave blank until ready for testing.">
