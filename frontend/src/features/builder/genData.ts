@@ -263,4 +263,5 @@ export interface GenForm {
   jobType: 'new-install' | 'swap-out';
   removalFee: number;
   validDays: number;
+  depositPct: number;
 }
