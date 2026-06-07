@@ -40,23 +40,6 @@ async function loadOwnedGen(req: AuthRequest, res: import('express').Response) {
   return rows[0];
 }
 
-// List photos from the gen job's Drive "Photos" subfolder. Lazily creates the folder
-// on older jobs that predate the Photos subfolder.
-router.get('/:id/photos', requireAuth, async (req: AuthRequest, res) => {
-  const gen = await loadOwnedGen(req, res);
-  if (!gen) return;
-  let photosFolderId: string | null = gen.drive_photos_folder_id || null;
-  if (!photosFolderId && gen.drive_job_folder_id) {
-    photosFolderId = await ensureSubfolder('Photos', gen.drive_job_folder_id);
-    if (photosFolderId) {
-      await pool.query('UPDATE generator_proposals SET drive_photos_folder_id=$1 WHERE id=$2', [photosFolderId, gen.id]);
-    }
-  }
-  if (!photosFolderId) return res.json([]);
-  const files = await listFolderFiles(photosFolderId);
-  res.json(files);
-});
-
 router.get('/benchmark', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT kw, amount FROM generator_proposals WHERE stage = 'awarded' AND kw > 0 AND amount > 0 AND deleted_at IS NULL`
@@ -452,6 +435,24 @@ router.get('/p/:token', async (req, res) => {
   );
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
   res.json(rows[0]);
+});
+
+// List photos from the gen job's Drive "Photos" subfolder. Lazily creates the folder
+// on older jobs that predate the Photos subfolder. Placed after static GET routes so
+// the dynamic /:id pattern never shadows them.
+router.get('/:id/photos', requireAuth, async (req: AuthRequest, res) => {
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+  let photosFolderId: string | null = gen.drive_photos_folder_id || null;
+  if (!photosFolderId && gen.drive_job_folder_id) {
+    photosFolderId = await ensureSubfolder('Photos', gen.drive_job_folder_id);
+    if (photosFolderId) {
+      await pool.query('UPDATE generator_proposals SET drive_photos_folder_id=$1 WHERE id=$2', [photosFolderId, gen.id]);
+    }
+  }
+  if (!photosFolderId) return res.json([]);
+  const files = await listFolderFiles(photosFolderId);
+  res.json(files);
 });
 
 // ── Public: sign proposal by token (no auth) ────────────────────────────────
