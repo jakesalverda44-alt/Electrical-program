@@ -88,10 +88,20 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
     setShowAdd(false);
   };
 
+  const daysSince = (ts?: string) => ts ? Math.floor((Date.now() - new Date(ts).getTime()) / 86400000) : 0;
+
   const dueBadge = (b: Bid) => {
-    if (b.stage === 'submitted') return <span className="badge normal">Submitted</span>;
-    if (b.stage === 'awarded')   return <span className="badge won"><Icon name="check" size={11} stroke={2.4}/>Won</span>;
-    if (b.stage === 'lost')      return <span className="badge lost">Lost</span>;
+    if (b.stage === 'submitted') {
+      const age = daysSince(b.submitted_at);
+      if (age >= 30) return (
+        <span className="badge" style={{ background: 'var(--orange-soft)', color: 'var(--orange)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <Icon name="clock" size={11} stroke={2}/>Stale · {age}d
+        </span>
+      );
+      return <span className="badge normal">Submitted</span>;
+    }
+    if (b.stage === 'awarded') return <span className="badge won"><Icon name="check" size={11} stroke={2.4}/>Won</span>;
+    if (b.stage === 'lost')    return <span className="badge lost">Lost</span>;
     const u = b.due_days <= 3 ? 'critical' : b.due_days <= 7 ? 'urgent' : 'normal';
     return <span className={'badge ' + u}><Icon name="clock" size={11} stroke={2}/>Due {b.due}</span>;
   };
