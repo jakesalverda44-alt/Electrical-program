@@ -69,7 +69,7 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
           </button>
         </div>
         {testResult === 'ok'    && <div style={{ marginTop: 8, fontSize: 13, color: 'var(--green)', fontWeight: 700 }}>✓ Test email delivered — check your inbox.</div>}
-        {testResult === 'error' && <div style={{ marginTop: 8, fontSize: 13, color: '#DC2626', fontWeight: 700 }}>✗ Delivery failed — check your API key and from address.</div>}
+        {testResult === 'error' && <div style={{ marginTop: 8, fontSize: 13, color: 'var(--red)', fontWeight: 700 }}>✗ Delivery failed — check your API key and from address.</div>}
       </div>
 
       <div style={{ marginTop: 24, background: 'var(--blue-soft)', borderRadius: 12, padding: '16px 20px' }}>
@@ -86,6 +86,3 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
     </div>
   );
 }
-
-// ── AI ────────────────────────────────────────────────────────────────────────
-
