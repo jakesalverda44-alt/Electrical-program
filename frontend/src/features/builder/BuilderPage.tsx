@@ -227,7 +227,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
               </div>
             </Field>
             {form.jobType === 'swap-out' && (
-              <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 9, padding: '10px 14px', fontSize: 12, color: '#92400E', fontWeight: 700 }}>
+              <div style={{ background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.35)', borderRadius: 9, padding: '10px 14px', fontSize: 12, color: 'var(--amber)', fontWeight: 700 }}>
                 SWAP-OUT INSTALLATION<br/>
                 <span style={{ fontWeight: 500, fontSize: 11 }}>Remove existing generator · Install on existing pad · Use existing ATS</span>
               </div>
