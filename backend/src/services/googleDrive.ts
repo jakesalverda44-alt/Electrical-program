@@ -9,7 +9,7 @@ export const GENERATOR_PROPOSALS_FOLDER     = '1FnUR5HJw3HunDBQR2I0-1ktk76L_GQih
 export const ACTIVE_GENERATOR_JOBS_ROOT     = '1PhG-nYeRMxCwYpiRsmSS6NkzW-aaJx8k';
 export const COMPLETED_GENERATOR_JOBS_ROOT  = '1-H8fn_ZdZgsu0W-8GKAbZ-nSp83ftaGC';
 
-export const GEN_SUBFOLDER_NAMES = ['Engineering', 'Permit', 'Contract', 'Invoices'];
+export const GEN_SUBFOLDER_NAMES = ['Engineering', 'Permit', 'Contract', 'Invoices', 'Photos'];
 export const BID_SUBFOLDER_NAMES = ['Plans', 'Bid Proposals'];
 export const AWARD_SUBFOLDER_NAMES = ['Submittals', 'RFIs', 'Change Orders', 'Photos', 'Contract & Invoices'];
 export const SUBFOLDER_NAMES = [...BID_SUBFOLDER_NAMES, ...AWARD_SUBFOLDER_NAMES];
@@ -86,6 +86,32 @@ export async function createCustomerFolder(customerName: string, rootId: string)
   const drive = getDriveClient();
   if (!drive) return null;
   return getOrCreateSubfolder(customerName, rootId);
+}
+
+/** Find or create a named subfolder under parentId. Public wrapper for lazy folder creation. */
+export async function ensureSubfolder(name: string, parentId: string): Promise<string | null> {
+  return getOrCreateSubfolder(name, parentId);
+}
+
+/**
+ * Stream a Drive file's bytes for proxying (image previews / downloads).
+ * Returns null if Drive is not configured or the file is inaccessible.
+ */
+export async function getFileMedia(fileId: string): Promise<{ stream: Readable; mimeType: string; name: string } | null> {
+  const drive = getDriveClient();
+  if (!drive) return null;
+  try {
+    const meta = await drive.files.get({ fileId, fields: 'mimeType, name' });
+    const resp = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'stream' });
+    return {
+      stream: resp.data as unknown as Readable,
+      mimeType: (meta.data.mimeType as string) || 'application/octet-stream',
+      name: (meta.data.name as string) || 'file',
+    };
+  } catch (err) {
+    console.error('[drive] getFileMedia failed:', err);
+    return null;
+  }
 }
 
 export async function createSubfolders(parentId: string, names: string[] = SUBFOLDER_NAMES): Promise<Record<string, string>> {
