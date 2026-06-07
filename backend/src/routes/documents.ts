@@ -5,7 +5,7 @@ import { logger } from '../utils/logger';
 import { asyncHandler } from '../utils/asyncHandler';
 import { writeAudit } from '../utils/audit';
 import { documentUpload } from '../utils/upload';
-import { uploadFile } from '../services/googleDrive';
+import { uploadFile, ensureSubfolder, getFileMedia } from '../services/googleDrive';
 import { uploadToCloud, deleteFromCloud, isCloudStorageConfigured } from '../utils/cloudStorage';
 
 const CATEGORY_TO_FOLDER: Record<string, string> = {
@@ -20,11 +20,18 @@ const CATEGORY_TO_FOLDER: Record<string, string> = {
   photo:         'drive_photos_folder_id',
 };
 
+// Generator proposals use a different (flatter) folder layout than electrical bids.
+const GEN_CATEGORY_TO_FOLDER: Record<string, string> = {
+  photo:       'drive_photos_folder_id',
+  contract:    'drive_contract_folder_id',
+  invoice:     'drive_invoices_folder_id',
+  permit:      'drive_permit_folder_id',
+  engineering: 'drive_engineering_folder_id',
+};
+
 const router = Router();
 const upload = documentUpload;
 
-// List documents. Optional ?linked_id= filters to one record (e.g. a generator).
-// file_data is excluded to keep responses small.
 router.get('/', requireAuth, asyncHandler(async (req, res) => {
   const { linked_id } = req.query as { linked_id?: string };
   const where = linked_id ? 'WHERE deleted_at IS NULL AND linked_id = $1' : 'WHERE deleted_at IS NULL';
@@ -36,65 +43,53 @@ router.get('/', requireAuth, asyncHandler(async (req, res) => {
   res.json(rows);
 }));
 
-// Upload with actual file binary (stored as base64 in file_data column)
 router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: AuthRequest, res) => {
   const { linked_id, linked_name, div, display_name, category } = req.body;
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'file required' });
 
-  logger.info({
-    linked_id,
-    linked_name,
-    div,
-    category,
-    fileName: file.originalname,
-    fileSize: file.size,
-    fileType: file.mimetype,
-    uploadedBy: req.user?.name,
-  }, 'Document upload started');
-
   try {
-    // Resolve the target Drive folder for linked electrical bids. Route to the
-    // category subfolder when it exists (e.g. Plans), else the job folder root.
     let driveFolderId: string | null = null;
     if (linked_id && div === 'elec') {
       const folderColumn = CATEGORY_TO_FOLDER[category];
-      const cols = folderColumn
-        ? `${folderColumn} AS sub_folder_id, drive_job_folder_id`
-        : `drive_job_folder_id`;
+      const cols = folderColumn ? `${folderColumn} AS sub_folder_id, drive_job_folder_id` : `drive_job_folder_id`;
       const { rows: bidRows } = await pool.query(`SELECT ${cols} FROM bids WHERE id=$1`, [linked_id]);
       driveFolderId = bidRows[0]?.sub_folder_id || bidRows[0]?.drive_job_folder_id || null;
-      logger.info({ linked_id, div, category, driveFolderId, sub_folder_id: bidRows[0]?.sub_folder_id, drive_job_folder_id: bidRows[0]?.drive_job_folder_id }, '[drive] folder lookup result');
+    } else if (linked_id && div === 'gen') {
+      const folderColumn = GEN_CATEGORY_TO_FOLDER[category];
+      const cols = folderColumn ? `${folderColumn} AS sub_folder_id, drive_job_folder_id` : `drive_job_folder_id`;
+      const { rows: genRows } = await pool.query(`SELECT ${cols} FROM generator_proposals WHERE id=$1`, [linked_id]);
+      driveFolderId = genRows[0]?.sub_folder_id || null;
+      // Photos folder may not exist yet on older gen jobs — lazily create it under the job folder.
+      if (!driveFolderId && category === 'photo' && genRows[0]?.drive_job_folder_id) {
+        driveFolderId = await ensureSubfolder('Photos', genRows[0].drive_job_folder_id);
+        if (driveFolderId) {
+          await pool.query(`UPDATE generator_proposals SET drive_photos_folder_id=$1 WHERE id=$2`, [driveFolderId, linked_id]);
+        }
+      }
+      driveFolderId = driveFolderId || genRows[0]?.drive_job_folder_id || null;
     }
 
-    // Primary app storage: Cloudinary, for files within its size limit.
     let storageUrl: string | null = null;
     if (isCloudStorageConfigured()) {
       try {
         storageUrl = await uploadToCloud(file.buffer, file.originalname, file.mimetype);
       } catch (cloudErr) {
-        logger.warn({ err: cloudErr, fileName: file.originalname, fileSize: file.size },
-          '[cloudStorage] upload rejected — using Drive/DB fallback');
+        logger.warn({ err: cloudErr }, '[cloudStorage] upload rejected — using Drive/DB fallback');
       }
     }
 
-    // Push to Google Drive whenever a folder is available. Always awaited so
-    // errors surface in logs and Drive upload is confirmed before we respond.
     const driveName = display_name?.trim() || file.originalname;
     const driveMime = file.mimetype || 'application/octet-stream';
     let driveFileId: string | null = null;
     if (driveFolderId) {
       try {
         driveFileId = await uploadFile(driveName, driveMime, file.buffer, driveFolderId);
-        if (driveFileId) logger.info({ driveFileId, linked_id, category, fileName: driveName }, '[drive] upload succeeded');
-        else logger.warn({ linked_id, category, fileName: driveName }, '[drive] upload returned null — Drive may not be configured');
       } catch (err) {
-        logger.error({ err, linked_id, category, fileName: driveName }, '[drive] upload failed');
+        logger.error({ err }, '[drive] upload failed');
       }
     }
 
-    // What to persist for app-side viewing/download, in order of preference:
-    //   1) Cloudinary URL  2) Drive view link  3) base64 in Postgres (small only).
     let fileData: string | null = null;
     if (!storageUrl) {
       if (driveFileId) storageUrl = `https://drive.google.com/file/d/${driveFileId}/view`;
@@ -109,29 +104,21 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
        display_name?.trim() || file.originalname, category || 'other',
        file.size, file.mimetype || '', req.user!.name, storageUrl || null, fileData]
     );
-    logger.info({ documentId: rows[0]?.id, fileName: file.originalname, fileSize: file.size }, 'Document upload saved');
     res.json(rows[0]);
   } catch (err) {
-    logger.error({ err, linked_id, fileName: file.originalname }, 'Document upload failed');
-    if ((err as { code?: string; column?: string }).code === '42703' && (err as { column?: string }).column === 'file_data') {
-      return res.status(500).json({ error: 'Document storage is not ready. Run database migrations and try again.' });
-    }
+    logger.error({ err }, 'Document upload failed');
     throw err;
   }
 }));
 
-// Download a document's file
 router.get('/:id/download', requireAuth, asyncHandler(async (req, res) => {
   const { rows } = await pool.query(
     'SELECT name, file_type, file_data, storage_url FROM documents WHERE id=$1 AND deleted_at IS NULL',
-    [req.params.id],
+    [req.params.id]
   );
   if (!rows[0]) return res.status(404).json({ error: 'not found' });
   const { name, file_type, file_data, storage_url } = rows[0];
-
-  // Cloud-stored file: redirect directly to Cloudinary URL
   if (storage_url) return res.redirect(storage_url as string);
-
   if (!file_data) return res.status(404).json({ error: 'no file data' });
   const buf = Buffer.from(file_data as string, 'base64');
   res.setHeader('Content-Type', (file_type as string) || 'application/octet-stream');
@@ -139,7 +126,18 @@ router.get('/:id/download', requireAuth, asyncHandler(async (req, res) => {
   res.send(buf);
 }));
 
-// Soft delete — moves the document to the Trash (recoverable via /restore).
+// Proxy a Drive file's bytes through the backend (the service account is authenticated;
+// the browser is not). Used for in-app image previews. Any authenticated staff user may
+// read — acceptable for an internal CRM.
+router.get('/drive-file/:fileId', requireAuth, asyncHandler(async (req, res) => {
+  const media = await getFileMedia(req.params.fileId);
+  if (!media) return res.status(404).json({ error: 'File not available' });
+  res.setHeader('Content-Type', media.mimeType);
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  media.stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
+  media.stream.pipe(res);
+}));
+
 router.delete('/:id', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res) => {
   const { rows } = await pool.query(
     'UPDATE documents SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id, name, linked_name, storage_url',
@@ -150,7 +148,6 @@ router.delete('/:id', requireAuth, requireAdmin, asyncHandler(async (req: AuthRe
   res.json({ ok: true });
 }));
 
-// Restore a trashed document.
 router.post('/:id/restore', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res) => {
   const { rows } = await pool.query(
     'UPDATE documents SET deleted_at=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at',
@@ -161,7 +158,6 @@ router.post('/:id/restore', requireAuth, requireAdmin, asyncHandler(async (req: 
   res.json(rows[0]);
 }));
 
-// Permanently delete a trashed document (admin only).
 router.delete('/:id/purge', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res) => {
   const { rows } = await pool.query('DELETE FROM documents WHERE id=$1 AND deleted_at IS NOT NULL RETURNING name', [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: 'Not found in Trash' });
