@@ -1,8 +1,8 @@
 /* styles.css — Accurate Power CRM · dark + airy design system
    Electrical = blue (#4D8DF7) · Generators = amber (#E0A53B) */
 :root{
-  --bg:#0E1626; --panel:#131E32; --surface:#18243B; --surface2:#1E2C46; --surface3:#243352;
-  --border:#26344F; --border2:#33445F;
+  --bg:#0B111C; --panel:#121B2C; --surface:#19263E; --surface2:#212F49; --surface3:#2A3B59;
+  --border:#2B3B57; --border2:#3B4D6B;
   --text:#EAEFF8; --text2:#9FADC6; --text3:#6A7892; --muted:#6E7C95;
   --blue:#4D8DF7; --blue-d:#3B7BEA; --blue-soft:rgba(77,141,247,.14);
   --amber:#E0A53B; --amber-d:#CE9326; --amber-soft:rgba(224,165,59,.15);
