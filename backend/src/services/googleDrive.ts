@@ -10,14 +10,8 @@ export const ACTIVE_GENERATOR_JOBS_ROOT     = '1PhG-nYeRMxCwYpiRsmSS6NkzW-aaJx8k
 export const COMPLETED_GENERATOR_JOBS_ROOT  = '1-H8fn_ZdZgsu0W-8GKAbZ-nSp83ftaGC';
 
 export const GEN_SUBFOLDER_NAMES = ['Engineering', 'Permit', 'Contract', 'Invoices'];
-
-// Bid-stage subfolders — created when a bid is first added (Plans + Bid Proposals).
 export const BID_SUBFOLDER_NAMES = ['Plans', 'Bid Proposals'];
-
-// Project subfolders — added when a bid is awarded and becomes a real project.
 export const AWARD_SUBFOLDER_NAMES = ['Submittals', 'RFIs', 'Change Orders', 'Photos', 'Contract & Invoices'];
-
-// Full set (bid + award) — used by backfill for awarded/closed jobs.
 export const SUBFOLDER_NAMES = [...BID_SUBFOLDER_NAMES, ...AWARD_SUBFOLDER_NAMES];
 
 function getCredentials(): Record<string, unknown> | null {
@@ -35,9 +29,6 @@ function getDriveClient() {
   const credentials = getCredentials();
   if (!credentials) return null;
   try {
-    // GOOGLE_IMPERSONATE_EMAIL enables domain-wide delegation so the service
-    // account acts as a real user — required for file uploads to My Drive
-    // (service accounts have no personal storage quota of their own).
     const subject = process.env.GOOGLE_IMPERSONATE_EMAIL || undefined;
     const auth = new google.auth.GoogleAuth({
       credentials,
@@ -51,20 +42,17 @@ function getDriveClient() {
   }
 }
 
-/** Build the job folder name: "Job Name — Location" (location omitted when blank). */
 export function jobFolderName(name: string, loc?: string | null): string {
   const cleanLoc = (loc || '').trim();
   return cleanLoc && cleanLoc !== '—' ? `${name} — ${cleanLoc}` : name;
 }
 
-/** Rename a folder by ID. No-op if Drive is not configured. Throws on API error. */
 export async function renameFolder(folderId: string, newName: string): Promise<void> {
   const drive = getDriveClient();
   if (!drive) return;
   await drive.files.update({ fileId: folderId, requestBody: { name: newName }, fields: 'id' });
 }
 
-/** Find or create a named subfolder inside parentId. Throws on API error. */
 async function getOrCreateSubfolder(name: string, parentId: string): Promise<string | null> {
   const drive = getDriveClient();
   if (!drive) return null;
@@ -78,10 +66,6 @@ async function getOrCreateSubfolder(name: string, parentId: string): Promise<str
   return created.id ?? null;
 }
 
-/**
- * Create a job folder under rootId / gcName / jobName.
- * Returns the job folder ID, or null if Drive is not configured.
- */
 export async function createJobFolder(
   jobName: string,
   gcName: string,
@@ -98,10 +82,6 @@ export async function createJobFolder(
   return data.id ?? null;
 }
 
-/**
- * Find or create a named folder directly inside rootId (no intermediate parent).
- * Used for generator jobs where the hierarchy is rootId / customerName.
- */
 export async function createCustomerFolder(customerName: string, rootId: string): Promise<string | null> {
   const drive = getDriveClient();
   if (!drive) return null;
@@ -126,7 +106,6 @@ export async function createSubfolders(parentId: string, names: string[] = SUBFO
   return result;
 }
 
-/** Move a file to a new parent folder, auto-detecting and removing all current parents. */
 async function moveToParent(fileId: string, newParentId: string): Promise<void> {
   const drive = getDriveClient();
   if (!drive) return;
@@ -145,10 +124,6 @@ async function moveToParent(fileId: string, newParentId: string): Promise<void> 
   }
 }
 
-/**
- * Move a job folder to destRootId / gcName, creating the GC subfolder if needed.
- * Used for all stage transitions and job close.
- */
 export async function moveJobToStage(
   jobFolderId: string,
   gcName: string,
@@ -159,6 +134,27 @@ export async function moveJobToStage(
   const gcSubfolderId = await getOrCreateSubfolder(gcName, destRootId);
   if (!gcSubfolderId) return;
   await moveToParent(jobFolderId, gcSubfolderId);
+}
+
+/** List files in a Drive folder. Returns empty array if Drive not configured or on error. */
+export async function listFolderFiles(folderId: string): Promise<{
+  id: string; name: string; mimeType: string;
+  webViewLink?: string; thumbnailLink?: string; size?: string; createdTime?: string;
+}[]> {
+  const drive = getDriveClient();
+  if (!drive) return [];
+  try {
+    const { data } = await drive.files.list({
+      q: `'${folderId}' in parents and trashed = false`,
+      fields: 'files(id,name,mimeType,webViewLink,thumbnailLink,size,createdTime)',
+      orderBy: 'createdTime desc',
+      pageSize: 100,
+    });
+    return (data.files ?? []) as { id: string; name: string; mimeType: string; webViewLink?: string; thumbnailLink?: string; size?: string; createdTime?: string; }[];
+  } catch (err) {
+    console.error('[drive] listFolderFiles failed:', err);
+    return [];
+  }
 }
 
 export async function uploadFile(
