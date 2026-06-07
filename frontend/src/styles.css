@@ -678,3 +678,247 @@ button{font-family:inherit}
     background: var(--surface2); color: var(--text2); flex-shrink: 0;
   }
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   VISUAL POLISH — UI improvements (appended, additive only)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Design tokens ─────────────────────────────────────────────── */
+:root {
+  --ease-out: cubic-bezier(.2,.8,.3,1);
+  --ease-spring: cubic-bezier(.34,1.56,.64,1);
+  --trans-fast: 120ms var(--ease-out);
+  --trans-base: 180ms var(--ease-out);
+  --card-shadow: 0 4px 16px rgba(0,0,0,.28), 0 1px 4px rgba(0,0,0,.18);
+  --card-shadow-hover: 0 12px 32px rgba(0,0,0,.42), 0 2px 8px rgba(0,0,0,.28);
+}
+
+/* ── Sidebar — left accent bar on active items ─────────────────── */
+.nav-btn { position: relative; overflow: hidden; }
+.nav-btn.active::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 8px; bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--blue);
+}
+.nav-btn.active.amber::before { background: var(--amber); }
+
+/* Better nav hover — slide in from left */
+.nav-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--surface);
+  border-radius: var(--rs);
+  opacity: 0;
+  transform: scaleX(.92);
+  transform-origin: left;
+  transition: opacity var(--trans-fast), transform var(--trans-fast);
+  z-index: -1;
+}
+.nav-btn:hover::after { opacity: 1; transform: scaleX(1); }
+
+/* ── Stat cards — refined look ─────────────────────────────────── */
+.stat {
+  position: relative;
+  overflow: hidden;
+  transition: box-shadow var(--trans-base), border-color var(--trans-base), transform var(--trans-base);
+  cursor: default;
+}
+.stat:hover {
+  box-shadow: var(--card-shadow);
+  border-color: var(--border2);
+  transform: translateY(-1px);
+}
+
+/* Stat icon — slightly larger, rounded more */
+.stat-ic {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+/* Stat value — tighten letter spacing */
+.stat-val { letter-spacing: -1.5px; }
+
+/* Stat sub — gap fix */
+.stat-sub { margin-top: 10px; }
+
+/* ── Pipeline board columns — stage-color top border ──────────── */
+.col { position: relative; transition: background var(--trans-fast), outline-color var(--trans-fast); }
+
+/* Column header — bolder stage label */
+.col-title { font-size: 11px; letter-spacing: .08em; }
+
+/* Better drag-over feedback */
+.col.drag-over {
+  background: rgba(77,141,247,.06);
+  outline: 2px solid var(--blue);
+  outline-offset: -4px;
+}
+
+/* Empty state — more inviting */
+.col-empty {
+  border-style: dashed;
+  border-color: var(--border);
+  color: var(--text3);
+  padding: 28px 12px;
+  border-radius: var(--rs);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  transition: border-color var(--trans-base), color var(--trans-base);
+}
+.col:hover .col-empty { border-color: var(--border2); color: var(--text2); }
+
+/* ── Pipeline cards — elevated hover, thicker accent bar ────────── */
+.bcard {
+  box-shadow: 0 1px 3px rgba(0,0,0,.2);
+  transition: transform var(--trans-base), box-shadow var(--trans-base), border-color var(--trans-base);
+}
+.bcard:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--card-shadow-hover);
+  border-color: var(--border2);
+}
+.bcard:active { transform: translateY(-1px); box-shadow: var(--card-shadow); }
+
+.bcard-accent { width: 4px; border-radius: 0 0 0 13px; }
+
+/* Card name — slightly tighter */
+.bcard-name { font-size: 14px; letter-spacing: -.25px; }
+
+/* Card amount — stronger presence */
+.bcard-amt { font-size: 15.5px; letter-spacing: -.5px; }
+
+/* Advance button — spring pop */
+.adv-btn {
+  transition: background var(--trans-fast), color var(--trans-fast),
+              border-color var(--trans-fast), transform 200ms var(--ease-spring);
+}
+.adv-btn:hover { transform: scale(1.08); }
+.adv-btn:active { transform: scale(.95); }
+
+/* ── Buttons — improved press feedback ──────────────────────────── */
+.btn {
+  transition: background var(--trans-fast), transform var(--trans-fast),
+              box-shadow var(--trans-fast);
+  letter-spacing: -.1px;
+}
+.btn:active { transform: translateY(1px) scale(.99); }
+
+/* Focus rings — accessibility */
+.btn:focus-visible,
+.nav-btn:focus-visible,
+.icon-btn:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+/* ── Panels — subtle header gradient ───────────────────────────── */
+.panel-hdr {
+  background: linear-gradient(to bottom, rgba(36,51,82,.4), transparent);
+}
+
+/* ── Badges — add border for definition ────────────────────────── */
+.badge {
+  border: 1px solid transparent;
+  letter-spacing: .01em;
+}
+.badge.won  { border-color: rgba(52,197,136,.2); }
+.badge.lost { border-color: rgba(124,138,163,.2); }
+.badge.urgent { border-color: rgba(224,165,59,.2); }
+.badge.normal { border-color: rgba(77,141,247,.2); }
+.badge.critical { border-color: rgba(242,133,79,.2); }
+
+/* ── Topbar — stronger glass effect ────────────────────────────── */
+.topbar {
+  background: rgba(14,22,38,.75);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+}
+
+/* ── Drawer — smoother slide ────────────────────────────────────── */
+@keyframes drawerIn {
+  from { transform: translateX(32px); opacity: .6; }
+  to   { transform: translateX(0);    opacity: 1;  }
+}
+.drawer { animation-timing-function: var(--ease-out); animation-duration: .22s; }
+
+/* ── Modals — spring entrance ───────────────────────────────────── */
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(.97) translateY(8px); }
+  to   { opacity: 1; transform: scale(1)   translateY(0); }
+}
+.modal { animation: modalIn .24s var(--ease-spring); }
+
+/* ── Scrollbar — thinner and more refined ──────────────────────── */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--slate); background-clip: content-box; }
+
+/* ── View transition — slightly faster ──────────────────────────── */
+@keyframes viewIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.view-enter { animation: viewIn .22s var(--ease-out); }
+
+/* ── Nav count badge — refined ──────────────────────────────────── */
+.nav-count {
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 1px 7px;
+  background: var(--surface2);
+  border-color: var(--border2);
+  letter-spacing: 0;
+}
+
+/* ── Avatar — add ring on hover ─────────────────────────────────── */
+.side-user { cursor: pointer; border-radius: var(--rs); transition: background var(--trans-fast); }
+.side-user:hover { background: var(--surface); }
+
+/* ── Toast — spring in ──────────────────────────────────────────── */
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(20px) scale(.96); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);   }
+}
+.toast { animation: toastIn .32s var(--ease-spring); }
+
+/* ── Due date widget — hot state glow ───────────────────────────── */
+.due-date.hot { box-shadow: 0 0 0 3px rgba(242,133,79,.15); }
+
+/* ── Table rows — smoother hover ────────────────────────────────── */
+.ctable tr { transition: background var(--trans-fast); }
+
+/* ── Chip toolbar — active chip punch ───────────────────────────── */
+.pipe-toolbar .chip {
+  transition: background var(--trans-fast), color var(--trans-fast),
+              border-color var(--trans-fast), transform var(--trans-fast);
+}
+.pipe-toolbar .chip:hover { border-color: var(--text2); color: var(--text); }
+.pipe-toolbar .chip.active { transform: scale(1.03); }
+
+/* ── Mobile nav — active item indicator ─────────────────────────── */
+@media (max-width: 768px) {
+  .mobile-nav-btn.active::after {
+    content: '';
+    position: absolute;
+    bottom: 4px;
+    left: 50%; transform: translateX(-50%);
+    width: 18px; height: 3px;
+    border-radius: 2px;
+    background: currentColor;
+    opacity: .7;
+  }
+}
