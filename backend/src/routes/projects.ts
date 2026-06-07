@@ -92,6 +92,7 @@ router.patch('/:type/:id/change-orders/:coId', requireAuth, async (req: AuthRequ
   else if (wasApproved && isApproved)  delta =  Number(rows[0].amount) - Number(before[0].amount);
   if (delta !== 0) {
     await pool.query('UPDATE projects SET contract_value = COALESCE(contract_value,0) + $1, updated_at=now() WHERE id=$2', [delta, req.params.id]);
+    await pool.query('UPDATE won_jobs SET value = COALESCE(value,0) + $1 WHERE proposal_id=$2', [delta, req.params.id]);
   }
   if (before[0].status !== rows[0].status) {
     const action = rows[0].status === 'approved' ? 'co_approved' : rows[0].status === 'rejected' ? 'co_rejected' : 'co_update';
@@ -109,7 +110,9 @@ router.delete('/:type/:id/change-orders/:coId', requireAuth, async (req: AuthReq
   // Backing out an approved CO keeps the project contract value correct.
   const { rows } = await pool.query('DELETE FROM project_change_orders WHERE id=$1 AND project_id=$2 RETURNING status, amount, number', [req.params.coId, req.params.id]);
   if (rows.length && rows[0].status === 'approved') {
-    await pool.query('UPDATE projects SET contract_value = COALESCE(contract_value,0) - $1, updated_at=now() WHERE id=$2', [Number(rows[0].amount), req.params.id]);
+    const amt = Number(rows[0].amount);
+    await pool.query('UPDATE projects SET contract_value = COALESCE(contract_value,0) - $1, updated_at=now() WHERE id=$2', [amt, req.params.id]);
+    await pool.query('UPDATE won_jobs SET value = COALESCE(value,0) - $1 WHERE proposal_id=$2', [amt, req.params.id]);
   }
   res.json({ ok: true });
 });
