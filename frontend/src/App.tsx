@@ -269,6 +269,7 @@ export default function App() {
         onNewProposal={() => setView('builder')}
         onNewBid={() => openNewBid()}
         bids={bids} gens={gens}
+        showToast={showToast}
       >
         {renderView()}
       </AppShell>
