@@ -19,6 +19,7 @@ import ReportingPage from './features/reporting/ReportingPage';
 import CommsPage from './features/comms/CommsPage';
 import DocsPage from './features/docs/DocsPage';
 import FollowupsPage from './features/followups/FollowupsPage';
+import CalendarPage from './features/calendar/CalendarPage';
 import ProposalPublicPage from './pages/ProposalPublicPage';
 import SettingsPage from './features/settings/SettingsPage';
 import { PcWorkspace } from './features/preconstruction/constants';
@@ -227,6 +228,8 @@ export default function App() {
         return <ContactsPage onNewBid={openNewBid}/>;
       case 'reporting':
         return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
+      case 'calendar':
+        return <CalendarPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
       case 'followups':
         return <FollowupsPage onCountChange={setFollowupCount}/>;
       case 'comms':
@@ -238,7 +241,7 @@ export default function App() {
           return (
             <div className="scroll view-enter">
               <div style={{ padding: 32, color: 'var(--text2)', fontSize: 15 }}>
-                <b>Settings</b> — you don’t have permission to view this page. Contact an owner or administrator.
+                <b>Settings</b> — you don't have permission to view this page. Contact an owner or administrator.
               </div>
             </div>
           );
