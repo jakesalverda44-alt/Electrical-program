@@ -39,7 +39,7 @@ export default function NotificationBell({ authenticated, onNav }: { authenticat
         <div style={{
           position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 340, maxHeight: 420, overflowY: 'auto',
           background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 12,
-          boxShadow: '0 12px 32px rgba(0,0,0,.28)', zIndex: 100,
+          boxShadow: '0 12px 32px rgba(0,0,0,.28)', zIndex: 200,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
             <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)' }}>Notifications{unread > 0 ? ` · ${unread}` : ''}</span>
