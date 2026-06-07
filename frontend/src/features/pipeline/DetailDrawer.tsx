@@ -153,7 +153,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
             </div>
           ) : (
             <>
-              <div className="dtl-amt">{moneyFull(bid.amount)}</div>
+              <div className="dtl-amt">{moneyFull(Number(bid.amount) + Number(bid.co_approved_total ?? 0))}</div>
 
               <div className="dtl-stage-label">Stage</div>
               <div className="dtl-stages">
@@ -255,7 +255,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
               <div className="dtl-section">
                 <div className="dtl-row"><span className="dtl-k">General Contractor</span><span className="dtl-v">{bid.gc}</span></div>
                 <div className="dtl-row"><span className="dtl-k">Location</span><span className="dtl-v">{bid.loc}</span></div>
-                <div className="dtl-row"><span className="dtl-k">Bid amount</span><span className="dtl-v num">{moneyFull(bid.amount)}</span></div>
+                <div className="dtl-row"><span className="dtl-k">Bid amount</span><span className="dtl-v num">{moneyFull(Number(bid.amount) + Number(bid.co_approved_total ?? 0))}</span></div>
                 <div className="dtl-row"><span className="dtl-k">Due</span><span className="dtl-v">{bid.due}</span></div>
                 <div className="dtl-row"><span className="dtl-k">Drawing sheets</span><span className="dtl-v">{bid.sheets || '—'}</span></div>
                 <div className="dtl-row"><span className="dtl-k">Contact</span><span className="dtl-v">{bid.contact || '—'}</span></div>

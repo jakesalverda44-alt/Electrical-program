@@ -10,8 +10,8 @@ router.get('/', requireAuth, async (req: AuthRequest, res) => {
     const scope = ownScopeId(req.user!);
     const [bidsR, gensR, wonR, actR] = await Promise.all([
       scope
-        ? pool.query('SELECT * FROM bids WHERE deleted_at IS NULL AND closed_at IS NULL AND salesperson_id = $1 ORDER BY created_at DESC', [scope])
-        : pool.query('SELECT * FROM bids WHERE deleted_at IS NULL AND closed_at IS NULL ORDER BY created_at DESC'),
+        ? pool.query(`SELECT b.*, COALESCE((SELECT SUM(amount) FROM project_change_orders WHERE project_id=b.id AND status='approved'),0) AS co_approved_total FROM bids b WHERE b.deleted_at IS NULL AND b.closed_at IS NULL AND b.salesperson_id=$1 ORDER BY b.created_at DESC`, [scope])
+        : pool.query(`SELECT b.*, COALESCE((SELECT SUM(amount) FROM project_change_orders WHERE project_id=b.id AND status='approved'),0) AS co_approved_total FROM bids b WHERE b.deleted_at IS NULL AND b.closed_at IS NULL ORDER BY b.created_at DESC`),
       scope
         ? pool.query('SELECT * FROM generator_proposals WHERE deleted_at IS NULL AND salesperson_id = $1 ORDER BY created_at DESC', [scope])
         : pool.query('SELECT * FROM generator_proposals WHERE deleted_at IS NULL ORDER BY created_at DESC'),
