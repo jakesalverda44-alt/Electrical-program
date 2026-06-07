@@ -310,6 +310,9 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
             <Field label="Proposal Valid For (days)">
               <input type="number" min={1} max={365} style={INPUT_STYLE} value={form.validDays} onChange={e => set('validDays', Number(e.target.value))}/>
             </Field>
+            <Field label="Deposit (%)">
+              <input type="number" min={0} max={100} style={INPUT_STYLE} value={form.depositPct} onChange={e => set('depositPct', Number(e.target.value))}/>
+            </Field>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
               <input type="checkbox" checked={!!form.includeBreakdown} onChange={e => set('includeBreakdown', e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
               Include Price Breakdown Page
@@ -371,7 +374,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 <span className="num">{fmt(totals.total)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>
-                <span>50% Deposit</span>
+                <span>{form.depositPct}% Deposit</span>
                 <span className="num">{fmt(totals.deposit)}</span>
               </div>
 
