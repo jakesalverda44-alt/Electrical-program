@@ -34,7 +34,7 @@ interface Props {
 }
 
 const TB: Record<string, { title: string; sub: string | null }> = {
-  dashboard:       { title: 'Sales Dashboard',      sub: 'June 2026 · Accurate Power & Technology' },
+  dashboard:       { title: 'Sales Dashboard',      sub: `${new Date().toLocaleString('en-US',{month:'long',year:'numeric'})} · Accurate Power & Technology` },
   'gen-proposals': { title: 'Generator Proposals',  sub: 'Kohler & Generac · In-house proposal builder' },
   'elec-proposals':{ title: 'Electrical Proposals', sub: 'Electrical subcontracting · Bid tracking pipeline' },
   'sales-by-rep':  { title: 'Sales by Rep',         sub: 'Won jobs by salesperson · Generator & Electrical' },
@@ -109,6 +109,7 @@ export default function AppShell({
     { id: 'builder',         label: 'Proposal Builder',   icon: 'doc',     count: 0 },
     { id: 'docs',            label: 'Documents',          icon: 'clip',    count: 0 },
     { id: 'reporting',       label: 'Reporting',          icon: 'trend',   count: 0 },
+    { id: 'calendar',        label: 'Calendar',           icon: 'clock',   count: 0 },
     { id: 'contacts',        label: 'Contacts',           icon: 'users',   count: 0 },
     ...(canAdmin ? [{ id: 'admin', label: 'Settings', icon: 'gear', count: 0 }] : []),
   ];
