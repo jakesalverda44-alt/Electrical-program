@@ -27,15 +27,15 @@ export const ROLE_LABELS: Record<string, string> = {
 };
 
 export const ROLE_COLORS: Record<string, { bg: string; color: string }> = {
-  owner:           { bg: '#FEF3C7', color: '#92400E' },
-  administrator:   { bg: '#EDE9FE', color: '#5B21B6' },
-  sales_manager:   { bg: '#DBEAFE', color: '#1E40AF' },
-  salesperson:     { bg: '#D1FAE5', color: '#065F46' },
-  estimator:       { bg: '#E0F2FE', color: '#075985' },
-  project_manager: { bg: '#FCE7F3', color: '#9D174D' },
-  technician:      { bg: '#FEE2E2', color: '#991B1B' },
-  accounting:      { bg: '#F3F4F6', color: '#374151' },
-  read_only:       { bg: '#F9FAFB', color: '#6B7280' },
+  owner:           { bg: 'var(--amber-soft)',              color: 'var(--amber)'  },
+  administrator:   { bg: 'rgba(139,92,246,.14)',           color: '#A78BFA'       },
+  sales_manager:   { bg: 'var(--blue-soft)',               color: 'var(--blue)'   },
+  salesperson:     { bg: 'var(--green-soft)',              color: 'var(--green)'  },
+  estimator:       { bg: 'rgba(77,141,247,.10)',           color: 'var(--blue)'   },
+  project_manager: { bg: 'rgba(236,72,153,.12)',           color: '#F472B6'       },
+  technician:      { bg: 'rgba(224,106,106,.14)',          color: 'var(--red)'    },
+  accounting:      { bg: 'var(--surface2)',                color: 'var(--text2)'  },
+  read_only:       { bg: 'var(--surface2)',                color: 'var(--text3)'  },
 };
 
 export function RolePill({ role }: { role: string }) {
