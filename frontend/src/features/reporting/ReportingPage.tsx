@@ -9,6 +9,26 @@ const sumGen = (arr: Gen[])    => arr.reduce((s, g) => s + Number(g.amount), 0);
 
 const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
+function exportCSV(wonJobs: WonJob[], year: number) {
+  const headers = ['Date Won','Customer','Type','Salesperson','Value','Commission Status'];
+  const rows = wonJobs.map(j => [
+    new Date(j.date_won).toLocaleDateString('en-US'),
+    j.customer,
+    j.proposal_type,
+    j.salesperson_name,
+    Number(j.value).toFixed(2),
+    j.commission_status || 'earned',
+  ]);
+  const csv = [headers, ...rows]
+    .map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','))
+    .join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `apt-revenue-${year}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
 interface Props {
   bids: Bid[];
   gens: Gen[];
@@ -176,6 +196,9 @@ export default function ReportingPage({ bids, gens, wonJobs }: Props) {
                 </span>
                 Contract Value Won by Month · {currentYear}
               </span>
+              <button onClick={() => exportCSV(wonJobs, currentYear)} className="btn ghost" style={{ fontSize: 12, height: 34, padding: '0 12px', gap: 6 }}>
+                <Icon name="arrow" size={13} stroke={2}/>Export CSV
+              </button>
             </div>
             <div style={{ padding: '24px 28px 16px' }}>
               {/* Stacked bar chart */}
