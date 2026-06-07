@@ -139,7 +139,7 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
         </button>
       </div>
       {error && (
-        <div style={{ margin: '-4px 0 10px', padding: '8px 10px', borderRadius: 8, background: '#FEF2F2', color: '#DC2626', fontSize: 12.5, fontWeight: 600 }}>
+        <div style={{ margin: '-4px 0 10px', padding: '8px 10px', borderRadius: 8, background: 'rgba(224,106,106,.12)', color: 'var(--red)', fontSize: 12.5, fontWeight: 600 }}>
           {error}
         </div>
       )}
