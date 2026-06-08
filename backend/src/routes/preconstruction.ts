@@ -177,17 +177,19 @@ async function runPipeline(
       }
       contentBlocks.push({
         type: 'text',
-        text: 'Analyze all uploaded electrical plans and provide your complete Drawing Analyzer output following your output format exactly. Return JSON only.',
+        text: 'Analyze all uploaded electrical plans and provide your complete Drawing Analyzer output following your output format exactly. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if a sheet contains no electrical equipment, you MUST return a valid JSON object. For non-electrical sheets, include the sheet name in sheet_inventory with a note and leave equipment arrays empty.',
       });
 
       logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, 'single');
-      const resp = await callWithRetry(() => client.messages.create({
-        model: config.model,
-        max_tokens: config.maxTokensA1,
-        temperature: config.temperature,
-        system: [{ type: 'text', text: config.promptA1 || AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
-        messages: [{ role: 'user', content: contentBlocks }],
-      }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
+      const resp = await callWithRetry(() =>
+        client.messages.stream({
+          model: config.model,
+          max_tokens: config.maxTokensA1,
+          temperature: config.temperature,
+          system: [{ type: 'text', text: config.promptA1 || AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
+          messages: [{ role: 'user', content: contentBlocks }],
+        }).finalMessage()
+      , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
       agent1Output = extractText(resp);
       logAgent1Response(bidId, resp, agent1Output, 'single');
       await pool.query(
@@ -226,19 +228,25 @@ async function runPipeline(
         }
         contentBlocks.push({
           type: 'text',
-          text: `Analyze batch ${bi + 1} of ${batches.length} electrical plan files and provide Drawing Analyzer JSON output. Return JSON only.`,
+          text: `Analyze batch ${bi + 1} of ${batches.length} electrical plan files and provide Drawing Analyzer JSON output. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if this sheet contains no electrical equipment, you MUST return a valid JSON object with the sheet in sheet_inventory and equipment arrays empty.`,
         });
 
         logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${batches.length}`);
-        const bResp = await callWithRetry(() => client.messages.create({
-          model: config.model,
-          max_tokens: config.maxTokensA1,
-          temperature: config.temperature,
-          system: [{ type: 'text', text: config.promptA1 || AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
-          messages: [{ role: 'user', content: contentBlocks }],
-        }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
+        const bResp = await callWithRetry(() =>
+          client.messages.stream({
+            model: config.model,
+            max_tokens: config.maxTokensA1,
+            temperature: config.temperature,
+            system: [{ type: 'text', text: config.promptA1 || AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
+            messages: [{ role: 'user', content: contentBlocks }],
+          }).finalMessage()
+        , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
         logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${batches.length}`);
+        if (!bText.trim()) {
+          logger.warn({ bidId, batch: `${bi + 1}/${batches.length}`, files: batch.map(f => f.originalname) },
+            '[takeoff] Agent 1 batch returned empty output — skipping');
+        }
         const parsed = parseAIJSON(bText);
         if (parsed) batchResults.push(parsed);
         if (bResp.usage) {
