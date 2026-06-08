@@ -31,6 +31,11 @@ export default class ErrorBoundary extends React.Component<Props, State> {
         <div style={{ fontSize: 14, color: '#94a3b8', maxWidth: 440, lineHeight: 1.6 }}>
           An unexpected error occurred. Try reloading the page. If the problem continues, contact an administrator.
         </div>
+        {this.state.message && (
+          <div style={{ fontSize: 12, color: '#f87171', maxWidth: 500, background: 'rgba(248,113,113,.1)', border: '1px solid rgba(248,113,113,.3)', borderRadius: 8, padding: '10px 16px', textAlign: 'left', fontFamily: 'monospace', wordBreak: 'break-word' }}>
+            {this.state.message}
+          </div>
+        )}
         <button
           onClick={() => window.location.reload()}
           style={{
