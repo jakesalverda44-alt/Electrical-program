@@ -790,7 +790,10 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
     [bidId]
   );
   const bidName = (bidRows[0]?.name as string | undefined) ?? bidId;
-  const filename = `Proposal — ${bidName}.docx`.replace(/[<>:"/\\|?*\r\n]/g, '-');
+  // HTTP headers must be Latin-1. Strip any non-ASCII (em dashes, accents, etc.)
+  // from the filename or res.setHeader throws ERR_INVALID_CHAR.
+  const asciiName = bidName.replace(/[^\x20-\x7E]/g, '').trim() || 'proposal';
+  const filename = `Proposal - ${asciiName}.docx`.replace(/[<>:"/\\|?*\r\n]/g, '-');
 
   let buf: Buffer;
   try {
