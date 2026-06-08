@@ -1451,7 +1451,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       ? 'Running Agent 4…'
                       : (propData || propParseError) ? '↺ Re-run Agent 4' : 'Run Agent 4 — Generate Proposal'}
                   </button>
-                  {(propData || propParseError) && (
+                  {propData && (
                     <button className="btn" onClick={downloadDocx} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
                       <Icon name="doc" size={14} stroke={1.9}/> Download .docx
                     </button>
