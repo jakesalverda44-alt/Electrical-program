@@ -43,6 +43,18 @@ const MD  = 20;  // 10pt
 const LG  = 24;  // 12pt
 const XL  = 36;  // 18pt
 
+// Claude occasionally returns array items as objects instead of strings.
+// Flatten any such value to a readable string so the docx builder never crashes.
+function toStr(v: unknown): string {
+  if (typeof v === 'string') return v;
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    return [o.item, o.text, o.description, o.question, o.risks, o.risk, o.note]
+      .filter(Boolean).map(String).join(' — ') || JSON.stringify(v);
+  }
+  return String(v ?? '');
+}
+
 type ImgType = 'jpg' | 'png' | 'gif';
 
 function loadAsset(assetsDir: string, names: string[]): { buf: Buffer; type: ImgType } | null {
@@ -230,10 +242,10 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
   const sow = data.scopeOfWork ?? {};
   const std6 = sow.standard6Bullets ?? [];
   if (std6.length) {
-    std6.forEach(b => children.push(numberedItem(b)));
+    std6.forEach(b => children.push(numberedItem(toStr(b))));
     children.push(blank());
   }
-  const sowSections: [string, string[] | undefined][] = [
+  const sowSections: [string, unknown[] | undefined][] = [
     ['A.  SERVICE & DISTRIBUTION',                   sow.A_ServiceDistribution],
     ['B.  BRANCH POWER',                             sow.B_BranchPower],
     ['C.  LIGHTING & CONTROLS',                      sow.C_LightingControls],
@@ -244,7 +256,7 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
   for (const [label, bullets] of sowSections) {
     if (!bullets?.length) continue;
     children.push(subHeader(label));
-    bullets.forEach(b => children.push(bulletItem(b)));
+    bullets.forEach(b => children.push(bulletItem(toStr(b))));
   }
   children.push(blank());
 
@@ -252,7 +264,7 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
   const excl = data.exclusions ?? [];
   if (excl.length) {
     children.push(navyHeader('EXCLUSIONS'));
-    excl.forEach(e => children.push(bulletItem(e)));
+    excl.forEach(e => children.push(bulletItem(toStr(e))));
     children.push(blank());
   }
 
@@ -305,7 +317,7 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
   const terms = data.terms ?? [];
   if (terms.length) {
     children.push(navyHeader('TERMS & CONDITIONS'));
-    terms.forEach(t => children.push(numberedItem(t)));
+    terms.forEach(t => children.push(numberedItem(toStr(t))));
     children.push(blank());
   }
 
