@@ -6,7 +6,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import AdmZip from 'adm-zip';
 import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM } from '../ai/prompts';
 import { callWithRetry } from '../ai/retry';
-import { parseAIJSON } from '../ai/json';
+import { parseAIJSON, extractJSONText } from '../ai/json';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
 import { drawingUpload } from '../utils/upload';
@@ -332,10 +332,11 @@ async function runPipeline(
       }],
     }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
     agent2Output = extractText(resp);
+    const agent2ToStore = extractJSONText(agent2Output) ?? agent2Output;
 
     await pool.query(
       `UPDATE takeoff_results SET status='agent2_complete', agent2_output=$1, usage_agent2=$2, model_agent2=$3 WHERE bid_id=$4`,
-      [agent2Output, JSON.stringify(resp.usage), config.modelA2, bidId]
+      [agent2ToStore, JSON.stringify(resp.usage), config.modelA2, bidId]
     );
   } catch (err) {
     const message = `Agent 2 failed: ${describeAIError(err)}`;
@@ -361,6 +362,7 @@ async function runPipeline(
       }],
     }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
     agent3Output = extractText(resp);
+    const agent3ToStore = extractJSONText(agent3Output) ?? agent3Output;
 
     // Final write — all three complete
     await pool.query(`
@@ -371,7 +373,7 @@ async function runPipeline(
         usage_agent3=$3,
         model_agent3=$4
       WHERE bid_id=$5
-    `, [agent3Output, agent1Output, JSON.stringify(resp.usage), config.modelA3, bidId]);
+    `, [agent3ToStore, agent1Output, JSON.stringify(resp.usage), config.modelA3, bidId]);
 
     // Also persist structured fields from agent1 JSON for backward compatibility
     const a1 = parseAIJSON(agent1Output) ?? {};

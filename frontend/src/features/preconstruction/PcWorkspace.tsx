@@ -933,9 +933,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     </div>
                   );
 
-                  // Try to parse JSON for structured agents
+                  // Try to parse JSON for structured agents (fence-tolerant)
                   let parsed: Record<string, unknown> | null = null;
-                  try { parsed = JSON.parse(t.output) as Record<string, unknown>; } catch { /* raw text */ }
+                  try {
+                    const raw = t.output.trim();
+                    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+                    const candidate = fenced ? fenced[1].trim() : raw;
+                    const start = candidate.indexOf('{');
+                    parsed = JSON.parse(start >= 0 ? candidate.slice(start) : candidate) as Record<string, unknown>;
+                  } catch { /* raw text */ }
 
                   const riskColor = (r: string) =>
                     r === 'HIGH' ? '#EF4444' : r === 'MEDIUM' ? '#F59E0B' : 'var(--green)';
