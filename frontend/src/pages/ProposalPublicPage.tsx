@@ -45,7 +45,9 @@ export default function ProposalPublicPage() {
   const contractRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch(`${API}/gens/p/${token}`)
+    // In-app previews pass ?preview=1 so the backend doesn't record a customer "view".
+    const isPreview = new URLSearchParams(window.location.search).get('preview') === '1';
+    fetch(`${API}/gens/p/${token}${isPreview ? '?preview=1' : ''}`)
       .then(r => { if (!r.ok) throw new Error(); return r.json(); })
       .then(data => {
         setGen(data);

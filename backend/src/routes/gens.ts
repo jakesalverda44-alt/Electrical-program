@@ -609,13 +609,16 @@ router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
 
 // ── Public: view proposal by token (no auth) ────────────────────────────────
 router.get('/p/:token', async (req, res) => {
-  const { rows } = await pool.query(
-    `UPDATE generator_proposals
-     SET viewed_at = COALESCE(viewed_at, now())
-     WHERE proposal_token = $1 AND deleted_at IS NULL
-     RETURNING *`,
-    [req.params.token]
-  );
+  // In-app previews pass ?preview=1 — fetch without recording a customer "view".
+  const isPreview = !!req.query.preview;
+  const sql = isPreview
+    ? `SELECT * FROM generator_proposals
+       WHERE proposal_token = $1 AND deleted_at IS NULL`
+    : `UPDATE generator_proposals
+       SET viewed_at = COALESCE(viewed_at, now())
+       WHERE proposal_token = $1 AND deleted_at IS NULL
+       RETURNING *`;
+  const { rows } = await pool.query(sql, [req.params.token]);
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
   res.json(rows[0]);
 });

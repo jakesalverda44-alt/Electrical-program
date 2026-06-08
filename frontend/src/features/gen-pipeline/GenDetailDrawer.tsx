@@ -135,7 +135,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             <button
               className="btn ghost"
               style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
-              onClick={() => window.open(`${window.location.origin}/p/${gen.proposal_token}`, '_blank', 'noopener')}
+              onClick={() => window.open(`${window.location.origin}/p/${gen.proposal_token}?preview=1`, '_blank', 'noopener')}
             >
               <Icon name="eye" size={15} stroke={1.9}/>View customer proposal
             </button>
