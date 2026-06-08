@@ -37,6 +37,7 @@ interface Props {
 
 const TB: Record<string, { title: string; sub: string | null }> = {
   dashboard:       { title: 'Sales Dashboard',      sub: `${new Date().toLocaleString('en-US',{month:'long',year:'numeric'})} · Accurate Power & Technology` },
+  pipeline:        { title: 'Pipeline',              sub: 'Generator & Electrical proposals' },
   'gen-proposals': { title: 'Generator Proposals',  sub: 'Kohler & Generac · In-house proposal builder' },
   'elec-proposals':{ title: 'Electrical Proposals', sub: 'Electrical subcontracting · Bid tracking pipeline' },
   'sales-by-rep':  { title: 'Sales by Rep',         sub: 'Won jobs by salesperson · Generator & Electrical' },
@@ -86,11 +87,10 @@ export default function AppShell({
 
   const nav: NavGroup[] = [
     { group: 'Sales', items: [
-      { id: 'dashboard',      label: 'Sales Dashboard',      icon: 'dashboard' },
-      { id: 'gen-leads',      label: 'Generator Leads',      icon: 'users', tone: 'amber' },
-      { id: 'gen-proposals',  label: 'Generator Proposals',  icon: 'bolt', tone: 'amber', count: genProposalCount },
-      { id: 'elec-proposals', label: 'Electrical Proposals', icon: 'pipeline', count: elecProposalCount },
-      { id: 'intake',         label: 'Intake Inbox',         icon: 'bell', count: newIncoming },
+      { id: 'dashboard', label: 'Sales Dashboard', icon: 'dashboard' },
+      { id: 'gen-leads', label: 'Generator Leads', icon: 'users', tone: 'amber' },
+      { id: 'pipeline',  label: 'Pipeline',        icon: 'pipeline', count: genProposalCount + elecProposalCount },
+      { id: 'intake',    label: 'Intake Inbox',    icon: 'bell', count: newIncoming },
     ]},
     { group: 'Projects', items: [
       { id: 'preconstruction', label: 'Estimating',          icon: 'sparkle' },
@@ -115,22 +115,21 @@ export default function AppShell({
 
   const mobileBottomNav = [
     { id: 'dashboard',       label: 'Dashboard',  icon: 'dashboard', count: 0 },
-    { id: 'gen-proposals',   label: 'Generator',  icon: 'bolt',      count: genProposalCount, amber: true },
-    { id: 'elec-proposals',  label: 'Electrical', icon: 'pipeline',  count: elecProposalCount },
+    { id: 'pipeline',        label: 'Pipeline',   icon: 'pipeline',  count: genProposalCount + elecProposalCount },
     { id: 'preconstruction', label: 'Estimating', icon: 'sparkle',   count: 0 },
+    { id: 'gen-projects',    label: 'Projects',   icon: 'bolt',      count: genProjectCount },
   ];
 
   const mobileMoreNav = [
-    { id: 'followups',      label: 'Follow-ups',       icon: 'checkc',   count: followupCount },
-    { id: 'intake',         label: 'Intake Inbox',     icon: 'bell',     count: newIncoming },
-    { id: 'gen-leads',      label: 'Generator Leads',  icon: 'users',    count: 0 },
-    { id: 'gen-projects',   label: 'Gen. Projects',    icon: 'bolt',     count: genProjectCount },
-    { id: 'elec-projects',  label: 'Elec. Projects',   icon: 'checkc',   count: elecProjectCount },
-    { id: 'builder',        label: 'Proposal Builder', icon: 'doc',      count: 0 },
-    { id: 'docs',           label: 'Documents',        icon: 'clip',     count: 0 },
-    { id: 'reporting',      label: 'Reporting',        icon: 'trend',    count: 0 },
-    { id: 'calendar',       label: 'Calendar',         icon: 'clock',    count: 0 },
-    { id: 'contacts',       label: 'Contacts',         icon: 'users',    count: 0 },
+    { id: 'followups',     label: 'Follow-ups',       icon: 'checkc', count: followupCount },
+    { id: 'intake',        label: 'Intake Inbox',     icon: 'bell',   count: newIncoming },
+    { id: 'gen-leads',     label: 'Generator Leads',  icon: 'users',  count: 0 },
+    { id: 'elec-projects', label: 'Elec. Projects',   icon: 'checkc', count: elecProjectCount },
+    { id: 'builder',       label: 'Proposal Builder', icon: 'doc',    count: 0 },
+    { id: 'docs',          label: 'Documents',        icon: 'clip',   count: 0 },
+    { id: 'reporting',     label: 'Reporting',        icon: 'trend',  count: 0 },
+    { id: 'calendar',      label: 'Calendar',         icon: 'clock',  count: 0 },
+    { id: 'contacts',      label: 'Contacts',         icon: 'users',  count: 0 },
     ...(canAdmin ? [{ id: 'admin', label: 'Settings', icon: 'gear', count: 0 }] : []),
   ];
 
@@ -243,7 +242,7 @@ export default function AppShell({
       {/* Mobile bottom navigation */}
       <nav className="mobile-nav">
         {mobileBottomNav.map(it => (
-          <button key={it.id} className={'mobile-nav-btn' + (view === it.id ? ' active' + (it.amber ? ' amber' : '') : '')} onClick={() => onNav(it.id)}>
+          <button key={it.id} className={'mobile-nav-btn' + (view === it.id ? ' active' : '')} onClick={() => onNav(it.id)}>
             <div style={{ position: 'relative', display: 'inline-flex' }}>
               <Icon name={it.icon} size={22} stroke={1.8}/>
               {it.count > 0 && <span className="mobile-nav-badge">{it.count}</span>}

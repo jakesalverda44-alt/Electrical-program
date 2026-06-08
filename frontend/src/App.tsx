@@ -8,6 +8,7 @@ import AppShell from './features/layout/AppShell';
 import DashboardPage from './features/dashboard/DashboardPage';
 import ElecPipelinePage from './features/pipeline/ElecPipelinePage';
 import GenPipelinePage from './features/gen-pipeline/GenPipelinePage';
+import PipelinePage from './features/pipeline/PipelinePage';
 import SalesByRepPage from './features/sales-by-rep/SalesByRepPage';
 import IntakeInboxPage from './features/intake/IntakeInboxPage';
 import BuilderPage from './features/builder/BuilderPage';
@@ -176,26 +177,22 @@ export default function App() {
             onNav={setView} onNewProposal={() => setView('builder')}
           />
         );
+      case 'pipeline':
       case 'elec-proposals':
+      case 'gen-proposals':
         return (
-          <ElecPipelinePage
+          <PipelinePage
             bids={bids} setBids={setBids}
+            gens={gens} setGens={setGens}
             setWonJobs={setWonJobs}
             onOpenPreconstruction={() => setView('preconstruction')}
+            onOpenBuilder={() => { setEditGen(null); setView('builder'); }}
+            onEditGen={g => { setEditGen(g); setView('builder'); }}
             flashId={flashId}
             openAddBid={openAddBid}
             onAddBidHandled={() => { setOpenAddBid(false); setAddBidGc(undefined); }}
             initialGc={addBidGc}
-          />
-        );
-      case 'gen-proposals':
-        return (
-          <GenPipelinePage
-            gens={gens} setGens={setGens}
-            setWonJobs={setWonJobs}
-            onOpenBuilder={() => { setEditGen(null); setView('builder'); }}
-            onEditGen={g => { setEditGen(g); setView('builder'); }}
-            flashId={flashId}
+            defaultTab={view === 'elec-proposals' ? 'electrical' : 'generator'}
             onNav={setView}
           />
         );
