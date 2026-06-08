@@ -387,6 +387,11 @@ async function runPipeline(
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
+// GET hardcoded default system prompts (for display in Settings)
+router.get('/prompt-defaults', requireAuth, (_req, res) => {
+  res.json({ agent1: AGENT1_SYSTEM, agent2: AGENT2_SYSTEM, agent3: AGENT3_SYSTEM });
+});
+
 // GET all workspaces (for restoring state on app load)
 router.get('/workspaces', requireAuth, async (_req, res) => {
   const { rows } = await pool.query('SELECT * FROM bid_workspaces');
