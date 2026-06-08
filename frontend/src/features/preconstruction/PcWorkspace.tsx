@@ -192,7 +192,11 @@ function buildLineItemsFromTakeoff(
 ): EstimateLineItem[] {
   if (!agent2Output) return [];
   try {
-    const j = JSON.parse(agent2Output) as { takeoff?: { category: string; item: string; qty: number; unit: string; spec?: string; confidence?: string; notes?: string }[] };
+    const raw = agent2Output.trim();
+    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = fenced ? fenced[1].trim() : raw;
+    const start = candidate.indexOf('{');
+    const j = JSON.parse(start >= 0 ? candidate.slice(start) : candidate) as { takeoff?: { category: string; item: string; qty: number; unit: string; spec?: string; confidence?: string; notes?: string }[] };
     if (!j.takeoff?.length) return [];
     return j.takeoff.map(row => {
       const key = `${row.category}||${row.item}`;
