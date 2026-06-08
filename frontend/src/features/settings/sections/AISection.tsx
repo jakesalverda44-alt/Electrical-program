@@ -4,7 +4,7 @@ import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, inputStyle } from '../shared';
 
 export function AISection({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
-  const keys = ['ai_anthropic_key','ai_model','ai_takeoff_agent23_model','ai_max_tokens','ai_temperature'];
+  const keys = ['ai_anthropic_key','ai_model','ai_takeoff_agent2_model','ai_takeoff_agent3_model','ai_max_tokens','ai_temperature'];
   const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(keys.map(k => [k, (settings as unknown as Record<string,string>)[k] ?? ''])));
   const [orig, setOrig] = useState(vals);
   const [saving, setSaving] = useState(false);
@@ -27,10 +27,8 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
   const VISION_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'];
   const TEXT_MODELS   = ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8'];
 
-  const visionModels = vals.ai_model && !VISION_MODELS.includes(vals.ai_model)
-    ? [vals.ai_model, ...VISION_MODELS] : VISION_MODELS;
-  const textModels = vals.ai_takeoff_agent23_model && !TEXT_MODELS.includes(vals.ai_takeoff_agent23_model)
-    ? [vals.ai_takeoff_agent23_model, ...TEXT_MODELS] : TEXT_MODELS;
+  const mkModelList = (current: string, base: string[]) =>
+    current && !base.includes(current) ? [current, ...base] : base;
 
   return (
     <div>
@@ -47,15 +45,20 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
         <input type="password" style={inputStyle} value={vals.ai_anthropic_key} onChange={set('ai_anthropic_key')} placeholder="sk-ant-••••••••••"/>
       </Field>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 20px' }}>
-        <Field label="Agent 1 — Vision Model" desc="Reads plan drawings. Smarter model = better extraction.">
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 20px' }}>
+        <Field label="Agent 1 — Vision Model" desc="Reads plan drawings. Sonnet recommended for best extraction.">
           <select style={{ ...inputStyle, appearance: 'none' }} value={vals.ai_model} onChange={set('ai_model')}>
-            {visionModels.map(m => <option key={m} value={m}>{m}</option>)}
+            {mkModelList(vals.ai_model, VISION_MODELS).map(m => <option key={m} value={m}>{m}</option>)}
           </select>
         </Field>
-        <Field label="Agents 2 & 3 — Text Model" desc="Scope, estimate & QA review. Haiku is fast and cost-effective.">
-          <select style={{ ...inputStyle, appearance: 'none' }} value={vals.ai_takeoff_agent23_model} onChange={set('ai_takeoff_agent23_model')}>
-            {textModels.map(m => <option key={m} value={m}>{m}</option>)}
+        <Field label="Agent 2 — Scope & Estimate" desc="Builds scope of work and estimate. Haiku is fast and cost-effective.">
+          <select style={{ ...inputStyle, appearance: 'none' }} value={vals.ai_takeoff_agent2_model} onChange={set('ai_takeoff_agent2_model')}>
+            {mkModelList(vals.ai_takeoff_agent2_model, TEXT_MODELS).map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </Field>
+        <Field label="Agent 3 — QA Review" desc="Checks scope gaps and risk. Haiku is fast and cost-effective.">
+          <select style={{ ...inputStyle, appearance: 'none' }} value={vals.ai_takeoff_agent3_model} onChange={set('ai_takeoff_agent3_model')}>
+            {mkModelList(vals.ai_takeoff_agent3_model, TEXT_MODELS).map(m => <option key={m} value={m}>{m}</option>)}
           </select>
         </Field>
       </div>

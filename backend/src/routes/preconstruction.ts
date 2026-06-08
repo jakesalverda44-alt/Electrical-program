@@ -16,8 +16,9 @@ const router = Router();
 const upload = drawingUpload;
 
 interface AIConfig {
-  model: string;      // Agent 1 — vision model (reads plan images/PDFs)
-  modelText: string;  // Agents 2 & 3 — text-only model (scope, estimate, QA)
+  model: string;       // Agent 1 — vision model (reads plan images/PDFs)
+  modelA2: string;     // Agent 2 — scope & estimate
+  modelA3: string;     // Agent 3 — QA review
   maxTokens: number;
   temperature: number;
 }
@@ -33,15 +34,18 @@ function parseNumberSetting(value: string, fallback: number, min: number, max: n
 }
 
 async function loadAIConfig(): Promise<AIConfig> {
-  const [modelSetting, modelTextSetting, maxTokensSetting, temperatureSetting] = await Promise.all([
+  const [modelSetting, modelA2Setting, modelA3Setting, maxTokensSetting, temperatureSetting] = await Promise.all([
     getSetting('ai_model'),
-    getSetting('ai_takeoff_agent23_model'),
+    getSetting('ai_takeoff_agent2_model'),
+    getSetting('ai_takeoff_agent3_model'),
     getSetting('ai_max_tokens'),
     getSetting('ai_temperature'),
   ]);
+  const defaultText = 'claude-haiku-4-5-20251001';
   return {
-    model:     (modelSetting     || process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim(),
-    modelText: (modelTextSetting || 'claude-haiku-4-5-20251001').trim(),
+    model:    (modelSetting    || process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim(),
+    modelA2:  (modelA2Setting  || defaultText).trim(),
+    modelA3:  (modelA3Setting  || defaultText).trim(),
     maxTokens: parseNumberSetting(maxTokensSetting || process.env.AI_MAX_TOKENS || '', DEFAULT_MAX_TOKENS, 256, 64000),
     temperature: parseNumberSetting(temperatureSetting || process.env.AI_TEMPERATURE || '', DEFAULT_TEMPERATURE, 0, 1),
   };
@@ -256,7 +260,7 @@ async function runPipeline(
   try {
     await updateStatus('agent2_running');
     const resp = await callWithRetry(() => client.messages.stream({
-      model: config.modelText,
+      model: config.modelA2,
       max_tokens: config.maxTokens,
       temperature: config.temperature,
       system: [{ type: 'text', text: AGENT2_SYSTEM, cache_control: { type: 'ephemeral' } }],
@@ -285,7 +289,7 @@ async function runPipeline(
   try {
     await updateStatus('agent3_running');
     const resp = await callWithRetry(() => client.messages.stream({
-      model: config.modelText,
+      model: config.modelA3,
       max_tokens: config.maxTokens,
       temperature: config.temperature,
       system: [{ type: 'text', text: AGENT3_SYSTEM, cache_control: { type: 'ephemeral' } }],
