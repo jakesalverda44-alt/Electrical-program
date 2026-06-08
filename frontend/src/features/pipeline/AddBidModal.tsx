@@ -12,6 +12,7 @@ interface Props {
 
 export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
   const [f, setF] = useState({ name: '', gc: initialGc ?? '', loc: '', amount: '', due: '', notes: '', project_type: '', sq_ft: '' });
+  const [notifyTeam, setNotifyTeam] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -26,7 +27,7 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
     setSaving(true);
     setError('');
     try {
-      const { data } = await api.post('/bids', f);
+      const { data } = await api.post('/bids', { ...f, suppress_notify: !notifyTeam });
       onAdded(data);
     } catch {
       setError('Failed to add bid. Please try again.');
@@ -86,6 +87,17 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
               <textarea value={f.notes} onChange={set('notes')} placeholder="Scope details, contacts, special requirements…"
                 rows={3} style={{ resize: 'vertical', minHeight: 72 }}/>
             </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', marginTop: 4 }}>
+              <input
+                type="checkbox"
+                checked={notifyTeam}
+                onChange={e => setNotifyTeam(e.target.checked)}
+                style={{ width: 15, height: 15, accentColor: 'var(--blue)', cursor: 'pointer', flexShrink: 0 }}
+              />
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)' }}>
+                Send notification email to team
+              </span>
+            </label>
             {error && <div className="login-error">{error}</div>}
           </div>
           <div className="modal-foot">

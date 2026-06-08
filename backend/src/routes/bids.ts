@@ -97,7 +97,7 @@ async function loadOwnedBid(req: AuthRequest, res: import('express').Response) {
 }
 
 router.post('/', requireAuth, async (req: AuthRequest, res) => {
-  const { name, gc, loc, amount, due, notes, project_type, sq_ft } = req.body;
+  const { name, gc, loc, amount, due, notes, project_type, sq_ft, suppress_notify } = req.body;
   if (!name?.trim() || !gc?.trim()) return res.status(400).json({ error: 'Name and GC required' });
   const user = req.user!;
   const customerId = await upsertCustomer(gc, 'gc');
@@ -106,7 +106,7 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
     [name.trim(), gc.trim(), (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), notes?.trim() || null, user.id, user.name, customerId, project_type || null, sq_ft ? Number(sq_ft) : null]
   );
-  sendBidNotification(rows[0], user).catch(() => {});
+  if (!suppress_notify) sendBidNotification(rows[0], user).catch(() => {});
 
   // Await Drive folder setup before responding so that folder IDs are written to
   // the DB by the time the client receives the new bid. This prevents a race where
