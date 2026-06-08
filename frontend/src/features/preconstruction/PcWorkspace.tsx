@@ -19,6 +19,50 @@ interface Props {
 
 const STEP_ORDER: PcStepKey[] = ['intake','takeoff','scope','estimate','review','proposal','submitted'];
 
+// Parse Agent 2's "Scope of Work" prose into its lettered sections (A–H).
+// Tolerant of markdown headers (#, *, -) and ".", ")" after the letter.
+function parseScopeSections(agent2: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!agent2) return result;
+  // Isolate the Scope of Work region so lettered headers elsewhere
+  // (Quantity Takeoff, BOM, etc.) aren't captured.
+  let region = agent2;
+  const scopeStart = region.search(/scope of work/i);
+  if (scopeStart >= 0) {
+    region = region.slice(scopeStart);
+    const exclIdx = region.search(/\n\s*[#*>-]*\s*exclusions/i);
+    if (exclIdx > 0) region = region.slice(0, exclIdx);
+  }
+  const headerRe = /^[#*\s>-]*([A-H])[.)]\s+[^\n]+/gm;
+  const matches = [...region.matchAll(headerRe)];
+  for (let i = 0; i < matches.length; i++) {
+    const letter = matches[i][1].toUpperCase();
+    const start = matches[i].index! + matches[i][0].length;
+    const end = i + 1 < matches.length ? matches[i + 1].index! : region.length;
+    const body = region.slice(start, end).trim();
+    if (body) result[letter] = body;
+  }
+  return result;
+}
+
+// Map Agent 2's 8 sections (A–H) into the Scope of Work tab's 7 sections (A–G).
+// Only non-empty parsed sections are returned, so sections Agent 2 omitted
+// leave any existing manual text untouched.
+function buildScopeFromAgent2(agent2?: string): Record<string, string> {
+  if (!agent2) return {};
+  const s = parseScopeSections(agent2);
+  const out: Record<string, string> = {};
+  if (s.A) out.A = s.A;                                  // Service & Distribution
+  if (s.B) out.B = s.B;                                  // Branch Power → Branch Circuits
+  if (s.C) out.C = s.C;                                  // Lighting & Controls → Lighting
+  if (s.E) out.D = s.E;                                  // Low Voltage Infrastructure → Low Voltage / Data
+  if (s.F) out.E = s.F;                                  // Fire Alarm
+  if (s.D) out.F = s.D;                                  // Site Electrical → Site / Exterior
+  const special = [s.G, s.H].filter(Boolean).join('\n\n'); // Generator + Coordination → Special Systems
+  if (special) out.G = special;
+  return out;
+}
+
 function StepTracker({ current }: { current: PcStepKey }) {
   const idx = STEP_ORDER.indexOf(current);
   return (
@@ -144,7 +188,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         }
         if (data?.status === 'complete') {
           setAiResults(data);
-          set(prev => ({ aiRunning: false, aiDone: true, aiLog: [...(prev.aiLog ?? []), '✓ Analysis complete — see Plan Review tab.'] }));
+          const scopeFill = buildScopeFromAgent2(data?.agent2_output);
+          const filled = Object.keys(scopeFill).length > 0;
+          set(prev => ({
+            aiRunning: false, aiDone: true,
+            scope: filled ? { ...prev.scope, ...scopeFill } : prev.scope,
+            aiLog: [...(prev.aiLog ?? []), filled
+              ? '✓ Analysis complete — Scope of Work auto-filled. See Plan Review tab.'
+              : '✓ Analysis complete — see Plan Review tab.'],
+          }));
         } else if (data?.status === 'error') {
           setAiResults(data);
           set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${analysisErrorMessage(data)}`] }));
