@@ -786,10 +786,11 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
   }
 
   const { rows: bidRows } = await pool.query(
-    'SELECT name FROM bids WHERE id=$1 AND deleted_at IS NULL',
+    'SELECT name, loc, gc, contact FROM bids WHERE id=$1 AND deleted_at IS NULL',
     [bidId]
   );
-  const bidName = (bidRows[0]?.name as string | undefined) ?? bidId;
+  const bid = bidRows[0] as { name?: string; loc?: string; gc?: string; contact?: string } | undefined;
+  const bidName = bid?.name ?? bidId;
   // HTTP headers must be Latin-1. Strip any non-ASCII (em dashes, accents, etc.)
   // from the filename or res.setHeader throws ERR_INVALID_CHAR.
   const asciiName = bidName.replace(/[^\x20-\x7E]/g, '').trim() || 'proposal';
@@ -797,7 +798,14 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
 
   let buf: Buffer;
   try {
-    buf = await buildProposalDocx(proposalData);
+    // The bid record is the authoritative source for the project name — Agent 4's
+    // generated projectName is ignored in favor of what the estimator entered.
+    buf = await buildProposalDocx(proposalData, {
+      projectName: bid?.name,
+      projectAddress: bid?.loc,
+      gcName: bid?.gc,
+      gcContact: bid?.contact,
+    });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-docx] buildProposalDocx threw');
     return res.status(500).json({ error: `Document build failed: ${err instanceof Error ? err.message : String(err)}` });
