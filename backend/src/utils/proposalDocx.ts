@@ -115,7 +115,7 @@ const CELL_NO_BORDER = {
 function navyHeader(text: string): Paragraph {
   return new Paragraph({
     children: [new TextRun({ text, bold: true, color: WHITE, size: LG, font: FONT })],
-    shading: { type: ShadingType.SOLID, fill: NAVY, color: 'auto' },
+    shading: { type: ShadingType.SOLID, fill: NAVY, color: NAVY },
     spacing: { before: 280, after: 120 },
     indent: { left: 80, right: 80 },
   });
@@ -126,7 +126,7 @@ function navyHeader(text: string): Paragraph {
 function subHeader(text: string): Paragraph {
   return new Paragraph({
     children: [new TextRun({ text, bold: true, color: WHITE, size: MD, font: FONT })],
-    shading: { type: ShadingType.SOLID, fill: NAVY, color: 'auto' },
+    shading: { type: ShadingType.SOLID, fill: NAVY, color: NAVY },
     spacing: { before: 180, after: 80 },
     indent: { left: 80, right: 80 },
   });
@@ -162,7 +162,7 @@ function bulletItem(text: string): Paragraph {
 function hdrCell(text: string, widthPct?: number): TableCell {
   return new TableCell({
     ...(widthPct ? { width: { size: widthPct, type: WidthType.PERCENTAGE } } : {}),
-    shading: { type: ShadingType.SOLID, fill: NAVY, color: 'auto' },
+    shading: { type: ShadingType.SOLID, fill: NAVY, color: NAVY },
     children: [new Paragraph({
       children: [new TextRun({ text, bold: true, color: WHITE, size: SM, font: FONT })],
       spacing: { before: 60, after: 60 },
@@ -171,30 +171,18 @@ function hdrCell(text: string, widthPct?: number): TableCell {
   });
 }
 
-function dataCell(text: string, stripe: boolean, widthPct?: number): TableCell {
+function dataCell(text: string, stripe: boolean, widthPct?: number, fontSize = SM): TableCell {
   return new TableCell({
     ...(widthPct ? { width: { size: widthPct, type: WidthType.PERCENTAGE } } : {}),
-    ...(stripe ? { shading: { type: ShadingType.SOLID, fill: GRAY, color: 'auto' } } : {}),
+    ...(stripe ? { shading: { type: ShadingType.SOLID, fill: GRAY, color: GRAY } } : {}),
     children: [new Paragraph({
-      children: [new TextRun({ text, size: SM, font: FONT })],
+      children: [new TextRun({ text, size: fontSize, font: FONT })],
       spacing: { before: 40, after: 40 },
       indent: { left: 80, right: 80 },
     })],
   });
 }
 
-function infoPara(label: string, value: string): Paragraph[] {
-  return [
-    new Paragraph({
-      children: [new TextRun({ text: label, bold: true, size: SM, color: NAVY, font: FONT })],
-      spacing: { before: 60, after: 30 },
-    }),
-    new Paragraph({
-      children: [new TextRun({ text: value, size: MD, font: FONT })],
-      spacing: { before: 0, after: 60 },
-    }),
-  ];
-}
 
 export async function buildProposalDocx(data: ProposalJSON, bidMeta: BidMeta = {}): Promise<Buffer> {
   const ASSETS_DIR = path.resolve(__dirname, '../../assets');
@@ -230,34 +218,14 @@ export async function buildProposalDocx(data: ProposalJSON, bidMeta: BidMeta = {
   }));
   children.push(blank());
 
-  // ── Info table: Prepared For (left) | Date + Project (right) ─────────────
-  children.push(new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: NO_BORDER,
-    rows: [new TableRow({
-      children: [
-        new TableCell({
-          width: { size: 50, type: WidthType.PERCENTAGE },
-          borders: CELL_NO_BORDER,
-          children: [
-            ...infoPara('PREPARED FOR', gcName),
-            ...(gcContact ? [new Paragraph({ children: [new TextRun({ text: gcContact, size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
-            ...(gcEmail   ? [new Paragraph({ children: [new TextRun({ text: gcEmail,   size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
-          ],
-        }),
-        new TableCell({
-          width: { size: 50, type: WidthType.PERCENTAGE },
-          borders: CELL_NO_BORDER,
-          children: [
-            ...infoPara('DATE', date),
-            ...infoPara('PROJECT', projectName),
-            ...(projectAddr ? [new Paragraph({ children: [new TextRun({ text: projectAddr, size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
-            ...(jobNumber   ? [new Paragraph({ children: [new TextRun({ text: `Job #: ${jobNumber}`, size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
-          ],
-        }),
-      ],
-    })],
-  }));
+  // ── Proposal header block (plain left-aligned paragraphs) ────────────────────
+  // Order: date · bold GC name · Attn · Re · address · job number
+  children.push(new Paragraph({ children: [new TextRun({ text: date, size: MD, font: FONT })], spacing: { after: 40 } }));
+  children.push(new Paragraph({ children: [new TextRun({ text: gcName, bold: true, size: MD, font: FONT })], spacing: { after: 40 } }));
+  if (gcContact) children.push(new Paragraph({ children: [new TextRun({ text: `Attn: ${gcContact}`, size: MD, font: FONT })], spacing: { after: 40 } }));
+  children.push(new Paragraph({ children: [new TextRun({ text: `Re: ${projectName}`, size: MD, font: FONT })], spacing: { after: 40 } }));
+  if (projectAddr) children.push(new Paragraph({ children: [new TextRun({ text: projectAddr, size: MD, font: FONT })], spacing: { after: 40 } }));
+  if (jobNumber)   children.push(new Paragraph({ children: [new TextRun({ text: `Job #: ${jobNumber}`, size: MD, font: FONT })], spacing: { after: 40 } }));
   children.push(blank());
 
   // ── Prepared By ─────────────────────────────────────────────────────────────
@@ -338,12 +306,12 @@ export async function buildProposalDocx(data: ProposalJSON, bidMeta: BidMeta = {
           hdrCell('Unit', 10), hdrCell('Qty', 8), hdrCell('Notes', 12),
         ]}),
         ...tkf.map((t, i) => new TableRow({ children: [
-          dataCell(toStr(t.category), i % 2 === 0, 18),
-          dataCell(toStr(t.item), i % 2 === 0, 20),
-          dataCell(toStr(t.description), i % 2 === 0, 32),
-          dataCell(toStr(t.unit), i % 2 === 0, 10),
-          dataCell(String(t.qty ?? ''), i % 2 === 0, 8),
-          dataCell(toStr(t.sourceNotes), i % 2 === 0, 12),
+          dataCell(toStr(t.category), i % 2 === 0, 18, 16),
+          dataCell(toStr(t.item), i % 2 === 0, 20, 16),
+          dataCell(toStr(t.description), i % 2 === 0, 32, 16),
+          dataCell(toStr(t.unit), i % 2 === 0, 10, 16),
+          dataCell(String(t.qty ?? ''), i % 2 === 0, 8, 16),
+          dataCell(toStr(t.sourceNotes).slice(0, 80), i % 2 === 0, 12, 16),
         ]})),
       ],
     }));
