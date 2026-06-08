@@ -62,10 +62,10 @@ export default function SettingsPage() {
 
   return (
     <div className="scroll view-enter" style={{ height: '100%' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', minHeight: '100vh', maxHeight: '100vh', overflow: 'hidden' }}>
+      <div className="settings-layout">
 
         {/* ── Left sidebar ── */}
-        <div style={{ background: 'var(--surface2)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
+        <div className="settings-sidebar">
           <div style={{ padding: '20px 16px 12px' }}>
             <div style={{ fontSize: 15, fontWeight: 900, color: 'var(--text)', marginBottom: 12 }}>Settings</div>
             <div style={{ position: 'relative' }}>
@@ -96,7 +96,7 @@ export default function SettingsPage() {
         </div>
 
         {/* ── Right content ── */}
-        <div style={{ overflow: 'auto', padding: '28px 32px 60px' }}>
+        <div className="settings-content">
           {active === 'company'           && <CompanySection     settings={settings} onSaved={onSettingsSaved}/>}
           {active === 'users'             && <UsersSection/>}
           {active === 'proposal-defaults' && <ProposalDefaultsSection settings={settings} onSaved={onSettingsSaved}/>}

@@ -123,8 +123,25 @@ if (require.main === module) {
   runMigrations()
     .then(async () => {
       await initJwtSecret();
-      app.listen(port, () => logger.info(`Backend running on :${port}`));
+      const server = app.listen(port, () => logger.info(`Backend running on :${port}`));
       startReminderScheduler();
+
+      // On SIGTERM (Render redeploy), mark any stuck in-progress analyses as error
+      // so the frontend poll sees a terminal state instead of spinning forever.
+      process.on('SIGTERM', async () => {
+        logger.info('SIGTERM received — marking in-progress analyses as interrupted');
+        try {
+          await pool.query(
+            `UPDATE takeoff_results SET status='error', agent1_output=
+              CASE WHEN agent1_output IS NULL THEN 'Analysis interrupted: server redeployed mid-run. Re-run the analysis.' ELSE agent1_output END
+            WHERE status IN ('running','agent1_complete','agent2_running','agent2_complete','agent3_running')`
+          );
+        } catch (err) {
+          logger.error({ err }, 'Failed to clean up in-progress analyses on shutdown');
+        }
+        server.close(() => process.exit(0));
+        setTimeout(() => process.exit(0), 5000);
+      });
     })
     .catch(err => {
       logger.error({ err }, 'Migration failed, aborting startup');
