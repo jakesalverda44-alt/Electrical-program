@@ -82,7 +82,7 @@ function describeAIError(err: unknown): string {
 
 // ── Electrical sheet filter ────────────────────────────────────────────────────
 const ELEC_INCLUDE = /^E\d|electrical|one.?line|panel.?sched|equip.?sched/i;
-const EXCLUDE_ONLY = /^(A|S|C|L|M)\d/i;
+const EXCLUDE_ONLY = /^(A|S|C|L|M|P|G|FP|PL|CV|CI|LS)\d/i;
 
 function isElectricalSheet(filename: string): boolean {
   const base = filename.replace(/\.[^.]+$/, '');
@@ -127,7 +127,10 @@ async function runPipeline(
     const filesToSend = electricalFiles.length > 0 ? electricalFiles : files;
 
     // Build document/image blocks
-    const BATCH_SIZE = 20;
+    // When multiple PDFs are present, send 1 per batch — each PDF may have many pages
+    // and combined token output easily hits the max_tokens hard limit.
+    const pdfCount = filesToSend.filter(f => (f.originalname.split('.').pop() || '').toLowerCase() === 'pdf').length;
+    const BATCH_SIZE = pdfCount > 1 ? 1 : 20;
     let agent1JSON: Record<string, unknown> = {};
 
     if (filesToSend.length <= BATCH_SIZE) {
