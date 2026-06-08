@@ -148,8 +148,9 @@ function StepTracker({ current }: { current: PcStepKey }) {
   );
 }
 
-const ELEC_INCLUDE = /^E\d|electrical|one.?line|panel.?sched|equip.?sched/i;
-const EXCLUDE_ONLY = /^(A|S|C|L|M)\d/i;
+// Mirror of backend isElectricalSheet (preconstruction.ts) — keep in sync.
+const ELEC_INCLUDE = /^E\d|electrical|one.?line|panel.?sched|equip.?sched|fixture|lumin|lighting|schedule/i;
+const EXCLUDE_ONLY = /^(A|S|C|L|M|P|G|FP|PL|CV|CI|LS)\d/i;
 function isElecSheet(name: string) {
   const base = name.replace(/\.[^.]+$/, '');
   if (ELEC_INCLUDE.test(base)) return true;

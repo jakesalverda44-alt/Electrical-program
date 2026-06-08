@@ -81,7 +81,10 @@ function describeAIError(err: unknown): string {
 }
 
 // ── Electrical sheet filter ────────────────────────────────────────────────────
-const ELEC_INCLUDE = /^E\d|electrical|one.?line|panel.?sched|equip.?sched/i;
+// Positive include: electrical sheet prefixes OR any keyword that signals electrical
+// scope — fixture/lighting/luminaire/schedule. Keyword matches win over the exclude
+// list, so a "Lighting Fixture Schedule" sheet is never dropped regardless of prefix.
+const ELEC_INCLUDE = /^E\d|electrical|one.?line|panel.?sched|equip.?sched|fixture|lumin|lighting|schedule/i;
 const EXCLUDE_ONLY = /^(A|S|C|L|M|P|G|FP|PL|CV|CI|LS)\d/i;
 
 function isElectricalSheet(filename: string): boolean {
@@ -147,6 +150,12 @@ async function runPipeline(
     // Filter to electrical sheets
     const electricalFiles = files.filter(f => isElectricalSheet(f.originalname));
     const filesToSend = electricalFiles.length > 0 ? electricalFiles : files;
+    const droppedFiles = files.filter(f => !filesToSend.includes(f));
+    logger.info({
+      bidId,
+      sent: filesToSend.map(f => f.originalname),
+      dropped: droppedFiles.map(f => f.originalname),
+    }, '[takeoff] Agent 1 sheet filter — files sent vs. dropped');
 
     // Build document/image blocks
     // When multiple PDFs are present, send 1 per batch — each PDF may have many pages
