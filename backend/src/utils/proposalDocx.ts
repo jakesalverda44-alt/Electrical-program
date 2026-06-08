@@ -172,6 +172,17 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
   const logo = loadAsset(ASSETS_DIR, ['logo.png', 'logo.jpg', 'logo.jpeg']);
   const sig  = loadAsset(ASSETS_DIR, ['signature.png', 'signature.jpg', 'sig.png', 'sig.jpg']);
 
+  // Coerce every scalar field so TextRun never receives a non-string value
+  const gcName        = toStr(data.gcName)        || '—';
+  const gcContact     = toStr(data.gcContact);
+  const gcEmail       = toStr(data.gcEmail);
+  const date          = toStr(data.date)          || new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const projectName   = toStr(data.projectName)   || '—';
+  const projectAddr   = toStr(data.projectAddress);
+  const jobNumber     = toStr(data.jobNumber);
+  const openingStmt   = toStr(data.openingStatement);
+  const totalPrice    = toStr(data.totalPrice)    || 'TBD';
+
   const children: (Paragraph | Table)[] = [];
 
   // ── Logo ────────────────────────────────────────────────────────────────────
@@ -201,19 +212,19 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
           width: { size: 50, type: WidthType.PERCENTAGE },
           borders: CELL_NO_BORDER,
           children: [
-            ...infoPara('PREPARED FOR', data.gcName ?? '—'),
-            ...(data.gcContact ? [new Paragraph({ children: [new TextRun({ text: data.gcContact, size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
-            ...(data.gcEmail   ? [new Paragraph({ children: [new TextRun({ text: data.gcEmail,   size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
+            ...infoPara('PREPARED FOR', gcName),
+            ...(gcContact ? [new Paragraph({ children: [new TextRun({ text: gcContact, size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
+            ...(gcEmail   ? [new Paragraph({ children: [new TextRun({ text: gcEmail,   size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
           ],
         }),
         new TableCell({
           width: { size: 50, type: WidthType.PERCENTAGE },
           borders: CELL_NO_BORDER,
           children: [
-            ...infoPara('DATE', data.date ?? new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })),
-            ...infoPara('PROJECT', data.projectName ?? '—'),
-            ...(data.projectAddress ? [new Paragraph({ children: [new TextRun({ text: data.projectAddress, size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
-            ...(data.jobNumber ? [new Paragraph({ children: [new TextRun({ text: `Job #: ${data.jobNumber}`, size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
+            ...infoPara('DATE', date),
+            ...infoPara('PROJECT', projectName),
+            ...(projectAddr ? [new Paragraph({ children: [new TextRun({ text: projectAddr, size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
+            ...(jobNumber   ? [new Paragraph({ children: [new TextRun({ text: `Job #: ${jobNumber}`, size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
           ],
         }),
       ],
@@ -231,9 +242,9 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
   children.push(blank());
 
   // ── Opening Statement ────────────────────────────────────────────────────────
-  if (data.openingStatement) {
+  if (openingStmt) {
     children.push(navyHeader('OPENING STATEMENT'));
-    children.push(bodyPara(data.openingStatement));
+    children.push(bodyPara(openingStmt));
     children.push(blank());
   }
 
@@ -269,7 +280,7 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
   }
 
   // ── Allowances table ─────────────────────────────────────────────────────────
-  const allows = (data.allowances ?? []).filter(a => a.item);
+  const allows = (Array.isArray(data.allowances) ? data.allowances : []).filter(a => a?.item);
   if (allows.length) {
     children.push(navyHeader('ALLOWANCES'));
     children.push(new Table({
@@ -279,10 +290,10 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
           hdrCell('Item', 45), hdrCell('Qty', 15), hdrCell('Unit', 15), hdrCell('Notes', 25),
         ]}),
         ...allows.map((a, i) => new TableRow({ children: [
-          dataCell(a.item, i % 2 === 0, 45),
+          dataCell(toStr(a.item), i % 2 === 0, 45),
           dataCell(String(a.footage || ''), i % 2 === 0, 15),
-          dataCell(a.unit || 'LF', i % 2 === 0, 15),
-          dataCell(a.notes || '', i % 2 === 0, 25),
+          dataCell(toStr(a.unit) || 'LF', i % 2 === 0, 15),
+          dataCell(toStr(a.notes), i % 2 === 0, 25),
         ]})),
       ],
     }));
@@ -290,7 +301,7 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
   }
 
   // ── Takeoff table ─────────────────────────────────────────────────────────────
-  const tkf = (data.takeoff ?? []).filter(t => t.item);
+  const tkf = (Array.isArray(data.takeoff) ? data.takeoff : []).filter(t => t?.item);
   if (tkf.length) {
     children.push(navyHeader('MATERIAL & LABOR TAKEOFF'));
     children.push(new Table({
@@ -301,12 +312,12 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
           hdrCell('Unit', 10), hdrCell('Qty', 8), hdrCell('Notes', 12),
         ]}),
         ...tkf.map((t, i) => new TableRow({ children: [
-          dataCell(t.category || '', i % 2 === 0, 18),
-          dataCell(t.item || '', i % 2 === 0, 20),
-          dataCell(t.description || '', i % 2 === 0, 32),
-          dataCell(t.unit || '', i % 2 === 0, 10),
+          dataCell(toStr(t.category), i % 2 === 0, 18),
+          dataCell(toStr(t.item), i % 2 === 0, 20),
+          dataCell(toStr(t.description), i % 2 === 0, 32),
+          dataCell(toStr(t.unit), i % 2 === 0, 10),
           dataCell(String(t.qty ?? ''), i % 2 === 0, 8),
-          dataCell(t.sourceNotes || '', i % 2 === 0, 12),
+          dataCell(toStr(t.sourceNotes), i % 2 === 0, 12),
         ]})),
       ],
     }));
@@ -326,7 +337,7 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
   children.push(new Paragraph({
     children: [
       new TextRun({ text: 'Total Proposed Contract Value:  ', bold: true, size: MD, color: NAVY, font: FONT }),
-      new TextRun({ text: data.totalPrice ?? 'TBD', bold: true, size: XL, color: NAVY, font: FONT }),
+      new TextRun({ text: totalPrice, bold: true, size: XL, color: NAVY, font: FONT }),
     ],
     alignment: AlignmentType.CENTER,
     spacing: { before: 120, after: 80 },
@@ -358,7 +369,7 @@ export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
               : [new Paragraph({ children: [new TextRun('')], spacing: { before: 300, after: 0 } })]
             ),
             new Paragraph({ children: [new TextRun({ text: 'Jake Salverda, Commercial A.E.', size: SM, font: FONT })], spacing: { after: 20 } }),
-            new Paragraph({ children: [new TextRun({ text: `Date: ${data.date ?? new Date().toLocaleDateString()}`, size: SM, font: FONT })], spacing: { after: 20 } }),
+            new Paragraph({ children: [new TextRun({ text: `Date: ${date}`, size: SM, font: FONT })], spacing: { after: 20 } }),
           ],
         }),
         new TableCell({
