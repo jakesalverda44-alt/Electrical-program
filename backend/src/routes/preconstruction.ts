@@ -105,7 +105,10 @@ async function runPipeline(
     const filesToSend = electricalFiles.length > 0 ? electricalFiles : files;
 
     // Build document/image blocks
-    const BATCH_SIZE = 20;
+    // If multiple PDFs are present, process one per batch — each PDF may have many pages
+    // and combined output easily exceeds the 64K token hard limit.
+    const pdfCount = filesToSend.filter(f => (f.originalname.split('.').pop() || '').toLowerCase() === 'pdf').length;
+    const BATCH_SIZE = pdfCount > 1 ? 1 : 20;
     let agent1JSON: Record<string, unknown> = {};
 
     if (filesToSend.length <= BATCH_SIZE) {
@@ -222,9 +225,9 @@ async function runPipeline(
     if (!parsedAgent1) {
       const looksLikeJSON = agent1Output.trim().startsWith('```') || agent1Output.trim().startsWith('{');
       const stopHint = looksLikeJSON
-        ? `Agent 1 output was cut off before the JSON closed — the response exceeded the Max Tokens limit. ` +
-          `This job has too many sheets for ${config.maxTokens.toLocaleString()} tokens. ` +
-          `Go to Settings → Plan Analysis · AI Takeoff and raise Max Tokens to 64000, then run again.`
+        ? `Agent 1 output was cut off before the JSON closed — the response exceeded the ${config.maxTokens.toLocaleString()}-token output limit. ` +
+          `This usually means a single file contains too many sheets. ` +
+          `Try splitting the plan set into separate PDFs (e.g. one per discipline or 20 sheets each) and uploading them individually.`
         : 'Agent 1 did not return JSON. Check that the uploaded files are readable electrical plan PDFs.';
       await pool.query(
         `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
