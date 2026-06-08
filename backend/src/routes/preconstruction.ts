@@ -100,6 +100,28 @@ function extractText(response: Anthropic.Message): string {
     .join('\n');
 }
 
+function logAgent1Request(bidId: string, blocks: Anthropic.MessageParam['content'], model: string, maxTokens: number, batchLabel: string) {
+  const blockSummary = (blocks as Array<{ type: string; source?: { media_type?: string; type?: string }; text?: string }>).map(b => ({
+    type: b.type,
+    ...(b.source ? { source_type: b.source.type, media_type: b.source.media_type } : {}),
+    ...(b.text   ? { text_length: b.text.length } : {}),
+  }));
+  logger.info({ bidId, batch: batchLabel, model, maxTokens, blocks: blockSummary }, '[takeoff] Agent 1 request');
+}
+
+function logAgent1Response(bidId: string, resp: Anthropic.Message, outputText: string, batchLabel: string) {
+  logger.info({
+    bidId,
+    batch: batchLabel,
+    stop_reason: resp.stop_reason,
+    content_blocks: resp.content.map(b => ({ type: b.type, ...(b.type === 'text' ? { length: (b as Anthropic.TextBlock).text.length } : {}) })),
+    input_tokens: resp.usage?.input_tokens,
+    output_tokens: resp.usage?.output_tokens,
+    output_text_length: outputText.length,
+    output_preview: outputText.slice(0, 200),
+  }, '[takeoff] Agent 1 response');
+}
+
 function compactOutput(text: string, max = 500): string {
   const oneLine = text.replace(/\s+/g, ' ').trim();
   if (oneLine.length <= max) return oneLine;
@@ -158,6 +180,7 @@ async function runPipeline(
         text: 'Analyze all uploaded electrical plans and provide your complete Drawing Analyzer output following your output format exactly. Return JSON only.',
       });
 
+      logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, 'single');
       const resp = await callWithRetry(() => client.messages.create({
         model: config.model,
         max_tokens: config.maxTokensA1,
@@ -166,6 +189,7 @@ async function runPipeline(
         messages: [{ role: 'user', content: contentBlocks }],
       }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
       agent1Output = extractText(resp);
+      logAgent1Response(bidId, resp, agent1Output, 'single');
       await pool.query(
         `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2 WHERE bid_id=$3`,
         [JSON.stringify(resp.usage), config.model, bidId]
@@ -205,6 +229,7 @@ async function runPipeline(
           text: `Analyze batch ${bi + 1} of ${batches.length} electrical plan files and provide Drawing Analyzer JSON output. Return JSON only.`,
         });
 
+        logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${batches.length}`);
         const bResp = await callWithRetry(() => client.messages.create({
           model: config.model,
           max_tokens: config.maxTokensA1,
@@ -213,6 +238,7 @@ async function runPipeline(
           messages: [{ role: 'user', content: contentBlocks }],
         }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
+        logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${batches.length}`);
         const parsed = parseAIJSON(bText);
         if (parsed) batchResults.push(parsed);
         if (bResp.usage) {
