@@ -1436,6 +1436,16 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           try { propData = JSON.parse(agent4Raw); }
           catch { propParseError = true; }
         }
+        // Safely convert any item that Claude may have returned as an object instead of a string
+        const toStr = (v: unknown): string => {
+          if (typeof v === 'string') return v;
+          if (v && typeof v === 'object') {
+            const o = v as Record<string, unknown>;
+            return [o.item, o.text, o.description, o.question, o.risks, o.risk, o.note]
+              .filter(Boolean).map(String).join(' — ') || JSON.stringify(v);
+          }
+          return String(v ?? '');
+        };
         const sow = propData?.scopeOfWork as Record<string, string[]> | undefined;
         const fieldStyle: React.CSSProperties = {
           width: '100%', font: 'inherit', fontSize: 13, fontWeight: 600,
@@ -1576,7 +1586,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                           <div key={label as string} style={{ marginBottom: 10 }}>
                             <div style={{ fontSize: 12, fontWeight: 700, color: '#1F3864', marginBottom: 4 }}>{label as string}</div>
                             <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
-                              {arr.map((b, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{b}</li>)}
+                              {arr.map((b, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{toStr(b)}</li>)}
                             </ul>
                           </div>
                         );
@@ -1589,7 +1599,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     <div style={{ marginBottom: 16 }}>
                       <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Exclusions</div>
                       <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
-                        {(propData.exclusions as string[]).map((e, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{e}</li>)}
+                        {(propData.exclusions as unknown[]).map((e, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{toStr(e)}</li>)}
                       </ul>
                     </div>
                   )}
@@ -1599,7 +1609,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     <div style={{ padding: '10px 14px', background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.35)', borderRadius: 8 }}>
                       <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--amber)', marginBottom: 6 }}>⚠ Open Items to Resolve Before Sending</div>
                       <ul style={{ margin: 0, paddingLeft: 18 }}>
-                        {(propData.rfisToResolve as string[]).map((r, i) => <li key={i} style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 3 }}>{r}</li>)}
+                        {(propData.rfisToResolve as unknown[]).map((r, i) => <li key={i} style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 3 }}>{toStr(r)}</li>)}
                       </ul>
                     </div>
                   )}
