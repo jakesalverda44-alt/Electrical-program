@@ -17,12 +17,21 @@ const upload = drawingUpload;
 
 interface AIConfig {
   model: string;
-  maxTokens: number;
+  modelA2: string;
+  modelA3: string;
+  maxTokensA1: number;
+  maxTokensA2: number;
+  maxTokensA3: number;
   temperature: number;
+  promptA1: string;
+  promptA2: string;
+  promptA3: string;
 }
 
-const DEFAULT_AI_MODEL = 'claude-sonnet-4-5';
-const DEFAULT_MAX_TOKENS = 16000;
+const DEFAULT_AI_MODEL = 'claude-sonnet-4-6';
+const DEFAULT_MAX_TOKENS_A1 = 16000;
+const DEFAULT_MAX_TOKENS_A2 = 4000;
+const DEFAULT_MAX_TOKENS_A3 = 4000;
 const DEFAULT_TEMPERATURE = 0.3;
 
 function parseNumberSetting(value: string, fallback: number, min: number, max: number): number {
@@ -32,15 +41,35 @@ function parseNumberSetting(value: string, fallback: number, min: number, max: n
 }
 
 async function loadAIConfig(): Promise<AIConfig> {
-  const [modelSetting, maxTokensSetting, temperatureSetting] = await Promise.all([
+  const [
+    modelSetting, modelA2Setting, modelA3Setting,
+    maxA1Setting, maxA2Setting, maxA3Setting,
+    temperatureSetting,
+    promptA1Setting, promptA2Setting, promptA3Setting,
+  ] = await Promise.all([
     getSetting('ai_model'),
-    getSetting('ai_max_tokens'),
+    getSetting('ai_takeoff_agent2_model'),
+    getSetting('ai_takeoff_agent3_model'),
+    getSetting('ai_max_tokens_agent1'),
+    getSetting('ai_max_tokens_agent2'),
+    getSetting('ai_max_tokens_agent3'),
     getSetting('ai_temperature'),
+    getSetting('ai_prompt_agent1'),
+    getSetting('ai_prompt_agent2'),
+    getSetting('ai_prompt_agent3'),
   ]);
+  const defaultModel = (process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim();
   return {
-    model: (modelSetting || process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim(),
-    maxTokens: parseNumberSetting(maxTokensSetting || process.env.AI_MAX_TOKENS || '', DEFAULT_MAX_TOKENS, 256, 64000),
+    model:   (modelSetting   || defaultModel),
+    modelA2: (modelA2Setting || 'claude-haiku-4-5-20251001'),
+    modelA3: (modelA3Setting || 'claude-haiku-4-5-20251001'),
+    maxTokensA1: parseNumberSetting(maxA1Setting || '', DEFAULT_MAX_TOKENS_A1, 256, 64000),
+    maxTokensA2: parseNumberSetting(maxA2Setting || '', DEFAULT_MAX_TOKENS_A2, 256, 64000),
+    maxTokensA3: parseNumberSetting(maxA3Setting || '', DEFAULT_MAX_TOKENS_A3, 256, 64000),
     temperature: parseNumberSetting(temperatureSetting || process.env.AI_TEMPERATURE || '', DEFAULT_TEMPERATURE, 0, 1),
+    promptA1: (promptA1Setting || '').trim(),
+    promptA2: (promptA2Setting || '').trim(),
+    promptA3: (promptA3Setting || '').trim(),
   };
 }
 
@@ -128,12 +157,16 @@ async function runPipeline(
 
       const resp = await callWithRetry(() => client.messages.create({
         model: config.model,
-        max_tokens: config.maxTokens,
+        max_tokens: config.maxTokensA1,
         temperature: config.temperature,
-        system: [{ type: 'text', text: AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
+        system: [{ type: 'text', text: config.promptA1 || AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: contentBlocks }],
       }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
       agent1Output = extractText(resp);
+      await pool.query(
+        `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2 WHERE bid_id=$3`,
+        [JSON.stringify(resp.usage), config.model, bidId]
+      ).catch(() => {});
 
     } else {
       // Batched: split into groups of BATCH_SIZE, merge JSON
@@ -142,6 +175,7 @@ async function runPipeline(
         batches.push(filesToSend.slice(i, i + BATCH_SIZE));
       }
       const batchResults: Record<string, unknown>[] = [];
+      let batchUsage = { input_tokens: 0, output_tokens: 0 };
 
       for (let bi = 0; bi < batches.length; bi++) {
         const batch = batches[bi];
@@ -170,15 +204,23 @@ async function runPipeline(
 
         const bResp = await callWithRetry(() => client.messages.create({
           model: config.model,
-          max_tokens: config.maxTokens,
+          max_tokens: config.maxTokensA1,
           temperature: config.temperature,
-          system: [{ type: 'text', text: AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
+          system: [{ type: 'text', text: config.promptA1 || AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: contentBlocks }],
         }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
         const parsed = parseAIJSON(bText);
         if (parsed) batchResults.push(parsed);
+        if (bResp.usage) {
+          batchUsage.input_tokens  += bResp.usage.input_tokens  ?? 0;
+          batchUsage.output_tokens += bResp.usage.output_tokens ?? 0;
+        }
       }
+      await pool.query(
+        `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2 WHERE bid_id=$3`,
+        [JSON.stringify(batchUsage), config.model, bidId]
+      ).catch(() => {});
 
       // Merge batch results
       const merged: Record<string, unknown[]> & { project_info?: unknown; confidence_scores?: unknown } = {
@@ -243,10 +285,10 @@ async function runPipeline(
   try {
     await updateStatus('agent2_running');
     const resp = await callWithRetry(() => client.messages.create({
-      model: config.model,
-      max_tokens: config.maxTokens,
+      model: config.modelA2,
+      max_tokens: config.maxTokensA2,
       temperature: config.temperature,
-      system: [{ type: 'text', text: AGENT2_SYSTEM, cache_control: { type: 'ephemeral' } }],
+      system: [{ type: 'text', text: config.promptA2 || AGENT2_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
         content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${agent1Output}`,
@@ -255,8 +297,8 @@ async function runPipeline(
     agent2Output = extractText(resp);
 
     await pool.query(
-      `UPDATE takeoff_results SET status='agent2_complete', agent2_output=$1 WHERE bid_id=$2`,
-      [agent2Output, bidId]
+      `UPDATE takeoff_results SET status='agent2_complete', agent2_output=$1, usage_agent2=$2, model_agent2=$3 WHERE bid_id=$4`,
+      [agent2Output, JSON.stringify(resp.usage), config.modelA2, bidId]
     );
   } catch (err) {
     const message = `Agent 2 failed: ${describeAIError(err)}`;
@@ -272,10 +314,10 @@ async function runPipeline(
   try {
     await updateStatus('agent3_running');
     const resp = await callWithRetry(() => client.messages.create({
-      model: config.model,
-      max_tokens: config.maxTokens,
+      model: config.modelA3,
+      max_tokens: config.maxTokensA3,
       temperature: config.temperature,
-      system: [{ type: 'text', text: AGENT3_SYSTEM, cache_control: { type: 'ephemeral' } }],
+      system: [{ type: 'text', text: config.promptA3 || AGENT3_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
         content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${agent1Output}\n\n---\n\nESTIMATOR OUTPUT:\n\n${agent2Output}`,
@@ -288,9 +330,11 @@ async function runPipeline(
       UPDATE takeoff_results SET
         status='complete',
         agent3_output=$1,
-        raw_response=$2
-      WHERE bid_id=$3
-    `, [agent3Output, agent1Output, bidId]);
+        raw_response=$2,
+        usage_agent3=$3,
+        model_agent3=$4
+      WHERE bid_id=$5
+    `, [agent3Output, agent1Output, JSON.stringify(resp.usage), config.modelA3, bidId]);
 
     // Also persist structured fields from agent1 JSON for backward compatibility
     const a1 = parseAIJSON(agent1Output) ?? {};
@@ -555,7 +599,7 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   });
 
   const client = new Anthropic({ apiKey });
-  logger.info({ bidId, model: aiConfig.model, maxTokens: aiConfig.maxTokens }, 'AI takeoff pipeline started');
+  logger.info({ bidId, model: aiConfig.model, modelA2: aiConfig.modelA2, modelA3: aiConfig.modelA3 }, 'AI takeoff pipeline started');
   runPipeline(bidId, files, client, aiConfig).catch(async err => {
     const message = `Pipeline failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff pipeline failed');

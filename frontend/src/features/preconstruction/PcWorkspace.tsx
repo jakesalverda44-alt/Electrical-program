@@ -600,6 +600,30 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             </div>
           );
         }
+        const MODEL_PRICING: Record<string, [number, number]> = {
+          'claude-haiku-4-5-20251001': [0.80, 4.00],
+          'claude-sonnet-4-6': [3.00, 15.00],
+          'claude-opus-4-8': [15.00, 75.00],
+        };
+        function estimateCost(usage: { input_tokens: number; output_tokens: number } | null | undefined, model: string | null | undefined): number | null {
+          if (!usage || !model) return null;
+          const pricing = MODEL_PRICING[model];
+          if (!pricing) return null;
+          return (usage.input_tokens / 1_000_000) * pricing[0] + (usage.output_tokens / 1_000_000) * pricing[1];
+        }
+        const usageA1 = aiResults?.usage_agent1 as { input_tokens: number; output_tokens: number } | null | undefined;
+        const usageA2 = aiResults?.usage_agent2 as { input_tokens: number; output_tokens: number } | null | undefined;
+        const usageA3 = aiResults?.usage_agent3 as { input_tokens: number; output_tokens: number } | null | undefined;
+        const modelA1 = aiResults?.model_agent1 as string | null | undefined;
+        const modelA2 = aiResults?.model_agent2 as string | null | undefined;
+        const modelA3 = aiResults?.model_agent3 as string | null | undefined;
+        const costA1 = estimateCost(usageA1, modelA1);
+        const costA2 = estimateCost(usageA2, modelA2);
+        const costA3 = estimateCost(usageA3, modelA3);
+        const hasUsage = !!(usageA1 || usageA2 || usageA3);
+        const totalIn  = (usageA1?.input_tokens  ?? 0) + (usageA2?.input_tokens  ?? 0) + (usageA3?.input_tokens  ?? 0);
+        const totalOut = (usageA1?.output_tokens ?? 0) + (usageA2?.output_tokens ?? 0) + (usageA3?.output_tokens ?? 0);
+        const totalCost = (costA1 ?? 0) + (costA2 ?? 0) + (costA3 ?? 0);
         const agent1 = aiResults?.agent1_output as string | undefined;
         const agent2 = aiResults?.agent2_output as string | undefined;
         const agent3 = aiResults?.agent3_output as string | undefined;
@@ -652,6 +676,44 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     ↓ Export
                   </button>
                 </div>
+                {/* Run cost summary */}
+                {aiResults?.status === 'complete' && hasUsage && (
+                  <div style={{ marginBottom: 16, border: '1px solid var(--border2)', borderRadius: 10, overflow: 'hidden', fontSize: 12.5 }}>
+                    <div style={{ padding: '8px 14px', background: 'var(--surface2)', fontWeight: 800, fontSize: 12, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                      Run Cost Summary
+                    </div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border2)' }}>
+                          {['Agent', 'Model', 'Input Tokens', 'Output Tokens', 'Est. Cost'].map(h => (
+                            <th key={h} style={{ padding: '6px 14px', textAlign: h === 'Agent' || h === 'Model' ? 'left' : 'right', fontWeight: 700, color: 'var(--text3)', fontSize: 11 }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[
+                          { label: 'Drawing Analysis', usage: usageA1, model: modelA1, cost: costA1 },
+                          { label: 'Scope & Estimate',  usage: usageA2, model: modelA2, cost: costA2 },
+                          { label: 'QA Review',         usage: usageA3, model: modelA3, cost: costA3 },
+                        ].map((row, i) => (
+                          <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                            <td style={{ padding: '6px 14px', fontWeight: 700, color: 'var(--text)' }}>Agent {i + 1} — {row.label}</td>
+                            <td style={{ padding: '6px 14px', color: 'var(--text3)', fontFamily: 'monospace', fontSize: 11 }}>{row.model ?? '—'}</td>
+                            <td style={{ padding: '6px 14px', textAlign: 'right', fontFamily: 'monospace' }}>{row.usage ? row.usage.input_tokens.toLocaleString() : '—'}</td>
+                            <td style={{ padding: '6px 14px', textAlign: 'right', fontFamily: 'monospace' }}>{row.usage ? row.usage.output_tokens.toLocaleString() : '—'}</td>
+                            <td style={{ padding: '6px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--text)' }}>{row.cost != null ? `$${row.cost.toFixed(4)}` : '—'}</td>
+                          </tr>
+                        ))}
+                        <tr style={{ background: 'var(--surface2)', fontWeight: 800 }}>
+                          <td colSpan={2} style={{ padding: '6px 14px', color: 'var(--text2)' }}>Total</td>
+                          <td style={{ padding: '6px 14px', textAlign: 'right', fontFamily: 'monospace' }}>{totalIn.toLocaleString()}</td>
+                          <td style={{ padding: '6px 14px', textAlign: 'right', fontFamily: 'monospace' }}>{totalOut.toLocaleString()}</td>
+                          <td style={{ padding: '6px 14px', textAlign: 'right', color: 'var(--blue)' }}>{hasUsage && totalCost > 0 ? `$${totalCost.toFixed(4)}` : '—'}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
                 {/* Sub-tab content */}
                 {ANALYSIS_TABS.map(t => t.key === analysisTab && (
                   <div key={t.key}>
