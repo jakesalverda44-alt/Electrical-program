@@ -675,7 +675,8 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   });
 }));
 
-// POST run-agent4 — Proposal Formatter (on-demand, separate from pipeline)
+// POST run-agent4 — kicks off Proposal Formatter in background, returns immediately
+// Frontend polls GET /:bidId/results and watches agent4_status for completion.
 router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis'), asyncHandler(async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   const { price, internalNotes } = req.body as { price?: string; internalNotes?: string };
@@ -699,6 +700,14 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   const agent1Output = (trRows[0].agent1_output as string) || '';
   const agent2Output = (trRows[0].agent2_output as string) || '';
 
+  // Mark as running and respond immediately — don't wait for AI
+  await pool.query(
+    `UPDATE takeoff_results SET agent4_status='running', agent4_error=NULL, agent4_output=NULL WHERE bid_id=$1`,
+    [bidId]
+  );
+  res.json({ status: 'running' });
+
+  // Run AI call in background
   const userMsg = [
     `PROPOSAL REQUEST`,
     ``,
@@ -714,34 +723,44 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
     agent2Output,
   ].join('\n');
 
-  const resp = await callWithRetry(() => client.messages.create({
-    model: config.modelA4,
-    max_tokens: config.maxTokensA4,
-    temperature: config.temperature,
-    system: [{ type: 'text', text: config.promptA4 || AGENT4_SYSTEM, cache_control: { type: 'ephemeral' } }],
-    messages: [{ role: 'user', content: userMsg }],
-  }), { onRetry: (a, _e, d) => logger.warn(`[agent4] retry ${a} in ${d}ms`) });
+  (async () => {
+    try {
+      const resp = await callWithRetry(() => client.messages.create({
+        model: config.modelA4,
+        max_tokens: config.maxTokensA4,
+        temperature: config.temperature,
+        system: [{ type: 'text', text: config.promptA4 || AGENT4_SYSTEM, cache_control: { type: 'ephemeral' } }],
+        messages: [{ role: 'user', content: userMsg }],
+      }), { onRetry: (a, _e, d) => logger.warn(`[agent4] retry ${a} in ${d}ms`) });
 
-  const rawText = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');
-  const parsed = parseAIJSON(rawText);
-  if (!parsed) {
-    logger.warn({ bidId, preview: rawText.slice(0, 300) }, '[agent4] Could not parse JSON from response — likely truncated');
-    return res.status(422).json({
-      error: 'The AI response could not be parsed as valid JSON. The output may have been cut off. Try increasing the Agent 4 max tokens in Settings → AI, then re-run Agent 4.',
-    });
-  }
-  const toStore = JSON.stringify(parsed);
-
-  await pool.query(
-    `UPDATE takeoff_results SET agent4_output=$1, agent4_price=$2, agent4_notes=$3, agent4_model=$4, usage_agent4=$5 WHERE bid_id=$6`,
-    [toStore, price.trim(), internalNotes?.trim() || null, config.modelA4, JSON.stringify(resp.usage), bidId]
-  );
-
-  res.json({
-    agent4_output: toStore,
-    agent4_model: config.modelA4,
-    usage_agent4: resp.usage,
-  });
+      const rawText = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');
+      const parsed = parseAIJSON(rawText);
+      if (!parsed) {
+        logger.warn({ bidId, preview: rawText.slice(0, 300) }, '[agent4] Could not parse JSON from response');
+        await pool.query(
+          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2`,
+          ['AI response could not be parsed as valid JSON — the output may have been cut off. Try re-running Agent 4.', bidId]
+        );
+        return;
+      }
+      await pool.query(
+        `UPDATE takeoff_results SET
+          agent4_output=$1, agent4_price=$2, agent4_notes=$3,
+          agent4_model=$4, usage_agent4=$5,
+          agent4_status='complete', agent4_error=NULL
+        WHERE bid_id=$6`,
+        [JSON.stringify(parsed), price.trim(), internalNotes?.trim() || null, config.modelA4, JSON.stringify(resp.usage), bidId]
+      );
+      logger.info({ bidId }, '[agent4] Proposal generated successfully');
+    } catch (err) {
+      logger.error({ err, bidId }, '[agent4] Background run failed');
+      const message = err instanceof Error ? err.message : 'Unknown error during proposal generation';
+      await pool.query(
+        `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2`,
+        [message, bidId]
+      );
+    }
+  })().catch(err => logger.error({ err, bidId }, '[agent4] Uncaught background error'));
 }));
 
 // GET generate-docx — build and return the .docx proposal file

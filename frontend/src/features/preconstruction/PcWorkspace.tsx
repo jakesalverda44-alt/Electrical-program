@@ -255,8 +255,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [propPrice,  setPropPrice]  = useState('');
   const [propNotes,  setPropNotes]  = useState('');
   const [agent4Running, setAgent4Running] = useState(false);
-  const pollRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const agent4PollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const wsRef = useRef(ws);
   wsRef.current = ws;
@@ -336,6 +337,33 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }, 3000);
   };
 
+  const pollAgent4 = (failStreak = 0) => {
+    agent4PollRef.current = setTimeout(async () => {
+      try {
+        const { data } = await api.get(`/preconstruction/${bid.id}/results`);
+        const status = data?.agent4_status as string | undefined;
+        if (status === 'complete') {
+          setAiResults(data);
+          setAgent4Running(false);
+          showToast({ title: 'Proposal generated', sub: 'Review the preview and download the .docx' });
+        } else if (status === 'error') {
+          setAiResults(data);
+          setAgent4Running(false);
+          const errMsg = (data?.agent4_error as string | undefined) ?? 'Failed to generate proposal';
+          showToast({ title: 'Agent 4 error', sub: errMsg });
+        } else {
+          pollAgent4(0);
+        }
+      } catch {
+        if (failStreak < 5) pollAgent4(failStreak + 1);
+        else {
+          setAgent4Running(false);
+          showToast({ title: 'Agent 4 error', sub: 'Could not reach server. The proposal may still be generating — check back in a moment.' });
+        }
+      }
+    }, 3000);
+  };
+
   useEffect(() => {
     const RUNNING_STATUSES = ['running', 'agent1_complete', 'agent2_running', 'agent2_complete', 'agent3_running'];
     api.get(`/preconstruction/${bid.id}/results`).then(r => {
@@ -348,8 +376,16 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         set({ aiRunning: true, aiLog: ['Analysis in progress — reconnecting…'] });
         pollForResults(Date.now(), shownA2, shownA3);
       }
+      // Reconnect Agent 4 poll if it was running when page was refreshed
+      if (r.data?.agent4_status === 'running') {
+        setAgent4Running(true);
+        pollAgent4();
+      }
     }).catch(() => {});
-    return () => { if (pollRef.current) clearTimeout(pollRef.current); };
+    return () => {
+      if (pollRef.current) clearTimeout(pollRef.current);
+      if (agent4PollRef.current) clearTimeout(agent4PollRef.current);
+    };
   }, [bid.id]);
 
   useEffect(() => {
@@ -541,16 +577,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         price: propPrice,
         internalNotes: propNotes,
       });
-      // Re-fetch full results from DB to confirm storage and update all fields
-      const fresh = await api.get(`/preconstruction/${bid.id}/results`);
-      if (fresh.data) setAiResults(fresh.data);
-      set({ proposalGenerated: true });
-      showToast({ title: 'Proposal generated', sub: 'Review the preview and download the .docx' });
+      // Backend returns immediately — poll for completion
+      pollAgent4();
     } catch (err) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to run proposal formatter';
-      showToast({ title: 'Agent 4 error', sub: msg });
-    } finally {
       setAgent4Running(false);
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to start Agent 4';
+      showToast({ title: 'Agent 4 error', sub: msg });
     }
   };
 
@@ -1395,7 +1427,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         );
 
       case 'proposal': {
-        const agent4Raw = aiResults?.agent4_output as string | undefined;
+        const agent4Raw    = aiResults?.agent4_output as string | undefined;
+        const agent4Status = aiResults?.agent4_status as string | undefined;
+        const agent4ErrMsg = aiResults?.agent4_error  as string | undefined;
         let propData: Record<string, unknown> | null = null;
         let propParseError = false;
         if (agent4Raw) {
@@ -1448,8 +1482,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     disabled={agent4Running || !propPrice.trim() || !aiResults?.agent2_output}
                     style={{ fontSize: 13 }}>
                     {agent4Running
-                      ? 'Running Agent 4…'
-                      : (propData || propParseError) ? '↺ Re-run Agent 4' : 'Run Agent 4 — Generate Proposal'}
+                      ? 'Generating proposal…'
+                      : (propData || propParseError || agent4Status === 'error') ? '↺ Re-run Agent 4' : 'Run Agent 4 — Generate Proposal'}
                   </button>
                   {propData && (
                     <button className="btn" onClick={downloadDocx} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
@@ -1471,19 +1505,29 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               </div>
             </div>
 
-            {/* Parse error fallback — stored output is not valid JSON (likely a previous truncated run) */}
-            {propParseError && agent4Raw && (
+            {/* Agent 4 in-progress indicator */}
+            {agent4Running && (
+              <div className="panel" style={{ marginBottom: 16 }}>
+                <div style={{ padding: '14px 20px', fontSize: 13, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div className="spinner" style={{ width: 16, height: 16, border: '2px solid var(--border2)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', flexShrink: 0 }}/>
+                  Generating proposal with Agent 4 — this takes 30–60 seconds…
+                </div>
+              </div>
+            )}
+
+            {/* Agent 4 error state — DB-stored error or legacy parse failure */}
+            {(agent4Status === 'error' || propParseError) && !agent4Running && (
               <div className="panel" style={{ marginBottom: 16, borderColor: 'rgba(224,165,59,.4)' }}>
                 <div className="panel-hdr" style={{ background: 'var(--amber-soft)' }}>
                   <span className="panel-title" style={{ color: 'var(--amber)' }}>
                     <span className="pt-ic" style={{ background: 'rgba(224,165,59,.2)', color: 'var(--amber)' }}>
                       <Icon name="zap" size={14} stroke={2}/>
                     </span>
-                    Previous Proposal Incomplete
+                    Agent 4 Did Not Complete
                   </span>
                 </div>
                 <div style={{ padding: '12px 20px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
-                  The previous Agent 4 run was cut off before it finished — the response was truncated and couldn't be parsed. Click <strong>↺ Re-run Agent 4</strong> above to regenerate (max tokens have been increased to fix this).
+                  {agent4ErrMsg ?? 'The previous run was cut off before finishing.'} Click <strong>↺ Re-run Agent 4</strong> above to try again.
                 </div>
               </div>
             )}
