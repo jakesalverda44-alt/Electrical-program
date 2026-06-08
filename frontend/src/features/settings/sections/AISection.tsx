@@ -19,7 +19,7 @@ const PROMPT_KEYS = ['ai_prompt_agent1', 'ai_prompt_agent2', 'ai_prompt_agent3',
 const MODEL_KEYS  = ['ai_model', 'ai_takeoff_agent2_model', 'ai_takeoff_agent3_model', 'ai_takeoff_agent4_model'] as const;
 const TOKEN_KEYS  = ['ai_max_tokens_agent1', 'ai_max_tokens_agent2', 'ai_max_tokens_agent3', 'ai_max_tokens_agent4'] as const;
 const MODEL_LISTS = [VISION_MODELS, TEXT_MODELS, TEXT_MODELS, TEXT_MODELS];
-const TOKEN_DEFAULTS = ['16000', '4000', '4000', '4000'];
+const TOKEN_DEFAULTS = ['16000', '4000', '4000', '8000'];
 const AGT = ['agent1', 'agent2', 'agent3', 'agent4'] as const;
 
 type PromptDefaults = { agent1: string; agent2: string; agent3: string; agent4: string };
