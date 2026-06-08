@@ -227,7 +227,20 @@ F. Fire Alarm
 G. Generator & Transfer Switch
 H. Coordination & Closeout
 
-Use professional electrical contractor language suitable for customer proposals.
+SCOPE WRITING RULES (CRITICAL)
+The Scope of Work sections (A–H) must be written as clean, narrative prose suitable to
+paste directly into a customer proposal. Specifically:
+- Write complete sentences and short paragraphs describing the work to be performed
+  (e.g. "Furnish and install (1) 400A main service entrance with automatic transfer
+  switch, including all associated feeders, grounding, and terminations.").
+- You MAY use simple dash bullet points ("- ") for lists of distinct scope items.
+- Do NOT use markdown tables, pipe characters (|), or column layouts in the scope sections.
+- Do NOT use markdown formatting symbols such as ** for bold, * for italics, or # headers.
+- Do NOT embed quantity tables, feeder schedules, or fixture schedules inside the scope
+  sections. All tabular/quantitative detail belongs ONLY in the Quantity Takeoff and Bill
+  of Materials sections below.
+Keep the scope sections readable as plain text. Use professional electrical contractor
+language suitable for customer proposals.
 
 ECFECI FLAGGING
 For service and distribution equipment (switchboards, switchgear, panelboards, transformers, ATS, disconnects) and for the lighting package (fixtures, controls, exit signs, emergency units), flag each line item as ECFECI — meaning the Electrical Contractor both furnishes and installs. Use the label "ECFECI" explicitly on those line items so the downstream formatter can identify them without guessing. Items where the owner or GC furnishes equipment should be labeled "OCFECI" (Owner Furnishes, EC Installs) or "NIC" as appropriate.

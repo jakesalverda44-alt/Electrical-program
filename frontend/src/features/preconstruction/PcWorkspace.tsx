@@ -45,6 +45,35 @@ function parseScopeSections(agent2: string): Record<string, string> {
   return result;
 }
 
+// Strip markdown so Agent 2 output reads cleanly inside plain textareas:
+// removes bold/italic/heading/code markers and flattens markdown tables to readable lines.
+function cleanMarkdown(text: string): string {
+  return text
+    .split('\n')
+    .map(raw => {
+      let l = raw;
+      // Drop table separator rows like |---|---| or | :--- | ---: |
+      if (/^\s*\|?(\s*:?-{2,}:?\s*\|)+\s*:?-*:?\s*\|?\s*$/.test(l)) return null;
+      // Flatten table data rows: | a | b | c | → a · b · c
+      if (/^\s*\|.*\|\s*$/.test(l)) {
+        const cells = l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim()).filter(Boolean);
+        l = cells.join(' · ');
+      }
+      l = l.replace(/^\s*#{1,6}\s+/, '');        // heading markers
+      l = l.replace(/^\s*>\s?/, '');             // blockquote
+      l = l.replace(/^\s*[-*+]\s+/, '• ');       // list markers → bullet
+      l = l.replace(/\*\*(.+?)\*\*/g, '$1');     // bold
+      l = l.replace(/__(.+?)__/g, '$1');
+      l = l.replace(/\*(.+?)\*/g, '$1');         // italics
+      l = l.replace(/`([^`]+)`/g, '$1');         // inline code
+      return l;
+    })
+    .filter((l): l is string => l !== null)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 // Map Agent 2's 8 sections (A–H) into the Scope of Work tab's 7 sections (A–G).
 // Only non-empty parsed sections are returned, so sections Agent 2 omitted
 // leave any existing manual text untouched.
@@ -52,14 +81,18 @@ function buildScopeFromAgent2(agent2?: string): Record<string, string> {
   if (!agent2) return {};
   const s = parseScopeSections(agent2);
   const out: Record<string, string> = {};
-  if (s.A) out.A = s.A;                                  // Service & Distribution
-  if (s.B) out.B = s.B;                                  // Branch Power → Branch Circuits
-  if (s.C) out.C = s.C;                                  // Lighting & Controls → Lighting
-  if (s.E) out.D = s.E;                                  // Low Voltage Infrastructure → Low Voltage / Data
-  if (s.F) out.E = s.F;                                  // Fire Alarm
-  if (s.D) out.F = s.D;                                  // Site Electrical → Site / Exterior
-  const special = [s.G, s.H].filter(Boolean).join('\n\n'); // Generator + Coordination → Special Systems
-  if (special) out.G = special;
+  const put = (key: string, val?: string) => {
+    if (!val) return;
+    const cleaned = cleanMarkdown(val);
+    if (cleaned) out[key] = cleaned;
+  };
+  put('A', s.A);                                  // Service & Distribution
+  put('B', s.B);                                  // Branch Power → Branch Circuits
+  put('C', s.C);                                  // Lighting & Controls → Lighting
+  put('D', s.E);                                  // Low Voltage Infrastructure → Low Voltage / Data
+  put('E', s.F);                                  // Fire Alarm
+  put('F', s.D);                                  // Site Electrical → Site / Exterior
+  put('G', [s.G, s.H].filter(Boolean).join('\n\n')); // Generator + Coordination → Special Systems
   return out;
 }
 
