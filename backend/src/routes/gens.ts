@@ -12,6 +12,8 @@ import { logger } from '../utils/logger';
 import { writeAudit } from '../utils/audit';
 import { ensureProject, setProjectDeleted } from '../utils/project';
 import { commissionRate, commissionAmount } from '../utils/commission';
+import { createNotification } from '../notifications/engine';
+import { ownerAdminIds } from '../notifications/prefs';
 import { pdfUpload } from '../utils/upload';
 import {
   uploadFile,
@@ -653,7 +655,7 @@ router.post('/p/:token/sign', async (req, res) => {
          stage = CASE WHEN stage IN ('declined','awarded') THEN stage ELSE 'signed' END,
          updated_at = now()
      WHERE proposal_token = $2 AND deleted_at IS NULL
-     RETURNING id, customer, stage, signed_at, drive_job_folder_id`,
+     RETURNING id, customer, stage, signed_at, drive_job_folder_id, salesperson_id`,
     [signatureData, req.params.token]
   );
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
@@ -690,6 +692,28 @@ router.post('/p/:token/sign', async (req, res) => {
   }
 
   res.json({ ok: true, gen });
+
+  // Fire-and-forget: in-app notification to salesperson when proposal is signed.
+  (async () => {
+    try {
+      const raw = await getSetting('notifications_json');
+      const notifPrefs = raw ? JSON.parse(raw) : {};
+      if (!notifPrefs.proposal_signed) return;
+      const targets = gen.salesperson_id ? [gen.salesperson_id] : await ownerAdminIds();
+      for (const uid of targets) {
+        await createNotification(uid, {
+          type: 'proposal_viewed_unsigned',
+          title: 'Proposal signed',
+          body: `${gen.customer} accepted and signed their proposal`,
+          linkView: 'gen-proposals',
+          linkId: gen.id,
+          dedupKey: `propsigned:${gen.id}`,
+        });
+      }
+    } catch (err) {
+      logger.error({ err }, '[notify] proposal signed notification failed');
+    }
+  })();
 });
 
 // ── Public: auto-save a signed-proposal PDF (no auth) ───────────────────────────

@@ -15,7 +15,7 @@ interface NewNotif { type: ReminderType; title: string; body: string; linkView: 
  * Insert an in-app notification, skipping duplicates via dedup_key.
  * Returns true if a new row was created (so we know whether to also email).
  */
-async function createNotification(userId: string, n: NewNotif & { dedupKey: string }): Promise<boolean> {
+export async function createNotification(userId: string, n: NewNotif & { dedupKey: string }): Promise<boolean> {
   const { rows } = await pool.query(
     `INSERT INTO notifications (user_id, type, title, body, link_view, link_id, dedup_key)
      VALUES ($1,$2,$3,$4,$5,$6,$7)
