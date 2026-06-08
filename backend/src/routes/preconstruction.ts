@@ -269,7 +269,9 @@ async function runPipeline(
         content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${agent1Output}`,
       }],
     }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
-    agent2Output = extractText(resp);
+    const raw2 = extractText(resp);
+    const parsed2 = parseAIJSON(raw2);
+    agent2Output = parsed2 ? JSON.stringify(parsed2) : raw2;
 
     await pool.query(
       `UPDATE takeoff_results SET status='agent2_complete', agent2_output=$1 WHERE bid_id=$2`,
@@ -298,7 +300,9 @@ async function runPipeline(
         content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${agent1Output}\n\n---\n\nESTIMATOR OUTPUT:\n\n${agent2Output}`,
       }],
     }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
-    agent3Output = extractText(resp);
+    const raw3 = extractText(resp);
+    const parsed3 = parseAIJSON(raw3);
+    agent3Output = parsed3 ? JSON.stringify(parsed3) : raw3;
 
     // Final write — all three complete
     await pool.query(`

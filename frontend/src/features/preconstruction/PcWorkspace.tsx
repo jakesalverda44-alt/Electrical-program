@@ -74,11 +74,30 @@ function cleanMarkdown(text: string): string {
     .trim();
 }
 
-// Map Agent 2's 8 sections (A–H) into the Scope of Work tab's 7 sections (A–G).
-// Only non-empty parsed sections are returned, so sections Agent 2 omitted
-// leave any existing manual text untouched.
+// Map Agent 2 output into the Scope of Work tab's 7 sections (A–G).
+// Handles both the new compact JSON format and the old prose format.
 function buildScopeFromAgent2(agent2?: string): Record<string, string> {
   if (!agent2) return {};
+
+  // Try new JSON format first
+  try {
+    const j = JSON.parse(agent2) as Record<string, unknown>;
+    const sow = j.scopeOfWork as Record<string, string[]> | undefined;
+    if (sow) {
+      const join = (arr?: string[]) => (arr ?? []).join('\n');
+      const out: Record<string, string> = {};
+      const put = (key: string, val: string) => { const c = cleanMarkdown(val); if (c) out[key] = c; };
+      put('A', join(sow.A_ServiceDistribution));
+      put('B', join(sow.B_BranchPower));
+      put('C', join(sow.C_LightingControls));
+      put('D', join(sow.E_LowVoltage));                         // Low Voltage → D
+      put('F', join(sow.D_SiteLightingUnderground));            // Site → F
+      put('G', join(sow.F_Coordination));                       // Coordination → G (Special Systems)
+      return out;
+    }
+  } catch { /* fall through to prose parser */ }
+
+  // Fall back to prose parser for old format
   const s = parseScopeSections(agent2);
   const out: Record<string, string> = {};
   const put = (key: string, val?: string) => {
@@ -86,13 +105,13 @@ function buildScopeFromAgent2(agent2?: string): Record<string, string> {
     const cleaned = cleanMarkdown(val);
     if (cleaned) out[key] = cleaned;
   };
-  put('A', s.A);                                  // Service & Distribution
-  put('B', s.B);                                  // Branch Power → Branch Circuits
-  put('C', s.C);                                  // Lighting & Controls → Lighting
-  put('D', s.E);                                  // Low Voltage Infrastructure → Low Voltage / Data
-  put('E', s.F);                                  // Fire Alarm
-  put('F', s.D);                                  // Site Electrical → Site / Exterior
-  put('G', [s.G, s.H].filter(Boolean).join('\n\n')); // Generator + Coordination → Special Systems
+  put('A', s.A);
+  put('B', s.B);
+  put('C', s.C);
+  put('D', s.E);
+  put('E', s.F);
+  put('F', s.D);
+  put('G', [s.G, s.H].filter(Boolean).join('\n\n'));
   return out;
 }
 
@@ -754,31 +773,212 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   </button>
                 </div>
                 {/* Sub-tab content */}
-                {ANALYSIS_TABS.map(t => t.key === analysisTab && (
-                  <div key={t.key}>
-                    {t.output ? (
-                      <div style={{ position: 'relative' }}>
-                        <button
-                          onClick={() => copyToClipboard(t.output!, t.key)}
-                          style={{ position: 'absolute', top: 10, right: 10, zIndex: 2, border: '1px solid var(--border2)',
-                            borderRadius: 7, background: 'var(--surface)', color: copied === t.key ? 'var(--green)' : 'var(--text3)',
-                            fontSize: 11, fontWeight: 700, padding: '4px 10px', cursor: 'pointer' }}>
-                          {copied === t.key ? '✓ Copied' : 'Copy'}
-                        </button>
-                        <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '14px 16px',
-                          fontFamily: t.key === 'raw' ? 'monospace' : 'inherit', fontSize: t.key === 'raw' ? 12 : 13,
-                          color: 'var(--text2)', lineHeight: 1.75,
-                          whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '65vh', overflowY: 'auto' }}>
-                          {t.output}
+                {ANALYSIS_TABS.map(t => {
+                  if (t.key !== analysisTab) return null;
+                  if (!t.output) return (
+                    <div key={t.key} style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
+                      No output yet for this agent.
+                    </div>
+                  );
+
+                  // Try to parse JSON for structured agents
+                  let parsed: Record<string, unknown> | null = null;
+                  try { parsed = JSON.parse(t.output) as Record<string, unknown>; } catch { /* raw text */ }
+
+                  const riskColor = (r: string) =>
+                    r === 'HIGH' ? '#EF4444' : r === 'MEDIUM' ? '#F59E0B' : 'var(--green)';
+                  const pill = (label: string, color: string) => (
+                    <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 99, fontSize: 11,
+                      fontWeight: 700, background: color + '22', color }}>
+                      {label}
+                    </span>
+                  );
+
+                  // ── Agent 2 structured view ──────────────────────────────
+                  if (t.key === 'agent2' && parsed) {
+                    const sow = parsed.scopeOfWork as Record<string, string[]> | undefined;
+                    const takeoff = parsed.takeoff as Array<Record<string,unknown>> | undefined;
+                    const rfis = parsed.rfis as Array<Record<string,unknown>> | undefined;
+                    const exclusions = parsed.exclusions as string[] | undefined;
+                    const confidence = parsed.confidence as number | undefined;
+                    const manual = parsed.manualCountRequired as string[] | undefined;
+                    const SOW_LABELS: [string, string][] = [
+                      ['A_ServiceDistribution','A. Service & Distribution'],
+                      ['B_BranchPower','B. Branch Power'],
+                      ['C_LightingControls','C. Lighting & Controls'],
+                      ['D_SiteLightingUnderground','D. Site Lighting, Underground & Allowances'],
+                      ['E_LowVoltage','E. Low Voltage Infrastructure'],
+                      ['F_Coordination','F. Project Coordination & Closeout'],
+                    ];
+                    return (
+                      <div key={t.key} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                          {confidence !== undefined && pill(`Confidence: ${Math.round(confidence * 100)}%`, confidence >= 0.75 ? '#10B981' : confidence >= 0.5 ? '#F59E0B' : '#EF4444')}
+                          <button onClick={() => copyToClipboard(t.output!, t.key)}
+                            style={{ marginLeft: 'auto', border: '1px solid var(--border2)', borderRadius: 7,
+                              background: 'var(--surface)', color: copied === t.key ? 'var(--green)' : 'var(--text3)',
+                              fontSize: 11, fontWeight: 700, padding: '4px 10px', cursor: 'pointer' }}>
+                            {copied === t.key ? '✓ Copied' : 'Copy JSON'}
+                          </button>
                         </div>
+                        {sow && SOW_LABELS.map(([key, label]) => {
+                          const bullets = sow[key] ?? [];
+                          if (!bullets.length) return null;
+                          return (
+                            <div key={key} style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 16px' }}>
+                              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--blue)', marginBottom: 8 }}>{label}</div>
+                              {bullets.map((b, i) => (
+                                <div key={i} style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, paddingLeft: 12,
+                                  borderLeft: '2px solid var(--border2)', marginBottom: 4 }}>
+                                  {b}
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })}
+                        {takeoff && takeoff.length > 0 && (
+                          <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 16px' }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text)', marginBottom: 10 }}>Quantity Takeoff</div>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                              <thead>
+                                <tr style={{ borderBottom: '1px solid var(--border2)' }}>
+                                  {['Category','Item','Spec','Qty','Unit','Conf'].map(h => (
+                                    <th key={h} style={{ textAlign: 'left', padding: '4px 8px', color: 'var(--text3)', fontWeight: 700 }}>{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {takeoff.map((row, i) => (
+                                  <tr key={i} style={{ borderBottom: '1px solid var(--border)', color: 'var(--text2)' }}>
+                                    <td style={{ padding: '5px 8px', fontSize: 11, color: 'var(--text3)' }}>{String(row.category ?? '')}</td>
+                                    <td style={{ padding: '5px 8px' }}>{String(row.item ?? '')}</td>
+                                    <td style={{ padding: '5px 8px', fontSize: 11 }}>{String(row.spec ?? '')}</td>
+                                    <td style={{ padding: '5px 8px', fontWeight: 700 }}>{String(row.qty ?? '')}</td>
+                                    <td style={{ padding: '5px 8px' }}>{String(row.unit ?? '')}</td>
+                                    <td style={{ padding: '5px 8px' }}>{pill(String(row.confidence ?? ''), row.confidence === 'VERIFIED' ? '#10B981' : '#F59E0B')}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        {rfis && rfis.length > 0 && (
+                          <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 16px' }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text)', marginBottom: 8 }}>RFIs</div>
+                            {rfis.map((r, i) => (
+                              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 6, fontSize: 13 }}>
+                                {pill(String(r.risk ?? 'RFI'), riskColor(String(r.risk ?? '')))}
+                                <span style={{ color: 'var(--text2)' }}><strong>{String(r.item ?? '')}</strong> — {String(r.question ?? '')}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {exclusions && exclusions.length > 0 && (
+                          <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 16px' }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text)', marginBottom: 8 }}>Exclusions</div>
+                            {exclusions.map((e, i) => <div key={i} style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 2 }}>• {e}</div>)}
+                          </div>
+                        )}
+                        {manual && manual.length > 0 && (
+                          <div style={{ background: '#FEF3C722', border: '1px solid #F59E0B44', borderRadius: 10, padding: '12px 16px' }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: '#F59E0B', marginBottom: 8 }}>Manual Count Required</div>
+                            {manual.map((m, i) => <div key={i} style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 2 }}>• {m}</div>)}
+                          </div>
+                        )}
                       </div>
-                    ) : (
-                      <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
-                        No output yet for this agent.
+                    );
+                  }
+
+                  // ── Agent 3 structured view ──────────────────────────────
+                  if (t.key === 'agent3' && parsed) {
+                    const overallRisk = String(parsed.overallRisk ?? '');
+                    const confidence = parsed.confidence as number | undefined;
+                    const readyToSubmit = parsed.readyToSubmit as boolean | undefined;
+                    const stopItems = parsed.stopItems as string[] | undefined;
+                    const catRisk = parsed.categoryRisk as Array<Record<string,unknown>> | undefined;
+                    const conflicts = parsed.conflicts as string[] | undefined;
+                    const missing = parsed.missingFromScope as string[] | undefined;
+                    const topRfis = parsed.topRfis as string[] | undefined;
+                    const contingency = String(parsed.contingencyRecommended ?? '');
+                    const recommendation = String(parsed.recommendation ?? '');
+                    return (
+                      <div key={t.key} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                          {overallRisk && pill(`Overall Risk: ${overallRisk}`, riskColor(overallRisk))}
+                          {confidence !== undefined && pill(`Confidence: ${Math.round(confidence * 100)}%`, confidence >= 0.75 ? '#10B981' : confidence >= 0.5 ? '#F59E0B' : '#EF4444')}
+                          {readyToSubmit !== undefined && pill(readyToSubmit ? 'Ready to Submit' : 'Not Ready', readyToSubmit ? '#10B981' : '#EF4444')}
+                          <button onClick={() => copyToClipboard(t.output!, t.key)}
+                            style={{ marginLeft: 'auto', border: '1px solid var(--border2)', borderRadius: 7,
+                              background: 'var(--surface)', color: copied === t.key ? 'var(--green)' : 'var(--text3)',
+                              fontSize: 11, fontWeight: 700, padding: '4px 10px', cursor: 'pointer' }}>
+                            {copied === t.key ? '✓ Copied' : 'Copy JSON'}
+                          </button>
+                        </div>
+                        {recommendation && (
+                          <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 16px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.7 }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text)', marginBottom: 6 }}>Recommendation</div>
+                            {recommendation}
+                            {contingency && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text3)' }}>Contingency: <strong>{contingency}</strong></div>}
+                          </div>
+                        )}
+                        {stopItems && stopItems.length > 0 && (
+                          <div style={{ background: '#FEE2E222', border: '1px solid #EF444444', borderRadius: 10, padding: '12px 16px' }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: '#EF4444', marginBottom: 8 }}>Stop Items — Resolve Before Submitting</div>
+                            {stopItems.map((s, i) => <div key={i} style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4 }}>• {s}</div>)}
+                          </div>
+                        )}
+                        {catRisk && catRisk.length > 0 && (
+                          <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 16px' }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text)', marginBottom: 10 }}>Category Risk</div>
+                            {catRisk.map((r, i) => (
+                              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 6, fontSize: 13 }}>
+                                {pill(String(r.risk ?? ''), riskColor(String(r.risk ?? '')))}
+                                <span style={{ fontWeight: 600, color: 'var(--text)' }}>{String(r.category ?? '')}</span>
+                                {r.note ? <span style={{ color: 'var(--text3)', fontSize: 12 }}>— {String(r.note)}</span> : null}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {conflicts && conflicts.length > 0 && (
+                          <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 16px' }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: '#F59E0B', marginBottom: 8 }}>Conflicts</div>
+                            {conflicts.map((c, i) => <div key={i} style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4 }}>• {c}</div>)}
+                          </div>
+                        )}
+                        {missing && missing.length > 0 && (
+                          <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 16px' }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: '#F59E0B', marginBottom: 8 }}>Missing from Scope</div>
+                            {missing.map((m, i) => <div key={i} style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4 }}>• {m}</div>)}
+                          </div>
+                        )}
+                        {topRfis && topRfis.length > 0 && (
+                          <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 16px' }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text)', marginBottom: 8 }}>Top RFIs</div>
+                            {topRfis.map((r, i) => <div key={i} style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4 }}>• {r}</div>)}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                ))}
+                    );
+                  }
+
+                  // ── Default: raw text / JSON / agent 1 ───────────────────
+                  return (
+                    <div key={t.key} style={{ position: 'relative' }}>
+                      <button onClick={() => copyToClipboard(t.output!, t.key)}
+                        style={{ position: 'absolute', top: 10, right: 10, zIndex: 2, border: '1px solid var(--border2)',
+                          borderRadius: 7, background: 'var(--surface)', color: copied === t.key ? 'var(--green)' : 'var(--text3)',
+                          fontSize: 11, fontWeight: 700, padding: '4px 10px', cursor: 'pointer' }}>
+                        {copied === t.key ? '✓ Copied' : 'Copy'}
+                      </button>
+                      <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '14px 16px',
+                        fontFamily: t.key === 'raw' ? 'monospace' : 'inherit', fontSize: t.key === 'raw' ? 12 : 13,
+                        color: 'var(--text2)', lineHeight: 1.75,
+                        whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '65vh', overflowY: 'auto' }}>
+                        {t.output}
+                      </div>
+                    </div>
+                  );
+                })}
               </>
             )}
           </div>
