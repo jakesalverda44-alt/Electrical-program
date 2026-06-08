@@ -537,11 +537,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }
     setAgent4Running(true);
     try {
-      const { data } = await api.post(`/preconstruction/${bid.id}/run-agent4`, {
+      await api.post(`/preconstruction/${bid.id}/run-agent4`, {
         price: propPrice,
         internalNotes: propNotes,
       });
-      setAiResults(prev => prev ? { ...prev, ...data } : data);
+      // Re-fetch full results from DB to confirm storage and update all fields
+      const fresh = await api.get(`/preconstruction/${bid.id}/results`);
+      if (fresh.data) setAiResults(fresh.data);
       set({ proposalGenerated: true });
       showToast({ title: 'Proposal generated', sub: 'Review the preview and download the .docx' });
     } catch (err) {
@@ -1395,7 +1397,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       case 'proposal': {
         const agent4Raw = aiResults?.agent4_output as string | undefined;
         let propData: Record<string, unknown> | null = null;
-        if (agent4Raw) { try { propData = JSON.parse(agent4Raw); } catch {} }
+        let propParseError = false;
+        if (agent4Raw) {
+          try { propData = JSON.parse(agent4Raw); }
+          catch { propParseError = true; }
+        }
         const sow = propData?.scopeOfWork as Record<string, string[]> | undefined;
         const fieldStyle: React.CSSProperties = {
           width: '100%', font: 'inherit', fontSize: 13, fontWeight: 600,
@@ -1443,9 +1449,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     style={{ fontSize: 13 }}>
                     {agent4Running
                       ? 'Running Agent 4…'
-                      : propData ? '↺ Re-run Agent 4' : 'Run Agent 4 — Generate Proposal'}
+                      : (propData || propParseError) ? '↺ Re-run Agent 4' : 'Run Agent 4 — Generate Proposal'}
                   </button>
-                  {propData && (
+                  {(propData || propParseError) && (
                     <button className="btn" onClick={downloadDocx} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
                       <Icon name="doc" size={14} stroke={1.9}/> Download .docx
                     </button>
@@ -1464,6 +1470,26 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 )}
               </div>
             </div>
+
+            {/* Parse error fallback — raw output is stored but not valid JSON */}
+            {propParseError && agent4Raw && (
+              <div className="panel" style={{ marginBottom: 16, borderColor: 'rgba(224,165,59,.4)' }}>
+                <div className="panel-hdr" style={{ background: 'var(--amber-soft)' }}>
+                  <span className="panel-title" style={{ color: 'var(--amber)' }}>
+                    <span className="pt-ic" style={{ background: 'rgba(224,165,59,.2)', color: 'var(--amber)' }}>
+                      <Icon name="shield" size={14} stroke={2}/>
+                    </span>
+                    Proposal Saved — Display Issue
+                  </span>
+                  <button className="btn" onClick={downloadDocx} style={{ fontSize: 12, height: 28, padding: '0 12px', background: 'var(--green)', borderColor: 'var(--green)' }}>
+                    Download .docx
+                  </button>
+                </div>
+                <div style={{ padding: '12px 20px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
+                  The proposal was saved but couldn't be previewed (the AI output format was unexpected). You can still download the .docx, or re-run Agent 4 to regenerate.
+                </div>
+              </div>
+            )}
 
             {/* Proposal preview */}
             {propData && (
