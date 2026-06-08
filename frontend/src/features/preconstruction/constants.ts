@@ -47,6 +47,13 @@ export const SCOPE_SECS = [
   { id: 'G', label: 'Special Systems'        },
 ];
 
+export interface ConfirmedService {
+  voltage: string;
+  ampacity: string;
+  panel: string;
+  confirmed: boolean;
+}
+
 export interface PcWorkspace {
   bidId: string;
   bidName: string;
@@ -64,6 +71,7 @@ export interface PcWorkspace {
   estimateOverrides: Record<string, number>;
   overheadPct: number;
   profitPct: number;
+  confirmedService?: ConfirmedService;
 }
 
 export function blankWorkspace(bidId: string, bidName: string, amount: number): PcWorkspace {

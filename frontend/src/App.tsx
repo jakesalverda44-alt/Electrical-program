@@ -25,7 +25,7 @@ import KohlerIntakePage from './features/leads/KohlerIntakePage';
 import CalendarPage from './features/calendar/CalendarPage';
 import ProposalPublicPage from './pages/ProposalPublicPage';
 import SettingsPage from './features/settings/SettingsPage';
-import { PcWorkspace } from './features/preconstruction/constants';
+import { PcWorkspace, ConfirmedService } from './features/preconstruction/constants';
 import Toast from './components/Toast';
 import { AppProviders } from './contexts/AppContext';
 import api from './api/client';
@@ -102,6 +102,7 @@ export default function App() {
             files:             (row.files as PcWorkspace['files']) || [],
             aiDone:            !!(row.ai_done),
             proposalGenerated: !!(row.proposal_generated),
+            confirmedService:  (row.confirmed_service as ConfirmedService | null) ?? undefined,
             aiRunning:         false,
             aiLog:             [],
             estimateOverrides: {},

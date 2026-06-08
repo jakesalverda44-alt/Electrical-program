@@ -449,17 +449,18 @@ router.get('/workspaces', requireAuth, async (_req, res) => {
 // PUT workspace (upsert)
 router.put('/:bidId/workspace', requireAuth, async (req, res) => {
   const { bidId } = req.params;
-  const { step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated } = req.body;
+  const { step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated, confirmed_service } = req.body;
   const { rows } = await pool.query(
-    `INSERT INTO bid_workspaces (bid_id, step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())
+    `INSERT INTO bid_workspaces (bid_id, step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated, confirmed_service, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
      ON CONFLICT (bid_id) DO UPDATE SET
        step=$2, active_tab=$3, notes=$4, scope=$5, rfis=$6, files=$7,
-       ai_done=$8, proposal_generated=$9, updated_at=now()
+       ai_done=$8, proposal_generated=$9, confirmed_service=$10, updated_at=now()
      RETURNING *`,
     [bidId, step||'intake', active_tab||'overview', notes||'',
      JSON.stringify(scope||{}), JSON.stringify(rfis||[]), JSON.stringify(files||[]),
-     !!ai_done, !!proposal_generated]
+     !!ai_done, !!proposal_generated,
+     confirmed_service ? JSON.stringify(confirmed_service) : null]
   );
   res.json(rows[0]);
 });

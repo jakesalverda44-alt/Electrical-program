@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Toast, BidEstimate, EstimateLineItem } from '../../types';
-import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey, PROJECT_TYPES } from './constants';
+import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey, PROJECT_TYPES, ConfirmedService } from './constants';
 import api from '../../api/client';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
 import { moneyFull } from '../../lib/money';
@@ -209,6 +209,26 @@ function buildLineItemsFromTakeoff(
   }
 }
 
+function parseAgent1Service(output: string): { voltage: string; ampacity: string; panel: string } {
+  try {
+    const raw = output.trim();
+    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = fenced ? fenced[1].trim() : raw;
+    const start = candidate.indexOf('{');
+    const j = JSON.parse(start >= 0 ? candidate.slice(start) : candidate) as {
+      service?: { voltage?: string; mainAmps?: number };
+      panels?: Array<{ name?: string }>;
+    };
+    const voltage  = j.service?.voltage ?? '';
+    const ampacity = j.service?.mainAmps != null ? String(j.service.mainAmps) : '';
+    const panels   = j.panels ?? [];
+    const main = panels.find(p => /^(MDP|MTP|MSB|MAIN|MPS|MLO)/i.test(p.name ?? '')) ?? panels[0];
+    return { voltage, ampacity, panel: main?.name ?? '' };
+  } catch {
+    return { voltage: '', ampacity: '', panel: '' };
+  }
+}
+
 export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, showToast, userRole, settings }: Props) {
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
@@ -229,6 +249,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [bidIntel, setBidIntel] = useState<Record<string,unknown> | null>(null);
   const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
+  const [svcVoltage,  setSvcVoltage]  = useState(() => ws.confirmedService?.voltage  ?? '');
+  const [svcAmpacity, setSvcAmpacity] = useState(() => ws.confirmedService?.ampacity ?? '');
+  const [svcPanel,    setSvcPanel]    = useState(() => ws.confirmedService?.panel    ?? '');
   const pollRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -248,10 +271,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         files: ws.files,
         ai_done: ws.aiDone,
         proposal_generated: ws.proposalGenerated,
+        confirmed_service: ws.confirmedService ?? null,
       }).catch(() => {});
     }, 800);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated]);
+  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated, ws.confirmedService]);
 
   function set(patchOrFn: Partial<PcWorkspace> | ((prev: PcWorkspace) => Partial<PcWorkspace>)) {
     const current = wsRef.current;
@@ -341,6 +365,16 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }).catch(() => {});
   }, [bid.id]);
 
+  // Pre-fill service fields from Agent 1 output when it becomes available (skips already-filled fields)
+  useEffect(() => {
+    const agent1 = aiResults?.agent1_output as string | undefined;
+    if (!agent1) return;
+    const p = parseAgent1Service(agent1);
+    setSvcVoltage(v => v || p.voltage);
+    setSvcAmpacity(v => v || p.ampacity);
+    setSvcPanel(v => v || p.panel);
+  }, [aiResults?.agent1_output]);
+
   const runAI = async (force = false) => {
     if (wsRef.current.aiRunning || (!force && wsRef.current.aiDone)) return;
     const elecUploaded = fileObjectsRef.current.filter(f => isElecSheet(f.name)).length;
@@ -400,8 +434,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const rerunAI = () => {
     if (!window.confirm('Re-run the AI analysis? This will permanently delete the previous takeoff results and clear the Scope of Work.')) return;
     setAiResults(null);
-    set({ aiDone: false, aiRunning: false, aiLog: [], scope: {} });
+    set({ aiDone: false, aiRunning: false, aiLog: [], scope: {}, confirmedService: undefined });
+    setSvcVoltage(''); setSvcAmpacity(''); setSvcPanel('');
     runAI(true);
+  };
+
+  const handleConfirmService = () => {
+    const data: ConfirmedService = { voltage: svcVoltage.trim(), ampacity: svcAmpacity.trim(), panel: svcPanel.trim(), confirmed: true };
+    set({ confirmedService: data });
+    showToast({ title: 'Project data confirmed', sub: 'Pricing is now unlocked' });
   };
 
   const suggestRfis = () => {
@@ -862,6 +903,65 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               <div style={{ padding: 48, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Loading results…</div>
             ) : (
               <>
+                {/* Confirm Key Project Data */}
+                {aiResults?.agent1_output && (() => {
+                  const isConfirmed = ws.confirmedService?.confirmed;
+                  const fieldStyle: React.CSSProperties = {
+                    width: '100%', font: 'inherit', fontSize: 13, fontWeight: 600,
+                    color: 'var(--text)', background: 'var(--surface)',
+                    border: '1px solid var(--border2)', borderRadius: 8,
+                    padding: '8px 11px', outline: 'none', boxSizing: 'border-box',
+                  };
+                  const labelStyle: React.CSSProperties = {
+                    fontSize: 11, fontWeight: 800, color: 'var(--text3)',
+                    textTransform: 'uppercase', letterSpacing: '.05em',
+                    display: 'block', marginBottom: 6,
+                  };
+                  return (
+                    <div className="panel" style={{ marginBottom: 16, borderColor: isConfirmed ? 'rgba(16,185,129,.35)' : 'rgba(224,165,59,.4)' }}>
+                      <div className="panel-hdr" style={{ background: isConfirmed ? 'rgba(16,185,129,.08)' : 'var(--amber-soft)' }}>
+                        <span className="panel-title" style={{ color: isConfirmed ? 'var(--green)' : 'var(--amber)' }}>
+                          <span className="pt-ic" style={{ background: isConfirmed ? 'rgba(16,185,129,.15)' : 'rgba(224,165,59,.2)', color: isConfirmed ? 'var(--green)' : 'var(--amber)' }}>
+                            <Icon name={isConfirmed ? 'check' : 'shield'} size={14} stroke={2.2}/>
+                          </span>
+                          Confirm Key Project Data
+                        </span>
+                        {isConfirmed && (
+                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--green)' }}>✓ Confirmed — Pricing unlocked</span>
+                        )}
+                      </div>
+                      <div style={{ padding: '14px 20px 6px', display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16 }}>
+                        <div>
+                          <label style={labelStyle}>Service Voltage</label>
+                          <input type="text" value={svcVoltage} onChange={e => setSvcVoltage(e.target.value)}
+                            placeholder="e.g. 480/277V 3Ø" style={fieldStyle}/>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Service Ampacity (A)</label>
+                          <input type="text" value={svcAmpacity} onChange={e => setSvcAmpacity(e.target.value)}
+                            placeholder="e.g. 400" style={fieldStyle}/>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Main Panel Designation</label>
+                          <input type="text" value={svcPanel} onChange={e => setSvcPanel(e.target.value)}
+                            placeholder="e.g. MDP" style={fieldStyle}/>
+                        </div>
+                      </div>
+                      <div style={{ padding: '10px 20px 14px', display: 'flex', gap: 10, alignItems: 'center' }}>
+                        <button className="btn" style={{ fontSize: 12, height: 32, padding: '0 14px',
+                          ...(isConfirmed ? { background: 'var(--green)', borderColor: 'var(--green)' } : {}) }}
+                          onClick={handleConfirmService}>
+                          <Icon name="check" size={13} stroke={2.2}/>
+                          {isConfirmed ? 'Update Confirmation' : 'Confirm Data'}
+                        </button>
+                        <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>
+                          Pre-filled from AI analysis — correct as needed before confirming.
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Sub-tab bar */}
                 <div style={{ display: 'flex', gap: 2, marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 0, alignItems: 'center' }}>
                   {ANALYSIS_TABS.map(t => (
@@ -1316,8 +1416,37 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         const compCount = savedEstimate?.comp_count ?? 0;
         const confidence = savedEstimate?.confidence ?? (compCount >= 3 ? 'HIGH' : compCount >= 1 ? 'MEDIUM' : 'LOW');
         const confColor = confidence === 'HIGH' ? 'var(--green)' : confidence === 'MEDIUM' ? 'var(--amber)' : 'var(--text3)';
+        const svc = ws.confirmedService;
         return (
           <div style={{ padding: '20px 24px' }}>
+            {/* Service data reference / confirmation gate */}
+            {svc?.confirmed ? (
+              <div style={{ display: 'flex', gap: 20, padding: '10px 16px', background: 'rgba(16,185,129,.08)',
+                border: '1px solid rgba(16,185,129,.25)', borderRadius: 10, fontSize: 13, marginBottom: 16,
+                flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={{ fontWeight: 800, color: 'var(--green)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <Icon name="check" size={13} stroke={2.2}/>Service Data Confirmed
+                </span>
+                {svc.voltage && <span style={{ color: 'var(--text2)' }}><strong>Voltage:</strong> {svc.voltage}</span>}
+                {svc.ampacity && <span style={{ color: 'var(--text2)' }}><strong>Service:</strong> {svc.ampacity}A</span>}
+                {svc.panel && <span style={{ color: 'var(--text2)' }}><strong>Main Panel:</strong> {svc.panel}</span>}
+                <button className="btn ghost" style={{ marginLeft: 'auto', height: 26, fontSize: 11, padding: '0 10px' }}
+                  onClick={() => set({ activeTab: 'takeoff' })}>
+                  Edit →
+                </button>
+              </div>
+            ) : aiResults?.agent1_output ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', background: 'var(--amber-soft)',
+                border: '1px solid rgba(224,165,59,.35)', borderRadius: 10, fontSize: 13, color: 'var(--amber)', marginBottom: 16 }}>
+                <Icon name="shield" size={16} stroke={1.8}/>
+                <span style={{ flex: 1, fontWeight: 600 }}>Confirm key project data on the Plan Review tab before pricing to ensure accuracy.</span>
+                <button className="btn ghost" style={{ height: 28, fontSize: 12, padding: '0 12px', color: 'var(--amber)', borderColor: 'rgba(224,165,59,.45)', flexShrink: 0 }}
+                  onClick={() => set({ activeTab: 'takeoff' })}>
+                  Plan Review →
+                </button>
+              </div>
+            ) : null}
+
             {!pricingLineItems.length ? (
               <div className="panel" style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
                 No takeoff data yet. Complete the AI analysis (Plan Review tab) to populate pricing.
