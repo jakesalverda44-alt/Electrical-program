@@ -36,7 +36,7 @@ const DEFAULT_AI_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_MAX_TOKENS_A1 = 16000;
 const DEFAULT_MAX_TOKENS_A2 = 4000;
 const DEFAULT_MAX_TOKENS_A3 = 4000;
-const DEFAULT_MAX_TOKENS_A4 = 4000;
+const DEFAULT_MAX_TOKENS_A4 = 8000;
 const DEFAULT_TEMPERATURE = 0.3;
 
 function parseNumberSetting(value: string, fallback: number, min: number, max: number): number {
@@ -724,7 +724,13 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
 
   const rawText = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');
   const parsed = parseAIJSON(rawText);
-  const toStore = parsed ? JSON.stringify(parsed) : (extractJSONText(rawText) ?? rawText);
+  if (!parsed) {
+    logger.warn({ bidId, preview: rawText.slice(0, 300) }, '[agent4] Could not parse JSON from response — likely truncated');
+    return res.status(422).json({
+      error: 'The AI response could not be parsed as valid JSON. The output may have been cut off. Try increasing the Agent 4 max tokens in Settings → AI, then re-run Agent 4.',
+    });
+  }
+  const toStore = JSON.stringify(parsed);
 
   await pool.query(
     `UPDATE takeoff_results SET agent4_output=$1, agent4_price=$2, agent4_notes=$3, agent4_model=$4, usage_agent4=$5 WHERE bid_id=$6`,
@@ -752,9 +758,12 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
 
   let proposalData: ProposalJSON;
   try {
-    proposalData = JSON.parse(trRows[0].agent4_output as string) as ProposalJSON;
+    const raw = trRows[0].agent4_output as string;
+    const parsed = parseAIJSON(raw);
+    if (!parsed) return res.status(422).json({ error: 'Proposal data could not be parsed. Re-run Agent 4 to regenerate.' });
+    proposalData = parsed as unknown as ProposalJSON;
   } catch {
-    return res.status(422).json({ error: 'Proposal data is not valid JSON.' });
+    return res.status(422).json({ error: 'Proposal data is not valid JSON. Re-run Agent 4 to regenerate.' });
   }
 
   const { rows: bidRows } = await pool.query(

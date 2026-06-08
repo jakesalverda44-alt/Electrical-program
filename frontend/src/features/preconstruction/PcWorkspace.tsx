@@ -1471,26 +1471,22 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               </div>
             </div>
 
-            {/* Parse error fallback — raw output is stored but not valid JSON */}
+            {/* Parse error fallback — stored output is not valid JSON (likely a previous truncated run) */}
             {propParseError && agent4Raw && (
               <div className="panel" style={{ marginBottom: 16, borderColor: 'rgba(224,165,59,.4)' }}>
                 <div className="panel-hdr" style={{ background: 'var(--amber-soft)' }}>
                   <span className="panel-title" style={{ color: 'var(--amber)' }}>
                     <span className="pt-ic" style={{ background: 'rgba(224,165,59,.2)', color: 'var(--amber)' }}>
-                      <Icon name="shield" size={14} stroke={2}/>
+                      <Icon name="zap" size={14} stroke={2}/>
                     </span>
-                    Proposal Saved — Display Issue
+                    Previous Proposal Incomplete
                   </span>
-                  <button className="btn" onClick={downloadDocx} style={{ fontSize: 12, height: 28, padding: '0 12px', background: 'var(--green)', borderColor: 'var(--green)' }}>
-                    Download .docx
-                  </button>
                 </div>
                 <div style={{ padding: '12px 20px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
-                  The proposal was saved but couldn't be previewed (the AI output format was unexpected). You can still download the .docx, or re-run Agent 4 to regenerate.
+                  The previous Agent 4 run was cut off before it finished — the response was truncated and couldn't be parsed. Click <strong>↺ Re-run Agent 4</strong> above to regenerate (max tokens have been increased to fix this).
                 </div>
               </div>
             )}
-
             {/* Proposal preview */}
             {propData && (
               <div className="panel">
