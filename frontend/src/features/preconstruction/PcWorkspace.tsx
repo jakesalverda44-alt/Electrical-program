@@ -598,8 +598,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       a.download = `Proposal — ${bid.name}.docx`.replace(/[<>:"/\\|?*]/g, '-');
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      showToast({ title: 'Download failed', sub: 'Could not generate the proposal document' });
+    } catch (err: unknown) {
+      let sub = 'Could not generate the proposal document';
+      try {
+        const axiosErr = err as { response?: { data?: Blob } };
+        if (axiosErr.response?.data instanceof Blob) {
+          const text = await axiosErr.response.data.text();
+          const json = JSON.parse(text) as { error?: string };
+          if (json.error) sub = json.error;
+        }
+      } catch { /* ignore parse failure */ }
+      showToast({ title: 'Download failed', sub });
     }
   };
 

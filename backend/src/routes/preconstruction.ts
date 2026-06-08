@@ -792,7 +792,13 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
   const bidName = (bidRows[0]?.name as string | undefined) ?? bidId;
   const filename = `Proposal — ${bidName}.docx`.replace(/[<>:"/\\|?*\r\n]/g, '-');
 
-  const buf = await buildProposalDocx(proposalData);
+  let buf: Buffer;
+  try {
+    buf = await buildProposalDocx(proposalData);
+  } catch (err) {
+    logger.error({ err, bidId }, '[generate-docx] buildProposalDocx threw');
+    return res.status(500).json({ error: `Document build failed: ${err instanceof Error ? err.message : String(err)}` });
+  }
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
