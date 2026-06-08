@@ -163,8 +163,18 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   };
 
   useEffect(() => {
-    // Always load — partial results from a failed run may exist
-    api.get(`/preconstruction/${bid.id}/results`).then(r => { if (r.data) setAiResults(r.data); }).catch(() => {});
+    const RUNNING_STATUSES = ['running', 'agent1_complete', 'agent2_running', 'agent2_complete', 'agent3_running'];
+    api.get(`/preconstruction/${bid.id}/results`).then(r => {
+      if (!r.data) return;
+      setAiResults(r.data);
+      // Reconnect polling if a pipeline was in progress when the page was refreshed
+      if (RUNNING_STATUSES.includes(r.data?.status)) {
+        const shownA2 = ['agent2_running', 'agent2_complete', 'agent3_running'].includes(r.data.status);
+        const shownA3 = r.data.status === 'agent3_running';
+        set({ aiRunning: true, aiLog: ['Analysis in progress — reconnecting…'] });
+        pollForResults(Date.now(), shownA2, shownA3);
+      }
+    }).catch(() => {});
     return () => { if (pollRef.current) clearTimeout(pollRef.current); };
   }, [bid.id]);
 
