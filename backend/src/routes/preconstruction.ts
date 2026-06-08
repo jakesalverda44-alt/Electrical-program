@@ -4,7 +4,8 @@ import { requireAuth, requireAIPermission, AuthRequest } from '../middleware/aut
 import { getSetting } from '../db/getSetting';
 import Anthropic from '@anthropic-ai/sdk';
 import AdmZip from 'adm-zip';
-import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM } from '../ai/prompts';
+import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM, AGENT4_SYSTEM } from '../ai/prompts';
+import { buildProposalDocx, ProposalJSON } from '../utils/proposalDocx';
 import { callWithRetry } from '../ai/retry';
 import { parseAIJSON, extractJSONText } from '../ai/json';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -19,19 +20,23 @@ interface AIConfig {
   model: string;
   modelA2: string;
   modelA3: string;
+  modelA4: string;
   maxTokensA1: number;
   maxTokensA2: number;
   maxTokensA3: number;
+  maxTokensA4: number;
   temperature: number;
   promptA1: string;
   promptA2: string;
   promptA3: string;
+  promptA4: string;
 }
 
 const DEFAULT_AI_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_MAX_TOKENS_A1 = 16000;
 const DEFAULT_MAX_TOKENS_A2 = 4000;
 const DEFAULT_MAX_TOKENS_A3 = 4000;
+const DEFAULT_MAX_TOKENS_A4 = 4000;
 const DEFAULT_TEMPERATURE = 0.3;
 
 function parseNumberSetting(value: string, fallback: number, min: number, max: number): number {
@@ -42,34 +47,40 @@ function parseNumberSetting(value: string, fallback: number, min: number, max: n
 
 async function loadAIConfig(): Promise<AIConfig> {
   const [
-    modelSetting, modelA2Setting, modelA3Setting,
-    maxA1Setting, maxA2Setting, maxA3Setting,
+    modelSetting, modelA2Setting, modelA3Setting, modelA4Setting,
+    maxA1Setting, maxA2Setting, maxA3Setting, maxA4Setting,
     temperatureSetting,
-    promptA1Setting, promptA2Setting, promptA3Setting,
+    promptA1Setting, promptA2Setting, promptA3Setting, promptA4Setting,
   ] = await Promise.all([
     getSetting('ai_model'),
     getSetting('ai_takeoff_agent2_model'),
     getSetting('ai_takeoff_agent3_model'),
+    getSetting('ai_takeoff_agent4_model'),
     getSetting('ai_max_tokens_agent1'),
     getSetting('ai_max_tokens_agent2'),
     getSetting('ai_max_tokens_agent3'),
+    getSetting('ai_max_tokens_agent4'),
     getSetting('ai_temperature'),
     getSetting('ai_prompt_agent1'),
     getSetting('ai_prompt_agent2'),
     getSetting('ai_prompt_agent3'),
+    getSetting('ai_prompt_agent4'),
   ]);
   const defaultModel = (process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim();
   return {
     model:   (modelSetting   || defaultModel),
     modelA2: (modelA2Setting || 'claude-haiku-4-5-20251001'),
     modelA3: (modelA3Setting || 'claude-haiku-4-5-20251001'),
+    modelA4: (modelA4Setting || 'claude-haiku-4-5-20251001'),
     maxTokensA1: parseNumberSetting(maxA1Setting || '', DEFAULT_MAX_TOKENS_A1, 256, 64000),
     maxTokensA2: parseNumberSetting(maxA2Setting || '', DEFAULT_MAX_TOKENS_A2, 256, 64000),
     maxTokensA3: parseNumberSetting(maxA3Setting || '', DEFAULT_MAX_TOKENS_A3, 256, 64000),
+    maxTokensA4: parseNumberSetting(maxA4Setting || '', DEFAULT_MAX_TOKENS_A4, 256, 64000),
     temperature: parseNumberSetting(temperatureSetting || process.env.AI_TEMPERATURE || '', DEFAULT_TEMPERATURE, 0, 1),
     promptA1: (promptA1Setting || '').trim(),
     promptA2: (promptA2Setting || '').trim(),
     promptA3: (promptA3Setting || '').trim(),
+    promptA4: (promptA4Setting || '').trim(),
   };
 }
 
@@ -437,7 +448,7 @@ async function runPipeline(
 
 // GET hardcoded default system prompts (for display in Settings)
 router.get('/prompt-defaults', requireAuth, (_req, res) => {
-  res.json({ agent1: AGENT1_SYSTEM, agent2: AGENT2_SYSTEM, agent3: AGENT3_SYSTEM });
+  res.json({ agent1: AGENT1_SYSTEM, agent2: AGENT2_SYSTEM, agent3: AGENT3_SYSTEM, agent4: AGENT4_SYSTEM });
 });
 
 // GET all workspaces (for restoring state on app load)
@@ -662,6 +673,103 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
       [message, bidId]
     ).catch(dbErr => logger.error({ err: dbErr, bidId }, 'Could not persist takeoff pipeline failure'));
   });
+}));
+
+// POST run-agent4 — Proposal Formatter (on-demand, separate from pipeline)
+router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis'), asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  const { price, internalNotes } = req.body as { price?: string; internalNotes?: string };
+
+  if (!price?.trim()) return res.status(400).json({ error: 'price is required' });
+
+  const { rows: trRows } = await pool.query(
+    'SELECT agent1_output, agent2_output FROM takeoff_results WHERE bid_id=$1',
+    [bidId]
+  );
+  if (!trRows.length || !trRows[0].agent2_output) {
+    return res.status(400).json({ error: 'No scope data found. Run the 3-agent analysis first.' });
+  }
+
+  const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!apiKey) return res.status(503).json({ error: 'Anthropic API key not configured.' });
+
+  const config = await loadAIConfig();
+  const client = new Anthropic({ apiKey });
+
+  const agent1Output = (trRows[0].agent1_output as string) || '';
+  const agent2Output = (trRows[0].agent2_output as string) || '';
+
+  const userMsg = [
+    `PROPOSAL REQUEST`,
+    ``,
+    `Total Bid Price: ${price.trim()}`,
+    ``,
+    `Internal Notes from Estimator:`,
+    (internalNotes?.trim() || '(none)'),
+    ``,
+    `--- DRAWING ANALYSIS (Agent 1) ---`,
+    agent1Output.slice(0, 8000),
+    ``,
+    `--- SCOPE & ESTIMATE (Agent 2) ---`,
+    agent2Output,
+  ].join('\n');
+
+  const resp = await callWithRetry(() => client.messages.create({
+    model: config.modelA4,
+    max_tokens: config.maxTokensA4,
+    temperature: config.temperature,
+    system: [{ type: 'text', text: config.promptA4 || AGENT4_SYSTEM, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: userMsg }],
+  }), { onRetry: (a, _e, d) => logger.warn(`[agent4] retry ${a} in ${d}ms`) });
+
+  const rawText = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');
+  const parsed = parseAIJSON(rawText);
+  const toStore = parsed ? JSON.stringify(parsed) : (extractJSONText(rawText) ?? rawText);
+
+  await pool.query(
+    `UPDATE takeoff_results SET agent4_output=$1, agent4_price=$2, agent4_notes=$3, agent4_model=$4, usage_agent4=$5 WHERE bid_id=$6`,
+    [toStore, price.trim(), internalNotes?.trim() || null, config.modelA4, JSON.stringify(resp.usage), bidId]
+  );
+
+  res.json({
+    agent4_output: toStore,
+    agent4_model: config.modelA4,
+    usage_agent4: resp.usage,
+  });
+}));
+
+// GET generate-docx — build and return the .docx proposal file
+router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req, res) => {
+  const { bidId } = req.params;
+
+  const { rows: trRows } = await pool.query(
+    'SELECT agent4_output FROM takeoff_results WHERE bid_id=$1',
+    [bidId]
+  );
+  if (!trRows.length || !trRows[0].agent4_output) {
+    return res.status(404).json({ error: 'No proposal data found. Run Agent 4 first.' });
+  }
+
+  let proposalData: ProposalJSON;
+  try {
+    proposalData = JSON.parse(trRows[0].agent4_output as string) as ProposalJSON;
+  } catch {
+    return res.status(422).json({ error: 'Proposal data is not valid JSON.' });
+  }
+
+  const { rows: bidRows } = await pool.query(
+    'SELECT name FROM bids WHERE id=$1 AND deleted_at IS NULL',
+    [bidId]
+  );
+  const bidName = (bidRows[0]?.name as string | undefined) ?? bidId;
+  const filename = `Proposal — ${bidName}.docx`.replace(/[<>:"/\\|?*\r\n]/g, '-');
+
+  const buf = await buildProposalDocx(proposalData);
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Length', buf.length);
+  res.send(buf);
 }));
 
 export default router;

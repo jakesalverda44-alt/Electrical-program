@@ -1,0 +1,422 @@
+import {
+  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+  WidthType, AlignmentType, BorderStyle, ImageRun, ShadingType,
+  convertInchesToTwip, NumberFormat,
+} from 'docx';
+import * as fs from 'fs';
+import * as path from 'path';
+
+export interface ProposalJSON {
+  date?: string;
+  gcName?: string;
+  gcContact?: string;
+  gcEmail?: string;
+  projectName?: string;
+  projectAddress?: string;
+  jobNumber?: string;
+  drawingDate?: string;
+  sheets?: string[];
+  openingStatement?: string;
+  scopeOfWork?: {
+    standard6Bullets?: string[];
+    A_ServiceDistribution?: string[];
+    B_BranchPower?: string[];
+    C_LightingControls?: string[];
+    D_SiteLightingUnderground?: string[];
+    E_LowVoltage?: string[];
+    F_Coordination?: string[];
+  };
+  exclusions?: string[];
+  allowances?: Array<{ item: string; footage: number; unit: string; notes: string }>;
+  takeoff?: Array<{ category: string; item: string; description: string; unit: string; qty: number; sourceNotes: string }>;
+  terms?: string[];
+  totalPrice?: string;
+  rfisToResolve?: string[];
+}
+
+const NAVY = '1F3864';
+const WHITE = 'FFFFFF';
+const GRAY = 'F2F2F2';
+const FONT = 'Arial';
+const SM  = 18;  // 9pt in half-points
+const MD  = 20;  // 10pt
+const LG  = 24;  // 12pt
+const XL  = 36;  // 18pt
+
+type ImgType = 'jpg' | 'png' | 'gif';
+
+function loadAsset(assetsDir: string, names: string[]): { buf: Buffer; type: ImgType } | null {
+  for (const name of names) {
+    const p = path.join(assetsDir, name);
+    if (fs.existsSync(p)) {
+      const buf = fs.readFileSync(p);
+      const ext = name.split('.').pop()?.toLowerCase();
+      const type: ImgType = ext === 'png' ? 'png' : ext === 'gif' ? 'gif' : 'jpg';
+      return { buf, type };
+    }
+  }
+  return null;
+}
+
+const NO_BORDER = {
+  top:     { style: BorderStyle.NONE, size: 0, color: 'auto' },
+  bottom:  { style: BorderStyle.NONE, size: 0, color: 'auto' },
+  left:    { style: BorderStyle.NONE, size: 0, color: 'auto' },
+  right:   { style: BorderStyle.NONE, size: 0, color: 'auto' },
+  insideH: { style: BorderStyle.NONE, size: 0, color: 'auto' },
+  insideV: { style: BorderStyle.NONE, size: 0, color: 'auto' },
+} as const;
+
+const CELL_NO_BORDER = {
+  top:    { style: BorderStyle.NONE, size: 0, color: 'auto' },
+  bottom: { style: BorderStyle.NONE, size: 0, color: 'auto' },
+  left:   { style: BorderStyle.NONE, size: 0, color: 'auto' },
+  right:  { style: BorderStyle.NONE, size: 0, color: 'auto' },
+} as const;
+
+function navyHeader(text: string): Paragraph {
+  return new Paragraph({
+    children: [new TextRun({ text, bold: true, color: WHITE, size: LG, font: FONT })],
+    shading: { type: ShadingType.SOLID, fill: NAVY, color: 'auto' },
+    spacing: { before: 280, after: 120 },
+    indent: { left: 80, right: 80 },
+  });
+}
+
+function subHeader(text: string): Paragraph {
+  return new Paragraph({
+    children: [new TextRun({ text, bold: true, color: NAVY, size: MD, font: FONT })],
+    spacing: { before: 160, after: 60 },
+    border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: NAVY } },
+  });
+}
+
+function bodyPara(text: string): Paragraph {
+  return new Paragraph({
+    children: [new TextRun({ text, size: MD, font: FONT })],
+    spacing: { before: 40, after: 60 },
+  });
+}
+
+function blank(): Paragraph {
+  return new Paragraph({ children: [new TextRun('')], spacing: { before: 0, after: 100 } });
+}
+
+function numberedItem(text: string): Paragraph {
+  return new Paragraph({
+    numbering: { reference: 'numbered-list', level: 0 },
+    children: [new TextRun({ text, size: MD, font: FONT })],
+    spacing: { before: 60, after: 60 },
+  });
+}
+
+function bulletItem(text: string): Paragraph {
+  return new Paragraph({
+    numbering: { reference: 'bullet-list', level: 0 },
+    children: [new TextRun({ text, size: MD, font: FONT })],
+    spacing: { before: 60, after: 60 },
+  });
+}
+
+function hdrCell(text: string, widthPct?: number): TableCell {
+  return new TableCell({
+    ...(widthPct ? { width: { size: widthPct, type: WidthType.PERCENTAGE } } : {}),
+    shading: { type: ShadingType.SOLID, fill: NAVY, color: 'auto' },
+    children: [new Paragraph({
+      children: [new TextRun({ text, bold: true, color: WHITE, size: SM, font: FONT })],
+      spacing: { before: 60, after: 60 },
+      indent: { left: 80, right: 80 },
+    })],
+  });
+}
+
+function dataCell(text: string, stripe: boolean, widthPct?: number): TableCell {
+  return new TableCell({
+    ...(widthPct ? { width: { size: widthPct, type: WidthType.PERCENTAGE } } : {}),
+    ...(stripe ? { shading: { type: ShadingType.SOLID, fill: GRAY, color: 'auto' } } : {}),
+    children: [new Paragraph({
+      children: [new TextRun({ text, size: SM, font: FONT })],
+      spacing: { before: 40, after: 40 },
+      indent: { left: 80, right: 80 },
+    })],
+  });
+}
+
+function infoPara(label: string, value: string): Paragraph[] {
+  return [
+    new Paragraph({
+      children: [new TextRun({ text: label, bold: true, size: SM, color: NAVY, font: FONT })],
+      spacing: { before: 60, after: 30 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: value, size: MD, font: FONT })],
+      spacing: { before: 0, after: 60 },
+    }),
+  ];
+}
+
+export async function buildProposalDocx(data: ProposalJSON): Promise<Buffer> {
+  const ASSETS_DIR = path.resolve(__dirname, '../../assets');
+  const logo = loadAsset(ASSETS_DIR, ['logo.png', 'logo.jpg', 'logo.jpeg']);
+  const sig  = loadAsset(ASSETS_DIR, ['signature.png', 'signature.jpg', 'sig.png', 'sig.jpg']);
+
+  const children: (Paragraph | Table)[] = [];
+
+  // ── Logo ────────────────────────────────────────────────────────────────────
+  if (logo) {
+    children.push(new Paragraph({
+      children: [new ImageRun({ data: logo.buf, transformation: { width: 200, height: 60 }, type: logo.type })],
+      spacing: { after: 120 },
+    }));
+  }
+
+  // ── Title ───────────────────────────────────────────────────────────────────
+  children.push(new Paragraph({
+    children: [new TextRun({ text: 'ELECTRICAL PROPOSAL', bold: true, color: NAVY, size: XL + 4, font: FONT })],
+    alignment: AlignmentType.CENTER,
+    spacing: { after: 100 },
+    border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: NAVY } },
+  }));
+  children.push(blank());
+
+  // ── Info table: Prepared For (left) | Date + Project (right) ─────────────
+  children.push(new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: NO_BORDER,
+    rows: [new TableRow({
+      children: [
+        new TableCell({
+          width: { size: 50, type: WidthType.PERCENTAGE },
+          borders: CELL_NO_BORDER,
+          children: [
+            ...infoPara('PREPARED FOR', data.gcName ?? '—'),
+            ...(data.gcContact ? [new Paragraph({ children: [new TextRun({ text: data.gcContact, size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
+            ...(data.gcEmail   ? [new Paragraph({ children: [new TextRun({ text: data.gcEmail,   size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
+          ],
+        }),
+        new TableCell({
+          width: { size: 50, type: WidthType.PERCENTAGE },
+          borders: CELL_NO_BORDER,
+          children: [
+            ...infoPara('DATE', data.date ?? new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })),
+            ...infoPara('PROJECT', data.projectName ?? '—'),
+            ...(data.projectAddress ? [new Paragraph({ children: [new TextRun({ text: data.projectAddress, size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
+            ...(data.jobNumber ? [new Paragraph({ children: [new TextRun({ text: `Job #: ${data.jobNumber}`, size: SM, font: FONT })], spacing: { before: 0, after: 20 } })] : []),
+          ],
+        }),
+      ],
+    })],
+  }));
+  children.push(blank());
+
+  // ── Prepared By ─────────────────────────────────────────────────────────────
+  children.push(new Paragraph({ children: [new TextRun({ text: 'PREPARED BY', bold: true, size: SM, color: NAVY, font: FONT })], spacing: { before: 60, after: 30 } }));
+  children.push(new Paragraph({ children: [new TextRun({ text: 'Accurate Power & Technology (APT)', bold: true, size: MD, font: FONT })], spacing: { after: 20 } }));
+  children.push(new Paragraph({ children: [new TextRun({ text: '15519 W US Hwy 441, Suite 101A, Eustis, FL 32726', size: SM, font: FONT })], spacing: { after: 20 } }));
+  children.push(new Paragraph({ children: [new TextRun({ text: 'Office: 352-735-8285  |  Cell: 352-801-8997', size: SM, font: FONT })], spacing: { after: 20 } }));
+  children.push(new Paragraph({ children: [new TextRun({ text: 'License: EC13007737 | LI45063', size: SM, font: FONT })], spacing: { after: 20 } }));
+  children.push(new Paragraph({ children: [new TextRun({ text: 'Jake Salverda, Commercial A.E., Central FL Region', size: SM, font: FONT })], spacing: { after: 20 } }));
+  children.push(blank());
+
+  // ── Opening Statement ────────────────────────────────────────────────────────
+  if (data.openingStatement) {
+    children.push(navyHeader('OPENING STATEMENT'));
+    children.push(bodyPara(data.openingStatement));
+    children.push(blank());
+  }
+
+  // ── Scope of Work ────────────────────────────────────────────────────────────
+  children.push(navyHeader('SCOPE OF WORK'));
+  const sow = data.scopeOfWork ?? {};
+  const std6 = sow.standard6Bullets ?? [];
+  if (std6.length) {
+    std6.forEach(b => children.push(numberedItem(b)));
+    children.push(blank());
+  }
+  const sowSections: [string, string[] | undefined][] = [
+    ['A.  SERVICE & DISTRIBUTION',                   sow.A_ServiceDistribution],
+    ['B.  BRANCH POWER',                             sow.B_BranchPower],
+    ['C.  LIGHTING & CONTROLS',                      sow.C_LightingControls],
+    ['D.  SITE LIGHTING, UNDERGROUND & ALLOWANCES',  sow.D_SiteLightingUnderground],
+    ['E.  LOW VOLTAGE INFRASTRUCTURE',               sow.E_LowVoltage],
+    ['F.  PROJECT COORDINATION & CLOSEOUT',          sow.F_Coordination],
+  ];
+  for (const [label, bullets] of sowSections) {
+    if (!bullets?.length) continue;
+    children.push(subHeader(label));
+    bullets.forEach(b => children.push(bulletItem(b)));
+  }
+  children.push(blank());
+
+  // ── Exclusions ──────────────────────────────────────────────────────────────
+  const excl = data.exclusions ?? [];
+  if (excl.length) {
+    children.push(navyHeader('EXCLUSIONS'));
+    excl.forEach(e => children.push(bulletItem(e)));
+    children.push(blank());
+  }
+
+  // ── Allowances table ─────────────────────────────────────────────────────────
+  const allows = (data.allowances ?? []).filter(a => a.item);
+  if (allows.length) {
+    children.push(navyHeader('ALLOWANCES'));
+    children.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        new TableRow({ tableHeader: true, children: [
+          hdrCell('Item', 45), hdrCell('Qty', 15), hdrCell('Unit', 15), hdrCell('Notes', 25),
+        ]}),
+        ...allows.map((a, i) => new TableRow({ children: [
+          dataCell(a.item, i % 2 === 0, 45),
+          dataCell(String(a.footage || ''), i % 2 === 0, 15),
+          dataCell(a.unit || 'LF', i % 2 === 0, 15),
+          dataCell(a.notes || '', i % 2 === 0, 25),
+        ]})),
+      ],
+    }));
+    children.push(blank());
+  }
+
+  // ── Takeoff table ─────────────────────────────────────────────────────────────
+  const tkf = (data.takeoff ?? []).filter(t => t.item);
+  if (tkf.length) {
+    children.push(navyHeader('MATERIAL & LABOR TAKEOFF'));
+    children.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        new TableRow({ tableHeader: true, children: [
+          hdrCell('Category', 18), hdrCell('Item', 20), hdrCell('Description', 32),
+          hdrCell('Unit', 10), hdrCell('Qty', 8), hdrCell('Notes', 12),
+        ]}),
+        ...tkf.map((t, i) => new TableRow({ children: [
+          dataCell(t.category || '', i % 2 === 0, 18),
+          dataCell(t.item || '', i % 2 === 0, 20),
+          dataCell(t.description || '', i % 2 === 0, 32),
+          dataCell(t.unit || '', i % 2 === 0, 10),
+          dataCell(String(t.qty ?? ''), i % 2 === 0, 8),
+          dataCell(t.sourceNotes || '', i % 2 === 0, 12),
+        ]})),
+      ],
+    }));
+    children.push(blank());
+  }
+
+  // ── Terms & Conditions ───────────────────────────────────────────────────────
+  const terms = data.terms ?? [];
+  if (terms.length) {
+    children.push(navyHeader('TERMS & CONDITIONS'));
+    terms.forEach(t => children.push(numberedItem(t)));
+    children.push(blank());
+  }
+
+  // ── Price summary ────────────────────────────────────────────────────────────
+  children.push(navyHeader('PROPOSAL PRICE'));
+  children.push(new Paragraph({
+    children: [
+      new TextRun({ text: 'Total Proposed Contract Value:  ', bold: true, size: MD, color: NAVY, font: FONT }),
+      new TextRun({ text: data.totalPrice ?? 'TBD', bold: true, size: XL, color: NAVY, font: FONT }),
+    ],
+    alignment: AlignmentType.CENTER,
+    spacing: { before: 120, after: 80 },
+  }));
+  children.push(new Paragraph({
+    children: [new TextRun({ text: 'This price includes all labor, materials, permits, and coordination as described above.', size: SM, font: FONT, italics: true })],
+    alignment: AlignmentType.CENTER,
+    spacing: { after: 60 },
+  }));
+  children.push(blank());
+
+  // ── Signature block ────────────────────────────────────────────────────────
+  children.push(navyHeader('ACCEPTANCE & SIGNATURE'));
+  children.push(bodyPara('By signing below, the undersigned authorizes Accurate Power & Technology to proceed with the work described herein per the stated terms and price.'));
+  children.push(blank());
+
+  children.push(new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: NO_BORDER,
+    rows: [new TableRow({
+      children: [
+        new TableCell({
+          width: { size: 48, type: WidthType.PERCENTAGE },
+          borders: CELL_NO_BORDER,
+          children: [
+            new Paragraph({ children: [new TextRun({ text: 'AUTHORIZED BY (APT):', bold: true, size: SM, color: NAVY, font: FONT })], spacing: { after: 80 } }),
+            ...(sig
+              ? [new Paragraph({ children: [new ImageRun({ data: sig.buf, transformation: { width: 160, height: 60 }, type: sig.type })], spacing: { after: 40 } })]
+              : [new Paragraph({ children: [new TextRun('')], spacing: { before: 300, after: 0 } })]
+            ),
+            new Paragraph({ children: [new TextRun({ text: 'Jake Salverda, Commercial A.E.', size: SM, font: FONT })], spacing: { after: 20 } }),
+            new Paragraph({ children: [new TextRun({ text: `Date: ${data.date ?? new Date().toLocaleDateString()}`, size: SM, font: FONT })], spacing: { after: 20 } }),
+          ],
+        }),
+        new TableCell({
+          width: { size: 4, type: WidthType.PERCENTAGE },
+          borders: CELL_NO_BORDER,
+          children: [new Paragraph({ children: [] })],
+        }),
+        new TableCell({
+          width: { size: 48, type: WidthType.PERCENTAGE },
+          borders: CELL_NO_BORDER,
+          children: [
+            new Paragraph({ children: [new TextRun({ text: 'ACCEPTED BY (OWNER/GC):', bold: true, size: SM, color: NAVY, font: FONT })], spacing: { after: 80 } }),
+            new Paragraph({ children: [new TextRun('')], spacing: { before: 300, after: 0 } }),
+            new Paragraph({ children: [new TextRun({ text: 'Signature: _______________________________', size: SM, font: FONT })], spacing: { after: 20 } }),
+            new Paragraph({ children: [new TextRun({ text: 'Print Name: _____________________________', size: SM, font: FONT })], spacing: { after: 20 } }),
+            new Paragraph({ children: [new TextRun({ text: 'Date: ___________________________________', size: SM, font: FONT })], spacing: { after: 20 } }),
+          ],
+        }),
+      ],
+    })],
+  }));
+
+  // ── Build document ────────────────────────────────────────────────────────────
+  const doc = new Document({
+    numbering: {
+      config: [
+        {
+          reference: 'numbered-list',
+          levels: [{
+            level: 0,
+            format: NumberFormat.DECIMAL,
+            text: '%1.',
+            alignment: AlignmentType.LEFT,
+            style: {
+              paragraph: {
+                indent: { left: convertInchesToTwip(0.5), hanging: convertInchesToTwip(0.25) },
+              },
+            },
+          }],
+        },
+        {
+          reference: 'bullet-list',
+          levels: [{
+            level: 0,
+            format: NumberFormat.BULLET,
+            text: '•',
+            alignment: AlignmentType.LEFT,
+            style: {
+              paragraph: {
+                indent: { left: convertInchesToTwip(0.5), hanging: convertInchesToTwip(0.25) },
+              },
+            },
+          }],
+        },
+      ],
+    },
+    sections: [{
+      properties: {
+        page: {
+          margin: {
+            top:    convertInchesToTwip(1.0),
+            bottom: convertInchesToTwip(1.0),
+            left:   convertInchesToTwip(1.0),
+            right:  convertInchesToTwip(1.0),
+          },
+        },
+      },
+      children,
+    }],
+  });
+
+  return Buffer.from(await Packer.toBuffer(doc));
+}

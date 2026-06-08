@@ -23,6 +23,7 @@ const ALLOWED_KEYS = [
   'ai_max_tokens', 'ai_max_tokens_agent1', 'ai_max_tokens_agent2', 'ai_max_tokens_agent3',
   'ai_temperature',
   'ai_prompt_agent1', 'ai_prompt_agent2', 'ai_prompt_agent3',
+  'ai_takeoff_agent4_model', 'ai_max_tokens_agent4', 'ai_prompt_agent4',
   'unit_cost_library',
   'ai_enabled', 'ai_analysis_enabled', 'ai_daily_limit_per_user', 'ai_role_permissions',
   'commission_default_rate',

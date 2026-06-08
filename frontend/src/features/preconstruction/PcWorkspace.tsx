@@ -252,6 +252,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [svcVoltage,  setSvcVoltage]  = useState(() => ws.confirmedService?.voltage  ?? '');
   const [svcAmpacity, setSvcAmpacity] = useState(() => ws.confirmedService?.ampacity ?? '');
   const [svcPanel,    setSvcPanel]    = useState(() => ws.confirmedService?.panel    ?? '');
+  const [propPrice,  setPropPrice]  = useState('');
+  const [propNotes,  setPropNotes]  = useState('');
+  const [agent4Running, setAgent4Running] = useState(false);
   const pollRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -374,6 +377,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     setSvcAmpacity(v => v || p.ampacity);
     setSvcPanel(v => v || p.panel);
   }, [aiResults?.agent1_output]);
+
+  // Pre-fill proposal price from saved estimate grand total
+  useEffect(() => {
+    if (savedEstimate?.grand_total && !propPrice) {
+      setPropPrice(String(Math.round(savedEstimate.grand_total)));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedEstimate?.grand_total]);
 
   const runAI = async (force = false) => {
     if (wsRef.current.aiRunning || (!force && wsRef.current.aiDone)) return;
@@ -517,6 +528,45 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const generateProposal = () => {
     set({ proposalGenerated: true });
     showToast({ title: 'Proposal generated', sub: 'Ready to review and send' });
+  };
+
+  const runAgent4Proposal = async () => {
+    if (!propPrice.trim()) {
+      showToast({ title: 'Price required', sub: 'Enter the total bid price before generating the proposal' });
+      return;
+    }
+    setAgent4Running(true);
+    try {
+      const { data } = await api.post(`/preconstruction/${bid.id}/run-agent4`, {
+        price: propPrice,
+        internalNotes: propNotes,
+      });
+      setAiResults(prev => prev ? { ...prev, ...data } : data);
+      set({ proposalGenerated: true });
+      showToast({ title: 'Proposal generated', sub: 'Review the preview and download the .docx' });
+    } catch (err) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to run proposal formatter';
+      showToast({ title: 'Agent 4 error', sub: msg });
+    } finally {
+      setAgent4Running(false);
+    }
+  };
+
+  const downloadDocx = async () => {
+    try {
+      const response = await api.get(`/preconstruction/${bid.id}/generate-docx`, { responseType: 'blob' });
+      const blob = new Blob([response.data as BlobPart], {
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Proposal — ${bid.name}.docx`.replace(/[<>:"/\\|?*]/g, '-');
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      showToast({ title: 'Download failed', sub: 'Could not generate the proposal document' });
+    }
   };
 
   const handleConvert = () => {
@@ -845,16 +895,19 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         const usageA1 = aiResults?.usage_agent1 as { input_tokens: number; output_tokens: number } | null | undefined;
         const usageA2 = aiResults?.usage_agent2 as { input_tokens: number; output_tokens: number } | null | undefined;
         const usageA3 = aiResults?.usage_agent3 as { input_tokens: number; output_tokens: number } | null | undefined;
+        const usageA4 = aiResults?.usage_agent4 as { input_tokens: number; output_tokens: number } | null | undefined;
         const modelA1 = aiResults?.model_agent1 as string | null | undefined;
         const modelA2 = aiResults?.model_agent2 as string | null | undefined;
         const modelA3 = aiResults?.model_agent3 as string | null | undefined;
+        const modelA4 = aiResults?.agent4_model  as string | null | undefined;
         const costA1 = estimateCost(usageA1, modelA1);
         const costA2 = estimateCost(usageA2, modelA2);
         const costA3 = estimateCost(usageA3, modelA3);
-        const hasUsage = !!(usageA1 || usageA2 || usageA3);
-        const totalIn  = (usageA1?.input_tokens  ?? 0) + (usageA2?.input_tokens  ?? 0) + (usageA3?.input_tokens  ?? 0);
-        const totalOut = (usageA1?.output_tokens ?? 0) + (usageA2?.output_tokens ?? 0) + (usageA3?.output_tokens ?? 0);
-        const totalCost = (costA1 ?? 0) + (costA2 ?? 0) + (costA3 ?? 0);
+        const costA4 = estimateCost(usageA4, modelA4);
+        const hasUsage = !!(usageA1 || usageA2 || usageA3 || usageA4);
+        const totalIn  = (usageA1?.input_tokens  ?? 0) + (usageA2?.input_tokens  ?? 0) + (usageA3?.input_tokens  ?? 0) + (usageA4?.input_tokens  ?? 0);
+        const totalOut = (usageA1?.output_tokens ?? 0) + (usageA2?.output_tokens ?? 0) + (usageA3?.output_tokens ?? 0) + (usageA4?.output_tokens ?? 0);
+        const totalCost = (costA1 ?? 0) + (costA2 ?? 0) + (costA3 ?? 0) + (costA4 ?? 0);
         const agent1 = aiResults?.agent1_output as string | undefined;
         const agent2 = aiResults?.agent2_output as string | undefined;
         const agent3 = aiResults?.agent3_output as string | undefined;
@@ -1007,9 +1060,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       </thead>
                       <tbody>
                         {[
-                          { label: 'Drawing Analysis', usage: usageA1, model: modelA1, cost: costA1 },
+                          { label: 'Drawing Analysis',  usage: usageA1, model: modelA1, cost: costA1 },
                           { label: 'Scope & Estimate',  usage: usageA2, model: modelA2, cost: costA2 },
                           { label: 'QA Review',         usage: usageA3, model: modelA3, cost: costA3 },
+                          { label: 'Proposal Formatter', usage: usageA4, model: modelA4, cost: costA4 },
                         ].map((row, i) => (
                           <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
                             <td style={{ padding: '6px 14px', fontWeight: 700, color: 'var(--text)' }}>Agent {i + 1} — {row.label}</td>
@@ -1338,69 +1392,175 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           </div>
         );
 
-      case 'proposal':
+      case 'proposal': {
+        const agent4Raw = aiResults?.agent4_output as string | undefined;
+        let propData: Record<string, unknown> | null = null;
+        if (agent4Raw) { try { propData = JSON.parse(agent4Raw); } catch {} }
+        const sow = propData?.scopeOfWork as Record<string, string[]> | undefined;
+        const fieldStyle: React.CSSProperties = {
+          width: '100%', font: 'inherit', fontSize: 13, fontWeight: 600,
+          color: 'var(--text)', background: 'var(--surface)',
+          border: '1px solid var(--border2)', borderRadius: 8,
+          padding: '8px 11px', outline: 'none', boxSizing: 'border-box',
+        };
+        const labelStyle: React.CSSProperties = {
+          fontSize: 11, fontWeight: 800, color: 'var(--text3)',
+          textTransform: 'uppercase', letterSpacing: '.05em',
+          display: 'block', marginBottom: 6,
+        };
         return (
           <div style={{ padding: '20px 24px' }}>
-            {!ws.proposalGenerated ? (
-              <div className="panel">
-                <div className="panel-hdr"><span className="panel-title">Generate Proposal</span></div>
-                <div style={{ padding: '24px 20px', textAlign: 'center' }}>
-                  <p style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 20, lineHeight: 1.6 }}>
-                    Complete takeoff and scope of work, then generate the formal electrical proposal document.
-                  </p>
-                  <button className="btn" onClick={generateProposal} style={{ fontSize: 13 }}>
-                    <Icon name="doc" size={14} stroke={1.9}/> Generate Proposal
-                  </button>
-                </div>
+            {/* Input + action panel */}
+            <div className="panel" style={{ marginBottom: 16 }}>
+              <div className="panel-hdr">
+                <span className="panel-title">
+                  <span className="pt-ic"><Icon name="doc" size={14} stroke={1.9}/></span>
+                  Agent 4 — Proposal Formatter
+                </span>
+                {propData && (
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--green)' }}>
+                    <Icon name="check" size={12} stroke={2.2}/> Proposal ready
+                  </span>
+                )}
               </div>
-            ) : (
-              <div>
-                <div className="panel" style={{ marginBottom: 16 }}>
-                  <div className="panel-hdr">
-                    <span className="panel-title">
-                      <span className="pt-ic" style={{ background: 'var(--green-soft)', color: 'var(--green)' }}>
-                        <Icon name="check" size={15} stroke={2.2}/>
-                      </span>
-                      Proposal Ready
-                    </span>
+              <div style={{ padding: '16px 20px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, marginBottom: 16 }}>
+                  <div>
+                    <label style={labelStyle}>Total Bid Price ($)</label>
+                    <input type="number" value={propPrice} onChange={e => setPropPrice(e.target.value)}
+                      placeholder="e.g. 285000" style={fieldStyle}/>
                   </div>
-                  <div style={{ padding: '16px 20px' }}>
-                    <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 16 }}>
-                      Electrical subcontractor proposal for <b>{bid.name}</b> — ready to send to {bid.gc}.
-                    </div>
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <button className="btn ghost" onClick={() => window.print()} style={{ fontSize: 13 }}>
-                        <Icon name="doc" size={14} stroke={1.9}/> Print / PDF
-                      </button>
-                      <button className="btn" onClick={() => setConvertOpen(true)}
-                        style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
-                        <Icon name="check" size={14} stroke={2.2}/> Mark as Awarded
-                      </button>
-                    </div>
+                  <div>
+                    <label style={labelStyle}>Internal Notes for Agent 4 (optional)</label>
+                    <textarea value={propNotes} onChange={e => setPropNotes(e.target.value)}
+                      placeholder="Manual items, RFI outcomes, scope adjustments, pricing notes..."
+                      rows={3} style={{ ...fieldStyle, resize: 'vertical', lineHeight: 1.5 }}/>
                   </div>
                 </div>
-
-                {convertOpen && (
-                  <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }}>
-                    <div className="panel" style={{ width: 380, padding: 28 }}>
-                      <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text)', marginBottom: 12 }}>Convert to Awarded Project?</div>
-                      <p style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, marginBottom: 20 }}>
-                        This will mark <b>{bid.name}</b> as Awarded and add it to Electrical Projects.
-                      </p>
-                      <div style={{ display: 'flex', gap: 10 }}>
-                        <button className="btn ghost" onClick={() => setConvertOpen(false)} style={{ flex: 1, fontSize: 13 }}>Cancel</button>
-                        <button className="btn" onClick={handleConvert}
-                          style={{ flex: 1, fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
-                          Confirm
-                        </button>
-                      </div>
-                    </div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button className="btn" onClick={runAgent4Proposal}
+                    disabled={agent4Running || !propPrice.trim() || !aiResults?.agent2_output}
+                    style={{ fontSize: 13 }}>
+                    {agent4Running
+                      ? 'Running Agent 4…'
+                      : propData ? '↺ Re-run Agent 4' : 'Run Agent 4 — Generate Proposal'}
+                  </button>
+                  {propData && (
+                    <button className="btn" onClick={downloadDocx} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
+                      <Icon name="doc" size={14} stroke={1.9}/> Download .docx
+                    </button>
+                  )}
+                  {propData && (
+                    <button className="btn" onClick={() => setConvertOpen(true)}
+                      style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)', marginLeft: 'auto' }}>
+                      <Icon name="check" size={14} stroke={2.2}/> Mark as Awarded
+                    </button>
+                  )}
+                </div>
+                {!aiResults?.agent2_output && (
+                  <div style={{ marginTop: 12, fontSize: 12, color: 'var(--amber)', fontWeight: 600 }}>
+                    ⚠ Run the 3-agent plan analysis first — Agent 4 needs scope data from Agent 2.
                   </div>
                 )}
+              </div>
+            </div>
+
+            {/* Proposal preview */}
+            {propData && (
+              <div className="panel">
+                <div className="panel-hdr">
+                  <span className="panel-title">Proposal Preview</span>
+                </div>
+                <div style={{ padding: '16px 20px', fontSize: 13 }}>
+                  {/* Header row */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16, padding: '12px 16px', background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border2)' }}>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Prepared For</div>
+                      <div style={{ fontWeight: 700, color: 'var(--text)' }}>{String(propData.gcName ?? '—')}</div>
+                      {propData.gcContact ? <div style={{ color: 'var(--text3)' }}>{String(propData.gcContact)}</div> : null}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Project</div>
+                      <div style={{ fontWeight: 700, color: 'var(--text)' }}>{String(propData.projectName ?? bid.name)}</div>
+                      {propData.projectAddress ? <div style={{ color: 'var(--text3)' }}>{String(propData.projectAddress)}</div> : null}
+                    </div>
+                  </div>
+
+                  {/* Price */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'rgba(31,56,100,.06)', border: '1px solid rgba(31,56,100,.2)', borderRadius: 8, marginBottom: 16 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>Total Proposed Contract Value:</div>
+                    <div style={{ fontSize: 20, fontWeight: 900, color: '#1F3864' }}>{String(propData.totalPrice ?? propPrice)}</div>
+                  </div>
+
+                  {/* Scope sections */}
+                  {sow && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Scope of Work</div>
+                      {[
+                        ['A. Service & Distribution',                  sow.A_ServiceDistribution],
+                        ['B. Branch Power',                            sow.B_BranchPower],
+                        ['C. Lighting & Controls',                     sow.C_LightingControls],
+                        ['D. Site Lighting, Underground & Allowances', sow.D_SiteLightingUnderground],
+                        ['E. Low Voltage Infrastructure',              sow.E_LowVoltage],
+                        ['F. Project Coordination & Closeout',         sow.F_Coordination],
+                      ].map(([label, bullets]) => {
+                        const arr = bullets as string[] | undefined;
+                        if (!arr?.length) return null;
+                        return (
+                          <div key={label as string} style={{ marginBottom: 10 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: '#1F3864', marginBottom: 4 }}>{label as string}</div>
+                            <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
+                              {arr.map((b, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{b}</li>)}
+                            </ul>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Exclusions */}
+                  {Array.isArray(propData.exclusions) && (propData.exclusions as string[]).length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Exclusions</div>
+                      <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
+                        {(propData.exclusions as string[]).map((e, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{e}</li>)}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* RFIs to resolve */}
+                  {Array.isArray(propData.rfisToResolve) && (propData.rfisToResolve as string[]).length > 0 && (
+                    <div style={{ padding: '10px 14px', background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.35)', borderRadius: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--amber)', marginBottom: 6 }}>⚠ Open Items to Resolve Before Sending</div>
+                      <ul style={{ margin: 0, paddingLeft: 18 }}>
+                        {(propData.rfisToResolve as string[]).map((r, i) => <li key={i} style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 3 }}>{r}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {convertOpen && (
+              <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }}>
+                <div className="panel" style={{ width: 380, padding: 28 }}>
+                  <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text)', marginBottom: 12 }}>Convert to Awarded Project?</div>
+                  <p style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, marginBottom: 20 }}>
+                    This will mark <b>{bid.name}</b> as Awarded and add it to Electrical Projects.
+                  </p>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button className="btn ghost" onClick={() => setConvertOpen(false)} style={{ flex: 1, fontSize: 13 }}>Cancel</button>
+                    <button className="btn" onClick={handleConvert}
+                      style={{ flex: 1, fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
+                      Confirm
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
         );
+      }
 
       case 'pricing': {
         const pricingLineItems = computePricingItems();
