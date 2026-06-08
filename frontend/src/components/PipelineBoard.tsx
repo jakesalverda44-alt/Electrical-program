@@ -15,8 +15,7 @@ interface PipelineBoardProps<T> {
   getId: (item: T) => string;
   getStage: (item: T) => string;
   getAmount: (item: T) => number;
-  /** Filter applied within each column (e.g. urgent/large/rep). */
-  applyFilter: (list: T[]) => T[];
+  applyFilter?: (list: T[]) => T[];
   flashId: string | null;
   onMoveToStage: (id: string, stageKey: string) => void;
   onOpenDetail: (item: T) => void;
@@ -53,7 +52,7 @@ export default function PipelineBoard<T>({
     <div className="board" style={{ gridTemplateColumns: `repeat(${stages.length}, 1fr)` }}>
       {stages.map(st => {
         const allInCol = items.filter(i => getStage(i) === st.key);
-        const visible  = applyFilter(allInCol);
+        const visible  = applyFilter ? applyFilter(allInCol) : allInCol;
         const isOver   = overCol === st.key;
 
         return (

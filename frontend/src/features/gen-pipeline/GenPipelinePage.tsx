@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import Icon from '../../components/Icon';
 import { Gen, WonJob } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
@@ -8,8 +8,6 @@ import api from '../../api/client';
 import { moneyShort as money } from '../../lib/money';
 import PipelineBoard from '../../components/PipelineBoard';
 import { useShowToast } from '../../contexts/AppContext';
-
-type Filter = 'all' | 'large';
 
 interface Props {
   gens: Gen[];
@@ -23,10 +21,7 @@ interface Props {
 
 export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuilder, flashId, onEditGen, onNav }: Props) {
   const showToast = useShowToast();
-  const [filter, setFilter] = useState<Filter>('all');
   const [detail, setDetail] = useState<Gen | null>(null);
-  const [filterRep, setFilterRep] = useState<string>('all');
-  const repNames = useMemo(() => Array.from(new Set(gens.map(g => g.salesperson_name).filter(Boolean))).sort(), [gens]);
 
   const { moveToStage, advance, pendingDeclined, cancelDeclined } = useGenPipeline({
     gens, setGens, setWonJobs, showToast, onNav,
@@ -35,13 +30,6 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
   const sum = (list: Gen[]) => list.reduce((s, g) => s + Number(g.amount), 0);
   const activeCount = gens.filter(g => g.stage !== 'awarded' && g.stage !== 'declined').length;
   const activeValue = sum(gens.filter(g => g.stage === 'building' || g.stage === 'sent' || g.stage === 'signed'));
-
-  const applyFilter = (list: Gen[]): Gen[] => {
-    let r = list;
-    if (filter === 'large') r = r.filter(g => Number(g.amount) >= 100_000);
-    if (filterRep !== 'all') r = r.filter(g => g.salesperson_name === filterRep);
-    return r;
-  };
 
   const handleStageFromDrawer = (stage: GenStageKey) => {
     if (!detail) return;
@@ -92,19 +80,6 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
     <div className="scroll view-enter">
       {/* Toolbar */}
       <div className="pipe-toolbar">
-        <button className={'chip' + (filter === 'all'   ? ' active' : '')} onClick={() => setFilter('all')}>All</button>
-        <button className={'chip' + (filter === 'large' ? ' active' : '')} onClick={() => setFilter('large')}>&gt; $100K</button>
-        {repNames.length > 1 && (
-          <>
-            <div style={{ width:1, height:20, background:'var(--border)', margin:'0 4px' }}/>
-            <button className={'chip' + (filterRep === 'all' ? ' active' : '')} onClick={() => setFilterRep('all')}>All Reps</button>
-            {repNames.map(r => (
-              <button key={r} className={'chip' + (filterRep === r ? ' active' : '')} onClick={() => setFilterRep(r)}>
-                {r.split(' ')[0]}
-              </button>
-            ))}
-          </>
-        )}
         <span className="spacer"/>
         <span className="pipe-summary">
           Active value <b>{money(activeValue)}</b> · {activeCount} open
@@ -118,7 +93,6 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
         getId={g => g.id}
         getStage={g => g.stage}
         getAmount={g => Number(g.amount)}
-        applyFilter={applyFilter}
         flashId={flashId}
         onMoveToStage={(id, stageKey) => moveToStage(id, stageKey as GenStageKey)}
         onOpenDetail={g => setDetail(g)}

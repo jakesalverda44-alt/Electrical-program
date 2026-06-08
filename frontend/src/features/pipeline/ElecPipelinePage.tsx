@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, WonJob } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
@@ -9,8 +9,6 @@ import api from '../../api/client';
 import { moneyShort as money } from '../../lib/money';
 import PipelineBoard from '../../components/PipelineBoard';
 import { useShowToast } from '../../contexts/AppContext';
-
-type Filter = 'all' | 'urgent' | 'large';
 
 interface Props {
   bids: Bid[];
@@ -25,9 +23,6 @@ interface Props {
 
 export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPreconstruction, flashId, openAddBid, onAddBidHandled, initialGc }: Props) {
   const showToast = useShowToast();
-  const [filter, setFilter] = useState<Filter>('all');
-  const [filterRep, setFilterRep] = useState<string>('all');
-  const repNames = useMemo(() => Array.from(new Set(bids.map(b => b.salesperson_name).filter(Boolean))).sort(), [bids]);
   const [detail, setDetail] = useState<Bid | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [addGc, setAddGc] = useState<string | undefined>(undefined);
@@ -44,13 +39,7 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
   const activeCount = bids.filter(b => b.stage !== 'awarded' && b.stage !== 'lost').length;
   const activeValue = sum(bids.filter(b => b.stage === 'due' || b.stage === 'submitted'));
 
-  const applyFilter = (list: Bid[]): Bid[] => {
-    let r = list;
-    if (filter === 'urgent') r = r.filter(b => b.due_days <= 7);
-    if (filter === 'large')  r = r.filter(b => Number(b.amount) >= 500_000);
-    if (filterRep !== 'all') r = r.filter(b => b.salesperson_name === filterRep);
-    return r.slice().sort((a, b) => a.due_days - b.due_days);
-  };
+  const sortedBids = [...bids].sort((a, b) => a.due_days - b.due_days);
 
   const handleStageFromDrawer = (stage: ElecStageKey, extra?: { loss_reason?: string; competitor?: string }) => {
     if (!detail) return;
@@ -112,20 +101,6 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
     <div className="scroll view-enter">
       {/* Toolbar */}
       <div className="pipe-toolbar">
-        <button className={'chip' + (filter === 'all'    ? ' active' : '')} onClick={() => setFilter('all')}>All</button>
-        <button className={'chip' + (filter === 'urgent' ? ' active' : '')} onClick={() => setFilter('urgent')}>Due ≤ 7d</button>
-        <button className={'chip' + (filter === 'large'  ? ' active' : '')} onClick={() => setFilter('large')}>&gt; $500K</button>
-        {repNames.length > 1 && (
-          <>
-            <div style={{ width:1, height:20, background:'var(--border)', margin:'0 4px' }}/>
-            <button className={'chip' + (filterRep === 'all' ? ' active' : '')} onClick={() => setFilterRep('all')}>All Reps</button>
-            {repNames.map(r => (
-              <button key={r} className={'chip' + (filterRep === r ? ' active' : '')} onClick={() => setFilterRep(r)}>
-                {r.split(' ')[0]}
-              </button>
-            ))}
-          </>
-        )}
         <span className="spacer"/>
         <span className="pipe-summary">
           Active value <b>{money(activeValue)}</b> · {activeCount} open
@@ -135,11 +110,10 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
       {/* Board */}
       <PipelineBoard<Bid>
         stages={ELEC_STAGES}
-        items={bids}
+        items={sortedBids}
         getId={b => b.id}
         getStage={b => b.stage}
         getAmount={b => Number(b.amount)}
-        applyFilter={applyFilter}
         flashId={flashId}
         onMoveToStage={(id, stageKey) => moveToStage(id, stageKey as ElecStageKey)}
         onOpenDetail={b => setDetail(b)}
