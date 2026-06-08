@@ -124,7 +124,7 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
             },
             {
               label: 'Plan Analysis',
-              desc: 'Disables the preconstruction plan analysis pipeline only. Other AI features unaffected.',
+              desc: 'Disables the estimating plan analysis pipeline only. Other AI features unaffected.',
               value: analysisEnabled, set: setAnalysisEnabled, danger: !analysisEnabled,
             },
           ].map(item => (

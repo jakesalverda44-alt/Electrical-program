@@ -210,7 +210,7 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
                     style={{ height: 28, fontSize: 11, padding: '0 10px', width: '100%', justifyContent: 'center', color: 'var(--blue)' }}
                     onClick={e => { e.stopPropagation(); onOpenPreconstruction(b.id); }}
                   >
-                    <Icon name="sparkle" size={12} stroke={2}/>Open in Preconstruction
+                    <Icon name="sparkle" size={12} stroke={2}/>Open in Estimating
                   </button>
                 </div>
               )}

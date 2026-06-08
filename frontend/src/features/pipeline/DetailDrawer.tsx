@@ -347,7 +347,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                   style={{ width: '100%', justifyContent: 'center', color: 'var(--blue)', marginTop: 4 }}
                   onClick={() => { onClose(); onOpenPreconstruction(bid.id); }}
                 >
-                  <Icon name="sparkle" size={14} stroke={2}/>Open in Preconstruction
+                  <Icon name="sparkle" size={14} stroke={2}/>Open in Estimating
                 </button>
               )}
 

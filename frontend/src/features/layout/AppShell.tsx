@@ -43,7 +43,7 @@ const TB: Record<string, { title: string; sub: string | null }> = {
   'gen-projects':  { title: 'Generator Projects',   sub: 'Installation & commissioning pipeline' },
   'elec-projects': { title: 'Electrical Projects',  sub: 'Construction & closeout pipeline' },
   intake:          { title: 'Intake Inbox',          sub: 'Bid invitations · AI extraction · Accept or reject' },
-  preconstruction: { title: 'Preconstruction',       sub: 'AI-assisted bid development & proposal workflow' },
+  preconstruction: { title: 'Estimating',             sub: 'AI plan analysis, takeoff & bid estimation' },
   builder:         { title: 'Proposal Builder',      sub: null },
   comms:           { title: 'Communications',        sub: 'Email timeline, notes & follow-ups' },
   followups:       { title: 'Follow-ups',            sub: 'Tasks & reminders · Stay on top of every deal' },
@@ -93,8 +93,8 @@ export default function AppShell({
       { id: 'intake',         label: 'Intake Inbox',         icon: 'bell', count: newIncoming },
       { id: 'sales-by-rep',   label: 'Sales by Rep',         icon: 'trend' },
     ]},
-    { group: 'Preconstruction', items: [
-      { id: 'preconstruction', label: 'Preconstruction', icon: 'sparkle' },
+    { group: 'Estimating', items: [
+      { id: 'preconstruction', label: 'Estimating', icon: 'sparkle' },
     ]},
     { group: 'Projects', items: [
       { id: 'gen-projects',   label: 'Generator Projects',  icon: 'bolt', tone: 'amber', count: genProjectCount },
@@ -129,7 +129,7 @@ export default function AppShell({
     { id: 'followups',       label: 'Follow-ups',         icon: 'checkc',  count: followupCount },
     { id: 'intake',          label: 'Intake Inbox',       icon: 'bell',    count: newIncoming },
     { id: 'sales-by-rep',    label: 'Sales by Rep',       icon: 'trend',   count: 0 },
-    { id: 'preconstruction', label: 'Preconstruction',    icon: 'sparkle', count: 0 },
+    { id: 'preconstruction', label: 'Estimating',          icon: 'sparkle', count: 0 },
     { id: 'elec-projects',   label: 'Elec. Projects',     icon: 'checkc',  count: elecProjectCount },
     { id: 'builder',         label: 'Proposal Builder',   icon: 'doc',     count: 0 },
     { id: 'docs',            label: 'Documents',          icon: 'clip',    count: 0 },
