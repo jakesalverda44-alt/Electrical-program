@@ -228,17 +228,16 @@ export async function buildProposalDocx(data: ProposalJSON, bidMeta: BidMeta = {
   if (jobNumber)   children.push(new Paragraph({ children: [new TextRun({ text: `Job #: ${jobNumber}`, size: MD, font: FONT })], spacing: { after: 40 } }));
   children.push(blank());
 
-  // ── Prepared By ─────────────────────────────────────────────────────────────
-  children.push(new Paragraph({ children: [new TextRun({ text: 'PREPARED BY', bold: true, size: SM, color: NAVY, font: FONT })], spacing: { before: 60, after: 30 } }));
-  children.push(new Paragraph({ children: [new TextRun({ text: 'Accurate Power & Technology (APT)', bold: true, size: MD, font: FONT })], spacing: { after: 20 } }));
-  children.push(new Paragraph({ children: [new TextRun({ text: '15519 W US Hwy 441, Suite 101A, Eustis, FL 32726', size: SM, font: FONT })], spacing: { after: 20 } }));
-  children.push(new Paragraph({ children: [new TextRun({ text: 'Office: 352-735-8285  |  Cell: 352-801-8997', size: SM, font: FONT })], spacing: { after: 20 } }));
-  children.push(new Paragraph({ children: [new TextRun({ text: 'License: EC13007737 | LI45063', size: SM, font: FONT })], spacing: { after: 20 } }));
-  children.push(new Paragraph({ children: [new TextRun({ text: 'Jake Salverda, Commercial A.E., Central FL Region', size: SM, font: FONT })], spacing: { after: 20 } }));
+  // ── Signature image (replaces PREPARED BY text block) ───────────────────────
+  if (sig) {
+    children.push(new Paragraph({
+      children: [new ImageRun({ data: sig.buf, transformation: { width: 500, height: 167 }, type: sig.type })],
+      spacing: { after: 60 },
+    }));
+  }
   children.push(blank());
 
-  // ── Opening Statement ────────────────────────────────────────────────────────
-  children.push(navyHeader('OPENING STATEMENT'));
+  // ── Opening statement (no section header band) ───────────────────────────────
   children.push(bodyPara(aptOpening(projectName)));
   children.push(blank());
 
