@@ -36,13 +36,19 @@ export interface AppSettings {
   email_from_name: string;
   email_reply_to: string;
   frontend_url: string;
-  // AI — Plan Analysis / Takeoff
+  // AI
   ai_anthropic_key: string;
   ai_model: string;
   ai_takeoff_agent2_model: string;
   ai_takeoff_agent3_model: string;
   ai_max_tokens: string;
+  ai_max_tokens_agent1: string;
+  ai_max_tokens_agent2: string;
+  ai_max_tokens_agent3: string;
   ai_temperature: string;
+  ai_prompt_agent1: string;
+  ai_prompt_agent2: string;
+  ai_prompt_agent3: string;
   // AI permissions
   ai_enabled: string;
   ai_analysis_enabled: string;
@@ -55,6 +61,8 @@ export interface AppSettings {
   // Bid notifications
   bid_notify_enabled: string;
   bid_notify_emails: string;
+  // Estimating
+  unit_cost_library: string;
   // Other
   notifications_json: string;
   security_session_timeout: string;
@@ -71,11 +79,16 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   gen_default_lull: '1100', gen_default_crane: '1800',
   gen_default_deposit_pct: '50', gen_default_valid_days: '30', gen_pricing_table: '',
   email_resend_api_key: '', email_from_address: '', email_from_name: '', email_reply_to: '', frontend_url: '',
-  ai_anthropic_key: '', ai_model: 'claude-sonnet-4-6', ai_takeoff_agent2_model: 'claude-haiku-4-5-20251001', ai_takeoff_agent3_model: 'claude-haiku-4-5-20251001', ai_max_tokens: '16000', ai_temperature: '0.3',
+  ai_anthropic_key: '', ai_model: 'claude-sonnet-4-6',
+  ai_takeoff_agent2_model: 'claude-haiku-4-5-20251001', ai_takeoff_agent3_model: 'claude-haiku-4-5-20251001',
+  ai_max_tokens: '4096', ai_max_tokens_agent1: '16000', ai_max_tokens_agent2: '4000', ai_max_tokens_agent3: '4000',
+  ai_temperature: '0.3',
+  ai_prompt_agent1: '', ai_prompt_agent2: '', ai_prompt_agent3: '',
   ai_enabled: 'true', ai_analysis_enabled: 'true', ai_daily_limit_per_user: '10', ai_role_permissions: '',
   commission_default_rate: '3',
   currency_code: 'USD',
   bid_notify_enabled: 'true', bid_notify_emails: '[]',
+  unit_cost_library: '',
   notifications_json: '{}', security_session_timeout: '480',
 };
 

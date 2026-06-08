@@ -40,6 +40,32 @@ export interface Bid {
   drive_change_orders_folder_id?: string;
   closed_at?: string;
   co_approved_total?: number;
+  sq_ft?: number | null;
+  project_type?: string | null;
+}
+
+export interface EstimateLineItem {
+  category: string;
+  item: string;
+  qty: number;
+  unit: string;
+  unit_cost: number;
+  total: number;
+  overridden: boolean;
+}
+
+export interface BidEstimate {
+  bid_id: string;
+  overhead_pct: number;
+  profit_pct: number;
+  line_items: EstimateLineItem[];
+  subtotals: Record<string, number>;
+  total_direct: number;
+  total_overhead: number;
+  total_profit: number;
+  grand_total: number;
+  comp_count: number;
+  confidence: 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
 export interface Gen {
