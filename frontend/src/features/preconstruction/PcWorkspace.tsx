@@ -652,19 +652,35 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           { key: 'agent3' as const, label: 'QA Review & Risk',   output: agent3 },
           { key: 'raw'    as const, label: 'Raw Data',           output: aiResults ? JSON.stringify(aiResults, null, 2) : undefined },
         ];
-        const exportMarkdown = () => {
+        const slug = bid.name.replace(/\s+/g, '-');
+        const downloadFile = (content: string, filename: string, mime: string) => {
+          const blob = new Blob([content], { type: mime });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = filename;
+          a.click(); URL.revokeObjectURL(url);
+        };
+        // Export only the sub-tab currently being viewed.
+        const exportActive = () => {
+          const tab = ANALYSIS_TABS.find(t => t.key === analysisTab);
+          if (!tab?.output) return;
+          if (tab.key === 'raw') {
+            downloadFile(tab.output, `${slug}-raw-data.json`, 'application/json');
+          } else {
+            downloadFile(`# ${tab.label} — ${bid.name}\n\n${tab.output}`, `${slug}-${tab.key}.md`, 'text/markdown');
+          }
+        };
+        // Export all three agent outputs combined into one file.
+        const exportAll = () => {
           const parts = [
             `# Plan Review — ${bid.name}\n`,
             agent1 ? `## Drawing Analysis\n${agent1}` : '',
             agent2 ? `## Scope & Estimate\n${agent2}` : '',
             agent3 ? `## QA Review & Risk\n${agent3}` : '',
           ].filter(Boolean).join('\n\n');
-          const blob = new Blob([parts], { type: 'text/markdown' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url; a.download = `${bid.name.replace(/\s+/g,'-')}-analysis.md`;
-          a.click(); URL.revokeObjectURL(url);
+          downloadFile(parts, `${slug}-analysis.md`, 'text/markdown');
         };
+        const activeTabMeta = ANALYSIS_TABS.find(t => t.key === analysisTab);
         return (
           <div style={{ padding: '20px 24px' }}>
             {!aiResults?.agent1_output && !aiResults?.agent2_output ? (
@@ -688,11 +704,20 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       {!t.output && t.key !== 'raw' && <span style={{ marginLeft: 4, fontSize: 10, color: 'var(--text3)' }}>—</span>}
                     </button>
                   ))}
-                  <button onClick={exportMarkdown}
-                    style={{ marginLeft: 'auto', border: '1px solid var(--border2)', borderRadius: 7, cursor: 'pointer',
+                  <button onClick={exportActive} disabled={!activeTabMeta?.output}
+                    title={`Export only the ${activeTabMeta?.label ?? 'current'} tab`}
+                    style={{ marginLeft: 'auto', border: '1px solid var(--border2)', borderRadius: 7,
+                      cursor: activeTabMeta?.output ? 'pointer' : 'default',
+                      font: 'inherit', fontSize: 12, fontWeight: 700, padding: '5px 12px',
+                      background: 'var(--surface2)', color: 'var(--text2)', opacity: activeTabMeta?.output ? 1 : 0.5 }}>
+                    ↓ Export {activeTabMeta?.label ?? ''}
+                  </button>
+                  <button onClick={exportAll}
+                    title="Export all three agent outputs combined into one file"
+                    style={{ marginLeft: 6, border: '1px solid var(--border2)', borderRadius: 7, cursor: 'pointer',
                       font: 'inherit', fontSize: 12, fontWeight: 700, padding: '5px 12px',
                       background: 'var(--surface2)', color: 'var(--text2)' }}>
-                    ↓ Export
+                    ↓ All
                   </button>
                 </div>
                 {/* Sub-tab content */}
