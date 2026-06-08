@@ -296,8 +296,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }).catch(() => {});
   }, [bid.id]);
 
-  const runAI = async () => {
-    if (wsRef.current.aiRunning || wsRef.current.aiDone) return;
+  const runAI = async (force = false) => {
+    if (wsRef.current.aiRunning || (!force && wsRef.current.aiDone)) return;
     const elecUploaded = fileObjectsRef.current.filter(f => isElecSheet(f.name)).length;
     const elecSelected = projectDocs.filter(d => selectedDocIds.has(d.id) && isElecSheet(d.name)).length;
     const elecCount = elecUploaded + elecSelected;
@@ -350,6 +350,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     const rfi = { id: Date.now().toString(), question: newRfi.trim(), submitted: false, answer: '' };
     set({ rfis: [...ws.rfis, rfi] });
     setNewRfi('');
+  };
+
+  const rerunAI = () => {
+    if (!window.confirm('Re-run the AI analysis? This will permanently delete the previous takeoff results and clear the Scope of Work.')) return;
+    setAiResults(null);
+    set({ aiDone: false, aiRunning: false, aiLog: [], scope: {} });
+    runAI(true);
   };
 
   const suggestRfis = () => {
@@ -645,7 +652,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   </div>
                 ) : (
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: ws.aiLog.length ? 16 : 0 }}>
-                    <button className="btn" onClick={runAI} disabled={ws.aiRunning || ws.aiDone} style={{ fontSize: 13 }}>
+                    <button className="btn" onClick={() => runAI()} disabled={ws.aiRunning || ws.aiDone} style={{ fontSize: 13 }}>
                       <Icon name="spark" size={14} stroke={1.9}/>
                       {ws.aiDone ? 'Takeoff Complete' : ws.aiRunning ? 'Running…' : 'Run AI Takeoff'}
                     </button>
@@ -676,9 +683,16 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   </div>
                 )}
                 {ws.aiDone && (
-                  <button className="btn ghost" onClick={() => set({ activeTab: 'takeoff' })} style={{ fontSize: 13, marginTop: 10 }}>
-                    View Results <Icon name="arrow" size={13} stroke={2}/>
-                  </button>
+                  <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                    <button className="btn ghost" onClick={() => set({ activeTab: 'takeoff' })} style={{ fontSize: 13 }}>
+                      View Results <Icon name="arrow" size={13} stroke={2}/>
+                    </button>
+                    <button className="btn ghost" onClick={rerunAI}
+                      style={{ fontSize: 13, color: 'var(--red, #EF4444)', borderColor: 'rgba(239,68,68,.35)' }}
+                      title="Delete previous results and run a fresh AI analysis">
+                      Re-run Analysis
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
