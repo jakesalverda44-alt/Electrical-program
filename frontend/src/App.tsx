@@ -101,6 +101,9 @@ export default function App() {
             proposalGenerated: !!(row.proposal_generated),
             aiRunning:         false,
             aiLog:             [],
+            estimateOverrides: {},
+            overheadPct:       10,
+            profitPct:         15,
           };
         }
         setPcData(restored);

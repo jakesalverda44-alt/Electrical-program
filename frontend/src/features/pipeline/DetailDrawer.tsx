@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { Bid } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
+import { PROJECT_TYPES } from '../preconstruction/constants';
 import api from '../../api/client';
 import RecordFiles from '../../components/RecordFiles';
 import { moneyFull as fmtMoney } from '../../lib/money';
@@ -66,9 +67,11 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
     due: bid.due,
     sheets: bid.sheets ? String(bid.sheets) : '',
     contact: bid.contact ?? '',
+    project_type: bid.project_type ?? '',
+    sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '',
   });
 
-  const setField = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const setField = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(prev => ({ ...prev, [k]: e.target.value }));
 
   const handleSave = async () => {
@@ -83,6 +86,8 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
         due: form.due,
         sheets: form.sheets === '' ? null : form.sheets,
         contact: form.contact,
+        project_type: form.project_type || null,
+        sq_ft: form.sq_ft === '' ? null : Number(form.sq_ft),
       });
       onBidEdited(data);
       setEditMode(false);
@@ -120,7 +125,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {!isTerminal && (
               <button className="btn ghost" style={{ height: 30, fontSize: 12, padding: '0 10px' }}
-                onClick={() => { setEditMode(e => !e); setForm({ name: bid.name, gc: bid.gc, loc: bid.loc, amount: bid.amount != null ? String(bid.amount) : '', due: bid.due, sheets: bid.sheets ? String(bid.sheets) : '', contact: bid.contact ?? '' }); }}>
+                onClick={() => { setEditMode(e => !e); setForm({ name: bid.name, gc: bid.gc, loc: bid.loc, amount: bid.amount != null ? String(bid.amount) : '', due: bid.due, sheets: bid.sheets ? String(bid.sheets) : '', contact: bid.contact ?? '', project_type: bid.project_type ?? '', sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '' }); }}>
                 <Icon name={editMode ? 'x' : 'gear'} size={13} stroke={2}/>{editMode ? 'Cancel' : 'Edit'}
               </button>
             )}
@@ -139,12 +144,20 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                 { label: 'Due Date', key: 'due' as const },
                 { label: 'Plan Sheets', key: 'sheets' as const, type: 'number' },
                 { label: 'Contact', key: 'contact' as const },
+                { label: 'Square Footage', key: 'sq_ft' as const, type: 'number' },
               ].map(({ label, key, required, type }) => (
                 <div key={key}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>{label}</div>
                   <input style={INPUT} type={type ?? 'text'} value={form[key]} onChange={setField(key)} required={required} placeholder={required ? label : undefined}/>
                 </div>
               ))}
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>Project Type</div>
+                <select style={INPUT as React.CSSProperties} value={form.project_type} onChange={setField('project_type')}>
+                  <option value="">Select type…</option>
+                  {PROJECT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select>
+              </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                 <button className="btn" onClick={handleSave} disabled={saving || !form.name.trim() || !form.gc.trim()} style={{ flex: 1 }}>
                   <Icon name="check" size={14} stroke={2.2}/>{saving ? 'Saving…' : 'Save Changes'}

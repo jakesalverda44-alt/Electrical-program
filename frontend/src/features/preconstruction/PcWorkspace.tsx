@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Icon from '../../components/Icon';
-import { Bid, Toast } from '../../types';
-import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey } from './constants';
+import { Bid, Toast, BidEstimate, EstimateLineItem } from '../../types';
+import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey, PROJECT_TYPES } from './constants';
 import api from '../../api/client';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
 import { moneyFull } from '../../lib/money';
@@ -76,6 +76,38 @@ function analysisErrorMessage(data: Record<string, unknown> | null | undefined) 
 
 interface ProjectDoc { id: string; name: string; display_name: string; category: string; file_type: string; }
 
+function lookupUnitCost(
+  cat: string,
+  lib: { global: Record<string,number>; by_project_type: Record<string,Record<string,number>> },
+  projectType?: string | null
+): number {
+  if (projectType && lib.by_project_type[projectType]?.[cat] !== undefined) {
+    return lib.by_project_type[projectType][cat];
+  }
+  return lib.global[cat] ?? 0;
+}
+
+function buildLineItemsFromTakeoff(
+  agent2Output: string | undefined,
+  lib: { global: Record<string,number>; by_project_type: Record<string,Record<string,number>> },
+  projectType: string | null | undefined,
+  overrides: Record<string, number>
+): EstimateLineItem[] {
+  if (!agent2Output) return [];
+  try {
+    const j = JSON.parse(agent2Output) as { takeoff?: { category: string; item: string; qty: number; unit: string; spec?: string; confidence?: string; notes?: string }[] };
+    if (!j.takeoff?.length) return [];
+    return j.takeoff.map(row => {
+      const key = `${row.category}||${row.item}`;
+      const base = lookupUnitCost(row.category, lib, projectType);
+      const unit_cost = overrides[key] !== undefined ? overrides[key] : base;
+      return { category: row.category, item: row.item, qty: row.qty, unit: row.unit || 'EA', unit_cost, total: row.qty * unit_cost, overridden: overrides[key] !== undefined };
+    });
+  } catch {
+    return [];
+  }
+}
+
 export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, showToast, userRole, settings }: Props) {
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
@@ -87,6 +119,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [copied, setCopied] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [historicalCosts, setHistoricalCosts] = useState<Array<Record<string,unknown>>>([]);
+  const [expandedCostRow, setExpandedCostRow] = useState<number | null>(null);
+  const [costTypeFilter, setCostTypeFilter] = useState<string>('all');
+  const [savedEstimate, setSavedEstimate] = useState<BidEstimate | null>(null);
+  const [unitCostLib, setUnitCostLib] = useState<{ global: Record<string,number>; by_project_type: Record<string,Record<string,number>> }>({ global: {}, by_project_type: {} });
+  const [savingEstimate, setSavingEstimate] = useState(false);
+  const [estimateSaved, setEstimateSaved] = useState(false);
   const [bidIntel, setBidIntel] = useState<Record<string,unknown> | null>(null);
   const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
@@ -167,6 +205,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   useEffect(() => {
     api.get('/preconstruction/costs').then(r => setHistoricalCosts(r.data || [])).catch(() => {});
     api.get(`/preconstruction/intelligence/${bid.id}`).then(r => setBidIntel(r.data)).catch(() => {});
+    api.get('/estimates/unit-costs').then(r => setUnitCostLib(r.data || { global: {}, by_project_type: {} })).catch(() => {});
+    api.get(`/estimates/${bid.id}`).then(r => { if (r.data) setSavedEstimate(r.data); }).catch(() => {});
     api.get(`/documents?linked_id=${bid.id}`).then(r => {
       const docs: ProjectDoc[] = (r.data || []).filter((d: ProjectDoc) => {
         const t = (d.file_type || '').toLowerCase();
@@ -241,6 +281,42 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const submitRfi = (id: string) => {
     set({ rfis: ws.rfis.map(r => r.id === id ? { ...r, submitted: true } : r) });
     showToast({ title: 'RFI submitted', sub: 'GC will be notified' });
+  };
+
+  const computePricingItems = (): EstimateLineItem[] => {
+    if (savedEstimate?.line_items?.length) {
+      return savedEstimate.line_items.map(li => {
+        const key = `${li.category}||${li.item}`;
+        const ov = ws.estimateOverrides[key];
+        const unit_cost = ov !== undefined ? ov : li.unit_cost;
+        return { ...li, unit_cost, total: li.qty * unit_cost, overridden: ov !== undefined || li.overridden };
+      });
+    }
+    return buildLineItemsFromTakeoff(
+      aiResults?.agent2_output as string | undefined,
+      unitCostLib,
+      bid.project_type,
+      ws.estimateOverrides
+    );
+  };
+
+  const saveEstimate = async () => {
+    const items = computePricingItems();
+    if (!items.length) return;
+    setSavingEstimate(true);
+    try {
+      const { data } = await api.put(`/estimates/${bid.id}`, {
+        line_items: items,
+        overhead_pct: ws.overheadPct,
+        profit_pct: ws.profitPct,
+      });
+      setSavedEstimate(data);
+      setEstimateSaved(true);
+      setTimeout(() => setEstimateSaved(false), 3000);
+      showToast({ title: 'Estimate saved', sub: `Grand total: ${moneyFull(data.grand_total)}` });
+    } finally {
+      setSavingEstimate(false);
+    }
   };
 
   const generateProposal = () => {
@@ -743,33 +819,233 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           </div>
         );
 
-      case 'costs':
+      case 'pricing': {
+        const pricingLineItems = computePricingItems();
+        const grouped: Record<string, EstimateLineItem[]> = {};
+        for (const li of pricingLineItems) {
+          if (!grouped[li.category]) grouped[li.category] = [];
+          grouped[li.category].push(li);
+        }
+        const totalDirect = pricingLineItems.reduce((s, li) => s + li.total, 0);
+        const totalOverhead = totalDirect * (ws.overheadPct / 100);
+        const totalProfit   = (totalDirect + totalOverhead) * (ws.profitPct / 100);
+        const grandTotal    = totalDirect + totalOverhead + totalProfit;
+        const compCount = savedEstimate?.comp_count ?? 0;
+        const confidence = savedEstimate?.confidence ?? (compCount >= 3 ? 'HIGH' : compCount >= 1 ? 'MEDIUM' : 'LOW');
+        const confColor = confidence === 'HIGH' ? 'var(--green)' : confidence === 'MEDIUM' ? 'var(--amber)' : 'var(--text3)';
         return (
           <div style={{ padding: '20px 24px' }}>
+            {!pricingLineItems.length ? (
+              <div className="panel" style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
+                No takeoff data yet. Complete the AI analysis (Plan Review tab) to populate pricing.
+              </div>
+            ) : (
+              <>
+                <div className="panel" style={{ marginBottom: 16 }}>
+                  <div className="panel-hdr">
+                    <span className="panel-title">Line-Item Estimate</span>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      {savedEstimate && (
+                        <span style={{ fontSize: 12, fontWeight: 700, color: confColor }}>
+                          {confidence} confidence · {savedEstimate.comp_count} comp{savedEstimate.comp_count !== 1 ? 's' : ''}
+                        </span>
+                      )}
+                      <button className="btn" style={{ height: 30, fontSize: 12, padding: '0 14px' }}
+                        onClick={saveEstimate} disabled={savingEstimate}>
+                        {savingEstimate ? 'Saving…' : 'Save Estimate'}
+                      </button>
+                      {estimateSaved && <span style={{ fontSize: 12, color: 'var(--green)', fontWeight: 700 }}>✓ Saved</span>}
+                    </div>
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="ctable" style={{ minWidth: 640 }}>
+                      <thead>
+                        <tr>
+                          <th>Item</th>
+                          <th>Spec</th>
+                          <th style={{ textAlign: 'right' }}>Qty</th>
+                          <th>Unit</th>
+                          <th style={{ textAlign: 'right' }}>Unit Cost</th>
+                          <th style={{ textAlign: 'right' }}>Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(grouped).map(([cat, items]) => {
+                          const catTotal = items.reduce((s, li) => s + li.total, 0);
+                          return (
+                            <React.Fragment key={cat}>
+                              <tr style={{ background: 'var(--surface2)' }}>
+                                <td colSpan={6} style={{ fontWeight: 800, fontSize: 12, color: 'var(--text2)', padding: '8px 16px', textTransform: 'uppercase', letterSpacing: '.04em' }}>{cat}</td>
+                              </tr>
+                              {items.map((li, idx) => (
+                                <tr key={idx}>
+                                  <td className="nm">{li.item}</td>
+                                  <td className="sub" style={{ fontSize: 11 }}>—</td>
+                                  <td className="num" style={{ textAlign: 'right' }}>{li.qty}</td>
+                                  <td className="sub">{li.unit}</td>
+                                  <td style={{ textAlign: 'right', padding: '4px 8px' }}>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      value={li.unit_cost}
+                                      onChange={e => {
+                                        const key = `${li.category}||${li.item}`;
+                                        const val = Number(e.target.value);
+                                        set({ estimateOverrides: { ...ws.estimateOverrides, [key]: val } });
+                                      }}
+                                      style={{ width: 90, textAlign: 'right', font: 'inherit', fontSize: 13, fontWeight: 700, color: li.overridden ? 'var(--blue)' : 'var(--text)', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 6, padding: '4px 8px', outline: 'none' }}
+                                    />
+                                  </td>
+                                  <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{moneyFull(li.total)}</td>
+                                </tr>
+                              ))}
+                              <tr style={{ borderTop: '2px solid var(--border)' }}>
+                                <td colSpan={5} style={{ textAlign: 'right', fontWeight: 700, fontSize: 12, color: 'var(--text2)', padding: '6px 16px' }}>{cat} Subtotal</td>
+                                <td className="num" style={{ textAlign: 'right', fontWeight: 900 }}>{moneyFull(catTotal)}</td>
+                              </tr>
+                            </React.Fragment>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="panel" style={{ padding: '16px 20px' }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 14 }}>Summary</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 24px', marginBottom: 16 }}>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Total Direct Cost</div>
+                      <div style={{ fontSize: 18, fontWeight: 900 }}>{moneyFull(totalDirect)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Grand Total</div>
+                      <div style={{ fontSize: 22, fontWeight: 900, color: 'var(--blue)' }}>{moneyFull(grandTotal)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Overhead %</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input type="number" min={0} max={100} value={ws.overheadPct}
+                          onChange={e => set({ overheadPct: Number(e.target.value) })}
+                          style={{ width: 70, font: 'inherit', fontSize: 14, fontWeight: 700, background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 7, padding: '6px 10px', outline: 'none' }}
+                        />
+                        <span style={{ fontSize: 13, color: 'var(--text3)' }}>{moneyFull(totalOverhead)}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Profit %</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input type="number" min={0} max={100} value={ws.profitPct}
+                          onChange={e => set({ profitPct: Number(e.target.value) })}
+                          style={{ width: 70, font: 'inherit', fontSize: 14, fontWeight: 700, background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 7, padding: '6px 10px', outline: 'none' }}
+                        />
+                        <span style={{ fontSize: 13, color: 'var(--text3)' }}>{moneyFull(totalProfit)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      }
+
+      case 'costs': {
+        const filteredCosts = costTypeFilter === 'all'
+          ? historicalCosts
+          : historicalCosts.filter(r => r.project_type === costTypeFilter);
+        const usedTypes = Array.from(new Set(historicalCosts.map(r => String(r.project_type || '')).filter(Boolean)));
+        return (
+          <div style={{ padding: '20px 24px' }}>
+            {/* Project type filter chips */}
+            {usedTypes.length > 0 && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+                {['all', ...usedTypes].map(val => {
+                  const label = val === 'all' ? 'All' : (PROJECT_TYPES.find(t => t.value === val)?.label ?? val);
+                  const active = costTypeFilter === val;
+                  return (
+                    <button key={val} onClick={() => setCostTypeFilter(val)}
+                      style={{ fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 20, border: 'none', cursor: 'pointer',
+                        background: active ? 'var(--accent)' : 'var(--surface2)',
+                        color: active ? '#fff' : 'var(--text2)' }}>
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             <div className="panel">
               <div className="panel-hdr"><span className="panel-title">Historical Cost Comps — Awarded Jobs</span></div>
-              {historicalCosts.length === 0 ? (
+              {filteredCosts.length === 0 ? (
                 <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
-                  No awarded jobs yet. Win bids to build your historical cost database.
+                  {historicalCosts.length === 0 ? 'No awarded jobs yet. Win bids to build your historical cost database.' : 'No jobs match the selected filter.'}
                 </div>
               ) : (
                 <table className="ctable">
-                  <thead><tr><th>Project</th><th>GC</th><th>Year</th><th style={{ textAlign: 'right' }}>Contract Value</th></tr></thead>
+                  <thead>
+                    <tr>
+                      <th>Project</th>
+                      <th>GC</th>
+                      <th>Type</th>
+                      <th>Year</th>
+                      <th style={{ textAlign: 'right' }}>Sq Ft</th>
+                      <th style={{ textAlign: 'right' }}>Contract Value</th>
+                      <th style={{ textAlign: 'right' }}>$/SF</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {historicalCosts.map((row, i) => (
-                      <tr key={i}>
-                        <td className="nm">{String(row.name)}</td>
-                        <td className="sub">{String(row.gc)}</td>
-                        <td className="sub">{String(row.year ?? '—')}</td>
-                        <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{moneyFull(Number(row.amount))}</td>
-                      </tr>
-                    ))}
+                    {filteredCosts.map((row, i) => {
+                      const sqFt = row.sq_ft ? Number(row.sq_ft) : null;
+                      const amount = Number(row.amount);
+                      const perSF = sqFt ? amount / sqFt : null;
+                      const subtotals = (row.subtotals as Record<string,number> | null) ?? null;
+                      const isExpanded = expandedCostRow === i;
+                      const typePt = PROJECT_TYPES.find(t => t.value === String(row.project_type || ''));
+                      return (
+                        <React.Fragment key={i}>
+                          <tr
+                            onClick={() => setExpandedCostRow(isExpanded ? null : i)}
+                            style={{ cursor: subtotals ? 'pointer' : 'default' }}
+                          >
+                            <td className="nm">{String(row.name)}</td>
+                            <td className="sub">{String(row.gc)}</td>
+                            <td className="sub">
+                              {typePt ? (
+                                <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 5, background: 'var(--blue-soft)', color: 'var(--blue)' }}>
+                                  {typePt.label}
+                                </span>
+                              ) : '—'}
+                            </td>
+                            <td className="sub">{String(row.year ?? '—')}</td>
+                            <td className="num" style={{ textAlign: 'right' }}>{sqFt ? sqFt.toLocaleString() : '—'}</td>
+                            <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{moneyFull(amount)}</td>
+                            <td className="num" style={{ textAlign: 'right', color: 'var(--text3)' }}>{perSF ? `$${perSF.toFixed(0)}/sf` : '—'}</td>
+                          </tr>
+                          {isExpanded && subtotals && (
+                            <tr>
+                              <td colSpan={7} style={{ background: 'var(--surface2)', padding: '12px 20px' }}>
+                                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.04em' }}>Category Breakdown</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '6px 16px' }}>
+                                  {Object.entries(subtotals).map(([cat, val]) => (
+                                    <div key={cat} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                                      <span style={{ color: 'var(--text2)', fontWeight: 600 }}>{cat}</span>
+                                      <span style={{ fontWeight: 800 }}>{moneyFull(Number(val))}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
             </div>
           </div>
         );
+      }
 
       case 'intel':
         return (

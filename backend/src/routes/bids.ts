@@ -97,14 +97,14 @@ async function loadOwnedBid(req: AuthRequest, res: import('express').Response) {
 }
 
 router.post('/', requireAuth, async (req: AuthRequest, res) => {
-  const { name, gc, loc, amount, due, notes } = req.body;
+  const { name, gc, loc, amount, due, notes, project_type, sq_ft } = req.body;
   if (!name?.trim() || !gc?.trim()) return res.status(400).json({ error: 'Name and GC required' });
   const user = req.user!;
   const customerId = await upsertCustomer(gc, 'gc');
   const { rows } = await pool.query(
-    `INSERT INTO bids (name, gc, loc, amount, due, notes, salesperson_id, salesperson_name, customer_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-    [name.trim(), gc.trim(), (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), notes?.trim() || null, user.id, user.name, customerId]
+    `INSERT INTO bids (name, gc, loc, amount, due, notes, salesperson_id, salesperson_name, customer_id, project_type, sq_ft)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    [name.trim(), gc.trim(), (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), notes?.trim() || null, user.id, user.name, customerId, project_type || null, sq_ft ? Number(sq_ft) : null]
   );
   sendBidNotification(rows[0], user).catch(() => {});
 
@@ -353,17 +353,19 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
 
 router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (!(await loadOwnedBid(req, res))) return;
-  const { name, gc, loc, amount, due, sheets, contact } = req.body;
+  const { name, gc, loc, amount, due, sheets, contact, project_type, sq_ft } = req.body;
   const fields: string[] = [];
   const vals: unknown[] = [];
   let i = 1;
-  if (name    !== undefined) { fields.push(`name=$${i++}`);    vals.push(name.trim()); }
-  if (gc      !== undefined) { fields.push(`gc=$${i++}`);      vals.push(gc.trim()); }
-  if (loc     !== undefined) { fields.push(`loc=$${i++}`);     vals.push(loc.trim() || '—'); }
-  if (amount  !== undefined) { fields.push(`amount=$${i++}`);  vals.push(amount === '' || amount === null ? null : Number(amount)); }
-  if (due     !== undefined) { fields.push(`due=$${i++}`);     vals.push(formatDue(due)); }
-  if (sheets  !== undefined) { fields.push(`sheets=$${i++}`);  vals.push(Number(sheets) || null); }
-  if (contact !== undefined) { fields.push(`contact=$${i++}`); vals.push(contact.trim()); }
+  if (name         !== undefined) { fields.push(`name=$${i++}`);         vals.push(name.trim()); }
+  if (gc           !== undefined) { fields.push(`gc=$${i++}`);           vals.push(gc.trim()); }
+  if (loc          !== undefined) { fields.push(`loc=$${i++}`);          vals.push(loc.trim() || '—'); }
+  if (amount       !== undefined) { fields.push(`amount=$${i++}`);       vals.push(amount === '' || amount === null ? null : Number(amount)); }
+  if (due          !== undefined) { fields.push(`due=$${i++}`);          vals.push(formatDue(due)); }
+  if (sheets       !== undefined) { fields.push(`sheets=$${i++}`);       vals.push(Number(sheets) || null); }
+  if (contact      !== undefined) { fields.push(`contact=$${i++}`);      vals.push(contact.trim()); }
+  if (project_type !== undefined) { fields.push(`project_type=$${i++}`); vals.push(project_type || null); }
+  if (sq_ft        !== undefined) { fields.push(`sq_ft=$${i++}`);        vals.push(sq_ft === '' || sq_ft === null ? null : Number(sq_ft)); }
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
   fields.push(`updated_at=now()`);
   vals.push(req.params.id);

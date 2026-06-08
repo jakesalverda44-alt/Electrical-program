@@ -379,12 +379,14 @@ router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), 
 // GET historical cost comps from real won jobs data
 router.get('/costs', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(`
-    SELECT b.name, b.amount, b.sheets, b.gc, b.loc,
-           EXTRACT(YEAR FROM b.updated_at) as year
+    SELECT b.name, b.amount, b.sheets, b.gc, b.loc, b.sq_ft, b.project_type,
+           EXTRACT(YEAR FROM b.updated_at) as year,
+           be.subtotals, be.confidence
     FROM bids b
+    LEFT JOIN bid_estimates be ON be.bid_id = b.id
     WHERE b.stage = 'awarded' AND b.amount IS NOT NULL AND b.deleted_at IS NULL
     ORDER BY b.updated_at DESC
-    LIMIT 20
+    LIMIT 30
   `);
   res.json(rows);
 });

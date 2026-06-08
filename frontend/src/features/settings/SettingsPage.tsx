@@ -15,9 +15,10 @@ import { SecuritySection } from './sections/SecuritySection';
 import { TrashSection } from './sections/TrashSection';
 import { AuditSection } from './sections/AuditSection';
 import { CommissionsSection } from './sections/CommissionsSection';
+import { UnitCostSection } from './sections/UnitCostSection';
 
 
-type SectionId = 'company' | 'proposal-defaults' | 'gen-pricing' | 'users' | 'email' | 'ai' | 'ai-permissions' | 'integrations' | 'notifications' | 'security' | 'trash' | 'audit' | 'commissions';
+type SectionId = 'company' | 'proposal-defaults' | 'gen-pricing' | 'users' | 'email' | 'ai' | 'ai-permissions' | 'integrations' | 'notifications' | 'security' | 'trash' | 'audit' | 'commissions' | 'unit-costs';
 
 const NAV: { group: string; items: { id: SectionId; label: string; icon: string }[] }[] = [
   { group: 'Organization', items: [
@@ -32,6 +33,9 @@ const NAV: { group: string; items: { id: SectionId; label: string; icon: string 
   { group: 'Integrations', items: [
     { id: 'email',            label: 'Email Delivery',  icon: 'send'     },
     { id: 'integrations',     label: 'Integrations',    icon: 'link'     },
+  ]},
+  { group: 'Estimating', items: [
+    { id: 'unit-costs',       label: 'Unit Cost Library', icon: 'dollar' },
   ]},
   { group: 'AI', items: [
     { id: 'ai',               label: 'AI Configuration', icon: 'cpu'     },
@@ -104,6 +108,7 @@ export default function SettingsPage() {
           {active === 'integrations'      && <IntegrationsSection/>}
           {active === 'notifications'     && <NotificationsSection settings={settings} onSaved={onSettingsSaved}/>}
           {active === 'security'          && <SecuritySection    settings={settings} onSaved={onSettingsSaved}/>}
+          {active === 'unit-costs'         && <UnitCostSection/>}
           {active === 'audit'             && <AuditSection/>}
           {active === 'trash'             && <TrashSection/>}
         </div>

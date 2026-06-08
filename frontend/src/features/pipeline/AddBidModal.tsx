@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { Bid } from '../../types';
+import { PROJECT_TYPES } from '../preconstruction/constants';
 
 interface Props {
   onClose: () => void;
@@ -10,11 +11,11 @@ interface Props {
 }
 
 export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
-  const [f, setF] = useState({ name: '', gc: initialGc ?? '', loc: '', amount: '', due: '', notes: '' });
+  const [f, setF] = useState({ name: '', gc: initialGc ?? '', loc: '', amount: '', due: '', notes: '', project_type: '', sq_ft: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
     setF(prev => ({ ...prev, [k]: e.target.value }));
 
   const ok = f.name.trim() && f.gc.trim();
@@ -65,6 +66,19 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
               <div className="field">
                 <label>Due date</label>
                 <input type="date" value={f.due} onChange={set('due')}/>
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Project Type <span style={{fontWeight:400,color:'var(--text3)'}}>— optional</span></label>
+                <select value={f.project_type} onChange={set('project_type')} style={{ width: '100%', font: 'inherit', fontSize: 13, fontWeight: 600, color: 'var(--text)', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 9, padding: '9px 12px' }}>
+                  <option value="">Select type…</option>
+                  {PROJECT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label>Square Footage <span style={{fontWeight:400,color:'var(--text3)'}}>— optional</span></label>
+                <input className="num" type="number" value={f.sq_ft} onChange={set('sq_ft')} placeholder="e.g. 5000" min="0"/>
               </div>
             </div>
             <div className="field">

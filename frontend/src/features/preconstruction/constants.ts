@@ -17,12 +17,25 @@ export const PC_TABS = [
   { key: 'takeoff',    label: 'Plan Review'       },
   { key: 'scope',      label: 'Scope of Work'     },
   { key: 'rfis',       label: 'RFIs'              },
+  { key: 'pricing',    label: 'Pricing'           },
   { key: 'proposal',   label: 'Proposal'          },
   { key: 'costs',      label: 'Historical Costs'  },
   { key: 'intel',      label: 'Win-Rate Insights' },
 ] as const;
 
 export type PcTabKey = typeof PC_TABS[number]['key'];
+
+export const PROJECT_TYPES = [
+  { value: 'cstore_fuel',  label: 'C-Store w/ Fuel' },
+  { value: 'car_wash',     label: 'Car Wash'         },
+  { value: 'self_storage', label: 'Self-Storage'     },
+  { value: 'office',       label: 'Office'           },
+  { value: 'warehouse',    label: 'Warehouse'        },
+  { value: 'restaurant',   label: 'Restaurant'       },
+  { value: 'medical',      label: 'Medical'          },
+  { value: 'retail',       label: 'Retail'           },
+  { value: 'other',        label: 'Other'            },
+];
 
 export const SCOPE_SECS = [
   { id: 'A', label: 'Service & Distribution' },
@@ -48,6 +61,9 @@ export interface PcWorkspace {
   proposalGenerated: boolean;
   notes: string;
   amount: number;
+  estimateOverrides: Record<string, number>;
+  overheadPct: number;
+  profitPct: number;
 }
 
 export function blankWorkspace(bidId: string, bidName: string, amount: number): PcWorkspace {
@@ -56,5 +72,6 @@ export function blankWorkspace(bidId: string, bidName: string, amount: number): 
     step: 'intake', activeTab: 'overview',
     files: [], aiLog: [], aiRunning: false, aiDone: false,
     scope: {}, rfis: [], proposalGenerated: false, notes: '',
+    estimateOverrides: {}, overheadPct: 10, profitPct: 15,
   };
 }
