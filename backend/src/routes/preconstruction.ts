@@ -71,7 +71,7 @@ async function loadAIConfig(): Promise<AIConfig> {
     model:   (modelSetting   || defaultModel),
     modelA2: (modelA2Setting || 'claude-haiku-4-5-20251001'),
     modelA3: (modelA3Setting || 'claude-haiku-4-5-20251001'),
-    modelA4: (modelA4Setting || 'claude-haiku-4-5-20251001'),
+    modelA4: (modelA4Setting || 'claude-sonnet-4-6'),
     maxTokensA1: parseNumberSetting(maxA1Setting || '', DEFAULT_MAX_TOKENS_A1, 256, 64000),
     maxTokensA2: parseNumberSetting(maxA2Setting || '', DEFAULT_MAX_TOKENS_A2, 256, 64000),
     maxTokensA3: parseNumberSetting(maxA3Setting || '', DEFAULT_MAX_TOKENS_A3, 256, 64000),
