@@ -49,13 +49,20 @@ const allowedOrigins = (process.env.CORS_ORIGIN || process.env.FRONTEND_URL || '
 if (process.env.NODE_ENV !== 'production' && !allowedOrigins.length) {
   allowedOrigins.push('http://localhost:3000', 'http://localhost:5173');
 }
+// Headers/methods advertised on preflight. X-API-Key lets the browser
+// extension authenticate its cross-origin POST /api/leads call.
+const corsHeaders = ['Content-Type', 'Authorization', 'X-API-Key'];
+const corsMethods = ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'];
 app.use(cors((req, cb) => {
   const origin = req.headers.origin;
-  if (!origin) return cb(null, { origin: true });
+  const opts = { allowedHeaders: corsHeaders, methods: corsMethods };
+  if (!origin) return cb(null, { ...opts, origin: true });
+  // Browser extensions (the Kohler Lead Puller) call from a chrome-extension:// origin.
+  if (origin.startsWith('chrome-extension://')) return cb(null, { ...opts, origin: true });
   let sameOrigin = false;
   try { sameOrigin = new URL(origin).host === req.headers.host; } catch { /* malformed Origin */ }
-  if (sameOrigin || allowedOrigins.includes(origin.replace(/\/$/, ''))) return cb(null, { origin: true });
-  cb(null, { origin: false });
+  if (sameOrigin || allowedOrigins.includes(origin.replace(/\/$/, ''))) return cb(null, { ...opts, origin: true });
+  cb(null, { ...opts, origin: false });
 }));
 app.use(express.json());
 app.use(pinoHttp({ logger, autoLogging: { ignore: req => req.url === '/api/health' } }));
