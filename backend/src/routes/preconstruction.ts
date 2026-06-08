@@ -381,12 +381,28 @@ router.put('/:bidId/workspace', requireAuth, async (req, res) => {
 });
 
 // GET results for a bid
+const RUNNING_STATUSES = ['running', 'agent1_complete', 'agent2_running', 'agent2_complete', 'agent3_running'];
+const STALE_RUN_MS = 30 * 60 * 1000; // a real pipeline finishes well within 30 min
+
 router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), async (req, res) => {
   const { rows } = await pool.query(
     'SELECT * FROM takeoff_results WHERE bid_id=$1',
     [req.params.bidId]
   );
-  res.json(rows[0] || null);
+  let row = rows[0] || null;
+  // Self-heal stale runs: a row still "running" long after it started was almost
+  // certainly killed by a server restart/redeploy (which silently kills the background
+  // pipeline). Flip it to error so the UI stops showing "reconnecting…" indefinitely.
+  if (row && RUNNING_STATUSES.includes(row.status) && row.created_at &&
+      Date.now() - new Date(row.created_at).getTime() > STALE_RUN_MS) {
+    const msg = 'Analysis was interrupted before it finished (the server may have restarted). Please run it again.';
+    const { rows: upd } = await pool.query(
+      `UPDATE takeoff_results SET status='error', raw_response=$1 WHERE bid_id=$2 RETURNING *`,
+      [msg, req.params.bidId]
+    );
+    row = upd[0] || row;
+  }
+  res.json(row);
 });
 
 // GET historical cost comps from real won jobs data
