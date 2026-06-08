@@ -727,9 +727,27 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         );
       }
 
-      case 'scope':
+      case 'scope': {
+        const agent2Scope = aiResults?.agent2_output as string | undefined;
+        const importScope = () => {
+          const scopeFill = buildScopeFromAgent2(agent2Scope);
+          if (!Object.keys(scopeFill).length) {
+            showToast({ title: 'Nothing to import', sub: 'No scope sections found in the AI takeoff output' });
+            return;
+          }
+          set({ scope: { ...ws.scope, ...scopeFill } });
+          showToast({ title: 'Scope imported', sub: 'Filled from the AI takeoff — review and edit as needed' });
+        };
         return (
           <div style={{ padding: '20px 24px' }}>
+            {agent2Scope && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
+                <button className="btn ghost" onClick={importScope} style={{ fontSize: 13, color: 'var(--blue)' }}
+                  title="Fill these sections from the completed AI takeoff (Agent 2). Existing text in sections the AI didn't produce is kept.">
+                  <Icon name="spark" size={14} stroke={1.9}/> Import from AI Takeoff
+                </button>
+              </div>
+            )}
             {SCOPE_SECS.map(sec => (
               <div key={sec.id} className="panel" style={{ marginBottom: 14 }}>
                 <div className="panel-hdr">
@@ -749,6 +767,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             ))}
           </div>
         );
+      }
 
       case 'rfis':
         return (
