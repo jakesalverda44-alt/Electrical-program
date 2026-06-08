@@ -9,6 +9,12 @@ services:
         value: production
       - key: JWT_SECRET
         generateValue: true
+      # Long-lived key for automation / browser-extension lead creation, sent as
+      # the X-API-Key header on POST /api/leads. Set the value in the Render
+      # dashboard (Environment tab); sync:false keeps it dashboard-managed and
+      # out of git.
+      - key: AUTOMATION_API_KEY
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: accurate-power-db
