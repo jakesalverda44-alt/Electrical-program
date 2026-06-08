@@ -582,7 +582,7 @@ button{font-family:inherit}
   .login-card { width: calc(100vw - 32px) !important; padding: 24px 20px !important; }
 
   /* Toast */
-  .toast-wrap { left: 12px !important; right: 12px !important; bottom: 72px !important; max-width: none !important; }
+  .toast-wrap { left: 12px !important; right: 12px !important; bottom: 72px !important; max-width: none !important; transform: none !important; }
   .toast { flex-wrap: wrap; }
 
   /* Buttons */
