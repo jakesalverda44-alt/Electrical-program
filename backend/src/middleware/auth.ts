@@ -68,6 +68,31 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   }
 }
 
+/** Constant-time comparison so a wrong key can't be guessed by timing the response. */
+function apiKeyMatches(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * Accepts EITHER a valid JWT bearer token (frontend) OR a valid X-API-Key header
+ * matching AUTOMATION_API_KEY (external automation / browser extension). Use this
+ * only on routes meant to be reachable by automation — currently just lead
+ * creation. When the key matches we attach a synthetic automation principal; the
+ * lead-create handler does not rely on a real user record. If AUTOMATION_API_KEY
+ * is unset, the API-key path is disabled and only JWT is accepted.
+ */
+export function requireAuthOrApiKey(req: AuthRequest, res: Response, next: NextFunction) {
+  const provided = req.headers['x-api-key'];
+  const expected = process.env.AUTOMATION_API_KEY;
+  if (typeof provided === 'string' && expected && apiKeyMatches(provided, expected)) {
+    req.user = { id: 'automation', name: 'Automation', email: '', role: 'api', org_id: DEFAULT_ORG_ID };
+    return next();
+  }
+  return requireAuth(req, res, next);
+}
+
 // Roles with full administrative rights: user management, settings writes, and
 // destructive deletes. `manager` is the legacy name for an admin-equivalent role
 // and is treated as privileged so existing accounts are not locked out.
