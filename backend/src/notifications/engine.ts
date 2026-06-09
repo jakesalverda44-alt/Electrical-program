@@ -8,6 +8,9 @@ import { purgeExpired } from '../utils/audit';
 import {
   ReminderType, getReminderPrefs, resolveRecipients, ownerAdminIds,
 } from './prefs';
+import { getStageConfig } from '../utils/leadStageConfig';
+
+const DAILY_DIGEST_RECIPIENT = 'jakes@accuratepowerandtechnology.com';
 
 interface NewNotif { type: ReminderType; title: string; body: string; linkView: string; linkId: string | null }
 
@@ -38,7 +41,7 @@ export async function runReminderScan(): Promise<void> {
   const owners = await ownerAdminIds();
   const day = today();
   // Collect newly created notifications per type for the email digest.
-  const fresh: Record<ReminderType, string[]> = { followup_due: [], proposal_viewed_unsigned: [], bid_due_soon: [] };
+  const fresh: Record<ReminderType, string[]> = { followup_due: [], proposal_viewed_unsigned: [], bid_due_soon: [], lead_overdue: [] };
 
   const targetsFor = (salespersonId: string | null) => (salespersonId ? [salespersonId] : owners);
 
@@ -106,6 +109,35 @@ export async function runReminderScan(): Promise<void> {
     }
   }
 
+  // 4. Overdue leads — last_activity_at older than the per-stage threshold.
+  if (prefs.types.lead_overdue.app || prefs.types.lead_overdue.email) {
+    const stageConfig = await getStageConfig();
+    for (const [stage, cfg] of Object.entries(stageConfig)) {
+      if (!cfg.overdue_after_hours) continue;
+      const { rows: overdueLeads } = await pool.query(
+        `SELECT id, name, salesperson_id, last_activity_at, stage FROM leads
+         WHERE stage = $1 AND deleted_at IS NULL
+           AND (
+             last_activity_at IS NULL AND created_at < now() - ($2 || ' hours')::interval
+             OR last_activity_at < now() - ($2 || ' hours')::interval
+           )`,
+        [stage, String(cfg.overdue_after_hours)]
+      );
+      for (const l of overdueLeads) {
+        if (!prefs.types.lead_overdue.app) break;
+        const lastLabel = l.last_activity_at
+          ? `last activity ${new Date(l.last_activity_at).toLocaleDateString()}`
+          : 'no activity yet';
+        await emit('lead_overdue', targetsFor(l.salesperson_id),
+          { type: 'lead_overdue', title: 'Lead overdue — no recent activity',
+            body: `${l.name} (${l.stage}) — ${lastLabel}`,
+            linkView: 'gen-leads', linkId: l.id },
+          `lead_overdue:${l.id}:${day}`,
+          `${l.name} — stage: ${l.stage}, ${lastLabel}`);
+      }
+    }
+  }
+
   await sendDigests(prefs, fresh);
 }
 
@@ -113,6 +145,7 @@ const TYPE_LABELS: Record<ReminderType, string> = {
   followup_due: 'Follow-ups Due',
   proposal_viewed_unsigned: 'Proposals Awaiting Signature',
   bid_due_soon: 'Bids Due Soon',
+  lead_overdue: 'Overdue Leads',
 };
 
 async function sendDigests(
@@ -152,6 +185,86 @@ async function sendDigests(
   }
 }
 
+/**
+ * Send a daily digest email of all overdue leads to jakes@accuratepowerandtechnology.com.
+ * Runs at most once per calendar day (deduped via app_settings key).
+ */
+export async function maybeSendDailyLeadDigest(): Promise<void> {
+  const day = today();
+  try {
+    const lastSent = await getSetting('lead_digest_last_sent');
+    if (lastSent === day) return; // already sent today
+
+    const stageConfig = await getStageConfig();
+    const lines: string[] = [];
+    for (const [stage, cfg] of Object.entries(stageConfig)) {
+      if (!cfg.overdue_after_hours) continue;
+      const { rows } = await pool.query(
+        `SELECT l.name, l.stage, l.last_activity_at, l.salesperson_name
+         FROM leads l
+         WHERE l.stage = $1 AND l.deleted_at IS NULL
+           AND (
+             l.last_activity_at IS NULL AND l.created_at < now() - ($2 || ' hours')::interval
+             OR l.last_activity_at < now() - ($2 || ' hours')::interval
+           )
+         ORDER BY l.last_activity_at ASC NULLS FIRST`,
+        [stage, String(cfg.overdue_after_hours)]
+      );
+      for (const l of rows) {
+        const lastLabel = l.last_activity_at
+          ? `last contact ${new Date(l.last_activity_at).toLocaleDateString()}`
+          : 'never contacted';
+        const rep = l.salesperson_name ? ` · ${l.salesperson_name}` : '';
+        lines.push(`${l.name} (${l.stage}${rep}) — ${lastLabel}`);
+      }
+    }
+    if (!lines.length) {
+      // Mark as sent so we don't keep re-querying throughout the day
+      await pool.query(
+        `INSERT INTO app_settings (key, value) VALUES ('lead_digest_last_sent', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [day]
+      );
+      return;
+    }
+
+    const [apiKey, fromAddress, fromName] = await Promise.all([
+      getSetting('email_resend_api_key'), getSetting('email_from_address'), getSetting('email_from_name'),
+    ]);
+    if (!apiKey || !fromAddress) {
+      logger.warn('[lead-digest] email not configured; skipping daily digest');
+      return;
+    }
+
+    const html = `<div style="max-width:560px;font-family:sans-serif">
+      <h2 style="color:#d97706">Generator Leads — Daily Overdue Summary</h2>
+      <p style="color:#666;font-size:14px">${lines.length} lead${lines.length === 1 ? '' : 's'} need attention today.</p>
+      <ul style="color:#334;font-size:14px">${lines.map(l => `<li style="margin-bottom:6px">${escapeHtml(l)}</li>`).join('')}</ul>
+      <p style="color:#999;font-size:12px">Log into the CRM to view and update these leads.</p>
+    </div>`;
+    const text = `Generator Leads — Daily Overdue Summary\n\n${lines.map(l => ` - ${l}`).join('\n')}`;
+
+    const resend = new Resend(apiKey);
+    await resend.emails.send({
+      from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
+      to: DAILY_DIGEST_RECIPIENT,
+      subject: `${lines.length} lead${lines.length === 1 ? '' : 's'} overdue — ${day}`,
+      html,
+      text,
+    });
+    logger.info({ count: lines.length }, '[lead-digest] daily digest sent');
+
+    // Mark sent for today
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('lead_digest_last_sent', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [day]
+    );
+  } catch (err) {
+    logger.error({ err }, '[lead-digest] daily digest failed');
+  }
+}
+
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
 
@@ -164,6 +277,8 @@ export function startReminderScheduler(): void {
     running = true;
     try { await runReminderScan(); }
     catch (err) { logger.error({ err }, '[reminders] scan failed'); }
+    try { await maybeSendDailyLeadDigest(); }
+    catch (err) { logger.error({ err }, '[lead-digest] daily digest failed'); }
     // Retention: purge expired audit rows and trashed records (best-effort).
     try {
       const months = parseInt((await getSetting('audit_retention_months')) || '12');

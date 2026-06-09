@@ -7,6 +7,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { validateBody, inputErrorMessage } from '../utils/validate';
 import { logger } from '../utils/logger';
 import { sendLeadFirstContactEmail, sendNeedsCallNotification } from '../email/leadFirstContact';
+import { getStageConfig } from '../utils/leadStageConfig';
 
 const router = Router();
 
@@ -112,6 +113,41 @@ async function handleLeadFirstContact(leadId: string): Promise<void> {
       [lead.id]
     ).catch(() => {});
     logger.error({ err, leadId: lead.id }, '[lead first-contact] send failed; will retry');
+  }
+}
+
+// Per-stage default text for quick-log activity kinds (stored when body is empty)
+const KIND_DEFAULTS: Record<string, string> = {
+  call:     'Outgoing call',
+  text:     'Text sent',
+  voicemail:'Left voicemail',
+  note:     '',
+  email:    'Email sent',
+  system:   '',
+};
+
+/**
+ * Auto-create a follow-up task when a lead enters a stage, based on per-stage config
+ * stored in app_settings key "lead_stage_config_json" (falls back to coded defaults).
+ * Non-blocking — errors are logged but never thrown.
+ */
+async function scheduleFollowUpTask(lead: { id: string; name: string; salesperson_id: string | null }, stage: string): Promise<void> {
+  try {
+    const config = await getStageConfig();
+    const cfg = config[stage];
+    if (!cfg?.followup_delay_hours) return;
+
+    const title = cfg.followup_title.replace('{name}', lead.name);
+    const dueMs = Date.now() + cfg.followup_delay_hours * 60 * 60 * 1000;
+    const dueDate = new Date(dueMs).toISOString().slice(0, 10);
+
+    await pool.query(
+      `INSERT INTO tasks (title, due_date, linked_type, linked_id, linked_name, assigned_to)
+       VALUES ($1, $2, 'lead', $3, $4, $5)`,
+      [title, dueDate, lead.id, lead.name, lead.salesperson_id]
+    );
+  } catch (err) {
+    logger.error({ err, leadId: lead.id, stage }, '[scheduleFollowUpTask] failed');
   }
 }
 
@@ -277,6 +313,12 @@ router.post('/', leadWriteLimiter, requireAuthOrApiKey, validateBody(leadCreateS
   // lead must not re-fire it. Fire-and-forget (does NOT await).
   if (inserted) {
     fireAndLogWebhook(lead, lead.stage, lead.contact_method).catch(() => {});
+    // Auto-log creation and schedule the first follow-up task.
+    pool.query(
+      'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3)',
+      [lead.id, 'system', 'Lead created']
+    ).catch(() => {});
+    scheduleFollowUpTask(lead, lead.stage).catch(() => {});
   }
 
   // First-contact email / call notification. Safe to call on every POST: it is
@@ -293,7 +335,7 @@ router.get('/:id', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   if (!lead) return;
 
   const { rows: activity } = await pool.query(
-    'SELECT * FROM lead_activity WHERE lead_id=$1 ORDER BY created_at DESC',
+    'SELECT * FROM lead_activity WHERE lead_id=$1 ORDER BY created_at DESC LIMIT 200',
     [lead.id]
   );
   res.json({ ...lead, activity });
@@ -333,7 +375,7 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
   }
   const updated = rows[0];
 
-  // Log stage change and fire webhook if stage changed
+  // Log stage change, fire webhook, and schedule follow-up task when stage changes.
   if (req.body.stage && req.body.stage !== lead.stage) {
     await pool.query(
       'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3)',
@@ -341,6 +383,7 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
     ).catch(() => {});
 
     fireAndLogWebhook(updated, updated.stage, updated.contact_method).catch(() => {});
+    scheduleFollowUpTask({ id: lead.id, name: updated.name, salesperson_id: updated.salesperson_id }, updated.stage).catch(() => {});
   }
 
   res.json(updated);
@@ -363,7 +406,29 @@ router.post('/:id/trigger-automation', requireAuth, asyncHandler(async (req: Aut
   res.json({ ok: true });
 }));
 
-// POST /api/leads/:id/log-call
+const ALLOWED_ACTIVITY_KINDS = ['call', 'text', 'voicemail', 'note', 'email'] as const;
+const logActivitySchema = z.object({
+  kind:      z.enum(ALLOWED_ACTIVITY_KINDS),
+  direction: z.enum(['in', 'out']).optional(),
+  body:      z.string().optional(),
+});
+
+// POST /api/leads/:id/log-activity  — write a timeline activity (quick-log or note)
+router.post('/:id/log-activity', requireAuth, validateBody(logActivitySchema), asyncHandler(async (req: AuthRequest, res) => {
+  const lead = await loadOwnedLead(req, res);
+  if (!lead) return;
+
+  const { kind, direction, body } = req.body as z.infer<typeof logActivitySchema>;
+  const text = body?.trim() || KIND_DEFAULTS[kind] || kind;
+
+  const { rows } = await pool.query(
+    'INSERT INTO lead_activity (lead_id, kind, direction, created_by, text) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+    [lead.id, kind, direction ?? null, req.user!.name, text]
+  );
+  res.status(201).json(rows[0]);
+}));
+
+// POST /api/leads/:id/log-call  (kept for backward compatibility — proxies to log-activity)
 router.post('/:id/log-call', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const lead = await loadOwnedLead(req, res);
   if (!lead) return;
@@ -372,8 +437,8 @@ router.post('/:id/log-call', requireAuth, asyncHandler(async (req: AuthRequest, 
   if (!text?.trim()) { res.status(400).json({ error: 'text is required' }); return; }
 
   const { rows } = await pool.query(
-    'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3) RETURNING *',
-    [lead.id, 'call', text.trim()]
+    'INSERT INTO lead_activity (lead_id, kind, direction, created_by, text) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+    [lead.id, 'call', 'out', req.user!.name, text.trim()]
   );
   res.status(201).json(rows[0]);
 }));
