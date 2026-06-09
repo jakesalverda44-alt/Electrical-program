@@ -101,6 +101,13 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
     <div className="scroll view-enter">
       {/* Toolbar */}
       <div className="pipe-toolbar">
+        <button
+          className="btn"
+          style={{ fontSize: 13 }}
+          onClick={() => { setAddGc(undefined); setShowAdd(true); }}
+        >
+          <Icon name="plus" size={15} stroke={2.4}/>Add Bid
+        </button>
         <span className="spacer"/>
         <span className="pipe-summary">
           Active value <b>{money(activeValue)}</b> · {activeCount} open
