@@ -10,6 +10,8 @@ import { pool } from './db/pool';
 import { logger } from './utils/logger';
 import { asyncHandler } from './utils/asyncHandler';
 import { startReminderScheduler } from './notifications/engine';
+import { startWebhookDispatcher, stopWebhookDispatcher } from './webhooks/outbox';
+import { startPipelineRecovery, stopPipelineRecovery } from './ai/recovery';
 import { requireAuth, AuthRequest, initJwtSecret } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
@@ -132,20 +134,19 @@ if (require.main === module) {
       await initJwtSecret();
       const server = app.listen(port, () => logger.info(`Backend running on :${port}`));
       startReminderScheduler();
+      startWebhookDispatcher();
+      startPipelineRecovery();
 
-      // On SIGTERM (Render redeploy), mark any stuck in-progress analyses as error
-      // so the frontend poll sees a terminal state instead of spinning forever.
-      process.on('SIGTERM', async () => {
-        logger.info('SIGTERM received — marking in-progress analyses as interrupted');
-        try {
-          await pool.query(
-            `UPDATE takeoff_results SET status='error', agent1_output=
-              CASE WHEN agent1_output IS NULL THEN 'Analysis interrupted: server redeployed mid-run. Re-run the analysis.' ELSE agent1_output END
-            WHERE status IN ('running','agent1_complete','agent2_running','agent2_complete','agent3_running')`
-          );
-        } catch (err) {
-          logger.error({ err }, 'Failed to clean up in-progress analyses on shutdown');
-        }
+      // On SIGTERM (Render redeploy), shut down cleanly. In-progress AI analyses
+      // are NOT marked as error here: their per-agent outputs are persisted, the
+      // worker heartbeat goes stale within ~2 minutes, and the recovery sweep on
+      // the new instance resumes them from the last completed agent (an
+      // interrupted Agent 1 is the one unresumable case — recovery marks it as
+      // error since its uploaded files lived only in this process's memory).
+      process.on('SIGTERM', () => {
+        logger.info('SIGTERM received — shutting down; interrupted analyses resume via recovery sweep');
+        stopWebhookDispatcher();
+        stopPipelineRecovery();
         server.close(() => process.exit(0));
         setTimeout(() => process.exit(0), 5000);
       });

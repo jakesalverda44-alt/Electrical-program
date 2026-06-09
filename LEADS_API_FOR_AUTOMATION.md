@@ -178,11 +178,14 @@ the top-level `id` field.
 - **Rate limits:** No rate limiter on `/api/leads` — create calls are
   unthrottled. Only the auth endpoints are throttled (10 logins / 15 min / IP),
   so reuse the 12h token.
-- **Webhook side effect:** On create, the app fires a fire-and-forget Zapier
-  "new lead" webhook keyed by `new:<contact_method>` (i.e. `new:email` or
-  `new:phone`), if the corresponding `ZAPIER_WEBHOOK_*` env vars are configured
-  on the server. This never blocks or fails your request, but be aware each
-  created lead may trigger a downstream Zap.
+- **Webhook side effect:** On create, the app queues a Zapier "new lead"
+  webhook keyed by `new:<contact_method>` (i.e. `new:email` or `new:phone`), if
+  the corresponding `ZAPIER_WEBHOOK_*` env vars are configured on the server.
+  This never blocks or fails your request, but be aware each created lead may
+  trigger a downstream Zap. Delivery is durable (`webhook_outbox` table) with
+  retries on failure, and **at-least-once** — a crash mid-delivery can
+  re-deliver, so downstream Zaps should treat `lead_id` + `stage` as an
+  idempotency key.
 - **Salesperson fields:** `salesperson_id` / `salesperson_name` are NOT
   auto-filled from your token on this endpoint — they default to `null` unless
   you pass them. (The screenshot endpoint behaves differently.)

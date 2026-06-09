@@ -10,6 +10,7 @@ import { sendLeadFirstContactEmail, sendNeedsCallNotification } from '../email/l
 import { createStageFollowup, closeLeadFollowups } from '../utils/leadFollowups';
 import { getStageConfig } from '../utils/leadStageConfig';
 import { pushSiteVisitToCalendar } from '../integrations/outlookCalendar';
+import { enqueueStageWebhook } from '../webhooks/outbox';
 
 const router = Router();
 
@@ -248,7 +249,7 @@ async function advanceToContacted(leadId: string, actorName: string): Promise<vo
       [leadId, actorName, 'Stage changed from "new" to "contacted" (auto)']
     ).catch(() => {});
     createStageFollowup({ id: lead.id, name: lead.name, salesperson_id: lead.salesperson_id }, 'contacted').catch(() => {});
-    fireAndLogWebhook(lead, 'contacted', lead.contact_method).catch(() => {});
+    enqueueStageWebhook(lead, 'contacted', lead.contact_method).catch(() => {});
   } catch (err) {
     logger.error({ err, leadId }, '[advanceToContacted] failed');
   }
@@ -266,67 +267,6 @@ async function loadOwnedLead(req: AuthRequest, res: import('express').Response) 
     return null;
   }
   return rows[0];
-}
-
-// Webhook URL map: key = 'stage:contact_method' or 'stage:any'
-const WEBHOOK_URLS: Record<string, string | undefined> = {
-  'new:email':          process.env.ZAPIER_WEBHOOK_EMAIL_NEW_LEAD,
-  'new:phone':          process.env.ZAPIER_WEBHOOK_PHONE_NEW_LEAD,
-  'quoted:any':         process.env.ZAPIER_WEBHOOK_QUOTED,
-  'site-scheduled:any': process.env.ZAPIER_WEBHOOK_SITE_SCHEDULED,
-};
-
-async function triggerWebhook(
-  lead: Record<string, unknown>,
-  stage: string,
-  contactMethod: string,
-): Promise<{ result: 'ok' | 'fail' | 'no_url'; error?: string }> {
-  const specificKey = `${stage}:${contactMethod}`;
-  const anyKey = `${stage}:any`;
-  const url = WEBHOOK_URLS[specificKey] ?? WEBHOOK_URLS[anyKey];
-  if (!url) return { result: 'no_url' };
-
-  try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        lead_id:        lead.id,
-        name:           lead.name,
-        email:          lead.email,
-        phone:          lead.phone,
-        address:        lead.address,
-        source:         lead.source,
-        contact_method: lead.contact_method,
-        interest_level: lead.interest_level,
-        stage,
-        notes:          lead.notes,
-        quoted_range:   lead.quoted_range,
-        follow_up_date: lead.follow_up_date,
-      }),
-    });
-    if (resp.ok) return { result: 'ok' };
-    return { result: 'fail', error: `HTTP ${resp.status}` };
-  } catch (err: unknown) {
-    return { result: 'fail', error: String(err) };
-  }
-}
-
-async function fireAndLogWebhook(
-  lead: Record<string, unknown>,
-  stage: string,
-  contactMethod: string,
-) {
-  const { result, error } = await triggerWebhook(lead, stage, contactMethod);
-  if (result === 'no_url') return;
-  const kind  = result === 'ok' ? 'webhook_ok' : 'webhook_fail';
-  const text  = result === 'ok'
-    ? `Automation triggered for stage "${stage}"`
-    : `Automation failed for stage "${stage}": ${error}`;
-  await pool.query(
-    'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3)',
-    [lead.id, kind, text]
-  ).catch(e => logger.error({ err: e }, 'lead_activity insert failed'));
 }
 
 // GET /api/leads
@@ -423,9 +363,10 @@ router.post('/', leadWriteLimiter, requireAuthOrApiKey, validateBody(leadCreateS
   const { inserted, ...lead } = rows[0];
 
   // Only a brand-new lead triggers the stage webhook; re-pulling an existing
-  // lead must not re-fire it. Fire-and-forget (does NOT await).
+  // lead must not re-fire it. Queued durably — delivery and retries happen in
+  // the outbox dispatcher, so a Zapier outage can't lose the trigger.
   if (inserted) {
-    fireAndLogWebhook(lead, lead.stage, lead.contact_method).catch(() => {});
+    enqueueStageWebhook(lead, lead.stage, lead.contact_method).catch(() => {});
     // Auto-log creation and schedule the first follow-up task.
     pool.query(
       'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3)',
@@ -521,7 +462,7 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
       [lead.id, 'stage_change', `Stage changed from "${lead.stage}" to "${req.body.stage}"`]
     ).catch(() => {});
 
-    fireAndLogWebhook(updated, updated.stage, updated.contact_method).catch(() => {});
+    enqueueStageWebhook(updated, updated.stage, updated.contact_method).catch(() => {});
     if (updated.stage === 'lost') {
       // Terminal exit — close any open follow-ups instead of creating a new one.
       await closeLeadFollowups(lead.id);
@@ -546,8 +487,8 @@ router.post('/:id/trigger-automation', requireAuth, asyncHandler(async (req: Aut
   const lead = await loadOwnedLead(req, res);
   if (!lead) return;
 
-  await fireAndLogWebhook(lead, lead.stage, lead.contact_method);
-  res.json({ ok: true });
+  const queued = await enqueueStageWebhook(lead, lead.stage, lead.contact_method);
+  res.json({ ok: true, queued });
 }));
 
 const ALLOWED_ACTIVITY_KINDS = ['call', 'text', 'voicemail', 'note', 'email'] as const;
