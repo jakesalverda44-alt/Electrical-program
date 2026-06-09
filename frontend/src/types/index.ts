@@ -83,6 +83,8 @@ export interface Gen {
   salesperson_name: string;
   salesperson_id?: string;
   lead_id?: string | null;
+  site_visit_at?: string | null;
+  site_visit_needs_time?: boolean;
   gen_install_phase?: string;
   proposal_token?: string;
   proposal_no?: string;
@@ -167,6 +169,8 @@ export interface Lead {
   salesperson_id?: string | null;
   created_at?: string;
   last_activity_at?: string | null;
+  site_visit_at?: string | null;
+  site_visit_needs_time?: boolean;
 }
 
 export interface LeadActivity {

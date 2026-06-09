@@ -9,6 +9,11 @@ import { moneyShort as money } from '../../lib/money';
 import PipelineBoard from '../../components/PipelineBoard';
 import { useShowToast } from '../../contexts/AppContext';
 
+function fmtVisit(ts?: string | null) {
+  if (!ts) return null;
+  return new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
 interface Props {
   gens: Gen[];
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
@@ -154,6 +159,18 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
                   {g.salesperson_name?.split(' ')[0]}
                 </span>
               </div>
+
+              {(g.site_visit_at || g.site_visit_needs_time) && (
+                <div className="bcard-row" style={{ marginTop: 4 }}>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 700,
+                    color: g.site_visit_at ? 'var(--text2)' : 'var(--amber)',
+                  }}>
+                    <Icon name="clock" size={12} stroke={1.9}/>
+                    {g.site_visit_at ? `Visit ${fmtVisit(g.site_visit_at)}` : 'Visit · needs time'}
+                  </span>
+                </div>
+              )}
 
               {isPendingDeclined && (
                 <div className="lost-confirm" onClick={e => e.stopPropagation()}>

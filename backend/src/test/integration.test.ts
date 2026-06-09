@@ -265,6 +265,46 @@ describe('lead -> proposal handoff (integration)', () => {
     expect(patched.body.proposal.id).toBe(genId);
     expect(patched.body.proposal.stage).toBe('building');
   });
+
+  it('captures the site-visit time on the handoff and carries it to the proposal', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const owner = await makeUser('owner');
+    const created = await request(app).post('/api/leads').set(auth(owner.token))
+      .send({ name: `SV ${Date.now()}`, phone: '555' }).expect(201);
+    const id = created.body.id as string;
+    const visit = '2026-06-20T18:00:00.000Z';
+
+    const patched = await request(app).patch(`/api/leads/${id}`).set(auth(owner.token))
+      .send({ stage: 'site-scheduled', site_visit_at: visit, site_visit_needs_time: false }).expect(200);
+
+    const genId = patched.body.linked_gen_id as string;
+    expect(new Date(patched.body.proposal.site_visit_at).toISOString()).toBe(visit);
+    expect(patched.body.proposal.site_visit_needs_time).toBe(false);
+
+    const lead = await pool.query('SELECT site_visit_at FROM leads WHERE id=$1', [id]);
+    expect(new Date(lead.rows[0].site_visit_at).toISOString()).toBe(visit);
+
+    // "Site visit scheduled for <datetime>" logged on both sides.
+    const la = await pool.query(`SELECT 1 FROM lead_activity WHERE lead_id=$1 AND text LIKE 'Site visit scheduled for %'`, [id]);
+    expect(la.rowCount).toBeGreaterThan(0);
+    const pa = await pool.query(`SELECT 1 FROM proposal_activity WHERE proposal_id=$1 AND text LIKE 'Site visit scheduled for %'`, [genId]);
+    expect(pa.rowCount).toBeGreaterThan(0);
+  });
+
+  it('still converts with "no time yet", flagging the proposal as needing a time', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const owner = await makeUser('owner');
+    const created = await request(app).post('/api/leads').set(auth(owner.token))
+      .send({ name: `NT ${Date.now()}`, phone: '555' }).expect(201);
+    const id = created.body.id as string;
+
+    const patched = await request(app).patch(`/api/leads/${id}`).set(auth(owner.token))
+      .send({ stage: 'site-scheduled', site_visit_at: null, site_visit_needs_time: true }).expect(200);
+
+    expect(patched.body.stage).toBe('converted');
+    expect(patched.body.proposal.site_visit_at).toBeNull();
+    expect(patched.body.proposal.site_visit_needs_time).toBe(true);
+  });
 });
 
 describe('lead follow-up backfill & activity-based overdue (integration)', () => {

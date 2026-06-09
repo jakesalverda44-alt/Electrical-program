@@ -9,6 +9,7 @@ import { logger } from '../utils/logger';
 import { sendLeadFirstContactEmail, sendNeedsCallNotification } from '../email/leadFirstContact';
 import { createStageFollowup, closeLeadFollowups } from '../utils/leadFollowups';
 import { getStageConfig } from '../utils/leadStageConfig';
+import { pushSiteVisitToCalendar } from '../integrations/outlookCalendar';
 
 const router = Router();
 
@@ -52,6 +53,9 @@ const leadPatchSchema = z.object({
   follow_up_date: z.string().nullable().or(z.literal('')),
   salesperson_id: z.string().uuid('Invalid salesperson_id').nullable().or(z.literal('')),
   salesperson_name: z.string(),
+  // Site-visit scheduling, sent with the Site Scheduled handoff.
+  site_visit_at: z.string().datetime().nullable().or(z.literal('')),
+  site_visit_needs_time: z.boolean(),
 }).partial();
 
 // Throttle lead writes to stop flooding/lead-spam. Automation callers authenticate
@@ -136,7 +140,16 @@ type LeadRow = {
   address: string | null; notes: string | null; source: string; stage: string;
   contact_method: string; linked_gen_id: string | null;
   salesperson_id: string | null; salesperson_name: string | null;
+  site_visit_at: string | Date | null; site_visit_needs_time: boolean;
 };
+
+// FL-based business — render the site-visit time in Eastern for activity logs.
+function fmtSiteVisit(at: string | Date | null): string {
+  if (!at) return 'a time to be determined';
+  return new Date(at).toLocaleString('en-US', {
+    dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/New_York',
+  });
+}
 
 /**
  * Lead -> proposal handoff. Idempotent. Creates a generator proposal in the pipeline's
@@ -160,11 +173,13 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
     };
     const { rows } = await pool.query(
       `INSERT INTO generator_proposals
-         (customer, loc, salesperson_id, salesperson_name, stage, form_data, lead_id)
-       VALUES ($1, $2, $3, $4, 'building', $5::jsonb, $6)
+         (customer, loc, salesperson_id, salesperson_name, stage, form_data, lead_id,
+          site_visit_at, site_visit_needs_time)
+       VALUES ($1, $2, $3, $4, 'building', $5::jsonb, $6, $7, $8)
        RETURNING id`,
       [lead.name, (lead.address && lead.address.trim()) || '—',
-       lead.salesperson_id, lead.salesperson_name, JSON.stringify(formData), lead.id]
+       lead.salesperson_id, lead.salesperson_name, JSON.stringify(formData), lead.id,
+       lead.site_visit_at || null, !!lead.site_visit_needs_time]
     );
     genId = rows[0].id as string;
 
@@ -176,7 +191,13 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
       [genId, lead.id]
     );
   } else {
-    await pool.query('UPDATE generator_proposals SET lead_id=$1 WHERE id=$2 AND lead_id IS NULL', [lead.id, genId]);
+    await pool.query(
+      `UPDATE generator_proposals
+          SET lead_id = COALESCE(lead_id, $1),
+              site_visit_at = $2, site_visit_needs_time = $3
+        WHERE id = $4`,
+      [lead.id, lead.site_visit_at || null, !!lead.site_visit_needs_time, genId]
+    );
   }
 
   // Link forward + mark converted (removes it from the active leads board).
@@ -185,15 +206,22 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
     [genId, lead.id]
   );
 
-  // Log the conversion on both sides.
+  // Log the conversion + the scheduled site visit on both sides.
+  const visitText = `Site visit scheduled for ${fmtSiteVisit(lead.site_visit_at)}`;
   await pool.query(
-    "INSERT INTO lead_activity (lead_id, kind, created_by, text) VALUES ($1,'system',$2,$3)",
-    [lead.id, actor, 'Site scheduled — converted to generator proposal']
+    "INSERT INTO lead_activity (lead_id, kind, created_by, text) VALUES ($1,'system',$2,$3),($1,'system',$2,$4)",
+    [lead.id, actor, 'Site scheduled — converted to generator proposal', visitText]
   ).catch(() => {});
   await pool.query(
-    "INSERT INTO proposal_activity (proposal_id, kind, created_by, text) VALUES ($1,'system',$2,$3)",
-    [genId, actor, `Converted from lead "${lead.name}"`]
+    "INSERT INTO proposal_activity (proposal_id, kind, created_by, text) VALUES ($1,'system',$2,$3),($1,'system',$2,$4)",
+    [genId, actor, `Converted from lead "${lead.name}"`, visitText]
   ).catch(() => {});
+
+  // Fire-and-forget calendar push (stub until wired to Microsoft Graph).
+  pushSiteVisitToCalendar({
+    id: lead.id, name: lead.name, address: lead.address, phone: lead.phone,
+    email: lead.email, site_visit_at: lead.site_visit_at, salesperson_name: lead.salesperson_name,
+  }).catch(() => {});
 
   // A converted lead is terminal — close out any open follow-up tasks.
   await closeLeadFollowups(lead.id);
@@ -465,6 +493,17 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
   const updated = rows[0];
 
   if (isHandoff) {
+    // Capture the scheduled site visit on the lead before converting. "No time yet"
+    // arrives as a null datetime and flags the lead/proposal as needing a time.
+    const siteVisitAt = req.body.site_visit_at || null;
+    const needsTime = req.body.site_visit_needs_time ?? !siteVisitAt;
+    await pool.query(
+      'UPDATE leads SET site_visit_at=$1, site_visit_needs_time=$2, updated_at=now() WHERE id=$3',
+      [siteVisitAt, needsTime, lead.id]
+    );
+    updated.site_visit_at = siteVisitAt;
+    updated.site_visit_needs_time = needsTime;
+
     const genId = await convertLeadToProposal(updated, req.user);
     const { rows: converted } = await pool.query('SELECT * FROM leads WHERE id=$1', [lead.id]);
     // Return the new proposal too so the client can drop the new card into the Pipeline

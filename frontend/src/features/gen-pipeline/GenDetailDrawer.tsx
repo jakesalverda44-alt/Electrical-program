@@ -126,6 +126,16 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             <div className="dtl-row"><span className="dtl-k">Output</span><span className="dtl-v num">{gen.kw} kW</span></div>
             <div className="dtl-row"><span className="dtl-k">Add-ons</span><span className="dtl-v">{gen.addons}</span></div>
             <div className="dtl-row"><span className="dtl-k">Location</span><span className="dtl-v">{gen.loc}</span></div>
+            {(gen.site_visit_at || gen.site_visit_needs_time) && (
+              <div className="dtl-row">
+                <span className="dtl-k">Site visit</span>
+                <span className="dtl-v">
+                  {gen.site_visit_at
+                    ? fmtTs(gen.site_visit_at)
+                    : <span style={{ color: 'var(--amber)', fontWeight: 700 }}>Needs a time</span>}
+                </span>
+              </div>
+            )}
             <div className="dtl-row"><span className="dtl-k">Proposal amount</span><span className="dtl-v num">{moneyFull(Number(gen.amount))}</span></div>
             <div className="dtl-row"><span className="dtl-k">Built</span><span className="dtl-v">{gen.built_on}</span></div>
             <div className="dtl-row"><span className="dtl-k">Salesperson</span><span className="dtl-v">{gen.salesperson_name}</span></div>
