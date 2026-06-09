@@ -3,8 +3,56 @@ import { pool } from '../db/pool';
 import { requireAuth, requireAuthOrApiKey, AuthRequest, ownScopeId } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
+import { sendLeadFirstContactEmail, sendNeedsCallNotification } from '../email/leadFirstContact';
 
 const router = Router();
+
+/**
+ * Automated first contact for a brand-new (or not-yet-contacted) lead.
+ *
+ * Idempotent and safe to call on every POST: it atomically *claims* the lead by
+ * stamping first_contact_sent_at, so re-pulls / upserts from the browser
+ * extension can never trigger a second send. Email leads get the first-contact
+ * email; phone-only leads are flagged needs_call and the team is notified to
+ * place a call. On any send failure the claim is released (first_contact_sent_at
+ * back to NULL) so the next upsert retries. Fully non-blocking — never throws.
+ */
+async function handleLeadFirstContact(leadId: string): Promise<void> {
+  // Atomic claim: only one caller wins, and only while first contact is pending.
+  const { rows } = await pool.query(
+    `UPDATE leads SET first_contact_sent_at = now()
+       WHERE id = $1 AND first_contact_sent_at IS NULL AND deleted_at IS NULL
+       RETURNING id, name, email, phone, contact_method`,
+    [leadId]
+  );
+  if (!rows.length) return; // already contacted, or being contacted concurrently
+  const lead = rows[0];
+
+  try {
+    if (lead.contact_method === 'email' && lead.email) {
+      await sendLeadFirstContactEmail(lead);
+      await pool.query(
+        'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3)',
+        [lead.id, 'email_sent', `First-contact email sent to ${lead.email}`]
+      ).catch(() => {});
+    } else {
+      // Phone-only lead: flag for a manual call and notify the team.
+      await pool.query('UPDATE leads SET needs_call = true WHERE id = $1', [lead.id]);
+      await sendNeedsCallNotification(lead);
+      await pool.query(
+        'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3)',
+        [lead.id, 'note', 'No email on lead — flagged for a call and notified the team']
+      ).catch(() => {});
+    }
+  } catch (err) {
+    // Release the claim so the next upsert can retry, and keep the create OK.
+    await pool.query(
+      'UPDATE leads SET first_contact_sent_at = NULL WHERE id = $1',
+      [lead.id]
+    ).catch(() => {});
+    logger.error({ err, leadId: lead.id }, '[lead first-contact] send failed; will retry');
+  }
+}
 
 async function loadOwnedLead(req: AuthRequest, res: import('express').Response) {
   const { rows } = await pool.query(
@@ -157,11 +205,16 @@ router.post('/', requireAuthOrApiKey, asyncHandler(async (req: AuthRequest, res)
   const { rows } = await pool.query(sql, values);
   const { inserted, ...lead } = rows[0];
 
-  // Only a brand-new lead triggers the first-contact automation; re-pulling an
-  // existing lead must not re-fire it. Fire-and-forget (does NOT await).
+  // Only a brand-new lead triggers the stage webhook; re-pulling an existing
+  // lead must not re-fire it. Fire-and-forget (does NOT await).
   if (inserted) {
     fireAndLogWebhook(lead, lead.stage, lead.contact_method).catch(() => {});
   }
+
+  // First-contact email / call notification. Safe to call on every POST: it is
+  // guarded by an atomic claim so it runs at most once per lead. Non-blocking —
+  // the create response is returned regardless of email outcome.
+  handleLeadFirstContact(lead.id).catch(() => {});
 
   res.status(inserted ? 201 : 200).json(lead);
 }));
