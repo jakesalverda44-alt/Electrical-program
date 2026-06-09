@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger';
 import { escapeHtml } from '../utils/escapeHtml';
+import { getGraphToken, GRAPH_BASE } from '../integrations/graphAuth';
 
 // First-contact automation for inbound (Kohler) leads, sent from our Microsoft
 // 365 mailbox via the Microsoft Graph API using app-only (client credentials)
@@ -20,8 +21,6 @@ const NEEDS_CALL_TO = 'jakes@accuratepowerandtechnology.com';
 const LOGO_PATH = path.resolve(__dirname, '../../assets/email-logo.png');
 const LOGO_CID = 'apt-logo';
 
-const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
-
 export interface LeadForContact {
   id: string;
   name: string | null;
@@ -29,53 +28,7 @@ export interface LeadForContact {
   phone: string | null;
 }
 
-// --- Auth: app-only client credentials with a tiny in-process token cache. ---
-
-let cachedToken: { value: string; expiresAt: number } | null = null;
-
-async function getGraphToken(): Promise<string> {
-  const tenant = process.env.GRAPH_TENANT_ID;
-  const clientId = process.env.GRAPH_CLIENT_ID;
-  const clientSecret = process.env.GRAPH_CLIENT_SECRET;
-  if (!tenant || !clientId || !clientSecret) {
-    throw new Error('GRAPH_TENANT_ID / GRAPH_CLIENT_ID / GRAPH_CLIENT_SECRET are not configured');
-  }
-
-  // Reuse a still-valid token (refresh 60s before actual expiry).
-  if (cachedToken && cachedToken.expiresAt - 60_000 > Date.now()) {
-    return cachedToken.value;
-  }
-
-  const body = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    scope: 'https://graph.microsoft.com/.default',
-    grant_type: 'client_credentials',
-  });
-
-  const resp = await fetch(
-    `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    }
-  );
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    throw new Error(`Graph token request failed: HTTP ${resp.status} ${text}`);
-  }
-
-  const json = (await resp.json()) as { access_token: string; expires_in: number };
-  cachedToken = {
-    value: json.access_token,
-    expiresAt: Date.now() + json.expires_in * 1000,
-  };
-  return cachedToken.value;
-}
-
-// --- Graph sendMail ---
+// --- Graph sendMail (auth via shared integrations/graphAuth) ---
 
 interface GraphAttachment {
   '@odata.type': '#microsoft.graph.fileAttachment';
