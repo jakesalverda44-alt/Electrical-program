@@ -2,8 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { Lead, LeadActivity } from '../../types';
-import { LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_LABELS } from './constants';
-import BuildFromNotesModal from '../builder/BuildFromNotesModal';
+import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_LABELS } from './constants';
 import { Gen } from '../../types';
 
 interface Props {
@@ -38,8 +37,7 @@ function timeAgo(ts: string) {
 
 // Overdue thresholds mirror backend DEFAULT_STAGE_CONFIG.overdue_after_hours (hours)
 const OVERDUE_HOURS: Partial<Record<Lead['stage'], number>> = {
-  new: 48, contacted: 96, vetting: 120, quoted: 72,
-  'site-scheduled': 168, 'site-complete': 72, 'proposal-sent': 96,
+  new: 48, contacted: 96,
 };
 
 function isLeadOverdue(lead: Lead): boolean {
@@ -61,7 +59,6 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
   const [noteText, setNoteText] = useState('');
   const [showNoteInput, setShowNoteInput] = useState(false);
   const [noteLogging, setNoteLogging] = useState(false);
-  const [showBuildNotes, setShowBuildNotes] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const actionsRef = useRef<HTMLDivElement>(null);
 
@@ -108,11 +105,22 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
 
   const setStage = async (stage: LeadStageKey) => {
     setActionsOpen(false);
+    // Moving to "Site Scheduled" hands the lead off to a proposal and converts it.
+    if (stage === 'site-scheduled' && !window.confirm(
+      `Schedule the site visit for "${lead.name}"? This creates a generator proposal in the pipeline and moves the lead to Converted.`
+    )) return;
+
     const { data } = await api.patch<Lead>(`/leads/${lead.id}`, { stage });
     setLead(data);
     setDirty({});
     onUpdated(data);
     await refreshActivity();
+
+    // Handoff complete → drop from the board and jump to the new proposal.
+    if (data.stage === 'converted' && data.linked_gen_id) {
+      onClose();
+      onNav('gen-proposals');
+    }
   };
 
   const refreshActivity = async () => {
@@ -174,7 +182,8 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
   };
 
   const hasChanges = Object.keys(dirty).length > 0;
-  const stageInfo = LEAD_STAGES.find(s => s.key === lead.stage);
+  const isConverted = lead.stage === 'converted';
+  const stageInfo = ALL_LEAD_STAGES.find(s => s.key === lead.stage);
 
   const kindLabel: Record<string, string> = {
     stage_change: 'Stage →', note: 'Note', call: 'Call', text: 'Text',
@@ -208,21 +217,28 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
         <div className="drawer-body">
           {/* Stage badge + selector */}
           <div className="dtl-stage-label">Stage</div>
-          <div className="dtl-stages" style={{ flexWrap: 'wrap' }}>
-            {LEAD_STAGES.map(s => {
-              const isActive = lead.stage === s.key;
-              return (
-                <button
-                  key={s.key}
-                  className={'dtl-stage' + (isActive ? ' on' : '')}
-                  style={isActive ? { background: s.color, borderColor: s.color, color: '#fff' } : undefined}
-                  onClick={() => setStage(s.key as LeadStageKey)}
-                >
-                  {s.label}
-                </button>
-              );
-            })}
-          </div>
+          {isConverted ? (
+            <div style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(52,197,136,.1)', border: '1px solid rgba(52,197,136,.35)' }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: '#34C588' }}>Converted to proposal</div>
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>This lead was handed off to the generator pipeline. See the linked proposal below.</div>
+            </div>
+          ) : (
+            <div className="dtl-stages" style={{ flexWrap: 'wrap' }}>
+              {LEAD_STAGES.map(s => {
+                const isActive = lead.stage === s.key;
+                return (
+                  <button
+                    key={s.key}
+                    className={'dtl-stage' + (isActive ? ' on' : '')}
+                    style={isActive ? { background: s.color, borderColor: s.color, color: '#fff' } : undefined}
+                    onClick={() => setStage(s.key as LeadStageKey)}
+                  >
+                    {s.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {/* Contact Info */}
           <div className="dtl-section" style={{ marginTop: 16 }}>
@@ -283,8 +299,8 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
             <textarea style={{ ...inp, resize: 'vertical', minHeight: 80 }} value={lead.notes ?? ''} onChange={field('notes')} placeholder="General notes…"/>
           </div>
 
-          {/* Site Notes — shown when stage >= site-scheduled */}
-          {['site-scheduled','site-complete','proposal-sent','won','lost'].includes(lead.stage) && (
+          {/* Site Notes — shown when a site visit is being scheduled or notes exist */}
+          {(lead.stage === 'site-scheduled' || !!lead.site_notes) && (
             <div className="dtl-section">
               <label style={lbl}>Site Visit Notes</label>
               <textarea
@@ -304,17 +320,6 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
                 {saving ? 'Saving…' : 'Save Changes'}
               </button>
             </div>
-          )}
-
-          {/* Generate Proposal button — when site complete and has linked gen */}
-          {lead.stage === 'site-complete' && lead.linked_gen_id && lead.site_notes && (
-            <button
-              className="btn ghost"
-              style={{ width: '100%', justifyContent: 'center', color: 'var(--blue)', borderColor: 'rgba(59,130,246,.4)', marginTop: 4 }}
-              onClick={() => setShowBuildNotes(true)}
-            >
-              <Icon name="bolt" size={14} stroke={2}/>Generate Proposal from Site Notes
-            </button>
           )}
 
           {/* Quick-log buttons */}
@@ -459,19 +464,6 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
           </div>
         </div>
       </div>
-
-      {showBuildNotes && lead.linked_gen_id && (
-        <BuildFromNotesModal
-          genId={lead.linked_gen_id}
-          onClose={() => setShowBuildNotes(false)}
-          onSuccess={gen => {
-            setShowBuildNotes(false);
-            onClose();
-            if (onEditGen) onEditGen(gen);
-            else onNav('builder');
-          }}
-        />
-      )}
     </div>
   );
 }

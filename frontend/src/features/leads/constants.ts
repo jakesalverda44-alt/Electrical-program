@@ -1,16 +1,20 @@
+// Active board stages, in order. These drive the filter pills, the board columns, and
+// the stage selector. New -> Contacted -> Site Scheduled, plus Lost (an exit from any
+// stage). "Converted" is a terminal state set automatically on handoff and is NOT shown
+// on the board — it lives in ALL_LEAD_STAGES only so labels/colors still resolve.
 export const LEAD_STAGES = [
   { key: 'new',            label: 'New',            color: '#4D8DF7' },
   { key: 'contacted',      label: 'Contacted',      color: '#8B5CF6' },
-  { key: 'vetting',        label: 'Vetting',        color: '#F2854F' },
-  { key: 'quoted',         label: 'Quoted',         color: '#E0A53B' },
   { key: 'site-scheduled', label: 'Site Scheduled', color: '#06B6D4' },
-  { key: 'site-complete',  label: 'Site Complete',  color: '#10B981' },
-  { key: 'proposal-sent',  label: 'Proposal Sent',  color: '#4D8DF7' },
-  { key: 'won',            label: 'Won',            color: '#34C588' },
   { key: 'lost',           label: 'Lost',           color: '#7C8AA3' },
 ] as const;
 
-export type LeadStageKey = typeof LEAD_STAGES[number]['key'];
+export const CONVERTED_STAGE = { key: 'converted', label: 'Converted', color: '#34C588' } as const;
+
+// All stages including the hidden terminal "Converted" — use for label/color lookups.
+export const ALL_LEAD_STAGES = [...LEAD_STAGES, CONVERTED_STAGE] as const;
+
+export type LeadStageKey = typeof ALL_LEAD_STAGES[number]['key'];
 
 export const SOURCE_LABELS: Record<string, string> = {
   web:      'Web',

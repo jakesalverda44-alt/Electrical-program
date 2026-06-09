@@ -174,9 +174,9 @@ describe('lead auto follow-ups (integration)', () => {
       .send({ name: `AF ${Date.now()}`, phone: '555' }).expect(201);
     const id = created.body.id as string;
 
-    await request(app).patch(`/api/leads/${id}`).set(auth(owner.token)).send({ stage: 'quoted' }).expect(200);
-    const tasks = await leadTasks(owner.token, id, t => /Check in on quote/.test(t.title));
-    expect(tasks.some((t: { title: string }) => /Check in on quote/.test(t.title))).toBe(true);
+    await request(app).patch(`/api/leads/${id}`).set(auth(owner.token)).send({ stage: 'contacted' }).expect(200);
+    const tasks = await leadTasks(owner.token, id, t => /Re-contact/.test(t.title));
+    expect(tasks.some((t: { title: string }) => /Re-contact/.test(t.title))).toBe(true);
   });
 
   it("assigns the follow-up to the rep so it surfaces in their Follow-ups view", async (ctx) => {
@@ -210,5 +210,53 @@ describe('lead auto follow-ups (integration)', () => {
       `SELECT count(*)::int AS n FROM tasks WHERE linked_id=$1 AND title LIKE 'Re-contact%' AND status='open'`, [id]
     );
     expect(rows[0].n).toBe(1);
+  });
+});
+
+describe('lead -> proposal handoff (integration)', () => {
+  it('auto-advances New -> Contacted when a call is logged', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const owner = await makeUser('owner');
+    const created = await request(app).post('/api/leads').set(auth(owner.token))
+      .send({ name: `Adv ${Date.now()}`, phone: '555' }).expect(201);
+    const id = created.body.id as string;
+    expect(created.body.stage).toBe('new');
+
+    await request(app).post(`/api/leads/${id}/log-activity`).set(auth(owner.token))
+      .send({ kind: 'call', direction: 'out' }).expect(201);
+
+    const { rows } = await pool.query('SELECT stage FROM leads WHERE id=$1', [id]);
+    expect(rows[0].stage).toBe('contacted');
+  });
+
+  it('hands off to a Building proposal and converts the lead when moved to Site Scheduled', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const owner = await makeUser('owner');
+    const created = await request(app).post('/api/leads').set(auth(owner.token))
+      .send({ name: `HO ${Date.now()}`, phone: '555', address: '9 Elm', notes: 'wants 24kw', source: 'referral' }).expect(201);
+    const id = created.body.id as string;
+
+    const patched = await request(app).patch(`/api/leads/${id}`).set(auth(owner.token))
+      .send({ stage: 'site-scheduled' }).expect(200);
+    // Lead ends in 'converted' with a linked proposal.
+    expect(patched.body.stage).toBe('converted');
+    expect(patched.body.linked_gen_id).toBeTruthy();
+
+    const genId = patched.body.linked_gen_id as string;
+    const { rows: g } = await pool.query('SELECT stage, customer, lead_id, form_data FROM generator_proposals WHERE id=$1', [genId]);
+    expect(g[0].stage).toBe('building');          // lands in the Building column
+    expect(g[0].lead_id).toBe(id);                // reverse link
+    expect(g[0].form_data.phone).toBe('555');     // contact details carried over
+    expect(g[0].form_data.lead_source).toBe('referral');
+
+    // Conversion logged on both sides; timeline carried over.
+    const { rows: pa } = await pool.query('SELECT count(*)::int AS n FROM proposal_activity WHERE proposal_id=$1', [genId]);
+    expect(pa[0].n).toBeGreaterThan(0);
+
+    // Converted lead is hidden from the active board but queryable by stage.
+    const board = await request(app).get('/api/leads').set(auth(owner.token)).expect(200);
+    expect(board.body.some((l: { id: string }) => l.id === id)).toBe(false);
+    const history = await request(app).get('/api/leads?stage=converted').set(auth(owner.token)).expect(200);
+    expect(history.body.some((l: { id: string }) => l.id === id)).toBe(true);
   });
 });

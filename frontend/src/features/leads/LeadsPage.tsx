@@ -3,7 +3,7 @@ import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { Lead } from '../../types';
 import { Gen } from '../../types';
-import { LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_COLORS, INTEREST_LABELS } from './constants';
+import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_COLORS, INTEREST_LABELS } from './constants';
 import AddLeadModal from './AddLeadModal';
 import LeadDetailDrawer from './LeadDetailDrawer';
 
@@ -46,17 +46,20 @@ export default function LeadsPage({ onNav, onEditGen }: Props) {
 
   useEffect(() => { load(); }, [load]);
 
-  const filtered = leads.filter(l => {
+  // Converted leads are handed off to the proposal pipeline and hidden from the board.
+  const boardLeads = leads.filter(l => l.stage !== 'converted');
+
+  const filtered = boardLeads.filter(l => {
     if (stageFilter !== 'all' && l.stage !== stageFilter) return false;
     if (contactFilter !== 'all' && l.contact_method !== contactFilter) return false;
     return true;
   });
 
   const stageCounts = Object.fromEntries(
-    LEAD_STAGES.map(s => [s.key, leads.filter(l => l.stage === s.key).length])
+    LEAD_STAGES.map(s => [s.key, boardLeads.filter(l => l.stage === s.key).length])
   );
 
-  const stageInfo = (key: string) => LEAD_STAGES.find(s => s.key === key);
+  const stageInfo = (key: string) => ALL_LEAD_STAGES.find(s => s.key === key);
 
   return (
     <div className="scroll view-enter">
@@ -68,7 +71,7 @@ export default function LeadsPage({ onNav, onEditGen }: Props) {
             <FilterChip
               label="All"
               active={stageFilter === 'all'}
-              count={leads.length}
+              count={boardLeads.length}
               onClick={() => setStageFilter('all')}
             />
             {LEAD_STAGES.map(s => (
@@ -109,7 +112,7 @@ export default function LeadsPage({ onNav, onEditGen }: Props) {
           <div style={{ padding: 32, color: 'var(--text3)', textAlign: 'center' }}>Loading…</div>
         ) : filtered.length === 0 ? (
           <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text3)' }}>
-            {leads.length === 0 ? (
+            {boardLeads.length === 0 ? (
               <>
                 <Icon name="users" size={40} stroke={1.2}/>
                 <div style={{ marginTop: 12, fontSize: 15, fontWeight: 700, color: 'var(--text2)' }}>No leads yet</div>
