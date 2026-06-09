@@ -95,3 +95,57 @@ describe('soft-delete & audit (integration)', () => {
     await request(app).get('/api/admin/audit').set(auth(sales.token)).expect(403);
   });
 });
+
+describe('object-level authorization — IDOR fixes (integration)', () => {
+  it("forbids a salesperson from reading another rep's bid estimate", async (ctx) => {
+    if (!ok) return ctx.skip();
+    const a = await makeUser('salesperson');
+    const b = await makeUser('salesperson');
+    const bid = await request(app).post('/api/bids').set(auth(b.token))
+      .send({ name: `EST ${Date.now()}`, gc: 'GC' }).expect(200);
+    await request(app).get(`/api/estimates/${bid.body.id}`).set(auth(a.token)).expect(403);
+    // The owner (b) can still read it.
+    await request(app).get(`/api/estimates/${bid.body.id}`).set(auth(b.token)).expect(200);
+  });
+
+  it("forbids a salesperson from reading another rep's preconstruction data", async (ctx) => {
+    if (!ok) return ctx.skip();
+    const a = await makeUser('salesperson');
+    const b = await makeUser('salesperson');
+    const bid = await request(app).post('/api/bids').set(auth(b.token))
+      .send({ name: `PRE ${Date.now()}`, gc: 'GC' }).expect(200);
+    await request(app).get(`/api/preconstruction/intelligence/${bid.body.id}`).set(auth(a.token)).expect(403);
+  });
+
+  it('lets a manager read any bid estimate (sees all)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const b = await makeUser('salesperson');
+    const mgr = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(b.token))
+      .send({ name: `MGR ${Date.now()}`, gc: 'GC' }).expect(200);
+    await request(app).get(`/api/estimates/${bid.body.id}`).set(auth(mgr.token)).expect(200);
+  });
+});
+
+describe('input validation — 400 not 500 (integration)', () => {
+  it('rejects a bad enum value on lead create with 400', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const sales = await makeUser('salesperson');
+    await request(app).post('/api/leads').set(auth(sales.token))
+      .send({ name: 'Bad Enum', source: 'not-a-real-source' }).expect(400);
+  });
+
+  it('rejects a non-existent salesperson_id (valid UUID, missing FK) with 400', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const sales = await makeUser('salesperson');
+    await request(app).post('/api/leads').set(auth(sales.token))
+      .send({ name: 'Bad FK', salesperson_id: '00000000-0000-0000-0000-0000000000ff' }).expect(400);
+  });
+
+  it('accepts a valid lead create', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const sales = await makeUser('salesperson');
+    await request(app).post('/api/leads').set(auth(sales.token))
+      .send({ name: `Good ${Date.now()}`, source: 'web', interest_level: 'warm' }).expect(201);
+  });
+});

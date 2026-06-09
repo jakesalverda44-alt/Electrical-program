@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import bcrypt from 'bcryptjs';
 import { pool } from './db/pool';
 
 export async function runMigrations(): Promise<void> {
@@ -44,14 +45,26 @@ export async function runMigrations(): Promise<void> {
     }
   }
 
-  // Seed users if the table is empty
+  // Bootstrap the first account if the users table is empty. Credentials are NOT
+  // committed to the repo — they come from the environment so production never ships
+  // with a known default password. Set SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD on
+  // first boot; leave them unset to skip seeding (e.g. when restoring a real DB).
   const { rows: userRows } = await pool.query('SELECT 1 FROM users LIMIT 1');
   if (userRows.length === 0) {
-    const seedPath = path.join(__dirname, '../../database/seed.sql');
-    if (fs.existsSync(seedPath)) {
-      const seedSql = fs.readFileSync(seedPath, 'utf8');
-      await pool.query(seedSql);
-      console.log('[migrate] Seed applied: user accounts created');
+    const email = process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase();
+    const password = process.env.SEED_ADMIN_PASSWORD;
+    const name = process.env.SEED_ADMIN_NAME?.trim() || 'Administrator';
+    if (email && password) {
+      const hash = await bcrypt.hash(password, 12);
+      await pool.query(
+        `INSERT INTO users (name, email, password_hash, role)
+         VALUES ($1, $2, $3, 'owner')
+         ON CONFLICT (email) DO NOTHING`,
+        [name, email, hash]
+      );
+      console.log(`[migrate] Seeded initial owner account: ${email}`);
+    } else {
+      console.warn('[migrate] users table is empty and SEED_ADMIN_EMAIL/SEED_ADMIN_PASSWORD are not set — no account created. Set them once to bootstrap the first login.');
     }
   }
 }
