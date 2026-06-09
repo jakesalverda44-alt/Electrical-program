@@ -233,7 +233,13 @@ export default function App() {
       case 'calendar':
         return <CalendarPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
       case 'gen-leads':
-        return <LeadsPage onNav={setView} onEditGen={g => { setEditGen(g); setView('builder'); }}/>;
+        return (
+          <LeadsPage
+            onNav={setView}
+            onEditGen={g => { setEditGen(g); setView('builder'); }}
+            onConverted={gen => setGens(prev => prev.some(g => g.id === gen.id) ? prev : [gen, ...prev])}
+          />
+        );
       case 'followups':
         return <FollowupsPage onCountChange={setFollowupCount}/>;
       case 'comms':

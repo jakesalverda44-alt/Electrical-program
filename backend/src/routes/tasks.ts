@@ -4,6 +4,7 @@ import { pool } from '../db/pool';
 import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
 import { validateBody } from '../utils/validate';
 import { asyncHandler } from '../utils/asyncHandler';
+import { getStageConfig } from '../utils/leadStageConfig';
 
 const router = Router();
 
@@ -18,25 +19,45 @@ const taskSchema = z.object({
 });
 
 // List tasks. Reps see tasks assigned to or created by them; managers see all.
-// ?status=open|done and ?mine=1 supported.
+// ?status=open|done and ?mine=1 supported. Lead-linked tasks are enriched with the
+// lead's stage + last_activity_at and a computed `lead_overdue` flag (the lead has had
+// no activity within its stage's configured threshold) so the Follow-ups view can mark
+// them overdue by activity rather than only by due date.
 router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
   const where: string[] = [];
   const params: unknown[] = [];
   if (scope || req.query.mine === '1') {
     params.push(req.user!.id);
-    where.push(`(assigned_to = $${params.length} OR created_by = $${params.length})`);
+    where.push(`(t.assigned_to = $${params.length} OR t.created_by = $${params.length})`);
   }
-  if (req.query.status) { params.push(req.query.status); where.push(`status = $${params.length}`); }
+  if (req.query.status) { params.push(req.query.status); where.push(`t.status = $${params.length}`); }
   const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const { rows } = await pool.query(
-    `SELECT t.*, u.name AS assigned_to_name
-     FROM tasks t LEFT JOIN users u ON u.id = t.assigned_to
+    `SELECT t.*, u.name AS assigned_to_name,
+            l.stage AS lead_stage, l.last_activity_at AS lead_last_activity_at
+     FROM tasks t
+     LEFT JOIN users u ON u.id = t.assigned_to
+     LEFT JOIN leads l ON (t.linked_type = 'lead' AND l.id = t.linked_id)
      ${clause}
      ORDER BY (t.status = 'done'), t.due_date NULLS LAST, t.created_at DESC`,
     params
   );
-  res.json(rows);
+
+  const config = await getStageConfig();
+  const now = Date.now();
+  const enriched = rows.map(r => {
+    let lead_overdue = false;
+    if (r.linked_type === 'lead' && r.lead_stage) {
+      const threshold = config[r.lead_stage]?.overdue_after_hours;
+      const ref = r.lead_last_activity_at;
+      if (threshold && ref) {
+        lead_overdue = now - new Date(ref).getTime() > threshold * 60 * 60 * 1000;
+      }
+    }
+    return { ...r, lead_overdue };
+  });
+  res.json(enriched);
 }));
 
 router.post('/', requireAuth, validateBody(taskSchema), asyncHandler(async (req: AuthRequest, res) => {

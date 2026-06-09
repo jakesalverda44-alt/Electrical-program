@@ -258,5 +258,57 @@ describe('lead -> proposal handoff (integration)', () => {
     expect(board.body.some((l: { id: string }) => l.id === id)).toBe(false);
     const history = await request(app).get('/api/leads?stage=converted').set(auth(owner.token)).expect(200);
     expect(history.body.some((l: { id: string }) => l.id === id)).toBe(true);
+
+    // The new proposal is returned in the handoff response so the client can drop it
+    // straight into the Pipeline "Building" column with no refresh.
+    expect(patched.body.proposal).toBeTruthy();
+    expect(patched.body.proposal.id).toBe(genId);
+    expect(patched.body.proposal.stage).toBe('building');
+  });
+});
+
+describe('lead follow-up backfill & activity-based overdue (integration)', () => {
+  it('backfills a follow-up for an existing lead already sitting in a stage', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { ensureLeadFollowups } = await import('../utils/leadFollowups');
+    // A lead already in 'contacted' with no follow-up (entered the stage pre-feature).
+    const { rows } = await pool.query(
+      `INSERT INTO leads (name, phone, source, stage, last_activity_at)
+       VALUES ($1,'555','phone','contacted', now() - interval '40 minutes') RETURNING id`,
+      [`Backfill ${Date.now()}`]
+    );
+    const id = rows[0].id as string;
+
+    const before = await pool.query(`SELECT count(*)::int AS n FROM tasks WHERE linked_id=$1 AND status='open'`, [id]);
+    expect(before.rows[0].n).toBe(0);
+
+    await ensureLeadFollowups();
+    const after = await pool.query(`SELECT count(*)::int AS n FROM tasks WHERE linked_id=$1 AND status='open'`, [id]);
+    expect(after.rows[0].n).toBe(1); // exactly one open follow-up
+
+    // Idempotent: re-running does not stack duplicates.
+    await ensureLeadFollowups();
+    const again = await pool.query(`SELECT count(*)::int AS n FROM tasks WHERE linked_id=$1 AND status='open'`, [id]);
+    expect(again.rows[0].n).toBe(1);
+  });
+
+  it('flags a lead follow-up overdue based on last_activity_at vs the stage threshold', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { ensureLeadFollowups } = await import('../utils/leadFollowups');
+    const owner = await makeUser('owner');
+    // Contacted lead, gone quiet well past the 96h contacted threshold.
+    const { rows } = await pool.query(
+      `INSERT INTO leads (name, phone, source, stage, last_activity_at)
+       VALUES ($1,'555','phone','contacted', now() - interval '200 hours') RETURNING id`,
+      [`Silent ${Date.now()}`]
+    );
+    const id = rows[0].id as string;
+    await ensureLeadFollowups();
+
+    const tasks = (await request(app).get('/api/tasks').set(auth(owner.token)).expect(200)).body as
+      { linked_id: string; lead_overdue?: boolean }[];
+    const t = tasks.find(x => x.linked_id === id);
+    expect(t).toBeTruthy();
+    expect(t!.lead_overdue).toBe(true);
   });
 });

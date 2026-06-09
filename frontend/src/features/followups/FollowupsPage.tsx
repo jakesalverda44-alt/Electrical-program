@@ -13,6 +13,16 @@ interface Task {
   linked_name?: string | null;
   assigned_to_name?: string | null;
   created_at: string;
+  lead_overdue?: boolean;       // lead has had no activity within its stage threshold
+}
+
+// A lead follow-up is overdue when the lead has gone quiet (lead_overdue, computed
+// server-side from last_activity_at vs the per-stage threshold). Other tasks fall back
+// to their due date.
+function isTaskOverdue(t: Task): boolean {
+  if (t.status !== 'open') return false;
+  if (t.linked_type === 'lead') return !!t.lead_overdue;
+  return !!t.due_date && new Date(t.due_date + 'T00:00:00') < new Date(new Date().toDateString());
 }
 
 interface Props {
@@ -78,7 +88,7 @@ export default function FollowupsPage({ onCountChange }: Props) {
 
   const visible = tasks.filter(t => filter === 'all' ? true : t.status === filter);
   const openCount = tasks.filter(t => t.status === 'open').length;
-  const overdue = tasks.filter(t => t.status === 'open' && t.due_date && new Date(t.due_date + 'T00:00:00') < new Date(new Date().toDateString())).length;
+  const overdue = tasks.filter(isTaskOverdue).length;
 
   return (
     <div className="scroll view-enter">
@@ -134,7 +144,10 @@ export default function FollowupsPage({ onCountChange }: Props) {
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>No follow-ups here.</div>
           ) : (
             visible.map(t => {
-              const dm = dueMeta(t.due_date);
+              // Lead follow-ups flag overdue by activity; everything else by due date.
+              const dm = isTaskOverdue(t)
+                ? { label: 'Overdue', color: 'var(--red)' }
+                : dueMeta(t.due_date);
               return (
                 <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 18px', borderBottom: '1px solid var(--border)' }}>
                   <button onClick={() => toggle(t)} aria-label={t.status === 'done' ? 'Reopen' : 'Complete'}
