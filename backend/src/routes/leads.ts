@@ -1,11 +1,72 @@
 import { Router } from 'express';
+import { z } from 'zod';
+import rateLimit from 'express-rate-limit';
 import { pool } from '../db/pool';
 import { requireAuth, requireAuthOrApiKey, AuthRequest, ownScopeId } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
+import { validateBody, inputErrorMessage } from '../utils/validate';
 import { logger } from '../utils/logger';
 import { sendLeadFirstContactEmail, sendNeedsCallNotification } from '../email/leadFirstContact';
 
 const router = Router();
+
+// Enum values mirror the CHECK constraints in 049_create_leads.sql so a bad value
+// is rejected with a clear 400 instead of bubbling up as a DB error → 500.
+const SOURCES        = ['web', 'phone', 'referral', 'kohler', 'other'] as const;
+const CONTACT_METHODS = ['email', 'phone'] as const;
+const INTEREST_LEVELS = ['unknown', 'warm', 'hot', 'not-interested'] as const;
+const STAGES = ['new', 'contacted', 'vetting', 'quoted', 'site-scheduled',
+  'site-complete', 'proposal-sent', 'won', 'lost'] as const;
+
+const leadCreateSchema = z.object({
+  name: z.string().trim().min(1, 'Name is required'),
+  email: z.string().trim().email('Invalid email').optional().or(z.literal('')),
+  phone: z.string().trim().optional(),
+  address: z.string().trim().optional(),
+  source: z.enum(SOURCES).optional(),
+  contact_method: z.enum(CONTACT_METHODS).optional(),
+  interest_level: z.enum(INTEREST_LEVELS).optional(),
+  notes: z.string().optional(),
+  follow_up_date: z.string().trim().optional().nullable().or(z.literal('')),
+  salesperson_id: z.string().uuid('Invalid salesperson_id').optional().nullable().or(z.literal('')),
+  salesperson_name: z.string().optional(),
+  external_lead_id: z.string().optional(),
+});
+
+const leadPatchSchema = z.object({
+  name: z.string().trim().min(1, 'Name is required'),
+  email: z.string().trim().email('Invalid email').or(z.literal('')),
+  phone: z.string(),
+  address: z.string(),
+  source: z.enum(SOURCES),
+  contact_method: z.enum(CONTACT_METHODS),
+  interest_level: z.enum(INTEREST_LEVELS),
+  stage: z.enum(STAGES),
+  notes: z.string(),
+  site_notes: z.string(),
+  quoted_range: z.string(),
+  follow_up_date: z.string().nullable().or(z.literal('')),
+  salesperson_id: z.string().uuid('Invalid salesperson_id').nullable().or(z.literal('')),
+  salesperson_name: z.string(),
+}).partial();
+
+// Throttle lead writes to stop flooding/lead-spam. Automation callers authenticate
+// with a shared X-API-Key, so key the limiter by that header when present and fall
+// back to the client IP for JWT users.
+const leadWriteLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Single-IP-fallback validation is intentionally off: automation callers are
+  // distinguished by their X-API-Key, JWT users fall back to client IP.
+  validate: { ip: false },
+  keyGenerator: (req) => {
+    const apiKey = req.headers['x-api-key'];
+    return typeof apiKey === 'string' && apiKey ? `apikey:${apiKey}` : (req.ip ?? 'unknown');
+  },
+  message: { error: 'Too many requests. Please slow down and try again shortly.' },
+});
 
 /**
  * Automated first contact for a brand-new (or not-yet-contacted) lead.
@@ -145,7 +206,7 @@ router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
 // extension (X-API-Key). When external_lead_id is supplied it acts as a dedupe
 // key: a repeat call with the same id updates the existing lead instead of
 // creating a duplicate.
-router.post('/', requireAuthOrApiKey, asyncHandler(async (req: AuthRequest, res) => {
+router.post('/', leadWriteLimiter, requireAuthOrApiKey, validateBody(leadCreateSchema), asyncHandler(async (req: AuthRequest, res) => {
   const {
     name, email, phone, address,
     source = 'phone',
@@ -202,7 +263,14 @@ router.post('/', requireAuthOrApiKey, asyncHandler(async (req: AuthRequest, res)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING *, true AS inserted`;
 
-  const { rows } = await pool.query(sql, values);
+  let rows;
+  try {
+    ({ rows } = await pool.query(sql, values));
+  } catch (err) {
+    const msg = inputErrorMessage(err);
+    if (msg) { res.status(400).json({ error: msg }); return; }
+    throw err;
+  }
   const { inserted, ...lead } = rows[0];
 
   // Only a brand-new lead triggers the stage webhook; re-pulling an existing
@@ -232,7 +300,7 @@ router.get('/:id', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
 }));
 
 // PATCH /api/leads/:id
-router.patch('/:id', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema), asyncHandler(async (req: AuthRequest, res) => {
   const lead = await loadOwnedLead(req, res);
   if (!lead) return;
 
@@ -252,10 +320,17 @@ router.patch('/:id', requireAuth, asyncHandler(async (req: AuthRequest, res) => 
   }
 
   params.push(lead.id);
-  const { rows } = await pool.query(
-    `UPDATE leads SET ${sets.join(', ')} WHERE id=$${params.length} RETURNING *`,
-    params
-  );
+  let rows;
+  try {
+    ({ rows } = await pool.query(
+      `UPDATE leads SET ${sets.join(', ')} WHERE id=$${params.length} RETURNING *`,
+      params
+    ));
+  } catch (err) {
+    const msg = inputErrorMessage(err);
+    if (msg) { res.status(400).json({ error: msg }); return; }
+    throw err;
+  }
   const updated = rows[0];
 
   // Log stage change and fire webhook if stage changed

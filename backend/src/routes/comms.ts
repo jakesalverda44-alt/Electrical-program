@@ -1,13 +1,27 @@
 import { Router } from 'express';
 import { pool } from '../db/pool';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, AuthRequest, ownScopeId } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/', requireAuth, async (_req, res) => {
-  const { rows } = await pool.query(
-    'SELECT * FROM communications ORDER BY created_at DESC LIMIT 200'
-  );
+// Restricted reps only see communications they authored or that are linked to a
+// bid/proposal they own; managers/admins see everything. Previously this returned
+// every communication in the system to any authenticated user (data leak).
+router.get('/', requireAuth, async (req: AuthRequest, res) => {
+  const scope = ownScopeId(req.user!);
+  const { rows } = scope
+    ? await pool.query(
+        `SELECT * FROM communications c
+         WHERE c.author = $2
+            OR c.linked_id IN (
+                 SELECT id::text FROM bids WHERE salesperson_id = $1 AND deleted_at IS NULL
+                 UNION
+                 SELECT id::text FROM generator_proposals WHERE salesperson_id = $1 AND deleted_at IS NULL
+               )
+         ORDER BY c.created_at DESC LIMIT 200`,
+        [scope, req.user!.name]
+      )
+    : await pool.query('SELECT * FROM communications ORDER BY created_at DESC LIMIT 200');
   res.json(rows);
 });
 

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
+import { loadAccessibleBid } from '../utils/ownership';
 
 const router = Router();
 
@@ -27,7 +28,8 @@ router.put('/unit-costs', requireAuth, requireAdmin, async (req: AuthRequest, re
 });
 
 // GET /api/estimates/:bidId — return saved estimate or null
-router.get('/:bidId', requireAuth, async (req, res) => {
+router.get('/:bidId', requireAuth, async (req: AuthRequest, res) => {
+  if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
   const { rows } = await pool.query(
     'SELECT * FROM bid_estimates WHERE bid_id = $1',
     [req.params.bidId]
@@ -38,6 +40,7 @@ router.get('/:bidId', requireAuth, async (req, res) => {
 // PUT /api/estimates/:bidId — upsert estimate, recompute totals, sync bids.amount
 router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const { line_items, overhead_pct, profit_pct } = req.body as {
     line_items: { category: string; item: string; qty: number; unit: string; unit_cost: number; total: number; overridden: boolean }[];
     overhead_pct: number;

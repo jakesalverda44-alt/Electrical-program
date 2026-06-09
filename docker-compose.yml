@@ -18,7 +18,10 @@ services:
       DB_NAME: electrical_crm
       DB_USER: postgres
       DB_PASS: postgres
-      JWT_SECRET: dev_secret_change_in_prod
+      # JWT_SECRET intentionally omitted for local dev — the backend uses a
+      # non-production dev fallback (see backend/src/middleware/auth.ts). In
+      # production it is set via the platform (render.yaml uses generateValue).
+      # To override locally: JWT_SECRET: ${JWT_SECRET:-}
     ports:
       - "3001:3001"
     depends_on:

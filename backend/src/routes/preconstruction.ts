@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db/pool';
-import { requireAuth, requireAIPermission, AuthRequest } from '../middleware/auth';
+import { requireAuth, requireAIPermission, AuthRequest, ownScopeId } from '../middleware/auth';
+import { loadAccessibleBid } from '../utils/ownership';
 import { getSetting } from '../db/getSetting';
 import Anthropic from '@anthropic-ai/sdk';
 import AdmZip from 'adm-zip';
@@ -451,15 +452,25 @@ router.get('/prompt-defaults', requireAuth, (_req, res) => {
   res.json({ agent1: AGENT1_SYSTEM, agent2: AGENT2_SYSTEM, agent3: AGENT3_SYSTEM, agent4: AGENT4_SYSTEM });
 });
 
-// GET all workspaces (for restoring state on app load)
-router.get('/workspaces', requireAuth, async (_req, res) => {
-  const { rows } = await pool.query('SELECT * FROM bid_workspaces');
+// GET all workspaces (for restoring state on app load). Restricted reps only get
+// workspaces for bids they own; managers/admins see all.
+router.get('/workspaces', requireAuth, async (req: AuthRequest, res) => {
+  const scope = ownScopeId(req.user!);
+  const { rows } = scope
+    ? await pool.query(
+        `SELECT w.* FROM bid_workspaces w
+         JOIN bids b ON b.id = w.bid_id
+         WHERE b.salesperson_id = $1 AND b.deleted_at IS NULL`,
+        [scope]
+      )
+    : await pool.query('SELECT * FROM bid_workspaces');
   res.json(rows);
 });
 
 // PUT workspace (upsert)
-router.put('/:bidId/workspace', requireAuth, async (req, res) => {
+router.put('/:bidId/workspace', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const { step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated, confirmed_service } = req.body;
   const { rows } = await pool.query(
     `INSERT INTO bid_workspaces (bid_id, step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated, confirmed_service, updated_at)
@@ -477,7 +488,8 @@ router.put('/:bidId/workspace', requireAuth, async (req, res) => {
 });
 
 // GET results for a bid
-router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), async (req, res) => {
+router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), async (req: AuthRequest, res) => {
+  if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
   const { rows } = await pool.query(
     'SELECT * FROM takeoff_results WHERE bid_id=$1',
     [req.params.bidId]
@@ -501,10 +513,9 @@ router.get('/costs', requireAuth, async (_req, res) => {
 });
 
 // GET bid intelligence stats
-router.get('/intelligence/:bidId', requireAuth, async (req, res) => {
-  const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1 AND deleted_at IS NULL', [req.params.bidId]);
-  if (!bidRows.length) return res.status(404).json({ error: 'Bid not found' });
-  const bid = bidRows[0];
+router.get('/intelligence/:bidId', requireAuth, async (req: AuthRequest, res) => {
+  const bid = await loadAccessibleBid(res, req.user!, req.params.bidId);
+  if (!bid) return;
 
   const { rows: gcStats } = await pool.query(`
     SELECT
@@ -543,8 +554,8 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   const bidId = req.body.bidId;
   if (!bidId) return res.status(400).json({ error: 'bidId required' });
 
-  const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1 AND deleted_at IS NULL', [bidId]);
-  if (!bidRows.length) return res.status(404).json({ error: 'Bid not found' });
+  const bid = await loadAccessibleBid(res, req.user!, bidId);
+  if (!bid) return;
 
   const rawFiles = (req.files as Express.Multer.File[]) ?? [];
 
@@ -649,7 +660,7 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   // Log AI usage for rate limiting and audit
   await pool.query(
     `INSERT INTO activity (kind, div, text, user_id) VALUES ('ai_analysis','preconstruction',$1,$2)`,
-    [`Plan analysis for ${bidRows[0].name || bidId} (${files.length} files) by ${req.user?.name}`, req.user?.id]
+    [`Plan analysis for ${bid.name || bidId} (${files.length} files) by ${req.user?.name}`, req.user?.id]
   ).catch(() => {}); // non-fatal
 
   // Count electrical sheets for immediate response
@@ -682,6 +693,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   const { price, internalNotes } = req.body as { price?: string; internalNotes?: string };
 
   if (!price?.trim()) return res.status(400).json({ error: 'price is required' });
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
 
   const { rows: trRows } = await pool.query(
     'SELECT agent1_output, agent2_output FROM takeoff_results WHERE bid_id=$1',
@@ -764,8 +776,9 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
 }));
 
 // GET generate-docx — build and return the .docx proposal file
-router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req, res) => {
+router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res) => {
   const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
 
   const { rows: trRows } = await pool.query(
     'SELECT agent4_output FROM takeoff_results WHERE bid_id=$1',

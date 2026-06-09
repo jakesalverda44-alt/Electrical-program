@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db/pool';
-import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
+import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
+import { ownsLinkedRecord } from '../utils/ownership';
 import { logger } from '../utils/logger';
 import { asyncHandler } from '../utils/asyncHandler';
 import { writeAudit } from '../utils/audit';
@@ -32,12 +33,47 @@ const GEN_CATEGORY_TO_FOLDER: Record<string, string> = {
 const router = Router();
 const upload = documentUpload;
 
-router.get('/', requireAuth, asyncHandler(async (req, res) => {
-  const { linked_id } = req.query as { linked_id?: string };
-  const where = linked_id ? 'WHERE deleted_at IS NULL AND linked_id = $1' : 'WHERE deleted_at IS NULL';
-  const params = linked_id ? [linked_id] : [];
+/**
+ * Load a document the user is allowed to read. Restricted reps may only reach a
+ * document they uploaded or one linked to a bid/proposal they own; managers/admins
+ * may read any. Sends 404/403 and returns null when access is denied.
+ */
+async function loadAccessibleDocument(req: AuthRequest, res: import('express').Response, columns: string) {
   const { rows } = await pool.query(
-    `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at FROM documents ${where} ORDER BY created_at DESC`,
+    `SELECT ${columns}, linked_id, uploaded_by FROM documents WHERE id=$1 AND deleted_at IS NULL`,
+    [req.params.id]
+  );
+  if (!rows[0]) { res.status(404).json({ error: 'not found' }); return null; }
+  const scope = ownScopeId(req.user!);
+  if (scope && rows[0].uploaded_by !== req.user!.name && !(await ownsLinkedRecord(scope, rows[0].linked_id))) {
+    res.status(403).json({ error: 'You do not have access to this document' });
+    return null;
+  }
+  return rows[0];
+}
+
+router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { linked_id } = req.query as { linked_id?: string };
+  const conds = ['deleted_at IS NULL'];
+  const params: unknown[] = [];
+  if (linked_id) { params.push(linked_id); conds.push(`linked_id = $${params.length}`); }
+  // Restricted reps only see documents they uploaded or linked to a bid/proposal
+  // they own; managers/admins see all. Previously any logged-in user could list
+  // every document by id (data leak).
+  const scope = ownScopeId(req.user!);
+  if (scope) {
+    params.push(scope); const pScope = params.length;
+    params.push(req.user!.name); const pName = params.length;
+    conds.push(
+      `(uploaded_by = $${pName} OR linked_id IN (
+          SELECT id::text FROM bids WHERE salesperson_id = $${pScope} AND deleted_at IS NULL
+          UNION
+          SELECT id::text FROM generator_proposals WHERE salesperson_id = $${pScope} AND deleted_at IS NULL
+        ))`
+    );
+  }
+  const { rows } = await pool.query(
+    `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at FROM documents WHERE ${conds.join(' AND ')} ORDER BY created_at DESC`,
     params
   );
   res.json(rows);
@@ -111,13 +147,10 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
   }
 }));
 
-router.get('/:id/download', requireAuth, asyncHandler(async (req, res) => {
-  const { rows } = await pool.query(
-    'SELECT name, file_type, file_data, storage_url FROM documents WHERE id=$1 AND deleted_at IS NULL',
-    [req.params.id]
-  );
-  if (!rows[0]) return res.status(404).json({ error: 'not found' });
-  const { name, file_type, file_data, storage_url } = rows[0];
+router.get('/:id/download', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const doc = await loadAccessibleDocument(req, res, 'name, file_type, file_data, storage_url');
+  if (!doc) return;
+  const { name, file_type, file_data, storage_url } = doc;
   if (storage_url) return res.redirect(storage_url as string);
   if (!file_data) return res.status(404).json({ error: 'no file data' });
   const buf = Buffer.from(file_data as string, 'base64');
@@ -129,13 +162,10 @@ router.get('/:id/download', requireAuth, asyncHandler(async (req, res) => {
 // View a document inline (browser preview) regardless of where it's stored.
 // Drive view links aren't publicly accessible, so Drive-stored files stream through
 // the service account; DB-stored files stream from base64; other URLs redirect.
-router.get('/:id/view', requireAuth, asyncHandler(async (req, res) => {
-  const { rows } = await pool.query(
-    'SELECT name, file_type, file_data, storage_url FROM documents WHERE id=$1 AND deleted_at IS NULL',
-    [req.params.id]
-  );
-  if (!rows[0]) return res.status(404).json({ error: 'not found' });
-  const { name, file_type, file_data, storage_url } = rows[0];
+router.get('/:id/view', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const doc = await loadAccessibleDocument(req, res, 'name, file_type, file_data, storage_url');
+  if (!doc) return;
+  const { name, file_type, file_data, storage_url } = doc;
 
   if (storage_url) {
     const m = /\/file\/d\/([^/]+)/.exec(storage_url as string);
@@ -160,9 +190,21 @@ router.get('/:id/view', requireAuth, asyncHandler(async (req, res) => {
 }));
 
 // Proxy a Drive file's bytes through the backend (the service account is authenticated;
-// the browser is not). Used for in-app image previews. Any authenticated staff user may
-// read — acceptable for an internal CRM.
-router.get('/drive-file/:fileId', requireAuth, asyncHandler(async (req, res) => {
+// the browser is not). Used for in-app image previews. Restricted reps may only proxy
+// files belonging to a document they can access; if the file id isn't tracked as a
+// document we fall through (it isn't tied to a rep-owned record), managers see all.
+router.get('/drive-file/:fileId', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const scope = ownScopeId(req.user!);
+  if (scope) {
+    const { rows } = await pool.query(
+      `SELECT linked_id, uploaded_by FROM documents
+       WHERE deleted_at IS NULL AND storage_url LIKE $1 LIMIT 1`,
+      [`%${req.params.fileId}%`]
+    );
+    if (rows.length && rows[0].uploaded_by !== req.user!.name && !(await ownsLinkedRecord(scope, rows[0].linked_id))) {
+      return res.status(403).json({ error: 'You do not have access to this file' });
+    }
+  }
   const media = await getFileMedia(req.params.fileId);
   if (!media) return res.status(404).json({ error: 'File not available' });
   res.setHeader('Content-Type', media.mimeType);
