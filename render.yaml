@@ -15,13 +15,16 @@ services:
       # out of git.
       - key: AUTOMATION_API_KEY
         sync: false
-      # Microsoft 365 SMTP credentials for automated lead first-contact email
-      # (smtp.office365.com:587, STARTTLS). SMTP_USER is the mailbox login
-      # (JakeS@accuratepowerandtechnology.com); SMTP_PASS its password / app
-      # password. Dashboard-managed (sync:false) to keep secrets out of git.
-      - key: SMTP_USER
+      # Microsoft Graph (app-only) credentials for automated lead first-contact
+      # email. Entra app registration with APPLICATION permission Mail.Send,
+      # admin-consented and scoped to JakeS@accuratepowerandtechnology.com via an
+      # Application Access Policy. Dashboard-managed (sync:false) to keep secrets
+      # out of git.
+      - key: GRAPH_TENANT_ID
         sync: false
-      - key: SMTP_PASS
+      - key: GRAPH_CLIENT_ID
+        sync: false
+      - key: GRAPH_CLIENT_SECRET
         sync: false
       - key: DATABASE_URL
         fromDatabase:

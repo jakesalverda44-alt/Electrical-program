@@ -1,13 +1,16 @@
+import fs from 'fs';
 import path from 'path';
-import nodemailer, { Transporter } from 'nodemailer';
 import { logger } from '../utils/logger';
 import { escapeHtml } from '../utils/escapeHtml';
 
-// First-contact automation for inbound (Kohler) leads. Sent over our Microsoft
-// 365 mailbox via SMTP. If the tenant blocks SMTP AUTH this is the single place
-// to swap in Microsoft Graph sendMail (see README / env notes).
+// First-contact automation for inbound (Kohler) leads, sent from our Microsoft
+// 365 mailbox via the Microsoft Graph API using app-only (client credentials)
+// auth. SMTP is intentionally not used: the tenant blocks SMTP AUTH and app
+// passwords.
 
-const FROM = 'JakeS@accuratepowerandtechnology.com';
+// The mailbox we send as / from. App-only Mail.Send must be scoped to this
+// mailbox via an Application Access Policy (see env/README notes).
+const SEND_AS = 'JakeS@accuratepowerandtechnology.com';
 // Internal heads-up address for phone-only leads (no email to contact).
 const NEEDS_CALL_TO = 'jakes@accuratepowerandtechnology.com';
 
@@ -17,6 +20,8 @@ const NEEDS_CALL_TO = 'jakes@accuratepowerandtechnology.com';
 const LOGO_PATH = path.resolve(__dirname, '../../assets/email-logo.png');
 const LOGO_CID = 'apt-logo';
 
+const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
+
 export interface LeadForContact {
   id: string;
   name: string | null;
@@ -24,25 +29,115 @@ export interface LeadForContact {
   phone: string | null;
 }
 
-let transporter: Transporter | null = null;
+// --- Auth: app-only client credentials with a tiny in-process token cache. ---
 
-/** Lazily build the Office 365 SMTP transport. Throws if credentials are unset. */
-function getTransporter(): Transporter {
-  if (transporter) return transporter;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  if (!user || !pass) {
-    throw new Error('SMTP_USER / SMTP_PASS are not configured');
+let cachedToken: { value: string; expiresAt: number } | null = null;
+
+async function getGraphToken(): Promise<string> {
+  const tenant = process.env.GRAPH_TENANT_ID;
+  const clientId = process.env.GRAPH_CLIENT_ID;
+  const clientSecret = process.env.GRAPH_CLIENT_SECRET;
+  if (!tenant || !clientId || !clientSecret) {
+    throw new Error('GRAPH_TENANT_ID / GRAPH_CLIENT_ID / GRAPH_CLIENT_SECRET are not configured');
   }
-  transporter = nodemailer.createTransport({
-    host: 'smtp.office365.com',
-    port: 587,
-    secure: false,    // STARTTLS is negotiated on the plain 587 connection
-    requireTLS: true,
-    auth: { user, pass },
+
+  // Reuse a still-valid token (refresh 60s before actual expiry).
+  if (cachedToken && cachedToken.expiresAt - 60_000 > Date.now()) {
+    return cachedToken.value;
+  }
+
+  const body = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    scope: 'https://graph.microsoft.com/.default',
+    grant_type: 'client_credentials',
   });
-  return transporter;
+
+  const resp = await fetch(
+    `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    }
+  );
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`Graph token request failed: HTTP ${resp.status} ${text}`);
+  }
+
+  const json = (await resp.json()) as { access_token: string; expires_in: number };
+  cachedToken = {
+    value: json.access_token,
+    expiresAt: Date.now() + json.expires_in * 1000,
+  };
+  return cachedToken.value;
 }
+
+// --- Graph sendMail ---
+
+interface GraphAttachment {
+  '@odata.type': '#microsoft.graph.fileAttachment';
+  name: string;
+  contentType: string;
+  contentBytes: string;
+  isInline: boolean;
+  contentId: string;
+}
+
+interface SendArgs {
+  to: string;
+  subject: string;
+  html: string;
+  attachments?: GraphAttachment[];
+}
+
+async function graphSendMail({ to, subject, html, attachments }: SendArgs): Promise<void> {
+  const token = await getGraphToken();
+  const message: Record<string, unknown> = {
+    subject,
+    body: { contentType: 'HTML', content: html },
+    toRecipients: [{ emailAddress: { address: to } }],
+  };
+  if (attachments?.length) message.attachments = attachments;
+
+  const resp = await fetch(
+    `${GRAPH_BASE}/users/${encodeURIComponent(SEND_AS)}/sendMail`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ message, saveToSentItems: true }),
+    }
+  );
+
+  // Graph sendMail returns 202 Accepted with an empty body on success.
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`Graph sendMail failed: HTTP ${resp.status} ${text}`);
+  }
+}
+
+/** The PNG logo as a Graph inline file attachment (base64). Read+encoded lazily. */
+let logoAttachment: GraphAttachment | null = null;
+function getLogoAttachment(): GraphAttachment {
+  if (logoAttachment) return logoAttachment;
+  const contentBytes = fs.readFileSync(LOGO_PATH).toString('base64');
+  logoAttachment = {
+    '@odata.type': '#microsoft.graph.fileAttachment',
+    name: 'logo.png',
+    contentType: 'image/png',
+    contentBytes,
+    isInline: true,
+    contentId: LOGO_CID,
+  };
+  return logoAttachment;
+}
+
+// --- Content (unchanged subject + HTML body) ---
 
 /** First word of the lead's name, or "there" when we have nothing usable. */
 export function firstNameOf(name: string | null | undefined): string {
@@ -89,14 +184,11 @@ export function leadFirstContactHtml(firstName: string): string {
  */
 export async function sendLeadFirstContactEmail(lead: LeadForContact): Promise<void> {
   if (!lead.email) throw new Error('lead has no email');
-  await getTransporter().sendMail({
-    from: FROM,
+  await graphSendMail({
     to: lead.email,
     subject: 'We got your request — Accurate Power & Technology',
     html: leadFirstContactHtml(firstNameOf(lead.name)),
-    attachments: [
-      { filename: 'logo.png', path: LOGO_PATH, cid: LOGO_CID },
-    ],
+    attachments: [getLogoAttachment()],
   });
   logger.info({ leadId: lead.id }, '[lead first-contact] email sent');
 }
@@ -108,11 +200,10 @@ export async function sendLeadFirstContactEmail(lead: LeadForContact): Promise<v
 export async function sendNeedsCallNotification(lead: LeadForContact): Promise<void> {
   const phone = lead.phone || '(no phone on file)';
   const name = lead.name || 'Unknown';
-  await getTransporter().sendMail({
-    from: FROM,
+  await graphSendMail({
     to: NEEDS_CALL_TO,
     subject: 'New Kohler lead — no email, needs a call',
-    text: `New Kohler lead, no email — call ${name} at ${phone}.`,
+    html: `<p>New Kohler lead, no email — call ${escapeHtml(name)} at ${escapeHtml(phone)}.</p>`,
   });
   logger.info({ leadId: lead.id }, '[lead first-contact] needs-call notification sent');
 }
