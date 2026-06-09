@@ -11,7 +11,7 @@ const taskSchema = z.object({
   title: z.string().trim().min(1, 'Title is required'),
   notes: z.string().trim().optional(),
   due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'due_date must be YYYY-MM-DD').optional().nullable(),
-  linked_type: z.enum(['bid', 'gen', 'customer']).optional().nullable(),
+  linked_type: z.enum(['bid', 'gen', 'customer', 'lead']).optional().nullable(),
   linked_id: z.string().uuid().optional().nullable(),
   linked_name: z.string().trim().optional().nullable(),
   assigned_to: z.string().uuid().optional().nullable(),
