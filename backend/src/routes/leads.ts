@@ -217,10 +217,11 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
     [genId, actor, `Converted from lead "${lead.name}"`, visitText]
   ).catch(() => {});
 
-  // Fire-and-forget calendar push (stub until wired to Microsoft Graph).
-  pushSiteVisitToCalendar({
+  // Fire-and-forget Outlook calendar push (non-blocking; updates on re-run).
+  pushSiteVisitToCalendar(genId, {
     id: lead.id, name: lead.name, address: lead.address, phone: lead.phone,
-    email: lead.email, site_visit_at: lead.site_visit_at, salesperson_name: lead.salesperson_name,
+    email: lead.email, notes: lead.notes, site_visit_at: lead.site_visit_at,
+    salesperson_name: lead.salesperson_name,
   }).catch(() => {});
 
   // A converted lead is terminal — close out any open follow-up tasks.
