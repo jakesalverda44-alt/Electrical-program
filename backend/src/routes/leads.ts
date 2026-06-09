@@ -16,8 +16,10 @@ const router = Router();
 const SOURCES        = ['web', 'phone', 'referral', 'kohler', 'other'] as const;
 const CONTACT_METHODS = ['email', 'phone'] as const;
 const INTEREST_LEVELS = ['unknown', 'warm', 'hot', 'not-interested'] as const;
-const STAGES = ['new', 'contacted', 'vetting', 'quoted', 'site-scheduled',
-  'site-complete', 'proposal-sent', 'won', 'lost'] as const;
+// Reduced lead pipeline. 'site-scheduled' is the handoff trigger (a lead moved there
+// is immediately converted to a proposal), and 'converted' is the terminal state set
+// automatically on handoff. 'lost' is an exit reachable from any stage.
+const STAGES = ['new', 'contacted', 'site-scheduled', 'lost', 'converted'] as const;
 
 const leadCreateSchema = z.object({
   name: z.string().trim().min(1, 'Name is required'),
@@ -97,6 +99,8 @@ async function handleLeadFirstContact(leadId: string): Promise<void> {
         'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3)',
         [lead.id, 'email_sent', `First-contact email sent to ${lead.email}`]
       ).catch(() => {});
+      // First contact made → auto-advance New -> Contacted.
+      await advanceToContacted(lead.id, 'System');
     } else {
       // Phone-only lead: flag for a manual call and notify the team.
       await pool.query('UPDATE leads SET needs_call = true WHERE id = $1', [lead.id]);
@@ -171,6 +175,97 @@ async function scheduleFollowUpTask(
     );
   } catch (err) {
     logger.error({ err, leadId: lead.id, stage }, '[scheduleFollowUpTask] failed');
+  }
+}
+
+type LeadRow = {
+  id: string; name: string; email: string | null; phone: string | null;
+  address: string | null; notes: string | null; source: string; stage: string;
+  contact_method: string; linked_gen_id: string | null;
+  salesperson_id: string | null; salesperson_name: string | null;
+};
+
+/**
+ * Lead -> proposal handoff. Idempotent. Creates a generator proposal in the pipeline's
+ * "Building" column (carrying the lead's contact details + full activity timeline),
+ * links it to the originating lead in both directions, marks the lead 'converted', and
+ * logs the conversion on both the lead and the new proposal. Returns the proposal id.
+ */
+async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string }): Promise<string> {
+  const actor = actingUser?.name || 'System';
+  let genId = lead.linked_gen_id;
+
+  if (!genId) {
+    const formData = {
+      customer: lead.name,
+      attn:     lead.name,
+      address:  lead.address ?? '',
+      phone:    lead.phone ?? '',
+      email:    lead.email ?? '',
+      notes:    lead.notes ?? '',
+      lead_source: lead.source,
+    };
+    const { rows } = await pool.query(
+      `INSERT INTO generator_proposals
+         (customer, loc, salesperson_id, salesperson_name, stage, form_data, lead_id)
+       VALUES ($1, $2, $3, $4, 'building', $5::jsonb, $6)
+       RETURNING id`,
+      [lead.name, (lead.address && lead.address.trim()) || '—',
+       lead.salesperson_id, lead.salesperson_name, JSON.stringify(formData), lead.id]
+    );
+    genId = rows[0].id as string;
+
+    // Carry over the full lead activity timeline onto the proposal.
+    await pool.query(
+      `INSERT INTO proposal_activity (proposal_id, kind, direction, text, created_by, created_at)
+       SELECT $1, kind, direction, text, created_by, created_at
+         FROM lead_activity WHERE lead_id = $2`,
+      [genId, lead.id]
+    );
+  } else {
+    await pool.query('UPDATE generator_proposals SET lead_id=$1 WHERE id=$2 AND lead_id IS NULL', [lead.id, genId]);
+  }
+
+  // Link forward + mark converted (removes it from the active leads board).
+  await pool.query(
+    "UPDATE leads SET linked_gen_id=$1, stage='converted', updated_at=now() WHERE id=$2",
+    [genId, lead.id]
+  );
+
+  // Log the conversion on both sides.
+  await pool.query(
+    "INSERT INTO lead_activity (lead_id, kind, created_by, text) VALUES ($1,'system',$2,$3)",
+    [lead.id, actor, 'Site scheduled — converted to generator proposal']
+  ).catch(() => {});
+  await pool.query(
+    "INSERT INTO proposal_activity (proposal_id, kind, created_by, text) VALUES ($1,'system',$2,$3)",
+    [genId, actor, `Converted from lead "${lead.name}"`]
+  ).catch(() => {});
+
+  return genId;
+}
+
+/**
+ * Auto-advance a lead from 'new' to 'contacted'. Fires when first contact is made
+ * (first-contact email sent, or a call logged). No-op unless the lead is currently
+ * 'new'. Logs the transition and schedules the contacted follow-up.
+ */
+async function advanceToContacted(leadId: string, actorName: string): Promise<void> {
+  try {
+    const { rows } = await pool.query(
+      "UPDATE leads SET stage='contacted', updated_at=now() WHERE id=$1 AND stage='new' AND deleted_at IS NULL RETURNING *",
+      [leadId]
+    );
+    if (!rows.length) return;
+    const lead = rows[0];
+    await pool.query(
+      "INSERT INTO lead_activity (lead_id, kind, created_by, text) VALUES ($1,'stage_change',$2,$3)",
+      [leadId, actorName, 'Stage changed from "new" to "contacted" (auto)']
+    ).catch(() => {});
+    scheduleFollowUpTask({ id: lead.id, name: lead.name, salesperson_id: lead.salesperson_id }, 'contacted').catch(() => {});
+    fireAndLogWebhook(lead, 'contacted', lead.contact_method).catch(() => {});
+  } catch (err) {
+    logger.error({ err, leadId }, '[advanceToContacted] failed');
   }
 }
 
@@ -250,11 +345,21 @@ async function fireAndLogWebhook(
 }
 
 // GET /api/leads
+// Converted leads are hidden from the active board by default. Pass ?stage=converted
+// to fetch them for history, or ?include_converted=1 to include them in the full list.
 router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
   const params: unknown[] = [];
   const where = ['deleted_at IS NULL'];
   if (scope) { params.push(scope); where.push(`salesperson_id = $${params.length}`); }
+
+  if (typeof req.query.stage === 'string') {
+    params.push(req.query.stage);
+    where.push(`stage = $${params.length}`);
+  } else if (req.query.include_converted !== '1') {
+    where.push(`stage <> 'converted'`);
+  }
+
   const sql = `SELECT * FROM leads WHERE ${where.join(' AND ')} ORDER BY created_at DESC`;
   const { rows } = await pool.query(sql, params);
   res.json(rows);
@@ -369,6 +474,10 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
   const lead = await loadOwnedLead(req, res);
   if (!lead) return;
 
+  // Moving to "Site Scheduled" is the handoff trigger: the lead is converted to a
+  // proposal and ends in 'converted', so don't write the transient stage itself.
+  const isHandoff = req.body.stage === 'site-scheduled' && lead.stage !== 'converted';
+
   const allowed = [
     'name', 'email', 'phone', 'address', 'source', 'contact_method',
     'interest_level', 'stage', 'notes', 'site_notes', 'quoted_range',
@@ -378,6 +487,7 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
   const params: unknown[] = [];
 
   for (const key of allowed) {
+    if (key === 'stage' && isHandoff) continue; // handoff sets 'converted' itself
     if (key in req.body) {
       params.push(req.body[key] ?? null);
       sets.push(`${key} = $${params.length}`);
@@ -397,6 +507,13 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
     throw err;
   }
   const updated = rows[0];
+
+  if (isHandoff) {
+    const genId = await convertLeadToProposal(updated, req.user);
+    const { rows: converted } = await pool.query('SELECT * FROM leads WHERE id=$1', [lead.id]);
+    res.json({ ...converted[0], linked_gen_id: genId });
+    return;
+  }
 
   // Log stage change, fire webhook, and schedule follow-up task when stage changes.
   if (req.body.stage && req.body.stage !== lead.stage) {
@@ -448,6 +565,8 @@ router.post('/:id/log-activity', requireAuth, validateBody(logActivitySchema), a
     'INSERT INTO lead_activity (lead_id, kind, direction, created_by, text) VALUES ($1,$2,$3,$4,$5) RETURNING *',
     [lead.id, kind, direction ?? null, req.user!.name, text]
   );
+  // A logged call counts as first contact → auto-advance New -> Contacted.
+  if (kind === 'call') await advanceToContacted(lead.id, req.user!.name);
   res.status(201).json(rows[0]);
 }));
 
@@ -463,6 +582,7 @@ router.post('/:id/log-call', requireAuth, asyncHandler(async (req: AuthRequest, 
     'INSERT INTO lead_activity (lead_id, kind, direction, created_by, text) VALUES ($1,$2,$3,$4,$5) RETURNING *',
     [lead.id, 'call', 'out', req.user!.name, text.trim()]
   );
+  await advanceToContacted(lead.id, req.user!.name);
   res.status(201).json(rows[0]);
 }));
 
@@ -471,15 +591,28 @@ router.post('/:id/create-gen', requireAuth, asyncHandler(async (req: AuthRequest
   const lead = await loadOwnedLead(req, res);
   if (!lead) return;
 
-  // Insert minimal generator proposal record
+  // Create the proposal carrying contact details, link both directions, and copy the
+  // lead's activity timeline onto the proposal (does not convert/close the lead).
+  const formData = {
+    customer: lead.name, attn: lead.name, address: lead.address ?? '',
+    phone: lead.phone ?? '', email: lead.email ?? '', notes: lead.notes ?? '',
+    lead_source: lead.source,
+  };
   const { rows: genRows } = await pool.query(
     `INSERT INTO generator_proposals
-       (customer, salesperson_id, salesperson_name, stage)
-     VALUES ($1,$2,$3,'building')
+       (customer, loc, salesperson_id, salesperson_name, stage, form_data, lead_id)
+     VALUES ($1,$2,$3,$4,'building',$5::jsonb,$6)
      RETURNING *`,
-    [lead.name, lead.salesperson_id, lead.salesperson_name]
+    [lead.name, (lead.address && lead.address.trim()) || '—',
+     lead.salesperson_id, lead.salesperson_name, JSON.stringify(formData), lead.id]
   );
   const gen = genRows[0];
+
+  await pool.query(
+    `INSERT INTO proposal_activity (proposal_id, kind, direction, text, created_by, created_at)
+     SELECT $1, kind, direction, text, created_by, created_at FROM lead_activity WHERE lead_id = $2`,
+    [gen.id, lead.id]
+  ).catch(() => {});
 
   // Link the gen back to the lead
   await pool.query(

@@ -82,6 +82,7 @@ export interface Gen {
   addons: number;
   salesperson_name: string;
   salesperson_id?: string;
+  lead_id?: string | null;
   gen_install_phase?: string;
   proposal_token?: string;
   proposal_no?: string;
@@ -156,7 +157,7 @@ export interface Lead {
   source: 'web' | 'phone' | 'referral' | 'kohler' | 'other';
   contact_method: 'email' | 'phone';
   interest_level: 'unknown' | 'warm' | 'hot' | 'not-interested';
-  stage: 'new' | 'contacted' | 'vetting' | 'quoted' | 'site-scheduled' | 'site-complete' | 'proposal-sent' | 'won' | 'lost';
+  stage: 'new' | 'contacted' | 'site-scheduled' | 'lost' | 'converted';
   notes?: string | null;
   site_notes?: string | null;
   quoted_range?: string | null;
