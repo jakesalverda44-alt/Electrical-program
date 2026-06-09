@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { Lead, LeadActivity } from '../../types';
 import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_LABELS } from './constants';
+import SiteVisitModal from './SiteVisitModal';
 import { Gen } from '../../types';
 
 interface Props {
@@ -61,6 +62,8 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
   const [showNoteInput, setShowNoteInput] = useState(false);
   const [noteLogging, setNoteLogging] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showSiteVisit, setShowSiteVisit] = useState(false);
+  const [handingOff, setHandingOff] = useState(false);
   const actionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -106,25 +109,42 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
 
   const setStage = async (stage: LeadStageKey) => {
     setActionsOpen(false);
-    // Moving to "Site Scheduled" hands the lead off to a proposal and converts it.
-    if (stage === 'site-scheduled' && !window.confirm(
-      `Schedule the site visit for "${lead.name}"? This creates a generator proposal in the pipeline and moves the lead to Converted.`
-    )) return;
+    // Moving to "Site Scheduled" first asks for the visit date/time, then hands the
+    // lead off to a proposal (see doHandoff).
+    if (stage === 'site-scheduled') { setShowSiteVisit(true); return; }
 
-    const { data } = await api.patch<Lead & { proposal?: Gen }>(`/leads/${lead.id}`, { stage });
+    const { data } = await api.patch<Lead>(`/leads/${lead.id}`, { stage });
     setLead(data);
     setDirty({});
     onUpdated(data);
-
-    // Handoff complete → drop from the board, push the new proposal card into the
-    // Pipeline, and jump there — all without a manual refresh.
-    if (data.stage === 'converted' && data.linked_gen_id) {
-      if (data.proposal && onConverted) onConverted(data.proposal);
-      onClose();
-      onNav('gen-proposals');
-      return;
-    }
     await refreshActivity();
+  };
+
+  // Complete the Site Scheduled handoff with the chosen site-visit datetime (or null
+  // for "no time yet"). Converts the lead, pushes the new proposal into the Pipeline,
+  // and navigates there.
+  const doHandoff = async (siteVisitAt: string | null) => {
+    setHandingOff(true);
+    try {
+      const { data } = await api.patch<Lead & { proposal?: Gen }>(`/leads/${lead.id}`, {
+        stage: 'site-scheduled',
+        site_visit_at: siteVisitAt,
+        site_visit_needs_time: !siteVisitAt,
+      });
+      setShowSiteVisit(false);
+      setLead(data);
+      setDirty({});
+      onUpdated(data);
+      if (data.stage === 'converted' && data.linked_gen_id) {
+        if (data.proposal && onConverted) onConverted(data.proposal);
+        onClose();
+        onNav('gen-proposals');
+        return;
+      }
+      await refreshActivity();
+    } finally {
+      setHandingOff(false);
+    }
   };
 
   const refreshActivity = async () => {
@@ -468,6 +488,15 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
           </div>
         </div>
       </div>
+
+      {showSiteVisit && (
+        <SiteVisitModal
+          leadName={lead.name}
+          saving={handingOff}
+          onConfirm={doHandoff}
+          onClose={() => setShowSiteVisit(false)}
+        />
+      )}
     </div>
   );
 }
