@@ -116,19 +116,18 @@ function navyHeader(text: string): Paragraph {
   return new Paragraph({
     children: [new TextRun({ text, bold: true, color: WHITE, size: LG, font: FONT })],
     shading: { type: ShadingType.SOLID, fill: NAVY, color: NAVY },
+    alignment: AlignmentType.CENTER,
     spacing: { before: 280, after: 120 },
-    indent: { left: 80, right: 80 },
   });
 }
 
-// Scope A–F subsection header — a navy filled band, slightly smaller than the
-// top-level navyHeader so the hierarchy still reads clearly.
+// Scope A–F subsection header — same navy band, slightly smaller text.
 function subHeader(text: string): Paragraph {
   return new Paragraph({
     children: [new TextRun({ text, bold: true, color: WHITE, size: MD, font: FONT })],
     shading: { type: ShadingType.SOLID, fill: NAVY, color: NAVY },
+    alignment: AlignmentType.CENTER,
     spacing: { before: 180, after: 80 },
-    indent: { left: 80, right: 80 },
   });
 }
 
@@ -228,15 +227,6 @@ export async function buildProposalDocx(data: ProposalJSON, bidMeta: BidMeta = {
   if (jobNumber)   children.push(new Paragraph({ children: [new TextRun({ text: `Job #: ${jobNumber}`, size: MD, font: FONT })], spacing: { after: 40 } }));
   children.push(blank());
 
-  // ── Signature image (replaces PREPARED BY text block) ───────────────────────
-  if (sig) {
-    children.push(new Paragraph({
-      children: [new ImageRun({ data: sig.buf, transformation: { width: 500, height: 167 }, type: sig.type })],
-      spacing: { after: 60 },
-    }));
-  }
-  children.push(blank());
-
   // ── Opening statement (no section header band) ───────────────────────────────
   children.push(bodyPara(aptOpening(projectName)));
   children.push(blank());
@@ -246,7 +236,7 @@ export async function buildProposalDocx(data: ProposalJSON, bidMeta: BidMeta = {
   const sow = data.scopeOfWork ?? {};
   const std6 = sow.standard6Bullets ?? [];
   if (std6.length) {
-    std6.forEach(b => children.push(numberedItem(toStr(b))));
+    std6.forEach(b => children.push(bulletItem(toStr(b))));
     children.push(blank());
   }
   const sowSections: [string, unknown[] | undefined][] = [
