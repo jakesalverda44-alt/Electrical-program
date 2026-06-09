@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
-import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
+import { requireAuth, requireAdmin, AuthRequest, PRIVILEGED_ROLES } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
 
 const router = Router();
@@ -35,10 +35,31 @@ const ALLOWED_KEYS = [
 
 const INTERNAL_KEYS = ['jwt_secret'];
 
-router.get('/', requireAuth, async (_req, res) => {
+// The only settings a non-admin needs to render the app: company identity on
+// proposal previews, generator-builder defaults/pricing, currency, and the AI
+// permission flags that gate AI buttons in the UI. Everything else — API keys,
+// email config, AI models/prompts/budgets, unit costs, commission rates,
+// notification recipients — is admin-only. (Estimators get unit costs through
+// /api/estimates, not through settings.)
+const NON_ADMIN_KEYS = [
+  'company_name', 'company_address', 'company_city', 'company_state', 'company_zip',
+  'company_phone', 'company_email', 'company_website',
+  'company_license_ec', 'company_license_cfc', 'company_license_li',
+  'gen_default_labor', 'gen_default_permit', 'gen_default_startup', 'gen_default_tax_rate',
+  'gen_default_pad', 'gen_default_smm', 'gen_default_surge_pro', 'gen_default_battery',
+  'gen_default_extra_wire', 'gen_default_lull', 'gen_default_crane',
+  'gen_default_deposit_pct', 'gen_default_valid_days',
+  'gen_pricing_table',
+  'currency_code',
+  'ai_enabled', 'ai_analysis_enabled', 'ai_role_permissions',
+];
+
+router.get('/', requireAuth, async (req: AuthRequest, res) => {
+  const isAdmin = (PRIVILEGED_ROLES as readonly string[]).includes(req.user?.role ?? '');
   const { rows } = await pool.query('SELECT key, value FROM app_settings ORDER BY key');
   const masked = rows
     .filter(r => !INTERNAL_KEYS.includes(r.key))
+    .filter(r => isAdmin || NON_ADMIN_KEYS.includes(r.key))
     .map(r => ({
       key: r.key,
       value: MASKED_KEYS.includes(r.key) && r.value
