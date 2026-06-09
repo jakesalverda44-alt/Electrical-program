@@ -88,6 +88,23 @@ export async function ensureLeadFollowups(): Promise<number> {
   }
 }
 
+/**
+ * Mark a lead's open follow-up tasks as done. Called when a lead reaches a terminal
+ * state (converted to a proposal, or lost) — those leads should not keep an open
+ * "follow up" task hanging around in the Follow-ups view.
+ */
+export async function closeLeadFollowups(leadId: string): Promise<void> {
+  try {
+    await pool.query(
+      `UPDATE tasks SET status='done', completed_at=now()
+        WHERE linked_type='lead' AND linked_id=$1 AND status='open'`,
+      [leadId]
+    );
+  } catch (err) {
+    logger.error({ err, leadId }, '[closeLeadFollowups] failed');
+  }
+}
+
 async function openFollowupCount(leadId: string): Promise<number> {
   const { rows } = await pool.query(
     `SELECT count(*)::int AS n FROM tasks WHERE linked_type='lead' AND linked_id=$1 AND status='open'`,

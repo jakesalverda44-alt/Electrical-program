@@ -13,15 +13,19 @@ interface Props {
   onConverted?: (gen: Gen) => void;
 }
 
+// Postgres DATE columns arrive serialized as ISO ("2026-06-11T00:00:00.000Z"); take the
+// calendar-day portion so date math doesn't produce Invalid Date / NaN.
+function dayOf(d: string) { return new Date(d.slice(0, 10) + 'T00:00:00'); }
+
 function fmtDate(d?: string | null) {
   if (!d) return null;
-  return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return dayOf(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function followUpMeta(d?: string | null): { label: string; color: string } | null {
   if (!d) return null;
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const due = new Date(d + 'T00:00:00');
+  const due = dayOf(d);
   const days = Math.round((due.getTime() - today.getTime()) / 86400000);
   if (days < 0) return { label: `Overdue ${-days}d`, color: 'var(--red)' };
   if (days === 0) return { label: 'Today', color: 'var(--amber)' };
