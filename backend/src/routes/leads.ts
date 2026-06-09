@@ -7,7 +7,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { validateBody, inputErrorMessage } from '../utils/validate';
 import { logger } from '../utils/logger';
 import { sendLeadFirstContactEmail, sendNeedsCallNotification } from '../email/leadFirstContact';
-import { createStageFollowup } from '../utils/leadFollowups';
+import { createStageFollowup, closeLeadFollowups } from '../utils/leadFollowups';
 import { getStageConfig } from '../utils/leadStageConfig';
 
 const router = Router();
@@ -194,6 +194,9 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
     "INSERT INTO proposal_activity (proposal_id, kind, created_by, text) VALUES ($1,'system',$2,$3)",
     [genId, actor, `Converted from lead "${lead.name}"`]
   ).catch(() => {});
+
+  // A converted lead is terminal — close out any open follow-up tasks.
+  await closeLeadFollowups(lead.id);
 
   return genId;
 }
@@ -479,7 +482,12 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
     ).catch(() => {});
 
     fireAndLogWebhook(updated, updated.stage, updated.contact_method).catch(() => {});
-    createStageFollowup({ id: lead.id, name: updated.name, salesperson_id: updated.salesperson_id }, updated.stage, req.user).catch(() => {});
+    if (updated.stage === 'lost') {
+      // Terminal exit — close any open follow-ups instead of creating a new one.
+      await closeLeadFollowups(lead.id);
+    } else {
+      createStageFollowup({ id: lead.id, name: updated.name, salesperson_id: updated.salesperson_id }, updated.stage, req.user).catch(() => {});
+    }
   }
 
   res.json(updated);

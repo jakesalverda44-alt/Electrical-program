@@ -311,4 +311,60 @@ describe('lead follow-up backfill & activity-based overdue (integration)', () =>
     expect(t).toBeTruthy();
     expect(t!.lead_overdue).toBe(true);
   });
+
+  it('returns a valid due_date and a real (non-NaN) day count for backfilled follow-ups', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { ensureLeadFollowups } = await import('../utils/leadFollowups');
+    const owner = await makeUser('owner');
+    const { rows } = await pool.query(
+      `INSERT INTO leads (name, phone, source, stage, last_activity_at)
+       VALUES ($1,'555','phone','contacted', now()) RETURNING id`,
+      [`Due ${Date.now()}`]
+    );
+    const id = rows[0].id as string;
+    await ensureLeadFollowups();
+
+    const tasks = (await request(app).get('/api/tasks').set(auth(owner.token)).expect(200)).body as
+      { linked_id: string; due_date: string }[];
+    const t = tasks.find(x => x.linked_id === id)!;
+    expect(t).toBeTruthy();
+    // The frontend takes the calendar-day portion; that must parse to a real date.
+    const day = new Date(String(t.due_date).slice(0, 10) + 'T00:00:00');
+    expect(Number.isNaN(day.getTime())).toBe(false);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const days = Math.round((day.getTime() - today.getTime()) / 86400000);
+    expect(Number.isNaN(days)).toBe(false);
+    expect(days).toBeGreaterThanOrEqual(1); // contacted -> due ~2 days out
+  });
+
+  it('closes open follow-ups when a lead converts to a proposal', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const owner = await makeUser('owner');
+    const created = await request(app).post('/api/leads').set(auth(owner.token))
+      .send({ name: `Conv ${Date.now()}`, phone: '555' }).expect(201);
+    const id = created.body.id as string;
+    await request(app).patch(`/api/leads/${id}`).set(auth(owner.token)).send({ stage: 'contacted' }).expect(200);
+    await new Promise(r => setTimeout(r, 300));
+
+    const before = await pool.query(`SELECT count(*)::int AS n FROM tasks WHERE linked_id=$1 AND status='open'`, [id]);
+    expect(before.rows[0].n).toBeGreaterThan(0);
+
+    await request(app).patch(`/api/leads/${id}`).set(auth(owner.token)).send({ stage: 'site-scheduled' }).expect(200);
+    const after = await pool.query(`SELECT count(*)::int AS n FROM tasks WHERE linked_id=$1 AND status='open'`, [id]);
+    expect(after.rows[0].n).toBe(0); // converted lead keeps no open follow-up
+  });
+
+  it('closes open follow-ups when a lead is marked lost', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const owner = await makeUser('owner');
+    const created = await request(app).post('/api/leads').set(auth(owner.token))
+      .send({ name: `Lost ${Date.now()}`, phone: '555' }).expect(201);
+    const id = created.body.id as string;
+    await request(app).patch(`/api/leads/${id}`).set(auth(owner.token)).send({ stage: 'contacted' }).expect(200);
+    await new Promise(r => setTimeout(r, 300));
+    await request(app).patch(`/api/leads/${id}`).set(auth(owner.token)).send({ stage: 'lost' }).expect(200);
+
+    const after = await pool.query(`SELECT count(*)::int AS n FROM tasks WHERE linked_id=$1 AND status='open'`, [id]);
+    expect(after.rows[0].n).toBe(0);
+  });
 });

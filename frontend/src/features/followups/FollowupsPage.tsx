@@ -22,7 +22,10 @@ interface Task {
 function isTaskOverdue(t: Task): boolean {
   if (t.status !== 'open') return false;
   if (t.linked_type === 'lead') return !!t.lead_overdue;
-  return !!t.due_date && new Date(t.due_date + 'T00:00:00') < new Date(new Date().toDateString());
+  const d = parseDueDate(t.due_date);
+  if (!d) return false;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return d < today;
 }
 
 interface Props {
@@ -35,10 +38,19 @@ const inputStyle: React.CSSProperties = {
   padding: '8px 10px', outline: 'none', boxSizing: 'border-box',
 };
 
+// Accepts either a 'YYYY-MM-DD' date or a full ISO timestamp (Postgres DATE columns
+// come back from the API serialized as ISO, e.g. "2026-06-11T00:00:00.000Z"). Returns
+// the calendar day at local midnight, or null if unparseable.
+function parseDueDate(due?: string | null): Date | null {
+  if (!due) return null;
+  const d = new Date(due.slice(0, 10) + 'T00:00:00');
+  return isNaN(d.getTime()) ? null : d;
+}
+
 function dueMeta(due?: string | null): { label: string; color: string } {
-  if (!due) return { label: 'No due date', color: 'var(--text3)' };
+  const d = parseDueDate(due);
+  if (!d) return { label: 'No due date', color: 'var(--text3)' };
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const d = new Date(due + 'T00:00:00');
   const days = Math.round((d.getTime() - today.getTime()) / 86400000);
   if (days < 0) return { label: `Overdue ${-days}d`, color: 'var(--red)' };
   if (days === 0) return { label: 'Due today', color: 'var(--amber)' };
