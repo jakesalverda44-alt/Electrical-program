@@ -130,21 +130,44 @@ const KIND_DEFAULTS: Record<string, string> = {
  * Auto-create a follow-up task when a lead enters a stage, based on per-stage config
  * stored in app_settings key "lead_stage_config_json" (falls back to coded defaults).
  * Non-blocking — errors are logged but never thrown.
+ *
+ * The task is assigned so it actually surfaces in someone's Follow-ups view: the
+ * lead's salesperson if set, otherwise the (real) user who triggered the transition.
+ * API-key automation has no user record, so those are left unassigned for
+ * managers/owners (who see every task) to triage. A lead re-entering the same stage
+ * does not stack duplicate open follow-ups.
  */
-async function scheduleFollowUpTask(lead: { id: string; name: string; salesperson_id: string | null }, stage: string): Promise<void> {
+type ActingUser = { id: string; role: string } | undefined;
+
+async function scheduleFollowUpTask(
+  lead: { id: string; name: string; salesperson_id: string | null },
+  stage: string,
+  actingUser?: ActingUser,
+): Promise<void> {
   try {
     const config = await getStageConfig();
     const cfg = config[stage];
     if (!cfg?.followup_delay_hours) return;
 
     const title = cfg.followup_title.replace('{name}', lead.name);
+
+    const fallbackAssignee = actingUser && actingUser.role !== 'api' ? actingUser.id : null;
+    const assignee: string | null = lead.salesperson_id ?? fallbackAssignee;
+
+    // Don't stack duplicate auto follow-ups when a lead bounces back into a stage.
+    const { rows: dupe } = await pool.query(
+      `SELECT 1 FROM tasks WHERE linked_type='lead' AND linked_id=$1 AND title=$2 AND status='open' LIMIT 1`,
+      [lead.id, title]
+    );
+    if (dupe.length) return;
+
     const dueMs = Date.now() + cfg.followup_delay_hours * 60 * 60 * 1000;
     const dueDate = new Date(dueMs).toISOString().slice(0, 10);
 
     await pool.query(
       `INSERT INTO tasks (title, due_date, linked_type, linked_id, linked_name, assigned_to)
        VALUES ($1, $2, 'lead', $3, $4, $5)`,
-      [title, dueDate, lead.id, lead.name, lead.salesperson_id]
+      [title, dueDate, lead.id, lead.name, assignee]
     );
   } catch (err) {
     logger.error({ err, leadId: lead.id, stage }, '[scheduleFollowUpTask] failed');
@@ -318,7 +341,7 @@ router.post('/', leadWriteLimiter, requireAuthOrApiKey, validateBody(leadCreateS
       'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3)',
       [lead.id, 'system', 'Lead created']
     ).catch(() => {});
-    scheduleFollowUpTask(lead, lead.stage).catch(() => {});
+    scheduleFollowUpTask(lead, lead.stage, req.user).catch(() => {});
   }
 
   // First-contact email / call notification. Safe to call on every POST: it is
@@ -383,7 +406,7 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
     ).catch(() => {});
 
     fireAndLogWebhook(updated, updated.stage, updated.contact_method).catch(() => {});
-    scheduleFollowUpTask({ id: lead.id, name: updated.name, salesperson_id: updated.salesperson_id }, updated.stage).catch(() => {});
+    scheduleFollowUpTask({ id: lead.id, name: updated.name, salesperson_id: updated.salesperson_id }, updated.stage, req.user).catch(() => {});
   }
 
   res.json(updated);

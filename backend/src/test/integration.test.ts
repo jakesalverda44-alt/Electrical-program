@@ -149,3 +149,66 @@ describe('input validation — 400 not 500 (integration)', () => {
       .send({ name: `Good ${Date.now()}`, source: 'web', interest_level: 'warm' }).expect(201);
   });
 });
+
+describe('lead auto follow-ups (integration)', () => {
+  // Helper: poll the tasks list (scheduleFollowUpTask is fire-and-forget) until a
+  // lead-linked task matching `match` appears, or the budget runs out.
+  const leadTasks = async (
+    token: string, leadId: string,
+    match: (t: { title: string }) => boolean = () => true, tries = 15,
+  ) => {
+    for (let i = 0; i < tries; i++) {
+      const { body } = await request(app).get('/api/tasks').set(auth(token));
+      const found = (body as { linked_id: string; linked_type: string; title: string }[])
+        .filter(t => t.linked_id === leadId && t.linked_type === 'lead');
+      if (found.some(match)) return found;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return [];
+  };
+
+  it('creates a real, visible follow-up task when a stage is entered', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const owner = await makeUser('owner');
+    const created = await request(app).post('/api/leads').set(auth(owner.token))
+      .send({ name: `AF ${Date.now()}`, phone: '555' }).expect(201);
+    const id = created.body.id as string;
+
+    await request(app).patch(`/api/leads/${id}`).set(auth(owner.token)).send({ stage: 'quoted' }).expect(200);
+    const tasks = await leadTasks(owner.token, id, t => /Check in on quote/.test(t.title));
+    expect(tasks.some((t: { title: string }) => /Check in on quote/.test(t.title))).toBe(true);
+  });
+
+  it("assigns the follow-up to the rep so it surfaces in their Follow-ups view", async (ctx) => {
+    if (!ok) return ctx.skip();
+    const rep = await makeUser('salesperson');
+    // Lead assigned to the rep (so the rep is allowed to advance it).
+    const created = await request(app).post('/api/leads').set(auth(rep.token))
+      .send({ name: `RF ${Date.now()}`, phone: '555', salesperson_id: rep.id, salesperson_name: rep.name }).expect(201);
+    const id = created.body.id as string;
+
+    await request(app).patch(`/api/leads/${id}`).set(auth(rep.token)).send({ stage: 'contacted' }).expect(200);
+    const tasks = await leadTasks(rep.token, id, t => /Re-contact/.test(t.title));
+    // The restricted rep can SEE the task — proving it was assigned to them, not left null.
+    expect(tasks.length).toBeGreaterThan(0);
+  });
+
+  it('does not stack duplicate follow-ups when a lead re-enters a stage', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const owner = await makeUser('owner');
+    const created = await request(app).post('/api/leads').set(auth(owner.token))
+      .send({ name: `DUP ${Date.now()}`, phone: '555' }).expect(201);
+    const id = created.body.id as string;
+
+    await request(app).patch(`/api/leads/${id}`).set(auth(owner.token)).send({ stage: 'contacted' }).expect(200);
+    await leadTasks(owner.token, id);
+    await request(app).patch(`/api/leads/${id}`).set(auth(owner.token)).send({ stage: 'new' }).expect(200);
+    await request(app).patch(`/api/leads/${id}`).set(auth(owner.token)).send({ stage: 'contacted' }).expect(200);
+    await new Promise(r => setTimeout(r, 400));
+
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS n FROM tasks WHERE linked_id=$1 AND title LIKE 'Re-contact%' AND status='open'`, [id]
+    );
+    expect(rows[0].n).toBe(1);
+  });
+});
