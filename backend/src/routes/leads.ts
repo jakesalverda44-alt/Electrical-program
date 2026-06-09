@@ -7,6 +7,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { validateBody, inputErrorMessage } from '../utils/validate';
 import { logger } from '../utils/logger';
 import { sendLeadFirstContactEmail, sendNeedsCallNotification } from '../email/leadFirstContact';
+import { createStageFollowup } from '../utils/leadFollowups';
 import { getStageConfig } from '../utils/leadStageConfig';
 
 const router = Router();
@@ -130,54 +131,6 @@ const KIND_DEFAULTS: Record<string, string> = {
   system:   '',
 };
 
-/**
- * Auto-create a follow-up task when a lead enters a stage, based on per-stage config
- * stored in app_settings key "lead_stage_config_json" (falls back to coded defaults).
- * Non-blocking — errors are logged but never thrown.
- *
- * The task is assigned so it actually surfaces in someone's Follow-ups view: the
- * lead's salesperson if set, otherwise the (real) user who triggered the transition.
- * API-key automation has no user record, so those are left unassigned for
- * managers/owners (who see every task) to triage. A lead re-entering the same stage
- * does not stack duplicate open follow-ups.
- */
-type ActingUser = { id: string; role: string } | undefined;
-
-async function scheduleFollowUpTask(
-  lead: { id: string; name: string; salesperson_id: string | null },
-  stage: string,
-  actingUser?: ActingUser,
-): Promise<void> {
-  try {
-    const config = await getStageConfig();
-    const cfg = config[stage];
-    if (!cfg?.followup_delay_hours) return;
-
-    const title = cfg.followup_title.replace('{name}', lead.name);
-
-    const fallbackAssignee = actingUser && actingUser.role !== 'api' ? actingUser.id : null;
-    const assignee: string | null = lead.salesperson_id ?? fallbackAssignee;
-
-    // Don't stack duplicate auto follow-ups when a lead bounces back into a stage.
-    const { rows: dupe } = await pool.query(
-      `SELECT 1 FROM tasks WHERE linked_type='lead' AND linked_id=$1 AND title=$2 AND status='open' LIMIT 1`,
-      [lead.id, title]
-    );
-    if (dupe.length) return;
-
-    const dueMs = Date.now() + cfg.followup_delay_hours * 60 * 60 * 1000;
-    const dueDate = new Date(dueMs).toISOString().slice(0, 10);
-
-    await pool.query(
-      `INSERT INTO tasks (title, due_date, linked_type, linked_id, linked_name, assigned_to)
-       VALUES ($1, $2, 'lead', $3, $4, $5)`,
-      [title, dueDate, lead.id, lead.name, assignee]
-    );
-  } catch (err) {
-    logger.error({ err, leadId: lead.id, stage }, '[scheduleFollowUpTask] failed');
-  }
-}
-
 type LeadRow = {
   id: string; name: string; email: string | null; phone: string | null;
   address: string | null; notes: string | null; source: string; stage: string;
@@ -262,7 +215,7 @@ async function advanceToContacted(leadId: string, actorName: string): Promise<vo
       "INSERT INTO lead_activity (lead_id, kind, created_by, text) VALUES ($1,'stage_change',$2,$3)",
       [leadId, actorName, 'Stage changed from "new" to "contacted" (auto)']
     ).catch(() => {});
-    scheduleFollowUpTask({ id: lead.id, name: lead.name, salesperson_id: lead.salesperson_id }, 'contacted').catch(() => {});
+    createStageFollowup({ id: lead.id, name: lead.name, salesperson_id: lead.salesperson_id }, 'contacted').catch(() => {});
     fireAndLogWebhook(lead, 'contacted', lead.contact_method).catch(() => {});
   } catch (err) {
     logger.error({ err, leadId }, '[advanceToContacted] failed');
@@ -446,7 +399,7 @@ router.post('/', leadWriteLimiter, requireAuthOrApiKey, validateBody(leadCreateS
       'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3)',
       [lead.id, 'system', 'Lead created']
     ).catch(() => {});
-    scheduleFollowUpTask(lead, lead.stage, req.user).catch(() => {});
+    createStageFollowup(lead, lead.stage, req.user).catch(() => {});
   }
 
   // First-contact email / call notification. Safe to call on every POST: it is
@@ -511,7 +464,10 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
   if (isHandoff) {
     const genId = await convertLeadToProposal(updated, req.user);
     const { rows: converted } = await pool.query('SELECT * FROM leads WHERE id=$1', [lead.id]);
-    res.json({ ...converted[0], linked_gen_id: genId });
+    // Return the new proposal too so the client can drop the new card into the Pipeline
+    // "Building" column without a manual refresh.
+    const { rows: gen } = await pool.query('SELECT * FROM generator_proposals WHERE id=$1', [genId]);
+    res.json({ ...converted[0], linked_gen_id: genId, proposal: gen[0] ?? null });
     return;
   }
 
@@ -523,7 +479,7 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
     ).catch(() => {});
 
     fireAndLogWebhook(updated, updated.stage, updated.contact_method).catch(() => {});
-    scheduleFollowUpTask({ id: lead.id, name: updated.name, salesperson_id: updated.salesperson_id }, updated.stage, req.user).catch(() => {});
+    createStageFollowup({ id: lead.id, name: updated.name, salesperson_id: updated.salesperson_id }, updated.stage, req.user).catch(() => {});
   }
 
   res.json(updated);

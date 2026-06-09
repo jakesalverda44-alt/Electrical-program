@@ -9,6 +9,7 @@ import {
   ReminderType, getReminderPrefs, resolveRecipients, ownerAdminIds,
 } from './prefs';
 import { getStageConfig } from '../utils/leadStageConfig';
+import { ensureLeadFollowups } from '../utils/leadFollowups';
 
 const DAILY_DIGEST_RECIPIENT = 'jakes@accuratepowerandtechnology.com';
 
@@ -275,6 +276,10 @@ export function startReminderScheduler(): void {
   const tick = async () => {
     if (running) return;
     running = true;
+    // Self-healing backfill: make sure every active lead has its stage follow-up task,
+    // including leads that entered a stage before the auto follow-up feature existed.
+    try { await ensureLeadFollowups(); }
+    catch (err) { logger.error({ err }, '[lead-followups] backfill failed'); }
     try { await runReminderScan(); }
     catch (err) { logger.error({ err }, '[reminders] scan failed'); }
     try { await maybeSendDailyLeadDigest(); }

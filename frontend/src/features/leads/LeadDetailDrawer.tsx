@@ -12,6 +12,7 @@ interface Props {
   onDeleted: (lead: Lead) => void;
   onNav: (view: string) => void;
   onEditGen?: (gen: Gen) => void;
+  onConverted?: (gen: Gen) => void;
 }
 
 const inp: React.CSSProperties = {
@@ -48,7 +49,7 @@ function isLeadOverdue(lead: Lead): boolean {
   return Date.now() - new Date(ref).getTime() > threshold * 60 * 60 * 1000;
 }
 
-export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated, onDeleted, onNav, onEditGen }: Props) {
+export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated, onDeleted, onNav, onEditGen, onConverted }: Props) {
   const [lead, setLead] = useState<Lead>(initialLead);
   const [activity, setActivity] = useState<LeadActivity[]>([]);
   const [dirty, setDirty] = useState<Partial<Lead>>({});
@@ -110,17 +111,20 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
       `Schedule the site visit for "${lead.name}"? This creates a generator proposal in the pipeline and moves the lead to Converted.`
     )) return;
 
-    const { data } = await api.patch<Lead>(`/leads/${lead.id}`, { stage });
+    const { data } = await api.patch<Lead & { proposal?: Gen }>(`/leads/${lead.id}`, { stage });
     setLead(data);
     setDirty({});
     onUpdated(data);
-    await refreshActivity();
 
-    // Handoff complete → drop from the board and jump to the new proposal.
+    // Handoff complete → drop from the board, push the new proposal card into the
+    // Pipeline, and jump there — all without a manual refresh.
     if (data.stage === 'converted' && data.linked_gen_id) {
+      if (data.proposal && onConverted) onConverted(data.proposal);
       onClose();
       onNav('gen-proposals');
+      return;
     }
+    await refreshActivity();
   };
 
   const refreshActivity = async () => {

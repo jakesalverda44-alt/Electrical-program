@@ -10,6 +10,7 @@ import LeadDetailDrawer from './LeadDetailDrawer';
 interface Props {
   onNav: (view: string) => void;
   onEditGen?: (gen: Gen) => void;
+  onConverted?: (gen: Gen) => void;
 }
 
 function fmtDate(d?: string | null) {
@@ -28,7 +29,7 @@ function followUpMeta(d?: string | null): { label: string; color: string } | nul
   return { label: fmtDate(d)!, color: 'var(--text3)' };
 }
 
-export default function LeadsPage({ onNav, onEditGen }: Props) {
+export default function LeadsPage({ onNav, onEditGen, onConverted }: Props) {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [stageFilter, setStageFilter] = useState<LeadStageKey | 'all'>('all');
@@ -208,6 +209,7 @@ export default function LeadsPage({ onNav, onEditGen }: Props) {
           }}
           onNav={onNav}
           onEditGen={onEditGen}
+          onConverted={onConverted}
         />
       )}
     </div>
