@@ -145,8 +145,9 @@ export default function FollowupsPage({ onCountChange }: Props) {
                   </button>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)', textDecoration: t.status === 'done' ? 'line-through' : 'none', opacity: t.status === 'done' ? 0.6 : 1 }}>{t.title}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-                      {t.linked_name ? `${t.linked_name} · ` : ''}{t.assigned_to_name || ''}
+                    <div style={{ fontSize: 12, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      {t.linked_type === 'lead' && <span title="Generator Lead" style={{ fontSize: 12 }}>⚡</span>}
+                      {t.linked_name ? `${t.linked_name}${t.assigned_to_name ? ' · ' : ''}` : ''}{t.assigned_to_name || ''}
                     </div>
                   </div>
                   {t.status === 'open' && <span style={{ fontSize: 12, fontWeight: 700, color: dm.color, whiteSpace: 'nowrap' }}>{dm.label}</span>}

@@ -1,7 +1,7 @@
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 
-export type ReminderType = 'followup_due' | 'proposal_viewed_unsigned' | 'bid_due_soon';
+export type ReminderType = 'followup_due' | 'proposal_viewed_unsigned' | 'bid_due_soon' | 'lead_overdue';
 
 export interface ReminderTypePref { app: boolean; email: boolean; days?: number }
 
@@ -17,6 +17,7 @@ export const DEFAULT_REMINDER_PREFS: ReminderPrefs = {
     followup_due:             { app: true, email: true },
     proposal_viewed_unsigned: { app: true, email: true, days: 3 },
     bid_due_soon:             { app: true, email: false, days: 3 },
+    lead_overdue:             { app: true, email: true },
   },
 };
 
@@ -31,6 +32,7 @@ export function mergeReminderPrefs(parsed: unknown): ReminderPrefs {
       followup_due:             { ...DEFAULT_REMINDER_PREFS.types.followup_due, ...(t.followup_due ?? {}) },
       proposal_viewed_unsigned: { ...DEFAULT_REMINDER_PREFS.types.proposal_viewed_unsigned, ...(t.proposal_viewed_unsigned ?? {}) },
       bid_due_soon:             { ...DEFAULT_REMINDER_PREFS.types.bid_due_soon, ...(t.bid_due_soon ?? {}) },
+      lead_overdue:             { ...DEFAULT_REMINDER_PREFS.types.lead_overdue, ...(t.lead_overdue ?? {}) },
     },
   };
 }

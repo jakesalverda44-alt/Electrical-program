@@ -36,15 +36,31 @@ function timeAgo(ts: string) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+// Overdue thresholds mirror backend DEFAULT_STAGE_CONFIG.overdue_after_hours (hours)
+const OVERDUE_HOURS: Partial<Record<Lead['stage'], number>> = {
+  new: 48, contacted: 96, vetting: 120, quoted: 72,
+  'site-scheduled': 168, 'site-complete': 72, 'proposal-sent': 96,
+};
+
+function isLeadOverdue(lead: Lead): boolean {
+  const threshold = OVERDUE_HOURS[lead.stage];
+  if (!threshold) return false;
+  const ref = lead.last_activity_at ?? lead.created_at;
+  if (!ref) return false;
+  return Date.now() - new Date(ref).getTime() > threshold * 60 * 60 * 1000;
+}
+
 export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated, onDeleted, onNav, onEditGen }: Props) {
   const [lead, setLead] = useState<Lead>(initialLead);
   const [activity, setActivity] = useState<LeadActivity[]>([]);
   const [dirty, setDirty] = useState<Partial<Lead>>({});
   const [saving, setSaving] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
-  const [callText, setCallText] = useState('');
-  const [showCallInput, setShowCallInput] = useState(false);
-  const [logCallSaving, setLogCallSaving] = useState(false);
+  const [quickLogging, setQuickLogging] = useState<string | null>(null); // which kind is in-flight
+  const [quickLogged, setQuickLogged] = useState<string | null>(null);  // brief ✓ confirmation
+  const [noteText, setNoteText] = useState('');
+  const [showNoteInput, setShowNoteInput] = useState(false);
+  const [noteLogging, setNoteLogging] = useState(false);
   const [showBuildNotes, setShowBuildNotes] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -84,8 +100,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
       setDirty({});
       onUpdated(data);
       // Refresh activity (stage change may have been logged)
-      const { data: full } = await api.get<{ activity: LeadActivity[] } & Lead>(`/leads/${lead.id}`);
-      setActivity(full.activity || []);
+      await refreshActivity();
     } finally {
       setSaving(false);
     }
@@ -97,19 +112,38 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
     setLead(data);
     setDirty({});
     onUpdated(data);
-    const { data: full } = await api.get<{ activity: LeadActivity[] } & Lead>(`/leads/${lead.id}`);
-    setActivity(full.activity || []);
+    await refreshActivity();
   };
 
-  const logCall = async () => {
-    if (!callText.trim()) return;
-    setLogCallSaving(true);
+  const refreshActivity = async () => {
+    const { data: full } = await api.get<{ activity: LeadActivity[] } & Lead>(`/leads/${lead.id}`);
+    setActivity(full.activity || []);
+    setLead(l => ({ ...l, last_activity_at: full.last_activity_at }));
+  };
+
+  const quickLog = async (kind: 'call' | 'text' | 'voicemail', direction: 'in' | 'out' = 'out') => {
+    setQuickLogging(kind);
     try {
-      const { data } = await api.post<LeadActivity>(`/leads/${lead.id}/log-call`, { text: callText.trim() });
+      const { data } = await api.post<LeadActivity>(`/leads/${lead.id}/log-activity`, { kind, direction });
       setActivity(prev => [data, ...prev]);
-      setCallText(''); setShowCallInput(false);
+      setLead(l => ({ ...l, last_activity_at: data.created_at }));
+      setQuickLogged(kind);
+      setTimeout(() => setQuickLogged(null), 2000);
     } finally {
-      setLogCallSaving(false);
+      setQuickLogging(null);
+    }
+  };
+
+  const logNote = async () => {
+    if (!noteText.trim()) return;
+    setNoteLogging(true);
+    try {
+      const { data } = await api.post<LeadActivity>(`/leads/${lead.id}/log-activity`, { kind: 'note', body: noteText.trim() });
+      setActivity(prev => [data, ...prev]);
+      setLead(l => ({ ...l, last_activity_at: data.created_at }));
+      setNoteText(''); setShowNoteInput(false);
+    } finally {
+      setNoteLogging(false);
     }
   };
 
@@ -142,12 +176,15 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
   const hasChanges = Object.keys(dirty).length > 0;
   const stageInfo = LEAD_STAGES.find(s => s.key === lead.stage);
 
-  const kindIcon: Record<string, string> = {
-    stage_change: '→',
-    note:         '📝',
-    call:         '📞',
-    webhook_ok:   '✓',
-    webhook_fail: '!',
+  const kindLabel: Record<string, string> = {
+    stage_change: 'Stage →', note: 'Note', call: 'Call', text: 'Text',
+    voicemail: 'Voicemail', email_sent: 'Email sent', email: 'Email',
+    webhook_ok: 'Automation', webhook_fail: 'Automation failed', system: 'System',
+  };
+  const directionArrow = (a: LeadActivity) => {
+    if (a.direction === 'out') return <span style={{ fontSize: 11, color: 'var(--text3)' }}>↗ </span>;
+    if (a.direction === 'in')  return <span style={{ fontSize: 11, color: 'var(--text3)' }}>↙ </span>;
+    return null;
   };
 
   return (
@@ -156,7 +193,14 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
         <div className="drawer-hdr">
           <div>
             <div className="drawer-eyebrow">Generator Lead</div>
-            <div className="drawer-title">{lead.name}</div>
+            <div className="drawer-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {lead.name}
+              {isLeadOverdue(lead) && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#d97706', background: 'rgba(217,119,6,.12)', border: '1px solid rgba(217,119,6,.3)', borderRadius: 20, padding: '2px 8px', verticalAlign: 'middle' }}>
+                  OVERDUE
+                </span>
+              )}
+            </div>
           </div>
           <button className="close-x" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
         </div>
@@ -273,30 +317,51 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
             </button>
           )}
 
-          {/* Log call */}
-          {showCallInput ? (
-            <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-              <input
-                style={{ ...inp, flex: 1 }}
-                value={callText}
-                onChange={e => setCallText(e.target.value)}
-                placeholder="Call notes…"
-                autoFocus
-                onKeyDown={e => { if (e.key === 'Enter') logCall(); if (e.key === 'Escape') { setShowCallInput(false); setCallText(''); }}}
-              />
-              <button className="btn" style={{ fontSize: 12, padding: '0 14px' }} onClick={logCall} disabled={logCallSaving || !callText.trim()}>
-                {logCallSaving ? '…' : 'Log'}
-              </button>
-              <button className="btn ghost" style={{ fontSize: 12, padding: '0 10px' }} onClick={() => { setShowCallInput(false); setCallText(''); }}>✕</button>
-            </div>
-          ) : (
+          {/* Quick-log buttons */}
+          <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {(['call', 'text', 'voicemail'] as const).map(kind => {
+              const labels = { call: '📞 Called', text: '💬 Texted', voicemail: '📭 Voicemail' };
+              const isLogging = quickLogging === kind;
+              const didLog = quickLogged === kind;
+              return (
+                <button
+                  key={kind}
+                  className="btn ghost"
+                  style={{ fontSize: 12, flex: 1, justifyContent: 'center', minWidth: 80,
+                    color: didLog ? 'var(--green)' : undefined,
+                    borderColor: didLog ? 'var(--green)' : undefined }}
+                  disabled={isLogging || !!quickLogging}
+                  onClick={() => quickLog(kind)}
+                >
+                  {didLog ? '✓ Logged' : isLogging ? '…' : labels[kind]}
+                </button>
+              );
+            })}
             <button
               className="btn ghost"
-              style={{ width: '100%', justifyContent: 'center', marginTop: 8, fontSize: 13 }}
-              onClick={() => setShowCallInput(true)}
+              style={{ fontSize: 12, flex: 1, justifyContent: 'center', minWidth: 80 }}
+              onClick={() => { setShowNoteInput(v => !v); setNoteText(''); }}
             >
-              <Icon name="phone" size={14} stroke={1.9}/>Log Call
+              <Icon name="pencil" size={13} stroke={2}/>Note
             </button>
+          </div>
+          {showNoteInput && (
+            <div style={{ marginTop: 6, display: 'flex', gap: 8 }}>
+              <textarea
+                style={{ ...inp, flex: 1, resize: 'vertical', minHeight: 56 }}
+                value={noteText}
+                onChange={e => setNoteText(e.target.value)}
+                placeholder="Add a note…"
+                autoFocus
+                onKeyDown={e => { if (e.key === 'Escape') { setShowNoteInput(false); setNoteText(''); }}}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <button className="btn" style={{ fontSize: 12, padding: '0 14px' }} onClick={logNote} disabled={noteLogging || !noteText.trim()}>
+                  {noteLogging ? '…' : 'Log'}
+                </button>
+                <button className="btn ghost" style={{ fontSize: 12, padding: '0 10px' }} onClick={() => { setShowNoteInput(false); setNoteText(''); }}>✕</button>
+              </div>
+            </div>
           )}
 
           {/* Actions dropdown */}
@@ -339,10 +404,20 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
                     border: `1px solid ${a.kind === 'webhook_fail' ? 'rgba(224,106,106,.2)' : 'var(--border)'}`,
                   }}>
                     <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
-                      <span style={{ fontSize: 12 }}>{kindIcon[a.kind] ?? '•'}</span>
-                      <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)', flex: 1 }}>{a.text}</span>
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text3)', flexShrink: 0 }}>
+                        {directionArrow(a)}{kindLabel[a.kind] ?? a.kind}
+                      </span>
+                      {a.text && a.kind !== 'stage_change' && (
+                        <span style={{ fontSize: 12.5, color: 'var(--text)', flex: 1 }}>{a.text}</span>
+                      )}
+                      {a.kind === 'stage_change' && (
+                        <span style={{ fontSize: 12.5, color: 'var(--text)', flex: 1 }}>{a.text}</span>
+                      )}
                       <span style={{ fontSize: 11, color: 'var(--text3)', whiteSpace: 'nowrap' }}>{timeAgo(a.created_at)}</span>
                     </div>
+                    {a.created_by && (
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>by {a.created_by}</div>
+                    )}
                   </div>
                 ))}
               </div>

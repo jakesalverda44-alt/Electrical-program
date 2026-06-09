@@ -165,13 +165,16 @@ export interface Lead {
   salesperson_name?: string | null;
   salesperson_id?: string | null;
   created_at?: string;
+  last_activity_at?: string | null;
 }
 
 export interface LeadActivity {
   id: string;
   lead_id: string;
   kind: string;
+  direction?: 'in' | 'out' | null;
   text: string;
+  created_by?: string | null;
   created_at: string;
 }
 
