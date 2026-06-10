@@ -105,19 +105,23 @@ export interface GraphAttachmentFile {
 
 interface GraphAttachmentRaw {
   '@odata.type'?: string;
+  id?: string;
   name?: string;
   contentType?: string;
+  size?: number;
+  isInline?: boolean;
   contentBytes?: string;
 }
 
 /** Just the attachment filenames for an email (no download), used at import time. */
 export async function listAttachmentNames(messageId: string): Promise<string[]> {
   try {
+    const mid = encodeURIComponent(messageId);
     const data = await graphGet<{ value: GraphAttachmentRaw[] }>(
-      `/users/${MAILBOX}/messages/${messageId}/attachments?$select=name,@odata.type`
+      `/users/${MAILBOX}/messages/${mid}/attachments?$select=id,name,contentType,size,isInline`
     );
     return (data.value || [])
-      .filter(a => a['@odata.type'] === '#microsoft.graph.fileAttachment' && a.name)
+      .filter(a => !a.isInline && a.name)
       .map(a => a.name as string);
   } catch (err) {
     logger.error({ err, messageId }, '[outlook-mail] listAttachmentNames failed');
@@ -125,29 +129,62 @@ export async function listAttachmentNames(messageId: string): Promise<string[]> 
   }
 }
 
-/** Download the file attachments of an email as Buffers (for upload to Drive on accept). */
+/**
+ * Download the real file attachments of an email as Buffers (for upload to Drive on accept).
+ *
+ * Lists attachment metadata first (skipping inline signature images), then pulls each file's
+ * raw bytes via the `/$value` endpoint — which is reliable for the large PDFs bid invitations
+ * carry, where `contentBytes` may be omitted from the collection response. Per-attachment
+ * failures are logged and skipped rather than aborting the whole set. The message id is
+ * URL-encoded because immutable Graph ids contain '/', '+' and '=' .
+ */
 export async function downloadAttachments(messageId: string): Promise<GraphAttachmentFile[]> {
-  const data = await graphGet<{ value: GraphAttachmentRaw[] }>(
-    `/users/${MAILBOX}/messages/${messageId}/attachments`
+  const mid = encodeURIComponent(messageId);
+  const list = await graphGet<{ value: GraphAttachmentRaw[] }>(
+    `/users/${MAILBOX}/messages/${mid}/attachments?$select=id,name,contentType,size,isInline`
   );
-  return (data.value || [])
-    .filter(a => a['@odata.type'] === '#microsoft.graph.fileAttachment' && a.name && a.contentBytes)
-    .map(a => ({
-      name: a.name as string,
-      contentType: a.contentType || 'application/octet-stream',
-      content: Buffer.from(a.contentBytes as string, 'base64'),
-    }));
+  const candidates = (list.value || []).filter(a =>
+    a.id && a.name && !a.isInline &&
+    (!a['@odata.type'] || a['@odata.type'] === '#microsoft.graph.fileAttachment')
+  );
+  if (!candidates.length) {
+    logger.info({ messageId, total: list.value?.length ?? 0 }, '[outlook-mail] no downloadable file attachments');
+    return [];
+  }
+
+  const token = await getGraphToken();
+  const files: GraphAttachmentFile[] = [];
+  for (const a of candidates) {
+    try {
+      const resp = await fetch(
+        `${GRAPH_BASE}/users/${MAILBOX}/messages/${mid}/attachments/${encodeURIComponent(a.id as string)}/$value`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        logger.error({ messageId, name: a.name, status: resp.status, text }, '[outlook-mail] attachment $value fetch failed');
+        continue;
+      }
+      const content = Buffer.from(await resp.arrayBuffer());
+      files.push({ name: a.name as string, contentType: a.contentType || 'application/octet-stream', content });
+    } catch (err) {
+      logger.error({ err, messageId, name: a.name }, '[outlook-mail] attachment download errored');
+    }
+  }
+  logger.info({ messageId, downloaded: files.length, candidates: candidates.length }, '[outlook-mail] downloadAttachments complete');
+  return files;
 }
 
 /**
- * Create a DRAFT reply to the GC in Outlook (saved to Drafts, NOT sent). The reviewer
- * reviews and sends it manually. Non-blocking: logs and swallows errors.
+ * Create a DRAFT reply to the email's sender in Outlook (saved to Drafts, NOT sent). The
+ * reviewer reviews and sends it manually. Non-blocking: logs and swallows errors. The message
+ * id is URL-encoded (immutable Graph ids contain '/', '+' and '=').
  */
 export async function createReplyDraft(messageId: string, comment: string): Promise<void> {
   try {
     const token = await getGraphToken();
     const resp = await fetch(
-      `${GRAPH_BASE}/users/${MAILBOX}/messages/${messageId}/createReply`,
+      `${GRAPH_BASE}/users/${MAILBOX}/messages/${encodeURIComponent(messageId)}/createReply`,
       {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

@@ -20,6 +20,7 @@ interface IntakeItem {
   decline_reason: string | null;
   created_by_name: string | null;
   created_at: string;
+  read_at: string | null;        // null = unread (not yet opened)
   // Email-sourced (source === 'email') metadata
   web_link: string | null;
   from_email: string | null;
@@ -62,6 +63,7 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
   const [addOpen, setAddOpen] = useState(false);
   const [addForm, setAddForm] = useState<typeof BLANK>(BLANK);
   const [refreshing, setRefreshing] = useState(false);
+  const [unreadOnly, setUnreadOnly] = useState(false);
 
   const report = useCallback((list: IntakeItem[]) => {
     onPendingChange?.(list.filter(i => i.status === 'pending').length);
@@ -86,6 +88,14 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
       due: item.due ? item.due.slice(0, 10) : '', notes: item.notes || '',
     });
     setDeclineOpen(false);
+    // Opening an unread item marks it read (persisted), and updates the count locally.
+    if (!item.read_at) {
+      const stamp = new Date().toISOString();
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, read_at: stamp } : i));
+      api.post(`/intake/${item.id}/read`).catch(() => {
+        setItems(prev => prev.map(i => i.id === item.id ? { ...i, read_at: null } : i)); // revert on failure
+      });
+    }
   };
 
   const handleRefresh = async () => {
@@ -156,23 +166,30 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
     }
   };
 
-  const pending = items.filter(i => i.status === 'pending');
-  const processed = items.filter(i => i.status !== 'pending');
+  const unreadCount = items.filter(i => !i.read_at).length;
+  const shown = unreadOnly ? items.filter(i => !i.read_at) : items;
+  const pending = shown.filter(i => i.status === 'pending');
+  const processed = shown.filter(i => i.status !== 'pending');
 
   const fmt = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
   const ItemRow = ({ item }: { item: IntakeItem }) => {
     const isActive = selected?.id === item.id;
+    const unread = !item.read_at;
     return (
       <div onClick={() => openItem(item)} style={{
-        padding: '12px 18px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
+        padding: '12px 18px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
         background: isActive ? 'var(--surface2)' : 'transparent',
+        borderLeft: unread ? '3px solid var(--blue)' : '3px solid transparent',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
-          <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)' }}>{item.name}</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+            {unread && <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--blue)', flexShrink: 0 }}/>}
+            <span style={{ fontSize: 13, fontWeight: unread ? 900 : 700, color: unread ? 'var(--text)' : 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
+          </span>
           <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, whiteSpace: 'nowrap', marginLeft: 8 }}>{fmt(item.created_at)}</span>
         </div>
-        <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginBottom: 3 }}>{item.gc || '—'}{item.loc ? ` · ${item.loc}` : ''}</div>
+        <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: unread ? 700 : 600, marginBottom: 3 }}>{item.gc || '—'}{item.loc ? ` · ${item.loc}` : ''}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {item.status === 'accepted' && <span style={{ fontSize: 10.5, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'var(--green-soft)', color: 'var(--green)', textTransform: 'uppercase' }}>Accepted</span>}
           {item.status === 'declined' && <span style={{ fontSize: 10.5, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'var(--surface2)', color: 'var(--text3)', textTransform: 'uppercase' }}>Rejected</span>}
@@ -215,15 +232,35 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
       <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', height: 'calc(100vh - 60px)' }}>
         {/* Left: inbox list */}
         <div style={{ borderRight: '1px solid var(--border)', overflowY: 'auto' }}>
-          <div style={{ padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
-            <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)' }}>Intake Inbox</span>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn ghost" onClick={handleRefresh} disabled={refreshing} style={{ fontSize: 12, padding: '6px 12px' }} title="Pull new bid-tagged emails from Outlook">
-                <Icon name="sync" size={13} stroke={2.2}/> {refreshing ? 'Refreshing…' : 'Refresh'}
-              </button>
-              <button className="btn" onClick={() => { setAddOpen(true); setSelected(null); }} style={{ fontSize: 12, padding: '6px 12px' }}>
-                <Icon name="plus" size={13} stroke={2.4}/> Add
-              </button>
+          <div style={{ padding: '14px 18px 10px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)' }}>Intake Inbox</span>
+                {unreadCount > 0 && (
+                  <span style={{ fontSize: 11, fontWeight: 900, color: '#fff', background: 'var(--blue)', borderRadius: 10, padding: '1px 8px', minWidth: 18, textAlign: 'center' }}>{unreadCount}</span>
+                )}
+              </span>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn ghost" onClick={handleRefresh} disabled={refreshing} style={{ fontSize: 12, padding: '6px 12px' }} title="Pull new bid-tagged emails from Outlook">
+                  <Icon name="sync" size={13} stroke={2.2}/> {refreshing ? 'Refreshing…' : 'Refresh'}
+                </button>
+                <button className="btn" onClick={() => { setAddOpen(true); setSelected(null); }} style={{ fontSize: 12, padding: '6px 12px' }}>
+                  <Icon name="plus" size={13} stroke={2.4}/> Add
+                </button>
+              </div>
+            </div>
+            <div style={{ display: 'inline-flex', background: 'var(--surface2)', borderRadius: 8, padding: 2 }}>
+              {([['unread', `Unread${unreadCount ? ` · ${unreadCount}` : ''}`], ['all', 'All']] as const).map(([key, label]) => {
+                const active = (key === 'unread') === unreadOnly;
+                return (
+                  <button key={key} onClick={() => setUnreadOnly(key === 'unread')} style={{
+                    fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 6, cursor: 'pointer', border: 'none',
+                    background: active ? 'var(--surface)' : 'transparent',
+                    color: active ? 'var(--text)' : 'var(--text3)',
+                    boxShadow: active ? '0 1px 2px rgba(0,0,0,.08)' : 'none',
+                  }}>{label}</button>
+                );
+              })}
             </div>
           </div>
           {loading ? (
@@ -242,7 +279,13 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
                   {processed.map(i => <ItemRow key={i.id} item={i}/>)}
                 </>
               )}
-              {items.length === 0 && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Inbox empty. Click “Add” to log an incoming bid.</div>}
+              {shown.length === 0 && (
+                <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
+                  {items.length === 0
+                    ? 'Inbox empty. Click “Add” to log an incoming bid.'
+                    : unreadOnly ? 'No unread items. Switch to “All” to see everything.' : 'No items.'}
+                </div>
+              )}
             </>
           )}
         </div>

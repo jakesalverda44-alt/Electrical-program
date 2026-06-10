@@ -38,22 +38,46 @@ function toGraphDateTime(at: Date): string {
 }
 
 /**
- * Add a bid's due date to the calendar as an all-day event with a reminder 2 days before.
- * Used by the Intake Inbox accept flow. Non-blocking: logs and swallows all errors so an
- * accept never fails because of the calendar. Returns the created event id (or null).
+ * Resolve a due-date input to the literal calendar day (YYYY-MM-DD), no timezone math. The
+ * Intake review sends an ISO date from a date picker ("2026-06-20"); we use those components
+ * verbatim so an all-day event lands on exactly that day. Falls back to parsing other inputs
+ * via the ET wall-clock. Returns null when the value isn't a real date.
  */
-export async function pushBidDueToCalendar(bid: {
-  id: string; name: string; gc: string | null; loc: string | null; due: string | Date | null;
-  source_email_link?: string | null;
-}): Promise<string | null> {
-  if (!bid.due) return null;
+export function toCalendarDay(value: string | Date): string | null {
+  if (typeof value === 'string') {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value.trim());
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  }
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return null;
+  return toGraphDateTime(d).slice(0, 10);
+}
+
+/** YYYY-MM-DD one day after the given calendar day (string math, no timezone drift). */
+export function nextCalendarDay(day: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  const next = new Date(Date.UTC(y, m - 1, d + 1));
+  return next.toISOString().slice(0, 10);
+}
+
+/**
+ * Add a bid's due date to the calendar as an all-day event with a reminder 2 days before,
+ * built from the bid's explicit due_date (not a date parsed out of the email). Used by the
+ * Intake Inbox accept flow. Non-blocking: logs and swallows all errors so an accept never
+ * fails because of the calendar. No-op only when dueDate is empty. Returns the event id.
+ */
+export async function pushBidDueToCalendar(
+  bid: { id: string; name: string; gc: string | null; loc: string | null; source_email_link?: string | null },
+  dueDate: string | Date | null,
+): Promise<string | null> {
+  if (!dueDate) return null;
   try {
-    const due = new Date(bid.due);
-    if (isNaN(due.getTime())) return null;
-    // Treat the due date as an all-day event on that calendar day (ET).
-    const dayStart = toGraphDateTime(due).slice(0, 10); // YYYY-MM-DD
-    const next = new Date(due.getTime() + 24 * 60 * 60 * 1000);
-    const dayEnd = toGraphDateTime(next).slice(0, 10);
+    const dayStart = toCalendarDay(dueDate);
+    if (!dayStart) {
+      logger.warn({ bidId: bid.id, dueDate }, '[calendar] bid-due skipped — unparseable due date');
+      return null;
+    }
+    const dayEnd = nextCalendarDay(dayStart);
 
     const bodyLines = [
       bid.gc ? `GC: ${bid.gc}` : null,
