@@ -359,8 +359,9 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
 });
 
 router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
-  if (!(await loadOwnedBid(req, res))) return;
-  const { name, gc, loc, amount, due, sheets, contact, project_type, sq_ft } = req.body;
+  const existingBid = await loadOwnedBid(req, res);
+  if (!existingBid) return;
+  const { name, gc, loc, amount, due, sheets, contact, project_type, sq_ft, date_won } = req.body;
   const fields: string[] = [];
   const vals: unknown[] = [];
   let i = 1;
@@ -373,15 +374,44 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (contact      !== undefined) { fields.push(`contact=$${i++}`);      vals.push(contact.trim()); }
   if (project_type !== undefined) { fields.push(`project_type=$${i++}`); vals.push(project_type || null); }
   if (sq_ft        !== undefined) { fields.push(`sq_ft=$${i++}`);        vals.push(sq_ft === '' || sq_ft === null ? null : Number(sq_ft)); }
-  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
-  fields.push(`updated_at=now()`);
-  vals.push(req.params.id);
-  const { rows } = await pool.query(
-    `UPDATE bids SET ${fields.join(',')} WHERE id=$${i} RETURNING *`,
-    vals
-  );
-  if (!rows.length) return res.status(404).json({ error: 'Not found' });
-  res.json(withDueDays(rows[0]));
+  if (!fields.length && date_won === undefined) return res.status(400).json({ error: 'Nothing to update' });
+  let bid = existingBid;
+  if (fields.length) {
+    fields.push(`updated_at=now()`);
+    vals.push(req.params.id);
+    const { rows } = await pool.query(
+      `UPDATE bids SET ${fields.join(',')} WHERE id=$${i} RETURNING *`,
+      vals
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    bid = rows[0];
+  }
+
+  // Keep won_jobs in sync for awarded bids: amount and/or date_won changed.
+  let wonJob = null;
+  if (bid.stage === 'awarded' && (amount !== undefined || (date_won !== undefined && date_won))) {
+    const wjFields: string[] = [];
+    const wjVals: unknown[] = [];
+    let wi = 1;
+    if (amount !== undefined) {
+      wjFields.push(`value=$${wi++}`);
+      wjVals.push(amount === '' || amount === null ? 0 : Number(amount));
+    }
+    if (date_won !== undefined && date_won) {
+      wjFields.push(`date_won=$${wi++}`);
+      wjVals.push(date_won);
+    }
+    if (wjFields.length) {
+      wjVals.push(bid.id);
+      const { rows: wj } = await pool.query(
+        `UPDATE won_jobs SET ${wjFields.join(',')} WHERE proposal_id=$${wi} RETURNING *`,
+        wjVals
+      );
+      wonJob = wj[0] || null;
+    }
+  }
+
+  res.json({ bid: withDueDays(bid), wonJob });
 });
 
 // List files from the Drive Photos folder for this project.

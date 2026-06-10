@@ -122,11 +122,11 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
   const [overCol, setOverCol] = useState<PhaseKey|null>(null);
   const [detail,  setDetail]  = useState<Gen|null>(null);
   const [editingDetail, setEditingDetail] = useState(false);
-  const [editDraft, setEditDraft] = useState({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '' });
+  const [editDraft, setEditDraft] = useState({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '', date_won: '' });
   const [editSaving, setEditSaving] = useState(false);
 
   const startDetailEdit = (g: Gen) => {
-    setEditDraft({ customer: g.customer||'', loc: g.loc||'', mfr: g.mfr||'Kohler', model: g.model||'', kw: String(g.kw??''), amount: String(g.amount??''), addons: String(g.addons??'') });
+    setEditDraft({ customer: g.customer||'', loc: g.loc||'', mfr: g.mfr||'Kohler', model: g.model||'', kw: String(g.kw??''), amount: String(g.amount??''), addons: String(g.addons??''), date_won: g.date_won ? String(g.date_won).slice(0,10) : '' });
     setEditingDetail(true);
   };
 
@@ -137,10 +137,12 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
         customer: editDraft.customer.trim(), loc: editDraft.loc.trim(), mfr: editDraft.mfr,
         model: editDraft.model.trim(), kw: Number(editDraft.kw)||0,
         amount: Number(editDraft.amount)||0, addons: Number(editDraft.addons)||0,
+        ...(editDraft.date_won ? { date_won: editDraft.date_won } : {}),
       });
       const updated = data.gen ?? data;
       setGens(prev => prev.map(x => x.id === updated.id ? updated : x));
       setDetail(updated);
+      if (data.wonJob) setWonJobs(prev => prev.map(w => w.proposal_id === updated.id ? data.wonJob : w));
       setEditingDetail(false);
       showToast({ title: 'Details updated', sub: updated.customer });
     } finally {
@@ -365,6 +367,14 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
                     <option>Kohler</option>
                     <option>Generac</option>
                   </select>
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Award Date (for sales reporting)</div>
+                  <input type="date" value={editDraft.date_won}
+                    onChange={e => setEditDraft(d => ({ ...d, date_won: e.target.value }))}
+                    style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 7,
+                      padding: '7px 10px', fontSize: 13, color: 'var(--text)', outline: 'none', boxSizing: 'border-box' }}
+                  />
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
                   <button className="btn" style={{ flex: 1, justifyContent: 'center' }} disabled={editSaving} onClick={() => saveDetailEdit(detail)}>

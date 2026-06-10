@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import Icon from '../../components/Icon';
-import { Gen } from '../../types';
+import { Gen, WonJob } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
 import RecordFiles from '../../components/RecordFiles';
 import { moneyFull } from '../../lib/money';
@@ -24,10 +24,10 @@ interface Props {
   onEditGen: (gen: Gen) => void;
   onDelete: (gen: Gen) => void;
   onClosed: (gen: Gen) => void;
-  onUpdated: (gen: Gen) => void;
+  onUpdated: (gen: Gen, wonJob?: WonJob | null) => void;
 }
 
-interface Draft { customer: string; loc: string; mfr: string; model: string; kw: string; amount: string; addons: string; }
+interface Draft { customer: string; loc: string; mfr: string; model: string; kw: string; amount: string; addons: string; date_won: string; }
 
 export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDelete, onClosed, onUpdated }: Props) {
   const canDelete = isPrivileged(useUser());
@@ -37,7 +37,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
   const [showBuildNotes, setShowBuildNotes] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [draft, setDraft] = useState<Draft>({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '' });
+  const [draft, setDraft] = useState<Draft>({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '', date_won: '' });
 
   const startEdit = () => {
     setDraft({
@@ -48,6 +48,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
       kw: String(gen.kw ?? ''),
       amount: String(gen.amount ?? ''),
       addons: String(gen.addons ?? ''),
+      date_won: gen.date_won ? String(gen.date_won).slice(0, 10) : '',
     });
     setEditing(true);
   };
@@ -63,9 +64,10 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
         kw: Number(draft.kw) || 0,
         amount: Number(draft.amount) || 0,
         addons: Number(draft.addons) || 0,
+        ...(gen.stage === 'awarded' && draft.date_won ? { date_won: draft.date_won } : {}),
       });
       const updated = data.gen ?? data;
-      onUpdated(updated);
+      onUpdated(updated, data.wonJob ?? null);
       setEditing(false);
       showToast({ title: 'Details updated', sub: updated.customer });
     } finally {
@@ -201,6 +203,15 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
                   <option>Generac</option>
                 </select>
               </div>
+              {gen.stage === 'awarded' && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Award Date (for sales reporting)</div>
+                  <input type="date" value={draft.date_won} onChange={set('date_won')}
+                    style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 7,
+                      padding: '7px 10px', fontSize: 13, color: 'var(--text)', outline: 'none', boxSizing: 'border-box' }}
+                  />
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
                 <button className="btn" style={{ flex: 1, justifyContent: 'center' }} disabled={saving} onClick={saveEdit}>
                   {saving ? 'Saving…' : 'Save'}

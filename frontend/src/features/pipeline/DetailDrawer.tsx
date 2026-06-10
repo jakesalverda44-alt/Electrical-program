@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
-import { Bid } from '../../types';
+import { Bid, WonJob } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
 import { PROJECT_TYPES } from '../preconstruction/constants';
 import api from '../../api/client';
@@ -24,13 +24,13 @@ interface Props {
   onCancelLost: () => void;
   onClose: () => void;
   onOpenPreconstruction: (id: string) => void;
-  onBidEdited: (bid: Bid) => void;
+  onBidEdited: (bid: Bid, wonJob?: WonJob | null) => void;
   onDelete: (bid: Bid) => void;
   onClosed: (bid: Bid) => void;
 }
 
 export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, onClose, onOpenPreconstruction, onBidEdited, onDelete, onClosed }: Props) {
-  const isTerminal = bid.stage === 'awarded' || bid.stage === 'lost';
+  const isTerminal = bid.stage === 'lost';
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [qualifying, setQualifying] = useState(false);
@@ -69,6 +69,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
     contact: bid.contact ?? '',
     project_type: bid.project_type ?? '',
     sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '',
+    date_won: bid.date_won ? String(bid.date_won).slice(0, 10) : '',
   });
 
   const setField = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
@@ -88,8 +89,9 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
         contact: form.contact,
         project_type: form.project_type || null,
         sq_ft: form.sq_ft === '' ? null : Number(form.sq_ft),
+        ...(bid.stage === 'awarded' && form.date_won ? { date_won: form.date_won } : {}),
       });
-      onBidEdited(data);
+      onBidEdited(data.bid ?? data, data.wonJob ?? null);
       setEditMode(false);
     } finally {
       setSaving(false);
@@ -125,7 +127,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {!isTerminal && (
               <button className="btn ghost" style={{ height: 30, fontSize: 12, padding: '0 10px' }}
-                onClick={() => { setEditMode(e => !e); setForm({ name: bid.name, gc: bid.gc, loc: bid.loc, amount: bid.amount != null ? String(bid.amount) : '', due: bid.due, sheets: bid.sheets ? String(bid.sheets) : '', contact: bid.contact ?? '', project_type: bid.project_type ?? '', sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '' }); }}>
+                onClick={() => { setEditMode(e => !e); setForm({ name: bid.name, gc: bid.gc, loc: bid.loc, amount: bid.amount != null ? String(bid.amount) : '', due: bid.due, sheets: bid.sheets ? String(bid.sheets) : '', contact: bid.contact ?? '', project_type: bid.project_type ?? '', sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '', date_won: bid.date_won ? String(bid.date_won).slice(0, 10) : '' }); }}>
                 <Icon name={editMode ? 'x' : 'gear'} size={13} stroke={2}/>{editMode ? 'Cancel' : 'Edit'}
               </button>
             )}
@@ -158,6 +160,12 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                   {PROJECT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
               </div>
+              {bid.stage === 'awarded' && (
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>Award Date (for sales reporting)</div>
+                  <input style={INPUT} type="date" value={form.date_won} onChange={setField('date_won')}/>
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                 <button className="btn" onClick={handleSave} disabled={saving || !form.name.trim() || !form.gc.trim()} style={{ flex: 1 }}>
                   <Icon name="check" size={14} stroke={2.2}/>{saving ? 'Saving…' : 'Save Changes'}

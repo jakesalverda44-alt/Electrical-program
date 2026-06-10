@@ -47,9 +47,10 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
     setDetail(prev => prev ? { ...prev, stage, ...(stage === 'lost' ? extra : { loss_reason: undefined, competitor: undefined }) } : prev);
   };
 
-  const handleBidEdited = (updated: Bid) => {
+  const handleBidEdited = (updated: Bid, wonJob?: WonJob | null) => {
     setBids(prev => prev.map(b => b.id === updated.id ? updated : b));
     setDetail(updated);
+    if (wonJob) setWonJobs(prev => prev.map(w => w.proposal_id === updated.id ? wonJob : w));
   };
 
   const handleDelete = async (bid: Bid) => {

@@ -280,7 +280,7 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
 
 router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (!(await loadOwnedGen(req, res))) return;
-  const { customer, loc, mfr, model, kw, amount, tax, addons, proposal_no, form_data, totals_data } = req.body;
+  const { customer, loc, mfr, model, kw, amount, tax, addons, proposal_no, form_data, totals_data, date_won } = req.body;
   const fields: string[] = [];
   const vals: unknown[] = [];
   let i = 1;
@@ -295,30 +295,45 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (proposal_no !== undefined) { fields.push(`proposal_no=$${i++}`); vals.push(proposal_no || null); }
   if (form_data   !== undefined) { fields.push(`form_data=$${i++}::jsonb`); vals.push(JSON.stringify(form_data)); }
   if (totals_data !== undefined) { fields.push(`totals_data=$${i++}::jsonb`); vals.push(JSON.stringify(totals_data)); }
-  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
-  fields.push(`updated_at=now()`);
-  vals.push(req.params.id);
-  const { rows } = await pool.query(
-    `UPDATE generator_proposals SET ${fields.join(',')} WHERE id=$${i} RETURNING *`,
-    vals
-  );
-  if (!rows.length) return res.status(404).json({ error: 'Not found' });
-  const gen = rows[0];
-
-  // If amount changed on an awarded gen, keep won_jobs (and the unpaid
-  // commission, at its existing rate) in sync.
-  let wonJob = null;
-  if (amount !== undefined && gen.stage === 'awarded') {
-    const { rows: wj } = await pool.query(
-      `UPDATE won_jobs
-       SET value = $1,
-           commission_amount = CASE WHEN commission_status = 'paid'
-             THEN commission_amount
-             ELSE ROUND($1 * COALESCE(commission_rate, 0) / 100, 2) END
-       WHERE proposal_id = $2 RETURNING *`,
-      [Number(amount), gen.id]
+  if (!fields.length && date_won === undefined) return res.status(400).json({ error: 'Nothing to update' });
+  let gen = null;
+  if (fields.length) {
+    fields.push(`updated_at=now()`);
+    vals.push(req.params.id);
+    const { rows } = await pool.query(
+      `UPDATE generator_proposals SET ${fields.join(',')} WHERE id=$${i} RETURNING *`,
+      vals
     );
-    wonJob = wj[0] || null;
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    gen = rows[0];
+  } else {
+    const { rows } = await pool.query('SELECT * FROM generator_proposals WHERE id=$1 AND deleted_at IS NULL', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    gen = rows[0];
+  }
+
+  // Keep won_jobs in sync for awarded gens: amount and/or date_won changed.
+  let wonJob = null;
+  if (gen.stage === 'awarded' && (amount !== undefined || date_won !== undefined)) {
+    const wjFields: string[] = [];
+    const wjVals: unknown[] = [];
+    let wi = 1;
+    if (amount !== undefined) {
+      wjFields.push(`value=$${wi++}`, `commission_amount=CASE WHEN commission_status='paid' THEN commission_amount ELSE ROUND($${wi++}*COALESCE(commission_rate,0)/100,2) END`);
+      wjVals.push(Number(amount), Number(amount));
+    }
+    if (date_won !== undefined && date_won) {
+      wjFields.push(`date_won=$${wi++}`);
+      wjVals.push(date_won);
+    }
+    if (wjFields.length) {
+      wjVals.push(gen.id);
+      const { rows: wj } = await pool.query(
+        `UPDATE won_jobs SET ${wjFields.join(',')} WHERE proposal_id=$${wi} RETURNING *`,
+        wjVals
+      );
+      wonJob = wj[0] || null;
+    }
   }
 
   res.json({ gen, wonJob });

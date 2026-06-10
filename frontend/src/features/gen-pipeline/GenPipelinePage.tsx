@@ -200,7 +200,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
           onEditGen={g => { setDetail(null); onEditGen(g); }}
           onDelete={handleDelete}
           onClosed={handleClosed}
-          onUpdated={g => { setGens(prev => prev.map(x => x.id === g.id ? g : x)); setDetail(g); }}
+          onUpdated={(g, wj) => { setGens(prev => prev.map(x => x.id === g.id ? g : x)); setDetail(g); if (wj) setWonJobs(prev => prev.map(w => w.proposal_id === g.id ? wj : w)); }}
         />
       )}
     </div>
