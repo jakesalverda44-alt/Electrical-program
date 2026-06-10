@@ -14,8 +14,8 @@ import { fetchTodayEvents, TodayEvent } from '../integrations/outlookCalendar';
 export type BriefChip = 'Elec' | 'Gen' | 'Call';
 
 export interface BriefAttentionItem {
-  id: string;                          // 'email:<id>' | 'lead:<uuid>' | 'bid:<uuid>'
-  type: 'email' | 'lead-call' | 'bid';
+  id: string;                          // 'email:<id>' | 'lead:<uuid>' | 'bid:<uuid>' | 'task:<uuid>' | 'stale:<uuid>'
+  type: 'email' | 'lead-call' | 'bid' | 'task' | 'lead-stale';
   chips: BriefChip[];
   title: string;
   subtitle: string;
@@ -137,6 +137,10 @@ export function composeBullets(p: Omit<BriefPayload, 'briefBullets'>): string[] 
   if (f.replied > 0) out.push(`${f.replied} Kohler lead${f.replied === 1 ? '' : 's'} replied to your first message`);
   const dueSoon = p.attention.filter(a => a.type === 'bid').length;
   if (dueSoon > 0) out.push(`${dueSoon} bid${dueSoon === 1 ? '' : 's'} due within 3 days`);
+  const tasksDue = p.attention.filter(a => a.type === 'task').length;
+  if (tasksDue > 0) out.push(`${tasksDue} follow-up${tasksDue === 1 ? '' : 's'} due today or overdue`);
+  const stale = p.attention.filter(a => a.type === 'lead-stale').length;
+  if (stale > 0) out.push(`${stale} lead${stale === 1 ? ' has' : 's have'} never responded since being added — nudge them`);
   if (p.kpis.unreadEmails > 0) out.push(`${p.kpis.unreadEmails} unread email${p.kpis.unreadEmails === 1 ? '' : 's'} from known contacts`);
   if (p.kpis.wonThisMonthValue > 0) out.push(`$${Math.round(p.kpis.wonThisMonthValue).toLocaleString()} won this month`);
   if (p.todayEvents.length > 0) {
@@ -159,7 +163,7 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
   // CRM SQL (always fresh; scoped per-rep). Run in parallel.
   const scopeAnd = scope ? ' AND salesperson_id = $1' : '';
   const sp: unknown[] = scope ? [scope] : [];
-  const [bidsKpi, gensKpi, wonKpi, needCallRows, dueSoonRows, kohlerAccepted, intakeCounts, knownContacts] = await Promise.all([
+  const [bidsKpi, gensKpi, wonKpi, needCallRows, dueSoonRows, kohlerAccepted, intakeCounts, dueTasks, staleLeads, knownContacts] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS v FROM bids WHERE deleted_at IS NULL AND closed_at IS NULL AND stage IN ('due','submitted')${scopeAnd}`, sp),
     pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS v FROM generator_proposals WHERE deleted_at IS NULL AND stage IN ('building','sent')${scopeAnd}`, sp),
     pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(value),0)::float AS v FROM won_jobs WHERE deleted_at IS NULL AND date_won >= $${sp.length + 1}${scopeAnd}`, [...sp, monthStart]),
@@ -180,12 +184,34 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
               COUNT(*) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date)::int AS today,
               COUNT(*) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date - 1)::int AS yesterday
          FROM intake_items`),
-    // Known contact emails (for matching unread senders). Not rep-scoped: the mailbox is shared.
+    // Follow-up tasks due today or overdue (the Follow-ups view, condensed). Reps see their own.
+    pool.query(
+      `SELECT id, title, linked_type, linked_id, linked_name,
+              ((now() AT TIME ZONE 'America/New_York')::date - due_date)::int AS overdue_days
+         FROM tasks
+        WHERE status='open' AND due_date IS NOT NULL
+          AND due_date <= (now() AT TIME ZONE 'America/New_York')::date
+          ${scope ? 'AND assigned_to = $1' : ''}
+        ORDER BY due_date ASC LIMIT 10`, sp),
+    // Ghosted leads: first contact went out 2+ days ago and they have never replied or
+    // picked up — no inbound activity at all since the lead was added.
+    pool.query(
+      `SELECT id, name, phone, email, source, stage, notes,
+              EXTRACT(DAY FROM now() - created_at)::int AS age_days
+         FROM leads
+        WHERE deleted_at IS NULL AND stage NOT IN ('won','lost')
+          AND needs_call = false
+          AND first_contact_sent_at IS NOT NULL
+          AND first_contact_sent_at < now() - interval '2 days'
+          AND NOT EXISTS (SELECT 1 FROM lead_activity a WHERE a.lead_id = leads.id AND a.direction = 'in')${scopeAnd}
+        ORDER BY first_contact_sent_at ASC LIMIT 10`, sp),
+    // Known human contacts (for matching unread senders). Not rep-scoped: the mailbox is
+    // shared. Intake/plan-room senders (BuildingConnected, PlanHub, …) are intentionally
+    // not included — those are filtered into the Intake Inbox, not the respond queue.
     useGraph
       ? pool.query(
           `SELECT lower(email) AS email, 'lead' AS kind, id::text AS ref, name AS label FROM leads WHERE email IS NOT NULL AND email <> '' AND deleted_at IS NULL
-           UNION ALL SELECT lower(email), 'customer', id::text, name FROM customers WHERE email IS NOT NULL AND email <> ''
-           UNION ALL SELECT lower(from_email), 'intake', id::text, name FROM intake_items WHERE from_email IS NOT NULL AND from_email <> ''`)
+           UNION ALL SELECT lower(email), 'customer', id::text, name FROM customers WHERE email IS NOT NULL AND email <> ''`)
       : Promise.resolve({ rows: [] as Array<{ email: string; kind: string; ref: string; label: string }> }),
   ]);
 
@@ -217,18 +243,55 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
     });
   }
 
+  // ── Attention: follow-up tasks due today / overdue ──
+  for (const t of dueTasks.rows) {
+    const od = t.overdue_days as number;
+    attention.push({
+      id: `task:${t.id}`,
+      type: 'task',
+      chips: ['Call'],
+      title: t.title,
+      subtitle: `${t.linked_name ? `${t.linked_name} · ` : ''}${od > 0 ? `overdue ${od} day${od === 1 ? '' : 's'}` : 'due today'}`,
+      receivedAt: null,
+      briefing: `Follow-up "${t.title}"${t.linked_name ? ` for ${t.linked_name}` : ''} is ${od > 0 ? `${od} day${od === 1 ? '' : 's'} overdue` : 'due today'}. Knock it out and check it off in Follow-ups.`,
+      cta: t.linked_type === 'lead' && t.linked_id
+        ? { navTo: 'gen-leads', leadId: t.linked_id }
+        : { navTo: 'followups' },
+    });
+  }
+
+  // ── Attention: ghosted leads (no response at all since they were added) ──
+  for (const l of staleLeads.rows) {
+    const age = l.age_days as number;
+    const src = l.source === 'kohler' ? 'Kohler lead' : 'Lead';
+    attention.push({
+      id: `stale:${l.id}`,
+      type: 'lead-stale',
+      chips: ['Gen', 'Call'],
+      title: l.name,
+      subtitle: `${src} · added ${age} day${age === 1 ? '' : 's'} ago · no response yet`,
+      receivedAt: null,
+      briefing: `${l.name} hasn't responded at all since being added ${age} day${age === 1 ? '' : 's'} ago — your first contact went out but nothing came back. ${l.phone ? `Call ${l.phone} or send a nudge.` : 'No phone on file — send a nudge email.'}${l.notes ? ` Notes: ${l.notes}` : ''}`,
+      cta: { tel: l.phone ? `tel:${digits(l.phone)}` : undefined, navTo: 'gen-leads', leadId: l.id },
+    });
+  }
+
   // ── Attention: unread emails from real human contacts only. Automated notifications —
   // new-bid invitations (tagged → Intake Inbox) and Kohler new-lead alerts — are excluded
   // here and surfaced as arrival tallies instead. ──
   const contactByEmail = new Map<string, { kind: string; ref: string; label: string }>();
   for (const c of knownContacts.rows) if (c.email) contactByEmail.set(c.email, { kind: c.kind, ref: c.ref, label: c.label });
   const wantedCat = BID_CATEGORY.toLowerCase();
+  // Automated/plan-room senders never belong in the respond queue, even if their address
+  // somehow ends up on a lead or customer record.
+  const NOISE_SENDER = /no-?reply|do-?not-?reply|notification|mailer|automated|@buildingconnected\.|@planhub\./i;
   let unreadMatched = 0;
   for (const m of unread) {
     const tagged = (m.categories || []).some(c => c.trim().toLowerCase() === wantedCat);
     if (tagged || isKohlerNotification(m)) continue;
     const from = (m.from || '').toLowerCase();
-    const match = from ? contactByEmail.get(from) : undefined;
+    if (!from || NOISE_SENDER.test(from)) continue;
+    const match = contactByEmail.get(from);
     if (!match) continue;
     unreadMatched++;
     const chips: BriefChip[] = match.kind === 'lead' ? ['Gen'] : ['Elec'];
@@ -261,8 +324,8 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
     });
   }
 
-  // Sort: calls first, then emails (newest), then bids.
-  const order = { 'lead-call': 0, email: 1, bid: 2 } as const;
+  // Sort: deadline bids, then overdue follow-ups, calls, ghosted leads, then emails (newest).
+  const order = { bid: 0, task: 1, 'lead-call': 2, 'lead-stale': 3, email: 4 } as const;
   attention.sort((a, b) => order[a.type] - order[b.type]
     || String(b.receivedAt || '').localeCompare(String(a.receivedAt || '')));
 

@@ -52,4 +52,17 @@ describe('composeBullets', () => {
     });
     expect(bullets.some(b => /1 bid due within 3 days/.test(b))).toBe(true);
   });
+
+  it('summarizes due follow-ups and ghosted leads', () => {
+    const bullets = composeBullets({
+      ...base,
+      attention: [
+        { id: 'task:1', type: 'task', chips: ['Call'], title: 'T', subtitle: '', receivedAt: null, briefing: '', cta: {} },
+        { id: 'stale:1', type: 'lead-stale', chips: ['Gen', 'Call'], title: 'S', subtitle: '', receivedAt: null, briefing: '', cta: {} },
+        { id: 'stale:2', type: 'lead-stale', chips: ['Gen', 'Call'], title: 'S2', subtitle: '', receivedAt: null, briefing: '', cta: {} },
+      ],
+    });
+    expect(bullets.some(b => /1 follow-up due today or overdue/.test(b))).toBe(true);
+    expect(bullets.some(b => /2 leads have never responded since being added/.test(b))).toBe(true);
+  });
 });

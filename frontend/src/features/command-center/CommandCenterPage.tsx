@@ -72,6 +72,8 @@ function loadDone(): Set<string> {
 const KIND_META: Record<BriefAttentionItem['type'], { label: string; cls: string }> = {
   'lead-call': { label: 'Call', cls: 'call' },
   bid: { label: 'Bid due', cls: 'bid' },
+  task: { label: 'Follow-up', cls: 'task' },
+  'lead-stale': { label: 'No response', cls: 'stale' },
   email: { label: 'Reply', cls: 'reply' },
 };
 
@@ -127,8 +129,9 @@ export default function CommandCenterPage({ onNav }: Props) {
   const firstName = (user.name || '').split(/\s+/)[0] || 'there';
   const [quote, quoteBy] = quoteOfTheDay();
 
-  // Priorities = things to act on (deadline bids first, then calls). Replies live in their own queue.
-  const tasks = [...brief.attention.filter(a => a.type === 'bid'), ...brief.attention.filter(a => a.type === 'lead-call')];
+  // Priorities = things to act on, pre-ranked by the backend (deadline bids, overdue
+  // follow-ups, calls, ghosted leads). Replies live in their own queue.
+  const tasks = brief.attention.filter(a => a.type !== 'email');
   const replies = brief.attention.filter(a => a.type === 'email');
   const all = [...tasks, ...replies];
   const handled = all.filter(a => done.has(a.id)).length;

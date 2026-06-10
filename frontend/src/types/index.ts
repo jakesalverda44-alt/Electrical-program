@@ -198,7 +198,7 @@ export type BriefChip = 'Elec' | 'Gen' | 'Call';
 
 export interface BriefAttentionItem {
   id: string;
-  type: 'email' | 'lead-call' | 'bid';
+  type: 'email' | 'lead-call' | 'bid' | 'task' | 'lead-stale';
   chips: BriefChip[];
   title: string;
   subtitle: string;

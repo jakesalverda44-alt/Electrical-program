@@ -13,6 +13,8 @@ const TYPE_SUB: Record<BriefAttentionItem['type'], string> = {
   'lead-call': 'Lead · call to make',
   email: 'Unread email',
   bid: 'Active bid',
+  task: 'Follow-up due',
+  'lead-stale': 'Lead · no response yet',
 };
 
 export default function BriefDrawer({ item, onClose, onNav, onMarkContacted, markingContacted }: Props) {

@@ -97,6 +97,8 @@
 .cc2-task::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 3px; }
 .cc2-task.call::before { background: var(--green); }
 .cc2-task.bid::before { background: var(--red); }
+.cc2-task.task::before { background: var(--blue); }
+.cc2-task.stale::before { background: var(--orange); }
 .cc2-task:hover { transform: translateY(-2px); border-color: var(--border2); box-shadow: var(--shadow); }
 .cc2-task .rank { font-family: var(--mono); font-size: 21px; font-weight: 700; color: var(--text3); width: 32px; flex: none; }
 .cc2-task .body { flex: 1; min-width: 0; }
@@ -112,6 +114,8 @@
 }
 .tag.call { background: var(--green-soft); color: var(--green); }
 .tag.bid { background: rgba(224,106,106,.14); color: var(--red); }
+.tag.task { background: var(--blue-soft); color: var(--blue); }
+.tag.stale { background: var(--orange-soft); color: var(--orange); }
 .tag.reply { background: var(--blue-soft); color: var(--blue); }
 
 /* ── Respond queue ────────────────────────────────────────────────── */
