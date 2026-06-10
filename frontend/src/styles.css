@@ -620,18 +620,12 @@ button{font-family:inherit}
   .sd-chart { height: 140px !important; gap: 6px !important; }
   .sd-col .amt { font-size: 9px !important; }
 
-  /* Command Center respond queue — keep action buttons reachable */
-  .cc2-reply { padding: 10px 12px 10px 12px !important; gap: 10px !important; }
-  .cc2-reply .t { font-size: 12.5px !important; }
-  .cc-btn.p { font-size: 11px !important; padding: 5px 8px !important; }
-
   /* Sales dashboard hero pills wrap nicely */
   .sd-pills { gap: 6px !important; }
   .sd-pills .pill { font-size: 11px !important; padding: 5px 10px !important; }
 
-  /* Tighter side padding on phone for main content pages */
-  .cc2-root { padding: 12px 14px 80px !important; }
-  .sd-root  { padding: 12px 14px 80px !important; }
+  /* Tighter side padding on phone (Command Center handles its own in command-center.css) */
+  .sd-root { padding: 12px 14px 80px !important; }
 }
 
 @media (max-width: 480px) {
