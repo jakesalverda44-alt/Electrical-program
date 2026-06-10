@@ -19,7 +19,7 @@ export interface GraphAttachment {
 }
 
 export interface SendArgs {
-  to: string;
+  to: string | string[];
   subject: string;
   html: string;
   attachments?: GraphAttachment[];
@@ -31,10 +31,11 @@ export function isGraphMailConfigured(): boolean {
 
 export async function graphSendMail({ to, subject, html, attachments }: SendArgs): Promise<void> {
   const token = await getGraphToken();
+  const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
   const message: Record<string, unknown> = {
     subject,
     body: { contentType: 'HTML', content: html },
-    toRecipients: [{ emailAddress: { address: to } }],
+    toRecipients: toList.map(address => ({ emailAddress: { address } })),
   };
   if (attachments?.length) message.attachments = attachments;
 

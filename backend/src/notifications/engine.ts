@@ -3,6 +3,7 @@ import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { logger } from '../utils/logger';
 import { escapeHtml } from '../utils/escapeHtml';
+import { graphSendMail, isGraphMailConfigured } from '../email/graphMailer';
 import { parseDueDays } from '../utils/dueDate';
 import { purgeExpired } from '../utils/audit';
 import {
@@ -149,6 +150,35 @@ const TYPE_LABELS: Record<ReminderType, string> = {
   lead_overdue: 'Overdue Leads',
 };
 
+/**
+ * Deliver a digest email. Prefers Microsoft Graph — our primary mailer: no API key to
+ * configure, sends from the shared JakeS@ mailbox so replies land in the inbox. Falls
+ * back to Resend only when Graph isn't configured and a Resend key + from-address are
+ * set in app settings. Returns true if an email was actually sent.
+ */
+async function deliverDigestEmail(
+  to: string | string[], subject: string, html: string, text: string,
+): Promise<boolean> {
+  if (isGraphMailConfigured()) {
+    await graphSendMail({ to, subject, html });
+    return true;
+  }
+  // Legacy fallback: Resend (only if a key + from-address were configured).
+  const [apiKey, fromAddress, fromName] = await Promise.all([
+    getSetting('email_resend_api_key'), getSetting('email_from_address'), getSetting('email_from_name'),
+  ]);
+  if (!apiKey || !fromAddress) {
+    logger.warn('[reminders] no mailer configured (Graph or Resend) — skipping digest email');
+    return false;
+  }
+  const resend = new Resend(apiKey);
+  await resend.emails.send({
+    from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
+    to, subject, html, text,
+  });
+  return true;
+}
+
 async function sendDigests(
   prefs: Awaited<ReturnType<typeof getReminderPrefs>>,
   fresh: Record<ReminderType, string[]>,
@@ -156,11 +186,6 @@ async function sendDigests(
   const sections = (Object.keys(fresh) as ReminderType[])
     .filter(t => prefs.types[t].email && fresh[t].length);
   if (!sections.length) return;
-
-  const [apiKey, fromAddress, fromName] = await Promise.all([
-    getSetting('email_resend_api_key'), getSetting('email_from_address'), getSetting('email_from_name'),
-  ]);
-  if (!apiKey || !fromAddress) { logger.warn('[reminders] email enabled but email delivery not configured'); return; }
 
   const recipients = await resolveRecipients(prefs);
   if (!recipients.length) return;
@@ -172,15 +197,12 @@ async function sendDigests(
   const text = sections.map(t => `${TYPE_LABELS[t]}\n${fresh[t].map(l => ` - ${l}`).join('\n')}`).join('\n\n');
 
   try {
-    const resend = new Resend(apiKey);
-    await resend.emails.send({
-      from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
-      to: recipients,
-      subject: 'Your CRM reminders',
-      html: `<div style="max-width:560px"><h2 style="font-family:sans-serif">Reminders</h2>${html}</div>`,
+    const sent = await deliverDigestEmail(
+      recipients, 'Your CRM reminders',
+      `<div style="max-width:560px"><h2 style="font-family:sans-serif">Reminders</h2>${html}</div>`,
       text,
-    });
-    logger.info({ sections, recipients: recipients.length }, '[reminders] digest sent');
+    );
+    if (sent) logger.info({ sections, recipients: recipients.length }, '[reminders] digest sent');
   } catch (err) {
     logger.error({ err }, '[reminders] digest email failed');
   }
@@ -229,14 +251,6 @@ export async function maybeSendDailyLeadDigest(): Promise<void> {
       return;
     }
 
-    const [apiKey, fromAddress, fromName] = await Promise.all([
-      getSetting('email_resend_api_key'), getSetting('email_from_address'), getSetting('email_from_name'),
-    ]);
-    if (!apiKey || !fromAddress) {
-      logger.warn('[lead-digest] email not configured; skipping daily digest');
-      return;
-    }
-
     const html = `<div style="max-width:560px;font-family:sans-serif">
       <h2 style="color:#d97706">Generator Leads — Daily Overdue Summary</h2>
       <p style="color:#666;font-size:14px">${lines.length} lead${lines.length === 1 ? '' : 's'} need attention today.</p>
@@ -245,14 +259,12 @@ export async function maybeSendDailyLeadDigest(): Promise<void> {
     </div>`;
     const text = `Generator Leads — Daily Overdue Summary\n\n${lines.map(l => ` - ${l}`).join('\n')}`;
 
-    const resend = new Resend(apiKey);
-    await resend.emails.send({
-      from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
-      to: DAILY_DIGEST_RECIPIENT,
-      subject: `${lines.length} lead${lines.length === 1 ? '' : 's'} overdue — ${day}`,
-      html,
-      text,
-    });
+    const sent = await deliverDigestEmail(
+      DAILY_DIGEST_RECIPIENT,
+      `${lines.length} lead${lines.length === 1 ? '' : 's'} overdue — ${day}`,
+      html, text,
+    );
+    if (!sent) return; // no mailer configured — try again next run rather than marking sent
     logger.info({ count: lines.length }, '[lead-digest] daily digest sent');
 
     // Mark sent for today

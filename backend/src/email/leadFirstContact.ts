@@ -117,6 +117,26 @@ export function leadNudgeHtml(firstName: string): string {
 }
 
 /**
+ * HTML body for the "going cold" final touch: sent a few days after the day-2 nudge
+ * when a Kohler lead still hasn't replied and nobody has reached them. No-pressure,
+ * leaves the door open, and makes it one tap to call/text Jake directly.
+ */
+export function leadColdHtml(firstName: string): string {
+  const name = escapeHtml(firstName);
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;line-height:1.6;">
+    <p>Hi ${name},</p>
+    <p>I haven't heard back, so I'll assume the timing isn't right just yet — no problem
+    at all. I'll close out the request for now so I'm not crowding your inbox.</p>
+    <p>Whenever you're ready to talk about backup power, we'll be here. Just reply to this
+    email or call or text me directly at
+    <a href="tel:3528018997" style="color:#1c2c54;">352-801-8997</a> and we'll pick right
+    back up — no starting over.</p>
+    <p>Thanks for considering Accurate Power &amp; Technology.</p>
+    ${signatureHtml()}
+  </div>`;
+}
+
+/**
  * Send the first-contact email to an email lead, with the logo embedded inline
  * (Content-ID "apt-logo"). Throws on failure so the caller can leave
  * first_contact_sent_at NULL and retry later.
@@ -145,6 +165,21 @@ export async function sendLeadNudgeEmail(lead: LeadForContact): Promise<void> {
     attachments: [getLogoAttachment()],
   });
   logger.info({ leadId: lead.id }, '[lead nudge] engagement email sent');
+}
+
+/**
+ * Send the "going cold" final touch to a lead that never engaged after the nudge.
+ * Throws on failure so the caller can release the claim and retry.
+ */
+export async function sendLeadColdEmail(lead: LeadForContact): Promise<void> {
+  if (!lead.email) throw new Error('lead has no email');
+  await graphSendMail({
+    to: lead.email,
+    subject: "Closing the loop on your generator request",
+    html: leadColdHtml(firstNameOf(lead.name)),
+    attachments: [getLogoAttachment()],
+  });
+  logger.info({ leadId: lead.id }, '[lead cold] final-touch email sent');
 }
 
 /**
