@@ -6,7 +6,7 @@ import { requireAuth, requireAuthOrApiKey, AuthRequest, ownScopeId } from '../mi
 import { asyncHandler } from '../utils/asyncHandler';
 import { validateBody, inputErrorMessage } from '../utils/validate';
 import { logger } from '../utils/logger';
-import { sendLeadFirstContactEmail, sendNeedsCallNotification } from '../email/leadFirstContact';
+import { sendLeadFirstContactEmail, sendNeedsCallNotification, isPlaceholderLeadEmail } from '../email/leadFirstContact';
 import { createStageFollowup, closeLeadFollowups } from '../utils/leadFollowups';
 import { getStageConfig } from '../utils/leadStageConfig';
 import { pushSiteVisitToCalendar } from '../integrations/outlookCalendar';
@@ -98,7 +98,7 @@ async function handleLeadFirstContact(leadId: string): Promise<void> {
   const lead = rows[0];
 
   try {
-    if (lead.contact_method === 'email' && lead.email) {
+    if (lead.contact_method === 'email' && lead.email && !isPlaceholderLeadEmail(lead.email)) {
       await sendLeadFirstContactEmail(lead);
       await pool.query(
         'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3)',
@@ -107,12 +107,13 @@ async function handleLeadFirstContact(leadId: string): Promise<void> {
       // First contact made → auto-advance New -> Contacted.
       await advanceToContacted(lead.id, 'System');
     } else {
-      // Phone-only lead: flag for a manual call and notify the team.
-      await pool.query('UPDATE leads SET needs_call = true WHERE id = $1', [lead.id]);
+      // Phone-only lead (no email, or a Kohler refuse@ placeholder): flag for a
+      // manual call and notify the team.
+      await pool.query(`UPDATE leads SET needs_call = true, contact_method = 'phone' WHERE id = $1`, [lead.id]);
       await sendNeedsCallNotification(lead);
       await pool.query(
         'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3)',
-        [lead.id, 'note', 'No email on lead — flagged for a call and notified the team']
+        [lead.id, 'note', 'No usable email on lead — flagged for a call and notified the team']
       ).catch(() => {});
     }
   } catch (err) {
@@ -371,10 +372,11 @@ router.post('/', leadWriteLimiter, requireAuthOrApiKey, validateBody(leadCreateS
   if (!name?.trim()) { res.status(400).json({ error: 'Name is required' }); return; }
 
   // Split the lead on whether we captured an email: with one we can email the
-  // first-contact message, without one it must be a phone call. An explicit
-  // contact_method in the request still wins.
-  const hasEmail = typeof email === 'string' && email.trim() !== '';
-  const resolvedContactMethod = contact_method ?? (hasEmail ? 'email' : 'phone');
+  // first-contact message, without one it must be a phone call. Kohler "refused
+  // to share" placeholders (refuse@kohler.com) count as no email. An explicit
+  // contact_method in the request still wins — unless the email is a placeholder.
+  const hasEmail = typeof email === 'string' && email.trim() !== '' && !isPlaceholderLeadEmail(email);
+  const resolvedContactMethod = hasEmail ? (contact_method ?? 'email') : 'phone';
 
   const extId = external_lead_id?.trim() || null;
 

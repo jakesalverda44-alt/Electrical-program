@@ -92,6 +92,17 @@ function getLogoAttachment(): GraphAttachment {
 
 // --- Content (unchanged subject + HTML body) ---
 
+/**
+ * Kohler sends placeholder addresses when a homeowner refuses to share an email
+ * (e.g. refuse@kohler.com). These can never be emailed — leads carrying one are
+ * treated as phone-only and flagged for a call.
+ */
+export function isPlaceholderLeadEmail(email: string | null | undefined): boolean {
+  const e = (email ?? '').trim().toLowerCase();
+  if (!e) return false;
+  return e.endsWith('@kohler.com') || /^(refuse[d]?|no-?email|do-?not-?email|none|declined)@/.test(e);
+}
+
 /** First word of the lead's name, or "there" when we have nothing usable. */
 export function firstNameOf(name: string | null | undefined): string {
   const trimmed = (name ?? '').trim();
@@ -99,18 +110,9 @@ export function firstNameOf(name: string | null | undefined): string {
   return trimmed.split(/\s+/)[0];
 }
 
-/** HTML body for the first-contact email. `firstName` is escaped before use. */
-export function leadFirstContactHtml(firstName: string): string {
-  const name = escapeHtml(firstName);
-  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;line-height:1.6;">
-    <p>Hi ${name},</p>
-    <p>Thanks for reaching out through Kohler about a home standby generator — we've got
-    your information and someone from our team will follow up within one business day.</p>
-    <p>Want to move faster? Reply here with the best number and time to reach you, or call
-    or text Jake directly at <a href="tel:3528018997" style="color:#1c2c54;">352-801-8997</a>.
-    We'll walk you through your options and rough pricing.</p>
-    <p style="font-weight:bold;">What's the best way and time to reach you?</p>
-    <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-top:14px;">
+/** Shared signature block (logo via inline Content-ID). */
+function signatureHtml(): string {
+  return `<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-top:14px;">
       <tr>
         <td style="vertical-align:middle;padding-right:16px;border-right:2px solid #1c2c54;">
           <img src="cid:${LOGO_CID}" alt="Accurate Power and Technology" width="180"
@@ -126,7 +128,52 @@ export function leadFirstContactHtml(firstName: string): string {
           <div><a href="mailto:JakeS@accuratepowerandtechnology.com" style="color:#1c2c54;">JakeS@accuratepowerandtechnology.com</a></div>
         </td>
       </tr>
-    </table>
+    </table>`;
+}
+
+/** HTML body for the first-contact email. `firstName` is escaped before use. */
+export function leadFirstContactHtml(firstName: string): string {
+  const name = escapeHtml(firstName);
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;line-height:1.6;">
+    <p>Hi ${name},</p>
+    <p>Thanks for reaching out through Kohler about a home standby generator — we've got
+    your information and someone from our team will follow up within one business day.</p>
+    <p>Want to move faster? Reply here with the best number and time to reach you, or call
+    or text Jake directly at <a href="tel:3528018997" style="color:#1c2c54;">352-801-8997</a>.
+    We'll walk you through your options and rough pricing.</p>
+    <p style="font-weight:bold;">What's the best way and time to reach you?</p>
+    ${signatureHtml()}
+  </div>`;
+}
+
+/**
+ * HTML body for the day-2 engagement nudge: sent the morning after a Kohler lead
+ * was accepted when they haven't replied and nobody has reached them by phone.
+ * Goal: get them to reply with what they actually want out of a generator.
+ */
+export function leadNudgeHtml(firstName: string): string {
+  const name = escapeHtml(firstName);
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;line-height:1.6;">
+    <p>Hi ${name},</p>
+    <p>I reached out yesterday after your Kohler request came through — I know these
+    things can land in a busy inbox, so I wanted to float it back to the top.</p>
+    <p>Every generator project is a little different, and the more I know up front, the
+    more useful I can be. If you've got 30 seconds, just hit reply and tell me:</p>
+    <ul style="margin:0 0 14px 0;padding-left:22px;">
+      <li style="margin-bottom:6px;">What's got you thinking about backup power — storm season,
+        past outages, medical equipment, working from home?</li>
+      <li style="margin-bottom:6px;">Whole-home coverage, or just the essentials
+        (A/C, fridge, well pump)?</li>
+      <li style="margin-bottom:6px;">Do you have natural gas at the house, or would this
+        run on propane?</li>
+      <li>Any timeline in mind — before storm season hits, or just exploring options?</li>
+    </ul>
+    <p>Even a one-line reply helps me show up with real answers and honest numbers
+    instead of a canned pitch.</p>
+    <p>Rather talk it through? Call or text me at
+    <a href="tel:3528018997" style="color:#1c2c54;">352-801-8997</a> — ten minutes is
+    usually all it takes to point you in the right direction.</p>
+    ${signatureHtml()}
   </div>`;
 }
 
@@ -147,6 +194,21 @@ export async function sendLeadFirstContactEmail(lead: LeadForContact): Promise<v
 }
 
 /**
+ * Send the day-2 engagement nudge to a lead that has gone quiet since first
+ * contact. Throws on failure so the caller can release the claim and retry.
+ */
+export async function sendLeadNudgeEmail(lead: LeadForContact): Promise<void> {
+  if (!lead.email) throw new Error('lead has no email');
+  await graphSendMail({
+    to: lead.email,
+    subject: 'Quick question about your generator project',
+    html: leadNudgeHtml(firstNameOf(lead.name)),
+    attachments: [getLogoAttachment()],
+  });
+  logger.info({ leadId: lead.id }, '[lead nudge] engagement email sent');
+}
+
+/**
  * Notify the team that a phone-only lead needs a manual call. Throws on failure
  * so the caller can leave first_contact_sent_at NULL and retry later.
  */
@@ -155,8 +217,8 @@ export async function sendNeedsCallNotification(lead: LeadForContact): Promise<v
   const name = lead.name || 'Unknown';
   await graphSendMail({
     to: NEEDS_CALL_TO,
-    subject: 'New Kohler lead — no email, needs a call',
-    html: `<p>New Kohler lead, no email — call ${escapeHtml(name)} at ${escapeHtml(phone)}.</p>`,
+    subject: 'New Kohler lead — no usable email, needs a call',
+    html: `<p>New Kohler lead with no usable email — call ${escapeHtml(name)} at ${escapeHtml(phone)}.</p>`,
   });
   logger.info({ leadId: lead.id }, '[lead first-contact] needs-call notification sent');
 }
