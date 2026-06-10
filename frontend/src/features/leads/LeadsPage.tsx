@@ -33,13 +33,32 @@ function followUpMeta(d?: string | null): { label: string; color: string } | nul
   return { label: fmtDate(d)!, color: 'var(--text3)' };
 }
 
+interface LeadAction {
+  id: string; name: string; phone: string | null; email: string | null;
+  stage: string; source: string; interest_level: string;
+  priority: 1 | 2 | 3; reason: string;
+}
+
+const PRIORITY_META: Record<number, { label: string; color: string }> = {
+  1: { label: 'Call now', color: 'var(--red)' },
+  2: { label: 'No response', color: 'var(--orange)' },
+  3: { label: 'Follow-up', color: 'var(--blue)' },
+};
+
 export default function LeadsPage({ onNav, onEditGen, onConverted }: Props) {
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [actions, setActions] = useState<LeadAction[]>([]);
   const [loading, setLoading] = useState(true);
   const [stageFilter, setStageFilter] = useState<LeadStageKey | 'all'>('all');
   const [contactFilter, setContactFilter] = useState<'all' | 'email' | 'phone'>('all');
   const [detail, setDetail] = useState<Lead | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+
+  const loadActions = useCallback(() => {
+    api.get<LeadAction[]>('/leads/action-queue')
+      .then(({ data }) => setActions(data))
+      .catch(() => {});
+  }, []);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -47,9 +66,15 @@ export default function LeadsPage({ onNav, onEditGen, onConverted }: Props) {
       .then(({ data }) => setLeads(data))
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+    loadActions();
+  }, [loadActions]);
 
   useEffect(() => { load(); }, [load]);
+
+  const openActionLead = (a: LeadAction) => {
+    const lead = leads.find(l => l.id === a.id);
+    if (lead) setDetail(lead);
+  };
 
   // Converted leads are handed off to the proposal pipeline and hidden from the board.
   const boardLeads = leads.filter(l => l.stage !== 'converted');
@@ -69,6 +94,66 @@ export default function LeadsPage({ onNav, onEditGen, onConverted }: Props) {
   return (
     <div className="scroll view-enter">
       <div style={{ padding: '20px 24px', maxWidth: 1100, margin: '0 auto' }}>
+
+        {/* Action queue: every lead that needs something, most urgent first */}
+        {actions.length > 0 && (
+          <div style={{
+            background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 14,
+            marginBottom: 20, overflow: 'hidden',
+          }}>
+            <div style={{
+              padding: '11px 16px', borderBottom: '1px solid var(--border)',
+              display: 'flex', alignItems: 'center', gap: 8,
+              fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--text2)',
+            }}>
+              ⚡ Needs action
+              <span style={{
+                fontFamily: 'var(--mono)', fontSize: 11, background: 'var(--surface2)',
+                borderRadius: 6, padding: '2px 8px', color: 'var(--text3)',
+              }}>{actions.length}</span>
+            </div>
+            <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+              {actions.map((a, i) => {
+                const pm = PRIORITY_META[a.priority];
+                return (
+                  <div
+                    key={a.id}
+                    onClick={() => openActionLead(a)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', cursor: 'pointer',
+                      borderBottom: i < actions.length - 1 ? '1px solid var(--border)' : 'none',
+                      transition: 'background .1s',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface2)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = '')}
+                  >
+                    <span style={{
+                      flex: 'none', fontSize: 10, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase',
+                      padding: '3px 9px', borderRadius: 6, background: pm.color + '22', color: pm.color,
+                      minWidth: 86, textAlign: 'center',
+                    }}>{pm.label}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)' }}>{a.name}</span>
+                      <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 10 }}>
+                        {a.reason}{a.source === 'kohler' ? ' · Kohler' : ''}
+                      </span>
+                    </div>
+                    {a.phone && (
+                      <a
+                        href={`tel:${a.phone.replace(/[^\d+]/g, '')}`}
+                        onClick={e => e.stopPropagation()}
+                        style={{
+                          flex: 'none', fontSize: 12, fontWeight: 700, textDecoration: 'none',
+                          padding: '6px 12px', borderRadius: 8, background: 'var(--green-soft)', color: 'var(--green)',
+                        }}
+                      >Call {a.phone}</a>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Toolbar */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
@@ -206,10 +291,12 @@ export default function LeadsPage({ onNav, onEditGen, onConverted }: Props) {
           onUpdated={updated => {
             setLeads(prev => prev.map(l => l.id === updated.id ? updated : l));
             setDetail(updated);
+            loadActions();
           }}
           onDeleted={deleted => {
             setLeads(prev => prev.filter(l => l.id !== deleted.id));
             setDetail(null);
+            loadActions();
           }}
           onNav={onNav}
           onEditGen={onEditGen}

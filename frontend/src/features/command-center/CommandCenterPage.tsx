@@ -58,30 +58,28 @@ function fmtEventTime(ev: TodayEvent): string {
   return `${h}:${String(mins % 60).padStart(2, '0')}${ampm}`;
 }
 
-// Per-day "handled" checklist, kept on this device.
-function dayKey(): string {
+function localDay(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
-  return `cc-done-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-function loadDone(): Set<string> {
-  try { return new Set<string>(JSON.parse(localStorage.getItem(dayKey()) || '[]')); }
-  catch { return new Set(); }
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-const KIND_META: Record<BriefAttentionItem['type'], { label: string; cls: string }> = {
-  'gen-signed': { label: 'Signed 🎉', cls: 'signed' },
-  'lead-call': { label: 'Call', cls: 'call' },
-  bid: { label: 'Bid due', cls: 'bid' },
-  task: { label: 'Follow-up', cls: 'task' },
-  'lead-stale': { label: 'No response', cls: 'stale' },
-  email: { label: 'Reply', cls: 'reply' },
-};
+// Per-day "handled" checklist for the respond queue, kept on this device.
+function loadDone(): Set<string> {
+  try { return new Set<string>(JSON.parse(localStorage.getItem(`cc-done-${localDay()}`) || '[]')); }
+  catch { return new Set(); }
+}
 
 function avatarHue(s: string): number {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
   return h;
+}
+
+const MAX_REPLIES_SHOWN = 6;
+
+interface ActionBox {
+  key: string; n: number; ic: string; label: string; sub: string; nav: string; cls: string;
 }
 
 interface Props { onNav: (v: string) => void; }
@@ -94,6 +92,10 @@ export default function CommandCenterPage({ onNav }: Props) {
   const [drawerItem, setDrawerItem] = useState<BriefAttentionItem | null>(null);
   const [marking, setMarking] = useState(false);
   const [done, setDone] = useState<Set<string>>(loadDone);
+  const [baseline, setBaseline] = useState<number>(() => {
+    const n = parseInt(localStorage.getItem(`cc-base-${localDay()}`) || '0', 10);
+    return isNaN(n) ? 0 : n;
+  });
 
   const load = useCallback(() => {
     api.get<BriefPayload>('/brief')
@@ -108,7 +110,7 @@ export default function CommandCenterPage({ onNav }: Props) {
   const toggleDone = (id: string) => setDone(prev => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
-    localStorage.setItem(dayKey(), JSON.stringify([...next]));
+    localStorage.setItem(`cc-done-${localDay()}`, JSON.stringify([...next]));
     return next;
   });
 
@@ -124,29 +126,64 @@ export default function CommandCenterPage({ onNav }: Props) {
     }
   };
 
+  // ── Counts → quick boxes (no long lists on the command center) ──
+  const count = (t: BriefAttentionItem['type']) => (brief?.attention || []).filter(a => a.type === t).length;
+  const replies = (brief?.attention || []).filter(a => a.type === 'email');
+  const boxes: ActionBox[] = !brief ? [] : ([
+    { key: 'signed', n: count('gen-signed'), ic: '✍️', label: 'Signed — ready to award', sub: 'open the pipeline and award it', nav: 'gen-proposals', cls: 'purple' },
+    { key: 'bids', n: count('bid'), ic: '⏰', label: 'Bids due soon', sub: 'due within 3 days', nav: 'pipeline', cls: 'red' },
+    {
+      key: 'leads', n: count('lead-call') + count('lead-stale'), ic: '📞', label: 'Leads need action',
+      sub: 'calls & no-response nudges', nav: 'gen-leads', cls: 'green',
+    },
+    { key: 'tasks', n: count('task'), ic: '✅', label: 'Follow-ups due', sub: 'today or overdue', nav: 'followups', cls: 'blue' },
+    {
+      key: 'intake', n: brief.intake.unread, ic: '📥', label: 'New bids in intake',
+      sub: [
+        brief.intake.newToday > 0 && `${brief.intake.newToday} today`,
+        brief.intake.newYesterday > 0 && `${brief.intake.newYesterday} yesterday`,
+      ].filter(Boolean).join(' · ') || 'review and accept or decline',
+      nav: 'intake', cls: 'blue',
+    },
+    {
+      key: 'kohler',
+      n: brief.kohlerFunnel.notAccepted || brief.kohlerFunnel.newToday + brief.kohlerFunnel.newYesterday,
+      ic: '⚡', label: 'Kohler leads to accept',
+      sub: [
+        brief.kohlerFunnel.newToday > 0 && `${brief.kohlerFunnel.newToday} today`,
+        brief.kohlerFunnel.newYesterday > 0 && `${brief.kohlerFunnel.newYesterday} yesterday`,
+      ].filter(Boolean).join(' · ') || `${brief.kohlerFunnel.received} this month`,
+      nav: 'gen-leads', cls: 'amber',
+    },
+  ] as ActionBox[]).filter(b => b.n > 0);
+
+  const boxTotal = boxes.reduce((s, b) => s + b.n, 0);
+  const repliesOpen = replies.filter(r => !done.has(r.id)).length;
+  const remaining = boxTotal + repliesOpen;
+
+  // Day baseline: progress = how much of today's peak workload has been cleared.
+  useEffect(() => {
+    if (!brief) return;
+    setBaseline(prev => {
+      const next = Math.max(prev, remaining);
+      if (next !== prev) localStorage.setItem(`cc-base-${localDay()}`, String(next));
+      return next;
+    });
+  }, [brief, remaining]);
+
   if (loading && !brief) return <div className="cc2-root"><div className="cc2-loading">Loading your day…</div></div>;
   if (!brief) return <div className="cc2-root"><div className="cc2-loading">Couldn’t load the brief. Retrying…</div></div>;
 
   const firstName = (user.name || '').split(/\s+/)[0] || 'there';
   const [quote, quoteBy] = quoteOfTheDay();
-
-  // Priorities = individually listed action items (signed money, deadline bids, due
-  // follow-ups). Leads are deliberately NOT listed row-by-row — they collapse into a
-  // single "Leads need action" card that opens the leads board. Replies have their own queue.
-  const tasks = brief.attention.filter(a => a.type === 'gen-signed' || a.type === 'bid' || a.type === 'task');
-  const leadsNeedAction = brief.attention.filter(a => a.type === 'lead-call' || a.type === 'lead-stale');
-  const replies = brief.attention.filter(a => a.type === 'email');
-  const all = [...tasks, ...replies];
-  const handled = all.filter(a => done.has(a.id)).length;
-  const pct = all.length ? Math.round((handled / all.length) * 100) : 100;
-  const allClear = all.length === 0 && leadsNeedAction.length === 0;
+  const allClear = remaining === 0;
+  const cleared = Math.max(baseline - remaining, 0);
+  const pct = baseline > 0 ? Math.round((cleared / baseline) * 100) : 100;
 
   const statBits = [
-    tasks.length > 0 && { ic: '🎯', tx: `${tasks.length} action${tasks.length === 1 ? '' : 's'}` },
-    leadsNeedAction.length > 0 && { ic: '📞', tx: `${leadsNeedAction.length} lead${leadsNeedAction.length === 1 ? '' : 's'} need action` },
-    replies.length > 0 && { ic: '💬', tx: `${replies.length} repl${replies.length === 1 ? 'y' : 'ies'} owed` },
+    boxTotal > 0 && { ic: '🎯', tx: `${boxTotal} item${boxTotal === 1 ? '' : 's'} need action` },
+    repliesOpen > 0 && { ic: '💬', tx: `${repliesOpen} repl${repliesOpen === 1 ? 'y' : 'ies'} owed` },
     brief.todayEvents.length > 0 && { ic: '📅', tx: `${brief.todayEvents.length} on the calendar` },
-    (brief.intake.unread > 0) && { ic: '📥', tx: `${brief.intake.unread} new bid${brief.intake.unread === 1 ? '' : 's'} in intake` },
   ].filter(Boolean) as Array<{ ic: string; tx: string }>;
 
   // Insert the "now" marker into today's timeline.
@@ -156,14 +193,6 @@ export default function CommandCenterPage({ onNav }: Props) {
     const m = eventMinutes(brief.todayEvents[i]);
     if (m !== null && m > nowMins) { nowIdx = i; break; }
   }
-
-  const Check = ({ id }: { id: string }) => (
-    <button
-      className={'cc2-check' + (done.has(id) ? ' on' : '')}
-      title={done.has(id) ? 'Mark not handled' : 'Mark handled'}
-      onClick={e => { e.stopPropagation(); toggleDone(id); }}
-    >✓</button>
-  );
 
   return (
     <div className="cc2-root scroll view-enter">
@@ -181,7 +210,7 @@ export default function CommandCenterPage({ onNav }: Props) {
             {brief.daySummary && <span>{brief.daySummary} </span>}
             {allClear
               ? 'Nothing is waiting on you. Go make something happen.'
-              : `You’ve got ${all.length + leadsNeedAction.length} thing${all.length + leadsNeedAction.length === 1 ? '' : 's'} to knock out — start at the top.`}
+              : `${remaining} thing${remaining === 1 ? '' : 's'} need${remaining === 1 ? 's' : ''} you — knock them out below.`}
           </div>
           <div className="cc2-stats">
             {statBits.map((s, i) => <span className="pill" key={i}><i>{s.ic}</i>{s.tx}</span>)}
@@ -189,91 +218,38 @@ export default function CommandCenterPage({ onNav }: Props) {
               <span className="pill win"><i>🏆</i>{brief.kpis.wonThisMonth} job{brief.kpis.wonThisMonth === 1 ? '' : 's'} won this month</span>
             )}
           </div>
-          {!allClear && (
+          {baseline > 0 && (
             <div className="cc2-prog">
               <div className="track"><div className="fill" style={{ width: pct + '%' }} /></div>
-              <div className="lbl">{handled} of {all.length} handled{pct === 100 ? ' — day cleared 🎉' : ''}</div>
+              <div className="lbl">{cleared} of {baseline} cleared{pct === 100 ? ' — day cleared 🎉' : ''}</div>
             </div>
           )}
         </div>
       </div>
 
-      {/* ── What came in: tallies only. Bid invites live in the Intake Inbox, Kohler leads in the leads pipeline ── */}
-      {(brief.intake.unread > 0 || brief.intake.newToday > 0 || brief.intake.newYesterday > 0
-        || brief.kohlerFunnel.notAccepted > 0 || brief.kohlerFunnel.newToday > 0 || brief.kohlerFunnel.newYesterday > 0) && (
-        <div className="cc2-flow">
-          {(brief.intake.unread > 0 || brief.intake.newToday > 0 || brief.intake.newYesterday > 0) && (
-            <div className="cc2-chip blue" onClick={() => onNav('intake')}>
-              <div className="n">{brief.intake.unread}</div>
-              <div className="tx">
-                <b>new bid{brief.intake.unread === 1 ? '' : 's'} waiting in Intake</b>
-                <span>
-                  {[
-                    brief.intake.newToday > 0 && `${brief.intake.newToday} came in today`,
-                    brief.intake.newYesterday > 0 && `${brief.intake.newYesterday} yesterday`,
-                  ].filter(Boolean).join(' · ') || 'review and accept or decline'}
-                </span>
-              </div>
-              <span className="go">Review →</span>
-            </div>
-          )}
-          {(brief.kohlerFunnel.notAccepted > 0 || brief.kohlerFunnel.newToday > 0 || brief.kohlerFunnel.newYesterday > 0) && (
-            <div className="cc2-chip amber" onClick={() => onNav('gen-leads')}>
-              <div className="n">{brief.kohlerFunnel.notAccepted || brief.kohlerFunnel.newToday + brief.kohlerFunnel.newYesterday}</div>
-              <div className="tx">
-                <b>{brief.kohlerFunnel.notAccepted > 0
-                  ? `Kohler lead${brief.kohlerFunnel.notAccepted === 1 ? '' : 's'} to accept`
-                  : 'new Kohler leads'}</b>
-                <span>
-                  {[
-                    brief.kohlerFunnel.newToday > 0 && `${brief.kohlerFunnel.newToday} came in today`,
-                    brief.kohlerFunnel.newYesterday > 0 && `${brief.kohlerFunnel.newYesterday} yesterday`,
-                  ].filter(Boolean).join(' · ') || `${brief.kohlerFunnel.received} this month`}
-                </span>
-              </div>
-              <span className="go">Open leads →</span>
-            </div>
-          )}
-        </div>
-      )}
-
       <div className="cc2-grid">
-        {/* ── Left: the work ── */}
+        {/* ── Left: quick counts + the respond queue ── */}
         <div>
-          <div className="cc2-h"><span>Today’s priorities</span><em>{tasks.length + (leadsNeedAction.length ? 1 : 0)}</em><i /></div>
-          {tasks.length === 0 && leadsNeedAction.length === 0 && <div className="cc2-empty">No deadlines or follow-ups on deck. 🎉</div>}
-          {tasks.map((item, idx) => (
-            <div className={'cc2-task ' + KIND_META[item.type].cls + (done.has(item.id) ? ' done' : '')} key={item.id} onClick={() => setDrawerItem(item)}>
-              <div className="rank">{String(idx + 1).padStart(2, '0')}</div>
-              <div className="body">
-                <div className="t">{item.title}</div>
-                <div className="m"><span className={'tag ' + KIND_META[item.type].cls}>{KIND_META[item.type].label}</span>{item.subtitle}</div>
-              </div>
-              <div className="acts" onClick={e => e.stopPropagation()}>
-                {item.cta.tel && <a className="cc-btn p" href={item.cta.tel}>Call now</a>}
-                {item.cta.webLink && <a className="cc-btn" href={item.cta.webLink} target="_blank" rel="noopener noreferrer">Open</a>}
-                <Check id={item.id} />
-              </div>
-            </div>
-          ))}
-
-          {/* Leads collapse into one card — the leads board is where the work happens. */}
-          {leadsNeedAction.length > 0 && (
-            <div className="cc2-task leads" onClick={() => onNav('gen-leads')}>
-              <div className="rank big">{leadsNeedAction.length}</div>
-              <div className="body">
-                <div className="t">Lead{leadsNeedAction.length === 1 ? '' : 's'} need{leadsNeedAction.length === 1 ? 's' : ''} action</div>
-                <div className="m">calls to make &amp; no-response nudges — work them on the leads board</div>
-              </div>
-              <div className="acts" onClick={e => e.stopPropagation()}>
-                <button className="cc-btn p" onClick={() => onNav('gen-leads')}>Open leads →</button>
-              </div>
+          <div className="cc2-h"><span>Needs action</span><em>{boxTotal}</em><i /></div>
+          {boxes.length === 0 && <div className="cc2-empty">All caught up. 🎉</div>}
+          {boxes.length > 0 && (
+            <div className="cc2-flow boxes">
+              {boxes.map(b => (
+                <div className={'cc2-chip ' + b.cls} key={b.key} onClick={() => onNav(b.nav)}>
+                  <div className="n">{b.n}</div>
+                  <div className="tx">
+                    <b>{b.ic} {b.label}</b>
+                    <span>{b.sub}</span>
+                  </div>
+                  <span className="go">→</span>
+                </div>
+              ))}
             </div>
           )}
 
           <div className="cc2-h"><span>Respond to</span><em>{replies.length}</em><i /></div>
           {replies.length === 0 && <div className="cc2-empty">Inbox is quiet — nobody’s waiting on you.</div>}
-          {replies.map(item => {
+          {replies.slice(0, MAX_REPLIES_SHOWN).map(item => {
             const who = (item.subtitle || '?').trim();
             return (
               <div className={'cc2-reply' + (done.has(item.id) ? ' done' : '')} key={item.id} onClick={() => setDrawerItem(item)}>
@@ -284,11 +260,18 @@ export default function CommandCenterPage({ onNav }: Props) {
                 </div>
                 <div className="acts" onClick={e => e.stopPropagation()}>
                   {item.cta.webLink && <a className="cc-btn p" href={item.cta.webLink} target="_blank" rel="noopener noreferrer">Open email</a>}
-                  <Check id={item.id} />
+                  <button
+                    className={'cc2-check' + (done.has(item.id) ? ' on' : '')}
+                    title={done.has(item.id) ? 'Mark not handled' : 'Mark handled'}
+                    onClick={() => toggleDone(item.id)}
+                  >✓</button>
                 </div>
               </div>
             );
           })}
+          {replies.length > MAX_REPLIES_SHOWN && (
+            <div className="cc2-more">+{replies.length - MAX_REPLIES_SHOWN} more in your inbox</div>
+          )}
         </div>
 
         {/* ── Right: the day ── */}

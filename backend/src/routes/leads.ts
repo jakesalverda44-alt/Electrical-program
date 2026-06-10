@@ -351,6 +351,57 @@ router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   res.json(rows);
 }));
 
+// GET /api/leads/action-queue
+// Prioritized "needs action" list for the leads board:
+//   P1 — flagged needs_call (phone-only / refuse@ placeholder): call them
+//   P2 — first contact sent 2+ days ago, zero inbound since the lead was added
+//   P3 — open follow-up task due today or overdue
+// One row per lead (highest priority wins), ordered most urgent first.
+router.get('/action-queue', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const scope = ownScopeId(req.user!);
+  const params: unknown[] = scope ? [scope] : [];
+  const scopeAnd = scope ? ' AND l.salesperson_id = $1' : '';
+
+  const { rows } = await pool.query(
+    `SELECT * FROM (
+       SELECT DISTINCT ON (l.id)
+              l.id, l.name, l.phone, l.email, l.stage, l.source, l.interest_level,
+              r.priority, r.reason
+         FROM (
+           SELECT l.id, 1 AS priority,
+                  CASE WHEN l.phone IS NULL OR l.phone = '' THEN 'Needs a call — no phone on file'
+                       ELSE 'Needs a call' END AS reason
+             FROM leads l
+            WHERE l.deleted_at IS NULL AND l.stage NOT IN ('won','lost','converted')
+              AND l.needs_call = true
+           UNION ALL
+           SELECT l.id, 2,
+                  'No response in ' || GREATEST(EXTRACT(DAY FROM now() - l.first_contact_sent_at)::int, 1) || 'd since first contact'
+             FROM leads l
+            WHERE l.deleted_at IS NULL AND l.stage NOT IN ('won','lost','converted')
+              AND l.needs_call = false AND l.first_contact_sent_at IS NOT NULL
+              AND l.first_contact_sent_at < now() - interval '2 days'
+              AND NOT EXISTS (SELECT 1 FROM lead_activity a WHERE a.lead_id = l.id AND a.direction = 'in')
+           UNION ALL
+           SELECT t.linked_id, 3,
+                  CASE WHEN ((now() AT TIME ZONE 'America/New_York')::date - t.due_date) > 0
+                       THEN 'Follow-up overdue ' || ((now() AT TIME ZONE 'America/New_York')::date - t.due_date)::int || 'd'
+                       ELSE 'Follow-up due today' END
+             FROM tasks t
+            WHERE t.status = 'open' AND t.linked_type = 'lead' AND t.linked_id IS NOT NULL
+              AND t.due_date IS NOT NULL
+              AND t.due_date <= (now() AT TIME ZONE 'America/New_York')::date
+         ) r
+         JOIN leads l ON l.id = r.id
+        WHERE l.deleted_at IS NULL AND l.stage NOT IN ('won','lost','converted')${scopeAnd}
+        ORDER BY l.id, r.priority
+     ) q
+     ORDER BY q.priority, q.name`,
+    params
+  );
+  res.json(rows);
+}));
+
 // POST /api/leads
 // Reachable by the frontend (JWT) and by external automation / the browser
 // extension (X-API-Key). When external_lead_id is supplied it acts as a dedupe
