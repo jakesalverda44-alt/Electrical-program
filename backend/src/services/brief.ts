@@ -14,8 +14,8 @@ import { fetchTodayEvents, TodayEvent } from '../integrations/outlookCalendar';
 export type BriefChip = 'Elec' | 'Gen' | 'Call';
 
 export interface BriefAttentionItem {
-  id: string;                          // 'email:<id>' | 'lead:<uuid>' | 'bid:<uuid>' | 'task:<uuid>' | 'stale:<uuid>'
-  type: 'email' | 'lead-call' | 'bid' | 'task' | 'lead-stale';
+  id: string;                          // 'email:<id>' | 'lead:<uuid>' | 'bid:<uuid>' | 'task:<uuid>' | 'stale:<uuid>' | 'signed:<uuid>'
+  type: 'email' | 'lead-call' | 'bid' | 'task' | 'lead-stale' | 'gen-signed';
   chips: BriefChip[];
   title: string;
   subtitle: string;
@@ -40,7 +40,35 @@ export interface BriefPayload {
   };
   intake: { unread: number; newToday: number; newYesterday: number };
   todayEvents: TodayEvent[];
+  /** Time-of-day narrative: morning = yesterday's recap, midday = today so far, evening = today's recap. */
+  daySummary: string;
   briefBullets: string[];
+}
+
+// ── Day summary (pure, unit-testable) ───────────────────────────────────────────────────
+
+export interface DayActivity {
+  newBids: number; newLeads: number; signed: number; won: number; wonValue: number;
+}
+
+export function composeDaySummary(hourEt: number, yesterday: DayActivity, today: DayActivity): string {
+  const period = hourEt < 12 ? 'morning' : hourEt < 17 ? 'midday' : 'evening';
+  const d = period === 'morning' ? yesterday : today;
+  const parts: string[] = [];
+  if (d.newBids > 0) parts.push(`${d.newBids} new bid${d.newBids === 1 ? '' : 's'} hit intake`);
+  if (d.newLeads > 0) parts.push(`${d.newLeads} lead${d.newLeads === 1 ? '' : 's'} came in`);
+  if (d.signed > 0) parts.push(`${d.signed} proposal${d.signed === 1 ? ' was' : 's were'} signed`);
+  if (d.won > 0) parts.push(`${d.won} job${d.won === 1 ? '' : 's'} won ($${Math.round(d.wonValue).toLocaleString()})`);
+  const list = parts.length <= 1 ? parts.join('')
+    : parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
+
+  if (period === 'morning') {
+    return parts.length ? `Since yesterday: ${list}.` : 'Yesterday was quiet — fresh slate today.';
+  }
+  if (period === 'midday') {
+    return parts.length ? `So far today: ${list}.` : 'Quiet so far today — good time to work the list.';
+  }
+  return parts.length ? `Today's recap: ${list}.` : 'Nothing new came in today.';
 }
 
 // ── Graph snapshot cache (single mailbox → a module-level cache is correct) ──────────────
@@ -128,6 +156,8 @@ async function autologInboundLeadEmails(unread: GraphMailMessage[]): Promise<voi
 export function composeBullets(p: Omit<BriefPayload, 'briefBullets'>): string[] {
   const out: string[] = [];
   const f = p.kohlerFunnel;
+  const signed = p.attention.filter(a => a.type === 'gen-signed').length;
+  if (signed > 0) out.push(`🎉 ${signed} signed proposal${signed === 1 ? '' : 's'} waiting to be awarded`);
   if (p.intake.newToday > 0) out.push(`${p.intake.newToday} new bid${p.intake.newToday === 1 ? '' : 's'} came in today — review them in the Intake Inbox`);
   if (p.intake.newYesterday > 0) out.push(`${p.intake.newYesterday} new bid${p.intake.newYesterday === 1 ? '' : 's'} came in yesterday`);
   if (f.newToday > 0) out.push(`${f.newToday} new Kohler lead${f.newToday === 1 ? '' : 's'} came in today`);
@@ -163,7 +193,7 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
   // CRM SQL (always fresh; scoped per-rep). Run in parallel.
   const scopeAnd = scope ? ' AND salesperson_id = $1' : '';
   const sp: unknown[] = scope ? [scope] : [];
-  const [bidsKpi, gensKpi, wonKpi, needCallRows, dueSoonRows, kohlerAccepted, intakeCounts, dueTasks, staleLeads, knownContacts] = await Promise.all([
+  const [bidsKpi, gensKpi, wonKpi, needCallRows, dueSoonRows, kohlerAccepted, intakeCounts, dueTasks, staleLeads, signedGens, dayActivity, knownContacts] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS v FROM bids WHERE deleted_at IS NULL AND closed_at IS NULL AND stage IN ('due','submitted')${scopeAnd}`, sp),
     pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS v FROM generator_proposals WHERE deleted_at IS NULL AND stage IN ('building','sent')${scopeAnd}`, sp),
     pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(value),0)::float AS v FROM won_jobs WHERE deleted_at IS NULL AND date_won >= $${sp.length + 1}${scopeAnd}`, [...sp, monthStart]),
@@ -205,6 +235,29 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
           AND first_contact_sent_at < now() - interval '2 days'
           AND NOT EXISTS (SELECT 1 FROM lead_activity a WHERE a.lead_id = leads.id AND a.direction = 'in')${scopeAnd}
         ORDER BY first_contact_sent_at ASC LIMIT 10`, sp),
+    // Signed proposals waiting to be moved to Awarded.
+    pool.query(
+      `SELECT id, customer, mfr, kw, amount, signed_at
+         FROM generator_proposals
+        WHERE deleted_at IS NULL AND stage = 'signed'${scopeAnd}
+        ORDER BY signed_at ASC NULLS LAST LIMIT 10`, sp),
+    // Whole-business day activity for the narrative summary (today + yesterday, ET days).
+    pool.query(
+      `WITH days AS (
+         SELECT (now() AT TIME ZONE 'America/New_York')::date AS today,
+                (now() AT TIME ZONE 'America/New_York')::date - 1 AS yest
+       )
+       SELECT
+         (SELECT COUNT(*)::int FROM intake_items, days WHERE (created_at AT TIME ZONE 'America/New_York')::date = days.today) AS bids_today,
+         (SELECT COUNT(*)::int FROM intake_items, days WHERE (created_at AT TIME ZONE 'America/New_York')::date = days.yest) AS bids_yest,
+         (SELECT COUNT(*)::int FROM leads, days WHERE deleted_at IS NULL AND (created_at AT TIME ZONE 'America/New_York')::date = days.today) AS leads_today,
+         (SELECT COUNT(*)::int FROM leads, days WHERE deleted_at IS NULL AND (created_at AT TIME ZONE 'America/New_York')::date = days.yest) AS leads_yest,
+         (SELECT COUNT(*)::int FROM generator_proposals, days WHERE deleted_at IS NULL AND signed_at IS NOT NULL AND (signed_at AT TIME ZONE 'America/New_York')::date = days.today) AS signed_today,
+         (SELECT COUNT(*)::int FROM generator_proposals, days WHERE deleted_at IS NULL AND signed_at IS NOT NULL AND (signed_at AT TIME ZONE 'America/New_York')::date = days.yest) AS signed_yest,
+         (SELECT COUNT(*)::int FROM won_jobs, days WHERE deleted_at IS NULL AND (date_won AT TIME ZONE 'America/New_York')::date = days.today) AS won_today,
+         (SELECT COALESCE(SUM(value),0)::float FROM won_jobs, days WHERE deleted_at IS NULL AND (date_won AT TIME ZONE 'America/New_York')::date = days.today) AS won_today_value,
+         (SELECT COUNT(*)::int FROM won_jobs, days WHERE deleted_at IS NULL AND (date_won AT TIME ZONE 'America/New_York')::date = days.yest) AS won_yest,
+         (SELECT COALESCE(SUM(value),0)::float FROM won_jobs, days WHERE deleted_at IS NULL AND (date_won AT TIME ZONE 'America/New_York')::date = days.yest) AS won_yest_value`),
     // Known human contacts (for matching unread senders). Not rep-scoped: the mailbox is
     // shared. Intake/plan-room senders (BuildingConnected, PlanHub, …) are intentionally
     // not included — those are filtered into the Intake Inbox, not the respond queue.
@@ -260,6 +313,22 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
     });
   }
 
+  // ── Attention: signed proposals waiting to be awarded ──
+  for (const g of signedGens.rows) {
+    const spec = [g.kw ? `${g.kw}kW` : null, g.mfr].filter(Boolean).join(' ');
+    const when = g.signed_at ? new Date(g.signed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    attention.push({
+      id: `signed:${g.id}`,
+      type: 'gen-signed',
+      chips: ['Gen'],
+      title: g.customer,
+      subtitle: `${spec ? spec + ' · ' : ''}signed${when ? ` ${when}` : ''} · ready to award`,
+      receivedAt: g.signed_at ? new Date(g.signed_at).toISOString() : null,
+      briefing: `${g.customer} signed their ${spec ? spec + ' ' : ''}proposal${g.amount ? ` ($${Number(g.amount).toLocaleString()})` : ''}. Move it to Awarded on the generator pipeline to create the project and lock in the win.`,
+      cta: { navTo: 'gen-proposals' },
+    });
+  }
+
   // ── Attention: ghosted leads (no response at all since they were added) ──
   for (const l of staleLeads.rows) {
     const age = l.age_days as number;
@@ -285,23 +354,32 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
   // Automated/plan-room senders never belong in the respond queue, even if their address
   // somehow ends up on a lead or customer record.
   const NOISE_SENDER = /no-?reply|do-?not-?reply|notification|mailer|automated|@buildingconnected\.|@planhub\./i;
+  const OWN_DOMAIN = '@accuratepowerandtechnology.com';
   let unreadMatched = 0;
   for (const m of unread) {
     const tagged = (m.categories || []).some(c => c.trim().toLowerCase() === wantedCat);
     if (tagged || isKohlerNotification(m)) continue;
     const from = (m.from || '').toLowerCase();
     if (!from || NOISE_SENDER.test(from)) continue;
+    // Three ways an email earns a "respond to" slot:
+    //   1. sender is a known lead/customer in the CRM
+    //   2. it's a reply on a thread ("Re:" subject) — someone is waiting on an answer
+    //   3. it's from a teammate at our own domain asking for something
     const match = contactByEmail.get(from);
-    if (!match) continue;
+    const isReply = /^(re|fwd?):/i.test(m.subject || '');
+    const isTeammate = from.endsWith(OWN_DOMAIN);
+    if (!match && !isReply && !isTeammate) continue;
     unreadMatched++;
-    const chips: BriefChip[] = match.kind === 'lead' ? ['Gen'] : ['Elec'];
-    const navTo = match.kind === 'lead' ? 'gen-leads' : undefined;
+    const chips: BriefChip[] = match?.kind === 'lead' ? ['Gen'] : ['Elec'];
+    const navTo = match?.kind === 'lead' ? 'gen-leads' : undefined;
+    const who = m.fromName || m.from || 'Unknown';
+    const tagTxt = match ? match.label : isTeammate ? 'teammate' : 'awaiting your reply';
     attention.push({
       id: `email:${m.id}`,
       type: 'email',
       chips,
       title: m.subject || '(no subject)',
-      subtitle: `${m.fromName || m.from || 'Unknown'} · ${match.label}`,
+      subtitle: `${who} · ${tagTxt}`,
       receivedAt: m.receivedDateTime,
       briefing: m.bodyPreview || 'No preview available.',
       cta: { webLink: m.webLink || undefined, navTo },
@@ -324,8 +402,8 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
     });
   }
 
-  // Sort: deadline bids, then overdue follow-ups, calls, ghosted leads, then emails (newest).
-  const order = { bid: 0, task: 1, 'lead-call': 2, 'lead-stale': 3, email: 4 } as const;
+  // Sort: signed money first, deadline bids, overdue follow-ups, calls, ghosted leads, then emails (newest).
+  const order = { 'gen-signed': 0, bid: 1, task: 2, 'lead-call': 3, 'lead-stale': 4, email: 5 } as const;
   attention.sort((a, b) => order[a.type] - order[b.type]
     || String(b.receivedAt || '').localeCompare(String(a.receivedAt || '')));
 
@@ -362,6 +440,17 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
       newYesterday: intakeCounts.rows[0].yesterday,
     },
     todayEvents: events,
+    daySummary: composeDaySummary(
+      parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', hourCycle: 'h23' }).format(new Date()), 10),
+      {
+        newBids: dayActivity.rows[0].bids_yest, newLeads: dayActivity.rows[0].leads_yest,
+        signed: dayActivity.rows[0].signed_yest, won: dayActivity.rows[0].won_yest, wonValue: dayActivity.rows[0].won_yest_value,
+      },
+      {
+        newBids: dayActivity.rows[0].bids_today, newLeads: dayActivity.rows[0].leads_today,
+        signed: dayActivity.rows[0].signed_today, won: dayActivity.rows[0].won_today, wonValue: dayActivity.rows[0].won_today_value,
+      },
+    ),
   };
   return { ...payloadNoBullets, briefBullets: composeBullets(payloadNoBullets) };
 }

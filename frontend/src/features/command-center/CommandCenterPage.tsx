@@ -70,6 +70,7 @@ function loadDone(): Set<string> {
 }
 
 const KIND_META: Record<BriefAttentionItem['type'], { label: string; cls: string }> = {
+  'gen-signed': { label: 'Signed 🎉', cls: 'signed' },
   'lead-call': { label: 'Call', cls: 'call' },
   bid: { label: 'Bid due', cls: 'bid' },
   task: { label: 'Follow-up', cls: 'task' },
@@ -129,17 +130,20 @@ export default function CommandCenterPage({ onNav }: Props) {
   const firstName = (user.name || '').split(/\s+/)[0] || 'there';
   const [quote, quoteBy] = quoteOfTheDay();
 
-  // Priorities = things to act on, pre-ranked by the backend (deadline bids, overdue
-  // follow-ups, calls, ghosted leads). Replies live in their own queue.
-  const tasks = brief.attention.filter(a => a.type !== 'email');
+  // Priorities = individually listed action items (signed money, deadline bids, due
+  // follow-ups). Leads are deliberately NOT listed row-by-row — they collapse into a
+  // single "Leads need action" card that opens the leads board. Replies have their own queue.
+  const tasks = brief.attention.filter(a => a.type === 'gen-signed' || a.type === 'bid' || a.type === 'task');
+  const leadsNeedAction = brief.attention.filter(a => a.type === 'lead-call' || a.type === 'lead-stale');
   const replies = brief.attention.filter(a => a.type === 'email');
   const all = [...tasks, ...replies];
   const handled = all.filter(a => done.has(a.id)).length;
   const pct = all.length ? Math.round((handled / all.length) * 100) : 100;
-  const allClear = all.length === 0;
+  const allClear = all.length === 0 && leadsNeedAction.length === 0;
 
   const statBits = [
     tasks.length > 0 && { ic: '🎯', tx: `${tasks.length} action${tasks.length === 1 ? '' : 's'}` },
+    leadsNeedAction.length > 0 && { ic: '📞', tx: `${leadsNeedAction.length} lead${leadsNeedAction.length === 1 ? '' : 's'} need action` },
     replies.length > 0 && { ic: '💬', tx: `${replies.length} repl${replies.length === 1 ? 'y' : 'ies'} owed` },
     brief.todayEvents.length > 0 && { ic: '📅', tx: `${brief.todayEvents.length} on the calendar` },
     (brief.intake.unread > 0) && { ic: '📥', tx: `${brief.intake.unread} new bid${brief.intake.unread === 1 ? '' : 's'} in intake` },
@@ -174,9 +178,10 @@ export default function CommandCenterPage({ onNav }: Props) {
           </div>
           <div className="cc2-greet">{greetWord(now.getHours())}, <em>{firstName}</em>.</div>
           <div className="cc2-sub">
+            {brief.daySummary && <span>{brief.daySummary} </span>}
             {allClear
               ? 'Nothing is waiting on you. Go make something happen.'
-              : `You’ve got ${all.length} thing${all.length === 1 ? '' : 's'} to knock out today. Start at the top.`}
+              : `You’ve got ${all.length + leadsNeedAction.length} thing${all.length + leadsNeedAction.length === 1 ? '' : 's'} to knock out — start at the top.`}
           </div>
           <div className="cc2-stats">
             {statBits.map((s, i) => <span className="pill" key={i}><i>{s.ic}</i>{s.tx}</span>)}
@@ -235,8 +240,8 @@ export default function CommandCenterPage({ onNav }: Props) {
       <div className="cc2-grid">
         {/* ── Left: the work ── */}
         <div>
-          <div className="cc2-h"><span>Today’s priorities</span><em>{tasks.length}</em><i /></div>
-          {tasks.length === 0 && <div className="cc2-empty">No calls or deadlines on deck. 🎉</div>}
+          <div className="cc2-h"><span>Today’s priorities</span><em>{tasks.length + (leadsNeedAction.length ? 1 : 0)}</em><i /></div>
+          {tasks.length === 0 && leadsNeedAction.length === 0 && <div className="cc2-empty">No deadlines or follow-ups on deck. 🎉</div>}
           {tasks.map((item, idx) => (
             <div className={'cc2-task ' + KIND_META[item.type].cls + (done.has(item.id) ? ' done' : '')} key={item.id} onClick={() => setDrawerItem(item)}>
               <div className="rank">{String(idx + 1).padStart(2, '0')}</div>
@@ -251,6 +256,20 @@ export default function CommandCenterPage({ onNav }: Props) {
               </div>
             </div>
           ))}
+
+          {/* Leads collapse into one card — the leads board is where the work happens. */}
+          {leadsNeedAction.length > 0 && (
+            <div className="cc2-task leads" onClick={() => onNav('gen-leads')}>
+              <div className="rank big">{leadsNeedAction.length}</div>
+              <div className="body">
+                <div className="t">Lead{leadsNeedAction.length === 1 ? '' : 's'} need{leadsNeedAction.length === 1 ? 's' : ''} action</div>
+                <div className="m">calls to make &amp; no-response nudges — work them on the leads board</div>
+              </div>
+              <div className="acts" onClick={e => e.stopPropagation()}>
+                <button className="cc-btn p" onClick={() => onNav('gen-leads')}>Open leads →</button>
+              </div>
+            </div>
+          )}
 
           <div className="cc2-h"><span>Respond to</span><em>{replies.length}</em><i /></div>
           {replies.length === 0 && <div className="cc2-empty">Inbox is quiet — nobody’s waiting on you.</div>}

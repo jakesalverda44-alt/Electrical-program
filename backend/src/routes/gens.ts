@@ -4,6 +4,8 @@ import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
+import { graphSendMail, isGraphMailConfigured, TEAM_NOTIFY_TO } from '../email/graphMailer';
+import { escapeHtml } from '../utils/escapeHtml';
 import { getSetting } from './settings';
 import { upsertCustomer } from './customers';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -124,6 +126,16 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Not found' });
     }
     const gen = cur[0];
+
+    // "Signed" is reserved for the customer actually signing (the public sign
+    // endpoint sets it). It can't be dragged into manually unless a signature
+    // is already on file.
+    if (stage === 'signed' && !gen.signed_at) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: 'Signed is set automatically when the customer signs the proposal. Send it and the card will move on its own.',
+      });
+    }
 
     const { rows } = await client.query(
       'UPDATE generator_proposals SET stage=$1, updated_at=now() WHERE id=$2 RETURNING *',
@@ -560,11 +572,68 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
 }));
 
 // ── Send proposal email ──────────────────────────────────────────────────────
+// Sends through Microsoft Graph (the shared Outlook mailbox, so it lands in Sent
+// Items and replies come back to the inbox); falls back to Resend if Graph isn't
+// configured. The proposal is only marked sent AFTER the email actually goes out.
 router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
   const { to, subject, note, proposalNo, total, deposit } = req.body;
   if (!to) return res.status(400).json({ error: 'Recipient email required' });
-  if (!(await loadOwnedGen(req, res))) return;
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
 
+  const frontendUrl = await getSetting('frontend_url');
+  const baseUrl = frontendUrl || process.env.FRONTEND_URL || 'http://localhost:5173';
+  const link = `${baseUrl}/p/${gen.proposal_token}`;
+
+  // Generator spec straight off the proposal: "22kW Generac RG022" etc.
+  const spec = [gen.kw ? `${gen.kw}kW` : null, gen.mfr, gen.model].filter(Boolean).join(' ');
+  const form = gen.form_data || {};
+  const validDays = Number(form.validDays) || 30;
+  const finalSubject = subject?.trim()
+    || `Your ${spec ? spec + ' ' : ''}Generator Proposal — ${proposalNo || gen.proposal_no || ''}`.trim();
+  const html = proposalEmailHtml({
+    customerName: gen.customer,
+    proposalNo: proposalNo || gen.proposal_no || '',
+    spec, total, deposit, validDays, link, senderNote: note,
+  });
+
+  if (isGraphMailConfigured()) {
+    try {
+      await graphSendMail({ to, subject: finalSubject, html });
+    } catch (err) {
+      logger.error({ err, genId: gen.id }, '[email] Graph proposal send failed');
+      return res.status(502).json({ error: 'Email delivery failed (Outlook). Try again or copy the proposal link.', link });
+    }
+  } else {
+    const [apiKey, fromAddress, fromName, replyTo] = await Promise.all([
+      getSetting('email_resend_api_key'),
+      getSetting('email_from_address'),
+      getSetting('email_from_name'),
+      getSetting('email_reply_to'),
+    ]);
+    if (!apiKey) {
+      return res.status(503).json({
+        error: 'No email service is configured. Copy the proposal link and send it yourself.',
+        link,
+      });
+    }
+    const resend = new Resend(apiKey);
+    try {
+      await resend.emails.send({
+        from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
+        replyTo: replyTo || undefined,
+        to,
+        subject: finalSubject,
+        html,
+        text: proposalEmailText({ customerName: gen.customer, proposalNo: proposalNo || gen.proposal_no || '', total, link }),
+      });
+    } catch (err) {
+      console.error('[email] Resend error:', err);
+      return res.status(502).json({ error: 'Email delivery failed', link });
+    }
+  }
+
+  // Email is out — now stamp sent_at and advance Building -> Sent.
   const { rows } = await pool.query(
     `UPDATE generator_proposals
      SET sent_at = now(), stage = CASE WHEN stage = 'building' THEN 'sent' ELSE stage END, updated_at = now()
@@ -572,41 +641,8 @@ router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
      RETURNING *`,
     [req.params.id]
   );
-  if (!rows.length) return res.status(404).json({ error: 'Not found' });
-  const gen = rows[0];
 
-  const [apiKey, fromAddress, fromName, replyTo, frontendUrl] = await Promise.all([
-    getSetting('email_resend_api_key'),
-    getSetting('email_from_address'),
-    getSetting('email_from_name'),
-    getSetting('email_reply_to'),
-    getSetting('frontend_url'),
-  ]);
-
-  const baseUrl = frontendUrl || process.env.FRONTEND_URL || 'http://localhost:5173';
-  const link = `${baseUrl}/p/${gen.proposal_token}`;
-
-  if (!apiKey) {
-    console.warn('[email] No API key configured — skipping send, returning link:', link);
-    return res.json({ gen, link, skipped: true });
-  }
-
-  const resend = new Resend(apiKey);
-  try {
-    await resend.emails.send({
-      from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
-      replyTo: replyTo || undefined,
-      to,
-      subject: subject || `Your Generator Proposal — ${proposalNo}`,
-      html: proposalEmailHtml({ customerName: gen.customer, proposalNo, total, deposit, link, senderNote: note }),
-      text: proposalEmailText({ customerName: gen.customer, proposalNo, total, link }),
-    });
-  } catch (err) {
-    console.error('[email] Resend error:', err);
-    return res.status(502).json({ error: 'Email delivery failed' });
-  }
-
-  res.json({ gen, link });
+  res.json({ gen: rows[0], link });
 });
 
 // ── Public: view proposal by token (no auth) ────────────────────────────────
@@ -655,7 +691,7 @@ router.post('/p/:token/sign', async (req, res) => {
          stage = CASE WHEN stage IN ('declined','awarded') THEN stage ELSE 'signed' END,
          updated_at = now()
      WHERE proposal_token = $2 AND deleted_at IS NULL
-     RETURNING id, customer, stage, signed_at, drive_job_folder_id, salesperson_id`,
+     RETURNING id, customer, stage, signed_at, drive_job_folder_id, salesperson_id, amount, mfr, kw`,
     [signatureData, req.params.token]
   );
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
@@ -714,6 +750,27 @@ router.post('/p/:token/sign', async (req, res) => {
       logger.error({ err }, '[notify] proposal signed notification failed');
     }
   })();
+
+  // Fire-and-forget: email heads-up to the team mailbox so a signature never
+  // goes unnoticed. Next step for the user: move the card to Awarded.
+  if (isGraphMailConfigured()) {
+    (async () => {
+      try {
+        const spec = [gen.kw ? `${gen.kw}kW` : null, gen.mfr].filter(Boolean).join(' ');
+        const amt = Number(gen.amount || 0);
+        await graphSendMail({
+          to: TEAM_NOTIFY_TO,
+          subject: `🎉 Proposal signed — ${gen.customer}${amt ? ` ($${amt.toLocaleString()})` : ''}`,
+          html: `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.6;">
+            <p><b>${escapeHtml(gen.customer)}</b> just signed their${spec ? ` ${escapeHtml(spec)}` : ''} generator proposal${amt ? ` for <b>$${amt.toLocaleString()}</b>` : ''}.</p>
+            <p>Next step: open the Generator Pipeline and move it to <b>Awarded</b> to kick off the project.</p>
+          </div>`,
+        });
+      } catch (err) {
+        logger.error({ err, genId: gen.id }, '[notify] proposal signed email failed');
+      }
+    })();
+  }
 });
 
 // ── Public: auto-save a signed-proposal PDF (no auth) ───────────────────────────

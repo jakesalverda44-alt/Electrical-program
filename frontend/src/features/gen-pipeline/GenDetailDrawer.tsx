@@ -60,16 +60,23 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           <div className="dtl-stages">
             {GEN_STAGES.map(s => {
               const isActive = gen.stage === s.key;
+              // "Signed" is set automatically when the customer signs the proposal.
+              const lockedSigned = s.key === 'signed' && !isActive && !gen.signed_at;
               return (
                 <button
                   key={s.key}
                   className={'dtl-stage' + (isActive ? ' on' : '')}
-                  style={isActive ? {
-                    background: s.color,
-                    borderColor: s.color,
-                    color: s.key === 'building' ? '#11192a' : '#fff',
-                  } : undefined}
-                  onClick={() => onStage(s.key)}
+                  disabled={lockedSigned}
+                  title={lockedSigned ? 'Set automatically when the customer signs the proposal' : undefined}
+                  style={{
+                    ...(isActive ? {
+                      background: s.color,
+                      borderColor: s.color,
+                      color: s.key === 'building' ? '#11192a' : '#fff',
+                    } : undefined),
+                    ...(lockedSigned ? { opacity: .4, cursor: 'not-allowed' } : undefined),
+                  }}
+                  onClick={() => { if (!lockedSigned) onStage(s.key); }}
                 >
                   {s.label}
                 </button>

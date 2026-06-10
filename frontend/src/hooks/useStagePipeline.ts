@@ -31,6 +31,11 @@ interface UseStagePipelineConfig<T extends StageItem, K extends string> {
   /** Positive progression used by the advance button, ending at 'awarded'
    *  (excludes the negative terminal stage). */
   advanceOrder: K[];
+  /** Per-stage overrides for the advance button when the progression isn't
+   *  linear (e.g. gens: both 'sent' and 'signed' advance to 'awarded'). */
+  nextStageMap?: Partial<Record<string, K>>;
+  /** Veto a move before it happens. Return a toast to show (and block), or null to allow. */
+  guardMove?: (item: T, stage: K) => Toast | null;
   /** Optimistic patch to apply before the server responds. Defaults to { stage }. */
   buildPatch?: (stage: K, extra?: Record<string, unknown>) => Partial<T>;
   /** Toast shown when a move produces a won job. */
@@ -38,10 +43,17 @@ interface UseStagePipelineConfig<T extends StageItem, K extends string> {
 }
 
 export function useStagePipeline<T extends StageItem, K extends string>(cfg: UseStagePipelineConfig<T, K>) {
-  const { items, setItems, setWonJobs, showToast, endpoint, responseKey, confirmStage, advanceOrder, buildPatch, wonToast } = cfg;
+  const { items, setItems, setWonJobs, showToast, endpoint, responseKey, confirmStage, advanceOrder, nextStageMap, guardMove, buildPatch, wonToast } = cfg;
   const [pendingConfirm, setPendingConfirm] = useState<string | null>(null);
 
   const moveToStage = useCallback(async (id: string, stage: K, extra?: Record<string, unknown>) => {
+    // Domain veto (e.g. "Signed" is reserved for the customer's signature).
+    const target = items.find(i => i.id === id);
+    if (target && guardMove) {
+      const veto = guardMove(target, stage);
+      if (veto) { showToast(veto); return; }
+    }
+
     // Confirmation guard for the negative terminal stage.
     if (stage === confirmStage && pendingConfirm !== id) {
       setPendingConfirm(id);
@@ -74,10 +86,13 @@ export function useStagePipeline<T extends StageItem, K extends string>(cfg: Use
   const advance = useCallback((id: string) => {
     const item = items.find(i => i.id === id);
     if (!item) return;
+    // Per-stage override first (non-linear progressions), then the linear order.
+    const mapped = nextStageMap?.[item.stage];
+    if (mapped) { moveToStage(id, mapped); return; }
     const idx = advanceOrder.indexOf(item.stage as K);
     if (idx < 0 || idx >= advanceOrder.length - 1) return; // already at 'awarded' or off-track
     moveToStage(id, advanceOrder[idx + 1]);
-  }, [items, advanceOrder, moveToStage]);
+  }, [items, advanceOrder, nextStageMap, moveToStage]);
 
   const cancelConfirm = useCallback(() => setPendingConfirm(null), []);
 

@@ -7,18 +7,21 @@ interface Props {
   genId: string;
   defaultEmail: string;
   proposalNo: string;
+  /** Generator spec for the subject line, e.g. "22kW Generac". */
+  spec?: string;
   total: string;
   deposit: string;
   onSent: (updatedGen: Gen) => void;
   onClose: () => void;
 }
 
-export default function SendProposalModal({ genId, defaultEmail, proposalNo, total, deposit, onSent, onClose }: Props) {
+export default function SendProposalModal({ genId, defaultEmail, proposalNo, spec, total, deposit, onSent, onClose }: Props) {
   const [to,      setTo]      = useState(defaultEmail);
-  const [subject, setSubject] = useState(`Your Generator Proposal — ${proposalNo}`);
+  const [subject, setSubject] = useState(`Your ${spec ? spec + ' ' : ''}Generator Proposal — ${proposalNo}`);
   const [note,    setNote]    = useState('');
   const [status,  setStatus]  = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [errMsg,  setErrMsg]  = useState('');
+  const [errLink, setErrLink] = useState('');
 
   const send = async () => {
     if (!to.trim()) return;
@@ -28,7 +31,8 @@ export default function SendProposalModal({ genId, defaultEmail, proposalNo, tot
       onSent(r.data.gen);
       setStatus('sent');
     } catch (e: any) {
-      setErrMsg(e?.message || 'Failed to send');
+      setErrMsg(e?.response?.data?.error || e?.message || 'Failed to send');
+      setErrLink(e?.response?.data?.link || '');
       setStatus('error');
     }
   };
@@ -89,6 +93,15 @@ export default function SendProposalModal({ genId, defaultEmail, proposalNo, tot
             {status === 'error' && (
               <div style={{ background: 'rgba(224,106,106,.12)', color: 'var(--red)', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 13, fontWeight: 600 }}>
                 {errMsg}
+                {errLink && (
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      onClick={() => { navigator.clipboard?.writeText(errLink); }}
+                      style={{ border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)', borderRadius: 7, padding: '6px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                      Copy proposal link
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

@@ -1,12 +1,16 @@
 export function proposalEmailHtml(opts: {
   customerName: string;
   proposalNo: string;
+  /** Generator spec from the proposal, e.g. "22kW Generac RG022" or "20kW Kohler". */
+  spec?: string;
   total: string;
   deposit: string;
+  validDays?: number;
   link: string;
   senderNote?: string;
 }): string {
-  const { customerName, proposalNo, total, deposit, link, senderNote } = opts;
+  const { customerName, proposalNo, spec, total, deposit, link, senderNote } = opts;
+  const validDays = opts.validDays || 30;
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -28,7 +32,8 @@ export function proposalEmailHtml(opts: {
           <td style="padding:32px 36px;">
             <p style="font-size:15px;color:#1e293b;margin:0 0 16px;">Dear ${customerName},</p>
             <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 24px;">
-              Thank you for the opportunity to earn your business. Please find your generator proposal attached below.${senderNote ? ' ' + senderNote : ''}
+              Thank you for the opportunity to earn your business. Your${spec ? ` <strong>${spec}</strong>` : ''} standby
+              generator proposal is ready to review and sign below.${senderNote ? ' ' + senderNote : ''}
             </p>
 
             <!-- Proposal card -->
@@ -37,6 +42,7 @@ export function proposalEmailHtml(opts: {
                 <td style="padding:16px 20px;border-bottom:1px solid #e2e8f0;">
                   <span style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Proposal</span>
                   <div style="font-size:14px;font-weight:700;color:#1e293b;margin-top:4px;">${proposalNo}</div>
+                  ${spec ? `<div style="font-size:12px;font-weight:600;color:#475569;margin-top:2px;">${spec} Standby Generator</div>` : ''}
                 </td>
                 <td style="padding:16px 20px;border-bottom:1px solid #e2e8f0;text-align:right;">
                   <span style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Total</span>
@@ -45,7 +51,7 @@ export function proposalEmailHtml(opts: {
               </tr>
               <tr>
                 <td colspan="2" style="padding:12px 20px;">
-                  <span style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Deposit at Signing</span>
+                  <span style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Deposit Due at Signing</span>
                   <div style="font-size:14px;font-weight:700;color:#1e293b;margin-top:4px;">${deposit}</div>
                 </td>
               </tr>
@@ -56,14 +62,14 @@ export function proposalEmailHtml(opts: {
               <tr>
                 <td style="background:#1B3A6B;border-radius:8px;text-align:center;">
                   <a href="${link}" style="display:inline-block;padding:14px 36px;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;letter-spacing:.02em;">
-                    View &amp; Sign Proposal →
+                    Review &amp; Sign Proposal →
                   </a>
                 </td>
               </tr>
             </table>
 
             <p style="font-size:12px;color:#94a3b8;text-align:center;margin:0 0 8px;">
-              This proposal is valid for 30 days.
+              This proposal is valid for ${validDays} days. Signing online takes about a minute.
             </p>
             <p style="font-size:12px;color:#94a3b8;text-align:center;margin:0;">
               Questions? Reply to this email or call us directly.

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { isKohlerNotification } from '../integrations/outlookMail';
-import { composeBullets, BriefPayload } from './brief';
+import { composeBullets, composeDaySummary, BriefPayload } from './brief';
 
 describe('isKohlerNotification', () => {
   it('matches a Kohler sender address (case-insensitive)', () => {
@@ -17,7 +17,7 @@ const base: Omit<BriefPayload, 'briefBullets'> = {
   generatedAt: '', graphEnabled: true,
   kpis: { activeBids: 0, activeBidsValue: 0, activeGens: 0, activeGensValue: 0, wonThisMonth: 0, wonThisMonthValue: 0, leadsNeedingCall: 0, unreadEmails: 0 },
   attention: [], kohlerFunnel: { received: 0, notAccepted: 0, accepted: 0, replied: 0, needCall: 0, newToday: 0, newYesterday: 0 },
-  intake: { unread: 0, newToday: 0, newYesterday: 0 }, todayEvents: [],
+  intake: { unread: 0, newToday: 0, newYesterday: 0 }, todayEvents: [], daySummary: '',
 };
 
 describe('composeBullets', () => {
@@ -53,6 +53,14 @@ describe('composeBullets', () => {
     expect(bullets.some(b => /1 bid due within 3 days/.test(b))).toBe(true);
   });
 
+  it('celebrates signed proposals waiting to be awarded', () => {
+    const bullets = composeBullets({
+      ...base,
+      attention: [{ id: 'signed:1', type: 'gen-signed', chips: ['Gen'], title: 'X', subtitle: '', receivedAt: null, briefing: '', cta: {} }],
+    });
+    expect(bullets.some(b => /1 signed proposal waiting to be awarded/.test(b))).toBe(true);
+  });
+
   it('summarizes due follow-ups and ghosted leads', () => {
     const bullets = composeBullets({
       ...base,
@@ -64,5 +72,28 @@ describe('composeBullets', () => {
     });
     expect(bullets.some(b => /1 follow-up due today or overdue/.test(b))).toBe(true);
     expect(bullets.some(b => /2 leads have never responded since being added/.test(b))).toBe(true);
+  });
+});
+
+describe('composeDaySummary', () => {
+  const quiet = { newBids: 0, newLeads: 0, signed: 0, won: 0, wonValue: 0 };
+  const busy = { newBids: 3, newLeads: 2, signed: 1, won: 1, wonValue: 18500 };
+
+  it('recaps yesterday in the morning', () => {
+    const s = composeDaySummary(8, busy, quiet);
+    expect(s).toMatch(/^Since yesterday: /);
+    expect(s).toContain('3 new bids hit intake');
+    expect(s).toContain('1 proposal was signed');
+    expect(s).toContain('1 job won ($18,500)');
+  });
+
+  it('shows today-so-far at midday and a recap in the evening', () => {
+    expect(composeDaySummary(13, quiet, busy)).toMatch(/^So far today: /);
+    expect(composeDaySummary(19, quiet, busy)).toMatch(/^Today's recap: /);
+  });
+
+  it('falls back to quiet-day copy', () => {
+    expect(composeDaySummary(8, quiet, busy)).toBe('Yesterday was quiet — fresh slate today.');
+    expect(composeDaySummary(14, busy, quiet)).toBe('Quiet so far today — good time to work the list.');
   });
 });

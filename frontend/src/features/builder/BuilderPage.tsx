@@ -429,6 +429,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                   genId={savedGenId}
                   defaultEmail={form.email}
                   proposalNo={proposalNo}
+                  spec={`${parseInt(String(form.size)) || ''}kW ${form.brand}`.trim()}
                   total={fmt(totals.total)}
                   deposit={fmt(totals.deposit)}
                   onSent={updatedGen => {

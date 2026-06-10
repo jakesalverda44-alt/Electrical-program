@@ -2,18 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger';
 import { escapeHtml } from '../utils/escapeHtml';
-import { getGraphToken, GRAPH_BASE } from '../integrations/graphAuth';
+import { graphSendMail, GraphAttachment, TEAM_NOTIFY_TO } from './graphMailer';
 
 // First-contact automation for inbound (Kohler) leads, sent from our Microsoft
-// 365 mailbox via the Microsoft Graph API using app-only (client credentials)
-// auth. SMTP is intentionally not used: the tenant blocks SMTP AUTH and app
-// passwords.
-
-// The mailbox we send as / from. App-only Mail.Send must be scoped to this
-// mailbox via an Application Access Policy (see env/README notes).
-const SEND_AS = 'JakeS@accuratepowerandtechnology.com';
-// Internal heads-up address for phone-only leads (no email to contact).
-const NEEDS_CALL_TO = 'jakes@accuratepowerandtechnology.com';
+// 365 mailbox via the shared Graph mailer (email/graphMailer.ts).
 
 // Resolved relative to the compiled dist/email dir → backend/assets, matching
 // how proposalDocx.ts locates its assets. Embedded as an inline attachment so
@@ -26,52 +18,6 @@ export interface LeadForContact {
   name: string | null;
   email: string | null;
   phone: string | null;
-}
-
-// --- Graph sendMail (auth via shared integrations/graphAuth) ---
-
-interface GraphAttachment {
-  '@odata.type': '#microsoft.graph.fileAttachment';
-  name: string;
-  contentType: string;
-  contentBytes: string;
-  isInline: boolean;
-  contentId: string;
-}
-
-interface SendArgs {
-  to: string;
-  subject: string;
-  html: string;
-  attachments?: GraphAttachment[];
-}
-
-async function graphSendMail({ to, subject, html, attachments }: SendArgs): Promise<void> {
-  const token = await getGraphToken();
-  const message: Record<string, unknown> = {
-    subject,
-    body: { contentType: 'HTML', content: html },
-    toRecipients: [{ emailAddress: { address: to } }],
-  };
-  if (attachments?.length) message.attachments = attachments;
-
-  const resp = await fetch(
-    `${GRAPH_BASE}/users/${encodeURIComponent(SEND_AS)}/sendMail`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ message, saveToSentItems: true }),
-    }
-  );
-
-  // Graph sendMail returns 202 Accepted with an empty body on success.
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    throw new Error(`Graph sendMail failed: HTTP ${resp.status} ${text}`);
-  }
 }
 
 /** The PNG logo as a Graph inline file attachment (base64). Read+encoded lazily. */
@@ -209,7 +155,7 @@ export async function sendNeedsCallNotification(lead: LeadForContact): Promise<v
   const phone = lead.phone || '(no phone on file)';
   const name = lead.name || 'Unknown';
   await graphSendMail({
-    to: NEEDS_CALL_TO,
+    to: TEAM_NOTIFY_TO,
     subject: 'New Kohler lead — no usable email, needs a call',
     html: `<p>New Kohler lead with no usable email — call ${escapeHtml(name)} at ${escapeHtml(phone)}.</p>`,
   });

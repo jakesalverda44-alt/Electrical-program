@@ -99,6 +99,9 @@
 .cc2-task.bid::before { background: var(--red); }
 .cc2-task.task::before { background: var(--blue); }
 .cc2-task.stale::before { background: var(--orange); }
+.cc2-task.signed::before { background: #8B5CF6; }
+.cc2-task.leads::before { background: var(--green); }
+.cc2-task .rank.big { font-size: 26px; color: var(--green); width: auto; min-width: 32px; }
 .cc2-task:hover { transform: translateY(-2px); border-color: var(--border2); box-shadow: var(--shadow); }
 .cc2-task .rank { font-family: var(--mono); font-size: 21px; font-weight: 700; color: var(--text3); width: 32px; flex: none; }
 .cc2-task .body { flex: 1; min-width: 0; }
@@ -116,6 +119,7 @@
 .tag.bid { background: rgba(224,106,106,.14); color: var(--red); }
 .tag.task { background: var(--blue-soft); color: var(--blue); }
 .tag.stale { background: var(--orange-soft); color: var(--orange); }
+.tag.signed { background: rgba(139,92,246,.15); color: #8B5CF6; }
 .tag.reply { background: var(--blue-soft); color: var(--blue); }
 
 /* ── Respond queue ────────────────────────────────────────────────── */
