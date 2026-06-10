@@ -279,7 +279,7 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
                               background:'var(--green-soft)', color:'var(--green)', marginLeft:4 }}>Active</span>
                           </span>
                           <span style={{ fontSize:11.5, fontWeight:700, color:'var(--text3)' }}>
-                            {gen.salesperson_name.split(' ').map(n=>n[0]).join('')}
+                            {(gen.salesperson_name || '—').split(' ').map(n=>n[0]).join('')}
                           </span>
                         </div>
                       </div>
