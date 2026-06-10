@@ -155,24 +155,17 @@ export function leadNudgeHtml(firstName: string): string {
   const name = escapeHtml(firstName);
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;line-height:1.6;">
     <p>Hi ${name},</p>
-    <p>I reached out yesterday after your Kohler request came through — I know these
-    things can land in a busy inbox, so I wanted to float it back to the top.</p>
-    <p>Every generator project is a little different, and the more I know up front, the
-    more useful I can be. If you've got 30 seconds, just hit reply and tell me:</p>
+    <p>Following up on your Kohler generator request — I'd like to understand what you
+    want to accomplish with this project so I can point you in the right direction.
+    A few quick questions, just hit reply:</p>
     <ul style="margin:0 0 14px 0;padding-left:22px;">
-      <li style="margin-bottom:6px;">What's got you thinking about backup power — storm season,
-        past outages, medical equipment, working from home?</li>
+      <li style="margin-bottom:6px;">What's driving the need for backup power — past
+        outages, storm prep, medical equipment?</li>
       <li style="margin-bottom:6px;">Whole-home coverage, or just the essentials
         (A/C, fridge, well pump)?</li>
-      <li style="margin-bottom:6px;">Do you have natural gas at the house, or would this
-        run on propane?</li>
-      <li>Any timeline in mind — before storm season hits, or just exploring options?</li>
+      <li>Natural gas at the house, or propane?</li>
     </ul>
-    <p>Even a one-line reply helps me show up with real answers and honest numbers
-    instead of a canned pitch.</p>
-    <p>Rather talk it through? Call or text me at
-    <a href="tel:3528018997" style="color:#1c2c54;">352-801-8997</a> — ten minutes is
-    usually all it takes to point you in the right direction.</p>
+    <p>Even a one-line reply is enough to get you real answers and honest numbers.</p>
     ${signatureHtml()}
   </div>`;
 }

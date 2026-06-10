@@ -53,10 +53,10 @@ describe('leadNudgeHtml', () => {
   it('greets by first name and asks goal-discovery questions', () => {
     const html = leadNudgeHtml('Jane');
     expect(html).toContain('Hi Jane,');
+    expect(html).toMatch(/what you\s+want to accomplish/i);
     expect(html).toMatch(/backup power/i);
     expect(html).toMatch(/whole-home|essentials/i);
     expect(html).toMatch(/natural gas|propane/i);
-    expect(html).toMatch(/timeline/i);
   });
   it('uses the inline logo and escapes the name', () => {
     expect(leadNudgeHtml('Jane')).toContain('src="cid:apt-logo"');
