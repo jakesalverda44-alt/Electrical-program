@@ -192,3 +192,42 @@ export interface CustomerDetail {
   documents: { id: string; linked_id: string | null; linked_name: string | null; div: string; name: string; display_name: string; category: string; file_size: number; file_type: string; uploaded_by: string; created_at: string }[];
   tasks: { id: string; title: string; notes?: string; due_date?: string | null; status: 'open' | 'done'; linked_name?: string | null; assigned_to_name?: string | null; created_at: string }[];
 }
+
+// ── Command Center "morning brief" (mirrors backend/src/services/brief.ts) ──
+export type BriefChip = 'Elec' | 'Gen' | 'Call';
+
+export interface BriefAttentionItem {
+  id: string;
+  type: 'email' | 'lead-call' | 'bid';
+  chips: BriefChip[];
+  title: string;
+  subtitle: string;
+  receivedAt: string | null;
+  briefing: string;
+  cta: { webLink?: string; tel?: string; navTo?: string; leadId?: string };
+}
+
+export interface TodayEvent {
+  id: string;
+  subject: string;
+  start: string;
+  end: string;
+  location: string | null;
+  webLink: string | null;
+  isAllDay: boolean;
+}
+
+export interface BriefPayload {
+  generatedAt: string;
+  graphEnabled: boolean;
+  kpis: {
+    activeBids: number; activeBidsValue: number;
+    activeGens: number; activeGensValue: number;
+    wonThisMonth: number; wonThisMonthValue: number;
+    leadsNeedingCall: number; unreadEmails: number;
+  };
+  attention: BriefAttentionItem[];
+  kohlerFunnel: { received: number; notAccepted: number; accepted: number; replied: number; needCall: number };
+  todayEvents: TodayEvent[];
+  briefBullets: string[];
+}

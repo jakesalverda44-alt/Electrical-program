@@ -235,7 +235,7 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
  * (first-contact email sent, or a call logged). No-op unless the lead is currently
  * 'new'. Logs the transition and schedules the contacted follow-up.
  */
-async function advanceToContacted(leadId: string, actorName: string): Promise<void> {
+export async function advanceToContacted(leadId: string, actorName: string): Promise<void> {
   try {
     const { rows } = await pool.query(
       "UPDATE leads SET stage='contacted', updated_at=now() WHERE id=$1 AND stage='new' AND deleted_at IS NULL RETURNING *",

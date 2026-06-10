@@ -1,0 +1,132 @@
+/* Command Center — futuristic morning-brief view. All rules scoped under .cc-root so nothing
+   leaks into the rest of the app. Uses only existing design tokens from styles.css. */
+
+.cc-root {
+  position: relative;
+  padding: 18px 24px 60px;
+  min-height: 100%;
+  overflow-x: hidden;
+}
+
+/* Faint grid overlay, faded out toward the bottom. */
+.cc-root::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: .5;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 42px 42px;
+  -webkit-mask: radial-gradient(900px 480px at 50% 0%, #000, transparent 80%);
+          mask: radial-gradient(900px 480px at 50% 0%, #000, transparent 80%);
+}
+.cc-root > * { position: relative; z-index: 1; }
+
+.cc-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 4px; }
+.cc-greet { font-size: 15px; color: var(--text2); }
+.cc-greet b { color: var(--text); font-weight: 700; }
+.cc-clock { text-align: right; font-family: var(--mono); }
+.cc-clock .t { font-size: 15px; color: var(--blue); letter-spacing: .5px; }
+.cc-clock .d { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 1.5px; }
+
+/* KPI row */
+.cc-kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin: 16px 0; }
+.cc-kpi {
+  position: relative; overflow: hidden;
+  background: linear-gradient(180deg, var(--surface2), var(--surface));
+  border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px;
+}
+.cc-kpi .bar { position: absolute; left: 0; top: 0; height: 3px; width: 100%; opacity: .9; }
+.cc-kpi .lab { font-size: 10.5px; color: var(--text3); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 8px; }
+.cc-kpi .val { font-family: var(--mono); font-size: 24px; font-weight: 700; line-height: 1; }
+.cc-kpi .note { font-size: 11px; color: var(--text3); margin-top: 6px; }
+.cc-kpi.k-amber .val { color: var(--amber); }   .cc-kpi.k-amber .bar { background: var(--amber); }
+.cc-kpi.k-blue  .val { color: var(--blue); }     .cc-kpi.k-blue  .bar { background: var(--blue); }
+.cc-kpi.k-green .val { color: var(--green); }    .cc-kpi.k-green .bar { background: var(--green); }
+.cc-kpi.k-red   .val { color: var(--red); }      .cc-kpi.k-red   .bar { background: var(--red); }
+
+.cc-grid { display: grid; grid-template-columns: 1.55fr 1fr; gap: 14px; }
+@media (max-width: 900px) { .cc-grid { grid-template-columns: 1fr; } .cc-kpis { grid-template-columns: repeat(2, 1fr); } }
+
+.cc-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; margin-bottom: 14px; }
+.cc-card.glow { box-shadow: 0 0 0 1px var(--blue-soft), 0 8px 30px rgba(0,0,0,.25); }
+.cc-card h2 {
+  font-size: 13px; margin: 0; padding: 13px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: .3px; color: var(--text);
+}
+.cc-card h2 .ct { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text3); background: var(--surface2); padding: 2px 8px; border-radius: 6px; }
+
+/* Pulsing live dot */
+.cc-live { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); animation: cc-pulse 2s infinite; }
+@keyframes cc-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--blue-soft); }
+  70%  { box-shadow: 0 0 0 7px rgba(77,141,247,0); }
+  100% { box-shadow: 0 0 0 0 rgba(77,141,247,0); }
+}
+
+.cc-sec-title { font-size: 10.5px; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; padding: 12px 16px 4px; }
+
+.cc-row { display: flex; align-items: center; gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background .13s; }
+.cc-row:last-child { border-bottom: none; }
+.cc-row:hover { background: var(--blue-soft); }
+.cc-row .info { flex: 1; min-width: 0; }
+.cc-row .t { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-row .m { font-size: 11px; color: var(--text3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-row .cta { display: flex; gap: 6px; flex-shrink: 0; }
+
+.cc-chip { font-size: 10px; font-weight: 700; letter-spacing: .5px; padding: 3px 8px; border-radius: 6px; text-transform: uppercase; white-space: nowrap; flex-shrink: 0; }
+.cc-chip.elec { background: var(--blue-soft); color: var(--blue); }
+.cc-chip.gen  { background: var(--amber-soft); color: var(--amber); }
+.cc-chip.call { background: rgba(52,197,136,.14); color: var(--green); }
+
+.cc-btn { font-size: 11px; font-weight: 600; padding: 6px 11px; border-radius: 7px; border: 1px solid var(--border2); background: var(--surface2); color: var(--text); cursor: pointer; white-space: nowrap; transition: .13s; text-decoration: none; display: inline-flex; align-items: center; gap: 5px; }
+.cc-btn:hover { border-color: var(--blue); color: var(--blue); }
+.cc-btn.p { background: var(--amber-soft); border-color: rgba(224,165,59,.5); color: var(--amber); }
+.cc-btn.p:hover { background: rgba(224,165,59,.25); }
+
+/* Kohler funnel */
+.cc-funnel { display: flex; gap: 8px; padding: 16px; }
+.cc-fstep { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 8px; text-align: center; }
+.cc-fstep .n { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--text); }
+.cc-fstep .l { font-size: 9.5px; color: var(--text3); text-transform: uppercase; letter-spacing: .5px; margin-top: 4px; }
+.cc-fstep.alert { border-color: rgba(224,106,106,.5); background: rgba(224,106,106,.08); }
+.cc-fstep.alert .n { color: var(--red); }
+
+/* Agenda */
+.cc-ag { padding: 6px 16px 12px; }
+.cc-agi { display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.cc-agi:last-child { border: none; }
+.cc-agi .tm { font-family: var(--mono); font-size: 12px; color: var(--blue); width: 60px; flex: none; }
+.cc-agi .x { font-size: 13px; font-weight: 600; color: var(--text); }
+.cc-agi .y { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
+/* Brief bullets */
+.cc-brief { padding: 8px 18px 16px; margin: 0; }
+.cc-brief li { font-size: 12.5px; color: var(--text2); margin: 8px 0; list-style: none; padding-left: 16px; position: relative; }
+.cc-brief li::before { content: "\203A"; position: absolute; left: 0; color: var(--blue); font-weight: 700; }
+
+.cc-empty { padding: 28px 16px; text-align: center; color: var(--text3); font-size: 12.5px; }
+.cc-loading { padding: 60px; text-align: center; color: var(--text3); font-size: 13px; }
+
+/* Slide-in briefing drawer */
+.cc-scrim { position: fixed; inset: 0; background: rgba(3,6,12,.55); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 55; }
+.cc-scrim.open { opacity: 1; pointer-events: auto; }
+.cc-drawer {
+  position: fixed; top: 0; right: 0; height: 100%; width: 420px; max-width: 92vw;
+  background: var(--surface); border-left: 1px solid var(--border2);
+  transform: translateX(100%); transition: transform .25s cubic-bezier(.4,0,.2,1);
+  z-index: 60; overflow: auto; display: flex; flex-direction: column;
+}
+.cc-drawer.open { transform: translateX(0); }
+.cc-drawer .dh { padding: 18px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: flex-start; gap: 10px; }
+.cc-drawer .dh h3 { margin: 0; font-size: 16px; color: var(--text); }
+.cc-drawer .dh .sub { font-size: 12px; color: var(--text3); margin-top: 3px; }
+.cc-drawer .close { margin-left: auto; cursor: pointer; color: var(--text3); font-size: 20px; line-height: 1; background: none; border: none; }
+.cc-drawer .dbody { padding: 18px 20px; }
+.cc-ai { background: var(--blue-soft); border: 1px solid rgba(77,141,247,.25); border-radius: 12px; padding: 14px; margin-bottom: 16px; font-size: 13px; line-height: 1.6; color: var(--text2); }
+.cc-ai .tag { font-size: 10px; color: var(--blue); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; font-weight: 700; }
+.cc-actions { display: flex; flex-direction: column; gap: 8px; }
+.cc-actions .cc-btn { padding: 11px; justify-content: center; font-size: 13px; }

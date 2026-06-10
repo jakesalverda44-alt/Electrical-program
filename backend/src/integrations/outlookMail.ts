@@ -27,6 +27,7 @@ export interface GraphMailMessage {
   webLink: string;
   categories: string[];
   hasAttachments: boolean;
+  isRead: boolean;
 }
 
 interface GraphMessageRaw {
@@ -39,9 +40,38 @@ interface GraphMessageRaw {
   webLink?: string;
   categories?: string[];
   hasAttachments?: boolean;
+  isRead?: boolean;
 }
 
-async function graphGet<T>(path: string): Promise<T> {
+// Sender substrings that mark a Kohler new-lead notification email. Overridable via
+// KOHLER_SENDER_MATCH (comma-separated). Matched case-insensitively against the from address.
+export const KOHLER_SENDER_MATCH: string[] =
+  (process.env.KOHLER_SENDER_MATCH || 'kohler').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+
+/** True when a message looks like a Kohler new-lead notification (by sender address). */
+export function isKohlerNotification(msg: { from: string | null }): boolean {
+  const from = (msg.from || '').toLowerCase();
+  return !!from && KOHLER_SENDER_MATCH.some(s => from.includes(s));
+}
+
+/** Map a raw Graph message to our normalized shape. */
+function mapRaw(m: GraphMessageRaw): GraphMailMessage {
+  return {
+    id: m.id,
+    subject: (m.subject || '').trim(),
+    from: m.from?.emailAddress?.address || null,
+    fromName: m.from?.emailAddress?.name || null,
+    receivedDateTime: m.receivedDateTime || new Date().toISOString(),
+    bodyPreview: (m.bodyPreview || '').trim(),
+    body: toPlainText(m.body?.content || m.bodyPreview || '', m.body?.contentType),
+    webLink: m.webLink || '',
+    categories: m.categories || [],
+    hasAttachments: !!m.hasAttachments,
+    isRead: m.isRead !== false, // default true when not selected
+  };
+}
+
+export async function graphGet<T>(path: string): Promise<T> {
   const token = await getGraphToken();
   const resp = await fetch(`${GRAPH_BASE}${path}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -79,20 +109,48 @@ export async function fetchTaggedBidEmails(limit = 50): Promise<GraphMailMessage
     const wanted = BID_CATEGORY.toLowerCase();
     return (data.value || [])
       .filter(m => (m.categories || []).some(c => c.trim().toLowerCase() === wanted))
-      .map(m => ({
-        id: m.id,
-        subject: (m.subject || '').trim(),
-        from: m.from?.emailAddress?.address || null,
-        fromName: m.from?.emailAddress?.name || null,
-        receivedDateTime: m.receivedDateTime || new Date().toISOString(),
-        bodyPreview: (m.bodyPreview || '').trim(),
-        body: toPlainText(m.body?.content || m.bodyPreview || '', m.body?.contentType),
-        webLink: m.webLink || '',
-        categories: m.categories || [],
-        hasAttachments: !!m.hasAttachments,
-      }));
+      .map(mapRaw);
   } catch (err) {
     logger.error({ err }, '[outlook-mail] fetchTaggedBidEmails failed');
+    return [];
+  }
+}
+
+// Lightweight select for brief scans — no body (keeps payloads small), includes isRead.
+const SCAN_SELECT = 'id,subject,from,receivedDateTime,bodyPreview,webLink,categories,hasAttachments,isRead';
+
+/**
+ * Unread Inbox messages (newest first). Graph rejects $orderby combined with an arbitrary
+ * $filter, so we filter isRead server-side and sort by receivedDateTime in code (matches the
+ * codebase's "filter in code" approach). Returns [] on any failure.
+ */
+export async function fetchUnreadInbox(limit = 50): Promise<GraphMailMessage[]> {
+  try {
+    const path = `/users/${MAILBOX}/mailFolders/Inbox/messages`
+      + `?$select=${SCAN_SELECT}&$top=${limit}&$filter=isRead eq false`;
+    const data = await graphGet<{ value: GraphMessageRaw[] }>(path);
+    return (data.value || []).map(mapRaw)
+      .sort((a, b) => b.receivedDateTime.localeCompare(a.receivedDateTime));
+  } catch (err) {
+    logger.error({ err }, '[outlook-mail] fetchUnreadInbox failed');
+    return [];
+  }
+}
+
+/**
+ * All Inbox messages (read + unread) received since `sinceIso`, newest first — used to count
+ * Kohler notifications "received this month". Returns [] on any failure.
+ */
+export async function fetchInboxSince(sinceIso: string, limit = 200): Promise<GraphMailMessage[]> {
+  try {
+    const path = `/users/${MAILBOX}/mailFolders/Inbox/messages`
+      + `?$select=${SCAN_SELECT}&$top=${limit}`
+      + `&$filter=${encodeURIComponent(`receivedDateTime ge ${sinceIso}`)}`
+      + `&$orderby=${encodeURIComponent('receivedDateTime desc')}`;
+    const data = await graphGet<{ value: GraphMessageRaw[] }>(path);
+    return (data.value || []).map(mapRaw);
+  } catch (err) {
+    logger.error({ err }, '[outlook-mail] fetchInboxSince failed');
     return [];
   }
 }
