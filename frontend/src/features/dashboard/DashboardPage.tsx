@@ -1,397 +1,260 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import Icon from '../../components/Icon';
-import api from '../../api/client';
-import { Bid, Gen, WonJob, Activity } from '../../types';
+import { Bid, Gen, WonJob } from '../../types';
 import { moneyFull, moneyShort as money } from '../../lib/money';
 import { useUser } from '../../contexts/AppContext';
+import './sales-dashboard.css';
 
 // Roles that see company-wide figures; everyone else sees their own scoped data.
 const MANAGER_ROLES = ['owner', 'administrator', 'sales_manager'];
 
-interface DueTask { id: string; title: string; due_date?: string | null; linked_name?: string | null; status: string; }
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function greeting() {
-  const h = new Date().getHours();
-  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+// date_won is a Postgres DATE serialized as ISO; take the calendar day so the
+// browser timezone can't shift it into the wrong month.
+function dayOf(d: string) { return new Date(String(d).slice(0, 10) + 'T00:00:00'); }
+
+function fmtWinDate(d: string) {
+  return dayOf(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-// Compact dashboard widget: the current user's open follow-ups that are due today or overdue.
-function FollowupsDue({ onNav }: { onNav: (v: string) => void }) {
-  const [tasks, setTasks] = useState<DueTask[]>([]);
-  useEffect(() => {
-    api.get('/tasks', { params: { status: 'open' } })
-      .then(({ data }) => setTasks(data))
-      .catch(() => { /* non-fatal */ });
-  }, []);
-
-  const today = new Date(new Date().toDateString());
-  const due = tasks.filter(t => t.due_date && new Date(t.due_date + 'T00:00:00') <= today);
-  if (due.length === 0) return null;
-
+/** "▲ 12% vs May" style delta chip; hidden when there's nothing to compare. */
+function Delta({ cur, prev, vs }: { cur: number; prev: number; vs: string }) {
+  if (prev <= 0 && cur <= 0) return null;
+  if (prev <= 0) return <span className="sd-delta up">▲ first wins {vs}</span>;
+  const pct = Math.round(((cur - prev) / prev) * 100);
+  if (pct === 0) return <span className="sd-delta">— even {vs}</span>;
   return (
-    <div style={{ margin: '0 0 18px', padding: '14px 18px', background: 'rgba(245,158,11,.10)', border: '1px solid rgba(245,158,11,.28)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 14 }}>
-      <span style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(245,158,11,.16)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-        <Icon name="checkc" size={18} stroke={2} style={{ color: 'var(--amber)' }}/>
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--amber)', marginBottom: 4 }}>
-          {due.length} Follow-up{due.length !== 1 ? 's' : ''} due
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {due.slice(0, 4).map(t => (
-            <span key={t.id} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', padding: '2px 8px', background: 'var(--surface2)', borderRadius: 6 }}>
-              {t.title}{t.linked_name ? ` · ${t.linked_name}` : ''}
-            </span>
-          ))}
-        </div>
-      </div>
-      <button className="btn ghost" onClick={() => onNav('followups')} style={{ fontSize: 12, flexShrink: 0, color: 'var(--amber)', borderColor: 'var(--amber)' }}>
-        View
-      </button>
-    </div>
+    <span className={'sd-delta ' + (pct > 0 ? 'up' : 'down')}>
+      {pct > 0 ? '▲' : '▼'} {Math.abs(pct)}% {vs}
+    </span>
   );
 }
-
 
 interface Props {
   bids: Bid[];
   gens: Gen[];
   wonJobs: WonJob[];
-  activity: Activity[];
   repNames?: string[];
-  /** Division filter from the header tabs: 'all' | 'elec' | 'gen'. */
-  dashFilter?: string;
   onNav: (v: string) => void;
-  onNewProposal: () => void;
 }
 
-export default function DashboardPage({ bids, gens, wonJobs, activity, repNames, dashFilter = 'all', onNav, onNewProposal }: Props) {
+export default function DashboardPage({ bids, gens, wonJobs, repNames, onNav }: Props) {
   const user = useUser();
   const isManager = MANAGER_ROLES.includes(user.role);
-  const firstName = user.name.split(' ')[0];
-  // Reps see their own scoped data (enforced server-side); label it accordingly.
-  const scopeWord = isManager ? '' : 'My ';
-  const sum = (a: { amount: number | null }[]) => a.reduce((s, x) => s + Number(x.amount ?? 0), 0);
-
-  // Division filter from the header tabs.
-  const showElec = dashFilter !== 'gen';
-  const showGen  = dashFilter !== 'elec';
-  // Activity feed scoped to the division (preconstruction is electrical work,
-  // so it stays visible in Electrical mode).
-  const fActivity = dashFilter === 'all' ? activity
-    : dashFilter === 'gen' ? activity.filter(a => a.div === 'gen')
-    : activity.filter(a => a.div !== 'gen');
-
-  const elecActive = bids.filter(b => b.stage === 'due' || b.stage === 'submitted');
-  const genActive  = gens.filter(g => g.stage === 'building' || g.stage === 'sent');
-  const elecVal = sum(elecActive), genVal = sum(genActive);
-  const total = (showElec ? elecVal : 0) + (showGen ? genVal : 0);
-  const activeCount = (showElec ? elecActive.length : 0) + (showGen ? genActive.length : 0);
-  const elecWon  = bids.filter(b => b.stage === 'awarded').length;
-  const elecLost = bids.filter(b => b.stage === 'lost').length;
-  const winRate = Math.round((elecWon / Math.max(1, elecWon + elecLost)) * 100);
-  const pct = total ? Math.round((elecVal / total) * 100) : 50;
-  const dueSoon = bids.filter(b => b.stage === 'due').sort((a, b) => a.due_days - b.due_days);
-  const overdue = bids.filter(b => (b.stage === 'due' || b.stage === 'submitted') && b.due_days < 0);
-  const recentGens = gens.slice(0, 4);
-
-  // Proposal status tracking
-  const sentGens    = gens.filter(g => g.sent_at && g.stage !== 'awarded' && g.stage !== 'declined');
-  const viewedGens  = sentGens.filter(g => g.viewed_at);
-  const signedGens  = gens.filter(g => g.stage === 'signed');
-  const awaitingReply = sentGens.filter(g => !g.viewed_at);
-  const viewedNotSigned = viewedGens.filter(g => g.stage !== 'signed');
-
-  // Sales summary — scoped to the selected division + date range.
-  const [salesRange, setSalesRange] = useState<'30d'|'90d'|'ytd'|'all'>('ytd');
-  const fWon = dashFilter === 'elec' ? wonJobs.filter(j => j.proposal_type === 'Electrical')
-             : dashFilter === 'gen'  ? wonJobs.filter(j => j.proposal_type === 'Generator')
-             : wonJobs;
   const now = new Date();
-  const rangeWon = fWon.filter(j => {
-    const d = new Date(j.date_won);
-    if (salesRange === '30d') return (now.getTime() - d.getTime()) <= 30 * 86400000;
-    if (salesRange === '90d') return (now.getTime() - d.getTime()) <= 90 * 86400000;
-    if (salesRange === 'ytd') return d.getFullYear() === now.getFullYear();
-    return true;
-  });
-  const thisMonth = fWon.filter(j => {
-    const d = new Date(j.date_won); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  });
-  const thisYear = fWon.filter(j => new Date(j.date_won).getFullYear() === now.getFullYear());
+  const year = now.getFullYear();
+  const month = now.getMonth();
+
   const sumWon = (a: WonJob[]) => a.reduce((s, x) => s + Number(x.value), 0);
-  const rangeVal = sumWon(rangeWon);
-  const monthVal = sumWon(thisMonth), yearVal = sumWon(thisYear);
-  const avgDeal  = rangeWon.length ? Math.round(rangeVal / rangeWon.length) : 0;
-  const RANGE_LABELS: Record<string, string> = { '30d': 'Last 30d', '90d': 'Last 90d', ytd: 'YTD', all: 'All time' };
+
+  // ── Sales: this month, this year, and the comparison baselines ──
+  const inYear = (y: number) => wonJobs.filter(j => dayOf(j.date_won).getFullYear() === y);
+  const thisYearJobs = inYear(year);
+  const monthJobsOf = (y: number, m: number) =>
+    wonJobs.filter(j => { const d = dayOf(j.date_won); return d.getFullYear() === y && d.getMonth() === m; });
+
+  const thisMonthJobs = monthJobsOf(year, month);
+  const prevMonthJobs = month === 0 ? monthJobsOf(year - 1, 11) : monthJobsOf(year, month - 1);
+  const monthVal = sumWon(thisMonthJobs);
+  const prevMonthVal = sumWon(prevMonthJobs);
+  const yearVal = sumWon(thisYearJobs);
+
+  // Last year *through the same date*, so a mid-year comparison is honest.
+  const sameDateLastYear = new Date(year - 1, month, now.getDate(), 23, 59, 59);
+  const lastYearToDate = sumWon(inYear(year - 1).filter(j => dayOf(j.date_won) <= sameDateLastYear));
+
+  const avgDeal = thisYearJobs.length ? Math.round(yearVal / thisYearJobs.length) : 0;
+
+  // Win rate across both divisions (decided deals only).
+  const wonCount = bids.filter(b => b.stage === 'awarded').length + gens.filter(g => g.stage === 'awarded').length;
+  const lostCount = bids.filter(b => b.stage === 'lost').length + gens.filter(g => g.stage === 'declined').length;
+  const winRate = wonCount + lostCount > 0 ? Math.round((wonCount / (wonCount + lostCount)) * 100) : null;
+
+  // ── Monthly chart: stacked elec/gen for the current year ──
+  const monthly = MONTHS.map((_, m) => {
+    const js = monthJobsOf(year, m);
+    return {
+      elec: sumWon(js.filter(j => j.proposal_type === 'Electrical')),
+      gen:  sumWon(js.filter(j => j.proposal_type === 'Generator')),
+    };
+  });
+  const chartMax = Math.max(...monthly.map(x => x.elec + x.gen), 1);
+  const yearElec = monthly.reduce((s, x) => s + x.elec, 0);
+  const yearGen  = monthly.reduce((s, x) => s + x.gen, 0);
+
+  // ── Open pipeline (live, not yet won) ──
+  const elecActive = bids.filter(b => b.stage === 'due' || b.stage === 'submitted');
+  const genActive  = gens.filter(g => g.stage === 'building' || g.stage === 'sent' || g.stage === 'signed');
+  const sum = (a: { amount: number | null }[]) => a.reduce((s, x) => s + Number(x.amount ?? 0), 0);
+  const elecOpen = sum(elecActive), genOpen = sum(genActive);
+  const openTotal = elecOpen + genOpen;
+  const elecPct = openTotal ? Math.round((elecOpen / openTotal) * 100) : 50;
+
+  // ── Proposal tracking funnel (gen proposals carry view/sign telemetry) ──
+  const sentGens   = gens.filter(g => g.sent_at && g.stage !== 'awarded' && g.stage !== 'declined');
+  const viewedGens = sentGens.filter(g => g.viewed_at);
+  const signedGens = gens.filter(g => g.stage === 'signed');
+
+  // ── Rep leaderboard (YTD) ──
+  const repSet = new Set<string>(repNames ?? []);
+  for (const j of thisYearJobs) if (j.salesperson_name) repSet.add(j.salesperson_name);
+  const reps = [...repSet]
+    .map(name => ({ name, val: sumWon(thisYearJobs.filter(j => j.salesperson_name === name)) }))
+    .sort((a, b) => b.val - a.val)
+    .slice(0, 6);
+  const repMax = Math.max(...reps.map(r => r.val), 1);
+
+  // ── Recent wins ──
+  const recentWins = [...wonJobs]
+    .sort((a, b) => dayOf(b.date_won).getTime() - dayOf(a.date_won).getTime())
+    .slice(0, 7);
 
   return (
     <div className="scroll view-enter">
-      <div className="dash">
-        {/* Personalized greeting */}
-        {firstName && (
-          <div style={{ marginBottom: 18 }}>
-            <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--text)' }}>{greeting()}, {firstName}</div>
-            <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 2 }}>
-              {isManager ? 'Company-wide pipeline and performance.' : 'Here are your deals and what needs attention today.'}
+      <div className="sd-root">
+
+        {/* ── Hero: the two numbers that matter ── */}
+        <div className="sd-hero">
+          <div className="sd-hero-in">
+            <div className="sd-big month">
+              <div className="k">Sales · {now.toLocaleDateString('en-US', { month: 'long' })}</div>
+              <div className="v">{moneyFull(monthVal)}</div>
+              <div className="s">{thisMonthJobs.length} job{thisMonthJobs.length === 1 ? '' : 's'} won this month</div>
+              <Delta cur={monthVal} prev={prevMonthVal} vs={`vs ${MONTHS[month === 0 ? 11 : month - 1]}`}/>
+            </div>
+            <div className="sd-big">
+              <div className="k">Sales · {year} total</div>
+              <div className="v">{moneyFull(yearVal)}</div>
+              <div className="s">{thisYearJobs.length} job{thisYearJobs.length === 1 ? '' : 's'} won this year</div>
+              <Delta cur={yearVal} prev={lastYearToDate} vs={`vs ${year - 1} to date`}/>
+            </div>
+            <div className="sd-pills">
+              {avgDeal > 0 && <span className="pill"><i>📊</i>Avg deal <b>{moneyFull(avgDeal)}</b></span>}
+              {winRate !== null && <span className="pill"><i>🎯</i>Win rate <b>{winRate}%</b></span>}
+              {openTotal > 0 && <span className="pill"><i>🔭</i>Open pipeline <b>{money(openTotal)}</b></span>}
+              {!isManager && <span className="pill"><i>👤</i>Showing your deals</span>}
             </div>
           </div>
-        )}
-
-        {/* Follow-ups due today / overdue */}
-        <FollowupsDue onNav={onNav}/>
-
-        {/* Stat cards */}
-        {(() => {
-        const statCards = [
-          { label: scopeWord + 'Open Pipeline', val: money(total), sub: `${activeCount} active opportunities`, ic: 'trend', tone: 'blue', nav: showGen && !showElec ? 'gen-proposals' : 'elec-proposals' },
-          ...(showElec ? [{ label: 'Electrical Value', val: money(elecVal), sub: `${elecActive.length} active bids`,      ic: 'pipeline', tone: 'blue',  nav: 'elec-proposals' }] : []),
-          ...(showGen  ? [{ label: 'Generator Value',  val: money(genVal),  sub: `${genActive.length} active proposals`, ic: 'bolt',     tone: 'amber', nav: 'gen-proposals'  }] : []),
-          ...(showElec ? [{ label: 'Win Rate',         val: winRate + '%',  sub: `${elecWon} won · ${elecLost} lost`,    ic: 'spark',    tone: 'green', nav: 'sales-by-rep'   }] : []),
-        ];
-        return (
-        <div className="stats" style={{ gridTemplateColumns: `repeat(${statCards.length},1fr)`, padding: 0 }}>
-          {statCards.map(s => (
-            <div className="stat" key={s.label} onClick={() => onNav(s.nav)} style={{ cursor: 'pointer' }}>
-              <div className="stat-top">
-                <span className="stat-label">{s.label}</span>
-                <span className={'stat-ic ' + s.tone}><Icon name={s.ic} size={17} stroke={1.9}/></span>
-              </div>
-              <div className="stat-val num">{s.val}</div>
-              <div className="stat-sub">{s.sub}</div>
-            </div>
-          ))}
         </div>
-        ); })()}
 
-        {/* Sales summary band */}
-        <div className="comm-band">
-          <div className="comm-stats">
-            {/* Range filter chips */}
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-              {(['30d','90d','ytd','all'] as const).map(r => (
-                <button key={r} onClick={() => setSalesRange(r)}
-                  style={{ fontSize: 11, fontWeight: 800, padding: '3px 9px', borderRadius: 20,
-                    border: '1px solid', cursor: 'pointer', fontFamily: 'inherit',
-                    borderColor: salesRange === r ? 'var(--blue)' : 'var(--border2)',
-                    background: salesRange === r ? 'var(--blue-soft)' : 'transparent',
-                    color: salesRange === r ? 'var(--blue)' : 'var(--text3)',
-                  }}>
-                  {RANGE_LABELS[r]}
+        {/* ── Month-by-month, divisions stacked inline ── */}
+        <div className="sd-card">
+          <div className="ch">
+            {year} month by month
+            <span className="sp"/>
+            <span className="sd-legend">
+              <span><i style={{ background: 'var(--blue)' }}/>Electrical · {money(yearElec)}</span>
+              <span><i style={{ background: 'var(--amber)' }}/>Generators · {money(yearGen)}</span>
+            </span>
+          </div>
+          <div className="sd-chart">
+            {monthly.map((x, m) => {
+              const total = x.elec + x.gen;
+              const isNow = m === month;
+              return (
+                <div
+                  className={'sd-col' + (isNow ? ' now' : '') + (m > month ? ' future' : '')}
+                  key={m}
+                  title={total > 0 ? `${MONTHS[m]}: ${moneyFull(total)} (${moneyFull(x.elec)} electrical · ${moneyFull(x.gen)} generators)` : `${MONTHS[m]}: no wins`}
+                >
+                  <span className="amt">{total > 0 ? money(total) : ''}</span>
+                  <div className={'bars' + (total === 0 ? ' empty' : '')} style={{ height: '100%' }}>
+                    <div style={{ flex: 1 }}/>
+                    <div className="seg-gen"  style={{ height: `${(x.gen  / chartMax) * 100}%` }}/>
+                    <div className="seg-elec" style={{ height: `${(x.elec / chartMax) * 100}%` }}/>
+                  </div>
+                  <span className="m">{MONTHS[m]}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="sd-grid">
+          {/* ── Left: recent wins ── */}
+          <div>
+            <div className="sd-card">
+              <div className="ch">
+                Recent wins
+                <span className="sp"/>
+                <button className="panel-link" onClick={() => onNav('sales-by-rep')}>
+                  Sales by rep <Icon name="arrow" size={13} stroke={2}/>
                 </button>
+              </div>
+              {recentWins.length === 0 && <div className="sd-empty">No wins yet — go get the first one.</div>}
+              {recentWins.map(j => (
+                <div className="sd-win" key={j.id}>
+                  <span className="ic"><Icon name="check" size={16} stroke={2.2}/></span>
+                  <div className="tx">
+                    <b>
+                      {j.customer}
+                      <span className={'div-chip ' + (j.proposal_type === 'Generator' ? 'gen' : 'elec')}>
+                        {j.proposal_type === 'Generator' ? 'Gen' : 'Elec'}
+                      </span>
+                    </b>
+                    <span>{j.salesperson_name || '—'} · {fmtWinDate(j.date_won)}</span>
+                  </div>
+                  <span className="amt">{moneyFull(Number(j.value))}</span>
+                </div>
               ))}
             </div>
-            {[
-              { label: `Won · ${RANGE_LABELS[salesRange]}`, val: moneyFull(rangeVal) },
-              { label: 'Won This Month', val: moneyFull(monthVal) },
-              { label: 'Jobs Won',       val: String(rangeWon.length) },
-              { label: 'Avg Deal Size',  val: moneyFull(avgDeal)  },
-            ].map(s => (
-              <div className="comm-stat" key={s.label}>
-                <div className="cs-label">{s.label}</div>
-                <div className="cs-val num">{s.val}</div>
-              </div>
-            ))}
           </div>
-          <div className="comm-right">
-            <div className="comm-reps">
-              {(repNames && repNames.length > 0 ? repNames : ['Jake Salverda','David Marsh']).map(rep => {
-                const repJobs = thisYear.filter(j => j.salesperson_name === rep);
-                const repVal  = sumWon(repJobs);
-                const repPct  = yearVal ? Math.round((repVal/yearVal)*100) : 0;
-                return (
-                  <div className="rep-row" key={rep}>
-                    <div className="rep-name">{rep}</div>
-                    <div className="rep-bar-wrap"><div className="rep-bar" style={{ width: repPct+'%' }}/></div>
-                    <div className="rep-val num">{moneyFull(repVal)}</div>
-                  </div>
-                );
-              })}
-            </div>
-            <button className="panel-link" onClick={() => onNav('sales-by-rep')}>View all <Icon name="arrow" size={13} stroke={2}/></button>
-          </div>
-        </div>
 
-              {showElec && overdue.length > 0 && (
-                <div style={{ margin: '0 0 18px', padding: '14px 18px', background: 'rgba(224,106,106,.10)', border: '1px solid rgba(224,106,106,.25)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <span style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(224,106,106,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <Icon name="clock" size={18} stroke={2} style={{ color: '#E06A6A' }}/>
-                  </span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 800, color: '#E06A6A', marginBottom: 4 }}>
-                      {overdue.length} Overdue Bid{overdue.length !== 1 ? 's' : ''}
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      {overdue.map(b => (
-                        <span key={b.id} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', padding: '2px 8px', background: 'var(--surface2)', borderRadius: 6 }}>
-                          {b.name} <span style={{ color: '#E06A6A' }}>({Math.abs(b.due_days)}d overdue)</span>
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <button className="btn ghost" onClick={() => onNav('elec-proposals')} style={{ fontSize: 12, flexShrink: 0, color: '#E06A6A', borderColor: '#E06A6A' }}>
-                    View Pipeline
-                  </button>
-                </div>
-              )}
-        <div className="dash-grid">
-          {/* Left column */}
-          <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
-            {showElec && (
-            <div className="panel">
-              <div className="panel-hdr">
-                <span className="panel-title">
-                  <span className="pt-ic" style={{ background:'var(--orange-soft)', color:'var(--orange)' }}><Icon name="clock" size={15} stroke={2}/></span>
-                  Bids Due This Week
-                </span>
-                <button className="panel-link" onClick={() => onNav('elec-proposals')}>View pipeline <Icon name="arrow" size={13} stroke={2}/></button>
+          {/* ── Right: pipeline, funnel, leaderboard ── */}
+          <div>
+            <div className="sd-card">
+              <div className="ch">
+                Open pipeline
+                <span className="sp"/>
+                <button className="panel-link" onClick={() => onNav('pipeline')}>
+                  View <Icon name="arrow" size={13} stroke={2}/>
+                </button>
               </div>
-              <div className="panel-body">
-                {dueSoon.length === 0 && <div className="panel-empty">No bids currently due</div>}
-                {dueSoon.map(b => {
-                  const [m, d] = b.due.split(' ');
-                  return (
-                    <div className="due-item" key={b.id} onClick={() => onNav('elec-proposals')}>
-                      <div className={'due-date' + (b.due_days <= 3 ? ' hot' : '')}><b>{d}</b><small>{m}</small></div>
-                      <div className="di-main"><div className="di-name">{b.name}</div><div className="di-sub">{b.gc} · {b.loc}</div></div>
-                      <div style={{ textAlign:'right' }}>
-                        <div className="di-amt num">{money(Number(b.amount))}</div>
-                        <div className="di-when">{b.due_days <= 3 ? `Due in ${b.due_days}d` : `${b.due_days} days`}</div>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 26, fontWeight: 700, color: 'var(--text)' }}>
+                {moneyFull(openTotal)}
+              </div>
+              <div className="sd-pipe-bar">
+                <i style={{ width: `${elecPct}%`, background: 'var(--blue)' }}/>
+                <i style={{ width: `${100 - elecPct}%`, background: 'var(--amber)' }}/>
+              </div>
+              <div className="sd-pipe-row">
+                <span className="dot" style={{ background: 'var(--blue)' }}/>Electrical · {elecActive.length} active
+                <span className="v">{money(elecOpen)}</span>
+              </div>
+              <div className="sd-pipe-row">
+                <span className="dot" style={{ background: 'var(--amber)' }}/>Generators · {genActive.length} active
+                <span className="v">{money(genOpen)}</span>
               </div>
             </div>
+
+            <div className="sd-card">
+              <div className="ch">
+                Proposals out
+                <span className="sp"/>
+                <button className="panel-link" onClick={() => onNav('gen-proposals')}>
+                  View <Icon name="arrow" size={13} stroke={2}/>
+                </button>
+              </div>
+              <div className="sd-funnel">
+                <div className="step"><div className="n" style={{ color: 'var(--blue)'  }}>{sentGens.length}</div><div className="l">Sent</div></div>
+                <div className="step"><div className="n" style={{ color: 'var(--amber)' }}>{viewedGens.length}</div><div className="l">Viewed</div></div>
+                <div className="step"><div className="n" style={{ color: 'var(--green)' }}>{signedGens.length}</div><div className="l">Signed</div></div>
+              </div>
+            </div>
+
+            {isManager && reps.length > 0 && (
+              <div className="sd-card">
+                <div className="ch">Leaderboard · {year}</div>
+                {reps.map(r => (
+                  <div className="sd-rep" key={r.name}>
+                    <span className="nm">{r.name}</span>
+                    <span className="track"><span className="fill" style={{ width: `${(r.val / repMax) * 100}%`, display: 'block' }}/></span>
+                    <span className="val">{money(r.val)}</span>
+                  </div>
+                ))}
+              </div>
             )}
-
-            <div className="panel">
-              <div className="panel-hdr">
-                <span className="panel-title">
-                  <span className="pt-ic" style={{ background:'var(--blue-soft)', color:'var(--blue)' }}><Icon name="dollar" size={15} stroke={1.9}/></span>
-                  Pipeline by Division
-                </span>
-              </div>
-              <div className="split">
-                {showElec && (
-                <div className="split-card">
-                  <div className="sc-top"><span className="sc-tag" style={{ background:'var(--blue)' }}/> Electrical Bids</div>
-                  <div className="sc-val num">{money(elecVal)}</div>
-                  <div className="sc-sub">{elecActive.length} active · {money(sum(bids.filter(b=>b.stage==='awarded')))} awarded</div>
-                  {dashFilter === 'all' && <div className="sc-bar"><i style={{ width:pct+'%', background:'var(--blue)' }}/><i style={{ width:(100-pct)+'%', background:'var(--amber)' }}/></div>}
-                </div>
-                )}
-                {showGen && (
-                <div className="split-card">
-                  <div className="sc-top"><span className="sc-tag" style={{ background:'var(--amber)' }}/> Generators</div>
-                  <div className="sc-val num">{money(genVal)}</div>
-                  <div className="sc-sub">{genActive.length} active · {money(sum(gens.filter(g=>g.stage==='awarded')))} awarded</div>
-                  {dashFilter === 'all' && <div className="sc-bar"><i style={{ width:(100-pct)+'%', background:'var(--amber)' }}/><i style={{ width:pct+'%', background:'var(--surface3)' }}/></div>}
-                </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Right column */}
-          <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
-            {showGen && (<>
-            <div className="panel">
-              <div className="panel-hdr">
-                <span className="panel-title">
-                  <span className="pt-ic" style={{ background:'var(--amber-soft)', color:'var(--amber)' }}><Icon name="doc" size={15} stroke={1.8}/></span>
-                  Recently Built Proposals
-                </span>
-                <button className="panel-link" onClick={onNewProposal} style={{ color:'var(--amber)' }}>New <Icon name="plus" size={13} stroke={2.4}/></button>
-              </div>
-              <div className="panel-body">
-                {recentGens.map(g => (
-                  <div className="recent-item" key={g.id} onClick={() => onNav('gen-proposals')}>
-                    <div className="recent-ic"><Icon name="bolt" size={18} stroke={1.8}/></div>
-                    <div className="di-main"><div className="di-name">{g.customer}</div><div className="di-sub">{g.mfr} {g.model} · {g.kw}kW</div></div>
-                    <div style={{ textAlign:'right' }}><div className="di-amt num">{money(Number(g.amount))}</div><div className="di-when">{g.built_on}</div></div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="panel">
-              <div className="panel-hdr">
-                <span className="panel-title">
-                  <span className="pt-ic" style={{ background:'var(--green-soft)', color:'var(--green)' }}><Icon name="doc" size={15} stroke={1.8}/></span>
-                  Proposal Pipeline
-                </span>
-                <button className="panel-link" onClick={() => onNav('gen-proposals')}>View all <Icon name="arrow" size={13} stroke={2}/></button>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 0, borderBottom: '1px solid var(--border)' }}>
-                {[
-                  { label: 'Sent',   val: sentGens.length,        color: 'var(--blue)'  },
-                  { label: 'Viewed', val: viewedNotSigned.length, color: 'var(--amber)' },
-                  { label: 'Signed', val: signedGens.length,      color: 'var(--green)' },
-                ].map(s => (
-                  <div key={s.label} style={{ padding: '14px 0', textAlign: 'center', borderRight: '1px solid var(--border)' }}>
-                    <div style={{ fontSize: 22, fontWeight: 900, color: s.color }}>{s.val}</div>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{s.label}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="panel-body">
-                {awaitingReply.length > 0 && (
-                  <div style={{ padding: '10px 16px', background: 'var(--amber-soft)', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--amber)', fontWeight: 600 }}>
-                    {awaitingReply.length} proposal{awaitingReply.length !== 1 ? 's' : ''} sent — awaiting customer view
-                  </div>
-                )}
-                {viewedNotSigned.length > 0 && viewedNotSigned.map(g => (
-                  <div className="recent-item" key={g.id} onClick={() => onNav('gen-proposals')} style={{ cursor: 'pointer' }}>
-                    <div className="recent-ic" style={{ background: 'var(--amber-soft)', color: 'var(--amber)' }}><Icon name="eye" size={16} stroke={1.8}/></div>
-                    <div className="di-main">
-                      <div className="di-name">{g.customer}</div>
-                      <div className="di-sub">Viewed · awaiting signature</div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div className="di-amt num" style={{ fontSize: 12 }}>{money(Number(g.amount))}</div>
-                    </div>
-                  </div>
-                ))}
-                {signedGens.slice(0, 3).map(g => (
-                  <div className="recent-item" key={g.id} onClick={() => onNav('gen-proposals')} style={{ cursor: 'pointer' }}>
-                    <div className="recent-ic" style={{ background: 'var(--green-soft)', color: 'var(--green)' }}><Icon name="check" size={16} stroke={2.2}/></div>
-                    <div className="di-main">
-                      <div className="di-name">{g.customer}</div>
-                      <div className="di-sub">Signed — pending award</div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div className="di-amt num" style={{ fontSize: 12 }}>{money(Number(g.amount))}</div>
-                    </div>
-                  </div>
-                ))}
-                {sentGens.length === 0 && (
-                  <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>No active proposals sent yet.</div>
-                )}
-              </div>
-            </div>
-            </>)}
-
-            <div className="panel">
-              <div className="panel-hdr">
-                <span className="panel-title">
-                  <span className="pt-ic" style={{ background:'var(--green-soft)', color:'var(--green)' }}><Icon name="spark" size={15} stroke={1.9}/></span>
-                  Activity
-                </span>
-              </div>
-              <div className="panel-body">
-                {fActivity.length === 0 && <div className="panel-empty">No recent activity</div>}
-                {fActivity.slice(0, 6).map(a => (
-                  <div className="act-item" key={a.id}>
-                    <div className={'act-ic ' + a.kind}>
-                      <Icon name={a.kind==='awarded'?'check':a.kind==='lost'?'x':a.kind==='built'?'bolt':a.kind==='sent'?'arrow':'plus'} size={16} stroke={2}/>
-                    </div>
-                    <div className="act-text">{a.text}</div>
-                    <div className="di-when">{a.time_label}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
       </div>

@@ -51,7 +51,6 @@ export default function App() {
   // browser back/forward buttons work. setView simply navigates.
   const view = location.pathname.replace(/^\/+/, '').split('/')[0] || 'dashboard';
   const setView = useCallback((v: string) => navigate('/' + v), [navigate]);
-  const [dashFilter, setDashFilter] = useState('all');
   const [bids, setBids] = useState<Bid[]>([]);
   const [gens, setGens] = useState<Gen[]>([]);
   const [wonJobs, setWonJobs] = useState<WonJob[]>([]);
@@ -186,10 +185,9 @@ export default function App() {
       case 'sales-dashboard':
         return (
           <DashboardPage
-            bids={bids} gens={gens} wonJobs={wonJobs} activity={activity}
+            bids={bids} gens={gens} wonJobs={wonJobs}
             repNames={repNames}
-            dashFilter={dashFilter}
-            onNav={setView} onNewProposal={() => setView('builder')}
+            onNav={setView}
           />
         );
       case 'pipeline':
@@ -290,8 +288,6 @@ export default function App() {
         elecProjectCount={elecProjectCount}
         newIncoming={intakeCount}
         followupCount={followupCount}
-        dashFilter={dashFilter}
-        onDashFilter={setDashFilter}
         onNewProposal={() => setView('builder')}
         onNewBid={() => openNewBid()}
         bids={bids} gens={gens}

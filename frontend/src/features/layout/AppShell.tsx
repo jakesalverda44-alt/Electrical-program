@@ -25,8 +25,6 @@ interface Props {
   elecProjectCount?: number;
   newIncoming?: number;
   followupCount?: number;
-  dashFilter?: string;
-  onDashFilter?: (f: string) => void;
   onNewProposal?: () => void;
   onNewBid?: () => void;
   onOpenImport?: () => void;
@@ -61,7 +59,7 @@ export default function AppShell({
   view, onNav, onLogout, children,
   genProposalCount = 0, elecProposalCount = 0, genProjectCount = 0, elecProjectCount = 0, newIncoming = 0,
   followupCount = 0,
-  dashFilter = 'all', onDashFilter, onNewProposal, onNewBid, onOpenImport,
+  onNewProposal, onNewBid, onOpenImport,
   bids = [], gens = [], showToast,
 }: Props) {
   const user = useUser();
@@ -87,8 +85,11 @@ export default function AppShell({
   };
 
   const nav: NavGroup[] = [
-    { group: 'Sales', items: [
+    // Command Center stands alone — it's the morning home base, not a sales report.
+    { group: '', items: [
       { id: 'dashboard',       label: 'Command Center',  icon: 'dashboard' },
+    ]},
+    { group: 'Sales', items: [
       { id: 'sales-dashboard', label: 'Sales Dashboard', icon: 'trend' },
       { id: 'gen-leads', label: 'Generator Leads', icon: 'users', tone: 'amber' },
       { id: 'pipeline',  label: 'Pipeline',        icon: 'pipeline', count: genProposalCount + elecProposalCount },
@@ -158,9 +159,9 @@ export default function AppShell({
         <div className="logo">
           <img className="logo-img" src={aptLogo} alt="Accurate Power and Technology"/>
         </div>
-        {nav.map(g => (
-          <div className="nav-group" key={g.group}>
-            <div className="nav-label">{g.group}</div>
+        {nav.map((g, gi) => (
+          <div className="nav-group" key={g.group || gi}>
+            {g.group && <div className="nav-label">{g.group}</div>}
             {g.items.map(it => {
               const isActive = view === it.id;
               const isAmber  = it.tone === 'amber';
@@ -224,13 +225,6 @@ export default function AppShell({
                 <div className="page-title">{tb.title}</div>
                 {tb.sub && <div className="page-sub">{tb.sub}</div>}
               </div>
-              {view === 'sales-dashboard' && (
-                <div className="seg">
-                  <button className={dashFilter === 'all'  ? 'active' : ''} onClick={() => onDashFilter?.('all')}>All</button>
-                  <button className={dashFilter === 'gen'  ? 'active amber' : ''} onClick={() => onDashFilter?.('gen')}><Icon name="bolt" size={14} stroke={2}/>Generators</button>
-                  <button className={dashFilter === 'elec' ? 'active' : ''} onClick={() => onDashFilter?.('elec')}><Icon name="pipeline" size={14} stroke={2}/>Electrical</button>
-                </div>
-              )}
             </div>
             <div className="top-right">
               <SearchBox bids={bids} gens={gens} onNav={onNav}/>
