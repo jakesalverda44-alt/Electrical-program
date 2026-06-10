@@ -8,6 +8,7 @@ import api from '../../api/client';
 import BuildFromNotesModal from '../builder/BuildFromNotesModal';
 import { isPrivileged } from '../../hooks/useAuth';
 import { useUser } from '../../contexts/AppContext';
+import { useShowToast } from '../../contexts/AppContext';
 
 function fmtTs(ts?: string | null) {
   if (!ts) return null;
@@ -23,13 +24,56 @@ interface Props {
   onEditGen: (gen: Gen) => void;
   onDelete: (gen: Gen) => void;
   onClosed: (gen: Gen) => void;
+  onUpdated: (gen: Gen) => void;
 }
 
-export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDelete, onClosed }: Props) {
+interface Draft { customer: string; loc: string; mfr: string; model: string; kw: string; amount: string; addons: string; }
+
+export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDelete, onClosed, onUpdated }: Props) {
   const canDelete = isPrivileged(useUser());
+  const showToast = useShowToast();
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed';
   const [closingJob, setClosingJob] = useState(false);
   const [showBuildNotes, setShowBuildNotes] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState<Draft>({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '' });
+
+  const startEdit = () => {
+    setDraft({
+      customer: gen.customer || '',
+      loc: gen.loc || '',
+      mfr: gen.mfr || 'Kohler',
+      model: gen.model || '',
+      kw: String(gen.kw ?? ''),
+      amount: String(gen.amount ?? ''),
+      addons: String(gen.addons ?? ''),
+    });
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    setSaving(true);
+    try {
+      const { data } = await api.patch(`/gens/${gen.id}`, {
+        customer: draft.customer.trim(),
+        loc: draft.loc.trim(),
+        mfr: draft.mfr,
+        model: draft.model.trim(),
+        kw: Number(draft.kw) || 0,
+        amount: Number(draft.amount) || 0,
+        addons: Number(draft.addons) || 0,
+      });
+      onUpdated(data);
+      setEditing(false);
+      showToast({ title: 'Details updated', sub: data.customer });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const set = (k: keyof Draft) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setDraft(d => ({ ...d, [k]: e.target.value }));
 
   const handleCloseJob = async () => {
     if (!window.confirm(`Mark "${gen.customer}" as closed/complete? This will move the Drive folder to Completed Generator Jobs and remove it from the active pipeline.`)) return;
@@ -124,32 +168,81 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             </div>
           )}
 
-          <div className="dtl-section">
-            <div className="dtl-row"><span className="dtl-k">Manufacturer</span>
-              <span className="dtl-v">
-                <span className={'chip-mfr ' + gen.mfr} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 800, padding: '2px 8px', borderRadius: 5, textTransform: 'uppercase', letterSpacing: '.04em', background: gen.mfr === 'Kohler' ? 'var(--blue-soft)' : 'var(--amber-soft)', color: gen.mfr === 'Kohler' ? 'var(--blue)' : 'var(--amber)' }}>
-                  <Icon name="bolt" size={11} stroke={2}/>{gen.mfr}
-                </span>
-              </span>
+          {editing ? (
+            <div className="dtl-section">
+              <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--text3)', marginBottom: 12 }}>Edit Details</div>
+              {([
+                { label: 'Customer', key: 'customer', type: 'text' },
+                { label: 'Location', key: 'loc', type: 'text' },
+                { label: 'Model', key: 'model', type: 'text' },
+                { label: 'kW Output', key: 'kw', type: 'number' },
+                { label: 'Amount ($)', key: 'amount', type: 'number' },
+                { label: 'Add-ons ($)', key: 'addons', type: 'number' },
+              ] as { label: string; key: keyof Draft; type: string }[]).map(f => (
+                <div key={f.key} style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>{f.label}</div>
+                  <input
+                    type={f.type}
+                    value={draft[f.key]}
+                    onChange={set(f.key)}
+                    style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 7,
+                      padding: '7px 10px', fontSize: 13, color: 'var(--text)', fontFamily: f.type === 'number' ? 'var(--mono)' : 'inherit',
+                      outline: 'none', boxSizing: 'border-box' }}
+                  />
+                </div>
+              ))}
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Manufacturer</div>
+                <select value={draft.mfr} onChange={set('mfr')}
+                  style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 7,
+                    padding: '7px 10px', fontSize: 13, color: 'var(--text)', outline: 'none', boxSizing: 'border-box' }}>
+                  <option>Kohler</option>
+                  <option>Generac</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                <button className="btn" style={{ flex: 1, justifyContent: 'center' }} disabled={saving} onClick={saveEdit}>
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+                <button className="btn ghost" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setEditing(false)}>
+                  Cancel
+                </button>
+              </div>
             </div>
-            <div className="dtl-row"><span className="dtl-k">Model</span><span className="dtl-v">{gen.model}</span></div>
-            <div className="dtl-row"><span className="dtl-k">Output</span><span className="dtl-v num">{gen.kw} kW</span></div>
-            <div className="dtl-row"><span className="dtl-k">Add-ons</span><span className="dtl-v">{gen.addons}</span></div>
-            <div className="dtl-row"><span className="dtl-k">Location</span><span className="dtl-v">{gen.loc}</span></div>
-            {(gen.site_visit_at || gen.site_visit_needs_time) && (
-              <div className="dtl-row">
-                <span className="dtl-k">Site visit</span>
+          ) : (
+            <div className="dtl-section">
+              <div className="dtl-row"><span className="dtl-k">Manufacturer</span>
                 <span className="dtl-v">
-                  {gen.site_visit_at
-                    ? fmtTs(gen.site_visit_at)
-                    : <span style={{ color: 'var(--amber)', fontWeight: 700 }}>Needs a time</span>}
+                  <span className={'chip-mfr ' + gen.mfr} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 800, padding: '2px 8px', borderRadius: 5, textTransform: 'uppercase', letterSpacing: '.04em', background: gen.mfr === 'Kohler' ? 'var(--blue-soft)' : 'var(--amber-soft)', color: gen.mfr === 'Kohler' ? 'var(--blue)' : 'var(--amber)' }}>
+                    <Icon name="bolt" size={11} stroke={2}/>{gen.mfr}
+                  </span>
                 </span>
               </div>
-            )}
-            <div className="dtl-row"><span className="dtl-k">Proposal amount</span><span className="dtl-v num">{moneyFull(Number(gen.amount))}</span></div>
-            <div className="dtl-row"><span className="dtl-k">Built</span><span className="dtl-v">{gen.built_on}</span></div>
-            <div className="dtl-row"><span className="dtl-k">Salesperson</span><span className="dtl-v">{gen.salesperson_name}</span></div>
-          </div>
+              <div className="dtl-row"><span className="dtl-k">Model</span><span className="dtl-v">{gen.model}</span></div>
+              <div className="dtl-row"><span className="dtl-k">Output</span><span className="dtl-v num">{gen.kw} kW</span></div>
+              <div className="dtl-row"><span className="dtl-k">Add-ons</span><span className="dtl-v">{gen.addons}</span></div>
+              <div className="dtl-row"><span className="dtl-k">Location</span><span className="dtl-v">{gen.loc}</span></div>
+              {(gen.site_visit_at || gen.site_visit_needs_time) && (
+                <div className="dtl-row">
+                  <span className="dtl-k">Site visit</span>
+                  <span className="dtl-v">
+                    {gen.site_visit_at
+                      ? fmtTs(gen.site_visit_at)
+                      : <span style={{ color: 'var(--amber)', fontWeight: 700 }}>Needs a time</span>}
+                  </span>
+                </div>
+              )}
+              <div className="dtl-row"><span className="dtl-k">Proposal amount</span><span className="dtl-v num">{moneyFull(Number(gen.amount))}</span></div>
+              <div className="dtl-row"><span className="dtl-k">Built</span><span className="dtl-v">{gen.built_on}</span></div>
+              <div className="dtl-row"><span className="dtl-k">Salesperson</span><span className="dtl-v">{gen.salesperson_name}</span></div>
+              <button className="btn ghost"
+                style={{ width: '100%', justifyContent: 'center', marginTop: 10 }}
+                onClick={startEdit}
+              >
+                <Icon name="doc" size={14} stroke={1.9}/>Edit Details
+              </button>
+            </div>
+          )}
 
           {gen.proposal_token && (
             <button

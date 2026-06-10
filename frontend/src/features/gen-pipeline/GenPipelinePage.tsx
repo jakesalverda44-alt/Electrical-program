@@ -200,6 +200,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
           onEditGen={g => { setDetail(null); onEditGen(g); }}
           onDelete={handleDelete}
           onClosed={handleClosed}
+          onUpdated={g => { setGens(prev => prev.map(x => x.id === g.id ? g : x)); setDetail(g); }}
         />
       )}
     </div>

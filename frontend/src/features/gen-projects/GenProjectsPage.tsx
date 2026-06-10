@@ -121,6 +121,31 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
   const [dragId,  setDragId]  = useState<string|null>(null);
   const [overCol, setOverCol] = useState<PhaseKey|null>(null);
   const [detail,  setDetail]  = useState<Gen|null>(null);
+  const [editingDetail, setEditingDetail] = useState(false);
+  const [editDraft, setEditDraft] = useState({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '' });
+  const [editSaving, setEditSaving] = useState(false);
+
+  const startDetailEdit = (g: Gen) => {
+    setEditDraft({ customer: g.customer||'', loc: g.loc||'', mfr: g.mfr||'Kohler', model: g.model||'', kw: String(g.kw??''), amount: String(g.amount??''), addons: String(g.addons??'') });
+    setEditingDetail(true);
+  };
+
+  const saveDetailEdit = async (g: Gen) => {
+    setEditSaving(true);
+    try {
+      const { data } = await api.patch(`/gens/${g.id}`, {
+        customer: editDraft.customer.trim(), loc: editDraft.loc.trim(), mfr: editDraft.mfr,
+        model: editDraft.model.trim(), kw: Number(editDraft.kw)||0,
+        amount: Number(editDraft.amount)||0, addons: Number(editDraft.addons)||0,
+      });
+      setGens(prev => prev.map(x => x.id === data.id ? data : x));
+      setDetail(data);
+      setEditingDetail(false);
+      showToast({ title: 'Details updated', sub: data.customer });
+    } finally {
+      setEditSaving(false);
+    }
+  };
 
   const movePhase = async (id: string, phase: PhaseKey) => {
     const prevPhase = phases[id] ?? 'deposit';
@@ -305,41 +330,89 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
                   <Icon name="pin" size={12} stroke={1.8}/>{detail.loc}
                 </div>
               </div>
-              <button onClick={()=>setDetail(null)} style={{ border:'none', background:'none', cursor:'pointer', color:'var(--text3)', padding:4 }}>
+              <button onClick={() => { setDetail(null); setEditingDetail(false); }} style={{ border:'none', background:'none', cursor:'pointer', color:'var(--text3)', padding:4 }}>
                 <Icon name="x" size={18} stroke={2}/>
               </button>
             </div>
 
-            {/* Brand + model */}
-            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:18 }}>
-              <span style={{ fontSize:11, fontWeight:800, padding:'3px 10px', borderRadius:6,
-                textTransform:'uppercase', letterSpacing:'.04em',
-                background:detail.mfr==='Kohler'?'var(--blue-soft)':'var(--amber-soft)',
-                color:detail.mfr==='Kohler'?'var(--blue)':'var(--amber)',
-                display:'inline-flex', alignItems:'center', gap:5 }}>
-                <Icon name="bolt" size={11} stroke={2}/>{detail.mfr}
-              </span>
-              <span style={{ fontSize:13, fontWeight:700, color:'var(--text2)' }}>{detail.model} · {detail.kw}kW</span>
-            </div>
-
-            {/* Info rows */}
-            {[
-              ['Contract Value', moneyFull(detail.amount)],
-              ['Tax',            moneyFull(detail.tax)],
-              ['Add-ons',        `${detail.addons} included`],
-              ['Salesperson',    detail.salesperson_name],
-            ].map(([k,v]) => (
-              <div key={k} style={{ marginBottom:12 }}>
-                <div style={{ fontSize:11, fontWeight:700, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.05em', marginBottom:3 }}>{k}</div>
-                <div style={{ fontSize:13, fontWeight:700, color:'var(--text)' }}>{v}</div>
+            {editingDetail ? (
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--text3)', marginBottom: 12 }}>Edit Details</div>
+                {([
+                  { label: 'Customer', key: 'customer', type: 'text' },
+                  { label: 'Location', key: 'loc', type: 'text' },
+                  { label: 'Model', key: 'model', type: 'text' },
+                  { label: 'kW Output', key: 'kw', type: 'number' },
+                  { label: 'Amount ($)', key: 'amount', type: 'number' },
+                  { label: 'Add-ons ($)', key: 'addons', type: 'number' },
+                ] as { label: string; key: keyof typeof editDraft; type: string }[]).map(f => (
+                  <div key={f.key} style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>{f.label}</div>
+                    <input type={f.type} value={editDraft[f.key]}
+                      onChange={e => setEditDraft(d => ({ ...d, [f.key]: e.target.value }))}
+                      style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 7,
+                        padding: '7px 10px', fontSize: 13, color: 'var(--text)', fontFamily: f.type === 'number' ? 'var(--mono)' : 'inherit',
+                        outline: 'none', boxSizing: 'border-box' }}
+                    />
+                  </div>
+                ))}
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Manufacturer</div>
+                  <select value={editDraft.mfr} onChange={e => setEditDraft(d => ({ ...d, mfr: e.target.value }))}
+                    style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 7,
+                      padding: '7px 10px', fontSize: 13, color: 'var(--text)', outline: 'none', boxSizing: 'border-box' }}>
+                    <option>Kohler</option>
+                    <option>Generac</option>
+                  </select>
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                  <button className="btn" style={{ flex: 1, justifyContent: 'center' }} disabled={editSaving} onClick={() => saveDetailEdit(detail)}>
+                    {editSaving ? 'Saving…' : 'Save'}
+                  </button>
+                  <button className="btn ghost" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setEditingDetail(false)}>
+                    Cancel
+                  </button>
+                </div>
               </div>
-            ))}
+            ) : (
+              <>
+                {/* Brand + model */}
+                <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:18 }}>
+                  <span style={{ fontSize:11, fontWeight:800, padding:'3px 10px', borderRadius:6,
+                    textTransform:'uppercase', letterSpacing:'.04em',
+                    background:detail.mfr==='Kohler'?'var(--blue-soft)':'var(--amber-soft)',
+                    color:detail.mfr==='Kohler'?'var(--blue)':'var(--amber)',
+                    display:'inline-flex', alignItems:'center', gap:5 }}>
+                    <Icon name="bolt" size={11} stroke={2}/>{detail.mfr}
+                  </span>
+                  <span style={{ fontSize:13, fontWeight:700, color:'var(--text2)' }}>{detail.model} · {detail.kw}kW</span>
+                </div>
 
-            <button className="btn ghost"
-              style={{ width: '100%', justifyContent: 'center', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', margin: '4px 0 16px' }}
-              onClick={() => deleteProject(detail)}>
-              <Icon name="x" size={14} stroke={2}/>Delete Project
-            </button>
+                {/* Info rows */}
+                {[
+                  ['Contract Value', moneyFull(detail.amount)],
+                  ['Tax',            moneyFull(detail.tax)],
+                  ['Add-ons',        `${detail.addons} included`],
+                  ['Salesperson',    detail.salesperson_name],
+                ].map(([k,v]) => (
+                  <div key={k} style={{ marginBottom:12 }}>
+                    <div style={{ fontSize:11, fontWeight:700, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.05em', marginBottom:3 }}>{k}</div>
+                    <div style={{ fontSize:13, fontWeight:700, color:'var(--text)' }}>{v}</div>
+                  </div>
+                ))}
+
+                <button className="btn ghost"
+                  style={{ width: '100%', justifyContent: 'center', marginBottom: 8 }}
+                  onClick={() => startDetailEdit(detail)}>
+                  <Icon name="doc" size={14} stroke={1.9}/>Edit Details
+                </button>
+                <button className="btn ghost"
+                  style={{ width: '100%', justifyContent: 'center', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', margin: '4px 0 16px' }}
+                  onClick={() => deleteProject(detail)}>
+                  <Icon name="x" size={14} stroke={2}/>Delete Project
+                </button>
+              </>
+            )}
 
             {/* Phase selector */}
             <div style={{ marginTop:20 }}>
@@ -370,7 +443,7 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
           </div>
         </div>
       )}
-      {detail && <div style={{ position:'fixed', inset:0, zIndex:199 }} onClick={()=>setDetail(null)}/>}
+      {detail && <div style={{ position:'fixed', inset:0, zIndex:199 }} onClick={() => { setDetail(null); setEditingDetail(false); }}/>}
     </div>
   );
 }
