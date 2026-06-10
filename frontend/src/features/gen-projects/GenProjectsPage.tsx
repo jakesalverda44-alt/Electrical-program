@@ -138,10 +138,11 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
         model: editDraft.model.trim(), kw: Number(editDraft.kw)||0,
         amount: Number(editDraft.amount)||0, addons: Number(editDraft.addons)||0,
       });
-      setGens(prev => prev.map(x => x.id === data.id ? data : x));
-      setDetail(data);
+      const updated = data.gen ?? data;
+      setGens(prev => prev.map(x => x.id === updated.id ? updated : x));
+      setDetail(updated);
       setEditingDetail(false);
-      showToast({ title: 'Details updated', sub: data.customer });
+      showToast({ title: 'Details updated', sub: updated.customer });
     } finally {
       setEditSaving(false);
     }

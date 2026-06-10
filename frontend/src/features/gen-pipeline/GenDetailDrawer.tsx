@@ -64,9 +64,10 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
         amount: Number(draft.amount) || 0,
         addons: Number(draft.addons) || 0,
       });
-      onUpdated(data);
+      const updated = data.gen ?? data;
+      onUpdated(updated);
       setEditing(false);
-      showToast({ title: 'Details updated', sub: data.customer });
+      showToast({ title: 'Details updated', sub: updated.customer });
     } finally {
       setSaving(false);
     }
