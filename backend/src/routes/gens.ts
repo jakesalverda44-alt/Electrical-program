@@ -151,7 +151,7 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
          VALUES ($1,$2,$3,'Generator',$4,$5,$6,$7,'earned',now())
          ON CONFLICT (proposal_id) DO NOTHING
          RETURNING *`,
-        [gen.salesperson_name, gen.customer, gen.id, gen.amount, gen.salesperson_id || null,
+        [gen.salesperson_name || 'Unknown', gen.customer, gen.id, gen.amount, gen.salesperson_id || null,
          rate, commissionAmount(gen.amount, rate)]
       );
       wonJob = wj[0] || null;
