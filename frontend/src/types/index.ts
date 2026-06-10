@@ -228,6 +228,7 @@ export interface BriefPayload {
   };
   attention: BriefAttentionItem[];
   kohlerFunnel: { received: number; notAccepted: number; accepted: number; replied: number; needCall: number };
+  intake: { unread: number; newToday: number; newYesterday: number };
   todayEvents: TodayEvent[];
   briefBullets: string[];
 }

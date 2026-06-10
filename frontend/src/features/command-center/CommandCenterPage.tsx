@@ -125,6 +125,22 @@ export default function CommandCenterPage({ onNav }: Props) {
           <div className="note">{k.leadsNeedingCall} calls · {k.unreadEmails} emails</div></div>
       </div>
 
+      {(brief.intake.unread > 0 || brief.intake.newToday > 0 || brief.intake.newYesterday > 0) && (
+        <div className="cc-intake" onClick={() => onNav('intake')}>
+          <span className="ic">📥</span>
+          <span className="tx">
+            {[
+              brief.intake.newToday > 0 && `${brief.intake.newToday} new bid${brief.intake.newToday === 1 ? '' : 's'} came in today`,
+              brief.intake.newYesterday > 0 && (brief.intake.newToday > 0
+                ? `${brief.intake.newYesterday} yesterday`
+                : `${brief.intake.newYesterday} new bid${brief.intake.newYesterday === 1 ? '' : 's'} came in yesterday`),
+              brief.intake.unread > 0 && `${brief.intake.unread} awaiting review`,
+            ].filter(Boolean).join(' · ')}
+          </span>
+          <span className="go">Open Intake Inbox →</span>
+        </div>
+      )}
+
       <div className="cc-grid">
         <div>
           <div className="cc-card glow">

@@ -35,6 +35,7 @@ export interface BriefPayload {
   };
   attention: BriefAttentionItem[];
   kohlerFunnel: { received: number; notAccepted: number; accepted: number; replied: number; needCall: number };
+  intake: { unread: number; newToday: number; newYesterday: number };
   todayEvents: TodayEvent[];
   briefBullets: string[];
 }
@@ -115,6 +116,8 @@ async function autologInboundLeadEmails(unread: GraphMailMessage[]): Promise<voi
 export function composeBullets(p: Omit<BriefPayload, 'briefBullets'>): string[] {
   const out: string[] = [];
   const f = p.kohlerFunnel;
+  if (p.intake.newToday > 0) out.push(`${p.intake.newToday} new bid${p.intake.newToday === 1 ? '' : 's'} came in today — review them in the Intake Inbox`);
+  if (p.intake.newYesterday > 0) out.push(`${p.intake.newYesterday} new bid${p.intake.newYesterday === 1 ? '' : 's'} came in yesterday`);
   if (f.received > 0) out.push(`${f.received} Kohler lead${f.received === 1 ? '' : 's'} received this month — ${f.notAccepted} not yet accepted`);
   if (f.needCall > 0) out.push(`${f.needCall} lead${f.needCall === 1 ? '' : 's'} waiting on a call`);
   if (f.replied > 0) out.push(`${f.replied} Kohler lead${f.replied === 1 ? '' : 's'} replied to your first message`);
@@ -142,7 +145,7 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
   // CRM SQL (always fresh; scoped per-rep). Run in parallel.
   const scopeAnd = scope ? ' AND salesperson_id = $1' : '';
   const sp: unknown[] = scope ? [scope] : [];
-  const [bidsKpi, gensKpi, wonKpi, needCallRows, dueSoonRows, kohlerAccepted, knownContacts] = await Promise.all([
+  const [bidsKpi, gensKpi, wonKpi, needCallRows, dueSoonRows, kohlerAccepted, intakeCounts, knownContacts] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS v FROM bids WHERE deleted_at IS NULL AND closed_at IS NULL AND stage IN ('due','submitted')${scopeAnd}`, sp),
     pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS v FROM generator_proposals WHERE deleted_at IS NULL AND stage IN ('building','sent')${scopeAnd}`, sp),
     pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(value),0)::float AS v FROM won_jobs WHERE deleted_at IS NULL AND date_won >= $${sp.length + 1}${scopeAnd}`, [...sp, monthStart]),
@@ -156,6 +159,13 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
     pool.query(`SELECT COUNT(*)::int AS n,
                        COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM lead_activity a WHERE a.lead_id=leads.id AND a.kind='email' AND a.direction='in'))::int AS replied
                   FROM leads WHERE source='kohler' AND deleted_at IS NULL AND created_at >= $1`, [monthStart]),
+    // Intake inbox counts (shared inbox — not rep-scoped, same as the sidebar badge).
+    // "Today"/"yesterday" use Eastern-time day boundaries.
+    pool.query(
+      `SELECT COUNT(*) FILTER (WHERE read_at IS NULL)::int AS unread,
+              COUNT(*) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date)::int AS today,
+              COUNT(*) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date - 1)::int AS yesterday
+         FROM intake_items`),
     // Known contact emails (for matching unread senders). Not rep-scoped: the mailbox is shared.
     useGraph
       ? pool.query(
@@ -193,26 +203,28 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
     });
   }
 
-  // ── Attention: relevant unread emails (matched contacts + new-bid tagged + Kohler) ──
+  // ── Attention: relevant unread emails (matched contacts + Kohler). New-bid invitations
+  // are deliberately excluded — they live in the Intake Inbox; the brief only counts them. ──
   const contactByEmail = new Map<string, { kind: string; ref: string; label: string }>();
   for (const c of knownContacts.rows) if (c.email) contactByEmail.set(c.email, { kind: c.kind, ref: c.ref, label: c.label });
   const wantedCat = BID_CATEGORY.toLowerCase();
   let unreadMatched = 0;
   for (const m of unread) {
+    const tagged = (m.categories || []).some(c => c.trim().toLowerCase() === wantedCat);
+    if (tagged) continue;
     const from = (m.from || '').toLowerCase();
     const match = from ? contactByEmail.get(from) : undefined;
-    const tagged = (m.categories || []).some(c => c.trim().toLowerCase() === wantedCat);
     const kohler = isKohlerNotification(m);
-    if (!match && !tagged && !kohler) continue;
+    if (!match && !kohler) continue;
     unreadMatched++;
-    const chips: BriefChip[] = tagged ? ['Elec'] : kohler ? ['Gen'] : match?.kind === 'lead' ? ['Gen'] : ['Elec'];
-    const navTo = tagged || kohler ? 'intake' : match?.kind === 'lead' ? 'gen-leads' : undefined;
+    const chips: BriefChip[] = kohler ? ['Gen'] : match?.kind === 'lead' ? ['Gen'] : ['Elec'];
+    const navTo = kohler ? 'intake' : match?.kind === 'lead' ? 'gen-leads' : undefined;
     attention.push({
       id: `email:${m.id}`,
       type: 'email',
       chips,
       title: m.subject || '(no subject)',
-      subtitle: `${m.fromName || m.from || 'Unknown'}${kohler ? ' · Kohler new lead' : tagged ? ' · new bid' : match ? ` · ${match.label}` : ''}`,
+      subtitle: `${m.fromName || m.from || 'Unknown'}${kohler ? ' · Kohler new lead' : match ? ` · ${match.label}` : ''}`,
       receivedAt: m.receivedDateTime,
       briefing: m.bodyPreview || 'No preview available.',
       cta: { webLink: m.webLink || undefined, navTo },
@@ -260,6 +272,11 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
       accepted: kohlerAccepted.rows[0].n,
       replied: kohlerAccepted.rows[0].replied,
       needCall: needCallRows.rows.length,
+    },
+    intake: {
+      unread: intakeCounts.rows[0].unread,
+      newToday: intakeCounts.rows[0].today,
+      newYesterday: intakeCounts.rows[0].yesterday,
     },
     todayEvents: events,
   };
