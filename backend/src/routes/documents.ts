@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { Readable } from 'stream';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { ownsLinkedRecord } from '../utils/ownership';
@@ -160,8 +161,11 @@ router.get('/:id/download', requireAuth, asyncHandler(async (req: AuthRequest, r
 }));
 
 // View a document inline (browser preview) regardless of where it's stored.
-// Drive view links aren't publicly accessible, so Drive-stored files stream through
-// the service account; DB-stored files stream from base64; other URLs redirect.
+// Drive-stored files stream through the service account; cloud-stored files
+// (Cloudinary) are proxied through the backend; DB-stored files stream from
+// base64. Never redirect: the frontend fetches this via XHR (it needs the auth
+// header), and a redirect to an external host dies on CORS before the browser
+// can read a byte.
 router.get('/:id/view', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const doc = await loadAccessibleDocument(req, res, 'name, file_type, file_data, storage_url');
   if (!doc) return;
@@ -171,14 +175,33 @@ router.get('/:id/view', requireAuth, asyncHandler(async (req: AuthRequest, res) 
     const m = /\/file\/d\/([^/]+)/.exec(storage_url as string);
     if (m) {
       const media = await getFileMedia(m[1]);
-      if (media) {
-        res.setHeader('Content-Type', media.mimeType);
-        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(name as string)}"`);
-        media.stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
-        return media.stream.pipe(res);
-      }
+      if (!media) return res.status(502).json({ error: 'File is stored in Google Drive but could not be fetched. Try the download button.' });
+      res.setHeader('Content-Type', media.mimeType);
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(name as string)}"`);
+      media.stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
+      return media.stream.pipe(res);
     }
-    return res.redirect(storage_url as string);
+    try {
+      const upstream = await fetch(storage_url as string);
+      if (!upstream.ok || !upstream.body) {
+        logger.error({ docId: req.params.id, status: upstream.status }, '[documents] view: storage fetch failed');
+        return res.status(502).json({ error: 'Could not fetch the file from storage. Try the download button.' });
+      }
+      // Cloudinary serves raw uploads as octet-stream; prefer the recorded type
+      // so PDFs/images actually render inline instead of downloading.
+      const upstreamType = upstream.headers.get('content-type');
+      const contentType = (!upstreamType || upstreamType === 'application/octet-stream')
+        ? ((file_type as string) || 'application/octet-stream')
+        : upstreamType;
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(name as string)}"`);
+      const stream = Readable.fromWeb(upstream.body as import('stream/web').ReadableStream);
+      stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
+      return stream.pipe(res);
+    } catch (err) {
+      logger.error({ err, docId: req.params.id }, '[documents] view: storage proxy failed');
+      return res.status(502).json({ error: 'Could not fetch the file from storage. Try the download button.' });
+    }
   }
   if (file_data) {
     const buf = Buffer.from(file_data as string, 'base64');
