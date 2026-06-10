@@ -26,31 +26,43 @@ router.post('/refresh', requireAuth, async (_req, res) => {
 });
 
 // After a bid is created from an email-sourced intake item: copy the email's attachments into
-// the bid's Drive folder, add the due date to the calendar, and draft a reply to the GC.
-// All steps are best-effort and must never fail the accept. Runs after the DB commit.
-async function finishEmailSourcedAccept(item: Record<string, any>, bid: Record<string, any>): Promise<void> {
-  // Download the email's attachments and upload them into the bid's Plans subfolder
-  // (falling back to the job folder), reusing the existing Drive upload helper.
+// the bid's Drive "Plans" folder, add the due date to the calendar, and draft a reply to the
+// GC. All steps are best-effort and must never fail the accept. Runs after the DB commit.
+// `dueDate` is the reviewer's confirmed ISO due date (not a date parsed from the email body).
+async function finishEmailSourcedAccept(
+  item: Record<string, any>,
+  bid: Record<string, any>,
+  dueDate: string | null,
+): Promise<void> {
+  // 1) Download the email's attachments and upload them into the bid's Plans subfolder
+  //    (falling back to the job folder), reusing the existing Drive upload helper.
   try {
     const folderId = bid.drive_plans_folder_id || bid.drive_job_folder_id;
-    if (folderId && item.graph_message_id) {
+    if (!item.graph_message_id) {
+      logger.warn({ bidId: bid.id }, '[intake] no graph_message_id — cannot fetch attachments');
+    } else if (!folderId) {
+      logger.warn({ bidId: bid.id }, '[intake] no Drive folder on bid — skipping attachment upload');
+    } else {
       const files = await downloadAttachments(item.graph_message_id);
+      let uploaded = 0;
       for (const f of files) {
-        await uploadFile(f.name, f.contentType, f.content, folderId);
+        const id = await uploadFile(f.name, f.contentType, f.content, folderId);
+        if (id) uploaded++;
+        else logger.error({ bidId: bid.id, name: f.name }, '[intake] Drive upload returned null (Drive not configured?)');
       }
-      if (files.length) logger.info({ bidId: bid.id, count: files.length }, '[intake] uploaded email attachments to Drive');
+      logger.info({ bidId: bid.id, folderId, fetched: files.length, uploaded }, '[intake] email attachments → Drive');
     }
   } catch (err) {
-    logger.error({ err, bidId: bid.id }, '[intake] attachment upload failed');
+    logger.error({ err, bidId: bid.id }, '[intake] attachment download/upload failed');
   }
 
-  // Add the bid due date to Outlook (reminder 2 days before).
-  await pushBidDueToCalendar({
-    id: bid.id, name: bid.name, gc: bid.gc, loc: bid.loc, due: bid.due,
-    source_email_link: bid.source_email_link,
-  }).catch(() => {});
+  // 2) Add the bid due date to Outlook from the confirmed due_date field (reminder 2d before).
+  await pushBidDueToCalendar(
+    { id: bid.id, name: bid.name, gc: bid.gc, loc: bid.loc, source_email_link: bid.source_email_link },
+    dueDate,
+  ).catch(() => {});
 
-  // Draft (do NOT send) a reply to the GC saying we'll be bidding.
+  // 3) Draft (do NOT send) a reply to the email's sender saying we'll be bidding.
   if (item.graph_message_id) {
     const comment = 'Thank you for the invitation — we received the bid documents and we will '
       + 'be submitting a proposal. We will follow up with any questions. Best regards,';
@@ -74,13 +86,25 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const { name, gc, loc, contact, amount, sheets, due, notes, source, sq_ft } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
   const num = (v: unknown) => (v !== undefined && v !== null && v !== '') ? Number(v) : null;
+  // Manually-added items are authored by the user, so they start read (not "new to you").
+  // Email-imported items are created unread by the ingest path.
   const { rows } = await pool.query(
-    `INSERT INTO intake_items (name, gc, loc, contact, amount, sheets, due, notes, source, sq_ft, created_by, created_by_name)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+    `INSERT INTO intake_items (name, gc, loc, contact, amount, sheets, due, notes, source, sq_ft, created_by, created_by_name, read_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now()) RETURNING *`,
     [name.trim(), gc?.trim() || null, loc?.trim() || null, contact?.trim() || null,
      num(amount), num(sheets), due || null, notes?.trim() || null, source || 'manual',
      num(sq_ft), req.user!.id, req.user!.name]
   );
+  res.json(rows[0]);
+});
+
+// Mark an intake item read (called when the reviewer opens it). Idempotent.
+router.post('/:id/read', requireAuth, async (req: AuthRequest, res) => {
+  const { rows } = await pool.query(
+    `UPDATE intake_items SET read_at = COALESCE(read_at, now()) WHERE id=$1 RETURNING id, read_at`,
+    [req.params.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
   res.json(rows[0]);
 });
 
@@ -127,7 +151,10 @@ router.post('/:id/accept', requireAuth, async (req: AuthRequest, res) => {
     // due date to the calendar, and draft a reply. None of this blocks/fails the accept.
     await setupBidDriveFolders(bid);
     if (it.source === 'email') {
-      await finishEmailSourcedAccept(it, bid).catch(err =>
+      // Pass the reviewer's confirmed ISO due date for the calendar event (the stored bid.due
+      // is a display string like "Jun 20" with no year — unsafe to re-parse).
+      const dueIso = (due && String(due).trim()) ? String(due).trim() : null;
+      await finishEmailSourcedAccept(it, bid, dueIso).catch(err =>
         logger.error({ err, bidId: bid.id }, '[intake] email-sourced post-accept failed'));
     }
     res.json({ bid: withDueDays(bid) });
