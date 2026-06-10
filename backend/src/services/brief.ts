@@ -34,7 +34,10 @@ export interface BriefPayload {
     leadsNeedingCall: number; unreadEmails: number;
   };
   attention: BriefAttentionItem[];
-  kohlerFunnel: { received: number; notAccepted: number; accepted: number; replied: number; needCall: number };
+  kohlerFunnel: {
+    received: number; notAccepted: number; accepted: number; replied: number; needCall: number;
+    newToday: number; newYesterday: number;
+  };
   intake: { unread: number; newToday: number; newYesterday: number };
   todayEvents: TodayEvent[];
   briefBullets: string[];
@@ -60,13 +63,22 @@ function monthStartIso(): string {
   return `${y}-${m}-01T00:00:00Z`;
 }
 
+/** Calendar date (YYYY-MM-DD) of an instant in Eastern time, for today/yesterday tallies. */
+export function etDateStr(d: Date): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+}
+
 async function loadGraphSnapshot(): Promise<GraphSnapshot> {
   if (snap && Date.now() - snap.at < TTL_MS) return snap.data;
   if (inflight) return inflight;            // collapse concurrent loads onto one fetch
   inflight = (async () => {
+    // Window covers both the month-to-date funnel and the "yesterday" tallies
+    // (matters on the 1st/2nd of the month, when yesterday precedes month start).
+    const twoDaysAgo = new Date(Date.now() - 48 * 3600_000).toISOString();
+    const ms = monthStartIso();
     const [unread, monthInbox, events] = await Promise.all([
       fetchUnreadInbox(50),
-      fetchInboxSince(monthStartIso(), 200),
+      fetchInboxSince(twoDaysAgo < ms ? twoDaysAgo : ms, 200),
       fetchTodayEvents(),
     ]);
     const data: GraphSnapshot = { unread, monthInbox, events };
@@ -118,6 +130,8 @@ export function composeBullets(p: Omit<BriefPayload, 'briefBullets'>): string[] 
   const f = p.kohlerFunnel;
   if (p.intake.newToday > 0) out.push(`${p.intake.newToday} new bid${p.intake.newToday === 1 ? '' : 's'} came in today — review them in the Intake Inbox`);
   if (p.intake.newYesterday > 0) out.push(`${p.intake.newYesterday} new bid${p.intake.newYesterday === 1 ? '' : 's'} came in yesterday`);
+  if (f.newToday > 0) out.push(`${f.newToday} new Kohler lead${f.newToday === 1 ? '' : 's'} came in today`);
+  if (f.newYesterday > 0) out.push(`${f.newYesterday} new Kohler lead${f.newYesterday === 1 ? '' : 's'} came in yesterday`);
   if (f.received > 0) out.push(`${f.received} Kohler lead${f.received === 1 ? '' : 's'} received this month — ${f.notAccepted} not yet accepted`);
   if (f.needCall > 0) out.push(`${f.needCall} lead${f.needCall === 1 ? '' : 's'} waiting on a call`);
   if (f.replied > 0) out.push(`${f.replied} Kohler lead${f.replied === 1 ? '' : 's'} replied to your first message`);
@@ -203,28 +217,28 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
     });
   }
 
-  // ── Attention: relevant unread emails (matched contacts + Kohler). New-bid invitations
-  // are deliberately excluded — they live in the Intake Inbox; the brief only counts them. ──
+  // ── Attention: unread emails from real human contacts only. Automated notifications —
+  // new-bid invitations (tagged → Intake Inbox) and Kohler new-lead alerts — are excluded
+  // here and surfaced as arrival tallies instead. ──
   const contactByEmail = new Map<string, { kind: string; ref: string; label: string }>();
   for (const c of knownContacts.rows) if (c.email) contactByEmail.set(c.email, { kind: c.kind, ref: c.ref, label: c.label });
   const wantedCat = BID_CATEGORY.toLowerCase();
   let unreadMatched = 0;
   for (const m of unread) {
     const tagged = (m.categories || []).some(c => c.trim().toLowerCase() === wantedCat);
-    if (tagged) continue;
+    if (tagged || isKohlerNotification(m)) continue;
     const from = (m.from || '').toLowerCase();
     const match = from ? contactByEmail.get(from) : undefined;
-    const kohler = isKohlerNotification(m);
-    if (!match && !kohler) continue;
+    if (!match) continue;
     unreadMatched++;
-    const chips: BriefChip[] = kohler ? ['Gen'] : match?.kind === 'lead' ? ['Gen'] : ['Elec'];
-    const navTo = kohler ? 'intake' : match?.kind === 'lead' ? 'gen-leads' : undefined;
+    const chips: BriefChip[] = match.kind === 'lead' ? ['Gen'] : ['Elec'];
+    const navTo = match.kind === 'lead' ? 'gen-leads' : undefined;
     attention.push({
       id: `email:${m.id}`,
       type: 'email',
       chips,
       title: m.subject || '(no subject)',
-      subtitle: `${m.fromName || m.from || 'Unknown'}${kohler ? ' · Kohler new lead' : match ? ` · ${match.label}` : ''}`,
+      subtitle: `${m.fromName || m.from || 'Unknown'} · ${match.label}`,
       receivedAt: m.receivedDateTime,
       briefing: m.bodyPreview || 'No preview available.',
       cta: { webLink: m.webLink || undefined, navTo },
@@ -252,9 +266,14 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
   attention.sort((a, b) => order[a.type] - order[b.type]
     || String(b.receivedAt || '').localeCompare(String(a.receivedAt || '')));
 
-  // ── Kohler funnel ──
-  const received = useGraph ? monthInbox.filter(isKohlerNotification).length : 0;
-  const notAccepted = useGraph ? monthInbox.filter(m => isKohlerNotification(m) && !m.isRead).length : 0;
+  // ── Kohler funnel + arrival tallies (ET day boundaries) ──
+  const kohlerMail = useGraph ? monthInbox.filter(isKohlerNotification) : [];
+  const etToday = etDateStr(new Date());
+  const etYesterday = etDateStr(new Date(Date.now() - 86_400_000));
+  const received = kohlerMail.filter(m => m.receivedDateTime >= monthStart).length;
+  const notAccepted = kohlerMail.filter(m => !m.isRead).length;
+  const kohlerNewToday = kohlerMail.filter(m => etDateStr(new Date(m.receivedDateTime)) === etToday).length;
+  const kohlerNewYesterday = kohlerMail.filter(m => etDateStr(new Date(m.receivedDateTime)) === etYesterday).length;
 
   const payloadNoBullets: Omit<BriefPayload, 'briefBullets'> = {
     generatedAt: new Date().toISOString(),
@@ -272,6 +291,7 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
       accepted: kohlerAccepted.rows[0].n,
       replied: kohlerAccepted.rows[0].replied,
       needCall: needCallRows.rows.length,
+      newToday: kohlerNewToday, newYesterday: kohlerNewYesterday,
     },
     intake: {
       unread: intakeCounts.rows[0].unread,

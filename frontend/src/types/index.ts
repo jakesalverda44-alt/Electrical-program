@@ -227,7 +227,10 @@ export interface BriefPayload {
     leadsNeedingCall: number; unreadEmails: number;
   };
   attention: BriefAttentionItem[];
-  kohlerFunnel: { received: number; notAccepted: number; accepted: number; replied: number; needCall: number };
+  kohlerFunnel: {
+    received: number; notAccepted: number; accepted: number; replied: number; needCall: number;
+    newToday: number; newYesterday: number;
+  };
   intake: { unread: number; newToday: number; newYesterday: number };
   todayEvents: TodayEvent[];
   briefBullets: string[];
