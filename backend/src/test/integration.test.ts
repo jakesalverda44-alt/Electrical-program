@@ -408,3 +408,33 @@ describe('lead follow-up backfill & activity-based overdue (integration)', () =>
     expect(after.rows[0].n).toBe(0);
   });
 });
+
+describe('command center brief (integration)', () => {
+  it('returns the full brief shape and requires auth', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const owner = await makeUser('owner');
+    await request(app).get('/api/brief').expect(401);
+    const res = await request(app).get('/api/brief').set(auth(owner.token)).expect(200);
+    for (const key of ['generatedAt', 'graphEnabled', 'kpis', 'attention', 'kohlerFunnel', 'todayEvents', 'briefBullets']) {
+      expect(res.body).toHaveProperty(key);
+    }
+    expect(res.body.graphEnabled).toBe(false); // GRAPH_* unset in test env → graph sections gated off
+    expect(Array.isArray(res.body.attention)).toBe(true);
+  });
+
+  it('surfaces a needs-call Kohler lead as a lead-call item with a tel: CTA', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const owner = await makeUser('owner');
+    // Isolate: clear any other open needs-call leads so ours is within the 10-item window.
+    await pool.query(`UPDATE leads SET needs_call = false WHERE needs_call = true`);
+    const { rows } = await pool.query(
+      `INSERT INTO leads (name, phone, source, contact_method, stage, needs_call, salesperson_id)
+       VALUES ($1,'352-555-0100','kohler','phone','new',true,$2) RETURNING id`,
+      [`CallMe ${Date.now()}`, owner.id]);
+    const res = await request(app).get('/api/brief').set(auth(owner.token)).expect(200);
+    const item = res.body.attention.find((a: { cta?: { leadId?: string } }) => a.cta?.leadId === rows[0].id);
+    expect(item?.type).toBe('lead-call');
+    expect(item.cta.tel).toBe('tel:3525550100');
+    expect(res.body.kohlerFunnel.needCall).toBeGreaterThan(0);
+  });
+});

@@ -36,7 +36,8 @@ interface Props {
 }
 
 const TB: Record<string, { title: string; sub: string | null }> = {
-  dashboard:       { title: 'Sales Dashboard',      sub: `${new Date().toLocaleString('en-US',{month:'long',year:'numeric'})} · Accurate Power & Technology` },
+  dashboard:        { title: 'Command Center',       sub: `Morning brief · ${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}` },
+  'sales-dashboard':{ title: 'Sales Dashboard',      sub: `${new Date().toLocaleString('en-US',{month:'long',year:'numeric'})} · Accurate Power & Technology` },
   pipeline:        { title: 'Pipeline',              sub: 'Generator & Electrical proposals' },
   'gen-proposals': { title: 'Generator Proposals',  sub: 'Kohler & Generac · In-house proposal builder' },
   'elec-proposals':{ title: 'Electrical Proposals', sub: 'Electrical subcontracting · Bid tracking pipeline' },
@@ -87,7 +88,8 @@ export default function AppShell({
 
   const nav: NavGroup[] = [
     { group: 'Sales', items: [
-      { id: 'dashboard', label: 'Sales Dashboard', icon: 'dashboard' },
+      { id: 'dashboard',       label: 'Command Center',  icon: 'dashboard' },
+      { id: 'sales-dashboard', label: 'Sales Dashboard', icon: 'trend' },
       { id: 'gen-leads', label: 'Generator Leads', icon: 'users', tone: 'amber' },
       { id: 'pipeline',  label: 'Pipeline',        icon: 'pipeline', count: genProposalCount + elecProposalCount },
       { id: 'intake',    label: 'Intake Inbox',    icon: 'bell', count: newIncoming },
@@ -114,13 +116,14 @@ export default function AppShell({
   const initials = user.name.split(' ').map(w => w[0]).join('').slice(0, 2);
 
   const mobileBottomNav = [
-    { id: 'dashboard',       label: 'Dashboard',  icon: 'dashboard', count: 0 },
+    { id: 'dashboard',       label: 'Home',       icon: 'dashboard', count: 0 },
     { id: 'pipeline',        label: 'Pipeline',   icon: 'pipeline',  count: genProposalCount + elecProposalCount },
     { id: 'preconstruction', label: 'Estimating', icon: 'sparkle',   count: 0 },
     { id: 'gen-projects',    label: 'Projects',   icon: 'bolt',      count: genProjectCount },
   ];
 
   const mobileMoreNav = [
+    { id: 'sales-dashboard', label: 'Sales Dashboard', icon: 'trend',  count: 0 },
     { id: 'followups',     label: 'Follow-ups',       icon: 'checkc', count: followupCount },
     { id: 'intake',        label: 'Intake Inbox',     icon: 'bell',   count: newIncoming },
     { id: 'gen-leads',     label: 'Generator Leads',  icon: 'users',  count: 0 },
@@ -134,7 +137,7 @@ export default function AppShell({
   ];
 
   const renderActions = () => {
-    if (view === 'dashboard' || view === 'gen-proposals')
+    if (view === 'sales-dashboard' || view === 'gen-proposals')
       return <button className="btn amber" onClick={onNewProposal}><Icon name="plus" size={16} stroke={2.4}/>New Proposal</button>;
     if (view === 'elec-proposals')
       return <>
@@ -221,7 +224,7 @@ export default function AppShell({
                 <div className="page-title">{tb.title}</div>
                 {tb.sub && <div className="page-sub">{tb.sub}</div>}
               </div>
-              {view === 'dashboard' && (
+              {view === 'sales-dashboard' && (
                 <div className="seg">
                   <button className={dashFilter === 'all'  ? 'active' : ''} onClick={() => onDashFilter?.('all')}>All</button>
                   <button className={dashFilter === 'gen'  ? 'active amber' : ''} onClick={() => onDashFilter?.('gen')}><Icon name="bolt" size={14} stroke={2}/>Generators</button>

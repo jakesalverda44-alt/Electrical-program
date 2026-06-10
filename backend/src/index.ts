@@ -14,6 +14,7 @@ import { startIntakeInboxPoller } from './integrations/intakePoller';
 import { requireAuth, AuthRequest, initJwtSecret } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
+import briefRouter from './routes/brief';
 import bidsRouter from './routes/bids';
 import gensRouter from './routes/gens';
 import wonJobsRouter from './routes/wonJobs';
@@ -70,6 +71,7 @@ app.use(pinoHttp({ logger, autoLogging: { ignore: req => req.url === '/api/healt
 
 app.use('/api/auth', authRouter);
 app.use('/api/dashboard', dashboardRouter);
+app.use('/api/brief', briefRouter);
 app.use('/api/bids', bidsRouter);
 app.use('/api/gens', gensRouter);
 app.use('/api/won-jobs', wonJobsRouter);

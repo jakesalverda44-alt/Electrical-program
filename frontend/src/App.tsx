@@ -6,6 +6,7 @@ import { useAppSettings } from './hooks/useAppSettings';
 import LoginPage from './features/auth/LoginPage';
 import AppShell from './features/layout/AppShell';
 import DashboardPage from './features/dashboard/DashboardPage';
+import CommandCenterPage from './features/command-center/CommandCenterPage';
 import ElecPipelinePage from './features/pipeline/ElecPipelinePage';
 import GenPipelinePage from './features/gen-pipeline/GenPipelinePage';
 import PipelinePage from './features/pipeline/PipelinePage';
@@ -181,6 +182,8 @@ export default function App() {
     }
     switch (view) {
       case 'dashboard':
+        return <CommandCenterPage onNav={setView} />;
+      case 'sales-dashboard':
         return (
           <DashboardPage
             bids={bids} gens={gens} wonJobs={wonJobs} activity={activity}

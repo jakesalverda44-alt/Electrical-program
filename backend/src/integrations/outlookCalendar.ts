@@ -2,6 +2,16 @@ import { pool } from '../db/pool';
 import { logger } from '../utils/logger';
 import { getGraphToken, GRAPH_BASE } from './graphAuth';
 
+export interface TodayEvent {
+  id: string;
+  subject: string;
+  start: string;            // ET wall-clock ISO (no offset), via Prefer timezone header
+  end: string;
+  location: string | null;
+  webLink: string | null;
+  isAllDay: boolean;
+}
+
 // Calendar that the site-visit events are created on. App-only Calendars.ReadWrite
 // must be scoped to this mailbox via an Application Access Policy (same approach as
 // the first-contact mailbox).
@@ -182,5 +192,56 @@ export async function pushSiteVisitToCalendar(proposalId: string, lead: SiteVisi
     }
   } catch (err) {
     logger.error({ err, proposalId }, '[calendar] pushSiteVisitToCalendar failed (handoff not blocked)');
+  }
+}
+
+interface GraphEventRaw {
+  id: string;
+  subject?: string;
+  start?: { dateTime?: string };
+  end?: { dateTime?: string };
+  location?: { displayName?: string };
+  webLink?: string;
+  isAllDay?: boolean;
+}
+
+/**
+ * Today's events (Eastern) from the mailbox calendar via calendarView. The
+ * Prefer: outlook.timezone header makes both the day boundaries and the returned start/end
+ * values ET wall-clock, which is exactly what the agenda renders. Returns [] on any failure
+ * (incl. missing GRAPH_* config) so the Command Center never errors on the calendar.
+ */
+export async function fetchTodayEvents(): Promise<TodayEvent[]> {
+  try {
+    const day = toGraphDateTime(new Date()).slice(0, 10); // YYYY-MM-DD in ET
+    const next = nextCalendarDay(day);
+    const select = 'id,subject,start,end,location,webLink,isAllDay';
+    const url = `${GRAPH_BASE}/users/${encodeURIComponent(CALENDAR_USER)}/calendarView`
+      + `?startDateTime=${day}T00:00:00&endDateTime=${next}T00:00:00`
+      + `&$select=${select}&$orderby=${encodeURIComponent('start/dateTime')}&$top=25`;
+    const token = await getGraphToken();
+    const resp = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Prefer: 'outlook.timezone="America/New_York"',
+      },
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`Graph calendarView failed: HTTP ${resp.status} ${text}`);
+    }
+    const data = (await resp.json()) as { value: GraphEventRaw[] };
+    return (data.value || []).map(e => ({
+      id: e.id,
+      subject: (e.subject || '(no subject)').trim(),
+      start: e.start?.dateTime || '',
+      end: e.end?.dateTime || '',
+      location: e.location?.displayName?.trim() || null,
+      webLink: e.webLink || null,
+      isAllDay: !!e.isAllDay,
+    }));
+  } catch (err) {
+    logger.error({ err }, '[calendar] fetchTodayEvents failed');
+    return [];
   }
 }
