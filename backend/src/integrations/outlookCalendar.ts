@@ -38,6 +38,60 @@ function toGraphDateTime(at: Date): string {
 }
 
 /**
+ * Add a bid's due date to the calendar as an all-day event with a reminder 2 days before.
+ * Used by the Intake Inbox accept flow. Non-blocking: logs and swallows all errors so an
+ * accept never fails because of the calendar. Returns the created event id (or null).
+ */
+export async function pushBidDueToCalendar(bid: {
+  id: string; name: string; gc: string | null; loc: string | null; due: string | Date | null;
+  source_email_link?: string | null;
+}): Promise<string | null> {
+  if (!bid.due) return null;
+  try {
+    const due = new Date(bid.due);
+    if (isNaN(due.getTime())) return null;
+    // Treat the due date as an all-day event on that calendar day (ET).
+    const dayStart = toGraphDateTime(due).slice(0, 10); // YYYY-MM-DD
+    const next = new Date(due.getTime() + 24 * 60 * 60 * 1000);
+    const dayEnd = toGraphDateTime(next).slice(0, 10);
+
+    const bodyLines = [
+      bid.gc ? `GC: ${bid.gc}` : null,
+      bid.loc ? `Location: ${bid.loc}` : null,
+      bid.source_email_link ? `Email: ${bid.source_email_link}` : null,
+    ].filter(Boolean) as string[];
+
+    const event = {
+      subject: `Bid Due – ${bid.name}`,
+      isAllDay: true,
+      start: { dateTime: `${dayStart}T00:00:00`, timeZone: EVENT_TZ },
+      end:   { dateTime: `${dayEnd}T00:00:00`,   timeZone: EVENT_TZ },
+      location: { displayName: bid.loc || '' },
+      body: { contentType: 'Text', content: bodyLines.join('\n') },
+      isReminderOn: true,
+      reminderMinutesBeforeStart: 2 * 24 * 60, // 2 days before
+    };
+
+    const token = await getGraphToken();
+    const resp = await fetch(`${GRAPH_BASE}/users/${encodeURIComponent(CALENDAR_USER)}/events`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(event),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`Graph bid-due event create failed: HTTP ${resp.status} ${text}`);
+    }
+    const json = (await resp.json()) as { id: string };
+    logger.info({ bidId: bid.id, eventId: json.id }, '[calendar] bid-due event created');
+    return json.id;
+  } catch (err) {
+    logger.error({ err, bidId: bid.id }, '[calendar] pushBidDueToCalendar failed (accept not blocked)');
+    return null;
+  }
+}
+
+/**
  * Create (or update) an Outlook calendar event for a lead's scheduled site visit via
  * Microsoft Graph, using the same app-only client-credentials auth as the first-contact
  * email. The Graph event id is stored on the proposal so a re-run updates the same event

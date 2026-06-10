@@ -12,6 +12,7 @@ interface IntakeItem {
   contact: string | null;
   amount: number | null;
   sheets: number | null;
+  sq_ft: number | null;
   due: string | null;
   notes: string | null;
   source: string;
@@ -19,6 +20,12 @@ interface IntakeItem {
   decline_reason: string | null;
   created_by_name: string | null;
   created_at: string;
+  // Email-sourced (source === 'email') metadata
+  web_link: string | null;
+  from_email: string | null;
+  received_at: string | null;
+  body_snippet: string | null;
+  attachment_names: string[] | null;
 }
 
 const DECLINE_REASONS = [
@@ -30,7 +37,7 @@ const DECLINE_REASONS = [
   'Other',
 ];
 
-const BLANK = { name: '', gc: '', loc: '', contact: '', amount: '', sheets: '', due: '', notes: '' };
+const BLANK = { name: '', gc: '', loc: '', contact: '', amount: '', sheets: '', sq_ft: '', due: '', notes: '' };
 
 interface Props {
   onBidAccepted: (bid: Bid) => void;
@@ -54,6 +61,7 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
   const [saving, setSaving] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [addForm, setAddForm] = useState<typeof BLANK>(BLANK);
+  const [refreshing, setRefreshing] = useState(false);
 
   const report = useCallback((list: IntakeItem[]) => {
     onPendingChange?.(list.filter(i => i.status === 'pending').length);
@@ -74,9 +82,25 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
     setEdit({
       name: item.name || '', gc: item.gc || '', loc: item.loc || '', contact: item.contact || '',
       amount: item.amount != null ? String(item.amount) : '', sheets: item.sheets != null ? String(item.sheets) : '',
-      due: item.due || '', notes: item.notes || '',
+      sq_ft: item.sq_ft != null ? String(item.sq_ft) : '',
+      due: item.due ? item.due.slice(0, 10) : '', notes: item.notes || '',
     });
     setDeclineOpen(false);
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const r = await api.post('/intake/refresh');
+      const n = r.data?.imported ?? 0;
+      showToast({ title: n > 0 ? `Imported ${n} new ${n === 1 ? 'email' : 'emails'}` : 'No new tagged emails' });
+      load();
+    } catch (err: unknown) {
+      const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      showToast({ title: 'Refresh failed', sub: message || 'Could not reach the mailbox' });
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const handleAccept = async () => {
@@ -86,7 +110,7 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
     try {
       const r = await api.post(`/intake/${selected.id}/accept`, {
         name: edit.name, gc: edit.gc, loc: edit.loc, contact: edit.contact,
-        amount: edit.amount, due: edit.due, notes: edit.notes,
+        amount: edit.amount, sq_ft: edit.sq_ft, due: edit.due, notes: edit.notes,
       });
       onBidAccepted(r.data.bid as Bid);
       showToast({ title: 'Bid accepted', sub: `${edit.name} added to pipeline` });
@@ -105,7 +129,7 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
     setSaving(true);
     try {
       await api.post(`/intake/${selected.id}/decline`, { reason: declineReason });
-      showToast({ title: 'Bid declined', sub: declineReason });
+      showToast({ title: 'Bid rejected', sub: declineReason });
       setSelected(null);
       setDeclineOpen(false);
       load();
@@ -151,7 +175,7 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
         <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginBottom: 3 }}>{item.gc || '—'}{item.loc ? ` · ${item.loc}` : ''}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {item.status === 'accepted' && <span style={{ fontSize: 10.5, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'var(--green-soft)', color: 'var(--green)', textTransform: 'uppercase' }}>Accepted</span>}
-          {item.status === 'declined' && <span style={{ fontSize: 10.5, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'var(--surface2)', color: 'var(--text3)', textTransform: 'uppercase' }}>Declined</span>}
+          {item.status === 'declined' && <span style={{ fontSize: 10.5, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'var(--surface2)', color: 'var(--text3)', textTransform: 'uppercase' }}>Rejected</span>}
         </div>
       </div>
     );
@@ -176,6 +200,10 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
         </div>
       </div>
       <div style={{ marginBottom: 12 }}>
+        <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 5 }}>Square Footage</label>
+        <input type="number" min={0} style={inputStyle} value={form.sq_ft} onChange={e => set('sq_ft', e.target.value)} />
+      </div>
+      <div style={{ marginBottom: 12 }}>
         <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 5 }}>Notes</label>
         <textarea style={{ ...inputStyle, minHeight: 64, resize: 'vertical' }} value={form.notes} onChange={e => set('notes', e.target.value)} />
       </div>
@@ -189,9 +217,14 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
         <div style={{ borderRight: '1px solid var(--border)', overflowY: 'auto' }}>
           <div style={{ padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
             <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)' }}>Intake Inbox</span>
-            <button className="btn" onClick={() => { setAddOpen(true); setSelected(null); }} style={{ fontSize: 12, padding: '6px 12px' }}>
-              <Icon name="plus" size={13} stroke={2.4}/> Add
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn ghost" onClick={handleRefresh} disabled={refreshing} style={{ fontSize: 12, padding: '6px 12px' }} title="Pull new bid-tagged emails from Outlook">
+                <Icon name="sync" size={13} stroke={2.2}/> {refreshing ? 'Refreshing…' : 'Refresh'}
+              </button>
+              <button className="btn" onClick={() => { setAddOpen(true); setSelected(null); }} style={{ fontSize: 12, padding: '6px 12px' }}>
+                <Icon name="plus" size={13} stroke={2.4}/> Add
+              </button>
+            </div>
           </div>
           {loading ? (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Loading…</div>
@@ -239,6 +272,33 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
               {selected.source !== 'manual' ? ` · ${selected.source}` : ''}
             </div>
 
+            {selected.source === 'email' && (
+              <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>From Outlook</div>
+                {selected.from_email && (
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>{selected.from_email}</div>
+                )}
+                {selected.body_snippet && (
+                  <div style={{ fontSize: 12.5, color: 'var(--text3)', lineHeight: 1.5, marginBottom: 8 }}>{selected.body_snippet}</div>
+                )}
+                {selected.attachment_names && selected.attachment_names.length > 0 && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Attachments ({selected.attachment_names.length})</div>
+                    {selected.attachment_names.map((a, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text2)', fontWeight: 600, marginBottom: 2 }}>
+                        <Icon name="file" size={12} stroke={2}/> {a}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {selected.web_link && (
+                  <a href={selected.web_link} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--blue)', textDecoration: 'none' }}>
+                    <Icon name="doc" size={13} stroke={2}/> Open original email
+                  </a>
+                )}
+              </div>
+            )}
+
             {selected.status === 'pending' ? (
               <>
                 {FormFields(edit, (k, v) => setEdit(prev => ({ ...prev, [k]: v })))}
@@ -247,15 +307,15 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
                     <Icon name="check" size={14} stroke={2.2}/> {saving ? 'Accepting…' : 'Accept & Add to Pipeline'}
                   </button>
                   <button className="btn ghost" onClick={() => setDeclineOpen(o => !o)} style={{ fontSize: 13 }}>
-                    <Icon name="x" size={14} stroke={2.2}/> Decline
+                    <Icon name="x" size={14} stroke={2.2}/> Reject
                   </button>
                   {declineOpen && (
                     <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 14, marginTop: 4 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', marginBottom: 8 }}>Reason for declining:</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', marginBottom: 8 }}>Reason for rejecting:</div>
                       <select value={declineReason} onChange={e => setDeclineReason(e.target.value)} style={{ ...inputStyle, marginBottom: 10, cursor: 'pointer' }}>
                         {DECLINE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
                       </select>
-                      <button className="btn" onClick={handleDecline} disabled={saving} style={{ fontSize: 13, width: '100%', background: 'var(--slate)', borderColor: 'var(--slate)' }}>Confirm Decline</button>
+                      <button className="btn" onClick={handleDecline} disabled={saving} style={{ fontSize: 13, width: '100%', background: 'var(--slate)', borderColor: 'var(--slate)' }}>Confirm Reject</button>
                     </div>
                   )}
                 </div>
@@ -264,7 +324,7 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
               <div style={{ marginTop: 8, fontSize: 13, fontWeight: 600, color: 'var(--text3)' }}>
                 {selected.status === 'accepted'
                   ? '✓ Accepted and added to the pipeline.'
-                  : `✗ Declined${selected.decline_reason ? ` — ${selected.decline_reason}` : ''}.`}
+                  : `✗ Rejected${selected.decline_reason ? ` — ${selected.decline_reason}` : ''}.`}
               </div>
             )}
           </div>

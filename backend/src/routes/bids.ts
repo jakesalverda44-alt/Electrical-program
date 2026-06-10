@@ -96,6 +96,34 @@ async function loadOwnedBid(req: AuthRequest, res: import('express').Response) {
   return rows[0];
 }
 
+// Create the "Active Bids/GC/Job" Drive folder + standard subfolders for a bid and persist
+// the folder ids onto the bid row (mutating `bid` in place). Shared by the POST /bids route
+// and the Intake Inbox accept flow so the folder setup lives in exactly one place. Drive
+// failure must never block bid creation — errors are logged and swallowed.
+export async function setupBidDriveFolders(bid: Record<string, any>): Promise<void> {
+  try {
+    logger.info({ bidId: bid.id, bidName: bid.name }, '[drive] starting bid folder setup');
+    const jobFolderId = await createJobFolder(jobFolderName(bid.name, bid.loc), bid.gc, ESTIMATING_ACTIVE_BIDS_ROOT);
+    logger.info({ bidId: bid.id, jobFolderId }, '[drive] createJobFolder result');
+    if (jobFolderId) {
+      const subs = await createSubfolders(jobFolderId, BID_SUBFOLDER_NAMES);
+      logger.info({ bidId: bid.id, subs }, '[drive] createSubfolders result');
+      await pool.query(
+        `UPDATE bids SET drive_job_folder_id=$1, drive_plans_folder_id=$2, drive_estimates_folder_id=$3 WHERE id=$4`,
+        [jobFolderId, subs['Plans'] || null, subs['Bid Proposals'] || null, bid.id],
+      );
+      bid.drive_job_folder_id = jobFolderId;
+      bid.drive_plans_folder_id = subs['Plans'] || null;
+      bid.drive_estimates_folder_id = subs['Bid Proposals'] || null;
+      logger.info({ bidId: bid.id, drive_job_folder_id: jobFolderId, drive_plans_folder_id: bid.drive_plans_folder_id }, '[drive] bid folder setup complete');
+    } else {
+      logger.warn({ bidId: bid.id }, '[drive] createJobFolder returned null — Drive may not be configured or ESTIMATING_ACTIVE_BIDS_ROOT is inaccessible');
+    }
+  } catch (err) {
+    logger.error({ err, bidId: bid.id }, '[drive] bid folder setup failed');
+  }
+}
+
 router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const { name, gc, loc, amount, due, notes, project_type, sq_ft, suppress_notify } = req.body;
   if (!name?.trim() || !gc?.trim()) return res.status(400).json({ error: 'Name and GC required' });
@@ -111,29 +139,8 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   // Await Drive folder setup before responding so that folder IDs are written to
   // the DB by the time the client receives the new bid. This prevents a race where
   // an immediately-uploaded file finds null folder IDs and skips Drive routing.
-  // Drive failure must not block bid creation — we catch and continue.
   const newBid = rows[0];
-  try {
-    logger.info({ bidId: newBid.id, bidName: newBid.name }, '[drive] starting bid folder setup');
-    const jobFolderId = await createJobFolder(jobFolderName(newBid.name, newBid.loc), newBid.gc, ESTIMATING_ACTIVE_BIDS_ROOT);
-    logger.info({ bidId: newBid.id, jobFolderId }, '[drive] createJobFolder result');
-    if (jobFolderId) {
-      const subs = await createSubfolders(jobFolderId, BID_SUBFOLDER_NAMES);
-      logger.info({ bidId: newBid.id, subs }, '[drive] createSubfolders result');
-      await pool.query(
-        `UPDATE bids SET drive_job_folder_id=$1, drive_plans_folder_id=$2, drive_estimates_folder_id=$3 WHERE id=$4`,
-        [jobFolderId, subs['Plans'] || null, subs['Bid Proposals'] || null, newBid.id],
-      );
-      newBid.drive_job_folder_id = jobFolderId;
-      newBid.drive_plans_folder_id = subs['Plans'] || null;
-      newBid.drive_estimates_folder_id = subs['Bid Proposals'] || null;
-      logger.info({ bidId: newBid.id, drive_job_folder_id: jobFolderId, drive_plans_folder_id: newBid.drive_plans_folder_id }, '[drive] bid folder setup complete');
-    } else {
-      logger.warn({ bidId: newBid.id }, '[drive] createJobFolder returned null — Drive may not be configured or ESTIMATING_ACTIVE_BIDS_ROOT is inaccessible');
-    }
-  } catch (err) {
-    logger.error({ err, bidId: newBid.id }, '[drive] bid folder setup failed');
-  }
+  await setupBidDriveFolders(newBid);
 
   res.json(withDueDays(newBid));
 });

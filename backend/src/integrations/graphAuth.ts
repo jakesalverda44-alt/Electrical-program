@@ -4,6 +4,11 @@ import { logger } from '../utils/logger';
 // email and the site-visit calendar push. Same env vars, same in-process token cache.
 export const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
+// The Microsoft 365 mailbox all app-only mail/calendar operations run against. App-only
+// Mail.Read / Mail.ReadWrite / Calendars.ReadWrite must be scoped to this mailbox via an
+// Application Access Policy (same mailbox used by the first-contact email + site visits).
+export const GRAPH_MAILBOX = 'JakeS@accuratepowerandtechnology.com';
+
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
 export async function getGraphToken(): Promise<string> {

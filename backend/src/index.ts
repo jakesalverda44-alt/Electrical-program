@@ -10,6 +10,7 @@ import { pool } from './db/pool';
 import { logger } from './utils/logger';
 import { asyncHandler } from './utils/asyncHandler';
 import { startReminderScheduler } from './notifications/engine';
+import { startIntakeInboxPoller } from './integrations/intakePoller';
 import { requireAuth, AuthRequest, initJwtSecret } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
@@ -132,6 +133,7 @@ if (require.main === module) {
       await initJwtSecret();
       const server = app.listen(port, () => logger.info(`Backend running on :${port}`));
       startReminderScheduler();
+      startIntakeInboxPoller();
 
       // On SIGTERM (Render redeploy), mark any stuck in-progress analyses as error
       // so the frontend poll sees a terminal state instead of spinning forever.
