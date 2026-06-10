@@ -6,6 +6,8 @@ import RecordFiles from '../../components/RecordFiles';
 import { moneyFull } from '../../lib/money';
 import api from '../../api/client';
 import BuildFromNotesModal from '../builder/BuildFromNotesModal';
+import { isPrivileged } from '../../hooks/useAuth';
+import { useUser } from '../../contexts/AppContext';
 
 function fmtTs(ts?: string | null) {
   if (!ts) return null;
@@ -24,6 +26,7 @@ interface Props {
 }
 
 export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDelete, onClosed }: Props) {
+  const canDelete = isPrivileged(useUser());
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed';
   const [closingJob, setClosingJob] = useState(false);
   const [showBuildNotes, setShowBuildNotes] = useState(false);
@@ -172,13 +175,17 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             </button>
           )}
 
-          <button
-            className="btn ghost"
-            style={{ width: '100%', justifyContent: 'center', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', marginTop: 8 }}
-            onClick={() => onDelete(gen)}
-          >
-            <Icon name="x" size={14} stroke={2}/>Delete Proposal
-          </button>
+          {/* Deleting a proposal is admin-only on the server (owner/administrator/manager).
+              Hide the button for everyone else so they don't hit a 403 "Delete failed". */}
+          {canDelete && (
+            <button
+              className="btn ghost"
+              style={{ width: '100%', justifyContent: 'center', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', marginTop: 8 }}
+              onClick={() => onDelete(gen)}
+            >
+              <Icon name="x" size={14} stroke={2}/>Delete Proposal
+            </button>
+          )}
 
           {!isTerminal && (
             <button
