@@ -117,23 +117,23 @@ export default function AppShell({
   const initials = user.name.split(' ').map(w => w[0]).join('').slice(0, 2);
 
   const mobileBottomNav = [
-    { id: 'dashboard',       label: 'Home',       icon: 'dashboard', count: 0 },
-    { id: 'pipeline',        label: 'Pipeline',   icon: 'pipeline',  count: genProposalCount + elecProposalCount },
-    { id: 'preconstruction', label: 'Estimating', icon: 'sparkle',   count: 0 },
-    { id: 'gen-projects',    label: 'Projects',   icon: 'bolt',      count: genProjectCount },
+    { id: 'dashboard',  label: 'Home',     icon: 'dashboard', count: 0 },
+    { id: 'gen-leads',  label: 'Leads',    icon: 'users',     count: 0 },
+    { id: 'pipeline',   label: 'Pipeline', icon: 'pipeline',  count: genProposalCount + elecProposalCount },
   ];
 
   const mobileMoreNav = [
-    { id: 'sales-dashboard', label: 'Sales Dashboard', icon: 'trend',  count: 0 },
-    { id: 'followups',     label: 'Follow-ups',       icon: 'checkc', count: followupCount },
-    { id: 'intake',        label: 'Intake Inbox',     icon: 'bell',   count: newIncoming },
-    { id: 'gen-leads',     label: 'Generator Leads',  icon: 'users',  count: 0 },
-    { id: 'elec-projects', label: 'Elec. Projects',   icon: 'checkc', count: elecProjectCount },
-    { id: 'builder',       label: 'Proposal Builder', icon: 'doc',    count: 0 },
-    { id: 'docs',          label: 'Documents',        icon: 'clip',   count: 0 },
-    { id: 'reporting',     label: 'Reporting',        icon: 'trend',  count: 0 },
-    { id: 'calendar',      label: 'Calendar',         icon: 'clock',  count: 0 },
-    { id: 'contacts',      label: 'Contacts',         icon: 'users',  count: 0 },
+    { id: 'sales-dashboard', label: 'Sales Dashboard',   icon: 'trend',    count: 0 },
+    { id: 'preconstruction', label: 'Estimating',         icon: 'sparkle',  count: 0 },
+    { id: 'gen-projects',    label: 'Generator Projects', icon: 'bolt',     count: genProjectCount },
+    { id: 'elec-projects',   label: 'Elec. Projects',    icon: 'checkc',   count: elecProjectCount },
+    { id: 'followups',       label: 'Follow-ups',         icon: 'checkc',   count: followupCount },
+    { id: 'intake',          label: 'Intake Inbox',       icon: 'bell',     count: newIncoming },
+    { id: 'builder',         label: 'Proposal Builder',   icon: 'doc',      count: 0 },
+    { id: 'docs',            label: 'Documents',          icon: 'clip',     count: 0 },
+    { id: 'reporting',       label: 'Reporting',          icon: 'trend',    count: 0 },
+    { id: 'calendar',        label: 'Calendar',           icon: 'clock',    count: 0 },
+    { id: 'contacts',        label: 'Contacts',           icon: 'users',    count: 0 },
     ...(canAdmin ? [{ id: 'admin', label: 'Settings', icon: 'gear', count: 0 }] : []),
   ];
 

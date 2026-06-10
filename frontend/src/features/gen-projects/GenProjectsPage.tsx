@@ -322,7 +322,7 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
 
       {/* Detail side panel */}
       {detail && (
-        <div style={{ position:'fixed', right:0, top:0, bottom:0, width:340, background:'var(--panel)',
+        <div className="gp-detail-panel" style={{ position:'fixed', right:0, top:0, bottom:0, width:340, background:'var(--panel)',
           borderLeft:'1px solid var(--border)', zIndex:200, overflowY:'auto', boxShadow:'-8px 0 32px rgba(0,0,0,.25)' }}
           onClick={e=>e.stopPropagation()}>
           <div style={{ padding:'20px 22px' }}>

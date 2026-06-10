@@ -598,6 +598,40 @@ button{font-family:inherit}
   /* Preconstruction */
   .pc-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; }
   .pc-step-tracker { overflow-x: auto; }
+
+  /* Gen Projects fixed detail panel — full-width bottom sheet on mobile */
+  .gp-detail-panel {
+    width: 100% !important;
+    left: 0 !important;
+    top: auto !important;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
+    max-height: 72vh !important;
+    border-top: 1px solid var(--border) !important;
+    border-left: none !important;
+    border-radius: 20px 20px 0 0 !important;
+    overflow-y: auto !important;
+    box-shadow: 0 -8px 32px rgba(0,0,0,.3) !important;
+  }
+
+  /* Search bar — cap width so it doesn't bleed off screen */
+  .search-wrap.open .search-field { width: min(280px, calc(100vw - 120px)) !important; }
+
+  /* Sales dashboard — chart labels squish on small screens */
+  .sd-chart { height: 140px !important; gap: 6px !important; }
+  .sd-col .amt { font-size: 9px !important; }
+
+  /* Command Center respond queue — keep action buttons reachable */
+  .cc2-reply { padding: 10px 12px 10px 12px !important; gap: 10px !important; }
+  .cc2-reply .t { font-size: 12.5px !important; }
+  .cc-btn.p { font-size: 11px !important; padding: 5px 8px !important; }
+
+  /* Sales dashboard hero pills wrap nicely */
+  .sd-pills { gap: 6px !important; }
+  .sd-pills .pill { font-size: 11px !important; padding: 5px 10px !important; }
+
+  /* Tighter side padding on phone for main content pages */
+  .cc2-root { padding: 12px 14px 80px !important; }
+  .sd-root  { padding: 12px 14px 80px !important; }
 }
 
 @media (max-width: 480px) {
