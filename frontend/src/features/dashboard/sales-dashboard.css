@@ -80,10 +80,11 @@
 .sd-col.future { opacity: .35; }
 
 /* ── Two-column lower grid ─────────────────────────────────────────── */
-.sd-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 18px; align-items: start; }
+.sd-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.sd-grid > div { min-width: 0; }
 .sd-grid > div > .sd-card:first-child { margin-top: 18px; }
 @media (max-width: 980px) {
-  .sd-grid { grid-template-columns: 1fr; }
+  .sd-grid { grid-template-columns: minmax(0, 1fr); }
   .sd-hero-in { gap: 20px 36px; }
   .sd-col .amt { display: none; }
 }
