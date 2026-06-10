@@ -114,6 +114,19 @@ export default function App() {
       .finally(() => setLoading(false));
   }, [user]);
 
+  // Keep the Intake Inbox sidebar badge live (unread bids) regardless of the open page:
+  // fetch on login and poll every 60s. Local actions (opening/importing) also update it
+  // immediately via the page's onUnreadChange callback.
+  const loadIntakeUnread = useCallback(() => {
+    api.get('/intake/unread-count').then(r => setIntakeCount(r.data.unread ?? 0)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!user) return;
+    loadIntakeUnread();
+    const t = setInterval(loadIntakeUnread, 60_000);
+    return () => clearInterval(t);
+  }, [user, loadIntakeUnread]);
+
   const handleLogin = async (email: string, password: string) => {
     await login(email, password);
     navigate('/dashboard');
@@ -201,7 +214,7 @@ export default function App() {
         return (
           <IntakeInboxPage
             onBidAccepted={(bid) => { setBids(prev => [bid, ...prev]); setView('elec-proposals'); }}
-            onPendingChange={setIntakeCount}
+            onUnreadChange={setIntakeCount}
           />
         );
       case 'builder':

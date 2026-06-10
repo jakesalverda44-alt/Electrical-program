@@ -42,7 +42,7 @@ const BLANK = { name: '', gc: '', loc: '', contact: '', amount: '', sheets: '', 
 
 interface Props {
   onBidAccepted: (bid: Bid) => void;
-  onPendingChange?: (count: number) => void;
+  onUnreadChange?: (count: number) => void;   // unread (unopened) bids, for the sidebar badge
 }
 
 const inputStyle: React.CSSProperties = {
@@ -51,7 +51,7 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 9, padding: '8px 10px', outline: 'none',
 };
 
-export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Props) {
+export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props) {
   const showToast = useShowToast();
   const [items, setItems] = useState<IntakeItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -66,8 +66,12 @@ export default function IntakeInboxPage({ onBidAccepted, onPendingChange }: Prop
   const [unreadOnly, setUnreadOnly] = useState(false);
 
   const report = useCallback((list: IntakeItem[]) => {
-    onPendingChange?.(list.filter(i => i.status === 'pending').length);
-  }, [onPendingChange]);
+    onUnreadChange?.(list.filter(i => !i.read_at).length);
+  }, [onUnreadChange]);
+
+  // Keep the sidebar badge in lockstep with local state — opening, importing, or refreshing
+  // all change the unread set, so report on every items change (not just on load).
+  useEffect(() => { report(items); }, [items, report]);
 
   const load = useCallback(() => {
     setLoading(true);
