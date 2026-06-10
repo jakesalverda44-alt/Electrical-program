@@ -70,6 +70,13 @@ async function finishEmailSourcedAccept(
   }
 }
 
+// Lightweight unread count for the sidebar badge (all unopened bids). Polled app-wide so the
+// badge stays live regardless of which page is open.
+router.get('/unread-count', requireAuth, async (_req, res) => {
+  const { rows } = await pool.query(`SELECT count(*)::int AS unread FROM intake_items WHERE read_at IS NULL`);
+  res.json({ unread: rows[0].unread });
+});
+
 // Shared inbox of incoming bid invitations. Pending items plus anything
 // processed in the last 7 days (so accept/decline stay visible briefly).
 router.get('/', requireAuth, async (_req, res) => {
