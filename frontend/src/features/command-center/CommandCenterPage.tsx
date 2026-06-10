@@ -114,6 +114,19 @@ export default function CommandCenterPage({ onNav }: Props) {
     return next;
   });
 
+  // Checking off an email also marks it read in Outlook so it leaves the queue
+  // for everyone — not just this device. The brief refetch then drops it.
+  const handleReplyCheck = (item: BriefAttentionItem) => {
+    const wasDone = done.has(item.id);
+    toggleDone(item.id);
+    if (!wasDone && item.type === 'email' && item.id.startsWith('email:')) {
+      const graphId = item.id.slice('email:'.length);
+      api.post(`/brief/email/${encodeURIComponent(graphId)}/read`)
+        .then(() => load())
+        .catch(() => {});
+    }
+  };
+
   const markContacted = async (leadId: string) => {
     setMarking(true);
     try {
@@ -262,8 +275,8 @@ export default function CommandCenterPage({ onNav }: Props) {
                   {item.cta.webLink && <a className="cc-btn p" href={item.cta.webLink} target="_blank" rel="noopener noreferrer">Open email</a>}
                   <button
                     className={'cc2-check' + (done.has(item.id) ? ' on' : '')}
-                    title={done.has(item.id) ? 'Mark not handled' : 'Mark handled'}
-                    onClick={() => toggleDone(item.id)}
+                    title={done.has(item.id) ? 'Mark not handled' : 'Mark handled — also marks read in Outlook'}
+                    onClick={() => handleReplyCheck(item)}
                   >✓</button>
                 </div>
               </div>

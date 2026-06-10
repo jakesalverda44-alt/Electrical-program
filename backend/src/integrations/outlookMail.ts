@@ -238,6 +238,34 @@ export async function downloadAttachments(messageId: string): Promise<GraphAttac
  * reviewer reviews and sends it manually. Non-blocking: logs and swallows errors. The message
  * id is URL-encoded (immutable Graph ids contain '/', '+' and '=').
  */
+/**
+ * Mark an Inbox message as read in Outlook (PATCH isRead=true). Uses the same
+ * Mail.ReadWrite app permission as the draft-reply feature. Returns true on
+ * success so callers can surface a failure to the user.
+ */
+export async function markMessageRead(messageId: string): Promise<boolean> {
+  try {
+    const token = await getGraphToken();
+    const resp = await fetch(
+      `${GRAPH_BASE}/users/${MAILBOX}/messages/${encodeURIComponent(messageId)}`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isRead: true }),
+      }
+    );
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`Graph PATCH isRead failed: HTTP ${resp.status} ${text}`);
+    }
+    logger.info({ messageId }, '[outlook-mail] message marked read');
+    return true;
+  } catch (err) {
+    logger.error({ err, messageId }, '[outlook-mail] markMessageRead failed');
+    return false;
+  }
+}
+
 export async function createReplyDraft(messageId: string, comment: string): Promise<void> {
   try {
     const token = await getGraphToken();

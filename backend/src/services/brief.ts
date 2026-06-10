@@ -78,6 +78,10 @@ let snap: { at: number; data: GraphSnapshot } | null = null;
 let inflight: Promise<GraphSnapshot> | null = null;
 const TTL_MS = 90_000;
 
+// Drop the cached Graph snapshot so the next brief refetches the inbox. Called
+// after an email is marked read in Outlook so it leaves the respond queue promptly.
+export function invalidateGraphSnapshot(): void { snap = null; }
+
 function graphConfigured(): boolean {
   return !!(process.env.GRAPH_TENANT_ID && process.env.GRAPH_CLIENT_ID && process.env.GRAPH_CLIENT_SECRET);
 }
