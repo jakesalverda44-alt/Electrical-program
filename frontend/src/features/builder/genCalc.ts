@@ -1,4 +1,4 @@
-import { DEFAULT_PRICES, LC_MODELS, GEN_SPECS, GenForm } from './genData';
+import { DEFAULT_PRICES, LC_MODELS, GEN_SPECS, NEW_INSTALL_ONLY, GenForm } from './genData';
 
 interface DefaultOverrides {
   gen_default_labor?: string;
@@ -30,8 +30,13 @@ export function blankGenForm(overrides?: DefaultOverrides): GenForm {
   };
 }
 
-export function getGenSizes(form: Pick<GenForm, 'brand' | 'coolingType'>): string[] {
-  return Object.keys(DEFAULT_PRICES.generators[form.coolingType]?.[form.brand] ?? {});
+export function getGenSizes(form: Pick<GenForm, 'brand' | 'coolingType' | 'jobType'>): string[] {
+  const all = Object.keys(DEFAULT_PRICES.generators[form.coolingType]?.[form.brand] ?? {});
+  // Some sizes (e.g. the 12KW load-center unit) are new-install only — hide on swap-outs.
+  if (form.jobType === 'swap-out') {
+    return all.filter(size => !NEW_INSTALL_ONLY.has(`${form.brand}|${form.coolingType}|${size}`));
+  }
+  return all;
 }
 
 export function getGenPrice(form: Pick<GenForm, 'brand' | 'coolingType' | 'size'>): number {

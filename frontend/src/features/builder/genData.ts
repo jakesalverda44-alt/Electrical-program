@@ -1,7 +1,7 @@
 export const DEFAULT_PRICES = {
   generators: {
     'air-cooled': {
-      Kohler:  { '14KW': 5800, '20KW': 6700, '26KW': 8200 },
+      Kohler:  { '12KW': 4900, '14KW': 5800, '20KW': 6700, '26KW': 8200 },
       Generac: { '14KW': 5600, '18KW': 6450, '22KW': 7150, '24KW': 7575, '26KW': 8000, '28KW': 9300 },
     },
     'liquid-cooled': {
@@ -29,6 +29,15 @@ export const DEFAULT_PRICES = {
   atsLC_200: 1000,
 };
 
+// Sizes only offered on new installs — hidden from the size dropdown for swap-outs.
+// Key format: `${brand}|${coolingType}|${size}`.
+export const NEW_INSTALL_ONLY = new Set<string>(['Kohler|air-cooled|12KW']);
+
+// Optional friendlier dropdown labels for a size (value stays the bare size key).
+export const GEN_SIZE_LABELS: Record<string, string> = {
+  '12KW': '12KW — 100A Load Center',
+};
+
 export const LC_MODELS: Record<string, Record<string, string>> = {
   Kohler:  { '24KW': '24RCLA', '30KW': '30RCLA', '38KW': '38RCLC', '48KW': '48RCLC', '60KW': '60RCLB', '80KW': 'KG80R', '100KW': 'KG1004' },
   Generac: { '32KW': 'XG03245ANAX', '40KW': 'XG04045ANAX', '48KW': 'XG04845ANAX', '60KW': 'XG06045ANAX' },
@@ -37,6 +46,7 @@ export const LC_MODELS: Record<string, Record<string, string>> = {
 // Thin spec used only for genModelNo() in genCalc
 export const GEN_SPECS: Record<string, Record<string, { amps?: number; phases?: number }>> = {
   Kohler: {
+    '12KW': { amps: 50 },
     '14KW': { amps: 58 }, '20KW': { amps: 83 }, '26KW': { amps: 108 },
     '24KW': { amps: 100 }, '30KW': { amps: 125 }, '38KW': { amps: 158 },
     '48KW': { amps: 200 }, '60KW': { amps: 250 }, '80KW': { amps: 333 }, '100KW': { amps: 417 },
