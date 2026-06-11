@@ -96,9 +96,12 @@ interface Props {
   bids: Bid[];
   setBids: (fn: (prev: Bid[]) => Bid[]) => void;
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
+  // Deep-link record id (from global search): opens that project's workspace.
+  openId?: string | null;
+  onClearParam?: () => void;
 }
 
-export default function ElecProjectsPage({ bids, setBids, setWonJobs }: Props) {
+export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, onClearParam }: Props) {
   const showToast = useShowToast();
   const awarded = useMemo(() => bids.filter(b => b.stage === 'awarded'), [bids]);
 
@@ -154,6 +157,18 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs }: Props) {
     setActiveTab('overview');
     loadProject(id);
   };
+
+  // Open the deep-linked project's workspace once, then strip the id from the URL.
+  const openedParam = useRef<string | null>(null);
+  useEffect(() => {
+    if (!openId) { openedParam.current = null; return; }
+    if (openedParam.current === openId) return;
+    if (awarded.some(b => b.id === openId)) {
+      openedParam.current = openId;
+      openWorkspace(openId);
+      onClearParam?.();
+    }
+  }, [openId, awarded, onClearParam]);
 
   const setPhase = (id: string, phase: ElecPhase) => {
     setPhases(prev => ({ ...prev, [id]: phase }));

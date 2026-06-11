@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, WonJob } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
@@ -19,9 +19,12 @@ interface Props {
   openAddBid?: boolean;
   onAddBidHandled?: () => void;
   initialGc?: string;
+  // Deep-link record id (from global search): opens that bid's drawer.
+  openId?: string | null;
+  onClearParam?: () => void;
 }
 
-export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPreconstruction, flashId, openAddBid, onAddBidHandled, initialGc }: Props) {
+export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPreconstruction, flashId, openAddBid, onAddBidHandled, initialGc, openId, onClearParam }: Props) {
   const showToast = useShowToast();
   const [detail, setDetail] = useState<Bid | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -30,6 +33,19 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
   useEffect(() => {
     if (openAddBid) { setAddGc(initialGc); setShowAdd(true); onAddBidHandled?.(); }
   }, [openAddBid]);
+
+  // Open the deep-linked bid's drawer once, then strip the id from the URL.
+  const openedParam = useRef<string | null>(null);
+  useEffect(() => {
+    if (!openId) { openedParam.current = null; return; }
+    if (openedParam.current === openId) return;
+    const match = bids.find(b => b.id === openId);
+    if (match) {
+      openedParam.current = openId;
+      setDetail(match);
+      onClearParam?.();
+    }
+  }, [openId, bids, onClearParam]);
 
   const { moveToStage, advance, pendingLost, cancelLost } = usePipeline({
     bids, setBids, setWonJobs, showToast,

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Icon from '../../components/Icon';
 import { Gen, WonJob } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
@@ -21,12 +21,28 @@ interface Props {
   onOpenBuilder: () => void;
   flashId: string | null;
   onEditGen: (gen: import('../../types').Gen) => void;
+  // Deep-link record id (from global search): opens that proposal's drawer.
+  openId?: string | null;
+  onClearParam?: () => void;
   onNav?: (v: string) => void;
 }
 
-export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuilder, flashId, onEditGen, onNav }: Props) {
+export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuilder, flashId, onEditGen, openId, onClearParam, onNav }: Props) {
   const showToast = useShowToast();
   const [detail, setDetail] = useState<Gen | null>(null);
+
+  // Open the deep-linked proposal's drawer once, then strip the id from the URL.
+  const openedParam = useRef<string | null>(null);
+  useEffect(() => {
+    if (!openId) { openedParam.current = null; return; }
+    if (openedParam.current === openId) return;
+    const match = gens.find(g => g.id === openId);
+    if (match) {
+      openedParam.current = openId;
+      setDetail(match);
+      onClearParam?.();
+    }
+  }, [openId, gens, onClearParam]);
 
   const { moveToStage, advance, pendingDeclined, cancelDeclined } = useGenPipeline({
     gens, setGens, setWonJobs, showToast, onNav,

@@ -58,6 +58,8 @@ export default function App() {
     (v: string, recordId?: string) => navigate('/' + v + (recordId ? '/' + encodeURIComponent(recordId) : '')),
     [navigate],
   );
+  // Strip a deep-link record id back out of the URL once the page has opened it.
+  const clearParam = useCallback(() => navigate('/' + view, { replace: true }), [navigate, view]);
   const [bids, setBids] = useState<Bid[]>([]);
   const [gens, setGens] = useState<Gen[]>([]);
   const [wonJobs, setWonJobs] = useState<WonJob[]>([]);
@@ -213,6 +215,8 @@ export default function App() {
             onAddBidHandled={() => { setOpenAddBid(false); setAddBidGc(undefined); }}
             initialGc={addBidGc}
             defaultTab={view === 'elec-proposals' ? 'electrical' : 'generator'}
+            openId={viewParam}
+            onClearParam={clearParam}
             onNav={setView}
           />
         );
@@ -244,9 +248,9 @@ export default function App() {
           />
         );
       case 'elec-projects':
-        return <ElecProjectsPage bids={bids} setBids={setBids} setWonJobs={setWonJobs}/>;
+        return <ElecProjectsPage bids={bids} setBids={setBids} setWonJobs={setWonJobs} openId={viewParam} onClearParam={clearParam}/>;
       case 'gen-projects':
-        return <GenProjectsPage gens={gens} setGens={setGens} setWonJobs={setWonJobs}/>;
+        return <GenProjectsPage gens={gens} setGens={setGens} setWonJobs={setWonJobs} openId={viewParam} onClearParam={clearParam}/>;
       case 'contacts':
         return <ContactsPage onNewBid={openNewBid}/>;
       case 'reporting':
@@ -258,7 +262,7 @@ export default function App() {
           <LeadsPage
             onNav={setView}
             openLeadId={viewParam}
-            onClearParam={() => navigate('/gen-leads', { replace: true })}
+            onClearParam={clearParam}
             onEditGen={g => { setEditGen(g); setView('builder'); }}
             onConverted={gen => setGens(prev => prev.some(g => g.id === gen.id) ? prev : [gen, ...prev])}
           />
