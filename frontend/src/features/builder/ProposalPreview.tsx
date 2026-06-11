@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { GenForm } from './genData';
-import { GenTotals, genPriceRows, genModelNo } from './genCalc';
+import { GenTotals, genPriceRows, genModelNo, loadCenterFor } from './genCalc';
 import { GEN_SPEC_DETAIL } from './genData';
 import { AppSettings, DEFAULT_APP_SETTINGS } from '../../hooks/useAppSettings';
 import api from '../../api/client';
@@ -198,6 +198,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
   const licLine = [co.company_license_ec, co.company_license_cfc, co.company_license_li].filter(Boolean).join(' · ');
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   const spec = GEN_SPEC_DETAIL[form.brand]?.[form.size];
+  const lc = loadCenterFor(form);
   const addrDisplay = [form.address, [form.city, form.state, form.zip].filter(Boolean).join(', ')].filter(Boolean).join('  |  ');
   const buyerAddr   = [form.address, form.city, form.state, form.zip].filter(Boolean).join(', ');
 
@@ -315,7 +316,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
               <tbody>
                 {[
                   {
-                    title: `APT to provide a ${form.brand} ${form.size} Generator — ${form.jobType === 'swap-out' ? 'Existing ' : ''}${form.ats} ATS`,
+                    title: `APT to provide a ${form.brand} ${form.size} Generator — ${lc ? `${lc} Load Center` : `${form.jobType === 'swap-out' ? 'Existing ' : ''}${form.ats} ATS`}`,
                     desc: `The ${form.brand} Advantage: High Quality Power — advanced voltage/frequency regulation with ultra-low harmonic distortion protects electronics. Extraordinary Reliability — 5-year/2,000-hour warranty. Powerful Performance — Exclusive Power Boost; starts 5-ton A/C. Corrosion-Proof Enclosure — impact-resistant to -34°C. Fast Response. Quiet Operation.`,
                     shade: false,
                   },
