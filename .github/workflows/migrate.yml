@@ -1,0 +1,17 @@
+﻿name: Migrate Data
+on:
+  workflow_dispatch:
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 18
+      - run: cd backend && npm install
+      - name: Run migration
+        env:
+          SOURCE_DB: ${{ secrets.SOURCE_DB }}
+          TARGET_DB: ${{ secrets.TARGET_DB }}
+        run: node backend/migrate-data.js
