@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { buildBrief, invalidateGraphSnapshot } from '../services/brief';
-import { markMessageRead, createReplyDraft } from '../integrations/outlookMail';
+import { markMessageRead, createReplyDraft, fetchMessage } from '../integrations/outlookMail';
+import { generateReplyText, replyTextToHtml } from '../email/aiReplyDraft';
 
 const router = Router();
 
@@ -23,11 +24,17 @@ router.post('/email/:id/read', requireAuth, asyncHandler(async (req: AuthRequest
 }));
 
 // Create a reply draft in Outlook's Drafts folder so it's waiting when the user opens
-// the email. The id is the Graph message id.
+// the email. The id is the Graph message id. When AI is configured, Claude reads the
+// email and pre-writes the reply; otherwise (or on AI failure) a blank draft is created.
 router.post('/email/:id/draft-reply', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
-  const ok = await createReplyDraft(req.params.id, '');
+  const msg = await fetchMessage(req.params.id);
+  const replyText = msg
+    ? await generateReplyText({ subject: msg.subject, fromName: msg.fromName, from: msg.from, body: msg.body })
+    : null;
+
+  const ok = await createReplyDraft(req.params.id, replyText ? replyTextToHtml(replyText) : '');
   if (!ok) return res.status(502).json({ error: 'Could not create the draft in Outlook.' });
-  res.json({ ok: true });
+  res.json({ ok: true, ai: !!replyText });
 }));
 
 export default router;

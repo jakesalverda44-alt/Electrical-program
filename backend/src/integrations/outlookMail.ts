@@ -240,6 +240,23 @@ export async function downloadAttachments(messageId: string): Promise<GraphAttac
  * reviewer reviews and sends it manually. Non-blocking: logs and swallows errors. The message
  * id is URL-encoded (immutable Graph ids contain '/', '+' and '=').
  */
+/**
+ * Fetch one Inbox message with its full body (plain text), for AI reply drafting.
+ * Returns null on any failure.
+ */
+export async function fetchMessage(messageId: string): Promise<GraphMailMessage | null> {
+  try {
+    const select = 'id,subject,from,receivedDateTime,bodyPreview,body,webLink,categories,hasAttachments,isRead';
+    const data = await graphGet<GraphMessageRaw>(
+      `/users/${MAILBOX}/messages/${encodeURIComponent(messageId)}?$select=${select}`
+    );
+    return mapRaw(data);
+  } catch (err) {
+    logger.error({ err, messageId }, '[outlook-mail] fetchMessage failed');
+    return null;
+  }
+}
+
 export interface MarkReadResult {
   ok: boolean;
   /** Graph HTTP status when the PATCH was rejected, for diagnostics. */

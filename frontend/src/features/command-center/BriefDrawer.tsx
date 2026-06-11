@@ -20,8 +20,8 @@ const TYPE_SUB: Record<BriefAttentionItem['type'], string> = {
 };
 
 export default function BriefDrawer({ item, onClose, onNav, onMarkContacted, markingContacted }: Props) {
-  // 'idle' | 'busy' | 'done' | 'fail' — per-item, reset when the drawer switches items.
-  const [draftState, setDraftState] = useState<'idle' | 'busy' | 'done' | 'fail'>('idle');
+  // 'idle' | 'busy' | 'done' | 'doneBlank' | 'fail' — per-item, reset when the drawer switches items.
+  const [draftState, setDraftState] = useState<'idle' | 'busy' | 'done' | 'doneBlank' | 'fail'>('idle');
 
   useEffect(() => { setDraftState('idle'); }, [item?.id]);
 
@@ -34,12 +34,12 @@ export default function BriefDrawer({ item, onClose, onNav, onMarkContacted, mar
   const cta = item?.cta;
 
   const draftReply = async () => {
-    if (!item || draftState === 'busy' || draftState === 'done') return;
+    if (!item || draftState === 'busy' || draftState === 'done' || draftState === 'doneBlank') return;
     setDraftState('busy');
     try {
       const graphId = item.id.slice('email:'.length);
-      await api.post(`/brief/email/${encodeURIComponent(graphId)}/draft-reply`);
-      setDraftState('done');
+      const { data } = await api.post(`/brief/email/${encodeURIComponent(graphId)}/draft-reply`);
+      setDraftState(data?.ai ? 'done' : 'doneBlank');
     } catch {
       setDraftState('fail');
     }
@@ -70,11 +70,12 @@ export default function BriefDrawer({ item, onClose, onNav, onMarkContacted, mar
                   </a>
                 )}
                 {item.type === 'email' && item.id.startsWith('email:') && (
-                  <button className="cc-btn" disabled={draftState === 'busy' || draftState === 'done'} onClick={draftReply}>
-                    {draftState === 'busy' ? 'Creating draft…'
-                      : draftState === 'done' ? 'Draft ready in Outlook ✓'
+                  <button className="cc-btn" disabled={draftState === 'busy' || draftState === 'done' || draftState === 'doneBlank'} onClick={draftReply}>
+                    {draftState === 'busy' ? 'AI is writing your reply…'
+                      : draftState === 'done' ? 'AI draft ready in Outlook ✓'
+                      : draftState === 'doneBlank' ? 'Blank draft created in Outlook ✓'
                       : draftState === 'fail' ? 'Failed — try again'
-                      : 'Draft reply in Outlook'}
+                      : '✨ AI draft reply'}
                   </button>
                 )}
                 {cta?.tel && (
