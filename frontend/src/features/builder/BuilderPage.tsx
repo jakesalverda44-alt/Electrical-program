@@ -143,8 +143,11 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
   const sizes  = getGenSizes(form);
   const lc     = loadCenterFor(form);
 
-  const handleSave = async () => {
-    if (!form.customer.trim()) { showToast({ title: 'Customer name required' }); return; }
+  // Persist the current builder state to the gen row and return its id. Does NOT
+  // navigate away — used by both "Save to Pipeline" and "Send to Customer" so the
+  // emailed proposal always reflects exactly what's on screen (form_data + totals_data).
+  const persist = async (): Promise<string | null> => {
+    if (!form.customer.trim()) { showToast({ title: 'Customer name required' }); return null; }
     setSaving(true);
     try {
       const payload = {
@@ -167,19 +170,31 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
         if (r.data.wonJob && setWonJobs) {
           setWonJobs(prev => prev.map(w => w.proposal_id === editGen.id ? r.data.wonJob : w));
         }
-        showToast({ title: 'Proposal updated', sub: form.customer });
-      } else {
-        const r = await api.post('/gens', { ...payload, stage: 'building' });
-        setGens(prev => [r.data, ...prev]);
-        setSavedGenId(r.data.id);
-        showToast({ title: 'Proposal saved', sub: `${form.customer} added to Gen pipeline` });
+        return editGen.id;
       }
-      onSaved();
+      const r = await api.post('/gens', { ...payload, stage: 'building' });
+      setGens(prev => [r.data, ...prev]);
+      setSavedGenId(r.data.id);
+      return r.data.id as string;
     } catch {
       showToast({ title: 'Save failed', sub: 'Please try again' });
+      return null;
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSave = async () => {
+    const id = await persist();
+    if (!id) return;
+    showToast({ title: editGen ? 'Proposal updated' : 'Proposal saved', sub: editGen ? form.customer : `${form.customer} added to Gen pipeline` });
+    onSaved();
+  };
+
+  // Save the current state first, then open the send modal with a fresh snapshot.
+  const handleSendClick = async () => {
+    const id = await persist();
+    if (id) { setSavedGenId(id); setShowSend(true); }
   };
 
   if (screen === 'preview') {
@@ -462,9 +477,9 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                   <Icon name="check" size={14} stroke={2.2}/> {saving ? 'Saving…' : 'Save to Pipeline'}
                 </button>
                 {savedGenId && (
-                  <button className="btn" onClick={() => setShowSend(true)}
+                  <button className="btn" onClick={handleSendClick} disabled={saving}
                     style={{ fontSize: 13, background: 'var(--navy, #1B3A6B)', borderColor: 'var(--navy, #1B3A6B)', color: '#fff' }}>
-                    <Icon name="send" size={14} stroke={2} style={{ color: '#fff' }}/> Send to Customer
+                    <Icon name="send" size={14} stroke={2} style={{ color: '#fff' }}/> {saving ? 'Saving…' : 'Send to Customer'}
                   </button>
                 )}
               </div>
