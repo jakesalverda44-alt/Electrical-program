@@ -3,9 +3,13 @@ import { isKohlerNotification } from '../integrations/outlookMail';
 import { composeBullets, composeDaySummary, BriefPayload } from './brief';
 
 describe('isKohlerNotification', () => {
-  it('matches a Kohler sender address (case-insensitive)', () => {
-    expect(isKohlerNotification({ from: 'noreply@KohlerLeads.com' })).toBe(true);
-    expect(isKohlerNotification({ from: 'leads@kohler.com' })).toBe(true);
+  it('matches the Kohler lead-notification sender (case-insensitive)', () => {
+    expect(isKohlerNotification({ from: 'KohlerLeadNotification@rehlko.com' })).toBe(true);
+    expect(isKohlerNotification({ from: 'kohlerleadnotification@rehlko.com' })).toBe(true);
+  });
+  it('ignores Kohler marketing senders — those are not leads', () => {
+    expect(isKohlerNotification({ from: 'PartnerComms@e.kohlerhomeenergy.com' })).toBe(false);
+    expect(isKohlerNotification({ from: 'leads@kohler.com' })).toBe(false);
   });
   it('ignores non-Kohler senders and empty from', () => {
     expect(isKohlerNotification({ from: 'pm@summitgc.com' })).toBe(false);

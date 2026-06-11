@@ -167,7 +167,7 @@ export default function CommandCenterPage({ onNav }: Props) {
     },
     {
       key: 'kohler',
-      n: brief.kohlerFunnel.notAccepted || brief.kohlerFunnel.newToday + brief.kohlerFunnel.newYesterday,
+      n: brief.kohlerFunnel.notAccepted,
       ic: '⚡', label: 'Kohler leads to accept',
       sub: [
         brief.kohlerFunnel.newToday > 0 && `${brief.kohlerFunnel.newToday} today`,

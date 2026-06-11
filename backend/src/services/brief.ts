@@ -412,11 +412,18 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
     || String(b.receivedAt || '').localeCompare(String(a.receivedAt || '')));
 
   // ── Kohler funnel + arrival tallies (ET day boundaries) ──
-  const kohlerMail = useGraph ? monthInbox.filter(isKohlerNotification) : [];
+  // Only actual assignment emails ("Action Required … Customer Opportunity") count as
+  // leads — the same sender also re-sends "REMINDER: Pending Opportunities" duplicates.
+  const kohlerMail = useGraph
+    ? monthInbox.filter(m => isKohlerNotification(m) && /action required/i.test(m.subject || ''))
+    : [];
   const etToday = etDateStr(new Date());
   const etYesterday = etDateStr(new Date(Date.now() - 86_400_000));
   const received = kohlerMail.filter(m => m.receivedDateTime >= monthStart).length;
-  const notAccepted = kohlerMail.filter(m => !m.isRead).length;
+  // "To accept" = unread assignments from the last 48h only. Kohler opportunities expire
+  // and get redistributed after 24h, so an older unread notice is moot, not actionable.
+  const acceptCutoff = new Date(Date.now() - 2 * 86_400_000).toISOString();
+  const notAccepted = kohlerMail.filter(m => !m.isRead && m.receivedDateTime >= acceptCutoff).length;
   const kohlerNewToday = kohlerMail.filter(m => etDateStr(new Date(m.receivedDateTime)) === etToday).length;
   const kohlerNewYesterday = kohlerMail.filter(m => etDateStr(new Date(m.receivedDateTime)) === etYesterday).length;
 

@@ -44,9 +44,11 @@ interface GraphMessageRaw {
 }
 
 // Sender substrings that mark a Kohler new-lead notification email. Overridable via
-// KOHLER_SENDER_MATCH (comma-separated). Matched case-insensitively against the from address.
+// KOHLER_SENDER_MATCH (comma-separated). Matched case-insensitively against the from
+// address. Deliberately the lead-notification sender only (kohlerleadnotification@rehlko.com)
+// — a bare 'kohler' also matches PartnerComms marketing blasts, which are not leads.
 export const KOHLER_SENDER_MATCH: string[] =
-  (process.env.KOHLER_SENDER_MATCH || 'kohler').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  (process.env.KOHLER_SENDER_MATCH || 'kohlerleadnotification').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
 /** True when a message looks like a Kohler new-lead notification (by sender address). */
 export function isKohlerNotification(msg: { from: string | null }): boolean {
