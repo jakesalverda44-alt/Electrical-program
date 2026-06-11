@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Icon from './Icon';
-import { Bid, Gen } from '../types';
+import api from '../api/client';
+import { Bid, Gen, Lead } from '../types';
 
 interface Result {
   id: string;
@@ -19,10 +20,20 @@ interface Props {
 export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
+  const [leads, setLeads] = useState<Lead[] | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
+
+  // Leads aren't loaded app-wide like bids/gens, so fetch them lazily the first
+  // time the search opens (includes converted ones so history is findable).
+  useEffect(() => {
+    if (!open || leads !== null) return;
+    api.get('/leads?include_converted=1')
+      .then(r => setLeads(r.data as Lead[]))
+      .catch(() => setLeads([]));
+  }, [open, leads]);
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
@@ -47,6 +58,16 @@ export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
         out.push({ id: 'g-' + g.id, label: g.customer, sub: `${g.mfr} ${g.model} · ${g.kw}kW · ${g.stage}`, section: g.stage === 'awarded' ? 'gen-projects' : 'gen-proposals', icon: 'bolt' });
       }
     }
+    for (const l of leads ?? []) {
+      if (out.length >= 16) break;
+      if ([l.name, l.phone, l.email, l.address].some(v => v?.toLowerCase().includes(lq))) {
+        out.push({
+          id: 'l-' + l.id, label: l.name,
+          sub: `Lead · ${l.stage}${l.phone ? ` · ${l.phone}` : l.email ? ` · ${l.email}` : ''}`,
+          section: 'gen-leads', icon: 'users',
+        });
+      }
+    }
     return out;
   })();
 
@@ -64,7 +85,7 @@ export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
             if (e.key === 'Escape') { setQ(''); setOpen(false); }
             if (e.key === 'Enter' && results.length > 0) go(results[0]);
           }}
-          placeholder="Search bids, customers, GCs…"
+          placeholder="Search bids, customers, leads…"
         />
         {q && <button className="search-clear" onClick={() => { setQ(''); inputRef.current?.focus(); }}><Icon name="x" size={14} stroke={2.2}/></button>}
       </div>

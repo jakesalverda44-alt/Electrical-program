@@ -40,6 +40,18 @@
 .sd-delta.up   { color: #7ce0b4; border-color: rgba(52,197,136,.4);  background: var(--green-soft); }
 .sd-delta.down { color: #f0a0a0; border-color: rgba(224,106,106,.4); background: rgba(224,106,106,.12); }
 
+/* Monthly goal progress (under the month hero figure) */
+.sd-goal { margin-top: 12px; max-width: 280px; }
+.sd-goal .track { height: 7px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
+.sd-goal .fill {
+  height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--green), #7ce0b4);
+  box-shadow: 0 0 10px rgba(52,197,136,.45);
+  transition: width .5s cubic-bezier(.4,0,.2,1);
+}
+.sd-goal .fill.hit { background: linear-gradient(90deg, var(--amber), #f0cd86); box-shadow: 0 0 10px rgba(224,165,59,.5); }
+.sd-goal .lbl { margin-top: 6px; font-size: 11.5px; font-weight: 700; color: var(--text2); }
+
 .sd-pills { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; margin-top: 2px; }
 .sd-pills .pill {
   display: inline-flex; align-items: center; gap: 7px;
@@ -127,5 +139,11 @@
 .sd-pipe-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text2); padding: 4px 0; font-weight: 600; }
 .sd-pipe-row .dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
 .sd-pipe-row .v { margin-left: auto; font-family: var(--mono); font-weight: 700; color: var(--text); }
+
+/* Commissions card */
+.sd-comm-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text2); font-weight: 600; }
+.sd-comm-row:last-child { border-bottom: none; }
+.sd-comm-row b { font-family: var(--mono); font-weight: 700; color: var(--text); }
+.sd-comm-row b.due { color: var(--amber); }
 
 .sd-empty { padding: 18px 0; text-align: center; color: var(--text3); font-size: 12.5px; }

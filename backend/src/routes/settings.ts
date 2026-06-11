@@ -27,6 +27,7 @@ const ALLOWED_KEYS = [
   'unit_cost_library',
   'ai_enabled', 'ai_analysis_enabled', 'ai_daily_limit_per_user', 'ai_role_permissions',
   'commission_default_rate',
+  'sales_goal_monthly',
   'bid_notify_enabled', 'bid_notify_emails',
   'currency_code',
   'notifications_json',

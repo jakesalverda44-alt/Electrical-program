@@ -57,8 +57,9 @@ export interface AppSettings {
   ai_analysis_enabled: string;
   ai_daily_limit_per_user: string;
   ai_role_permissions: string;
-  // Commissions
+  // Commissions & sales goals
   commission_default_rate: string;
+  sales_goal_monthly: string;
   // Localization
   currency_code: string;
   // Bid notifications
@@ -90,6 +91,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   ai_takeoff_agent4_model: 'claude-sonnet-4-6', ai_max_tokens_agent4: '8000', ai_prompt_agent4: '',
   ai_enabled: 'true', ai_analysis_enabled: 'true', ai_daily_limit_per_user: '10', ai_role_permissions: '',
   commission_default_rate: '3',
+  sales_goal_monthly: '',
   currency_code: 'USD',
   bid_notify_enabled: 'true', bid_notify_emails: '[]',
   unit_cost_library: '',

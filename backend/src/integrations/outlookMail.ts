@@ -285,7 +285,8 @@ export async function markMessageRead(messageId: string): Promise<MarkReadResult
   }
 }
 
-export async function createReplyDraft(messageId: string, comment: string): Promise<void> {
+/** Create a reply draft in the mailbox's Drafts folder. Returns true on success. */
+export async function createReplyDraft(messageId: string, comment: string): Promise<boolean> {
   try {
     const token = await getGraphToken();
     const resp = await fetch(
@@ -301,7 +302,9 @@ export async function createReplyDraft(messageId: string, comment: string): Prom
       throw new Error(`Graph createReply failed: HTTP ${resp.status} ${text}`);
     }
     logger.info({ messageId }, '[outlook-mail] draft reply created');
+    return true;
   } catch (err) {
     logger.error({ err, messageId }, '[outlook-mail] createReplyDraft failed');
+    return false;
   }
 }

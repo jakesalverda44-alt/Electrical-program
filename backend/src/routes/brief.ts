@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { buildBrief, invalidateGraphSnapshot } from '../services/brief';
-import { markMessageRead } from '../integrations/outlookMail';
+import { markMessageRead, createReplyDraft } from '../integrations/outlookMail';
 
 const router = Router();
 
@@ -19,6 +19,14 @@ router.post('/email/:id/read', requireAuth, asyncHandler(async (req: AuthRequest
     return res.status(502).json({ error: result.reason || 'Could not mark the email read in Outlook.' });
   }
   invalidateGraphSnapshot();
+  res.json({ ok: true });
+}));
+
+// Create a reply draft in Outlook's Drafts folder so it's waiting when the user opens
+// the email. The id is the Graph message id.
+router.post('/email/:id/draft-reply', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const ok = await createReplyDraft(req.params.id, '');
+  if (!ok) return res.status(502).json({ error: 'Could not create the draft in Outlook.' });
   res.json({ ok: true });
 }));
 

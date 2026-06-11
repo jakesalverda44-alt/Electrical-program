@@ -37,45 +37,55 @@ const TTL_MS = 15 * 60_000;      // serve a good reading for 15 minutes
 const FAIL_TTL_MS = 2 * 60_000;  // back off for 2 minutes after a failure
 const FETCH_TIMEOUT_MS = 5_000;
 
+// Shop location fallback (Eustis, FL) so weather works even when the company
+// city/zip settings are empty or the geocoder is unreachable.
+const DEFAULT_LOC = { lat: 28.8528, lon: -81.6856, name: 'Eustis' };
+
 let geo: { key: string; lat: number; lon: number; name: string } | null = null;
 let wx: { at: number; ttl: number; data: BriefWeather | null } | null = null;
 let inflight: Promise<BriefWeather | null> | null = null;
 
-/** Resolve the company location to lat/lon, cached until the settings change. */
-async function resolveLocation(): Promise<{ lat: number; lon: number; name: string } | null> {
+/**
+ * Resolve the company location to lat/lon, cached until the settings change.
+ * Falls back to the shop's coordinates when settings are empty or geocoding fails —
+ * weather should degrade to "shop weather", never disappear.
+ */
+async function resolveLocation(): Promise<{ lat: number; lon: number; name: string }> {
   const [city, state, zip] = await Promise.all([
     getSetting('company_city'), getSetting('company_state'), getSetting('company_zip'),
   ]);
   const query = (city || zip || '').trim();
-  if (!query) {
-    logger.warn('[weather] company_city/company_zip not set — weather disabled');
-    return null;
-  }
+  if (!query) return DEFAULT_LOC;
   const key = `${city}|${state}|${zip}`;
   if (geo && geo.key === key) return geo;
 
-  const resp = await fetch(
-    `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&countryCode=US`,
-    { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
-  );
-  if (!resp.ok) throw new Error(`geocoding HTTP ${resp.status}`);
-  const json = (await resp.json()) as { results?: Array<{ latitude: number; longitude: number; name: string; admin1?: string }> };
-  const results = json.results || [];
-  if (!results.length) {
-    logger.warn({ query }, '[weather] geocoding returned no results');
-    return null;
+  try {
+    const resp = await fetch(
+      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5`,
+      { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
+    );
+    if (!resp.ok) throw new Error(`geocoding HTTP ${resp.status}`);
+    const json = (await resp.json()) as {
+      results?: Array<{ latitude: number; longitude: number; name: string; admin1?: string; country_code?: string }>;
+    };
+    const us = (json.results || []).filter(r => (r.country_code || '').toUpperCase() === 'US');
+    if (!us.length) {
+      logger.warn({ query }, '[weather] geocoding returned no US results — using shop location');
+      return DEFAULT_LOC;
+    }
+    // Prefer a result in the company's state when one matches; otherwise take the top hit.
+    const wantState = (state || '').trim().toLowerCase();
+    const pick = (wantState && us.find(r => (r.admin1 || '').toLowerCase().startsWith(wantState.slice(0, 4)))) || us[0];
+    geo = { key, lat: pick.latitude, lon: pick.longitude, name: pick.name };
+    return geo;
+  } catch (err) {
+    logger.warn({ err, query }, '[weather] geocoding failed — using shop location');
+    return DEFAULT_LOC;
   }
-  // Prefer a result in the company's state when one matches; otherwise take the top hit.
-  const wantState = (state || '').trim().toLowerCase();
-  const pick = (wantState && results.find(r => (r.admin1 || '').toLowerCase().startsWith(wantState.slice(0, 4)))) || results[0];
-  geo = { key, lat: pick.latitude, lon: pick.longitude, name: pick.name };
-  return geo;
 }
 
 async function fetchWeather(): Promise<BriefWeather | null> {
   const loc = await resolveLocation();
-  if (!loc) return null;
-
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}`
     + '&current=temperature_2m,weather_code'
     + '&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max'

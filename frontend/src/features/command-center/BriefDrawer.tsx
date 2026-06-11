@@ -1,4 +1,5 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import api from '../../api/client';
 import { BriefAttentionItem } from '../../types';
 
 interface Props {
@@ -19,6 +20,11 @@ const TYPE_SUB: Record<BriefAttentionItem['type'], string> = {
 };
 
 export default function BriefDrawer({ item, onClose, onNav, onMarkContacted, markingContacted }: Props) {
+  // 'idle' | 'busy' | 'done' | 'fail' — per-item, reset when the drawer switches items.
+  const [draftState, setDraftState] = useState<'idle' | 'busy' | 'done' | 'fail'>('idle');
+
+  useEffect(() => { setDraftState('idle'); }, [item?.id]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -26,6 +32,18 @@ export default function BriefDrawer({ item, onClose, onNav, onMarkContacted, mar
   }, [onClose]);
 
   const cta = item?.cta;
+
+  const draftReply = async () => {
+    if (!item || draftState === 'busy' || draftState === 'done') return;
+    setDraftState('busy');
+    try {
+      const graphId = item.id.slice('email:'.length);
+      await api.post(`/brief/email/${encodeURIComponent(graphId)}/draft-reply`);
+      setDraftState('done');
+    } catch {
+      setDraftState('fail');
+    }
+  };
 
   return (
     <>
@@ -50,6 +68,14 @@ export default function BriefDrawer({ item, onClose, onNav, onMarkContacted, mar
                   <a className="cc-btn p" href={cta.webLink} target="_blank" rel="noopener noreferrer">
                     Open in Outlook
                   </a>
+                )}
+                {item.type === 'email' && item.id.startsWith('email:') && (
+                  <button className="cc-btn" disabled={draftState === 'busy' || draftState === 'done'} onClick={draftReply}>
+                    {draftState === 'busy' ? 'Creating draft…'
+                      : draftState === 'done' ? 'Draft ready in Outlook ✓'
+                      : draftState === 'fail' ? 'Failed — try again'
+                      : 'Draft reply in Outlook'}
+                  </button>
                 )}
                 {cta?.tel && (
                   <a className="cc-btn p" href={cta.tel}>Call now</a>

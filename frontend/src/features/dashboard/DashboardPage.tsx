@@ -2,7 +2,7 @@ import React from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Gen, WonJob } from '../../types';
 import { moneyFull, moneyShort as money } from '../../lib/money';
-import { useUser } from '../../contexts/AppContext';
+import { useUser, useSettings } from '../../contexts/AppContext';
 import './sales-dashboard.css';
 
 // Roles that see company-wide figures; everyone else sees their own scoped data.
@@ -41,6 +41,7 @@ interface Props {
 
 export default function DashboardPage({ bids, gens, wonJobs, repNames, onNav }: Props) {
   const user = useUser();
+  const { settings } = useSettings();
   const isManager = MANAGER_ROLES.includes(user.role);
   const now = new Date();
   const year = now.getFullYear();
@@ -70,6 +71,20 @@ export default function DashboardPage({ bids, gens, wonJobs, repNames, onNav }: 
   const wonCount = bids.filter(b => b.stage === 'awarded').length + gens.filter(g => g.stage === 'awarded').length;
   const lostCount = bids.filter(b => b.stage === 'lost').length + gens.filter(g => g.stage === 'declined').length;
   const winRate = wonCount + lostCount > 0 ? Math.round((wonCount / (wonCount + lostCount)) * 100) : null;
+
+  // ── Monthly goal (company-wide, so only meaningful against company-wide numbers) ──
+  const goal = isManager ? Number(settings.sales_goal_monthly) || 0 : 0;
+  const goalPct = goal > 0 ? Math.min(100, Math.round((monthVal / goal) * 100)) : 0;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  // Pro-rated pace: where the month "should" be by today to land exactly on goal.
+  const paceTarget = goal * (now.getDate() / daysInMonth);
+  const onPace = monthVal >= paceTarget;
+
+  // ── Commissions (fields ride along on each won job; reps see their own scope) ──
+  const comm = (a: WonJob[]) => a.reduce((s, x) => s + Number(x.commission_amount ?? 0), 0);
+  const commMonth = comm(thisMonthJobs);
+  const commYear = comm(thisYearJobs);
+  const commUnpaid = comm(wonJobs.filter(j => j.commission_status === 'earned'));
 
   // ── Monthly chart: stacked elec/gen for the current year ──
   const monthly = MONTHS.map((_, m) => {
@@ -122,6 +137,15 @@ export default function DashboardPage({ bids, gens, wonJobs, repNames, onNav }: 
               <div className="v">{moneyFull(monthVal)}</div>
               <div className="s">{thisMonthJobs.length} job{thisMonthJobs.length === 1 ? '' : 's'} won this month</div>
               <Delta cur={monthVal} prev={prevMonthVal} vs={`vs ${MONTHS[month === 0 ? 11 : month - 1]}`}/>
+              {goal > 0 && (
+                <div className="sd-goal">
+                  <div className="track"><div className={'fill' + (goalPct >= 100 ? ' hit' : '')} style={{ width: goalPct + '%' }}/></div>
+                  <div className="lbl">
+                    {goalPct}% of {money(goal)} goal
+                    {goalPct >= 100 ? ' — goal hit 🎉' : onPace ? ' · on pace' : ` · ${money(Math.max(0, Math.round(paceTarget - monthVal)))} behind pace`}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="sd-big">
               <div className="k">Sales · {year} total</div>
@@ -242,6 +266,30 @@ export default function DashboardPage({ bids, gens, wonJobs, repNames, onNav }: 
                 <div className="step"><div className="n" style={{ color: 'var(--green)' }}>{signedGens.length}</div><div className="l">Signed</div></div>
               </div>
             </div>
+
+            {commYear > 0 && (
+              <div className="sd-card">
+                <div className="ch">
+                  Commissions
+                  <span className="sp"/>
+                  <button className="panel-link" onClick={() => onNav('sales-by-rep')}>
+                    Manage <Icon name="arrow" size={13} stroke={2}/>
+                  </button>
+                </div>
+                <div className="sd-comm-row">
+                  <span>This month</span>
+                  <b>{moneyFull(commMonth)}</b>
+                </div>
+                <div className="sd-comm-row">
+                  <span>{year} total</span>
+                  <b>{moneyFull(commYear)}</b>
+                </div>
+                <div className="sd-comm-row">
+                  <span>Unpaid</span>
+                  <b className={commUnpaid > 0 ? 'due' : ''}>{moneyFull(commUnpaid)}</b>
+                </div>
+              </div>
+            )}
 
             {isManager && reps.length > 0 && (
               <div className="sd-card">

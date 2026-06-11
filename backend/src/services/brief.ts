@@ -203,7 +203,7 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
   // CRM SQL (always fresh; scoped per-rep). Run in parallel.
   const scopeAnd = scope ? ' AND salesperson_id = $1' : '';
   const sp: unknown[] = scope ? [scope] : [];
-  const [bidsKpi, gensKpi, wonKpi, needCallRows, dueSoonRows, kohlerAccepted, intakeCounts, dueTasks, staleLeads, signedGens, dayActivity, knownContacts] = await Promise.all([
+  const [bidsKpi, gensKpi, wonKpi, needCallRows, dueSoonRows, kohlerAccepted, intakeCounts, dueTasks, staleLeads, signedGens, dayActivity, knownContacts, seqStats] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS v FROM bids WHERE deleted_at IS NULL AND closed_at IS NULL AND stage IN ('due','submitted')${scopeAnd}`, sp),
     pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS v FROM generator_proposals WHERE deleted_at IS NULL AND stage IN ('building','sent')${scopeAnd}`, sp),
     pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(value),0)::float AS v FROM won_jobs WHERE deleted_at IS NULL AND date_won >= $${sp.length + 1}${scopeAnd}`, [...sp, monthStart]),
@@ -276,6 +276,20 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
           `SELECT lower(email) AS email, 'lead' AS kind, id::text AS ref, name AS label FROM leads WHERE email IS NOT NULL AND email <> '' AND deleted_at IS NULL
            UNION ALL SELECT lower(email), 'customer', id::text, name FROM customers WHERE email IS NOT NULL AND email <> ''`)
       : Promise.resolve({ rows: [] as Array<{ email: string; kind: string; ref: string; label: string }> }),
+    // Automated email sequence pulse: active Kohler email leads that are still quiet
+    // (no reply, no human outreach), broken out by which step they're on.
+    pool.query(
+      `SELECT COUNT(*) FILTER (WHERE nudge_sent_at IS NULL)::int AS awaiting,
+              COUNT(*) FILTER (WHERE nudge_sent_at IS NOT NULL AND cold_email_sent_at IS NULL)::int AS nudged,
+              COUNT(*) FILTER (WHERE cold_email_sent_at IS NOT NULL)::int AS cold
+         FROM leads l
+        WHERE l.deleted_at IS NULL AND l.source = 'kohler' AND l.stage IN ('new','contacted')
+          AND l.contact_method = 'email' AND l.first_contact_sent_at IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM lead_activity a
+             WHERE a.lead_id = l.id
+               AND (a.direction = 'in' OR a.kind IN ('call','voicemail','text','email'))
+          )`),
   ]);
 
   // Graph snapshot (cached). Skipped entirely when not configured / not privileged.
@@ -470,5 +484,17 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
       },
     ),
   };
-  return { ...payloadNoBullets, briefBullets: composeBullets(payloadNoBullets) };
+  // Automation pulse: where the still-quiet leads sit in the 3-email sequence.
+  const briefBullets = composeBullets(payloadNoBullets);
+  const seq = seqStats.rows[0] as { awaiting: number; nudged: number; cold: number };
+  const seqTotal = seq.awaiting + seq.nudged + seq.cold;
+  if (seqTotal > 0) {
+    const steps: string[] = [];
+    if (seq.awaiting) steps.push(`${seq.awaiting} awaiting a reply to the 1st email`);
+    if (seq.nudged) steps.push(`${seq.nudged} nudged`);
+    if (seq.cold) steps.push(`${seq.cold} sent the going-cold email`);
+    briefBullets.push(`✉️ ${seqTotal} lead${seqTotal === 1 ? '' : 's'} in the email sequence — ${steps.join(', ')}`);
+  }
+
+  return { ...payloadNoBullets, briefBullets };
 }
