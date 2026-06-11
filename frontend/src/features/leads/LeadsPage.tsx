@@ -39,6 +39,48 @@ interface LeadAction {
   priority: 1 | 2 | 3; reason: string;
 }
 
+// ---- Sorting --------------------------------------------------------------
+// Leads arrive from the API in created_at order, which reads as "random" once
+// there are more than a handful. These give the board a deliberate order.
+
+// Pipeline progression weight (lower = earlier/needs attention sooner).
+const STAGE_ORDER: Record<string, number> = {
+  new: 0, contacted: 1, 'site-scheduled': 2, lost: 3, converted: 4,
+};
+// Interest weight (hottest first).
+const INTEREST_ORDER: Record<string, number> = {
+  hot: 0, warm: 1, unknown: 2, 'not-interested': 3,
+};
+
+function ts(d?: string | null) { return d ? dayOf(d).getTime() : null; }
+
+// Newest created first.
+function cmpCreated(a: Lead, b: Lead) {
+  return (ts(b.created_at) ?? 0) - (ts(a.created_at) ?? 0);
+}
+// Soonest / overdue follow-up first; leads with no follow-up date sink to the bottom.
+function cmpFollowUp(a: Lead, b: Lead) {
+  const av = ts(a.follow_up_date), bv = ts(b.follow_up_date);
+  if (av === null && bv === null) return 0;
+  if (av === null) return 1;
+  if (bv === null) return -1;
+  return av - bv;
+}
+
+type SortKey = 'smart' | 'followup' | 'newest' | 'oldest' | 'name' | 'interest';
+
+const SORTS: { key: SortKey; label: string; cmp: (a: Lead, b: Lead) => number }[] = [
+  // Stage progression, then most urgent follow-up, then newest.
+  { key: 'smart', label: 'Smart', cmp: (a, b) =>
+      (STAGE_ORDER[a.stage] - STAGE_ORDER[b.stage]) || cmpFollowUp(a, b) || cmpCreated(a, b) },
+  { key: 'followup', label: 'Follow-up due', cmp: (a, b) => cmpFollowUp(a, b) || cmpCreated(a, b) },
+  { key: 'newest', label: 'Newest', cmp: cmpCreated },
+  { key: 'oldest', label: 'Oldest', cmp: (a, b) => -cmpCreated(a, b) },
+  { key: 'name', label: 'Name A–Z', cmp: (a, b) => a.name.localeCompare(b.name) },
+  { key: 'interest', label: 'Interest', cmp: (a, b) =>
+      (INTEREST_ORDER[a.interest_level] - INTEREST_ORDER[b.interest_level]) || cmpCreated(a, b) },
+];
+
 const PRIORITY_META: Record<number, { label: string; color: string }> = {
   1: { label: 'Call now', color: 'var(--red)' },
   2: { label: 'No response', color: 'var(--orange)' },
@@ -51,6 +93,7 @@ export default function LeadsPage({ onNav, onEditGen, onConverted }: Props) {
   const [loading, setLoading] = useState(true);
   const [stageFilter, setStageFilter] = useState<LeadStageKey | 'all'>('all');
   const [contactFilter, setContactFilter] = useState<'all' | 'email' | 'phone'>('all');
+  const [sort, setSort] = useState<SortKey>('smart');
   const [detail, setDetail] = useState<Lead | null>(null);
   const [showAdd, setShowAdd] = useState(false);
 
@@ -79,11 +122,21 @@ export default function LeadsPage({ onNav, onEditGen, onConverted }: Props) {
   // Converted leads are handed off to the proposal pipeline and hidden from the board.
   const boardLeads = leads.filter(l => l.stage !== 'converted');
 
-  const filtered = boardLeads.filter(l => {
-    if (stageFilter !== 'all' && l.stage !== stageFilter) return false;
-    if (contactFilter !== 'all' && l.contact_method !== contactFilter) return false;
-    return true;
-  });
+  const sortCmp = (SORTS.find(s => s.key === sort) ?? SORTS[0]).cmp;
+
+  const filtered = boardLeads
+    .filter(l => {
+      // Lost leads are hidden from the default view — they only appear when the
+      // "Lost" pill is explicitly selected, so they don't clutter active work.
+      if (stageFilter === 'all') { if (l.stage === 'lost') return false; }
+      else if (l.stage !== stageFilter) return false;
+      if (contactFilter !== 'all' && l.contact_method !== contactFilter) return false;
+      return true;
+    })
+    .sort(sortCmp);
+
+  // The default ("Active") pill excludes lost leads so its count matches what's shown.
+  const activeCount = boardLeads.filter(l => l.stage !== 'lost').length;
 
   const stageCounts = Object.fromEntries(
     LEAD_STAGES.map(s => [s.key, boardLeads.filter(l => l.stage === s.key).length])
@@ -159,9 +212,9 @@ export default function LeadsPage({ onNav, onEditGen, onConverted }: Props) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 6, flex: 1, flexWrap: 'wrap' }}>
             <FilterChip
-              label="All"
+              label="Active"
               active={stageFilter === 'all'}
-              count={boardLeads.length}
+              count={activeCount}
               onClick={() => setStageFilter('all')}
             />
             {LEAD_STAGES.map(s => (
@@ -191,6 +244,20 @@ export default function LeadsPage({ onNav, onEditGen, onConverted }: Props) {
                 {m === 'all' ? 'All Methods' : m.charAt(0).toUpperCase() + m.slice(1)}
               </button>
             ))}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Sort</span>
+            <select
+              value={sort}
+              onChange={e => setSort(e.target.value as SortKey)}
+              style={{
+                padding: '6px 10px', fontSize: 12.5, fontWeight: 700,
+                borderRadius: 8, cursor: 'pointer',
+                border: '2px solid var(--border2)', background: 'var(--surface)', color: 'var(--text2)',
+              }}
+            >
+              {SORTS.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+            </select>
           </div>
           <button className="btn amber" style={{ fontSize: 13 }} onClick={() => setShowAdd(true)}>
             <Icon name="plus" size={15} stroke={2.4}/>Add Lead
