@@ -356,11 +356,17 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                       : 'Gas installation and connections are NOT included in this proposal.',
                     shade: false,
                   },
+                  // Builder "Notes" field — appended as its own line item when filled in.
+                  ...(form.notes && form.notes.trim() ? [{
+                    title: 'Additional Notes',
+                    desc: form.notes.trim(),
+                    shade: true,
+                  }] : []),
                 ].map((row, idx) => ({ ...row, n: String(idx + 1) })).map(row => (
                   <tr key={row.n} style={{ background: row.shade ? '#F8FAFC' : '#fff', verticalAlign: 'top', borderBottom: '1px solid #E5E7EB' }}>
                     <td style={{ padding: '7px 6px', width: 20, fontWeight: 800, color: ACCENT, textAlign: 'center' }}>{row.n}</td>
                     <td style={{ padding: '7px 6px', width: '30%', fontWeight: 700, color: '#1B3A6B', lineHeight: '13px' }}>{row.title}</td>
-                    <td style={{ padding: '7px 6px', color: GRAY_M, lineHeight: '13px' }}>{row.desc}</td>
+                    <td style={{ padding: '7px 6px', color: GRAY_M, lineHeight: '13px', whiteSpace: 'pre-line' }}>{row.desc}</td>
                   </tr>
                 ))}
               </tbody>
