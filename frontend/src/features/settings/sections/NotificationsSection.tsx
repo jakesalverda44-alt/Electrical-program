@@ -4,6 +4,53 @@ import Icon from '../../../components/Icon';
 import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, Toggle, RolePill, inputStyle, initials, timeAgo, ROLE_OPTIONS, ROLE_LABELS, ROLE_COLORS } from '../shared';
+import { isPushSupported, isSubscribed, isIOS, isStandalone, enablePush, disablePush } from '../../../push';
+
+/**
+ * Per-device Web Push toggle. Subscriptions are tied to the browser/device, not the
+ * saved settings form, so this manages its own state and side-effects independently.
+ */
+function DevicePushCard() {
+  const supported = isPushSupported();
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const needsInstall = isIOS() && !isStandalone();
+
+  useEffect(() => { if (supported) isSubscribed().then(setOn); }, [supported]);
+
+  const flip = async () => {
+    setErr(''); setBusy(true);
+    try {
+      if (on) { await disablePush(); setOn(false); }
+      else { await enablePush(); setOn(true); }
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Could not change notification settings.');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 2 }}>Push Alerts on This Device</div>
+          <div style={{ fontSize: 12, color: 'var(--text3)' }}>Get a notification on this phone/computer for new leads that need a call and signed proposals — even when the app is closed.</div>
+        </div>
+        {supported && !needsInstall && <Toggle on={on} onToggle={busy ? () => {} : flip}/>}
+      </div>
+      {!supported && (
+        <div style={{ fontSize: 12, color: 'var(--text3)' }}>This browser doesn't support push notifications.</div>
+      )}
+      {supported && needsInstall && (
+        <div style={{ background: 'var(--blue-soft)', border: '1px solid rgba(77,141,247,.25)', borderRadius: 10, padding: '12px 16px', fontSize: 12.5, color: 'var(--blue)' }}>
+          To enable alerts on iPhone/iPad: tap the <strong>Share</strong> icon → <strong>Add to Home Screen</strong>, then open the CRM from that new icon and flip this toggle on.
+        </div>
+      )}
+      {busy && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>Working…</div>}
+      {err && <div style={{ fontSize: 12, color: '#e06a6a', marginTop: 6 }}>{err}</div>}
+    </div>
+  );
+}
 
 const NOTIF_EVENTS = [
   { key: 'proposal_sent',     label: 'Proposal Sent',     desc: 'When you send a generator proposal to a customer.' },
@@ -109,6 +156,8 @@ export function NotificationsSection({ settings, onSaved }: { settings: AppSetti
   return (
     <div>
       <SectionTitle title="Notifications" sub="Choose which events and reminders are sent, and how."/>
+
+      <DevicePushCard/>
 
       {/* New bid email team */}
       <div style={{ marginBottom: 28 }}>

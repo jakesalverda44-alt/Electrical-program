@@ -10,6 +10,8 @@ import { sendLeadFirstContactEmail, sendNeedsCallNotification, isPlaceholderLead
 import { createStageFollowup, closeLeadFollowups } from '../utils/leadFollowups';
 import { getStageConfig } from '../utils/leadStageConfig';
 import { pushSiteVisitToCalendar } from '../integrations/outlookCalendar';
+import { sendPushToUsers } from '../integrations/webPush';
+import { ownerAdminIds } from '../notifications/prefs';
 
 const router = Router();
 
@@ -111,6 +113,16 @@ async function handleLeadFirstContact(leadId: string): Promise<void> {
       // manual call and notify the team.
       await pool.query(`UPDATE leads SET needs_call = true, contact_method = 'phone' WHERE id = $1`, [lead.id]);
       await sendNeedsCallNotification(lead);
+      // Push alert to the team so a no-email lead gets called fast (fire-and-forget).
+      ownerAdminIds()
+        .then(ids => sendPushToUsers(ids, {
+          title: 'New lead — needs a call',
+          body: `${lead.name || 'A new lead'} has no usable email${lead.phone ? ` — call ${lead.phone}` : ''}`,
+          view: 'gen-leads',
+          id: lead.id,
+          tag: `needscall:${lead.id}`,
+        }))
+        .catch(() => {});
       await pool.query(
         'INSERT INTO lead_activity (lead_id, kind, text) VALUES ($1,$2,$3)',
         [lead.id, 'note', 'No usable email on lead — flagged for a call and notified the team']

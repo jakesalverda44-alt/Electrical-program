@@ -16,6 +16,7 @@ import { ensureProject, setProjectDeleted } from '../utils/project';
 import { commissionRate, commissionAmount } from '../utils/commission';
 import { createNotification } from '../notifications/engine';
 import { ownerAdminIds } from '../notifications/prefs';
+import { sendPushToUsers } from '../integrations/webPush';
 import { pdfUpload } from '../utils/upload';
 import {
   uploadFile,
@@ -761,6 +762,15 @@ router.post('/p/:token/sign', async (req, res) => {
           dedupKey: `propsigned:${gen.id}`,
         });
       }
+      // Push the same alert to the salesperson's devices (fire-and-forget).
+      const amt = Number(gen.amount || 0);
+      sendPushToUsers(targets, {
+        title: '🎉 Proposal signed',
+        body: `${gen.customer} signed${amt ? ` — $${amt.toLocaleString()}` : ''}`,
+        view: 'gen-proposals',
+        id: gen.id,
+        tag: `propsigned:${gen.id}`,
+      }).catch(() => {});
     } catch (err) {
       logger.error({ err }, '[notify] proposal signed notification failed');
     }
