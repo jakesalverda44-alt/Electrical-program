@@ -513,7 +513,7 @@ router.post('/', leadWriteLimiter, requireAuthOrApiKey, validateBody(leadCreateS
 // 8am–noon morning-window timing. Eligibility is identical to the automatic job:
 // still-quiet, not-yet-nudged Kohler email leads only, and it never double-sends
 // (nudge_sent_at is claimed atomically). Returns how many emails went out.
-router.post('/send-nudges', requireAdmin, asyncHandler(async (_req: AuthRequest, res) => {
+router.post('/send-nudges', requireAuth, requireAdmin, asyncHandler(async (_req: AuthRequest, res) => {
   const sent = await sendDueLeadNudges();
   res.json({ sent });
 }));
