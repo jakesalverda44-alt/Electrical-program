@@ -125,13 +125,9 @@ export function leadColdHtml(firstName: string): string {
   const name = escapeHtml(firstName);
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;line-height:1.6;">
     <p>Hi ${name},</p>
-    <p>I haven't heard back, so I'll assume the timing isn't right just yet — no problem
-    at all. I'll close out the request for now so I'm not crowding your inbox.</p>
-    <p>Whenever you're ready to talk about backup power, we'll be here. Just reply to this
-    email or call or text me directly at
-    <a href="tel:3528018997" style="color:#1c2c54;">352-801-8997</a> and we'll pick right
-    back up — no starting over.</p>
-    <p>Thanks for considering Accurate Power &amp; Technology.</p>
+    <p>I haven't heard back, so I'll close out your request for now — no problem at all.</p>
+    <p>Whenever you're ready to talk backup power, just reply or call/text me at
+    <a href="tel:3528018997" style="color:#1c2c54;">352-801-8997</a> and we'll pick right up.</p>
     ${signatureHtml()}
   </div>`;
 }
