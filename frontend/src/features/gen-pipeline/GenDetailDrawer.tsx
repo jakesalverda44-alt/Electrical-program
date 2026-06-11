@@ -256,6 +256,11 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             </div>
           )}
 
+          {/* Photos & files up top so site-visit capture is one tap on mobile, not
+              buried below every action button. */}
+          <RecordFiles linkedId={gen.id} linkedName={gen.customer} div="gen" cameraFirst title="Photos & Files"
+            emptyHint="No files yet. Snap site-visit photos, or attach the proposal, PO, permit, signed contract, or delivery/startup docs."/>
+
           {gen.proposal_token && (
             <button
               className="btn ghost"
@@ -338,8 +343,6 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             </div>
           )}
 
-          <RecordFiles linkedId={gen.id} linkedName={gen.customer} div="gen" cameraFirst title="Photos & Files"
-            emptyHint="No files yet. Snap site-visit photos, or attach the proposal, PO, permit, signed contract, or delivery/startup docs."/>
         </div>
       </div>
 
