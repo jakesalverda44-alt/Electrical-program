@@ -17,6 +17,9 @@ interface Props {
   onAddBidHandled?: () => void;
   initialGc?: string;
   defaultTab?: 'generator' | 'electrical';
+  // Deep-link record id (from global search): opens that proposal's drawer on the active tab.
+  openId?: string | null;
+  onClearParam?: () => void;
   onNav?: (v: string) => void;
 }
 
@@ -24,7 +27,7 @@ export default function PipelinePage({
   bids, setBids, gens, setGens, setWonJobs,
   onOpenPreconstruction, onOpenBuilder, onEditGen,
   flashId, openAddBid, onAddBidHandled, initialGc,
-  defaultTab = 'generator', onNav,
+  defaultTab = 'generator', openId, onClearParam, onNav,
 }: Props) {
   const [tab, setTab] = useState<'generator' | 'electrical'>(defaultTab);
 
@@ -66,6 +69,8 @@ export default function PipelinePage({
             onOpenBuilder={onOpenBuilder}
             onEditGen={onEditGen}
             flashId={flashId}
+            openId={tab === 'generator' ? openId : null}
+            onClearParam={onClearParam}
             onNav={onNav}
           />
         ) : (
@@ -77,6 +82,8 @@ export default function PipelinePage({
             openAddBid={openAddBid}
             onAddBidHandled={onAddBidHandled}
             initialGc={initialGc}
+            openId={tab === 'electrical' ? openId : null}
+            onClearParam={onClearParam}
           />
         )}
       </div>

@@ -99,9 +99,12 @@ interface Props {
   gens: Gen[];
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
+  // Deep-link record id (from global search): opens that project's detail panel.
+  openId?: string | null;
+  onClearParam?: () => void;
 }
 
-export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
+export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onClearParam }: Props) {
   const showToast = useShowToast();
   const awarded = useMemo(() => gens.filter(g => g.stage === 'awarded'), [gens]);
 
@@ -122,6 +125,19 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs }: Props) {
   const [overCol, setOverCol] = useState<PhaseKey|null>(null);
   const [detail,  setDetail]  = useState<Gen|null>(null);
   const [editingDetail, setEditingDetail] = useState(false);
+
+  // Open the deep-linked project's detail panel once, then strip the id from the URL.
+  const openedParam = useRef<string | null>(null);
+  useEffect(() => {
+    if (!openId) { openedParam.current = null; return; }
+    if (openedParam.current === openId) return;
+    const match = awarded.find(g => g.id === openId);
+    if (match) {
+      openedParam.current = openId;
+      setDetail(match);
+      onClearParam?.();
+    }
+  }, [openId, awarded, onClearParam]);
   const [editDraft, setEditDraft] = useState({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '', date_won: '' });
   const [editSaving, setEditSaving] = useState(false);
 
