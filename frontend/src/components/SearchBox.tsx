@@ -5,6 +5,7 @@ import { Bid, Gen, Lead } from '../types';
 
 interface Result {
   id: string;
+  targetId: string;
   label: string;
   sub: string;
   section: string;
@@ -14,7 +15,7 @@ interface Result {
 interface Props {
   bids?: Bid[];
   gens?: Gen[];
-  onNav?: (section: string) => void;
+  onNav?: (section: string, recordId?: string) => void;
 }
 
 export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
@@ -49,20 +50,20 @@ export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
     for (const b of bids) {
       if (out.length >= 8) break;
       if ([b.name, b.gc, b.loc, b.contact].some(v => v?.toLowerCase().includes(lq))) {
-        out.push({ id: 'b-' + b.id, label: b.name, sub: `${b.gc} · ${b.loc} · ${b.stage}`, section: b.stage === 'awarded' ? 'elec-projects' : 'elec-proposals', icon: 'pipeline' });
+        out.push({ id: 'b-' + b.id, targetId: b.id, label: b.name, sub: `${b.gc} · ${b.loc} · ${b.stage}`, section: b.stage === 'awarded' ? 'elec-projects' : 'elec-proposals', icon: 'pipeline' });
       }
     }
     for (const g of gens) {
       if (out.length >= 12) break;
       if ([g.customer, g.loc, g.mfr, g.model].some(v => v?.toLowerCase().includes(lq))) {
-        out.push({ id: 'g-' + g.id, label: g.customer, sub: `${g.mfr} ${g.model} · ${g.kw}kW · ${g.stage}`, section: g.stage === 'awarded' ? 'gen-projects' : 'gen-proposals', icon: 'bolt' });
+        out.push({ id: 'g-' + g.id, targetId: g.id, label: g.customer, sub: `${g.mfr} ${g.model} · ${g.kw}kW · ${g.stage}`, section: g.stage === 'awarded' ? 'gen-projects' : 'gen-proposals', icon: 'bolt' });
       }
     }
     for (const l of leads ?? []) {
       if (out.length >= 16) break;
       if ([l.name, l.phone, l.email, l.address].some(v => v?.toLowerCase().includes(lq))) {
         out.push({
-          id: 'l-' + l.id, label: l.name,
+          id: 'l-' + l.id, targetId: l.id, label: l.name,
           sub: `Lead · ${l.stage}${l.phone ? ` · ${l.phone}` : l.email ? ` · ${l.email}` : ''}`,
           section: 'gen-leads', icon: 'users',
         });
@@ -71,7 +72,7 @@ export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
     return out;
   })();
 
-  const go = (r: Result) => { onNav?.(r.section); setQ(''); setOpen(false); };
+  const go = (r: Result) => { onNav?.(r.section, r.targetId); setQ(''); setOpen(false); };
 
   return (
     <div className={'search-wrap' + (open ? ' open' : '')} ref={wrapRef} style={{ position: 'relative' }}>

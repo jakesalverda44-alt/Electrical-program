@@ -48,9 +48,16 @@ export default function App() {
   const location = useLocation();
 
   // The active view is derived from the URL so pages are bookmarkable and the
-  // browser back/forward buttons work. setView simply navigates.
-  const view = location.pathname.replace(/^\/+/, '').split('/')[0] || 'dashboard';
-  const setView = useCallback((v: string) => navigate('/' + v), [navigate]);
+  // browser back/forward buttons work. setView simply navigates. An optional
+  // second path segment carries a record id (e.g. /gen-leads/<id>) so global
+  // search and notifications can deep-link straight to a specific record.
+  const segments = location.pathname.replace(/^\/+/, '').split('/');
+  const view = segments[0] || 'dashboard';
+  const viewParam = segments[1] ? decodeURIComponent(segments[1]) : null;
+  const setView = useCallback(
+    (v: string, recordId?: string) => navigate('/' + v + (recordId ? '/' + encodeURIComponent(recordId) : '')),
+    [navigate],
+  );
   const [bids, setBids] = useState<Bid[]>([]);
   const [gens, setGens] = useState<Gen[]>([]);
   const [wonJobs, setWonJobs] = useState<WonJob[]>([]);
@@ -250,6 +257,8 @@ export default function App() {
         return (
           <LeadsPage
             onNav={setView}
+            openLeadId={viewParam}
+            onClearParam={() => navigate('/gen-leads', { replace: true })}
             onEditGen={g => { setEditGen(g); setView('builder'); }}
             onConverted={gen => setGens(prev => prev.some(g => g.id === gen.id) ? prev : [gen, ...prev])}
           />
