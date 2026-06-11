@@ -4,6 +4,7 @@ import api from '../../api/client';
 import { Lead, LeadActivity } from '../../types';
 import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_LABELS } from './constants';
 import SiteVisitModal from './SiteVisitModal';
+import RecordFiles from '../../components/RecordFiles';
 import { Gen } from '../../types';
 
 interface Props {
@@ -420,6 +421,20 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
               </div>
             )}
           </div>
+
+          {/* Site photos & files — capture during the site visit; they follow the lead
+              into the generator pipeline on conversion. Hidden once converted (the files
+              now live on the proposal). */}
+          {!isConverted && (
+            <RecordFiles
+              linkedId={lead.id}
+              linkedName={lead.name}
+              div="lead"
+              cameraFirst
+              title="Site Photos & Files"
+              emptyHint="No photos yet. Snap site-visit photos here — they follow this lead into the generator pipeline."
+            />
+          )}
 
           {/* Activity Timeline */}
           {activity.length > 0 && (
