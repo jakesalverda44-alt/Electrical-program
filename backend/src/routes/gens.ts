@@ -529,9 +529,10 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
   if (!apiKey) return res.status(503).json({ error: 'Anthropic API key not configured. Add it in Settings > AI or set ANTHROPIC_API_KEY.' });
 
+  const model = ((await getSetting('ai_build_from_notes_model')) || 'claude-haiku-4-5-20251001').trim();
   const client = new Anthropic({ apiKey });
   const message = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model,
     max_tokens: 2048,
     system: BUILD_FROM_NOTES_SYSTEM,
     messages: [{ role: 'user', content: notes.trim() }],

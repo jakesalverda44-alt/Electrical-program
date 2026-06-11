@@ -12,6 +12,7 @@ const ALL_KEYS = [
   'ai_max_tokens_agent1', 'ai_max_tokens_agent2', 'ai_max_tokens_agent3', 'ai_max_tokens_agent4',
   'ai_temperature',
   'ai_prompt_agent1', 'ai_prompt_agent2', 'ai_prompt_agent3', 'ai_prompt_agent4',
+  'ai_reply_draft_model', 'ai_build_from_notes_model',
 ];
 
 const AGENT_LABELS = ['Drawing Analysis', 'Scope & Estimate', 'QA Review', 'Proposal Formatter'];
@@ -154,6 +155,33 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
               <Field label={`Max Tokens (default: ${TOKEN_DEFAULTS[i]})`}>
                 <input type="number" style={inputStyle} value={vals[tKey]} onChange={set(tKey)} min={256} max={64000}
                   placeholder={TOKEN_DEFAULTS[i]}/>
+              </Field>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Standalone assistant features (not part of the takeoff pipeline) */}
+      {(() => {
+        const featureModel = (key: string) => {
+          const cur = vals[key];
+          return cur && !TEXT_MODELS.includes(cur) ? [cur, ...TEXT_MODELS] : TEXT_MODELS;
+        };
+        return (
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 4 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8, marginTop: 12 }}>
+              Assistant Models
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 20px', maxWidth: 480 }}>
+              <Field label="Email Reply Draft" desc="Command Center “AI draft reply”. Haiku is faster/cheaper; Opus is highest quality.">
+                <select style={{ ...inputStyle, appearance: 'none' }} value={vals.ai_reply_draft_model} onChange={set('ai_reply_draft_model')}>
+                  {featureModel('ai_reply_draft_model').map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </Field>
+              <Field label="Build Proposal from Notes" desc="Generator builder “from notes”. Haiku is faster/cheaper; Opus is highest quality.">
+                <select style={{ ...inputStyle, appearance: 'none' }} value={vals.ai_build_from_notes_model} onChange={set('ai_build_from_notes_model')}>
+                  {featureModel('ai_build_from_notes_model').map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
               </Field>
             </div>
           </div>

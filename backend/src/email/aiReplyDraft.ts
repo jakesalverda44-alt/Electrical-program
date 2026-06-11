@@ -9,7 +9,7 @@ import { escapeHtml } from '../utils/escapeHtml';
 // tweaked, and sent. Returns null when AI isn't configured or the call fails — the
 // caller falls back to creating a blank draft.
 
-const DRAFT_MODEL = 'claude-opus-4-8';
+const DEFAULT_DRAFT_MODEL = 'claude-opus-4-8';
 
 const SYSTEM = `You write email replies for Jake Salverda of Accurate Power & Technology, a licensed generator and electrical contractor in Eustis, Florida (Kohler & Generac home standby generators, commercial electrical work).
 
@@ -49,10 +49,12 @@ Subject: ${email.subject || '(no subject)'}
 
 ${body}`;
 
+  const model = ((await getSetting('ai_reply_draft_model')) || DEFAULT_DRAFT_MODEL).trim();
+
   try {
     const client = new Anthropic({ apiKey });
     const message = await client.messages.create({
-      model: DRAFT_MODEL,
+      model,
       max_tokens: 1024,
       system: SYSTEM,
       messages: [{ role: 'user', content: prompt }],
