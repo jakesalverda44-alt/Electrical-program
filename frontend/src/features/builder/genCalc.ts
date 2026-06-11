@@ -1,4 +1,4 @@
-import { DEFAULT_PRICES, LC_MODELS, GEN_SPECS, NEW_INSTALL_ONLY, GenForm } from './genData';
+import { DEFAULT_PRICES, LC_MODELS, GEN_SPECS, NEW_INSTALL_ONLY, LOAD_CENTER_UNITS, GenForm } from './genData';
 
 interface DefaultOverrides {
   gen_default_labor?: string;
@@ -37,6 +37,12 @@ export function getGenSizes(form: Pick<GenForm, 'brand' | 'coolingType' | 'jobTy
     return all.filter(size => !NEW_INSTALL_ONLY.has(`${form.brand}|${form.coolingType}|${size}`));
   }
   return all;
+}
+
+// For units with an integrated load center, returns its amperage label (e.g. '100A');
+// otherwise null. These include the transfer switch, so no separate ATS is selected.
+export function loadCenterFor(form: Pick<GenForm, 'brand' | 'coolingType' | 'size'>): string | null {
+  return LOAD_CENTER_UNITS[`${form.brand}|${form.coolingType}|${form.size}`] ?? null;
 }
 
 export function getGenPrice(form: Pick<GenForm, 'brand' | 'coolingType' | 'size'>): number {

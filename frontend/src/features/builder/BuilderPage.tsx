@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { GenForm, GEN_SIZE_LABELS } from './genData';
-import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo } from './genCalc';
+import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo, loadCenterFor } from './genCalc';
 import ProposalPreview from './ProposalPreview';
 import SendProposalModal from './SendProposalModal';
 import api from '../../api/client';
@@ -103,11 +103,17 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
       const sizes = getGenSizes(next);
       if (!sizes.includes(next.size)) next.size = sizes[0] ?? '';
     }
+    // Load-center units include their transfer switch — lock the ATS to its rating.
+    if (key === 'brand' || key === 'coolingType' || key === 'size') {
+      const lcAmps = loadCenterFor(next);
+      if (lcAmps) next.ats = lcAmps;
+    }
     return next;
   });
 
   const totals = calcGenTotals(form);
   const sizes  = getGenSizes(form);
+  const lc     = loadCenterFor(form);
 
   const handleSave = async () => {
     if (!form.customer.trim()) { showToast({ title: 'Customer name required' }); return; }
@@ -203,10 +209,16 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 {sizes.map(s => <option key={s} value={s}>{GEN_SIZE_LABELS[s] ?? s}</option>)}
               </select>
             </Field>
-            <Field label="ATS Size">
-              <select style={SELECT_STYLE} value={form.ats} onChange={e => set('ats', e.target.value)}>
-                {['100A','150A','200A','400A'].map(a => <option key={a} value={a}>{a}</option>)}
-              </select>
+            <Field label={lc ? 'Transfer Switch' : 'ATS Size'}>
+              {lc ? (
+                <div style={{ ...SELECT_STYLE, display: 'flex', alignItems: 'center', color: 'var(--text2)', fontWeight: 600 }}>
+                  {lc} Load Center — included
+                </div>
+              ) : (
+                <select style={SELECT_STYLE} value={form.ats} onChange={e => set('ats', e.target.value)}>
+                  {['100A','150A','200A','400A'].map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+              )}
             </Field>
             <Field label="Job Type">              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
                 {(['new-install', 'swap-out'] as const).map(jt => (
@@ -218,6 +230,8 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                       // New-install-only sizes (e.g. the 12KW load-center unit) drop off on swap-out.
                       const sizes = getGenSizes(next);
                       if (!sizes.includes(next.size)) next.size = sizes[0] ?? '';
+                      const lcAmps = loadCenterFor(next);
+                      if (lcAmps) next.ats = lcAmps;
                       return next;
                     });
                   }}

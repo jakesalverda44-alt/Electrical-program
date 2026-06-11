@@ -33,6 +33,12 @@ export const DEFAULT_PRICES = {
 // Key format: `${brand}|${coolingType}|${size}`.
 export const NEW_INSTALL_ONLY = new Set<string>(['Kohler|air-cooled|12KW']);
 
+// Units that ship with an integrated load center instead of a separate ATS.
+// Key: `${brand}|${coolingType}|${size}` → load-center amperage label.
+export const LOAD_CENTER_UNITS: Record<string, string> = {
+  'Kohler|air-cooled|12KW': '100A',
+};
+
 // Optional friendlier dropdown labels for a size (value stays the bare size key).
 export const GEN_SIZE_LABELS: Record<string, string> = {
   '12KW': '12KW — 100A Load Center',
@@ -83,6 +89,24 @@ export interface GenSpecDetail {
 
 export const GEN_SPEC_DETAIL: Record<string, Record<string, GenSpecDetail>> = {
   Kohler: {
+    '12KW': {
+      model: '12RCA', engine: 'Kohler Command PRO CH730 V-Twin', displacement: '725 cc (44 cu in)',
+      rpm: '3,600', voltage: '120/240V, Single Phase', amps_lp: '52A', amps_ng: '50A', breaker: '60A',
+      weight: '375 lbs', dims: '48 × 25 × 29 in', sound: '68 dB(A) at 23 ft', wind: '181 MPH',
+      fuel_ng_full: '170 CFH', fuel_ng_half: '110 CFH', fuel_lp_full: '2.0 gal/hr', fuel_lp_half: '1.5 gal/hr',
+      warranty: '5-Year / 2,000-Hour', controller: 'RDC2 with OnCue Plus', certs: 'UL 2200, EPA, CARB',
+      features: [
+        'Integrated 100A load center — generator and transfer switch in one enclosure',
+        'Kohler Command PRO OHV engine with hydraulic valve lifters',
+        'PowerBoost™ technology — starts & runs 5-ton A/C',
+        'Aluminum enclosure, corrosion-proof, tool-free panel removal',
+        'Digital voltage regulation ±1.0% RMS / THD < 5%',
+        'RDC2 controller manages generator & transfer switch',
+        'Weekly exercise mode with full system diagnostics',
+        'OnCue® Plus Generator Management System included',
+        'Field convertible: Natural Gas or LP / Meets 181 MPH wind rating',
+      ],
+    },
     '14KW': {
       model: '14RCA', engine: 'Kohler Command PRO CH740 V-Twin', displacement: '725 cc (44 cu in)',
       rpm: '3,600', voltage: '120/240V, Single Phase', amps_lp: '59A', amps_ng: '50A', breaker: '70A',
