@@ -37,16 +37,18 @@ function fmtDate(ts: string) {
   return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-/** File attachments tied to a single record (generator or electrical bid). */
-export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
-  linkedId: string; linkedName: string; div: 'gen' | 'elec'; emptyHint?: string;
+/** File attachments tied to a single record (generator, electrical bid, or lead). */
+export default function RecordFiles({ linkedId, linkedName, div, emptyHint, cameraFirst, title }: {
+  linkedId: string; linkedName: string; div: 'gen' | 'elec' | 'lead'; emptyHint?: string;
+  cameraFirst?: boolean; title?: string;
 }) {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [loading, setLoading] = useState(true);
-  const [category, setCategory] = useState(div === 'elec' ? 'plans' : 'other');
+  const [category, setCategory] = useState(div === 'elec' ? 'plans' : div === 'lead' ? 'photo' : 'other');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
+  const cameraInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -141,7 +143,18 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint }: {
 
   return (
     <div className="dtl-section" style={{ marginTop: 18 }}>
-      <div className="dtl-stage-label" style={{ marginBottom: 10 }}>Files · {docs.length}</div>
+      <div className="dtl-stage-label" style={{ marginBottom: 10 }}>{title || 'Files'} · {docs.length}</div>
+
+      {/* Camera-first capture (mobile): one tap to the rear camera for site-visit photos. */}
+      {cameraFirst && (
+        <>
+          <input ref={cameraInput} type="file" accept="image/*" capture="environment" onChange={onPick} style={{ display: 'none' }}/>
+          <button className="btn amber" disabled={uploading} onClick={() => cameraInput.current?.click()}
+            style={{ width: '100%', justifyContent: 'center', marginBottom: 8 }}>
+            <Icon name="plus" size={15} stroke={2.4}/>{uploading ? 'Uploading…' : 'Take Photo'}
+          </button>
+        </>
+      )}
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
         <select value={category} onChange={e => setCategory(e.target.value)}

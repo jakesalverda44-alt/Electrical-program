@@ -214,6 +214,13 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
     );
   }
 
+  // Site-visit photos/files attached to the lead follow it into the generator
+  // pipeline — re-link them to the proposal so they show under its Files.
+  await pool.query(
+    `UPDATE documents SET linked_id=$1, div='gen', linked_name=$2 WHERE linked_id=$3 AND deleted_at IS NULL`,
+    [genId, lead.name, lead.id]
+  ).catch(() => {});
+
   // Link forward + mark converted (removes it from the active leads board).
   await pool.query(
     "UPDATE leads SET linked_gen_id=$1, stage='converted', updated_at=now() WHERE id=$2",
@@ -601,6 +608,11 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
     if (updated.stage === 'lost') {
       // Terminal exit — close any open follow-ups instead of creating a new one.
       await closeLeadFollowups(lead.id);
+      // Discard the lead's site-visit photos/files (soft delete → recoverable in Trash).
+      await pool.query(
+        `UPDATE documents SET deleted_at=now() WHERE linked_id=$1 AND deleted_at IS NULL`,
+        [lead.id]
+      ).catch(() => {});
     } else {
       createStageFollowup({ id: lead.id, name: updated.name, salesperson_id: updated.salesperson_id }, updated.stage, req.user).catch(() => {});
     }
