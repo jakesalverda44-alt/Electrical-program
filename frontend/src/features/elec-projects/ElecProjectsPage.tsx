@@ -389,7 +389,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                 { label:'General Contractor', key:'gc',              val:ovDraft.gc||bid.gc },
                 { label:'Location',           key:'location',        val:ovDraft.location||bid.loc },
                 { label:'Project Manager',    key:'project_manager', val:ovDraft.project_manager||'' },
-                { label:'Contract Date',      key:'contract_date',   val:ovDraft.contract_date||'', type:'date' },
+                { label:'Contract Date (sales month)', key:'contract_date', val:ovDraft.contract_date||'', type:'date' },
                 { label:'Contract Value',     key:'_contract_val',   val:moneyFull(contractVal), readonly:true },
                 { label:'Retainage',          key:'retainage',       val:ovDraft.retainage||'', placeholder:'e.g. 10%' },
               ]} onChange={(k,v) => setOvDraft(d=>({...d,[k]:v}))}/>
@@ -419,7 +419,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
           <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
             <SCard title="Schedule" icon="clock">
               <EditGrid fields={[
-                { label:'Contract Date',      key:'contract_date',    val:schDraft.contract_date||'',    type:'date' },
+                { label:'Contract Date (sales month)', key:'contract_date', val:schDraft.contract_date||'', type:'date' },
                 { label:'Start Date',         key:'start_date',       val:schDraft.start_date||'',       type:'date' },
                 { label:'Est. Completion',    key:'est_completion',   val:schDraft.est_completion||'',   type:'date' },
                 { label:'Mobilization Date',  key:'mobilize',         val:schDraft.mobilize||'',         type:'date' },

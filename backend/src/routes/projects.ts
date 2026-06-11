@@ -211,6 +211,18 @@ router.put('/:type/:id/section/:section', requireAuth, async (req: AuthRequest, 
      ON CONFLICT (project_id, section) DO UPDATE SET data=$4, updated_at=now()`,
     [req.params.id, req.params.type, req.params.section, JSON.stringify(data)]
   );
+
+  // The Contract Date doubles as the sales date for electrical jobs: keep won_jobs.date_won
+  // in sync so the Sales Dashboard buckets the job into the contract month. No-op when the
+  // job isn't won yet (no matching won_jobs row).
+  const contractDate = (data as { contract_date?: string } | null)?.contract_date;
+  if (req.params.type === 'elec' && typeof contractDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(contractDate)) {
+    await pool.query(
+      'UPDATE won_jobs SET date_won=$1 WHERE proposal_id=$2 AND deleted_at IS NULL',
+      [contractDate, req.params.id]
+    ).catch(() => {});
+  }
+
   res.json({ ok: true });
 });
 
