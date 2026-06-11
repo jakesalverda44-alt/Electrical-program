@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { Lead } from '../../types';
@@ -9,6 +9,10 @@ import LeadDetailDrawer from './LeadDetailDrawer';
 
 interface Props {
   onNav: (view: string) => void;
+  // A lead id pulled from the URL (e.g. global search deep-link); opens that lead's drawer.
+  openLeadId?: string | null;
+  // Called once the deep-linked lead has been opened, so the id is stripped from the URL.
+  onClearParam?: () => void;
   onEditGen?: (gen: Gen) => void;
   onConverted?: (gen: Gen) => void;
 }
@@ -87,7 +91,7 @@ const PRIORITY_META: Record<number, { label: string; color: string }> = {
   3: { label: 'Follow-up', color: 'var(--blue)' },
 };
 
-export default function LeadsPage({ onNav, onEditGen, onConverted }: Props) {
+export default function LeadsPage({ onNav, openLeadId, onClearParam, onEditGen, onConverted }: Props) {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [actions, setActions] = useState<LeadAction[]>([]);
   const [loading, setLoading] = useState(true);
@@ -113,6 +117,26 @@ export default function LeadsPage({ onNav, onEditGen, onConverted }: Props) {
   }, [loadActions]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Deep-link from global search / notifications: open the targeted lead's drawer.
+  // Leads not on the board (e.g. a converted one) are fetched directly by id.
+  const openedParam = useRef<string | null>(null);
+  useEffect(() => {
+    if (!openLeadId) { openedParam.current = null; return; }
+    if (openedParam.current === openLeadId) return;
+    const existing = leads.find(l => l.id === openLeadId);
+    if (existing) {
+      openedParam.current = openLeadId;
+      setDetail(existing);
+      onClearParam?.();
+    } else if (!loading) {
+      openedParam.current = openLeadId;
+      api.get<Lead>(`/leads/${openLeadId}`)
+        .then(({ data }) => setDetail(data))
+        .catch(() => {})
+        .finally(() => onClearParam?.());
+    }
+  }, [openLeadId, leads, loading, onClearParam]);
 
   const openActionLead = (a: LeadAction) => {
     const lead = leads.find(l => l.id === a.id);

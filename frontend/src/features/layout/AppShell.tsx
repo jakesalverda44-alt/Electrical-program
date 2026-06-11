@@ -15,7 +15,7 @@ interface NavGroup { group: string; items: NavItem[]; }
 
 interface Props {
   view: View;
-  onNav: (v: string) => void;
+  onNav: (v: string, recordId?: string) => void;
   onLogout: () => void;
   children: React.ReactNode;
   topbarExtra?: React.ReactNode;
