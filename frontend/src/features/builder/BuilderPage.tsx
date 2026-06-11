@@ -8,6 +8,7 @@ import api from '../../api/client';
 import { Gen, WonJob } from '../../types';
 import { useSettings, useShowToast } from '../../contexts/AppContext';
 import { parseAddress } from '../../lib/address';
+import { flTaxRate } from '../../lib/flSalesTax';
 
 function fmt(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 
@@ -78,6 +79,12 @@ function genToForm(g: Gen): GenForm {
         merged.zip = p.zip;
       }
     }
+    // Auto-fill the FL sales-tax rate from the address unless a custom rate was saved
+    // (anything other than the bare 7% default is treated as a deliberate override).
+    if (merged.state === 'FL' && Number(merged.taxRate) === 7) {
+      const r = flTaxRate({ city: merged.city, zip: merged.zip });
+      if (r != null) merged.taxRate = r;
+    }
     return merged;
   }
   const [city, state] = (g.loc || '').split(',').map(s => s.trim());
@@ -120,6 +127,14 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
     if (key === 'brand' || key === 'coolingType' || key === 'size') {
       const lcAmps = loadCenterFor(next);
       if (lcAmps) next.ats = lcAmps;
+    }
+    // Editing the address re-derives the FL sales-tax rate (rep can still override the
+    // Tax Rate field afterward — that's a 'taxRate' change, which isn't re-derived here).
+    if (key === 'city' || key === 'state' || key === 'zip') {
+      if (next.state === 'FL') {
+        const r = flTaxRate({ city: next.city, zip: next.zip });
+        if (r != null) next.taxRate = r;
+      }
     }
     return next;
   });
