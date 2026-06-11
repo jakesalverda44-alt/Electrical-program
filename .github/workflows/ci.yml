@@ -84,3 +84,23 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  # Triggers a Render deploy after CI passes on main, instead of relying on Render's
+  # GitHub auto-deploy. Inert until the RENDER_DEPLOY_HOOK repo secret is set (get the
+  # URL from Render → your service → Settings → Deploy Hook).
+  deploy:
+    name: Deploy to Render
+    needs: [backend, frontend]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "RENDER_DEPLOY_HOOK secret not set — skipping deploy."
+            echo "Add it in repo Settings → Secrets and variables → Actions."
+            exit 0
+          fi
+          curl -fsS -X POST "$HOOK" && echo "Render deploy triggered."
