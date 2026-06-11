@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import SignatureCanvas from 'react-signature-canvas';
 import { GenForm } from '../features/builder/genData';
-import { GenTotals, genPriceRows } from '../features/builder/genCalc';
+import { GenTotals, genPriceRows, calcGenTotals } from '../features/builder/genCalc';
 import ProposalPreview from '../features/builder/ProposalPreview';
 
 interface GenData {
@@ -122,7 +122,10 @@ export default function ProposalPublicPage() {
 
   const fmt = (n: number) => '$' + Math.round(n).toLocaleString('en-US');
   const form = parseSnapshot<GenForm>(gen?.form_data);
-  const totals = parseSnapshot<GenTotals>(gen?.totals_data);
+  // Older/legacy proposals may lack a stored totals snapshot — recompute from the form
+  // so the full multi-page document still renders for the customer.
+  const totals = parseSnapshot<GenTotals>(gen?.totals_data)
+    ?? (form ? calcGenTotals(form as GenForm) : null);
   const address = form ? [form.address, form.city, form.state, form.zip].filter(Boolean).join(', ') : '';
   const priceRows = form && totals ? genPriceRows(form as GenForm, totals as GenTotals, fmt) : [];
 
