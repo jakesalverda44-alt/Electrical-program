@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import { pool } from '../db/pool';
-import { requireAuth, requireAuthOrApiKey, AuthRequest, ownScopeId } from '../middleware/auth';
+import { requireAuth, requireAuthOrApiKey, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { validateBody, inputErrorMessage } from '../utils/validate';
 import { logger } from '../utils/logger';
@@ -12,6 +12,7 @@ import { getStageConfig } from '../utils/leadStageConfig';
 import { pushSiteVisitToCalendar } from '../integrations/outlookCalendar';
 import { sendPushToUsers } from '../integrations/webPush';
 import { ownerAdminIds } from '../notifications/prefs';
+import { sendDueLeadNudges } from '../integrations/leadNudge';
 
 const router = Router();
 
@@ -505,6 +506,16 @@ router.post('/', leadWriteLimiter, requireAuthOrApiKey, validateBody(leadCreateS
   handleLeadFirstContact(lead.id).catch(() => {});
 
   res.status(inserted ? 201 : 200).json(lead);
+}));
+
+// POST /api/leads/send-nudges
+// Admin-only manual trigger that runs the day-2 nudge sweep right now, ignoring the
+// 8am–noon morning-window timing. Eligibility is identical to the automatic job:
+// still-quiet, not-yet-nudged Kohler email leads only, and it never double-sends
+// (nudge_sent_at is claimed atomically). Returns how many emails went out.
+router.post('/send-nudges', requireAdmin, asyncHandler(async (_req: AuthRequest, res) => {
+  const sent = await sendDueLeadNudges();
+  res.json({ sent });
 }));
 
 // GET /api/leads/:id  (includes activity log)

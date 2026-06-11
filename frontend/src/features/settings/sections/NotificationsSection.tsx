@@ -52,6 +52,46 @@ function DevicePushCard() {
   );
 }
 
+/**
+ * Admin-only manual trigger for the day-2 lead follow-up email. Runs the same sweep as
+ * the automatic morning job (still-quiet, un-nudged email leads only; never double-sends)
+ * but on demand, so a backlog can be cleared without waiting for the schedule.
+ */
+function LeadNudgeCard() {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  const send = async () => {
+    if (!window.confirm(
+      'Send the 2nd (day-2) follow-up email now?\n\nThis goes only to email leads that have NOT replied, have NOT been contacted, and have NOT already been nudged. It never sends twice to the same lead.'
+    )) return;
+    setBusy(true); setMsg('');
+    try {
+      const { data } = await api.post('/leads/send-nudges');
+      const n = data?.sent ?? 0;
+      setMsg(n > 0 ? `Sent the 2nd email to ${n} lead${n === 1 ? '' : 's'}.` : 'No eligible leads right now — everyone has already replied, been contacted, or been nudged.');
+    } catch (e: unknown) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      setMsg(status === 403 ? 'Only owners/administrators can do this.' : 'Could not send. Check email is configured under Integrations.');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 2 }}>Send the 2nd Lead Email Now</div>
+          <div style={{ fontSize: 12, color: 'var(--text3)' }}>Manually run the day-2 follow-up to all still-quiet email leads that haven't been nudged. Skips anyone who replied or was already contacted, and never double-sends.</div>
+        </div>
+        <button className="btn" onClick={send} disabled={busy} style={{ whiteSpace: 'nowrap', height: 38, padding: '0 16px' }}>
+          {busy ? 'Sending…' : 'Send now'}
+        </button>
+      </div>
+      {msg && <div style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 4 }}>{msg}</div>}
+    </div>
+  );
+}
+
 const NOTIF_EVENTS = [
   { key: 'proposal_sent',     label: 'Proposal Sent',     desc: 'When you send a generator proposal to a customer.' },
   { key: 'proposal_viewed',   label: 'Proposal Viewed',   desc: 'When a customer opens their proposal link.' },
@@ -158,6 +198,8 @@ export function NotificationsSection({ settings, onSaved }: { settings: AppSetti
       <SectionTitle title="Notifications" sub="Choose which events and reminders are sent, and how."/>
 
       <DevicePushCard/>
+
+      <LeadNudgeCard/>
 
       {/* New bid email team */}
       <div style={{ marginBottom: 28 }}>
