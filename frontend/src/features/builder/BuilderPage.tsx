@@ -7,6 +7,7 @@ import SendProposalModal from './SendProposalModal';
 import api from '../../api/client';
 import { Gen, WonJob } from '../../types';
 import { useSettings, useShowToast } from '../../contexts/AppContext';
+import { parseAddress } from '../../lib/address';
 
 function fmt(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 
@@ -65,7 +66,19 @@ function genToForm(g: Gen): GenForm {
     saved = null;
   }
   if (saved && typeof saved === 'object') {
-    return { ...blank, ...saved };
+    const merged = { ...blank, ...saved };
+    // A lead's combined address lands entirely in the address field (city/zip empty).
+    // Split it so the builder fields are uniform; saving then persists the structured form.
+    if (!merged.city && typeof merged.address === 'string' && merged.address.includes(',')) {
+      const p = parseAddress(merged.address);
+      if (p.city || p.state || p.zip) {
+        merged.address = p.street || merged.address;
+        merged.city = p.city;
+        if (p.state) merged.state = p.state;
+        merged.zip = p.zip;
+      }
+    }
+    return merged;
   }
   const [city, state] = (g.loc || '').split(',').map(s => s.trim());
   return {
