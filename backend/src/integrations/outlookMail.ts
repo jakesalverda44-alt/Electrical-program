@@ -238,12 +238,28 @@ export async function downloadAttachments(messageId: string): Promise<GraphAttac
  * reviewer reviews and sends it manually. Non-blocking: logs and swallows errors. The message
  * id is URL-encoded (immutable Graph ids contain '/', '+' and '=').
  */
+export interface MarkReadResult {
+  ok: boolean;
+  /** Graph HTTP status when the PATCH was rejected, for diagnostics. */
+  status?: number;
+  /** Human-readable reason the caller can surface to the user. */
+  reason?: string;
+}
+
+/** Map a Graph PATCH failure to a short, actionable reason. */
+function markReadReason(status: number): string {
+  if (status === 403) return 'The mailbox app is missing the Mail.ReadWrite permission (needs admin consent in Azure).';
+  if (status === 404) return 'That email was not found in the mailbox (it may have been moved or deleted).';
+  if (status === 401) return 'Outlook authorization failed — the Graph app credentials need attention.';
+  return `Outlook rejected the request (HTTP ${status}).`;
+}
+
 /**
  * Mark an Inbox message as read in Outlook (PATCH isRead=true). Uses the same
- * Mail.ReadWrite app permission as the draft-reply feature. Returns true on
- * success so callers can surface a failure to the user.
+ * Mail.ReadWrite app permission as the draft-reply feature. Returns a result with
+ * the Graph status so the caller can surface exactly why it failed.
  */
-export async function markMessageRead(messageId: string): Promise<boolean> {
+export async function markMessageRead(messageId: string): Promise<MarkReadResult> {
   try {
     const token = await getGraphToken();
     const resp = await fetch(
@@ -256,13 +272,14 @@ export async function markMessageRead(messageId: string): Promise<boolean> {
     );
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
-      throw new Error(`Graph PATCH isRead failed: HTTP ${resp.status} ${text}`);
+      logger.error({ messageId, status: resp.status, text }, '[outlook-mail] markMessageRead rejected');
+      return { ok: false, status: resp.status, reason: markReadReason(resp.status) };
     }
     logger.info({ messageId }, '[outlook-mail] message marked read');
-    return true;
+    return { ok: true };
   } catch (err) {
     logger.error({ err, messageId }, '[outlook-mail] markMessageRead failed');
-    return false;
+    return { ok: false, reason: 'Could not reach Outlook. Check the network/Graph connection.' };
   }
 }
 

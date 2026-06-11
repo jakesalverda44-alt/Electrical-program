@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../api/client';
-import { useUser } from '../../contexts/AppContext';
+import { useUser, useShowToast } from '../../contexts/AppContext';
 import { BriefPayload, BriefAttentionItem, TodayEvent } from '../../types';
 import BriefDrawer from './BriefDrawer';
 import './command-center.css';
@@ -86,6 +86,7 @@ interface Props { onNav: (v: string) => void; }
 
 export default function CommandCenterPage({ onNav }: Props) {
   const user = useUser();
+  const showToast = useShowToast();
   const [brief, setBrief] = useState<BriefPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(new Date());
@@ -123,7 +124,13 @@ export default function CommandCenterPage({ onNav }: Props) {
       const graphId = item.id.slice('email:'.length);
       api.post(`/brief/email/${encodeURIComponent(graphId)}/read`)
         .then(() => load())
-        .catch(() => {});
+        .catch((err) => {
+          // The read never reached Outlook — revert the check and say so, instead
+          // of silently leaving it "done" here while the email stays unread there.
+          toggleDone(item.id);
+          const sub = err?.response?.data?.error || 'Check your Outlook connection and try again.';
+          showToast({ title: "Couldn't mark read in Outlook", sub });
+        });
     }
   };
 
