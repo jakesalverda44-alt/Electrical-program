@@ -566,6 +566,9 @@ button{font-family:inherit}
   /* Drawers — slide up from bottom */
   .drawer { width: 100% !important; right: 0 !important; border-radius: 18px 18px 0 0 !important; max-height: 85vh !important; }
   .drawer-overlay { align-items: flex-end !important; }
+  /* The fixed bottom nav (z-index 200) overlays the bottom of the drawer; pad the
+     scroll area so the last section clears it instead of being hidden behind it. */
+  .drawer-body { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 20px) !important; }
 
   /* Builder */
   .builder-layout { grid-template-columns: 1fr !important; padding: 12px !important; }
