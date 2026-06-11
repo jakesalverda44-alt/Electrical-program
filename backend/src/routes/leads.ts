@@ -13,6 +13,7 @@ import { pushSiteVisitToCalendar } from '../integrations/outlookCalendar';
 import { sendPushToUsers } from '../integrations/webPush';
 import { ownerAdminIds } from '../notifications/prefs';
 import { sendDueLeadNudges } from '../integrations/leadNudge';
+import { leadAddressToProposal } from '../utils/address';
 
 const router = Router();
 
@@ -176,10 +177,14 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
   let genId = lead.linked_gen_id;
 
   if (!genId) {
+    const addr = leadAddressToProposal(lead.address);
     const formData = {
       customer: lead.name,
       attn:     lead.name,
-      address:  lead.address ?? '',
+      address:  addr.address,
+      city:     addr.city,
+      state:    addr.state,
+      zip:      addr.zip,
       phone:    lead.phone ?? '',
       email:    lead.email ?? '',
       notes:    lead.notes ?? '',
@@ -191,7 +196,7 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
           site_visit_at, site_visit_needs_time)
        VALUES ($1, $2, $3, $4, 'building', $5::jsonb, $6, $7, $8)
        RETURNING id`,
-      [lead.name, (lead.address && lead.address.trim()) || '—',
+      [lead.name, addr.loc,
        lead.salesperson_id, lead.salesperson_name, JSON.stringify(formData), lead.id,
        lead.site_visit_at || null, !!lead.site_visit_needs_time]
     );
@@ -685,8 +690,10 @@ router.post('/:id/create-gen', requireAuth, asyncHandler(async (req: AuthRequest
 
   // Create the proposal carrying contact details, link both directions, and copy the
   // lead's activity timeline onto the proposal (does not convert/close the lead).
+  const addr = leadAddressToProposal(lead.address);
   const formData = {
-    customer: lead.name, attn: lead.name, address: lead.address ?? '',
+    customer: lead.name, attn: lead.name, address: addr.address,
+    city: addr.city, state: addr.state, zip: addr.zip,
     phone: lead.phone ?? '', email: lead.email ?? '', notes: lead.notes ?? '',
     lead_source: lead.source,
   };
@@ -695,7 +702,7 @@ router.post('/:id/create-gen', requireAuth, asyncHandler(async (req: AuthRequest
        (customer, loc, salesperson_id, salesperson_name, stage, form_data, lead_id)
      VALUES ($1,$2,$3,$4,'building',$5::jsonb,$6)
      RETURNING *`,
-    [lead.name, (lead.address && lead.address.trim()) || '—',
+    [lead.name, addr.loc,
      lead.salesperson_id, lead.salesperson_name, JSON.stringify(formData), lead.id]
   );
   const gen = genRows[0];
