@@ -219,6 +219,17 @@ export interface TodayEvent {
   isAllDay: boolean;
 }
 
+export interface BriefWeather {
+  tempF: number;
+  hiF: number;
+  loF: number;
+  rainPct: number;
+  code: number;
+  label: string;
+  emoji: string;
+  city: string;
+}
+
 export interface BriefPayload {
   generatedAt: string;
   graphEnabled: boolean;
@@ -235,6 +246,7 @@ export interface BriefPayload {
   };
   intake: { unread: number; newToday: number; newYesterday: number };
   todayEvents: TodayEvent[];
+  weather: BriefWeather | null;
   daySummary: string;
   briefBullets: string[];
 }

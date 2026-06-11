@@ -10,11 +10,24 @@
   border: 1px solid var(--border2); border-radius: 22px;
   background: linear-gradient(160deg, #131F35, #0D1626 65%);
   padding: 30px 32px 26px;
+  transition: background .8s ease;
 }
-.cc2-hero .blob { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .5; pointer-events: none; }
+.cc2-hero .blob { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .5; pointer-events: none; transition: background .8s ease; }
 .cc2-hero .b1 { width: 360px; height: 360px; left: -90px; top: -160px; background: #2D5FBF; animation: cc2-drift 16s ease-in-out infinite alternate; }
 .cc2-hero .b2 { width: 300px; height: 300px; right: -60px; top: -140px; background: #8a6420; animation: cc2-drift 19s ease-in-out infinite alternate-reverse; }
 .cc2-hero .b3 { width: 260px; height: 260px; right: 28%; bottom: -180px; background: #15584a; animation: cc2-drift 22s ease-in-out infinite alternate; }
+
+/* Time-of-day palettes. Afternoon = the default above. */
+.cc2-hero[data-period="morning"] { background: linear-gradient(160deg, #15294A, #0E1B30 65%); }
+.cc2-hero[data-period="morning"] .b1 { background: #3D7AD9; }
+.cc2-hero[data-period="morning"] .b2 { background: #9a7a2e; }
+.cc2-hero[data-period="morning"] .b3 { background: #1d7a6a; }
+.cc2-hero[data-period="morning"] .cc2-greet em { background-image: linear-gradient(92deg, #3ecfb0, var(--blue) 60%, #9cc0ff); }
+.cc2-hero[data-period="evening"] { background: linear-gradient(160deg, #1A1535, #0D0B1E 65%); }
+.cc2-hero[data-period="evening"] .b1 { background: #5246c9; }
+.cc2-hero[data-period="evening"] .b2 { background: #a85e1e; }
+.cc2-hero[data-period="evening"] .b3 { background: #6e2a8c; }
+.cc2-hero[data-period="evening"] .cc2-greet em { background-image: linear-gradient(92deg, #8f7ff0, #c2a0ff 55%, var(--amber)); }
 @keyframes cc2-drift {
   from { transform: translate(0, 0) scale(1); }
   to   { transform: translate(46px, 28px) scale(1.18); }
@@ -27,6 +40,10 @@
   font-family: var(--mono); font-size: 22px; font-weight: 600; color: var(--text);
 }
 .cc2-clock span { display: block; font-family: var(--font); font-size: 11px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: .12em; margin-top: 3px; }
+.cc2-clock .cc2-wx {
+  display: block; font-family: var(--font); font-size: 11.5px; font-weight: 600;
+  color: var(--text2); text-transform: none; letter-spacing: 0; margin-top: 6px; white-space: nowrap;
+}
 
 .cc2-greet { font-size: clamp(26px, 3.4vw, 40px); font-weight: 800; letter-spacing: -1.2px; line-height: 1.05; padding-right: 170px; }
 .cc2-greet em {
@@ -64,6 +81,16 @@
   border-radius: 16px; padding: 13px 18px; cursor: pointer;
   border: 1px solid var(--border2); background: var(--surface);
   transition: transform .15s, border-color .15s, box-shadow .15s;
+}
+
+/* Staggered entry for action chips + reply rows (runs once on mount). */
+.cc2-flow.boxes .cc2-chip, .cc2-reply { animation: viewIn .3s cubic-bezier(.2,.7,.3,1) both; }
+.cc2-flow.boxes .cc2-chip:nth-child(2), .cc2-reply:nth-child(2) { animation-delay: .05s; }
+.cc2-flow.boxes .cc2-chip:nth-child(3), .cc2-reply:nth-child(3) { animation-delay: .1s; }
+.cc2-flow.boxes .cc2-chip:nth-child(4), .cc2-reply:nth-child(4) { animation-delay: .15s; }
+.cc2-flow.boxes .cc2-chip:nth-child(n+5), .cc2-reply:nth-child(n+5) { animation-delay: .2s; }
+@media (prefers-reduced-motion: reduce) {
+  .cc2-flow.boxes .cc2-chip, .cc2-reply { animation: none; }
 }
 .cc2-chip:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
 .cc2-chip.blue:hover { border-color: var(--blue); }
@@ -211,6 +238,8 @@
   .cc2-hero { padding: 18px 16px 16px; border-radius: 18px; }
   .cc2-clock { position: static; text-align: left; font-size: 16px; margin-bottom: 6px; }
   .cc2-clock span { display: inline; margin-left: 8px; letter-spacing: .08em; }
+  /* Weather gets its own compact line under the inline clock */
+  .cc2-clock .cc2-wx { display: block; margin: 3px 0 0; font-size: 11px; white-space: normal; }
   .cc2-greet { font-size: 24px; letter-spacing: -.6px; padding-right: 0; }
   .cc2-sub { font-size: 13px; margin-top: 8px; }
   .cc2-stats { gap: 6px; margin-top: 12px; }

@@ -33,9 +33,21 @@ interface Props {
   showToast?: (t: { title: string; sub?: string }) => void;
 }
 
+/**
+ * Command Center subtitle, computed at render time so the period and date are never
+ * stale in a long-lived tab. Period boundaries (12/17) match the backend's
+ * composeDaySummary so the header agrees with the hero's day summary.
+ */
+function briefSub(): string {
+  const now = new Date();
+  const h = now.getHours();
+  const period = h < 12 ? 'Morning' : h < 17 ? 'Midday' : 'Evening';
+  return `${period} brief · ${now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
+}
+
 const TB: Record<string, { title: string; sub: string | null }> = {
-  dashboard:        { title: 'Command Center',       sub: `Morning brief · ${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}` },
-  'sales-dashboard':{ title: 'Sales Dashboard',      sub: `${new Date().toLocaleString('en-US',{month:'long',year:'numeric'})} · Accurate Power & Technology` },
+  dashboard:        { title: 'Command Center',       sub: null },
+  'sales-dashboard':{ title: 'Sales Dashboard',      sub: null },
   pipeline:        { title: 'Pipeline',              sub: 'Generator & Electrical proposals' },
   'gen-proposals': { title: 'Generator Proposals',  sub: 'Kohler & Generac · In-house proposal builder' },
   'elec-proposals':{ title: 'Electrical Proposals', sub: 'Electrical subcontracting · Bid tracking pipeline' },
@@ -113,7 +125,13 @@ export default function AppShell({
   const [moreOpen, setMoreOpen] = useState(false);
   const canAdmin = isPrivileged(user);
 
-  const tb = TB[view] || TB['dashboard'];
+  const tbBase = TB[view] || TB['dashboard'];
+  // Dynamic subtitles, evaluated per render so they never go stale in an open tab.
+  const tb = view === 'sales-dashboard'
+    ? { ...tbBase, sub: `${new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })} · Accurate Power & Technology` }
+    : tbBase.sub === null && tbBase.title === 'Command Center'
+      ? { ...tbBase, sub: briefSub() }
+      : tbBase;
   const initials = user.name.split(' ').map(w => w[0]).join('').slice(0, 2);
 
   const mobileBottomNav = [

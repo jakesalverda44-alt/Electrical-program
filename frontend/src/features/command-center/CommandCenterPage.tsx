@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../../api/client';
 import { useUser, useShowToast } from '../../contexts/AppContext';
 import { BriefPayload, BriefAttentionItem, TodayEvent } from '../../types';
@@ -28,6 +28,32 @@ function quoteOfTheDay(): [string, string] {
 }
 
 function greetWord(h: number) { return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
+
+/** Animate a number from its previous value to `target` (0 on first mount). */
+function useCountUp(target: number, ms = 500): number {
+  const [val, setVal] = useState(0);
+  const fromRef = useRef(0);
+  useEffect(() => {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      fromRef.current = target; setVal(target); return;
+    }
+    const from = fromRef.current;
+    const start = performance.now();
+    let raf = 0;
+    const tick = (t: number) => {
+      const p = Math.min(1, (t - start) / ms);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setVal(Math.round(from + (target - from) * eased));
+      if (p < 1) raf = requestAnimationFrame(tick);
+      else fromRef.current = target;
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return val;
+}
+
+function CountUp({ n }: { n: number }) { return <>{useCountUp(n)}</>; }
 
 function timeAgo(iso: string | null): string {
   if (!iso) return '';
@@ -218,12 +244,19 @@ export default function CommandCenterPage({ onNav }: Props) {
     <div className="cc2-root scroll view-enter">
 
       {/* ── Hero ── */}
-      <div className="cc2-hero">
+      <div className="cc2-hero" data-period={now.getHours() < 12 ? 'morning' : now.getHours() < 17 ? 'afternoon' : 'evening'}>
         <div className="blob b1" /><div className="blob b2" /><div className="blob b3" />
         <div className="cc2-hero-in">
           <div className="cc2-clock">
             {now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
             <span>{now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</span>
+            {brief.weather && (
+              <span className="cc2-wx" title={brief.weather.city}>
+                {Math.round(brief.weather.tempF)}° {brief.weather.emoji} {brief.weather.label}
+                {' · H '}{Math.round(brief.weather.hiF)}°
+                {brief.weather.rainPct > 0 && <>{' · Rain '}{Math.round(brief.weather.rainPct)}%</>}
+              </span>
+            )}
           </div>
           <div className="cc2-greet">{greetWord(now.getHours())}, <em>{firstName}</em>.</div>
           <div className="cc2-sub">
@@ -256,7 +289,7 @@ export default function CommandCenterPage({ onNav }: Props) {
             <div className="cc2-flow boxes">
               {boxes.map(b => (
                 <div className={'cc2-chip ' + b.cls} key={b.key} onClick={() => onNav(b.nav)}>
-                  <div className="n">{b.n}</div>
+                  <div className="n"><CountUp n={b.n}/></div>
                   <div className="tx">
                     <b>{b.ic} {b.label}</b>
                     <span>{b.sub}</span>

@@ -8,6 +8,7 @@ import {
   GraphMailMessage,
 } from '../integrations/outlookMail';
 import { fetchTodayEvents, TodayEvent } from '../integrations/outlookCalendar';
+import { getWeather, BriefWeather } from './weather';
 
 // ── Shared response contract (mirrored in frontend/src/types/index.ts) ──────────────────
 
@@ -40,6 +41,8 @@ export interface BriefPayload {
   };
   intake: { unread: number; newToday: number; newYesterday: number };
   todayEvents: TodayEvent[];
+  /** Current weather at the company location, or null when unavailable. */
+  weather: BriefWeather | null;
   /** Time-of-day narrative: morning = yesterday's recap, midday = today so far, evening = today's recap. */
   daySummary: string;
   briefBullets: string[];
@@ -193,6 +196,9 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
   const scope = ownScopeId(user);
   const useGraph = graphConfigured() && isPrivileged(user);
   const monthStart = monthStartIso();
+
+  // Weather rides along with the brief; it has its own 15-min cache and never throws.
+  const weatherP = getWeather().catch(() => null);
 
   // CRM SQL (always fresh; scoped per-rep). Run in parallel.
   const scopeAnd = scope ? ' AND salesperson_id = $1' : '';
@@ -451,6 +457,7 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
       newYesterday: intakeCounts.rows[0].yesterday,
     },
     todayEvents: events,
+    weather: await weatherP,
     daySummary: composeDaySummary(
       parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', hourCycle: 'h23' }).format(new Date()), 10),
       {
