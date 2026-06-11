@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
-import { GenForm } from './genData';
+import { GenForm, GEN_SIZE_LABELS } from './genData';
 import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo } from './genCalc';
 import ProposalPreview from './ProposalPreview';
 import SendProposalModal from './SendProposalModal';
@@ -200,7 +200,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
             </Field>
             <Field label="Size">
               <select style={SELECT_STYLE} value={form.size} onChange={e => set('size', e.target.value)}>
-                {sizes.map(s => <option key={s} value={s}>{s}</option>)}
+                {sizes.map(s => <option key={s} value={s}>{GEN_SIZE_LABELS[s] ?? s}</option>)}
               </select>
             </Field>
             <Field label="ATS Size">
@@ -211,12 +211,15 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
             <Field label="Job Type">              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
                 {(['new-install', 'swap-out'] as const).map(jt => (
                   <button key={jt} onClick={() => {
-                    set('jobType', jt);
-                    if (jt === 'swap-out') {
-                      setForm(f => ({ ...f, jobType: 'swap-out', pad: false, labor: 1500, permit: 475 }));
-                    } else {
-                      setForm(f => ({ ...f, jobType: 'new-install', gasLine: false, labor: s.gen_default_labor ? Number(s.gen_default_labor) : 3000, permit: s.gen_default_permit ? Number(s.gen_default_permit) : 1250 }));
-                    }
+                    setForm(f => {
+                      const next: GenForm = jt === 'swap-out'
+                        ? { ...f, jobType: 'swap-out', pad: false, labor: 1500, permit: 475 }
+                        : { ...f, jobType: 'new-install', gasLine: false, labor: s.gen_default_labor ? Number(s.gen_default_labor) : 3000, permit: s.gen_default_permit ? Number(s.gen_default_permit) : 1250 };
+                      // New-install-only sizes (e.g. the 12KW load-center unit) drop off on swap-out.
+                      const sizes = getGenSizes(next);
+                      if (!sizes.includes(next.size)) next.size = sizes[0] ?? '';
+                      return next;
+                    });
                   }}
                     style={{ padding: '9px 0', fontSize: 12, fontWeight: 700, border: 'none', cursor: 'pointer',
                       background: form.jobType === jt ? 'var(--accent)' : 'var(--surface)',

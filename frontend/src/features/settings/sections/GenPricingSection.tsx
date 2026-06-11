@@ -12,7 +12,7 @@ interface PricingTable {
 
 const DEFAULT_PRICING: PricingTable = {
   'air-cooled': {
-    Kohler:  { '14KW': 5800, '20KW': 6700, '26KW': 8200 },
+    Kohler:  { '12KW': 4900, '14KW': 5800, '20KW': 6700, '26KW': 8200 },
     Generac: { '14KW': 5600, '18KW': 6450, '22KW': 7150, '24KW': 7575, '26KW': 8000, '28KW': 9300 },
   },
   'liquid-cooled': {
