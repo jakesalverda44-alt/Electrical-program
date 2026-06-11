@@ -162,7 +162,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
               </div>
               {bid.stage === 'awarded' && (
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>Award Date (for sales reporting)</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>Contract Date (sales month)</div>
                   <input style={INPUT} type="date" value={form.date_won} onChange={setField('date_won')}/>
                 </div>
               )}

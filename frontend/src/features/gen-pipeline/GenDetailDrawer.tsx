@@ -205,7 +205,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
               </div>
               {gen.stage === 'awarded' && (
                 <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Award Date (for sales reporting)</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Contract Date (sales month)</div>
                   <input type="date" value={draft.date_won} onChange={set('date_won')}
                     style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 7,
                       padding: '7px 10px', fontSize: 13, color: 'var(--text)', outline: 'none', boxSizing: 'border-box' }}
