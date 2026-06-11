@@ -338,8 +338,8 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             </div>
           )}
 
-          <RecordFiles linkedId={gen.id} linkedName={gen.customer} div="gen"
-            emptyHint="No files yet. Attach the proposal, PO, permit, signed contract, delivery/startup docs, or photos."/>
+          <RecordFiles linkedId={gen.id} linkedName={gen.customer} div="gen" cameraFirst title="Photos & Files"
+            emptyHint="No files yet. Snap site-visit photos, or attach the proposal, PO, permit, signed contract, or delivery/startup docs."/>
         </div>
       </div>
 
