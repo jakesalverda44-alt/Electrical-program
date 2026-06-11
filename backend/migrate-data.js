@@ -1,13 +1,6 @@
 ﻿const { Pool } = require('pg');
 const source = new Pool({ connectionString: process.env.SOURCE_DB, ssl: { rejectUnauthorized: false } });
-const target = new Pool({
-  host: 'aws-0-us-east-1.pooler.supabase.com',
-  port: 5432,
-  database: 'postgres',
-  user: 'postgres.blvhvxlkhfutshmlhwqg',
-  password: process.env.SUPABASE_PASS,
-  ssl: { rejectUnauthorized: false }
-});
+const target = new Pool({ connectionString: process.env.TARGET_DB, ssl: { rejectUnauthorized: false } });
 const tables = ['users','customers','leads','bids','bid_estimates','generator_proposals','projects','project_sections','project_field_notes','project_change_orders','project_rfis','organizations','communications','documents','notifications','activity','lead_activity','intake_items','app_settings','audit_log','push_subscriptions','takeoff_results','proposal_activity'];
 async function migrate() {
   for (const table of tables) {
