@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import SignatureCanvas from 'react-signature-canvas';
 import { GenForm } from '../features/builder/genData';
-import { GenTotals, genPriceRows, calcGenTotals } from '../features/builder/genCalc';
+import { GenTotals, calcGenTotals } from '../features/builder/genCalc';
 import ProposalPreview from '../features/builder/ProposalPreview';
 
 interface GenData {
@@ -120,14 +120,11 @@ export default function ProposalPublicPage() {
   if (status === 'loading') return <CenteredMsg>Loading your proposal…</CenteredMsg>;
   if (status === 'error')   return <CenteredMsg>Proposal not found or the link has expired. Please contact us.</CenteredMsg>;
 
-  const fmt = (n: number) => '$' + Math.round(n).toLocaleString('en-US');
   const form = parseSnapshot<GenForm>(gen?.form_data);
   // Older/legacy proposals may lack a stored totals snapshot — recompute from the form
   // so the full multi-page document still renders for the customer.
   const totals = parseSnapshot<GenTotals>(gen?.totals_data)
     ?? (form ? calcGenTotals(form as GenForm) : null);
-  const address = form ? [form.address, form.city, form.state, form.zip].filter(Boolean).join(', ') : '';
-  const priceRows = form && totals ? genPriceRows(form as GenForm, totals as GenTotals, fmt) : [];
 
   return (
     <div style={{ minHeight: '100vh', background: '#f4f6f9', fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif' }}>
@@ -142,66 +139,9 @@ export default function ProposalPublicPage() {
       </div>
 
       <div style={{ maxWidth: 760, margin: '0 auto', padding: '32px 16px 60px' }}>
-        {/* Proposal card */}
-        <div style={{ background: '#fff', borderRadius: 12, boxShadow: '0 2px 12px rgba(0,0,0,.08)', overflow: 'hidden', marginBottom: 28 }}>
-          <div style={{ background: '#1B3A6B', padding: '20px 28px' }}>
-            <div style={{ fontSize: 13, color: '#C9A84C', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Generator Proposal</div>
-            <div style={{ fontSize: 22, fontWeight: 900, color: '#fff' }}>{gen?.customer}</div>
-            {gen?.proposal_no && <div style={{ fontSize: 12, color: '#C9A84C', marginTop: 4 }}>Proposal {gen.proposal_no}</div>}
-          </div>
-          <div style={{ padding: '24px 28px' }}>
-            {form && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 24, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 9, padding: 14 }}>
-                <InfoBlock label="Attention" value={form.attn || gen?.customer || '—'}/>
-                <InfoBlock label="Phone" value={form.phone || '—'}/>
-                <InfoBlock label="Email" value={form.email || '—'}/>
-                <InfoBlock label="Address" value={address || '—'}/>
-              </div>
-            )}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20, marginBottom: 24 }}>
-              <InfoBlock label="Generator" value={`${gen?.mfr} ${gen?.kw}kW`}/>
-              <InfoBlock label="Model" value={gen?.model || '—'}/>
-              <InfoBlock label="Total" value={fmt(gen?.amount || 0)} accent/>
-            </div>
-            {priceRows.length > 0 && (
-              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 16, marginBottom: 20 }}>
-                {priceRows.map(r => (
-                  <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: '#475569', marginBottom: 7 }}>
-                    <span>{r.label}</span>
-                    <strong>{r.amount}</strong>
-                  </div>
-                ))}
-                {!!Number(totals?.discountAmt || 0) && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: '#b91c1c', marginBottom: 7 }}>
-                    <span>Discount</span>
-                    <strong>-{fmt(Number(totals?.discountAmt))}</strong>
-                  </div>
-                )}
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: '#475569', marginBottom: 7 }}>
-                  <span>Tax</span>
-                  <strong>{fmt(Number(totals?.tax || gen?.tax || 0))}</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18, color: '#1B3A6B', borderTop: '2px solid #1B3A6B', paddingTop: 10, marginTop: 10 }}>
-                  <strong>Total</strong>
-                  <strong>{fmt(Number(totals?.total || gen?.amount || 0))}</strong>
-                </div>
-              </div>
-            )}
-            <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.7, borderTop: '1px solid #e2e8f0', paddingTop: 20 }}>
-              <p style={{ margin: '0 0 12px' }}>
-                Accurate Power &amp; Technology, Inc. proposes to furnish all labor and material necessary to complete
-                this generator installation. Our price is in accordance with the <strong>{new Date().getFullYear()} National Electrical Code</strong>.{' '}
-                <strong>This proposal is valid for {(form as Partial<GenForm>)?.validDays ?? 30} days.</strong>
-              </p>
-              <p style={{ margin: 0 }}>
-                By signing below, you acknowledge and agree to all terms and conditions of this proposal and the attached
-                Sales Agreement, including the {(form as Partial<GenForm>)?.depositPct ?? 50}% deposit due at signing, non-refundability of the deposit, and all
-                applicable disclosures.
-              </p>
-            </div>
-          </div>
-        </div>
-
+        {/* Full proposal document — exactly what prints to PDF: cover, scope, signature
+            blocks, sales agreement, disclosures, spec sheet, and the price breakdown only
+            when the rep enabled it on the proposal. */}
         {/* Full sales contract — the actual document the customer is signing */}
         {form && totals && gen && (
           <div ref={contractRef} style={{ marginBottom: 28, borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,.08)', background: '#fff' }}>
@@ -271,15 +211,6 @@ export default function ProposalPublicPage() {
           Accurate Power &amp; Technology, Inc. · EC13007737 · CFC1430965 · LI45063
         </div>
       </div>
-    </div>
-  );
-}
-
-function InfoBlock({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div>
-      <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: accent ? 22 : 15, fontWeight: 800, color: accent ? '#1B3A6B' : '#1e293b' }}>{value}</div>
     </div>
   );
 }

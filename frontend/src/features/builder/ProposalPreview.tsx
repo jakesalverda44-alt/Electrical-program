@@ -376,7 +376,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
               By accepting this proposal, Buyer acknowledges receipt of and agrees to all terms and conditions contained in the attached Disclosures and Sales Agreement, both incorporated herein by reference, including payment terms, non-refundability of the deposit, and waiver of all warranties, express or implied.
             </p>
 
-            <SigBlock/>
+            <SigBlock signatureImage={signatureImage} signedDate={signedDate} buyerName={form.customer}/>
           </div>
 
           {/* ═══ PAGE 2 (OPTIONAL) — PRICE BREAKDOWN ══════════════════════ */}
