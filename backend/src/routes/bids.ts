@@ -9,6 +9,7 @@ import { getSetting } from '../db/getSetting';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { escapeHtml } from '../utils/escapeHtml';
 import { logger } from '../utils/logger';
+import { graphSendMail, isGraphMailConfigured } from '../email/graphMailer';
 import { upsertCustomer } from './customers';
 import {
   createJobFolder,
@@ -35,7 +36,7 @@ async function sendBidNotification(bid: Record<string, unknown>, addedBy: { name
     getSetting('email_from_name'),
     getSetting('frontend_url'),
   ]);
-  if (enabled === 'false' || !apiKey) return;
+  if (enabled === 'false') return;
   let emails: string[] = [];
   try { emails = JSON.parse(emailsJson || '[]'); } catch { return; }
   if (!emails.length) return;
@@ -44,12 +45,8 @@ async function sendBidNotification(bid: Record<string, unknown>, addedBy: { name
   const amt = bid.amount ? '$' + Number(bid.amount).toLocaleString() : '—';
   const base = (frontendUrl || 'https://electrical-program.onrender.com').replace(/\/$/, '');
 
-  const resend = new Resend(apiKey);
-  await resend.emails.send({
-    from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
-    to: emails,
-    subject: `New Bid — ${bid.name}`,
-    html: `<div style="font-family:sans-serif;max-width:520px">
+  const subject = `New Bid — ${bid.name}`;
+  const html = `<div style="font-family:sans-serif;max-width:520px">
       <h2 style="margin:0 0 16px">New Bid Added</h2>
       <table style="border-collapse:collapse;width:100%">
         <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5;width:130px">Job</td><td style="padding:8px 12px">${escapeHtml(bid.name)}</td></tr>
@@ -60,7 +57,20 @@ async function sendBidNotification(bid: Record<string, unknown>, addedBy: { name
         <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Added By</td><td style="padding:8px 12px">${escapeHtml(addedBy.name)}</td></tr>
       </table>
       <p style="margin:20px 0 0"><a href="${base}" style="background:#4D8DF7;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700">Open Pipeline →</a></p>
-    </div>`,
+    </div>`;
+
+  // Prefer Microsoft Graph (app-only); fall back to Resend only if Graph isn't configured.
+  if (isGraphMailConfigured()) {
+    await graphSendMail({ to: emails, subject, html });
+    return;
+  }
+  if (!apiKey) return;
+  const resend = new Resend(apiKey);
+  await resend.emails.send({
+    from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
+    to: emails,
+    subject,
+    html,
     text: `New Bid: ${bid.name}\nGC: ${bid.gc}\nLocation: ${bid.loc}\nDue: ${dueStr}\nEst. Value: ${amt}\nAdded by: ${addedBy.name}\n\n${base}`,
   });
 }
