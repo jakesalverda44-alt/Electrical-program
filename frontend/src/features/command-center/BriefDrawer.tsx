@@ -22,8 +22,10 @@ const TYPE_SUB: Record<BriefAttentionItem['type'], string> = {
 export default function BriefDrawer({ item, onClose, onNav, onMarkContacted, markingContacted }: Props) {
   // 'idle' | 'busy' | 'done' | 'doneBlank' | 'fail' — per-item, reset when the drawer switches items.
   const [draftState, setDraftState] = useState<'idle' | 'busy' | 'done' | 'doneBlank' | 'fail'>('idle');
+  // Explanation shown when AI was configured but failed and we fell back to a blank draft.
+  const [aiError, setAiError] = useState<string | null>(null);
 
-  useEffect(() => { setDraftState('idle'); }, [item?.id]);
+  useEffect(() => { setDraftState('idle'); setAiError(null); }, [item?.id]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -36,9 +38,11 @@ export default function BriefDrawer({ item, onClose, onNav, onMarkContacted, mar
   const draftReply = async () => {
     if (!item || draftState === 'busy' || draftState === 'done' || draftState === 'doneBlank') return;
     setDraftState('busy');
+    setAiError(null);
     try {
       const graphId = item.id.slice('email:'.length);
       const { data } = await api.post(`/brief/email/${encodeURIComponent(graphId)}/draft-reply`);
+      setAiError(data?.aiError ?? null);
       setDraftState(data?.ai ? 'done' : 'doneBlank');
     } catch {
       setDraftState('fail');
@@ -70,13 +74,18 @@ export default function BriefDrawer({ item, onClose, onNav, onMarkContacted, mar
                   </a>
                 )}
                 {item.type === 'email' && item.id.startsWith('email:') && (
-                  <button className="cc-btn" disabled={draftState === 'busy' || draftState === 'done' || draftState === 'doneBlank'} onClick={draftReply}>
-                    {draftState === 'busy' ? 'AI is writing your reply…'
-                      : draftState === 'done' ? 'AI draft ready in Outlook ✓'
-                      : draftState === 'doneBlank' ? 'Blank draft created in Outlook ✓'
-                      : draftState === 'fail' ? 'Failed — try again'
-                      : '✨ AI draft reply'}
-                  </button>
+                  <>
+                    <button className="cc-btn" disabled={draftState === 'busy' || draftState === 'done' || (draftState === 'doneBlank' && !aiError)} onClick={draftReply}>
+                      {draftState === 'busy' ? 'AI is writing your reply…'
+                        : draftState === 'done' ? 'AI draft ready in Outlook ✓'
+                        : draftState === 'doneBlank' ? (aiError ? '✨ Try AI draft again' : 'Blank draft created in Outlook ✓')
+                        : draftState === 'fail' ? 'Failed — try again'
+                        : '✨ AI draft reply'}
+                    </button>
+                    {draftState === 'doneBlank' && aiError && (
+                      <div style={{ fontSize: 12.5, color: 'var(--text3)', lineHeight: 1.5, marginTop: 2 }}>{aiError}</div>
+                    )}
+                  </>
                 )}
                 {cta?.tel && (
                   <a className="cc-btn p" href={cta.tel}>Call now</a>

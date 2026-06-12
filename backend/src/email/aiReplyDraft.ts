@@ -30,14 +30,41 @@ export interface EmailForReply {
 }
 
 /**
- * Generate the reply text for an email. Returns null when no API key is configured
- * or the model call fails — never throws.
+ * Outcome of an AI reply-draft attempt. `unconfigured` is the intended quiet fallback
+ * (no API key — caller creates a blank draft silently); `error` and `empty` mean the AI
+ * actually failed and the caller should tell the user, not pretend the blank was wanted.
  */
-export async function generateReplyText(email: EmailForReply): Promise<string | null> {
+export type ReplyDraftResult =
+  | { ok: true; text: string }
+  | { ok: false; reason: 'unconfigured' | 'empty' | 'error'; detail?: string };
+
+/** Concatenate every text block in a Claude response (don't assume it's only content[0]). */
+function extractText(message: Anthropic.Message): string {
+  return message.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map(b => b.text)
+    .join('')
+    .trim();
+}
+
+/** Transient Anthropic failures worth one retry: rate limits, overload, 5xx, network blips. */
+function isTransient(err: unknown): boolean {
+  if (err instanceof Anthropic.APIError && typeof err.status === 'number') {
+    return err.status === 429 || err.status >= 500;
+  }
+  // No HTTP status → connection/timeout error.
+  return err instanceof Anthropic.APIError || err instanceof Error;
+}
+
+/**
+ * Generate the reply text for an email. Returns a discriminated result and never throws.
+ * Retries once on transient API errors before giving up.
+ */
+export async function generateReplyText(email: EmailForReply): Promise<ReplyDraftResult> {
   const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
   if (!apiKey) {
     logger.info('[ai-draft] no Anthropic API key configured — falling back to blank draft');
-    return null;
+    return { ok: false, reason: 'unconfigured' };
   }
 
   // Cap pathological bodies (huge quoted threads) so the prompt stays lean.
@@ -50,21 +77,36 @@ Subject: ${email.subject || '(no subject)'}
 ${body}`;
 
   const model = ((await getSetting('ai_reply_draft_model')) || DEFAULT_DRAFT_MODEL).trim();
+  const client = new Anthropic({ apiKey });
 
-  try {
-    const client = new Anthropic({ apiKey });
-    const message = await client.messages.create({
-      model,
-      max_tokens: 1024,
-      system: SYSTEM,
-      messages: [{ role: 'user', content: prompt }],
-    });
-    const text = message.content[0]?.type === 'text' ? message.content[0].text.trim() : '';
-    return text || null;
-  } catch (err) {
-    logger.error({ err }, '[ai-draft] reply generation failed');
-    return null;
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const message = await client.messages.create({
+        model,
+        max_tokens: 1024,
+        system: SYSTEM,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      const text = extractText(message);
+      if (!text) {
+        logger.error({ stopReason: message.stop_reason }, '[ai-draft] model returned no text');
+        return { ok: false, reason: 'empty' };
+      }
+      return { ok: true, text };
+    } catch (err) {
+      lastErr = err;
+      logger.error({ err, attempt }, '[ai-draft] reply generation failed');
+      if (attempt < 2 && isTransient(err)) {
+        await new Promise(r => setTimeout(r, 1500));
+        continue;
+      }
+      break;
+    }
   }
+
+  const detail = lastErr instanceof Error ? lastErr.message : undefined;
+  return { ok: false, reason: 'error', detail };
 }
 
 /** Plain text → simple HTML for the Graph createReply comment body. */
