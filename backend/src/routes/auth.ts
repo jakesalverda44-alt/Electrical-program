@@ -6,6 +6,7 @@ import { pool } from '../db/pool';
 import { requireAuth, AuthRequest, getJwtSecret, TOKEN_TTL } from '../middleware/auth';
 import { Resend } from 'resend';
 import { getSetting } from '../db/getSetting';
+import { graphSendMail, isGraphMailConfigured } from '../email/graphMailer';
 
 const router = Router();
 
@@ -158,14 +159,19 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
   ]);
   const base = frontendUrl || 'https://electrical-program.onrender.com';
   const link = `${base}/reset-password?token=${token}`;
+  const subject = 'Password Reset — Accurate Power & Technology';
+  const html = `<p>Hi ${user.name},</p><p>Click the link below to reset your password. This link expires in 1 hour.</p><p><a href="${link}">${link}</a></p><p>If you didn't request this, you can ignore this email.</p>`;
 
-  if (apiKey) {
+  // Prefer Microsoft Graph (app-only); fall back to Resend only if Graph isn't configured.
+  if (isGraphMailConfigured()) {
+    await graphSendMail({ to: email.toLowerCase(), subject, html }).catch(() => {});
+  } else if (apiKey) {
     const resend = new Resend(apiKey);
     await resend.emails.send({
       from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
       to: email.toLowerCase(),
-      subject: 'Password Reset — Accurate Power & Technology',
-      html: `<p>Hi ${user.name},</p><p>Click the link below to reset your password. This link expires in 1 hour.</p><p><a href="${link}">${link}</a></p><p>If you didn't request this, you can ignore this email.</p>`,
+      subject,
+      html,
       text: `Hi ${user.name},\n\nReset your password: ${link}\n\nExpires in 1 hour.`,
     }).catch(() => {});
   }
