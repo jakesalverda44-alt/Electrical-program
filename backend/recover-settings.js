@@ -11,9 +11,8 @@
 // app_settings table — no business data (leads, customers, proposals, …) is read or changed.
 //
 // MODES (set via the MODE env var, default "verify"):
-//   verify — read-only. Connects to both databases and prints which one holds your real
-//            key and how many settings each has. WRITES NOTHING. Run this first to confirm
-//            SOURCE_DB is the OLD database and TARGET_DB is the CURRENT one.
+//   verify — read-only. Connects to both databases and prints a full SOURCE-vs-TARGET
+//            comparison so you can see exactly which settings were lost. WRITES NOTHING.
 //   apply  — performs the recovery (writes to TARGET_DB only).
 //
 // Run via the "Migrate Data" GitHub Actions workflow (workflow_dispatch), with repo secrets:
@@ -25,19 +24,48 @@ const MODE = (process.env.MODE || 'verify').toLowerCase();
 const source = new Pool({ connectionString: process.env.SOURCE_DB, ssl: { rejectUnauthorized: false } });
 const target = new Pool({ connectionString: process.env.TARGET_DB, ssl: { rejectUnauthorized: false } });
 
-/** Safe, secret-free fingerprint of a database's settings, for the verify report. */
-async function summarize(pool, label) {
+// Secrets are shown as SET/EMPTY only; everything else shows its real value so the
+// verify report is actually useful for spotting reverted pricing / company info.
+const SECRET_KEYS = ['ai_anthropic_key', 'email_resend_api_key'];
+const show = (key, v) => {
+  if (!v || !v.trim()) return 'EMPTY';
+  if (SECRET_KEYS.includes(key)) return `SET (••••${v.slice(-4)})`;
+  const s = v.replace(/\s+/g, ' ').trim();
+  return s.length > 60 ? s.slice(0, 57) + '…' : s;
+};
+
+/** Read app_settings into a key→value map. */
+async function readSettings(pool) {
   const { rows } = await pool.query('SELECT key, value FROM app_settings');
-  const nonEmpty = rows.filter(r => r.value && r.value.trim() !== '').length;
-  const apiKey = (rows.find(r => r.key === 'ai_anthropic_key') || {}).value || '';
-  const resendKey = (rows.find(r => r.key === 'email_resend_api_key') || {}).value || '';
-  const fmt = v => (v && v.trim() ? `SET (••••${v.slice(-4)})` : 'EMPTY');
-  console.log(`\n[${label}]`);
-  console.log(`  total settings : ${rows.length}`);
-  console.log(`  non-empty      : ${nonEmpty}`);
-  console.log(`  ai_anthropic_key      : ${fmt(apiKey)}`);
-  console.log(`  email_resend_api_key  : ${fmt(resendKey)}`);
-  return { apiKey: apiKey.trim() };
+  return new Map(rows.map(r => [r.key, r.value ?? '']));
+}
+
+/** Print a full SOURCE-vs-TARGET comparison so reverted settings are obvious. */
+function printDiff(src, tgt) {
+  const keys = [...new Set([...src.keys(), ...tgt.keys()])].sort();
+  const rows = keys.map(k => {
+    const s = src.get(k) ?? '';
+    const t = tgt.get(k) ?? '';
+    let status = 'same';
+    if (!src.has(k)) status = 'only in current';
+    else if (s.trim() === t.trim()) status = 'same';
+    else if (s.trim() && !t.trim()) status = 'LOST';
+    else status = 'differs';
+    return { k, s, t, status };
+  });
+  const lost = rows.filter(r => r.status === 'LOST');
+  const diff = rows.filter(r => r.status === 'differs');
+
+  console.log(`\n================ SETTINGS COMPARISON ================`);
+  console.log(`SOURCE (old) keys: ${src.size}   TARGET (current) keys: ${tgt.size}`);
+  console.log(`\n--- LOST (had a value in old DB, blank in current) ---`);
+  if (!lost.length) console.log('  (none)');
+  for (const r of lost) console.log(`  ${r.k.padEnd(24)} old=${show(r.k, r.s)}`);
+  console.log(`\n--- DIFFERENT (value changed between old and current) ---`);
+  if (!diff.length) console.log('  (none)');
+  for (const r of diff) console.log(`  ${r.k.padEnd(24)} old=${show(r.k, r.s)}  |  current=${show(r.k, r.t)}`);
+  console.log(`\n====================================================`);
+  return { lostCount: lost.length, diffCount: diff.length };
 }
 
 async function main() {
@@ -47,23 +75,29 @@ async function main() {
   }
 
   console.log(`Mode: ${MODE}`);
-  const src = await summarize(source, 'SOURCE_DB (should be your OLD database — has the key)');
-  await summarize(target, 'TARGET_DB (should be the CURRENT database — key is empty)');
+  const srcMap = await readSettings(source);
+  const tgtMap = await readSettings(target);
+  const srcApiKey = (srcMap.get('ai_anthropic_key') || '').trim();
+
+  if (MODE !== 'apply') {
+    // Read-only: full comparison, writes nothing. Never aborts — safe to run anytime.
+    printDiff(srcMap, tgtMap);
+    if (!srcApiKey) {
+      console.log('\nNOTE: SOURCE_DB has no ai_anthropic_key. Either it is not the old database,');
+      console.log('or the SOURCE/TARGET secrets are swapped. Do NOT run apply until this looks right.');
+    }
+    console.log('\nVERIFY only — nothing was written. Re-run with mode = apply to copy the');
+    console.log('SOURCE (old) values into the current database.');
+    await source.end(); await target.end();
+    process.exit(0);
+  }
 
   // Guard: if SOURCE has no key, it is almost certainly NOT the old database (or the secrets
   // are swapped). Refuse to write, so we never overwrite the old DB's real values with empties.
-  if (!src.apiKey) {
+  if (!srcApiKey) {
     console.error('\nABORT: SOURCE_DB has no ai_anthropic_key — it does not look like the old database.');
     console.error('Check that SOURCE_DB points to the OLD database and TARGET_DB to the CURRENT one.');
     process.exit(1);
-  }
-
-  if (MODE !== 'apply') {
-    console.log('\nVERIFY only — nothing was written.');
-    console.log('If the SOURCE block above shows your key as SET and TARGET shows EMPTY, the');
-    console.log('direction is correct. Re-run the workflow with mode = apply to restore.');
-    await source.end(); await target.end();
-    process.exit(0);
   }
 
   const { rows } = await source.query('SELECT key, value FROM app_settings');
