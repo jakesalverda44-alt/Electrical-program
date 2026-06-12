@@ -599,7 +599,9 @@ router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
   if (!gen) return;
 
   const frontendUrl = await getSetting('frontend_url');
-  const baseUrl = frontendUrl || process.env.FRONTEND_URL || 'http://localhost:5173';
+  // Never fall back to localhost — a blanked frontend_url must still yield a reachable link
+  // (matches bids.ts / auth.ts). Strip any trailing slash so the path joins cleanly.
+  const baseUrl = (frontendUrl || process.env.FRONTEND_URL || 'https://electrical-program.onrender.com').replace(/\/$/, '');
   const link = `${baseUrl}/p/${gen.proposal_token}`;
 
   // Generator spec straight off the proposal: "22kW Generac RG022" etc.
