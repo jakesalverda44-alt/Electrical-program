@@ -11,6 +11,7 @@ const MASKED_KEYS = ['email_resend_api_key', 'ai_anthropic_key'];
 
 const ALLOWED_KEYS = [
   'email_resend_api_key', 'email_from_address', 'email_from_name', 'email_reply_to', 'frontend_url',
+  'email_signature',
   'company_name', 'company_address', 'company_city', 'company_state', 'company_zip',
   'company_phone', 'company_email', 'company_website',
   'company_license_ec', 'company_license_cfc', 'company_license_li',

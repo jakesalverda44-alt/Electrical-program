@@ -6,7 +6,7 @@ import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, Toggle, RolePill, inputStyle, initials, timeAgo, ROLE_OPTIONS, ROLE_LABELS, ROLE_COLORS } from '../shared';
 
 export function EmailSection({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
-  const keys = ['email_resend_api_key','email_from_address','email_from_name','email_reply_to','frontend_url'];
+  const keys = ['email_resend_api_key','email_from_address','email_from_name','email_reply_to','email_signature','frontend_url'];
   const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(keys.map(k => [k, (settings as any)[k] ?? ''])));
   const [orig, setOrig] = useState(vals);
   const [saving, setSaving] = useState(false);
@@ -21,7 +21,7 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
   }, [settings]);
 
   const hasChanges = keys.some(k => vals[k] !== orig[k]);
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setVals(p => ({ ...p, [k]: e.target.value }));
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setVals(p => ({ ...p, [k]: e.target.value }));
 
   const save = async () => {
     setSaving(true);
@@ -56,6 +56,14 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
           <input type="url" style={inputStyle} value={vals.frontend_url} onChange={set('frontend_url')} placeholder="https://your-app.onrender.com"/>
         </Field>
       </div>
+      <Field label="Email Signature" desc="Appended to the bottom of every email the app sends (proposals, password resets, bid & internal notifications). Plain text or HTML.">
+        <textarea
+          style={{ ...inputStyle, minHeight: 110, fontFamily: 'inherit', resize: 'vertical', lineHeight: 1.5 }}
+          value={vals.email_signature}
+          onChange={set('email_signature')}
+          placeholder={'Jake Salverda\nAccurate Power & Technology\n(352) 801-8997 · accuratepowerandtechnology.com'}
+        />
+      </Field>
       <SaveBar onSave={save} saving={saving} saved={saved} hasChanges={hasChanges}/>
 
       <div style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid var(--border)' }}>
