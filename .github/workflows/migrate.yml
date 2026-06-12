@@ -10,8 +10,8 @@ jobs:
         with:
           node-version: 18
       - run: cd backend && npm install
-      - name: Run migration
+      - name: Recover settings from old database
         env:
           SOURCE_DB: ${{ secrets.SOURCE_DB }}
           TARGET_DB: ${{ secrets.TARGET_DB }}
-        run: node backend/migrate-data.js
+        run: node backend/recover-settings.js
