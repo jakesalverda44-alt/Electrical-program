@@ -1,6 +1,14 @@
-﻿name: Migrate Data
+name: Migrate Data
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'verify = read-only check (writes nothing); apply = restore settings'
+        type: choice
+        default: verify
+        options:
+          - verify
+          - apply
 jobs:
   migrate:
     runs-on: ubuntu-latest
@@ -14,4 +22,5 @@ jobs:
         env:
           SOURCE_DB: ${{ secrets.SOURCE_DB }}
           TARGET_DB: ${{ secrets.TARGET_DB }}
+          MODE: ${{ inputs.mode }}
         run: node backend/recover-settings.js
