@@ -1,4 +1,5 @@
 import { getGraphToken, GRAPH_BASE } from '../integrations/graphAuth';
+import { emailSignatureHtml } from './signature';
 
 // Shared Microsoft Graph sendMail helper (app-only auth). All outbound mail —
 // lead first contact, nudges, proposal sends, internal notifications — goes out
@@ -32,9 +33,11 @@ export function isGraphMailConfigured(): boolean {
 export async function graphSendMail({ to, subject, html, attachments }: SendArgs): Promise<void> {
   const token = await getGraphToken();
   const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
+  // Append the configured signature to every outbound app email (no-op when unset).
+  const content = html + (await emailSignatureHtml());
   const message: Record<string, unknown> = {
     subject,
-    body: { contentType: 'HTML', content: html },
+    body: { contentType: 'HTML', content },
     toRecipients: toList.map(address => ({ emailAddress: { address } })),
   };
   if (attachments?.length) message.attachments = attachments;

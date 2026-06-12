@@ -35,6 +35,7 @@ export interface AppSettings {
   email_from_address: string;
   email_from_name: string;
   email_reply_to: string;
+  email_signature: string;
   frontend_url: string;
   // AI
   ai_anthropic_key: string;
@@ -84,7 +85,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   gen_default_surge_pro: '395', gen_default_battery: '185', gen_default_extra_wire: '25',
   gen_default_lull: '1100', gen_default_crane: '1800',
   gen_default_deposit_pct: '50', gen_default_valid_days: '30', gen_pricing_table: '',
-  email_resend_api_key: '', email_from_address: '', email_from_name: '', email_reply_to: '', frontend_url: '',
+  email_resend_api_key: '', email_from_address: '', email_from_name: '', email_reply_to: '', email_signature: '', frontend_url: '',
   ai_anthropic_key: '', ai_model: 'claude-sonnet-4-6',
   ai_takeoff_agent2_model: 'claude-haiku-4-5-20251001', ai_takeoff_agent3_model: 'claude-haiku-4-5-20251001',
   ai_max_tokens: '4096', ai_max_tokens_agent1: '16000', ai_max_tokens_agent2: '4000', ai_max_tokens_agent3: '4000',
