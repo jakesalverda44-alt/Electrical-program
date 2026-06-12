@@ -36,11 +36,13 @@ router.post('/email/:id/draft-reply', requireAuth, asyncHandler(async (req: Auth
   const ok = await createReplyDraft(req.params.id, replyHtml);
   if (!ok) return res.status(502).json({ error: 'Could not create the draft in Outlook.' });
 
-  // When AI was configured but failed (not the quiet "unconfigured" fallback), tell the
-  // user a blank draft was created instead of silently pretending it was intended.
-  const aiError = !result.ok && result.reason !== 'unconfigured'
-    ? 'The AI could not write this reply, so a blank draft was created. Try again in a moment.'
-    : undefined;
+  // A blank draft is never silent: tell the user why so a missing key or a failed
+  // call can't masquerade as intended behavior (which is what made this hard to spot).
+  const aiError = result.ok
+    ? undefined
+    : result.reason === 'unconfigured'
+      ? 'No Anthropic API key is configured on the server, so a blank draft was created. Add one in Settings → AI.'
+      : 'The AI could not write this reply, so a blank draft was created. Try again in a moment.';
   res.json({ ok: true, ai: result.ok, aiError });
 }));
 
