@@ -1,5 +1,5 @@
 import { getGraphToken, GRAPH_BASE } from '../integrations/graphAuth';
-import { emailSignatureHtml } from './signature';
+import { resolveSignature } from './signature';
 
 // Shared Microsoft Graph sendMail helper (app-only auth). All outbound mail —
 // lead first contact, nudges, proposal sends, internal notifications — goes out
@@ -24,23 +24,34 @@ export interface SendArgs {
   subject: string;
   html: string;
   attachments?: GraphAttachment[];
+  /** Append the configured signature (default true). Set false when the body already has one. */
+  appendSignature?: boolean;
 }
 
 export function isGraphMailConfigured(): boolean {
   return !!(process.env.GRAPH_TENANT_ID && process.env.GRAPH_CLIENT_ID && process.env.GRAPH_CLIENT_SECRET);
 }
 
-export async function graphSendMail({ to, subject, html, attachments }: SendArgs): Promise<void> {
+export async function graphSendMail({ to, subject, html, attachments, appendSignature = true }: SendArgs): Promise<void> {
   const token = await getGraphToken();
   const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
-  // Append the configured signature to every outbound app email (no-op when unset).
-  const content = html + (await emailSignatureHtml());
+
+  // Append the signature (branded-with-logo by default, or the custom setting) unless the
+  // caller already embedded one. Merge any inline logo attachment with the caller's.
+  let content = html;
+  const allAttachments: GraphAttachment[] = attachments ? [...attachments] : [];
+  if (appendSignature) {
+    const sig = await resolveSignature();
+    content += sig.html;
+    allAttachments.push(...sig.attachments);
+  }
+
   const message: Record<string, unknown> = {
     subject,
     body: { contentType: 'HTML', content },
     toRecipients: toList.map(address => ({ emailAddress: { address } })),
   };
-  if (attachments?.length) message.attachments = attachments;
+  if (allAttachments.length) message.attachments = allAttachments;
 
   const resp = await fetch(
     `${GRAPH_BASE}/users/${encodeURIComponent(SEND_AS)}/sendMail`,
