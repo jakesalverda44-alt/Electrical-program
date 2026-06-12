@@ -28,13 +28,20 @@ router.post('/email/:id/read', requireAuth, asyncHandler(async (req: AuthRequest
 // email and pre-writes the reply; otherwise (or on AI failure) a blank draft is created.
 router.post('/email/:id/draft-reply', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const msg = await fetchMessage(req.params.id);
-  const replyText = msg
-    ? await generateReplyText({ subject: msg.subject, fromName: msg.fromName, from: msg.from, body: msg.body })
-    : null;
+  if (!msg) return res.status(502).json({ error: 'Could not load the email from Outlook.' });
 
-  const ok = await createReplyDraft(req.params.id, replyText ? replyTextToHtml(replyText) : '');
+  const result = await generateReplyText({ subject: msg.subject, fromName: msg.fromName, from: msg.from, body: msg.body });
+  const replyHtml = result.ok ? replyTextToHtml(result.text) : '';
+
+  const ok = await createReplyDraft(req.params.id, replyHtml);
   if (!ok) return res.status(502).json({ error: 'Could not create the draft in Outlook.' });
-  res.json({ ok: true, ai: !!replyText });
+
+  // When AI was configured but failed (not the quiet "unconfigured" fallback), tell the
+  // user a blank draft was created instead of silently pretending it was intended.
+  const aiError = !result.ok && result.reason !== 'unconfigured'
+    ? 'The AI could not write this reply, so a blank draft was created. Try again in a moment.'
+    : undefined;
+  res.json({ ok: true, ai: result.ok, aiError });
 }));
 
 export default router;
