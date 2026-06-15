@@ -1,0 +1,6 @@
+# System packages installed by Render's apt build step (native runtimes).
+# poppler-utils provides `pdftoppm`, used by Stage 0 document prep
+# (backend/src/ai/documentPrep.ts) to rasterize plan PDFs before tiling them
+# for Agent 1 vision analysis. If absent, the pipeline falls back to sending
+# PDFs as low-fidelity document blocks.
+poppler-utils

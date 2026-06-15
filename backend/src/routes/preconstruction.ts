@@ -13,6 +13,10 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
 import { drawingUpload } from '../utils/upload';
 import { uploadFile, getFileMedia } from '../services/googleDrive';
+import { buildAgent1Content, type PrepFile, type Agent1Block } from '../ai/documentPrep';
+
+// Cap on tiles rasterized per PDF page (cost control — see Stage 0 doc prep).
+const MAX_TILES_PER_PAGE = 9;
 
 const router = Router();
 const upload = drawingUpload;
@@ -115,19 +119,54 @@ function extractText(response: Anthropic.Message): string {
     .join('\n');
 }
 
-function logAgent1Request(bidId: string, blocks: Anthropic.MessageParam['content'], model: string, maxTokens: number, batchLabel: string) {
+/** Stage 0 prep summary: tile count per sheet + total image/document blocks. */
+interface PrepSummary {
+  sheets: { sheet: string; tiles: number }[];
+  imageBlocks: number;
+  documentBlocks: number;
+}
+
+function summarizePrep(blocks: Agent1Block[]): PrepSummary {
+  const sheets: { sheet: string; tiles: number }[] = [];
+  let current: { sheet: string; tiles: number } | null = null;
+  let imageBlocks = 0;
+  let documentBlocks = 0;
+  for (const b of blocks) {
+    if (b.type === 'text' && b.text.startsWith('--- Sheet:')) {
+      current = { sheet: b.text.replace(/^--- Sheet:\s*/, '').replace(/\s*---$/, ''), tiles: 0 };
+      sheets.push(current);
+    } else if (b.type === 'image') {
+      imageBlocks++;
+      if (current) current.tiles++;
+    } else if (b.type === 'document') {
+      documentBlocks++;
+      if (current) current.tiles++;
+    }
+  }
+  return { sheets, imageBlocks, documentBlocks };
+}
+
+function logAgent1Request(bidId: string, blocks: Agent1Block[], model: string, maxTokens: number, batchLabel: string, prep: PrepSummary) {
   const blockSummary = (blocks as Array<{ type: string; source?: { media_type?: string; type?: string }; text?: string }>).map(b => ({
     type: b.type,
     ...(b.source ? { source_type: b.source.type, media_type: b.source.media_type } : {}),
     ...(b.text   ? { text_length: b.text.length } : {}),
   }));
-  logger.info({ bidId, batch: batchLabel, model, maxTokens, blocks: blockSummary }, '[takeoff] Agent 1 request');
+  logger.info({
+    bidId, batch: batchLabel, model, maxTokens,
+    tiles_per_sheet: prep.sheets,
+    image_blocks: prep.imageBlocks,
+    document_blocks: prep.documentBlocks,
+    blocks: blockSummary,
+  }, '[takeoff] Agent 1 request');
 }
 
-function logAgent1Response(bidId: string, resp: Anthropic.Message, outputText: string, batchLabel: string) {
+function logAgent1Response(bidId: string, resp: Anthropic.Message, outputText: string, batchLabel: string, prep: PrepSummary) {
   logger.info({
     bidId,
     batch: batchLabel,
+    image_blocks: prep.imageBlocks,
+    document_blocks: prep.documentBlocks,
     stop_reason: resp.stop_reason,
     content_blocks: resp.content.map(b => ({ type: b.type, ...(b.type === 'text' ? { length: (b as Anthropic.TextBlock).text.length } : {}) })),
     input_tokens: resp.usage?.input_tokens,
@@ -135,6 +174,40 @@ function logAgent1Response(bidId: string, resp: Anthropic.Message, outputText: s
     output_text_length: outputText.length,
     output_preview: outputText.slice(0, 200),
   }, '[takeoff] Agent 1 response');
+}
+
+/** Legacy block builder: one document block per PDF, one image block per image.
+ *  Used as a whole-batch fallback if Stage 0 doc prep throws unexpectedly. */
+function legacyContentBlocks(batchFiles: Express.Multer.File[]): Agent1Block[] {
+  const blocks: Agent1Block[] = [];
+  for (const f of batchFiles) {
+    const b64 = f.buffer.toString('base64');
+    const ext = f.originalname.split('.').pop()?.toLowerCase() ?? '';
+    if (ext === 'pdf') {
+      blocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } });
+    } else {
+      const mt: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' =
+        ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+      blocks.push({ type: 'image', source: { type: 'base64', media_type: mt, data: b64 } });
+    }
+  }
+  return blocks;
+}
+
+/** Stage 0 — Document Prep: tile dense sheets into legible image blocks. Falls
+ *  back to legacy document/image blocks if prep fails (e.g. poppler missing). */
+async function buildAgent1Blocks(bidId: string, batchFiles: Express.Multer.File[]): Promise<Agent1Block[]> {
+  const prepFiles: PrepFile[] = batchFiles.map(f => ({
+    filename: f.originalname,
+    buffer: f.buffer,
+    ext: (f.originalname.split('.').pop() ?? '').toLowerCase(),
+  }));
+  try {
+    return await buildAgent1Content(prepFiles, { maxTilesPerPage: MAX_TILES_PER_PAGE });
+  } catch (err) {
+    logger.warn({ err, bidId }, '[takeoff] Stage 0 document prep failed — falling back to document blocks');
+    return legacyContentBlocks(batchFiles);
+  }
 }
 
 function compactOutput(text: string, max = 500): string {
@@ -177,31 +250,15 @@ async function runPipeline(
     let agent1JSON: Record<string, unknown> = {};
 
     if (filesToSend.length <= BATCH_SIZE) {
-      // Single pass
-      const contentBlocks: Anthropic.MessageParam['content'] = [];
-      for (const f of filesToSend) {
-        const b64 = f.buffer.toString('base64');
-        const ext = f.originalname.split('.').pop()?.toLowerCase() ?? '';
-        if (ext === 'pdf') {
-          contentBlocks.push({
-            type: 'document',
-            source: { type: 'base64', media_type: 'application/pdf', data: b64 },
-          } as Anthropic.DocumentBlockParam);
-        } else {
-          const mt: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' =
-            ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-          contentBlocks.push({
-            type: 'image',
-            source: { type: 'base64', media_type: mt, data: b64 },
-          } as Anthropic.ImageBlockParam);
-        }
-      }
+      // Single pass — Stage 0 doc prep tiles dense sheets so Agent 1 can read them.
+      const contentBlocks = await buildAgent1Blocks(bidId, filesToSend);
+      const prep = summarizePrep(contentBlocks);
       contentBlocks.push({
         type: 'text',
         text: 'Analyze all uploaded electrical plans and provide your complete Drawing Analyzer output following your output format exactly. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if a sheet contains no electrical equipment, you MUST return a valid JSON object. For non-electrical sheets, include the sheet name in sheet_inventory with a note and leave equipment arrays empty.',
       });
 
-      logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, 'single');
+      logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, 'single', prep);
       const resp = await callWithRetry(() =>
         client.messages.stream({
           model: config.model,
@@ -212,7 +269,7 @@ async function runPipeline(
         }).finalMessage()
       , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
       agent1Output = extractText(resp);
-      logAgent1Response(bidId, resp, agent1Output, 'single');
+      logAgent1Response(bidId, resp, agent1Output, 'single', prep);
       await pool.query(
         `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2 WHERE bid_id=$3`,
         [JSON.stringify(resp.usage), config.model, bidId]
@@ -229,30 +286,14 @@ async function runPipeline(
 
       for (let bi = 0; bi < batches.length; bi++) {
         const batch = batches[bi];
-        const contentBlocks: Anthropic.MessageParam['content'] = [];
-        for (const f of batch) {
-          const b64 = f.buffer.toString('base64');
-          const ext = f.originalname.split('.').pop()?.toLowerCase() ?? '';
-          if (ext === 'pdf') {
-            contentBlocks.push({
-              type: 'document',
-              source: { type: 'base64', media_type: 'application/pdf', data: b64 },
-            } as Anthropic.DocumentBlockParam);
-          } else {
-            const mt: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' =
-              ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-            contentBlocks.push({
-              type: 'image',
-              source: { type: 'base64', media_type: mt, data: b64 },
-            } as Anthropic.ImageBlockParam);
-          }
-        }
+        const contentBlocks = await buildAgent1Blocks(bidId, batch);
+        const prep = summarizePrep(contentBlocks);
         contentBlocks.push({
           type: 'text',
           text: `Analyze batch ${bi + 1} of ${batches.length} electrical plan files and provide Drawing Analyzer JSON output. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if this sheet contains no electrical equipment, you MUST return a valid JSON object with the sheet in sheet_inventory and equipment arrays empty.`,
         });
 
-        logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${batches.length}`);
+        logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${batches.length}`, prep);
         const bResp = await callWithRetry(() =>
           client.messages.stream({
             model: config.model,
@@ -263,7 +304,7 @@ async function runPipeline(
           }).finalMessage()
         , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
-        logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${batches.length}`);
+        logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${batches.length}`, prep);
         if (!bText.trim()) {
           logger.warn({ bidId, batch: `${bi + 1}/${batches.length}`, files: batch.map(f => f.originalname) },
             '[takeoff] Agent 1 batch returned empty output — skipping');
