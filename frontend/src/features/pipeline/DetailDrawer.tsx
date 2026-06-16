@@ -43,6 +43,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
   const [sendingNotify, setSendingNotify] = useState(false);
   const [attachFiles, setAttachFiles] = useState(true);
   const [fileCount, setFileCount] = useState<number | null>(null);
+  const [draftLink, setDraftLink] = useState<string | null>(null);
   const [teamDefaults, setTeamDefaults] = useState<{ emails: string[]; mailConfigured: boolean }>({ emails: [], mailConfigured: false });
 
   useEffect(() => {
@@ -54,6 +55,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
   const openNotify = () => {
     setNotifyEmails(notifyEmails.trim() || teamDefaults.emails.join(', '));
     setAttachFiles(true);
+    setDraftLink(null);
     setNotifyOpen(true);
     api.get(`/documents?linked_id=${encodeURIComponent(bid.id)}`)
       .then(({ data }) => setFileCount(Array.isArray(data) ? data.length : 0))
@@ -66,8 +68,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
     setSendingNotify(true);
     try {
       const { data } = await api.post(`/bids/${bid.id}/notify-team`, { emails, attachFiles });
-      onBidEdited(data.bid ?? data, null);
-      setNotifyOpen(false);
+      setDraftLink(data.draftWebLink || '');
     } finally {
       setSendingNotify(false);
     }
@@ -365,39 +366,49 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
             )}
           </div>
 
-          {/* Email this new commercial bid to the team (after the fact). */}
+          {/* Draft a "new bid" email to the team in Outlook (review & send yourself). */}
           {!isTerminal && (
             <div style={{ marginTop: 8 }}>
               {notifyOpen ? (
-                <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>Email bid to team — recipients</div>
-                  <textarea
-                    style={{ ...INPUT, minHeight: 44, resize: 'vertical' } as React.CSSProperties}
-                    value={notifyEmails}
-                    onChange={e => setNotifyEmails(e.target.value)}
-                    placeholder="name@company.com, name2@company.com"
-                  />
-                  <div style={{ fontSize: 11, color: 'var(--text3)', margin: '5px 0 10px' }}>Comma-separated. Sent from your Outlook mailbox.</div>
-                  {fileCount != null && fileCount > 0 && (
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--text2)', margin: '0 0 12px', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={attachFiles} onChange={e => setAttachFiles(e.target.checked)}/>
-                      Attach bid files ({fileCount})
-                    </label>
-                  )}
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn" style={{ flex: 1, justifyContent: 'center' }} disabled={sendingNotify || !notifyEmails.trim()} onClick={handleNotifyTeam}>
-                      <Icon name="check" size={14} stroke={2.2}/>{sendingNotify ? 'Sending…' : 'Send to Team'}
-                    </button>
-                    <button className="btn ghost" style={{ justifyContent: 'center' }} onClick={() => setNotifyOpen(false)}>Cancel</button>
+                draftLink !== null ? (
+                  <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700, color: 'var(--green)', marginBottom: 8 }}>
+                      <Icon name="check" size={15} stroke={2.4}/>Draft created in your Outlook
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>Review it in your Drafts and hit send when ready.</div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {draftLink && (
+                        <a className="btn" href={draftLink} target="_blank" rel="noopener noreferrer" style={{ flex: 1, justifyContent: 'center', textDecoration: 'none' }}>
+                          <Icon name="mail" size={14} stroke={2}/>Open draft
+                        </a>
+                      )}
+                      <button className="btn ghost" style={{ justifyContent: 'center' }} onClick={() => setNotifyOpen(false)}>Done</button>
+                    </div>
                   </div>
-                </div>
-              ) : bid.team_notified_at ? (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'var(--surface2)', borderRadius: 9, padding: '8px 12px' }}>
-                  <span title={bid.team_notified_to?.length ? `Sent to ${bid.team_notified_to.join(', ')}` : 'Sent to the team'} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--green)' }}>
-                    <Icon name="check" size={14} stroke={2.4}/>Sent to team{fmtTs(bid.team_notified_at) ? ` · ${fmtTs(bid.team_notified_at)}` : ''}
-                  </span>
-                  <button className="btn ghost" style={{ height: 26, fontSize: 11.5, padding: '0 9px' }} disabled={!teamDefaults.mailConfigured} onClick={openNotify}>Resend</button>
-                </div>
+                ) : (
+                  <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px' }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>Draft email to team — recipients</div>
+                    <textarea
+                      style={{ ...INPUT, minHeight: 44, resize: 'vertical' } as React.CSSProperties}
+                      value={notifyEmails}
+                      onChange={e => setNotifyEmails(e.target.value)}
+                      placeholder="name@company.com, name2@company.com"
+                    />
+                    <div style={{ fontSize: 11, color: 'var(--text3)', margin: '5px 0 10px' }}>Comma-separated. Creates a draft in your Outlook — nothing is sent until you send it.</div>
+                    {fileCount != null && fileCount > 0 && (
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--text2)', margin: '0 0 12px', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={attachFiles} onChange={e => setAttachFiles(e.target.checked)}/>
+                        Attach bid files ({fileCount})
+                      </label>
+                    )}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button className="btn" style={{ flex: 1, justifyContent: 'center' }} disabled={sendingNotify || !notifyEmails.trim()} onClick={handleNotifyTeam}>
+                        <Icon name="mail" size={14} stroke={2}/>{sendingNotify ? 'Creating…' : 'Create Draft'}
+                      </button>
+                      <button className="btn ghost" style={{ justifyContent: 'center' }} onClick={() => setNotifyOpen(false)}>Cancel</button>
+                    </div>
+                  </div>
+                )
               ) : (
                 <button
                   className="btn ghost"
@@ -406,7 +417,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                   onClick={openNotify}
                   title={!teamDefaults.mailConfigured ? 'Email isn’t configured in Settings' : undefined}
                 >
-                  <Icon name="mail" size={14} stroke={2}/>Email Bid to Team
+                  <Icon name="mail" size={14} stroke={2}/>Draft Email to Team
                 </button>
               )}
             </div>

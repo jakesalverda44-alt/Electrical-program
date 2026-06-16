@@ -177,32 +177,22 @@ router.post('/:id/accept', requireAuth, async (req: AuthRequest, res) => {
         logger.error({ err, bidId: bid.id }, '[intake] email-sourced post-accept failed'));
     }
 
-    // Opt-in: email the new commercial bid to the team from the shared mailbox, using the
-    // reviewer-edited recipient list. Best-effort — never fails the accept. On success we
-    // record team_notified_at/_to on the item so the inbox can show a "Sent to team" mark.
-    let teamNotifiedAt: string | null = null;
-    let teamNotifiedTo: string[] | null = null;
+    // Opt-in: create a draft "new bid" email to the team in Outlook, using the reviewer-edited
+    // recipient list. Best-effort — never fails the accept. The user reviews and sends it.
+    let teamDraftLink: string | null = null;
     if (o.notifyTeam === true) {
       const to = Array.isArray(o.notifyEmails)
         ? (o.notifyEmails as unknown[]).map(e => String(e).trim()).filter(Boolean)
         : [];
       try {
-        const result = await sendBidNotification(bid, { name: user.name }, { to, force: true });
-        if (result.sent) {
-          teamNotifiedTo = result.to;
-          const { rows } = await pool.query(
-            `UPDATE intake_items SET team_notified_at=now(), team_notified_to=$1, updated_at=now()
-             WHERE id=$2 RETURNING team_notified_at`,
-            [result.to, req.params.id]
-          );
-          teamNotifiedAt = rows[0]?.team_notified_at ?? null;
-        }
+        const result = await sendBidNotification(bid, { name: user.name }, { to, force: true, draft: true });
+        teamDraftLink = result.draftWebLink ?? null;
       } catch (err) {
-        logger.error({ err, bidId: bid.id }, '[intake] team bid notification failed');
+        logger.error({ err, bidId: bid.id }, '[intake] team bid draft failed');
       }
     }
 
-    res.json({ bid: withDueDays(bid), teamNotifiedAt, teamNotifiedTo });
+    res.json({ bid: withDueDays(bid), teamDraftLink });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);
