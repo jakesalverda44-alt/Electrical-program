@@ -1,6 +1,6 @@
 import { getSetting } from '../db/getSetting';
 import { escapeHtml } from '../utils/escapeHtml';
-import { graphSendMail, isGraphMailConfigured, GraphAttachment } from './graphMailer';
+import { graphSendMail, graphCreateDraft, isGraphMailConfigured, GraphAttachment } from './graphMailer';
 
 // "New commercial bid → team" notification. Shared by the manual POST /bids path
 // (auto-send, gated by the bid_notify_enabled toggle) and the Intake accept path
@@ -69,6 +69,8 @@ export interface SendBidNotificationOpts {
   to?: string[];
   /** Send even when bid_notify_enabled is 'false' (used for the explicit opt-in). */
   force?: boolean;
+  /** Create a draft in Outlook instead of sending immediately. */
+  draft?: boolean;
   /** File attachments (e.g. the bid's uploaded plans). */
   attachments?: GraphAttachment[];
   /** Names of the attached files, listed in the body. */
@@ -77,15 +79,25 @@ export interface SendBidNotificationOpts {
   driveLink?: string | null;
 }
 
+export interface SendBidNotificationResult {
+  /** True when an email was actually sent (false for a draft or a no-op). */
+  sent: boolean;
+  /** Recipients on the message. */
+  to: string[];
+  /** Set when a draft was created instead of sending — link to open it in Outlook. */
+  draftWebLink?: string;
+}
+
 /**
- * Send the "new bid" team notification. Returns the recipients actually emailed
- * (empty when nothing was sent: disabled, no recipients, or no mail transport).
+ * Email (or draft) the "new bid" team notification. `to` is empty when nothing happened
+ * (disabled, no recipients, or no mail transport). With opts.draft, a draft is created in
+ * Outlook instead of sending, and draftWebLink is returned.
  */
 export async function sendBidNotification(
   bid: BidNotifyData,
   addedBy: { name: string },
   opts: SendBidNotificationOpts = {},
-): Promise<{ sent: boolean; to: string[] }> {
+): Promise<SendBidNotificationResult> {
   const enabled = await getSetting('bid_notify_enabled');
   if (!opts.force && enabled === 'false') return { sent: false, to: [] };
 
@@ -94,6 +106,12 @@ export async function sendBidNotification(
   if (!isGraphMailConfigured()) return { sent: false, to: [] };
 
   const { subject, html } = buildEmail(bid, addedBy.name, { attachedNames: opts.attachedNames, driveLink: opts.driveLink });
+
+  if (opts.draft) {
+    const draft = await graphCreateDraft({ to: emails, subject, html, attachments: opts.attachments });
+    return { sent: false, to: emails, draftWebLink: draft.webLink };
+  }
+
   await graphSendMail({ to: emails, subject, html, attachments: opts.attachments });
   return { sent: true, to: emails };
 }

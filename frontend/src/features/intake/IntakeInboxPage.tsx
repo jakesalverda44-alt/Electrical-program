@@ -147,11 +147,11 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
         notifyTeam, notifyEmails: teamEmails,
       });
       onBidAccepted(r.data.bid as Bid);
-      const notified: string[] | null = r.data.teamNotifiedTo ?? null;
+      const draftLink: string | null = r.data.teamDraftLink ?? null;
       showToast({
         title: 'Bid accepted',
-        sub: notified?.length
-          ? `${edit.name} added · emailed ${notified.length} ${notified.length === 1 ? 'teammate' : 'teammates'}`
+        sub: draftLink
+          ? `${edit.name} added · draft email created in your Outlook`
           : `${edit.name} added to pipeline`,
       });
       setSelected(null);
@@ -394,7 +394,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
                         if (c && !notifyEmails.trim()) setNotifyEmails(teamDefaults.emails.join(', '));
                       }}
                     />
-                    Email this new bid to the team
+                    Create a draft email to the team (in Outlook)
                   </label>
                   {!teamDefaults.mailConfigured && (
                     <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 6 }}>Email isn’t configured — set it up in Settings to enable this.</div>
@@ -408,7 +408,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
                         onChange={e => setNotifyEmails(e.target.value)}
                         placeholder="name@company.com, name2@company.com"
                       />
-                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5 }}>Comma-separated. Sent from your Outlook mailbox when you accept.</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5 }}>Comma-separated. Creates a draft in your Outlook on accept — nothing is sent until you send it.</div>
                     </div>
                   )}
                 </div>

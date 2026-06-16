@@ -256,9 +256,9 @@ router.post('/:id/close', requireAuth, async (req: AuthRequest, res) => {
   res.json(withDueDays(rows[0]));
 });
 
-// Email this bid to the team after the fact (the Accept panel offers it at accept time).
-// Recipients come from the request (reviewer-edited, prefilled from the Settings team list).
-// Records team_notified_at/_to so the pipeline drawer can show a "Sent to team" mark.
+// Create a draft "new bid" email to the team in Outlook (does NOT send — the user reviews
+// and sends it from their mailbox). Recipients come from the request (reviewer-edited,
+// prefilled from the Settings team list); the bid's uploaded files are attached.
 router.post('/:id/notify-team', requireAuth, async (req: AuthRequest, res) => {
   const bid = await loadOwnedBid(req, res);
   if (!bid) return;
@@ -286,28 +286,23 @@ router.post('/:id/notify-team', requireAuth, async (req: AuthRequest, res) => {
     ? `https://drive.google.com/drive/folders/${bid.drive_job_folder_id}`
     : null;
 
-  let result: { sent: boolean; to: string[] };
+  let result;
   try {
-    result = await sendBidNotification(bid, { name: req.user!.name }, { to, force: true, attachments, attachedNames, driveLink });
+    result = await sendBidNotification(bid, { name: req.user!.name }, { to, force: true, draft: true, attachments, attachedNames, driveLink });
   } catch (err) {
-    logger.error({ err, bidId: bid.id }, '[bids] notify-team send failed');
-    return res.status(502).json({ error: 'Could not send the email. Check the mail configuration.' });
+    logger.error({ err, bidId: bid.id }, '[bids] notify-team draft failed');
+    return res.status(502).json({ error: 'Could not create the draft. Check the mail configuration.' });
   }
-  if (!result.sent) {
-    return res.status(503).json({ error: 'Email is not configured. Set up Microsoft Graph (GRAPH_* env vars) to send mail.' });
+  if (!result.to.length) {
+    return res.status(503).json({ error: 'Email is not configured. Set up Microsoft Graph (GRAPH_* env vars) to create the draft.' });
   }
 
-  const { rows } = await pool.query(
-    `UPDATE bids SET team_notified_at = now(), team_notified_to = $1, updated_at = now()
-     WHERE id = $2 AND deleted_at IS NULL RETURNING *`,
-    [result.to, bid.id]
-  );
   await writeAudit(req, {
-    action: 'notify_team', entityType: 'bid', entityId: bid.id,
-    summary: `Emailed new bid "${bid.name}" to ${result.to.length} recipient${result.to.length === 1 ? '' : 's'}`
+    action: 'notify_team_draft', entityType: 'bid', entityId: bid.id,
+    summary: `Drafted new-bid email for "${bid.name}" to ${result.to.length} recipient${result.to.length === 1 ? '' : 's'}`
       + (attachedNames.length ? ` with ${attachedNames.length} file${attachedNames.length === 1 ? '' : 's'}` : ''),
   });
-  res.json({ bid: withDueDays(rows[0]), teamNotifiedTo: result.to, attachedNames, skipped });
+  res.json({ draftWebLink: result.draftWebLink, to: result.to, attachedNames, skipped });
 });
 
 // Bid qualification score — computed from historical data, no AI key needed

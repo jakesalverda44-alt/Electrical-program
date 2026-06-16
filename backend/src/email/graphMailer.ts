@@ -71,3 +71,44 @@ export async function graphSendMail({ to, subject, html, attachments, appendSign
     throw new Error(`Graph sendMail failed: HTTP ${resp.status} ${text}`);
   }
 }
+
+/**
+ * Create a DRAFT message in the mailbox's Drafts folder (does NOT send). Returns the
+ * draft's id and webLink so the caller can surface an "open in Outlook" link. Same
+ * recipients/subject/body/attachments handling as graphSendMail, including the signature.
+ */
+export async function graphCreateDraft({ to, subject, html, attachments, appendSignature = true }: SendArgs): Promise<{ id: string; webLink: string }> {
+  const token = await getGraphToken();
+  const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
+
+  let content = html;
+  const allAttachments: GraphAttachment[] = attachments ? [...attachments] : [];
+  if (appendSignature) {
+    const sig = await resolveSignature();
+    content += sig.html;
+    allAttachments.push(...sig.attachments);
+  }
+
+  const message: Record<string, unknown> = {
+    subject,
+    body: { contentType: 'HTML', content },
+    toRecipients: toList.map(address => ({ emailAddress: { address } })),
+  };
+  if (allAttachments.length) message.attachments = allAttachments;
+
+  // POSTing to /messages creates the message as a draft in the Drafts folder.
+  const resp = await fetch(
+    `${GRAPH_BASE}/users/${encodeURIComponent(SEND_AS)}/messages`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(message),
+    }
+  );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`Graph create draft failed: HTTP ${resp.status} ${text}`);
+  }
+  const data = (await resp.json()) as { id?: string; webLink?: string };
+  return { id: data.id || '', webLink: data.webLink || '' };
+}
