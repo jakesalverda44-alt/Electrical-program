@@ -1,4 +1,3 @@
-import { Resend } from 'resend';
 import { getSetting } from '../db/getSetting';
 import { escapeHtml } from '../utils/escapeHtml';
 import { graphSendMail, isGraphMailConfigured } from './graphMailer';
@@ -6,7 +5,7 @@ import { graphSendMail, isGraphMailConfigured } from './graphMailer';
 // "New commercial bid → team" notification. Shared by the manual POST /bids path
 // (auto-send, gated by the bid_notify_enabled toggle) and the Intake accept path
 // (opt-in per accept, with a reviewer-edited recipient list). Mail goes out via
-// Microsoft Graph from the shared mailbox, falling back to Resend if Graph is off.
+// Microsoft Graph from the shared mailbox.
 
 export interface BidNotifyData {
   name: unknown;
@@ -43,8 +42,7 @@ function buildEmail(bid: BidNotifyData, addedByName: string, base: string) {
       </table>
       <p style="margin:20px 0 0"><a href="${base}" style="background:#4D8DF7;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700">Open Pipeline →</a></p>
     </div>`;
-  const text = `New Bid: ${bid.name}\nGC: ${bid.gc}\nLocation: ${bid.loc}\nDue: ${dueStr}\nEst. Value: ${amt}\nAdded by: ${addedByName}\n\n${base}`;
-  return { subject, html, text };
+  return { subject, html };
 }
 
 export interface SendBidNotificationOpts {
@@ -63,34 +61,18 @@ export async function sendBidNotification(
   addedBy: { name: string },
   opts: SendBidNotificationOpts = {},
 ): Promise<{ sent: boolean; to: string[] }> {
-  const [enabled, apiKey, fromAddress, fromName, frontendUrl] = await Promise.all([
+  const [enabled, frontendUrl] = await Promise.all([
     getSetting('bid_notify_enabled'),
-    getSetting('email_resend_api_key'),
-    getSetting('email_from_address'),
-    getSetting('email_from_name'),
     getSetting('frontend_url'),
   ]);
   if (!opts.force && enabled === 'false') return { sent: false, to: [] };
 
   const emails = (opts.to ?? await getBidNotifyEmails()).map(s => s.trim()).filter(Boolean);
   if (!emails.length) return { sent: false, to: [] };
+  if (!isGraphMailConfigured()) return { sent: false, to: [] };
 
   const base = (frontendUrl || 'https://electrical-program.onrender.com').replace(/\/$/, '');
-  const { subject, html, text } = buildEmail(bid, addedBy.name, base);
-
-  // Prefer Microsoft Graph (app-only); fall back to Resend only if Graph isn't configured.
-  if (isGraphMailConfigured()) {
-    await graphSendMail({ to: emails, subject, html });
-    return { sent: true, to: emails };
-  }
-  if (!apiKey) return { sent: false, to: [] };
-  const resend = new Resend(apiKey);
-  await resend.emails.send({
-    from: fromName ? `${fromName} <${fromAddress}>` : (fromAddress as string),
-    to: emails,
-    subject,
-    html,
-    text,
-  });
+  const { subject, html } = buildEmail(bid, addedBy.name, base);
+  await graphSendMail({ to: emails, subject, html });
   return { sent: true, to: emails };
 }

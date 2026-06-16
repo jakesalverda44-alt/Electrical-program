@@ -1,16 +1,16 @@
 import { Router } from 'express';
-import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
+import { graphSendMail, isGraphMailConfigured } from '../email/graphMailer';
 
 const router = Router();
 
-const MASKED_KEYS = ['email_resend_api_key', 'ai_anthropic_key'];
+const MASKED_KEYS = ['ai_anthropic_key'];
 
 const ALLOWED_KEYS = [
-  'email_resend_api_key', 'email_from_address', 'email_from_name', 'email_reply_to', 'frontend_url',
+  'frontend_url',
   'email_signature',
   'company_name', 'company_address', 'company_city', 'company_state', 'company_zip',
   'company_phone', 'company_email', 'company_website',
@@ -89,24 +89,16 @@ router.post('/test-email', requireAuth, requireAdmin, async (req: AuthRequest, r
   const { to } = req.body;
   if (!to) return res.status(400).json({ error: 'Recipient required' });
 
-  const [apiKey, fromAddress, fromName, replyTo] = await Promise.all([
-    getSetting('email_resend_api_key'),
-    getSetting('email_from_address'),
-    getSetting('email_from_name'),
-    getSetting('email_reply_to'),
-  ]);
+  // Mail is sent through Microsoft Graph from the shared mailbox.
+  if (!isGraphMailConfigured()) {
+    return res.status(400).json({ error: 'Email is not configured. Set the Microsoft Graph credentials (GRAPH_TENANT_ID / GRAPH_CLIENT_ID / GRAPH_CLIENT_SECRET) in the environment.' });
+  }
 
-  if (!apiKey) return res.status(400).json({ error: 'No API key configured' });
-
-  const resend = new Resend(apiKey);
   try {
-    await resend.emails.send({
-      from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
-      replyTo: replyTo || undefined,
+    await graphSendMail({
       to,
       subject: 'Test Email — Accurate Power & Technology',
-      html: '<p>Your email settings are configured correctly. Proposal delivery is ready. ✅</p>',
-      text: 'Your email settings are configured correctly. Proposal delivery is ready.',
+      html: '<p>Your email settings are configured correctly. Mail delivery is ready. ✅</p>',
     });
     res.json({ ok: true });
   } catch (err) {

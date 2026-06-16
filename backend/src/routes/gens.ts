@@ -1,9 +1,8 @@
 import { Router } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
-import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
-import { proposalEmailHtml, proposalEmailText } from '../email/proposalEmail';
+import { proposalEmailHtml } from '../email/proposalEmail';
 import { graphSendMail, isGraphMailConfigured, TEAM_NOTIFY_TO } from '../email/graphMailer';
 import { escapeHtml } from '../utils/escapeHtml';
 import { getSetting } from './settings';
@@ -590,8 +589,8 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
 
 // ── Send proposal email ──────────────────────────────────────────────────────
 // Sends through Microsoft Graph (the shared Outlook mailbox, so it lands in Sent
-// Items and replies come back to the inbox); falls back to Resend if Graph isn't
-// configured. The proposal is only marked sent AFTER the email actually goes out.
+// Items and replies come back to the inbox). The proposal is only marked sent
+// AFTER the email actually goes out.
 router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
   const { to, subject, note, proposalNo, total, deposit } = req.body;
   if (!to) return res.status(400).json({ error: 'Recipient email required' });
@@ -616,40 +615,17 @@ router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
     spec, total, deposit, validDays, link, senderNote: note,
   });
 
-  if (isGraphMailConfigured()) {
-    try {
-      await graphSendMail({ to, subject: finalSubject, html });
-    } catch (err) {
-      logger.error({ err, genId: gen.id }, '[email] Graph proposal send failed');
-      return res.status(502).json({ error: 'Email delivery failed (Outlook). Try again or copy the proposal link.', link });
-    }
-  } else {
-    const [apiKey, fromAddress, fromName, replyTo] = await Promise.all([
-      getSetting('email_resend_api_key'),
-      getSetting('email_from_address'),
-      getSetting('email_from_name'),
-      getSetting('email_reply_to'),
-    ]);
-    if (!apiKey) {
-      return res.status(503).json({
-        error: 'No email service is configured. Copy the proposal link and send it yourself.',
-        link,
-      });
-    }
-    const resend = new Resend(apiKey);
-    try {
-      await resend.emails.send({
-        from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
-        replyTo: replyTo || undefined,
-        to,
-        subject: finalSubject,
-        html,
-        text: proposalEmailText({ customerName: gen.customer, proposalNo: proposalNo || gen.proposal_no || '', total, link }),
-      });
-    } catch (err) {
-      console.error('[email] Resend error:', err);
-      return res.status(502).json({ error: 'Email delivery failed', link });
-    }
+  if (!isGraphMailConfigured()) {
+    return res.status(503).json({
+      error: 'Email is not configured (Microsoft Graph). Copy the proposal link and send it yourself.',
+      link,
+    });
+  }
+  try {
+    await graphSendMail({ to, subject: finalSubject, html });
+  } catch (err) {
+    logger.error({ err, genId: gen.id }, '[email] Graph proposal send failed');
+    return res.status(502).json({ error: 'Email delivery failed (Outlook). Try again or copy the proposal link.', link });
   }
 
   // Email is out — now stamp sent_at and advance Building -> Sent.

@@ -12,7 +12,6 @@ import { uploadFile } from '../services/googleDrive';
 import { logger } from '../utils/logger';
 import { sendBidNotification, getBidNotifyEmails } from '../email/bidNotification';
 import { isGraphMailConfigured } from '../email/graphMailer';
-import { getSetting } from '../db/getSetting';
 
 const router = Router();
 
@@ -84,11 +83,8 @@ router.get('/unread-count', requireAuth, async (_req, res) => {
 // the configured team distribution list (prefilled, editable) and whether mail is
 // configured at all (so the UI can disable the option when it can't send).
 router.get('/notify-defaults', requireAuth, async (_req, res) => {
-  const [emails, resendKey] = await Promise.all([
-    getBidNotifyEmails(),
-    getSetting('email_resend_api_key'),
-  ]);
-  res.json({ emails, mailConfigured: isGraphMailConfigured() || !!resendKey });
+  const emails = await getBidNotifyEmails();
+  res.json({ emails, mailConfigured: isGraphMailConfigured() });
 });
 
 // Shared inbox of incoming bid invitations. Pending items plus anything
