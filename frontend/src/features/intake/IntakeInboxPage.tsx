@@ -27,6 +27,9 @@ interface IntakeItem {
   received_at: string | null;
   body_snippet: string | null;
   attachment_names: string[] | null;
+  // Set when the "new bid" email was sent to the team from the Accept panel.
+  team_notified_at: string | null;
+  team_notified_to: string[] | null;
 }
 
 const DECLINE_REASONS = [
@@ -64,6 +67,16 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   const [addForm, setAddForm] = useState<typeof BLANK>(BLANK);
   const [refreshing, setRefreshing] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
+  // "Email new bid to the team" option (opt-in, off by default) + its editable recipients.
+  const [notifyTeam, setNotifyTeam] = useState(false);
+  const [notifyEmails, setNotifyEmails] = useState('');
+  const [teamDefaults, setTeamDefaults] = useState<{ emails: string[]; mailConfigured: boolean }>({ emails: [], mailConfigured: false });
+
+  useEffect(() => {
+    api.get('/intake/notify-defaults')
+      .then(r => setTeamDefaults({ emails: r.data?.emails ?? [], mailConfigured: !!r.data?.mailConfigured }))
+      .catch(() => setTeamDefaults({ emails: [], mailConfigured: false }));
+  }, []);
 
   const report = useCallback((list: IntakeItem[]) => {
     onUnreadChange?.(list.filter(i => !i.read_at).length);
@@ -92,6 +105,9 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
       due: item.due ? item.due.slice(0, 10) : '', notes: item.notes || '',
     });
     setDeclineOpen(false);
+    // Reset the team-email option for each item (off by default), prefilled & editable.
+    setNotifyTeam(false);
+    setNotifyEmails(teamDefaults.emails.join(', '));
     // Opening an unread item marks it read (persisted), and updates the count locally.
     if (!item.read_at) {
       const stamp = new Date().toISOString();
@@ -120,14 +136,24 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   const handleAccept = async () => {
     if (!selected) return;
     if (!edit.name.trim() || !edit.gc.trim()) { showToast({ title: 'Name and GC are required' }); return; }
+    const teamEmails = notifyTeam
+      ? notifyEmails.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
+      : [];
     setSaving(true);
     try {
       const r = await api.post(`/intake/${selected.id}/accept`, {
         name: edit.name, gc: edit.gc, loc: edit.loc, contact: edit.contact,
         amount: edit.amount, sq_ft: edit.sq_ft, due: edit.due, notes: edit.notes,
+        notifyTeam, notifyEmails: teamEmails,
       });
       onBidAccepted(r.data.bid as Bid);
-      showToast({ title: 'Bid accepted', sub: `${edit.name} added to pipeline` });
+      const notified: string[] | null = r.data.teamNotifiedTo ?? null;
+      showToast({
+        title: 'Bid accepted',
+        sub: notified?.length
+          ? `${edit.name} added · emailed ${notified.length} ${notified.length === 1 ? 'teammate' : 'teammates'}`
+          : `${edit.name} added to pipeline`,
+      });
       setSelected(null);
       load();
     } catch (err: unknown) {
@@ -197,6 +223,11 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {item.status === 'accepted' && <span style={{ fontSize: 10.5, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'var(--green-soft)', color: 'var(--green)', textTransform: 'uppercase' }}>Accepted</span>}
           {item.status === 'declined' && <span style={{ fontSize: 10.5, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'var(--surface2)', color: 'var(--text3)', textTransform: 'uppercase' }}>Rejected</span>}
+          {item.team_notified_at && (
+            <span title={item.team_notified_to?.length ? `Sent to ${item.team_notified_to.join(', ')}` : 'Sent to the team'} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'var(--blue-soft, var(--surface2))', color: 'var(--blue)', textTransform: 'uppercase' }}>
+              <Icon name="check" size={11} stroke={2.6}/> Team
+            </span>
+          )}
         </div>
       </div>
     );
@@ -349,6 +380,39 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
             {selected.status === 'pending' ? (
               <>
                 {FormFields(edit, (k, v) => setEdit(prev => ({ ...prev, [k]: v })))}
+
+                {/* Opt-in: email this new commercial bid to the team (off by default). */}
+                <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px', marginBottom: 12 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: teamDefaults.mailConfigured ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>
+                    <input
+                      type="checkbox"
+                      checked={notifyTeam}
+                      disabled={!teamDefaults.mailConfigured}
+                      onChange={e => {
+                        const c = e.target.checked;
+                        setNotifyTeam(c);
+                        if (c && !notifyEmails.trim()) setNotifyEmails(teamDefaults.emails.join(', '));
+                      }}
+                    />
+                    Email this new bid to the team
+                  </label>
+                  {!teamDefaults.mailConfigured && (
+                    <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 6 }}>Email isn’t configured — set it up in Settings to enable this.</div>
+                  )}
+                  {notifyTeam && (
+                    <div style={{ marginTop: 10 }}>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 5 }}>Recipients</label>
+                      <textarea
+                        style={{ ...inputStyle, minHeight: 44, resize: 'vertical' }}
+                        value={notifyEmails}
+                        onChange={e => setNotifyEmails(e.target.value)}
+                        placeholder="name@company.com, name2@company.com"
+                      />
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5 }}>Comma-separated. Sent from your Outlook mailbox when you accept.</div>
+                    </div>
+                  )}
+                </div>
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
                   <button className="btn" onClick={handleAccept} disabled={saving} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
                     <Icon name="check" size={14} stroke={2.2}/> {saving ? 'Accepting…' : 'Accept & Add to Pipeline'}
@@ -372,6 +436,13 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
                 {selected.status === 'accepted'
                   ? '✓ Accepted and added to the pipeline.'
                   : `✗ Rejected${selected.decline_reason ? ` — ${selected.decline_reason}` : ''}.`}
+                {selected.team_notified_at && (
+                  <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--blue)', fontWeight: 700 }}>
+                    <Icon name="check" size={14} stroke={2.4}/>
+                    Emailed to the team on {fmt(selected.team_notified_at)}
+                    {selected.team_notified_to?.length ? ` · ${selected.team_notified_to.length} ${selected.team_notified_to.length === 1 ? 'recipient' : 'recipients'}` : ''}
+                  </div>
+                )}
               </div>
             )}
           </div>

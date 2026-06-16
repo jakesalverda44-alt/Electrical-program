@@ -10,6 +10,9 @@ import { downloadAttachments, createReplyDraft } from '../integrations/outlookMa
 import { pushBidDueToCalendar } from '../integrations/outlookCalendar';
 import { uploadFile } from '../services/googleDrive';
 import { logger } from '../utils/logger';
+import { sendBidNotification, getBidNotifyEmails } from '../email/bidNotification';
+import { isGraphMailConfigured } from '../email/graphMailer';
+import { getSetting } from '../db/getSetting';
 
 const router = Router();
 
@@ -75,6 +78,17 @@ async function finishEmailSourcedAccept(
 router.get('/unread-count', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(`SELECT count(*)::int AS unread FROM intake_items WHERE read_at IS NULL`);
   res.json({ unread: rows[0].unread });
+});
+
+// Defaults for the "email this new bid to the team" option in the Accept panel:
+// the configured team distribution list (prefilled, editable) and whether mail is
+// configured at all (so the UI can disable the option when it can't send).
+router.get('/notify-defaults', requireAuth, async (_req, res) => {
+  const [emails, resendKey] = await Promise.all([
+    getBidNotifyEmails(),
+    getSetting('email_resend_api_key'),
+  ]);
+  res.json({ emails, mailConfigured: isGraphMailConfigured() || !!resendKey });
 });
 
 // Shared inbox of incoming bid invitations. Pending items plus anything
@@ -166,7 +180,33 @@ router.post('/:id/accept', requireAuth, async (req: AuthRequest, res) => {
       await finishEmailSourcedAccept(it, bid, dueIso).catch(err =>
         logger.error({ err, bidId: bid.id }, '[intake] email-sourced post-accept failed'));
     }
-    res.json({ bid: withDueDays(bid) });
+
+    // Opt-in: email the new commercial bid to the team from the shared mailbox, using the
+    // reviewer-edited recipient list. Best-effort — never fails the accept. On success we
+    // record team_notified_at/_to on the item so the inbox can show a "Sent to team" mark.
+    let teamNotifiedAt: string | null = null;
+    let teamNotifiedTo: string[] | null = null;
+    if (o.notifyTeam === true) {
+      const to = Array.isArray(o.notifyEmails)
+        ? (o.notifyEmails as unknown[]).map(e => String(e).trim()).filter(Boolean)
+        : [];
+      try {
+        const result = await sendBidNotification(bid, { name: user.name }, { to, force: true });
+        if (result.sent) {
+          teamNotifiedTo = result.to;
+          const { rows } = await pool.query(
+            `UPDATE intake_items SET team_notified_at=now(), team_notified_to=$1, updated_at=now()
+             WHERE id=$2 RETURNING team_notified_at`,
+            [result.to, req.params.id]
+          );
+          teamNotifiedAt = rows[0]?.team_notified_at ?? null;
+        }
+      } catch (err) {
+        logger.error({ err, bidId: bid.id }, '[intake] team bid notification failed');
+      }
+    }
+
+    res.json({ bid: withDueDays(bid), teamNotifiedAt, teamNotifiedTo });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);
