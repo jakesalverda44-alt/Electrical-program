@@ -255,6 +255,41 @@ router.post('/:id/close', requireAuth, async (req: AuthRequest, res) => {
   res.json(withDueDays(rows[0]));
 });
 
+// Email this bid to the team after the fact (the Accept panel offers it at accept time).
+// Recipients come from the request (reviewer-edited, prefilled from the Settings team list).
+// Records team_notified_at/_to so the pipeline drawer can show a "Sent to team" mark.
+router.post('/:id/notify-team', requireAuth, async (req: AuthRequest, res) => {
+  const bid = await loadOwnedBid(req, res);
+  if (!bid) return;
+
+  const to = Array.isArray(req.body?.emails)
+    ? (req.body.emails as unknown[]).map(e => String(e).trim()).filter(Boolean)
+    : [];
+  if (!to.length) return res.status(400).json({ error: 'Add at least one recipient.' });
+
+  let result: { sent: boolean; to: string[] };
+  try {
+    result = await sendBidNotification(bid, { name: req.user!.name }, { to, force: true });
+  } catch (err) {
+    logger.error({ err, bidId: bid.id }, '[bids] notify-team send failed');
+    return res.status(502).json({ error: 'Could not send the email. Check the mail configuration.' });
+  }
+  if (!result.sent) {
+    return res.status(503).json({ error: 'Email is not configured. Set up Outlook (Graph) or Resend in Settings.' });
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE bids SET team_notified_at = now(), team_notified_to = $1, updated_at = now()
+     WHERE id = $2 AND deleted_at IS NULL RETURNING *`,
+    [result.to, bid.id]
+  );
+  await writeAudit(req, {
+    action: 'notify_team', entityType: 'bid', entityId: bid.id,
+    summary: `Emailed new bid "${bid.name}" to ${result.to.length} recipient${result.to.length === 1 ? '' : 's'}`,
+  });
+  res.json({ bid: withDueDays(rows[0]), teamNotifiedTo: result.to });
+});
+
 // Bid qualification score — computed from historical data, no AI key needed
 router.get('/:id/qualify', requireAuth, async (req: AuthRequest, res) => {
   const bid = await loadOwnedBid(req, res);
