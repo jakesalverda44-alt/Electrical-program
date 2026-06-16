@@ -130,18 +130,20 @@ router.post('/:id/accept', requireAuth, async (req: AuthRequest, res) => {
     const name = String(o.name ?? it.name ?? '').trim();
     const gc   = String(o.gc ?? it.gc ?? '').trim();
     if (!name || !gc) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Name and GC are required to accept' }); }
-    const loc    = o.loc ?? it.loc;
-    const amount = o.amount ?? it.amount;
-    const notes  = o.notes ?? it.notes;
-    const due    = o.due ?? it.due;
-    const sqFt   = o.sq_ft ?? it.sq_ft;
+    const loc     = o.loc ?? it.loc;
+    const contact = o.contact ?? it.contact;
+    const amount  = o.amount ?? it.amount;
+    const notes   = o.notes ?? it.notes;
+    const due     = o.due ?? it.due;
+    const sqFt    = o.sq_ft ?? it.sq_ft;
     const user = req.user!;
     const customerId = await upsertCustomer(gc, 'gc');
 
     const { rows: bidRows } = await client.query(
-      `INSERT INTO bids (name, gc, loc, amount, due, notes, salesperson_id, salesperson_name, customer_id, sq_ft, source_email_link)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [name, gc, (loc || '').trim() || '—', amount != null && amount !== '' ? Number(amount) : null,
+      `INSERT INTO bids (name, gc, loc, contact, amount, due, notes, salesperson_id, salesperson_name, customer_id, sq_ft, source_email_link)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [name, gc, (loc || '').trim() || '—', (typeof contact === 'string' && contact.trim()) ? contact.trim() : null,
+       amount != null && amount !== '' ? Number(amount) : null,
        formatDue(due), notes?.trim?.() || notes || null, user.id, user.name, customerId,
        sqFt != null && sqFt !== '' ? Number(sqFt) : null, it.web_link || null]
     );
