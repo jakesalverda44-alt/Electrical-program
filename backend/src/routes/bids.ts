@@ -7,6 +7,7 @@ import { commissionRate, commissionAmount } from '../utils/commission';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { logger } from '../utils/logger';
 import { sendBidNotification } from '../email/bidNotification';
+import { loadBidDocumentsAsAttachments } from '../email/bidAttachments';
 import { upsertCustomer } from './customers';
 import {
   createJobFolder,
@@ -267,9 +268,27 @@ router.post('/:id/notify-team', requireAuth, async (req: AuthRequest, res) => {
     : [];
   if (!to.length) return res.status(400).json({ error: 'Add at least one recipient.' });
 
+  // Attach the bid's uploaded files (plans, etc.) unless the sender opted out. Files too
+  // large to attach fall back to a Google Drive folder link in the email body.
+  const attach = req.body?.attachFiles !== false;
+  let attachments; let attachedNames: string[] = []; let skipped: string[] = [];
+  if (attach) {
+    try {
+      const loaded = await loadBidDocumentsAsAttachments(bid.id);
+      attachments = loaded.attachments;
+      attachedNames = loaded.attachedNames;
+      skipped = loaded.skipped;
+    } catch (err) {
+      logger.error({ err, bidId: bid.id }, '[bids] notify-team attachment load failed');
+    }
+  }
+  const driveLink = (skipped.length && bid.drive_job_folder_id)
+    ? `https://drive.google.com/drive/folders/${bid.drive_job_folder_id}`
+    : null;
+
   let result: { sent: boolean; to: string[] };
   try {
-    result = await sendBidNotification(bid, { name: req.user!.name }, { to, force: true });
+    result = await sendBidNotification(bid, { name: req.user!.name }, { to, force: true, attachments, attachedNames, driveLink });
   } catch (err) {
     logger.error({ err, bidId: bid.id }, '[bids] notify-team send failed');
     return res.status(502).json({ error: 'Could not send the email. Check the mail configuration.' });
@@ -285,9 +304,10 @@ router.post('/:id/notify-team', requireAuth, async (req: AuthRequest, res) => {
   );
   await writeAudit(req, {
     action: 'notify_team', entityType: 'bid', entityId: bid.id,
-    summary: `Emailed new bid "${bid.name}" to ${result.to.length} recipient${result.to.length === 1 ? '' : 's'}`,
+    summary: `Emailed new bid "${bid.name}" to ${result.to.length} recipient${result.to.length === 1 ? '' : 's'}`
+      + (attachedNames.length ? ` with ${attachedNames.length} file${attachedNames.length === 1 ? '' : 's'}` : ''),
   });
-  res.json({ bid: withDueDays(rows[0]), teamNotifiedTo: result.to });
+  res.json({ bid: withDueDays(rows[0]), teamNotifiedTo: result.to, attachedNames, skipped });
 });
 
 // Bid qualification score — computed from historical data, no AI key needed

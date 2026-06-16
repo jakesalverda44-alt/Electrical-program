@@ -41,6 +41,8 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
   const [notifyOpen, setNotifyOpen] = useState(false);
   const [notifyEmails, setNotifyEmails] = useState('');
   const [sendingNotify, setSendingNotify] = useState(false);
+  const [attachFiles, setAttachFiles] = useState(true);
+  const [fileCount, setFileCount] = useState<number | null>(null);
   const [teamDefaults, setTeamDefaults] = useState<{ emails: string[]; mailConfigured: boolean }>({ emails: [], mailConfigured: false });
 
   useEffect(() => {
@@ -51,7 +53,11 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
 
   const openNotify = () => {
     setNotifyEmails(notifyEmails.trim() || teamDefaults.emails.join(', '));
+    setAttachFiles(true);
     setNotifyOpen(true);
+    api.get(`/documents?linked_id=${encodeURIComponent(bid.id)}`)
+      .then(({ data }) => setFileCount(Array.isArray(data) ? data.length : 0))
+      .catch(() => setFileCount(0));
   };
 
   const handleNotifyTeam = async () => {
@@ -59,7 +65,7 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
     if (!emails.length) return;
     setSendingNotify(true);
     try {
-      const { data } = await api.post(`/bids/${bid.id}/notify-team`, { emails });
+      const { data } = await api.post(`/bids/${bid.id}/notify-team`, { emails, attachFiles });
       onBidEdited(data.bid ?? data, null);
       setNotifyOpen(false);
     } finally {
@@ -372,6 +378,12 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
                     placeholder="name@company.com, name2@company.com"
                   />
                   <div style={{ fontSize: 11, color: 'var(--text3)', margin: '5px 0 10px' }}>Comma-separated. Sent from your Outlook mailbox.</div>
+                  {fileCount != null && fileCount > 0 && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--text2)', margin: '0 0 12px', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={attachFiles} onChange={e => setAttachFiles(e.target.checked)}/>
+                      Attach bid files ({fileCount})
+                    </label>
+                  )}
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button className="btn" style={{ flex: 1, justifyContent: 'center' }} disabled={sendingNotify || !notifyEmails.trim()} onClick={handleNotifyTeam}>
                       <Icon name="check" size={14} stroke={2.2}/>{sendingNotify ? 'Sending…' : 'Send to Team'}
