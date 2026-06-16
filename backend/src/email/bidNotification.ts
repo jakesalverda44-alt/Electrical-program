@@ -30,28 +30,27 @@ export async function getBidNotifyEmails(): Promise<string[]> {
 function buildEmail(
   bid: BidNotifyData,
   addedByName: string,
-  base: string,
   opts: { attachedNames?: string[]; driveLink?: string | null } = {},
 ) {
   const str = (v: unknown) => (v == null ? '' : String(v)).trim();
   const dueStr = bid.due ? String(bid.due) : 'TBD';
   const amt = bid.amount ? '$' + Number(bid.amount).toLocaleString() : null;
 
-  // Plain, readable lines — no card/table. Only show fields we actually have.
+  // Plain lines, no styling — reads like a normal typed email; the signature follows.
   const rows: string[] = [
-    `<strong>Job:</strong> ${escapeHtml(str(bid.name))}`,
-    bid.gc ? `<strong>General Contractor:</strong> ${escapeHtml(str(bid.gc))}` : '',
-    bid.loc ? `<strong>Location:</strong> ${escapeHtml(str(bid.loc))}` : '',
-    bid.contact ? `<strong>Contact:</strong> ${escapeHtml(str(bid.contact))}` : '',
-    `<strong>Due:</strong> ${escapeHtml(dueStr)}`,
-    amt ? `<strong>Estimated Value:</strong> ${escapeHtml(amt)}` : '',
-    `<strong>Added by:</strong> ${escapeHtml(addedByName)}`,
+    `Job: ${escapeHtml(str(bid.name))}`,
+    bid.gc ? `General Contractor: ${escapeHtml(str(bid.gc))}` : '',
+    bid.loc ? `Location: ${escapeHtml(str(bid.loc))}` : '',
+    bid.contact ? `Contact: ${escapeHtml(str(bid.contact))}` : '',
+    `Due: ${escapeHtml(dueStr)}`,
+    amt ? `Estimated Value: ${escapeHtml(amt)}` : '',
+    `Added by: ${escapeHtml(addedByName)}`,
   ].filter(Boolean);
 
   const parts: string[] = [
     `<p>Team,</p>`,
     `<p>We have a new commercial bid to work:</p>`,
-    `<p style="line-height:1.7">${rows.join('<br>')}</p>`,
+    `<p>${rows.join('<br>')}</p>`,
   ];
   if (opts.attachedNames?.length) {
     parts.push(`<p>Plans &amp; documents attached: ${opts.attachedNames.map(n => escapeHtml(n)).join(', ')}.</p>`);
@@ -59,10 +58,9 @@ function buildEmail(
   if (opts.driveLink) {
     parts.push(`<p>All job files are in Google Drive: <a href="${opts.driveLink}">${opts.driveLink}</a></p>`);
   }
-  parts.push(`<p>View it in the pipeline: <a href="${base}">${base}</a></p>`);
 
   const subject = `New Bid — ${str(bid.name)}`;
-  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;line-height:1.5">${parts.join('\n')}</div>`;
+  const html = parts.join('\n');
   return { subject, html };
 }
 
@@ -88,18 +86,14 @@ export async function sendBidNotification(
   addedBy: { name: string },
   opts: SendBidNotificationOpts = {},
 ): Promise<{ sent: boolean; to: string[] }> {
-  const [enabled, frontendUrl] = await Promise.all([
-    getSetting('bid_notify_enabled'),
-    getSetting('frontend_url'),
-  ]);
+  const enabled = await getSetting('bid_notify_enabled');
   if (!opts.force && enabled === 'false') return { sent: false, to: [] };
 
   const emails = (opts.to ?? await getBidNotifyEmails()).map(s => s.trim()).filter(Boolean);
   if (!emails.length) return { sent: false, to: [] };
   if (!isGraphMailConfigured()) return { sent: false, to: [] };
 
-  const base = (frontendUrl || 'https://electrical-program.onrender.com').replace(/\/$/, '');
-  const { subject, html } = buildEmail(bid, addedBy.name, base, { attachedNames: opts.attachedNames, driveLink: opts.driveLink });
+  const { subject, html } = buildEmail(bid, addedBy.name, { attachedNames: opts.attachedNames, driveLink: opts.driveLink });
   await graphSendMail({ to: emails, subject, html, attachments: opts.attachments });
   return { sent: true, to: emails };
 }
