@@ -37,6 +37,35 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
   const [qualResult, setQualResult] = useState<QualResult | null>(null);
   const [winProb, setWinProb] = useState<{ pct: number; label: string } | null>(null);
   const [closingJob, setClosingJob] = useState(false);
+  // "Email bid to team" (send the new-bid notification after the fact).
+  const [notifyOpen, setNotifyOpen] = useState(false);
+  const [notifyEmails, setNotifyEmails] = useState('');
+  const [sendingNotify, setSendingNotify] = useState(false);
+  const [teamDefaults, setTeamDefaults] = useState<{ emails: string[]; mailConfigured: boolean }>({ emails: [], mailConfigured: false });
+
+  useEffect(() => {
+    api.get('/intake/notify-defaults')
+      .then(({ data }) => setTeamDefaults({ emails: data?.emails ?? [], mailConfigured: !!data?.mailConfigured }))
+      .catch(() => {});
+  }, []);
+
+  const openNotify = () => {
+    setNotifyEmails(notifyEmails.trim() || teamDefaults.emails.join(', '));
+    setNotifyOpen(true);
+  };
+
+  const handleNotifyTeam = async () => {
+    const emails = notifyEmails.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+    if (!emails.length) return;
+    setSendingNotify(true);
+    try {
+      const { data } = await api.post(`/bids/${bid.id}/notify-team`, { emails });
+      onBidEdited(data.bid ?? data, null);
+      setNotifyOpen(false);
+    } finally {
+      setSendingNotify(false);
+    }
+  };
 
   useEffect(() => {
     api.get(`/bids/${bid.id}/qualify`).then(({ data }) => {
@@ -329,6 +358,47 @@ export default function DetailDrawer({ bid, pendingLost, onStage, onCancelLost, 
               </button>
             )}
           </div>
+
+          {/* Email this new commercial bid to the team (after the fact). */}
+          {!isTerminal && (
+            <div style={{ marginTop: 8 }}>
+              {notifyOpen ? (
+                <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>Email bid to team — recipients</div>
+                  <textarea
+                    style={{ ...INPUT, minHeight: 44, resize: 'vertical' } as React.CSSProperties}
+                    value={notifyEmails}
+                    onChange={e => setNotifyEmails(e.target.value)}
+                    placeholder="name@company.com, name2@company.com"
+                  />
+                  <div style={{ fontSize: 11, color: 'var(--text3)', margin: '5px 0 10px' }}>Comma-separated. Sent from your Outlook mailbox.</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn" style={{ flex: 1, justifyContent: 'center' }} disabled={sendingNotify || !notifyEmails.trim()} onClick={handleNotifyTeam}>
+                      <Icon name="check" size={14} stroke={2.2}/>{sendingNotify ? 'Sending…' : 'Send to Team'}
+                    </button>
+                    <button className="btn ghost" style={{ justifyContent: 'center' }} onClick={() => setNotifyOpen(false)}>Cancel</button>
+                  </div>
+                </div>
+              ) : bid.team_notified_at ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'var(--surface2)', borderRadius: 9, padding: '8px 12px' }}>
+                  <span title={bid.team_notified_to?.length ? `Sent to ${bid.team_notified_to.join(', ')}` : 'Sent to the team'} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--green)' }}>
+                    <Icon name="check" size={14} stroke={2.4}/>Sent to team{fmtTs(bid.team_notified_at) ? ` · ${fmtTs(bid.team_notified_at)}` : ''}
+                  </span>
+                  <button className="btn ghost" style={{ height: 26, fontSize: 11.5, padding: '0 9px' }} disabled={!teamDefaults.mailConfigured} onClick={openNotify}>Resend</button>
+                </div>
+              ) : (
+                <button
+                  className="btn ghost"
+                  style={{ width: '100%', justifyContent: 'center', color: 'var(--blue)' }}
+                  disabled={!teamDefaults.mailConfigured}
+                  onClick={openNotify}
+                  title={!teamDefaults.mailConfigured ? 'Email isn’t configured in Settings' : undefined}
+                >
+                  <Icon name="mail" size={14} stroke={2}/>Email Bid to Team
+                </button>
+              )}
+            </div>
+          )}
 
           {bid.stage === 'awarded' && !bid.closed_at && (
             <button
