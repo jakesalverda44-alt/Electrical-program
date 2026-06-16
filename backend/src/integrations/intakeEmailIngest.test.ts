@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDueDate, parseProjectName } from './intakeEmailIngest';
+import { parseDueDate, parseProjectName, parseGc } from './intakeEmailIngest';
 
 const NOW = new Date('2026-06-10T12:00:00Z');
 
@@ -33,6 +33,45 @@ describe('parseDueDate', () => {
     // sent date 6/1 appears first, but the real due date is cued
     expect(parseDueDate('Sent 6/1. Bids due 6/25/2026.', NOW)).toBe('2026-06-25');
   });
+
+  it('reads a structured "BID DUE DATE:" field (Kingdom)', () => {
+    const body = 'DATE: June 16, 2026 ... PROJECT NAME: Alachua County ... BID DUE DATE: 07/17/2026 05:00 PM Eastern';
+    expect(parseDueDate(body, NOW)).toBe('2026-07-17');
+  });
+
+  it('ignores the letter/send date when it is uncued (Kingdom)', () => {
+    // The only cued date is 7/17; the leading "DATE: June 16, 2026" must NOT win.
+    const body = 'INVITATION TO BID DATE: June 16, 2026 FROM: Ian Nichols BID DUE DATE: 07/17/2026';
+    expect(parseDueDate(body, NOW)).toBe('2026-07-17');
+  });
+
+  it('does not mistake a phone number for a due date', () => {
+    // 865-691-6818 must not be read as a date now that uncued numbers are rejected.
+    expect(parseDueDate('Questions? Call Walker at (865) 691-6818.', NOW)).toBeNull();
+  });
+
+  it('returns null for an uncued bare date', () => {
+    expect(parseDueDate('Kickoff meeting on 6/30/2026', NOW)).toBeNull();
+  });
+});
+
+describe('parseGc', () => {
+  it('pulls the GC from "from <GC> for <Project>" over the contact name (Kingdom)', () => {
+    expect(parseGc(
+      'Invitation to Bid from Kingdom Construction for Alachua County Land Conservation Admin Building',
+      'Ian Nichols', 'ian@kingdomconstruction.org',
+    )).toBe('Kingdom Construction');
+  });
+
+  it('uses the sender display name when the subject has no "from … for" (Summit)', () => {
+    expect(parseGc('Invitation to Bid - Firestone - (Prototype)', 'Summit General Contractors', 'estimating@summitgc.net'))
+      .toBe('Summit General Contractors');
+  });
+
+  it('falls back to the sender address when there is no display name', () => {
+    expect(parseGc('Reminder to submit your Bid for 7-Eleven', null, 'noreply@procoretech.com'))
+      .toBe('noreply@procoretech.com');
+  });
 });
 
 describe('parseProjectName', () => {
@@ -50,5 +89,19 @@ describe('parseProjectName', () => {
 
   it('falls back to the raw subject when nothing matches', () => {
     expect(parseProjectName('Downtown Parking Structure')).toBe('Downtown Parking Structure');
+  });
+
+  it('extracts the project from "from <GC> for <Project>" (Kingdom)', () => {
+    expect(parseProjectName('Invitation to Bid from Kingdom Construction for Alachua County Land Conservation Admin Building'))
+      .toBe('Alachua County Land Conservation Admin Building');
+  });
+
+  it('extracts the project from a "Reminder to submit your Bid for …" subject (Procore)', () => {
+    expect(parseProjectName('Reminder to submit your Bid for 7-Eleven #42759 - Minneola, FL'))
+      .toBe('7-Eleven #42759 - Minneola, FL');
+  });
+
+  it('keeps a hyphenated project after the invitation prefix (Summit)', () => {
+    expect(parseProjectName('Invitation to Bid - Firestone - (Prototype)')).toBe('Firestone - (Prototype)');
   });
 });
