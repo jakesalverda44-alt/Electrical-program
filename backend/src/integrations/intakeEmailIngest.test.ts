@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDueDate, parseProjectName, parseGc } from './intakeEmailIngest';
+import { parseDueDate, parseProjectName, parseGc, parseLocation, parseContact } from './intakeEmailIngest';
 
 const NOW = new Date('2026-06-10T12:00:00Z');
 
@@ -71,6 +71,41 @@ describe('parseGc', () => {
   it('falls back to the sender address when there is no display name', () => {
     expect(parseGc('Reminder to submit your Bid for 7-Eleven', null, 'noreply@procoretech.com'))
       .toBe('noreply@procoretech.com');
+  });
+});
+
+describe('parseLocation', () => {
+  it('pulls a trailing City, ST from the subject (Summit/Procore)', () => {
+    expect(parseLocation('Invitation to Bid - AutoZone - St. Johns, FL', '')).toBe('St. Johns, FL');
+    expect(parseLocation('Reminder to submit your Bid for 7-Eleven #42759 - Minneola, FL', '')).toBe('Minneola, FL');
+  });
+
+  it('reads a structured PROJECT LOCATION field and collapses a repeated address (Kingdom)', () => {
+    const body = 'PROJECT NAME: Alachua County PROJECT LOCATION: 8191 NW 43rdST 8191 NW 43rdST, 32653 BID DUE DATE: 07/17/2026';
+    expect(parseLocation('Invitation to Bid from Kingdom Construction for Alachua County', body)).toBe('8191 NW 43rdST, 32653');
+  });
+
+  it('returns null when there is no location (Summit prototype, address TBD)', () => {
+    expect(parseLocation('Invitation to Bid - Firestone - (Prototype)', 'Bids Due 6/24/2026')).toBeNull();
+  });
+
+  it('does not treat a "Mental, Physical" subject as a City, ST', () => {
+    expect(parseLocation('Pasco Sheriff - Mental, Physical, Emotional Health Center', '')).toBeNull();
+  });
+});
+
+describe('parseContact', () => {
+  it('uses the sender name when it is a person distinct from the GC (Kingdom)', () => {
+    expect(parseContact('Ian Nichols', 'ian@kingdomconstruction.org', 'Kingdom Construction')).toBe('Ian Nichols');
+  });
+
+  it('falls back to the email when the only name is the GC company itself (Summit)', () => {
+    expect(parseContact('Summit General Contractors', 'estimating@summitgc.net', 'Summit General Contractors'))
+      .toBe('estimating@summitgc.net');
+  });
+
+  it('uses the email when there is no display name', () => {
+    expect(parseContact(null, 'noreply@procoretech.com', 'Bay to Bay Properties')).toBe('noreply@procoretech.com');
   });
 });
 
