@@ -13,68 +13,108 @@ const MONTHS: Record<string, number> = {
 
 function pad(n: number): string { return String(n).padStart(2, '0'); }
 
+// A "due"-style cue that must precede the date for it to count. Deliberately requires
+// a cue — bid invitations are full of other dates (the letter/"DATE:" send date, phone
+// numbers like 865-691-6818, cost codes like 02500-003) that an uncued scan would
+// wrongly grab. Better to leave the due date blank for the reviewer than to fill a wrong one.
+const DUE_CUE = '(?:due(?:\\s*date)?|bid\\s*due\\s*date|bids?\\s*due|bid\\s*date|proposals?\\s*due|responses?\\s*due|submittals?\\s*due|submit\\s*by|respond\\s*by|due\\s*by|deadline)';
+
 /**
- * Best-effort extraction of a bid due date from subject/body text. Recognises:
- *   - "due 6/20/2026", "due 6/20" (year inferred), "bid date 06-20-26"
- *   - "due June 20, 2026", "June 20"
+ * Best-effort extraction of a bid due date from subject/body text. Only accepts a date that
+ * follows a due cue (see DUE_CUE), e.g.:
+ *   - "Bids Due 6/24/2026", "due 6/20", "bid date 06-20-26", "BID DUE DATE: 07/17/2026"
+ *   - "Proposals due June 20, 2026", "submit by 7/15"
  * Returns YYYY-MM-DD or null. Intentionally conservative — the reviewer can always edit.
  */
 export function parseDueDate(text: string, now = new Date()): string | null {
   const t = ` ${text.toLowerCase()} `;
 
-  // Numeric M/D[/Y] — prefer one that follows a "due"/"bid"/"date" cue, else first match.
-  const numeric = /(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?/g;
-  const cueWindow = /(due|bid\s*date|bids?\s*due|proposals?\s*due)[^\d]{0,20}(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?/;
-  const cue = cueWindow.exec(t);
-  let mo: number | null = null, day: number | null = null, yr: number | null = null;
-  if (cue) {
-    mo = Number(cue[2]); day = Number(cue[3]); yr = cue[4] ? Number(cue[4]) : null;
-  } else {
-    const m = numeric.exec(t);
-    if (m) { mo = Number(m[1]); day = Number(m[2]); yr = m[3] ? Number(m[3]) : null; }
-  }
-  if (mo && day && mo >= 1 && mo <= 12 && day >= 1 && day <= 31) {
+  const finalize = (mo: number, day: number, yr: number | null): string | null => {
+    if (!(mo >= 1 && mo <= 12 && day >= 1 && day <= 31)) return null;
     let year = yr ?? now.getFullYear();
     if (year < 100) year += 2000;
     // If no year given and the date already passed this year, assume next year.
-    if (!yr) {
+    if (yr == null) {
       const candidate = new Date(year, mo - 1, day);
       if (candidate.getTime() < now.getTime() - 86400000) year += 1;
     }
     return `${year}-${pad(mo)}-${pad(day)}`;
+  };
+
+  // 1) Cued numeric M/D[/Y]: "... due 6/24/2026", "BID DUE DATE: 07/17/2026".
+  //    The gap may contain words ("due date:"), but not digits, so it can't span past
+  //    the cue into an unrelated number.
+  const cuedNum = new RegExp(`${DUE_CUE}[^\\d]{0,25}(\\d{1,2})[/-](\\d{1,2})(?:[/-](\\d{2,4}))?`).exec(t);
+  if (cuedNum) {
+    const r = finalize(Number(cuedNum[1]), Number(cuedNum[2]), cuedNum[3] ? Number(cuedNum[3]) : null);
+    if (r) return r;
   }
 
-  // Month-name form: "june 20, 2026" / "june 20"
-  const named = /\b([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?/.exec(t);
-  if (named && MONTHS[named[1]]) {
-    const mon = MONTHS[named[1]];
-    const d = Number(named[2]);
-    let year = named[3] ? Number(named[3]) : now.getFullYear();
-    if (d >= 1 && d <= 31) {
-      if (!named[3]) {
-        const candidate = new Date(year, mon - 1, d);
-        if (candidate.getTime() < now.getTime() - 86400000) year += 1;
-      }
-      return `${year}-${pad(mon)}-${pad(d)}`;
-    }
+  // 2) Cued month-name: "... due June 20, 2026". The gap excludes letters so it can't
+  //    swallow the month word itself.
+  const cuedNamed = new RegExp(`${DUE_CUE}[^a-z\\d]{0,15}([a-z]{3,9})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s*(\\d{4}))?`).exec(t);
+  if (cuedNamed && MONTHS[cuedNamed[1]]) {
+    const r = finalize(MONTHS[cuedNamed[1]], Number(cuedNamed[2]), cuedNamed[3] ? Number(cuedNamed[3]) : null);
+    if (r) return r;
   }
+
   return null;
 }
 
 /**
  * Derive a clean project name from the subject by stripping common invitation prefixes
- * and trailing "due ..." fragments. Falls back to the raw subject.
+ * and trailing "due ..." fragments. Falls back to the raw subject. Handles the three
+ * shapes we actually receive:
+ *   - "Invitation to Bid - Firestone - (Prototype)"            (prefix + separator)
+ *   - "Invitation to Bid from <GC> for <Project>"              (Kingdom-style)
+ *   - "Reminder to submit your Bid for <Project>"              (Procore-style)
  */
 export function parseProjectName(subject: string): string {
   let s = subject.trim();
   s = s.replace(/^\s*(re|fw|fwd)\s*:\s*/i, '');
-  s = s.replace(/^\s*(invitation to bid|invite to bid|bid invitation|itb|rfp|rfq|bid request|request for (proposal|quote))\s*[:\-–—|]\s*/i, '');
-  s = s.replace(/\s*[-–—|]\s*(bids?\s*due|due|proposals?\s*due)\b.*$/i, '');
-  return s.trim() || subject.trim();
+
+  // "(Invitation|Invite|Request) to Bid from <GC> for <Project>" → keep the project only.
+  const fromFor = /^\s*(?:invitation|invite|request)\s+to\s+bid\s+from\s+.+?\s+for\s+(.+)$/i.exec(s);
+  if (fromFor) {
+    s = fromFor[1];
+  } else {
+    // A bid-invitation / reminder prefix that runs into "... for <Project>".
+    const forProj = /^\s*(?:reminder\s+to\s+(?:submit\s+(?:your\s+)?)?bid|invitation\s+to\s+bid|invite\s+to\s+bid|bid\s+invitation|itb|rfp|rfq|bid\s+request)\b.*?\bfor\s+(.+)$/i.exec(s);
+    if (forProj) {
+      s = forProj[1];
+    } else {
+      // Plain prefix followed by a separator: "Invitation to Bid - <Project>".
+      s = s.replace(/^\s*(invitation to bid|invite to bid|bid invitation|itb|rfp|rfq|bid request|request for (proposal|quote))\s*[:\-–—|]\s*/i, '');
+    }
+  }
+
+  // Drop a trailing "… - Bids Due 6/20" fragment and any dangling separator.
+  s = s.replace(/\s*[-–—|(]?\s*(bids?\s*due|due\s*date|due|proposals?\s*due)\b.*$/i, '');
+  s = s.replace(/\s*[-–—|]\s*$/, '').trim();
+  return s || subject.trim();
 }
 
+/**
+ * Derive the general contractor from the invitation. Prefers an explicit
+ * "from <GC> for <Project>" in the subject (where the sender is often the individual
+ * contact, not the company), otherwise falls back to the sender's display name, then
+ * the sender address.
+ */
+export function parseGc(subject: string, fromName: string | null, fromEmail: string | null): string | null {
+  const m = /\bfrom\s+(.+?)\s+for\s+/i.exec(subject);
+  if (m && /\bbid\b/i.test(subject)) {
+    const gc = m[1].trim();
+    if (gc) return gc;
+  }
+  return (fromName && fromName.trim()) || (fromEmail && fromEmail.trim()) || null;
+}
+
+// Invisible spacer/zero-width characters that Mailchimp-style senders pad previews with
+// (combining grapheme joiner, zero-width (non-)joiners, bidi marks, soft hyphen, BOM).
+const INVISIBLE_CHARS = /[\u00AD\u034F\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g;
+
 function snippet(text: string, max = 400): string {
-  const s = text.replace(/\s+/g, ' ').trim();
+  const s = (text || '').replace(INVISIBLE_CHARS, '').replace(/\s+/g, ' ').trim();
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
@@ -87,7 +127,11 @@ async function importOne(msg: GraphMailMessage): Promise<boolean> {
 
   const attachmentNames = msg.hasAttachments ? await listAttachmentNames(msg.id) : [];
   const name = parseProjectName(msg.subject) || '(no subject)';
+  const gc = parseGc(msg.subject, msg.fromName, msg.from);
   const due = parseDueDate(`${msg.subject}\n${msg.body}`);
+  // Prefer the full (HTML-stripped) body over bodyPreview, which on Mailchimp-style
+  // senders is mostly invisible spacer padding. snippet() strips those either way.
+  const body = snippet(msg.body?.trim() ? msg.body : msg.bodyPreview);
 
   try {
     await pool.query(
@@ -96,7 +140,7 @@ async function importOne(msg: GraphMailMessage): Promise<boolean> {
           web_link, from_email, received_at, attachment_names, created_by_name)
        VALUES ($1,$2,$3,$4,'email','pending',$5,$6,$7,$8,$9,$10,$11)
        ON CONFLICT (graph_message_id) WHERE graph_message_id IS NOT NULL DO NOTHING`,
-      [name, msg.fromName || msg.from || null, due, snippet(msg.bodyPreview), snippet(msg.bodyPreview),
+      [name, gc, due, body, body,
        msg.id, msg.webLink, msg.from, msg.receivedDateTime, attachmentNames.length ? attachmentNames : null,
        'Outlook (new bid)']
     );
