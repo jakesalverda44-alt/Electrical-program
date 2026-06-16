@@ -136,42 +136,27 @@ export function NotificationsSection({ settings, onSaved }: { settings: AppSetti
   const parsePrefs = (): Record<string, boolean> => {
     try { const o = JSON.parse(settings.notifications_json || '{}'); delete o.reminders; return o; } catch { return {}; }
   };
-  const parseEmails = (): string[] => {
-    try { return JSON.parse(settings.bid_notify_emails || '[]'); } catch { return []; }
-  };
-
   const [prefs,   setPrefs]   = useState<Record<string, boolean>>(parsePrefs);
   const [reminders, setReminders] = useState<ReminderPrefs>(() => parseReminders(settings.notifications_json));
-  const [bidOn,   setBidOn]   = useState(settings.bid_notify_enabled !== 'false');
-  const [emails,  setEmails]  = useState<string[]>(parseEmails);
-  const [emailIn, setEmailIn] = useState('');
   const [remIn,   setRemIn]   = useState('');
   const [orig,    setOrig]    = useState('');
   const [saving,  setSaving]  = useState(false);
   const [saved,   setSaved]   = useState(false);
 
-  const snapshot = (p: Record<string, boolean>, r: ReminderPrefs, b: boolean, e: string[]) =>
-    JSON.stringify({ p, r, b, e });
+  const snapshot = (p: Record<string, boolean>, r: ReminderPrefs) =>
+    JSON.stringify({ p, r });
 
   useEffect(() => {
     const p = parsePrefs(); const r = parseReminders(settings.notifications_json);
-    const b = settings.bid_notify_enabled !== 'false'; const e = parseEmails();
-    setPrefs(p); setReminders(r); setBidOn(b); setEmails(e);
-    setOrig(snapshot(p, r, b, e));
+    setPrefs(p); setReminders(r);
+    setOrig(snapshot(p, r));
   }, [settings]);
 
-  const hasChanges = snapshot(prefs, reminders, bidOn, emails) !== orig;
+  const hasChanges = snapshot(prefs, reminders) !== orig;
   const toggle     = (k: string) => setPrefs(p => ({ ...p, [k]: !p[k] }));
 
   const setRem = (key: string, patch: Partial<ReminderTypePref>) =>
     setReminders(r => ({ ...r, types: { ...r.types, [key]: { ...r.types[key], ...patch } } }));
-
-  const addEmail = () => {
-    const v = emailIn.trim().toLowerCase();
-    if (!v || emails.includes(v)) return;
-    setEmails(prev => [...prev, v]);
-    setEmailIn('');
-  };
 
   const addRem = () => {
     const v = remIn.trim().toLowerCase();
@@ -185,10 +170,8 @@ export function NotificationsSection({ settings, onSaved }: { settings: AppSetti
     try {
       await api.put('/settings', {
         notifications_json:  JSON.stringify({ ...prefs, reminders }),
-        bid_notify_enabled:  bidOn ? 'true' : 'false',
-        bid_notify_emails:   JSON.stringify(emails),
       });
-      setOrig(snapshot(prefs, reminders, bidOn, emails)); onSaved();
+      setOrig(snapshot(prefs, reminders)); onSaved();
       setSaved(true); setTimeout(() => setSaved(false), 3000);
     } finally { setSaving(false); }
   };
@@ -200,43 +183,6 @@ export function NotificationsSection({ settings, onSaved }: { settings: AppSetti
       <DevicePushCard/>
 
       <LeadNudgeCard/>
-
-      {/* New bid email team */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 2 }}>New Bid Notification</div>
-            <div style={{ fontSize: 12, color: 'var(--text3)' }}>Email the team list below whenever a new electrical bid is added to the pipeline.</div>
-          </div>
-          <Toggle on={bidOn} onToggle={() => setBidOn(o => !o)}/>
-        </div>
-
-        {/* Email chip list */}
-        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-          <input
-            type="email"
-            value={emailIn}
-            onChange={e => setEmailIn(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addEmail())}
-            placeholder="estimator@accuratepower.com"
-            style={{ flex: 1, height: 38, padding: '0 12px', borderRadius: 9, border: '1px solid var(--border2)',
-              background: 'var(--surface)', color: 'var(--text)', fontSize: 13, outline: 'none' }}
-          />
-          <button className="btn ghost" onClick={addEmail} style={{ height: 38, padding: '0 16px' }}>Add</button>
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {emails.map(em => (
-            <span key={em} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600,
-              background: 'var(--blue-soft)', color: 'var(--blue)', border: '1px solid rgba(77,141,247,.25)',
-              borderRadius: 20, padding: '4px 10px 4px 12px' }}>
-              {em}
-              <button onClick={() => setEmails(prev => prev.filter(x => x !== em))}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--blue)', fontSize: 15, lineHeight: 1, padding: 0, display: 'flex' }}>×</button>
-            </span>
-          ))}
-          {emails.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>No recipients added yet.</span>}
-        </div>
-      </div>
 
       {/* Proposal/job event toggles */}
       <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 10 }}>Proposal &amp; Job Events</div>
