@@ -275,7 +275,7 @@ router.post('/:id/notify-team', requireAuth, async (req: AuthRequest, res) => {
     return res.status(502).json({ error: 'Could not send the email. Check the mail configuration.' });
   }
   if (!result.sent) {
-    return res.status(503).json({ error: 'Email is not configured. Set up Outlook (Graph) or Resend in Settings.' });
+    return res.status(503).json({ error: 'Email is not configured. Set up Microsoft Graph (GRAPH_* env vars) to send mail.' });
   }
 
   const { rows } = await pool.query(

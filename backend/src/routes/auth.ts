@@ -4,7 +4,6 @@ import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { pool } from '../db/pool';
 import { requireAuth, AuthRequest, getJwtSecret, TOKEN_TTL } from '../middleware/auth';
-import { Resend } from 'resend';
 import { getSetting } from '../db/getSetting';
 import { graphSendMail, isGraphMailConfigured } from '../email/graphMailer';
 
@@ -151,29 +150,15 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
   );
   await pool.query('UPDATE users SET reset_token=$1, reset_token_expires=now()+interval\'1 hour\' WHERE id=$2', [token, user.id]);
 
-  const [apiKey, fromAddress, fromName, frontendUrl] = await Promise.all([
-    getSetting('email_resend_api_key'),
-    getSetting('email_from_address'),
-    getSetting('email_from_name'),
-    getSetting('frontend_url'),
-  ]);
+  const frontendUrl = await getSetting('frontend_url');
   const base = frontendUrl || 'https://electrical-program.onrender.com';
   const link = `${base}/reset-password?token=${token}`;
   const subject = 'Password Reset — Accurate Power & Technology';
   const html = `<p>Hi ${user.name},</p><p>Click the link below to reset your password. This link expires in 1 hour.</p><p><a href="${link}">${link}</a></p><p>If you didn't request this, you can ignore this email.</p>`;
 
-  // Prefer Microsoft Graph (app-only); fall back to Resend only if Graph isn't configured.
+  // Mail goes out through Microsoft Graph (app-only) from the shared mailbox.
   if (isGraphMailConfigured()) {
     await graphSendMail({ to: email.toLowerCase(), subject, html }).catch(() => {});
-  } else if (apiKey) {
-    const resend = new Resend(apiKey);
-    await resend.emails.send({
-      from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
-      to: email.toLowerCase(),
-      subject,
-      html,
-      text: `Hi ${user.name},\n\nReset your password: ${link}\n\nExpires in 1 hour.`,
-    }).catch(() => {});
   }
   res.json({ ok: true });
 });
