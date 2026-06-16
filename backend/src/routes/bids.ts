@@ -1,15 +1,12 @@
 import { Router } from 'express';
-import { Resend } from 'resend';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
 import { ensureProject, setProjectDeleted } from '../utils/project';
 import { commissionRate, commissionAmount } from '../utils/commission';
-import { getSetting } from '../db/getSetting';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
-import { escapeHtml } from '../utils/escapeHtml';
 import { logger } from '../utils/logger';
-import { graphSendMail, isGraphMailConfigured } from '../email/graphMailer';
+import { sendBidNotification } from '../email/bidNotification';
 import { upsertCustomer } from './customers';
 import {
   createJobFolder,
@@ -26,54 +23,6 @@ import {
 } from '../services/googleDrive';
 
 const router = Router();
-
-async function sendBidNotification(bid: Record<string, unknown>, addedBy: { name: string }) {
-  const [enabled, emailsJson, apiKey, fromAddress, fromName, frontendUrl] = await Promise.all([
-    getSetting('bid_notify_enabled'),
-    getSetting('bid_notify_emails'),
-    getSetting('email_resend_api_key'),
-    getSetting('email_from_address'),
-    getSetting('email_from_name'),
-    getSetting('frontend_url'),
-  ]);
-  if (enabled === 'false') return;
-  let emails: string[] = [];
-  try { emails = JSON.parse(emailsJson || '[]'); } catch { return; }
-  if (!emails.length) return;
-
-  const dueStr = bid.due ? String(bid.due) : 'TBD';
-  const amt = bid.amount ? '$' + Number(bid.amount).toLocaleString() : '—';
-  const base = (frontendUrl || 'https://electrical-program.onrender.com').replace(/\/$/, '');
-
-  const subject = `New Bid — ${bid.name}`;
-  const html = `<div style="font-family:sans-serif;max-width:520px">
-      <h2 style="margin:0 0 16px">New Bid Added</h2>
-      <table style="border-collapse:collapse;width:100%">
-        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5;width:130px">Job</td><td style="padding:8px 12px">${escapeHtml(bid.name)}</td></tr>
-        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">General Contractor</td><td style="padding:8px 12px">${escapeHtml(bid.gc)}</td></tr>
-        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Location</td><td style="padding:8px 12px">${escapeHtml(bid.loc)}</td></tr>
-        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Due Date</td><td style="padding:8px 12px">${escapeHtml(dueStr)}</td></tr>
-        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Est. Value</td><td style="padding:8px 12px">${escapeHtml(amt)}</td></tr>
-        <tr><td style="padding:8px 12px;font-weight:700;background:#f5f5f5">Added By</td><td style="padding:8px 12px">${escapeHtml(addedBy.name)}</td></tr>
-      </table>
-      <p style="margin:20px 0 0"><a href="${base}" style="background:#4D8DF7;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700">Open Pipeline →</a></p>
-    </div>`;
-
-  // Prefer Microsoft Graph (app-only); fall back to Resend only if Graph isn't configured.
-  if (isGraphMailConfigured()) {
-    await graphSendMail({ to: emails, subject, html });
-    return;
-  }
-  if (!apiKey) return;
-  const resend = new Resend(apiKey);
-  await resend.emails.send({
-    from: fromName ? `${fromName} <${fromAddress}>` : fromAddress,
-    to: emails,
-    subject,
-    html,
-    text: `New Bid: ${bid.name}\nGC: ${bid.gc}\nLocation: ${bid.loc}\nDue: ${dueStr}\nEst. Value: ${amt}\nAdded by: ${addedBy.name}\n\n${base}`,
-  });
-}
 
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
