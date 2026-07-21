@@ -7,6 +7,7 @@ import GenDetailDrawer from './GenDetailDrawer';
 import api from '../../api/client';
 import { moneyShort as money } from '../../lib/money';
 import PipelineBoard from '../../components/PipelineBoard';
+import AddLeadModal from '../leads/AddLeadModal';
 import { useShowToast } from '../../contexts/AppContext';
 
 function fmtVisit(ts?: string | null) {
@@ -30,6 +31,7 @@ interface Props {
 export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuilder, flashId, onEditGen, openId, onClearParam, onNav }: Props) {
   const showToast = useShowToast();
   const [detail, setDetail] = useState<Gen | null>(null);
+  const [showAddLead, setShowAddLead] = useState(false);
 
   // Open the deep-linked proposal's drawer once, then strip the id from the URL.
   const openedParam = useRef<string | null>(null);
@@ -110,6 +112,9 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
         <span className="pipe-summary">
           Active value <b>{money(activeValue)}</b> · {activeCount} open
         </span>
+        <button className="btn amber" style={{ fontSize: 13 }} onClick={() => setShowAddLead(true)}>
+          <Icon name="plus" size={15} stroke={2.4}/>Add Lead
+        </button>
       </div>
 
       {/* Board */}
@@ -205,6 +210,13 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
           );
         }}
       />
+
+      {showAddLead && (
+        <AddLeadModal
+          onClose={() => setShowAddLead(false)}
+          onAdded={lead => { setShowAddLead(false); showToast({ title: 'Lead added', sub: lead.name }); }}
+        />
+      )}
 
       {detail && (
         <GenDetailDrawer
