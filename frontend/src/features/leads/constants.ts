@@ -16,11 +16,18 @@ export const ALL_LEAD_STAGES = [...LEAD_STAGES, CONVERTED_STAGE] as const;
 
 export type LeadStageKey = typeof ALL_LEAD_STAGES[number]['key'];
 
+// Options offered when creating a new lead going forward.
+export const NEW_LEAD_SOURCES = ['kohler', 'generac', 'cummins', 'call-in'] as const;
+
 export const SOURCE_LABELS: Record<string, string> = {
+  kohler:   'Kohler',
+  generac:  'Generac',
+  cummins:  'Cummins',
+  'call-in': 'Call-in',
+  // Legacy values — kept so existing leads still resolve a label.
   web:      'Web',
   phone:    'Phone',
   referral: 'Referral',
-  kohler:   'Kohler',
   other:    'Other',
 };
 

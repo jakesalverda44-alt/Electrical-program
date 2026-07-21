@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { Lead } from '../../types';
+import { NEW_LEAD_SOURCES, SOURCE_LABELS } from './constants';
 
 interface Props {
   onClose: () => void;
@@ -42,7 +43,7 @@ export default function AddLeadModal({ onClose, onAdded }: Props) {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
-  const [source, setSource] = useState('phone');
+  const [source, setSource] = useState<string>('call-in');
   const [contactMethod, setContactMethod] = useState<'phone' | 'email'>('phone');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -108,11 +109,7 @@ export default function AddLeadModal({ onClose, onAdded }: Props) {
             <div>
               <label style={label}>Source</label>
               <select style={{ ...input }} value={source} onChange={e => setSource(e.target.value)}>
-                <option value="phone">Phone</option>
-                <option value="web">Web</option>
-                <option value="referral">Referral</option>
-                <option value="kohler">Kohler</option>
-                <option value="other">Other</option>
+                {NEW_LEAD_SOURCES.map(v => <option key={v} value={v}>{SOURCE_LABELS[v]}</option>)}
               </select>
             </div>
             <div>

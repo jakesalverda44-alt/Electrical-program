@@ -19,7 +19,7 @@ const router = Router();
 
 // Enum values mirror the CHECK constraints in 049_create_leads.sql so a bad value
 // is rejected with a clear 400 instead of bubbling up as a DB error → 500.
-const SOURCES        = ['web', 'phone', 'referral', 'kohler', 'other'] as const;
+const SOURCES        = ['web', 'phone', 'referral', 'kohler', 'other', 'generac', 'cummins', 'call-in'] as const;
 const CONTACT_METHODS = ['email', 'phone'] as const;
 const INTEREST_LEVELS = ['unknown', 'warm', 'hot', 'not-interested'] as const;
 // Reduced lead pipeline. 'site-scheduled' is the handoff trigger (a lead moved there
