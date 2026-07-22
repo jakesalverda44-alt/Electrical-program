@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import SignatureCanvas from 'react-signature-canvas';
 import { GenForm } from '../features/builder/genData';
-import { GenTotals, calcGenTotals } from '../features/builder/genCalc';
+import { GenTotals, calcGenTotals, migrateGenForm } from '../features/builder/genCalc';
 import ProposalPreview from '../features/builder/ProposalPreview';
 
 interface GenData {
@@ -120,7 +120,11 @@ export default function ProposalPublicPage() {
   if (status === 'loading') return <CenteredMsg>Loading your proposal…</CenteredMsg>;
   if (status === 'error')   return <CenteredMsg>Proposal not found or the link has expired. Please contact us.</CenteredMsg>;
 
-  const form = parseSnapshot<GenForm>(gen?.form_data);
+  const rawForm = parseSnapshot<GenForm>(gen?.form_data);
+  // Older sent/signed proposals used pre-unification field names (ats/smm/surgePro/lcATS/
+  // additionalATS) — migrate so those scope-of-work lines still render correctly if a
+  // customer revisits an old link.
+  const form = rawForm ? migrateGenForm(rawForm as unknown as Record<string, unknown>) as unknown as Partial<GenForm> : null;
   // Older/legacy proposals may lack a stored totals snapshot — recompute from the form
   // so the full multi-page document still renders for the customer.
   const totals = parseSnapshot<GenTotals>(gen?.totals_data)

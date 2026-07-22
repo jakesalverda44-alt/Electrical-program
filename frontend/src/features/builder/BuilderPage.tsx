@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { GenForm, GEN_SIZE_LABELS } from './genData';
-import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo, loadCenterFor } from './genCalc';
+import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo, loadCenterFor, migrateGenForm } from './genCalc';
 import ProposalPreview from './ProposalPreview';
 import SendProposalModal from './SendProposalModal';
 import api from '../../api/client';
@@ -67,7 +67,7 @@ function genToForm(g: Gen): GenForm {
     saved = null;
   }
   if (saved && typeof saved === 'object') {
-    const merged = { ...blank, ...saved };
+    const merged = { ...blank, ...migrateGenForm(saved as Record<string, unknown>) } as GenForm;
     // A lead's combined address lands entirely in the address field (city/zip empty).
     // Split it so the builder fields are uniform; saving then persists the structured form.
     if (!merged.city && typeof merged.address === 'string' && merged.address.includes(',')) {
@@ -123,10 +123,21 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
       const sizes = getGenSizes(next);
       if (!sizes.includes(next.size)) next.size = sizes[0] ?? '';
     }
-    // Load-center units include their transfer switch — lock the ATS to its rating.
+    // Air-cooled includes 1 ATS standard; liquid-cooled includes none — reset qty to the
+    // natural default on a cooling-type change so the rep doesn't have to remember to adjust it.
+    if (key === 'coolingType') {
+      next.atsQty = next.coolingType === 'air-cooled' ? 1 : 0;
+    }
+    // Load-center units bundle their own integrated transfer switch — lock ATS size to its
+    // rating and zero the qty (no separate ATS to size/count on these units).
     if (key === 'brand' || key === 'coolingType' || key === 'size') {
       const lcAmps = loadCenterFor(next);
-      if (lcAmps) next.ats = lcAmps;
+      if (lcAmps) { next.atsSize = lcAmps as GenForm['atsSize']; next.atsQty = 0; }
+    }
+    // The Kohler free-promo warranty option only applies to Kohler jobs — switching brands
+    // away from Kohler drops it back to "none" rather than silently waiving a Generac fee.
+    if (key === 'brand' && next.brand !== 'Kohler' && prev.extWarranty === 'promo') {
+      next.extWarranty = 'none';
     }
     // Editing the address re-derives the FL sales-tax rate (rep can still override the
     // Tax Rate field afterward — that's a 'taxRate' change, which isn't re-derived here).
@@ -158,7 +169,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
         kw:         parseInt(form.size),
         amount:     totals.total,
         tax:        totals.tax,
-        addons:     (form.smm ? 1 : 0) + (form.surgePro ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0) + (form.emPanel ? 1 : 0),
+        addons:     (form.smmQty > 0 ? 1 : 0) + (form.surgeProQty > 0 ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0) + (form.emPanel ? 1 : 0),
         proposal_no: proposalNo,
         form_data:   form,
         totals_data: totals,
@@ -258,11 +269,16 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                   {lc} Load Center — included
                 </div>
               ) : (
-                <select style={SELECT_STYLE} value={form.ats} onChange={e => set('ats', e.target.value)}>
+                <select style={SELECT_STYLE} value={form.atsSize} onChange={e => set('atsSize', e.target.value)}>
                   {['100A','150A','200A','400A'].map(a => <option key={a} value={a}>{a}</option>)}
                 </select>
               )}
             </Field>
+            {!lc && (
+              <Field label={`ATS Qty${form.coolingType === 'air-cooled' ? ' (1 included)' : ' (none included — liquid-cooled)'}`}>
+                <input type="number" min={0} max={10} style={INPUT_STYLE} value={form.atsQty} onChange={e => set('atsQty', Number(e.target.value))}/>
+              </Field>
+            )}
             <Field label="Job Type">              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
                 {(['new-install', 'swap-out'] as const).map(jt => (
                   <button key={jt} onClick={() => {
@@ -274,7 +290,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                       const sizes = getGenSizes(next);
                       if (!sizes.includes(next.size)) next.size = sizes[0] ?? '';
                       const lcAmps = loadCenterFor(next);
-                      if (lcAmps) next.ats = lcAmps;
+                      if (lcAmps) { next.atsSize = lcAmps as GenForm['atsSize']; next.atsQty = 0; }
                       return next;
                     });
                   }}
@@ -298,8 +314,6 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
           <Section title="Installation Options" icon="gear">
             {([
               ['pad',      form.jobType === 'swap-out' ? 'Concrete Pad (new)' : 'Concrete Pad'],
-              ['smm',      'SMM Maintenance'],
-              ['surgePro', 'SurgeProtector Pro'],
               ['battery',  'Battery'],
               ['emPanel',  'EM Panel'],
             ] as [keyof GenForm, string][]).map(([k, label]) => (
@@ -308,6 +322,12 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 {label}
               </label>
             ))}
+            <Field label="SMM Maintenance Qty">
+              <input type="number" min={0} max={10} style={INPUT_STYLE} value={form.smmQty} onChange={e => set('smmQty', Number(e.target.value))}/>
+            </Field>
+            <Field label="SurgeProtector Pro Qty">
+              <input type="number" min={0} max={10} style={INPUT_STYLE} value={form.surgeProQty} onChange={e => set('surgeProQty', Number(e.target.value))}/>
+            </Field>
             {form.jobType === 'swap-out' && (
               <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, gridColumn: '1' }}>
                 <input type="checkbox" checked={!!form.gasLine} onChange={e => set('gasLine', e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
@@ -333,16 +353,23 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 <option value="crane">Crane ($1,800)</option>
               </select>
             </Field>
-            <Field label="LC ATS">
-              <select style={SELECT_STYLE} value={form.lcATS} onChange={e => set('lcATS', e.target.value)}>
-                <option value="none">None</option>
-                <option value="150A">150A</option>
-                <option value="200A">200A</option>
+            <Field label="Extended Warranty">
+              <select style={SELECT_STYLE} value={form.extWarranty} onChange={e => set('extWarranty', e.target.value)}>
+                <option value="none">Standard 5-Year Only</option>
+                <option value="paid">10-Year Extension ($1,100)</option>
+                {form.brand === 'Kohler' && <option value="promo">Kohler Promo — 10-Year FREE</option>}
               </select>
             </Field>
-            <Field label="Additional ATS Units">
-              <input type="number" min={0} max={10} style={INPUT_STYLE} value={form.additionalATS} onChange={e => set('additionalATS', Number(e.target.value))}/>
-            </Field>
+            {form.extWarranty === 'promo' && (
+              <>
+                <Field label="Promo Valid From">
+                  <input type="date" style={INPUT_STYLE} value={form.extWarrantyPromoStart} onChange={e => set('extWarrantyPromoStart', e.target.value)}/>
+                </Field>
+                <Field label="Promo Valid Until">
+                  <input type="date" style={INPUT_STYLE} value={form.extWarrantyPromoEnd} onChange={e => set('extWarrantyPromoEnd', e.target.value)}/>
+                </Field>
+              </>
+            )}
           </Section>
 
           {/* Section 5: Pricing & Terms */}
@@ -416,8 +443,8 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 ...(totals.emPanelAmt  ? [{ label: 'EM Panel',   val: totals.emPanelAmt  }] : []),
                 ...(totals.gasLineAmt  ? [{ label: 'Gas Line',   val: totals.gasLineAmt  }] : []),
                 ...(totals.liftAmt     ? [{ label: 'Lift',       val: totals.liftAmt     }] : []),
-                ...(totals.lcATS      ? [{ label: 'LC ATS',      val: totals.lcATS      }] : []),
-                ...(totals.extraATS   ? [{ label: 'Extra ATS',   val: totals.extraATS   }] : []),
+                ...(totals.atsAmt      ? [{ label: `ATS (+${totals.atsBillableQty})`, val: totals.atsAmt }] : []),
+                ...(totals.extWarrantyAmt > 0 ? [{ label: 'Ext. Warranty', val: totals.extWarrantyAmt }] : []),
                 { label: 'Labor',        val: totals.laborAmt   },
                 { label: 'Permit',       val: totals.permitAmt  },
                 { label: 'Startup',      val: totals.startupAmt },
@@ -427,6 +454,12 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                   <span className="num" style={{ fontWeight: 700 }}>{fmt(r.val)}</span>
                 </div>
               ))}
+              {form.extWarranty === 'promo' && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 5, color: 'var(--green)' }}>
+                  <span>Ext. Warranty</span>
+                  <span className="num" style={{ fontWeight: 700 }}>FREE (Promo)</span>
+                </div>
+              )}
               <div style={{ height: 1, background: 'var(--border)', margin: '10px 0' }}/>
               {totals.discountAmt > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 5, color: 'var(--red, #E06A6A)' }}>

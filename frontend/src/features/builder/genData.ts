@@ -9,7 +9,7 @@ export const DEFAULT_PRICES = {
       Generac: { '32KW': 19203, '40KW': 21734, '48KW': 22914, '60KW': 25212 },
     },
   } as Record<string, Record<string, Record<string, number>>>,
-  additionalATS: 1000,
+  ats: 1000,
   smm: 250,
   surgePro: 395,
   pad: 485,
@@ -25,8 +25,7 @@ export const DEFAULT_PRICES = {
   startupLC: 1595,
   lull: 1100,
   crane: 1800,
-  atsLC_150: 1000,
-  atsLC_200: 1000,
+  extendedWarranty: 1100,
 };
 
 // Sizes only offered on new installs — hidden from the size dropdown for swap-outs.
@@ -277,19 +276,25 @@ export interface GenForm {
   brand: 'Kohler' | 'Generac';
   coolingType: 'air-cooled' | 'liquid-cooled';
   size: string;
-  ats: string;
+  atsSize: '100A' | '150A' | '200A' | '400A';
+  /** Total ATS units on this job. Air-cooled includes 1 free; liquid-cooled includes none —
+   *  only the amount above that included count is billed (see atsIncludedQty in genCalc). */
+  atsQty: number;
   fuel: 'Natural Gas' | 'LP';
   pad: boolean;
-  smm: boolean;
-  surgePro: boolean;
+  smmQty: number;
+  surgeProQty: number;
   battery: boolean;
   emPanel: boolean;
   gasLine: boolean;
   extraWire: number;
   liftType: 'none' | 'lull' | 'crane';
   removal: boolean;
-  additionalATS: number;
-  lcATS: '150A' | '200A' | 'none';
+  extWarranty: 'none' | 'paid' | 'promo';
+  /** Only used when extWarranty === 'promo' — the date range the manufacturer promo is valid,
+   *  shown on the proposal so the customer sees when the free upgrade applies. */
+  extWarrantyPromoStart: string;
+  extWarrantyPromoEnd: string;
   labor: number;
   permit: number;
   startup: number;

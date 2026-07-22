@@ -420,9 +420,9 @@ const GEN_PRICES: Record<string, Record<string, Record<string, number>>> = {
 
 const ADDON_P = {
   smm: 250, surgePro: 395, pad: 485, battery: 185, emPanel: 495, gasLine: 500,
-  additionalATS: 1000, extraWire: 25,
+  ats: 1000, extraWire: 25,
   padLC_small: 800, padLC_large: 1200, startupLC: 1595,
-  lull: 1100, crane: 1800, atsLC_150: 1000, atsLC_200: 1000,
+  lull: 1100, crane: 1800, extendedWarranty: 1100,
   labor: 3000, permit: 1250, startup: 695,
 };
 
@@ -434,20 +434,23 @@ function calcFormTotals(g: Record<string, unknown>) {
   const padAmt = g.pad ? (coolingType === 'liquid-cooled'
     ? (parseInt(size) >= 60 ? ADDON_P.padLC_large : ADDON_P.padLC_small)
     : ADDON_P.pad) : 0;
-  const smmTotal    = g.smm      ? ADDON_P.smm      : 0;
-  const surgeTotal  = g.surgePro ? ADDON_P.surgePro  : 0;
+  const smmTotal    = Number(g.smmQty || 0) * ADDON_P.smm;
+  const surgeTotal  = Number(g.surgeProQty || 0) * ADDON_P.surgePro;
   const batteryAmt  = g.battery  ? ADDON_P.battery   : 0;
   const emPanelAmt  = g.emPanel  ? ADDON_P.emPanel   : 0;
   const gasLineAmt  = (g.jobType === 'swap-out' && g.gasLine) ? ADDON_P.gasLine : 0;
   const extraWireAmt = Number(g.extraWire || 0) * ADDON_P.extraWire;
-  const extraATS    = Number(g.additionalATS || 0) * ADDON_P.additionalATS;
-  const lcATS       = g.lcATS === '150A' ? ADDON_P.atsLC_150 : g.lcATS === '200A' ? ADDON_P.atsLC_200 : 0;
+  // Air-cooled includes 1 ATS standard; liquid-cooled includes none — only qty beyond that is billed.
+  const atsIncluded = coolingType === 'air-cooled' ? 1 : 0;
+  const atsBillableQty = Math.max(0, Number(g.atsQty || 0) - atsIncluded);
+  const atsAmt      = atsBillableQty * ADDON_P.ats;
+  const extWarrantyAmt = g.extWarranty === 'paid' ? ADDON_P.extendedWarranty : 0;
   const liftAmt     = g.liftType === 'lull' ? ADDON_P.lull : g.liftType === 'crane' ? ADDON_P.crane : 0;
   const removalFee  = g.jobType === 'swap-out' ? (Number(g.removalFee) || 0) : (g.removal ? 500 : 0);
   const laborAmt    = Number(g.labor)   || ADDON_P.labor;
   const permitAmt   = Number(g.permit)  || ADDON_P.permit;
   const startupAmt  = coolingType === 'liquid-cooled' ? ADDON_P.startupLC : (Number(g.startup) || ADDON_P.startup);
-  const subtotal    = genP + padAmt + smmTotal + surgeTotal + batteryAmt + emPanelAmt + gasLineAmt + extraWireAmt + extraATS + lcATS + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
+  const subtotal    = genP + padAmt + smmTotal + surgeTotal + batteryAmt + emPanelAmt + gasLineAmt + extraWireAmt + atsAmt + extWarrantyAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
   const discountAmt = g.discountType === '%'
     ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
     : (Number(g.discount) || 0);
@@ -455,7 +458,7 @@ function calcFormTotals(g: Record<string, unknown>) {
   const tax         = Math.round(taxable * ((Number(g.taxRate) || 7) / 100));
   const total       = taxable + tax;
   const deposit     = Math.round(total * ((Number(g.depositPct) || 50) / 100));
-  return { genP, padAmt, smmTotal, surgeTotal, extraATS, lcATS, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxable, tax, total, deposit };
+  return { genP, padAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxable, tax, total, deposit };
 }
 
 const BUILD_FROM_NOTES_SYSTEM = `You are an expert generator installation estimator. Extract a proposal form (GenForm) from field site visit notes.
@@ -484,16 +487,15 @@ Enum fields:
                 liquid-cooled Kohler: "24KW" "30KW" "38KW" "48KW" "60KW" "80KW" "100KW"
                 liquid-cooled Generac:"32KW" "40KW" "48KW" "60KW"
   fuel        — "Natural Gas" | "LP"  (default: "Natural Gas")
-  ats         — "100A" | "150A" | "200A" | "400A"  (default: "200A")
+  atsSize     — "100A" | "150A" | "200A" | "400A"  (default: "200A")
   jobType     — "new-install" | "swap-out"  (default: "new-install")
   liftType    — "none" | "lull" | "crane"  (default: "none")
-  lcATS       — "none" | "150A" | "200A"  (default: "none")
+  extWarranty — "none" | "paid" | "promo"  (default: "none") — "paid" is the $1,100 10-year
+                extension; "promo" is a free Kohler manufacturer promo (Kohler brand only)
   discountType— "$" | "%"  (default: "$")
 
 Boolean fields (true/false):
   pad       — concrete pad needed  (default: true)
-  smm       — SMM maintenance plan  (default: true)
-  surgePro  — surge protector  (default: false)
   battery   — battery maintainer — ALWAYS true when jobType is "new-install"
   emPanel   — EM panel  (default: false)
   gasLine   — gas line disconnect & reconnect — only applies to swap-out jobs  (default: false)
@@ -501,8 +503,12 @@ Boolean fields (true/false):
   includeBreakdown — (default: false)
 
 Numeric fields:
-  extraWire     — extra wire in feet  (default: 0)
-  additionalATS — extra ATS units  (default: 0)
+  extraWire — extra wire in feet  (default: 0)
+  smmQty    — SMM maintenance modules  (default: 1)
+  surgeProQty — surge protectors  (default: 0)
+  atsQty    — total ATS units on the job. Air-cooled generators include 1 standard
+              (default: 1); liquid-cooled generators include none (default: 0). Only
+              set higher than the included amount if extra units are explicitly mentioned.
   removalFee    — removal fee in dollars  (default: 500)
   labor         — labor cost  (default: 3000)
   permit        — permit cost  (default: 1250)
@@ -512,11 +518,16 @@ Numeric fields:
   validDays     — proposal valid days  (default: 30)
   depositPct    — deposit percent  (default: 50)
 
+String fields (date, "" if not mentioned):
+  extWarrantyPromoStart — promo valid-from date, "YYYY-MM-DD"
+  extWarrantyPromoEnd   — promo valid-until date, "YYYY-MM-DD"
+
 RULES:
 1. If a field is not mentioned in the notes, use the default shown above.
 2. battery MUST be true whenever jobType is "new-install", regardless of what the notes say.
 3. Choose the closest valid size; if ambiguous pick the next size up.
-4. Return the JSON object only — no markdown, no explanation.`;
+4. extWarranty MUST NOT be "promo" unless brand is "Kohler".
+5. Return the JSON object only — no markdown, no explanation.`;
 
 router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const { notes } = req.body as { notes?: string };
@@ -550,9 +561,10 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   const form: Record<string, unknown> = {
     customer: '', attn: '', address: '', city: '', state: 'FL', zip: '', phone: '', email: '',
     brand: 'Kohler', coolingType: 'air-cooled', size: '14KW',
-    ats: '200A', fuel: 'Natural Gas', jobType: 'new-install', liftType: 'none', lcATS: 'none',
-    pad: true, smm: true, surgePro: false, battery: true, emPanel: false, gasLine: false,
-    removal: false, extraWire: 0, additionalATS: 0, removalFee: 500,
+    atsSize: '200A', atsQty: 1, fuel: 'Natural Gas', jobType: 'new-install', liftType: 'none',
+    extWarranty: 'none', extWarrantyPromoStart: '', extWarrantyPromoEnd: '',
+    pad: true, smmQty: 1, surgeProQty: 0, battery: true, emPanel: false, gasLine: false,
+    removal: false, extraWire: 0, removalFee: 500,
     labor: ADDON_P.labor, permit: ADDON_P.permit, startup: ADDON_P.startup,
     discount: 0, discountType: '$', taxRate: 7, validDays: 30, depositPct: 50,
     notes: '', includeBreakdown: false,
@@ -560,9 +572,11 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   };
   // Always enforce battery=true on new-install regardless of AI output
   form.battery = form.jobType === 'swap-out' ? (parsed.battery ?? true) : true;
+  // The Kohler free-promo warranty never applies to Generac, regardless of AI output.
+  if (form.extWarranty === 'promo' && form.brand !== 'Kohler') form.extWarranty = 'none';
 
   const totals = calcFormTotals(form);
-  const addons = (form.smm ? 1 : 0) + (form.surgePro ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0) + (form.emPanel ? 1 : 0) + (form.gasLine ? 1 : 0);
+  const addons = (Number(form.smmQty) > 0 ? 1 : 0) + (Number(form.surgeProQty) > 0 ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0) + (form.emPanel ? 1 : 0) + (form.gasLine ? 1 : 0);
 
   // Stage: set to 'building' only if not already in a more advanced stage
   const advancedStages = ['sent', 'signed', 'awarded'];

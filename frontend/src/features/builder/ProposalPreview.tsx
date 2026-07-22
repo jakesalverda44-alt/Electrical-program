@@ -1,12 +1,20 @@
 import React, { useRef, useState } from 'react';
 import { GenForm } from './genData';
 import { GenTotals, genPriceRows, genModelNo, loadCenterFor } from './genCalc';
-import { GEN_SPEC_DETAIL } from './genData';
+import { GEN_SPEC_DETAIL, DEFAULT_PRICES } from './genData';
 import { AppSettings, DEFAULT_APP_SETTINGS } from '../../hooks/useAppSettings';
 import api from '../../api/client';
 
 function fmt(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
 function fmtDec(n: number) { return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+// Parses a bare "YYYY-MM-DD" as a local calendar date (not UTC midnight) so the
+// displayed promo date can't shift a day off in negative-UTC timezones.
+function fmtDateLocal(iso: string): string {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
 
 const NAVY   = '#0F2044';
 const ACCENT = '#2563EB';
@@ -206,11 +214,14 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
   const taxableGen   = totals.genP;
   const taxablePad   = totals.padAmt;
   const taxableBatt  = totals.batteryAmt;
-  const taxableATS   = totals.extraATS;
+  const taxableATS   = totals.atsAmt;
   const taxableSMM   = totals.smmTotal;
   const taxableSurge = totals.surgeTotal;
-  const taxableTotal = taxableGen + taxablePad + taxableBatt + taxableATS + taxableSMM + taxableSurge;
-  const nonTaxable   = totals.laborAmt + totals.permitAmt + totals.startupAmt + totals.extraWireAmt + totals.liftAmt + totals.removalFee + totals.lcATS;
+  const taxableWarranty = totals.extWarrantyAmt;
+  const taxableTotal = taxableGen + taxablePad + taxableBatt + taxableATS + taxableSMM + taxableSurge + taxableWarranty;
+  const nonTaxable   = totals.laborAmt + totals.permitAmt + totals.startupAmt + totals.extraWireAmt + totals.liftAmt + totals.removalFee;
+  // Promo date range for the extended-warranty scope line / breakdown row, if set.
+  const warrantyPromoRange = [fmtDateLocal(form.extWarrantyPromoStart), fmtDateLocal(form.extWarrantyPromoEnd)].filter(Boolean).join(' – ');
 
   const docStyle: React.CSSProperties = {
     maxWidth: 780, margin: '0 auto', fontFamily: 'inherit',
@@ -316,7 +327,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
               <tbody>
                 {[
                   {
-                    title: `APT to provide a ${form.brand} ${form.size} Generator — ${lc ? `${lc} Load Center` : `${form.jobType === 'swap-out' ? 'Existing ' : ''}${form.ats} ATS`}`,
+                    title: `APT to provide a ${form.brand} ${form.size} Generator${lc ? ` — ${lc} Load Center` : form.atsQty > 0 ? ` — ${form.jobType === 'swap-out' ? 'Existing ' : ''}${form.atsSize} ATS${form.atsQty > 1 ? ` (${form.atsQty})` : ''}` : ''}`,
                     desc: `The ${form.brand} Advantage: High Quality Power — advanced voltage/frequency regulation with ultra-low harmonic distortion protects electronics. Extraordinary Reliability — 5-year/2,000-hour warranty. Powerful Performance — Exclusive Power Boost; starts 5-ton A/C. Corrosion-Proof Enclosure — impact-resistant to -34°C. Fast Response. Quiet Operation.`,
                     shade: false,
                   },
@@ -329,19 +340,25 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                       : 'Furnish and install a permanently mounted home standby generator and ATS on a code-compliant pad. Complete all electrical connections, integrate ATS for automatic transfer during outages. Includes grounding, bonding, utility coordination, startup, testing, and commissioning per 2026 NEC.',
                     shade: true,
                   },
-                  ...(form.smm ? [{
-                    title: 'Smart Management Module(s)',
+                  ...(form.smmQty > 0 ? [{
+                    title: `Smart Management Module${form.smmQty > 1 ? `s (${form.smmQty})` : ''}`,
                     desc: 'Provide and install SMM(s) for load management and permitting compliance per manufacturer specs and codes.',
                     shade: false,
                   }] : []),
-                  ...(form.surgePro ? [{
-                    title: 'Whole-Home Surge Protectors',
+                  ...(form.surgeProQty > 0 ? [{
+                    title: `Whole-Home Surge Protector${form.surgeProQty > 1 ? `s (${form.surgeProQty})` : ''}`,
                     desc: 'Provide and install a whole-home surge protective device at the electrical service equipment per manufacturer requirements and local codes.',
                     shade: true,
                   }] : []),
                   {
-                    title: "5-Year Manufacturer's Comprehensive Warranty",
-                    desc: "APT provides the full 5-year manufacturer's comprehensive warranty on this installation.",
+                    title: form.extWarranty === 'none'
+                      ? "5-Year Manufacturer's Comprehensive Warranty"
+                      : '5-Year Standard + 10-Year Extended Warranty',
+                    desc: form.extWarranty === 'promo'
+                      ? (<>APT provides the full 5-year manufacturer's comprehensive warranty, extended to 10 years at no additional cost — <s>{fmtDec(DEFAULT_PRICES.extendedWarranty)}</s>{' '}<strong>FREE</strong> (Kohler Promotion{warrantyPromoRange ? `, valid ${warrantyPromoRange}` : ''}).</>)
+                      : form.extWarranty === 'paid'
+                      ? `APT provides the full 5-year manufacturer's comprehensive warranty, extended to 10 years for ${fmtDec(DEFAULT_PRICES.extendedWarranty)}.`
+                      : "APT provides the full 5-year manufacturer's comprehensive warranty on this installation.",
                     shade: false,
                   },
                   {
@@ -395,23 +412,26 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                 <tbody>
                   {[
                     { label: `${form.brand} ${form.size} Generator`, tax: 'taxable', amt: taxableGen, show: true },
-                    { label: 'Transfer Switch — included', tax: 'included', amt: null, show: true },
+                    { label: `${lc} Load Center — included`, tax: 'included', amt: null, amtText: 'Included', show: !!lc },
+                    { label: `ATS (${form.atsSize}) — included`, tax: 'included', amt: null, amtText: 'Included', show: !lc && totals.atsIncluded > 0 },
+                    { label: 'ATS / Transfer Switch — NOT included (liquid-cooled)', tax: '', amt: null, amtText: 'Not Included', show: !lc && totals.atsIncluded === 0 && totals.atsBillableQty === 0 },
                     { label: 'Concrete Pad', tax: 'taxable', amt: taxablePad, show: taxablePad > 0 },
                     { label: 'Battery Maintainer', tax: 'taxable', amt: taxableBatt, show: taxableBatt > 0 },
-                    { label: 'Additional ATS', tax: 'taxable', amt: taxableATS, show: taxableATS > 0 },
-                    { label: 'SMM (Preventative Maintenance)', tax: 'taxable', amt: taxableSMM, show: taxableSMM > 0 },
-                    { label: 'Surge Protector', tax: 'taxable', amt: taxableSurge, show: taxableSurge > 0 },
+                    { label: `ATS — additional (${totals.atsBillableQty} × ${form.atsSize})`, tax: 'taxable', amt: taxableATS, show: taxableATS > 0 },
+                    { label: `SMM (Preventative Maintenance) × ${form.smmQty}`, tax: 'taxable', amt: taxableSMM, show: taxableSMM > 0 },
+                    { label: `Surge Protector × ${form.surgeProQty}`, tax: 'taxable', amt: taxableSurge, show: taxableSurge > 0 },
+                    { label: 'Extended Warranty (10-Year)', tax: 'taxable', amt: taxableWarranty, show: form.extWarranty === 'paid' },
+                    { label: `Extended Warranty (10-Year) — Kohler Promo (FREE${warrantyPromoRange ? `, valid ${warrantyPromoRange}` : ''})`, tax: 'taxable', amt: 0, show: form.extWarranty === 'promo' },
                     { label: `Labor & Electrical${form.extraWire > 0 ? ` + ${form.extraWire} ft extra wire` : ''}`, tax: '', amt: totals.laborAmt + totals.extraWireAmt, show: true },
                     { label: 'Permit Fee', tax: '', amt: totals.permitAmt, show: true },
                     { label: 'Startup & Commissioning', tax: '', amt: totals.startupAmt, show: true },
                     ...(totals.liftAmt > 0 ? [{ label: form.liftType === 'lull' ? 'Lull' : 'Crane', tax: '', amt: totals.liftAmt, show: true }] : []),
                     ...(totals.removalFee > 0 ? [{ label: form.jobType === 'swap-out' ? 'Removal / Disposal of Existing Generator' : 'Removal / Haul-Off', tax: '', amt: totals.removalFee, show: true }] : []),
-                    ...(totals.lcATS > 0 ? [{ label: `LC ATS (${form.lcATS})`, tax: '', amt: totals.lcATS, show: true }] : []),
                   ].filter(r => r.show).map((r, i) => (
                     <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : GRAY_L, borderBottom: '1px solid #E5E7EB' }}>
                       <td style={{ padding: '5px 10px', color: GRAY_D }}>{r.label}</td>
                       <td style={{ padding: '5px 10px', color: r.tax === 'taxable' ? ACCENT : GRAY_M, fontSize: 8 }}>{r.tax}</td>
-                      <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 700, color: r.amt === null ? GRAY_M : GRAY_D }}>{r.amt === null ? 'Included' : fmtDec(r.amt)}</td>
+                      <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 700, color: r.amt === null ? GRAY_M : GRAY_D }}>{r.amt === null ? (r as { amtText?: string }).amtText ?? 'Included' : fmtDec(r.amt)}</td>
                     </tr>
                   ))}
                   <tr>
@@ -433,7 +453,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                 </tbody>
               </table>
               <p style={{ fontSize: 8, color: GRAY_M, lineHeight: '13px' }}>
-                Sales tax is applied to: generator, concrete pad, battery, additional ATS, SMM, and surge protector. Labor, permit fees, and startup/commissioning are non-taxable.
+                Sales tax is applied to: generator, concrete pad, battery, additional ATS, SMM, surge protector, and extended warranty. Labor, permit fees, and startup/commissioning are non-taxable.
               </p>
             </div>
           )}
