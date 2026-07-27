@@ -64,6 +64,19 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
     showToast({ title: 'Generator job closed', sub: gen.customer });
   };
 
+  const handleDuplicate = async (gen: Gen) => {
+    try {
+      const { data } = await api.post<Gen>(`/gens/${gen.id}/duplicate`);
+      setGens(prev => [data, ...prev]);
+      setDetail(null);
+      showToast({ title: 'Proposal duplicated', sub: `New draft for ${data.customer}` });
+      // Drop straight into the builder so the rep can tweak the new option.
+      onEditGen(data);
+    } catch {
+      showToast({ title: 'Duplicate failed', sub: 'Please try again' });
+    }
+  };
+
   const handleDelete = async (gen: Gen) => {
     if (!window.confirm(`Delete "${gen.customer}" and its linked project/files/testing data? This cannot be undone.`)) return;
     try {
@@ -217,6 +230,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
           onCancelDeclined={cancelDeclined}
           onClose={() => setDetail(null)}
           onEditGen={g => { setDetail(null); onEditGen(g); }}
+          onDuplicate={handleDuplicate}
           onDelete={handleDelete}
           onClosed={handleClosed}
           onUpdated={(g, wj) => { setGens(prev => prev.map(x => x.id === g.id ? g : x)); setDetail(g); if (wj) setWonJobs(prev => prev.map(w => w.proposal_id === g.id ? wj : w)); }}

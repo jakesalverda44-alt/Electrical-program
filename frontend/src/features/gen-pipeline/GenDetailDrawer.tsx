@@ -22,6 +22,7 @@ interface Props {
   onCancelDeclined: () => void;
   onClose: () => void;
   onEditGen: (gen: Gen) => void;
+  onDuplicate: (gen: Gen) => void;
   onDelete: (gen: Gen) => void;
   onClosed: (gen: Gen) => void;
   onUpdated: (gen: Gen, wonJob?: WonJob | null) => void;
@@ -29,7 +30,7 @@ interface Props {
 
 interface Draft { customer: string; loc: string; mfr: string; model: string; kw: string; amount: string; addons: string; date_won: string; }
 
-export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDelete, onClosed, onUpdated }: Props) {
+export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated }: Props) {
   const canDelete = isPrivileged(useUser());
   const showToast = useShowToast();
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed';
@@ -313,6 +314,16 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
               <Icon name="doc" size={15} stroke={1.9}/>Edit in Proposal Builder
             </button>
           )}
+
+          {/* Duplicate into a new draft so the customer can be offered more than one
+              option (different size/brand/pricing) without re-entering their details. */}
+          <button
+            className="btn ghost"
+            style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
+            onClick={() => onDuplicate(gen)}
+          >
+            <Icon name="copy" size={14} stroke={1.9}/>Duplicate for New Option
+          </button>
 
           {/* Google Drive folder links — shown when folders were auto-created on award */}
           {gen.drive_job_folder_id && (

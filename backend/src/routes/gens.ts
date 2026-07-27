@@ -108,6 +108,46 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   res.json(rows[0]);
 });
 
+// Duplicate an existing proposal into a fresh "building" draft for the same
+// customer. This is how a rep offers more than one option to one customer
+// (e.g. a good/better/best set, or a Kohler vs Generac alternative): the copy
+// keeps the customer, site, and pricing details but gets its own proposal
+// number and link, and none of the original's lifecycle state (sent/signed/
+// awarded/Drive folders/won-job) carries over.
+router.post('/:id/duplicate', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const src = await loadOwnedGen(req, res);
+  if (!src) return;
+
+  // Preserve the original salesperson so ownership stays with the same rep even
+  // when an admin makes the copy. proposal_no is left null so the builder mints
+  // a new one; proposal_token defaults to a fresh uuid.
+  const customerId = src.customer_id || (await upsertCustomer(src.customer, 'customer'));
+  const { rows } = await pool.query(
+    `INSERT INTO generator_proposals (
+       customer, loc, mfr, model, kw, amount, tax, addons,
+       form_data, totals_data,
+       salesperson_id, salesperson_name, customer_id, stage
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,'building')
+     RETURNING *`,
+    [
+      src.customer, src.loc, src.mfr, src.model, src.kw, src.amount, src.tax, src.addons,
+      src.form_data != null ? JSON.stringify(src.form_data) : null,
+      src.totals_data != null ? JSON.stringify(src.totals_data) : null,
+      src.salesperson_id || null, src.salesperson_name || null, customerId,
+    ],
+  );
+  const gen = rows[0];
+
+  await writeAudit(req, {
+    action: 'duplicate', entityType: 'gen', entityId: gen.id,
+    summary: `Duplicated generator proposal "${src.customer}" into a new draft`,
+    after: { source_id: src.id },
+  });
+
+  res.json(gen);
+}));
+
 router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
   const { stage } = req.body;
   const valid = ['building', 'sent', 'signed', 'awarded', 'declined'];
