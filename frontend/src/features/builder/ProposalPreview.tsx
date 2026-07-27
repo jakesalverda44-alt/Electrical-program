@@ -121,10 +121,10 @@ function SigBlock({ signatureImage, signedDate, buyerName }: { signatureImage?: 
 }
 
 // ── Clause helpers ───────────────────────────────────────────────────────────
-function Clause({ num, label, text }: { num: string; label: string; text: React.ReactNode }) {
+function Clause({ num, label, text }: { num: string; label?: string; text: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 9, fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify' }}>
-      <span style={{ textDecoration: 'underline', fontWeight: 700 }}>{num}. {label}.</span>{'  '}{text}
+      <span style={{ textDecoration: 'underline', fontWeight: 700 }}>{num}.{label ? ` ${label}.` : ''}</span>{'  '}{text}
     </div>
   );
 }
@@ -132,6 +132,15 @@ function SubClause({ label, text }: { label: string; text: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 8, fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify', paddingLeft: 18 }}>
       <span style={{ textDecoration: 'underline', fontWeight: 700 }}>{label}.</span>{'  '}{text}
+    </div>
+  );
+}
+// Customer-initials line that appears at the foot of each Sales Agreement / Exhibit
+// page in the source document ("CUST INT ______").
+function CustInitFooter() {
+  return (
+    <div style={{ marginTop: 16, textAlign: 'right', fontSize: 8.5, color: GRAY_M, fontWeight: 700, letterSpacing: '.03em' }}>
+      CUST INT ________
     </div>
   );
 }
@@ -531,24 +540,21 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
 
             <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 10 }}>
               This Sales Agreement (this "Agreement") is entered into effective ________________________, by and between{' '}
-              <strong>Accurate Power &amp; Technology, Inc.</strong> ("APT"), a Florida corporation, 15519 US Highway 441 Suite A101, Eustis, FL 32726, and <strong>{form.customer || 'Buyer'}</strong> (the "Buyer"), address: {buyerAddr || '—'}. Accurate Power and Technology, Inc., All State Home Innovations, Inc., and Accurate Power and Technology, Inc. d/b/a "A Generator Guy" are collectively referred to as "APT."
+              <strong>Accurate Power &amp; Technology, Inc.</strong> ("APT"), a Florida corporation with its principal place of business at 15519 US Highway 441 Suite A101 Eustis, Fl 32726, and <strong>{form.customer || '________________________'}</strong> (the "Buyer"), having its address at {buyerAddr || '________________________'}. For avoidance of doubt, Accurate Power and Technology, Inc., All State Home Innovations, Inc. and Accurate Power and Technology, Inc. d/b/a "A Generator Guy" are collectively referred to as "APT" throughout this Agreement. APT and the Buyer may be referred to as the Party or the Parties throughout this Agreement.
             </p>
             <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 10 }}>
               In consideration of the mutual promises, covenants, and conditions hereinafter contained, the parties hereto agree as follows:
             </p>
 
-            <Clause num="1" label="Sale of Goods" text="APT hereby sells and Buyer hereby purchases the goods and materials described in the Generator Proposal for the purchase price contained therein, plus any Additional Labor charges, permit and license fees, and all applicable sales, excise, or other taxes."/>
-            <Clause num="2" label="Nonrefundable Deposit" text="Upon execution, Buyer shall pay the nonrefundable deposit stated in the Proposal. The deposit will not be refunded under any circumstances after APT orders the generator. APT will only refund deposits if APT materially breaches this Agreement. Unpaid balances accrue interest at 18% per annum."/>
-            <Clause num="3" label="Cancellation" text={<><strong>ALL GENERATOR SALES ARE FINAL.</strong> Generators are built on demand and are not returnable. If Buyer cancels after a generator has been ordered, Buyer shall pay 25% of the contract face value or the actual value of the generator, whichever is greater.</>}/>
-            <Clause num="4" label="Disclosures" text='Buyer acknowledges the Disclosures attached as Exhibit "A" were provided along with the Proposal and waives all claims of defective notice as to any matter disclosed therein.'/>
-            <Clause num="5" label="Installation Disconnects" text="The project may require a power disconnect by the electric company. APT will do everything necessary to restore power in a timely manner. Buyer understands that the electric company and municipality are separate entities whose schedules cannot be controlled by APT, and delays may occur."/>
-            <Clause num="6" label="After-Hours Charges" text="If delays force APT technicians to remain on-site after 3:00 PM, the homeowner will be billed at $185.00/hr until the inspector completes the inspection and power is restored."/>
-            <Clause num="7" label="Installation" text="APT shall provide only the initial installation at the premises. Buyer is responsible for costs of any Additional Labor. Installation is deemed accepted when installed, inspected, and ready for use per APT's normal standards."/>
-            <Clause num="8" label="Taxes" text="Buyer shall pay all federal, state, and local taxes on the generator and its installation, except taxes on APT's net income."/>
-            <Clause num="9" label="Access to Site" text="Buyer grants APT complete, unrestricted access to the installation site, including gated communities. Buyer agrees to remove all obstacles."/>
-            <Clause num="10" label="No Liability for Property Damage" text="APT assumes no responsibility for damage to plumbing, electrical, underground obstructions, sprinkler systems, lawn, or landscaping during installation."/>
-            <Clause num="11" label="Buyer's Default" text="If Buyer fails to make any payment or becomes insolvent, APT may enter the premises and remove the generator."/>
-            <Clause num="12" label="Title" text="Title passes to Buyer upon payment in full of the purchase price and all associated charges."/>
+            <Clause num="1" label="Sale of Goods" text="APT hereby sells and Buyer hereby purchases the goods and materials described in the Generator Proposal (attached hereto and incorporated by this reference as if fully stated herein) for the purchase price contained in the Generator Proposal, plus any charges for Additional Labor (as defined in Paragraph 5 below), permit and license fees, and all applicable sales, excise, or other taxes."/>
+            <Clause num="2" label="Nonrefundable Deposit" text="Upon Buyer's execution of this Agreement, Buyer shall pay to APT the nonrefundable deposit contained in the Generator Proposal, which deposit will be applied against the purchase price contained in the Generator Proposal. The nonrefundable deposit will not be refundable under any circumstances after APT orders a generator from the manufacturer. APT will only refund deposits in the unlikely event that APT materially breaches this Agreement by wrongfully failing to tender the generator to Buyer. If APT does not receive the deposit by the date and time specified in the Generator Proposal, then this Agreement shall be null and void and neither Party shall have any further obligations or claim against the other for damages or equitable relief of any kind. The balance of the contract purchase price shall be paid in accordance to the schedule stated in the Generator Proposal. If Buyer fails or refuses to pay APT all or any part of the contract purchase price when due, interest shall accrue and be paid to APT in addition to the unpaid purchase price at the rate of eighteen percent (18%) per annum on the unpaid amount."/>
+            <Clause num="3" label="Cancellation" text="ALL GENERATOR SALES ARE FINAL. Generators are built on demand and are not returnable. Once APT orders the generator from the manufacturer, APT is not able to return or resell the generator. For this reason, Buyer agrees that Buyer shall pay 25% of the face value of the contract if Buyer cancels after a generator has been ordered or the actual value of the generator, whichever is greater."/>
+            <Clause num="4" label="Disclosures" text={'Buyer acknowledges that the Disclosures attached hereto as Exhibit "A", which is incorporated by this reference as though such Disclosures were fully incorporated herein, were provided to the Buyer along with the Generator Proposal. Buyer waives all claims of defective notice as to any matter so disclosed.'}/>
+            <Clause num="5" label="Installation Disconnects" text="Buyer understands that the generator project may require a disconnect of power that can only be done by my electric company, and to get the power restored the same day an inspection with my municipality will also be required. Furthermore, the buyer understands that my contractor Accurate Power and Technology will do everything necessary to have my power restored in a timely manner. The Buyer also understands that their electric company and municipality are both separate entities who's schedules and employees cannot be controlled by Accurate Power and therefore may be a delay in power restoration. It's not likely but it can happen, and we just want you to be aware of the what if's that we have ran into."/>
+            <Clause num="6" text="I understand that if one or both entities is/are delayed forcing the technicians employed by Accurate Power to remain at my property after 3pm, I the homeowner will be billed Accurate Power's standard after hour charge of $185.00/hr. until the municipality inspector finishes his/her inspection, the power company restores my power, and technician employed by Accurate Power is able to leave my property."/>
+            <Clause num="7" label="Installation" text="APT shall provide only the initial installation of the generator at the premises designated in the Generator Proposal. APT may hire third-party contractors (the &quot;Additional Labor&quot;), such as a carpenter, or manual laborer, as needed to facilitate such installation. Buyer understands and agrees that APT is not responsible for the work of such Additional Labor, and Buyer shall reimburse APT for the cost of hiring such Additional Labor. The generator installation shall be deemed accepted by Buyer when it has been installed, inspected, and it is ready for use in accordance with APT's normal standards of installation."/>
+
+            <CustInitFooter/>
           </div>
 
           {/* ═══ SALES AGREEMENT — PAGE 2 ══════════════════════════════════ */}
@@ -557,69 +563,113 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, textAlign: 'center', marginTop: 16, marginBottom: 4 }}>SALES AGREEMENT (continued)</div>
             <div style={{ height: 2, background: ACCENT, marginBottom: 14 }}/>
 
-            <Clause num="13" label="Warranties/Limitation of Liabilities" text="APT's warranties and liabilities are as follows:"/>
-            <SubClause label="a. Limited Warranty" text="APT warrants only to the original Buyer that the generator will be free from defects in material and workmanship under normal use within twelve (12) months of installation. APT shall not be liable for special, exemplary, or consequential damages."/>
-            <SubClause label="b. Limitation of Warranties" text="THE WARRANTIES IN PARAGRAPH 13(A) ARE IN LIEU OF ALL OTHER WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. APT MAKES NO WARRANTY WITH RESPECT TO LABOR, ACCESSORIES, MATERIALS, OR PARTS NOT SUPPLIED BY APT."/>
-            <SubClause label="c. Assignment of Manufacturer's Warranties" text="APT assigns to Buyer all rights in the manufacturer's warranties, to the extent permitted. Manufacturer's warranties can be extended for up to five (5) years on most generators."/>
-            <Clause num="14" label="Risk of Loss" text="Risk of loss passes to Buyer upon delivery of the generator to the installation site."/>
-            <Clause num="15" label="Security Interest" text="Buyer grants APT a security interest in the generator to secure payment. APT may file a copy of this Agreement as a financing statement. APT may retake possession if Buyer defaults."/>
-            <Clause num="16" label="Personal Guaranty" text="Buyer (or its principals) agrees to personally guaranty payment of all sums due."/>
-            <Clause num="17" label="Permits and Licenses" text="Buyer shall pay for and APT shall secure all permits or licenses required by any state or local authority."/>
-            <Clause num="18" label="Breach of Agreement" text=""/>
-            <SubClause label="a. Limitation of Action" text="No action shall be maintained by Buyer against APT unless Buyer notifies APT in writing within thirty (30) days of the alleged breach and APT fails to remedy within sixty (60) days."/>
-            <SubClause label="b. Limitation of Damages" text="No cause of action shall include a claim for punitive, incidental, or consequential damages."/>
-            <SubClause label="c. Indemnification" text="Buyer shall hold APT harmless from all claims arising from subsequent sale, reinstallation, or use of the generator by parties other than APT."/>
-            <SubClause label="d. Reservation of Rights" text="If Buyer fails to pay, APT may cancel all warranties and cease work without breach."/>
-            <Clause num="19" label="Integration" text="This Agreement is the final, complete, exclusive statement of the terms between the Parties and supersedes all prior agreements."/>
-            <Clause num="20" label="Assignment" text="Not assignable by Buyer without APT's prior written consent."/>
-            <Clause num="21" label="Binding Effect" text="Binding on the parties and their respective successors and assigns."/>
-            <Clause num="22" label="Force Majeure" text="APT shall not be liable for failure to perform due to inability to obtain materials, transportation delays, government regulation, labor disputes, war, fire, flood, or other causes beyond APT's control."/>
-            <Clause num="23" label="Waiver of Default" text="No waiver is effective unless in writing and signed by the Parties."/>
-            <Clause num="24" label="Enforceability" text="Invalid provisions shall not affect the remainder of this Agreement."/>
-            <Clause num="25" label="Notice" text="Notices must be in writing, sent by certified mail to the addresses stated herein."/>
-            <Clause num="26" label="Attorney's Fees" text="If APT engages proceedings to enforce this Agreement, APT is entitled to recover reasonable attorneys' fees, costs, and disbursements."/>
-            <Clause num="27" label="Governing Law" text="This Agreement is governed by Florida law. Venue lies in the Circuit Civil Court of the Fifth Judicial Circuit, Lake County, Florida."/>
+            <Clause num="8" label="Taxes" text="Buyer shall pay all federal, state, and local sales, use, property, excise or other taxes imposed on or with respect to the generator and its installation, except taxes levied on APT's net income."/>
+            <Clause num="9" label="Access to Site" text="Buyer agrees that APT shall have complete use of and unrestricted access to the installation site during generator installation. Buyer further agrees to remove all obstacles, waste, or debris from the installation site which may affect APT's ability to access the installation site or install the generator. APT requires unlimited access to gated communities during the installation period, and it is Buyer's responsibility to ensure APT has such access."/>
+            <Clause num="10" label="No Liability for Property Damage" text="APT assumes no responsibility for damage to plumbing, electrical, underground obstructions, or sprinkler systems, lawn or landscaping during generator installation. Buyer agrees to indemnify and hold harmless APT for any damage to Buyer's property resulting from installation of the generator."/>
+            <Clause num="11" label="Buyer's Default" text="If Buyer fails to make any payment due hereunder or becomes insolvent or a party to or acquiesces in any bankruptcy or receivership proceeding or any similar action affecting Buyer's affairs or property, APT may enter upon the premises where the generator may be found and remove the same, without prejudice to any other remedies APT may have. Thereupon, APT may sell the generator so acquired upon commercially reasonably terms as APT may elect and apply the proceeds thereof against the Buyer's obligations hereunder."/>
+            <Clause num="12" label="Title" text="Title to the generator shall pass to Buyer immediately upon payment in full of the purchase price, and all associated costs and charges required hereunder."/>
+            <Clause num="13" label="Warranties/Limitation of Liabilities" text="APT's warranties and liabilities with regard to the generator and its installation are as follows:"/>
+            <SubClause label="a. Limited Warranty" text="Upon completion of the initial installation of the generator, APT warrants only to the original Buyer that the generator will be free from defects in material and workmanship under normal use at the installation site. After the initial installation provided for hereunder, APT shall have no obligation or liability to Buyer for damage to the generator resulting from the repair, maintenance or subsequent reinstallation of the generator by any party other than APT. APT's obligations under this limited material and workmanship warranty, and Buyer's exclusive remedy, shall be limited solely to the repair, exchange or replacement, at APT's election, of any material(s) or workmanship which may thus prove defective under normal use and service, within twelve (12) months from the installation date, and which APT's examination shall disclose to its satisfaction to be defective. This warranty excludes re-used projects, lamps, items furnished by others, unauthorized service, negligent care, vandalism, lightning, or other damages. The express warranties herein are in lieu of all other warranties and in no event shall APT be liable for special, exemplary or consequential damages."/>
+            <SubClause label="b. Limitation of Warranties and Liabilities" text="THE WARRANTIES STATED IN PARAGRAPH 11(A) ARE EXPRESSLY IN LIEU OF ALL OTHER WARRANTIES, EXPRESSED OR IMPLIED, INCLUDING THE WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, AND ALL OTHER OBLIGATIONS OR LIABILITIES ON APT'S PART. APT NEITHER ASSUMES NOR AUTHORIZES ANY OTHER PERSON TO ASSUME FOR IT, ANY OTHER LIABILITY IN CONNECTION WITH THE SALE OF THIS GENERATOR. THERE ARE NO WARRANTIES WHICH EXTEND BEYOND THE TERMS OF PARAGRAPH 11(A) OF THIS AGREEMENT. THESE WARRANTIES SHALL NOT APPLY TO THIS GENERATOR OR ANY PART THEREOF WHICH HAS BEEN SUBJECT TO ACCIDENT, NEGLIGENCE, ALTERATION, ABUSE, OR MISUSE. APT MAKES NO WARRANTY WHATSOEVER WITH RESPECT TO LABOR ACCESSORIES, MATERIALS, OR PARTS NOT SUPPLIED BY APT. AS USED IN THESE WARRANTIES, THE TERM &quot;ORIGINAL BUYER&quot; SHALL MEAN THAT PERSON OR ENTITY NAMED HEREIN FOR WHOM THE GENERATOR IS ORIGINALLY INSTALLED."/>
+            <SubClause label="c. Assignment of Manufacturer's Warranties" text="APT hereby assigns to Buyer all of its rights and interests in the warranties, if any, provided by the manufacturer of the generator, to the extent that this assignment is not prohibited by the terms of any agreement between APT and the manufacturer. Manufacturer's warranties can be extended for up to five (5) years on most generators."/>
+            <Clause num="14" label="Risk of Loss" text="The risk of loss for the generator shall pass to Buyer upon its delivery to the installation site."/>
 
-            <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, marginBottom: 14 }}>
-              <strong>In Witness Whereof</strong>, the parties have executed this Agreement on the day and year first written above.
-            </p>
-            <SigBlock signatureImage={signatureImage} signedDate={signedDate} buyerName={form.customer}/>
+            <CustInitFooter/>
           </div>
 
-          {/* ═══ EXHIBIT A — DISCLOSURES ═══════════════════════════════════ */}
+          {/* ═══ SALES AGREEMENT — PAGE 3 ══════════════════════════════════ */}
           <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
             <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine}/>
-            <SectionHeading title="EXHIBIT A — DISCLOSURES"/>
+            <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, textAlign: 'center', marginTop: 16, marginBottom: 4 }}>SALES AGREEMENT (continued)</div>
+            <div style={{ height: 2, background: ACCENT, marginBottom: 14 }}/>
+
+            <Clause num="15" label="Security Interest" text="Buyer hereby grants to APT a security interest in the generator to secure payment of the purchase price. A copy of this Agreement may be filed by APT at any time as a financing statement in order to perfect APT's security interest, and Buyer agrees to execute a UCC-1 financing statement to perfect this security interest on demand by APT. APT shall have the right to retake possession of any generator or other merchandise or materials sold to Buyer hereunder and such retaking shall not be construed to be a waiver of APT's lien rights or of any other remedy at law, in equity or otherwise."/>
+            <Clause num="16" label="Personal Guaranty" text="As a material inducement to enter into this Agreement, Buyer (or its principals) agrees to personally guaranty payment for all sums due hereunder."/>
+            <Clause num="17" label="Permits and Licenses" text="Buyer shall pay for and APT shall secure all permits or licenses required by any state or local authority in connection with the performance of APT's obligations hereunder."/>
+            <Clause num="18" label="Breach of Agreement" text=""/>
+            <SubClause label="a. Limitation of Action" text="No action at law or in equity shall be maintained by Buyer against APT for APT's alleged breach of this Agreement and/or violation of any federal or state law now in effect or hereafter enacted with respect to any obligation or duty incurred hereunder by APT, unless (i) Buyer notifies APT in writing at the address specified in this Agreement within thirty (30) days from the date of such alleged breach or violation, and provided APT does not remedy or correct the breach or violation within sixty (60) days from the receipt of the notice; and (ii) such action at law or in equity is commenced by Buyer within one (1) year from the finish date of the generator installation, unless extended by ninety (90) days to allow for notice to APT and its response as provided by this paragraph. Notwithstanding the foregoing, nothing contained in this paragraph shall be construed to abridge or limit the warranties contained in Paragraph 11 hereof."/>
+            <SubClause label="b. Limitation of Damages" text="If Buyer or APT brings any action at law or equity pursuant to Paragraph 16(a), no cause of action by Buyer or APT shall include a claim, nor may recovery be had against Buyer or APT, for any punitive, incidental, or consequential damages, including but not limited to, damages to property, for loss of use, loss of time, loss of profits or income."/>
+            <SubClause label="c. Indemnification and Limited Covenant Not to Sue" text="Buyer shall hold APT harmless and indemnify APT against any and all debts, obligations, costs and damages, including attorney's fees, arising from any claims or causes of action, whether in law or equity or sounding in contract, tort or otherwise, which may be asserted against APT by any person or entity not a party to this Agreement, resulting from the subsequent sale by Buyer, reinstallation by the Buyer, its agents and affiliates, use, repair (other than by APT), maintenance of (other than by APT) or decision to purchase, the generator, provided, however, that this indemnity and hold harmless provision shall not apply to APT's own acts of negligence or willful misconduct in the initial installation of the generator or in APT's repair or replacement thereof. Buyer, its agents, employees, officers, heirs, executors, administrators, and assigns, further agree not to prosecute, maintain or recover upon any rights, claims, demands, damages or causes of action that Buyer could assert against APT, now or in the future, arising from the sale, installation, reinstallation, use, repair or maintenance of the generator, except as specifically provided for in Paragraph 16(a) hereof."/>
+            <SubClause label="d. Reservation of Rights" text="In the event Buyer fails to pay APT as agreed, APT reserves the right to cancel all warranties and to cease work on the project until payment is made, or Buyer makes other suitable arrangements satisfactory to APT. Any such cessation of performance shall not constitute a breach of this Agreement by APT."/>
+            <Clause num="19" label="Integration" text="This Agreement constitutes the final, complete, exclusive, and fully integrated statement of the terms of the Agreement between the Parties pertaining to the sale and installation of the generator and supersedes all prior and contemporaneous agreements and undertakings of the Parties in connection with this sale."/>
+            <Clause num="20" label="Assignment and Delegation" text="This Agreement is not assignable nor is the performance of the duties delegable by the Buyer without APT's prior written consent."/>
+            <Clause num="21" label="Binding Effect" text="This Agreement shall inure to the benefit of, and be binding upon, the parties hereto and their respective next-of-kin, legatees, administrators, executors, legal representatives, nominees, successors and assigns."/>
+
+            <CustInitFooter/>
+          </div>
+
+          {/* ═══ SALES AGREEMENT — PAGE 4 ══════════════════════════════════ */}
+          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
+            <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine}/>
+            <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, textAlign: 'center', marginTop: 16, marginBottom: 4 }}>SALES AGREEMENT (continued)</div>
+            <div style={{ height: 2, background: ACCENT, marginBottom: 14 }}/>
+
+            <Clause num="22" label="Force Majeure" text="APT shall not be liable for any failure to perform as a result of its inability to obtain materials, parts or supplies through its usual and regular sources (or on a timely basis), interruption of transportation, delays in delivery, government regulation, labor disputes, strikes, war, fire, flood, accidents, or other causes beyond APT's control making it impractical for APT to perform."/>
+            <Clause num="23" label="Waiver of Default" text="No modification, addition to or waiver of any right, obligation or default shall be effective unless in writing and signed by the Parties. One or more waivers of any right, obligation or default shall not be construed as a waiver of any subsequent or other right, obligation or default."/>
+            <Clause num="24" label="Enforceability" text="If any of the provisions of this Agreement, or portions thereof, are found to be invalid by any court of competent jurisdiction, the remainder or this Agreement shall nevertheless remain in full force and effect."/>
+            <Clause num="25" label="Notice" text="Notices hereunder shall be in writing and shall be deemed to have been fully given and received when sent by certified or registered mail, return receipt requested, postage prepaid, and properly addressed to the respective Parties at the addresses above, or at such addresses as the Parties may later specify for such purpose."/>
+            <Clause num="26" label="Attorney's Fees" text="If APT is required to engage in any proceedings, legal or otherwise, to enforce its rights under this Agreement, APT shall be entitled to recover from Buyer, in addition to any other such sums due, the reasonable attorneys' fees, costs, and necessary disbursements involved in said proceedings."/>
+            <Clause num="27" label="Governing Law, Jurisdiction, and Venue" text="This Agreement shall be interpreted under the laws of the State of Florida without regard to its choice of law principles. APT and Buyer agree that any legal or equitable action for claims, debts or obligations arising out of, or to enforce the terms of, this Agreement may be brought in the Circuit Civil Court of the Fifth Judicial Circuit in and for Lake County, Florida, and that such court shall have personal jurisdiction over the parties and venue of the action shall be appropriate in such court."/>
+
+            <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, marginTop: 12, marginBottom: 14 }}>
+              <strong>In Witness Whereof</strong>, the parties hereto have executed this Agreement on the day and year first above written.
+            </p>
+            <SigBlock signatureImage={signatureImage} signedDate={signedDate} buyerName={form.customer}/>
+
+            <CustInitFooter/>
+          </div>
+
+          {/* ═══ EXHIBIT A — DISCLOSURES (PAGE 1) ══════════════════════════ */}
+          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
+            <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine}/>
+            <SectionHeading title="EXHIBIT A: DISCLOSURES"/>
 
             <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 8 }}>
-              <strong>Pre-Purchase Disclaimer:</strong>&nbsp; These disclosures are provided prior to purchase and incorporated by reference into the Sales Agreement.
+              <strong>Pre-Purchase Disclaimer and Disclosure Notification:</strong>&nbsp; These disclaimers and disclosures are provided to APT's customers prior to the purchase of any Services or Products from APT and are incorporated by reference into the Sales Agreement when the Buyer agrees to a Generator Proposal.
             </p>
             <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 6 }}>
-              <strong>Exclusions:</strong>&nbsp; APT excludes from the Proposal any repairs to existing inoperable equipment not in compliance with electrical codes. APT excludes utility in/out charges. Permits and Sales Tax are included in this Proposal. Additional costs for excluded items are the Buyer's responsibility.
+              <strong>Exclusions:</strong>&nbsp; APT excludes from the Generator Proposal any repairs to existing inoperable equipment and systems that do not comply with electrical codes, regulations, or specifications. APT excludes from the Generator Proposal any utility in and out charges. Permits and Sales Tax are included in the Generator Proposal. Additional taxes, fees, and costs related to these excluded items are the sole responsibility of the Buyer.
             </p>
             <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 6 }}>
-              <strong>Hours:</strong>&nbsp; All work is completed 7:00 AM – 3:30 PM, Monday–Friday. Overtime at Buyer's request is Buyer's responsibility. After 4:00 PM, overtime charges are passed to the consumer at $480/hr + $3/mile.
+              <strong>Time:</strong>&nbsp; All work will be completed between the hours of 7:00 a.m. and 3:30 p.m. Monday through Friday unless otherwise noted in the Generator Proposal. Overtime to accelerate the schedule at the request of the Buyer is the responsibility of the Buyer. During Disconnect this is sometimes unavoidable. We will schedule Disconnects with the power providers when needed. During major outages around the city or county, reconnects are sometimes delayed. Any time after the 4PM cut-off, overtime charges will be passed on to the consumer at a rate of $480 per hour plus $3/mile.
             </p>
             <p style={{ fontSize: 9, lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 12 }}>
-              <strong>Insurance:</strong>&nbsp; APT is licensed and insured per Florida law with general liability, commercial auto, and workers' compensation coverage. Certificates available on request. APT is a Drug-Free Workplace.
+              <strong>Insurance:</strong>&nbsp; APT is licensed and insured according to the laws of the State of Florida. APT carries general liability coverage, commercial automobile coverage, and worker's compensation coverage. Certificates of insurance are available on request. APT is a Drug-Free Workplace.
             </p>
 
             <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, marginBottom: 8 }}>General Disclosures:</div>
             {[
-              "APT does not guarantee any homeowner's insurance discount.",
-              'Scheduled installation dates may be postponed due to weather or severe storm conditions.',
-              `All quoted materials are valid for ${form.validDays ?? 30} days and may increase without warning.`,
-              "In the event of a named hurricane threatening Buyer's location, APT will make reasonable accommodations to install before the storm's arrival, including evenings and weekends.",
-              'APT installs generators in order by date of initial payment.',
-              "Individual generator units carry their own warranties. Manufacturer's warranties can be extended up to five (5) years on most generators.",
-              'Installation typically takes thirty (30) days from permit approval and material receipt.',
-              `Payment schedule: ${form.depositPct ?? 50}% deposit at signing; 50% of remaining balance after electrical completion; remainder at startup and final inspection.`,
-              'All contractors are paid at completion; proof of payment available on request.',
-              'Invoices and Commencement Notices MUST be signed before work begins.',
-              "Warning — Florida's Construction Law allows unpaid contractors, subcontractors, and material suppliers to file Liens against your property.",
-              "During warranty, manufacturer pays for 30 minutes of diagnosis. Buyer is responsible for additional time and trip charges. APT's shop rate is $160/hr including travel; mileage at IRS standard rate.",
-              'APT cannot quote what we cannot see. Unforeseen conditions may result in additional labor or material charges.',
-              'No other equipment or services are provided beyond those listed herein. Code violations discovered during inspections will require additional work at additional cost to Buyer.',
+              'APT does not guarantee the Buyer any homeowner’s insurance discount.',
+              'Scheduled installation dates may be postponed due to weather such as heavy rain or electrical storms. During severe weather conditions, scheduled disconnects may be postponed due to municipality resource allocations or re-routes.',
+              'All quoted materials are good for 30 days. There is no reference to the cost of materials and can go up at any time without warning.',
+              'In the event that a named hurricane is formed that threatens the Buyer’s location, APT, will, in its sole discretion, make reasonable accommodations to install the generator before the storm’s arrival. In this event, APT employees may work unusual hours including evenings and weekends in order to complete the installation.',
+              'APT installs generators in order by the date of their initial payment.',
+              'Individual generator units each carry their own warranties. Please inquire about the manufacturer’s warranty for your purchase. Manufacturer’s warranties can be extended for up to five (5) years on most generators.',
+              'Installation timeframes are typically thirty (30) days from the time APT acquires an approved permit and all materials. All efforts will be made to complete Buyer’s installation in a timely manner.',
+              'It is APT’s policy to collect payment in a draw-like manner. A deposit of at least 50% will be taken at the contract signing; 50 percent of the remaining balance is due after the electrical is complete, and the remaining gas portion is due upon gas completion. The remainder due under the Generator Proposal and Sales Agreement is due at completion of startup and final inspection and satisfaction is agreed.',
+              'All contractors will be paid at completion and proof of payment will be provided at job completion upon request.',
+            ].map((b, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 5, fontSize: 9, lineHeight: '13px', color: GRAY_D, textAlign: 'justify' }}>
+                <span style={{ flexShrink: 0 }}>•</span>
+                <span>{b}</span>
+              </div>
+            ))}
+
+            <CustInitFooter/>
+          </div>
+
+          {/* ═══ EXHIBIT A — DISCLOSURES (PAGE 2) ══════════════════════════ */}
+          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
+            <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine}/>
+            <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, textAlign: 'center', marginTop: 16, marginBottom: 4 }}>EXHIBIT A: DISCLOSURES (continued)</div>
+            <div style={{ height: 2, background: ACCENT, marginBottom: 14 }}/>
+
+            {[
+              'Invoices and Commencement Notices MUST be signed before work will begin.',
+              'Warning--- Florida’s Construction Law allows unpaid contractors, sub-contractors, and material suppliers to file Liens against your property.',
+              'During warranty, manufacturer generally pays for 30 minutes for diagnosis. Buyer will be responsible for additional time and trip charges. APT’s shop rate is $160.00 per hour, including travel time. Mileage will be at the standard IRS rate.',
+              'APT cannot quote what we cannot see. Unforeseen problems that arise during generator installation may result in additional labor or materials charges.',
+              'No other equipment or services is provided other than those listed herein. During inspections, code violations are sometimes found, and APT is made to bring the prior work to code compliance before proceeding. Such additional work will be completed at an additional cost to the Buyer.',
             ].map((b, i) => (
               <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 5, fontSize: 9, lineHeight: '13px', color: GRAY_D, textAlign: 'justify' }}>
                 <span style={{ flexShrink: 0 }}>•</span>
@@ -631,6 +681,8 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             <div style={{ marginTop: 8, fontSize: 8, color: GRAY_M, textAlign: 'center' }}>
               This proposal is valid for {form.validDays ?? 30} days. Accurate Power &amp; Technology, Inc. · Licensed &amp; Insured · FL
             </div>
+
+            <CustInitFooter/>
           </div>
 
         </div>
