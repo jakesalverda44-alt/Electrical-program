@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDueDate, parseProjectName, parseGc, parseLocation, parseContact, emailDomain } from './intakeEmailIngest';
+import { parseDueDate, parseProjectName, parseGc, parseLocation, parseContact, emailDomain, isSameProject } from './intakeEmailIngest';
 
 const NOW = new Date('2026-06-10T12:00:00Z');
 
@@ -93,6 +93,46 @@ describe('emailDomain', () => {
   it('returns null when there is no address', () => {
     expect(emailDomain(null)).toBeNull();
     expect(emailDomain('no-at-sign')).toBeNull();
+  });
+});
+
+describe('isSameProject', () => {
+  const KINGDOM = 'Kingdom Construction';
+  it('matches identical project + GC', () => {
+    expect(isSameProject(
+      { name: 'Alachua County Admin Building', gc: KINGDOM },
+      { name: 'Alachua County Admin Building', gc: 'kingdom construction' },
+    )).toBe(true);
+  });
+  it('matches a reminder that appends the city to the same title', () => {
+    expect(isSameProject(
+      { name: 'Alachua County Admin Building', gc: KINGDOM },
+      { name: 'Alachua County Admin Building - Gainesville, FL', gc: KINGDOM },
+    )).toBe(true);
+  });
+  it('does NOT match different store numbers for the same GC', () => {
+    expect(isSameProject(
+      { name: '7-Eleven #42759', gc: 'Summit' },
+      { name: '7-Eleven #42760', gc: 'Summit' },
+    )).toBe(false);
+  });
+  it('does NOT match the same project bid by a different GC', () => {
+    expect(isSameProject(
+      { name: 'Alachua County Admin Building', gc: 'Kingdom Construction' },
+      { name: 'Alachua County Admin Building', gc: 'Ajax Building Company' },
+    )).toBe(false);
+  });
+  it('does NOT collapse two projects on a short/generic shared title', () => {
+    expect(isSameProject(
+      { name: 'Clinic', gc: 'Summit' },
+      { name: 'Clinic Expansion', gc: 'Summit' },
+    )).toBe(false);
+  });
+  it('requires a GC on both sides', () => {
+    expect(isSameProject(
+      { name: 'Alachua County Admin Building', gc: null },
+      { name: 'Alachua County Admin Building', gc: 'Kingdom Construction' },
+    )).toBe(false);
   });
 });
 

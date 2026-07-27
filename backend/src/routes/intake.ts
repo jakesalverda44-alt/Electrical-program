@@ -6,7 +6,7 @@ import { upsertCustomer } from './customers';
 import { formatDue, withDueDays } from '../utils/dueDate';
 import { setupBidDriveFolders } from './bids';
 import { ingestTaggedBidEmails } from '../integrations/intakeEmailIngest';
-import { downloadAttachments, createReplyDraft } from '../integrations/outlookMail';
+import { downloadAttachments, createReplyDraft, clearBidCategory } from '../integrations/outlookMail';
 import { pushBidDueToCalendar } from '../integrations/outlookCalendar';
 import { uploadFile } from '../services/googleDrive';
 import { logger } from '../utils/logger';
@@ -69,6 +69,12 @@ async function finishEmailSourcedAccept(
     const comment = 'Thank you for the invitation — we received the bid documents and we will '
       + 'be submitting a proposal. We will follow up with any questions. Best regards,';
     await createReplyDraft(item.graph_message_id, comment).catch(() => {});
+  }
+
+  // 4) Untag the email in Outlook (and mark it read) so it drops out of the "new bid" set
+  //    and the tagged inbox stays small — keeps the reliable full-tag pull fast.
+  if (item.graph_message_id) {
+    await clearBidCategory(item.graph_message_id).catch(() => {});
   }
 }
 
@@ -228,6 +234,10 @@ router.post('/:id/decline', requireAuth, async (req: AuthRequest, res) => {
   );
   if (!rows.length) return res.status(404).json({ error: 'Not found or already processed' });
   await writeAudit(req, { action: 'decline', entityType: 'intake', entityId: req.params.id, summary: `Declined incoming bid "${rows[0].name}"${reason ? ` — ${reason}` : ''}` });
+  // Untag the declined invitation in Outlook so it stops showing up in the tagged set.
+  if (rows[0].source === 'email' && rows[0].graph_message_id) {
+    clearBidCategory(rows[0].graph_message_id).catch(() => {});
+  }
   res.json(rows[0]);
 });
 

@@ -228,6 +228,53 @@ export function parseContact(fromName: string | null, fromEmail: string | null, 
   return (fromEmail && fromEmail.trim()) || name || null;
 }
 
+// Tight normalization (alphanumerics only) — used to compare GC company names.
+function normTight(s: string | null): string {
+  return (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+// Loose normalization (words separated by single spaces) — used to compare project names,
+// where a reminder often appends "- City, ST" or a store number to the original title.
+function normLoose(s: string | null): string {
+  return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/**
+ * True when two invitations are for the same opportunity — same general contractor AND the
+ * same project (exact title, or one title is contained in the other, e.g. a reminder that
+ * appends the city). Requires a non-empty GC and a reasonably long shared title so short,
+ * generic names ("Clinic") never collapse two distinct projects. Same project bid by two
+ * different GCs are correctly treated as separate (the GC differs).
+ */
+export function isSameProject(
+  a: { name: string | null; gc: string | null },
+  b: { name: string | null; gc: string | null },
+): boolean {
+  const ga = normTight(a.gc);
+  if (!ga || ga !== normTight(b.gc)) return false;
+  const na = normLoose(a.name), nb = normLoose(b.name);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const [short, long] = na.length <= nb.length ? [na, nb] : [nb, na];
+  return short.length >= 12 && long.includes(short);
+}
+
+// Fill in only the fields still blank on a pending intake item — never overwrite a value the
+// reviewer may have set. Shared by the same-email and reminder/duplicate paths.
+async function backfillPending(
+  row: { id: string; loc: string | null; contact: string | null; due: string | null },
+  loc: string | null, contact: string | null, due: string | null,
+): Promise<void> {
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if ((row.loc == null || row.loc === '') && loc) { vals.push(loc); sets.push(`loc=$${vals.length}`); }
+  if ((row.contact == null || row.contact === '') && contact) { vals.push(contact); sets.push(`contact=$${vals.length}`); }
+  if ((row.due == null || row.due === '') && due) { vals.push(due); sets.push(`due=$${vals.length}`); }
+  if (sets.length) {
+    vals.push(row.id);
+    await pool.query(`UPDATE intake_items SET ${sets.join(', ')}, updated_at=now() WHERE id=$${vals.length}`, vals);
+  }
+}
+
 async function importOne(msg: GraphMailMessage): Promise<boolean> {
   const name = parseProjectName(msg.subject) || '(no subject)';
   // Keep one GC company mapped to one name — reuse the name already on file for this
@@ -249,18 +296,29 @@ async function importOne(msg: GraphMailMessage): Promise<boolean> {
   );
   if (existing.length) {
     const ex = existing[0];
-    if (ex.status === 'pending') {
-      const sets: string[] = [];
-      const vals: unknown[] = [];
-      if ((ex.loc == null || ex.loc === '') && loc) { vals.push(loc); sets.push(`loc=$${vals.length}`); }
-      if ((ex.contact == null || ex.contact === '') && contact) { vals.push(contact); sets.push(`contact=$${vals.length}`); }
-      if ((ex.due == null || ex.due === '') && due) { vals.push(due); sets.push(`due=$${vals.length}`); }
-      if (sets.length) {
-        vals.push(ex.id);
-        await pool.query(`UPDATE intake_items SET ${sets.join(', ')}, updated_at=now() WHERE id=$${vals.length}`, vals);
-      }
-    }
+    if (ex.status === 'pending') await backfillPending(ex, loc, contact, due);
     return false;
+  }
+
+  // Reminder / duplicate suppression: a follow-up invite or platform reminder (Procore,
+  // BuildingConnected, …) for a project we already have arrives as a SEPARATE email with its
+  // own message id. Rather than spawn a second intake item, fold it into the one we already
+  // have — backfill any blanks if that item is still pending — and skip creating a new row.
+  if (normTight(gc)) {
+    const { rows: sameGc } = await pool.query(
+      `SELECT id, name, gc, status, loc, contact, due
+         FROM intake_items
+        WHERE created_at > now() - interval '60 days'
+          AND gc IS NOT NULL
+          AND lower(regexp_replace(gc, '[^a-zA-Z0-9]', '', 'g')) = $1`,
+      [normTight(gc)]
+    );
+    const dup = sameGc.find(r => isSameProject({ name, gc }, { name: r.name, gc: r.gc }));
+    if (dup) {
+      if (dup.status === 'pending') await backfillPending(dup, loc, contact, due);
+      logger.info({ messageId: msg.id, existingId: dup.id, status: dup.status }, '[intake-ingest] suppressed duplicate/reminder');
+      return false;
+    }
   }
 
   const attachmentNames = msg.hasAttachments ? await listAttachmentNames(msg.id) : [];

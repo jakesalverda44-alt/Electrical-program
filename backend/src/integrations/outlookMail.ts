@@ -73,16 +73,34 @@ function mapRaw(m: GraphMessageRaw): GraphMailMessage {
   };
 }
 
-export async function graphGet<T>(path: string): Promise<T> {
+/** GET an absolute Graph URL (used to follow @odata.nextLink pages). */
+async function graphGetUrl<T>(url: string): Promise<T> {
   const token = await getGraphToken();
-  const resp = await fetch(`${GRAPH_BASE}${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
-    throw new Error(`Graph GET ${path} failed: HTTP ${resp.status} ${text}`);
+    throw new Error(`Graph GET ${url} failed: HTTP ${resp.status} ${text}`);
   }
   return (await resp.json()) as T;
+}
+
+export async function graphGet<T>(path: string): Promise<T> {
+  return graphGetUrl<T>(`${GRAPH_BASE}${path}`);
+}
+
+/**
+ * Follow @odata.nextLink for a starting message-collection path, returning every raw message
+ * across pages. Bounded by maxPages so a huge mailbox can never spin unbounded.
+ */
+async function graphGetAllMessages(path: string, maxPages = 10): Promise<GraphMessageRaw[]> {
+  const out: GraphMessageRaw[] = [];
+  let next: string | null = `${GRAPH_BASE}${path}`;
+  for (let i = 0; i < maxPages && next; i++) {
+    const page: { value?: GraphMessageRaw[]; '@odata.nextLink'?: string } = await graphGetUrl(next);
+    if (page.value) out.push(...page.value);
+    next = page['@odata.nextLink'] ?? null;
+  }
+  return out;
 }
 
 /** Strip HTML tags to a rough plain-text body for light date parsing. */
@@ -97,25 +115,49 @@ function toPlainText(content: string, contentType?: string): string {
   return content;
 }
 
+const TAGGED_SELECT = 'id,subject,from,receivedDateTime,bodyPreview,body,webLink,categories,hasAttachments';
+
 /**
- * Fetch recent Inbox messages tagged with the "new bid" Outlook category. We pull the most
- * recent N and filter the category in code so the match is case-insensitive (Graph's
- * categories/any OData filter is case-sensitive). Returns [] on any failure.
+ * Fetch Inbox messages tagged with the "new bid" Outlook category.
+ *
+ * Two passes, merged by id, so a tagged invitation is never silently missed:
+ *   1) Server-side category filter, paginated → EVERY tagged email regardless of age. This is
+ *      the important one: the old "50 most recent" scan dropped a tagged email whenever the
+ *      inbox was busy or an older message was tagged after the fact.
+ *   2) A recent-messages scan filtered in code → a safety net that also catches any category
+ *      casing the (case-sensitive) OData filter wouldn't match, and works if the filter errors.
+ *
+ * Every match is re-checked case-insensitively in code. Returns [] only if both passes fail.
  */
 export async function fetchTaggedBidEmails(limit = 50): Promise<GraphMailMessage[]> {
+  const wanted = BID_CATEGORY.toLowerCase();
+  const hasBidTag = (m: GraphMessageRaw) => (m.categories || []).some(c => c.trim().toLowerCase() === wanted);
+  const byId = new Map<string, GraphMailMessage>();
+
+  // 1) Paginated server-side category filter (no $orderby — Graph rejects it alongside a
+  //    categories/any lambda filter; order doesn't matter, we dedupe by id downstream).
   try {
-    const select = 'id,subject,from,receivedDateTime,bodyPreview,body,webLink,categories,hasAttachments';
-    const path = `/users/${MAILBOX}/mailFolders/Inbox/messages`
-      + `?$select=${select}&$top=${limit}&$orderby=receivedDateTime desc`;
-    const data = await graphGet<{ value: GraphMessageRaw[] }>(path);
-    const wanted = BID_CATEGORY.toLowerCase();
-    return (data.value || [])
-      .filter(m => (m.categories || []).some(c => c.trim().toLowerCase() === wanted))
-      .map(mapRaw);
+    const filter = encodeURIComponent(`categories/any(c:c eq '${BID_CATEGORY}')`);
+    const path = `/users/${MAILBOX}/mailFolders/Inbox/messages?$select=${TAGGED_SELECT}&$top=50&$filter=${filter}`;
+    for (const m of await graphGetAllMessages(path)) {
+      if (hasBidTag(m)) byId.set(m.id, mapRaw(m));
+    }
   } catch (err) {
-    logger.error({ err }, '[outlook-mail] fetchTaggedBidEmails failed');
-    return [];
+    logger.error({ err }, '[outlook-mail] category-filtered fetch failed — using recent scan only');
   }
+
+  // 2) Recent-messages safety net.
+  try {
+    const path = `/users/${MAILBOX}/mailFolders/Inbox/messages?$select=${TAGGED_SELECT}&$top=${limit}&$orderby=receivedDateTime desc`;
+    const data = await graphGet<{ value: GraphMessageRaw[] }>(path);
+    for (const m of data.value || []) {
+      if (hasBidTag(m)) byId.set(m.id, mapRaw(m));
+    }
+  } catch (err) {
+    logger.error({ err }, '[outlook-mail] recent-scan fetch failed');
+  }
+
+  return [...byId.values()];
 }
 
 // Lightweight select for brief scans — no body (keeps payloads small), includes isRead.
@@ -299,6 +341,36 @@ export async function markMessageRead(messageId: string): Promise<MarkReadResult
   } catch (err) {
     logger.error({ err, messageId }, '[outlook-mail] markMessageRead failed');
     return { ok: false, reason: 'Could not reach Outlook. Check the network/Graph connection.' };
+  }
+}
+
+/**
+ * Remove the "new bid" category from a message (and mark it read) once it has been accepted or
+ * declined, so it drops out of the tagged set and the mailbox stays tidy. Other categories the
+ * user applied are preserved. Best-effort: logs and returns false on failure.
+ */
+export async function clearBidCategory(messageId: string): Promise<boolean> {
+  const mid = encodeURIComponent(messageId);
+  try {
+    const cur = await graphGet<{ categories?: string[] }>(`/users/${MAILBOX}/messages/${mid}?$select=categories`);
+    const wanted = BID_CATEGORY.toLowerCase();
+    const remaining = (cur.categories || []).filter(c => c.trim().toLowerCase() !== wanted);
+    const token = await getGraphToken();
+    const resp = await fetch(`${GRAPH_BASE}/users/${MAILBOX}/messages/${mid}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ categories: remaining, isRead: true }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      logger.error({ messageId, status: resp.status, text }, '[outlook-mail] clearBidCategory rejected');
+      return false;
+    }
+    logger.info({ messageId }, '[outlook-mail] cleared "new bid" category');
+    return true;
+  } catch (err) {
+    logger.error({ err, messageId }, '[outlook-mail] clearBidCategory failed');
+    return false;
   }
 }
 
