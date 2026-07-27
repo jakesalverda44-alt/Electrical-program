@@ -17,13 +17,23 @@ function pad(n: number): string { return String(n).padStart(2, '0'); }
 // a cue — bid invitations are full of other dates (the letter/"DATE:" send date, phone
 // numbers like 865-691-6818, cost codes like 02500-003) that an uncued scan would
 // wrongly grab. Better to leave the due date blank for the reviewer than to fill a wrong one.
-const DUE_CUE = '(?:due(?:\\s*date)?|bid\\s*due\\s*date|bids?\\s*due|bid\\s*date|proposals?\\s*due|responses?\\s*due|submittals?\\s*due|submit\\s*by|respond\\s*by|due\\s*by|deadline)';
+const DUE_CUE = 'due(?:\\s*date)?|bid\\s*due\\s*date|bids?\\s*(?:are\\s*)?due|bid\\s*date|bid\\s*deadline'
+  + '|proposals?\\s*due|quotes?\\s*due|pricing\\s*due|estimates?\\s*due|responses?\\s*due'
+  + '|submittals?\\s*due|submit\\s*by|respond\\s*by|due\\s*by|deadline|must\\s*be\\s*received'
+  + '|received\\s*by|bids?\\s*(?:must\\s*be\\s*)?submitted|bid\\s*closing|closing\\s*date'
+  + '|turn(?:ed)?\\s*in\\s*by';
+
+// Month-name alternation (accepts common abbreviations). Used by the month-name date forms.
+const MONTH_ALT = 'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?'
+  + '|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?';
 
 /**
  * Best-effort extraction of a bid due date from subject/body text. Only accepts a date that
- * follows a due cue (see DUE_CUE), e.g.:
+ * appears shortly AFTER a due cue (see DUE_CUE), e.g.:
  *   - "Bids Due 6/24/2026", "due 6/20", "bid date 06-20-26", "BID DUE DATE: 07/17/2026"
- *   - "Proposals due June 20, 2026", "submit by 7/15"
+ *   - "Bids due by 2:00 PM on 6/20/2026"       (time-of-day between the cue and the date)
+ *   - "Proposals due June 20, 2026", "due Thursday, June 20, 2026", "submit by 7/15"
+ *   - "Bids due 20 June 2026"                   (day-first)
  * Returns YYYY-MM-DD or null. Intentionally conservative — the reviewer can always edit.
  */
 export function parseDueDate(text: string, now = new Date()): string | null {
@@ -41,21 +51,47 @@ export function parseDueDate(text: string, now = new Date()): string | null {
     return `${year}-${pad(mo)}-${pad(day)}`;
   };
 
-  // 1) Cued numeric M/D[/Y]: "... due 6/24/2026", "BID DUE DATE: 07/17/2026".
-  //    The gap may contain words ("due date:"), but not digits, so it can't span past
-  //    the cue into an unrelated number.
-  const cuedNum = new RegExp(`${DUE_CUE}[^\\d]{0,25}(\\d{1,2})[/-](\\d{1,2})(?:[/-](\\d{2,4}))?`).exec(t);
-  if (cuedNum) {
-    const r = finalize(Number(cuedNum[1]), Number(cuedNum[2]), cuedNum[3] ? Number(cuedNum[3]) : null);
-    if (r) return r;
+  // Collect the end offset of every due cue; we then look for a date in a short window
+  // after each. A window (rather than requiring the date to butt against the cue) lets a
+  // time-of-day or weekday sit in between — "due by 2:00 PM on 6/20", "due Thursday, June 20".
+  const cueRe = new RegExp(`\\b(?:${DUE_CUE})`, 'g');
+  const cueEnds: number[] = [];
+  for (let m = cueRe.exec(t); m; m = cueRe.exec(t)) cueEnds.push(m.index + m[0].length);
+  if (!cueEnds.length) return null;
+
+  const WINDOW = 40;
+  // Numeric M/D[/Y] with / . or - separators. .exec() scans past an intervening time-of-day
+  // ("2:00 PM") because a clock time uses ":" — never a date separator.
+  const numRe = /(\d{1,2})[/.\-](\d{1,2})(?:[/.\-](\d{2,4}))?/;
+
+  // PHASE 1 — a cued NUMERIC date wins over a cued month-name date, so a letter/"DATE:"
+  // send date can never beat the real "BID DUE DATE: 07/17" that appears further along.
+  for (const end of cueEnds) {
+    const m = numRe.exec(t.slice(end, end + WINDOW));
+    if (m) {
+      const r = finalize(Number(m[1]), Number(m[2]), m[3] ? Number(m[3]) : null);
+      if (r) return r;
+    }
   }
 
-  // 2) Cued month-name: "... due June 20, 2026". The gap excludes letters so it can't
-  //    swallow the month word itself.
-  const cuedNamed = new RegExp(`${DUE_CUE}[^a-z\\d]{0,15}([a-z]{3,9})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s*(\\d{4}))?`).exec(t);
-  if (cuedNamed && MONTHS[cuedNamed[1]]) {
-    const r = finalize(MONTHS[cuedNamed[1]], Number(cuedNamed[2]), cuedNamed[3] ? Number(cuedNamed[3]) : null);
-    if (r) return r;
+  // PHASE 2 — month-name dates: "June 20, 2026" and day-first "20 June 2026". Whichever
+  // form appears first in the window is the real date (day-first must be tried so
+  // "15 June 2026" isn't misread as June 20, taking the day from the year).
+  const namedRe    = new RegExp(`(${MONTH_ALT})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s*(\\d{4}))?`);
+  const dayFirstRe = new RegExp(`(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTH_ALT})\\.?(?:,?\\s*(\\d{4}))?`);
+  for (const end of cueEnds) {
+    const win = t.slice(end, end + WINDOW);
+    const named = namedRe.exec(win);
+    const dayFirst = dayFirstRe.exec(win);
+    const useDayFirst = dayFirst && (!named || dayFirst.index < named.index);
+    if (useDayFirst && dayFirst && MONTHS[dayFirst[2]] != null) {
+      const r = finalize(MONTHS[dayFirst[2]], Number(dayFirst[1]), dayFirst[3] ? Number(dayFirst[3]) : null);
+      if (r) return r;
+    }
+    if (named && MONTHS[named[1]] != null) {
+      const r = finalize(MONTHS[named[1]], Number(named[2]), named[3] ? Number(named[3]) : null);
+      if (r) return r;
+    }
   }
 
   return null;
@@ -109,6 +145,45 @@ export function parseGc(subject: string, fromName: string | null, fromEmail: str
   return (fromName && fromName.trim()) || (fromEmail && fromEmail.trim()) || null;
 }
 
+// Free-mail and bid-platform domains that identify a *person* or a *relay service* — never
+// a specific general contractor. We must not treat two invitations sharing one of these
+// domains as coming from the same GC.
+const NON_GC_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'ymail.com', 'outlook.com', 'hotmail.com',
+  'live.com', 'msn.com', 'aol.com', 'icloud.com', 'me.com', 'mac.com', 'comcast.net',
+  'att.net', 'verizon.net', 'sbcglobal.net', 'bellsouth.net', 'proton.me', 'protonmail.com',
+  // Bid-invitation platforms that relay on behalf of many GCs
+  'procore.com', 'procoretech.com', 'buildingconnected.com', 'autodesk.com', 'isqft.com',
+  'constructconnect.com', 'planhub.com', 'smartbidnet.com', 'bidclerk.com', 'pipelinesuite.com',
+  'sharefile.com', 'dropbox.com', 'wetransfer.com',
+]);
+
+export function emailDomain(email: string | null): string | null {
+  const m = /@([A-Za-z0-9.-]+)/.exec(email || '');
+  return m ? m[1].toLowerCase().replace(/[.,;]+$/, '') : null;
+}
+
+/**
+ * Keep the GC name stable across invitations from the same company. Invitation subjects and
+ * sender display names vary ("Kingdom Construction" one week, "Ian Nichols" the next), which
+ * would otherwise scatter one GC across several names/customer records. If we've already
+ * recorded a GC for this sender's (company) domain, reuse that exact name. Free-mail and
+ * bid-platform domains are excluded (see NON_GC_DOMAINS) — they don't identify a GC.
+ */
+export async function canonicalGc(parsedGc: string | null, fromEmail: string | null): Promise<string | null> {
+  const domain = emailDomain(fromEmail);
+  if (!domain || NON_GC_DOMAINS.has(domain)) return parsedGc;
+  const { rows } = await pool.query(
+    `SELECT gc FROM intake_items
+      WHERE gc IS NOT NULL AND btrim(gc) <> '' AND from_email ILIKE $1
+      GROUP BY gc
+      ORDER BY count(*) DESC, max(created_at) DESC
+      LIMIT 1`,
+    [`%@${domain}`]
+  );
+  return rows[0]?.gc || parsedGc;
+}
+
 /**
  * Best-effort project location. Prefers a structured "PROJECT LOCATION:" / "address:"
  * field in the body (Kingdom-style); otherwise falls back to a trailing "City, ST"
@@ -155,7 +230,9 @@ export function parseContact(fromName: string | null, fromEmail: string | null, 
 
 async function importOne(msg: GraphMailMessage): Promise<boolean> {
   const name = parseProjectName(msg.subject) || '(no subject)';
-  const gc = parseGc(msg.subject, msg.fromName, msg.from);
+  // Keep one GC company mapped to one name — reuse the name already on file for this
+  // sender's domain when we have one, so the same GC doesn't land under several spellings.
+  const gc = await canonicalGc(parseGc(msg.subject, msg.fromName, msg.from), msg.from);
   const loc = parseLocation(msg.subject, msg.body);
   const contact = parseContact(msg.fromName, msg.from, gc);
   const due = parseDueDate(`${msg.subject}\n${msg.body}`);
@@ -164,10 +241,11 @@ async function importOne(msg: GraphMailMessage): Promise<boolean> {
   const body = snippet(msg.body?.trim() ? msg.body : msg.bodyPreview);
 
   // Dedupe on the Graph message id. For an item already imported, backfill a missing
-  // location/contact while it's still pending — never overwrite a value the reviewer set
-  // or any other field. This lets a Refresh fill these in on items imported earlier.
+  // location/contact/due while it's still pending — never overwrite a value the reviewer set
+  // or any other field. This lets a Refresh fill these in on items imported earlier (e.g.
+  // ones whose due date the older parser couldn't read).
   const { rows: existing } = await pool.query(
-    'SELECT id, status, loc, contact FROM intake_items WHERE graph_message_id=$1', [msg.id]
+    'SELECT id, status, loc, contact, due FROM intake_items WHERE graph_message_id=$1', [msg.id]
   );
   if (existing.length) {
     const ex = existing[0];
@@ -176,6 +254,7 @@ async function importOne(msg: GraphMailMessage): Promise<boolean> {
       const vals: unknown[] = [];
       if ((ex.loc == null || ex.loc === '') && loc) { vals.push(loc); sets.push(`loc=$${vals.length}`); }
       if ((ex.contact == null || ex.contact === '') && contact) { vals.push(contact); sets.push(`contact=$${vals.length}`); }
+      if ((ex.due == null || ex.due === '') && due) { vals.push(due); sets.push(`due=$${vals.length}`); }
       if (sets.length) {
         vals.push(ex.id);
         await pool.query(`UPDATE intake_items SET ${sets.join(', ')}, updated_at=now() WHERE id=$${vals.length}`, vals);
