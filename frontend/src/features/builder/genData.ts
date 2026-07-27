@@ -26,6 +26,7 @@ export const DEFAULT_PRICES = {
   lull: 1100,
   crane: 1800,
   extendedWarranty: 1100,
+  silverService: 395,
 };
 
 // Sizes only offered on new installs — hidden from the size dropdown for swap-outs.
@@ -291,10 +292,14 @@ export interface GenForm {
   liftType: 'none' | 'lull' | 'crane';
   removal: boolean;
   extWarranty: 'none' | 'paid' | 'promo';
-  /** Only used when extWarranty === 'promo' — the date range the manufacturer promo is valid,
-   *  shown on the proposal so the customer sees when the free upgrade applies. */
+  /** Only used when extWarranty === 'promo' and brand === 'Kohler' — the date range the
+   *  manufacturer promo is valid, shown on the proposal so the customer sees when the free
+   *  upgrade applies. Generac's promo is an APT-included no-charge upgrade, not a time-boxed
+   *  manufacturer promo, so it has no date range. */
   extWarrantyPromoStart: string;
   extWarrantyPromoEnd: string;
+  /** Promo add-on: 1 year of Silver Service included at no charge. */
+  silverServicePromo: boolean;
   labor: number;
   permit: number;
   startup: number;

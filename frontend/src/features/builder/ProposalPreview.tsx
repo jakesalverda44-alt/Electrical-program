@@ -359,12 +359,19 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                     desc: 'Provide and install a whole-home surge protective device at the electrical service equipment per manufacturer requirements and local codes.',
                     shade: true,
                   }] : []),
+                  ...(form.silverServicePromo ? [{
+                    title: '1-Year Silver Service — Included',
+                    desc: (<>APT includes 1 year of Silver Service preventative maintenance at no additional cost — <s>{fmtDec(DEFAULT_PRICES.silverService)}</s>{' '}<strong>FREE</strong> (Promo).</>),
+                    shade: false,
+                  }] : []),
                   {
                     title: form.extWarranty === 'none'
                       ? "5-Year Manufacturer's Comprehensive Warranty"
                       : '5-Year Standard + 10-Year Extended Warranty',
                     desc: form.extWarranty === 'promo'
-                      ? (<>APT provides the full 5-year manufacturer's comprehensive warranty, extended to 10 years at no additional cost — <s>{fmtDec(DEFAULT_PRICES.extendedWarranty)}</s>{' '}<strong>FREE</strong> (Kohler Promotion{warrantyPromoRange ? `, valid ${warrantyPromoRange}` : ''}).</>)
+                      ? (form.brand === 'Kohler'
+                        ? (<>APT provides the full 5-year manufacturer's comprehensive warranty, extended to 10 years at no additional cost — <s>{fmtDec(DEFAULT_PRICES.extendedWarranty)}</s>{' '}<strong>FREE</strong> (Kohler Promotion{warrantyPromoRange ? `, valid ${warrantyPromoRange}` : ''}).</>)
+                        : (<>APT provides the full 5-year manufacturer's comprehensive warranty through Generac, extended to 10 years at no additional cost — <s>{fmtDec(DEFAULT_PRICES.extendedWarranty)}</s>{' '}<strong>FREE</strong> (included by APT).</>))
                       : form.extWarranty === 'paid'
                       ? `APT provides the full 5-year manufacturer's comprehensive warranty, extended to 10 years for ${fmtDec(DEFAULT_PRICES.extendedWarranty)}.`
                       : "APT provides the full 5-year manufacturer's comprehensive warranty on this installation.",
@@ -430,7 +437,8 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                     { label: `SMM (Preventative Maintenance) × ${form.smmQty}`, tax: 'taxable', amt: taxableSMM, show: taxableSMM > 0 },
                     { label: `Surge Protector × ${form.surgeProQty}`, tax: 'taxable', amt: taxableSurge, show: taxableSurge > 0 },
                     { label: 'Extended Warranty (10-Year)', tax: 'taxable', amt: taxableWarranty, show: form.extWarranty === 'paid' },
-                    { label: `Extended Warranty (10-Year) — Kohler Promo (FREE${warrantyPromoRange ? `, valid ${warrantyPromoRange}` : ''})`, tax: 'taxable', amt: 0, show: form.extWarranty === 'promo' },
+                    { label: `Extended Warranty (10-Year) — ${form.brand === 'Kohler' ? 'Kohler Promo' : 'Included by APT'} (FREE${form.brand === 'Kohler' && warrantyPromoRange ? `, valid ${warrantyPromoRange}` : ''})`, tax: 'taxable', amt: 0, show: form.extWarranty === 'promo' },
+                    { label: '1-Year Silver Service — Promo (FREE)', tax: '', amt: 0, show: !!form.silverServicePromo },
                     { label: `Labor & Electrical${form.extraWire > 0 ? ` + ${form.extraWire} ft extra wire` : ''}`, tax: '', amt: totals.laborAmt + totals.extraWireAmt, show: true },
                     { label: 'Permit Fee', tax: '', amt: totals.permitAmt, show: true },
                     { label: 'Startup & Commissioning', tax: '', amt: totals.startupAmt, show: true },

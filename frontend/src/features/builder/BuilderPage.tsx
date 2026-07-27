@@ -358,9 +358,10 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 <option value="none">Standard 5-Year Only</option>
                 <option value="paid">10-Year Extension ($1,100)</option>
                 {form.brand === 'Kohler' && <option value="promo">Kohler Promo — 10-Year FREE</option>}
+                {form.brand === 'Generac' && <option value="promo">APT Included — 10-Year FREE</option>}
               </select>
             </Field>
-            {form.extWarranty === 'promo' && (
+            {form.extWarranty === 'promo' && form.brand === 'Kohler' && (
               <>
                 <Field label="Promo Valid From">
                   <input type="date" style={INPUT_STYLE} value={form.extWarrantyPromoStart} onChange={e => set('extWarrantyPromoStart', e.target.value)}/>
@@ -370,6 +371,10 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 </Field>
               </>
             )}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, gridColumn: '1' }}>
+              <input type="checkbox" checked={!!form.silverServicePromo} onChange={e => set('silverServicePromo', e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
+              1-Year Silver Service — Promo (FREE, $395 value)
+            </label>
           </Section>
 
           {/* Section 5: Pricing & Terms */}

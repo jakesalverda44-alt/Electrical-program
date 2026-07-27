@@ -468,7 +468,7 @@ const ADDON_P = {
   smm: 250, surgePro: 395, pad: 485, battery: 185, emPanel: 495, gasLine: 500,
   ats: 1000, extraWire: 25,
   padLC_small: 800, padLC_large: 1200, startupLC: 1595,
-  lull: 1100, crane: 1800, extendedWarranty: 1100,
+  lull: 1100, crane: 1800, extendedWarranty: 1100, silverService: 395,
   labor: 3000, permit: 1250, startup: 695,
 };
 
@@ -537,7 +537,9 @@ Enum fields:
   jobType     — "new-install" | "swap-out"  (default: "new-install")
   liftType    — "none" | "lull" | "crane"  (default: "none")
   extWarranty — "none" | "paid" | "promo"  (default: "none") — "paid" is the $1,100 10-year
-                extension; "promo" is a free Kohler manufacturer promo (Kohler brand only)
+                extension; "promo" is the free 10-year upgrade — for Kohler it's a time-boxed
+                manufacturer promo (use extWarrantyPromoStart/End), for Generac it's an
+                APT-included no-charge upgrade with no date range
   discountType— "$" | "%"  (default: "$")
 
 Boolean fields (true/false):
@@ -547,6 +549,7 @@ Boolean fields (true/false):
   gasLine   — gas line disconnect & reconnect — only applies to swap-out jobs  (default: false)
   removal   — remove existing unit  (default: false)
   includeBreakdown — (default: false)
+  silverServicePromo — 1 year of Silver Service included free (promo add-on)  (default: false)
 
 Numeric fields:
   extraWire — extra wire in feet  (default: 0)
@@ -572,7 +575,7 @@ RULES:
 1. If a field is not mentioned in the notes, use the default shown above.
 2. battery MUST be true whenever jobType is "new-install", regardless of what the notes say.
 3. Choose the closest valid size; if ambiguous pick the next size up.
-4. extWarranty MUST NOT be "promo" unless brand is "Kohler".
+4. extWarrantyPromoStart/extWarrantyPromoEnd only apply when extWarranty is "promo" AND brand is "Kohler" — leave "" for Generac.
 5. Return the JSON object only — no markdown, no explanation.`;
 
 router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
@@ -610,7 +613,7 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
     atsSize: '200A', atsQty: 1, fuel: 'Natural Gas', jobType: 'new-install', liftType: 'none',
     extWarranty: 'none', extWarrantyPromoStart: '', extWarrantyPromoEnd: '',
     pad: true, smmQty: 1, surgeProQty: 0, battery: true, emPanel: false, gasLine: false,
-    removal: false, extraWire: 0, removalFee: 500,
+    removal: false, extraWire: 0, removalFee: 500, silverServicePromo: false,
     labor: ADDON_P.labor, permit: ADDON_P.permit, startup: ADDON_P.startup,
     discount: 0, discountType: '$', taxRate: 7, validDays: 30, depositPct: 50,
     notes: '', includeBreakdown: false,
@@ -618,8 +621,9 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   };
   // Always enforce battery=true on new-install regardless of AI output
   form.battery = form.jobType === 'swap-out' ? (parsed.battery ?? true) : true;
-  // The Kohler free-promo warranty never applies to Generac, regardless of AI output.
-  if (form.extWarranty === 'promo' && form.brand !== 'Kohler') form.extWarranty = 'none';
+  // The date-boxed promo range only makes sense for Kohler's manufacturer promo; Generac's
+  // promo is a standing APT-included upgrade with no expiry.
+  if (form.brand !== 'Kohler') { form.extWarrantyPromoStart = ''; form.extWarrantyPromoEnd = ''; }
 
   const totals = calcFormTotals(form);
   const addons = (Number(form.smmQty) > 0 ? 1 : 0) + (Number(form.surgeProQty) > 0 ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0) + (form.emPanel ? 1 : 0) + (form.gasLine ? 1 : 0);

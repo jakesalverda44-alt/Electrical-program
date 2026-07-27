@@ -17,6 +17,7 @@ export function blankGenForm(overrides?: DefaultOverrides): GenForm {
     pad: true, smmQty: 1, surgeProQty: 0, battery: true, emPanel: false, gasLine: false, extraWire: 0,
     liftType: 'none', removal: false,
     extWarranty: 'none', extWarrantyPromoStart: '', extWarrantyPromoEnd: '',
+    silverServicePromo: false,
     labor:   Number(overrides?.gen_default_labor)    || DEFAULT_PRICES.labor,
     permit:  Number(overrides?.gen_default_permit)   || DEFAULT_PRICES.permit,
     startup: Number(overrides?.gen_default_startup)  || DEFAULT_PRICES.startup,
@@ -54,6 +55,9 @@ export function migrateGenForm(raw: Record<string, unknown>): Record<string, unk
   }
   if (out.extWarranty === undefined) {
     out.extWarranty = 'none';
+  }
+  if (out.silverServicePromo === undefined) {
+    out.silverServicePromo = false;
   }
   return out;
 }
@@ -171,7 +175,11 @@ export function genPriceRows(g: GenForm, t: GenTotals, fmt: (n: number) => strin
   if (t.extraWireAmt) rows.push({ label: `Extra Wire (${g.extraWire} ft)`, amount: fmt(t.extraWireAmt) });
   if (t.atsAmt)      rows.push({ label: `ATS — additional (${t.atsBillableQty} × ${g.atsSize})`, amount: fmt(t.atsAmt) });
   if (g.extWarranty === 'paid')  rows.push({ label: 'Extended Warranty (10-Year)', amount: fmt(t.extWarrantyAmt) });
-  if (g.extWarranty === 'promo') rows.push({ label: `Extended Warranty (10-Year) — Kohler Promo: $${DEFAULT_PRICES.extendedWarranty.toLocaleString()} → FREE`, amount: fmt(0) });
+  if (g.extWarranty === 'promo') {
+    const promoLabel = g.brand === 'Kohler' ? 'Kohler Promo' : 'Included by APT';
+    rows.push({ label: `Extended Warranty (10-Year) — ${promoLabel}: $${DEFAULT_PRICES.extendedWarranty.toLocaleString()} → FREE`, amount: fmt(0) });
+  }
+  if (g.silverServicePromo) rows.push({ label: `1-Year Silver Service — Promo: $${DEFAULT_PRICES.silverService.toLocaleString()} → FREE`, amount: fmt(0) });
   if (t.liftAmt)     rows.push({ label: g.liftType === 'lull' ? 'Lull' : 'Crane', amount: fmt(t.liftAmt) });
   if (t.removalFee)  rows.push({ label: 'Removal / Haul-Off', amount: fmt(t.removalFee) });
   rows.push({ label: 'Labor & Installation', amount: fmt(t.laborAmt) });
