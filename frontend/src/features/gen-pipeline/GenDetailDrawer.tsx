@@ -316,14 +316,18 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           )}
 
           {/* Duplicate into a new draft so the customer can be offered more than one
-              option (different size/brand/pricing) without re-entering their details. */}
-          <button
-            className="btn ghost"
-            style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
-            onClick={() => onDuplicate(gen)}
-          >
-            <Icon name="copy" size={14} stroke={1.9}/>Duplicate for New Option
-          </button>
+              option (different size/brand/pricing) without re-entering their details.
+              Only offered on active proposals — terminal ones (signed/awarded/declined)
+              are not re-offered from here. */}
+          {!isTerminal && (
+            <button
+              className="btn ghost"
+              style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
+              onClick={() => onDuplicate(gen)}
+            >
+              <Icon name="copy" size={14} stroke={1.9}/>Duplicate for New Option
+            </button>
+          )}
 
           {/* Google Drive folder links — shown when folders were auto-created on award */}
           {gen.drive_job_folder_id && (

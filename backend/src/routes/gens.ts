@@ -118,6 +118,12 @@ router.post('/:id/duplicate', requireAuth, asyncHandler(async (req: AuthRequest,
   const src = await loadOwnedGen(req, res);
   if (!src) return;
 
+  // Only active proposals can be duplicated — terminal ones (signed/awarded/declined)
+  // are not re-offered from here.
+  if (['signed', 'awarded', 'declined'].includes(src.stage)) {
+    return res.status(400).json({ error: 'Only active proposals can be duplicated.' });
+  }
+
   // Preserve the original salesperson so ownership stays with the same rep even
   // when an admin makes the copy. proposal_no is left null so the builder mints
   // a new one; proposal_token defaults to a fresh uuid.
