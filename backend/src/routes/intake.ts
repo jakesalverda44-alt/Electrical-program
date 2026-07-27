@@ -158,9 +158,25 @@ router.post('/:id/accept', requireAuth, async (req: AuthRequest, res) => {
        sqFt != null && sqFt !== '' ? Number(sqFt) : null, it.web_link || null]
     );
     const bid = bidRows[0];
+    // Persist the reviewer's final values back onto the intake record so it mirrors what
+    // actually landed in the pipeline (accurate history) and so the GC name they confirmed
+    // becomes the canonical name reused for future invitations from the same sender domain.
     await client.query(
-      `UPDATE intake_items SET status='accepted', accepted_bid_id=$1, accepted_at=now(), updated_at=now() WHERE id=$2`,
-      [bid.id, req.params.id]
+      `UPDATE intake_items
+          SET status='accepted', accepted_bid_id=$1, accepted_at=now(), updated_at=now(),
+              name=$3, gc=$4, loc=$5, contact=$6,
+              amount=$7, due=$8, sq_ft=$9, notes=$10
+        WHERE id=$2`,
+      [
+        bid.id, req.params.id,
+        name, gc,
+        (typeof loc === 'string' && loc.trim()) ? loc.trim() : null,
+        (typeof contact === 'string' && contact.trim()) ? contact.trim() : null,
+        amount != null && amount !== '' ? Number(amount) : null,
+        (due && String(due).trim()) ? String(due).trim() : null,
+        sqFt != null && sqFt !== '' ? Number(sqFt) : null,
+        (typeof notes === 'string' && notes.trim()) ? notes.trim() : (notes ?? null),
+      ]
     );
     await client.query('COMMIT');
     await writeAudit(req, { action: 'accept', entityType: 'intake', entityId: req.params.id, summary: `Accepted incoming bid "${name}" (${gc}) into the pipeline` });

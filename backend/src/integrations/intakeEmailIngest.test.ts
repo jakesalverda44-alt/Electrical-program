@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDueDate, parseProjectName, parseGc, parseLocation, parseContact } from './intakeEmailIngest';
+import { parseDueDate, parseProjectName, parseGc, parseLocation, parseContact, emailDomain } from './intakeEmailIngest';
 
 const NOW = new Date('2026-06-10T12:00:00Z');
 
@@ -52,6 +52,47 @@ describe('parseDueDate', () => {
 
   it('returns null for an uncued bare date', () => {
     expect(parseDueDate('Kickoff meeting on 6/30/2026', NOW)).toBeNull();
+  });
+
+  it('reads the date past an intervening time-of-day', () => {
+    // Regression: "2:00" between the cue and the date used to abort the numeric scan.
+    expect(parseDueDate('Bids due by 2:00 PM on 6/20/2026', NOW)).toBe('2026-06-20');
+    expect(parseDueDate('Bid due date and time: June 20, 2026 at 2:00 PM', NOW)).toBe('2026-06-20');
+  });
+
+  it('skips a weekday before a month-name date', () => {
+    expect(parseDueDate('Proposals due Thursday, June 20, 2026', NOW)).toBe('2026-06-20');
+  });
+
+  it('reads a day-first date', () => {
+    expect(parseDueDate('Bids due 20 June 2026', NOW)).toBe('2026-06-20');
+    expect(parseDueDate('Bids due 15 June 2026', NOW)).toBe('2026-06-15');
+  });
+
+  it('reads a dotted numeric date', () => {
+    expect(parseDueDate('Bids due 6.20.2026', NOW)).toBe('2026-06-20');
+  });
+
+  it('recognizes additional due cues', () => {
+    expect(parseDueDate('Bids must be received by 6/20/2026', NOW)).toBe('2026-06-20');
+    expect(parseDueDate('Bid deadline: 6/20/2026', NOW)).toBe('2026-06-20');
+    expect(parseDueDate('Bids are due 6/20/2026', NOW)).toBe('2026-06-20');
+  });
+
+  it('does not fire a "due" cue inside another word ("overdue")', () => {
+    expect(parseDueDate('Account overdue notice sent 6/1/2026', NOW)).toBeNull();
+  });
+});
+
+describe('emailDomain', () => {
+  it('extracts the domain from an address', () => {
+    expect(emailDomain('ian@kingdomconstruction.org')).toBe('kingdomconstruction.org');
+    expect(emailDomain('Estimating <estimating@summitgc.net>')).toBe('summitgc.net');
+    expect(emailDomain('trailing.dot@example.com.')).toBe('example.com');
+  });
+  it('returns null when there is no address', () => {
+    expect(emailDomain(null)).toBeNull();
+    expect(emailDomain('no-at-sign')).toBeNull();
   });
 });
 
