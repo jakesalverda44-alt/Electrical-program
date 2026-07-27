@@ -30,6 +30,8 @@ export interface AppSettings {
   gen_default_deposit_pct: string;
   gen_default_valid_days: string;
   gen_pricing_table: string;
+  proposal_default_message: string;
+  gas_contacts_text: string;
   // Email
   email_resend_api_key: string;
   email_from_address: string;
@@ -85,6 +87,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   gen_default_surge_pro: '395', gen_default_battery: '185', gen_default_extra_wire: '25',
   gen_default_lull: '1100', gen_default_crane: '1800',
   gen_default_deposit_pct: '50', gen_default_valid_days: '30', gen_pricing_table: '',
+  proposal_default_message: 'Thank you for the opportunity to provide you with back-up power at your home.', gas_contacts_text: '',
   email_resend_api_key: '', email_from_address: '', email_from_name: '', email_reply_to: '', email_signature: '', frontend_url: '',
   ai_anthropic_key: '', ai_model: 'claude-sonnet-4-6',
   ai_takeoff_agent2_model: 'claude-haiku-4-5-20251001', ai_takeoff_agent3_model: 'claude-haiku-4-5-20251001',

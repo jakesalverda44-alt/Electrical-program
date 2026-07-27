@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import api from '../../api/client';
 import { Gen } from '../../types';
 import Icon from '../../components/Icon';
+import { useSettings } from '../../contexts/AppContext';
 
 interface Props {
   genId: string;
@@ -16,9 +17,11 @@ interface Props {
 }
 
 export default function SendProposalModal({ genId, defaultEmail, proposalNo, spec, total, deposit, onSent, onClose }: Props) {
+  const { settings } = useSettings();
   const [to,      setTo]      = useState(defaultEmail);
   const [subject, setSubject] = useState(`Your ${spec ? spec + ' ' : ''}Generator Proposal — ${proposalNo}`);
   const [note,    setNote]    = useState('');
+  const [includeGasContacts, setIncludeGasContacts] = useState(false);
   const [status,  setStatus]  = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [errMsg,  setErrMsg]  = useState('');
   const [errLink, setErrLink] = useState('');
@@ -27,7 +30,7 @@ export default function SendProposalModal({ genId, defaultEmail, proposalNo, spe
     if (!to.trim()) return;
     setStatus('sending');
     try {
-      const r = await api.post(`/gens/${genId}/send`, { to: to.trim(), subject, note, proposalNo, total, deposit });
+      const r = await api.post(`/gens/${genId}/send`, { to: to.trim(), subject, note, proposalNo, total, deposit, includeGasContacts });
       onSent(r.data.gen);
       setStatus('sent');
     } catch (e: any) {
@@ -73,6 +76,22 @@ export default function SendProposalModal({ genId, defaultEmail, proposalNo, spe
                 placeholder="e.g. Let me know if you have any questions!"
                 style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}/>
             </Field>
+
+            {settings.proposal_default_message && (
+              <Field label="Included with every proposal">
+                <div style={{ background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 9, padding: '9px 11px', fontSize: 12.5, color: 'var(--text3)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                  {settings.proposal_default_message}
+                </div>
+              </Field>
+            )}
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: settings.gas_contacts_text ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600, marginBottom: 20, opacity: settings.gas_contacts_text ? 1 : .5 }}>
+              <input type="checkbox" checked={includeGasContacts} disabled={!settings.gas_contacts_text}
+                onChange={e => setIncludeGasContacts(e.target.checked)}
+                style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
+              Include gas contacts
+              {!settings.gas_contacts_text && <span style={{ fontWeight: 500, color: 'var(--text3)' }}>(add in Settings &gt; Proposal Defaults)</span>}
+            </label>
 
             {/* Proposal summary */}
             <div style={{ background: 'var(--surface2)', borderRadius: 9, padding: '12px 14px', marginBottom: 20, fontSize: 13 }}>

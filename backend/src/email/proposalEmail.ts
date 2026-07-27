@@ -8,9 +8,14 @@ export function proposalEmailHtml(opts: {
   validDays?: number;
   link: string;
   senderNote?: string;
+  /** Pre-written message sent with every proposal (Settings > Proposal Defaults). */
+  defaultMessage?: string;
+  /** Gas utility contact info — only passed when "Include gas contacts" is checked. */
+  gasContacts?: string;
 }): string {
-  const { customerName, proposalNo, spec, total, deposit, link, senderNote } = opts;
+  const { customerName, proposalNo, spec, total, deposit, link, senderNote, defaultMessage, gasContacts } = opts;
   const validDays = opts.validDays || 30;
+  const nl2br = (s: string) => s.replace(/\n/g, '<br>');
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -31,10 +36,11 @@ export function proposalEmailHtml(opts: {
         <tr>
           <td style="padding:32px 36px;">
             <p style="font-size:15px;color:#1e293b;margin:0 0 16px;">Dear ${customerName},</p>
-            <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 24px;">
+            <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 ${defaultMessage ? 12 : 24}px;">
               Thank you for the opportunity to earn your business. Your${spec ? ` <strong>${spec}</strong>` : ''} standby
               generator proposal is ready to review and sign below.${senderNote ? ' ' + senderNote : ''}
             </p>
+            ${defaultMessage ? `<p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 24px;">${nl2br(defaultMessage)}</p>` : ''}
 
             <!-- Proposal card -->
             <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:28px;">
@@ -74,6 +80,16 @@ export function proposalEmailHtml(opts: {
             <p style="font-size:12px;color:#94a3b8;text-align:center;margin:0;">
               Questions? Reply to this email or call us directly.
             </p>
+
+            ${gasContacts ? `<!-- Gas contacts -->
+            <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;margin-top:24px;">
+              <tr>
+                <td style="padding:14px 20px;">
+                  <span style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Gas Contacts</span>
+                  <div style="font-size:13px;color:#475569;line-height:1.6;margin-top:6px;">${nl2br(gasContacts)}</div>
+                </td>
+              </tr>
+            </table>` : ''}
           </td>
         </tr>
         <!-- Footer -->

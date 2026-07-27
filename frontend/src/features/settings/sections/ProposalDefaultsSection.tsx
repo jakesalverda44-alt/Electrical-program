@@ -11,7 +11,8 @@ export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSe
                  'gen_default_pad','gen_default_smm','gen_default_surge_pro','gen_default_battery',
                  'gen_default_em_panel',
                  'gen_default_extra_wire','gen_default_lull','gen_default_crane',
-                 'gen_default_deposit_pct','gen_default_valid_days'];
+                 'gen_default_deposit_pct','gen_default_valid_days',
+                 'proposal_default_message','gas_contacts_text'];
   const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(keys.map(k => [k, (settings as any)[k] ?? ''])));
   const [orig, setOrig] = useState(vals);
   const [saving, setSaving] = useState(false);
@@ -23,7 +24,7 @@ export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSe
   }, [settings]);
 
   const hasChanges = keys.some(k => vals[k] !== orig[k]);
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setVals(p => ({ ...p, [k]: e.target.value }));
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setVals(p => ({ ...p, [k]: e.target.value }));
 
   const save = async () => {
     setSaving(true);
@@ -59,6 +60,19 @@ export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSe
           </Field>
         ))}
       </div>
+
+      <SectionTitle title="Proposal Email" sub="Included automatically when a proposal is sent to a customer."/>
+      <Field label="Default Message" desc="Pre-written message appended to every proposal email, below the note field.">
+        <textarea rows={4} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
+          value={vals.proposal_default_message} onChange={set('proposal_default_message')}
+          placeholder="e.g. We appreciate the opportunity to earn your business. Financing options are available — let us know if you'd like details."/>
+      </Field>
+      <Field label="Gas Contacts" desc="Shown in the email only when 'Include gas contacts' is checked when sending a proposal.">
+        <textarea rows={4} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
+          value={vals.gas_contacts_text} onChange={set('gas_contacts_text')}
+          placeholder={'e.g. TECO Gas: (813) 275-3909\nPeoples Gas: (877) 832-6747'}/>
+      </Field>
+
       <SaveBar onSave={save} saving={saving} saved={saved} hasChanges={hasChanges}/>
     </div>
   );

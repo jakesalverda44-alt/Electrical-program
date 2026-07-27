@@ -20,6 +20,7 @@ const ALLOWED_KEYS = [
   'gen_default_extra_wire', 'gen_default_lull', 'gen_default_crane',
   'gen_default_deposit_pct', 'gen_default_valid_days',
   'gen_pricing_table',
+  'proposal_default_message', 'gas_contacts_text',
   'ai_anthropic_key', 'ai_model', 'ai_takeoff_agent2_model', 'ai_takeoff_agent3_model',
   'ai_max_tokens', 'ai_max_tokens_agent1', 'ai_max_tokens_agent2', 'ai_max_tokens_agent3',
   'ai_temperature',

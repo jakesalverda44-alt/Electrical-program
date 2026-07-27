@@ -651,12 +651,22 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   res.json(rows[0]);
 }));
 
+// Short "what was quoted" label for emails, e.g. "22KW Generac". `model` is stored as the
+// size string (e.g. "22KW") — kw is a NUMERIC(8,2) column that stringifies as "22.00", so it's
+// only used as a fallback when model isn't set, and coerced through Number() to drop the decimals.
+function genSpecLabel(gen: { kw?: unknown; mfr?: string | null; model?: string | null }): string {
+  const size = gen.model || (gen.kw ? `${Number(gen.kw)}KW` : null);
+  return [size, gen.mfr].filter(Boolean).join(' ');
+}
+
 // ── Send proposal email ──────────────────────────────────────────────────────
 // Sends through Microsoft Graph (the shared Outlook mailbox, so it lands in Sent
 // Items and replies come back to the inbox). The proposal is only marked sent
 // AFTER the email actually goes out.
+const DEFAULT_PROPOSAL_MESSAGE = 'Thank you for the opportunity to provide you with back-up power at your home.';
+
 router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
-  const { to, subject, note, proposalNo, total, deposit } = req.body;
+  const { to, subject, note, proposalNo, total, deposit, includeGasContacts } = req.body;
   if (!to) return res.status(400).json({ error: 'Recipient email required' });
   const gen = await loadOwnedGen(req, res);
   if (!gen) return;
@@ -667,16 +677,19 @@ router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
   const baseUrl = (frontendUrl || process.env.FRONTEND_URL || 'https://electrical-program.onrender.com').replace(/\/$/, '');
   const link = `${baseUrl}/p/${gen.proposal_token}`;
 
-  // Generator spec straight off the proposal: "22kW Generac RG022" etc.
-  const spec = [gen.kw ? `${gen.kw}kW` : null, gen.mfr, gen.model].filter(Boolean).join(' ');
+  // Generator spec straight off the proposal, e.g. "22KW Generac".
+  const spec = genSpecLabel(gen);
   const form = gen.form_data || {};
   const validDays = Number(form.validDays) || 30;
   const finalSubject = subject?.trim()
     || `Your ${spec ? spec + ' ' : ''}Generator Proposal — ${proposalNo || gen.proposal_no || ''}`.trim();
+  const defaultMessage = (await getSetting('proposal_default_message')) || DEFAULT_PROPOSAL_MESSAGE;
+  const gasContacts = includeGasContacts ? ((await getSetting('gas_contacts_text')) || '') : '';
   const html = proposalEmailHtml({
     customerName: gen.customer,
     proposalNo: proposalNo || gen.proposal_no || '',
     spec, total, deposit, validDays, link, senderNote: note,
+    defaultMessage, gasContacts,
   });
 
   if (!isGraphMailConfigured()) {
@@ -824,7 +837,7 @@ router.post('/p/:token/sign', async (req, res) => {
   if (isGraphMailConfigured()) {
     (async () => {
       try {
-        const spec = [gen.kw ? `${gen.kw}kW` : null, gen.mfr].filter(Boolean).join(' ');
+        const spec = genSpecLabel(gen);
         const amt = Number(gen.amount || 0);
         await graphSendMail({
           to: TEAM_NOTIFY_TO,
