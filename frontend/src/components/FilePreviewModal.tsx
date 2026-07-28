@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import * as XLSX from 'xlsx';
 import Icon from './Icon';
-import { sheetToRows, docxToHtml } from './filePreview';
+import { sheetToRows, docxToHtml, sanitizeDocHtml } from './filePreview';
 
 interface Props {
   title: string;
@@ -9,12 +9,6 @@ interface Props {
   buf: ArrayBuffer;
   onClose: () => void;
   onDownload: () => void;
-}
-
-/** Strip <script tags before injecting mammoth-generated HTML — the HTML comes from the
- * docx itself (not user input), but this is a cheap belt-and-suspenders guard. */
-function stripScripts(html: string): string {
-  return html.replace(/<script/gi, '&lt;script');
 }
 
 export default function FilePreviewModal({ title, kind, buf, onClose, onDownload }: Props) {
@@ -41,7 +35,7 @@ export default function FilePreviewModal({ title, kind, buf, onClose, onDownload
         } else {
           const rawHtml = await docxToHtml(buf);
           if (cancelled) return;
-          setHtml(stripScripts(rawHtml));
+          setHtml(sanitizeDocHtml(rawHtml));
         }
       } catch {
         if (!cancelled) setError('Could not render a preview of this file.');

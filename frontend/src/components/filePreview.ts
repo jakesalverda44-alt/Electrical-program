@@ -1,6 +1,45 @@
 import * as XLSX from 'xlsx';
+import DOMPurify from 'dompurify';
 
 export type PreviewKind = 'inline' | 'sheet' | 'doc' | 'none';
+
+// Tags/attributes mammoth's default HTML writer can produce. Anything else
+// (script, style, iframe, object, embed, event-handler attributes, form
+// elements, etc.) is dropped.
+const DOC_HTML_ALLOWED_TAGS = [
+  'p', 'br', 'span', 'div',
+  'strong', 'em', 'b', 'i', 'u', 's', 'sup', 'sub',
+  'a', 'img',
+  'ul', 'ol', 'li',
+  'table', 'thead', 'tbody', 'tr', 'td', 'th',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'blockquote',
+];
+const DOC_HTML_ALLOWED_ATTR = ['href', 'src', 'alt', 'title', 'colspan', 'rowspan'];
+
+// Defense-in-depth on top of DOMPurify's own URI allowlist (which already
+// rejects javascript:/data:text-html etc.): explicitly restrict <a href> to
+// http(s)/mailto/same-page anchors. Registered once at module load so
+// sanitizeDocHtml doesn't re-register the hook on every call.
+DOMPurify.addHook('afterSanitizeAttributes', node => {
+  if (node.tagName !== 'A' || !node.hasAttribute('href')) return;
+  const href = node.getAttribute('href') || '';
+  if (!/^(https?:|mailto:)/i.test(href) && !href.startsWith('#') && !href.startsWith('/')) {
+    node.removeAttribute('href');
+  }
+});
+
+/** Sanitize mammoth-generated docx HTML before it's injected via dangerouslySetInnerHTML.
+ * The HTML is generated from the docx (not typed by a user), but a crafted docx can still
+ * carry a `javascript:` hyperlink or an event-handler attribute that mammoth round-trips
+ * verbatim — this is the only guard between that and script execution in-origin. */
+export function sanitizeDocHtml(html: string): string {
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: DOC_HTML_ALLOWED_TAGS,
+    ALLOWED_ATTR: DOC_HTML_ALLOWED_ATTR,
+    ALLOW_DATA_ATTR: false,
+  });
+}
 
 const SHEET_EXT = ['.xlsx', '.xls', '.csv'];
 const MAX_ROWS_PER_SHEET = 200;
