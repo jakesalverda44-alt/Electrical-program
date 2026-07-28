@@ -9,6 +9,8 @@ import BuildFromNotesModal from '../builder/BuildFromNotesModal';
 import SiteVisitChecklist from './SiteVisitChecklist';
 import SurveyMarkupEditor from './SurveyMarkupEditor';
 import DocSlot from './DocSlot';
+import { parseSizerFile } from './sizerParse';
+import { ChecklistData, BLANK } from './SiteVisitChecklist';
 import { isPrivileged } from '../../hooks/useAuth';
 import { useUser } from '../../contexts/AppContext';
 import { useShowToast } from '../../contexts/AppContext';
@@ -82,6 +84,38 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
 
   const set = (k: keyof Draft) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setDraft(d => ({ ...d, [k]: e.target.value }));
+
+  // When a sizer report is uploaded, parse it and auto-fill the Site Visit Checklist
+  // (gas type, LRA, AC tons, appliance fuels/amps). Merged over existing data so manual
+  // edits to untouched fields survive; sizer-derived fields are refreshed from the new file.
+  const autofillFromSizer = async (file: File) => {
+    try {
+      const { fields, loads, notesLine } = await parseSizerFile(file);
+      let current: ChecklistData;
+      try {
+        const raw = typeof gen.checklist_data === 'string' ? JSON.parse(gen.checklist_data) : gen.checklist_data;
+        current = { ...BLANK, ...(raw || {}), loads: { ...(raw?.loads || {}) } };
+      } catch { current = { ...BLANK, loads: {} }; }
+
+      const notes = notesLine && !current.notes.includes(notesLine)
+        ? [current.notes, notesLine].filter(Boolean).join('\n')
+        : current.notes;
+      const merged: ChecklistData = {
+        ...current,
+        ...fields,
+        loads: { ...current.loads, ...loads },
+        notes,
+      };
+      const { data } = await api.patch(`/gens/${gen.id}`, { checklist_data: merged });
+      onUpdated(data.gen ?? data);
+      const filled = Object.keys(fields).length + Object.keys(loads).length;
+      showToast(filled
+        ? { title: 'Checklist auto-filled from sizer', sub: 'Open the Checklist tab to review' }
+        : { title: 'Sizer uploaded', sub: "Couldn't read checklist data from it" });
+    } catch {
+      showToast({ title: 'Sizer uploaded', sub: 'Auto-fill failed — enter checklist manually' });
+    }
+  };
 
   const handleCloseJob = async () => {
     if (!window.confirm(`Mark "${gen.customer}" as closed/complete? This will move the Drive folder to Completed Generator Jobs and remove it from the active pipeline.`)) return;
@@ -283,7 +317,8 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
               off-CRM, then attached here once the job's underway. */}
           <div className="dtl-section" style={{ marginTop: 16 }}>
             <div className="dtl-stage-label" style={{ marginBottom: 8 }}>Sizer Report</div>
-            <DocSlot genId={gen.id} category="sizer_report" label="Sizer Report"/>
+            <DocSlot genId={gen.id} category="sizer_report" label="Sizer Report" onUploaded={autofillFromSizer}/>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>Uploading a sizer auto-fills the Site Visit Checklist — review &amp; edit it in the Checklist tab.</div>
           </div>
 
           {/* Photos & files up top so site-visit capture is one tap on mobile, not

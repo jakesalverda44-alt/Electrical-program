@@ -7,7 +7,7 @@ interface DocRow { id: string; display_name: string; category: string; storage_u
 /** Single labeled upload slot backed by the generic /documents API (one doc per
  *  category per gen) — used post-quote for things like the Sizer Report that
  *  aren't part of the proposal itself. */
-export default function DocSlot({ genId, category, label, accept = 'application/pdf' }: { genId: string; category: string; label: string; accept?: string }) {
+export default function DocSlot({ genId, category, label, accept = 'application/pdf', onUploaded }: { genId: string; category: string; label: string; accept?: string; onUploaded?: (file: File) => void }) {
   const showToast = useShowToast();
   const [doc, setDoc] = useState<DocRow | null>(null);
   const [loading, setLoading] = useState(true);
@@ -34,6 +34,7 @@ export default function DocSlot({ genId, category, label, accept = 'application/
       form.append('display_name', label);
       await api.post('/documents', form, { headers: { 'Content-Type': 'multipart/form-data' } });
       load();
+      onUploaded?.(file);
     } catch {
       showToast({ title: 'Upload failed', sub: 'Try again' });
     } finally {

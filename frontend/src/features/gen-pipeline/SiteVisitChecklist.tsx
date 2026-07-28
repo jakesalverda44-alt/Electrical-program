@@ -3,9 +3,9 @@ import api from '../../api/client';
 import { Gen } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
 
-interface LoadRow { fuel?: 'Electric' | 'Gas'; volt?: '120V' | '240V'; hp?: string; amps?: string; }
+export interface LoadRow { fuel?: 'Electric' | 'Gas'; volt?: '120V' | '240V'; hp?: string; amps?: string; }
 
-interface ChecklistData {
+export interface ChecklistData {
   disc: '' | 'Yes' | 'No';
   em: '' | 'Yes' | 'No';
   powerCo: string;
@@ -24,7 +24,7 @@ interface ChecklistData {
   notes: string;
 }
 
-const BLANK: ChecklistData = {
+export const BLANK: ChecklistData = {
   disc: '', em: '', powerCo: '', serviceAmps: '', atsQtyAmps: '', acSize: '', lra: '',
   airHandler: '', gasType: '', tankSize: '', tankType: '',
   loads: {}, feedLen: '', gasRunLength: '', locDesc: '', notes: '',
@@ -32,7 +32,7 @@ const BLANK: ChecklistData = {
 
 // Same fixed appliance list as the standalone Job Kickoff Tool, keyed by index
 // (two "Other" rows share a name, so the name alone can't be the key).
-const LOADS: { n: string; fuel?: boolean; volt?: boolean; hp?: boolean; amps?: boolean }[] = [
+export const LOADS: { n: string; fuel?: boolean; volt?: boolean; hp?: boolean; amps?: boolean }[] = [
   { n: 'Dryer', fuel: true }, { n: 'Microwave' }, { n: 'Range Oven w/Top', fuel: true }, { n: 'Cook Top', fuel: true },
   { n: 'Oven', fuel: true, amps: true }, { n: 'Pool Heater', fuel: true, amps: true }, { n: 'Water Heater', fuel: true, amps: true },
   { n: 'Hot Tub (small)' }, { n: 'Hot Tub (large)' }, { n: 'Dishwasher' }, { n: 'Freezer' }, { n: 'Refrigerator' },
