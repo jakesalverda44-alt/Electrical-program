@@ -14,7 +14,9 @@ import { logger } from '../utils/logger';
 import { drawingUpload, documentUpload } from '../utils/upload';
 import { uploadFile, getFileMedia } from '../services/googleDrive';
 import { buildAgent1Content, type PrepFile, type Agent1Block } from '../ai/documentPrep';
-import { extractDocxText, extractPdfText, parseBidDocText, extractXlsxText, parseTakeoffText } from '../utils/bidDocParse';
+import { extractDocxText, extractPdfText, parseBidDocText } from '../utils/bidDocParse';
+import { parseTakeoffWorkbook } from '../utils/takeoffParse';
+import { parseAccubidBreakdown } from '../utils/accubidParse';
 
 // Cap on tiles rasterized per PDF page (cost control — see Stage 0 doc prep).
 const MAX_TILES_PER_PAGE = 9;
@@ -512,12 +514,20 @@ router.get('/prompt-defaults', requireAuth, (_req, res) => {
   res.json({ agent1: AGENT1_SYSTEM, agent2: AGENT2_SYSTEM, agent3: AGENT3_SYSTEM, agent4: AGENT4_SYSTEM });
 });
 
-// POST import-bid — non-AI extraction of amount + scope of work from a finished bid
-// document (.docx/.pdf), plus square footage from its takeoff spreadsheet (.xlsx) if
-// uploaded alongside it — for logging a bid you already built outside the agent
-// pipeline. Label/regex parsing only, reliable for APT's own templates. Returns a
-// preview; nothing is saved until the caller PATCHes the bid with the confirmed values.
-router.post('/:bidId/import-bid', requireAuth, documentUpload.fields([{ name: 'file', maxCount: 1 }, { name: 'takeoff', maxCount: 1 }]), asyncHandler(async (req: AuthRequest, res) => {
+// POST import-bid — non-AI extraction from a bid you built outside the agent pipeline:
+// amount + scope of work from the finished proposal (.docx/.pdf), square footage and
+// quantity takeoff from its spreadsheet (.xlsx), and the material/labor/equipment/quote
+// split plus labor hours from an Accubid "Breakdown" export (.pdf). Label/structure
+// parsing only, reliable for APT's own templates.
+//
+// The takeoff and cost breakdown are persisted here (they're bulky and feed the
+// comparison view); the headline fields come back as a preview and aren't written to
+// the bid until the caller PATCHes it with the confirmed values.
+router.post('/:bidId/import-bid', requireAuth, documentUpload.fields([
+  { name: 'file', maxCount: 1 },
+  { name: 'takeoff', maxCount: 1 },
+  { name: 'breakdown', maxCount: 1 },
+]), asyncHandler(async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
 
@@ -537,15 +547,132 @@ router.post('/:bidId/import-bid', requireAuth, documentUpload.fields([{ name: 'f
   const parsed = parseBidDocText(text);
 
   let sqFt: number | null = null;
+  let takeoffSummary: { categories: unknown[]; itemCount: number } | null = null;
   const takeoffFile = files?.takeoff?.[0];
-  if (takeoffFile) {
-    const takeoffExt = (takeoffFile.originalname.split('.').pop() || '').toLowerCase();
-    if (takeoffExt === 'xlsx') {
-      sqFt = parseTakeoffText(extractXlsxText(takeoffFile.buffer)).sqFt;
+  if (takeoffFile && (takeoffFile.originalname.split('.').pop() || '').toLowerCase() === 'xlsx') {
+    const takeoff = parseTakeoffWorkbook(takeoffFile.buffer);
+    sqFt = takeoff.sqFt;
+    if (takeoff.lineItems.length) {
+      await pool.query(
+        `INSERT INTO bid_takeoffs (bid_id, categories, line_items, item_count, source_file, updated_at)
+         VALUES ($1,$2::jsonb,$3::jsonb,$4,$5,now())
+         ON CONFLICT (bid_id) DO UPDATE SET
+           categories=$2::jsonb, line_items=$3::jsonb, item_count=$4, source_file=$5, updated_at=now()`,
+        [bidId, JSON.stringify(takeoff.categories), JSON.stringify(takeoff.lineItems),
+         takeoff.lineItems.length, takeoffFile.originalname]
+      );
+      takeoffSummary = { categories: takeoff.categories, itemCount: takeoff.lineItems.length };
     }
   }
 
-  res.json({ ...parsed, sqFt });
+  let breakdownSummary: ReturnType<typeof parseAccubidBreakdown> | null = null;
+  const breakdownFile = files?.breakdown?.[0];
+  if (breakdownFile && (breakdownFile.originalname.split('.').pop() || '').toLowerCase() === 'pdf') {
+    const b = parseAccubidBreakdown(await extractPdfText(breakdownFile.buffer));
+    if (b.sellingPrice || b.laborTotal || b.laborHours) {
+      await pool.query(
+        `INSERT INTO bid_cost_breakdown (bid_id, material_total, labor_total, equipment_total,
+           quotes_total, prime_cost, total_overhead, total_markup, selling_price, labor_hours,
+           journeyman_hours, apprentice_hours, avg_labor_rate, avg_crew_size, labor_risk_ratio,
+           source_file, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now())
+         ON CONFLICT (bid_id) DO UPDATE SET
+           material_total=$2, labor_total=$3, equipment_total=$4, quotes_total=$5,
+           prime_cost=$6, total_overhead=$7, total_markup=$8, selling_price=$9,
+           labor_hours=$10, journeyman_hours=$11, apprentice_hours=$12, avg_labor_rate=$13,
+           avg_crew_size=$14, labor_risk_ratio=$15, source_file=$16, updated_at=now()`,
+        [bidId, b.materialTotal, b.laborTotal, b.equipmentTotal, b.quotesTotal, b.primeCost,
+         b.totalOverhead, b.totalMarkup, b.sellingPrice, b.laborHours, b.journeymanHours,
+         b.apprenticeHours, b.avgLaborRate, b.avgCrewSize, b.laborRiskRatio,
+         breakdownFile.originalname]
+      );
+      breakdownSummary = b;
+    }
+  }
+
+  res.json({ ...parsed, sqFt, takeoff: takeoffSummary, breakdown: breakdownSummary });
+}));
+
+// GET comparables — past bids worth pricing this one against. Same brand ranks above
+// same project type (chain stores are built to near-identical prototypes), then nearest
+// square footage. Any bid with an amount qualifies, won or lost: a lost bid is still
+// signal about where the number landed.
+router.get('/:bidId/comparables', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const bid = await loadAccessibleBid(res, req.user!, req.params.bidId);
+  if (!bid) return;
+
+  const { rows } = await pool.query(`
+    SELECT b.id, b.name, b.gc, b.stage, b.brand, b.project_type, b.sq_ft, b.amount,
+           b.updated_at,
+           (bt.bid_id IS NOT NULL) AS has_takeoff,
+           (bc.bid_id IS NOT NULL) AS has_breakdown,
+           bc.labor_hours
+      FROM bids b
+      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id
+      LEFT JOIN bid_cost_breakdown bc ON bc.bid_id = b.id
+     WHERE b.id <> $1
+       AND b.deleted_at IS NULL
+       AND b.amount IS NOT NULL AND b.amount > 0
+       AND ($2::text IS NOT NULL AND b.brand = $2
+            OR $3::text IS NOT NULL AND b.project_type = $3)
+     ORDER BY (b.brand IS NOT DISTINCT FROM $2::text) DESC,
+              CASE WHEN $4::numeric IS NULL OR b.sq_ft IS NULL THEN 1 ELSE 0 END,
+              ABS(COALESCE(b.sq_ft, 0) - COALESCE($4::numeric, 0)),
+              b.updated_at DESC
+     LIMIT 25
+  `, [bid.id, bid.brand, bid.project_type, bid.sq_ft]);
+
+  res.json({
+    bid: { id: bid.id, name: bid.name, brand: bid.brand, project_type: bid.project_type,
+           sq_ft: bid.sq_ft, amount: bid.amount },
+    comparables: rows,
+  });
+}));
+
+// GET compare — this bid against selected comparables. Returns per-category takeoff
+// quantities and cost-breakdown figures for each job, normalized per 1,000 SF so
+// buildings of different sizes line up. The frontend renders the deltas.
+router.get('/:bidId/compare', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const bid = await loadAccessibleBid(res, req.user!, req.params.bidId);
+  if (!bid) return;
+
+  const against = String(req.query.against || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!against.length) return res.status(400).json({ error: 'against required' });
+
+  const ids = [bid.id, ...against];
+  const { rows } = await pool.query(`
+    SELECT b.id, b.name, b.gc, b.stage, b.brand, b.project_type, b.sq_ft, b.amount,
+           bt.categories, bt.item_count,
+           bc.material_total, bc.labor_total, bc.equipment_total, bc.quotes_total,
+           bc.selling_price, bc.labor_hours, bc.journeyman_hours, bc.apprentice_hours,
+           bc.avg_labor_rate, bc.avg_crew_size, bc.labor_risk_ratio
+      FROM bids b
+      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id
+      LEFT JOIN bid_cost_breakdown bc ON bc.bid_id = b.id
+     WHERE b.id = ANY($1::uuid[]) AND b.deleted_at IS NULL
+  `, [ids]);
+
+  // Preserve caller order, subject bid first.
+  const byId = new Map(rows.map(r => [r.id, r]));
+  const jobs = ids.map(id => byId.get(id)).filter(Boolean);
+
+  // Union of categories across all jobs, so a category present in only one job still
+  // shows up as a gap rather than silently vanishing.
+  const categoryNames = [...new Set(
+    jobs.flatMap(j => (j.categories ?? []).map((c: { name: string }) => c.name))
+  )].sort();
+
+  res.json({ subjectId: bid.id, jobs, categoryNames });
+}));
+
+// GET takeoff line items for a bid — drill-down behind a category in the compare view.
+router.get('/:bidId/takeoff', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
+  const { rows } = await pool.query(
+    'SELECT categories, line_items, item_count, source_file FROM bid_takeoffs WHERE bid_id=$1',
+    [req.params.bidId]
+  );
+  res.json(rows[0] || null);
 }));
 
 // GET all workspaces (for restoring state on app load). Restricted reps only get

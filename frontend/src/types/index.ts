@@ -42,6 +42,8 @@ export interface Bid {
   co_approved_total?: number;
   sq_ft?: number | null;
   project_type?: string | null;
+  // Chain/prototype name (AutoZone, 7-Eleven) — drives same-brand bid comparison.
+  brand?: string | null;
   date_won?: string | null;
   team_notified_at?: string | null;
   team_notified_to?: string[] | null;

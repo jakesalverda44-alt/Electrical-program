@@ -5,6 +5,7 @@ import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey, PROJEC
 import api from '../../api/client';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
 import { moneyFull } from '../../lib/money';
+import BidCompare from './BidCompare';
 
 interface Props {
   ws: PcWorkspace;
@@ -259,9 +260,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [importBusy, setImportBusy] = useState(false);
   const [importBidFile, setImportBidFile] = useState<File | null>(null);
   const [importTakeoffFile, setImportTakeoffFile] = useState<File | null>(null);
-  const [importPreview, setImportPreview] = useState<{ amount: string; projectType: string; sqFt: string; scopeText: string } | null>(null);
+  const [importBreakdownFile, setImportBreakdownFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<{ amount: string; projectType: string; brand: string; sqFt: string; scopeText: string } | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
   const importTakeoffRef = useRef<HTMLInputElement>(null);
+  const importBreakdownRef = useRef<HTMLInputElement>(null);
   const [savingImport, setSavingImport] = useState(false);
   const pollRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
   const agent4PollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -696,15 +699,19 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       const formData = new FormData();
       formData.append('file', importBidFile);
       if (importTakeoffFile) formData.append('takeoff', importTakeoffFile);
+      if (importBreakdownFile) formData.append('breakdown', importBreakdownFile);
       const { data } = await api.post(`/preconstruction/${bid.id}/import-bid`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       setImportPreview({
         amount: data.amount != null ? String(data.amount) : (bid.amount ? String(bid.amount) : ''),
         projectType: bid.project_type ?? '',
+        brand: bid.brand ?? '',
         sqFt: data.sqFt != null ? String(data.sqFt) : (bid.sq_ft ? String(bid.sq_ft) : ''),
         scopeText: data.scopeText || '',
       });
       if (!data.amount) showToast({ title: 'No amount found', sub: 'Couldn\'t find a total in that file — enter it manually below.' });
       if (importTakeoffFile && !data.sqFt) showToast({ title: 'No sq ft found', sub: 'Couldn\'t find building area in the takeoff — enter it manually below.' });
+      if (data.takeoff) showToast({ title: 'Takeoff saved', sub: `${data.takeoff.itemCount} items across ${data.takeoff.categories.length} categories.` });
+      if (data.breakdown?.laborHours) showToast({ title: 'Cost breakdown saved', sub: `${Number(data.breakdown.laborHours).toLocaleString()} labor hours on file.` });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to read those files';
       showToast({ title: 'Import failed', sub: msg });
@@ -720,14 +727,16 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       const { data } = await api.patch(`/bids/${bid.id}`, {
         amount: importPreview.amount === '' ? null : Number(importPreview.amount),
         project_type: importPreview.projectType || null,
+        brand: importPreview.brand || null,
         sq_ft: importPreview.sqFt === '' ? null : Number(importPreview.sqFt),
         notes: importPreview.scopeText,
       });
       if (data.bid) onBidUpdated(data.bid);
-      showToast({ title: 'Bid saved', sub: 'Amount, project type, and scope logged for this project.' });
+      showToast({ title: 'Bid saved', sub: 'Logged for this project — now available in Compare Bids.' });
       setImportPreview(null);
       setImportBidFile(null);
       setImportTakeoffFile(null);
+      setImportBreakdownFile(null);
     } catch {
       showToast({ title: 'Save failed', sub: 'Could not save the imported bid.' });
     } finally {
@@ -790,11 +799,19 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                         </button>
                       </div>
                       <div>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Takeoff Spreadsheet (.xlsx) — optional, for sq ft</div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Takeoff Spreadsheet (.xlsx) — sq ft + scope</div>
                         <input ref={importTakeoffRef} type="file" accept=".xlsx" style={{ display: 'none' }}
                           onChange={e => setImportTakeoffFile(e.target.files?.[0] ?? null)}/>
                         <button className="btn ghost" disabled={importBusy} onClick={() => importTakeoffRef.current?.click()} style={{ fontSize: 13 }}>
                           {importTakeoffFile ? importTakeoffFile.name : 'Choose Takeoff'} <Icon name="cloudup" size={14} stroke={2.2}/>
+                        </button>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Accubid Breakdown (.pdf) — labor + cost split</div>
+                        <input ref={importBreakdownRef} type="file" accept=".pdf" style={{ display: 'none' }}
+                          onChange={e => setImportBreakdownFile(e.target.files?.[0] ?? null)}/>
+                        <button className="btn ghost" disabled={importBusy} onClick={() => importBreakdownRef.current?.click()} style={{ fontSize: 13 }}>
+                          {importBreakdownFile ? importBreakdownFile.name : 'Choose Breakdown'} <Icon name="cloudup" size={14} stroke={2.2}/>
                         </button>
                       </div>
                       <button className="btn" disabled={importBusy || !importBidFile} onClick={readImportFiles} style={{ fontSize: 13 }}>
@@ -820,6 +837,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                           {PROJECT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                         </select>
                       </label>
+                      <label style={{ width: 140, fontSize: 12, fontWeight: 700, color: 'var(--text3)' }}>
+                        Brand / Prototype
+                        <input type="text" value={importPreview.brand} placeholder="e.g. AutoZone"
+                          onChange={e => setImportPreview(p => p && { ...p, brand: e.target.value })}
+                          style={{ width: '100%', marginTop: 4, font: 'inherit', fontSize: 13, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 9, padding: '8px 10px', boxSizing: 'border-box' }}/>
+                      </label>
                       <label style={{ width: 110, fontSize: 12, fontWeight: 700, color: 'var(--text3)' }}>
                         Sq Ft
                         <input type="number" value={importPreview.sqFt}
@@ -837,7 +860,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       <button className="btn" disabled={savingImport} onClick={saveImportedBid} style={{ fontSize: 13 }}>
                         {savingImport ? 'Saving…' : 'Save to Bid Card'}
                       </button>
-                      <button className="btn ghost" disabled={savingImport} onClick={() => { setImportPreview(null); setImportBidFile(null); setImportTakeoffFile(null); }} style={{ fontSize: 13 }}>
+                      <button className="btn ghost" disabled={savingImport} onClick={() => { setImportPreview(null); setImportBidFile(null); setImportTakeoffFile(null); setImportBreakdownFile(null); }} style={{ fontSize: 13 }}>
                         Cancel
                       </button>
                     </div>
@@ -1940,6 +1963,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           </div>
         );
       }
+
+      case 'compare':
+        return <BidCompare bidId={bid.id}/>;
 
       case 'costs': {
         const filteredCosts = costTypeFilter === 'all'

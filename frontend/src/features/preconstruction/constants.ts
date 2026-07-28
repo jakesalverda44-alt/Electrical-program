@@ -19,6 +19,7 @@ export const PC_TABS = [
   { key: 'rfis',       label: 'RFIs'              },
   { key: 'pricing',    label: 'Pricing'           },
   { key: 'proposal',   label: 'Proposal'          },
+  { key: 'compare',    label: 'Compare Bids'      },
   { key: 'costs',      label: 'Historical Costs'  },
   { key: 'intel',      label: 'Win-Rate Insights' },
 ] as const;
