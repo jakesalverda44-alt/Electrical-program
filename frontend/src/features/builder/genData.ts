@@ -300,6 +300,12 @@ export interface GenForm {
   extWarrantyPromoEnd: string;
   /** Promo add-on: 1 year of Silver Service included at no charge. */
   silverServicePromo: boolean;
+  /** Internal site-detail fields — not shown on the customer proposal, used for the
+   *  award kickoff email to the ops team. */
+  feedFt: number;
+  genSide: '' | 'Left' | 'Right';
+  panelRel: '' | 'Same side as panel' | 'Opposite side of panel' | 'Next to panel';
+  panelFt: number;
   labor: number;
   permit: number;
   startup: number;

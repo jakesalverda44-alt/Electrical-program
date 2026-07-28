@@ -3,7 +3,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { proposalEmailHtml } from '../email/proposalEmail';
-import { graphSendMail, isGraphMailConfigured, TEAM_NOTIFY_TO } from '../email/graphMailer';
+import { graphSendMail, graphCreateDraft, isGraphMailConfigured, TEAM_NOTIFY_TO } from '../email/graphMailer';
+import { loadLinkedDocumentsAsAttachments } from '../email/bidAttachments';
 import { escapeHtml } from '../utils/escapeHtml';
 import { getSetting } from './settings';
 import { upsertCustomer } from './customers';
@@ -257,6 +258,11 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
           }
         })();
       }
+
+      // Fire-and-forget: draft the internal kickoff email to the ops team.
+      draftAwardKickoffEmail(rows[0]).catch(err => {
+        logger.error({ err, genId: gen.id }, '[email] award kickoff draft failed');
+      });
     }
     res.json({ gen: rows[0], wonJob });
   } catch (err) {
@@ -326,7 +332,7 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
 
 router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (!(await loadOwnedGen(req, res))) return;
-  const { customer, loc, mfr, model, kw, amount, tax, addons, proposal_no, form_data, totals_data, date_won } = req.body;
+  const { customer, loc, mfr, model, kw, amount, tax, addons, proposal_no, form_data, totals_data, checklist_data, survey_markup, date_won } = req.body;
   const fields: string[] = [];
   const vals: unknown[] = [];
   let i = 1;
@@ -341,6 +347,8 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (proposal_no !== undefined) { fields.push(`proposal_no=$${i++}`); vals.push(proposal_no || null); }
   if (form_data   !== undefined) { fields.push(`form_data=$${i++}::jsonb`); vals.push(JSON.stringify(form_data)); }
   if (totals_data !== undefined) { fields.push(`totals_data=$${i++}::jsonb`); vals.push(JSON.stringify(totals_data)); }
+  if (checklist_data !== undefined) { fields.push(`checklist_data=$${i++}::jsonb`); vals.push(JSON.stringify(checklist_data)); }
+  if (survey_markup !== undefined) { fields.push(`survey_markup=$${i++}::jsonb`); vals.push(JSON.stringify(survey_markup)); }
   if (!fields.length && date_won === undefined) return res.status(400).json({ error: 'Nothing to update' });
   let gen = null;
   if (fields.length) {
@@ -551,8 +559,14 @@ Boolean fields (true/false):
   includeBreakdown — (default: false)
   silverServicePromo — 1 year of Silver Service included free (promo add-on)  (default: false)
 
+String fields (enum, "" if not mentioned):
+  genSide  — "Left" | "Right" | "" — which side of the house the generator sits on
+  panelRel — "Same side as panel" | "Opposite side of panel" | "Next to panel" | ""
+
 Numeric fields:
   extraWire — extra wire in feet  (default: 0)
+  feedFt    — electrical feed distance in feet, if mentioned  (default: 0)
+  panelFt   — distance from the electrical panel in feet, if mentioned  (default: 0)
   smmQty    — SMM maintenance modules  (default: 1)
   surgeProQty — surge protectors  (default: 0)
   atsQty    — total ATS units on the job. Air-cooled generators include 1 standard
@@ -614,6 +628,7 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
     extWarranty: 'none', extWarrantyPromoStart: '', extWarrantyPromoEnd: '',
     pad: true, smmQty: 1, surgeProQty: 0, battery: true, emPanel: false, gasLine: false,
     removal: false, extraWire: 0, removalFee: 500, silverServicePromo: false,
+    feedFt: 0, genSide: '', panelRel: '', panelFt: 0,
     labor: ADDON_P.labor, permit: ADDON_P.permit, startup: ADDON_P.startup,
     discount: 0, discountType: '$', taxRate: 7, validDays: 30, depositPct: 50,
     notes: '', includeBreakdown: false,
@@ -657,6 +672,99 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
 function genSpecLabel(gen: { kw?: unknown; mfr?: string | null; model?: string | null }): string {
   const size = gen.model || (gen.kw ? `${Number(gen.kw)}KW` : null);
   return [size, gen.mfr].filter(Boolean).join(' ');
+}
+
+// ── Award kickoff email (ported from the standalone "Job Kickoff Tool") ─────
+// When a proposal moves to Awarded, an internal draft goes to the ops team with the
+// job specifics plus whatever of the signed proposal / sizer report / survey / site
+// visit checklist have been uploaded to the job so far.
+
+const DEFAULT_AWARD_RECIPIENTS = [
+  'kim@accuratepowerandtechnology.com', 'toni@accuratepowerandtechnology.com',
+  'sonny@accuratepowerandtechnology.com', 'brian@accuratepowerandtechnology.com',
+  'chrise@accuratepowerandtechnology.com', 'haley@accuratepowerandtechnology.com',
+  'alexis@accuratepowerandtechnology.com', 'permits@accuratepowerandtechnology.com',
+];
+
+async function getAwardRecipients(): Promise<string[]> {
+  try {
+    const raw = await getSetting('award_recipients');
+    const list = JSON.parse(raw || '[]');
+    return Array.isArray(list) && list.length ? list.map(String) : DEFAULT_AWARD_RECIPIENTS;
+  } catch {
+    return DEFAULT_AWARD_RECIPIENTS;
+  }
+}
+
+const AWARD_DOC_CATEGORIES = ['contract', 'sizer_report', 'survey', 'labeled_survey', 'site_checklist'];
+const AWARD_DOC_LABELS: Record<string, string> = {
+  contract: 'Signed Proposal',
+  sizer_report: 'Sizer Report',
+  survey: 'Survey',
+  labeled_survey: 'Labeled Survey',
+  site_checklist: 'Site Visit Checklist',
+};
+
+function buildAwardKickoffEmail(gen: Record<string, any>): { subject: string; html: string } {
+  const form: Record<string, any> = (gen.form_data && typeof gen.form_data === 'object') ? gen.form_data : {};
+  const totals: Record<string, any> = (gen.totals_data && typeof gen.totals_data === 'object') ? gen.totals_data : {};
+  const brand = form.brand || gen.mfr || '';
+  const city = form.city || '';
+  const subject = `New ${brand} Install - ${gen.customer || '[customer]'}${city ? ` - ${city}` : ''}`;
+
+  const equipParts = [form.size ? `${brand} ${form.size} Generator` : genSpecLabel(gen)];
+  if (Number(form.atsQty) > 0) {
+    equipParts.push(`${form.jobType === 'swap-out' ? 'Existing ' : ''}${form.atsSize || ''} ATS${Number(form.atsQty) > 1 ? ` (${form.atsQty})` : ''}`);
+  }
+  const equip = equipParts.filter(Boolean).join(' — ');
+
+  const lines: string[] = [`We will be installing a ${equip || '[equipment]'}.`];
+  lines.push(Number(form.smmQty) > 0 ? `SMM: Yes (${form.smmQty}).` : 'No SMM or load management.');
+  lines.push(form.emPanel ? '1 em-panel.' : 'No em-panel.');
+  if (form.fuel) lines.push(`Gas: ${form.fuel === 'LP' ? 'Propane' : 'Natural gas (NG)'}.`);
+  if (Number(form.feedFt) > 0) lines.push(`Electrical feed ~${form.feedFt} ft.`);
+  const pos: string[] = [];
+  if (form.genSide) pos.push(`${String(form.genSide).toLowerCase()} side of house`);
+  if (form.panelRel) pos.push(String(form.panelRel).toLowerCase());
+  if (Number(form.panelFt) > 0 && form.panelRel !== 'Next to panel') pos.push(`~${form.panelFt} ft from panel`);
+  if (pos.length) lines.push(`Generator: ${pos.join(', ')}.`);
+  if (form.silverServicePromo) lines.push('Included 1 year free Silver Service.');
+  if (form.notes && String(form.notes).trim()) lines.push(String(form.notes).trim());
+
+  const deposit = Number(totals.deposit) || 0;
+  const depLine = deposit ? `Customer made a deposit of $${deposit.toLocaleString()}.` : '';
+
+  const contactRows = [gen.customer, form.phone, form.email, form.address].filter(Boolean).map(String);
+
+  const parts: string[] = [
+    `<p>${contactRows.map(r => escapeHtml(r)).join('<br>')}</p>`,
+    `<p>${lines.map(l => escapeHtml(l)).join('<br>')}</p>`,
+  ];
+  if (depLine) parts.push(`<p>${escapeHtml(depLine)}</p>`);
+
+  return { subject, html: parts.join('\n') };
+}
+
+/** Fire-and-forget: draft (never auto-send) the internal kickoff email when a job
+ *  is awarded, attaching whatever of the signed proposal / sizer / survey / checklist
+ *  documents exist for it yet. */
+async function draftAwardKickoffEmail(gen: Record<string, any>): Promise<void> {
+  if (!isGraphMailConfigured()) return;
+  const to = await getAwardRecipients();
+  if (!to.length) return;
+
+  const { subject, html: bodyHtml } = buildAwardKickoffEmail(gen);
+  const { attachments, attached, skipped } = await loadLinkedDocumentsAsAttachments(gen.id, {
+    categories: AWARD_DOC_CATEGORIES,
+  });
+
+  let html = bodyHtml;
+  const attachedLabels = attached.map(a => AWARD_DOC_LABELS[a.category || ''] || a.name);
+  if (attachedLabels.length) html += `<p>Attached: ${escapeHtml(attachedLabels.join(', '))}.</p>`;
+  if (skipped.length) html += `<p>Too large to attach (see the job's Drive folder): ${escapeHtml(skipped.join(', '))}.</p>`;
+  if (gen.drive_job_folder_id) html += `<p>All job files: <a href="https://drive.google.com/drive/folders/${gen.drive_job_folder_id}">Google Drive</a></p>`;
+
+  await graphCreateDraft({ to, subject, html, attachments });
 }
 
 // ── Send proposal email ──────────────────────────────────────────────────────

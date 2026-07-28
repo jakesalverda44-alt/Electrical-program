@@ -25,6 +25,7 @@ interface DocRow {
   id: string;
   name: string | null;
   display_name: string | null;
+  category: string | null;
   file_type: string | null;
   file_size: number | null;
   file_data: string | null;
@@ -51,21 +52,38 @@ export interface BidAttachmentsResult {
   skipped: string[];   // names skipped (too large to fit, or could not be fetched)
 }
 
-/** Build Graph attachments from a bid's uploaded documents, capped at maxTotalBytes total. */
-export async function loadBidDocumentsAsAttachments(
-  bidId: string,
-  maxTotalBytes = DEFAULT_MAX_TOTAL,
-): Promise<BidAttachmentsResult> {
+export interface LinkedDocRef { name: string; category: string | null; }
+
+export interface LinkedAttachmentsResult extends BidAttachmentsResult {
+  /** name + category for every document actually attached, in order — lets the
+   *  caller label each one (e.g. "Signed Proposal", "Sizer Report") in the email body. */
+  attached: LinkedDocRef[];
+}
+
+/** Build Graph attachments from any linked_id's uploaded documents (bid or gen proposal),
+ *  capped at maxTotalBytes total. Pass `categories` to only pull specific document types. */
+export async function loadLinkedDocumentsAsAttachments(
+  linkedId: string,
+  opts: { maxTotalBytes?: number; categories?: string[] } = {},
+): Promise<LinkedAttachmentsResult> {
+  const maxTotalBytes = opts.maxTotalBytes ?? DEFAULT_MAX_TOTAL;
+  const params: unknown[] = [linkedId];
+  let categoryClause = '';
+  if (opts.categories?.length) {
+    params.push(opts.categories);
+    categoryClause = ` AND category = ANY($${params.length})`;
+  }
   const { rows } = await pool.query<DocRow>(
-    `SELECT id, name, display_name, file_type, file_size, file_data, storage_url
+    `SELECT id, name, display_name, category, file_type, file_size, file_data, storage_url
        FROM documents
-      WHERE linked_id = $1 AND deleted_at IS NULL
+      WHERE linked_id = $1 AND deleted_at IS NULL${categoryClause}
       ORDER BY created_at ASC`,
-    [bidId]
+    params
   );
 
   const attachments: GraphAttachment[] = [];
   const attachedNames: string[] = [];
+  const attached: LinkedDocRef[] = [];
   const skipped: string[] = [];
   let total = 0;
 
@@ -91,7 +109,13 @@ export async function loadBidDocumentsAsAttachments(
       contentId: `bidfile-${doc.id}`,
     });
     attachedNames.push(name);
+    attached.push({ name, category: doc.category });
   }
 
-  return { attachments, attachedNames, skipped };
+  return { attachments, attachedNames, attached, skipped };
+}
+
+/** Back-compat wrapper — same as before for the bid "new bid → team" email. */
+export function loadBidDocumentsAsAttachments(bidId: string, maxTotalBytes = DEFAULT_MAX_TOTAL): Promise<BidAttachmentsResult> {
+  return loadLinkedDocumentsAsAttachments(bidId, { maxTotalBytes });
 }

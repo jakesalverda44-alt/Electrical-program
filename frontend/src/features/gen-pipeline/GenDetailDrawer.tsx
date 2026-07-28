@@ -6,6 +6,8 @@ import RecordFiles from '../../components/RecordFiles';
 import { moneyFull } from '../../lib/money';
 import api from '../../api/client';
 import BuildFromNotesModal from '../builder/BuildFromNotesModal';
+import SiteVisitChecklist from './SiteVisitChecklist';
+import SurveyMarkupEditor from './SurveyMarkupEditor';
 import { isPrivileged } from '../../hooks/useAuth';
 import { useUser } from '../../contexts/AppContext';
 import { useShowToast } from '../../contexts/AppContext';
@@ -37,6 +39,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
   const [closingJob, setClosingJob] = useState(false);
   const [showBuildNotes, setShowBuildNotes] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [tab, setTab] = useState<'overview' | 'checklist' | 'survey'>('overview');
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<Draft>({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '', date_won: '' });
 
@@ -102,6 +105,23 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
         </div>
 
         <div className="drawer-body">
+          <div style={{ display: 'inline-flex', border: '1px solid var(--border2)', borderRadius: 9, overflow: 'hidden', marginBottom: 14 }}>
+            {(['overview', 'checklist', 'survey'] as const).map(t => (
+              <button key={t} onClick={() => setTab(t)}
+                style={{ padding: '7px 16px', fontSize: 12.5, fontWeight: 700, border: 'none', cursor: 'pointer',
+                  background: tab === t ? 'var(--accent)' : 'var(--surface)',
+                  color: tab === t ? '#fff' : 'var(--text2)' }}>
+                {t === 'overview' ? 'Overview' : t === 'checklist' ? 'Site Visit Checklist' : 'Survey'}
+              </button>
+            ))}
+          </div>
+
+          {tab === 'checklist' ? (
+            <SiteVisitChecklist gen={gen} onUpdated={g => onUpdated(g)}/>
+          ) : tab === 'survey' ? (
+            <SurveyMarkupEditor gen={gen} onUpdated={g => onUpdated(g)}/>
+          ) : (
+          <>
           <div className="dtl-amt">{moneyFull(Number(gen.amount))}</div>
 
           <div className="dtl-stage-label">Stage</div>
@@ -356,6 +376,8 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
                 ))}
               </div>
             </div>
+          )}
+          </>
           )}
 
         </div>

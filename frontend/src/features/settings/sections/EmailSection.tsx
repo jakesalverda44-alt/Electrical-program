@@ -15,6 +15,8 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
   const [bidOn, setBidOn] = useState(settings.bid_notify_enabled !== 'false');
   const [emails, setEmails] = useState<string[]>(parseEmails(settings.bid_notify_emails));
   const [emailIn, setEmailIn] = useState('');
+  const [awardEmails, setAwardEmails] = useState<string[]>(parseEmails(settings.award_recipients));
+  const [awardEmailIn, setAwardEmailIn] = useState('');
   const [orig, setOrig] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -22,16 +24,17 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<'idle' | 'ok' | 'error'>('idle');
 
-  const snapshot = (v: Record<string, string>, b: boolean, e: string[]) => JSON.stringify({ v, b, e });
+  const snapshot = (v: Record<string, string>, b: boolean, e: string[], a: string[]) => JSON.stringify({ v, b, e, a });
 
   useEffect(() => {
     const v = Object.fromEntries(keys.map(k => [k, (settings as any)[k] ?? '']));
     const b = settings.bid_notify_enabled !== 'false';
     const e = parseEmails(settings.bid_notify_emails);
-    setVals(v); setBidOn(b); setEmails(e); setOrig(snapshot(v, b, e));
+    const a = parseEmails(settings.award_recipients);
+    setVals(v); setBidOn(b); setEmails(e); setAwardEmails(a); setOrig(snapshot(v, b, e, a));
   }, [settings]);
 
-  const hasChanges = snapshot(vals, bidOn, emails) !== orig;
+  const hasChanges = snapshot(vals, bidOn, emails, awardEmails) !== orig;
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setVals(p => ({ ...p, [k]: e.target.value }));
 
   const addEmail = () => {
@@ -39,6 +42,12 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
     if (!v || emails.includes(v)) return;
     setEmails(prev => [...prev, v]);
     setEmailIn('');
+  };
+  const addAwardEmail = () => {
+    const v = awardEmailIn.trim().toLowerCase();
+    if (!v || awardEmails.includes(v)) return;
+    setAwardEmails(prev => [...prev, v]);
+    setAwardEmailIn('');
   };
 
   const save = async () => {
@@ -48,8 +57,9 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
         ...vals,
         bid_notify_enabled: bidOn ? 'true' : 'false',
         bid_notify_emails: JSON.stringify(emails),
+        award_recipients: JSON.stringify(awardEmails),
       });
-      setOrig(snapshot(vals, bidOn, emails));
+      setOrig(snapshot(vals, bidOn, emails, awardEmails));
       onSaved();
       setSaved(true); setTimeout(() => setSaved(false), 3000);
     } finally { setSaving(false); }
@@ -119,6 +129,40 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
             </span>
           ))}
           {emails.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>No recipients added yet.</span>}
+        </div>
+      </div>
+
+      {/* Award kickoff email recipients — who gets the internal "new job" draft when
+          a Gen Pipeline card is moved to Awarded. Always a draft, never auto-sent. */}
+      <div style={{ marginTop: 8, marginBottom: 8, paddingTop: 20, borderTop: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', marginBottom: 2 }}>Award Kickoff Email Recipients</div>
+        <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 12 }}>
+          The team list for the internal kickoff email drafted when a job moves to Awarded. Always created as an Outlook draft for you to review — never sent automatically.
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+          <input
+            type="email"
+            value={awardEmailIn}
+            onChange={e => setAwardEmailIn(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addAwardEmail())}
+            placeholder="ops@accuratepower.com"
+            style={{ flex: 1, height: 38, padding: '0 12px', borderRadius: 9, border: '1px solid var(--border2)',
+              background: 'var(--surface)', color: 'var(--text)', fontSize: 13, outline: 'none' }}
+          />
+          <button className="btn ghost" onClick={addAwardEmail} style={{ height: 38, padding: '0 16px' }}>Add</button>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {awardEmails.map(em => (
+            <span key={em} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600,
+              background: 'var(--blue-soft)', color: 'var(--blue)', border: '1px solid rgba(77,141,247,.25)',
+              borderRadius: 20, padding: '4px 10px 4px 12px' }}>
+              {em}
+              <button onClick={() => setAwardEmails(prev => prev.filter(x => x !== em))}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--blue)', fontSize: 15, lineHeight: 1, padding: 0, display: 'flex' }}>×</button>
+            </span>
+          ))}
+          {awardEmails.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Using the built-in default team list until you customize it here.</span>}
         </div>
       </div>
 

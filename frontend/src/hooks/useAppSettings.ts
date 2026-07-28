@@ -70,6 +70,8 @@ export interface AppSettings {
   // Bid notifications
   bid_notify_enabled: string;
   bid_notify_emails: string;
+  // Gen award kickoff email
+  award_recipients: string;
   // Estimating
   unit_cost_library: string;
   // Other
@@ -101,6 +103,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   sales_goal_monthly: '',
   currency_code: 'USD',
   bid_notify_enabled: 'true', bid_notify_emails: '[]',
+  award_recipients: '[]',
   unit_cost_library: '',
   notifications_json: '{}', security_session_timeout: '480',
 };

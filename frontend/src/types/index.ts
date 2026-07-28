@@ -93,6 +93,8 @@ export interface Gen {
   proposal_no?: string;
   form_data?: Record<string, unknown> | string | null;
   totals_data?: Record<string, unknown> | string | null;
+  checklist_data?: Record<string, unknown> | string | null;
+  survey_markup?: Record<string, unknown> | string | null;
   sent_at?: string;
   viewed_at?: string;
   signed_at?: string;

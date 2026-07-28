@@ -32,6 +32,7 @@ const ALLOWED_KEYS = [
   'commission_default_rate',
   'sales_goal_monthly',
   'bid_notify_enabled', 'bid_notify_emails',
+  'award_recipients',
   'currency_code',
   'notifications_json',
   'security_session_timeout',

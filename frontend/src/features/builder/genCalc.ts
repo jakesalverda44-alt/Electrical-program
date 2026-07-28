@@ -18,6 +18,7 @@ export function blankGenForm(overrides?: DefaultOverrides): GenForm {
     liftType: 'none', removal: false,
     extWarranty: 'none', extWarrantyPromoStart: '', extWarrantyPromoEnd: '',
     silverServicePromo: false,
+    feedFt: 0, genSide: '', panelRel: '', panelFt: 0,
     labor:   Number(overrides?.gen_default_labor)    || DEFAULT_PRICES.labor,
     permit:  Number(overrides?.gen_default_permit)   || DEFAULT_PRICES.permit,
     startup: Number(overrides?.gen_default_startup)  || DEFAULT_PRICES.startup,
@@ -59,6 +60,10 @@ export function migrateGenForm(raw: Record<string, unknown>): Record<string, unk
   if (out.silverServicePromo === undefined) {
     out.silverServicePromo = false;
   }
+  if (out.feedFt === undefined) out.feedFt = 0;
+  if (out.genSide === undefined) out.genSide = '';
+  if (out.panelRel === undefined) out.panelRel = '';
+  if (out.panelFt === undefined) out.panelFt = 0;
   return out;
 }
 

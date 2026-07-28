@@ -24,11 +24,15 @@ const CATEGORY_TO_FOLDER: Record<string, string> = {
 
 // Generator proposals use a different (flatter) folder layout than electrical bids.
 const GEN_CATEGORY_TO_FOLDER: Record<string, string> = {
-  photo:       'drive_photos_folder_id',
-  contract:    'drive_contract_folder_id',
-  invoice:     'drive_invoices_folder_id',
-  permit:      'drive_permit_folder_id',
-  engineering: 'drive_engineering_folder_id',
+  photo:          'drive_photos_folder_id',
+  contract:       'drive_contract_folder_id',
+  invoice:        'drive_invoices_folder_id',
+  permit:         'drive_permit_folder_id',
+  engineering:    'drive_engineering_folder_id',
+  sizer_report:   'drive_engineering_folder_id',
+  survey:         'drive_engineering_folder_id',
+  labeled_survey: 'drive_engineering_folder_id',
+  site_checklist: 'drive_engineering_folder_id',
 };
 
 const router = Router();
