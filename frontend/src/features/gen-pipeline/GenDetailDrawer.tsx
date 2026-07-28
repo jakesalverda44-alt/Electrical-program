@@ -43,6 +43,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
   const [showBuildNotes, setShowBuildNotes] = useState(false);
   const [editing, setEditing] = useState(false);
   const [tab, setTab] = useState<'overview' | 'checklist' | 'survey'>('overview');
+  const [drafting, setDrafting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<Draft>({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '', date_won: '' });
 
@@ -114,6 +115,22 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
         : { title: 'Sizer uploaded', sub: "Couldn't read checklist data from it" });
     } catch {
       showToast({ title: 'Sizer uploaded', sub: 'Auto-fill failed — enter checklist manually' });
+    }
+  };
+
+  const draftKickoff = async () => {
+    setDrafting(true);
+    try {
+      const { data } = await api.post(`/gens/${gen.id}/kickoff-email`);
+      const n = data.attachedLabels?.length || 0;
+      showToast({
+        title: 'Kickoff draft created in Outlook',
+        sub: n ? `${n} doc${n > 1 ? 's' : ''} attached — review & send` : 'No docs attached yet — review & send',
+      });
+    } catch (e: any) {
+      showToast({ title: 'Could not create draft', sub: e?.response?.data?.error || 'Try again' });
+    } finally {
+      setDrafting(false);
     }
   };
 
@@ -335,6 +352,17 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
               <Icon name="eye" size={15} stroke={1.9}/>View customer proposal
             </button>
           )}
+
+          {/* Draft the internal team kickoff email on demand — also fires automatically on
+              award, but this lets you (re)build it after uploading more docs. */}
+          <button
+            className="btn ghost"
+            style={{ width: '100%', justifyContent: 'center', marginTop: 8, color: 'var(--blue)', borderColor: 'rgba(59,130,246,.4)' }}
+            disabled={drafting}
+            onClick={draftKickoff}
+          >
+            <Icon name="mail" size={14} stroke={1.9}/>{drafting ? 'Drafting…' : 'Draft Kickoff Email'}
+          </button>
 
           {!isTerminal && (
             <button

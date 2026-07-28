@@ -745,13 +745,15 @@ function buildAwardKickoffEmail(gen: Record<string, any>): { subject: string; ht
   return { subject, html: parts.join('\n') };
 }
 
-/** Fire-and-forget: draft (never auto-send) the internal kickoff email when a job
- *  is awarded, attaching whatever of the signed proposal / sizer / survey / checklist
- *  documents exist for it yet. */
-async function draftAwardKickoffEmail(gen: Record<string, any>): Promise<void> {
-  if (!isGraphMailConfigured()) return;
+interface KickoffResult { drafted: boolean; reason?: 'email_not_configured' | 'no_recipients'; to: string[]; attachedLabels: string[]; skipped: string[]; }
+
+/** Draft (never auto-send) the internal kickoff email, attaching whatever of the signed
+ *  proposal / sizer / survey / labeled survey / checklist documents exist for the job.
+ *  Called fire-and-forget on the award transition, and on demand from the drawer button. */
+async function draftAwardKickoffEmail(gen: Record<string, any>): Promise<KickoffResult> {
+  if (!isGraphMailConfigured()) return { drafted: false, reason: 'email_not_configured', to: [], attachedLabels: [], skipped: [] };
   const to = await getAwardRecipients();
-  if (!to.length) return;
+  if (!to.length) return { drafted: false, reason: 'no_recipients', to: [], attachedLabels: [], skipped: [] };
 
   const { subject, html: bodyHtml } = buildAwardKickoffEmail(gen);
   const { attachments, attached, skipped } = await loadLinkedDocumentsAsAttachments(gen.id, {
@@ -765,7 +767,24 @@ async function draftAwardKickoffEmail(gen: Record<string, any>): Promise<void> {
   if (gen.drive_job_folder_id) html += `<p>All job files: <a href="https://drive.google.com/drive/folders/${gen.drive_job_folder_id}">Google Drive</a></p>`;
 
   await graphCreateDraft({ to, subject, html, attachments });
+  return { drafted: true, to, attachedLabels, skipped };
 }
+
+// On-demand: (re)create the kickoff email draft for a job — used by the drawer's
+// "Draft Kickoff Email" button so docs uploaded after award still get bundled.
+router.post('/:id/kickoff-email', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+  const result = await draftAwardKickoffEmail(gen);
+  if (!result.drafted) {
+    return res.status(503).json({
+      error: result.reason === 'email_not_configured'
+        ? 'Email is not configured (Microsoft Graph).'
+        : 'No award-email recipients set — add them in Settings → Email Delivery.',
+    });
+  }
+  res.json(result);
+}));
 
 // ── Send proposal email ──────────────────────────────────────────────────────
 // Sends through Microsoft Graph (the shared Outlook mailbox, so it lands in Sent
