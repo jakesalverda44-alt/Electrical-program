@@ -257,8 +257,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [propNotes,  setPropNotes]  = useState('');
   const [agent4Running, setAgent4Running] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
+  const [importBidFile, setImportBidFile] = useState<File | null>(null);
+  const [importTakeoffFile, setImportTakeoffFile] = useState<File | null>(null);
   const [importPreview, setImportPreview] = useState<{ amount: string; projectType: string; sqFt: string; scopeText: string } | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
+  const importTakeoffRef = useRef<HTMLInputElement>(null);
   const [savingImport, setSavingImport] = useState(false);
   const pollRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
   const agent4PollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -683,26 +686,27 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     addFiles(Array.from(e.dataTransfer.files));
   };
 
-  // Import a finished bid doc (.docx/.pdf) without running the AI agents — label/regex
-  // extraction only. Shows an editable preview; nothing is saved until confirmed.
-  const handleImportBidFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (importFileRef.current) importFileRef.current.value = '';
-    if (!file) return;
+  // Import a finished bid doc (.docx/.pdf) + its takeoff spreadsheet (.xlsx), uploaded
+  // together, without running the AI agents — label/regex extraction only. Shows an
+  // editable preview; nothing is saved until confirmed.
+  const readImportFiles = async () => {
+    if (!importBidFile) return;
     setImportBusy(true);
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('file', importBidFile);
+      if (importTakeoffFile) formData.append('takeoff', importTakeoffFile);
       const { data } = await api.post(`/preconstruction/${bid.id}/import-bid`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       setImportPreview({
         amount: data.amount != null ? String(data.amount) : (bid.amount ? String(bid.amount) : ''),
         projectType: bid.project_type ?? '',
-        sqFt: bid.sq_ft ? String(bid.sq_ft) : '',
+        sqFt: data.sqFt != null ? String(data.sqFt) : (bid.sq_ft ? String(bid.sq_ft) : ''),
         scopeText: data.scopeText || '',
       });
       if (!data.amount) showToast({ title: 'No amount found', sub: 'Couldn\'t find a total in that file — enter it manually below.' });
+      if (importTakeoffFile && !data.sqFt) showToast({ title: 'No sq ft found', sub: 'Couldn\'t find building area in the takeoff — enter it manually below.' });
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to read that file';
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to read those files';
       showToast({ title: 'Import failed', sub: msg });
     } finally {
       setImportBusy(false);
@@ -722,6 +726,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       if (data.bid) onBidUpdated(data.bid);
       showToast({ title: 'Bid saved', sub: 'Amount, project type, and scope logged for this project.' });
       setImportPreview(null);
+      setImportBidFile(null);
+      setImportTakeoffFile(null);
     } catch {
       showToast({ title: 'Save failed', sub: 'Could not save the imported bid.' });
     } finally {
@@ -771,13 +777,30 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 {!importPreview ? (
                   <>
                     <p style={{ fontSize: 12.5, color: 'var(--text3)', margin: '0 0 10px' }}>
-                      Already built this bid outside the AI pipeline? Upload the finished proposal (.docx or .pdf) to
-                      pull the contract amount and scope of work straight into this bid card.
+                      Already built this bid outside the AI pipeline? Upload the finished proposal and its takeoff
+                      together to pull the contract amount, scope of work, and square footage straight into this bid card.
                     </p>
-                    <input ref={importFileRef} type="file" accept=".docx,.pdf" style={{ display: 'none' }} onChange={handleImportBidFile}/>
-                    <button className="btn" disabled={importBusy} onClick={() => importFileRef.current?.click()} style={{ fontSize: 13 }}>
-                      {importBusy ? 'Reading file…' : 'Upload Bid Document'} <Icon name="cloudup" size={14} stroke={2.2}/>
-                    </button>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Bid Document (.docx / .pdf) — required</div>
+                        <input ref={importFileRef} type="file" accept=".docx,.pdf" style={{ display: 'none' }}
+                          onChange={e => setImportBidFile(e.target.files?.[0] ?? null)}/>
+                        <button className="btn ghost" disabled={importBusy} onClick={() => importFileRef.current?.click()} style={{ fontSize: 13 }}>
+                          {importBidFile ? importBidFile.name : 'Choose Bid Document'} <Icon name="cloudup" size={14} stroke={2.2}/>
+                        </button>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Takeoff Spreadsheet (.xlsx) — optional, for sq ft</div>
+                        <input ref={importTakeoffRef} type="file" accept=".xlsx" style={{ display: 'none' }}
+                          onChange={e => setImportTakeoffFile(e.target.files?.[0] ?? null)}/>
+                        <button className="btn ghost" disabled={importBusy} onClick={() => importTakeoffRef.current?.click()} style={{ fontSize: 13 }}>
+                          {importTakeoffFile ? importTakeoffFile.name : 'Choose Takeoff'} <Icon name="cloudup" size={14} stroke={2.2}/>
+                        </button>
+                      </div>
+                      <button className="btn" disabled={importBusy || !importBidFile} onClick={readImportFiles} style={{ fontSize: 13 }}>
+                        {importBusy ? 'Reading…' : 'Read Files'}
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -814,7 +837,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       <button className="btn" disabled={savingImport} onClick={saveImportedBid} style={{ fontSize: 13 }}>
                         {savingImport ? 'Saving…' : 'Save to Bid Card'}
                       </button>
-                      <button className="btn ghost" disabled={savingImport} onClick={() => setImportPreview(null)} style={{ fontSize: 13 }}>
+                      <button className="btn ghost" disabled={savingImport} onClick={() => { setImportPreview(null); setImportBidFile(null); setImportTakeoffFile(null); }} style={{ fontSize: 13 }}>
                         Cancel
                       </button>
                     </div>

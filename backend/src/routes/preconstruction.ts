@@ -14,7 +14,7 @@ import { logger } from '../utils/logger';
 import { drawingUpload, documentUpload } from '../utils/upload';
 import { uploadFile, getFileMedia } from '../services/googleDrive';
 import { buildAgent1Content, type PrepFile, type Agent1Block } from '../ai/documentPrep';
-import { extractDocxText, extractPdfText, parseBidDocText } from '../utils/bidDocParse';
+import { extractDocxText, extractPdfText, parseBidDocText, extractXlsxText, parseTakeoffText } from '../utils/bidDocParse';
 
 // Cap on tiles rasterized per PDF page (cost control — see Stage 0 doc prep).
 const MAX_TILES_PER_PAGE = 9;
@@ -513,14 +513,16 @@ router.get('/prompt-defaults', requireAuth, (_req, res) => {
 });
 
 // POST import-bid — non-AI extraction of amount + scope of work from a finished bid
-// document (.docx/.pdf), for logging a bid you already built outside the agent pipeline.
-// Label/regex parsing only — reliable for APT's own proposal template. Returns a preview;
-// nothing is saved until the caller PATCHes the bid with the confirmed values.
-router.post('/:bidId/import-bid', requireAuth, documentUpload.single('file'), asyncHandler(async (req: AuthRequest, res) => {
+// document (.docx/.pdf), plus square footage from its takeoff spreadsheet (.xlsx) if
+// uploaded alongside it — for logging a bid you already built outside the agent
+// pipeline. Label/regex parsing only, reliable for APT's own templates. Returns a
+// preview; nothing is saved until the caller PATCHes the bid with the confirmed values.
+router.post('/:bidId/import-bid', requireAuth, documentUpload.fields([{ name: 'file', maxCount: 1 }, { name: 'takeoff', maxCount: 1 }]), asyncHandler(async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
 
-  const file = req.file;
+  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+  const file = files?.file?.[0];
   if (!file) return res.status(400).json({ error: 'file required' });
 
   const ext = (file.originalname.split('.').pop() || '').toLowerCase();
@@ -532,8 +534,18 @@ router.post('/:bidId/import-bid', requireAuth, documentUpload.single('file'), as
   } else {
     return res.status(400).json({ error: 'Only .docx and .pdf are supported for bid import' });
   }
+  const parsed = parseBidDocText(text);
 
-  res.json(parseBidDocText(text));
+  let sqFt: number | null = null;
+  const takeoffFile = files?.takeoff?.[0];
+  if (takeoffFile) {
+    const takeoffExt = (takeoffFile.originalname.split('.').pop() || '').toLowerCase();
+    if (takeoffExt === 'xlsx') {
+      sqFt = parseTakeoffText(extractXlsxText(takeoffFile.buffer)).sqFt;
+    }
+  }
+
+  res.json({ ...parsed, sqFt });
 }));
 
 // GET all workspaces (for restoring state on app load). Restricted reps only get
