@@ -277,6 +277,9 @@ export interface GenForm {
   brand: 'Kohler' | 'Generac';
   coolingType: 'air-cooled' | 'liquid-cooled';
   size: string;
+  /** Manual override for the generator unit's price. Null/undefined falls back to the
+   *  brand/coolingType/size lookup in DEFAULT_PRICES.generators (see getGenPrice). */
+  genPriceOverride: number | null;
   atsSize: '100A' | '150A' | '200A' | '400A';
   /** Total ATS units on this job. Air-cooled includes 1 free; liquid-cooled includes none —
    *  only the amount above that included count is billed (see atsIncludedQty in genCalc). */

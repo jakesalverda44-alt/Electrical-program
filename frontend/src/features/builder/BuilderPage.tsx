@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { GenForm, GEN_SIZE_LABELS } from './genData';
-import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo, loadCenterFor, migrateGenForm } from './genCalc';
+import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo, loadCenterFor, migrateGenForm, getGenPrice } from './genCalc';
 import ProposalPreview from './ProposalPreview';
 import SendProposalModal from './SendProposalModal';
 import api from '../../api/client';
@@ -262,6 +262,12 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
               <select style={SELECT_STYLE} value={form.size} onChange={e => set('size', e.target.value)}>
                 {sizes.map(s => <option key={s} value={s}>{GEN_SIZE_LABELS[s] ?? s}</option>)}
               </select>
+            </Field>
+            <Field label="Generator Cost">
+              <input type="number" min={0} style={INPUT_STYLE}
+                value={form.genPriceOverride ?? ''}
+                placeholder={String(getGenPrice({ ...form, genPriceOverride: null }))}
+                onChange={e => set('genPriceOverride', e.target.value === '' ? null : Number(e.target.value))}/>
             </Field>
             <Field label={lc ? 'Transfer Switch' : 'ATS Size'}>
               {lc ? (

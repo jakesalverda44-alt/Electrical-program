@@ -12,7 +12,7 @@ interface DefaultOverrides {
 export function blankGenForm(overrides?: DefaultOverrides): GenForm {
   return {
     customer: '', attn: '', address: '', city: '', state: 'FL', zip: '', phone: '', email: '',
-    brand: 'Kohler', coolingType: 'air-cooled', size: '14KW',
+    brand: 'Kohler', coolingType: 'air-cooled', size: '14KW', genPriceOverride: null,
     atsSize: '200A', atsQty: 1, fuel: 'Natural Gas',
     pad: true, smmQty: 1, surgeProQty: 0, battery: true, emPanel: false, gasLine: false, extraWire: 0,
     liftType: 'none', removal: false,
@@ -64,6 +64,7 @@ export function migrateGenForm(raw: Record<string, unknown>): Record<string, unk
   if (out.genSide === undefined) out.genSide = '';
   if (out.panelRel === undefined) out.panelRel = '';
   if (out.panelFt === undefined) out.panelFt = 0;
+  if (out.genPriceOverride === undefined) out.genPriceOverride = null;
   return out;
 }
 
@@ -90,7 +91,10 @@ export function atsIncludedQty(form: Pick<GenForm, 'brand' | 'coolingType' | 'si
   return form.coolingType === 'air-cooled' ? 1 : 0;
 }
 
-export function getGenPrice(form: Pick<GenForm, 'brand' | 'coolingType' | 'size'>): number {
+export function getGenPrice(form: Pick<GenForm, 'brand' | 'coolingType' | 'size' | 'genPriceOverride'>): number {
+  if (form.genPriceOverride !== null && form.genPriceOverride !== undefined && !isNaN(form.genPriceOverride)) {
+    return form.genPriceOverride;
+  }
   return DEFAULT_PRICES.generators[form.coolingType]?.[form.brand]?.[form.size] ?? 0;
 }
 
