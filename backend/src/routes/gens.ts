@@ -88,25 +88,72 @@ router.get('/', requireAuth, async (req: AuthRequest, res) => {
 });
 
 router.post('/', requireAuth, async (req: AuthRequest, res) => {
-  const { customer, loc, mfr, model, kw, amount, tax, addons, proposal_no, form_data, totals_data } = req.body;
+  const { customer, loc, mfr, model, kw, amount, tax, addons, proposal_no, form_data, totals_data,
+          stage, date_won, commission_paid } = req.body;
   if (!customer?.trim()) return res.status(400).json({ error: 'Customer required' });
+
+  // Historical jobs finished before the CRM existed are logged directly at their final
+  // stage rather than dragged through the pipeline, so none of the stage-change side
+  // effects (Drive folders, "moved to…" activity, award notifications) fire for work
+  // that is already long done. 'signed' stays excluded — it means a real signature.
+  const HISTORICAL_STAGES = ['building', 'sent', 'awarded', 'declined'];
+  const initialStage = stage && HISTORICAL_STAGES.includes(stage) ? stage : 'building';
+
   const user = req.user!;
   const customerId = await upsertCustomer(customer, 'customer');
-  const { rows } = await pool.query(
-    `INSERT INTO generator_proposals (
-       customer, loc, mfr, model, kw, amount, tax, addons,
-       proposal_no, form_data, totals_data,
-       salesperson_id, salesperson_name, customer_id
-     )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14) RETURNING *`,
-    [customer.trim(), (loc || '').trim() || '—', mfr, model, Number(kw) || 0,
-     Number(amount) || 0, Number(tax) || 0, Number(addons) || 0,
-     proposal_no || null,
-     form_data !== undefined ? JSON.stringify(form_data) : null,
-     totals_data !== undefined ? JSON.stringify(totals_data) : null,
-     user.id, user.name, customerId]
-  );
-  res.json(rows[0]);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `INSERT INTO generator_proposals (
+         customer, loc, mfr, model, kw, amount, tax, addons,
+         proposal_no, form_data, totals_data,
+         salesperson_id, salesperson_name, customer_id, stage
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14,$15) RETURNING *`,
+      [customer.trim(), (loc || '').trim() || '—', mfr, model, Number(kw) || 0,
+       Number(amount) || 0, Number(tax) || 0, Number(addons) || 0,
+       proposal_no || null,
+       form_data !== undefined ? JSON.stringify(form_data) : null,
+       totals_data !== undefined ? JSON.stringify(totals_data) : null,
+       user.id, user.name, customerId, initialStage]
+    );
+    const gen = rows[0];
+
+    // An awarded job still needs its won_jobs row or it won't appear in revenue
+    // reporting — dated when the job was actually won, not today.
+    let wonJob = null;
+    if (initialStage === 'awarded') {
+      const rate = await commissionRate();
+      const { rows: wj } = await client.query(
+        `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value,
+                               salesperson_id, commission_rate, commission_amount,
+                               commission_status, commission_earned_at, date_won)
+         VALUES ($1,$2,$3,'Generator',$4,$5,$6,$7,$8,
+                 COALESCE($9::timestamptz, now()), COALESCE($9::date, CURRENT_DATE))
+         ON CONFLICT (proposal_id) DO NOTHING
+         RETURNING *`,
+        [gen.salesperson_name || 'Unknown', gen.customer, gen.id, gen.amount,
+         gen.salesperson_id || null, rate, commissionAmount(gen.amount, rate),
+         commission_paid ? 'paid' : 'earned', date_won || null]
+      );
+      wonJob = wj[0] || null;
+      await ensureProject(client, {
+        id: gen.id, sourceType: 'gen', customerId: gen.customer_id,
+        name: gen.customer, contractValue: gen.amount,
+      });
+    }
+
+    await client.query('COMMIT');
+    res.json(wonJob ? { ...gen, wonJob } : gen);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
 });
 
 // Duplicate an existing proposal into a fresh "building" draft for the same

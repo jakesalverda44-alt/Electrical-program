@@ -4,6 +4,7 @@ import { Gen, WonJob } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
 import { useGenPipeline } from './useGenPipeline';
 import GenDetailDrawer from './GenDetailDrawer';
+import LogGenJobModal from './LogGenJobModal';
 import api from '../../api/client';
 import { moneyShort as money } from '../../lib/money';
 import PipelineBoard from '../../components/PipelineBoard';
@@ -30,6 +31,7 @@ interface Props {
 export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuilder, flashId, onEditGen, openId, onClearParam, onNav }: Props) {
   const showToast = useShowToast();
   const [detail, setDetail] = useState<Gen | null>(null);
+  const [logOpen, setLogOpen] = useState(false);
 
   // Open the deep-linked proposal's drawer once, then strip the id from the URL.
   const openedParam = useRef<string | null>(null);
@@ -123,6 +125,9 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
         <span className="pipe-summary">
           Active value <b>{money(activeValue)}</b> · {activeCount} open
         </span>
+        <button className="btn ghost" style={{ fontSize: 13, marginRight: 8 }} onClick={() => setLogOpen(true)}>
+          <Icon name="doc" size={15} stroke={2.2}/>Log Existing Job
+        </button>
         <button className="btn amber" style={{ fontSize: 13 }} onClick={onOpenBuilder}>
           <Icon name="plus" size={15} stroke={2.4}/>New Proposal
         </button>
@@ -234,6 +239,18 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
           onDelete={handleDelete}
           onClosed={handleClosed}
           onUpdated={(g, wj) => { setGens(prev => prev.map(x => x.id === g.id ? g : x)); setDetail(g); if (wj) setWonJobs(prev => prev.map(w => w.proposal_id === g.id ? wj : w)); }}
+        />
+      )}
+
+      {logOpen && (
+        <LogGenJobModal
+          onClose={() => setLogOpen(false)}
+          onAdded={(gen, wonJob) => {
+            setGens(prev => [gen, ...prev]);
+            if (wonJob) setWonJobs(prev => [wonJob, ...prev]);
+            setLogOpen(false);
+            showToast({ title: 'Job logged', sub: `${gen.customer} added to the ${gen.stage} column.` });
+          }}
         />
       )}
     </div>
