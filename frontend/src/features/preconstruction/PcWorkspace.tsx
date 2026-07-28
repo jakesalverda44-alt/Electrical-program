@@ -989,7 +989,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                         <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 5, textTransform: 'uppercase', flexShrink: 0,
                           background: elec ? 'var(--green-soft)' : 'var(--surface2)',
                           color: elec ? 'var(--green)' : 'var(--text3)' }}>
-                          {elec ? 'Electrical' : d.category}
+                          {elec ? 'Electrical' : (d.category ?? '').replace(/_/g, ' ')}
                         </span>
                       </label>
                     );

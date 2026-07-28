@@ -17,6 +17,7 @@ import { buildAgent1Content, type PrepFile, type Agent1Block } from '../ai/docum
 import { extractDocxText, extractPdfText, parseBidDocText } from '../utils/bidDocParse';
 import { parseTakeoffWorkbook } from '../utils/takeoffParse';
 import { parseAccubidBreakdown } from '../utils/accubidParse';
+import { storeDocument } from '../utils/storeDocument';
 
 // Cap on tiles rasterized per PDF page (cost control — see Stage 0 doc prep).
 const MAX_TILES_PER_PAGE = 9;
@@ -520,36 +521,44 @@ router.get('/prompt-defaults', requireAuth, (_req, res) => {
 // split plus labor hours from an Accubid "Breakdown" export (.pdf). Label/structure
 // parsing only, reliable for APT's own templates.
 //
-// The takeoff and cost breakdown are persisted here (they're bulky and feed the
-// comparison view); the headline fields come back as a preview and aren't written to
-// the bid until the caller PATCHes it with the confirmed values.
+// Every uploaded file is filed in the Documents hub so it shows up on the bid's Files
+// tab afterwards. The takeoff and cost breakdown are also parsed and persisted (they
+// feed the comparison view); the headline fields come back as a preview and aren't
+// written to the bid until the caller PATCHes it with the confirmed values.
 router.post('/:bidId/import-bid', requireAuth, documentUpload.fields([
   { name: 'file', maxCount: 1 },
   { name: 'takeoff', maxCount: 1 },
   { name: 'breakdown', maxCount: 1 },
 ]), asyncHandler(async (req: AuthRequest, res) => {
   const { bidId } = req.params;
-  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const bid = await loadAccessibleBid(res, req.user!, bidId);
+  if (!bid) return;
 
   const files = req.files as Record<string, Express.Multer.File[]> | undefined;
   const file = files?.file?.[0];
   if (!file) return res.status(400).json({ error: 'file required' });
 
+  // Keep the uploaded file even if parsing later fails — a document that couldn't be
+  // read is still the customer's bid, and losing it is worse than a failed import.
+  const keep = (f: Express.Multer.File, category: string) =>
+    storeDocument({
+      file: f, linkedId: bidId, linkedName: bid.name, div: 'elec', category,
+      uploadedBy: req.user!.name, replaceExisting: true,
+    }).catch(err => { logger.error({ err, bidId, category }, '[import-bid] document store failed'); return null; });
+
   const ext = (file.originalname.split('.').pop() || '').toLowerCase();
-  let text = '';
-  if (ext === 'docx') {
-    text = extractDocxText(file.buffer);
-  } else if (ext === 'pdf') {
-    text = await extractPdfText(file.buffer);
-  } else {
+  if (ext !== 'docx' && ext !== 'pdf') {
     return res.status(400).json({ error: 'Only .docx and .pdf are supported for bid import' });
   }
+  await keep(file, 'proposal');
+  const text = ext === 'docx' ? extractDocxText(file.buffer) : await extractPdfText(file.buffer);
   const parsed = parseBidDocText(text);
 
   let sqFt: number | null = null;
   let takeoffSummary: { categories: unknown[]; itemCount: number } | null = null;
   const takeoffFile = files?.takeoff?.[0];
   if (takeoffFile && (takeoffFile.originalname.split('.').pop() || '').toLowerCase() === 'xlsx') {
+    await keep(takeoffFile, 'takeoff');
     const takeoff = parseTakeoffWorkbook(takeoffFile.buffer);
     sqFt = takeoff.sqFt;
     if (takeoff.lineItems.length) {
@@ -568,6 +577,7 @@ router.post('/:bidId/import-bid', requireAuth, documentUpload.fields([
   let breakdownSummary: ReturnType<typeof parseAccubidBreakdown> | null = null;
   const breakdownFile = files?.breakdown?.[0];
   if (breakdownFile && (breakdownFile.originalname.split('.').pop() || '').toLowerCase() === 'pdf') {
+    await keep(breakdownFile, 'cost_breakdown');
     const b = parseAccubidBreakdown(await extractPdfText(breakdownFile.buffer));
     if (b.sellingPrice || b.laborTotal || b.laborHours) {
       await pool.query(
