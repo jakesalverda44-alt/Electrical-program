@@ -17,6 +17,8 @@ const CATEGORIES: { value: string; label: string }[] = [
   { value: 'plans',         label: 'Plans & Specs' },
   { value: 'contract',      label: 'Signed Contract' },
   { value: 'proposal',      label: 'Proposal / Estimate' },
+  { value: 'takeoff',       label: 'Takeoff' },
+  { value: 'cost_breakdown', label: 'Cost Breakdown' },
   { value: 'change_order',  label: 'Change Order' },
   { value: 'submittal',     label: 'Submittal' },
   { value: 'rfi',           label: 'RFI' },
