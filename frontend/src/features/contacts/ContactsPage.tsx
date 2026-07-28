@@ -10,6 +10,7 @@ type FilterType = Customer['type'] | 'all';
 
 interface Props {
   onNewBid?: (gc: string) => void;
+  onNav?: (view: string, recordId?: string) => void;
 }
 
 function initials(name: string) { return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(); }
@@ -89,7 +90,7 @@ function AddCustomerForm({ onCreated, onCancel }: { onCreated: (c: Customer) => 
   );
 }
 
-export default function ContactsPage({ onNewBid }: Props) {
+export default function ContactsPage({ onNewBid, onNav }: Props) {
   const showToast = useShowToast();
   const userRole = useUser().role;
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -125,7 +126,7 @@ export default function ContactsPage({ onNewBid }: Props) {
 
   // Selecting a customer opens the full-screen hub; coming back refreshes the list.
   if (selectedId) {
-    return <CustomerHub id={selectedId} onBack={() => { setSelectedId(null); load(); }} showToast={showToast} onNewBid={onNewBid} userRole={userRole}/>;
+    return <CustomerHub id={selectedId} onBack={() => { setSelectedId(null); load(); }} showToast={showToast} onNewBid={onNewBid} userRole={userRole} onNav={onNav}/>;
   }
 
   return (

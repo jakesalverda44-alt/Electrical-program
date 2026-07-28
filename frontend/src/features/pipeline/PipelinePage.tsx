@@ -9,7 +9,7 @@ interface Props {
   gens: Gen[];
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
-  onOpenPreconstruction: (id: string) => void;
+  onOpenBid: (id: string, tab?: string) => void;
   onOpenBuilder: () => void;
   onEditGen: (gen: Gen) => void;
   flashId: string | null;
@@ -25,7 +25,7 @@ interface Props {
 
 export default function PipelinePage({
   bids, setBids, gens, setGens, setWonJobs,
-  onOpenPreconstruction, onOpenBuilder, onEditGen,
+  onOpenBid, onOpenBuilder, onEditGen,
   flashId, openAddBid, onAddBidHandled, initialGc,
   defaultTab = 'generator', openId, onClearParam, onNav,
 }: Props) {
@@ -77,7 +77,7 @@ export default function PipelinePage({
           <ElecPipelinePage
             bids={bids} setBids={setBids}
             setWonJobs={setWonJobs}
-            onOpenPreconstruction={onOpenPreconstruction}
+            onOpenBid={onOpenBid}
             flashId={flashId}
             openAddBid={openAddBid}
             onAddBidHandled={onAddBidHandled}

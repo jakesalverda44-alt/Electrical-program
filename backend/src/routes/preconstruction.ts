@@ -603,17 +603,79 @@ router.post('/:bidId/import-bid', requireAuth, documentUpload.fields([
   res.json({ ...parsed, sqFt, takeoff: takeoffSummary, breakdown: breakdownSummary });
 }));
 
+// GET comparables-preview — same matching rules as /:bidId/comparables, but for a bid
+// that doesn't exist yet (e.g. the "add bid" form previewing likely comps as the
+// estimator types in brand/project type/sq ft). No subject bid to authorize against,
+// so rows are scoped directly to the caller's own bids (owner/admin see all).
+// Registered ahead of the /:bidId/... routes so it isn't shadowed by them.
+router.get('/comparables-preview', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const brandRaw = req.query.brand;
+  const projectTypeRaw = req.query.project_type;
+  const brand = typeof brandRaw === 'string' && brandRaw.trim() ? brandRaw.trim() : null;
+  const projectType = typeof projectTypeRaw === 'string' && projectTypeRaw.trim() ? projectTypeRaw.trim() : null;
+  const sqFtNum = Number(req.query.sq_ft);
+  const sqFt = Number.isFinite(sqFtNum) && sqFtNum > 0 ? sqFtNum : null;
+
+  if (!brand && !projectType) {
+    return res.json({ count: 0, won: 0, lost: 0, avgPerSf: null, top: [] });
+  }
+
+  const scope = ownScopeId(req.user!);
+  const { rows } = await pool.query(`
+    SELECT b.id, b.name, b.gc, b.stage, b.brand, b.project_type, b.sq_ft, b.amount,
+           b.updated_at,
+           (bt.bid_id IS NOT NULL) AS has_takeoff,
+           (bc.bid_id IS NOT NULL) AS has_breakdown,
+           bc.labor_hours
+      FROM bids b
+      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id
+      LEFT JOIN bid_cost_breakdown bc ON bc.bid_id = b.id
+     WHERE b.deleted_at IS NULL
+       AND b.amount IS NOT NULL AND b.amount > 0
+       AND ($1::text IS NOT NULL AND b.brand = $1
+            OR $2::text IS NOT NULL AND b.project_type = $2)
+       AND ($4::uuid IS NULL OR b.salesperson_id = $4::uuid)
+     ORDER BY ((($1::text IS NOT NULL) AND b.brand = $1)) DESC,
+              CASE WHEN $3::numeric IS NULL OR b.sq_ft IS NULL THEN 1 ELSE 0 END,
+              ABS(COALESCE(b.sq_ft, 0) - COALESCE($3::numeric, 0)),
+              b.updated_at DESC
+     LIMIT 25
+  `, [brand, projectType, sqFt, scope]);
+
+  const won = rows.filter(r => r.stage === 'awarded').length;
+  const lost = rows.filter(r => r.stage === 'lost').length;
+  const perSf = rows
+    .map(r => (r.amount != null && r.sq_ft ? Number(r.amount) / Number(r.sq_ft) : null))
+    .filter((v): v is number => v !== null && Number.isFinite(v));
+  const avgPerSf = perSf.length ? perSf.reduce((a, b) => a + b, 0) / perSf.length : null;
+
+  res.json({
+    count: rows.length,
+    won,
+    lost,
+    avgPerSf,
+    top: rows.slice(0, 3).map(r => ({
+      id: r.id, name: r.name, brand: r.brand, project_type: r.project_type,
+      sq_ft: r.sq_ft, amount: r.amount, stage: r.stage,
+    })),
+  });
+}));
+
 // GET comparables — past bids worth pricing this one against. Same brand ranks above
 // same project type (chain stores are built to near-identical prototypes), then nearest
 // square footage. Any bid with an amount qualifies, won or lost: a lost bid is still
-// signal about where the number landed.
+// signal about where the number landed. Comp rows are scoped to bids the caller can
+// see (restricted reps: their own only) — matches the ownership check already applied
+// to the subject bid via loadAccessibleBid, so a rep can't read another rep's amounts
+// and cost data through the comps list.
 router.get('/:bidId/comparables', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const bid = await loadAccessibleBid(res, req.user!, req.params.bidId);
   if (!bid) return;
 
+  const scope = ownScopeId(req.user!);
   const { rows } = await pool.query(`
     SELECT b.id, b.name, b.gc, b.stage, b.brand, b.project_type, b.sq_ft, b.amount,
-           b.updated_at,
+           b.updated_at, b.awarded_at,
            (bt.bid_id IS NOT NULL) AS has_takeoff,
            (bc.bid_id IS NOT NULL) AS has_breakdown,
            bc.labor_hours
@@ -625,12 +687,13 @@ router.get('/:bidId/comparables', requireAuth, asyncHandler(async (req: AuthRequ
        AND b.amount IS NOT NULL AND b.amount > 0
        AND ($2::text IS NOT NULL AND b.brand = $2
             OR $3::text IS NOT NULL AND b.project_type = $3)
-     ORDER BY (b.brand IS NOT DISTINCT FROM $2::text) DESC,
+       AND ($5::uuid IS NULL OR b.salesperson_id = $5::uuid)
+     ORDER BY ((($2::text IS NOT NULL) AND b.brand = $2)) DESC,
               CASE WHEN $4::numeric IS NULL OR b.sq_ft IS NULL THEN 1 ELSE 0 END,
               ABS(COALESCE(b.sq_ft, 0) - COALESCE($4::numeric, 0)),
               b.updated_at DESC
      LIMIT 25
-  `, [bid.id, bid.brand, bid.project_type, bid.sq_ft]);
+  `, [bid.id, bid.brand, bid.project_type, bid.sq_ft, scope]);
 
   res.json({
     bid: { id: bid.id, name: bid.name, brand: bid.brand, project_type: bid.project_type,
@@ -650,6 +713,11 @@ router.get('/:bidId/compare', requireAuth, asyncHandler(async (req: AuthRequest,
   if (!against.length) return res.status(400).json({ error: 'against required' });
 
   const ids = [bid.id, ...against];
+  // Scope comp rows the same way as /comparables: a restricted rep only pulls bids
+  // they own into the comparison, even if they pass another rep's bid id in `against`.
+  // The subject bid itself always matches — loadAccessibleBid already verified it's
+  // either the caller's own or the caller is unrestricted.
+  const scope = ownScopeId(req.user!);
   const { rows } = await pool.query(`
     SELECT b.id, b.name, b.gc, b.stage, b.brand, b.project_type, b.sq_ft, b.amount,
            bt.categories, bt.item_count,
@@ -660,7 +728,8 @@ router.get('/:bidId/compare', requireAuth, asyncHandler(async (req: AuthRequest,
       LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id
       LEFT JOIN bid_cost_breakdown bc ON bc.bid_id = b.id
      WHERE b.id = ANY($1::uuid[]) AND b.deleted_at IS NULL
-  `, [ids]);
+       AND ($2::uuid IS NULL OR b.salesperson_id = $2::uuid)
+  `, [ids, scope]);
 
   // Preserve caller order, subject bid first.
   const byId = new Map(rows.map(r => [r.id, r]));

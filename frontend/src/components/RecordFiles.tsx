@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from './Icon';
 import api from '../api/client';
+import FilePreviewModal from './FilePreviewModal';
+import { previewKind } from './filePreview';
 
 interface Doc {
   id: string;
@@ -8,6 +10,7 @@ interface Doc {
   name: string;
   category: string;
   file_size: number;
+  file_type?: string | null;
   uploaded_by: string;
   created_at: string;
   storage_url?: string;
@@ -17,6 +20,8 @@ const CATEGORIES: { value: string; label: string }[] = [
   { value: 'plans',         label: 'Plans & Specs' },
   { value: 'contract',      label: 'Signed Contract' },
   { value: 'proposal',      label: 'Proposal / Estimate' },
+  { value: 'takeoff',       label: 'Takeoff' },
+  { value: 'cost_breakdown', label: 'Cost Breakdown' },
   { value: 'change_order',  label: 'Change Order' },
   { value: 'submittal',     label: 'Submittal' },
   { value: 'rfi',           label: 'RFI' },
@@ -47,6 +52,7 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
   const [category, setCategory] = useState(div === 'elec' ? 'plans' : div === 'lead' ? 'photo' : 'other');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
+  const [preview, setPreview] = useState<{ title: string; kind: 'sheet' | 'doc'; buf: ArrayBuffer; doc: Doc } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const cameraInput = useRef<HTMLInputElement>(null);
 
@@ -93,47 +99,54 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
     }
   };
 
-  // Open inline in a new tab. Opens the tab synchronously (user gesture) to dodge
-  // popup blockers, then points it at the blob once fetched.
-  const view = async (doc: Doc) => {
-    const w = window.open('', '_blank');
+  // Always goes through the backend (authenticated blob fetch), never anchors
+  // doc.storage_url directly: the raw Cloudinary URL is unauthenticated and skips
+  // access checks.
+  const download = async (doc: Doc) => {
     try {
-      const res = await api.get(`/documents/${doc.id}/view`, { responseType: 'blob' });
+      const res = await api.get(`/documents/${doc.id}/download`, { responseType: 'blob' });
       const url = URL.createObjectURL(res.data);
-      if (w) w.location.href = url; else window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      const a = document.createElement('a');
+      a.href = url; a.download = doc.display_name || doc.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
     } catch {
-      if (w) w.close();
-      setError('Preview failed — try downloading instead.');
+      setError('Download failed — please re-upload this file.');
     }
   };
 
-  const download = (doc: Doc) => {
-    if (doc.storage_url) {
-      // Use a real anchor click so popup blockers can't interfere
-      const a = document.createElement('a');
-      a.href = doc.storage_url;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+  // pdf/image: open inline in a new tab (opened synchronously, on the user gesture,
+  // to dodge popup blockers, then pointed at the blob once fetched).
+  // xlsx/xls/csv/docx: fetch the bytes and render them in-app via FilePreviewModal.
+  // Anything else: no in-app preview, fall straight through to download.
+  const view = async (doc: Doc) => {
+    const kind = previewKind(doc.name, doc.file_type);
+
+    if (kind === 'inline') {
+      const w = window.open('', '_blank');
+      try {
+        const res = await api.get(`/documents/${doc.id}/view`, { responseType: 'blob' });
+        const url = URL.createObjectURL(res.data);
+        if (w) w.location.href = url; else window.open(url, '_blank');
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } catch {
+        if (w) w.close();
+        setError('Preview failed — try downloading instead.');
+      }
       return;
     }
-    const token = localStorage.getItem('crm_token');
-    fetch(`/api/documents/${doc.id}/download`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.blob();
-      })
-      .then(blob => {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = doc.display_name;
-        document.body.appendChild(a); a.click(); a.remove();
-        URL.revokeObjectURL(url);
-      })
-      .catch(() => setError('Download failed — please re-upload this file.'));
+
+    if (kind === 'none') {
+      return download(doc);
+    }
+
+    try {
+      const res = await api.get(`/documents/${doc.id}/view`, { responseType: 'arraybuffer' });
+      setPreview({ title: doc.display_name || doc.name, kind, buf: res.data, doc });
+    } catch {
+      setError('Preview failed — downloading instead.');
+      download(doc);
+    }
   };
 
   const remove = async (doc: Doc) => {
@@ -142,6 +155,7 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
   };
 
   return (
+    <>
     <div className="dtl-section" style={{ marginTop: 18 }}>
       <div className="dtl-stage-label" style={{ marginBottom: 10 }}>{title || 'Files'} · {docs.length}</div>
 
@@ -201,5 +215,15 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
         </div>
       )}
     </div>
+    {preview && (
+      <FilePreviewModal
+        title={preview.title}
+        kind={preview.kind}
+        buf={preview.buf}
+        onClose={() => setPreview(null)}
+        onDownload={() => download(preview.doc)}
+      />
+    )}
+    </>
   );
 }

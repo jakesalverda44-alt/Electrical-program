@@ -3,9 +3,7 @@ import Icon from '../../components/Icon';
 import { Bid, WonJob } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from './constants';
 import { usePipeline } from './usePipeline';
-import DetailDrawer from './DetailDrawer';
 import AddBidModal from './AddBidModal';
-import api from '../../api/client';
 import { moneyShort as money } from '../../lib/money';
 import PipelineBoard from '../../components/PipelineBoard';
 import { useShowToast } from '../../contexts/AppContext';
@@ -14,19 +12,18 @@ interface Props {
   bids: Bid[];
   setBids: (fn: (prev: Bid[]) => Bid[]) => void;
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
-  onOpenPreconstruction: (id: string) => void;
+  onOpenBid: (id: string, tab?: string) => void;
   flashId: string | null;
   openAddBid?: boolean;
   onAddBidHandled?: () => void;
   initialGc?: string;
-  // Deep-link record id (from global search): opens that bid's drawer.
+  // Deep-link record id (from global search): opens that bid in the Hub.
   openId?: string | null;
   onClearParam?: () => void;
 }
 
-export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPreconstruction, flashId, openAddBid, onAddBidHandled, initialGc, openId, onClearParam }: Props) {
+export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenBid, flashId, openAddBid, onAddBidHandled, initialGc, openId, onClearParam }: Props) {
   const showToast = useShowToast();
-  const [detail, setDetail] = useState<Bid | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [addGc, setAddGc] = useState<string | undefined>(undefined);
 
@@ -34,7 +31,7 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
     if (openAddBid) { setAddGc(initialGc); setShowAdd(true); onAddBidHandled?.(); }
   }, [openAddBid]);
 
-  // Open the deep-linked bid's drawer once, then strip the id from the URL.
+  // Open the deep-linked bid in the Hub once, then strip the id from the URL.
   const openedParam = useRef<string | null>(null);
   useEffect(() => {
     if (!openId) { openedParam.current = null; return; }
@@ -42,10 +39,9 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
     const match = bids.find(b => b.id === openId);
     if (match) {
       openedParam.current = openId;
-      setDetail(match);
-      onClearParam?.();
+      onOpenBid(openId);
     }
-  }, [openId, bids, onClearParam]);
+  }, [openId, bids, onOpenBid]);
 
   const { moveToStage, advance, pendingLost, cancelLost } = usePipeline({
     bids, setBids, setWonJobs, showToast,
@@ -56,37 +52,6 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
   const activeValue = sum(bids.filter(b => b.stage === 'due' || b.stage === 'submitted'));
 
   const sortedBids = [...bids].sort((a, b) => a.due_days - b.due_days);
-
-  const handleStageFromDrawer = (stage: ElecStageKey, extra?: { loss_reason?: string; competitor?: string }) => {
-    if (!detail) return;
-    moveToStage(detail.id, stage, extra);
-    setDetail(prev => prev ? { ...prev, stage, ...(stage === 'lost' ? extra : { loss_reason: undefined, competitor: undefined }) } : prev);
-  };
-
-  const handleBidEdited = (updated: Bid, wonJob?: WonJob | null) => {
-    setBids(prev => prev.map(b => b.id === updated.id ? updated : b));
-    setDetail(updated);
-    if (wonJob) setWonJobs(prev => prev.map(w => w.proposal_id === updated.id ? wonJob : w));
-  };
-
-  const handleDelete = async (bid: Bid) => {
-    if (!window.confirm(`Delete "${bid.name}" and its linked project/files/testing data? This cannot be undone.`)) return;
-    try {
-      await api.delete(`/bids/${bid.id}`);
-      setBids(prev => prev.filter(b => b.id !== bid.id));
-      setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
-      setDetail(null);
-      showToast({ title: 'Bid deleted', sub: bid.name });
-    } catch {
-      showToast({ title: 'Delete failed', sub: 'Please try again' });
-    }
-  };
-
-  const handleClosed = (bid: Bid) => {
-    setBids(prev => prev.filter(b => b.id !== bid.id));
-    setDetail(null);
-    showToast({ title: 'Job closed', sub: `${bid.name} moved to Completed Projects` });
-  };
 
   const handleAdded = (bid: Bid) => {
     setBids(prev => [bid, ...prev]);
@@ -140,7 +105,7 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
         getAmount={b => Number(b.amount)}
         flashId={flashId}
         onMoveToStage={(id, stageKey) => moveToStage(id, stageKey as ElecStageKey)}
-        onOpenDetail={b => setDetail(b)}
+        onOpenDetail={b => onOpenBid(b.id)}
         renderEmptyAction={stageKey => stageKey === 'due'
           ? <button className="btn ghost" style={{ fontSize: 12, height: 32, padding: '0 12px' }} onClick={() => setShowAdd(true)}>
               <Icon name="plus" size={14} stroke={2.2}/>New Bid
@@ -200,15 +165,15 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
                 </div>
               )}
 
-              {/* Preconstruction shortcut */}
+              {/* Estimating shortcut */}
               {b.stage !== 'awarded' && b.stage !== 'lost' && (
                 <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
                   <button
                     className="btn ghost"
                     style={{ height: 28, fontSize: 11, padding: '0 10px', width: '100%', justifyContent: 'center', color: 'var(--blue)' }}
-                    onClick={e => { e.stopPropagation(); onOpenPreconstruction(b.id); }}
+                    onClick={e => { e.stopPropagation(); onOpenBid(b.id, 'estimating'); }}
                   >
-                    <Icon name="sparkle" size={12} stroke={2}/>Open in Estimating
+                    <Icon name="sparkle" size={12} stroke={2}/>Open Estimating
                   </button>
                 </div>
               )}
@@ -216,21 +181,6 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenPrec
           );
         }}
       />
-
-      {/* Detail drawer */}
-      {detail && (
-        <DetailDrawer
-          bid={bids.find(b => b.id === detail.id) || detail}
-          pendingLost={pendingLost === detail.id}
-          onStage={handleStageFromDrawer}
-          onCancelLost={cancelLost}
-          onClose={() => setDetail(null)}
-          onOpenPreconstruction={id => { setDetail(null); onOpenPreconstruction(id); }}
-          onBidEdited={handleBidEdited}
-          onDelete={handleDelete}
-          onClosed={handleClosed}
-        />
-      )}
 
       {/* Add bid modal */}
       {showAdd && (
