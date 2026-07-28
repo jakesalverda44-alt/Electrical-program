@@ -76,6 +76,23 @@ function cleanMarkdown(text: string): string {
     .trim();
 }
 
+// Map a lettered scope-of-work object (the shape Agent 2 emits, and the same shape the
+// bid importer parses out of a finished proposal) into the Scope of Work tab's A–G
+// sections. Section letters don't line up one-to-one, hence the explicit remapping.
+export function scopeSectionsFrom(sow: Record<string, string[]> | undefined): Record<string, string> {
+  if (!sow) return {};
+  const join = (arr?: string[]) => (arr ?? []).join('\n');
+  const out: Record<string, string> = {};
+  const put = (key: string, val: string) => { const c = cleanMarkdown(val); if (c) out[key] = c; };
+  put('A', join(sow.A_ServiceDistribution));
+  put('B', join(sow.B_BranchPower));
+  put('C', join(sow.C_LightingControls));
+  put('D', join(sow.E_LowVoltage));                         // Low Voltage → D
+  put('F', join(sow.D_SiteLightingUnderground));            // Site → F
+  put('G', join(sow.F_Coordination));                       // Coordination → G (Special Systems)
+  return out;
+}
+
 // Map Agent 2 output into the Scope of Work tab's 7 sections (A–G).
 // Handles both the new compact JSON format and the old prose format.
 function buildScopeFromAgent2(agent2?: string): Record<string, string> {
@@ -85,18 +102,7 @@ function buildScopeFromAgent2(agent2?: string): Record<string, string> {
   try {
     const j = JSON.parse(agent2) as Record<string, unknown>;
     const sow = j.scopeOfWork as Record<string, string[]> | undefined;
-    if (sow) {
-      const join = (arr?: string[]) => (arr ?? []).join('\n');
-      const out: Record<string, string> = {};
-      const put = (key: string, val: string) => { const c = cleanMarkdown(val); if (c) out[key] = c; };
-      put('A', join(sow.A_ServiceDistribution));
-      put('B', join(sow.B_BranchPower));
-      put('C', join(sow.C_LightingControls));
-      put('D', join(sow.E_LowVoltage));                         // Low Voltage → D
-      put('F', join(sow.D_SiteLightingUnderground));            // Site → F
-      put('G', join(sow.F_Coordination));                       // Coordination → G (Special Systems)
-      return out;
-    }
+    if (sow) return scopeSectionsFrom(sow);
   } catch { /* fall through to prose parser */ }
 
   // Fall back to prose parser for old format
@@ -261,11 +267,22 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [importBidFile, setImportBidFile] = useState<File | null>(null);
   const [importTakeoffFile, setImportTakeoffFile] = useState<File | null>(null);
   const [importBreakdownFile, setImportBreakdownFile] = useState<File | null>(null);
-  const [importPreview, setImportPreview] = useState<{ amount: string; projectType: string; brand: string; sqFt: string; scopeText: string } | null>(null);
+  const [importPreview, setImportPreview] = useState<{
+    amount: string; projectType: string; brand: string; sqFt: string; scopeText: string;
+    scopeOfWork?: Record<string, string[]>;
+    takeoff?: { categories: { name: string; itemCount: number; totals: Record<string, number> }[]; itemCount: number } | null;
+  } | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
   const importTakeoffRef = useRef<HTMLInputElement>(null);
   const importBreakdownRef = useRef<HTMLInputElement>(null);
   const [savingImport, setSavingImport] = useState(false);
+  const [takeoffOnFile, setTakeoffOnFile] = useState<{
+    categories: { name: string; itemCount: number; totals: Record<string, number> }[];
+    line_items: { category: string; description: string; unit: string; qty: number }[];
+    item_count: number;
+    source_file: string | null;
+  } | null>(null);
+  const [openTakeoffCat, setOpenTakeoffCat] = useState<string | null>(null);
   const pollRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
   const agent4PollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -401,6 +418,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
   useEffect(() => {
     api.get('/preconstruction/costs').then(r => setHistoricalCosts(r.data || [])).catch(() => {});
+    api.get(`/preconstruction/${bid.id}/takeoff`).then(r => setTakeoffOnFile(r.data)).catch(() => {});
     api.get(`/preconstruction/intelligence/${bid.id}`).then(r => setBidIntel(r.data)).catch(() => {});
     api.get('/estimates/unit-costs').then(r => setUnitCostLib(r.data || { global: {}, by_project_type: {} })).catch(() => {});
     api.get(`/estimates/${bid.id}`).then(r => { if (r.data) setSavedEstimate(r.data); }).catch(() => {});
@@ -707,10 +725,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         brand: bid.brand ?? '',
         sqFt: data.sqFt != null ? String(data.sqFt) : (bid.sq_ft ? String(bid.sq_ft) : ''),
         scopeText: data.scopeText || '',
+        scopeOfWork: data.scopeOfWork,
+        takeoff: data.takeoff ?? null,
       });
       if (!data.amount) showToast({ title: 'No amount found', sub: 'Couldn\'t find a total in that file — enter it manually below.' });
       if (importTakeoffFile && !data.sqFt) showToast({ title: 'No sq ft found', sub: 'Couldn\'t find building area in the takeoff — enter it manually below.' });
-      if (data.takeoff) showToast({ title: 'Takeoff saved', sub: `${data.takeoff.itemCount} items across ${data.takeoff.categories.length} categories.` });
+      if (data.takeoff) {
+        showToast({ title: 'Takeoff saved', sub: `${data.takeoff.itemCount} items across ${data.takeoff.categories.length} categories.` });
+        api.get(`/preconstruction/${bid.id}/takeoff`).then(r => setTakeoffOnFile(r.data)).catch(() => {});
+      }
       if (data.breakdown?.laborHours) showToast({ title: 'Cost breakdown saved', sub: `${Number(data.breakdown.laborHours).toLocaleString()} labor hours on file.` });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to read those files';
@@ -729,10 +752,23 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         project_type: importPreview.projectType || null,
         brand: importPreview.brand || null,
         sq_ft: importPreview.sqFt === '' ? null : Number(importPreview.sqFt),
-        notes: importPreview.scopeText,
       });
       if (data.bid) onBidUpdated(data.bid);
-      showToast({ title: 'Bid saved', sub: 'Logged for this project — now available in Compare Bids.' });
+
+      // Put the extracted scope on the Scope of Work tab rather than leaving it as
+      // loose text. Existing sections win — a hand-written scope is never overwritten.
+      const sections = scopeSectionsFrom(importPreview.scopeOfWork);
+      const filled = Object.entries(sections).filter(([k]) => !ws.scope?.[k]?.trim());
+      if (filled.length) {
+        set({ scope: { ...ws.scope, ...Object.fromEntries(filled) } });
+      }
+
+      showToast({
+        title: 'Bid saved',
+        sub: filled.length
+          ? `Scope filled ${filled.length} section${filled.length === 1 ? '' : 's'} — see Scope of Work.`
+          : 'Logged for this project — now available in Compare Bids.',
+      });
       setImportPreview(null);
       setImportBidFile(null);
       setImportTakeoffFile(null);
@@ -868,6 +904,46 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 )}
               </div>
             </div>
+            {takeoffOnFile && takeoffOnFile.item_count > 0 && (
+              <div className="panel" style={{ marginTop: 12 }}>
+                <div className="panel-hdr">
+                  <span className="panel-title">Quantity Takeoff on File</span>
+                  <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>
+                    {takeoffOnFile.item_count} items
+                    {takeoffOnFile.source_file ? ` · ${takeoffOnFile.source_file}` : ''}
+                  </span>
+                </div>
+                <div style={{ padding: '4px 0' }}>
+                  {takeoffOnFile.categories.map(c => {
+                    const open = openTakeoffCat === c.name;
+                    const items = takeoffOnFile.line_items.filter(l => l.category === c.name);
+                    return (
+                      <div key={c.name}>
+                        <div onClick={() => setOpenTakeoffCat(open ? null : c.name)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', cursor: 'pointer', borderBottom: '1px solid var(--border2)' }}>
+                          <Icon name="chevron-down" size={12} stroke={2.4}
+                            style={{ transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform .12s' }}/>
+                          <span style={{ fontSize: 12.5, fontWeight: 700, flex: 1 }}>{c.name}</span>
+                          <span style={{ fontSize: 11.5, color: 'var(--text3)', fontWeight: 600 }}>
+                            {Object.entries(c.totals).sort((a, b) => b[1] - a[1]).map(([u, q]) => `${q.toLocaleString()} ${u}`).join(' · ')}
+                            {' · '}{c.itemCount} items
+                          </span>
+                        </div>
+                        {open && (
+                          <div style={{ padding: '8px 16px 10px 36px', background: 'var(--surface2, rgba(0,0,0,.03))' }}>
+                            {items.map((l, i) => (
+                              <div key={i} style={{ fontSize: 11.5, marginBottom: 4, lineHeight: 1.45 }}>
+                                <b>{l.qty} {l.unit}</b> — {l.description}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div style={{ marginTop: 12, display: 'flex', gap: 10 }}>
               <button className="btn" onClick={advanceStep} disabled={ws.step === 'submitted'} style={{ fontSize: 13 }}>
                 Advance to Next Step <Icon name="arrow" size={14} stroke={2.2}/>
