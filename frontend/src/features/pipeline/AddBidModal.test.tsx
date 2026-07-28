@@ -22,4 +22,22 @@ describe('AddBidModal comps preview', () => {
     expect(screen.getByText(/\$28\.40\/SF/)).toBeTruthy();
     expect(screen.getByText(/2 won/)).toBeTruthy();
   });
+
+  it('ignores a stale comps-preview response after brand is cleared', async () => {
+    let resolveStale: (v: unknown) => void = () => {};
+    const stalePromise = new Promise(res => { resolveStale = res; });
+    get.mockImplementation((url: string) =>
+      url.includes('meta/brands') ? Promise.resolve({ data: [] }) : stalePromise
+    );
+    render(<AddBidModal onClose={() => {}} onAdded={() => {}}/>);
+    fireEvent.change(screen.getByLabelText(/brand/i), { target: { value: 'Old Brand' } });
+    await waitFor(() => expect(get).toHaveBeenCalledWith(expect.stringContaining('comparables-preview')), { timeout: 2000 });
+
+    // Clear the query before the in-flight request resolves.
+    fireEvent.change(screen.getByLabelText(/brand/i), { target: { value: '' } });
+    resolveStale({ data: { count: 3, won: 2, lost: 1, avgPerSf: 10, top: [] } });
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(screen.queryByText(/similar past bids/i)).toBeNull();
+  });
 });

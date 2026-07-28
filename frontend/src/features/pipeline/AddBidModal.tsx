@@ -41,6 +41,7 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     if (!f.brand.trim() && !f.project_type.trim()) {
       setPreview(null);
       return;
@@ -51,10 +52,10 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
       if (f.project_type.trim()) params.set('project_type', f.project_type.trim());
       if (f.sq_ft.trim()) params.set('sq_ft', f.sq_ft.trim());
       api.get(`/preconstruction/comparables-preview?${params.toString()}`)
-        .then(({ data }) => setPreview(data))
+        .then(({ data }) => { if (!cancelled) setPreview(data); })
         .catch(() => {});
     }, 400);
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [f.brand, f.project_type, f.sq_ft]);
 
   const submit = async (e: React.FormEvent) => {
@@ -63,7 +64,7 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
     setSaving(true);
     setError('');
     try {
-      const { data } = await api.post('/bids', { ...f, suppress_notify: !notifyTeam });
+      const { data } = await api.post('/bids', { ...f, brand: f.brand.trim(), suppress_notify: !notifyTeam });
       onAdded(data);
     } catch {
       setError('Failed to add bid. Please try again.');
@@ -122,11 +123,11 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
               <label htmlFor="bid-brand">Brand / Prototype <span style={{fontWeight:400,color:'var(--text3)'}}>— optional</span></label>
               <input id="bid-brand" list="brand-options" value={f.brand} onChange={set('brand')} placeholder="e.g. Sonny's"/>
               <datalist id="brand-options">
-                {brands.map(b => <option key={b} value={b}/>)}
+                {Array.from(new Set(brands)).map(b => <option key={b} value={b}/>)}
               </datalist>
             </div>
             {preview && preview.count > 0 && (
-              <div style={{ background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 9, padding: '10px 12px', fontSize: 12.5 }}>
+              <div aria-live="polite" style={{ background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 9, padding: '10px 12px', fontSize: 12.5 }}>
                 <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>
                   {preview.count} similar past bids
                   {preview.avgPerSf != null ? ` · avg $${preview.avgPerSf.toFixed(2)}/SF` : ''} · {preview.won} won {preview.lost} lost
