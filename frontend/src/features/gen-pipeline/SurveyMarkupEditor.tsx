@@ -7,7 +7,9 @@ import { GEN_SPEC_DETAIL } from '../builder/genData';
 
 type MarkerType = 'service' | 'gas' | 'generator';
 
-interface BaseMarker { id: string; type: MarkerType; x: number; y: number; label: string; }
+// labelDx/labelDy: label text offset from the marker anchor (x,y), so the wording can be
+// dragged clear of the survey's own text with a leader line drawn back to the marker.
+interface BaseMarker { id: string; type: MarkerType; x: number; y: number; label: string; labelDx: number; labelDy: number; }
 interface DotMarker extends BaseMarker { type: 'service' | 'gas'; }
 interface RectMarker extends BaseMarker { type: 'generator'; w: number; h: number; rotation: number; }
 type Marker = DotMarker | RectMarker;
@@ -34,7 +36,16 @@ function genFootprint(gen: Gen): { w: number; h: number; label: string } {
 function parseMarkup(raw: Gen['survey_markup']): SurveyMarkup | null {
   try {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as SurveyMarkup).markers)) return parsed as SurveyMarkup;
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as SurveyMarkup).markers)) {
+      // Back-compat: markers saved before draggable labels have no labelDx/labelDy.
+      const m = parsed as SurveyMarkup;
+      m.markers = m.markers.map(mk => ({
+        ...mk,
+        labelDx: mk.labelDx ?? (mk.type === 'generator' ? 0 : DOT_RADIUS + 6),
+        labelDy: mk.labelDy ?? (mk.type === 'generator' ? -((mk as RectMarker).h / 2 + 16) : 4),
+      }));
+      return m;
+    }
   } catch { /* ignore */ }
   return null;
 }
@@ -58,7 +69,7 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
   const [exporting, setExporting] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  const drag = useRef<{ kind: 'move' | 'resize' | 'rotate'; id: string; startX: number; startY: number; orig: Marker } | null>(null);
+  const drag = useRef<{ kind: 'move' | 'resize' | 'rotate' | 'label'; id: string; startX: number; startY: number; orig: Marker } | null>(null);
 
   // Load the raw "Survey" document + any saved markup on mount.
   useEffect(() => {
@@ -155,19 +166,19 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
     const { x, y } = svgPoint(e);
     if (placing === 'generator') {
       const fp = genFootprint(gen);
-      const m: RectMarker = { id: uid(), type: 'generator', x, y, w: fp.w, h: fp.h, rotation: 0, label: fp.label };
+      const m: RectMarker = { id: uid(), type: 'generator', x, y, w: fp.w, h: fp.h, rotation: 0, label: fp.label, labelDx: 0, labelDy: -(fp.h / 2 + 16) };
       setMarkers(prev => [...prev, m]);
       setSelectedId(m.id);
     } else {
       const label = placing === 'service' ? "Main Service and ATS's Location" : 'Gas Meter';
-      const m: DotMarker = { id: uid(), type: placing, x, y, label };
+      const m: DotMarker = { id: uid(), type: placing, x, y, label, labelDx: DOT_RADIUS + 6, labelDy: 4 };
       setMarkers(prev => [...prev, m]);
       setSelectedId(m.id);
     }
     setPlacing(null);
   };
 
-  const startDrag = (kind: 'move' | 'resize' | 'rotate', marker: Marker) => (e: React.MouseEvent) => {
+  const startDrag = (kind: 'move' | 'resize' | 'rotate' | 'label', marker: Marker) => (e: React.MouseEvent) => {
     e.stopPropagation();
     setSelectedId(marker.id);
     const { x, y } = svgPoint(e);
@@ -182,6 +193,7 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
     setMarkers(prev => prev.map(m => {
       if (m.id !== d.id) return m;
       if (d.kind === 'move') return { ...m, x: d.orig.x + dx, y: d.orig.y + dy };
+      if (d.kind === 'label') return { ...m, labelDx: d.orig.labelDx + dx, labelDy: d.orig.labelDy + dy };
       if (m.type === 'generator' && d.orig.type === 'generator') {
         if (d.kind === 'resize') {
           const rot = -m.rotation * Math.PI / 180;
@@ -291,6 +303,7 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
               <button onClick={deleteSelected} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>Delete</button>
             </div>
           )}
+          {selected && <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>Drag the marker to reposition, or drag its label text to move the wording clear of the survey.</div>}
 
           <div ref={exportRef} style={{ background: '#fff', border: '1px solid var(--border2)', borderRadius: 10, overflow: 'hidden', position: 'relative' }}>
             {imgUrl && natural && (
@@ -309,13 +322,16 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
                       x: m.x + cornerLocal.x * Math.cos(cRad) - cornerLocal.y * Math.sin(cRad),
                       y: m.y + cornerLocal.x * Math.sin(cRad) + cornerLocal.y * Math.cos(cRad),
                     };
+                    const lx = m.x + m.labelDx, ly = m.y + m.labelDy;
                     return (
                       <g key={m.id} onClick={(e: React.MouseEvent) => { e.stopPropagation(); setSelectedId(m.id); }}>
                         <rect x={m.x - m.w / 2} y={m.y - m.h / 2} width={m.w} height={m.h}
                           fill={MARKER_COLORS.generator} fillOpacity={0.55} stroke={MARKER_COLORS.generator} strokeWidth={isSel ? 3 : 2}
                           transform={`rotate(${m.rotation} ${m.x} ${m.y})`} onMouseDown={startDrag('move', m)} style={{ cursor: 'move' }}/>
-                        <text x={m.x} y={m.y - m.h / 2 - 8} textAnchor="middle" fontSize={Math.max(14, m.h * 0.28)} fontWeight={700} fill="#1B3A6B"
-                          transform={`rotate(${m.rotation} ${m.x} ${m.y - m.h / 2 - 8})`}>{m.label}</text>
+                        <line x1={m.x} y1={m.y} x2={lx} y2={ly} stroke={MARKER_COLORS.generator} strokeWidth={1} strokeDasharray="3 2"/>
+                        <text x={lx} y={ly} textAnchor={m.labelDx < 0 ? 'end' : 'start'} fontSize={14} fontWeight={700}
+                          fill={MARKER_COLORS.generator} stroke="#fff" strokeWidth={3} paintOrder="stroke"
+                          onMouseDown={startDrag('label', m)} style={{ cursor: 'move' }}>{m.label}</text>
                         {isSel && (
                           <>
                             <line x1={m.x} y1={m.y} x2={rotHandle.x} y2={rotHandle.y} stroke="#888" strokeWidth={1}/>
@@ -327,11 +343,15 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
                       </g>
                     );
                   }
+                  const lx = m.x + m.labelDx, ly = m.y + m.labelDy;
                   return (
                     <g key={m.id} onClick={(e: React.MouseEvent) => { e.stopPropagation(); setSelectedId(m.id); }}>
+                      <line x1={m.x} y1={m.y} x2={lx} y2={ly} stroke={MARKER_COLORS[m.type]} strokeWidth={1} strokeDasharray="3 2"/>
                       <circle cx={m.x} cy={m.y} r={DOT_RADIUS} fill={MARKER_COLORS[m.type]} stroke="#fff" strokeWidth={isSel ? 3 : 2}
                         onMouseDown={startDrag('move', m)} style={{ cursor: 'move' }}/>
-                      <text x={m.x + DOT_RADIUS + 6} y={m.y + 4} fontSize={13} fontWeight={700} fill={MARKER_COLORS[m.type]}>{m.label}</text>
+                      <text x={lx} y={ly} textAnchor={m.labelDx < 0 ? 'end' : 'start'} fontSize={13} fontWeight={700}
+                        fill={MARKER_COLORS[m.type]} stroke="#fff" strokeWidth={3} paintOrder="stroke"
+                        onMouseDown={startDrag('label', m)} style={{ cursor: 'move' }}>{m.label}</text>
                     </g>
                   );
                 })}

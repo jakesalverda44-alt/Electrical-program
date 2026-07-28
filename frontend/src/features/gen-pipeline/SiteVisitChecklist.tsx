@@ -55,9 +55,16 @@ function parseGenForm(raw: Gen['form_data']): Record<string, unknown> {
   catch { return {}; }
 }
 
+// The checklist renders on a white "paper" card (so it exports to a clean PDF), so it uses
+// fixed light-theme colors — NOT the app's dark-mode CSS vars, which would be invisible here.
+const INK = '#1c2430';
+const MUTED = '#6b7683';
+const LINE = '#dce3ec';
+const HEAD = '#164a86';
+
 const inputStyle: React.CSSProperties = {
-  width: '100%', font: 'inherit', fontSize: 13, fontWeight: 600, color: 'var(--text)',
-  background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 8,
+  width: '100%', font: 'inherit', fontSize: 13, fontWeight: 600, color: INK,
+  background: '#fff', border: `1px solid ${LINE}`, borderRadius: 8,
   padding: '7px 10px', outline: 'none', boxSizing: 'border-box',
 };
 const miniStyle: React.CSSProperties = { ...inputStyle, width: 74 };
@@ -65,7 +72,7 @@ const miniStyle: React.CSSProperties = { ...inputStyle, width: 74 };
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <label style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</label>
+      <label style={{ fontSize: 10.5, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</label>
       {children}
     </div>
   );
@@ -73,10 +80,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function ToggleGroup<T extends string>({ options, value, onChange }: { options: T[]; value: T; onChange: (v: T) => void }) {
   return (
-    <div style={{ display: 'inline-flex', border: '1px solid var(--border2)', borderRadius: 7, overflow: 'hidden' }}>
+    <div style={{ display: 'inline-flex', border: `1px solid ${LINE}`, borderRadius: 7, overflow: 'hidden' }}>
       {options.map(o => (
         <button key={o} type="button" onClick={() => onChange(value === o ? ('' as T) : o)}
-          style={{ background: value === o ? 'var(--blue, #1B3A6B)' : 'var(--surface)', color: value === o ? '#fff' : 'var(--text2)',
+          style={{ background: value === o ? HEAD : '#fff', color: value === o ? '#fff' : MUTED,
             border: 'none', padding: '5px 11px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
           {o}
         </button>
@@ -151,10 +158,10 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
 
   return (
     <div style={{ marginTop: 4 }}>
-      <div ref={printRef} style={{ background: '#fff', padding: 14, borderRadius: 10, border: '1px solid var(--border2)' }}>
+      <div ref={printRef} style={{ background: '#fff', color: INK, padding: 14, borderRadius: 10, border: '1px solid var(--border2)' }}>
         <div style={{ textAlign: 'center', marginBottom: 12 }}>
-          <div style={{ fontWeight: 800, color: '#164a86', fontSize: 14 }}>ACCURATE POWER &amp; TECHNOLOGY, INC.</div>
-          <div style={{ fontSize: 10.5, color: '#555' }}>Site Visit Checklist</div>
+          <div style={{ fontWeight: 800, color: HEAD, fontSize: 14 }}>ACCURATE POWER &amp; TECHNOLOGY, INC.</div>
+          <div style={{ fontSize: 10.5, color: MUTED }}>Site Visit Checklist</div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12, fontSize: 12.5 }}>
@@ -192,7 +199,7 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
             <thead>
               <tr>
                 {['Appliance', 'Fuel', 'Volts', 'HP', 'AMPS'].map(h => (
-                  <th key={h} style={{ textAlign: 'left', color: 'var(--text3)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.04em', padding: '4px 6px', borderBottom: '1px solid var(--border2)' }}>{h}</th>
+                  <th key={h} style={{ textAlign: 'left', color: MUTED, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.04em', padding: '4px 6px', borderBottom: `1px solid ${LINE}` }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -200,7 +207,7 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
               {LOADS.map((row, i) => {
                 const lv = data.loads[i] || {};
                 return (
-                  <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <tr key={i} style={{ borderBottom: `1px solid ${LINE}` }}>
                     <td style={{ padding: '4px 6px', fontWeight: 600 }}>{row.n}</td>
                     <td style={{ padding: '4px 6px' }}>{row.fuel ? <ToggleGroup options={['Electric', 'Gas']} value={lv.fuel || ''} onChange={v => setLoad(i, { fuel: v as LoadRow['fuel'] })}/> : <span style={{ color: '#c2ccd6' }}>—</span>}</td>
                     <td style={{ padding: '4px 6px' }}>{row.volt ? <ToggleGroup options={['120V', '240V']} value={lv.volt || ''} onChange={v => setLoad(i, { volt: v as LoadRow['volt'] })}/> : <span style={{ color: '#c2ccd6' }}>—</span>}</td>
