@@ -106,13 +106,14 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
         </div>
 
         <div className="drawer-body">
-          <div style={{ display: 'inline-flex', border: '1px solid var(--border2)', borderRadius: 9, overflow: 'hidden', marginBottom: 14 }}>
+          <div style={{ display: 'flex', border: '1px solid var(--border2)', borderRadius: 9, overflow: 'hidden', marginBottom: 16 }}>
             {(['overview', 'checklist', 'survey'] as const).map(t => (
               <button key={t} onClick={() => setTab(t)}
-                style={{ padding: '7px 16px', fontSize: 12.5, fontWeight: 700, border: 'none', cursor: 'pointer',
-                  background: tab === t ? 'var(--accent)' : 'var(--surface)',
-                  color: tab === t ? '#fff' : 'var(--text2)' }}>
-                {t === 'overview' ? 'Overview' : t === 'checklist' ? 'Site Visit Checklist' : 'Survey'}
+                style={{ flex: 1, padding: '9px 8px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                  border: 'none', borderRight: t !== 'survey' ? '1px solid var(--border2)' : 'none',
+                  background: tab === t ? 'var(--blue)' : 'var(--surface2)',
+                  color: tab === t ? '#fff' : 'var(--text2)', whiteSpace: 'nowrap' }}>
+                {t === 'overview' ? 'Overview' : t === 'checklist' ? 'Checklist' : 'Survey'}
               </button>
             ))}
           </div>
