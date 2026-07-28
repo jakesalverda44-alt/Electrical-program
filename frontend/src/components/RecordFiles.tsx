@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from './Icon';
 import api from '../api/client';
+import FilePreviewModal from './FilePreviewModal';
+import { previewKind } from './filePreview';
 
 interface Doc {
   id: string;
@@ -8,6 +10,7 @@ interface Doc {
   name: string;
   category: string;
   file_size: number;
+  file_type?: string | null;
   uploaded_by: string;
   created_at: string;
   storage_url?: string;
@@ -49,6 +52,7 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
   const [category, setCategory] = useState(div === 'elec' ? 'plans' : div === 'lead' ? 'photo' : 'other');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
+  const [preview, setPreview] = useState<{ title: string; kind: 'sheet' | 'doc'; buf: ArrayBuffer; doc: Doc } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const cameraInput = useRef<HTMLInputElement>(null);
 
@@ -95,21 +99,6 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
     }
   };
 
-  // Open inline in a new tab. Opens the tab synchronously (user gesture) to dodge
-  // popup blockers, then points it at the blob once fetched.
-  const view = async (doc: Doc) => {
-    const w = window.open('', '_blank');
-    try {
-      const res = await api.get(`/documents/${doc.id}/view`, { responseType: 'blob' });
-      const url = URL.createObjectURL(res.data);
-      if (w) w.location.href = url; else window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch {
-      if (w) w.close();
-      setError('Preview failed — try downloading instead.');
-    }
-  };
-
   // Always goes through the backend (authenticated blob fetch), never anchors
   // doc.storage_url directly: the raw Cloudinary URL is unauthenticated and skips
   // access checks.
@@ -126,12 +115,47 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
     }
   };
 
+  // pdf/image: open inline in a new tab (opened synchronously, on the user gesture,
+  // to dodge popup blockers, then pointed at the blob once fetched).
+  // xlsx/xls/csv/docx: fetch the bytes and render them in-app via FilePreviewModal.
+  // Anything else: no in-app preview, fall straight through to download.
+  const view = async (doc: Doc) => {
+    const kind = previewKind(doc.name, doc.file_type);
+
+    if (kind === 'inline') {
+      const w = window.open('', '_blank');
+      try {
+        const res = await api.get(`/documents/${doc.id}/view`, { responseType: 'blob' });
+        const url = URL.createObjectURL(res.data);
+        if (w) w.location.href = url; else window.open(url, '_blank');
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } catch {
+        if (w) w.close();
+        setError('Preview failed — try downloading instead.');
+      }
+      return;
+    }
+
+    if (kind === 'none') {
+      return download(doc);
+    }
+
+    try {
+      const res = await api.get(`/documents/${doc.id}/view`, { responseType: 'arraybuffer' });
+      setPreview({ title: doc.display_name || doc.name, kind, buf: res.data, doc });
+    } catch {
+      setError('Preview failed — downloading instead.');
+      download(doc);
+    }
+  };
+
   const remove = async (doc: Doc) => {
     setDocs(prev => prev.filter(d => d.id !== doc.id));
     await api.delete(`/documents/${doc.id}`).catch(() => load());
   };
 
   return (
+    <>
     <div className="dtl-section" style={{ marginTop: 18 }}>
       <div className="dtl-stage-label" style={{ marginBottom: 10 }}>{title || 'Files'} · {docs.length}</div>
 
@@ -191,5 +215,15 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
         </div>
       )}
     </div>
+    {preview && (
+      <FilePreviewModal
+        title={preview.title}
+        kind={preview.kind}
+        buf={preview.buf}
+        onClose={() => setPreview(null)}
+        onDownload={() => download(preview.doc)}
+      />
+    )}
+    </>
   );
 }
