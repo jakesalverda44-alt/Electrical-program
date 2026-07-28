@@ -4,10 +4,11 @@ import { Bid } from '../../types';
 import api from '../../api/client';
 
 // Ported from features/pipeline/DetailDrawer.tsx L236-296 (lifecycle timeline +
-// lost-reason/competitor form). The timeline is read-only and unchanged. The
-// lost-reason form used to be an inline pre-confirmation gate shown at the
-// moment a "Lost" stage pill was clicked; here it's a standalone editor,
-// available whenever the bid is already in the Lost stage, that PATCHes the
+// lost-reason/competitor form). The timeline is read-only and unchanged.
+// OverviewTab's stage-pill confirmation captures loss_reason/competitor at
+// the moment the bid is marked Lost (same as the drawer). This is a separate,
+// standalone editor — available whenever the bid is already in the Lost
+// stage — for viewing/correcting those details afterwards. It PATCHes the
 // same /bids/:id/stage endpoint the drawer used.
 
 const LOSS_REASONS = ['Budget', 'Competitor', 'No Award', 'Scope Change', 'Timeline', 'Relationship', 'Other'];

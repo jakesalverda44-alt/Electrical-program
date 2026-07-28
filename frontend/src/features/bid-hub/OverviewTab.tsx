@@ -61,6 +61,8 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
     }),
   });
   const pendingLost = pendingConfirm === bid.id;
+  const [lossReason, setLossReason] = useState(LOSS_REASONS[0]);
+  const [competitor, setCompetitor] = useState('');
 
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -317,11 +319,29 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
               })}
             </div>
             {pendingLost && (
-              <div className="lost-confirm">
-                <span>Mark as lost? Add the reason on the Activity tab after confirming.</span>
-                <button className="btn ghost" style={{ height: 24, fontSize: 11, padding: '0 8px' }} onClick={cancelConfirm}>No</button>
-                <button className="btn" style={{ height: 24, fontSize: 11, padding: '0 8px', background: 'var(--red)', borderColor: 'var(--red)' }}
-                  onClick={() => moveToStage(bid.id, 'lost')}>Yes, lost</button>
+              <div className="lost-confirm" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700 }}>
+                  <Icon name="x" size={14} stroke={2}/>Mark this bid as lost?
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Loss Reason</div>
+                    <select value={lossReason} onChange={e => setLossReason(e.target.value)} style={{ ...INPUT, cursor: 'pointer' } as React.CSSProperties}>
+                      {LOSS_REASONS.map(r => <option key={r}>{r}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Awarded To (optional)</div>
+                    <input style={INPUT} value={competitor} onChange={e => setCompetitor(e.target.value)} placeholder="Competitor name"/>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn ghost" style={{ height: 28, fontSize: 12, padding: '0 10px' }} onClick={cancelConfirm}>Cancel</button>
+                  <button className="btn" style={{ height: 28, fontSize: 12, padding: '0 10px', background: 'var(--red)', borderColor: 'var(--red)' }}
+                    onClick={() => moveToStage(bid.id, 'lost', { loss_reason: lossReason, competitor: competitor || undefined })}>
+                    Confirm Lost
+                  </button>
+                </div>
               </div>
             )}
           </div>
