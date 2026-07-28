@@ -13,7 +13,6 @@ import PipelinePage from './features/pipeline/PipelinePage';
 import SalesByRepPage from './features/sales-by-rep/SalesByRepPage';
 import IntakeInboxPage from './features/intake/IntakeInboxPage';
 import BuilderPage from './features/builder/BuilderPage';
-import PreconstructionPage from './features/preconstruction/PreconstructionPage';
 import BidHubPage from './features/bid-hub/BidHubPage';
 import ElecProjectsPage from './features/elec-projects/ElecProjectsPage';
 import GenProjectsPage from './features/gen-projects/GenProjectsPage';
@@ -208,7 +207,7 @@ export default function App() {
             bids={bids} setBids={setBids}
             gens={gens} setGens={setGens}
             setWonJobs={setWonJobs}
-            onOpenPreconstruction={() => setView('preconstruction')}
+            onOpenBid={(id, tab) => navigate('/bid/' + encodeURIComponent(id) + (tab ? '?tab=' + tab : ''))}
             onOpenBuilder={() => { setEditGen(null); setView('builder'); }}
             onEditGen={g => { setEditGen(g); setView('builder'); }}
             flashId={flashId}
@@ -240,14 +239,7 @@ export default function App() {
           />
         );
       case 'preconstruction':
-        return (
-          <PreconstructionPage
-            bids={bids}
-            pcData={pcData}
-            onPcUpdate={handlePcUpdate}
-            onBidUpdated={handleBidUpdated}
-          />
-        );
+        return <Navigate to="/pipeline" replace/>;
       case 'bid':
         if (!viewParam) return <StubPage title="Bid"/>;
         return (
