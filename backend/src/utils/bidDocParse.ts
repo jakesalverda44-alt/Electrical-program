@@ -20,7 +20,24 @@ const AMOUNT_PATTERNS = [
   /Total\s+Proposed\s+Contract\s+Value:?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i,
   /Total\s+(?:Bid|Contract|Proposal)\s+(?:Amount|Value):?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i,
   /Grand\s+Total:?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i,
+  // APT's own hand-built template: "Total for <project name>:" with the amount
+  // on the following line, under a "Proposal Price Summary" heading.
+  /Total\s+for\s+[^:$\n]*:?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i,
 ];
+
+// Last-resort fallback: first bare "$X,XXX.XX" line under a "Price Summary" heading,
+// skipping optional/adder lines so the base bid price wins over an add-on.
+function findAmountNearPriceSummary(text: string): number | null {
+  const idx = text.search(/price\s+summary/i);
+  if (idx < 0) return null;
+  const lines = text.slice(idx).split('\n').map(l => l.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (/optional|adder/i.test(line)) continue;
+    const m = line.match(/\$\s*([\d,]+(?:\.\d{2})?)/);
+    if (m) return Number(m[1].replace(/,/g, ''));
+  }
+  return null;
+}
 
 export function extractDocxText(buf: Buffer): string {
   const zip = new AdmZip(buf);
@@ -63,6 +80,7 @@ export function parseBidDocText(text: string): ParsedBidDoc {
     const m = text.match(pattern);
     if (m) { amount = Number(m[1].replace(/,/g, '')); break; }
   }
+  if (amount === null) amount = findAmountNearPriceSummary(text);
 
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const scopeOfWork: Record<string, string[]> = {};
