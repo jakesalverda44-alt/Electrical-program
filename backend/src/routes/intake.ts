@@ -146,16 +146,21 @@ router.post('/:id/accept', requireAuth, async (req: AuthRequest, res) => {
     const notes   = o.notes ?? it.notes;
     const due     = o.due ?? it.due;
     const sqFt    = o.sq_ft ?? it.sq_ft;
+    // intake_items carries no project_type/brand columns of its own — these are pass-through
+    // overrides the reviewer supplies on the accept call, no parsing, default null.
+    const projectType = o.project_type ?? null;
+    const brand       = o.brand ?? null;
     const user = req.user!;
     const customerId = await upsertCustomer(gc, 'gc');
 
     const { rows: bidRows } = await client.query(
-      `INSERT INTO bids (name, gc, loc, contact, amount, due, notes, salesperson_id, salesperson_name, customer_id, sq_ft, source_email_link)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      `INSERT INTO bids (name, gc, loc, contact, amount, due, notes, salesperson_id, salesperson_name, customer_id, sq_ft, source_email_link, project_type, brand)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
       [name, gc, (loc || '').trim() || '—', (typeof contact === 'string' && contact.trim()) ? contact.trim() : null,
        amount != null && amount !== '' ? Number(amount) : null,
        formatDue(due), notes?.trim?.() || notes || null, user.id, user.name, customerId,
-       sqFt != null && sqFt !== '' ? Number(sqFt) : null, it.web_link || null]
+       sqFt != null && sqFt !== '' ? Number(sqFt) : null, it.web_link || null,
+       projectType, brand]
     );
     const bid = bidRows[0];
     // Persist the reviewer's final values back onto the intake record so it mirrors what
