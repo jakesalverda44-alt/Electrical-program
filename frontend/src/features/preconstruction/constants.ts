@@ -19,12 +19,15 @@ export const PC_TABS = [
   { key: 'rfis',       label: 'RFIs'              },
   { key: 'pricing',    label: 'Pricing'           },
   { key: 'proposal',   label: 'Proposal'          },
-  { key: 'compare',    label: 'Compare Bids'      },
   { key: 'costs',      label: 'Historical Costs'  },
   { key: 'intel',      label: 'Win-Rate Insights' },
 ] as const;
 
-export type PcTabKey = typeof PC_TABS[number]['key'];
+// 'compare' is retired from the tab bar — Compare now lives only in the Bid Hub's
+// own Compare tab — but stays in the type so a workspace persisted with
+// active_tab='compare' from before the move still type-checks when restored
+// (App.tsx coerces it to 'overview' rather than rendering a dead tab).
+export type PcTabKey = typeof PC_TABS[number]['key'] | 'compare';
 
 export const PROJECT_TYPES = [
   { value: 'cstore_fuel',  label: 'C-Store w/ Fuel' },

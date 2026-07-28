@@ -8,6 +8,7 @@ import { moneyFull, moneyShort } from '../../lib/money';
 import { useStagePipeline } from '../../hooks/useStagePipeline';
 import { useShowToast } from '../../contexts/AppContext';
 import type { HubTab } from './BidHubPage';
+import SimilarBidsPanel from './SimilarBidsPanel';
 
 // Ported from features/pipeline/DetailDrawer.tsx (single-scroll drawer), split
 // across the Bid Hub's Overview + Activity tabs. Every API call below is
@@ -413,6 +414,8 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
               </button>
             )}
           </div>
+
+          <SimilarBidsPanel bidId={bid.id} onGoCompare={() => onGoTab('compare')}/>
 
           {/* Scope of Work (read-only — edit in Estimating) */}
           <div className="dtl-section">

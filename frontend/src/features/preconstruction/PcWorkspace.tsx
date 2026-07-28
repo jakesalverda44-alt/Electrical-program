@@ -5,7 +5,6 @@ import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey, PROJEC
 import api from '../../api/client';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
 import { moneyFull } from '../../lib/money';
-import BidCompare from './BidCompare';
 
 interface Props {
   ws: PcWorkspace;
@@ -2063,9 +2062,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           </div>
         );
       }
-
-      case 'compare':
-        return <BidCompare bidId={bid.id}/>;
 
       case 'costs': {
         const filteredCosts = costTypeFilter === 'all'

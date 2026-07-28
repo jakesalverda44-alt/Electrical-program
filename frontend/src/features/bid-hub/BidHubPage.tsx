@@ -130,7 +130,7 @@ export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, o
         )}
         {tab === 'compare' && (
           <div data-testid="hub-tab-compare">
-            <BidCompare bidId={bid.id}/>
+            <BidCompare bidId={bid.id} sqFt={bid.sq_ft} brand={bid.brand} projectType={bid.project_type}/>
           </div>
         )}
         {tab === 'files' && (

@@ -25,7 +25,7 @@ import LeadsPage from './features/leads/LeadsPage';
 import CalendarPage from './features/calendar/CalendarPage';
 import ProposalPublicPage from './pages/ProposalPublicPage';
 import SettingsPage from './features/settings/SettingsPage';
-import { PcWorkspace, ConfirmedService } from './features/preconstruction/constants';
+import { PcWorkspace, PC_TABS, ConfirmedService } from './features/preconstruction/constants';
 import Toast from './components/Toast';
 import { AppProviders } from './contexts/AppContext';
 import api from './api/client';
@@ -95,15 +95,21 @@ export default function App() {
         setRepNames(users.data.map((u: { name: string }) => u.name));
         // Restore persisted workspace state
         const restored: Record<string, PcWorkspace> = {};
+        // 'compare' tab was retired from the workspace tab bar (Task 12) — Compare now
+        // lives only in the Bid Hub. A workspace saved before that move may still carry
+        // active_tab='compare'; coerce anything not in the current tab list back to
+        // 'overview' so restoring an old workspace never lands on a dead tab.
+        const validTabs = new Set(PC_TABS.map(t => t.key as string));
         for (const row of (workspaces.data as Array<Record<string, unknown>>)) {
           const bid = bidsData.find(b => b.id === row.bid_id);
           if (!bid) continue;
+          const persistedTab = row.active_tab as string | undefined;
           restored[bid.id] = {
             bidId:             bid.id,
             bidName:           bid.name,
             amount:            bid.amount ?? 0,
             step:              (row.step as PcWorkspace['step']) || 'intake',
-            activeTab:         (row.active_tab as PcWorkspace['activeTab']) || 'overview',
+            activeTab:         (persistedTab && validTabs.has(persistedTab) ? persistedTab : 'overview') as PcWorkspace['activeTab'],
             notes:             (row.notes as string) || '',
             scope:             (row.scope as Record<string, string>) || {},
             rfis:              (row.rfis as PcWorkspace['rfis']) || [],
