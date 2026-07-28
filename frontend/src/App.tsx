@@ -261,7 +261,7 @@ export default function App() {
       case 'gen-projects':
         return <GenProjectsPage gens={gens} setGens={setGens} setWonJobs={setWonJobs} openId={viewParam} onClearParam={clearParam}/>;
       case 'contacts':
-        return <ContactsPage onNewBid={openNewBid}/>;
+        return <ContactsPage onNewBid={openNewBid} onNav={setView}/>;
       case 'reporting':
         return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
       case 'calendar':

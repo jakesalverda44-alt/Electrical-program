@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
+import FilePreviewModal from '../../components/FilePreviewModal';
+import { previewKind } from '../../components/filePreview';
 import { Customer, CustomerDetail, Toast } from '../../types';
 import { moneyFull as money, moneyShort } from '../../lib/money';
 
@@ -30,9 +32,9 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div style={{ padding: '14px 18px', fontSize: 12.5, color: 'var(--text3)' }}>{children}</div>;
 }
 
-function Row({ primary, secondary, right }: { primary: string; secondary?: string; right?: React.ReactNode }) {
+function Row({ primary, secondary, right, onClick }: { primary: string; secondary?: string; right?: React.ReactNode; onClick?: () => void }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 18px', borderTop: '1px solid var(--border)' }}>
+    <div onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 18px', borderTop: '1px solid var(--border)', cursor: onClick ? 'pointer' : undefined }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{primary}</div>
         {secondary && <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>{secondary}</div>}
@@ -106,7 +108,7 @@ function MergeModal({ targetId, targetName, onClose, onMerged }: { targetId: str
   );
 }
 
-export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole }: { id: string; onBack: () => void; showToast?: (t: Toast) => void; onNewBid?: (gc: string) => void; userRole?: string }) {
+export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole, onNav }: { id: string; onBack: () => void; showToast?: (t: Toast) => void; onNewBid?: (gc: string) => void; userRole?: string; onNav?: (view: string, recordId?: string) => void }) {
   const [detail, setDetail] = useState<CustomerDetail | null>(null);
   const [editing, setEditing] = useState(false);
   const [merging, setMerging] = useState(false);
@@ -118,6 +120,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole 
   const [collapsedComm, setCollapsedComm] = useState<Set<string>>(new Set());
   const fileInput = useRef<HTMLInputElement>(null);
   const [docCategory, setDocCategory] = useState('plans');
+  const [preview, setPreview] = useState<{ title: string; kind: 'sheet' | 'doc'; buf: ArrayBuffer; docId: string } | null>(null);
 
   const load = useCallback(() => {
     api.get(`/customers/${id}`).then(({ data }) => { setDetail(data); setForm(data.customer); });
@@ -129,7 +132,8 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole 
   const c = detail.customer;
   const isGc = c.type === 'gc';
   const canMerge = MANAGER_ROLES.includes(userRole || '');
-  const openBids = detail.bids.filter(b => b.stage === 'due' || b.stage === 'submitted');
+  const openBids = detail.bids.filter(b => b.stage === 'due');
+  const submitted = detail.bids.filter(b => b.stage === 'submitted');
   const awarded = detail.bids.filter(b => b.stage === 'awarded');
   const lost = detail.bids.filter(b => b.stage === 'lost');
   const revenue = detail.wonJobs.reduce((s, j) => s + Number(j.value), 0);
@@ -216,6 +220,41 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole 
       });
   };
 
+  // pdf/image: open inline in a new tab; xlsx/xls/csv/docx: fetch bytes and render
+  // via FilePreviewModal; anything else: no in-app preview, fall through to download.
+  const viewDoc = async (doc: CustomerDetail['documents'][number]) => {
+    const kind = previewKind(doc.name, doc.file_type);
+    const token = localStorage.getItem('crm_token');
+
+    if (kind === 'inline') {
+      const w = window.open('', '_blank');
+      try {
+        const res = await fetch(`/api/documents/${doc.id}/view`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        if (w) w.location.href = url; else window.open(url, '_blank');
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } catch {
+        if (w) w.close();
+        showToast?.({ title: 'Preview failed', sub: 'Try downloading instead.' });
+      }
+      return;
+    }
+
+    if (kind === 'none') {
+      return downloadDoc(doc.id, doc.display_name);
+    }
+
+    try {
+      const res = await fetch(`/api/documents/${doc.id}/view`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const buf = await res.arrayBuffer();
+      setPreview({ title: doc.display_name || doc.name, kind, buf, docId: doc.id });
+    } catch {
+      showToast?.({ title: 'Preview failed', sub: 'Downloading instead.' });
+      downloadDoc(doc.id, doc.display_name);
+    }
+  };
+
   const stageBadge = (stage: string) => {
     const map: Record<string, { bg: string; color: string; label: string }> = {
       due: { bg: 'var(--amber-soft)', color: 'var(--amber)', label: 'Due' },
@@ -233,6 +272,16 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole 
       action={onNewBid && <button className="panel-link" onClick={() => onNewBid(c.name)}>New bid +</button>}>
       {openBids.length === 0 ? <Empty>No open bids.</Empty> : openBids.map(b => (
         <Row key={b.id} primary={b.name} secondary={`${b.loc || ''}${b.due ? ' · due ' + b.due : ''}`}
+          onClick={() => onNav?.('bid', b.id)}
+          right={<div><div className="num" style={{ fontSize: 13, fontWeight: 700 }}>{b.amount != null ? money(Number(b.amount)) : '—'}</div><div style={{ marginTop: 2 }}>{stageBadge(b.stage)}</div></div>}/>
+      ))}
+    </Section>
+  );
+  const submittedSection = (
+    <Section key="submitted" title="Submitted Bids" count={submitted.length}>
+      {submitted.length === 0 ? <Empty>No submitted bids.</Empty> : submitted.map(b => (
+        <Row key={b.id} primary={b.name} secondary={`${b.loc || ''}${b.due ? ' · due ' + b.due : ''}`}
+          onClick={() => onNav?.('bid', b.id)}
           right={<div><div className="num" style={{ fontSize: 13, fontWeight: 700 }}>{b.amount != null ? money(Number(b.amount)) : '—'}</div><div style={{ marginTop: 2 }}>{stageBadge(b.stage)}</div></div>}/>
       ))}
     </Section>
@@ -241,7 +290,17 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole 
     <Section key="proj" title="Awarded Projects" count={awarded.length}>
       {awarded.length === 0 ? <Empty>No awarded projects yet.</Empty> : awarded.map(b => (
         <Row key={b.id} primary={b.name} secondary={b.elec_project_phase ? `Phase: ${b.elec_project_phase}` : b.loc}
+          onClick={() => onNav?.('bid', b.id)}
           right={<span className="num" style={{ fontSize: 13, fontWeight: 700, color: 'var(--green)' }}>{b.amount != null ? money(Number(b.amount)) : '—'}</span>}/>
+      ))}
+    </Section>
+  );
+  const lostSection = (
+    <Section key="lost" title="Lost Bids" count={lost.length}>
+      {lost.length === 0 ? <Empty>No lost bids.</Empty> : lost.map(b => (
+        <Row key={b.id} primary={b.name} secondary={b.loc}
+          onClick={() => onNav?.('bid', b.id)}
+          right={<span className="num" style={{ fontSize: 13, fontWeight: 700, color: '#E06A6A' }}>{b.amount != null ? money(Number(b.amount)) : '—'}</span>}/>
       ))}
     </Section>
   );
@@ -254,7 +313,9 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole 
     </Section>
   ) : null;
 
-  const leftSections = isGc ? [bidsSection, projectsSection, gensSection] : [gensSection, bidsSection, projectsSection];
+  const leftSections = isGc
+    ? [bidsSection, submittedSection, projectsSection, lostSection, gensSection]
+    : [gensSection, bidsSection, submittedSection, projectsSection, lostSection];
 
   return (
     <div className="scroll view-enter">
@@ -410,6 +471,9 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole 
                     <div style={{ fontSize: 12.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.display_name}</div>
                     <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'capitalize' }}>{d.category}{d.file_size ? ` · ${fmtSize(d.file_size)}` : ''} · {fmtDate(d.created_at)}</div>
                   </div>
+                  <button onClick={() => viewDoc(d)} title="View" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--blue)', padding: 4, flexShrink: 0 }}>
+                    <Icon name="eye" size={15} stroke={1.9}/>
+                  </button>
                   <button onClick={() => downloadDoc(d.id, d.display_name)} title="Download" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--blue)', padding: 4, flexShrink: 0 }}>
                     <Icon name="arrow" size={15} stroke={2}/>
                   </button>
@@ -423,6 +487,16 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole 
       {merging && (
         <MergeModal targetId={id} targetName={c.name} onClose={() => setMerging(false)}
           onMerged={n => { setMerging(false); load(); showToast?.({ title: `Merged ${n} duplicate${n !== 1 ? 's' : ''}`, sub: `into ${c.name}` }); }}/>
+      )}
+
+      {preview && (
+        <FilePreviewModal
+          title={preview.title}
+          kind={preview.kind}
+          buf={preview.buf}
+          onClose={() => setPreview(null)}
+          onDownload={() => downloadDoc(preview.docId, preview.title)}
+        />
       )}
     </div>
   );
