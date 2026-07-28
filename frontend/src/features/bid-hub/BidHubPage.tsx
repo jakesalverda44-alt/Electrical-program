@@ -4,6 +4,8 @@ import Icon from '../../components/Icon';
 import { Bid, WonJob } from '../../types';
 import { PcWorkspace } from '../preconstruction/constants';
 import { ELEC_STAGES } from '../pipeline/constants';
+import OverviewTab from './OverviewTab';
+import ActivityTab from './ActivityTab';
 
 export type HubTab = 'overview' | 'estimating' | 'compare' | 'files' | 'activity';
 
@@ -26,7 +28,7 @@ interface Props {
   onNav: (v: string, recordId?: string) => void;
 }
 
-export default function BidHubPage({ bidId, bids, onNav }: Props) {
+export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, onBidUpdated, onNav }: Props) {
   const [params, setParams] = useSearchParams();
   const rawTab = params.get('tab');
   const tab: HubTab = HUB_TABS.some(t => t.key === rawTab) ? (rawTab as HubTab) : 'overview';
@@ -82,11 +84,27 @@ export default function BidHubPage({ bidId, bids, onNav }: Props) {
           ))}
         </div>
 
-        {tab === 'overview' && <div data-testid="hub-tab-overview">Overview — coming soon</div>}
+        {tab === 'overview' && (
+          <div data-testid="hub-tab-overview">
+            <OverviewTab
+              bid={bid}
+              onBidUpdated={onBidUpdated}
+              setBids={setBids}
+              setWonJobs={setWonJobs}
+              onNav={onNav}
+              scope={pcData[bidId]?.scope ?? {}}
+              onGoTab={setTab}
+            />
+          </div>
+        )}
         {tab === 'estimating' && <div data-testid="hub-tab-estimating">Estimating — coming soon</div>}
         {tab === 'compare' && <div data-testid="hub-tab-compare">Compare — coming soon</div>}
         {tab === 'files' && <div data-testid="hub-tab-files">Files — coming soon</div>}
-        {tab === 'activity' && <div data-testid="hub-tab-activity">Activity — coming soon</div>}
+        {tab === 'activity' && (
+          <div data-testid="hub-tab-activity">
+            <ActivityTab bid={bid} onBidUpdated={onBidUpdated}/>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -8,7 +8,11 @@ import { Bid } from '../../types';
 afterEach(cleanup);
 
 vi.mock('../../api/client', () => ({
-  default: { get: vi.fn().mockResolvedValue({ data: [] }), post: vi.fn(), patch: vi.fn(), put: vi.fn() },
+  default: { get: vi.fn().mockResolvedValue({ data: [] }), post: vi.fn(), patch: vi.fn(), put: vi.fn(), delete: vi.fn() },
+}));
+
+vi.mock('../../contexts/AppContext', () => ({
+  useShowToast: () => vi.fn(),
 }));
 
 const bid: Bid = {
@@ -40,5 +44,11 @@ describe('BidHubPage', () => {
   it('shows not-found for unknown bid id', () => {
     render(<MemoryRouter><BidHubPage {...baseProps} bidId="nope"/></MemoryRouter>);
     expect(screen.getByText(/not found/i)).toBeTruthy();
+  });
+
+  it('overview shows stat row and stage pills', () => {
+    render(<MemoryRouter><BidHubPage {...baseProps}/></MemoryRouter>);
+    expect(screen.getByText(/\$250k/i)).toBeTruthy();          // amount tile
+    expect(screen.getByRole('button', { name: /submitted/i })).toBeTruthy(); // stage pill
   });
 });
