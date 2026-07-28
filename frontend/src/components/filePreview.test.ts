@@ -11,6 +11,13 @@ describe('previewKind', () => {
     expect(previewKind('photo.jpg', 'image/jpeg')).toBe('inline');
     expect(previewKind('scan.PDF', null)).toBe('inline');
   });
+  it('legacy docs with null file_type fall back to the image extension', () => {
+    expect(previewKind('photo.jpg', null)).toBe('inline');
+    expect(previewKind('photo.jpeg', null)).toBe('inline');
+    expect(previewKind('logo.png', null)).toBe('inline');
+    expect(previewKind('animation.gif', null)).toBe('inline');
+    expect(previewKind('banner.webp', null)).toBe('inline');
+  });
   it('spreadsheets are sheet', () => {
     expect(previewKind('takeoff.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')).toBe('sheet');
     expect(previewKind('old.xls', null)).toBe('sheet');
@@ -42,6 +49,18 @@ describe('sanitizeDocHtml', () => {
     const out = sanitizeDocHtml('<a href="https://example.com">site</a>');
     expect(out).toContain('href="https://example.com"');
     expect(out).toContain('site');
+  });
+
+  it('strips a protocol-relative href (schemeless off-site redirect)', () => {
+    const out = sanitizeDocHtml('<a href="//evil.com">click me</a>');
+    expect(out).not.toContain('href=');
+    expect(out).toContain('click me');
+  });
+
+  it('preserves a root-relative href', () => {
+    const out = sanitizeDocHtml('<a href="/files/report.pdf">report</a>');
+    expect(out).toContain('href="/files/report.pdf"');
+    expect(out).toContain('report');
   });
 
   it('removes script tags entirely, including their contents', () => {

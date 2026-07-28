@@ -40,9 +40,8 @@ export default function ElecPipelinePage({ bids, setBids, setWonJobs, onOpenBid,
     if (match) {
       openedParam.current = openId;
       onOpenBid(openId);
-      onClearParam?.();
     }
-  }, [openId, bids, onOpenBid, onClearParam]);
+  }, [openId, bids, onOpenBid]);
 
   const { moveToStage, advance, pendingLost, cancelLost } = usePipeline({
     bids, setBids, setWonJobs, showToast,

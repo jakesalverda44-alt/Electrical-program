@@ -136,7 +136,7 @@ export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, o
         {tab === 'files' && (
           <div data-testid="hub-tab-files">
             <RecordFiles linkedId={bid.id} linkedName={bid.name} div="elec"
-              emptyHint="Upload contracts, change orders, invoices, and photos here. Add large plan sets directly in the Drive folder above."/>
+              emptyHint="Upload contracts, change orders, invoices, and photos here. Add large plan sets directly in the Drive folder on the Overview tab."/>
           </div>
         )}
         {tab === 'activity' && (

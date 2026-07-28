@@ -24,7 +24,8 @@ const DOC_HTML_ALLOWED_ATTR = ['href', 'src', 'alt', 'title', 'colspan', 'rowspa
 DOMPurify.addHook('afterSanitizeAttributes', node => {
   if (node.tagName !== 'A' || !node.hasAttribute('href')) return;
   const href = node.getAttribute('href') || '';
-  if (!/^(https?:|mailto:)/i.test(href) && !href.startsWith('#') && !href.startsWith('/')) {
+  const isRootRelative = href.startsWith('/') && !href.startsWith('//');
+  if (!/^(https?:|mailto:)/i.test(href) && !href.startsWith('#') && !isRootRelative) {
     node.removeAttribute('href');
   }
 });
@@ -42,6 +43,7 @@ export function sanitizeDocHtml(html: string): string {
 }
 
 const SHEET_EXT = ['.xlsx', '.xls', '.csv'];
+const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
 const MAX_ROWS_PER_SHEET = 200;
 
 /** Decide how a document should be previewed based on its filename/mime type. */
@@ -51,6 +53,9 @@ export function previewKind(name: string, fileType?: string | null): PreviewKind
   if (lower.endsWith('.pdf')) return 'inline';
   if (SHEET_EXT.some(ext => lower.endsWith(ext))) return 'sheet';
   if (lower.endsWith('.docx')) return 'doc';
+  // Legacy docs saved without a file_type: fall back to the image extension
+  // so they still preview inline instead of forcing a download.
+  if (IMAGE_EXT.some(ext => lower.endsWith(ext))) return 'inline';
 
   const type = (fileType || '').toLowerCase();
   if (type === 'application/pdf' || type.startsWith('image/')) return 'inline';
