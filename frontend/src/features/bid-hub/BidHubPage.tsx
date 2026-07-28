@@ -8,6 +8,8 @@ import { ELEC_STAGES } from '../pipeline/constants';
 import { useUser, useShowToast, useSettings } from '../../contexts/AppContext';
 import OverviewTab from './OverviewTab';
 import ActivityTab from './ActivityTab';
+import BidCompare from '../preconstruction/BidCompare';
+import RecordFiles from '../../components/RecordFiles';
 
 export type HubTab = 'overview' | 'estimating' | 'compare' | 'files' | 'activity';
 
@@ -125,8 +127,17 @@ export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, o
             />
           </div>
         )}
-        {tab === 'compare' && <div data-testid="hub-tab-compare">Compare — coming soon</div>}
-        {tab === 'files' && <div data-testid="hub-tab-files">Files — coming soon</div>}
+        {tab === 'compare' && (
+          <div data-testid="hub-tab-compare">
+            <BidCompare bidId={bid.id}/>
+          </div>
+        )}
+        {tab === 'files' && (
+          <div data-testid="hub-tab-files">
+            <RecordFiles linkedId={bid.id} linkedName={bid.name} div="elec"
+              emptyHint="Upload contracts, change orders, invoices, and photos here. Add large plan sets directly in the Drive folder above."/>
+          </div>
+        )}
         {tab === 'activity' && (
           <div data-testid="hub-tab-activity">
             <ActivityTab bid={bid} onBidUpdated={onBidUpdated}/>
