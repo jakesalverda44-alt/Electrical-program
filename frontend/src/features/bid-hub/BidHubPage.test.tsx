@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import BidHubPage from './BidHubPage';
 import api from '../../api/client';
 import { Bid } from '../../types';
+import { moneyShort } from '../../lib/money';
 
 afterEach(cleanup);
 
@@ -67,7 +68,7 @@ describe('BidHubPage', () => {
 
   it('overview shows stat row and stage pills', () => {
     render(<MemoryRouter><BidHubPage {...baseProps}/></MemoryRouter>);
-    expect(screen.getByText(/\$250k/i)).toBeTruthy();          // amount tile
+    expect(screen.getByText(moneyShort(250000))).toBeTruthy(); // amount tile
     expect(screen.getByRole('button', { name: /submitted/i })).toBeTruthy(); // stage pill
   });
 

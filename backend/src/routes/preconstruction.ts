@@ -634,7 +634,7 @@ router.get('/comparables-preview', requireAuth, asyncHandler(async (req: AuthReq
        AND b.amount IS NOT NULL AND b.amount > 0
        AND ($1::text IS NOT NULL AND b.brand = $1
             OR $2::text IS NOT NULL AND b.project_type = $2)
-       AND ($4::text IS NULL OR b.salesperson_id = $4)
+       AND ($4::uuid IS NULL OR b.salesperson_id = $4::uuid)
      ORDER BY ((($1::text IS NOT NULL) AND b.brand = $1)) DESC,
               CASE WHEN $3::numeric IS NULL OR b.sq_ft IS NULL THEN 1 ELSE 0 END,
               ABS(COALESCE(b.sq_ft, 0) - COALESCE($3::numeric, 0)),
@@ -675,7 +675,7 @@ router.get('/:bidId/comparables', requireAuth, asyncHandler(async (req: AuthRequ
   const scope = ownScopeId(req.user!);
   const { rows } = await pool.query(`
     SELECT b.id, b.name, b.gc, b.stage, b.brand, b.project_type, b.sq_ft, b.amount,
-           b.updated_at, b.date_won, b.awarded_at,
+           b.updated_at, b.awarded_at,
            (bt.bid_id IS NOT NULL) AS has_takeoff,
            (bc.bid_id IS NOT NULL) AS has_breakdown,
            bc.labor_hours
@@ -687,7 +687,7 @@ router.get('/:bidId/comparables', requireAuth, asyncHandler(async (req: AuthRequ
        AND b.amount IS NOT NULL AND b.amount > 0
        AND ($2::text IS NOT NULL AND b.brand = $2
             OR $3::text IS NOT NULL AND b.project_type = $3)
-       AND ($5::text IS NULL OR b.salesperson_id = $5)
+       AND ($5::uuid IS NULL OR b.salesperson_id = $5::uuid)
      ORDER BY ((($2::text IS NOT NULL) AND b.brand = $2)) DESC,
               CASE WHEN $4::numeric IS NULL OR b.sq_ft IS NULL THEN 1 ELSE 0 END,
               ABS(COALESCE(b.sq_ft, 0) - COALESCE($4::numeric, 0)),
@@ -728,7 +728,7 @@ router.get('/:bidId/compare', requireAuth, asyncHandler(async (req: AuthRequest,
       LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id
       LEFT JOIN bid_cost_breakdown bc ON bc.bid_id = b.id
      WHERE b.id = ANY($1::uuid[]) AND b.deleted_at IS NULL
-       AND ($2::text IS NULL OR b.salesperson_id = $2)
+       AND ($2::uuid IS NULL OR b.salesperson_id = $2::uuid)
   `, [ids, scope]);
 
   // Preserve caller order, subject bid first.

@@ -13,7 +13,7 @@ interface Comparable {
   brand: string | null; project_type: string | null;
   sq_ft: number | null; amount: string | null;
   has_takeoff: boolean; has_breakdown: boolean; labor_hours: string | null;
-  date_won: string | null; awarded_at: string | null;
+  awarded_at: string | null;
 }
 
 interface CategoryRollup { name: string; itemCount: number; totals: Record<string, number> }
@@ -52,10 +52,9 @@ const headCell: React.CSSProperties = {
   letterSpacing: .3, whiteSpace: 'nowrap',
 };
 
-const outcomeYear = (dateWon?: string | null, awardedAt?: string | null): number | null => {
-  const raw = dateWon || awardedAt;
-  if (!raw) return null;
-  const d = new Date(raw);
+const outcomeYear = (awardedAt?: string | null): number | null => {
+  if (!awardedAt) return null;
+  const d = new Date(awardedAt);
   return Number.isNaN(d.getTime()) ? null : d.getFullYear();
 };
 
@@ -237,7 +236,7 @@ export default function BidCompare({ bidId, brand, projectType }: {
         <div style={{ padding: 12, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {comparables.map(c => {
             const on = selected.has(c.id);
-            const year = outcomeYear(c.date_won, c.awarded_at);
+            const year = outcomeYear(c.awarded_at);
             return (
               <button key={c.id} onClick={() => toggle(c.id)}
                 style={{

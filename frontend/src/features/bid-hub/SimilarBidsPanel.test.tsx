@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import SimilarBidsPanel from './SimilarBidsPanel';
+import { moneyShort } from '../../lib/money';
 
 afterEach(cleanup);
 
@@ -24,7 +25,7 @@ describe('SimilarBidsPanel', () => {
     expect(screen.getByText('Won')).toBeTruthy();
     expect(screen.getByText('Lost')).toBeTruthy();
     expect(screen.getByText(/\$30\.00\/SF/)).toBeTruthy(); // 120000/4000
-    expect(screen.getByText('$120K')).toBeTruthy();
+    expect(screen.getByText(moneyShort(120000))).toBeTruthy();
   });
 
   it('calls onGoCompare when the button is clicked', async () => {
