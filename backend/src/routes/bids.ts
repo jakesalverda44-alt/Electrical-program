@@ -370,7 +370,7 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
 router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   const existingBid = await loadOwnedBid(req, res);
   if (!existingBid) return;
-  const { name, gc, loc, amount, due, sheets, contact, project_type, sq_ft, date_won } = req.body;
+  const { name, gc, loc, amount, due, sheets, contact, project_type, sq_ft, notes, date_won } = req.body;
   const fields: string[] = [];
   const vals: unknown[] = [];
   let i = 1;
@@ -383,6 +383,7 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (contact      !== undefined) { fields.push(`contact=$${i++}`);      vals.push(contact.trim()); }
   if (project_type !== undefined) { fields.push(`project_type=$${i++}`); vals.push(project_type || null); }
   if (sq_ft        !== undefined) { fields.push(`sq_ft=$${i++}`);        vals.push(sq_ft === '' || sq_ft === null ? null : Number(sq_ft)); }
+  if (notes        !== undefined) { fields.push(`notes=$${i++}`);        vals.push(notes?.trim() || null); }
   if (!fields.length && date_won === undefined) return res.status(400).json({ error: 'Nothing to update' });
   let bid = existingBid;
   if (fields.length) {

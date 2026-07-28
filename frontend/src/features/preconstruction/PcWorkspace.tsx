@@ -12,6 +12,7 @@ interface Props {
   onUpdate: (ws: PcWorkspace) => void;
   onBack: () => void;
   onConverted: (bid: Bid) => void;
+  onBidUpdated: (bid: Bid) => void;
   showToast: (t: Toast) => void;
   userRole?: string;
   settings?: AppSettings;
@@ -229,7 +230,7 @@ function parseAgent1Service(output: string): { voltage: string; ampacity: string
   }
 }
 
-export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, showToast, userRole, settings }: Props) {
+export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings }: Props) {
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
   const [rfiSuggesting, setRfiSuggesting] = useState(false);
@@ -255,6 +256,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [propPrice,  setPropPrice]  = useState('');
   const [propNotes,  setPropNotes]  = useState('');
   const [agent4Running, setAgent4Running] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importPreview, setImportPreview] = useState<{ amount: string; projectType: string; sqFt: string; scopeText: string } | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const [savingImport, setSavingImport] = useState(false);
   const pollRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
   const agent4PollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -678,6 +683,52 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     addFiles(Array.from(e.dataTransfer.files));
   };
 
+  // Import a finished bid doc (.docx/.pdf) without running the AI agents — label/regex
+  // extraction only. Shows an editable preview; nothing is saved until confirmed.
+  const handleImportBidFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (importFileRef.current) importFileRef.current.value = '';
+    if (!file) return;
+    setImportBusy(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const { data } = await api.post(`/preconstruction/${bid.id}/import-bid`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setImportPreview({
+        amount: data.amount != null ? String(data.amount) : (bid.amount ? String(bid.amount) : ''),
+        projectType: bid.project_type ?? '',
+        sqFt: bid.sq_ft ? String(bid.sq_ft) : '',
+        scopeText: data.scopeText || '',
+      });
+      if (!data.amount) showToast({ title: 'No amount found', sub: 'Couldn\'t find a total in that file — enter it manually below.' });
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to read that file';
+      showToast({ title: 'Import failed', sub: msg });
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  const saveImportedBid = async () => {
+    if (!importPreview) return;
+    setSavingImport(true);
+    try {
+      const { data } = await api.patch(`/bids/${bid.id}`, {
+        amount: importPreview.amount === '' ? null : Number(importPreview.amount),
+        project_type: importPreview.projectType || null,
+        sq_ft: importPreview.sqFt === '' ? null : Number(importPreview.sqFt),
+        notes: importPreview.scopeText,
+      });
+      if (data.bid) onBidUpdated(data.bid);
+      showToast({ title: 'Bid saved', sub: 'Amount, project type, and scope logged for this project.' });
+      setImportPreview(null);
+    } catch {
+      showToast({ title: 'Save failed', sub: 'Could not save the imported bid.' });
+    } finally {
+      setSavingImport(false);
+    }
+  };
+
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(key);
@@ -709,6 +760,66 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               <div style={{ padding: 16 }}>
                 <textarea style={{ width: '100%', font: 'inherit', fontSize: 13, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 9, padding: '10px 12px', height: 140, resize: 'vertical', outline: 'none', boxSizing: 'border-box' }}
                   value={ws.notes} onChange={e => set({ notes: e.target.value })} placeholder="Add notes, reminders, or key info about this bid…"/>
+              </div>
+            </div>
+            <div className="panel" style={{ marginTop: 12 }}>
+              <div className="panel-hdr">
+                <span className="panel-title">Import Finished Bid</span>
+                <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>No AI &middot; reads your proposal doc directly</span>
+              </div>
+              <div style={{ padding: 16 }}>
+                {!importPreview ? (
+                  <>
+                    <p style={{ fontSize: 12.5, color: 'var(--text3)', margin: '0 0 10px' }}>
+                      Already built this bid outside the AI pipeline? Upload the finished proposal (.docx or .pdf) to
+                      pull the contract amount and scope of work straight into this bid card.
+                    </p>
+                    <input ref={importFileRef} type="file" accept=".docx,.pdf" style={{ display: 'none' }} onChange={handleImportBidFile}/>
+                    <button className="btn" disabled={importBusy} onClick={() => importFileRef.current?.click()} style={{ fontSize: 13 }}>
+                      {importBusy ? 'Reading file…' : 'Upload Bid Document'} <Icon name="cloudup" size={14} stroke={2.2}/>
+                    </button>
+                  </>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <label style={{ flex: 1, fontSize: 12, fontWeight: 700, color: 'var(--text3)' }}>
+                        Amount
+                        <input type="number" value={importPreview.amount}
+                          onChange={e => setImportPreview(p => p && { ...p, amount: e.target.value })}
+                          style={{ width: '100%', marginTop: 4, font: 'inherit', fontSize: 13, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 9, padding: '8px 10px', boxSizing: 'border-box' }}/>
+                      </label>
+                      <label style={{ flex: 1, fontSize: 12, fontWeight: 700, color: 'var(--text3)' }}>
+                        Project Type
+                        <select value={importPreview.projectType}
+                          onChange={e => setImportPreview(p => p && { ...p, projectType: e.target.value })}
+                          style={{ width: '100%', marginTop: 4, font: 'inherit', fontSize: 13, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 9, padding: '8px 10px', boxSizing: 'border-box' }}>
+                          <option value="">— Select —</option>
+                          {PROJECT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                        </select>
+                      </label>
+                      <label style={{ width: 110, fontSize: 12, fontWeight: 700, color: 'var(--text3)' }}>
+                        Sq Ft
+                        <input type="number" value={importPreview.sqFt}
+                          onChange={e => setImportPreview(p => p && { ...p, sqFt: e.target.value })}
+                          style={{ width: '100%', marginTop: 4, font: 'inherit', fontSize: 13, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 9, padding: '8px 10px', boxSizing: 'border-box' }}/>
+                      </label>
+                    </div>
+                    <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)' }}>
+                      Scope of Work (extracted — review before saving)
+                      <textarea value={importPreview.scopeText}
+                        onChange={e => setImportPreview(p => p && { ...p, scopeText: e.target.value })}
+                        style={{ width: '100%', marginTop: 4, font: 'inherit', fontSize: 13, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 9, padding: '10px 12px', height: 160, resize: 'vertical', outline: 'none', boxSizing: 'border-box' }}/>
+                    </label>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <button className="btn" disabled={savingImport} onClick={saveImportedBid} style={{ fontSize: 13 }}>
+                        {savingImport ? 'Saving…' : 'Save to Bid Card'}
+                      </button>
+                      <button className="btn ghost" disabled={savingImport} onClick={() => setImportPreview(null)} style={{ fontSize: 13 }}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
             <div style={{ marginTop: 12, display: 'flex', gap: 10 }}>

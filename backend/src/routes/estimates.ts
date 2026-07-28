@@ -60,7 +60,8 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const total_profit   = (total_direct + total_overhead) * (profit_pct / 100);
   const grand_total    = total_direct + total_overhead + total_profit;
 
-  // Count comps: awarded bids of same project_type with a saved estimate
+  // Count comps: awarded bids of same project_type with a known amount — either a saved
+  // estimate or an imported past bid (see preconstruction.ts import-bid), whichever set it.
   const { rows: bidRows } = await pool.query(
     'SELECT project_type FROM bids WHERE id = $1 AND deleted_at IS NULL',
     [bidId]
@@ -70,8 +71,8 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
     const { rows: comps } = await pool.query(
       `SELECT COUNT(*)::int AS cnt
        FROM bids b
-       JOIN bid_estimates be ON be.bid_id = b.id
-       WHERE b.stage = 'awarded' AND b.project_type = $1 AND b.id != $2 AND b.deleted_at IS NULL`,
+       WHERE b.stage = 'awarded' AND b.project_type = $1 AND b.amount IS NOT NULL
+         AND b.id != $2 AND b.deleted_at IS NULL`,
       [bidRows[0].project_type, bidId]
     );
     comp_count = comps[0]?.cnt ?? 0;

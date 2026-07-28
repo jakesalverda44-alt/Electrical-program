@@ -11,12 +11,16 @@ import { callWithRetry } from '../ai/retry';
 import { parseAIJSON, extractJSONText } from '../ai/json';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
-import { drawingUpload } from '../utils/upload';
+import { drawingUpload, documentUpload } from '../utils/upload';
 import { uploadFile, getFileMedia } from '../services/googleDrive';
 import { buildAgent1Content, type PrepFile, type Agent1Block } from '../ai/documentPrep';
+import { extractDocxText, extractPdfText, parseBidDocText } from '../utils/bidDocParse';
 
 // Cap on tiles rasterized per PDF page (cost control — see Stage 0 doc prep).
 const MAX_TILES_PER_PAGE = 9;
+
+// Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
+const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'warehouse', 'restaurant', 'medical', 'retail', 'other'];
 
 const router = Router();
 const upload = drawingUpload;
@@ -449,6 +453,21 @@ async function runPipeline(
       bidId,
     ]);
 
+    // Auto-fill project_type/sq_ft from the takeoff extraction — never overwrite a manually-set value
+    const a1Project = (a1.project ?? {}) as Record<string, unknown>;
+    const extractedType = String(a1Project.projectType ?? '');
+    const extractedSqFt = Number(a1Project.sqFt) || null;
+    const validType = PROJECT_TYPES.includes(extractedType) ? extractedType : null;
+    if (validType || extractedSqFt) {
+      await pool.query(
+        `UPDATE bids SET
+           project_type = COALESCE(project_type, $1),
+           sq_ft = COALESCE(sq_ft, $2)
+         WHERE id=$3 AND deleted_at IS NULL`,
+        [validType, extractedSqFt, bidId]
+      );
+    }
+
     // Fire-and-forget: upload scope extraction JSON to Drive
     (async () => {
       try {
@@ -492,6 +511,30 @@ async function runPipeline(
 router.get('/prompt-defaults', requireAuth, (_req, res) => {
   res.json({ agent1: AGENT1_SYSTEM, agent2: AGENT2_SYSTEM, agent3: AGENT3_SYSTEM, agent4: AGENT4_SYSTEM });
 });
+
+// POST import-bid — non-AI extraction of amount + scope of work from a finished bid
+// document (.docx/.pdf), for logging a bid you already built outside the agent pipeline.
+// Label/regex parsing only — reliable for APT's own proposal template. Returns a preview;
+// nothing is saved until the caller PATCHes the bid with the confirmed values.
+router.post('/:bidId/import-bid', requireAuth, documentUpload.single('file'), asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: 'file required' });
+
+  const ext = (file.originalname.split('.').pop() || '').toLowerCase();
+  let text = '';
+  if (ext === 'docx') {
+    text = extractDocxText(file.buffer);
+  } else if (ext === 'pdf') {
+    text = await extractPdfText(file.buffer);
+  } else {
+    return res.status(400).json({ error: 'Only .docx and .pdf are supported for bid import' });
+  }
+
+  res.json(parseBidDocText(text));
+}));
 
 // GET all workspaces (for restoring state on app load). Restricted reps only get
 // workspaces for bids they own; managers/admins see all.

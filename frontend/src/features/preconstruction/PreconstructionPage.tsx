@@ -48,6 +48,7 @@ export default function PreconstructionPage({ bids, pcData, onPcUpdate, onBidUpd
           onUpdate={updated => onPcUpdate(bid.id, updated)}
           onBack={() => setActiveBidId(null)}
           onConverted={handleConverted}
+          onBidUpdated={onBidUpdated}
           showToast={showToast}
           userRole={userRole}
           settings={settings}

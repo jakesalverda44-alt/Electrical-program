@@ -26,7 +26,9 @@ Return ONLY valid compact JSON — no prose, no markdown, no explanation.
     "gcContact": "",
     "gcEmail": "",
     "drawingDate": "",
-    "sheets": []
+    "sheets": [],
+    "projectType": "",
+    "sqFt": 0
   },
   "service": {
     "voltage": "",
@@ -90,6 +92,9 @@ Return ONLY valid compact JSON — no prose, no markdown, no explanation.
   "scopeNotes": [],
   "missingSheets": []
 }
+
+PROJECT TYPE — classify the overall project from the cover sheet / architectural plans into exactly one of: cstore_fuel, car_wash, self_storage, office, warehouse, restaurant, medical, retail, other. Leave "" only if the building type cannot be determined at all.
+SQ FT — total building square footage from the cover sheet, architectural plans, or code data plate. 0 if not stated anywhere in the documents.
 
 CATEGORIES for quantities array:
 Service & Distribution | Interior Lighting | Exterior Site Lighting | Lighting Controls | Branch Power | Site Underground Allowances | Low Voltage | Grounding
