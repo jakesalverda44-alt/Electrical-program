@@ -8,6 +8,7 @@ import api from '../../api/client';
 import BuildFromNotesModal from '../builder/BuildFromNotesModal';
 import SiteVisitChecklist from './SiteVisitChecklist';
 import SurveyMarkupEditor from './SurveyMarkupEditor';
+import DocSlot from './DocSlot';
 import { isPrivileged } from '../../hooks/useAuth';
 import { useUser } from '../../contexts/AppContext';
 import { useShowToast } from '../../contexts/AppContext';
@@ -276,6 +277,13 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
               </button>
             </div>
           )}
+
+          {/* Sizer report — usually run on Generac/Kohler's own sizing tool and saved
+              off-CRM, then attached here once the job's underway. */}
+          <div className="dtl-section" style={{ marginTop: 16 }}>
+            <div className="dtl-stage-label" style={{ marginBottom: 8 }}>Sizer Report</div>
+            <DocSlot genId={gen.id} category="sizer_report" label="Sizer Report"/>
+          </div>
 
           {/* Photos & files up top so site-visit capture is one tap on mobile, not
               buried below every action button. */}
