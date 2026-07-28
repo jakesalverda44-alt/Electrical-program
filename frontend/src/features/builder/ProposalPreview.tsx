@@ -227,7 +227,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
   const taxableSMM   = totals.smmTotal;
   const taxableSurge = totals.surgeTotal;
   const taxableWarranty = totals.extWarrantyAmt;
-  const taxableTotal = taxableGen + taxablePad + taxableBatt + taxableATS + taxableSMM + taxableSurge + taxableWarranty;
+  const taxableEmPanel  = totals.emPanelAmt;
   const nonTaxable   = totals.laborAmt + totals.permitAmt + totals.startupAmt + totals.extraWireAmt + totals.liftAmt + totals.removalFee;
   // Promo date range for the extended-warranty scope line / breakdown row, if set.
   const warrantyPromoRange = [fmtDateLocal(form.extWarrantyPromoStart), fmtDateLocal(form.extWarrantyPromoEnd)].filter(Boolean).join(' – ');
@@ -438,8 +438,10 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                     { label: `Surge Protector × ${form.surgeProQty}`, tax: 'taxable', amt: taxableSurge, show: taxableSurge > 0 },
                     { label: 'Extended Warranty (10-Year)', tax: 'taxable', amt: taxableWarranty, show: form.extWarranty === 'paid' },
                     { label: `Extended Warranty (10-Year) — ${form.brand === 'Kohler' ? 'Kohler Promo' : 'Included by APT'} (FREE${form.brand === 'Kohler' && warrantyPromoRange ? `, valid ${warrantyPromoRange}` : ''})`, tax: 'taxable', amt: 0, show: form.extWarranty === 'promo' },
+                    { label: 'Emergency Panel', tax: 'taxable', amt: taxableEmPanel, show: taxableEmPanel > 0 },
                     { label: '1-Year Silver Service — Promo (FREE)', tax: '', amt: 0, show: !!form.silverServicePromo },
                     { label: `Labor & Electrical${form.extraWire > 0 ? ` + ${form.extraWire} ft extra wire` : ''}`, tax: '', amt: totals.laborAmt + totals.extraWireAmt, show: true },
+                    { label: 'Gas Line', tax: '', amt: totals.gasLineAmt, show: totals.gasLineAmt > 0 },
                     { label: 'Permit Fee', tax: '', amt: totals.permitAmt, show: true },
                     { label: 'Startup & Commissioning', tax: '', amt: totals.startupAmt, show: true },
                     ...(totals.liftAmt > 0 ? [{ label: form.liftType === 'lull' ? 'Lull' : 'Crane', tax: '', amt: totals.liftAmt, show: true }] : []),
@@ -470,7 +472,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                 </tbody>
               </table>
               <p style={{ fontSize: 8, color: GRAY_M, lineHeight: '13px' }}>
-                Sales tax is applied to: generator, concrete pad, battery, additional ATS, SMM, surge protector, and extended warranty. Labor, permit fees, and startup/commissioning are non-taxable.
+                Sales tax is applied to: generator, concrete pad, battery, additional ATS, SMM, surge protector, emergency panel, and extended warranty (when purchased). Labor, permit fees, startup/commissioning, gas line, lift/crane, and removal are non-taxable. Any discount is applied proportionally across taxable and non-taxable items.
               </p>
             </div>
           )}

@@ -504,15 +504,24 @@ function calcFormTotals(g: Record<string, unknown>) {
   const laborAmt    = Number(g.labor)   || ADDON_P.labor;
   const permitAmt   = Number(g.permit)  || ADDON_P.permit;
   const startupAmt  = coolingType === 'liquid-cooled' ? ADDON_P.startupLC : (Number(g.startup) || ADDON_P.startup);
-  const subtotal    = genP + padAmt + smmTotal + surgeTotal + batteryAmt + emPanelAmt + gasLineAmt + extraWireAmt + atsAmt + extWarrantyAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
+  // Keep in step with calcGenTotals in frontend/src/features/builder/genCalc.ts.
+  // Sales tax applies to tangible goods only, matching the proposal's price breakdown:
+  // labor, permit, startup, lift, removal and the gas line are services, and extra wire
+  // is shown to the customer inside the non-taxable "Labor & Electrical" line.
+  const taxableBase    = genP + padAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt;
+  const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
+  const subtotal    = taxableBase + nonTaxableBase;
   const discountAmt = g.discountType === '%'
     ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
     : (Number(g.discount) || 0);
-  const taxable     = subtotal - discountAmt;
-  const tax         = Math.round(taxable * ((Number(g.taxRate) || 7) / 100));
-  const total       = taxable + tax;
+  const taxedAmount = subtotal > 0
+    ? Math.max(0, taxableBase - (discountAmt * taxableBase) / subtotal)
+    : 0;
+  const netSubtotal = subtotal - discountAmt;
+  const tax         = Math.round(taxedAmount * ((Number(g.taxRate) || 7) / 100));
+  const total       = netSubtotal + tax;
   const deposit     = Math.round(total * ((Number(g.depositPct) || 50) / 100));
-  return { genP, padAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxable, tax, total, deposit };
+  return { genP, padAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
 }
 
 const BUILD_FROM_NOTES_SYSTEM = `You are an expert generator installation estimator. Extract a proposal form (GenForm) from field site visit notes.

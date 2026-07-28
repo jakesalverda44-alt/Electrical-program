@@ -13,26 +13,58 @@ describe('calcGenTotals', () => {
       t.atsAmt + t.extWarrantyAmt + t.liftAmt + t.removalFee + t.laborAmt + t.permitAmt + t.startupAmt;
     expect(t.subtotal).toBe(lineSum);
 
-    // Taxable = subtotal - discount; total = taxable + tax
-    expect(t.taxable).toBe(t.subtotal - t.discountAmt);
-    expect(t.total).toBe(t.taxable + t.tax);
+    // Net subtotal = subtotal - discount; total = net subtotal + tax
+    expect(t.netSubtotal).toBe(t.subtotal - t.discountAmt);
+    expect(t.total).toBe(t.netSubtotal + t.tax);
 
     // Deposit is half the total (rounded)
     expect(t.deposit).toBe(Math.round(t.total * 0.5));
   });
 
-  it('applies a percentage discount before tax', () => {
+  it('taxes goods only — labor, permit and startup are never taxed', () => {
+    const form: GenForm = { ...blankGenForm(), taxRate: 7 };
+    const t = calcGenTotals(form);
+
+    expect(t.taxableBase).toBe(
+      t.genP + t.padAmt + t.batteryAmt + t.atsAmt + t.smmTotal + t.surgeTotal + t.extWarrantyAmt + t.emPanelAmt
+    );
+    expect(t.nonTaxableBase).toBe(
+      t.gasLineAmt + t.extraWireAmt + t.liftAmt + t.removalFee + t.laborAmt + t.permitAmt + t.startupAmt
+    );
+    expect(t.taxableBase + t.nonTaxableBase).toBe(t.subtotal);
+
+    // The service lines carry real money that must stay out of the tax base.
+    expect(t.laborAmt + t.permitAmt + t.startupAmt).toBeGreaterThan(0);
+    expect(t.tax).toBe(Math.round(t.taxableBase * 0.07));
+    expect(t.tax).toBeLessThan(Math.round(t.subtotal * 0.07));
+  });
+
+  it('a free promo extended warranty adds no tax', () => {
+    const paid: GenForm = { ...blankGenForm(), extWarranty: 'paid', taxRate: 7 };
+    const promo: GenForm = { ...blankGenForm(), extWarranty: 'promo', taxRate: 7 };
+    const tPaid = calcGenTotals(paid);
+    const tPromo = calcGenTotals(promo);
+
+    expect(tPromo.extWarrantyAmt).toBe(0);
+    expect(tPromo.tax).toBeLessThan(tPaid.tax);
+  });
+
+  it('spreads a percentage discount pro-rata across taxable and non-taxable', () => {
     const form: GenForm = { ...blankGenForm(), discount: 10, discountType: '%', taxRate: 7 };
     const t = calcGenTotals(form);
     expect(t.discountAmt).toBe(Math.round(t.subtotal * 0.1));
-    expect(t.tax).toBe(Math.round(t.taxable * 0.07));
+    expect(t.taxedAmount).toBeCloseTo(t.taxableBase - (t.discountAmt * t.taxableBase) / t.subtotal, 6);
+    expect(t.tax).toBe(Math.round(t.taxedAmount * 0.07));
   });
 
-  it('applies a flat dollar discount', () => {
+  it('applies a flat dollar discount pro-rata to the tax base', () => {
     const form: GenForm = { ...blankGenForm(), discount: 500, discountType: '$' };
     const t = calcGenTotals(form);
     expect(t.discountAmt).toBe(500);
-    expect(t.taxable).toBe(t.subtotal - 500);
+    expect(t.netSubtotal).toBe(t.subtotal - 500);
+    // Only the taxable share of the $500 comes off the tax base.
+    expect(t.taxedAmount).toBeCloseTo(t.taxableBase - (500 * t.taxableBase) / t.subtotal, 6);
+    expect(t.taxedAmount).toBeGreaterThan(t.taxableBase - 500);
   });
 
   it('air-cooled includes 1 ATS free — default qty of 1 bills nothing extra', () => {

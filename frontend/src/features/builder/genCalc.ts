@@ -128,7 +128,14 @@ export interface GenTotals {
   extraWireAmt: number;
   subtotal: number;
   discountAmt: number;
-  taxable: number;
+  /** Tangible goods, before discount — the only lines sales tax applies to. */
+  taxableBase: number;
+  /** Labor, permit, startup, lift, removal, gas line — never taxed. */
+  nonTaxableBase: number;
+  /** taxableBase after its pro-rata share of the discount; the figure tax is charged on. */
+  taxedAmount: number;
+  /** subtotal − discountAmt: the contract price before tax. */
+  netSubtotal: number;
   tax: number;
   total: number;
   deposit: number;
@@ -156,16 +163,28 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const permitAmt  = Number(g.permit);
   const startupAmt = g.coolingType === 'liquid-cooled' ? DEFAULT_PRICES.startupLC : Number(g.startup);
 
-  const subtotal   = genP + padAmt + smmTotal + surgeTotal + batteryAmt + emPanelAmt + gasLineAmt + extraWireAmt + atsAmt + extWarrantyAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
+  // Sales tax applies to tangible goods only — matching what the proposal's price
+  // breakdown tells the customer. Labor, permit fees, startup/commissioning, lift and
+  // removal are services; the gas line is an install, and extra wire is presented to
+  // the customer bundled into the non-taxable "Labor & Electrical" line.
+  // A promo extended warranty is $0 here, so it contributes no tax by construction.
+  const taxableBase    = genP + padAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt;
+  const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
+  const subtotal   = taxableBase + nonTaxableBase;
   const discountAmt = g.discountType === '%'
     ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
     : (Number(g.discount) || 0);
-  const taxable    = subtotal - discountAmt;
-  const tax        = Math.round(taxable * (Number(g.taxRate) / 100));
-  const total      = taxable + tax;
+  // A discount is given against the whole job, so it reduces the taxable base only in
+  // proportion to that base's share of the contract.
+  const taxedAmount = subtotal > 0
+    ? Math.max(0, taxableBase - (discountAmt * taxableBase) / subtotal)
+    : 0;
+  const netSubtotal = subtotal - discountAmt;
+  const tax        = Math.round(taxedAmount * (Number(g.taxRate) / 100));
+  const total      = netSubtotal + tax;
   const deposit    = Math.round(total * ((Number(g.depositPct) || 50) / 100));
 
-  return { genP, padAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxable, tax, total, deposit };
+  return { genP, padAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
 }
 
 export function genPriceRows(g: GenForm, t: GenTotals, fmt: (n: number) => string) {
