@@ -2,8 +2,10 @@ import React from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Icon from '../../components/Icon';
 import { Bid, WonJob } from '../../types';
-import { PcWorkspace } from '../preconstruction/constants';
+import { PcWorkspace, blankWorkspace } from '../preconstruction/constants';
+import PcWorkspaceView from '../preconstruction/PcWorkspace';
 import { ELEC_STAGES } from '../pipeline/constants';
+import { useUser, useShowToast, useSettings } from '../../contexts/AppContext';
 import OverviewTab from './OverviewTab';
 import ActivityTab from './ActivityTab';
 
@@ -28,12 +30,22 @@ interface Props {
   onNav: (v: string, recordId?: string) => void;
 }
 
-export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, onBidUpdated, onNav }: Props) {
+export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, onPcUpdate, onBidUpdated, onNav }: Props) {
+  const user = useUser();
+  const showToast = useShowToast();
+  const { settings } = useSettings();
   const [params, setParams] = useSearchParams();
   const rawTab = params.get('tab');
   const tab: HubTab = HUB_TABS.some(t => t.key === rawTab) ? (rawTab as HubTab) : 'overview';
 
   const bid = bids.find(b => b.id === bidId);
+
+  React.useEffect(() => {
+    if (!pcData[bidId] && bid) {
+      onPcUpdate(bidId, blankWorkspace(bidId, bid.name, bid.amount ?? 0));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bidId, bid, pcData[bidId]]);
 
   if (!bid) {
     return (
@@ -97,7 +109,22 @@ export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, o
             />
           </div>
         )}
-        {tab === 'estimating' && <div data-testid="hub-tab-estimating">Estimating — coming soon</div>}
+        {tab === 'estimating' && (
+          <div data-testid="hub-tab-estimating">
+            <PcWorkspaceView
+              ws={pcData[bid.id] ?? blankWorkspace(bid.id, bid.name, bid.amount ?? 0)}
+              bid={bid}
+              embedded
+              onUpdate={u => onPcUpdate(bid.id, u)}
+              onBack={() => setTab('overview')}
+              onConverted={b => { onBidUpdated(b); setTab('overview'); }}
+              onBidUpdated={onBidUpdated}
+              showToast={showToast}
+              userRole={user.role}
+              settings={settings}
+            />
+          </div>
+        )}
         {tab === 'compare' && <div data-testid="hub-tab-compare">Compare — coming soon</div>}
         {tab === 'files' && <div data-testid="hub-tab-files">Files — coming soon</div>}
         {tab === 'activity' && (

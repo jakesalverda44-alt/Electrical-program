@@ -20,6 +20,8 @@ vi.mock('../../api/client', () => ({
 
 vi.mock('../../contexts/AppContext', () => ({
   useShowToast: () => vi.fn(),
+  useUser: () => ({ id: 'u1', name: 'Test User', email: 't@example.com', role: 'estimator' }),
+  useSettings: () => ({ settings: {}, reloadSettings: vi.fn() }),
 }));
 
 beforeEach(() => {
@@ -93,5 +95,10 @@ describe('BidHubPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /save details/i }));
 
     expect(api.patch).toHaveBeenCalledWith('/bids/b2/stage', { stage: 'lost', loss_reason: 'Competitor', competitor: 'Acme Electric' });
+  });
+
+  it('estimating tab mounts the workspace', () => {
+    render(<MemoryRouter initialEntries={['/bid/b1?tab=estimating']}><BidHubPage {...baseProps}/></MemoryRouter>);
+    expect(screen.getByTestId('hub-tab-estimating')).toBeTruthy();
   });
 });

@@ -17,6 +17,7 @@ interface Props {
   showToast: (t: Toast) => void;
   userRole?: string;
   settings?: AppSettings;
+  embedded?: boolean;
 }
 
 const STEP_ORDER: PcStepKey[] = ['intake','takeoff','scope','estimate','review','proposal','submitted'];
@@ -237,7 +238,7 @@ function parseAgent1Service(output: string): { voltage: string; ampacity: string
   }
 }
 
-export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings }: Props) {
+export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings, embedded }: Props) {
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
   const [rfiSuggesting, setRfiSuggesting] = useState(false);
@@ -2200,13 +2201,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   return (
     <div className="scroll view-enter">
       {/* Back bar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 24px', borderBottom: '1px solid var(--border)', background: 'var(--panel)' }}>
-        <button className="btn ghost" onClick={onBack} style={{ fontSize: 12, height: 30, padding: '0 10px' }}>
-          ← All Bids
-        </button>
-        <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--text)', flex: 1 }}>{bid.name}</span>
-        <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{bid.gc}</span>
-      </div>
+      {!embedded && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 24px', borderBottom: '1px solid var(--border)', background: 'var(--panel)' }}>
+          <button className="btn ghost" onClick={onBack} style={{ fontSize: 12, height: 30, padding: '0 10px' }}>
+            ← All Bids
+          </button>
+          <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--text)', flex: 1 }}>{bid.name}</span>
+          <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{bid.gc}</span>
+        </div>
+      )}
 
       {/* Step tracker */}
       <div style={{ padding: '16px 24px 12px', borderBottom: '1px solid var(--border)' }}>
