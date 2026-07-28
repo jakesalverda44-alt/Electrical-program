@@ -109,8 +109,23 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 if (process.env.NODE_ENV === 'production') {
   const staticPath = path.join(__dirname, '../../frontend/dist');
-  app.use(express.static(staticPath));
-  app.get('*', (_req, res) => res.sendFile(path.join(staticPath, 'index.html')));
+  // Content-hashed build assets (index-<hash>.js/.css) are immutable — cache them hard.
+  // index.html must NEVER be cached: it points at the current asset hashes, so a stale
+  // copy pins the browser to an old bundle and new deploys never appear (see the
+  // "invisible tabs" incident). no-store forces a fresh fetch of index.html every load.
+  app.use(express.static(staticPath, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('index.html')) {
+        res.setHeader('Cache-Control', 'no-store, must-revalidate');
+      } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  }));
+  app.get('*', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, must-revalidate');
+    res.sendFile(path.join(staticPath, 'index.html'));
+  });
 }
 
 app.use((err: Error & { code?: string; status?: number; statusCode?: number }, req: express.Request, res: express.Response, _next: express.NextFunction) => {
