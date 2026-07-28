@@ -14,6 +14,7 @@ import SalesByRepPage from './features/sales-by-rep/SalesByRepPage';
 import IntakeInboxPage from './features/intake/IntakeInboxPage';
 import BuilderPage from './features/builder/BuilderPage';
 import PreconstructionPage from './features/preconstruction/PreconstructionPage';
+import BidHubPage from './features/bid-hub/BidHubPage';
 import ElecProjectsPage from './features/elec-projects/ElecProjectsPage';
 import GenProjectsPage from './features/gen-projects/GenProjectsPage';
 import ContactsPage from './features/contacts/ContactsPage';
@@ -245,6 +246,16 @@ export default function App() {
             pcData={pcData}
             onPcUpdate={handlePcUpdate}
             onBidUpdated={handleBidUpdated}
+          />
+        );
+      case 'bid':
+        if (!viewParam) return <StubPage title="Bid"/>;
+        return (
+          <BidHubPage
+            bidId={viewParam}
+            bids={bids} setBids={setBids} setWonJobs={setWonJobs}
+            pcData={pcData} onPcUpdate={handlePcUpdate} onBidUpdated={handleBidUpdated}
+            onNav={setView}
           />
         );
       case 'elec-projects':
