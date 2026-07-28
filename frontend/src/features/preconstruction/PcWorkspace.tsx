@@ -18,6 +18,10 @@ interface Props {
   userRole?: string;
   settings?: AppSettings;
   embedded?: boolean;
+  /** When set (embedded in BidHubPage), renders a link in the Files panel that
+   *  navigates to the hub's Files tab — the place to view/download every project
+   *  file, not just the PDFs/images this panel offers to the AI pipeline. */
+  onGoFiles?: () => void;
 }
 
 const STEP_ORDER: PcStepKey[] = ['intake','takeoff','scope','estimate','review','proposal','submitted'];
@@ -182,6 +186,18 @@ function analysisErrorMessage(data: Record<string, unknown> | null | undefined) 
 
 interface ProjectDoc { id: string; name: string; display_name: string; category: string; file_type: string; }
 
+// The AI vision pipeline can only read PDFs and images — this gates which project
+// documents may be sent to it (via the "From Project Files" checkboxes). It does
+// NOT gate what's visible in that list; all project files show there, non-eligible
+// rows just get a disabled checkbox. Full view/download of every file lives in the
+// hub's Files tab.
+function isPdfOrImage(d: { file_type?: string; name?: string }) {
+  const t = (d.file_type || '').toLowerCase();
+  const n = (d.name || '').toLowerCase();
+  return t === 'application/pdf' || t.startsWith('image/')
+    || n.endsWith('.pdf') || n.endsWith('.jpg') || n.endsWith('.jpeg') || n.endsWith('.png');
+}
+
 function lookupUnitCost(
   cat: string,
   lib: { global: Record<string,number>; by_project_type: Record<string,Record<string,number>> },
@@ -238,7 +254,7 @@ function parseAgent1Service(output: string): { voltage: string; ampacity: string
   }
 }
 
-export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings, embedded }: Props) {
+export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings, embedded, onGoFiles }: Props) {
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
   const [rfiSuggesting, setRfiSuggesting] = useState(false);
@@ -423,14 +439,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     api.get(`/preconstruction/intelligence/${bid.id}`).then(r => setBidIntel(r.data)).catch(() => {});
     api.get('/estimates/unit-costs').then(r => setUnitCostLib(r.data || { global: {}, by_project_type: {} })).catch(() => {});
     api.get(`/estimates/${bid.id}`).then(r => { if (r.data) setSavedEstimate(r.data); }).catch(() => {});
+    // Unfiltered — the "From Project Files" panel shows every project document;
+    // eligibility for AI analysis (PDF/image only) is enforced per-row via
+    // isPdfOrImage() at render time, not by hiding files here.
     api.get(`/documents?linked_id=${bid.id}`).then(r => {
-      const docs: ProjectDoc[] = (r.data || []).filter((d: ProjectDoc) => {
-        const t = (d.file_type || '').toLowerCase();
-        const n = (d.name || '').toLowerCase();
-        return t === 'application/pdf' || t.startsWith('image/')
-          || n.endsWith('.pdf') || n.endsWith('.jpg') || n.endsWith('.jpeg') || n.endsWith('.png');
-      });
-      setProjectDocs(docs);
+      setProjectDocs((r.data || []) as ProjectDoc[]);
     }).catch(() => {});
   }, [bid.id]);
 
@@ -671,12 +684,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       return api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
     })).then(() => {
       api.get(`/documents?linked_id=${bid.id}`).then(r => {
-        setProjectDocs((r.data || []).filter((d: ProjectDoc) => {
-          const t = (d.file_type || '').toLowerCase();
-          const n = (d.name || '').toLowerCase();
-          return t === 'application/pdf' || t.startsWith('image/')
-            || n.endsWith('.pdf') || n.endsWith('.jpg') || n.endsWith('.jpeg') || n.endsWith('.png');
-        }));
+        setProjectDocs((r.data || []) as ProjectDoc[]);
       }).catch(() => {});
     }).catch(() => {});
   };
@@ -959,6 +967,18 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         return (
           <div style={{ padding: '20px 24px' }}>
             <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.zip" style={{ display: 'none' }} onChange={handleFileUpload}/>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 14 }}>
+              All project files (view/download) live in the Files tab.
+              {onGoFiles && (
+                <>
+                  {' '}
+                  <button type="button" onClick={onGoFiles}
+                    style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', color: 'var(--blue)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>
+                    Go to Files
+                  </button>
+                </>
+              )}
+            </div>
             {/* Drag-and-drop zone */}
             <div
               onDragOver={e => { e.preventDefault(); setDragOver(true); }}
@@ -1048,16 +1068,19 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   {projectDocs.map(d => {
                     const checked = selectedDocIds.has(d.id);
                     const elec = isElecSheet(d.name);
+                    const eligible = isPdfOrImage(d);
                     return (
-                      <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', cursor: 'pointer',
+                      <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', cursor: eligible ? 'pointer' : 'not-allowed',
+                        opacity: eligible ? 1 : 0.5,
                         background: checked ? 'var(--blue-soft)' : 'transparent', transition: 'background .1s' }}>
-                        <input type="checkbox" checked={checked}
+                        <input type="checkbox" checked={checked} disabled={!eligible}
+                          title={eligible ? undefined : 'AI can only read PDFs and images'}
                           onChange={e => setSelectedDocIds(prev => {
                             const next = new Set(prev);
                             if (e.target.checked) next.add(d.id); else next.delete(d.id);
                             return next;
                           })}
-                          style={{ width: 15, height: 15, accentColor: 'var(--blue)', cursor: 'pointer', flexShrink: 0 }}
+                          style={{ width: 15, height: 15, accentColor: 'var(--blue)', cursor: eligible ? 'pointer' : 'not-allowed', flexShrink: 0 }}
                         />
                         <Icon name="file" size={13} stroke={1.8}/>
                         <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

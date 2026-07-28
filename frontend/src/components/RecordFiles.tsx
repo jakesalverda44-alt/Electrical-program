@@ -110,32 +110,20 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
     }
   };
 
-  const download = (doc: Doc) => {
-    if (doc.storage_url) {
-      // Use a real anchor click so popup blockers can't interfere
+  // Always goes through the backend (authenticated blob fetch), never anchors
+  // doc.storage_url directly: the raw Cloudinary URL is unauthenticated and skips
+  // access checks.
+  const download = async (doc: Doc) => {
+    try {
+      const res = await api.get(`/documents/${doc.id}/download`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
-      a.href = doc.storage_url;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      return;
+      a.href = url; a.download = doc.display_name || doc.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError('Download failed — please re-upload this file.');
     }
-    const token = localStorage.getItem('crm_token');
-    fetch(`/api/documents/${doc.id}/download`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.blob();
-      })
-      .then(blob => {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = doc.display_name;
-        document.body.appendChild(a); a.click(); a.remove();
-        URL.revokeObjectURL(url);
-      })
-      .catch(() => setError('Download failed — please re-upload this file.'));
   };
 
   const remove = async (doc: Doc) => {

@@ -124,6 +124,7 @@ export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, o
               showToast={showToast}
               userRole={user.role}
               settings={settings}
+              onGoFiles={() => setTab('files')}
             />
           </div>
         )}

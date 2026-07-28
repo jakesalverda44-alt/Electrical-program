@@ -82,11 +82,47 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
   }
 }));
 
+// Download a document as an attachment regardless of where it's stored. Mirrors
+// the /view proxy below (Drive-stored files stream through the service account,
+// cloud-stored files (Cloudinary) are proxied through the backend, DB-stored files
+// stream from base64) but forces a download instead of inline display. Never
+// redirect: the frontend fetches this via XHR (it needs the auth header), and a
+// redirect to an external host dies on CORS before the browser can read a byte.
 router.get('/:id/download', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const doc = await loadAccessibleDocument(req, res, 'name, file_type, file_data, storage_url');
   if (!doc) return;
   const { name, file_type, file_data, storage_url } = doc;
-  if (storage_url) return res.redirect(storage_url as string);
+
+  if (storage_url) {
+    const m = /\/file\/d\/([^/]+)/.exec(storage_url as string);
+    if (m) {
+      const media = await getFileMedia(m[1]);
+      if (!media) return res.status(502).json({ error: 'File is stored in Google Drive but could not be fetched. Try again later.' });
+      res.setHeader('Content-Type', media.mimeType);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(name as string)}"`);
+      media.stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
+      return media.stream.pipe(res);
+    }
+    try {
+      const upstream = await fetch(storage_url as string);
+      if (!upstream.ok || !upstream.body) {
+        logger.error({ docId: req.params.id, status: upstream.status }, '[documents] download: storage fetch failed');
+        return res.status(502).json({ error: 'Could not fetch the file from storage.' });
+      }
+      const upstreamType = upstream.headers.get('content-type');
+      const contentType = (!upstreamType || upstreamType === 'application/octet-stream')
+        ? ((file_type as string) || 'application/octet-stream')
+        : upstreamType;
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(name as string)}"`);
+      const stream = Readable.fromWeb(upstream.body as import('stream/web').ReadableStream);
+      stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
+      return stream.pipe(res);
+    } catch (err) {
+      logger.error({ err, docId: req.params.id }, '[documents] download: storage proxy failed');
+      return res.status(502).json({ error: 'Could not fetch the file from storage.' });
+    }
+  }
   if (!file_data) return res.status(404).json({ error: 'no file data' });
   const buf = Buffer.from(file_data as string, 'base64');
   res.setHeader('Content-Type', (file_type as string) || 'application/octet-stream');
