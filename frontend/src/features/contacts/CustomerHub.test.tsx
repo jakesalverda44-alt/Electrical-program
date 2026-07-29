@@ -106,3 +106,22 @@ describe('CustomerHub stage grouping + hub links', () => {
     expect(screen.queryByRole('heading', { name: 'Note.txt' })).toBeFalsy();
   });
 });
+
+describe('CustomerHub edit save', () => {
+  it('shows a failure toast and keeps edit mode open when the PATCH rejects', async () => {
+    vi.mocked(api.patch).mockRejectedValueOnce({ response: { data: { error: 'email: Invalid email' } } });
+    const showToast = vi.fn();
+    render(<CustomerHub id="c1" onBack={() => {}} showToast={showToast}/>);
+    await waitFor(() => expect(screen.getByText('ABC Builders')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Edit'));
+    await waitFor(() => expect(screen.getByText('Save changes')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Save changes'));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith({ title: 'Save failed', sub: 'email: Invalid email' }));
+    // Edit mode stays open on failure — the Save button (and Cancel, not Edit) is still visible.
+    expect(screen.getByText('Save changes')).toBeTruthy();
+    expect(screen.getByText('Cancel')).toBeTruthy();
+  });
+});

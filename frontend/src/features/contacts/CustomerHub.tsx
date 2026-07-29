@@ -141,10 +141,16 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
   const winRate = (awarded.length + lost.length) ? Math.round((awarded.length / (awarded.length + lost.length)) * 100) : null;
 
   const saveEdit = async () => {
-    const { data } = await api.patch(`/customers/${id}`, form);
-    setDetail(d => d ? { ...d, customer: { ...d.customer, ...data } } : d);
-    setEditing(false);
-    showToast?.({ title: 'Customer saved', sub: data.name });
+    const payload = Object.fromEntries(EDIT_FIELDS.map(([k]) => [k, form[k] ?? null]));
+    try {
+      const { data } = await api.patch(`/customers/${id}`, payload);
+      setDetail(d => d ? { ...d, customer: { ...d.customer, ...data } } : d);
+      setEditing(false);
+      showToast?.({ title: 'Customer saved', sub: data.name });
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to save customer.';
+      showToast?.({ title: 'Save failed', sub: msg });
+    }
   };
 
   const addTask = async () => {
