@@ -103,8 +103,13 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
       let current: ChecklistData;
       try {
         const raw = typeof gen.checklist_data === 'string' ? JSON.parse(gen.checklist_data) : gen.checklist_data;
-        current = { ...BLANK, ...(raw || {}), loads: { ...(raw?.loads || {}) } };
-      } catch { current = { ...BLANK, loads: {} }; }
+        current = {
+          ...BLANK, ...(raw || {}),
+          loads: { ...(raw?.loads || {}) },
+          acUnits: Array.isArray(raw?.acUnits) ? raw.acUnits : [],
+          customLoads: Array.isArray(raw?.customLoads) ? raw.customLoads : [],
+        };
+      } catch { current = { ...BLANK, loads: {}, acUnits: [], customLoads: [] }; }
 
       const notes = notesLine && !current.notes.includes(notesLine)
         ? [current.notes, notesLine].filter(Boolean).join('\n')
@@ -112,6 +117,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
       const merged: ChecklistData = {
         ...current,
         ...fields,
+        acUnits: current.acUnits.length ? current.acUnits : (fields.acUnits || []),
         loads: { ...current.loads, ...loads },
         notes,
       };
