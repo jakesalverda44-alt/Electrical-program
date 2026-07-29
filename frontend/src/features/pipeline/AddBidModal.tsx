@@ -25,6 +25,7 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [brands, setBrands] = useState<string[]>([]);
+  const [gcNames, setGcNames] = useState<string[]>([]);
   const [preview, setPreview] = useState<ComparablesPreview | null>(null);
 
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
@@ -36,6 +37,14 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
     let cancelled = false;
     api.get('/bids/meta/brands')
       .then(({ data }) => { if (!cancelled) setBrands(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get('/customers/meta/gc-names')
+      .then(({ data }) => { if (!cancelled) setGcNames(data); })
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
@@ -88,8 +97,11 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
             </div>
             <div className="field-row">
               <div className="field">
-                <label>General contractor</label>
-                <input value={f.gc} onChange={set('gc')} placeholder="e.g. Brasfield & Gorrie" required autoComplete="off"/>
+                <label htmlFor="bid-gc">General contractor</label>
+                <input id="bid-gc" list="gc-options" value={f.gc} onChange={set('gc')} placeholder="e.g. Brasfield & Gorrie" required autoComplete="off"/>
+                <datalist id="gc-options">
+                  {Array.from(new Set(gcNames)).map(g => <option key={g} value={g}/>)}
+                </datalist>
               </div>
               <div className="field">
                 <label>Location</label>

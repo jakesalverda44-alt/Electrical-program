@@ -6,6 +6,7 @@ import { validateBody } from '../utils/validate';
 import { withDueDays } from '../utils/dueDate';
 import { asyncHandler } from '../utils/asyncHandler';
 import { writeAudit } from '../utils/audit';
+import { extractCandidates, matchCustomer } from '../utils/customerMatch';
 
 const router = Router();
 
@@ -43,6 +44,30 @@ export async function upsertCustomer(name: string, type: 'gc' | 'customer'): Pro
   return rows[0]?.id ?? null;
 }
 
+/**
+ * Snap a raw GC/customer string to one canonical customer record. Tries
+ * matchCustomer() against existing customers of the same type first (exact or
+ * unambiguous-containment match on normalized names); on no match, falls
+ * through to find-or-create using the best extracted candidate as the name —
+ * so junk-wrapped strings ("Estimating Department (Bay to Bay Properties,
+ * LLC)") create/attach to "Bay to Bay Properties, LLC", not the raw string.
+ * Returns null for blank input (same as upsertCustomer).
+ */
+export async function resolveCustomer(name: string, type: 'gc' | 'customer'): Promise<{ id: string; canonicalName: string } | null> {
+  const trimmed = (name || '').trim();
+  if (!trimmed || trimmed === '—') return null;
+
+  const { rows: existing } = await pool.query('SELECT id, name FROM customers WHERE type = $1', [type]);
+  const matched = matchCustomer(trimmed, existing);
+  if (matched) return { id: matched.id, canonicalName: matched.name };
+
+  const candidates = extractCandidates(trimmed);
+  const createName = (candidates[0] || trimmed).trim();
+  const id = await upsertCustomer(createName, type);
+  if (!id) return null;
+  return { id, canonicalName: createName };
+}
+
 // List customers (shared directory). Supports ?type= and ?q= filters.
 router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const { type, q } = req.query as { type?: string; q?: string };
@@ -59,6 +84,13 @@ router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
     params
   );
   res.json(rows);
+}));
+
+// Canonical GC names for the AddBidModal autocomplete. Registered above /:id so
+// "meta" is never swallowed as a customer id.
+router.get('/meta/gc-names', requireAuth, asyncHandler(async (_req: AuthRequest, res) => {
+  const { rows } = await pool.query(`SELECT name FROM customers WHERE type = 'gc' ORDER BY name ASC`);
+  res.json(rows.map(r => r.name));
 }));
 
 // Customer detail with linked records. Linked bids/proposals/won-jobs are scoped
