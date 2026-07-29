@@ -97,6 +97,7 @@ export interface Gen {
   totals_data?: Record<string, unknown> | string | null;
   checklist_data?: Record<string, unknown> | string | null;
   survey_markup?: Record<string, unknown> | string | null;
+  kickoff_email_drafted_at?: string | null;
   sent_at?: string;
   viewed_at?: string;
   signed_at?: string;
