@@ -306,10 +306,8 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
         })();
       }
 
-      // Fire-and-forget: draft the internal kickoff email to the ops team.
-      draftAwardKickoffEmail(rows[0]).catch(err => {
-        logger.error({ err, genId: gen.id }, '[email] award kickoff draft failed');
-      });
+      // Kickoff email is drafted explicitly from the Award Kickoff modal
+      // (POST /:id/kickoff-email) — not automatically on the transition.
     }
     res.json({ gen: rows[0], wonJob });
   } catch (err) {
@@ -761,6 +759,15 @@ const AWARD_DOC_LABELS: Record<string, string> = {
   site_checklist: 'Site Visit Checklist',
 };
 
+/** Kickoff-kit categories with no uploaded document yet, as display labels.
+ *  'contract' is excluded — drafting is blocked without it, so it can never
+ *  be "to follow". */
+export function missingKickoffLabels(existingCategories: string[]): string[] {
+  return AWARD_DOC_CATEGORIES
+    .filter(c => c !== 'contract' && !existingCategories.includes(c))
+    .map(c => AWARD_DOC_LABELS[c]);
+}
+
 function buildAwardKickoffEmail(gen: Record<string, any>): { subject: string; html: string } {
   const form: Record<string, any> = (gen.form_data && typeof gen.form_data === 'object') ? gen.form_data : {};
   const totals: Record<string, any> = (gen.totals_data && typeof gen.totals_data === 'object') ? gen.totals_data : {};
@@ -801,15 +808,15 @@ function buildAwardKickoffEmail(gen: Record<string, any>): { subject: string; ht
   return { subject, html: parts.join('\n') };
 }
 
-interface KickoffResult { drafted: boolean; reason?: 'email_not_configured' | 'no_recipients'; to: string[]; attachedLabels: string[]; skipped: string[]; }
+interface KickoffResult { drafted: boolean; reason?: 'email_not_configured' | 'no_recipients'; to: string[]; attachedLabels: string[]; skipped: string[]; toFollow: string[]; }
 
 /** Draft (never auto-send) the internal kickoff email, attaching whatever of the signed
  *  proposal / sizer / survey / labeled survey / checklist documents exist for the job.
- *  Called fire-and-forget on the award transition, and on demand from the drawer button. */
+ *  Called on demand from the Award Kickoff modal (POST /:id/kickoff-email). */
 async function draftAwardKickoffEmail(gen: Record<string, any>): Promise<KickoffResult> {
-  if (!isGraphMailConfigured()) return { drafted: false, reason: 'email_not_configured', to: [], attachedLabels: [], skipped: [] };
+  if (!isGraphMailConfigured()) return { drafted: false, reason: 'email_not_configured', to: [], attachedLabels: [], skipped: [], toFollow: [] };
   const to = await getAwardRecipients();
-  if (!to.length) return { drafted: false, reason: 'no_recipients', to: [], attachedLabels: [], skipped: [] };
+  if (!to.length) return { drafted: false, reason: 'no_recipients', to: [], attachedLabels: [], skipped: [], toFollow: [] };
 
   const { subject, html: bodyHtml } = buildAwardKickoffEmail(gen);
   const { attachments, attached, skipped } = await loadLinkedDocumentsAsAttachments(gen.id, {
@@ -822,15 +829,34 @@ async function draftAwardKickoffEmail(gen: Record<string, any>): Promise<Kickoff
   if (skipped.length) html += `<p>Too large to attach (see the job's Drive folder): ${escapeHtml(skipped.join(', '))}.</p>`;
   if (gen.drive_job_folder_id) html += `<p>All job files: <a href="https://drive.google.com/drive/folders/${gen.drive_job_folder_id}">Google Drive</a></p>`;
 
+  const { rows: existing } = await pool.query(
+    `SELECT DISTINCT category FROM documents
+      WHERE linked_id = $1 AND deleted_at IS NULL AND category = ANY($2)`,
+    [gen.id, AWARD_DOC_CATEGORIES],
+  );
+  const toFollow = missingKickoffLabels(existing.map(r => r.category));
+  if (toFollow.length) html += `<p>To follow: ${escapeHtml(toFollow.join(', '))}.</p>`;
+
   await graphCreateDraft({ to, subject, html, attachments });
-  return { drafted: true, to, attachedLabels, skipped };
+  return { drafted: true, to, attachedLabels, skipped, toFollow };
 }
 
-// On-demand: (re)create the kickoff email draft for a job — used by the drawer's
-// "Draft Kickoff Email" button so docs uploaded after award still get bundled.
+// On-demand: (re)create the kickoff email draft for a job — used by the Award
+// Kickoff modal so docs uploaded after award still get bundled.
 router.post('/:id/kickoff-email', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const gen = await loadOwnedGen(req, res);
   if (!gen) return;
+
+  // Signed proposal is the minimum kickoff kit — block drafting without it.
+  const { rows: contract } = await pool.query(
+    `SELECT 1 FROM documents
+      WHERE linked_id = $1 AND category = 'contract' AND deleted_at IS NULL LIMIT 1`,
+    [gen.id],
+  );
+  if (!contract.length) {
+    return res.status(400).json({ error: 'Signed proposal required — upload it (or have the customer e-sign) before drafting the kickoff email.' });
+  }
+
   const result = await draftAwardKickoffEmail(gen);
   if (!result.drafted) {
     return res.status(503).json({
@@ -839,7 +865,12 @@ router.post('/:id/kickoff-email', requireAuth, asyncHandler(async (req: AuthRequ
         : 'No award-email recipients set — add them in Settings → Email Delivery.',
     });
   }
-  res.json(result);
+  const { rows: stamped } = await pool.query(
+    `UPDATE generator_proposals SET kickoff_email_drafted_at = now(), updated_at = now()
+      WHERE id = $1 RETURNING kickoff_email_drafted_at`,
+    [gen.id],
+  );
+  res.json({ ...result, kickoff_email_drafted_at: stamped[0].kickoff_email_drafted_at });
 }));
 
 // ── Send proposal email ──────────────────────────────────────────────────────
