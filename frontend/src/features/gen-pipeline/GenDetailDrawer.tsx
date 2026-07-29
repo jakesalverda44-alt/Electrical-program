@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { Gen, WonJob } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
@@ -6,6 +6,7 @@ import RecordFiles from '../../components/RecordFiles';
 import { moneyFull } from '../../lib/money';
 import api from '../../api/client';
 import BuildFromNotesModal from '../builder/BuildFromNotesModal';
+import AwardKickoffModal, { useKickoffDocs, kickoffStatus, KICKOFF_ROWS } from './AwardKickoffModal';
 import SiteVisitChecklist from './SiteVisitChecklist';
 import SurveyMarkupEditor from './SurveyMarkupEditor';
 import DocSlot from './DocSlot';
@@ -31,11 +32,14 @@ interface Props {
   onDelete: (gen: Gen) => void;
   onClosed: (gen: Gen) => void;
   onUpdated: (gen: Gen, wonJob?: WonJob | null) => void;
+  /** True when the page just awarded this gen — opens the kickoff modal once. */
+  autoKickoff?: boolean;
+  onAutoKickoffHandled?: () => void;
 }
 
 interface Draft { customer: string; loc: string; mfr: string; model: string; kw: string; amount: string; addons: string; date_won: string; }
 
-export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated }: Props) {
+export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated, autoKickoff, onAutoKickoffHandled }: Props) {
   const canDelete = isPrivileged(useUser());
   const showToast = useShowToast();
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed';
@@ -43,9 +47,13 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
   const [showBuildNotes, setShowBuildNotes] = useState(false);
   const [editing, setEditing] = useState(false);
   const [tab, setTab] = useState<'overview' | 'checklist' | 'survey'>('overview');
-  const [drafting, setDrafting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<Draft>({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '', date_won: '' });
+  const [showKickoff, setShowKickoff] = useState(!!autoKickoff);
+  useEffect(() => {
+    if (autoKickoff) { setShowKickoff(true); onAutoKickoffHandled?.(); }
+  }, [autoKickoff, onAutoKickoffHandled]);
+  const kickoffDocs = useKickoffDocs(gen.id);
 
   const startEdit = () => {
     setDraft({
@@ -115,22 +123,6 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
         : { title: 'Sizer uploaded', sub: "Couldn't read checklist data from it" });
     } catch {
       showToast({ title: 'Sizer uploaded', sub: 'Auto-fill failed — enter checklist manually' });
-    }
-  };
-
-  const draftKickoff = async () => {
-    setDrafting(true);
-    try {
-      const { data } = await api.post(`/gens/${gen.id}/kickoff-email`);
-      const n = data.attachedLabels?.length || 0;
-      showToast({
-        title: 'Kickoff draft created in Outlook',
-        sub: n ? `${n} doc${n > 1 ? 's' : ''} attached — review & send` : 'No docs attached yet — review & send',
-      });
-    } catch (e: any) {
-      showToast({ title: 'Could not create draft', sub: e?.response?.data?.error || 'Try again' });
-    } finally {
-      setDrafting(false);
     }
   };
 
@@ -353,16 +345,31 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             </button>
           )}
 
-          {/* Draft the internal team kickoff email on demand — also fires automatically on
-              award, but this lets you (re)build it after uploading more docs. */}
-          <button
-            className="btn ghost"
-            style={{ width: '100%', justifyContent: 'center', marginTop: 8, color: 'var(--blue)', borderColor: 'rgba(59,130,246,.4)' }}
-            disabled={drafting}
-            onClick={draftKickoff}
-          >
-            <Icon name="mail" size={14} stroke={1.9}/>{drafting ? 'Drafting…' : 'Draft Kickoff Email'}
-          </button>
+          {gen.stage === 'awarded' && (
+            <div className="dtl-section" style={{ marginTop: 16 }}>
+              <div className="dtl-stage-label" style={{ marginBottom: 8 }}>Kickoff</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                {KICKOFF_ROWS.map(r => {
+                  const st = kickoffStatus(gen, kickoffDocs.docs, r.category);
+                  return (
+                    <span key={r.category} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--border2)', color: st === 'done' ? 'var(--text)' : 'var(--text3)' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: st === 'done' ? 'var(--green)' : st === 'progress' ? 'var(--amber)' : 'var(--border2)' }}/>
+                      {r.label}
+                    </span>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
+                {gen.kickoff_email_drafted_at
+                  ? `Kickoff email drafted ${fmtTs(gen.kickoff_email_drafted_at)}`
+                  : 'Kickoff email not drafted yet'}
+              </div>
+              <button className="btn ghost" style={{ width: '100%', justifyContent: 'center', color: 'var(--blue)', borderColor: 'rgba(59,130,246,.4)' }}
+                onClick={() => setShowKickoff(true)}>
+                <Icon name="mail" size={14} stroke={1.9}/>Open Kickoff
+              </button>
+            </div>
+          )}
 
           {!isTerminal && (
             <button
@@ -463,6 +470,21 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             setShowBuildNotes(false);
             onClose();
             onEditGen(updatedGen);
+          }}
+        />
+      )}
+
+      {showKickoff && (
+        <AwardKickoffModal
+          gen={gen}
+          onClose={() => { setShowKickoff(false); kickoffDocs.refresh(); }}
+          onOpenTab={t => { setShowKickoff(false); setTab(t); kickoffDocs.refresh(); }}
+          onUpdated={g => onUpdated(g)}
+          onSizerUploaded={async f => {
+            await autofillFromSizer(f);
+            setShowKickoff(false);
+            kickoffDocs.refresh();
+            setTab('checklist');
           }}
         />
       )}

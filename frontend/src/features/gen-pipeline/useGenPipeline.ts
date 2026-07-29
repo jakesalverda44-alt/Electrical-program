@@ -9,9 +9,10 @@ interface UseGenPipelineProps {
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
   showToast: (t: Toast) => void;
   onNav?: (v: string) => void;
+  onAwarded?: (gen: Gen) => void;
 }
 
-export function useGenPipeline({ gens, setGens, setWonJobs, showToast, onNav }: UseGenPipelineProps) {
+export function useGenPipeline({ gens, setGens, setWonJobs, showToast, onNav, onAwarded }: UseGenPipelineProps) {
   const { moveToStage, advance, pendingConfirm, cancelConfirm } = useStagePipeline<Gen, GenStageKey>({
     items: gens, setItems: setGens, setWonJobs, showToast,
     endpoint: 'gens', responseKey: 'gen', confirmStage: 'declined',
@@ -30,6 +31,9 @@ export function useGenPipeline({ gens, setGens, setWonJobs, showToast, onNav }: 
       sub: `${wonJob.salesperson_name} · ${moneyFull(wonJob.value)} · ${wonJob.customer}`,
       action: onNav ? { label: 'View in Projects →', onClick: () => onNav('gen-projects') } : undefined,
     }),
+    onMoved: (gen, stage, prevStage) => {
+      if (stage === 'awarded' && prevStage !== 'awarded') onAwarded?.(gen);
+    },
   });
 
   return { moveToStage, advance, pendingDeclined: pendingConfirm, cancelDeclined: cancelConfirm };
