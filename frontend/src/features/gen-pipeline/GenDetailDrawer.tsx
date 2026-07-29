@@ -480,7 +480,12 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           onClose={() => { setShowKickoff(false); kickoffDocs.refresh(); }}
           onOpenTab={t => { setShowKickoff(false); setTab(t); kickoffDocs.refresh(); }}
           onUpdated={g => onUpdated(g)}
-          onSizerUploaded={autofillFromSizer}
+          onSizerUploaded={async f => {
+            await autofillFromSizer(f);
+            setShowKickoff(false);
+            kickoffDocs.refresh();
+            setTab('checklist');
+          }}
         />
       )}
     </div>
