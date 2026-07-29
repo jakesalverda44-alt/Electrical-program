@@ -61,6 +61,12 @@ function parseChecklist(raw: Gen['checklist_data']): ChecklistData {
       if (!merged.acUnits.length && (p.acSize || p.lra)) {
         merged.acUnits = [{ size: p.acSize || '', type: '', lra: p.lra || '' }];
       }
+      // Strip legacy keys so they never re-enter state and get re-persisted by save().
+      const mergedAny = merged as unknown as Record<string, unknown>;
+      delete mergedAny.acSize;
+      delete mergedAny.lra;
+      delete mergedAny.tankSize;
+      delete mergedAny.tankType;
       return merged;
     }
   } catch { /* fall through to blank */ }
@@ -156,11 +162,15 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
     try {
       await save(true);
       const pdf = await buildChecklistPdf(pdfHeader(), data, 'filled');
-      // Replace any prior finalized checklist so re-finalizing doesn't stack copies.
+      // Capture prior finalized checklist ids before uploading, so we only ever delete
+      // pre-existing docs (never the fresh one) and never leave the gen with no checklist
+      // doc if the upload fails.
+      let priorIds: string[] = [];
       try {
         const { data: docs } = await api.get('/documents', { params: { linked_id: gen.id } });
-        const prior = (docs as { id: string; category: string }[]).filter(d => d.category === 'site_checklist');
-        for (const d of prior) await api.delete(`/documents/${d.id}`);
+        priorIds = (docs as { id: string; category: string }[])
+          .filter(d => d.category === 'site_checklist')
+          .map(d => d.id);
       } catch { /* non-fatal — worst case a duplicate remains */ }
       const fd = new FormData();
       fd.append('file', pdf.output('blob'), `Site Visit Checklist - ${gen.customer}.pdf`);
@@ -170,6 +180,10 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
       fd.append('category', 'site_checklist');
       fd.append('display_name', `Site Visit Checklist — ${gen.customer}.pdf`);
       await api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      // Replace any prior finalized checklist so re-finalizing doesn't stack copies.
+      try {
+        for (const id of priorIds) await api.delete(`/documents/${id}`);
+      } catch { /* non-fatal — worst case a duplicate remains */ }
       showToast({ title: 'Checklist finalized', sub: 'Clean PDF attached to this job' });
     } catch {
       showToast({ title: 'Export failed', sub: 'Try again' });
@@ -181,7 +195,9 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
   const printBlank = async () => {
     try {
       const pdf = await buildChecklistPdf(pdfHeader(), { ...BLANK, sqft: data.sqft }, 'blank');
-      window.open(URL.createObjectURL(pdf.output('blob')), '_blank', 'noopener');
+      const url = URL.createObjectURL(pdf.output('blob'));
+      window.open(url, '_blank', 'noopener');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch {
       showToast({ title: 'Could not build blank form', sub: 'Try again' });
     }

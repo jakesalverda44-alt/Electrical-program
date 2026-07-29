@@ -110,6 +110,12 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           customLoads: Array.isArray(raw?.customLoads) ? raw.customLoads : [],
         };
       } catch { current = { ...BLANK, loads: {}, acUnits: [], customLoads: [] }; }
+      // Strip legacy keys so they never re-enter state and get re-persisted on save.
+      const currentAny = current as unknown as Record<string, unknown>;
+      delete currentAny.acSize;
+      delete currentAny.lra;
+      delete currentAny.tankSize;
+      delete currentAny.tankType;
 
       const notes = notesLine && !current.notes.includes(notesLine)
         ? [current.notes, notesLine].filter(Boolean).join('\n')
