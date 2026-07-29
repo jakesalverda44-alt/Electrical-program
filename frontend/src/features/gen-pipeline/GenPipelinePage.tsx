@@ -32,6 +32,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
   const showToast = useShowToast();
   const [detail, setDetail] = useState<Gen | null>(null);
   const [logOpen, setLogOpen] = useState(false);
+  const [autoKickoff, setAutoKickoff] = useState(false);
 
   // Open the deep-linked proposal's drawer once, then strip the id from the URL.
   const openedParam = useRef<string | null>(null);
@@ -48,6 +49,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
 
   const { moveToStage, advance, pendingDeclined, cancelDeclined } = useGenPipeline({
     gens, setGens, setWonJobs, showToast, onNav,
+    onAwarded: gen => { setDetail(gen); setAutoKickoff(true); },
   });
 
   const sum = (list: Gen[]) => list.reduce((s, g) => s + Number(g.amount), 0);
@@ -233,12 +235,14 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
           pendingDeclined={pendingDeclined === detail.id}
           onStage={handleStageFromDrawer}
           onCancelDeclined={cancelDeclined}
-          onClose={() => setDetail(null)}
+          onClose={() => { setDetail(null); setAutoKickoff(false); }}
           onEditGen={g => { setDetail(null); onEditGen(g); }}
           onDuplicate={handleDuplicate}
           onDelete={handleDelete}
           onClosed={handleClosed}
           onUpdated={(g, wj) => { setGens(prev => prev.map(x => x.id === g.id ? g : x)); setDetail(g); if (wj) setWonJobs(prev => prev.map(w => w.proposal_id === g.id ? wj : w)); }}
+          autoKickoff={autoKickoff}
+          onAutoKickoffHandled={() => setAutoKickoff(false)}
         />
       )}
 
