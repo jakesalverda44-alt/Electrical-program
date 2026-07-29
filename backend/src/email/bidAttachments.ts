@@ -60,6 +60,25 @@ export interface LinkedAttachmentsResult extends BidAttachmentsResult {
   attached: LinkedDocRef[];
 }
 
+const MIME_EXT: Record<string, string> = {
+  'application/pdf': '.pdf', 'image/png': '.png', 'image/jpeg': '.jpg',
+  'image/webp': '.webp', 'image/heic': '.heic',
+};
+const HAS_EXT = /\.[A-Za-z0-9]{1,5}$/;
+
+/** Attachment filename with a real extension — Outlook won't preview an
+ *  extensionless attachment, it forces a save instead. */
+export function attachmentFileName(displayName: string | null, originalName: string | null, fileType: string | null): string {
+  const display = (displayName || '').trim();
+  const original = (originalName || '').trim();
+  const base = display || original || 'file';
+  if (HAS_EXT.test(base)) return base;
+  const fromOriginal = original.match(HAS_EXT)?.[0];
+  if (fromOriginal) return base + fromOriginal;
+  const fromMime = fileType ? MIME_EXT[fileType.toLowerCase()] : undefined;
+  return fromMime ? base + fromMime : base;
+}
+
 /** Build Graph attachments from any linked_id's uploaded documents (bid or gen proposal),
  *  capped at maxTotalBytes total. Pass `categories` to only pull specific document types. */
 export async function loadLinkedDocumentsAsAttachments(
@@ -88,7 +107,7 @@ export async function loadLinkedDocumentsAsAttachments(
   let total = 0;
 
   for (const doc of rows) {
-    const name = (doc.display_name || doc.name || 'file').trim();
+    const name = attachmentFileName(doc.display_name, doc.name, doc.file_type);
     // Skip clearly-oversized files up front when the size is recorded.
     if (doc.file_size && doc.file_size > maxTotalBytes) { skipped.push(name); continue; }
 
