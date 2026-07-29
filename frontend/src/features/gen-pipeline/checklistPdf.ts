@@ -82,13 +82,17 @@ export async function buildChecklistPdf(header: ChecklistHeader, data: Checklist
   doc.text('Site Visit Checklist', PAGE_W / 2, y, { align: 'center' });
   y += 22;
 
-  field('Name', header.customer, MARGIN, 280, y);
-  field('Gen Size / Brand', header.genLabel, MARGIN + 296, 234, y);
-  y += 20;
-  field('Date', header.date, MARGIN, 160, y);
-  field('Proposal No.', header.proposalNo, MARGIN + 176, 190, y);
-  field('Sq/Ft', filled ? data.sqft : data.sqft || '', MARGIN + 382, 148, y);
-  y += 20;
+  {
+    const a1 = field('Name', header.customer, MARGIN, 280, y);
+    const a2 = field('Gen Size / Brand', header.genLabel, MARGIN + 296, 234, y);
+    y += 20 + Math.max(a1, a2);
+  }
+  {
+    const a1 = field('Date', header.date, MARGIN, 160, y);
+    const a2 = field('Proposal No.', header.proposalNo, MARGIN + 176, 190, y);
+    const a3 = field('Sq/Ft', filled ? data.sqft : data.sqft || '', MARGIN + 382, 148, y);
+    y += 20 + Math.max(a1, a2, a3);
+  }
   y += field('Address', header.address, MARGIN, PAGE_W - 2 * MARGIN, y);
   y += 24;
 
@@ -97,10 +101,12 @@ export async function buildChecklistPdf(header: ChecklistHeader, data: Checklist
   choice('Disconnect', ['Yes', 'No'], data.disc, MARGIN, y);
   choice('Em Panel', ['Yes', 'No'], data.em, MARGIN + 190, y);
   y += 20;
-  field('Power Company', data.powerCo, MARGIN, 190, y);
-  field('Service AMPS', data.serviceAmps, MARGIN + 206, 150, y);
-  field('ATS Qty / AMPS', data.atsQtyAmps, MARGIN + 372, 158, y);
-  y += 22;
+  {
+    const a1 = field('Power Company', data.powerCo, MARGIN, 190, y);
+    const a2 = field('Service AMPS', data.serviceAmps, MARGIN + 206, 150, y);
+    const a3 = field('ATS Qty / AMPS', data.atsQtyAmps, MARGIN + 372, 158, y);
+    y += 22 + Math.max(a1, a2, a3);
+  }
 
   // AC units: existing entries in filled mode; three write-in unit lines in blank mode.
   const acRows = filled
@@ -108,10 +114,11 @@ export async function buildChecklistPdf(header: ChecklistHeader, data: Checklist
     : [0, 1, 2].map(() => ({ size: '', type: '' as const, lra: '' }));
   acRows.forEach((u, i) => {
     ensureRoom(20);
-    field(`AC Unit ${i + 1} Size`, u.size, MARGIN, 170, y);
-    field('Type', filled ? u.type : '', MARGIN + 186, 170, y);
-    field('LRA', u.lra, MARGIN + 372, 158, y);
-    y += 20;
+    const f1 = field(`AC Unit ${i + 1} Size`, u.size, MARGIN, 170, y);
+    const f2 = field('Type', filled ? u.type : '', MARGIN + 186, 170, y);
+    const f3 = field('LRA', u.lra, MARGIN + 372, 158, y);
+    const ex = Math.max(f1, f2, f3);
+    y += 20 + ex;
   });
   ensureRoom(22);
   choice('Air Handler (Heat Strips)', ['Electric', 'Gas'], data.airHandler, MARGIN, y);
@@ -137,9 +144,11 @@ export async function buildChecklistPdf(header: ChecklistHeader, data: Checklist
   };
   tableHead();
   const loadRow = (name: string, lv: { fuel?: string; volt?: string; hp?: string; amps?: string }) => {
-    if (y + 16 > BOTTOM) { doc.addPage(); y = 52; tableHead(); }
+    const nameLines: string[] = name ? doc.splitTextToSize(name, COLS[0].w - 4) : [''];
+    const rowH = 11 * Math.max(1, nameLines.length) + 5;
+    if (y + rowH > BOTTOM) { doc.addPage(); y = 52; tableHead(); }
     doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...INK);
-    doc.text(doc.splitTextToSize(name, COLS[0].w)[0] || '', COLS[0].x, y);
+    nameLines.forEach((ln, i) => doc.text(ln, COLS[0].x, y + 11 * i));
     doc.setFont('helvetica', 'normal'); doc.setTextColor(...MUTED); doc.setFontSize(8.5);
     if (filled) {
       doc.setTextColor(...INK); doc.setFontSize(9);
@@ -151,10 +160,10 @@ export async function buildChecklistPdf(header: ChecklistHeader, data: Checklist
       doc.text('Electric / Gas', COLS[1].x, y);
       doc.text('120V / 240V', COLS[2].x, y);
     }
-    y += 3;
+    y += rowH - 11;
     doc.setDrawColor(...RULE); doc.setLineWidth(0.5);
-    doc.line(MARGIN, y, PAGE_W - MARGIN, y);
-    y += 13;
+    doc.line(MARGIN, y + 3, PAGE_W - MARGIN, y + 3);
+    y += 16;
   };
   LOADS.forEach((row, i) => loadRow(row.n, data.loads[i] || {}));
   if (filled) {
@@ -166,9 +175,11 @@ export async function buildChecklistPdf(header: ChecklistHeader, data: Checklist
 
   // ── Footer fields ──
   ensureRoom(70);
-  field('Gen Feed Length / Type', data.feedLen, MARGIN, 250, y);
-  field('Gas Run Length', data.gasRunLength, MARGIN + 266, 262, y);
-  y += 22;
+  {
+    const a1 = field('Gen Feed Length / Type', data.feedLen, MARGIN, 250, y);
+    const a2 = field('Gas Run Length', data.gasRunLength, MARGIN + 266, 262, y);
+    y += 22 + Math.max(a1, a2);
+  }
 
   const bigField = (label: string, value: string, blankLines: number) => {
     ensureRoom(16 + blankLines * 16);
