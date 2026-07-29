@@ -48,4 +48,32 @@ Final run: `npx vitest run src/utils/customerMatch.test.ts` → 20/20 passed on 
 
 ## Commits
 
-- `a782fe7` — "Canonicalize GC names into a single customer record on bid intake", single commit, imperative message, on `feat/gc-canonicalization`. Not pushed.
+- `a782fe7` — "Canonicalize GC names into a single customer record on bid intake", single commit, imperative message, on `feat/gc-canonicalization`.
+- `546e17e` — backfilled the actual commit hash into this report.
+- (see below) — post-review fix for a false-merge finding.
+
+## Post-review fix: containment false-merge (DR Horton vs Horton Group)
+
+**Finding (review, Important):** `matchCustomer("DR Horton", [{id:'1', name:'Horton Group'}])` returned a match. `containmentMatches` compared normalized strings with raw `String.includes`, and `"Horton Group"` suffix-strips (via the `group` suffix) down to the single token `"horton"`. Since `"horton"` is 6 chars it passed the old substantiality guard (`tokens>=2 || length>=5`), and `"dr horton".includes("horton")` is true, giving an unambiguous single hit — two unrelated companies sharing a surname/word silently collapsed into one customer.
+
+**Fix (`backend/src/utils/customerMatch.ts`):** rewrote `containmentMatches` to compare **tokens with word boundaries** instead of raw substrings, and added a second, containment-specific guard:
+- Both normalized strings are split into token arrays; the shorter (by token count) must appear in the longer as a **contiguous subsequence** (`isContiguousSubsequence`) — i.e. an unbroken run of adjacent tokens, not merely "all characters present somewhere."
+- The shorter side must have **≥2 tokens** to be eligible for containment at all — a single-token normalized form (however long the string) can only ever match via the *exact*-match phase, never containment. This is stricter than the old single `isSubstantial` guard (`tokens>=2 OR length>=5`), which is exactly the gap "horton" exploited.
+- The exact-match phase is untouched — it still uses `isSubstantial` (`tokens>=2 OR length>=5`), so a single-token name (e.g. a real one-word GC that happens to be ≥5 chars) still only ever merges on an unambiguous exact hit, never on a fuzzy contains.
+
+This also incidentally fixes a second, related bug the token-boundary rewrite implies: the old `.includes()` approach would have let `"bay to bays"` (extra trailing "s") match `"bay to bay"` as a raw substring — now refused since `["bay","to","bays"]` is not a contiguous-subsequence of `["bay","to","bay"]` (or vice versa).
+
+**New unit tests added to `customerMatch.test.ts`** (all in the `matchCustomer` describe block):
+1. `does not merge two unrelated companies that share a single surname/word (DR Horton vs Horton Group)` — the exact adversarial case from the finding → `null`.
+2. `never merges via containment when the shorter side normalizes to a single token, even with only one candidate` — `matchCustomer('Horton', [{id:'1', name:'Horton Roofing'}])` → `null` (proves the guard isn't just an ambiguity side-effect; it's a single-candidate, single-existing-customer case that would have matched under the old length-only guard since `"horton"` is 6 chars).
+3. `still matches a genuine multi-token contiguous subsequence` — `matchCustomer('Bay to Bay', [{id:'1', name:'Bay to Bay Electric Inc'}])` → matches (confirms the fix didn't regress legitimate containment, distinct from the pre-existing Skanska test).
+4. `respects token boundaries — "bay to bays" is not a contiguous match for "bay to bay"` — → `null`.
+
+**Verification:**
+- `cd backend && npx vitest run src/utils/customerMatch.test.ts` → **24/24 passed** (20 original + 4 new).
+- `cd backend && npm run typecheck` → clean.
+- `cd backend && npm test` → **156 passed, 37 skipped** (up from 152 passed pre-fix; skip count for DB-gated integration/comparables/brand tests unchanged — no DB available locally, same as before).
+- `cd frontend && npm run typecheck` → clean.
+- `cd frontend && npm test` → **62 passed** (frontend untouched by this fix; re-run for completeness).
+
+No other files changed for this fix — scope was contained to `customerMatch.ts` (implementation) and `customerMatch.test.ts` (tests), per the coordinator's instruction not to touch the other (ticket/PR-note) findings.

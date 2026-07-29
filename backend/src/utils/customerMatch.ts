@@ -98,10 +98,41 @@ function isSubstantial(normalized: string): boolean {
   return tokens.length >= 2 || normalized.length >= 5;
 }
 
-function containmentMatches(a: string, b: string): boolean {
-  const shorter = a.length <= b.length ? a : b;
-  if (!isSubstantial(shorter)) return false;
-  return a.includes(b) || b.includes(a);
+function tokensOf(normalized: string): string[] {
+  return normalized.split(/\s+/).filter(Boolean);
+}
+
+// Contiguous-subsequence check: every token of `shorter` must appear in `longer`,
+// in order, with no gaps — i.e. `shorter` is a run of adjacent tokens inside
+// `longer`. This is what makes "bay to bay" ⊂ "bay to bay construction" a real
+// containment match while refusing "bay to bays" vs "bay to bay" (last token
+// differs, so it's never a contiguous run) or a bare surname collision.
+function isContiguousSubsequence(shorter: string[], longer: string[]): boolean {
+  if (!shorter.length || shorter.length > longer.length) return false;
+  for (let i = 0; i <= longer.length - shorter.length; i++) {
+    let match = true;
+    for (let j = 0; j < shorter.length; j++) {
+      if (longer[i + j] !== shorter[j]) { match = false; break; }
+    }
+    if (match) return true;
+  }
+  return false;
+}
+
+// Containment match on WORD-BOUNDARY tokens, not raw substring — a raw
+// String.includes() would let "horton" (single token, ≥5 chars, passes the
+// exact-match substantiality guard) silently swallow "dr horton" vs "horton
+// group" as if they were the same company. Containment additionally refuses
+// to merge when the shorter side is a single token, regardless of length:
+// a lone surname/word is never trustworthy as a containment signal, only as
+// part of an exact match.
+function containmentMatches(aNorm: string, bNorm: string): boolean {
+  const aTokens = tokensOf(aNorm);
+  const bTokens = tokensOf(bNorm);
+  if (!aTokens.length || !bTokens.length) return false;
+  const [shorter, longer] = aTokens.length <= bTokens.length ? [aTokens, bTokens] : [bTokens, aTokens];
+  if (shorter.length < 2) return false;
+  return isContiguousSubsequence(shorter, longer);
 }
 
 /**

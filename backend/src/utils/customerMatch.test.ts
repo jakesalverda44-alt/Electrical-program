@@ -111,4 +111,27 @@ describe('matchCustomer', () => {
   it('returns null against an empty existing list', () => {
     expect(matchCustomer('Bay to Bay', [])).toBeNull();
   });
+
+  it('does not merge two unrelated companies that share a single surname/word (DR Horton vs Horton Group)', () => {
+    // "Horton Group" suffix-strips to the single token "horton" — a raw-substring
+    // containment check would let "DR Horton" swallow it. Word-boundary containment
+    // must refuse because the shorter side ("horton") is only one token.
+    const existing = [{ id: '1', name: 'Horton Group' }];
+    expect(matchCustomer('DR Horton', existing)).toBeNull();
+  });
+
+  it('never merges via containment when the shorter side normalizes to a single token, even with only one candidate', () => {
+    const existing = [{ id: '1', name: 'Horton Roofing' }];
+    expect(matchCustomer('Horton', existing)).toBeNull();
+  });
+
+  it('still matches a genuine multi-token contiguous subsequence', () => {
+    const existing = [{ id: '1', name: 'Bay to Bay Electric Inc' }];
+    expect(matchCustomer('Bay to Bay', existing)).toEqual({ id: '1', name: 'Bay to Bay Electric Inc' });
+  });
+
+  it('respects token boundaries — "bay to bays" is not a contiguous match for "bay to bay"', () => {
+    const existing = [{ id: '1', name: 'Bay to Bay' }];
+    expect(matchCustomer('Bay to Bays', existing)).toBeNull();
+  });
 });
