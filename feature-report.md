@@ -48,4 +48,4 @@ Final run: `npx vitest run src/utils/customerMatch.test.ts` → 20/20 passed on 
 
 ## Commits
 
-- `dc9...` (see `git log -1`) — single commit, imperative message, on `feat/gc-canonicalization`. Not pushed.
+- `a782fe7` — "Canonicalize GC names into a single customer record on bid intake", single commit, imperative message, on `feat/gc-canonicalization`. Not pushed.
