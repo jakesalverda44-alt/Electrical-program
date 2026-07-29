@@ -1,7 +1,8 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import api from '../../api/client';
 import { Gen } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
+import { buildChecklistPdf } from './checklistPdf';
 
 export interface LoadRow { fuel?: 'Electric' | 'Gas'; volt?: '120V' | '240V'; hp?: string; amps?: string; }
 
@@ -113,10 +114,17 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
   const [data, setData] = useState<ChecklistData>(() => parseChecklist(gen.checklist_data));
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const printRef = useRef<HTMLDivElement>(null);
 
   const form = useMemo(() => parseGenForm(gen.form_data), [gen.form_data]);
   const address = [form.address, form.city, form.state, form.zip].filter(Boolean).join(', ') || gen.loc;
+
+  const pdfHeader = () => ({
+    customer: gen.customer || '',
+    genLabel: [gen.mfr, gen.model, gen.kw ? `${gen.kw}kW` : ''].filter(Boolean).join(' '),
+    proposalNo: gen.proposal_no || '',
+    address,
+    date: new Date().toLocaleDateString(),
+  });
 
   const set = <K extends keyof ChecklistData>(k: K, v: ChecklistData[K]) => setData(d => ({ ...d, [k]: v }));
   const setLoad = (i: number, patch: Partial<LoadRow>) =>
@@ -144,35 +152,25 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
   };
 
   const finalize = async () => {
-    if (!printRef.current) return;
     setExporting(true);
     try {
       await save(true);
-      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
-      const canvas = await html2canvas(printRef.current, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
-      const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
-      const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
-      const imgH = canvas.height * (pageW / canvas.width);
-      const imgData = canvas.toDataURL('image/png');
-      let heightLeft = imgH, position = 0;
-      pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-      heightLeft -= pageH;
-      while (heightLeft > 0) {
-        position = heightLeft - imgH;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-        heightLeft -= pageH;
-      }
+      const pdf = await buildChecklistPdf(pdfHeader(), data, 'filled');
+      // Replace any prior finalized checklist so re-finalizing doesn't stack copies.
+      try {
+        const { data: docs } = await api.get('/documents', { params: { linked_id: gen.id } });
+        const prior = (docs as { id: string; category: string }[]).filter(d => d.category === 'site_checklist');
+        for (const d of prior) await api.delete(`/documents/${d.id}`);
+      } catch { /* non-fatal — worst case a duplicate remains */ }
       const fd = new FormData();
       fd.append('file', pdf.output('blob'), `Site Visit Checklist - ${gen.customer}.pdf`);
       fd.append('linked_id', gen.id);
       fd.append('linked_name', gen.customer);
       fd.append('div', 'gen');
       fd.append('category', 'site_checklist');
-      fd.append('display_name', `Site Visit Checklist — ${gen.customer}`);
+      fd.append('display_name', `Site Visit Checklist — ${gen.customer}.pdf`);
       await api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      showToast({ title: 'Checklist finalized', sub: 'PDF attached to this job' });
+      showToast({ title: 'Checklist finalized', sub: 'Clean PDF attached to this job' });
     } catch {
       showToast({ title: 'Export failed', sub: 'Try again' });
     } finally {
@@ -180,9 +178,18 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
     }
   };
 
+  const printBlank = async () => {
+    try {
+      const pdf = await buildChecklistPdf(pdfHeader(), { ...BLANK, sqft: data.sqft }, 'blank');
+      window.open(URL.createObjectURL(pdf.output('blob')), '_blank', 'noopener');
+    } catch {
+      showToast({ title: 'Could not build blank form', sub: 'Try again' });
+    }
+  };
+
   return (
     <div style={{ marginTop: 4 }}>
-      <div ref={printRef} style={{ background: '#fff', color: INK, padding: 14, borderRadius: 10, border: '1px solid var(--border2)' }}>
+      <div style={{ background: '#fff', color: INK, padding: 14, borderRadius: 10, border: '1px solid var(--border2)' }}>
         <div style={{ textAlign: 'center', marginBottom: 12 }}>
           <div style={{ fontWeight: 800, color: HEAD, fontSize: 14 }}>ACCURATE POWER &amp; TECHNOLOGY, INC.</div>
           <div style={{ fontSize: 10.5, color: MUTED }}>Site Visit Checklist</div>
@@ -288,6 +295,9 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         <button className="btn ghost" style={{ flex: 1, justifyContent: 'center' }} disabled={saving} onClick={() => save()}>
           {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button className="btn ghost" style={{ flex: 1, justifyContent: 'center' }} onClick={printBlank}>
+          Print Blank
         </button>
         <button className="btn amber" style={{ flex: 1, justifyContent: 'center' }} disabled={exporting} onClick={finalize}>
           {exporting ? 'Exporting…' : 'Finalize / Export PDF'}
