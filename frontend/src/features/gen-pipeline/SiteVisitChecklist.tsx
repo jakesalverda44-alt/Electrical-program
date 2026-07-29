@@ -1,9 +1,14 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import api from '../../api/client';
 import { Gen } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
+import { buildChecklistPdf } from './checklistPdf';
 
 export interface LoadRow { fuel?: 'Electric' | 'Gas'; volt?: '120V' | '240V'; hp?: string; amps?: string; }
+
+export interface AcUnit { size: string; type: '' | 'Central' | 'Mini Split' | 'Heat Pump' | 'Other'; lra: string }
+export interface CustomLoad extends LoadRow { name: string }
+export const AC_TYPES = ['Central', 'Mini Split', 'Heat Pump', 'Other'] as const;
 
 export interface ChecklistData {
   disc: '' | 'Yes' | 'No';
@@ -11,13 +16,12 @@ export interface ChecklistData {
   powerCo: string;
   serviceAmps: string;
   atsQtyAmps: string;
-  acSize: string;
-  lra: string;
+  sqft: string;
+  acUnits: AcUnit[];
   airHandler: '' | 'Electric' | 'Gas';
   gasType: '' | 'LP' | 'NG';
-  tankSize: string;
-  tankType: '' | 'AG' | 'UG';
   loads: Record<number, LoadRow>;
+  customLoads: CustomLoad[];
   feedLen: string;
   gasRunLength: string;
   locDesc: string;
@@ -25,29 +29,48 @@ export interface ChecklistData {
 }
 
 export const BLANK: ChecklistData = {
-  disc: '', em: '', powerCo: '', serviceAmps: '', atsQtyAmps: '', acSize: '', lra: '',
-  airHandler: '', gasType: '', tankSize: '', tankType: '',
-  loads: {}, feedLen: '', gasRunLength: '', locDesc: '', notes: '',
+  disc: '', em: '', powerCo: '', serviceAmps: '', atsQtyAmps: '', sqft: '',
+  acUnits: [], airHandler: '', gasType: '',
+  loads: {}, customLoads: [], feedLen: '', gasRunLength: '', locDesc: '', notes: '',
 };
 
 // Same fixed appliance list as the standalone Job Kickoff Tool, keyed by index
 // (two "Other" rows share a name, so the name alone can't be the key).
-export const LOADS: { n: string; fuel?: boolean; volt?: boolean; hp?: boolean; amps?: boolean }[] = [
-  { n: 'Dryer', fuel: true }, { n: 'Microwave' }, { n: 'Range Oven w/Top', fuel: true }, { n: 'Cook Top', fuel: true },
-  { n: 'Oven', fuel: true, amps: true }, { n: 'Pool Heater', fuel: true, amps: true }, { n: 'Water Heater', fuel: true, amps: true },
+export const LOADS: { n: string }[] = [
+  { n: 'Dryer' }, { n: 'Microwave' }, { n: 'Range Oven w/Top' }, { n: 'Cook Top' },
+  { n: 'Oven' }, { n: 'Pool Heater' }, { n: 'Water Heater' },
   { n: 'Hot Tub (small)' }, { n: 'Hot Tub (large)' }, { n: 'Dishwasher' }, { n: 'Freezer' }, { n: 'Refrigerator' },
-  { n: 'EV Charger', volt: true, amps: true }, { n: 'Pool Pump', volt: true, hp: true, amps: true }, { n: 'Sump / Grinder Pump', volt: true, hp: true, amps: true },
-  { n: 'Well Pump', volt: true, hp: true, amps: true }, { n: 'Garage Door Opener' }, { n: 'Water Softener' }, { n: 'Garbage Disposal' },
-  { n: 'Shop / Shed / MIL Suite', volt: true, amps: true }, { n: 'Boat House / Lift', volt: true, hp: true, amps: true },
-  { n: 'Sprinkler Pump', volt: true, hp: true, amps: true }, { n: 'Other', volt: true, amps: true }, { n: 'Other', volt: true, amps: true },
+  { n: 'EV Charger' }, { n: 'Pool Pump' }, { n: 'Sump / Grinder Pump' },
+  { n: 'Well Pump' }, { n: 'Garage Door Opener' }, { n: 'Water Softener' }, { n: 'Garbage Disposal' },
+  { n: 'Shop / Shed / MIL Suite' }, { n: 'Boat House / Lift' },
+  { n: 'Sprinkler Pump' }, { n: 'Other' }, { n: 'Other' },
 ];
 
 function parseChecklist(raw: Gen['checklist_data']): ChecklistData {
   try {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (parsed && typeof parsed === 'object') return { ...BLANK, ...parsed, loads: { ...(parsed as ChecklistData).loads } };
+    if (parsed && typeof parsed === 'object') {
+      const p = parsed as Partial<ChecklistData> & { acSize?: string; lra?: string };
+      const merged: ChecklistData = {
+        ...BLANK, ...p,
+        loads: { ...(p.loads || {}) },
+        acUnits: Array.isArray(p.acUnits) ? p.acUnits : [],
+        customLoads: Array.isArray(p.customLoads) ? p.customLoads : [],
+      };
+      // Legacy single AC fields → first AC unit. Old tankSize/tankType are dropped.
+      if (!merged.acUnits.length && (p.acSize || p.lra)) {
+        merged.acUnits = [{ size: p.acSize || '', type: '', lra: p.lra || '' }];
+      }
+      // Strip legacy keys so they never re-enter state and get re-persisted by save().
+      const mergedAny = merged as unknown as Record<string, unknown>;
+      delete mergedAny.acSize;
+      delete mergedAny.lra;
+      delete mergedAny.tankSize;
+      delete mergedAny.tankType;
+      return merged;
+    }
   } catch { /* fall through to blank */ }
-  return { ...BLANK, loads: {} };
+  return { ...BLANK, loads: {}, acUnits: [], customLoads: [] };
 }
 
 function parseGenForm(raw: Gen['form_data']): Record<string, unknown> {
@@ -97,14 +120,29 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
   const [data, setData] = useState<ChecklistData>(() => parseChecklist(gen.checklist_data));
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const printRef = useRef<HTMLDivElement>(null);
 
   const form = useMemo(() => parseGenForm(gen.form_data), [gen.form_data]);
   const address = [form.address, form.city, form.state, form.zip].filter(Boolean).join(', ') || gen.loc;
 
+  const pdfHeader = () => ({
+    customer: gen.customer || '',
+    genLabel: [gen.mfr, gen.model, gen.kw ? `${gen.kw}kW` : ''].filter(Boolean).join(' '),
+    proposalNo: gen.proposal_no || '',
+    address,
+    date: new Date().toLocaleDateString(),
+  });
+
   const set = <K extends keyof ChecklistData>(k: K, v: ChecklistData[K]) => setData(d => ({ ...d, [k]: v }));
   const setLoad = (i: number, patch: Partial<LoadRow>) =>
     setData(d => ({ ...d, loads: { ...d.loads, [i]: { ...d.loads[i], ...patch } } }));
+  const setAc = (i: number, patch: Partial<AcUnit>) =>
+    setData(d => ({ ...d, acUnits: d.acUnits.map((u, j) => j === i ? { ...u, ...patch } : u) }));
+  const removeAc = (i: number) =>
+    setData(d => ({ ...d, acUnits: d.acUnits.filter((_, j) => j !== i) }));
+  const setCustom = (i: number, patch: Partial<CustomLoad>) =>
+    setData(d => ({ ...d, customLoads: d.customLoads.map((c, j) => j === i ? { ...c, ...patch } : c) }));
+  const removeCustom = (i: number) =>
+    setData(d => ({ ...d, customLoads: d.customLoads.filter((_, j) => j !== i) }));
 
   const save = async (silent = false) => {
     setSaving(true);
@@ -120,35 +158,33 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
   };
 
   const finalize = async () => {
-    if (!printRef.current) return;
     setExporting(true);
     try {
       await save(true);
-      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
-      const canvas = await html2canvas(printRef.current, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
-      const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
-      const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
-      const imgH = canvas.height * (pageW / canvas.width);
-      const imgData = canvas.toDataURL('image/png');
-      let heightLeft = imgH, position = 0;
-      pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-      heightLeft -= pageH;
-      while (heightLeft > 0) {
-        position = heightLeft - imgH;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-        heightLeft -= pageH;
-      }
+      const pdf = await buildChecklistPdf(pdfHeader(), data, 'filled');
+      // Capture prior finalized checklist ids before uploading, so we only ever delete
+      // pre-existing docs (never the fresh one) and never leave the gen with no checklist
+      // doc if the upload fails.
+      let priorIds: string[] = [];
+      try {
+        const { data: docs } = await api.get('/documents', { params: { linked_id: gen.id } });
+        priorIds = (docs as { id: string; category: string }[])
+          .filter(d => d.category === 'site_checklist')
+          .map(d => d.id);
+      } catch { /* non-fatal — worst case a duplicate remains */ }
       const fd = new FormData();
       fd.append('file', pdf.output('blob'), `Site Visit Checklist - ${gen.customer}.pdf`);
       fd.append('linked_id', gen.id);
       fd.append('linked_name', gen.customer);
       fd.append('div', 'gen');
       fd.append('category', 'site_checklist');
-      fd.append('display_name', `Site Visit Checklist — ${gen.customer}`);
+      fd.append('display_name', `Site Visit Checklist — ${gen.customer}.pdf`);
       await api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      showToast({ title: 'Checklist finalized', sub: 'PDF attached to this job' });
+      // Replace any prior finalized checklist so re-finalizing doesn't stack copies.
+      try {
+        for (const id of priorIds) await api.delete(`/documents/${id}`);
+      } catch { /* non-fatal — worst case a duplicate remains */ }
+      showToast({ title: 'Checklist finalized', sub: 'Clean PDF attached to this job' });
     } catch {
       showToast({ title: 'Export failed', sub: 'Try again' });
     } finally {
@@ -156,9 +192,20 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
     }
   };
 
+  const printBlank = async () => {
+    try {
+      const pdf = await buildChecklistPdf(pdfHeader(), { ...BLANK, sqft: data.sqft }, 'blank');
+      const url = URL.createObjectURL(pdf.output('blob'));
+      window.open(url, '_blank', 'noopener');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      showToast({ title: 'Could not build blank form', sub: 'Try again' });
+    }
+  };
+
   return (
     <div style={{ marginTop: 4 }}>
-      <div ref={printRef} style={{ background: '#fff', color: INK, padding: 14, borderRadius: 10, border: '1px solid var(--border2)' }}>
+      <div style={{ background: '#fff', color: INK, padding: 14, borderRadius: 10, border: '1px solid var(--border2)' }}>
         <div style={{ textAlign: 'center', marginBottom: 12 }}>
           <div style={{ fontWeight: 800, color: HEAD, fontSize: 14 }}>ACCURATE POWER &amp; TECHNOLOGY, INC.</div>
           <div style={{ fontSize: 10.5, color: MUTED }}>Site Visit Checklist</div>
@@ -169,6 +216,7 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
           <div><b>Gen Size / Brand:</b> {gen.mfr} {gen.model}</div>
           <div><b>Proposal No.:</b> {gen.proposal_no || '—'}</div>
           <div><b>Date:</b> {new Date().toLocaleDateString()}</div>
+          <div><b>Sq/Ft:</b> <input style={{ ...inputStyle, display: 'inline-block', width: 90, padding: '3px 8px' }} value={data.sqft} onChange={e => set('sqft', e.target.value)}/></div>
           <div style={{ gridColumn: '1 / -1' }}><b>Address:</b> {address}</div>
         </div>
 
@@ -182,15 +230,24 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
           <Field label="Service AMPS"><input style={inputStyle} value={data.serviceAmps} onChange={e => set('serviceAmps', e.target.value)}/></Field>
           <Field label="ATS Qty / AMPS"><input style={inputStyle} value={data.atsQtyAmps} onChange={e => set('atsQtyAmps', e.target.value)}/></Field>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 10 }}>
-          <Field label="AC Unit Size"><input style={inputStyle} value={data.acSize} onChange={e => set('acSize', e.target.value)}/></Field>
-          <Field label="LRA"><input style={inputStyle} value={data.lra} onChange={e => set('lra', e.target.value)}/></Field>
-          <Field label="Air Handler (Heat Strips)"><ToggleGroup options={['Electric', 'Gas']} value={data.airHandler} onChange={v => set('airHandler', v)}/></Field>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>AC Units</div>
+          {data.acUnits.map((u, i) => (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr 1fr auto', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+              <input style={inputStyle} placeholder="Size (e.g. 3 Ton)" value={u.size} onChange={e => setAc(i, { size: e.target.value })}/>
+              <ToggleGroup options={[...AC_TYPES]} value={u.type} onChange={v => setAc(i, { type: v as AcUnit['type'] })}/>
+              <input style={inputStyle} placeholder="LRA" value={u.lra} onChange={e => setAc(i, { lra: e.target.value })}/>
+              <button type="button" onClick={() => removeAc(i)} style={{ border: 'none', background: 'none', color: '#c0392b', cursor: 'pointer', fontWeight: 700 }}>✕</button>
+            </div>
+          ))}
+          <button type="button" className="btn ghost" style={{ fontSize: 12, height: 30, padding: '0 12px' }}
+            onClick={() => setData(d => ({ ...d, acUnits: [...d.acUnits, { size: '', type: '', lra: '' }] }))}>
+            + Add AC unit
+          </button>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+          <Field label="Air Handler (Heat Strips)"><ToggleGroup options={['Electric', 'Gas']} value={data.airHandler} onChange={v => set('airHandler', v)}/></Field>
           <Field label="Gas Type"><ToggleGroup options={['LP', 'NG']} value={data.gasType} onChange={v => set('gasType', v)}/></Field>
-          <Field label="Tank Size / Qty"><input style={inputStyle} value={data.tankSize} onChange={e => set('tankSize', e.target.value)}/></Field>
-          <Field label="Tank Type"><ToggleGroup options={['AG', 'UG']} value={data.tankType} onChange={v => set('tankType', v)}/></Field>
         </div>
 
         <div style={{ fontSize: 12, fontWeight: 800, color: '#164a86', marginBottom: 6 }}>Loads / Appliances</div>
@@ -209,15 +266,34 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
                 return (
                   <tr key={i} style={{ borderBottom: `1px solid ${LINE}` }}>
                     <td style={{ padding: '4px 6px', fontWeight: 600 }}>{row.n}</td>
-                    <td style={{ padding: '4px 6px' }}>{row.fuel ? <ToggleGroup options={['Electric', 'Gas']} value={lv.fuel || ''} onChange={v => setLoad(i, { fuel: v as LoadRow['fuel'] })}/> : <span style={{ color: '#c2ccd6' }}>—</span>}</td>
-                    <td style={{ padding: '4px 6px' }}>{row.volt ? <ToggleGroup options={['120V', '240V']} value={lv.volt || ''} onChange={v => setLoad(i, { volt: v as LoadRow['volt'] })}/> : <span style={{ color: '#c2ccd6' }}>—</span>}</td>
-                    <td style={{ padding: '4px 6px' }}>{row.hp ? <input style={miniStyle} value={lv.hp || ''} onChange={e => setLoad(i, { hp: e.target.value })}/> : <span style={{ color: '#c2ccd6' }}>—</span>}</td>
-                    <td style={{ padding: '4px 6px' }}>{row.amps ? <input style={miniStyle} value={lv.amps || ''} onChange={e => setLoad(i, { amps: e.target.value })}/> : <span style={{ color: '#c2ccd6' }}>—</span>}</td>
+                    <td style={{ padding: '4px 6px' }}><ToggleGroup options={['Electric', 'Gas']} value={lv.fuel || ''} onChange={v => setLoad(i, { fuel: v as LoadRow['fuel'] })}/></td>
+                    <td style={{ padding: '4px 6px' }}><ToggleGroup options={['120V', '240V']} value={lv.volt || ''} onChange={v => setLoad(i, { volt: v as LoadRow['volt'] })}/></td>
+                    <td style={{ padding: '4px 6px' }}><input style={miniStyle} value={lv.hp || ''} onChange={e => setLoad(i, { hp: e.target.value })}/></td>
+                    <td style={{ padding: '4px 6px' }}><input style={miniStyle} value={lv.amps || ''} onChange={e => setLoad(i, { amps: e.target.value })}/></td>
                   </tr>
                 );
               })}
+              {data.customLoads.map((row, i) => (
+                <tr key={`c${i}`} style={{ borderBottom: `1px solid ${LINE}` }}>
+                  <td style={{ padding: '4px 6px' }}>
+                    <input style={{ ...inputStyle, width: 140 }} placeholder="Appliance" value={row.name}
+                      onChange={e => setCustom(i, { name: e.target.value })}/>
+                  </td>
+                  <td style={{ padding: '4px 6px' }}><ToggleGroup options={['Electric', 'Gas']} value={row.fuel || ''} onChange={v => setCustom(i, { fuel: v as LoadRow['fuel'] })}/></td>
+                  <td style={{ padding: '4px 6px' }}><ToggleGroup options={['120V', '240V']} value={row.volt || ''} onChange={v => setCustom(i, { volt: v as LoadRow['volt'] })}/></td>
+                  <td style={{ padding: '4px 6px' }}><input style={miniStyle} value={row.hp || ''} onChange={e => setCustom(i, { hp: e.target.value })}/></td>
+                  <td style={{ padding: '4px 6px', whiteSpace: 'nowrap' }}>
+                    <input style={miniStyle} value={row.amps || ''} onChange={e => setCustom(i, { amps: e.target.value })}/>
+                    <button type="button" onClick={() => removeCustom(i)} style={{ marginLeft: 6, border: 'none', background: 'none', color: '#c0392b', cursor: 'pointer', fontWeight: 700 }}>✕</button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
+          <button type="button" className="btn ghost" style={{ marginTop: 4, fontSize: 12, height: 30, padding: '0 12px' }}
+            onClick={() => setData(d => ({ ...d, customLoads: [...d.customLoads, { name: '' }] }))}>
+            + Add appliance
+          </button>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
@@ -235,6 +311,9 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         <button className="btn ghost" style={{ flex: 1, justifyContent: 'center' }} disabled={saving} onClick={() => save()}>
           {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button className="btn ghost" style={{ flex: 1, justifyContent: 'center' }} onClick={printBlank}>
+          Print Blank
         </button>
         <button className="btn amber" style={{ flex: 1, justifyContent: 'center' }} disabled={exporting} onClick={finalize}>
           {exporting ? 'Exporting…' : 'Finalize / Export PDF'}

@@ -103,8 +103,19 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
       let current: ChecklistData;
       try {
         const raw = typeof gen.checklist_data === 'string' ? JSON.parse(gen.checklist_data) : gen.checklist_data;
-        current = { ...BLANK, ...(raw || {}), loads: { ...(raw?.loads || {}) } };
-      } catch { current = { ...BLANK, loads: {} }; }
+        current = {
+          ...BLANK, ...(raw || {}),
+          loads: { ...(raw?.loads || {}) },
+          acUnits: Array.isArray(raw?.acUnits) ? raw.acUnits : [],
+          customLoads: Array.isArray(raw?.customLoads) ? raw.customLoads : [],
+        };
+      } catch { current = { ...BLANK, loads: {}, acUnits: [], customLoads: [] }; }
+      // Strip legacy keys so they never re-enter state and get re-persisted on save.
+      const currentAny = current as unknown as Record<string, unknown>;
+      delete currentAny.acSize;
+      delete currentAny.lra;
+      delete currentAny.tankSize;
+      delete currentAny.tankType;
 
       const notes = notesLine && !current.notes.includes(notesLine)
         ? [current.notes, notesLine].filter(Boolean).join('\n')
@@ -112,6 +123,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
       const merged: ChecklistData = {
         ...current,
         ...fields,
+        acUnits: current.acUnits.length ? current.acUnits : (fields.acUnits || []),
         loads: { ...current.loads, ...loads },
         notes,
       };

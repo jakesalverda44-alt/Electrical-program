@@ -1,4 +1,4 @@
-import { ChecklistData, LoadRow, LOADS } from './SiteVisitChecklist';
+import { AcUnit, ChecklistData, LoadRow, LOADS } from './SiteVisitChecklist';
 
 // Reads a Generac/Kohler NEC sizing-report PDF and maps its data onto the Site Visit
 // Checklist. Runs client-side (pdfjs-dist) when a sizer is uploaded so the tech gets a
@@ -33,7 +33,7 @@ export async function extractPdfLines(file: File): Promise<string[]> {
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 export interface SizerResult {
-  fields: Partial<Pick<ChecklistData, 'gasType' | 'lra' | 'acSize' | 'airHandler'>>;
+  fields: Partial<Pick<ChecklistData, 'gasType' | 'airHandler' | 'sqft'>> & { acUnits?: AcUnit[] };
   loads: Record<number, LoadRow>;
   notesLine: string;
 }
@@ -49,17 +49,22 @@ export function parseSizerLines(lines: string[]): SizerResult {
 
   // LRA — line like "Largest Motor's Starting Amps (LRA) 86.3 83.9 83.9"; take the last (utilized) value
   const lraLine = lines.find(l => /LRA\)/i.test(l) || /Starting Amps/i.test(l));
+  let lraVal: string | undefined;
   if (lraLine) {
     const nums = lraLine.match(/[\d.]+/g);
-    if (nums && nums.length) fields.lra = nums[nums.length - 1];
+    if (nums && nums.length) lraVal = nums[nums.length - 1];
   }
 
   // AC unit size — "3.0 Ton Unit"
   const ac = text.match(/([\d.]+)\s*Ton\s*Unit/i) || text.match(/([\d.]+)\s*Ton/i);
-  if (ac) fields.acSize = `${ac[1]} Ton`;
+  if (ac) fields.acUnits = [{ size: `${ac[1]} Ton`, type: '', lra: lraVal || '' }];
 
   // Electric heat / heat pump → air handler is electric (has heat strips / electric heat load)
   if (/heat\s*pump|heat\s*strip|electric\s*heat/i.test(text)) fields.airHandler = 'Electric';
+
+  // Square footage — "Square Footage ... ) 2,450"
+  const sqft = text.match(/Square Footage[^\n]*?\)\s*([\d,]+)/i);
+  if (sqft) fields.sqft = sqft[1].replace(/,/g, '');
 
   // Appliance nameplate amps — lines shaped "<name> <est_kw> <nameplate_amps> [X] <load_kw>".
   // Map to the checklist's fixed LOADS rows by exact normalized name.
@@ -71,25 +76,20 @@ export function parseSizerLines(lines: string[]): SizerResult {
     if (!isNaN(amps)) applianceAmps[norm(m[1])] = amps;
   }
   LOADS.forEach((row, i) => {
-    if (!row.fuel && !row.amps) return;          // grid row has nothing to fill
     const amps = applianceAmps[norm(row.n)];
     if (amps === undefined) return;               // not on this sizer
-    const lr: LoadRow = {};
-    if (row.fuel) lr.fuel = 'Electric';           // sizer lists electric loads
-    if (row.amps) lr.amps = String(Math.round(amps));
-    loads[i] = lr;
+    loads[i] = { fuel: 'Electric', amps: String(Math.round(amps)) };
   });
 
   // Summary note so the extra sizer data (sqft, recommended size, BTU) isn't lost
   const parts: string[] = [];
   const rec = text.match(/(\d+)\s*kW[^\n]*Recommended/i);
   if (rec) parts.push(`${rec[1]}kW recommended`);
-  const sqft = text.match(/Square Footage[^\n]*?\)\s*([\d,]+)/i);
   if (sqft) parts.push(`${sqft[1]} sqft`);
   if (fields.gasType) parts.push(fields.gasType === 'LP' ? 'Liquid Propane' : 'Natural Gas');
   const btu = text.match(/BTU\s*load\s*required\s*([\d,]+)/i);
   if (btu) parts.push(`BTU ${btu[1]}`);
-  if (fields.lra) parts.push(`LRA ${fields.lra}`);
+  if (lraVal) parts.push(`LRA ${lraVal}`);
   const notesLine = parts.length ? `Sizer: ${parts.join(' · ')}.` : '';
 
   return { fields, loads, notesLine };
