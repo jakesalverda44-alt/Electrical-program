@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from './Icon';
 import api from '../api/client';
 import FilePreviewModal from './FilePreviewModal';
-import { previewKind } from './filePreview';
+import { useDocPreview } from './useDocPreview';
 
 interface Doc {
   id: string;
@@ -52,7 +52,6 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
   const [category, setCategory] = useState(div === 'elec' ? 'plans' : div === 'lead' ? 'photo' : 'other');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
-  const [preview, setPreview] = useState<{ title: string; kind: 'sheet' | 'doc'; buf: ArrayBuffer; doc: Doc } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const cameraInput = useRef<HTMLInputElement>(null);
 
@@ -115,39 +114,11 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
     }
   };
 
-  // pdf/image: open inline in a new tab (opened synchronously, on the user gesture,
-  // to dodge popup blockers, then pointed at the blob once fetched).
-  // xlsx/xls/csv/docx: fetch the bytes and render them in-app via FilePreviewModal.
-  // Anything else: no in-app preview, fall straight through to download.
-  const view = async (doc: Doc) => {
-    const kind = previewKind(doc.name, doc.file_type);
-
-    if (kind === 'inline') {
-      const w = window.open('', '_blank');
-      try {
-        const res = await api.get(`/documents/${doc.id}/view`, { responseType: 'blob' });
-        const url = URL.createObjectURL(res.data);
-        if (w) w.location.href = url; else window.open(url, '_blank');
-        setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      } catch {
-        if (w) w.close();
-        setError('Preview failed — try downloading instead.');
-      }
-      return;
-    }
-
-    if (kind === 'none') {
-      return download(doc);
-    }
-
-    try {
-      const res = await api.get(`/documents/${doc.id}/view`, { responseType: 'arraybuffer' });
-      setPreview({ title: doc.display_name || doc.name, kind, buf: res.data, doc });
-    } catch {
-      setError('Preview failed — downloading instead.');
-      download(doc);
-    }
-  };
+  // pdf/image: open inline in a new tab. xlsx/xls/csv/docx: fetch the bytes and
+  // render them in-app via FilePreviewModal. Anything else: no in-app preview,
+  // fall straight through to download. Shared with the PcWorkspace "From Project
+  // Files" panel via useDocPreview so the two stay in sync.
+  const { preview, view, closePreview } = useDocPreview<Doc>(download, setError);
 
   const remove = async (doc: Doc) => {
     setDocs(prev => prev.filter(d => d.id !== doc.id));
@@ -220,7 +191,7 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
         title={preview.title}
         kind={preview.kind}
         buf={preview.buf}
-        onClose={() => setPreview(null)}
+        onClose={closePreview}
         onDownload={() => download(preview.doc)}
       />
     )}

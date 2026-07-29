@@ -970,3 +970,6 @@ button{font-family:inherit}
     opacity: .7;
   }
 }
+
+/* ── Clickable file name (opens in-app preview) ─────────────────── */
+.pc-file-name-link:hover { text-decoration: underline; }

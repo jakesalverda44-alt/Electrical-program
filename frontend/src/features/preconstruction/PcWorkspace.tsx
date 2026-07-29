@@ -5,6 +5,8 @@ import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey, PROJEC
 import api from '../../api/client';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
 import { moneyFull } from '../../lib/money';
+import FilePreviewModal from '../../components/FilePreviewModal';
+import { useDocPreview } from '../../components/useDocPreview';
 
 interface Props {
   ws: PcWorkspace;
@@ -688,6 +690,30 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }).catch(() => {});
   };
 
+  // Always goes through the backend (authenticated blob fetch), never anchors
+  // doc.storage_url directly: the raw Cloudinary URL is unauthenticated and skips
+  // access checks. Mirrors RecordFiles' download().
+  const downloadProjectDoc = async (doc: ProjectDoc) => {
+    try {
+      const res = await api.get(`/documents/${doc.id}/download`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = doc.display_name || doc.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      showToast({ title: 'Download failed', sub: 'Please re-upload this file.' });
+    }
+  };
+
+  // Same view/preview routing as RecordFiles' "Documents" list, shared via
+  // useDocPreview: pdf/image open inline in a new tab, xlsx/xls/csv/docx render
+  // in-app via FilePreviewModal, everything else falls through to download.
+  const { preview: docPreview, view: viewProjectDoc, closePreview: closeDocPreview } = useDocPreview<ProjectDoc>(
+    downloadProjectDoc,
+    message => showToast({ title: 'Preview failed', sub: message }),
+  );
+
   const removeFile = (id: string, name: string) => {
     let removed = false;
     fileObjectsRef.current = fileObjectsRef.current.filter(f => {
@@ -1082,7 +1108,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                           style={{ width: 15, height: 15, accentColor: 'var(--blue)', cursor: eligible ? 'pointer' : 'not-allowed', flexShrink: 0 }}
                         />
                         <Icon name="file" size={13} stroke={1.8}/>
-                        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span
+                          onClick={e => { e.preventDefault(); e.stopPropagation(); viewProjectDoc(d); }}
+                          title="Click to preview"
+                          style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                          className="pc-file-name-link"
+                        >
                           {d.display_name || d.name}
                         </span>
                         <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 5, textTransform: 'uppercase', flexShrink: 0,
@@ -2218,6 +2249,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   };
 
   return (
+    <>
     <div className="scroll view-enter">
       {/* Back bar */}
       {!embedded && (
@@ -2253,5 +2285,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       {/* Tab content */}
       {renderTab()}
     </div>
+    {docPreview && (
+      <FilePreviewModal
+        title={docPreview.title}
+        kind={docPreview.kind}
+        buf={docPreview.buf}
+        onClose={closeDocPreview}
+        onDownload={() => downloadProjectDoc(docPreview.doc)}
+      />
+    )}
+    </>
   );
 }
