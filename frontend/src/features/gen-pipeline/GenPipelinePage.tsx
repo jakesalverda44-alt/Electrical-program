@@ -231,6 +231,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
 
       {detail && (
         <GenDetailDrawer
+          key={detail.id}
           gen={gens.find(g => g.id === detail.id) || detail}
           pendingDeclined={pendingDeclined === detail.id}
           onStage={handleStageFromDrawer}

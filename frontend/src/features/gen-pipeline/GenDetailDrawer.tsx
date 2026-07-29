@@ -478,7 +478,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
         <AwardKickoffModal
           gen={gen}
           onClose={() => { setShowKickoff(false); kickoffDocs.refresh(); }}
-          onOpenTab={t => { setShowKickoff(false); setTab(t); }}
+          onOpenTab={t => { setShowKickoff(false); setTab(t); kickoffDocs.refresh(); }}
           onUpdated={g => onUpdated(g)}
           onSizerUploaded={autofillFromSizer}
         />
