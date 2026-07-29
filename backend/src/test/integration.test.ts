@@ -438,3 +438,48 @@ describe('command center brief (integration)', () => {
     expect(res.body.kohlerFunnel.needCall).toBeGreaterThan(0);
   });
 });
+
+describe('GC name canonicalization (integration)', () => {
+  it('collapses variant spellings of the same GC into one customer with a consistent display name', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const rep = await makeUser('salesperson');
+    // Unique per run so this never collides with a real/seeded customer.
+    const base = `Bay To Bay ${Date.now()}`;
+
+    const first = await request(app).post('/api/bids').set(auth(rep.token))
+      .send({ name: `Canon Test 1 ${Date.now()}`, gc: base })
+      .expect(200);
+    expect(first.body.gc).toBe(base);
+    expect(first.body.customer_id).toBeTruthy();
+
+    // "X Construction" normalizes to the same base name via suffix-stripping,
+    // so this should resolve to the same customer created above.
+    const second = await request(app).post('/api/bids').set(auth(rep.token))
+      .send({ name: `Canon Test 2 ${Date.now()}`, gc: `${base} Construction` })
+      .expect(200);
+
+    expect(second.body.customer_id).toBe(first.body.customer_id);
+    expect(second.body.gc).toBe(base);
+  });
+
+  it('resolves a junk-wrapped GC string through the Intake accept path to the canonical name', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const rep = await makeUser('salesperson');
+    const base = `Riverstone Electric ${Date.now()}`;
+
+    const seed = await request(app).post('/api/bids').set(auth(rep.token))
+      .send({ name: `Seed ${Date.now()}`, gc: base })
+      .expect(200);
+
+    const { rows } = await pool.query(
+      `INSERT INTO intake_items (name, gc, status) VALUES ($1,$2,'pending') RETURNING id`,
+      [`Intake Test ${Date.now()}`, `Estimating Department (${base})`]
+    );
+    const accepted = await request(app).post(`/api/intake/${rows[0].id}/accept`).set(auth(rep.token))
+      .send({})
+      .expect(200);
+
+    expect(accepted.body.customer_id).toBe(seed.body.customer_id);
+    expect(accepted.body.gc).toBe(base);
+  });
+});

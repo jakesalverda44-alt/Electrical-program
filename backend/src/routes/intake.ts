@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { pool } from '../db/pool';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
-import { upsertCustomer } from './customers';
+import { resolveCustomer } from './customers';
 import { formatDue, withDueDays } from '../utils/dueDate';
 import { setupBidDriveFolders } from './bids';
 import { ingestTaggedBidEmails } from '../integrations/intakeEmailIngest';
@@ -151,12 +151,17 @@ router.post('/:id/accept', requireAuth, async (req: AuthRequest, res) => {
     const projectType = o.project_type ?? null;
     const brand       = o.brand ?? null;
     const user = req.user!;
-    const customerId = await upsertCustomer(gc, 'gc');
+    // Snap the freeform GC text to one canonical customer record — same
+    // resolution used by POST /bids — so the pipeline board/hub shows a
+    // consistent GC name regardless of which intake email spelled it how.
+    const resolved = await resolveCustomer(gc, 'gc');
+    const customerId = resolved?.id ?? null;
+    const gcName = resolved?.canonicalName ?? gc;
 
     const { rows: bidRows } = await client.query(
       `INSERT INTO bids (name, gc, loc, contact, amount, due, notes, salesperson_id, salesperson_name, customer_id, sq_ft, source_email_link, project_type, brand)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-      [name, gc, (loc || '').trim() || '—', (typeof contact === 'string' && contact.trim()) ? contact.trim() : null,
+      [name, gcName, (loc || '').trim() || '—', (typeof contact === 'string' && contact.trim()) ? contact.trim() : null,
        amount != null && amount !== '' ? Number(amount) : null,
        formatDue(due), notes?.trim?.() || notes || null, user.id, user.name, customerId,
        sqFt != null && sqFt !== '' ? Number(sqFt) : null, it.web_link || null,

@@ -8,7 +8,7 @@ import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { logger } from '../utils/logger';
 import { sendBidNotification } from '../email/bidNotification';
 import { loadBidDocumentsAsAttachments } from '../email/bidAttachments';
-import { upsertCustomer } from './customers';
+import { resolveCustomer } from './customers';
 import {
   createJobFolder,
   createSubfolders,
@@ -97,11 +97,16 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const { name, gc, loc, amount, due, notes, project_type, sq_ft, suppress_notify, brand } = req.body;
   if (!name?.trim() || !gc?.trim()) return res.status(400).json({ error: 'Name and GC required' });
   const user = req.user!;
-  const customerId = await upsertCustomer(gc, 'gc');
+  // Snap the freeform GC text to one canonical customer record so duplicate
+  // spellings ("bay to bay" vs "Bay to Bay Construction") collapse into a
+  // single customer and the board/hub display the same canonical name.
+  const resolved = await resolveCustomer(gc, 'gc');
+  const customerId = resolved?.id ?? null;
+  const gcName = resolved?.canonicalName ?? gc.trim();
   const { rows } = await pool.query(
     `INSERT INTO bids (name, gc, loc, amount, due, notes, salesperson_id, salesperson_name, customer_id, project_type, sq_ft, brand)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-    [name.trim(), gc.trim(), (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), notes?.trim() || null, user.id, user.name, customerId, project_type || null, sq_ft ? Number(sq_ft) : null, brand ? String(brand).trim() || null : null]
+    [name.trim(), gcName, (loc||'').trim()||'—', amount ? Number(amount) : null, formatDue(due), notes?.trim() || null, user.id, user.name, customerId, project_type || null, sq_ft ? Number(sq_ft) : null, brand ? String(brand).trim() || null : null]
   );
   if (!suppress_notify) sendBidNotification(rows[0], user).catch(() => {});
 
