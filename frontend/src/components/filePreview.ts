@@ -63,11 +63,33 @@ export function previewKind(name: string, fileType?: string | null): PreviewKind
   return 'none';
 }
 
+/** Some workbooks (seen from estimating-software exports) carry a `<dimension>`
+ * element that undersells the sheet's real extent — e.g. `A1:A3` when data
+ * actually spans through column D. SheetJS trusts that element for `ws['!ref']`,
+ * so `sheet_to_json` silently drops every cell outside it (item numbers survive,
+ * descriptions/units/qty go blank). Recompute `!ref` from the worksheet's actual
+ * cell keys so the range reflects what's really there. Mutates `ws` in place and
+ * returns it for convenience. */
+export function fixSheetRange(ws: XLSX.WorkSheet): XLSX.WorkSheet {
+  const keys = Object.keys(ws).filter(k => /^[A-Z]+\d+$/.test(k));
+  if (keys.length) {
+    const range = keys.reduce((r, k) => {
+      const c = XLSX.utils.decode_cell(k);
+      return {
+        s: { r: Math.min(r.s.r, c.r), c: Math.min(r.s.c, c.c) },
+        e: { r: Math.max(r.e.r, c.r), c: Math.max(r.e.c, c.c) },
+      };
+    }, { s: { r: Infinity, c: Infinity }, e: { r: 0, c: 0 } });
+    ws['!ref'] = XLSX.utils.encode_range(range);
+  }
+  return ws;
+}
+
 /** Parse a spreadsheet ArrayBuffer into rows of cell text per sheet, capped at 200 rows/sheet. */
 export async function sheetToRows(buf: ArrayBuffer): Promise<string[][][]> {
   const wb = XLSX.read(buf, { type: 'array' });
   return wb.SheetNames.map(sheetName => {
-    const ws = wb.Sheets[sheetName];
+    const ws = fixSheetRange(wb.Sheets[sheetName]);
     const rows = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 });
     return rows.slice(0, MAX_ROWS_PER_SHEET).map(row => (row || []).map(cell => (cell == null ? '' : String(cell))));
   });
