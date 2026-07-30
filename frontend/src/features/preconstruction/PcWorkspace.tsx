@@ -301,7 +301,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [savingImport, setSavingImport] = useState(false);
   const [takeoffOnFile, setTakeoffOnFile] = useState<{
     categories: { name: string; itemCount: number; totals: Record<string, number> }[];
-    line_items: { category: string; description: string; unit: string; qty: number }[];
+    line_items: { category: string; description: string; unit: string; qty: number | null }[];
     item_count: number;
     source_file: string | null;
   } | null>(null);
@@ -985,7 +985,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                           <div style={{ padding: '8px 16px 10px 36px', background: 'var(--surface2, rgba(0,0,0,.03))' }}>
                             {items.map((l, i) => (
                               <div key={i} style={{ fontSize: 11.5, marginBottom: 4, lineHeight: 1.45 }}>
-                                <b>{l.qty} {l.unit}</b> — {l.description}
+                                <b>{l.qty ?? '—'} {l.unit}</b> — {l.description}
                               </div>
                             ))}
                           </div>
