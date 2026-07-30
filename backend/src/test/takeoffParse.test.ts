@@ -3,9 +3,17 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { parseTakeoffWorkbook } from '../utils/takeoffParse';
 
-const fixture = (n: string) => readFileSync(join(__dirname, 'fixtures/prebid', n));
-const autozone = () => parseTakeoffWorkbook(fixture('autozone_takeoff.xlsx'));
-const carwash = () => parseTakeoffWorkbook(fixture('elcarwash_takeoff.xlsx'));
+const fixture = (dir: string, n: string) => readFileSync(join(__dirname, 'fixtures', dir, n));
+const autozone = () => parseTakeoffWorkbook(fixture('prebid', 'autozone_takeoff.xlsx'));
+const carwash = () => parseTakeoffWorkbook(fixture('prebid', 'elcarwash_takeoff.xlsx'));
+
+// Synthetic fixture in the older finished-bid shape: ITEM | DESCRIPTION | UNIT | QTY |
+// NOTES columns, no CONF. column, all-numeric quantities. Real Cowork workbooks on disk
+// are all pre-bid-shaped (CONF. column + unresolved rows), so there is no ready-made
+// "final" sample to assert against — this is generated (see the repo history for the
+// build script) to guard the one behaviour this task must not change: the finished-bid
+// parse path.
+const finalShaped = () => parseTakeoffWorkbook(fixture('final', 'final_takeoff.xlsx'));
 
 describe('parseTakeoffWorkbook — unresolved quantities', () => {
   it('keeps rows whose quantity reads VERIFY instead of dropping them', () => {
@@ -74,5 +82,55 @@ describe('parseTakeoffWorkbook — header and narrative', () => {
     const kf = autozone().keyFindings;
     expect(kf.length).toBeGreaterThan(3);
     expect(kf.join(' ')).toMatch(/OFEI/i);
+  });
+});
+
+describe('parseTakeoffWorkbook — final (finished-bid) path regression guard', () => {
+  it('never marks a resolved row as unresolved', () => {
+    const items = finalShaped().lineItems;
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.every(i => i.qty !== null)).toBe(true);
+    expect(items.every(i => i.qtyRaw === undefined)).toBe(true);
+  });
+
+  it('never assigns a confidence when there is no CONF. column', () => {
+    expect(finalShaped().lineItems.every(i => i.confidence === undefined)).toBe(true);
+  });
+
+  it('has zero unresolved rows in every category', () => {
+    expect(finalShaped().categories.every(c => c.unresolvedCount === 0)).toBe(true);
+  });
+
+  it('sums category totals to the raw numeric quantities', () => {
+    const cats = finalShaped().categories;
+    const service = cats.find(c => c.name === 'SERVICE & DISTRIBUTION')!;
+    const branch = cats.find(c => c.name === 'BRANCH POWER')!;
+    expect(service.totals).toEqual({ EA: 3 }); // 1 (panel) + 2 (meter base)
+    expect(branch.totals).toEqual({ EA: 30 }); // 24 (duplex) + 6 (GFCI)
+  });
+
+  it('gives every category exactly one subcategory matching the raw heading and totals', () => {
+    for (const cat of finalShaped().categories) {
+      expect(cat.subcategories).toHaveLength(1);
+      expect(cat.subcategories[0].totals).toEqual(cat.totals);
+    }
+    const branch = finalShaped().categories.find(c => c.name === 'BRANCH POWER')!;
+    expect(branch.subcategories[0].name).toBe('BRANCH POWER — BUILDING');
+  });
+
+  it('populates categoryRaw, and the em-dash qualifier survives normalization as a difference', () => {
+    const items = finalShaped().lineItems;
+    expect(items.every(i => typeof i.categoryRaw === 'string' && i.categoryRaw.length > 0)).toBe(true);
+    const branchItem = items.find(i => i.category === 'BRANCH POWER')!;
+    expect(branchItem.categoryRaw).toBe('BRANCH POWER — BUILDING');
+    expect(branchItem.categoryRaw).not.toBe(branchItem.category);
+  });
+
+  it('reads gross square footage from the header block', () => {
+    expect(finalShaped().sqFt).toBe(5200);
+  });
+
+  it('still captures notes on a finished-bid workbook', () => {
+    expect(finalShaped().lineItems.filter(i => i.notes && i.notes.length > 0).length).toBeGreaterThan(0);
   });
 });
