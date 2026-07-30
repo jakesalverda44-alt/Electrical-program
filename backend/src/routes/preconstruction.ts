@@ -894,11 +894,14 @@ router.get('/:bidId/compare', requireAuth, asyncHandler(async (req: AuthRequest,
 }));
 
 // GET takeoff line items for a bid — drill-down behind a category in the compare view.
+// Mirrors /compare's kind selection so the detail view never contradicts the grid it
+// was opened from: default 'final' preserves every existing caller's behaviour.
 router.get('/:bidId/takeoff', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
+  const kind = req.query.kind === 'prebid' ? 'prebid' : 'final';
   const { rows } = await pool.query(
-    'SELECT categories, line_items, item_count, source_file FROM bid_takeoffs WHERE bid_id=$1',
-    [req.params.bidId]
+    'SELECT categories, line_items, item_count, source_file FROM bid_takeoffs WHERE bid_id=$1 AND kind=$2',
+    [req.params.bidId, kind]
   );
   res.json(rows[0] || null);
 }));

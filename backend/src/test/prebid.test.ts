@@ -265,3 +265,59 @@ describe('prebid comparables', () => {
     expect(r.body.comparables.map((c: { id: string }) => c.id)).not.toContain(hidden.body.id);
   });
 });
+
+describe('takeoff drill-down kind selection', () => {
+  it('returns the final row by default when a bid holds both kinds', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `TDD ${Date.now()}`, gc: 'G' }).expect(200);
+    await pool.query(
+      `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count)
+       VALUES ($1,'prebid','[]'::jsonb,'[]'::jsonb,11)`, [bid.body.id]
+    );
+    await pool.query(
+      `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count)
+       VALUES ($1,'final','[]'::jsonb,'[]'::jsonb,22)`, [bid.body.id]
+    );
+    const r = await request(app)
+      .get(`/api/preconstruction/${bid.body.id}/takeoff`).set(auth(u.token)).expect(200);
+    expect(r.body.item_count).toBe(22);
+  });
+
+  it('returns the prebid row when kind=prebid is passed', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `TDD2 ${Date.now()}`, gc: 'G' }).expect(200);
+    await pool.query(
+      `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count)
+       VALUES ($1,'prebid','[]'::jsonb,'[]'::jsonb,11)`, [bid.body.id]
+    );
+    await pool.query(
+      `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count)
+       VALUES ($1,'final','[]'::jsonb,'[]'::jsonb,22)`, [bid.body.id]
+    );
+    const r = await request(app)
+      .get(`/api/preconstruction/${bid.body.id}/takeoff?kind=prebid`).set(auth(u.token)).expect(200);
+    expect(r.body.item_count).toBe(11);
+  });
+
+  it('falls back to final for an unexpected kind value', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `TDD3 ${Date.now()}`, gc: 'G' }).expect(200);
+    await pool.query(
+      `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count)
+       VALUES ($1,'prebid','[]'::jsonb,'[]'::jsonb,11)`, [bid.body.id]
+    );
+    await pool.query(
+      `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count)
+       VALUES ($1,'final','[]'::jsonb,'[]'::jsonb,22)`, [bid.body.id]
+    );
+    const r = await request(app)
+      .get(`/api/preconstruction/${bid.body.id}/takeoff?kind=bogus`).set(auth(u.token)).expect(200);
+    expect(r.body.item_count).toBe(22);
+  });
+});
