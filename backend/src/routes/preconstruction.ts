@@ -851,8 +851,9 @@ router.get('/:bidId/prebid-comparables', requireAuth, asyncHandler(async (req: A
 }));
 
 // POST prebid-analyze — compare this pre-bid against one comparable's pre-bid. On demand
-// only and cached to ai_comparison: re-running against the same comp is free, and it never
-// fires on upload.
+// only: it never fires on upload, and result is cached to ai_comparison so re-VIEWING it
+// via GET /prebid (a plain SELECT) is free. Re-POSTing here always fires a fresh billed
+// call — there is no short-circuit on an existing ai_comparison for the same comparable.
 router.post('/:bidId/prebid-analyze', requireAuth, requireAIPermission('run_analysis'),
   asyncHandler(async (req: AuthRequest, res) => {
     const { bidId } = req.params;
@@ -878,6 +879,15 @@ router.post('/:bidId/prebid-analyze', requireAuth, requireAIPermission('run_anal
       return res.status(404).json({ error: 'both bids need a pre-bid scope' });
     }
 
+    // Gate synchronously, like the sibling AI routes (/analyze, run-agent4): an
+    // unconfigured key must fail the kickoff immediately with an actionable 503,
+    // not after a spinner via a polled ai_status='error'.
+    const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
+    if (!apiKey) return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI or set ANTHROPIC_API_KEY in Render.' });
+
+    const config = await loadAIConfig();
+    const client = new Anthropic({ apiKey });
+
     await pool.query(
       `UPDATE bid_prebid_scope
           SET ai_status='running', ai_error=NULL, ai_comparison_against=$2, updated_at=now()
@@ -886,15 +896,9 @@ router.post('/:bidId/prebid-analyze', requireAuth, requireAIPermission('run_anal
 
     // Fire and forget, exactly as run-agent4 does — the client polls GET /prebid.
     // callWithRetry takes a THUNK: it wraps the whole SDK call, it does not take a
-    // prompt pair. Mirrors the Agent 2 call site. The API key is looked up here rather
-    // than before responding, so a missing/unconfigured key surfaces as ai_status='error'
-    // (visible via GET /prebid) instead of blocking the synchronous "running" ack.
-    void (async () => {
+    // prompt pair. Mirrors the Agent 2 call site.
+    (async () => {
       try {
-        const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
-        if (!apiKey) throw new Error('AI analysis is not configured. Add an Anthropic API key in Settings > AI or set ANTHROPIC_API_KEY in Render.');
-        const config = await loadAIConfig();
-        const client = new Anthropic({ apiKey });
         const payload = JSON.stringify({
           subject: { name: subject.name, sqFt: subject.sq_ft, furnishModel: subject.furnish_model,
                      sections: subject.sections, categories: subject.categories ?? [] },
@@ -922,7 +926,7 @@ router.post('/:bidId/prebid-analyze', requireAuth, requireAIPermission('run_anal
           [bidId, describeAIError(err)]
         );
       }
-    })();
+    })().catch(err => logger.error({ err, bidId }, '[prebid-analyze] Uncaught background error'));
   }));
 
 // GET compare — this bid against selected comparables. Returns per-category takeoff

@@ -347,7 +347,12 @@ describe('prebid-analyze', () => {
       .set(auth(u.token)).expect(404);
   });
 
-  it('marks the run as running and records the comparison target', async (ctx) => {
+  // This sandbox intentionally leaves the Anthropic key unset (see .env), and the
+  // synchronous 503 gate mirrors the sibling AI routes (/analyze, run-agent4): passing
+  // both the `against` and pre-bid-scope checks with no key configured proves request
+  // validation ran and stops before any Anthropic call, without a live network request
+  // or mocking infrastructure (this backend has none).
+  it('passes validation but 503s when the Anthropic key is not configured, without stamping running', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');
     const a = await request(app).post('/api/bids').set(auth(u.token))
@@ -361,11 +366,11 @@ describe('prebid-analyze', () => {
     }
     const r = await request(app)
       .post(`/api/preconstruction/${a.body.id}/prebid-analyze?against=${b.body.id}`)
-      .set(auth(u.token)).expect(200);
-    expect(r.body.status).toBe('running');
+      .set(auth(u.token)).expect(503);
+    expect(r.body.error).toMatch(/not configured/);
     const { rows } = await pool.query(
       'SELECT ai_status, ai_comparison_against FROM bid_prebid_scope WHERE bid_id=$1', [a.body.id]);
-    expect(rows[0].ai_status).toBe('running');
-    expect(rows[0].ai_comparison_against).toBe(b.body.id);
+    expect(rows[0].ai_status).toBeNull();
+    expect(rows[0].ai_comparison_against).toBeNull();
   });
 });
