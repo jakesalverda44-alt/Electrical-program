@@ -16,6 +16,7 @@ import { uploadFile, getFileMedia } from '../services/googleDrive';
 import { buildAgent1Content, type PrepFile, type Agent1Block } from '../ai/documentPrep';
 import { extractDocxText, extractPdfText, parseBidDocText } from '../utils/bidDocParse';
 import { parseTakeoffWorkbook } from '../utils/takeoffParse';
+import { parsePrebidScope } from '../utils/prebidScopeParse';
 import { parseAccubidBreakdown } from '../utils/accubidParse';
 import { storeDocument } from '../utils/storeDocument';
 
@@ -601,6 +602,112 @@ router.post('/:bidId/import-bid', requireAuth, documentUpload.fields([
   }
 
   res.json({ ...parsed, sqFt, takeoff: takeoffSummary, breakdown: breakdownSummary });
+}));
+
+// POST import-prebid — the Cowork pre-bid package: a scope .docx and a quantity .xlsx
+// produced right after a bid invite is accepted, before any pricing exists. Stored under
+// kind='prebid' so a later finished-bid import cannot overwrite it; the pre-bid set is
+// the comparison corpus and is the only takeoff data most jobs will ever have.
+router.post('/:bidId/import-prebid', requireAuth, documentUpload.fields([
+  { name: 'takeoff', maxCount: 1 },
+  { name: 'scope', maxCount: 1 },
+]), asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  const bid = await loadAccessibleBid(res, req.user!, bidId);
+  if (!bid) return;
+
+  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+  const takeoffFile = files?.takeoff?.[0];
+  const scopeFile = files?.scope?.[0];
+  if (!takeoffFile && !scopeFile) {
+    return res.status(400).json({ error: 'takeoff or scope file required' });
+  }
+
+  const ext = (f: Express.Multer.File) => (f.originalname.split('.').pop() || '').toLowerCase();
+  if (takeoffFile && ext(takeoffFile) !== 'xlsx') {
+    return res.status(400).json({ error: 'takeoff must be .xlsx' });
+  }
+  if (scopeFile && ext(scopeFile) !== 'docx') {
+    return res.status(400).json({ error: 'scope must be .docx' });
+  }
+
+  // Keep the upload even if parsing fails — an unreadable file is still the estimator's
+  // document, and losing it is worse than a failed import.
+  const keep = (f: Express.Multer.File, category: string) =>
+    storeDocument({
+      file: f, linkedId: bidId, linkedName: bid.name, div: 'elec', category,
+      uploadedBy: req.user!.name, replaceExisting: true,
+    }).catch(err => { logger.error({ err, bidId, category }, '[import-prebid] document store failed'); return null; });
+
+  let takeoffSummary: { categories: unknown[]; itemCount: number; unresolvedCount: number } | null = null;
+  let parsedSqFt: number | null = null;
+
+  if (takeoffFile) {
+    await keep(takeoffFile, 'prebid_takeoff');
+    const t = parseTakeoffWorkbook(takeoffFile.buffer);
+    parsedSqFt = t.sqFt;
+    if (t.lineItems.length) {
+      await pool.query(
+        `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count, key_findings, source_file, updated_at)
+         VALUES ($1,'prebid',$2::jsonb,$3::jsonb,$4,$5::jsonb,$6,now())
+         ON CONFLICT (bid_id, kind) DO UPDATE SET
+           categories=$2::jsonb, line_items=$3::jsonb, item_count=$4,
+           key_findings=$5::jsonb, source_file=$6, updated_at=now()`,
+        [bidId, JSON.stringify(t.categories), JSON.stringify(t.lineItems),
+         t.lineItems.length, JSON.stringify(t.keyFindings), takeoffFile.originalname]
+      );
+      takeoffSummary = {
+        categories: t.categories,
+        itemCount: t.lineItems.length,
+        unresolvedCount: t.lineItems.filter(i => i.qty === null).length,
+      };
+    }
+  }
+
+  let scopeSummary: { sections: unknown[]; furnishModel: string | null } | null = null;
+  let suggestedBrand: string | null = null;
+
+  if (scopeFile) {
+    await keep(scopeFile, 'prebid_scope');
+    const s = parsePrebidScope(scopeFile.buffer);
+    suggestedBrand = s.suggestedBrand;
+    await pool.query(
+      `INSERT INTO bid_prebid_scope (bid_id, meta, furnish_model, furnish_note,
+         general_items, sections, source_file, updated_at)
+       VALUES ($1,$2::jsonb,$3,$4,$5::jsonb,$6::jsonb,$7,now())
+       ON CONFLICT (bid_id) DO UPDATE SET
+         meta=$2::jsonb, furnish_model=$3, furnish_note=$4, general_items=$5::jsonb,
+         sections=$6::jsonb, source_file=$7, updated_at=now()`,
+      [bidId, JSON.stringify(s.meta), s.furnishModel, s.furnishNote,
+       JSON.stringify(s.generalItems), JSON.stringify(s.sections), scopeFile.originalname]
+    );
+    scopeSummary = { sections: s.sections, furnishModel: s.furnishModel };
+  }
+
+  // Comparable matching ranks on square footage, so a bid without one cannot be compared
+  // at all. Fill it from the parsed header when absent — but never overwrite a value a
+  // human entered, which may be the leasable area rather than the gross footprint.
+  let sqFtApplied = false;
+  if (parsedSqFt && (bid.sq_ft === null || bid.sq_ft === undefined)) {
+    await pool.query('UPDATE bids SET sq_ft=$2 WHERE id=$1 AND sq_ft IS NULL', [bidId, parsedSqFt]);
+    sqFtApplied = true;
+  }
+
+  // brand is returned as a suggestion only. It outranks project_type in comp ranking, so
+  // a wrong auto-set would silently skew every future comparison on this job.
+  res.json({ takeoff: takeoffSummary, scope: scopeSummary, sqFtApplied, suggestedBrand });
+}));
+
+// GET prebid — the stored package for this bid, for the Pre-Bid tab.
+router.get('/:bidId/prebid', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
+  const [takeoff, scope] = await Promise.all([
+    pool.query(
+      `SELECT categories, line_items, item_count, key_findings, source_file
+         FROM bid_takeoffs WHERE bid_id=$1 AND kind='prebid'`, [req.params.bidId]),
+    pool.query('SELECT * FROM bid_prebid_scope WHERE bid_id=$1', [req.params.bidId]),
+  ]);
+  res.json({ takeoff: takeoff.rows[0] ?? null, scope: scope.rows[0] ?? null });
 }));
 
 // GET comparables-preview — same matching rules as /:bidId/comparables, but for a bid

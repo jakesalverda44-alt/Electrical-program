@@ -18,6 +18,8 @@ export const CATEGORY_TO_FOLDER: Record<string, string> = {
   proposal:       'drive_estimates_folder_id',
   takeoff:        'drive_estimates_folder_id',
   cost_breakdown: 'drive_estimates_folder_id',
+  prebid_takeoff: 'drive_estimates_folder_id',
+  prebid_scope:   'drive_estimates_folder_id',
   change_order:   'drive_change_orders_folder_id',
   submittal:      'drive_submittals_folder_id',
   rfi:            'drive_rfis_folder_id',
