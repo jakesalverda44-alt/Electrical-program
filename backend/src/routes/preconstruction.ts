@@ -563,9 +563,9 @@ router.post('/:bidId/import-bid', requireAuth, documentUpload.fields([
     sqFt = takeoff.sqFt;
     if (takeoff.lineItems.length) {
       await pool.query(
-        `INSERT INTO bid_takeoffs (bid_id, categories, line_items, item_count, source_file, updated_at)
-         VALUES ($1,$2::jsonb,$3::jsonb,$4,$5,now())
-         ON CONFLICT (bid_id) DO UPDATE SET
+        `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count, source_file, updated_at)
+         VALUES ($1,'final',$2::jsonb,$3::jsonb,$4,$5,now())
+         ON CONFLICT (bid_id, kind) DO UPDATE SET
            categories=$2::jsonb, line_items=$3::jsonb, item_count=$4, source_file=$5, updated_at=now()`,
         [bidId, JSON.stringify(takeoff.categories), JSON.stringify(takeoff.lineItems),
          takeoff.lineItems.length, takeoffFile.originalname]
