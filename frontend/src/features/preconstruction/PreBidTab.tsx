@@ -80,8 +80,8 @@ export default function PreBidTab({ bidId, onSectionsLoaded }: {
                 <strong>{c.name}</strong>
                 {c.sq_ft_delta_pct != null && (
                   <span style={{ marginLeft: 8, color: 'var(--muted)' }}>
-                    {Math.abs(Math.round(c.sq_ft_delta_pct))}%{' '}
-                    {c.sq_ft_delta_pct >= 0 ? 'larger' : 'smaller'} than this job
+                    This job is {Math.abs(Math.round(c.sq_ft_delta_pct))}%{' '}
+                    {c.sq_ft_delta_pct >= 0 ? 'larger' : 'smaller'} than {c.name}
                   </span>
                 )}
               </button>

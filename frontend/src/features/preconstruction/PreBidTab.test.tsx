@@ -61,7 +61,11 @@ describe('PreBidTab', () => {
     await waitFor(() => expect(screen.getByText(/CAR WASH EQUIPMENT/)).toBeTruthy());
   });
 
-  it('renders the size delta against a comparable', async () => {
+  it('renders the size delta against a smaller comparable, subject-first', async () => {
+    // Subject 7,500 SF vs comp "Indian Oaks" 5,000 SF -> sq_ft_delta_pct = +50
+    // (backend: ((subject - comp) / comp) * 100). The subject is the LARGER job here,
+    // so the sentence must read "This job is ... larger than Indian Oaks" — not attach
+    // "larger" to the comp's name, which would state the size relationship backwards.
     get.mockImplementation((url: string) => Promise.resolve({
       data: url.includes('/prebid-comparables')
         ? { bid: { id: 'b1', sq_ft: 7500 },
@@ -71,7 +75,23 @@ describe('PreBidTab', () => {
     }));
     render(<PreBidTab bidId="b1" onSectionsLoaded={() => {}}/>);
     await waitFor(() => expect(screen.getByText('Indian Oaks')).toBeTruthy());
-    expect(screen.getByText(/50%\s*larger/i)).toBeTruthy();
+    expect(screen.getByText(/This job is 50% larger than Indian Oaks/i)).toBeTruthy();
+  });
+
+  it('renders the size delta against a larger comparable, subject-first', async () => {
+    // Subject 5,000 SF vs comp "Big Store" 7,500 SF -> sq_ft_delta_pct = -33.
+    // The subject is the SMALLER job here, so the sentence must read "smaller".
+    // Paired with the case above, an inverted larger/smaller label can never pass both.
+    get.mockImplementation((url: string) => Promise.resolve({
+      data: url.includes('/prebid-comparables')
+        ? { bid: { id: 'b1', sq_ft: 5000 },
+            comparables: [{ id: 'c1', name: 'Big Store', sq_ft: 7500, project_type: 'self_storage',
+                            stage: 'due', sq_ft_delta_pct: -33 }] }
+        : pkg,
+    }));
+    render(<PreBidTab bidId="b1" onSectionsLoaded={() => {}}/>);
+    await waitFor(() => expect(screen.getByText('Big Store')).toBeTruthy());
+    expect(screen.getByText(/This job is 33% smaller than Big Store/i)).toBeTruthy();
   });
 
   it('prompts for upload when no package exists', async () => {
