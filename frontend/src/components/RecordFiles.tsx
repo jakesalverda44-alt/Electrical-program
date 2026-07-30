@@ -21,6 +21,8 @@ const CATEGORIES: { value: string; label: string }[] = [
   { value: 'contract',      label: 'Signed Contract' },
   { value: 'proposal',      label: 'Proposal / Estimate' },
   { value: 'takeoff',       label: 'Takeoff' },
+  { value: 'prebid_scope',   label: 'Pre-Bid Scope' },
+  { value: 'prebid_takeoff', label: 'Pre-Bid Takeoff' },
   { value: 'cost_breakdown', label: 'Cost Breakdown' },
   { value: 'change_order',  label: 'Change Order' },
   { value: 'submittal',     label: 'Submittal' },

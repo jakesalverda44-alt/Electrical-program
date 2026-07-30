@@ -8,6 +8,7 @@ import { moneyFull } from '../../lib/money';
 import FilePreviewModal from '../../components/FilePreviewModal';
 import { useDocPreview } from '../../components/useDocPreview';
 import { buildScopeFromPrebid, PrebidSection } from './prebidScope';
+import PreBidTab from './PreBidTab';
 
 interface Props {
   ws: PcWorkspace;
@@ -839,6 +840,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
   const renderTab = () => {
     switch (tab) {
+      case 'prebid':
+        return <PreBidTab bidId={bid.id} onSectionsLoaded={setPrebidSections}/>;
+
       case 'overview':
         return (
           <div style={{ padding: '20px 24px' }}>

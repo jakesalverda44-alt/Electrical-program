@@ -12,6 +12,7 @@ export type PcStepKey = typeof PC_STEPS[number]['key'];
 
 export const PC_TABS = [
   { key: 'overview',   label: 'Overview'          },
+  { key: 'prebid',     label: 'Pre-Bid'           },
   { key: 'files',      label: 'Files'             },
   { key: 'bid',        label: 'Bid Builder'       },
   { key: 'takeoff',    label: 'Plan Review'       },
