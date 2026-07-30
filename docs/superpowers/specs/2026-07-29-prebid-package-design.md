@@ -12,7 +12,7 @@ reach the CRM. The estimator wants them stored against the bid and compared agai
 similar past jobs — matched by project type and square footage — showing how much
 bigger or smaller this job is, and where the scope and quantities differ.
 
-## Findings that shape the design (verified against the code and four real files)
+## Findings that shape the design (verified against the code and seven real files)
 
 1. **`parseTakeoffWorkbook` already parses this format.** `backend/src/utils/takeoffParse.ts`
    was written against these same Cowork workbooks — its comments reference "the car
@@ -59,7 +59,28 @@ bigger or smaller this job is, and where the scope and quantities differ.
 8. **`docx` (v9) is a writer, not a reader.** `adm-zip` is already a dependency and a
    `.docx` is a zip containing `word/document.xml`, so scope parsing needs no new package.
 
-9. **`OFEI` vs `ECFECI` is a first-class cost driver.** The AutoZone scope carries an
+9. **The Cowork scope sections are a fixed template, not per-job-type.** Verified against
+   all three scope documents on hand — AutoZone (retail), Indian Oaks (self-storage) and
+   Nick Moes — which carry byte-identical `A.`–`F.` headings: Service & Distribution /
+   Branch Power / Lighting & Controls / Site Lighting, Underground Work & Allowances /
+   Low Voltage Infrastructure / Project Coordination & Closeout. Section alignment across
+   jobs is therefore safe.
+
+10. **Cowork's section letters do not match the CRM's.** `SCOPE_SECS`
+    (`constants.ts:44`) is live — it backs the Scope of Work tab (`PcWorkspace.tsx:1656`)
+    and the overview summary (`OverviewTab.tsx:224`). Its letters mean different things:
+    Cowork `D` is Site while CRM `D` is Low Voltage / Data; Cowork `E` is Low Voltage while
+    CRM `E` is Fire Alarm. Aligning by letter would file site lighting under Low Voltage and
+    low voltage under Fire Alarm — plausible-looking and wrong. The codebase already
+    establishes the correct pattern: `buildScopeFromAgent2` (`PcWorkspace.tsx:117-127`)
+    maps by meaning with a deliberate D/E/F crossover.
+
+11. **Scope auto-fill is destructive today.** `PcWorkspace.tsx:362` merges
+    `{ ...prev.scope, ...scopeFill }` on AI completion, overwriting any section the AI
+    produced. Since the pre-bid lands before plan analysis runs, the AI would silently
+    replace the Cowork-derived scope.
+
+12. **`OFEI` vs `ECFECI` is a first-class cost driver.** The AutoZone scope carries an
    `ESTIMATING NOTE — SCOPE DEVIATION FROM STANDARD` block: AutoZone furnishes all gear,
    fixtures, controls and poles; APT installs only. An OFEI job's $/SF is structurally far
    below an ECFECI job's. Comparing the two unflagged yields a credible-looking wrong number.
@@ -71,6 +92,11 @@ bigger or smaller this job is, and where the scope and quantities differ.
 - **New top-level "Pre-Bid" tab** in the estimating workspace, placed before Plan Review.
 - **The final bid import must not overwrite the pre-bid.** Both are retained under
   different `kind` values; the pre-bid is the corpus.
+- **The pre-bid scope populates the existing Scope of Work tab**, via an "Import from
+  Pre-Bid" button mirroring the existing "Import from AI Takeoff". The pre-bid is a source
+  for the real deliverable, not only something to look at.
+- **Pre-bid scope wins over AI scope.** AI auto-fill becomes non-destructive, writing only
+  sections that are still empty.
 
 ## A. Data model
 
@@ -229,13 +255,47 @@ Panels, in order:
 4. **Comparison** — comp picker from `/prebid-comparables`; selected comp renders the size
    delta (`this job is N% larger/smaller — 7,381 SF vs 5,900 SF`) and a per-1000-SF
    per-category quantity table with deltas.
-5. **Scope side-by-side** — subject sections against the comp's, aligned by section letter,
-   with sections present in only one side marked as gaps.
+5. **Scope side-by-side** — subject sections against the comp's, aligned by normalized
+   title (never by letter — see finding 10), with sections present on only one side marked
+   as gaps.
 6. **Unresolved items** — every `VERIFY` / null-quantity row with its source note. This is
    the pre-bid's risk list and is the reason the parser fix matters.
 7. **Analyze differences** — triggers the AI pass; renders `ai_comparison` when complete.
 
-## G. AI scope comparison
+## G. Scope of Work population
+
+The pre-bid scope feeds the existing Scope of Work tab rather than living only in the
+Pre-Bid tab. New `buildScopeFromPrebid(sections)` in `PcWorkspace.tsx`, mirroring
+`buildScopeFromAgent2` (`:104`), and an **"Import from Pre-Bid"** button rendered beside
+the existing "Import from AI Takeoff" on the `scope` tab, shown only when a pre-bid scope
+exists.
+
+**Mapping — by meaning, not by letter** (finding 10):
+
+| Cowork section | → `SCOPE_SECS` |
+|---|---|
+| A. Service & Distribution | **A.** Service & Distribution |
+| B. Branch Power | **B.** Branch Circuits |
+| C. Lighting & Controls | **C.** Lighting |
+| D. Site Lighting, Underground Work & Allowances | **F.** Site / Exterior |
+| E. Low Voltage Infrastructure | **D.** Low Voltage / Data |
+| F. Project Coordination & Closeout | **G.** Special Systems |
+
+`E. Fire Alarm` has no Cowork counterpart in any observed file and is left untouched.
+Matching is on the normalized section title, so a heading whose wording drifts still lands
+correctly; an unrecognized Cowork section is appended to `G` rather than dropped.
+
+**Precedence.** The AI auto-fill at `PcWorkspace.tsx:362` becomes non-destructive: it
+writes only sections that are currently empty, instead of `{ ...prev.scope, ...scopeFill }`
+overwriting them. Because the pre-bid arrives before plan analysis runs, this keeps the
+Cowork text — which carries the confidence flags and scope-deviation notes — from being
+silently replaced by Agent 2 output. The explicit "Import from AI Takeoff" button keeps its
+current overwrite behaviour, since that is a deliberate user action.
+
+The toast follows the existing copy pattern: "Scope imported — filled from the pre-bid
+package; review and edit as needed."
+
+## H. AI scope comparison
 
 New `PREBID_COMPARE_SYSTEM` prompt in `backend/src/ai/prompts.ts`, alongside the existing
 four agents. `POST /:bidId/prebid-analyze?against=<bidId>` runs it asynchronously against
@@ -254,7 +314,7 @@ The prompt is instructed to treat differing `furnish_model` values as a primary 
 and to say so explicitly rather than comparing quantities as though the two jobs bought the
 same scope.
 
-## H. Testing
+## I. Testing
 
 - **Parser fixtures** — the four real workbooks (AutoZone, El Car Wash, Indian Oaks
   Self-Storage, Nick Moes) and the three matching scope documents, copied into
@@ -266,7 +326,15 @@ same scope.
 - **Regression:** an existing finished-bid workbook parses byte-identically to the current
   output, guarding the `'final'` path.
 - **Scope parser:** sections A–F extracted with their items; `furnish_model = 'OFEI'` for
-  AutoZone; meta keys populated; entities decoded.
+  AutoZone; meta keys populated; entities decoded. All three scope documents must yield the
+  same six section titles, guarding the fixed-template assumption in finding 9.
+- **Scope mapping:** `buildScopeFromPrebid` puts site lighting in `F` and low voltage in
+  `D` — the crossover from finding 10, asserted explicitly so a future edit cannot quietly
+  revert to letter alignment. `E` (Fire Alarm) stays empty. An unrecognized section lands
+  in `G` rather than vanishing.
+- **Precedence:** AI completion does not overwrite a section the pre-bid already filled;
+  it still fills sections left empty; the explicit "Import from AI Takeoff" button still
+  overwrites.
 - **Route:** import with only one of the two files; `sq_ft` fills when null and is preserved
   when set; `brand` is never auto-written.
 - **SQL:** a bid holding both `prebid` and `final` takeoffs appears exactly once in
