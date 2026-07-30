@@ -735,7 +735,7 @@ router.get('/comparables-preview', requireAuth, asyncHandler(async (req: AuthReq
            (bc.bid_id IS NOT NULL) AS has_breakdown,
            bc.labor_hours
       FROM bids b
-      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id
+      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id AND bt.kind = 'final'
       LEFT JOIN bid_cost_breakdown bc ON bc.bid_id = b.id
      WHERE b.deleted_at IS NULL
        AND b.amount IS NOT NULL AND b.amount > 0
@@ -787,7 +787,7 @@ router.get('/:bidId/comparables', requireAuth, asyncHandler(async (req: AuthRequ
            (bc.bid_id IS NOT NULL) AS has_breakdown,
            bc.labor_hours
       FROM bids b
-      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id
+      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id AND bt.kind = 'final'
       LEFT JOIN bid_cost_breakdown bc ON bc.bid_id = b.id
      WHERE b.id <> $1
        AND b.deleted_at IS NULL
@@ -809,6 +809,47 @@ router.get('/:bidId/comparables', requireAuth, asyncHandler(async (req: AuthRequ
   });
 }));
 
+// GET prebid-comparables — comps for a pre-bid comparison. Same ranking as /comparables
+// (same brand beats same project type, then nearest square footage), with one deliberate
+// difference: the amount > 0 requirement is dropped. Pre-bid corpus jobs have not been
+// priced yet, so requiring an amount would filter out exactly the rows this feature runs
+// on. Candidates must instead carry a prebid takeoff, which is what there is to compare.
+router.get('/:bidId/prebid-comparables', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const bid = await loadAccessibleBid(res, req.user!, req.params.bidId);
+  if (!bid) return;
+
+  const scope = ownScopeId(req.user!);
+  const { rows } = await pool.query(`
+    SELECT b.id, b.name, b.gc, b.stage, b.brand, b.project_type, b.sq_ft, b.amount,
+           b.updated_at, bt.item_count
+      FROM bids b
+      JOIN bid_takeoffs bt ON bt.bid_id = b.id AND bt.kind = 'prebid'
+     WHERE b.id <> $1
+       AND b.deleted_at IS NULL
+       AND ($2::text IS NOT NULL AND b.brand = $2
+            OR $3::text IS NOT NULL AND b.project_type = $3)
+       AND ($5::uuid IS NULL OR b.salesperson_id = $5::uuid)
+     ORDER BY ((($2::text IS NOT NULL) AND b.brand = $2)) DESC,
+              CASE WHEN $4::numeric IS NULL OR b.sq_ft IS NULL THEN 1 ELSE 0 END,
+              ABS(COALESCE(b.sq_ft, 0) - COALESCE($4::numeric, 0)),
+              b.updated_at DESC
+     LIMIT 25
+  `, [bid.id, bid.brand, bid.project_type, bid.sq_ft, scope]);
+
+  const subjectSqFt = bid.sq_ft != null ? Number(bid.sq_ft) : null;
+  res.json({
+    bid: { id: bid.id, name: bid.name, brand: bid.brand,
+           project_type: bid.project_type, sq_ft: bid.sq_ft },
+    comparables: rows.map(r => ({
+      ...r,
+      // How much bigger or smaller this job is than the comp, the headline number.
+      sq_ft_delta_pct: subjectSqFt && r.sq_ft
+        ? ((subjectSqFt - Number(r.sq_ft)) / Number(r.sq_ft)) * 100
+        : null,
+    })),
+  });
+}));
+
 // GET compare — this bid against selected comparables. Returns per-category takeoff
 // quantities and cost-breakdown figures for each job, normalized per 1,000 SF so
 // buildings of different sizes line up. The frontend renders the deltas.
@@ -820,6 +861,7 @@ router.get('/:bidId/compare', requireAuth, asyncHandler(async (req: AuthRequest,
   if (!against.length) return res.status(400).json({ error: 'against required' });
 
   const ids = [bid.id, ...against];
+  const kind = req.query.kind === 'prebid' ? 'prebid' : 'final';
   // Scope comp rows the same way as /comparables: a restricted rep only pulls bids
   // they own into the comparison, even if they pass another rep's bid id in `against`.
   // The subject bid itself always matches — loadAccessibleBid already verified it's
@@ -832,11 +874,11 @@ router.get('/:bidId/compare', requireAuth, asyncHandler(async (req: AuthRequest,
            bc.selling_price, bc.labor_hours, bc.journeyman_hours, bc.apprentice_hours,
            bc.avg_labor_rate, bc.avg_crew_size, bc.labor_risk_ratio
       FROM bids b
-      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id
+      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id AND bt.kind = $3
       LEFT JOIN bid_cost_breakdown bc ON bc.bid_id = b.id
      WHERE b.id = ANY($1::uuid[]) AND b.deleted_at IS NULL
        AND ($2::uuid IS NULL OR b.salesperson_id = $2::uuid)
-  `, [ids, scope]);
+  `, [ids, scope, kind]);
 
   // Preserve caller order, subject bid first.
   const byId = new Map(rows.map(r => [r.id, r]));

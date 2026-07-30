@@ -168,3 +168,100 @@ describe('import-prebid', () => {
     expect(r.body.scope.furnish_model).toBe('OFEI');
   });
 });
+
+describe('prebid comparables', () => {
+  it('matches unpriced jobs that have a prebid takeoff', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const type = `t_${Date.now()}`;
+
+    const comp = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `Comp ${Date.now()}`, gc: 'G', project_type: type, sq_ft: 5000 }).expect(200);
+    await pool.query(
+      `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count)
+       VALUES ($1,'prebid','[]'::jsonb,'[]'::jsonb,5)`, [comp.body.id]
+    );
+
+    const subj = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `Subj ${Date.now()}`, gc: 'G', project_type: type, sq_ft: 7500 }).expect(200);
+
+    const r = await request(app)
+      .get(`/api/preconstruction/${subj.body.id}/prebid-comparables`).set(auth(u.token)).expect(200);
+
+    const hit = r.body.comparables.find((c: { id: string }) => c.id === comp.body.id);
+    expect(hit).toBeTruthy();                       // matched despite amount being null
+    expect(Math.round(hit.sq_ft_delta_pct)).toBe(50); // 7500 vs 5000
+  });
+
+  it('excludes jobs with no prebid takeoff', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const type = `t2_${Date.now()}`;
+    const bare = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `Bare ${Date.now()}`, gc: 'G', project_type: type, sq_ft: 4000 }).expect(200);
+    const subj = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `S2 ${Date.now()}`, gc: 'G', project_type: type, sq_ft: 4200 }).expect(200);
+    const r = await request(app)
+      .get(`/api/preconstruction/${subj.body.id}/prebid-comparables`).set(auth(u.token)).expect(200);
+    expect(r.body.comparables.map((c: { id: string }) => c.id)).not.toContain(bare.body.id);
+  });
+
+  it('a bid with both kinds appears once in comparables', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const brand = `Dup${Date.now()}`;
+    const other = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `Dup ${Date.now()}`, gc: 'G', brand, amount: 100000, sq_ft: 4000 }).expect(200);
+    for (const kind of ['prebid', 'final']) {
+      await pool.query(
+        `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count)
+         VALUES ($1,$2,'[]'::jsonb,'[]'::jsonb,1)`, [other.body.id, kind]
+      );
+    }
+    const subj = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `DupS ${Date.now()}`, gc: 'G', brand, amount: 90000 }).expect(200);
+    const r = await request(app)
+      .get(`/api/preconstruction/${subj.body.id}/comparables`).set(auth(u.token)).expect(200);
+    const hits = r.body.comparables.filter((c: { id: string }) => c.id === other.body.id);
+    expect(hits).toHaveLength(1);
+  });
+
+  it('compare selects rows by kind', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const subj = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `Cmp ${Date.now()}`, gc: 'G', sq_ft: 5000 }).expect(200);
+    const comp = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `CmpC ${Date.now()}`, gc: 'G', sq_ft: 5000 }).expect(200);
+    for (const id of [subj.body.id, comp.body.id]) {
+      await pool.query(
+        `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count)
+         VALUES ($1,'prebid','[{"name":"LIGHTING","itemCount":2,"unresolvedCount":0,"totals":{"EA":10},"subcategories":[]}]'::jsonb,'[]'::jsonb,2)`,
+        [id]
+      );
+    }
+    const r = await request(app)
+      .get(`/api/preconstruction/${subj.body.id}/compare?kind=prebid&against=${comp.body.id}`)
+      .set(auth(u.token)).expect(200);
+    expect(r.body.categoryNames).toContain('LIGHTING');
+    expect(r.body.jobs).toHaveLength(2);
+  });
+
+  it('rep cannot pull another rep job into prebid comparables', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const rep1 = await makeUser('salesperson');
+    const rep2 = await makeUser('salesperson');
+    const type = `t3_${Date.now()}`;
+    const hidden = await request(app).post('/api/bids').set(auth(rep1.token))
+      .send({ name: `H ${Date.now()}`, gc: 'G', project_type: type, sq_ft: 5000 }).expect(200);
+    await pool.query(
+      `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count)
+       VALUES ($1,'prebid','[]'::jsonb,'[]'::jsonb,1)`, [hidden.body.id]
+    );
+    const mine = await request(app).post('/api/bids').set(auth(rep2.token))
+      .send({ name: `M ${Date.now()}`, gc: 'G', project_type: type, sq_ft: 5100 }).expect(200);
+    const r = await request(app)
+      .get(`/api/preconstruction/${mine.body.id}/prebid-comparables`).set(auth(rep2.token)).expect(200);
+    expect(r.body.comparables.map((c: { id: string }) => c.id)).not.toContain(hidden.body.id);
+  });
+});
