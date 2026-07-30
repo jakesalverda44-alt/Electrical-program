@@ -53,4 +53,28 @@ describe('parsePrebidScope', () => {
     expect(p.sections).toEqual([]);
     expect(p.furnishModel).toBeNull();
   });
+
+  it('gives each empty result its own array/object instances, not a shared singleton', () => {
+    const a = parsePrebidScope(Buffer.from('not a zip'));
+    const b = parsePrebidScope(Buffer.from('also not a zip'));
+    expect(a.sections).not.toBe(b.sections);
+    expect(a.meta).not.toBe(b.meta);
+    expect(a.generalItems).not.toBe(b.generalItems);
+    a.sections.push({ id: 'X', title: 'mutated', items: [] });
+    a.meta['leak'] = 'leak';
+    a.generalItems.push('leak');
+    expect(b.sections).toEqual([]);
+    expect(b.meta).toEqual({});
+    expect(b.generalItems).toEqual([]);
+  });
+
+  it('does not swallow a prose paragraph starting with "Label:" into meta', () => {
+    const m = parsePrebidScope(fixture('indianoaks_scope.docx')).meta;
+    // The real fixture's "NOTE: The architectural/engineering drawing title blocks..."
+    // paragraph runs 350+ chars across multiple sentences — a header value, not a fact.
+    expect(m['NOTE']).toBeUndefined();
+    // Genuine header keys on the same document must still come through.
+    expect(m['GC / Client']).toMatch(/Bay to Bay/);
+    expect(m['Job No.']).toBeTruthy();
+  });
 });

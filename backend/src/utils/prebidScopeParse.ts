@@ -29,10 +29,17 @@ export interface ParsedPrebidScope {
 
 interface DocxParagraph { style: string; text: string }
 
-const EMPTY: ParsedPrebidScope = {
-  meta: {}, furnishModel: null, furnishNote: null,
-  generalItems: [], sections: [], suggestedBrand: null,
-};
+// A factory, not a module-level singleton: each caller must get its own `meta`/
+// `generalItems`/`sections` instances. A shared singleton would let one caller's
+// in-place mutation of an "empty" result leak into every other empty result for
+// the life of the process — real risk in a long-running server handling many
+// malformed-buffer requests.
+function emptyResult(): ParsedPrebidScope {
+  return {
+    meta: {}, furnishModel: null, furnishNote: null,
+    generalItems: [], sections: [], suggestedBrand: null,
+  };
+}
 
 function decodeEntities(s: string): string {
   return s
@@ -66,10 +73,17 @@ export function extractDocxParagraphs(buf: Buffer): DocxParagraph[] {
 const isBullet = (p: DocxParagraph) => /List/i.test(p.style);
 const SECTION_RE = /^([A-Z])\.\s+(.{3,80})$/;
 const META_RE = /^([A-Z][A-Za-z ()./]{1,30}):\s*(.+)$/;
+// Genuine header lines ("GC: Summit General Contractors", "Sheets Reviewed: C0.1; A0, ...")
+// are short, single-paragraph facts — the longest confirmed real value across all three
+// fixtures is ~180 chars (a dense "Owner / Engineer" line). A prose paragraph that merely
+// starts with "Label:" (e.g. "NOTE: The architectural/engineering drawing title blocks...",
+// or a future "IMPORTANT:"/"REMINDER:") runs several sentences and 300+ chars. Capping the
+// value length rejects the prose case without hard-coding the specific lead-in word.
+const META_VALUE_MAX_LEN = 200;
 
 export function parsePrebidScope(buf: Buffer): ParsedPrebidScope {
   const paras = extractDocxParagraphs(buf);
-  if (!paras.length) return { ...EMPTY };
+  if (!paras.length) return emptyResult();
 
   const meta: Record<string, string> = {};
   const generalItems: string[] = [];
@@ -112,7 +126,9 @@ export function parsePrebidScope(buf: Buffer): ParsedPrebidScope {
 
     if (!inScope) {
       const metaM = META_RE.exec(p.text);
-      if (metaM) meta[metaM[1].trim()] = metaM[2].trim();
+      if (metaM && metaM[2].trim().length <= META_VALUE_MAX_LEN) {
+        meta[metaM[1].trim()] = metaM[2].trim();
+      }
     }
   }
 
