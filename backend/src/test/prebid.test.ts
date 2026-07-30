@@ -321,3 +321,51 @@ describe('takeoff drill-down kind selection', () => {
     expect(r.body.item_count).toBe(22);
   });
 });
+
+describe('prebid-analyze', () => {
+  it('requires an against parameter', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `AI ${Date.now()}`, gc: 'G' }).expect(200);
+    await pool.query(
+      `INSERT INTO bid_prebid_scope (bid_id, sections) VALUES ($1,'[]'::jsonb)`, [bid.body.id]);
+    await request(app)
+      .post(`/api/preconstruction/${bid.body.id}/prebid-analyze`).set(auth(u.token))
+      .expect(400);
+  });
+
+  it('404s when the bid has no pre-bid scope', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const a = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `AIa ${Date.now()}`, gc: 'G' }).expect(200);
+    const b = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `AIb ${Date.now()}`, gc: 'G' }).expect(200);
+    await request(app)
+      .post(`/api/preconstruction/${a.body.id}/prebid-analyze?against=${b.body.id}`)
+      .set(auth(u.token)).expect(404);
+  });
+
+  it('marks the run as running and records the comparison target', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const a = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `AIc ${Date.now()}`, gc: 'G' }).expect(200);
+    const b = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `AId ${Date.now()}`, gc: 'G' }).expect(200);
+    for (const id of [a.body.id, b.body.id]) {
+      await pool.query(
+        `INSERT INTO bid_prebid_scope (bid_id, sections)
+         VALUES ($1,'[{"id":"A","title":"Service & Distribution","items":["gear"]}]'::jsonb)`, [id]);
+    }
+    const r = await request(app)
+      .post(`/api/preconstruction/${a.body.id}/prebid-analyze?against=${b.body.id}`)
+      .set(auth(u.token)).expect(200);
+    expect(r.body.status).toBe('running');
+    const { rows } = await pool.query(
+      'SELECT ai_status, ai_comparison_against FROM bid_prebid_scope WHERE bid_id=$1', [a.body.id]);
+    expect(rows[0].ai_status).toBe('running');
+    expect(rows[0].ai_comparison_against).toBe(b.body.id);
+  });
+});

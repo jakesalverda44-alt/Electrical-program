@@ -5,7 +5,7 @@ import { loadAccessibleBid } from '../utils/ownership';
 import { getSetting } from '../db/getSetting';
 import Anthropic from '@anthropic-ai/sdk';
 import AdmZip from 'adm-zip';
-import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM, AGENT4_SYSTEM } from '../ai/prompts';
+import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM, AGENT4_SYSTEM, PREBID_COMPARE_SYSTEM } from '../ai/prompts';
 import { buildProposalDocx, ProposalJSON } from '../utils/proposalDocx';
 import { callWithRetry } from '../ai/retry';
 import { parseAIJSON, extractJSONText } from '../ai/json';
@@ -849,6 +849,81 @@ router.get('/:bidId/prebid-comparables', requireAuth, asyncHandler(async (req: A
     })),
   });
 }));
+
+// POST prebid-analyze — compare this pre-bid against one comparable's pre-bid. On demand
+// only and cached to ai_comparison: re-running against the same comp is free, and it never
+// fires on upload.
+router.post('/:bidId/prebid-analyze', requireAuth, requireAIPermission('run_analysis'),
+  asyncHandler(async (req: AuthRequest, res) => {
+    const { bidId } = req.params;
+    const bid = await loadAccessibleBid(res, req.user!, bidId);
+    if (!bid) return;
+
+    const against = String(req.query.against || '').trim();
+    if (!against) return res.status(400).json({ error: 'against required' });
+    if (!(await loadAccessibleBid(res, req.user!, against))) return;
+
+    const { rows } = await pool.query(
+      `SELECT s.bid_id, s.sections, s.furnish_model, b.sq_ft, b.name,
+              t.categories
+         FROM bid_prebid_scope s
+         JOIN bids b ON b.id = s.bid_id
+         LEFT JOIN bid_takeoffs t ON t.bid_id = s.bid_id AND t.kind = 'prebid'
+        WHERE s.bid_id = ANY($1::uuid[])`,
+      [[bidId, against]]
+    );
+    const subject = rows.find(r => r.bid_id === bidId);
+    const comp = rows.find(r => r.bid_id === against);
+    if (!subject || !comp) {
+      return res.status(404).json({ error: 'both bids need a pre-bid scope' });
+    }
+
+    await pool.query(
+      `UPDATE bid_prebid_scope
+          SET ai_status='running', ai_error=NULL, ai_comparison_against=$2, updated_at=now()
+        WHERE bid_id=$1`, [bidId, against]);
+    res.json({ status: 'running' });
+
+    // Fire and forget, exactly as run-agent4 does — the client polls GET /prebid.
+    // callWithRetry takes a THUNK: it wraps the whole SDK call, it does not take a
+    // prompt pair. Mirrors the Agent 2 call site. The API key is looked up here rather
+    // than before responding, so a missing/unconfigured key surfaces as ai_status='error'
+    // (visible via GET /prebid) instead of blocking the synchronous "running" ack.
+    void (async () => {
+      try {
+        const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
+        if (!apiKey) throw new Error('AI analysis is not configured. Add an Anthropic API key in Settings > AI or set ANTHROPIC_API_KEY in Render.');
+        const config = await loadAIConfig();
+        const client = new Anthropic({ apiKey });
+        const payload = JSON.stringify({
+          subject: { name: subject.name, sqFt: subject.sq_ft, furnishModel: subject.furnish_model,
+                     sections: subject.sections, categories: subject.categories ?? [] },
+          comparable: { name: comp.name, sqFt: comp.sq_ft, furnishModel: comp.furnish_model,
+                        sections: comp.sections, categories: comp.categories ?? [] },
+        });
+        const resp = await callWithRetry(() => client.messages.create({
+          model: config.modelA2,
+          max_tokens: config.maxTokensA2,
+          temperature: config.temperature,
+          system: [{ type: 'text', text: PREBID_COMPARE_SYSTEM, cache_control: { type: 'ephemeral' } }],
+          messages: [{ role: 'user', content: `Compare these two pre-bid packages.\n\n${payload}` }],
+        }), { onRetry: (a, _e, d) => console.warn(`[prebid-analyze] transient error, retry ${a} in ${d}ms`) });
+
+        const parsed = parseAIJSON(extractText(resp));
+        if (!parsed) throw new Error('model did not return parseable JSON');
+        await pool.query(
+          `UPDATE bid_prebid_scope
+              SET ai_comparison=$2::jsonb, ai_status='complete', updated_at=now()
+            WHERE bid_id=$1`, [bidId, JSON.stringify(parsed)]);
+      } catch (err) {
+        logger.error({ err, bidId }, '[prebid-analyze] failed');
+        await pool.query(
+          `UPDATE bid_prebid_scope SET ai_status='error', ai_error=$2, updated_at=now() WHERE bid_id=$1`,
+          [bidId, describeAIError(err)]
+        );
+      }
+    })();
+  }));
 
 // GET compare — this bid against selected comparables. Returns per-category takeoff
 // quantities and cost-breakdown figures for each job, normalized per 1,000 SF so
