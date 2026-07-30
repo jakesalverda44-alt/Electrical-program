@@ -12,7 +12,12 @@ reach the CRM. The estimator wants them stored against the bid and compared agai
 similar past jobs — matched by project type and square footage — showing how much
 bigger or smaller this job is, and where the scope and quantities differ.
 
-## Findings that shape the design (verified against the code and seven real files)
+## Findings that shape the design (verified against the code and the real Cowork output)
+
+Files examined: `AutoZone_Tavares` (retail, 2026-07-29) takeoff + scope,
+`Indian_Oaks` (self-storage, 2026-07-23) scope, `Nick_Moes` (c-store, 2026-07-23) scope,
+`El Car Wash Lehigh Acres` (car wash, 2026-07-28) takeoff, and the legacy
+`VisionCarWash_ElectricalScope` (2026-01-14).
 
 1. **`parseTakeoffWorkbook` already parses this format.** `backend/src/utils/takeoffParse.ts`
    was written against these same Cowork workbooks — its comments reference "the car
@@ -59,14 +64,31 @@ bigger or smaller this job is, and where the scope and quantities differ.
 8. **`docx` (v9) is a writer, not a reader.** `adm-zip` is already a dependency and a
    `.docx` is a zip containing `word/document.xml`, so scope parsing needs no new package.
 
-9. **The Cowork scope sections are a fixed template, not per-job-type.** Verified against
-   all three scope documents on hand — AutoZone (retail), Indian Oaks (self-storage) and
-   Nick Moes — which carry byte-identical `A.`–`F.` headings: Service & Distribution /
-   Branch Power / Lighting & Controls / Site Lighting, Underground Work & Allowances /
-   Low Voltage Infrastructure / Project Coordination & Closeout. Section alignment across
-   jobs is therefore safe.
+9. **Cowork sections vary by job type — the template is not fixed.** The three scope
+   documents on hand (AutoZone/retail, Indian Oaks/self-storage, Nick Moes/c-store, all
+   2026-07) do carry byte-identical `A.`–`F.` headings, but none of them is a car wash.
+   The current-generation El Car Wash takeoff (2026-07-28) proves sections are job-type
+   dependent: it has **nine** categories to AutoZone's eight, splitting AutoZone's single
+   `5. BRANCH POWER` into `5. BRANCH POWER — BUILDING` and
+   `6. BRANCH POWER — CAR WASH EQUIPMENT`. Parsing must therefore tolerate unknown and
+   extra sections rather than assuming a fixed set.
 
-10. **Cowork's section letters do not match the CRM's.** `SCOPE_SECS`
+   A **legacy format also exists** and should not be designed for: `VisionCarWash_ElectricalScope.docx`
+   (file 2026-01-14, authored 2025-06-25) uses `Heading1`/`ListBullet` styles, seven
+   sections with entirely different names, inline `[MEP Plans | PDF]` citations, an
+   Inclusions/Exclusions block, and no metadata header. It predates the current generation
+   by six months and is superseded; the parser targets the current format and degrades
+   gracefully rather than supporting both.
+
+10. **`normalizeCategory` already collapses the job-type splits — which is right for
+    alignment and wrong for cost drivers.** Verified: `BRANCH POWER — BUILDING` and
+    `BRANCH POWER — CAR WASH EQUIPMENT` both normalize to `BRANCH POWER`
+    (`takeoffParse.ts:52-70`), by design — its comment states the goal is that "the same
+    scope lines up in a comparison." But the raw name is then discarded, and
+    "car-wash equipment power" is exactly the kind of major cost driver this feature is
+    meant to surface. The raw category must be preserved alongside the normalized one.
+
+11. **Cowork's section letters do not match the CRM's.** `SCOPE_SECS`
     (`constants.ts:44`) is live — it backs the Scope of Work tab (`PcWorkspace.tsx:1656`)
     and the overview summary (`OverviewTab.tsx:224`). Its letters mean different things:
     Cowork `D` is Site while CRM `D` is Low Voltage / Data; Cowork `E` is Low Voltage while
@@ -75,12 +97,12 @@ bigger or smaller this job is, and where the scope and quantities differ.
     establishes the correct pattern: `buildScopeFromAgent2` (`PcWorkspace.tsx:117-127`)
     maps by meaning with a deliberate D/E/F crossover.
 
-11. **Scope auto-fill is destructive today.** `PcWorkspace.tsx:362` merges
+12. **Scope auto-fill is destructive today.** `PcWorkspace.tsx:362` merges
     `{ ...prev.scope, ...scopeFill }` on AI completion, overwriting any section the AI
     produced. Since the pre-bid lands before plan analysis runs, the AI would silently
     replace the Cowork-derived scope.
 
-12. **`OFEI` vs `ECFECI` is a first-class cost driver.** The AutoZone scope carries an
+13. **`OFEI` vs `ECFECI` is a first-class cost driver.** The AutoZone scope carries an
    `ESTIMATING NOTE — SCOPE DEVIATION FROM STANDARD` block: AutoZone furnishes all gear,
    fixtures, controls and poles; APT installs only. An OFEI job's $/SF is structurally far
    below an ECFECI job's. Comparing the two unflagged yields a credible-looking wrong number.
@@ -165,8 +187,15 @@ Rows are only skipped when the description is empty or the row restates the head
 
 - `TakeoffLineItem.qty: number | null`, plus optional `qtyRaw`, `confidence`
   (`'FIRM' | 'APPROX' | 'VERIFY'`), `qtyLow`, `qtyHigh`.
-- `TakeoffCategory` gains `unresolvedCount: number`. `totals` sums numeric quantities only,
-  so an unresolved item never reads as a zero.
+- `TakeoffLineItem.categoryRaw: string` — the header as written, before
+  `normalizeCategory` collapses it (finding 10). `category` keeps the normalized value, so
+  every existing consumer is unaffected.
+- `TakeoffCategory` gains `unresolvedCount: number` and
+  `subcategories: { name: string; itemCount: number; totals: Record<string, number> }[]`,
+  built from the distinct `categoryRaw` values that normalized into it. A job with a single
+  `BRANCH POWER` yields one subcategory; the car wash yields `BRANCH POWER — BUILDING` and
+  `BRANCH POWER — CAR WASH EQUIPMENT`. `totals` sums numeric quantities only, so an
+  unresolved item never reads as a zero.
 
 **Column mapping:** add `/^(CONF\.?|CONFIDENCE)$/` detection; broaden the notes matcher to
 accept a header containing `NOTES` with optional `SOURCE` / `BASIS` prefixes.
@@ -254,13 +283,19 @@ Panels, in order:
    to `furnish_note`.
 4. **Comparison** — comp picker from `/prebid-comparables`; selected comp renders the size
    delta (`this job is N% larger/smaller — 7,381 SF vs 5,900 SF`) and a per-1000-SF
-   per-category quantity table with deltas.
-5. **Scope side-by-side** — subject sections against the comp's, aligned by normalized
-   title (never by letter — see finding 10), with sections present on only one side marked
+   per-category quantity table with deltas, rows keyed on the **normalized** category so
+   the two jobs line up.
+5. **Cost drivers** — expanding a category row reveals its `subcategories`. A subcategory
+   present on one side only (`BRANCH POWER — CAR WASH EQUIPMENT` against a retail comp with
+   plain `BRANCH POWER`) is called out explicitly as a driver. Without this the
+   normalization that makes the comparison possible would hide the single largest reason
+   two jobs differ (finding 10).
+6. **Scope side-by-side** — subject sections against the comp's, aligned by normalized
+   title (never by letter — see finding 11), with sections present on only one side marked
    as gaps.
-6. **Unresolved items** — every `VERIFY` / null-quantity row with its source note. This is
+7. **Unresolved items** — every `VERIFY` / null-quantity row with its source note. This is
    the pre-bid's risk list and is the reason the parser fix matters.
-7. **Analyze differences** — triggers the AI pass; renders `ai_comparison` when complete.
+8. **Analyze differences** — triggers the AI pass; renders `ai_comparison` when complete.
 
 ## G. Scope of Work population
 
@@ -270,7 +305,7 @@ Pre-Bid tab. New `buildScopeFromPrebid(sections)` in `PcWorkspace.tsx`, mirrorin
 the existing "Import from AI Takeoff" on the `scope` tab, shown only when a pre-bid scope
 exists.
 
-**Mapping — by meaning, not by letter** (finding 10):
+**Mapping — by meaning, not by letter** (finding 11):
 
 | Cowork section | → `SCOPE_SECS` |
 |---|---|
@@ -282,8 +317,15 @@ exists.
 | F. Project Coordination & Closeout | **G.** Special Systems |
 
 `E. Fire Alarm` has no Cowork counterpart in any observed file and is left untouched.
-Matching is on the normalized section title, so a heading whose wording drifts still lands
-correctly; an unrecognized Cowork section is appended to `G` rather than dropped.
+
+Matching is on the normalized section title, not the letter. Because sections are
+job-type dependent (finding 9), the mapping is a lookup with a fallback rather than a
+fixed table: a title is matched against the table above after the same normalization the
+takeoff categories use (strip trailing parentheticals and em-dash qualifiers), so
+`B. Branch Power — Car Wash Equipment` still resolves to `B. Branch Circuits`. A section
+matching nothing is **appended to `G` with its original heading retained inline**, so
+job-type-specific scope is never silently dropped — the failure mode is a slightly
+overloaded `G`, not missing scope.
 
 **Precedence.** The AI auto-fill at `PcWorkspace.tsx:362` becomes non-destructive: it
 writes only sections that are currently empty, instead of `{ ...prev.scope, ...scopeFill }`
@@ -301,8 +343,10 @@ New `PREBID_COMPARE_SYSTEM` prompt in `backend/src/ai/prompts.ts`, alongside the
 four agents. `POST /:bidId/prebid-analyze?against=<bidId>` runs it asynchronously against
 `ai_status`, matching the `run-agent4` pattern (`preconstruction.ts:993`).
 
-- **Input:** both scope section sets, both category rollups (including unresolved counts),
-  both `sq_ft`, both `furnish_model` values.
+- **Input:** both scope section sets, both category rollups (including unresolved counts
+  **and `subcategories`**), both `sq_ft`, both `furnish_model` values. The subcategories
+  matter most here — a subcategory on one side only is the strongest available signal of a
+  real cost driver, and the normalized rollup alone would not reveal it.
 - **Output JSON:** `{ majorDifferences[], costDrivers[], missingScope[], notes }`.
 - Reuses `callWithRetry` (`ai/retry.ts:35`) and the lenient extractor (`ai/json.ts:25`);
   model and token limits read from `app_settings` like the other agents.
@@ -318,18 +362,25 @@ same scope.
 
 - **Parser fixtures** — the four real workbooks (AutoZone, El Car Wash, Indian Oaks
   Self-Storage, Nick Moes) and the three matching scope documents, copied into
-  `backend/src/test/fixtures/prebid/`.
+  `backend/src/test/fixtures/prebid/`. El Car Wash is the job-type-variation fixture and
+  the only car wash available; the legacy `VisionCarWash_ElectricalScope.docx` is
+  deliberately excluded, since supporting the superseded format is out of scope.
+- **Job-type variation:** El Car Wash yields nine raw categories collapsing to eight
+  normalized ones; `BRANCH POWER` carries two `subcategories` while AutoZone's carries one;
+  `categoryRaw` survives on every line item. This is the regression guard for finding 10 —
+  without it, a future normalization change would silently erase cost drivers again.
 - **Takeoff parser:** unresolved rows are retained with `qty: null`; the AutoZone file keeps
   all three site-lighting lines; `confidence` is captured; `qtyLow`/`qtyHigh` parse from
   `range 58–70`; `sqFt` resolves to 7,381; category `totals` exclude nulls while
   `unresolvedCount` counts them.
 - **Regression:** an existing finished-bid workbook parses byte-identically to the current
   output, guarding the `'final'` path.
-- **Scope parser:** sections A–F extracted with their items; `furnish_model = 'OFEI'` for
-  AutoZone; meta keys populated; entities decoded. All three scope documents must yield the
-  same six section titles, guarding the fixed-template assumption in finding 9.
+- **Scope parser:** sections extracted with their items; `furnish_model = 'OFEI'` for
+  AutoZone; meta keys populated; entities decoded. The three current-generation documents
+  each yield their six sections, and a synthetic document carrying an unrecognized
+  job-type-specific section proves it lands in `G` rather than being dropped.
 - **Scope mapping:** `buildScopeFromPrebid` puts site lighting in `F` and low voltage in
-  `D` — the crossover from finding 10, asserted explicitly so a future edit cannot quietly
+  `D` — the crossover from finding 11, asserted explicitly so a future edit cannot quietly
   revert to letter alignment. `E` (Fire Alarm) stays empty. An unrecognized section lands
   in `G` rather than vanishing.
 - **Precedence:** AI completion does not overwrite a section the pre-bid already filled;
