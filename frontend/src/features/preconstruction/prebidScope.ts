@@ -21,7 +21,7 @@ const TITLE_TO_SECTION: Record<string, string> = {
 // and any em/en-dash qualifier, so "Branch Power — Car Wash Equipment" and "Low Voltage
 // Infrastructure (Conduit & Boxes Only)" still resolve. Sections are job-type dependent,
 // so this has to tolerate wording it has never seen.
-function normalizeTitle(raw: string): string {
+export function normalizeTitle(raw: string): string {
   return raw
     .replace(/\s*\(.*\)\s*$/, '')
     .replace(/\s*[—–-]\s+.*$/, '')

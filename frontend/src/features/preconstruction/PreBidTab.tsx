@@ -1,6 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import api from '../../api/client';
 import { PrebidSection } from './prebidScope';
+import PreBidUpload from './PreBidUpload';
+import PreBidQuantityCompare from './PreBidQuantityCompare';
+import PreBidScopeCompare from './PreBidScopeCompare';
+import PreBidAnalyze from './PreBidAnalyze';
 
 interface Subcategory { name: string; itemCount: number; totals: Record<string, number> }
 interface Category {
@@ -15,6 +19,9 @@ interface Comparable {
   id: string; name: string; sq_ft: number | null; project_type: string | null;
   stage: string; sq_ft_delta_pct: number | null;
 }
+interface AiComparison {
+  majorDifferences?: string[]; costDrivers?: string[]; missingScope?: string[]; notes?: string;
+}
 
 export default function PreBidTab({ bidId, onSectionsLoaded }: {
   bidId: string;
@@ -25,11 +32,13 @@ export default function PreBidTab({ bidId, onSectionsLoaded }: {
   }; scope: null | {
     furnish_model: string | null; furnish_note: string | null;
     meta: Record<string, string>; sections: PrebidSection[];
+    ai_comparison: AiComparison | null; ai_comparison_against: string | null;
+    ai_status: string | null; ai_error: string | null;
   } } | null>(null);
   const [comps, setComps] = useState<Comparable[]>([]);
   const [selected, setSelected] = useState<Comparable | null>(null);
 
-  useEffect(() => {
+  const refetch = useCallback(() => {
     api.get(`/preconstruction/${bidId}/prebid`).then(r => {
       setPkg(r.data);
       if (r.data?.scope?.sections) onSectionsLoaded(r.data.scope.sections);
@@ -39,26 +48,27 @@ export default function PreBidTab({ bidId, onSectionsLoaded }: {
       .catch(() => setComps([]));
   }, [bidId, onSectionsLoaded]);
 
+  useEffect(() => { refetch(); }, [refetch]);
+
   if (!pkg) return <div style={{ padding: '20px 24px' }}>Loading…</div>;
 
   const takeoff = pkg.takeoff;
   const scope = pkg.scope;
-
-  if (!takeoff && !scope) {
-    return (
-      <div style={{ padding: '20px 24px' }}>
-        <div className="panel"><div style={{ padding: 16 }}>
-          Upload the pre-bid package (scope .docx and quantity takeoff .xlsx) to compare
-          this job against similar past bids.
-        </div></div>
-      </div>
-    );
-  }
-
   const unresolved = (takeoff?.line_items ?? []).filter(i => i.qty === null);
 
   return (
     <div style={{ padding: '20px 24px' }}>
+      <PreBidUpload bidId={bidId} hasScope={!!scope} hasTakeoff={!!takeoff} onImported={refetch}/>
+
+      {!takeoff && !scope && (
+        <div className="panel" style={{ marginBottom: 14 }}>
+          <div style={{ padding: 16, fontSize: 13, color: 'var(--muted)' }}>
+            Upload the pre-bid package (scope .docx and quantity takeoff .xlsx) above to
+            compare this job against similar past bids.
+          </div>
+        </div>
+      )}
+
       {scope?.furnish_model === 'OFEI' && (
         <div className="panel" style={{ marginBottom: 14, borderColor: 'var(--amber)' }}>
           <div className="panel-hdr"><span className="panel-title">OFEI — Owner-Furnished, EC-Installed</span></div>
@@ -133,7 +143,19 @@ export default function PreBidTab({ bidId, onSectionsLoaded }: {
         </div>
       )}
 
-      {selected && <div style={{ fontSize: 13, color: 'var(--muted)' }}>Comparing against {selected.name}</div>}
+      {selected && (
+        <>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>Comparing against {selected.name}</div>
+          <PreBidQuantityCompare bidId={bidId} compId={selected.id} compName={selected.name}/>
+          <PreBidScopeCompare bidId={bidId} compId={selected.id} compName={selected.name}
+            subjectSections={scope?.sections ?? []}/>
+          <PreBidAnalyze bidId={bidId} compId={selected.id} compName={selected.name}
+            initialAgainst={scope?.ai_comparison_against ?? null}
+            initialStatus={scope?.ai_status ?? null}
+            initialComparison={scope?.ai_comparison ?? null}
+            initialError={scope?.ai_error ?? null}/>
+        </>
+      )}
     </div>
   );
 }
