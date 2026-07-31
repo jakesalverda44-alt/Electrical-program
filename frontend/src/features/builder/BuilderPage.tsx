@@ -111,7 +111,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
   const [saving, setSaving] = useState(false);
   const [showSend, setShowSend] = useState(false);
   const [savedGenId, setSavedGenId] = useState<string | null>(editGen?.id ?? null);
-  const [benchmarks, setBenchmarks] = useState<Array<{ min: number; max: number; avgAmount: number | null; avgPerKw: number | null; count: number }>>([]);
+  const [benchmarks, setBenchmarks] = useState<Array<{ kw: number; avgAmount: number; avgPerKw: number; count: number }>>([]);
 
   useEffect(() => {
     api.get('/gens/benchmark').then(r => setBenchmarks(r.data)).catch(() => {});
@@ -521,8 +521,8 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
               {/* Price benchmark flag */}
               {(() => {
                 const kw = parseInt(form.size) || 0;
-                const b = benchmarks.find(bk => kw >= bk.min && kw < bk.max);
-                if (!b || !b.avgAmount || b.count < 2) return null;
+                const b = benchmarks.find(bk => bk.kw === kw);
+                if (!b || b.count < 2 || !kw) return null;
                 const pct = ((totals.total - b.avgAmount) / b.avgAmount) * 100;
                 if (Math.abs(pct) < 15) return null;
                 const high = pct > 0;
@@ -534,7 +534,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                       {high ? '▲' : '▼'} {Math.abs(Math.round(pct))}% {high ? 'above' : 'below'} avg
                     </div>
                     <div style={{ fontSize: 11.5, color: 'var(--text3)', fontWeight: 600 }}>
-                      Avg for {kw}kW range: {fmt(b.avgAmount)} ({b.count} sold)
+                      Avg for {kw}kW: {fmt(b.avgAmount)} ({b.count} sold)
                     </div>
                   </div>
                 );

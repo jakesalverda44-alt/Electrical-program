@@ -51,20 +51,16 @@ router.get('/benchmark', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT kw, amount FROM generator_proposals WHERE stage = 'awarded' AND kw > 0 AND amount > 0 AND deleted_at IS NULL`
   );
-  const BRACKETS = [
-    { label: 'Under 20kW',   min: 0,   max: 20   },
-    { label: '20–50kW',      min: 20,  max: 50   },
-    { label: '50–100kW',     min: 50,  max: 100  },
-    { label: '100–200kW',    min: 100, max: 200  },
-    { label: '200–500kW',    min: 200, max: 500  },
-    { label: '500kW+',       min: 500, max: Infinity },
-  ];
-  const result = BRACKETS.map(b => {
-    const group = rows.filter(r => Number(r.kw) >= b.min && Number(r.kw) < b.max);
-    if (!group.length) return { ...b, count: 0, avgAmount: null, avgPerKw: null };
-    const avgAmount = group.reduce((s, r) => s + Number(r.amount), 0) / group.length;
-    const avgPerKw  = group.reduce((s, r) => s + Number(r.amount) / Number(r.kw), 0) / group.length;
-    return { ...b, count: group.length, avgAmount: Math.round(avgAmount), avgPerKw: Math.round(avgPerKw) };
+  const byKw = new Map<number, { amount: number }[]>();
+  for (const r of rows) {
+    const kw = Number(r.kw);
+    if (!byKw.has(kw)) byKw.set(kw, []);
+    byKw.get(kw)!.push({ amount: Number(r.amount) });
+  }
+  const result = Array.from(byKw.entries()).map(([kw, group]) => {
+    const avgAmount = group.reduce((s, r) => s + r.amount, 0) / group.length;
+    const avgPerKw  = avgAmount / kw;
+    return { kw, count: group.length, avgAmount: Math.round(avgAmount), avgPerKw: Math.round(avgPerKw) };
   });
   res.json(result);
 });
