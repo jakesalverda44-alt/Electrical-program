@@ -865,10 +865,11 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   res.json(rows[0]);
 }));
 
-// List upcoming Outlook calendar events (next 7 days) as candidates for
-// "create a proposal from this appointment."
+// List Outlook calendar events (past week through next 7 days) as candidates for
+// "create a proposal from this appointment" — includes recent past visits since a
+// rep often builds the proposal a few days after the actual site visit.
 router.get('/calendar-events', requireAuth, asyncHandler(async (_req: AuthRequest, res) => {
-  res.json(await fetchUpcomingEvents(7));
+  res.json(await fetchUpcomingEvents(7, 7));
 }));
 
 // Create a brand-new proposal pre-filled from a calendar appointment: pulls the

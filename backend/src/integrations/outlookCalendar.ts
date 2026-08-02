@@ -70,6 +70,13 @@ export function nextCalendarDay(day: string): string {
   return next.toISOString().slice(0, 10);
 }
 
+/** YYYY-MM-DD one day before the given calendar day (string math, no timezone drift). */
+export function prevCalendarDay(day: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  const prev = new Date(Date.UTC(y, m - 1, d - 1));
+  return prev.toISOString().slice(0, 10);
+}
+
 /**
  * Add a bid's due date to the calendar as an all-day event with a reminder 2 days before,
  * built from the bid's explicit due_date (not a date parsed out of the email). Used by the
@@ -265,19 +272,23 @@ export async function fetchTodayEvents(): Promise<TodayEvent[]> {
 }
 
 /**
- * Upcoming events (today through `days` days out, Eastern) from the mailbox calendar,
- * including attendees — candidates for "create a proposal from this appointment."
+ * Events from `daysBack` days ago through `daysForward` days out (Eastern) from the
+ * mailbox calendar, including attendees — candidates for "create a proposal from
+ * this appointment." Includes recent past events too, since a rep often builds the
+ * proposal a few days after the actual site visit, not during it.
  * Returns [] on any failure so the picker just shows empty rather than erroring.
  */
-export async function fetchUpcomingEvents(days: number): Promise<UpcomingEvent[]> {
+export async function fetchUpcomingEvents(daysForward: number, daysBack = 0): Promise<UpcomingEvent[]> {
   try {
-    const day = toGraphDateTime(new Date()).slice(0, 10); // YYYY-MM-DD in ET
-    let end = day;
-    for (let i = 0; i < days; i++) end = nextCalendarDay(end);
+    const today = toGraphDateTime(new Date()).slice(0, 10); // YYYY-MM-DD in ET
+    let start = today;
+    for (let i = 0; i < daysBack; i++) start = prevCalendarDay(start);
+    let end = today;
+    for (let i = 0; i < daysForward; i++) end = nextCalendarDay(end);
     const select = 'id,subject,start,end,location,webLink,isAllDay,attendees';
     const url = `${GRAPH_BASE}/users/${encodeURIComponent(CALENDAR_USER)}/calendarView`
-      + `?startDateTime=${day}T00:00:00&endDateTime=${end}T00:00:00`
-      + `&$select=${select}&$orderby=${encodeURIComponent('start/dateTime')}&$top=50`;
+      + `?startDateTime=${start}T00:00:00&endDateTime=${end}T00:00:00`
+      + `&$select=${select}&$orderby=${encodeURIComponent('start/dateTime')}&$top=100`;
     const token = await getGraphToken();
     const resp = await fetch(url, {
       headers: {

@@ -92,6 +92,12 @@ export default function CalendarEventPickerModal({ onClose, onCreated }: Props) 
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {ev.subject}
+                    {new Date(ev.end || ev.start).getTime() < Date.now() && (
+                      <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.04em',
+                        color: 'var(--text3)', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 5, padding: '1px 6px' }}>
+                        Past
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2 }}>
                     {fmtWhen(ev)}{ev.location ? ` · ${ev.location}` : ''}
