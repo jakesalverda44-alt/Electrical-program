@@ -5,6 +5,7 @@ import { GEN_STAGES, GenStageKey } from './constants';
 import { useGenPipeline } from './useGenPipeline';
 import GenDetailDrawer from './GenDetailDrawer';
 import LogGenJobModal from './LogGenJobModal';
+import CalendarEventPickerModal from './CalendarEventPickerModal';
 import api from '../../api/client';
 import { moneyShort as money } from '../../lib/money';
 import PipelineBoard from '../../components/PipelineBoard';
@@ -65,6 +66,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
   const showToast = useShowToast();
   const [detail, setDetail] = useState<Gen | null>(null);
   const [logOpen, setLogOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [autoKickoff, setAutoKickoff] = useState(false);
 
   // Open the deep-linked proposal's drawer once, then strip the id from the URL.
@@ -181,6 +183,9 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
         </span>
         <button className="btn ghost" style={{ fontSize: 13, marginRight: 8 }} onClick={() => setLogOpen(true)}>
           <Icon name="doc" size={15} stroke={2.2}/>Log Existing Job
+        </button>
+        <button className="btn ghost" style={{ fontSize: 13, marginRight: 8 }} onClick={() => setCalendarOpen(true)}>
+          <Icon name="clock" size={15} stroke={2.2}/>From Calendar
         </button>
         <button className="btn amber" style={{ fontSize: 13 }} onClick={onOpenBuilder}>
           <Icon name="plus" size={15} stroke={2.4}/>New Proposal
@@ -331,6 +336,18 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
             if (wonJob) setWonJobs(prev => [wonJob, ...prev]);
             setLogOpen(false);
             showToast({ title: 'Job logged', sub: `${gen.customer} added to the ${gen.stage} column.` });
+          }}
+        />
+      )}
+
+      {calendarOpen && (
+        <CalendarEventPickerModal
+          onClose={() => setCalendarOpen(false)}
+          onCreated={gen => {
+            setGens(prev => [gen, ...prev]);
+            setCalendarOpen(false);
+            showToast({ title: 'Proposal created from calendar', sub: `Review the pre-filled details for ${gen.customer}` });
+            onEditGen(gen);
           }}
         />
       )}

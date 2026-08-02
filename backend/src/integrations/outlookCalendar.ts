@@ -195,6 +195,10 @@ export async function pushSiteVisitToCalendar(proposalId: string, lead: SiteVisi
   }
 }
 
+interface GraphAttendeeRaw {
+  emailAddress?: { name?: string; address?: string };
+}
+
 interface GraphEventRaw {
   id: string;
   subject?: string;
@@ -203,6 +207,20 @@ interface GraphEventRaw {
   location?: { displayName?: string };
   webLink?: string;
   isAllDay?: boolean;
+  attendees?: GraphAttendeeRaw[];
+  body?: { content?: string };
+}
+
+export interface EventAttendee { name: string; email: string }
+
+export interface UpcomingEvent extends TodayEvent {
+  attendees: EventAttendee[];
+}
+
+function toAttendees(raw: GraphAttendeeRaw[] | undefined): EventAttendee[] {
+  return (raw || [])
+    .map(a => ({ name: a.emailAddress?.name?.trim() || '', email: a.emailAddress?.address?.trim() || '' }))
+    .filter(a => a.name || a.email);
 }
 
 /**
@@ -243,5 +261,90 @@ export async function fetchTodayEvents(): Promise<TodayEvent[]> {
   } catch (err) {
     logger.error({ err }, '[calendar] fetchTodayEvents failed');
     return [];
+  }
+}
+
+/**
+ * Upcoming events (today through `days` days out, Eastern) from the mailbox calendar,
+ * including attendees — candidates for "create a proposal from this appointment."
+ * Returns [] on any failure so the picker just shows empty rather than erroring.
+ */
+export async function fetchUpcomingEvents(days: number): Promise<UpcomingEvent[]> {
+  try {
+    const day = toGraphDateTime(new Date()).slice(0, 10); // YYYY-MM-DD in ET
+    let end = day;
+    for (let i = 0; i < days; i++) end = nextCalendarDay(end);
+    const select = 'id,subject,start,end,location,webLink,isAllDay,attendees';
+    const url = `${GRAPH_BASE}/users/${encodeURIComponent(CALENDAR_USER)}/calendarView`
+      + `?startDateTime=${day}T00:00:00&endDateTime=${end}T00:00:00`
+      + `&$select=${select}&$orderby=${encodeURIComponent('start/dateTime')}&$top=50`;
+    const token = await getGraphToken();
+    const resp = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Prefer: 'outlook.timezone="America/New_York"',
+      },
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`Graph calendarView failed: HTTP ${resp.status} ${text}`);
+    }
+    const data = (await resp.json()) as { value: GraphEventRaw[] };
+    return (data.value || []).map(e => ({
+      id: e.id,
+      subject: (e.subject || '(no subject)').trim(),
+      start: e.start?.dateTime || '',
+      end: e.end?.dateTime || '',
+      location: e.location?.displayName?.trim() || null,
+      webLink: e.webLink || null,
+      isAllDay: !!e.isAllDay,
+      attendees: toAttendees(e.attendees),
+    }));
+  } catch (err) {
+    logger.error({ err }, '[calendar] fetchUpcomingEvents failed');
+    return [];
+  }
+}
+
+export interface EventDetail {
+  subject: string;
+  location: string | null;
+  attendees: EventAttendee[];
+  bodyText: string | null;
+}
+
+/**
+ * Full detail for one event, including its body as plain text (via the
+ * outlook.body-content-type Prefer header, so HTML invites don't leak markup into
+ * the AI prompt) — used to pre-fill a proposal from a picked calendar appointment.
+ * Returns null on any failure or if the event doesn't exist.
+ */
+export async function fetchEventDetail(eventId: string): Promise<EventDetail | null> {
+  try {
+    const select = 'subject,location,attendees,body';
+    const url = `${GRAPH_BASE}/users/${encodeURIComponent(CALENDAR_USER)}/events/${encodeURIComponent(eventId)}`
+      + `?$select=${select}`;
+    const token = await getGraphToken();
+    const resp = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Prefer: 'outlook.body-content-type="text"',
+      },
+    });
+    if (!resp.ok) {
+      if (resp.status === 404) return null;
+      const text = await resp.text().catch(() => '');
+      throw new Error(`Graph event fetch failed: HTTP ${resp.status} ${text}`);
+    }
+    const e = (await resp.json()) as GraphEventRaw;
+    return {
+      subject: (e.subject || '(no subject)').trim(),
+      location: e.location?.displayName?.trim() || null,
+      attendees: toAttendees(e.attendees),
+      bodyText: e.body?.content?.trim() || null,
+    };
+  } catch (err) {
+    logger.error({ err, eventId }, '[calendar] fetchEventDetail failed');
+    return null;
   }
 }

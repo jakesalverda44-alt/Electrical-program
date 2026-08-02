@@ -18,6 +18,7 @@ import { commissionRate, commissionAmount } from '../utils/commission';
 import { createNotification } from '../notifications/engine';
 import { ownerAdminIds } from '../notifications/prefs';
 import { sendPushToUsers } from '../integrations/webPush';
+import { fetchUpcomingEvents, fetchEventDetail } from '../integrations/outlookCalendar';
 import { pdfUpload } from '../utils/upload';
 import {
   uploadFile,
@@ -767,15 +768,18 @@ RULES:
 4. extWarrantyPromoStart/extWarrantyPromoEnd only apply when extWarranty is "promo" AND brand is "Kohler" — leave "" for Generac.
 5. Return the JSON object only — no markdown, no explanation.`;
 
-router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
-  const { notes } = req.body as { notes?: string };
-  if (!notes?.trim()) return res.status(400).json({ error: 'notes required' });
+class BuildFromNotesError extends Error {
+  status: number;
+  constructor(status: number, message: string) { super(message); this.status = status; }
+}
 
-  const gen = await loadOwnedGen(req, res);
-  if (!gen) return;
-
+// Shared by /:id/build-from-notes and /from-calendar-event — turns any block of
+// free text (site-visit notes, or a calendar appointment's subject/location/body)
+// into a GenForm via the same AI extraction and the same safe-defaults/business
+// rules, so both entry points behave identically.
+async function extractFormFromNotes(notes: string): Promise<Record<string, unknown>> {
   const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
-  if (!apiKey) return res.status(503).json({ error: 'Anthropic API key not configured. Add it in Settings > AI or set ANTHROPIC_API_KEY.' });
+  if (!apiKey) throw new BuildFromNotesError(503, 'Anthropic API key not configured. Add it in Settings > AI or set ANTHROPIC_API_KEY.');
 
   const model = ((await getSetting('ai_build_from_notes_model')) || 'claude-haiku-4-5-20251001').trim();
   const client = new Anthropic({ apiKey });
@@ -788,7 +792,7 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
 
   const text = message.content[0]?.type === 'text' ? message.content[0].text : '';
   const parsed = parseAIJSON(text);
-  if (!parsed) return res.status(422).json({ error: 'AI returned an unrecognizable response. Please try again.' });
+  if (!parsed) throw new BuildFromNotesError(422, 'AI returned an unrecognizable response. Please try again.');
 
   // Normalize fuel: coerce any propane synonym to the stored enum value 'LP'
   if (parsed.fuel && String(parsed.fuel).toLowerCase() !== 'natural gas') {
@@ -817,6 +821,24 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   // promo is a standing APT-included upgrade with no expiry.
   if (form.brand !== 'Kohler') { form.extWarrantyPromoStart = ''; form.extWarrantyPromoEnd = ''; }
 
+  return form;
+}
+
+router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { notes } = req.body as { notes?: string };
+  if (!notes?.trim()) return res.status(400).json({ error: 'notes required' });
+
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+
+  let form: Record<string, unknown>;
+  try {
+    form = await extractFormFromNotes(notes);
+  } catch (err) {
+    if (err instanceof BuildFromNotesError) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+
   const totals = calcFormTotals(form);
   const addons = (Number(form.smmQty) > 0 ? 1 : 0) + (Number(form.surgeProQty) > 0 ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0) + (form.emPanel ? 1 : 0) + (form.gasLine ? 1 : 0);
 
@@ -841,6 +863,70 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   );
 
   res.json(rows[0]);
+}));
+
+// List upcoming Outlook calendar events (next 7 days) as candidates for
+// "create a proposal from this appointment."
+router.get('/calendar-events', requireAuth, asyncHandler(async (_req: AuthRequest, res) => {
+  res.json(await fetchUpcomingEvents(7));
+}));
+
+// Create a brand-new proposal pre-filled from a calendar appointment: pulls the
+// event's full body/attendees, runs it through the same extraction as
+// build-from-notes, and creates the gen in one step so the rep lands straight in
+// the builder to review instead of retyping the customer's name/address/phone.
+router.post('/from-calendar-event', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { eventId } = req.body as { eventId?: string };
+  if (!eventId?.trim()) return res.status(400).json({ error: 'eventId required' });
+
+  const event = await fetchEventDetail(eventId);
+  if (!event) return res.status(404).json({ error: 'Calendar event not found' });
+
+  const notesParts = [
+    `Subject: ${event.subject}`,
+    event.location ? `Location: ${event.location}` : null,
+    event.attendees.length ? `Attendees: ${event.attendees.map(a => a.email ? `${a.name} <${a.email}>` : a.name).join(', ')}` : null,
+    event.bodyText ? `\n${event.bodyText}` : null,
+  ].filter(Boolean);
+
+  let form: Record<string, unknown>;
+  try {
+    form = await extractFormFromNotes(notesParts.join('\n'));
+  } catch (err) {
+    if (err instanceof BuildFromNotesError) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+
+  const user = req.user!;
+  const customerName = String(form.customer || '').trim() || event.subject || 'New Customer';
+  const customerId = await upsertCustomer(customerName, 'customer');
+  const totals = calcFormTotals(form);
+  const addons = (Number(form.smmQty) > 0 ? 1 : 0) + (Number(form.surgeProQty) > 0 ? 1 : 0) + (form.battery ? 1 : 0) + (form.pad ? 1 : 0) + (form.emPanel ? 1 : 0) + (form.gasLine ? 1 : 0);
+
+  const { rows } = await pool.query(
+    `INSERT INTO generator_proposals (
+       customer, loc, mfr, model, kw, amount, tax, addons,
+       form_data, totals_data,
+       salesperson_id, salesperson_name, customer_id, stage
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,'building')
+     RETURNING *`,
+    [
+      customerName, (event.location || '').trim() || '—', String(form.brand), String(form.size), parseInt(String(form.size)),
+      totals.total, totals.tax, addons,
+      JSON.stringify(form), JSON.stringify(totals),
+      user.id, user.name, customerId,
+    ],
+  );
+  const gen = rows[0];
+
+  await writeAudit(req, {
+    action: 'create-from-calendar', entityType: 'gen', entityId: gen.id,
+    summary: `Created generator proposal "${gen.customer}" from calendar event "${event.subject}"`,
+    after: { event_id: eventId },
+  });
+
+  res.json(gen);
 }));
 
 // Short "what was quoted" label for emails, e.g. "22KW Generac". `model` is stored as the
