@@ -5,7 +5,7 @@ import { loadAccessibleBid } from '../utils/ownership';
 import { getSetting } from '../db/getSetting';
 import Anthropic from '@anthropic-ai/sdk';
 import AdmZip from 'adm-zip';
-import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM, AGENT4_SYSTEM } from '../ai/prompts';
+import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM, AGENT4_SYSTEM, PREBID_COMPARE_SYSTEM } from '../ai/prompts';
 import { buildProposalDocx, ProposalJSON } from '../utils/proposalDocx';
 import { callWithRetry } from '../ai/retry';
 import { parseAIJSON, extractJSONText } from '../ai/json';
@@ -16,6 +16,7 @@ import { uploadFile, getFileMedia } from '../services/googleDrive';
 import { buildAgent1Content, type PrepFile, type Agent1Block } from '../ai/documentPrep';
 import { extractDocxText, extractPdfText, parseBidDocText } from '../utils/bidDocParse';
 import { parseTakeoffWorkbook } from '../utils/takeoffParse';
+import { parsePrebidScope } from '../utils/prebidScopeParse';
 import { parseAccubidBreakdown } from '../utils/accubidParse';
 import { storeDocument } from '../utils/storeDocument';
 
@@ -563,9 +564,9 @@ router.post('/:bidId/import-bid', requireAuth, documentUpload.fields([
     sqFt = takeoff.sqFt;
     if (takeoff.lineItems.length) {
       await pool.query(
-        `INSERT INTO bid_takeoffs (bid_id, categories, line_items, item_count, source_file, updated_at)
-         VALUES ($1,$2::jsonb,$3::jsonb,$4,$5,now())
-         ON CONFLICT (bid_id) DO UPDATE SET
+        `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count, source_file, updated_at)
+         VALUES ($1,'final',$2::jsonb,$3::jsonb,$4,$5,now())
+         ON CONFLICT (bid_id, kind) DO UPDATE SET
            categories=$2::jsonb, line_items=$3::jsonb, item_count=$4, source_file=$5, updated_at=now()`,
         [bidId, JSON.stringify(takeoff.categories), JSON.stringify(takeoff.lineItems),
          takeoff.lineItems.length, takeoffFile.originalname]
@@ -603,6 +604,112 @@ router.post('/:bidId/import-bid', requireAuth, documentUpload.fields([
   res.json({ ...parsed, sqFt, takeoff: takeoffSummary, breakdown: breakdownSummary });
 }));
 
+// POST import-prebid — the Cowork pre-bid package: a scope .docx and a quantity .xlsx
+// produced right after a bid invite is accepted, before any pricing exists. Stored under
+// kind='prebid' so a later finished-bid import cannot overwrite it; the pre-bid set is
+// the comparison corpus and is the only takeoff data most jobs will ever have.
+router.post('/:bidId/import-prebid', requireAuth, documentUpload.fields([
+  { name: 'takeoff', maxCount: 1 },
+  { name: 'scope', maxCount: 1 },
+]), asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  const bid = await loadAccessibleBid(res, req.user!, bidId);
+  if (!bid) return;
+
+  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+  const takeoffFile = files?.takeoff?.[0];
+  const scopeFile = files?.scope?.[0];
+  if (!takeoffFile && !scopeFile) {
+    return res.status(400).json({ error: 'takeoff or scope file required' });
+  }
+
+  const ext = (f: Express.Multer.File) => (f.originalname.split('.').pop() || '').toLowerCase();
+  if (takeoffFile && ext(takeoffFile) !== 'xlsx') {
+    return res.status(400).json({ error: 'takeoff must be .xlsx' });
+  }
+  if (scopeFile && ext(scopeFile) !== 'docx') {
+    return res.status(400).json({ error: 'scope must be .docx' });
+  }
+
+  // Keep the upload even if parsing fails — an unreadable file is still the estimator's
+  // document, and losing it is worse than a failed import.
+  const keep = (f: Express.Multer.File, category: string) =>
+    storeDocument({
+      file: f, linkedId: bidId, linkedName: bid.name, div: 'elec', category,
+      uploadedBy: req.user!.name, replaceExisting: true,
+    }).catch(err => { logger.error({ err, bidId, category }, '[import-prebid] document store failed'); return null; });
+
+  let takeoffSummary: { categories: unknown[]; itemCount: number; unresolvedCount: number } | null = null;
+  let parsedSqFt: number | null = null;
+
+  if (takeoffFile) {
+    await keep(takeoffFile, 'prebid_takeoff');
+    const t = parseTakeoffWorkbook(takeoffFile.buffer);
+    parsedSqFt = t.sqFt;
+    if (t.lineItems.length) {
+      await pool.query(
+        `INSERT INTO bid_takeoffs (bid_id, kind, categories, line_items, item_count, key_findings, source_file, updated_at)
+         VALUES ($1,'prebid',$2::jsonb,$3::jsonb,$4,$5::jsonb,$6,now())
+         ON CONFLICT (bid_id, kind) DO UPDATE SET
+           categories=$2::jsonb, line_items=$3::jsonb, item_count=$4,
+           key_findings=$5::jsonb, source_file=$6, updated_at=now()`,
+        [bidId, JSON.stringify(t.categories), JSON.stringify(t.lineItems),
+         t.lineItems.length, JSON.stringify(t.keyFindings), takeoffFile.originalname]
+      );
+      takeoffSummary = {
+        categories: t.categories,
+        itemCount: t.lineItems.length,
+        unresolvedCount: t.lineItems.filter(i => i.qty === null).length,
+      };
+    }
+  }
+
+  let scopeSummary: { sections: unknown[]; furnishModel: string | null } | null = null;
+  let suggestedBrand: string | null = null;
+
+  if (scopeFile) {
+    await keep(scopeFile, 'prebid_scope');
+    const s = parsePrebidScope(scopeFile.buffer);
+    suggestedBrand = s.suggestedBrand;
+    await pool.query(
+      `INSERT INTO bid_prebid_scope (bid_id, meta, furnish_model, furnish_note,
+         general_items, sections, source_file, updated_at)
+       VALUES ($1,$2::jsonb,$3,$4,$5::jsonb,$6::jsonb,$7,now())
+       ON CONFLICT (bid_id) DO UPDATE SET
+         meta=$2::jsonb, furnish_model=$3, furnish_note=$4, general_items=$5::jsonb,
+         sections=$6::jsonb, source_file=$7, updated_at=now()`,
+      [bidId, JSON.stringify(s.meta), s.furnishModel, s.furnishNote,
+       JSON.stringify(s.generalItems), JSON.stringify(s.sections), scopeFile.originalname]
+    );
+    scopeSummary = { sections: s.sections, furnishModel: s.furnishModel };
+  }
+
+  // Comparable matching ranks on square footage, so a bid without one cannot be compared
+  // at all. Fill it from the parsed header when absent — but never overwrite a value a
+  // human entered, which may be the leasable area rather than the gross footprint.
+  let sqFtApplied = false;
+  if (parsedSqFt && (bid.sq_ft === null || bid.sq_ft === undefined)) {
+    await pool.query('UPDATE bids SET sq_ft=$2 WHERE id=$1 AND sq_ft IS NULL', [bidId, parsedSqFt]);
+    sqFtApplied = true;
+  }
+
+  // brand is returned as a suggestion only. It outranks project_type in comp ranking, so
+  // a wrong auto-set would silently skew every future comparison on this job.
+  res.json({ takeoff: takeoffSummary, scope: scopeSummary, sqFtApplied, suggestedBrand });
+}));
+
+// GET prebid — the stored package for this bid, for the Pre-Bid tab.
+router.get('/:bidId/prebid', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
+  const [takeoff, scope] = await Promise.all([
+    pool.query(
+      `SELECT categories, line_items, item_count, key_findings, source_file
+         FROM bid_takeoffs WHERE bid_id=$1 AND kind='prebid'`, [req.params.bidId]),
+    pool.query('SELECT * FROM bid_prebid_scope WHERE bid_id=$1', [req.params.bidId]),
+  ]);
+  res.json({ takeoff: takeoff.rows[0] ?? null, scope: scope.rows[0] ?? null });
+}));
+
 // GET comparables-preview — same matching rules as /:bidId/comparables, but for a bid
 // that doesn't exist yet (e.g. the "add bid" form previewing likely comps as the
 // estimator types in brand/project type/sq ft). No subject bid to authorize against,
@@ -628,7 +735,7 @@ router.get('/comparables-preview', requireAuth, asyncHandler(async (req: AuthReq
            (bc.bid_id IS NOT NULL) AS has_breakdown,
            bc.labor_hours
       FROM bids b
-      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id
+      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id AND bt.kind = 'final'
       LEFT JOIN bid_cost_breakdown bc ON bc.bid_id = b.id
      WHERE b.deleted_at IS NULL
        AND b.amount IS NOT NULL AND b.amount > 0
@@ -680,7 +787,7 @@ router.get('/:bidId/comparables', requireAuth, asyncHandler(async (req: AuthRequ
            (bc.bid_id IS NOT NULL) AS has_breakdown,
            bc.labor_hours
       FROM bids b
-      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id
+      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id AND bt.kind = 'final'
       LEFT JOIN bid_cost_breakdown bc ON bc.bid_id = b.id
      WHERE b.id <> $1
        AND b.deleted_at IS NULL
@@ -702,6 +809,126 @@ router.get('/:bidId/comparables', requireAuth, asyncHandler(async (req: AuthRequ
   });
 }));
 
+// GET prebid-comparables — comps for a pre-bid comparison. Same ranking as /comparables
+// (same brand beats same project type, then nearest square footage), with one deliberate
+// difference: the amount > 0 requirement is dropped. Pre-bid corpus jobs have not been
+// priced yet, so requiring an amount would filter out exactly the rows this feature runs
+// on. Candidates must instead carry a prebid takeoff, which is what there is to compare.
+router.get('/:bidId/prebid-comparables', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const bid = await loadAccessibleBid(res, req.user!, req.params.bidId);
+  if (!bid) return;
+
+  const scope = ownScopeId(req.user!);
+  const { rows } = await pool.query(`
+    SELECT b.id, b.name, b.gc, b.stage, b.brand, b.project_type, b.sq_ft, b.amount,
+           b.updated_at, bt.item_count
+      FROM bids b
+      JOIN bid_takeoffs bt ON bt.bid_id = b.id AND bt.kind = 'prebid'
+     WHERE b.id <> $1
+       AND b.deleted_at IS NULL
+       AND ($2::text IS NOT NULL AND b.brand = $2
+            OR $3::text IS NOT NULL AND b.project_type = $3)
+       AND ($5::uuid IS NULL OR b.salesperson_id = $5::uuid)
+     ORDER BY ((($2::text IS NOT NULL) AND b.brand = $2)) DESC,
+              CASE WHEN $4::numeric IS NULL OR b.sq_ft IS NULL THEN 1 ELSE 0 END,
+              ABS(COALESCE(b.sq_ft, 0) - COALESCE($4::numeric, 0)),
+              b.updated_at DESC
+     LIMIT 25
+  `, [bid.id, bid.brand, bid.project_type, bid.sq_ft, scope]);
+
+  const subjectSqFt = bid.sq_ft != null ? Number(bid.sq_ft) : null;
+  res.json({
+    bid: { id: bid.id, name: bid.name, brand: bid.brand,
+           project_type: bid.project_type, sq_ft: bid.sq_ft },
+    comparables: rows.map(r => ({
+      ...r,
+      // How much bigger or smaller this job is than the comp, the headline number.
+      sq_ft_delta_pct: subjectSqFt && r.sq_ft
+        ? ((subjectSqFt - Number(r.sq_ft)) / Number(r.sq_ft)) * 100
+        : null,
+    })),
+  });
+}));
+
+// POST prebid-analyze — compare this pre-bid against one comparable's pre-bid. On demand
+// only: it never fires on upload, and result is cached to ai_comparison so re-VIEWING it
+// via GET /prebid (a plain SELECT) is free. Re-POSTing here always fires a fresh billed
+// call — there is no short-circuit on an existing ai_comparison for the same comparable.
+router.post('/:bidId/prebid-analyze', requireAuth, requireAIPermission('run_analysis'),
+  asyncHandler(async (req: AuthRequest, res) => {
+    const { bidId } = req.params;
+    const bid = await loadAccessibleBid(res, req.user!, bidId);
+    if (!bid) return;
+
+    const against = String(req.query.against || '').trim();
+    if (!against) return res.status(400).json({ error: 'against required' });
+    if (!(await loadAccessibleBid(res, req.user!, against))) return;
+
+    const { rows } = await pool.query(
+      `SELECT s.bid_id, s.sections, s.furnish_model, b.sq_ft, b.name,
+              t.categories
+         FROM bid_prebid_scope s
+         JOIN bids b ON b.id = s.bid_id
+         LEFT JOIN bid_takeoffs t ON t.bid_id = s.bid_id AND t.kind = 'prebid'
+        WHERE s.bid_id = ANY($1::uuid[])`,
+      [[bidId, against]]
+    );
+    const subject = rows.find(r => r.bid_id === bidId);
+    const comp = rows.find(r => r.bid_id === against);
+    if (!subject || !comp) {
+      return res.status(404).json({ error: 'both bids need a pre-bid scope' });
+    }
+
+    // Gate synchronously, like the sibling AI routes (/analyze, run-agent4): an
+    // unconfigured key must fail the kickoff immediately with an actionable 503,
+    // not after a spinner via a polled ai_status='error'.
+    const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
+    if (!apiKey) return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI or set ANTHROPIC_API_KEY in Render.' });
+
+    const config = await loadAIConfig();
+    const client = new Anthropic({ apiKey });
+
+    await pool.query(
+      `UPDATE bid_prebid_scope
+          SET ai_status='running', ai_error=NULL, ai_comparison_against=$2, updated_at=now()
+        WHERE bid_id=$1`, [bidId, against]);
+    res.json({ status: 'running' });
+
+    // Fire and forget, exactly as run-agent4 does — the client polls GET /prebid.
+    // callWithRetry takes a THUNK: it wraps the whole SDK call, it does not take a
+    // prompt pair. Mirrors the Agent 2 call site.
+    (async () => {
+      try {
+        const payload = JSON.stringify({
+          subject: { name: subject.name, sqFt: subject.sq_ft, furnishModel: subject.furnish_model,
+                     sections: subject.sections, categories: subject.categories ?? [] },
+          comparable: { name: comp.name, sqFt: comp.sq_ft, furnishModel: comp.furnish_model,
+                        sections: comp.sections, categories: comp.categories ?? [] },
+        });
+        const resp = await callWithRetry(() => client.messages.create({
+          model: config.modelA2,
+          max_tokens: config.maxTokensA2,
+          temperature: config.temperature,
+          system: [{ type: 'text', text: PREBID_COMPARE_SYSTEM, cache_control: { type: 'ephemeral' } }],
+          messages: [{ role: 'user', content: `Compare these two pre-bid packages.\n\n${payload}` }],
+        }), { onRetry: (a, _e, d) => console.warn(`[prebid-analyze] transient error, retry ${a} in ${d}ms`) });
+
+        const parsed = parseAIJSON(extractText(resp));
+        if (!parsed) throw new Error('model did not return parseable JSON');
+        await pool.query(
+          `UPDATE bid_prebid_scope
+              SET ai_comparison=$2::jsonb, ai_status='complete', updated_at=now()
+            WHERE bid_id=$1`, [bidId, JSON.stringify(parsed)]);
+      } catch (err) {
+        logger.error({ err, bidId }, '[prebid-analyze] failed');
+        await pool.query(
+          `UPDATE bid_prebid_scope SET ai_status='error', ai_error=$2, updated_at=now() WHERE bid_id=$1`,
+          [bidId, describeAIError(err)]
+        );
+      }
+    })().catch(err => logger.error({ err, bidId }, '[prebid-analyze] Uncaught background error'));
+  }));
+
 // GET compare — this bid against selected comparables. Returns per-category takeoff
 // quantities and cost-breakdown figures for each job, normalized per 1,000 SF so
 // buildings of different sizes line up. The frontend renders the deltas.
@@ -713,6 +940,7 @@ router.get('/:bidId/compare', requireAuth, asyncHandler(async (req: AuthRequest,
   if (!against.length) return res.status(400).json({ error: 'against required' });
 
   const ids = [bid.id, ...against];
+  const kind = req.query.kind === 'prebid' ? 'prebid' : 'final';
   // Scope comp rows the same way as /comparables: a restricted rep only pulls bids
   // they own into the comparison, even if they pass another rep's bid id in `against`.
   // The subject bid itself always matches — loadAccessibleBid already verified it's
@@ -725,11 +953,11 @@ router.get('/:bidId/compare', requireAuth, asyncHandler(async (req: AuthRequest,
            bc.selling_price, bc.labor_hours, bc.journeyman_hours, bc.apprentice_hours,
            bc.avg_labor_rate, bc.avg_crew_size, bc.labor_risk_ratio
       FROM bids b
-      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id
+      LEFT JOIN bid_takeoffs bt ON bt.bid_id = b.id AND bt.kind = $3
       LEFT JOIN bid_cost_breakdown bc ON bc.bid_id = b.id
      WHERE b.id = ANY($1::uuid[]) AND b.deleted_at IS NULL
        AND ($2::uuid IS NULL OR b.salesperson_id = $2::uuid)
-  `, [ids, scope]);
+  `, [ids, scope, kind]);
 
   // Preserve caller order, subject bid first.
   const byId = new Map(rows.map(r => [r.id, r]));
@@ -745,11 +973,14 @@ router.get('/:bidId/compare', requireAuth, asyncHandler(async (req: AuthRequest,
 }));
 
 // GET takeoff line items for a bid — drill-down behind a category in the compare view.
+// Mirrors /compare's kind selection so the detail view never contradicts the grid it
+// was opened from: default 'final' preserves every existing caller's behaviour.
 router.get('/:bidId/takeoff', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
+  const kind = req.query.kind === 'prebid' ? 'prebid' : 'final';
   const { rows } = await pool.query(
-    'SELECT categories, line_items, item_count, source_file FROM bid_takeoffs WHERE bid_id=$1',
-    [req.params.bidId]
+    'SELECT categories, line_items, item_count, source_file FROM bid_takeoffs WHERE bid_id=$1 AND kind=$2',
+    [req.params.bidId, kind]
   );
   res.json(rows[0] || null);
 }));

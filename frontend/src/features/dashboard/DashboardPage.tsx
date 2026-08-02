@@ -107,7 +107,7 @@ export default function DashboardPage({ bids, gens, wonJobs, repNames, onNav }: 
   const elecPct = openTotal ? Math.round((elecOpen / openTotal) * 100) : 50;
 
   // ── Proposal tracking funnel (gen proposals carry view/sign telemetry) ──
-  const sentGens   = gens.filter(g => g.sent_at && g.stage !== 'awarded' && g.stage !== 'declined');
+  const sentGens   = gens.filter(g => g.sent_at && g.stage !== 'awarded' && g.stage !== 'declined' && g.stage !== 'superseded');
   const viewedGens = sentGens.filter(g => g.viewed_at);
   const signedGens = gens.filter(g => g.stage === 'signed');
 

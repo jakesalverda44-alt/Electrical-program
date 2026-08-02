@@ -9,7 +9,7 @@ describe('calcGenTotals', () => {
 
     // Subtotal is the sum of all line items
     const lineSum =
-      t.genP + t.padAmt + t.smmTotal + t.surgeTotal + t.batteryAmt + t.emPanelAmt + t.gasLineAmt + t.extraWireAmt +
+      t.genP + t.padAmt + t.genStandAmt + t.smmTotal + t.surgeTotal + t.batteryAmt + t.emPanelAmt + t.gasLineAmt + t.extraWireAmt +
       t.atsAmt + t.extWarrantyAmt + t.liftAmt + t.removalFee + t.laborAmt + t.permitAmt + t.startupAmt;
     expect(t.subtotal).toBe(lineSum);
 
@@ -26,7 +26,7 @@ describe('calcGenTotals', () => {
     const t = calcGenTotals(form);
 
     expect(t.taxableBase).toBe(
-      t.genP + t.padAmt + t.batteryAmt + t.atsAmt + t.smmTotal + t.surgeTotal + t.extWarrantyAmt + t.emPanelAmt
+      t.genP + t.padAmt + t.genStandAmt + t.batteryAmt + t.atsAmt + t.smmTotal + t.surgeTotal + t.extWarrantyAmt + t.emPanelAmt
     );
     expect(t.nonTaxableBase).toBe(
       t.gasLineAmt + t.extraWireAmt + t.liftAmt + t.removalFee + t.laborAmt + t.permitAmt + t.startupAmt
@@ -88,6 +88,15 @@ describe('calcGenTotals', () => {
     const promo = calcGenTotals({ ...blankGenForm(), extWarranty: 'promo', extWarrantyPromoStart: '2026-08-01', extWarrantyPromoEnd: '2026-09-30' });
     expect(paid.extWarrantyAmt).toBe(1100);
     expect(promo.extWarrantyAmt).toBe(0);
+  });
+
+  it('gen stand charges by size and replaces the pad, even if pad is still checked', () => {
+    const small = calcGenTotals({ ...blankGenForm(), pad: true, genStand: 'small' });
+    const big   = calcGenTotals({ ...blankGenForm(), pad: true, genStand: 'big' });
+    expect(small.genStandAmt).toBe(2000);
+    expect(small.padAmt).toBe(0);
+    expect(big.genStandAmt).toBe(2500);
+    expect(big.padAmt).toBe(0);
   });
 });
 

@@ -310,10 +310,11 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
       ))}
     </Section>
   );
+  const genStageLabel = (stage: string) => stage === 'superseded' ? 'Not selected' : stage.charAt(0).toUpperCase() + stage.slice(1);
   const gensSection = detail.gens.length > 0 ? (
     <Section key="gens" title="Generator Proposals" count={detail.gens.length}>
       {detail.gens.map(g => (
-        <Row key={g.id} primary={`${g.mfr || ''} ${g.model || ''}`.trim() || 'Proposal'} secondary={`${g.kw || 0}kW · ${g.stage}`}
+        <Row key={g.id} primary={`${g.mfr || ''} ${g.model || ''}`.trim() || 'Proposal'} secondary={`${g.kw || 0}kW · ${genStageLabel(g.stage)}`}
           right={<span className="num" style={{ fontSize: 13, fontWeight: 700 }}>{money(Number(g.amount))}</span>}/>
       ))}
     </Section>

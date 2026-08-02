@@ -7,6 +7,8 @@ import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
 import { moneyFull } from '../../lib/money';
 import FilePreviewModal from '../../components/FilePreviewModal';
 import { useDocPreview } from '../../components/useDocPreview';
+import { buildScopeFromPrebid, PrebidSection } from './prebidScope';
+import PreBidTab from './PreBidTab';
 
 interface Props {
   ws: PcWorkspace;
@@ -274,6 +276,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [estimateSaved, setEstimateSaved] = useState(false);
   const [bidIntel, setBidIntel] = useState<Record<string,unknown> | null>(null);
   const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
+  // Populated by the pre-bid package fetch (Task 7). Empty until then, so the
+  // "Import from Pre-Bid" button simply stays hidden.
+  const [prebidSections, setPrebidSections] = useState<PrebidSection[]>([]);
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
   const [svcVoltage,  setSvcVoltage]  = useState(() => ws.confirmedService?.voltage  ?? '');
   const [svcAmpacity, setSvcAmpacity] = useState(() => ws.confirmedService?.ampacity ?? '');
@@ -296,7 +301,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [savingImport, setSavingImport] = useState(false);
   const [takeoffOnFile, setTakeoffOnFile] = useState<{
     categories: { name: string; itemCount: number; totals: Record<string, number> }[];
-    line_items: { category: string; description: string; unit: string; qty: number }[];
+    line_items: { category: string; description: string; unit: string; qty: number | null }[];
     item_count: number;
     source_file: string | null;
   } | null>(null);
@@ -358,14 +363,24 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         if (data?.status === 'complete') {
           setAiResults(data);
           const scopeFill = buildScopeFromAgent2(data?.agent2_output);
-          const filled = Object.keys(scopeFill).length > 0;
-          set(prev => ({
-            aiRunning: false, aiDone: true,
-            scope: filled ? { ...prev.scope, ...scopeFill } : prev.scope,
-            aiLog: [...(prev.aiLog ?? []), filled
-              ? '✓ Analysis complete — Scope of Work auto-filled. See Plan Review tab.'
-              : '✓ Analysis complete — see Plan Review tab.'],
-          }));
+          set(prev => {
+            // Only write sections the estimator hasn't already got text in. The pre-bid
+            // package lands before analysis runs and its scope is the better source, so
+            // the AI must not clobber it. The explicit "Import from AI Takeoff" button
+            // still overwrites — that one is a deliberate choice.
+            const merged = { ...prev.scope };
+            let filled = 0;
+            for (const [k, v] of Object.entries(scopeFill)) {
+              if (!(merged[k] ?? '').trim()) { merged[k] = v; filled++; }
+            }
+            return {
+              aiRunning: false, aiDone: true,
+              scope: filled ? merged : prev.scope,
+              aiLog: [...(prev.aiLog ?? []), filled
+                ? '✓ Analysis complete — Scope of Work auto-filled. See Plan Review tab.'
+                : '✓ Analysis complete — see Plan Review tab.'],
+            };
+          });
         } else if (data?.status === 'error') {
           setAiResults(data);
           set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${analysisErrorMessage(data)}`] }));
@@ -825,6 +840,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
   const renderTab = () => {
     switch (tab) {
+      case 'prebid':
+        return <PreBidTab bidId={bid.id} onSectionsLoaded={setPrebidSections}/>;
+
       case 'overview':
         return (
           <div style={{ padding: '20px 24px' }}>
@@ -967,7 +985,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                           <div style={{ padding: '8px 16px 10px 36px', background: 'var(--surface2, rgba(0,0,0,.03))' }}>
                             {items.map((l, i) => (
                               <div key={i} style={{ fontSize: 11.5, marginBottom: 4, lineHeight: 1.45 }}>
-                                <b>{l.qty} {l.unit}</b> — {l.description}
+                                <b>{l.qty ?? '—'} {l.unit}</b> — {l.description}
                               </div>
                             ))}
                           </div>
@@ -1643,14 +1661,31 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           set({ scope: { ...ws.scope, ...scopeFill } });
           showToast({ title: 'Scope imported', sub: 'Filled from the AI takeoff — review and edit as needed' });
         };
+        const importPrebid = () => {
+          const fill = buildScopeFromPrebid(prebidSections);
+          if (!Object.keys(fill).length) {
+            showToast({ title: 'Nothing to import', sub: 'No scope sections found in the pre-bid package' });
+            return;
+          }
+          set({ scope: { ...ws.scope, ...fill } });
+          showToast({ title: 'Scope imported', sub: 'Filled from the pre-bid package — review and edit as needed' });
+        };
         return (
           <div style={{ padding: '20px 24px' }}>
-            {agent2Scope && (
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
-                <button className="btn ghost" onClick={importScope} style={{ fontSize: 13, color: 'var(--blue)' }}
-                  title="Fill these sections from the completed AI takeoff (Agent 2). Existing text in sections the AI didn't produce is kept.">
-                  <Icon name="spark" size={14} stroke={1.9}/> Import from AI Takeoff
-                </button>
+            {(agent2Scope || prebidSections.length > 0) && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginBottom: 14 }}>
+                {prebidSections.length > 0 && (
+                  <button className="btn ghost" onClick={importPrebid} style={{ fontSize: 13, color: 'var(--blue)' }}
+                    title="Fill these sections from the Cowork pre-bid scope. Existing text in sections the pre-bid doesn't cover is kept.">
+                    <Icon name="spark" size={14} stroke={1.9}/> Import from Pre-Bid
+                  </button>
+                )}
+                {agent2Scope && (
+                  <button className="btn ghost" onClick={importScope} style={{ fontSize: 13, color: 'var(--blue)' }}
+                    title="Fill these sections from the completed AI takeoff (Agent 2). Existing text in sections the AI didn't produce is kept.">
+                    <Icon name="spark" size={14} stroke={1.9}/> Import from AI Takeoff
+                  </button>
+                )}
               </div>
             )}
             {SCOPE_SECS.map(sec => (

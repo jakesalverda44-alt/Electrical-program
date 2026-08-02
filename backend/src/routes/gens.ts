@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { PoolClient } from 'pg';
 import Anthropic from '@anthropic-ai/sdk';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
@@ -47,24 +48,42 @@ async function loadOwnedGen(req: AuthRequest, res: import('express').Response) {
   return rows[0];
 }
 
+// Other options in a group (e.g. a good/better/best set offered to one customer)
+// lose out once one of them is awarded — reclassify them as "superseded" rather
+// than "declined" so they don't count against win rate. This also catches a
+// sibling a rep already declined by hand before getting to the winning option's
+// paperwork, or one that's being linked into the group after the fact — once a
+// group has a winner, none of its other options should read as a loss.
+async function supersedeGroupSiblings(client: PoolClient, groupId: string, awardedGen: Record<string, unknown>) {
+  const { rows: superseded } = await client.query(
+    `UPDATE generator_proposals SET stage='superseded', updated_at=now()
+     WHERE group_id=$1 AND id<>$2 AND stage NOT IN ('awarded','superseded')
+     RETURNING *`,
+    [groupId, awardedGen.id]
+  );
+  if (superseded.length) {
+    await client.query(
+      `INSERT INTO activity (kind, div, text) VALUES ('superseded','gen',$1)`,
+      [`${superseded.length} other option${superseded.length > 1 ? 's' : ''} for ${awardedGen.customer} superseded by the awarded proposal`]
+    );
+  }
+  return superseded;
+}
+
 router.get('/benchmark', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT kw, amount FROM generator_proposals WHERE stage = 'awarded' AND kw > 0 AND amount > 0 AND deleted_at IS NULL`
   );
-  const BRACKETS = [
-    { label: 'Under 20kW',   min: 0,   max: 20   },
-    { label: '20–50kW',      min: 20,  max: 50   },
-    { label: '50–100kW',     min: 50,  max: 100  },
-    { label: '100–200kW',    min: 100, max: 200  },
-    { label: '200–500kW',    min: 200, max: 500  },
-    { label: '500kW+',       min: 500, max: Infinity },
-  ];
-  const result = BRACKETS.map(b => {
-    const group = rows.filter(r => Number(r.kw) >= b.min && Number(r.kw) < b.max);
-    if (!group.length) return { ...b, count: 0, avgAmount: null, avgPerKw: null };
-    const avgAmount = group.reduce((s, r) => s + Number(r.amount), 0) / group.length;
-    const avgPerKw  = group.reduce((s, r) => s + Number(r.amount) / Number(r.kw), 0) / group.length;
-    return { ...b, count: group.length, avgAmount: Math.round(avgAmount), avgPerKw: Math.round(avgPerKw) };
+  const byKw = new Map<number, { amount: number }[]>();
+  for (const r of rows) {
+    const kw = Number(r.kw);
+    if (!byKw.has(kw)) byKw.set(kw, []);
+    byKw.get(kw)!.push({ amount: Number(r.amount) });
+  }
+  const result = Array.from(byKw.entries()).map(([kw, group]) => {
+    const avgAmount = group.reduce((s, r) => s + r.amount, 0) / group.length;
+    const avgPerKw  = avgAmount / kw;
+    return { kw, count: group.length, avgAmount: Math.round(avgAmount), avgPerKw: Math.round(avgPerKw) };
   });
   res.json(result);
 });
@@ -166,9 +185,9 @@ router.post('/:id/duplicate', requireAuth, asyncHandler(async (req: AuthRequest,
   const src = await loadOwnedGen(req, res);
   if (!src) return;
 
-  // Only active proposals can be duplicated — terminal ones (signed/awarded/declined)
-  // are not re-offered from here.
-  if (['signed', 'awarded', 'declined'].includes(src.stage)) {
+  // Only active proposals can be duplicated — terminal ones (signed/awarded/declined/
+  // superseded) are not re-offered from here.
+  if (['signed', 'awarded', 'declined', 'superseded'].includes(src.stage)) {
     return res.status(400).json({ error: 'Only active proposals can be duplicated.' });
   }
 
@@ -176,19 +195,31 @@ router.post('/:id/duplicate', requireAuth, asyncHandler(async (req: AuthRequest,
   // when an admin makes the copy. proposal_no is left null so the builder mints
   // a new one; proposal_token defaults to a fresh uuid.
   const customerId = src.customer_id || (await upsertCustomer(src.customer, 'customer'));
+
+  // Both copies share a group_id so they're recognized as alternate options for
+  // the same opportunity: awarding one auto-closes the other as "superseded"
+  // instead of it dragging down win rate as a genuine loss. If the source isn't
+  // grouped yet (first duplicate off it), mint a new group and backfill it onto
+  // the source too.
+  let groupId = src.group_id;
+  if (!groupId) {
+    groupId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
+    await pool.query('UPDATE generator_proposals SET group_id=$1 WHERE id=$2', [groupId, src.id]);
+  }
+
   const { rows } = await pool.query(
     `INSERT INTO generator_proposals (
        customer, loc, mfr, model, kw, amount, tax, addons,
        form_data, totals_data,
-       salesperson_id, salesperson_name, customer_id, stage
+       salesperson_id, salesperson_name, customer_id, group_id, stage
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,'building')
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,$14,'building')
      RETURNING *`,
     [
       src.customer, src.loc, src.mfr, src.model, src.kw, src.amount, src.tax, src.addons,
       src.form_data != null ? JSON.stringify(src.form_data) : null,
       src.totals_data != null ? JSON.stringify(src.totals_data) : null,
-      src.salesperson_id || null, src.salesperson_name || null, customerId,
+      src.salesperson_id || null, src.salesperson_name || null, customerId, groupId,
     ],
   );
   const gen = rows[0];
@@ -196,7 +227,7 @@ router.post('/:id/duplicate', requireAuth, asyncHandler(async (req: AuthRequest,
   await writeAudit(req, {
     action: 'duplicate', entityType: 'gen', entityId: gen.id,
     summary: `Duplicated generator proposal "${src.customer}" into a new draft`,
-    after: { source_id: src.id },
+    after: { source_id: src.id, group_id: groupId },
   });
 
   res.json(gen);
@@ -237,6 +268,7 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     );
 
     let wonJob = null;
+    let superseded: Record<string, unknown>[] = [];
     if (stage === 'awarded' && gen.stage !== 'awarded') {
       const rate = await commissionRate();
       const { rows: wj } = await client.query(
@@ -257,6 +289,10 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
         `INSERT INTO activity (kind, div, text) VALUES ('awarded','gen',$1)`,
         [`${gen.customer} awarded — ${gen.salesperson_name}`]
       );
+
+      if (gen.group_id) {
+        superseded = await supersedeGroupSiblings(client, gen.group_id, gen);
+      }
     } else if (stage !== gen.stage) {
       const labels: Record<string, string> = {
         building: 'Building', sent: 'Proposal Sent', signed: 'Signed', declined: 'Declined',
@@ -309,7 +345,85 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
       // Kickoff email is drafted explicitly from the Award Kickoff modal
       // (POST /:id/kickoff-email) — not automatically on the transition.
     }
-    res.json({ gen: rows[0], wonJob });
+    res.json({ gen: rows[0], wonJob, superseded });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// Retroactively link two already-existing proposals as alternate options for the
+// same opportunity — for cases that weren't created via Duplicate (so never got a
+// shared group_id) but should have been, e.g. two sizes quoted separately for one
+// customer. If the merged group already has an awarded member, the rest are
+// immediately superseded — this is the cleanup path for a job where one option
+// was awarded before the sibling ever got linked.
+router.post('/:id/link-group', requireAuth, async (req: AuthRequest, res) => {
+  const { targetId } = req.body;
+  if (!targetId || typeof targetId !== 'string') return res.status(400).json({ error: 'targetId required' });
+  if (targetId === req.params.id) return res.status(400).json({ error: 'Cannot link a proposal to itself' });
+  if (!(await loadOwnedGen(req, res))) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: pair } = await client.query(
+      `SELECT * FROM generator_proposals WHERE id IN ($1,$2) AND deleted_at IS NULL FOR UPDATE`,
+      [req.params.id, targetId]
+    );
+    const a = pair.find(r => r.id === req.params.id);
+    const b = pair.find(r => r.id === targetId);
+    if (!a || !b) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const scope = ownScopeId(req.user!);
+    if (scope && b.salesperson_id !== scope) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'You do not have access to that proposal' });
+    }
+    const sameCustomer = a.customer_id && b.customer_id
+      ? a.customer_id === b.customer_id
+      : String(a.customer || '').trim().toLowerCase() === String(b.customer || '').trim().toLowerCase();
+    if (!sameCustomer) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Can only link proposals for the same customer' });
+    }
+    if (a.group_id && a.group_id === b.group_id) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Already linked' });
+    }
+
+    // Reuse an existing group_id if either side already has one — folding both
+    // groups' full membership into it — otherwise mint a new one.
+    const groupId = a.group_id || b.group_id
+      || (await client.query('SELECT gen_random_uuid() AS id')).rows[0].id;
+    const oldGroupIds = [a.group_id, b.group_id].filter((id): id is string => !!id && id !== groupId);
+    await client.query(
+      `UPDATE generator_proposals SET group_id=$1, updated_at=now()
+       WHERE id = ANY($2::uuid[]) OR group_id = ANY($3::uuid[])`,
+      [groupId, [a.id, b.id], oldGroupIds]
+    );
+
+    await writeAudit(req, {
+      action: 'link-group', entityType: 'gen', entityId: a.id,
+      summary: `Linked "${a.customer}" proposal as an alternate option alongside another`,
+      after: { group_id: groupId, linked_id: b.id },
+    });
+
+    const { rows: groupRows } = await client.query('SELECT * FROM generator_proposals WHERE group_id=$1', [groupId]);
+    const awarded = groupRows.find(r => r.stage === 'awarded');
+    let superseded: Record<string, unknown>[] = [];
+    if (awarded) {
+      superseded = await supersedeGroupSiblings(client, groupId, awarded);
+    }
+
+    await client.query('COMMIT');
+    const { rows: finalRows } = await pool.query('SELECT * FROM generator_proposals WHERE group_id=$1', [groupId]);
+    res.json({ updated: finalRows, superseded });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);
@@ -523,6 +637,7 @@ const ADDON_P = {
   padLC_small: 800, padLC_large: 1200, startupLC: 1595,
   lull: 1100, crane: 1800, extendedWarranty: 1100, silverService: 395,
   labor: 3000, permit: 1250, startup: 695,
+  genStandSmall: 2000, genStandBig: 2500,
 };
 
 function calcFormTotals(g: Record<string, unknown>) {
@@ -530,7 +645,11 @@ function calcFormTotals(g: Record<string, unknown>) {
   const brand = String(g.brand || 'Kohler');
   const size = String(g.size || '14KW');
   const genP = GEN_PRICES[coolingType]?.[brand]?.[size] ?? 0;
-  const padAmt = g.pad ? (coolingType === 'liquid-cooled'
+  // A Gen Stand replaces the concrete pad, so it's charged instead of (never on top of) padAmt.
+  const genStandAmt = g.genStand === 'small' ? ADDON_P.genStandSmall
+    : g.genStand === 'big' ? ADDON_P.genStandBig : 0;
+  const hasGenStand = g.genStand === 'small' || g.genStand === 'big';
+  const padAmt = (g.pad && !hasGenStand) ? (coolingType === 'liquid-cooled'
     ? (parseInt(size) >= 60 ? ADDON_P.padLC_large : ADDON_P.padLC_small)
     : ADDON_P.pad) : 0;
   const smmTotal    = Number(g.smmQty || 0) * ADDON_P.smm;
@@ -553,7 +672,7 @@ function calcFormTotals(g: Record<string, unknown>) {
   // Sales tax applies to tangible goods only, matching the proposal's price breakdown:
   // labor, permit, startup, lift, removal and the gas line are services, and extra wire
   // is shown to the customer inside the non-taxable "Labor & Electrical" line.
-  const taxableBase    = genP + padAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt;
+  const taxableBase    = genP + padAmt + genStandAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt;
   const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
   const subtotal    = taxableBase + nonTaxableBase;
   const discountAmt = g.discountType === '%'
@@ -566,7 +685,7 @@ function calcFormTotals(g: Record<string, unknown>) {
   const tax         = Math.round(taxedAmount * ((Number(g.taxRate) || 7) / 100));
   const total       = netSubtotal + tax;
   const deposit     = Math.round(total * ((Number(g.depositPct) || 50) / 100));
-  return { genP, padAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
+  return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
 }
 
 const BUILD_FROM_NOTES_SYSTEM = `You are an expert generator installation estimator. Extract a proposal form (GenForm) from field site visit notes.
@@ -598,6 +717,8 @@ Enum fields:
   atsSize     — "100A" | "150A" | "200A" | "400A"  (default: "200A")
   jobType     — "new-install" | "swap-out"  (default: "new-install")
   liftType    — "none" | "lull" | "crane"  (default: "none")
+  genStand    — "none" | "small" | "big" — adjustable-height generator stand, if mentioned;
+                replaces the concrete pad, don't set pad=true alongside it  (default: "none")
   extWarranty — "none" | "paid" | "promo"  (default: "none") — "paid" is the $1,100 10-year
                 extension; "promo" is the free 10-year upgrade — for Kohler it's a time-boxed
                 manufacturer promo (use extWarrantyPromoStart/End), for Generac it's an
@@ -678,7 +799,7 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   const form: Record<string, unknown> = {
     customer: '', attn: '', address: '', city: '', state: 'FL', zip: '', phone: '', email: '',
     brand: 'Kohler', coolingType: 'air-cooled', size: '14KW',
-    atsSize: '200A', atsQty: 1, fuel: 'Natural Gas', jobType: 'new-install', liftType: 'none',
+    atsSize: '200A', atsQty: 1, fuel: 'Natural Gas', jobType: 'new-install', liftType: 'none', genStand: 'none',
     extWarranty: 'none', extWarrantyPromoStart: '', extWarrantyPromoEnd: '',
     pad: true, smmQty: 1, surgeProQty: 0, battery: true, emPanel: false, gasLine: false,
     removal: false, extraWire: 0, removalFee: 500, silverServicePromo: false,
@@ -690,6 +811,8 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   };
   // Always enforce battery=true on new-install regardless of AI output
   form.battery = form.jobType === 'swap-out' ? (parsed.battery ?? true) : true;
+  // A Gen Stand replaces the concrete pad — don't let both come back true from the AI.
+  if (form.genStand === 'small' || form.genStand === 'big') form.pad = false;
   // The date-boxed promo range only makes sense for Kohler's manufacturer promo; Generac's
   // promo is a standing APT-included upgrade with no expiry.
   if (form.brand !== 'Kohler') { form.extWarrantyPromoStart = ''; form.extWarrantyPromoEnd = ''; }

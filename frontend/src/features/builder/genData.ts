@@ -27,6 +27,8 @@ export const DEFAULT_PRICES = {
   crane: 1800,
   extendedWarranty: 1100,
   silverService: 395,
+  genStandSmall: 2000,
+  genStandBig: 2500,
 };
 
 // Sizes only offered on new installs — hidden from the size dropdown for swap-outs.
@@ -293,6 +295,8 @@ export interface GenForm {
   gasLine: boolean;
   extraWire: number;
   liftType: 'none' | 'lull' | 'crane';
+  /** Adjustable-height generator stand — an alternative to a poured concrete pad. */
+  genStand: 'none' | 'small' | 'big';
   removal: boolean;
   extWarranty: 'none' | 'paid' | 'promo';
   /** Only used when extWarranty === 'promo' and brand === 'Kohler' — the date range the

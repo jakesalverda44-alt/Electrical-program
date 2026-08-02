@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import { Gen, WonJob } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
@@ -13,6 +13,39 @@ import { useShowToast } from '../../contexts/AppContext';
 function fmtVisit(ts?: string | null) {
   if (!ts) return null;
   return new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+// Sibling proposals (same customer, alternate size/brand options created via
+// Duplicate) share a group_id and are bundled into one board card. The card
+// takes on the "leading" sibling's stage/amount — the awarded one once any
+// is awarded, otherwise the furthest-along still-open option — so dragging
+// or reading the card reflects where the group actually stands.
+const GROUP_STAGE_RANK: Record<string, number> = { awarded: 4, signed: 3, sent: 2, building: 1, declined: 0 };
+
+interface GenGroup { primary: Gen; siblings: Gen[] }
+
+function groupGens(gens: Gen[]): GenGroup[] {
+  const byGroup = new Map<string, Gen[]>();
+  const groups: GenGroup[] = [];
+  for (const g of gens) {
+    if (!g.group_id) { groups.push({ primary: g, siblings: [] }); continue; }
+    if (!byGroup.has(g.group_id)) byGroup.set(g.group_id, []);
+    byGroup.get(g.group_id)!.push(g);
+  }
+  for (const members of byGroup.values()) {
+    // Superseded options never lead a card — they're only shown nested under
+    // the sibling that got awarded.
+    const candidates = members.filter(m => m.stage !== 'superseded');
+    const pool = candidates.length ? candidates : members;
+    const primary = pool.reduce((best, m) => {
+      const mRank = GROUP_STAGE_RANK[m.stage] ?? -1;
+      const bRank = GROUP_STAGE_RANK[best.stage] ?? -1;
+      if (mRank !== bRank) return mRank > bRank ? m : best;
+      return (m.updated_at || '') > (best.updated_at || '') ? m : best;
+    }, pool[0]);
+    groups.push({ primary, siblings: members.filter(m => m.id !== primary.id) });
+  }
+  return groups;
 }
 
 interface Props {
@@ -53,8 +86,10 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
   });
 
   const sum = (list: Gen[]) => list.reduce((s, g) => s + Number(g.amount), 0);
-  const activeCount = gens.filter(g => g.stage !== 'awarded' && g.stage !== 'declined').length;
+  const activeCount = gens.filter(g => g.stage === 'building' || g.stage === 'sent' || g.stage === 'signed').length;
   const activeValue = sum(gens.filter(g => g.stage === 'building' || g.stage === 'sent' || g.stage === 'signed'));
+
+  const genGroups = useMemo(() => groupGens(gens), [gens]);
 
   const handleStageFromDrawer = (stage: GenStageKey) => {
     if (!detail) return;
@@ -78,6 +113,22 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
       onEditGen(data);
     } catch {
       showToast({ title: 'Duplicate failed', sub: 'Please try again' });
+    }
+  };
+
+  const handleLinkGroup = async (gen: Gen, targetId: string) => {
+    try {
+      const { data } = await api.post<{ updated: Gen[]; superseded: Gen[] }>(`/gens/${gen.id}/link-group`, { targetId });
+      setGens(prev => prev.map(g => data.updated.find(u => u.id === g.id) ?? g));
+      setDetail(prev => (prev && data.updated.find(u => u.id === prev.id)) || prev);
+      showToast({
+        title: 'Linked as alternate option',
+        sub: data.superseded.length
+          ? `${data.superseded.length} other option${data.superseded.length > 1 ? 's' : ''} superseded — the group already has a winner`
+          : 'Awarding one will now supersede the other instead of counting it as a loss',
+      });
+    } catch {
+      showToast({ title: 'Link failed', sub: 'Please try again' });
     }
   };
 
@@ -114,6 +165,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
     }
     if (g.stage === 'signed')  return <span className="badge" style={{ background: 'rgba(139,92,246,.15)', color: '#8B5CF6' }}><Icon name="check" size={11} stroke={2.2}/>Signed</span>;
     if (g.stage === 'awarded') return <span className="badge won"><Icon name="check" size={11} stroke={2.4}/>Awarded</span>;
+    if (g.stage === 'superseded') return <span className="badge" style={{ background: 'rgba(124,138,163,.15)', color: 'var(--text3)' }}>Not selected</span>;
     return <span className="badge lost">Declined</span>;
   };
 
@@ -136,21 +188,21 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
       </div>
 
       {/* Board */}
-      <PipelineBoard<Gen>
+      <PipelineBoard<GenGroup>
         stages={GEN_STAGES}
-        items={gens}
-        getId={g => g.id}
-        getStage={g => g.stage}
-        getAmount={g => Number(g.amount)}
+        items={genGroups}
+        getId={x => x.primary.id}
+        getStage={x => x.primary.stage === 'superseded' ? 'declined' : x.primary.stage}
+        getAmount={x => Number(x.primary.amount)}
         flashId={flashId}
         onMoveToStage={(id, stageKey) => moveToStage(id, stageKey as GenStageKey)}
-        onOpenDetail={g => setDetail(g)}
+        onOpenDetail={x => setDetail(x.primary)}
         renderEmptyAction={stageKey => stageKey === 'building'
           ? <button className="btn ghost" style={{ fontSize: 12, height: 32, padding: '0 12px' }} onClick={onOpenBuilder}>
               <Icon name="plus" size={14} stroke={2.2}/>New Proposal
             </button>
           : null}
-        renderCard={g => {
+        renderCard={({ primary: g, siblings }) => {
           const ORDER: GenStageKey[] = ['building', 'sent', 'signed', 'awarded'];
           const idx = ORDER.indexOf(g.stage as GenStageKey);
           const hasNext = idx >= 0 && idx < ORDER.length - 1;
@@ -216,6 +268,24 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
                 </div>
               )}
 
+              {siblings.length > 0 && (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border2)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text3)' }}>
+                    {siblings.length} other option{siblings.length > 1 ? 's' : ''} for this customer
+                  </div>
+                  {siblings.map(s => (
+                    <div
+                      key={s.id}
+                      onClick={e => { e.stopPropagation(); setDetail(s); }}
+                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, fontSize: 11.5, cursor: 'pointer' }}
+                    >
+                      <span style={{ color: 'var(--text2)', fontWeight: 600 }}>{s.kw}kW · {money(Number(s.amount))}</span>
+                      {genBadge(s)}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {isPendingDeclined && (
                 <div className="lost-confirm" onClick={e => e.stopPropagation()}>
                   <span>Mark as declined?</span>
@@ -233,6 +303,12 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
         <GenDetailDrawer
           key={detail.id}
           gen={gens.find(g => g.id === detail.id) || detail}
+          linkCandidates={gens.filter(g =>
+            g.id !== detail.id &&
+            g.customer === detail.customer &&
+            !(g.group_id && detail.group_id && g.group_id === detail.group_id)
+          )}
+          onLink={targetId => handleLinkGroup(gens.find(g => g.id === detail.id) || detail, targetId)}
           pendingDeclined={pendingDeclined === detail.id}
           onStage={handleStageFromDrawer}
           onCancelDeclined={cancelDeclined}

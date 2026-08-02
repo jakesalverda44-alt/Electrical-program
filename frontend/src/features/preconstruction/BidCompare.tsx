@@ -28,7 +28,7 @@ interface CompareJob {
   avg_labor_rate: string | null; avg_crew_size: string | null; labor_risk_ratio: string | null;
 }
 
-interface TakeoffLine { category: string; description: string; unit: string; qty: number }
+interface TakeoffLine { category: string; description: string; unit: string; qty: number | null }
 
 const num = (v: string | number | null | undefined): number | null => {
   if (v === null || v === undefined || v === '') return null;
@@ -474,7 +474,7 @@ export default function BidCompare({ bidId, brand, projectType }: {
                                   <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', marginBottom: 6 }}>{j.name}</div>
                                   {(lines[j.id] ?? []).filter(l => l.category === name).map((l, idx) => (
                                     <div key={idx} style={{ fontSize: 11.5, marginBottom: 4, lineHeight: 1.45 }}>
-                                      <b>{l.qty} {l.unit}</b> — {l.description}
+                                      <b>{l.qty ?? '—'} {l.unit}</b> — {l.description}
                                     </div>
                                   ))}
                                   {!(lines[j.id] ?? []).some(l => l.category === name) && (

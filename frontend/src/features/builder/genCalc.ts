@@ -15,7 +15,7 @@ export function blankGenForm(overrides?: DefaultOverrides): GenForm {
     brand: 'Kohler', coolingType: 'air-cooled', size: '14KW', genPriceOverride: null,
     atsSize: '200A', atsQty: 1, fuel: 'Natural Gas',
     pad: true, smmQty: 1, surgeProQty: 0, battery: true, emPanel: false, gasLine: false, extraWire: 0,
-    liftType: 'none', removal: false,
+    liftType: 'none', genStand: 'none', removal: false,
     extWarranty: 'none', extWarrantyPromoStart: '', extWarrantyPromoEnd: '',
     silverServicePromo: false,
     feedFt: 0, genSide: '', panelRel: '', panelFt: 0,
@@ -65,6 +65,7 @@ export function migrateGenForm(raw: Record<string, unknown>): Record<string, unk
   if (out.panelRel === undefined) out.panelRel = '';
   if (out.panelFt === undefined) out.panelFt = 0;
   if (out.genPriceOverride === undefined) out.genPriceOverride = null;
+  if (out.genStand === undefined) out.genStand = 'none';
   return out;
 }
 
@@ -122,6 +123,7 @@ export interface GenTotals {
   atsAmt: number;
   extWarrantyAmt: number;
   liftAmt: number;
+  genStandAmt: number;
   removalFee: number;
   laborAmt: number;
   permitAmt: number;
@@ -147,7 +149,10 @@ export interface GenTotals {
 
 export function calcGenTotals(g: GenForm): GenTotals {
   const genP       = getGenPrice(g);
-  const padAmt     = g.pad ? (g.coolingType === 'liquid-cooled'
+  // A Gen Stand replaces the concrete pad, so it's charged instead of (never on top of) padAmt.
+  const genStandAmt = g.genStand === 'small' ? DEFAULT_PRICES.genStandSmall
+    : g.genStand === 'big' ? DEFAULT_PRICES.genStandBig : 0;
+  const padAmt     = (g.pad && g.genStand === 'none') ? (g.coolingType === 'liquid-cooled'
     ? (parseInt(g.size) >= 60 ? DEFAULT_PRICES.padLC_large : DEFAULT_PRICES.padLC_small)
     : DEFAULT_PRICES.pad) : 0;
   const smmTotal   = Number(g.smmQty || 0) * DEFAULT_PRICES.smm;
@@ -172,7 +177,7 @@ export function calcGenTotals(g: GenForm): GenTotals {
   // removal are services; the gas line is an install, and extra wire is presented to
   // the customer bundled into the non-taxable "Labor & Electrical" line.
   // A promo extended warranty is $0 here, so it contributes no tax by construction.
-  const taxableBase    = genP + padAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt;
+  const taxableBase    = genP + padAmt + genStandAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt;
   const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
   const subtotal   = taxableBase + nonTaxableBase;
   const discountAmt = g.discountType === '%'
@@ -188,13 +193,14 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const total      = netSubtotal + tax;
   const deposit    = Math.round(total * ((Number(g.depositPct) || 50) / 100));
 
-  return { genP, padAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
+  return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
 }
 
 export function genPriceRows(g: GenForm, t: GenTotals, fmt: (n: number) => string) {
   const rows: { label: string; amount: string }[] = [];
   rows.push({ label: `${g.brand} ${g.size} ${genModelNo(g)} (${g.coolingType})`, amount: fmt(t.genP) });
   if (t.padAmt)      rows.push({ label: 'Concrete Pad', amount: fmt(t.padAmt) });
+  if (t.genStandAmt) rows.push({ label: g.genStand === 'small' ? 'Gen Stand — Adjustable 8–24"' : 'Gen Stand — Adjustable 32–72"', amount: fmt(t.genStandAmt) });
   if (t.smmTotal)    rows.push({ label: `SMM (Preventative Maintenance) × ${g.smmQty}`, amount: fmt(t.smmTotal) });
   if (t.surgeTotal)  rows.push({ label: `SurgeProtector Pro × ${g.surgeProQty}`, amount: fmt(t.surgeTotal) });
   if (t.batteryAmt)  rows.push({ label: 'Battery Maintainer', amount: fmt(t.batteryAmt) });

@@ -82,7 +82,9 @@ export interface Gen {
   kw: number;
   amount: number;
   tax: number;
-  stage: 'building' | 'sent' | 'awarded' | 'declined' | 'signed';
+  stage: 'building' | 'sent' | 'awarded' | 'declined' | 'signed' | 'superseded';
+  group_id?: string | null;
+  updated_at?: string;
   built_on: string;
   addons: number;
   salesperson_name: string;

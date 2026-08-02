@@ -11,18 +11,38 @@ import AdmZip from 'adm-zip';
 
 export interface TakeoffLineItem {
   category: string;
+  // The header exactly as written, before normalizeCategory collapses qualifiers.
+  // A car wash splits "BRANCH POWER — CAR WASH EQUIPMENT" out of plain "BRANCH POWER";
+  // collapsing is right for lining two jobs up, but the split IS the cost driver, so
+  // the raw name has to survive.
+  categoryRaw: string;
   description: string;
   unit: string;
-  qty: number;
+  // null when the sheet states VERIFY / NONE IDENTIFIED rather than a count. These are
+  // the highest-risk, usually highest-dollar rows; dropping them made a category read
+  // as empty and produced a fabricated -100% delta against a comp that had counts.
+  qty: number | null;
+  qtyRaw?: string;
+  confidence?: 'FIRM' | 'APPROX' | 'VERIFY';
+  qtyLow?: number;
+  qtyHigh?: number;
   notes?: string;
+}
+
+export interface TakeoffSubcategory {
+  name: string;
+  itemCount: number;
+  totals: Record<string, number>;
 }
 
 export interface TakeoffCategory {
   name: string;
   itemCount: number;
+  unresolvedCount: number;
   // Quantities summed per unit — categories mix EA/LOT/RUN/SET/LF, so a single
   // total would be meaningless.
   totals: Record<string, number>;
+  subcategories: TakeoffSubcategory[];
 }
 
 export interface ParsedTakeoff {
@@ -32,6 +52,7 @@ export interface ParsedTakeoff {
   price: number | null;
   categories: TakeoffCategory[];
   lineItems: TakeoffLineItem[];
+  keyFindings: string[];
 }
 
 type Grid = Record<number, Record<string, string>>;
@@ -77,6 +98,11 @@ function decodeEntities(s: string): string {
   return s
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    // Numeric character refs (Excel/Word emit em/en dashes this way, e.g. "&#8212;"
+    // for — and "&#8211;" for –) must decode to the real character — otherwise
+    // downstream dash-matching (category qualifiers, stated ranges) never fires.
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCodePoint(parseInt(n, 16)))
     .replace(/&amp;/g, '&');
 }
 
@@ -144,19 +170,20 @@ function scoreSheet(grid: Grid): number {
 
 // Locates the description / unit / qty columns from a header row, so an 8-column
 // AutoZone sheet and a 5-column car wash sheet both parse correctly.
-interface ColumnMap { desc: string; unit?: string; qty: string; notes?: string }
+interface ColumnMap { desc: string; unit?: string; qty: string; notes?: string; conf?: string }
 
 function findColumnMap(grid: Grid): ColumnMap | null {
   for (const rn of Object.keys(grid).map(Number).sort((a, b) => a - b)) {
     const cells = rowCells(grid[rn]);
     if (cells.length < 2) continue;
-    let desc: string | undefined, unit: string | undefined, qty: string | undefined, notes: string | undefined;
+    let desc: string | undefined, unit: string | undefined, qty: string | undefined, notes: string | undefined, conf: string | undefined;
     for (const { col, val } of cells) {
       const v = val.toUpperCase().replace(/\s+/g, ' ').trim();
       if (!desc && /(DESCRIPTION|^ITEM(\s*\/\s*DESCRIPTION)?$)/.test(v)) desc = col;
       else if (!unit && /^UNIT$/.test(v)) unit = col;
       else if (!qty && /^(QTY|QUANTITY|COUNT)$/.test(v)) qty = col;
-      else if (!notes && /^(NOTES?|SOURCE\s*\/\s*NOTES)$/.test(v)) notes = col;
+      else if (!notes && /(^NOTES?$)|(^(SOURCE|BASIS).*NOTES?$)/.test(v)) notes = col;
+      else if (!conf && /^(CONF\.?|CONFIDENCE)$/.test(v)) conf = col;
     }
     // The car wash layout has ITEM in col A and DESCRIPTION in col B; prefer DESCRIPTION.
     if (desc && qty) {
@@ -165,7 +192,7 @@ function findColumnMap(grid: Grid): ColumnMap | null {
         const better = cells.find(c => /DESCRIPTION/.test(c.val.toUpperCase()));
         if (better) desc = better.col;
       }
-      return { desc, unit, qty, notes };
+      return { desc, unit, qty, notes, conf };
     }
   }
   return null;
@@ -188,6 +215,7 @@ function parseSheet(grid: Grid, out: TakeoffLineItem[]): void {
   if (!map) return;
 
   let category = 'Uncategorized';
+  let categoryRaw = 'Uncategorized';
   let seenHeader = false;
   for (const rn of Object.keys(grid).map(Number).sort((a, b) => a - b)) {
     const row = grid[rn];
@@ -203,10 +231,12 @@ function parseSheet(grid: Grid, out: TakeoffLineItem[]): void {
     const isAlone = cells.length <= 2 && !row[map.qty];
     const catM = cells[0].val.match(CATEGORY_RE);
     if (catM && isAlone) {
+      categoryRaw = catM[2].trim();
       category = normalizeCategory(catM[2]);
       continue;
     }
     if (isAlone && seenHeader && looksLikeBareHeading(cells[0].val)) {
+      categoryRaw = cells[0].val.trim();
       category = normalizeCategory(cells[0].val);
       continue;
     }
@@ -214,18 +244,32 @@ function parseSheet(grid: Grid, out: TakeoffLineItem[]): void {
     const description = row[map.desc];
     const qtyRaw = map.qty ? row[map.qty] : undefined;
     if (!description || qtyRaw === undefined) continue;
-    // Skip repeated header rows (each category restates them in the AutoZone books).
-    if (/^(ITEM|DESCRIPTION|QTY|UNIT)$/i.test(description.trim())) continue;
+    if (/^(ITEM|DESCRIPTION|QTY|UNIT|CONF\.?)$/i.test(description.trim())) continue;
 
-    const qty = Number(String(qtyRaw).replace(/,/g, ''));
-    if (!Number.isFinite(qty)) continue;
+    const parsedQty = Number(String(qtyRaw).replace(/,/g, ''));
+    const qty = Number.isFinite(parsedQty) ? parsedQty : null;
+    const notes = map.notes ? row[map.notes]?.trim() : undefined;
+
+    const confRaw = (map.conf ? row[map.conf] : '')?.trim().toUpperCase();
+    const confidence = confRaw === 'FIRM' || confRaw === 'APPROX' || confRaw === 'VERIFY'
+      ? confRaw as 'FIRM' | 'APPROX' | 'VERIFY'
+      : undefined;
+
+    // "…visual count of chained runs — range 58–70." Both dash forms occur.
+    const rangeM = notes?.match(/range\s+(\d[\d,]*)\s*[–—-]\s*(\d[\d,]*)/i);
+    const num = (s: string) => Number(s.replace(/,/g, ''));
 
     out.push({
       category,
+      categoryRaw,
       description: description.trim(),
       unit: (map.unit ? row[map.unit] : '')?.trim() || 'EA',
       qty,
-      notes: map.notes ? row[map.notes]?.trim() : undefined,
+      qtyRaw: qty === null ? String(qtyRaw).trim() : undefined,
+      confidence,
+      qtyLow: rangeM ? num(rangeM[1]) : undefined,
+      qtyHigh: rangeM ? num(rangeM[2]) : undefined,
+      notes,
     });
   }
 }
@@ -262,13 +306,42 @@ export function parseTakeoffWorkbook(buf: Buffer): ParsedTakeoff {
     if (score > 0 && score >= best / 4) parseSheet(grid, lineItems);
   }
 
-  const byCategory = new Map<string, TakeoffCategory>();
-  for (const item of lineItems) {
-    let cat = byCategory.get(item.category);
-    if (!cat) { cat = { name: item.category, itemCount: 0, totals: {} }; byCategory.set(item.category, cat); }
-    cat.itemCount += 1;
-    cat.totals[item.unit] = (cat.totals[item.unit] ?? 0) + item.qty;
+  // Everything after "LEGEND & KEY FINDINGS" is prose: the confidence key, the counting
+  // methodology, and which sheets were missing from the reviewed set. Worth keeping —
+  // it is the estimator's read on how much to trust the counts.
+  const keyFindings: string[] = [];
+  const kfIdx = allText.search(/LEGEND\s*&\s*KEY FINDINGS/i);
+  if (kfIdx >= 0) {
+    for (const line of allText.slice(kfIdx).split('\n').slice(1)) {
+      const t = line.trim();
+      if (t) keyFindings.push(t);
+    }
   }
 
-  return { sqFt, price, categories: [...byCategory.values()], lineItems };
+  const byCategory = new Map<string, TakeoffCategory>();
+  const subIndex = new Map<string, Map<string, TakeoffSubcategory>>();
+
+  for (const item of lineItems) {
+    let cat = byCategory.get(item.category);
+    if (!cat) {
+      cat = { name: item.category, itemCount: 0, unresolvedCount: 0, totals: {}, subcategories: [] };
+      byCategory.set(item.category, cat);
+      subIndex.set(item.category, new Map());
+    }
+    cat.itemCount += 1;
+
+    const subs = subIndex.get(item.category)!;
+    let sub = subs.get(item.categoryRaw);
+    if (!sub) { sub = { name: item.categoryRaw, itemCount: 0, totals: {} }; subs.set(item.categoryRaw, sub); }
+    sub.itemCount += 1;
+
+    // Unresolved rows are counted, never summed — a VERIFY must not read as a zero.
+    if (item.qty === null) { cat.unresolvedCount += 1; continue; }
+    cat.totals[item.unit] = (cat.totals[item.unit] ?? 0) + item.qty;
+    sub.totals[item.unit] = (sub.totals[item.unit] ?? 0) + item.qty;
+  }
+
+  for (const [name, subs] of subIndex) byCategory.get(name)!.subcategories = [...subs.values()];
+
+  return { sqFt, price, categories: [...byCategory.values()], lineItems, keyFindings };
 }
