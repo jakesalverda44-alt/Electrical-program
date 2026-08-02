@@ -322,12 +322,16 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
               ['pad',      form.jobType === 'swap-out' ? 'Concrete Pad (new)' : 'Concrete Pad'],
               ['battery',  'Battery'],
               ['emPanel',  'EM Panel'],
-            ] as [keyof GenForm, string][]).map(([k, label]) => (
-              <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, gridColumn: '1' }}>
-                <input type="checkbox" checked={!!form[k]} onChange={e => set(k, e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
-                {label}
-              </label>
-            ))}
+            ] as [keyof GenForm, string][]).map(([k, label]) => {
+              const padReplaced = k === 'pad' && form.genStand !== 'none';
+              return (
+                <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: padReplaced ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, gridColumn: '1', opacity: padReplaced ? .5 : 1 }}
+                  title={padReplaced ? 'Not needed — the Gen Stand replaces the pad' : undefined}>
+                  <input type="checkbox" checked={!!form[k]} disabled={padReplaced} onChange={e => set(k, e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
+                  {label}{padReplaced ? ' (replaced by Gen Stand)' : ''}
+                </label>
+              );
+            })}
             <Field label="SMM Maintenance Qty">
               <input type="number" min={0} max={10} style={INPUT_STYLE} value={form.smmQty} onChange={e => set('smmQty', Number(e.target.value))}/>
             </Field>
@@ -379,6 +383,16 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
 
           {/* Section 4: Add-ons */}
           <Section title="Add-ons" icon="plus">
+            <Field label="Gen Stand">
+              <select style={SELECT_STYLE} value={form.genStand} onChange={e => {
+                const val = e.target.value as GenForm['genStand'];
+                setForm(prev => ({ ...prev, genStand: val, pad: val === 'none' ? prev.pad : false }));
+              }}>
+                <option value="none">None</option>
+                <option value="small">Adjustable 8–24&quot; ($2,000)</option>
+                <option value="big">Adjustable 32–72&quot; ($2,500)</option>
+              </select>
+            </Field>
             <Field label="Lift Type">
               <select style={SELECT_STYLE} value={form.liftType} onChange={e => set('liftType', e.target.value)}>
                 <option value="none">None</option>
@@ -475,6 +489,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
               {[
                 { label: 'Generator',    val: totals.genP },
                 ...(totals.padAmt     ? [{ label: 'Pad',         val: totals.padAmt     }] : []),
+                ...(totals.genStandAmt ? [{ label: 'Gen Stand',  val: totals.genStandAmt }] : []),
                 ...(totals.smmTotal   ? [{ label: 'SMM',         val: totals.smmTotal   }] : []),
                 ...(totals.surgeTotal ? [{ label: 'Surge Pro',   val: totals.surgeTotal }] : []),
                 ...(totals.batteryAmt  ? [{ label: 'Battery',    val: totals.batteryAmt  }] : []),

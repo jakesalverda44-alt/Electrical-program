@@ -554,6 +554,7 @@ const ADDON_P = {
   padLC_small: 800, padLC_large: 1200, startupLC: 1595,
   lull: 1100, crane: 1800, extendedWarranty: 1100, silverService: 395,
   labor: 3000, permit: 1250, startup: 695,
+  genStandSmall: 2000, genStandBig: 2500,
 };
 
 function calcFormTotals(g: Record<string, unknown>) {
@@ -561,7 +562,11 @@ function calcFormTotals(g: Record<string, unknown>) {
   const brand = String(g.brand || 'Kohler');
   const size = String(g.size || '14KW');
   const genP = GEN_PRICES[coolingType]?.[brand]?.[size] ?? 0;
-  const padAmt = g.pad ? (coolingType === 'liquid-cooled'
+  // A Gen Stand replaces the concrete pad, so it's charged instead of (never on top of) padAmt.
+  const genStandAmt = g.genStand === 'small' ? ADDON_P.genStandSmall
+    : g.genStand === 'big' ? ADDON_P.genStandBig : 0;
+  const hasGenStand = g.genStand === 'small' || g.genStand === 'big';
+  const padAmt = (g.pad && !hasGenStand) ? (coolingType === 'liquid-cooled'
     ? (parseInt(size) >= 60 ? ADDON_P.padLC_large : ADDON_P.padLC_small)
     : ADDON_P.pad) : 0;
   const smmTotal    = Number(g.smmQty || 0) * ADDON_P.smm;
@@ -584,7 +589,7 @@ function calcFormTotals(g: Record<string, unknown>) {
   // Sales tax applies to tangible goods only, matching the proposal's price breakdown:
   // labor, permit, startup, lift, removal and the gas line are services, and extra wire
   // is shown to the customer inside the non-taxable "Labor & Electrical" line.
-  const taxableBase    = genP + padAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt;
+  const taxableBase    = genP + padAmt + genStandAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt;
   const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
   const subtotal    = taxableBase + nonTaxableBase;
   const discountAmt = g.discountType === '%'
@@ -597,7 +602,7 @@ function calcFormTotals(g: Record<string, unknown>) {
   const tax         = Math.round(taxedAmount * ((Number(g.taxRate) || 7) / 100));
   const total       = netSubtotal + tax;
   const deposit     = Math.round(total * ((Number(g.depositPct) || 50) / 100));
-  return { genP, padAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
+  return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
 }
 
 const BUILD_FROM_NOTES_SYSTEM = `You are an expert generator installation estimator. Extract a proposal form (GenForm) from field site visit notes.
@@ -629,6 +634,8 @@ Enum fields:
   atsSize     — "100A" | "150A" | "200A" | "400A"  (default: "200A")
   jobType     — "new-install" | "swap-out"  (default: "new-install")
   liftType    — "none" | "lull" | "crane"  (default: "none")
+  genStand    — "none" | "small" | "big" — adjustable-height generator stand, if mentioned;
+                replaces the concrete pad, don't set pad=true alongside it  (default: "none")
   extWarranty — "none" | "paid" | "promo"  (default: "none") — "paid" is the $1,100 10-year
                 extension; "promo" is the free 10-year upgrade — for Kohler it's a time-boxed
                 manufacturer promo (use extWarrantyPromoStart/End), for Generac it's an
@@ -709,7 +716,7 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   const form: Record<string, unknown> = {
     customer: '', attn: '', address: '', city: '', state: 'FL', zip: '', phone: '', email: '',
     brand: 'Kohler', coolingType: 'air-cooled', size: '14KW',
-    atsSize: '200A', atsQty: 1, fuel: 'Natural Gas', jobType: 'new-install', liftType: 'none',
+    atsSize: '200A', atsQty: 1, fuel: 'Natural Gas', jobType: 'new-install', liftType: 'none', genStand: 'none',
     extWarranty: 'none', extWarrantyPromoStart: '', extWarrantyPromoEnd: '',
     pad: true, smmQty: 1, surgeProQty: 0, battery: true, emPanel: false, gasLine: false,
     removal: false, extraWire: 0, removalFee: 500, silverServicePromo: false,
@@ -721,6 +728,8 @@ router.post('/:id/build-from-notes', requireAuth, asyncHandler(async (req: AuthR
   };
   // Always enforce battery=true on new-install regardless of AI output
   form.battery = form.jobType === 'swap-out' ? (parsed.battery ?? true) : true;
+  // A Gen Stand replaces the concrete pad — don't let both come back true from the AI.
+  if (form.genStand === 'small' || form.genStand === 'big') form.pad = false;
   // The date-boxed promo range only makes sense for Kohler's manufacturer promo; Generac's
   // promo is a standing APT-included upgrade with no expiry.
   if (form.brand !== 'Kohler') { form.extWarrantyPromoStart = ''; form.extWarrantyPromoEnd = ''; }

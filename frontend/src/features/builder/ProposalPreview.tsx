@@ -222,6 +222,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
   // Taxable items for breakdown
   const taxableGen   = totals.genP;
   const taxablePad   = totals.padAmt;
+  const taxableGenStand = totals.genStandAmt;
   const taxableBatt  = totals.batteryAmt;
   const taxableATS   = totals.atsAmt;
   const taxableSMM   = totals.smmTotal;
@@ -432,6 +433,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                     { label: `ATS (${form.atsSize}) — included`, tax: 'included', amt: null, amtText: 'Included', show: !lc && totals.atsIncluded > 0 },
                     { label: 'ATS / Transfer Switch — NOT included (liquid-cooled)', tax: '', amt: null, amtText: 'Not Included', show: !lc && totals.atsIncluded === 0 && totals.atsBillableQty === 0 },
                     { label: 'Concrete Pad', tax: 'taxable', amt: taxablePad, show: taxablePad > 0 },
+                    { label: form.genStand === 'small' ? 'Gen Stand — Adjustable 8–24"' : 'Gen Stand — Adjustable 32–72"', tax: 'taxable', amt: taxableGenStand, show: taxableGenStand > 0 },
                     { label: 'Battery Maintainer', tax: 'taxable', amt: taxableBatt, show: taxableBatt > 0 },
                     { label: `ATS — additional (${totals.atsBillableQty} × ${form.atsSize})`, tax: 'taxable', amt: taxableATS, show: taxableATS > 0 },
                     { label: `SMM (Preventative Maintenance) × ${form.smmQty}`, tax: 'taxable', amt: taxableSMM, show: taxableSMM > 0 },
