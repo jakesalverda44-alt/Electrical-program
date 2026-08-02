@@ -42,10 +42,14 @@ interface UseStagePipelineConfig<T extends StageItem, K extends string> {
   wonToast: (wonJob: WonJob) => Toast;
   /** Called after a successful server-confirmed move, with the synced item. */
   onMoved?: (item: T, stage: K, prevStage: string) => void;
+  /** Called with the full raw server response after a successful move, for
+   *  domains that return extra side-effect data beyond the moved item itself
+   *  (e.g. sibling records the move also updated). */
+  onSynced?: (data: StageResponse) => void;
 }
 
 export function useStagePipeline<T extends StageItem, K extends string>(cfg: UseStagePipelineConfig<T, K>) {
-  const { items, setItems, setWonJobs, showToast, endpoint, responseKey, confirmStage, advanceOrder, nextStageMap, guardMove, buildPatch, wonToast, onMoved } = cfg;
+  const { items, setItems, setWonJobs, showToast, endpoint, responseKey, confirmStage, advanceOrder, nextStageMap, guardMove, buildPatch, wonToast, onMoved, onSynced } = cfg;
   const [pendingConfirm, setPendingConfirm] = useState<string | null>(null);
 
   const moveToStage = useCallback(async (id: string, stage: K, extra?: Record<string, unknown>) => {
@@ -80,12 +84,13 @@ export function useStagePipeline<T extends StageItem, K extends string>(cfg: Use
       }
 
       if (prev) onMoved?.({ ...(data[responseKey] as T), stage }, stage, prev.stage);
+      onSynced?.(data);
     } catch {
       // Roll back on failure.
       if (prev) setItems(list => list.map(i => i.id === id ? prev : i));
       showToast({ title: 'Failed to update stage', sub: 'Changes reverted' });
     }
-  }, [items, setItems, setWonJobs, showToast, endpoint, responseKey, confirmStage, buildPatch, wonToast, onMoved, pendingConfirm]);
+  }, [items, setItems, setWonJobs, showToast, endpoint, responseKey, confirmStage, buildPatch, wonToast, onMoved, onSynced, pendingConfirm]);
 
   const advance = useCallback((id: string) => {
     const item = items.find(i => i.id === id);

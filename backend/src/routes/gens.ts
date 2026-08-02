@@ -162,9 +162,9 @@ router.post('/:id/duplicate', requireAuth, asyncHandler(async (req: AuthRequest,
   const src = await loadOwnedGen(req, res);
   if (!src) return;
 
-  // Only active proposals can be duplicated — terminal ones (signed/awarded/declined)
-  // are not re-offered from here.
-  if (['signed', 'awarded', 'declined'].includes(src.stage)) {
+  // Only active proposals can be duplicated — terminal ones (signed/awarded/declined/
+  // superseded) are not re-offered from here.
+  if (['signed', 'awarded', 'declined', 'superseded'].includes(src.stage)) {
     return res.status(400).json({ error: 'Only active proposals can be duplicated.' });
   }
 
@@ -172,19 +172,31 @@ router.post('/:id/duplicate', requireAuth, asyncHandler(async (req: AuthRequest,
   // when an admin makes the copy. proposal_no is left null so the builder mints
   // a new one; proposal_token defaults to a fresh uuid.
   const customerId = src.customer_id || (await upsertCustomer(src.customer, 'customer'));
+
+  // Both copies share a group_id so they're recognized as alternate options for
+  // the same opportunity: awarding one auto-closes the other as "superseded"
+  // instead of it dragging down win rate as a genuine loss. If the source isn't
+  // grouped yet (first duplicate off it), mint a new group and backfill it onto
+  // the source too.
+  let groupId = src.group_id;
+  if (!groupId) {
+    groupId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
+    await pool.query('UPDATE generator_proposals SET group_id=$1 WHERE id=$2', [groupId, src.id]);
+  }
+
   const { rows } = await pool.query(
     `INSERT INTO generator_proposals (
        customer, loc, mfr, model, kw, amount, tax, addons,
        form_data, totals_data,
-       salesperson_id, salesperson_name, customer_id, stage
+       salesperson_id, salesperson_name, customer_id, group_id, stage
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,'building')
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,$14,'building')
      RETURNING *`,
     [
       src.customer, src.loc, src.mfr, src.model, src.kw, src.amount, src.tax, src.addons,
       src.form_data != null ? JSON.stringify(src.form_data) : null,
       src.totals_data != null ? JSON.stringify(src.totals_data) : null,
-      src.salesperson_id || null, src.salesperson_name || null, customerId,
+      src.salesperson_id || null, src.salesperson_name || null, customerId, groupId,
     ],
   );
   const gen = rows[0];
@@ -192,7 +204,7 @@ router.post('/:id/duplicate', requireAuth, asyncHandler(async (req: AuthRequest,
   await writeAudit(req, {
     action: 'duplicate', entityType: 'gen', entityId: gen.id,
     summary: `Duplicated generator proposal "${src.customer}" into a new draft`,
-    after: { source_id: src.id },
+    after: { source_id: src.id, group_id: groupId },
   });
 
   res.json(gen);
@@ -233,6 +245,7 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     );
 
     let wonJob = null;
+    let superseded: Record<string, unknown>[] = [];
     if (stage === 'awarded' && gen.stage !== 'awarded') {
       const rate = await commissionRate();
       const { rows: wj } = await client.query(
@@ -253,6 +266,28 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
         `INSERT INTO activity (kind, div, text) VALUES ('awarded','gen',$1)`,
         [`${gen.customer} awarded — ${gen.salesperson_name}`]
       );
+
+      // Other options in the same group (e.g. a good/better/best set offered to
+      // this customer) lost out to this one — reclassify them as "superseded"
+      // rather than "declined" so they don't count against win rate. This also
+      // catches a sibling a rep already declined by hand before getting to the
+      // winning option's paperwork — once the group has a winner, none of its
+      // options should read as a loss.
+      if (gen.group_id) {
+        const { rows: supersededRows } = await client.query(
+          `UPDATE generator_proposals SET stage='superseded', updated_at=now()
+           WHERE group_id=$1 AND id<>$2 AND stage NOT IN ('awarded','superseded')
+           RETURNING *`,
+          [gen.group_id, gen.id]
+        );
+        superseded = supersededRows;
+        if (superseded.length) {
+          await client.query(
+            `INSERT INTO activity (kind, div, text) VALUES ('superseded','gen',$1)`,
+            [`${superseded.length} other option${superseded.length > 1 ? 's' : ''} for ${gen.customer} superseded by the awarded proposal`]
+          );
+        }
+      }
     } else if (stage !== gen.stage) {
       const labels: Record<string, string> = {
         building: 'Building', sent: 'Proposal Sent', signed: 'Signed', declined: 'Declined',
@@ -305,7 +340,7 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
       // Kickoff email is drafted explicitly from the Award Kickoff modal
       // (POST /:id/kickoff-email) — not automatically on the transition.
     }
-    res.json({ gen: rows[0], wonJob });
+    res.json({ gen: rows[0], wonJob, superseded });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);

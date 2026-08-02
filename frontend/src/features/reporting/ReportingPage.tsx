@@ -94,7 +94,7 @@ export default function ReportingPage({ bids, gens, wonJobs }: Props) {
       won: won.length,
       wonValue: sumVal(won),
       winRate,
-      pipelineValue: sumAmt(myBids.filter(b => b.stage !== 'lost')) + sumGen(myGens.filter(g => g.stage !== 'declined')),
+      pipelineValue: sumAmt(myBids.filter(b => b.stage !== 'lost')) + sumGen(myGens.filter(g => g.stage !== 'declined' && g.stage !== 'superseded')),
     };
   }), [salespeople, bids, gens, wonJobs]);
 

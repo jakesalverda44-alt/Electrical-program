@@ -42,7 +42,7 @@ interface Draft { customer: string; loc: string; mfr: string; model: string; kw:
 export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated, autoKickoff, onAutoKickoffHandled }: Props) {
   const canDelete = isPrivileged(useUser());
   const showToast = useShowToast();
-  const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed';
+  const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed' || gen.stage === 'superseded';
   const [closingJob, setClosingJob] = useState(false);
   const [showBuildNotes, setShowBuildNotes] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -180,6 +180,15 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           ) : (
           <>
           <div className="dtl-amt">{moneyFull(Number(gen.amount))}</div>
+
+          {gen.stage === 'superseded' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600,
+              color: 'var(--text3)', background: 'var(--surface2)', border: '1px solid var(--border2)',
+              borderRadius: 8, padding: '8px 10px', marginBottom: 4 }}>
+              <Icon name="check" size={14} stroke={2}/>
+              Superseded — a different option for this customer was awarded instead. Not counted as a loss.
+            </div>
+          )}
 
           <div className="dtl-stage-label">Stage</div>
           <div className="dtl-stages">

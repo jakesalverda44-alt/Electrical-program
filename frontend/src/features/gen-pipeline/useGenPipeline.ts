@@ -34,6 +34,15 @@ export function useGenPipeline({ gens, setGens, setWonJobs, showToast, onNav, on
     onMoved: (gen, stage, prevStage) => {
       if (stage === 'awarded' && prevStage !== 'awarded') onAwarded?.(gen);
     },
+    // Awarding a gen auto-supersedes any other still-open options in the same
+    // group server-side; merge those rows in so the board reflects it without
+    // a refetch.
+    onSynced: data => {
+      const superseded = data.superseded as Gen[] | undefined;
+      if (superseded?.length) {
+        setGens(prev => prev.map(g => superseded.find(s => s.id === g.id) ?? g));
+      }
+    },
   });
 
   return { moveToStage, advance, pendingDeclined: pendingConfirm, cancelDeclined: cancelConfirm };
