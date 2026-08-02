@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { PoolClient } from 'pg';
 import Anthropic from '@anthropic-ai/sdk';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
@@ -45,6 +46,28 @@ async function loadOwnedGen(req: AuthRequest, res: import('express').Response) {
     return null;
   }
   return rows[0];
+}
+
+// Other options in a group (e.g. a good/better/best set offered to one customer)
+// lose out once one of them is awarded — reclassify them as "superseded" rather
+// than "declined" so they don't count against win rate. This also catches a
+// sibling a rep already declined by hand before getting to the winning option's
+// paperwork, or one that's being linked into the group after the fact — once a
+// group has a winner, none of its other options should read as a loss.
+async function supersedeGroupSiblings(client: PoolClient, groupId: string, awardedGen: Record<string, unknown>) {
+  const { rows: superseded } = await client.query(
+    `UPDATE generator_proposals SET stage='superseded', updated_at=now()
+     WHERE group_id=$1 AND id<>$2 AND stage NOT IN ('awarded','superseded')
+     RETURNING *`,
+    [groupId, awardedGen.id]
+  );
+  if (superseded.length) {
+    await client.query(
+      `INSERT INTO activity (kind, div, text) VALUES ('superseded','gen',$1)`,
+      [`${superseded.length} other option${superseded.length > 1 ? 's' : ''} for ${awardedGen.customer} superseded by the awarded proposal`]
+    );
+  }
+  return superseded;
 }
 
 router.get('/benchmark', requireAuth, async (_req, res) => {
@@ -267,26 +290,8 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
         [`${gen.customer} awarded — ${gen.salesperson_name}`]
       );
 
-      // Other options in the same group (e.g. a good/better/best set offered to
-      // this customer) lost out to this one — reclassify them as "superseded"
-      // rather than "declined" so they don't count against win rate. This also
-      // catches a sibling a rep already declined by hand before getting to the
-      // winning option's paperwork — once the group has a winner, none of its
-      // options should read as a loss.
       if (gen.group_id) {
-        const { rows: supersededRows } = await client.query(
-          `UPDATE generator_proposals SET stage='superseded', updated_at=now()
-           WHERE group_id=$1 AND id<>$2 AND stage NOT IN ('awarded','superseded')
-           RETURNING *`,
-          [gen.group_id, gen.id]
-        );
-        superseded = supersededRows;
-        if (superseded.length) {
-          await client.query(
-            `INSERT INTO activity (kind, div, text) VALUES ('superseded','gen',$1)`,
-            [`${superseded.length} other option${superseded.length > 1 ? 's' : ''} for ${gen.customer} superseded by the awarded proposal`]
-          );
-        }
+        superseded = await supersedeGroupSiblings(client, gen.group_id, gen);
       }
     } else if (stage !== gen.stage) {
       const labels: Record<string, string> = {
@@ -341,6 +346,84 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
       // (POST /:id/kickoff-email) — not automatically on the transition.
     }
     res.json({ gen: rows[0], wonJob, superseded });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// Retroactively link two already-existing proposals as alternate options for the
+// same opportunity — for cases that weren't created via Duplicate (so never got a
+// shared group_id) but should have been, e.g. two sizes quoted separately for one
+// customer. If the merged group already has an awarded member, the rest are
+// immediately superseded — this is the cleanup path for a job where one option
+// was awarded before the sibling ever got linked.
+router.post('/:id/link-group', requireAuth, async (req: AuthRequest, res) => {
+  const { targetId } = req.body;
+  if (!targetId || typeof targetId !== 'string') return res.status(400).json({ error: 'targetId required' });
+  if (targetId === req.params.id) return res.status(400).json({ error: 'Cannot link a proposal to itself' });
+  if (!(await loadOwnedGen(req, res))) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: pair } = await client.query(
+      `SELECT * FROM generator_proposals WHERE id IN ($1,$2) AND deleted_at IS NULL FOR UPDATE`,
+      [req.params.id, targetId]
+    );
+    const a = pair.find(r => r.id === req.params.id);
+    const b = pair.find(r => r.id === targetId);
+    if (!a || !b) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const scope = ownScopeId(req.user!);
+    if (scope && b.salesperson_id !== scope) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'You do not have access to that proposal' });
+    }
+    const sameCustomer = a.customer_id && b.customer_id
+      ? a.customer_id === b.customer_id
+      : String(a.customer || '').trim().toLowerCase() === String(b.customer || '').trim().toLowerCase();
+    if (!sameCustomer) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Can only link proposals for the same customer' });
+    }
+    if (a.group_id && a.group_id === b.group_id) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Already linked' });
+    }
+
+    // Reuse an existing group_id if either side already has one — folding both
+    // groups' full membership into it — otherwise mint a new one.
+    const groupId = a.group_id || b.group_id
+      || (await client.query('SELECT gen_random_uuid() AS id')).rows[0].id;
+    const oldGroupIds = [a.group_id, b.group_id].filter((id): id is string => !!id && id !== groupId);
+    await client.query(
+      `UPDATE generator_proposals SET group_id=$1, updated_at=now()
+       WHERE id = ANY($2::uuid[]) OR group_id = ANY($3::uuid[])`,
+      [groupId, [a.id, b.id], oldGroupIds]
+    );
+
+    await writeAudit(req, {
+      action: 'link-group', entityType: 'gen', entityId: a.id,
+      summary: `Linked "${a.customer}" proposal as an alternate option alongside another`,
+      after: { group_id: groupId, linked_id: b.id },
+    });
+
+    const { rows: groupRows } = await client.query('SELECT * FROM generator_proposals WHERE group_id=$1', [groupId]);
+    const awarded = groupRows.find(r => r.stage === 'awarded');
+    let superseded: Record<string, unknown>[] = [];
+    if (awarded) {
+      superseded = await supersedeGroupSiblings(client, groupId, awarded);
+    }
+
+    await client.query('COMMIT');
+    const { rows: finalRows } = await pool.query('SELECT * FROM generator_proposals WHERE group_id=$1', [groupId]);
+    res.json({ updated: finalRows, superseded });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);

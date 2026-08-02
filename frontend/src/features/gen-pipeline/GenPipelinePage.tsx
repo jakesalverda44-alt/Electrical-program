@@ -116,6 +116,22 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
     }
   };
 
+  const handleLinkGroup = async (gen: Gen, targetId: string) => {
+    try {
+      const { data } = await api.post<{ updated: Gen[]; superseded: Gen[] }>(`/gens/${gen.id}/link-group`, { targetId });
+      setGens(prev => prev.map(g => data.updated.find(u => u.id === g.id) ?? g));
+      setDetail(prev => (prev && data.updated.find(u => u.id === prev.id)) || prev);
+      showToast({
+        title: 'Linked as alternate option',
+        sub: data.superseded.length
+          ? `${data.superseded.length} other option${data.superseded.length > 1 ? 's' : ''} superseded — the group already has a winner`
+          : 'Awarding one will now supersede the other instead of counting it as a loss',
+      });
+    } catch {
+      showToast({ title: 'Link failed', sub: 'Please try again' });
+    }
+  };
+
   const handleDelete = async (gen: Gen) => {
     if (!window.confirm(`Delete "${gen.customer}" and its linked project/files/testing data? This cannot be undone.`)) return;
     try {
@@ -287,6 +303,12 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
         <GenDetailDrawer
           key={detail.id}
           gen={gens.find(g => g.id === detail.id) || detail}
+          linkCandidates={gens.filter(g =>
+            g.id !== detail.id &&
+            g.customer === detail.customer &&
+            !(g.group_id && detail.group_id && g.group_id === detail.group_id)
+          )}
+          onLink={targetId => handleLinkGroup(gens.find(g => g.id === detail.id) || detail, targetId)}
           pendingDeclined={pendingDeclined === detail.id}
           onStage={handleStageFromDrawer}
           onCancelDeclined={cancelDeclined}

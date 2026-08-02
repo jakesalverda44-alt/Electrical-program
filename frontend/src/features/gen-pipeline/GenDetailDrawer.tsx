@@ -35,11 +35,15 @@ interface Props {
   /** True when the page just awarded this gen — opens the kickoff modal once. */
   autoKickoff?: boolean;
   onAutoKickoffHandled?: () => void;
+  /** Other proposals for the same customer not already grouped with this one —
+   *  candidates to retroactively link as alternate options. */
+  linkCandidates?: Gen[];
+  onLink?: (targetId: string) => void;
 }
 
 interface Draft { customer: string; loc: string; mfr: string; model: string; kw: string; amount: string; addons: string; date_won: string; }
 
-export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated, autoKickoff, onAutoKickoffHandled }: Props) {
+export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated, autoKickoff, onAutoKickoffHandled, linkCandidates, onLink }: Props) {
   const canDelete = isPrivileged(useUser());
   const showToast = useShowToast();
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed' || gen.stage === 'superseded';
@@ -447,6 +451,33 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             >
               <Icon name="copy" size={14} stroke={1.9}/>Duplicate for New Option
             </button>
+          )}
+
+          {/* Retroactively link an already-existing proposal for this customer as an
+              alternate option — for pairs not created via Duplicate, so they never
+              got a shared group. Works either direction, including linking a still-
+              open sibling onto one that's already been awarded. */}
+          {!!linkCandidates?.length && (
+            <div className="dtl-section" style={{ marginTop: 16 }}>
+              <div className="dtl-stage-label" style={{ marginBottom: 8 }}>Link as Alternate Option</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>
+                Other proposals for {gen.customer}. Linking means awarding one supersedes the other instead of it counting as a loss.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {linkCandidates.map(c => (
+                  <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                    fontSize: 12.5, padding: '6px 8px', border: '1px solid var(--border2)', borderRadius: 7 }}>
+                    <span style={{ fontWeight: 600 }}>
+                      {c.kw}kW · {moneyFull(Number(c.amount))} <span style={{ color: 'var(--text3)', fontWeight: 500 }}>· {c.stage}</span>
+                    </span>
+                    <button className="btn ghost" style={{ height: 26, fontSize: 11.5, padding: '0 10px' }}
+                      onClick={() => onLink?.(c.id)}>
+                      Link
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
 
           {/* Google Drive folder links — shown when folders were auto-created on award */}
