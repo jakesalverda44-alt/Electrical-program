@@ -215,7 +215,24 @@ interface GraphEventRaw {
   webLink?: string;
   isAllDay?: boolean;
   attendees?: GraphAttendeeRaw[];
-  body?: { content?: string };
+  body?: { content?: string; contentType?: string };
+  bodyPreview?: string;
+}
+
+/** Strips tags from an HTML body — belt-and-suspenders for appointment types where
+ *  Graph doesn't honor the outlook.body-content-type="text" Prefer header (some
+ *  recurring-series exceptions and forwarded invites return HTML regardless). */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n')
+    .trim();
 }
 
 export interface EventAttendee { name: string; email: string }
@@ -332,7 +349,7 @@ export interface EventDetail {
  */
 export async function fetchEventDetail(eventId: string): Promise<EventDetail | null> {
   try {
-    const select = 'subject,location,attendees,body';
+    const select = 'subject,location,attendees,body,bodyPreview';
     const url = `${GRAPH_BASE}/users/${encodeURIComponent(CALENDAR_USER)}/events/${encodeURIComponent(eventId)}`
       + `?$select=${select}`;
     const token = await getGraphToken();
@@ -348,11 +365,21 @@ export async function fetchEventDetail(eventId: string): Promise<EventDetail | n
       throw new Error(`Graph event fetch failed: HTTP ${resp.status} ${text}`);
     }
     const e = (await resp.json()) as GraphEventRaw;
+    // The Prefer header should return plain text, but some appointment types
+    // (recurring-series exceptions, certain forwarded invites) ignore it and send
+    // HTML anyway — strip tags so markup doesn't dilute the AI extraction prompt.
+    // Fall back to bodyPreview (Graph's own plain-text truncation) if body is empty.
+    const rawBody = e.body?.content?.trim() || '';
+    const isHtml = e.body?.contentType === 'html' || /<[a-z][\s\S]*>/i.test(rawBody);
+    const bodyText = (isHtml ? stripHtml(rawBody) : rawBody) || e.bodyPreview?.trim() || null;
+    if (!bodyText) {
+      logger.warn({ eventId }, '[calendar] fetchEventDetail — no body/bodyPreview text on this event');
+    }
     return {
       subject: (e.subject || '(no subject)').trim(),
       location: e.location?.displayName?.trim() || null,
       attendees: toAttendees(e.attendees),
-      bodyText: e.body?.content?.trim() || null,
+      bodyText,
     };
   } catch (err) {
     logger.error({ err, eventId }, '[calendar] fetchEventDetail failed');
