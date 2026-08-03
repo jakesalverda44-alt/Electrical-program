@@ -104,7 +104,7 @@ export default function FollowupsPage({ onCountChange }: Props) {
 
   return (
     <div className="scroll view-enter">
-      <div style={{ padding: '20px 28px 40px', maxWidth: 820 }}>
+      <div className="page-pad" style={{ padding: '20px 28px 40px', maxWidth: 820 }}>
         <div className="stats" style={{ gridTemplateColumns: 'repeat(3,1fr)', padding: 0, marginBottom: 20 }}>
           {[
             { label: 'Open Follow-ups', val: String(openCount), tone: 'blue' },
@@ -122,7 +122,7 @@ export default function FollowupsPage({ onCountChange }: Props) {
         {/* Add form */}
         <div className="panel" style={{ marginBottom: 16 }}>
           <div className="panel-hdr"><span className="panel-title">New Follow-up</span></div>
-          <div style={{ padding: 16, display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: 10, alignItems: 'end' }}>
+          <div className="grid-collapse" style={{ padding: 16, display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: 10, alignItems: 'end' }}>
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 5 }}>Task</div>
               <input style={{ ...inputStyle, width: '100%' }} value={title} placeholder="Call GC about addendum…"

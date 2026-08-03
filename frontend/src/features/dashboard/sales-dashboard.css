@@ -147,3 +147,14 @@
 .sd-comm-row b.due { color: var(--amber); }
 
 .sd-empty { padding: 18px 0; text-align: center; color: var(--text3); font-size: 12.5px; }
+
+/* ── Mobile (phone) ───────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .sd-hero { padding: 16px 14px; }
+
+  /* Leaderboard name column — shrink so the fill bar gets real track length */
+  .sd-rep .nm { width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Funnel steps stack instead of squeezing 3-across */
+  .sd-funnel { grid-template-columns: 1fr; gap: 8px; }
+}

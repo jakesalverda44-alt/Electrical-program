@@ -142,7 +142,7 @@ export default function ProposalPublicPage() {
         </div>
       </div>
 
-      <div style={{ maxWidth: 760, margin: '0 auto', padding: '32px 16px 60px' }}>
+      <div className="ppp-outer" style={{ maxWidth: 760, margin: '0 auto', padding: '32px 16px 60px' }}>
         {/* Full proposal document — exactly what prints to PDF: cover, scope, signature
             blocks, sales agreement, disclosures, spec sheet, and the price breakdown only
             when the rep enabled it on the proposal. */}
