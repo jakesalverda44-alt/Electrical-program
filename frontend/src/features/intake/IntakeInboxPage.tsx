@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import { Bid } from '../../types';
 import api from '../../api/client';
 import { useShowToast } from '../../contexts/AppContext';
+import { useIsMobile } from '../../hooks/useIsMobile';
 
 interface IntakeItem {
   id: string;
@@ -56,6 +57,7 @@ const inputStyle: React.CSSProperties = {
 
 export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props) {
   const showToast = useShowToast();
+  const isMobile = useIsMobile();
   const [items, setItems] = useState<IntakeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<IntakeItem | null>(null);
@@ -241,7 +243,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
           <input style={inputStyle} value={form[k]} onChange={e => set(k, e.target.value)} />
         </div>
       ))}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10, marginBottom: 12 }}>
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 5 }}>Due Date</label>
           <input type="date" style={inputStyle} value={form.due} onChange={e => set('due', e.target.value)} />
@@ -262,11 +264,143 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
     </>
   );
 
+  // Mobile: single-pane master→detail. Reuses the existing `selected`/`addOpen`
+  // state (no parallel state) — the list shows when neither is set, otherwise the
+  // detail/add pane takes over full-width with a Back control.
+  const showMobileList = !selected && !addOpen;
+  const goBackMobile = () => { setSelected(null); setAddOpen(false); };
+
+  // Right pane content — identical on desktop to the pre-mobile markup; on mobile
+  // the overflow/max-width tweaks let the document (not this div) own scrolling
+  // and let the pane use the full available width.
+  const rightPane = addOpen ? (
+    <div style={{ overflowY: isMobile ? 'visible' : 'auto', padding: '24px 28px', maxWidth: isMobile ? undefined : 460 }}>
+      <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text)', marginBottom: 18 }}>Add Incoming Bid</div>
+      {FormFields(addForm, (k, v) => setAddForm(prev => ({ ...prev, [k]: v })))}
+      <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+        <button className="btn" onClick={handleAdd} disabled={saving} style={{ background: 'var(--green)', borderColor: 'var(--green)' }}>{saving ? 'Adding…' : 'Add to Inbox'}</button>
+        <button className="btn ghost" onClick={() => { setAddOpen(false); setAddForm(BLANK); }}>Cancel</button>
+      </div>
+    </div>
+  ) : !selected ? (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', fontSize: 13, fontWeight: 600 }}>
+      <div style={{ textAlign: 'center' }}>
+        <Icon name="bell" size={32} stroke={1.4}/>
+        <div style={{ marginTop: 12 }}>Select an item to review</div>
+      </div>
+    </div>
+  ) : (
+    <div style={{ overflowY: isMobile ? 'visible' : 'auto', padding: '24px 28px', maxWidth: isMobile ? undefined : 460 }}>
+      <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text)', marginBottom: 4 }}>{selected.name}</div>
+      <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginBottom: 18 }}>
+        Added by {selected.created_by_name || 'unknown'} · {fmt(selected.created_at)}
+        {selected.source !== 'manual' ? ` · ${selected.source}` : ''}
+      </div>
+
+      {selected.source === 'email' && (
+        <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>From Outlook</div>
+          {selected.from_email && (
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>{selected.from_email}</div>
+          )}
+          {selected.body_snippet && (
+            <div style={{ fontSize: 12.5, color: 'var(--text3)', lineHeight: 1.5, marginBottom: 8 }}>{selected.body_snippet}</div>
+          )}
+          {selected.attachment_names && selected.attachment_names.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Attachments ({selected.attachment_names.length})</div>
+              {selected.attachment_names.map((a, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text2)', fontWeight: 600, marginBottom: 2 }}>
+                  <Icon name="file" size={12} stroke={2}/> {a}
+                </div>
+              ))}
+            </div>
+          )}
+          {selected.web_link && (
+            <a href={selected.web_link} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--blue)', textDecoration: 'none' }}>
+              <Icon name="doc" size={13} stroke={2}/> Open original email
+            </a>
+          )}
+        </div>
+      )}
+
+      {selected.status === 'pending' ? (
+        <>
+          {FormFields(edit, (k, v) => setEdit(prev => ({ ...prev, [k]: v })))}
+
+          {/* Opt-in: email this new commercial bid to the team (off by default). */}
+          <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px', marginBottom: 12 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: teamDefaults.mailConfigured ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>
+              <input
+                type="checkbox"
+                checked={notifyTeam}
+                disabled={!teamDefaults.mailConfigured}
+                onChange={e => {
+                  const c = e.target.checked;
+                  setNotifyTeam(c);
+                  if (c && !notifyEmails.trim()) setNotifyEmails(teamDefaults.emails.join(', '));
+                }}
+              />
+              Create a draft email to the team (in Outlook)
+            </label>
+            {!teamDefaults.mailConfigured && (
+              <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 6 }}>Email isn’t configured — set it up in Settings to enable this.</div>
+            )}
+            {notifyTeam && (
+              <div style={{ marginTop: 10 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 5 }}>Recipients</label>
+                <textarea
+                  style={{ ...inputStyle, minHeight: 44, resize: 'vertical' }}
+                  value={notifyEmails}
+                  onChange={e => setNotifyEmails(e.target.value)}
+                  placeholder="name@company.com, name2@company.com"
+                />
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5 }}>Comma-separated. Creates a draft in your Outlook on accept — nothing is sent until you send it.</div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+            <button className="btn" onClick={handleAccept} disabled={saving} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
+              <Icon name="check" size={14} stroke={2.2}/> {saving ? 'Accepting…' : 'Accept & Add to Pipeline'}
+            </button>
+            <button className="btn ghost" onClick={() => setDeclineOpen(o => !o)} style={{ fontSize: 13 }}>
+              <Icon name="x" size={14} stroke={2.2}/> Reject
+            </button>
+            {declineOpen && (
+              <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 14, marginTop: 4 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', marginBottom: 8 }}>Reason for rejecting:</div>
+                <select value={declineReason} onChange={e => setDeclineReason(e.target.value)} style={{ ...inputStyle, marginBottom: 10, cursor: 'pointer' }}>
+                  {DECLINE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <button className="btn" onClick={handleDecline} disabled={saving} style={{ fontSize: 13, width: '100%', background: 'var(--slate)', borderColor: 'var(--slate)' }}>Confirm Reject</button>
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <div style={{ marginTop: 8, fontSize: 13, fontWeight: 600, color: 'var(--text3)' }}>
+          {selected.status === 'accepted'
+            ? '✓ Accepted and added to the pipeline.'
+            : `✗ Rejected${selected.decline_reason ? ` — ${selected.decline_reason}` : ''}.`}
+          {selected.team_notified_at && (
+            <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--blue)', fontWeight: 700 }}>
+              <Icon name="check" size={14} stroke={2.4}/>
+              Emailed to the team on {fmt(selected.team_notified_at)}
+              {selected.team_notified_to?.length ? ` · ${selected.team_notified_to.length} ${selected.team_notified_to.length === 1 ? 'recipient' : 'recipients'}` : ''}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="scroll view-enter">
-      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', height: 'calc(100vh - 60px)' }}>
+      <div style={isMobile ? { display: 'flex', flexDirection: 'column' } : { display: 'grid', gridTemplateColumns: '340px 1fr', height: 'calc(100vh - 60px)' }}>
         {/* Left: inbox list */}
-        <div style={{ borderRight: '1px solid var(--border)', overflowY: 'auto' }}>
+        {(!isMobile || showMobileList) && (
+        <div style={isMobile ? {} : { borderRight: '1px solid var(--border)', overflowY: 'auto' }}>
           <div style={{ padding: '14px 18px 10px', borderBottom: '1px solid var(--border)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -324,129 +458,22 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
             </>
           )}
         </div>
+        )}
 
         {/* Right: add form, or detail */}
-        {addOpen ? (
-          <div style={{ overflowY: 'auto', padding: '24px 28px', maxWidth: 460 }}>
-            <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text)', marginBottom: 18 }}>Add Incoming Bid</div>
-            {FormFields(addForm, (k, v) => setAddForm(prev => ({ ...prev, [k]: v })))}
-            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-              <button className="btn" onClick={handleAdd} disabled={saving} style={{ background: 'var(--green)', borderColor: 'var(--green)' }}>{saving ? 'Adding…' : 'Add to Inbox'}</button>
-              <button className="btn ghost" onClick={() => { setAddOpen(false); setAddForm(BLANK); }}>Cancel</button>
-            </div>
+        {(!isMobile || !showMobileList) && (isMobile ? (
+          <div>
+            <button onClick={goBackMobile} style={{
+              display: 'flex', alignItems: 'center', gap: 6, minHeight: 44,
+              margin: '12px 12px 0', padding: '10px 14px', border: '1px solid var(--border)',
+              borderRadius: 10, background: 'var(--surface)', color: 'var(--text)',
+              fontWeight: 700, fontSize: 13, cursor: 'pointer',
+            }}>
+              <Icon name="arrow" size={13} stroke={2} style={{ transform: 'rotate(180deg)' }}/> Back
+            </button>
+            {rightPane}
           </div>
-        ) : !selected ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', fontSize: 13, fontWeight: 600 }}>
-            <div style={{ textAlign: 'center' }}>
-              <Icon name="bell" size={32} stroke={1.4}/>
-              <div style={{ marginTop: 12 }}>Select an item to review</div>
-            </div>
-          </div>
-        ) : (
-          <div style={{ overflowY: 'auto', padding: '24px 28px', maxWidth: 460 }}>
-            <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text)', marginBottom: 4 }}>{selected.name}</div>
-            <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginBottom: 18 }}>
-              Added by {selected.created_by_name || 'unknown'} · {fmt(selected.created_at)}
-              {selected.source !== 'manual' ? ` · ${selected.source}` : ''}
-            </div>
-
-            {selected.source === 'email' && (
-              <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
-                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>From Outlook</div>
-                {selected.from_email && (
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>{selected.from_email}</div>
-                )}
-                {selected.body_snippet && (
-                  <div style={{ fontSize: 12.5, color: 'var(--text3)', lineHeight: 1.5, marginBottom: 8 }}>{selected.body_snippet}</div>
-                )}
-                {selected.attachment_names && selected.attachment_names.length > 0 && (
-                  <div style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Attachments ({selected.attachment_names.length})</div>
-                    {selected.attachment_names.map((a, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text2)', fontWeight: 600, marginBottom: 2 }}>
-                        <Icon name="file" size={12} stroke={2}/> {a}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {selected.web_link && (
-                  <a href={selected.web_link} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--blue)', textDecoration: 'none' }}>
-                    <Icon name="doc" size={13} stroke={2}/> Open original email
-                  </a>
-                )}
-              </div>
-            )}
-
-            {selected.status === 'pending' ? (
-              <>
-                {FormFields(edit, (k, v) => setEdit(prev => ({ ...prev, [k]: v })))}
-
-                {/* Opt-in: email this new commercial bid to the team (off by default). */}
-                <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px', marginBottom: 12 }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: teamDefaults.mailConfigured ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>
-                    <input
-                      type="checkbox"
-                      checked={notifyTeam}
-                      disabled={!teamDefaults.mailConfigured}
-                      onChange={e => {
-                        const c = e.target.checked;
-                        setNotifyTeam(c);
-                        if (c && !notifyEmails.trim()) setNotifyEmails(teamDefaults.emails.join(', '));
-                      }}
-                    />
-                    Create a draft email to the team (in Outlook)
-                  </label>
-                  {!teamDefaults.mailConfigured && (
-                    <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 6 }}>Email isn’t configured — set it up in Settings to enable this.</div>
-                  )}
-                  {notifyTeam && (
-                    <div style={{ marginTop: 10 }}>
-                      <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 5 }}>Recipients</label>
-                      <textarea
-                        style={{ ...inputStyle, minHeight: 44, resize: 'vertical' }}
-                        value={notifyEmails}
-                        onChange={e => setNotifyEmails(e.target.value)}
-                        placeholder="name@company.com, name2@company.com"
-                      />
-                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5 }}>Comma-separated. Creates a draft in your Outlook on accept — nothing is sent until you send it.</div>
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-                  <button className="btn" onClick={handleAccept} disabled={saving} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
-                    <Icon name="check" size={14} stroke={2.2}/> {saving ? 'Accepting…' : 'Accept & Add to Pipeline'}
-                  </button>
-                  <button className="btn ghost" onClick={() => setDeclineOpen(o => !o)} style={{ fontSize: 13 }}>
-                    <Icon name="x" size={14} stroke={2.2}/> Reject
-                  </button>
-                  {declineOpen && (
-                    <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: 14, marginTop: 4 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', marginBottom: 8 }}>Reason for rejecting:</div>
-                      <select value={declineReason} onChange={e => setDeclineReason(e.target.value)} style={{ ...inputStyle, marginBottom: 10, cursor: 'pointer' }}>
-                        {DECLINE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
-                      </select>
-                      <button className="btn" onClick={handleDecline} disabled={saving} style={{ fontSize: 13, width: '100%', background: 'var(--slate)', borderColor: 'var(--slate)' }}>Confirm Reject</button>
-                    </div>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div style={{ marginTop: 8, fontSize: 13, fontWeight: 600, color: 'var(--text3)' }}>
-                {selected.status === 'accepted'
-                  ? '✓ Accepted and added to the pipeline.'
-                  : `✗ Rejected${selected.decline_reason ? ` — ${selected.decline_reason}` : ''}.`}
-                {selected.team_notified_at && (
-                  <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--blue)', fontWeight: 700 }}>
-                    <Icon name="check" size={14} stroke={2.4}/>
-                    Emailed to the team on {fmt(selected.team_notified_at)}
-                    {selected.team_notified_to?.length ? ` · ${selected.team_notified_to.length} ${selected.team_notified_to.length === 1 ? 'recipient' : 'recipients'}` : ''}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+        ) : rightPane)}
       </div>
     </div>
   );
