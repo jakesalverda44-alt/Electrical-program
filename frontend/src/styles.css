@@ -88,6 +88,14 @@ button{font-family:inherit}
 
 .scroll{flex:1;overflow-y:auto;min-height:0}
 
+/* ── Division hub shell ────────────────────────────────── */
+/* The hub body must stay a flex column so the `.scroll` root each tab page
+   renders can actually claim the remaining height — in a block parent its
+   flex:1 is inert and the page grows past a clipped container. */
+.hub-page{display:flex;flex-direction:column;height:100%;min-height:0}
+.hub-tabs{flex-shrink:0}
+.hub-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+
 /* ── Segmented toggle ──────────────────────────────────── */
 .seg{display:inline-flex;background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:3px;gap:2px}
 .seg button{display:flex;align-items:center;gap:7px;padding:7px 16px;border-radius:8px;font-size:13px;font-weight:700;color:var(--text2);cursor:pointer;border:none;background:none;transition:background .12s,color .12s}
@@ -541,6 +549,10 @@ button{font-family:inherit}
 
   /* Scroll area — let document scroll naturally */
   .scroll { overflow-y: visible; flex: none; padding-bottom: 20px; }
+
+  /* Hub shell follows the same rule: no clipped inner viewport on mobile */
+  .hub-page { height: auto; min-height: 0; }
+  .hub-body { flex: none; overflow: visible; display: block; }
 
   /* Boards/pipelines — vertical stack */
   .board { display: flex !important; flex-direction: column !important; gap: 0 !important; overflow-x: hidden !important; padding: 10px 12px 20px !important; }

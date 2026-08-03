@@ -15,7 +15,7 @@ export default function HubTabs({ tabs, active, accent, onSelect, counts }: HubT
   const activeColor = accent === 'amber' ? 'var(--amber)' : 'var(--blue)';
   const isMobile = useIsMobile();
   return (
-    <div style={{ display: 'flex', gap: 4, padding: '0 16px', borderBottom: '1px solid var(--border)', overflowX: 'auto', whiteSpace: 'nowrap' }}>
+    <div className="hub-tabs" style={{ display: 'flex', gap: 4, padding: '0 16px', borderBottom: '1px solid var(--border)', overflowX: 'auto', whiteSpace: 'nowrap' }}>
       {tabs.map(t => {
         const isActive = active === t.key;
         const count = counts?.[t.key];
