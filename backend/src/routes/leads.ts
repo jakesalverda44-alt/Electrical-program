@@ -9,11 +9,12 @@ import { logger } from '../utils/logger';
 import { sendLeadFirstContactEmail, sendNeedsCallNotification, isPlaceholderLeadEmail } from '../email/leadFirstContact';
 import { createStageFollowup, closeLeadFollowups } from '../utils/leadFollowups';
 import { getStageConfig } from '../utils/leadStageConfig';
-import { pushSiteVisitToCalendar } from '../integrations/outlookCalendar';
+import { pushSiteVisitToCalendar, fetchEventDetail } from '../integrations/outlookCalendar';
 import { sendPushToUsers } from '../integrations/webPush';
 import { ownerAdminIds } from '../notifications/prefs';
 import { sendDueLeadNudges } from '../integrations/leadNudge';
 import { leadAddressToProposal } from '../utils/address';
+import { mapCalendarEventToLead, walkUpLeadName } from '../utils/calendarLeadMap';
 
 const router = Router();
 
@@ -118,6 +119,10 @@ const leadCreateSchema = z.object({
   salesperson_id: z.string().uuid('Invalid salesperson_id').optional().nullable().or(z.literal('')),
   salesperson_name: z.string().optional(),
   external_lead_id: z.string().optional(),
+});
+
+const fromCalendarEventSchema = z.object({
+  eventId: z.string().trim().min(1, 'eventId is required'),
 });
 
 const leadPatchSchema = z.object({
@@ -821,6 +826,73 @@ router.post('/:id/create-gen', requireAuth, asyncHandler(async (req: AuthRequest
   ).catch(() => {});
 
   res.status(201).json(gen);
+}));
+
+// POST /api/leads/from-calendar-event
+// Turns an Outlook appointment into a lead a field rep can immediately run the Site
+// Survey wizard against. Deliberately NOT the AI-extraction path /gens/from-calendar-event
+// uses — this returns instantly and can't fail on a weak connection, which is the
+// situation a rep standing at a site is actually in. The rep fixes anything wrong
+// once they're in the survey, where they're already typing.
+router.post('/from-calendar-event', requireAuth, validateBody(fromCalendarEventSchema), asyncHandler(async (req: AuthRequest, res) => {
+  const { eventId } = req.body as z.infer<typeof fromCalendarEventSchema>;
+
+  // Dedupe first: a repeat tap, or two reps on the same visit, must land on the same
+  // lead rather than creating a second one. This pre-check handles the common
+  // sequential case without ever touching Graph.
+  const { rows: existing } = await pool.query(
+    'SELECT * FROM leads WHERE outlook_event_id=$1 AND deleted_at IS NULL',
+    [eventId]
+  );
+  if (existing.length) { res.json({ lead: existing[0], created: false }); return; }
+
+  const event = await fetchEventDetail(eventId);
+  if (!event) { res.status(404).json({ error: 'Calendar event not found' }); return; }
+
+  const fields = mapCalendarEventToLead(event, eventId, req.user!);
+
+  let rows;
+  try {
+    ({ rows } = await pool.query(
+      `INSERT INTO leads
+         (name, address, email, notes, site_visit_at, stage, source,
+          salesperson_id, salesperson_name, outlook_event_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       RETURNING *`,
+      [fields.name, fields.address, fields.email, fields.notes, fields.site_visit_at,
+       fields.stage, fields.source, fields.salesperson_id, fields.salesperson_name, fields.outlook_event_id]
+    ));
+  } catch (err) {
+    // Two reps tapping the same appointment at the same instant can both pass the
+    // pre-check above before either has inserted — the partial unique index is the
+    // real backstop. On that race, fall back to whichever request won.
+    const code = (err as { code?: string })?.code;
+    if (code === '23505') {
+      const { rows: race } = await pool.query(
+        'SELECT * FROM leads WHERE outlook_event_id=$1 AND deleted_at IS NULL',
+        [eventId]
+      );
+      if (race.length) { res.json({ lead: race[0], created: false }); return; }
+    }
+    throw err;
+  }
+
+  res.status(201).json({ lead: rows[0], created: true });
+}));
+
+// POST /api/leads/blank-survey
+// The walk-up case: no appointment at all, just a rep standing at a site who needs a
+// lead to hang the Site Survey wizard on. Named after today's date since there is
+// nothing else yet to name it after.
+router.post('/blank-survey', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const user = req.user!;
+  const { rows } = await pool.query(
+    `INSERT INTO leads (name, stage, source, salesperson_id, salesperson_name)
+     VALUES ($1,'new','other',$2,$3)
+     RETURNING *`,
+    [walkUpLeadName(), user.id, user.name]
+  );
+  res.status(201).json(rows[0]);
 }));
 
 export default router;

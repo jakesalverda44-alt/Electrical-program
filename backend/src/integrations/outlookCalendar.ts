@@ -339,6 +339,16 @@ export interface EventDetail {
   location: string | null;
   attendees: EventAttendee[];
   bodyText: string | null;
+  start: string | null;
+}
+
+/** Graph returns UTC dateTime strings like "2026-08-05T18:30:00.0000000" (no trailing
+ *  "Z") for any request that doesn't send an outlook.timezone Prefer header — this
+ *  fetch deliberately doesn't send one, so append "Z" rather than let a downstream
+ *  `new Date(...)` or Postgres TIMESTAMPTZ column read it in the wrong timezone. */
+function graphUtcToIso(dateTime: string | undefined): string | null {
+  if (!dateTime) return null;
+  return dateTime.endsWith('Z') ? dateTime : `${dateTime}Z`;
 }
 
 /**
@@ -349,7 +359,7 @@ export interface EventDetail {
  */
 export async function fetchEventDetail(eventId: string): Promise<EventDetail | null> {
   try {
-    const select = 'subject,location,attendees,body,bodyPreview';
+    const select = 'subject,location,attendees,body,bodyPreview,start';
     const url = `${GRAPH_BASE}/users/${encodeURIComponent(CALENDAR_USER)}/events/${encodeURIComponent(eventId)}`
       + `?$select=${select}`;
     const token = await getGraphToken();
@@ -380,6 +390,7 @@ export async function fetchEventDetail(eventId: string): Promise<EventDetail | n
       location: e.location?.displayName?.trim() || null,
       attendees: toAttendees(e.attendees),
       bodyText,
+      start: graphUtcToIso(e.start?.dateTime),
     };
   } catch (err) {
     logger.error({ err, eventId }, '[calendar] fetchEventDetail failed');

@@ -588,6 +588,12 @@ button{font-family:inherit}
      scroll area so the last section clears it instead of being hidden behind it. */
   .drawer-body { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 20px) !important; }
 
+  /* Same collision for centered modals: at z-index 150 the fixed bottom nav sat on top
+     of them, so anything in a modal's bottom 64px — a footer button, the last row of a
+     list — silently swallowed taps and navigated instead. Modals are blocking, so they
+     belong above the nav like drawers already are. */
+  .overlay { z-index: 240; }
+
   /* Builder */
   .builder-layout { grid-template-columns: 1fr !important; padding: 12px !important; }
   /* Section's inner 2-col field grid and the State/Zip subgrid: desktop keeps the
