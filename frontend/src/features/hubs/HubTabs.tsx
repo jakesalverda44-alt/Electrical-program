@@ -1,4 +1,5 @@
 import React from 'react';
+import { useIsMobile } from '../../hooks/useIsMobile';
 
 interface HubTabsProps {
   tabs: readonly { key: string; label: string }[];
@@ -12,6 +13,7 @@ interface HubTabsProps {
 // replaced — amber accent for the generators hub, blue for the electrical hub.
 export default function HubTabs({ tabs, active, accent, onSelect, counts }: HubTabsProps) {
   const activeColor = accent === 'amber' ? 'var(--amber)' : 'var(--blue)';
+  const isMobile = useIsMobile();
   return (
     <div style={{ display: 'flex', gap: 4, padding: '0 16px', borderBottom: '1px solid var(--border)', overflowX: 'auto', whiteSpace: 'nowrap' }}>
       {tabs.map(t => {
@@ -32,7 +34,7 @@ export default function HubTabs({ tabs, active, accent, onSelect, counts }: HubT
               cursor: 'pointer',
               transition: 'color .15s',
               flexShrink: 0,
-              minHeight: 44,
+              minHeight: isMobile ? 44 : undefined,
             }}
           >
             {t.label}
