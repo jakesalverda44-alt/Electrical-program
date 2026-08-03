@@ -583,6 +583,14 @@ button{font-family:inherit}
      collapse to a single column only below the mobile breakpoint, same pattern
      as .builder-layout above. */
   .builder-field-grid, .builder-statezip-grid { grid-template-columns: 1fr !important; }
+
+  /* Elec Projects workspace — form/field grids (New CO/Pay App/RFI/Material/
+     Field Note rows, overview 2-col layout, financials/schedule/closeout
+     tiles) desktop keeps the original inline gridTemplateColumns literal;
+     collapse to a single column below the mobile breakpoint. Row/list data
+     stays in <table className="ctable"> wrapped by .table-scroll (untouched
+     here — that pattern already scrolls horizontally). */
+  .ws-form-grid { grid-template-columns: 1fr !important; }
   /* Real touch-target height for form fields on a phone (44px is the standard
      iOS/Android minimum tap target — these render smaller via INPUT_STYLE's
      '9px 12px' padding otherwise). Excludes checkboxes/radios so their native

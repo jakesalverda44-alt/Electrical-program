@@ -396,7 +396,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
 
       // ── Overview ─────────────────────────────────────────────
       case 'overview': return (
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:18 }}>
+        <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:18 }}>
           {/* Left col */}
           <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
             <SCard title="Contract Overview" icon="doc">
@@ -466,7 +466,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
       // ── Financials ───────────────────────────────────────────
       case 'financials': return (
         <div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:24 }}>
+          <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:24 }}>
             {[
               { label:'Original Contract', val:moneyFull(contractVal),           color:'var(--blue)'  },
               { label:'Approved COs',      val:moneyFull(coApproved),            color:'var(--green)' },
@@ -510,7 +510,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
         <div>
           <div className="panel" style={{ marginBottom:16, padding:'18px 20px' }}>
             <SL>New Change Order</SL>
-            <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr auto', gap:10, alignItems:'end' }}>
+            <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr auto', gap:10, alignItems:'end' }}>
               <div><FL>Description</FL><input value={coForm.description} onChange={e=>setCoForm(f=>({...f,description:e.target.value}))} placeholder="CO description…" style={INPUT}/></div>
               <div><FL>Amount ($)</FL><input type="number" value={coForm.amount} onChange={e=>setCoForm(f=>({...f,amount:e.target.value}))} placeholder="0" style={INPUT}/></div>
               <div><FL>Status</FL>
@@ -588,7 +588,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
         <div>
           <div className="panel" style={{ marginBottom:16, padding:'18px 20px' }}>
             <SL>New Pay Application</SL>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr auto', gap:10, alignItems:'end' }}>
+            <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr auto', gap:10, alignItems:'end' }}>
               <div><FL>Period</FL><input value={paForm.period} onChange={e=>setPaForm(f=>({...f,period:e.target.value}))} placeholder="e.g. June 2026" style={INPUT}/></div>
               <div><FL>Scheduled Value ($)</FL><input type="number" value={paForm.scheduled_value} onChange={e=>setPaForm(f=>({...f,scheduled_value:e.target.value}))} placeholder="0" style={INPUT}/></div>
               <div><FL>% Complete</FL><input type="number" value={paForm.pct_complete} onChange={e=>setPaForm(f=>({...f,pct_complete:e.target.value}))} placeholder="0" style={INPUT}/></div>
@@ -662,7 +662,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
         <div>
           <div className="panel" style={{ marginBottom:16, padding:'18px 20px' }}>
             <SL>Submit RFI</SL>
-            <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr', gap:10, marginBottom:10 }}>
+            <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr', gap:10, marginBottom:10 }}>
               <div><FL>Question</FL><input value={rfiForm.question} onChange={e=>setRfiForm(f=>({...f,question:e.target.value}))} placeholder="Describe the information request…" style={INPUT}/></div>
               <div><FL>Submitted To</FL><input value={rfiForm.submitted_to} onChange={e=>setRfiForm(f=>({...f,submitted_to:e.target.value}))} placeholder="GC / Architect" style={INPUT}/></div>
               <div><FL>Submitted</FL><input type="date" value={rfiForm.submitted_date} onChange={e=>setRfiForm(f=>({...f,submitted_date:e.target.value}))} style={INPUT}/></div>
@@ -723,7 +723,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
         <div>
           <div className="panel" style={{ marginBottom:16, padding:'18px 20px' }}>
             <SL>Add Material</SL>
-            <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr 1fr 1fr auto', gap:10, alignItems:'end' }}>
+            <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr 1fr 1fr auto', gap:10, alignItems:'end' }}>
               <div><FL>Material</FL><input value={kmForm.name} onChange={e=>setKmForm(f=>({...f,name:e.target.value}))} placeholder="e.g. 4000A Switchgear" style={INPUT}/></div>
               <div><FL>Supplier</FL><input value={kmForm.supplier} onChange={e=>setKmForm(f=>({...f,supplier:e.target.value}))} placeholder="Supplier name" style={INPUT}/></div>
               <div><FL>PO Number</FL><input value={kmForm.po_number} onChange={e=>setKmForm(f=>({...f,po_number:e.target.value}))} placeholder="PO-001" style={INPUT}/></div>
@@ -789,7 +789,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
         <div>
           <div className="panel" style={{ marginBottom:16, padding:'18px 20px' }}>
             <SL>Add Field Note</SL>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:10 }}>
+            <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:10 }}>
               <div><FL>Date</FL><input type="date" value={fnForm.note_date} onChange={e=>setFnForm(f=>({...f,note_date:e.target.value}))} style={INPUT}/></div>
               <div><FL>Weather</FL><input value={fnForm.weather} onChange={e=>setFnForm(f=>({...f,weather:e.target.value}))} placeholder="e.g. Sunny 82°F" style={INPUT}/></div>
               <div><FL>Crew Size</FL><input type="number" value={fnForm.crew_size} onChange={e=>setFnForm(f=>({...f,crew_size:e.target.value}))} placeholder="0" style={INPUT}/></div>
@@ -846,7 +846,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
       // ── Schedule ──────────────────────────────────────────────
       case 'schedule': return (
         <div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14, marginBottom:16 }}>
+          <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14, marginBottom:16 }}>
             {[
               { label:'Mobilization Date',    key:'mobilize'   },
               { label:'Rough-In Complete',    key:'rough_done' },
@@ -881,7 +881,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                 <div style={{ height:'100%', width:`${(clDone/CLOSEOUT_ITEMS.length)*100}%`,
                   background:clDone===CLOSEOUT_ITEMS.length?'var(--green)':'var(--blue)', borderRadius:4, transition:'width .3s' }}/>
               </div>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:10 }}>
+              <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:10 }}>
                 {CLOSEOUT_ITEMS.map(item => (
                   <label key={item.key} style={{ display:'flex', alignItems:'center', gap:10, cursor:'pointer',
                     background:clDraft[item.key]?'var(--green-soft)':'var(--surface2)', borderRadius:8,
