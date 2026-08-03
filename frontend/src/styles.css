@@ -663,6 +663,12 @@ button{font-family:inherit}
 
   /* Tighter side padding on phone (Command Center handles its own in command-center.css) */
   .sd-root { padding: 12px 14px 80px !important; }
+
+  /* Public e-sign page outer wrapper (ProposalPublicPage) — page is outside
+     AppShell but styles.css is still global. Needs !important: the element
+     carries an inline padding, which only an !important stylesheet rule can
+     beat. */
+  .ppp-outer { padding: 16px 8px 40px !important; }
 }
 
 /* ── Customer-facing proposal embed (public e-sign page) ─────────────────

@@ -234,6 +234,16 @@
 @media (max-width: 768px) {
   .cc2-root { padding: 12px 14px 90px; }
 
+  /* HomeKpis renders sales-dashboard's .sd-root inside .cc2-root — styles.css
+     gives .sd-root its own 12/14px side pad + 80px bottom pad for its normal
+     standalone route, which stacks with .cc2-root's pad here (~28px gutters,
+     doubled bottom pad) when nested on Home. Zero it out for the nested case.
+     Both rules carry !important, so this is decided by specificity, not
+     source order: .cc2-root .sd-root is two classes (0,2,0) vs styles.css's
+     bare .sd-root at one class (0,1,0) — the more specific selector wins
+     regardless of which stylesheet loads later. */
+  .cc2-root .sd-root { padding: 0 0 12px !important; }
+
   /* Hero — compact, clock inline above the greeting */
   .cc2-hero { padding: 18px 16px 16px; border-radius: 18px; }
   .cc2-clock { position: static; text-align: left; font-size: 16px; margin-bottom: 6px; }
