@@ -34,6 +34,7 @@ import intakeRouter from './routes/intake';
 import leadsRouter from './routes/leads';
 import estimatesRouter from './routes/estimates';
 import pushRouter from './routes/push';
+import calendarRouter from './routes/calendar';
 
 dotenv.config();
 
@@ -92,6 +93,7 @@ app.use('/api/intake', intakeRouter);
 app.use('/api/leads', leadsRouter);
 app.use('/api/estimates', estimatesRouter);
 app.use('/api/push', pushRouter);
+app.use('/api/calendar', calendarRouter);
 
 app.get('/api/ai/usage/today', requireAuth, asyncHandler(async (_req: AuthRequest, res) => {
   const today = new Date().toISOString().split('T')[0];

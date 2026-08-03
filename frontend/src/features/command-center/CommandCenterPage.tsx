@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../../api/client';
+import Icon from '../../components/Icon';
 import { useUser, useShowToast } from '../../contexts/AppContext';
-import { Bid, Gen, WonJob, BriefPayload, BriefAttentionItem, TodayEvent } from '../../types';
+import { Bid, Gen, WonJob, BriefPayload, BriefAttentionItem, TodayEvent, Lead } from '../../types';
 import BriefDrawer from './BriefDrawer';
 import HomeKpis from './HomeKpis';
+import SurveyFromCalendarModal from '../leads/SurveyFromCalendarModal';
+import LeadSiteSurvey from '../leads/LeadSiteSurvey';
 import './command-center.css';
 
 // One quote a day, rotated by day-of-year.
@@ -115,9 +118,10 @@ interface Props {
   wonJobs: WonJob[];
   repNames?: string[];
   onNav: (v: string) => void;
+  onEditGen: (gen: Gen) => void;
 }
 
-export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav }: Props) {
+export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav, onEditGen }: Props) {
   const user = useUser();
   const showToast = useShowToast();
   const [brief, setBrief] = useState<BriefPayload | null>(null);
@@ -126,6 +130,8 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
   const [drawerItem, setDrawerItem] = useState<BriefAttentionItem | null>(null);
   const [marking, setMarking] = useState(false);
   const [done, setDone] = useState<Set<string>>(loadDone);
+  const [showSurveyPicker, setShowSurveyPicker] = useState(false);
+  const [surveyLead, setSurveyLead] = useState<Lead | null>(null);
   const [baseline, setBaseline] = useState<number>(() => {
     const n = parseInt(localStorage.getItem(`cc-base-${localDay()}`) || '0', 10);
     return isNaN(n) ? 0 : n;
@@ -176,6 +182,28 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
       load();
     } finally {
       setMarking(false);
+    }
+  };
+
+  // The picker hands back whichever lead the appointment (or the blank-survey fallback)
+  // resolved to; mount the survey directly on it, same as LeadDetailDrawer does when a
+  // lead is already open.
+  const handleSurveyLeadReady = (lead: Lead) => {
+    setShowSurveyPicker(false);
+    setSurveyLead(lead);
+  };
+
+  // Mirrors LeadDetailDrawer's createGen: survey answers become a proposal and the rep
+  // lands in the builder with it already loaded, so finishing a survey flows straight
+  // into pricing it rather than dumping them on a list to hunt for what they just made.
+  const handleSurveyBuildProposal = async () => {
+    if (!surveyLead) return;
+    try {
+      const { data } = await api.post<Gen>(`/leads/${surveyLead.id}/create-gen`);
+      setSurveyLead(null);
+      onEditGen(data);
+    } catch {
+      showToast({ title: "Couldn't create the proposal", sub: 'Check connection and try again.' });
     }
   };
 
@@ -287,6 +315,14 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
         </div>
       </div>
 
+      {/* Primary field action — a rep standing at a job can jump straight into a survey
+          instead of first creating a lead by hand. Sits below the hero and above the
+          "Needs action" list so it reads as the day's default next move. */}
+      <button type="button" className="cc2-survey-cta" onClick={() => setShowSurveyPicker(true)}>
+        <Icon name="clip" size={16} stroke={2}/>
+        Start Site Survey
+      </button>
+
       <div className="cc2-grid">
         {/* ── Left: quick counts + the respond queue ── */}
         <div>
@@ -384,6 +420,22 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
         onMarkContacted={markContacted}
         markingContacted={marking}
       />
+
+      {showSurveyPicker && (
+        <SurveyFromCalendarModal
+          onClose={() => setShowSurveyPicker(false)}
+          onLeadReady={handleSurveyLeadReady}
+        />
+      )}
+
+      {surveyLead && (
+        <LeadSiteSurvey
+          lead={surveyLead}
+          onUpdated={setSurveyLead}
+          onBuildProposal={handleSurveyBuildProposal}
+          onClose={() => setSurveyLead(null)}
+        />
+      )}
     </div>
   );
 }

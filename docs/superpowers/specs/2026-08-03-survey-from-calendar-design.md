@@ -69,7 +69,7 @@ untouched — this is a second, neutral route, not a migration of the first.
 
 | Outlook | Lead column | Note |
 |---|---|---|
-| `subject` | `name` | falls back to `Site Survey — {date}` when blank |
+| `subject` | `name` | falls back to `Untitled appointment — {date}` when blank |
 | `location` | `address` | |
 | first attendee whose email domain is not `accuratepowerandtechnology.com` | `email` | that attendee's display name goes into `notes`, since `leads` has no contact-name column |
 | `bodyText` | `notes` | appended after the attendee line |
@@ -83,9 +83,13 @@ Plain mapping is deliberate: it returns instantly and cannot fail on a weak conn
 which is the situation this feature exists for. The rep corrects anything wrong inside the
 survey, where they are already typing.
 
-**`POST /api/leads/blank-survey`** — creates a lead named `Site Survey — {today}` with
+**`POST /api/leads/blank-survey`** — creates a lead named `Walk-up — {today}` with
 `stage: 'new'`, `source: 'other'`, and the caller as salesperson. Backs the walk-up case
 where there is no appointment at all.
+
+Neither fallback name may begin with "Site Survey". The wizard header renders
+`Site Survey — {lead name}`, so such a name renders as
+"SITE SURVEY — SITE SURVEY — AUG 3, 2026" the moment the survey opens.
 
 ### Frontend
 
@@ -106,8 +110,16 @@ One primary action, `Start Site Survey`, below the hero and above "Needs action"
 a real thumb target on mobile. Tapping opens the modal.
 
 On pick, the returned lead is held in Home state and `LeadSiteSurvey` mounts directly on
-it. `onBuildProposal` calls `POST /api/leads/:id/create-gen` and then navigates to the
-builder through the `onNav` prop Home already receives.
+it. `onBuildProposal` calls `POST /api/leads/:id/create-gen` and hands the new proposal to
+an `onEditGen` prop — the same `g => { setEditGen(g); setView('builder') }` handler `App`
+already passes to the leads hub — so the rep lands in the builder with the proposal
+loaded rather than on a list.
+
+**Mobile z-index.** `.overlay` sits at z-index 150 and `.mobile-nav` at 200, so on a phone
+the fixed bottom nav covered the bottom 64px of every centered modal and silently
+swallowed taps there — the picker's footer button lands exactly in that band. The ≤768px
+block raises `.overlay` to 240, matching what `.drawer-overlay` already does. This fixes
+every modal in the app, not just this one.
 
 ### Data flow
 
