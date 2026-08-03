@@ -12,6 +12,7 @@ import { asyncHandler } from './utils/asyncHandler';
 import { startReminderScheduler } from './notifications/engine';
 import { startIntakeInboxPoller } from './integrations/intakePoller';
 import { startLeadNudgeScheduler } from './integrations/leadNudge';
+import { startProposalQuietSweep } from './services/proposalQuietSweep';
 import { requireAuth, AuthRequest, initJwtSecret } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
@@ -155,6 +156,7 @@ if (require.main === module) {
       startReminderScheduler();
       startIntakeInboxPoller();
       startLeadNudgeScheduler();
+      startProposalQuietSweep();
 
       // On SIGTERM (Render redeploy), mark any stuck in-progress analyses as error
       // so the frontend poll sees a terminal state instead of spinning forever.

@@ -13,7 +13,10 @@ import { ensureLeadFollowups } from '../utils/leadFollowups';
 
 const DAILY_DIGEST_RECIPIENT = 'jakes@accuratepowerandtechnology.com';
 
-interface NewNotif { type: ReminderType; title: string; body: string; linkView: string; linkId: string | null }
+// ReminderType covers the scanner-driven reminder categories (each has a user-configurable
+// pref under runReminderScan); other callers (e.g. the proposal-quiet-sweep) mint their own
+// notification "type" tag that has no corresponding pref row, hence the plain-string escape hatch.
+interface NewNotif { type: ReminderType | (string & {}); title: string; body: string; linkView: string; linkId: string | null }
 
 /**
  * Insert an in-app notification, skipping duplicates via dedup_key.
