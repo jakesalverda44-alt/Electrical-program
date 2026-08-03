@@ -68,6 +68,9 @@ interface Props {
   embed?: boolean;
   /** Customer signature image (data URL). When present, the signature block shows it. */
   signatureImage?: string;
+  /** Customer initials image (data URL). When present, it is stamped on every
+   *  "CUST INT" rule and the Sales Agreement effective-date blank fills in. */
+  initialsImage?: string;
   /** Date the customer signed (display string). */
   signedDate?: string;
 }
@@ -168,11 +171,20 @@ function SubClause({ label, text, fs = identityFs }: { label: string; text: Reac
   );
 }
 // Customer-initials line that appears at the foot of each Sales Agreement / Exhibit
-// page in the source document ("CUST INT ______").
-function CustInitFooter({ fs = identityFs }: { fs?: FontFn } = {}) {
+// page in the source document ("CUST INT ______"). When the buyer has e-signed, their
+// drawn initials are stamped onto the rule the same way SigBlock stamps the signature —
+// on paper these get initialed page by page, so leaving them blank on an e-signed
+// contract left it looking half-executed.
+function CustInitFooter({ initialsImage, fs = identityFs }: { initialsImage?: string; fs?: FontFn } = {}) {
   return (
     <div style={{ marginTop: 16, textAlign: 'right', fontSize: fs(8.5), color: GRAY_M, fontWeight: 700, letterSpacing: '.03em' }}>
-      CUST INT ________
+      {initialsImage ? (
+        <span style={{ display: 'inline-flex', alignItems: 'flex-end', gap: 6 }}>
+          CUST INT
+          <img src={initialsImage} alt="Customer initials"
+            style={{ height: 22, maxWidth: 90, objectFit: 'contain', display: 'block' }}/>
+        </span>
+      ) : 'CUST INT ________'}
     </div>
   );
 }
@@ -202,7 +214,7 @@ function SpecTable({ header, rows, fs = identityFs }: { header: string; rows: [s
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
-export default function ProposalPreview({ form, totals, proposalNo, onBack, appSettings, genId, embed, signatureImage, signedDate }: Props) {
+export default function ProposalPreview({ form, totals, proposalNo, onBack, appSettings, genId, embed, signatureImage, initialsImage, signedDate }: Props) {
   const co = appSettings ?? DEFAULT_APP_SETTINGS;
   const previewRef = useRef<HTMLDivElement>(null);
   const [savingDrive, setSavingDrive] = useState(false);
@@ -583,7 +595,10 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             <SectionHeading title="SALES AGREEMENT"/>
 
             <p style={{ fontSize: fs(9), lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 10 }}>
-              This Sales Agreement (this "Agreement") is entered into effective ________________________, by and between{' '}
+              This Sales Agreement (this "Agreement") is entered into effective{' '}
+              {signedDate
+                ? <strong style={{ color: GRAY_D }}>{signedDate}</strong>
+                : '________________________'}, by and between{' '}
               <strong>Accurate Power &amp; Technology, Inc.</strong> ("APT"), a Florida corporation with its principal place of business at 15519 US Highway 441 Suite A101 Eustis, Fl 32726, and <strong>{form.customer || '________________________'}</strong> (the "Buyer"), having its address at {buyerAddr || '________________________'}. For avoidance of doubt, Accurate Power and Technology, Inc., All State Home Innovations, Inc. and Accurate Power and Technology, Inc. d/b/a "A Generator Guy" are collectively referred to as "APT" throughout this Agreement. APT and the Buyer may be referred to as the Party or the Parties throughout this Agreement.
             </p>
             <p style={{ fontSize: fs(9), lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 10 }}>
@@ -598,7 +613,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             <Clause num="6" text="I understand that if one or both entities is/are delayed forcing the technicians employed by Accurate Power to remain at my property after 3pm, I the homeowner will be billed Accurate Power's standard after hour charge of $185.00/hr. until the municipality inspector finishes his/her inspection, the power company restores my power, and technician employed by Accurate Power is able to leave my property." fs={fs}/>
             <Clause num="7" label="Installation" text="APT shall provide only the initial installation of the generator at the premises designated in the Generator Proposal. APT may hire third-party contractors (the &quot;Additional Labor&quot;), such as a carpenter, or manual laborer, as needed to facilitate such installation. Buyer understands and agrees that APT is not responsible for the work of such Additional Labor, and Buyer shall reimburse APT for the cost of hiring such Additional Labor. The generator installation shall be deemed accepted by Buyer when it has been installed, inspected, and it is ready for use in accordance with APT's normal standards of installation." fs={fs}/>
 
-            <CustInitFooter fs={fs}/>
+            <CustInitFooter initialsImage={initialsImage} fs={fs}/>
           </div>
 
           {/* ═══ SALES AGREEMENT — PAGE 2 ══════════════════════════════════ */}
@@ -618,7 +633,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             <SubClause label="c. Assignment of Manufacturer's Warranties" text="APT hereby assigns to Buyer all of its rights and interests in the warranties, if any, provided by the manufacturer of the generator, to the extent that this assignment is not prohibited by the terms of any agreement between APT and the manufacturer. Manufacturer's warranties can be extended for up to five (5) years on most generators." fs={fs}/>
             <Clause num="14" label="Risk of Loss" text="The risk of loss for the generator shall pass to Buyer upon its delivery to the installation site." fs={fs}/>
 
-            <CustInitFooter fs={fs}/>
+            <CustInitFooter initialsImage={initialsImage} fs={fs}/>
           </div>
 
           {/* ═══ SALES AGREEMENT — PAGE 3 ══════════════════════════════════ */}
@@ -639,7 +654,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             <Clause num="20" label="Assignment and Delegation" text="This Agreement is not assignable nor is the performance of the duties delegable by the Buyer without APT's prior written consent." fs={fs}/>
             <Clause num="21" label="Binding Effect" text="This Agreement shall inure to the benefit of, and be binding upon, the parties hereto and their respective next-of-kin, legatees, administrators, executors, legal representatives, nominees, successors and assigns." fs={fs}/>
 
-            <CustInitFooter fs={fs}/>
+            <CustInitFooter initialsImage={initialsImage} fs={fs}/>
           </div>
 
           {/* ═══ SALES AGREEMENT — PAGE 4 ══════════════════════════════════ */}
@@ -660,7 +675,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             </p>
             <SigBlock signatureImage={signatureImage} signedDate={signedDate} buyerName={form.customer} fs={fs}/>
 
-            <CustInitFooter fs={fs}/>
+            <CustInitFooter initialsImage={initialsImage} fs={fs}/>
           </div>
 
           {/* ═══ EXHIBIT A — DISCLOSURES (PAGE 1) ══════════════════════════ */}
@@ -699,7 +714,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
               </div>
             ))}
 
-            <CustInitFooter fs={fs}/>
+            <CustInitFooter initialsImage={initialsImage} fs={fs}/>
           </div>
 
           {/* ═══ EXHIBIT A — DISCLOSURES (PAGE 2) ══════════════════════════ */}
@@ -726,7 +741,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
               This proposal is valid for {form.validDays ?? 30} days. Accurate Power &amp; Technology, Inc. · Licensed &amp; Insured · FL
             </div>
 
-            <CustInitFooter fs={fs}/>
+            <CustInitFooter initialsImage={initialsImage} fs={fs}/>
           </div>
 
         </div>

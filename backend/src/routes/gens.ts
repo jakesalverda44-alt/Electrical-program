@@ -1177,18 +1177,24 @@ router.get('/:id/photos', requireAuth, async (req: AuthRequest, res) => {
 
 // ── Public: sign proposal by token (no auth) ────────────────────────────────
 router.post('/p/:token/sign', async (req, res) => {
-  const { signatureData } = req.body;
+  const { signatureData, initialsData } = req.body;
   if (!signatureData) return res.status(400).json({ error: 'Signature required' });
 
+  // initialsData is optional at the API level even though the UI now requires it —
+  // a stale cached client that only knows about signatureData must keep signing
+  // successfully. Unlike signature_data (set unconditionally), initials_data falls
+  // back to its current value when nothing is posted, so a re-sign that omits it
+  // never wipes out initials captured earlier.
   const { rows } = await pool.query(
     `UPDATE generator_proposals
      SET signed_at = COALESCE(signed_at, now()),
          signature_data = $1,
+         initials_data = COALESCE($3, initials_data),
          stage = CASE WHEN stage IN ('declined','awarded') THEN stage ELSE 'signed' END,
          updated_at = now()
      WHERE proposal_token = $2 AND deleted_at IS NULL
      RETURNING id, customer, stage, signed_at, drive_job_folder_id, salesperson_id, amount, mfr, kw`,
-    [signatureData, req.params.token]
+    [signatureData, req.params.token, initialsData || null]
   );
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
   const gen = rows[0];
@@ -1277,6 +1283,28 @@ router.post('/p/:token/sign', async (req, res) => {
     })();
   }
 });
+
+// ── Public: report that the customer-side PDF archive failed (no auth) ─────────
+// The archive PDF is rasterized in the BUYER's browser, where an 8-page render can
+// exhaust memory on a phone or lose the tab before the upload lands. That failure used
+// to be swallowed client-side, so a job could end up signed with no contract on file
+// and nobody knew. This records it in the log so it is discoverable; the rep rebuilds
+// the identical PDF from the gen card. Deliberately does nothing but log — it accepts
+// unauthenticated input, so it must not write anything a caller could pile up.
+router.post('/p/:token/archive-failed', asyncHandler(async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT id, customer FROM generator_proposals WHERE proposal_token = $1 AND deleted_at IS NULL',
+    [req.params.token]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
+
+  const message = String((req.body as { message?: unknown })?.message ?? '').slice(0, 500);
+  logger.error(
+    { genId: rows[0].id, customer: rows[0].customer, message },
+    '[sign] customer-side signed-PDF archive failed — rebuild from the gen card'
+  );
+  res.json({ ok: true });
+}));
 
 // ── Public: auto-save a signed-proposal PDF (no auth) ───────────────────────────
 // Token-scoped and tightly bounded: the proposal must be signed, and only one

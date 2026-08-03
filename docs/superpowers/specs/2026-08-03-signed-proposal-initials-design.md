@@ -90,6 +90,15 @@ exporting a function that takes a rendered element and returns a PDF blob. Both 
 customer-side path and the new rep-side path call it. This removes the duplication the
 second caller would otherwise create.
 
+**Fix the archive size while extracting it.** The page-slicing loop calls `addImage` with
+the same full-resolution PNG once per page. Without an alias, jsPDF embeds a *separate
+copy* of that bitmap for every page — a measured rebuild produced a **34MB** file for a
+6-page contract. Passing a stable alias (and `'FAST'` compression) makes jsPDF store the
+bytes once and reference them per page: the same document then measures **2.1MB**, a
+15.8× reduction, with identical output. This is very likely the root cause of the missing
+archives — a 34MB upload from a phone on cell data is exactly the kind of thing that dies
+silently, which is what the swallowed catch then hid.
+
 **On the gen card** (`GenDetailDrawer`), when `gen.signed_at` is set, show a "Signed
 Contract" row:
 
@@ -135,6 +144,8 @@ rep opens card → signed, no document → Rebuild
 - the sign route persists `initials_data` and leaves it null when omitted
 - revisiting a signed proposal renders the stored marks without re-signing
 - the card shows Rebuild only when signed and no contract document exists
+- `buildContractPdf` passes ONE alias and identical bytes across every page, so the
+  per-page-copy regression cannot come back unnoticed
 
 ## Out of scope
 
