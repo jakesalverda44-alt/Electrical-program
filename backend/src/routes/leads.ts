@@ -17,6 +17,84 @@ import { leadAddressToProposal } from '../utils/address';
 
 const router = Router();
 
+// Keep in step with surveyToGenFormFields in frontend/src/features/leads/surveyMap.ts —
+// same field names/rules verbatim, EXCEPT this mirror deliberately drops `notes`:
+// the caller merges lead.notes and survey_data.notes together (see create-gen below),
+// so emitting `notes` here would let the survey's note silently clobber the lead's.
+type LeadSurvey = {
+  jobType?: 'new-install' | 'swap-out';
+  brand?: 'Kohler' | 'Generac';
+  coolingType?: 'air-cooled' | 'liquid-cooled';
+  size?: string;
+  sizingNeeded?: boolean;
+  fuel?: 'Natural Gas' | 'LP';
+  genSide?: '' | 'Left' | 'Right';
+  panelRel?: '' | 'Same side as panel' | 'Opposite side of panel' | 'Next to panel';
+  panelFt?: number;
+  feedFt?: number;
+  base?: 'pad' | 'stand-small' | 'stand-big' | 'existing-pad';
+  gasLine?: boolean;
+  removal?: boolean;
+  liftType?: 'none' | 'lull' | 'crane';
+  battery?: boolean;
+  emPanel?: boolean;
+  surgeProQty?: number;
+  smmQty?: number;
+  notes?: string;
+};
+
+const BASE_TO_PAD_STAND: Record<
+  NonNullable<LeadSurvey['base']>,
+  { pad: boolean; genStand: 'none' | 'small' | 'big' }
+> = {
+  pad: { pad: true, genStand: 'none' },
+  'stand-small': { pad: false, genStand: 'small' },
+  'stand-big': { pad: false, genStand: 'big' },
+  'existing-pad': { pad: false, genStand: 'none' },
+};
+
+function surveyToGenFormFields(s: Record<string, unknown>): Record<string, unknown> {
+  const survey = s as LeadSurvey;
+  const out: Record<string, unknown> = {};
+
+  if (survey.jobType !== undefined) out.jobType = survey.jobType;
+  if (survey.brand !== undefined) out.brand = survey.brand;
+  if (survey.coolingType !== undefined) out.coolingType = survey.coolingType;
+  if (survey.fuel !== undefined) out.fuel = survey.fuel;
+  if (survey.genSide !== undefined) out.genSide = survey.genSide;
+  if (survey.panelRel !== undefined) out.panelRel = survey.panelRel;
+  if (survey.feedFt !== undefined) out.feedFt = survey.feedFt;
+  if (survey.liftType !== undefined) out.liftType = survey.liftType;
+  if (survey.battery !== undefined) out.battery = survey.battery;
+  if (survey.emPanel !== undefined) out.emPanel = survey.emPanel;
+  if (survey.surgeProQty !== undefined) out.surgeProQty = survey.surgeProQty;
+  if (survey.smmQty !== undefined) out.smmQty = survey.smmQty;
+  // NOTE: `notes` is intentionally NOT emitted here — see comment above.
+
+  // panelFt: pass through, but dropped when panelRel === 'Next to panel'.
+  if (survey.panelFt !== undefined && survey.panelRel !== 'Next to panel') {
+    out.panelFt = survey.panelFt;
+  }
+
+  // size: only when sizingNeeded is not true and size is set.
+  if (survey.size !== undefined && survey.sizingNeeded !== true) {
+    out.size = survey.size;
+  }
+
+  // base -> pad/genStand.
+  if (survey.base !== undefined) {
+    Object.assign(out, BASE_TO_PAD_STAND[survey.base]);
+  }
+
+  // gasLine/removal: swap-out only.
+  if (survey.jobType === 'swap-out') {
+    if (survey.gasLine !== undefined) out.gasLine = survey.gasLine;
+    if (survey.removal !== undefined) out.removal = survey.removal;
+  }
+
+  return out;
+}
+
 // Enum values mirror the CHECK constraints in 049_create_leads.sql so a bad value
 // is rejected with a clear 400 instead of bubbling up as a DB error → 500.
 const SOURCES        = ['web', 'phone', 'referral', 'kohler', 'other', 'generac', 'cummins', 'call-in'] as const;
@@ -60,6 +138,10 @@ const leadPatchSchema = z.object({
   // Site-visit scheduling, sent with the Site Scheduled handoff.
   site_visit_at: z.string().datetime().nullable().or(z.literal('')),
   site_visit_needs_time: z.boolean(),
+  // Site-survey answers from the mobile field wizard. Size-capped to keep the
+  // column reasonable — the wizard's answer set is small and bounded.
+  survey_data: z.record(z.unknown()).nullable().optional()
+    .refine(v => v == null || JSON.stringify(v).length <= 20_000, 'survey_data too large'),
 }).partial();
 
 // Throttle lead writes to stop flooding/lead-spam. Automation callers authenticate
@@ -567,6 +649,12 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
     }
   }
 
+  // JSONB column — needs an explicit cast, matching form_data/checklist_data in gens.ts.
+  if ('survey_data' in req.body) {
+    params.push(req.body.survey_data != null ? JSON.stringify(req.body.survey_data) : null);
+    sets.push(`survey_data = $${params.length}::jsonb`);
+  }
+
   params.push(lead.id);
   let rows;
   try {
@@ -691,11 +779,14 @@ router.post('/:id/create-gen', requireAuth, asyncHandler(async (req: AuthRequest
   // Create the proposal carrying contact details, link both directions, and copy the
   // lead's activity timeline onto the proposal (does not convert/close the lead).
   const addr = leadAddressToProposal(lead.address);
+  const surveyFields = surveyToGenFormFields((lead.survey_data ?? {}) as Record<string, unknown>);
   const formData = {
     customer: lead.name, attn: lead.name, address: addr.address,
     city: addr.city, state: addr.state, zip: addr.zip,
-    phone: lead.phone ?? '', email: lead.email ?? '', notes: lead.notes ?? '',
+    phone: lead.phone ?? '', email: lead.email ?? '',
+    notes: [lead.notes, (lead.survey_data as { notes?: string } | null)?.notes].filter(Boolean).join('\n'),
     lead_source: lead.source,
+    ...surveyFields,
   };
   const { rows: genRows } = await pool.query(
     `INSERT INTO generator_proposals
