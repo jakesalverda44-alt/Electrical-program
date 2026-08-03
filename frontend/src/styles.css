@@ -591,6 +591,16 @@ button{font-family:inherit}
      stays in <table className="ctable"> wrapped by .table-scroll (untouched
      here — that pattern already scrolls horizontally). */
   .ws-form-grid { grid-template-columns: 1fr !important; }
+
+  /* Docs / Followups / Contacts pages — shared generic mobile treatment (not
+     page-scoped since all three need the identical two rules). .page-pad
+     collapses the root section padding; desktop keeps its original inline
+     value. .grid-collapse forces any inline gridTemplateColumns literal down
+     to a single column — covers filter rows, add-forms, and Docs' `1fr 300px`
+     detail-sidebar grid (the detail panel already renders after the list in
+     source order, so collapsing to 1fr puts it full-width below the list). */
+  .page-pad { padding: 12px 14px !important; }
+  .grid-collapse { grid-template-columns: 1fr !important; }
   /* Real touch-target height for form fields on a phone (44px is the standard
      iOS/Android minimum tap target — these render smaller via INPUT_STYLE's
      '9px 12px' padding otherwise). Excludes checkboxes/radios so their native

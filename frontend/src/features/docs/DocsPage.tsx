@@ -156,7 +156,7 @@ export default function DocsPage({ bids, gens }: Props) {
 
   return (
     <div className="scroll view-enter">
-      <div style={{ padding: '20px 28px 40px' }}>
+      <div className="page-pad" style={{ padding: '20px 28px 40px' }}>
         <div className="stats" style={{ gridTemplateColumns: 'repeat(4,1fr)', padding: 0, marginBottom: 20 }}>
           {[
             { label: 'Total Documents', val: String(docs.length),                                        sub: 'in library',         tone: 'blue'  },
@@ -175,7 +175,7 @@ export default function DocsPage({ bids, gens }: Props) {
           ))}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: docs.length > 0 && selected ? '1fr 300px' : '1fr', gap: 16 }}>
+        <div className="grid-collapse" style={{ display: 'grid', gridTemplateColumns: docs.length > 0 && selected ? '1fr 300px' : '1fr', gap: 16 }}>
           <div>
             {/* Drop zone */}
             <div
@@ -214,7 +214,7 @@ export default function DocsPage({ bids, gens }: Props) {
                         background: 'var(--surface2)', color: 'var(--text2)' }}>{f.name}</span>
                     ))}
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 10, alignItems: 'end' }}>
+                  <div className="grid-collapse" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 10, alignItems: 'end' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                       <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Category</label>
                       <select value={uploadForm.category} onChange={e => setUploadForm(f => ({ ...f, category: e.target.value as DocCategory }))} style={{ ...INPUT, cursor: 'pointer' }}>

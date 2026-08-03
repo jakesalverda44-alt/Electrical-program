@@ -61,7 +61,7 @@ function AddCustomerForm({ onCreated, onCancel }: { onCreated: (c: Customer) => 
   return (
     <div className="panel" style={{ marginBottom: 16 }}>
       <div className="panel-hdr"><span className="panel-title">New Customer</span></div>
-      <div style={{ padding: 16, display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
+      <div className="grid-collapse" style={{ padding: 16, display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 5 }}>Name *</div>
           <input style={inputStyle} value={form.name ?? ''} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} autoFocus/>
@@ -131,7 +131,7 @@ export default function ContactsPage({ onNewBid, onNav }: Props) {
 
   return (
     <div className="scroll view-enter">
-      <div style={{ padding: '20px 28px 40px' }}>
+      <div className="page-pad" style={{ padding: '20px 28px 40px' }}>
         <div className="stats" style={{ gridTemplateColumns: 'repeat(3,1fr)', padding: 0, marginBottom: 20 }}>
           {[
             { label: 'General Contractors', val: String(totalGCs), sub: 'in directory', tone: 'blue' },
