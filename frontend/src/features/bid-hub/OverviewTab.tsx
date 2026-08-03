@@ -188,7 +188,7 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
       await api.post(`/bids/${bid.id}/close`);
       setBids(prev => prev.filter(b => b.id !== bid.id));
       showToast({ title: 'Job closed', sub: `${bid.name} moved to Completed Projects` });
-      onNav('elec-proposals');
+      onNav('electrical/bids');
     } finally {
       setClosingJob(false);
     }
@@ -202,7 +202,7 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
       setBids(prev => prev.filter(b => b.id !== bid.id));
       setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
       showToast({ title: 'Bid deleted', sub: bid.name });
-      onNav('elec-proposals');
+      onNav('electrical/bids');
     } catch {
       showToast({ title: 'Delete failed', sub: 'Please try again' });
       setDeleting(false);
