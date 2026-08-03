@@ -50,13 +50,13 @@ export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
     for (const b of bids) {
       if (out.length >= 8) break;
       if ([b.name, b.gc, b.loc, b.contact].some(v => v?.toLowerCase().includes(lq))) {
-        out.push({ id: 'b-' + b.id, targetId: b.id, label: b.name, sub: `${b.gc} · ${b.loc} · ${b.stage}`, section: b.stage === 'awarded' ? 'elec-projects' : 'elec-proposals', icon: 'pipeline' });
+        out.push({ id: 'b-' + b.id, targetId: b.id, label: b.name, sub: `${b.gc} · ${b.loc} · ${b.stage}`, section: b.stage === 'awarded' ? 'electrical/projects' : 'electrical/bids', icon: 'pipeline' });
       }
     }
     for (const g of gens) {
       if (out.length >= 12) break;
       if ([g.customer, g.loc, g.mfr, g.model].some(v => v?.toLowerCase().includes(lq))) {
-        out.push({ id: 'g-' + g.id, targetId: g.id, label: g.customer, sub: `${g.mfr} ${g.model} · ${g.kw}kW · ${g.stage}`, section: g.stage === 'awarded' ? 'gen-projects' : 'gen-proposals', icon: 'bolt' });
+        out.push({ id: 'g-' + g.id, targetId: g.id, label: g.customer, sub: `${g.mfr} ${g.model} · ${g.kw}kW · ${g.stage}`, section: g.stage === 'awarded' ? 'generators/jobs' : 'generators/pipeline', icon: 'bolt' });
       }
     }
     for (const l of leads ?? []) {
@@ -65,7 +65,7 @@ export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
         out.push({
           id: 'l-' + l.id, targetId: l.id, label: l.name,
           sub: `Lead · ${l.stage}${l.phone ? ` · ${l.phone}` : l.email ? ` · ${l.email}` : ''}`,
-          section: 'gen-leads', icon: 'users',
+          section: 'generators/leads', icon: 'users',
         });
       }
     }

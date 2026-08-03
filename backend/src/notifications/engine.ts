@@ -84,7 +84,7 @@ export async function runReminderScan(): Promise<void> {
       for (const g of rows) {
         if (!cfg.app) break;
         await emit('proposal_viewed_unsigned', targetsFor(g.salesperson_id),
-          { type: 'proposal_viewed_unsigned', title: 'Proposal viewed, not signed', body: `${g.customer} opened their proposal but hasn't signed`, linkView: 'gen-proposals', linkId: g.id },
+          { type: 'proposal_viewed_unsigned', title: 'Proposal viewed, not signed', body: `${g.customer} opened their proposal but hasn't signed`, linkView: 'generators/pipeline', linkId: g.id },
           `propunsigned:${g.id}`,
           `${g.customer} — viewed ${new Date(g.viewed_at).toLocaleDateString()}, not signed`);
       }
@@ -103,7 +103,7 @@ export async function runReminderScan(): Promise<void> {
         const dd = parseDueDays(String(b.due || ''));
         if (dd < 0 || dd > within || !cfg.app) continue;
         await emit('bid_due_soon', targetsFor(b.salesperson_id),
-          { type: 'bid_due_soon', title: 'Bid due soon', body: `${b.name} is due in ${dd} day${dd === 1 ? '' : 's'}`, linkView: 'elec-proposals', linkId: b.id },
+          { type: 'bid_due_soon', title: 'Bid due soon', body: `${b.name} is due in ${dd} day${dd === 1 ? '' : 's'}`, linkView: 'electrical/bids', linkId: b.id },
           `biddue:${b.id}:${day}`,
           `${b.name} — due in ${dd} day${dd === 1 ? '' : 's'}`);
       }
@@ -132,7 +132,7 @@ export async function runReminderScan(): Promise<void> {
         await emit('lead_overdue', targetsFor(l.salesperson_id),
           { type: 'lead_overdue', title: 'Lead overdue — no recent activity',
             body: `${l.name} (${l.stage}) — ${lastLabel}`,
-            linkView: 'gen-leads', linkId: l.id },
+            linkView: 'generators/leads', linkId: l.id },
           `lead_overdue:${l.id}:${day}`,
           `${l.name} — stage: ${l.stage}, ${lastLabel}`);
       }

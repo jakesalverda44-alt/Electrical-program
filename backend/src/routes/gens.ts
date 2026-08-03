@@ -1237,7 +1237,7 @@ router.post('/p/:token/sign', async (req, res) => {
           type: 'proposal_viewed_unsigned',
           title: 'Proposal signed',
           body: `${gen.customer} accepted and signed their proposal`,
-          linkView: 'gen-proposals',
+          linkView: 'generators/pipeline',
           linkId: gen.id,
           dedupKey: `propsigned:${gen.id}`,
         });
@@ -1247,7 +1247,7 @@ router.post('/p/:token/sign', async (req, res) => {
       sendPushToUsers(targets, {
         title: '🎉 Proposal signed',
         body: `${gen.customer} signed${amt ? ` — $${amt.toLocaleString()}` : ''}`,
-        view: 'gen-proposals',
+        view: 'generators/pipeline',
         id: gen.id,
         tag: `propsigned:${gen.id}`,
       }).catch(() => {});

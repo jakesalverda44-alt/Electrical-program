@@ -316,7 +316,7 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
       subtitle: `${l.source === 'kohler' ? 'Kohler lead' : 'Lead'}${l.phone ? ` · ${l.phone}` : ' · no phone'} · ${reason}`,
       receivedAt: l.last_activity_at ? new Date(l.last_activity_at).toISOString() : null,
       briefing: `${l.name} is ${l.stage}. ${l.phone ? `Call ${l.phone}.` : 'No phone on file.'} ${last}.${l.notes ? ` Notes: ${l.notes}` : ''}`,
-      cta: { tel: l.phone ? `tel:${digits(l.phone)}` : undefined, navTo: 'gen-leads', leadId: l.id },
+      cta: { tel: l.phone ? `tel:${digits(l.phone)}` : undefined, navTo: 'generators/leads', leadId: l.id },
     });
   }
 
@@ -332,7 +332,7 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
       receivedAt: null,
       briefing: `Follow-up "${t.title}"${t.linked_name ? ` for ${t.linked_name}` : ''} is ${od > 0 ? `${od} day${od === 1 ? '' : 's'} overdue` : 'due today'}. Knock it out and check it off in Follow-ups.`,
       cta: t.linked_type === 'lead' && t.linked_id
-        ? { navTo: 'gen-leads', leadId: t.linked_id }
+        ? { navTo: 'generators/leads', leadId: t.linked_id }
         : { navTo: 'followups' },
     });
   }
@@ -349,7 +349,7 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
       subtitle: `${spec ? spec + ' · ' : ''}signed${when ? ` ${when}` : ''} · ready to award`,
       receivedAt: g.signed_at ? new Date(g.signed_at).toISOString() : null,
       briefing: `${g.customer} signed their ${spec ? spec + ' ' : ''}proposal${g.amount ? ` ($${Number(g.amount).toLocaleString()})` : ''}. Move it to Awarded on the generator pipeline to create the project and lock in the win.`,
-      cta: { navTo: 'gen-proposals' },
+      cta: { navTo: 'generators/pipeline' },
     });
   }
 
@@ -365,7 +365,7 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
       subtitle: `${src} · added ${age} day${age === 1 ? '' : 's'} ago · no response yet`,
       receivedAt: null,
       briefing: `${l.name} hasn't responded at all since being added ${age} day${age === 1 ? '' : 's'} ago — your first contact went out but nothing came back. ${l.phone ? `Call ${l.phone} or send a nudge.` : 'No phone on file — send a nudge email.'}${l.notes ? ` Notes: ${l.notes}` : ''}`,
-      cta: { tel: l.phone ? `tel:${digits(l.phone)}` : undefined, navTo: 'gen-leads', leadId: l.id },
+      cta: { tel: l.phone ? `tel:${digits(l.phone)}` : undefined, navTo: 'generators/leads', leadId: l.id },
     });
   }
 
@@ -395,7 +395,7 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
     if (!match && !isReply && !isTeammate) continue;
     unreadMatched++;
     const chips: BriefChip[] = match?.kind === 'lead' ? ['Gen'] : ['Elec'];
-    const navTo = match?.kind === 'lead' ? 'gen-leads' : undefined;
+    const navTo = match?.kind === 'lead' ? 'generators/leads' : undefined;
     const who = m.fromName || m.from || 'Unknown';
     const tagTxt = match ? match.label : isTeammate ? 'teammate' : 'awaiting your reply';
     attention.push({
@@ -422,7 +422,7 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
       subtitle: `${b.gc || '—'} · due in ${dd} day${dd === 1 ? '' : 's'}`,
       receivedAt: null,
       briefing: `${b.name} for ${b.gc || 'an unnamed GC'} is due in ${dd} day${dd === 1 ? '' : 's'}. Make sure the estimate is finalized and submitted.`,
-      cta: { navTo: 'pipeline', webLink: b.source_email_link || undefined },
+      cta: { navTo: 'electrical/bids', webLink: b.source_email_link || undefined },
     });
   }
 

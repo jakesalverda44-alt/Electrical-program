@@ -206,7 +206,7 @@ export default function App() {
     }
     switch (view) {
       case 'dashboard':
-        return <CommandCenterPage onNav={setView} />;
+        return <CommandCenterPage bids={bids} gens={gens} wonJobs={wonJobs} repNames={repNames} onNav={setView} />;
       case 'generators':
         return (
           <GeneratorsHubPage
