@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../../api/client';
 import { useUser, useShowToast } from '../../contexts/AppContext';
-import { BriefPayload, BriefAttentionItem, TodayEvent } from '../../types';
+import { Bid, Gen, WonJob, BriefPayload, BriefAttentionItem, TodayEvent } from '../../types';
 import BriefDrawer from './BriefDrawer';
+import HomeKpis from './HomeKpis';
 import './command-center.css';
 
 // One quote a day, rotated by day-of-year.
@@ -108,9 +109,15 @@ interface ActionBox {
   key: string; n: number; ic: string; label: string; sub: string; nav: string; cls: string;
 }
 
-interface Props { onNav: (v: string) => void; }
+interface Props {
+  bids: Bid[];
+  gens: Gen[];
+  wonJobs: WonJob[];
+  repNames?: string[];
+  onNav: (v: string) => void;
+}
 
-export default function CommandCenterPage({ onNav }: Props) {
+export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav }: Props) {
   const user = useUser();
   const showToast = useShowToast();
   const [brief, setBrief] = useState<BriefPayload | null>(null);
@@ -176,11 +183,11 @@ export default function CommandCenterPage({ onNav }: Props) {
   const count = (t: BriefAttentionItem['type']) => (brief?.attention || []).filter(a => a.type === t).length;
   const replies = (brief?.attention || []).filter(a => a.type === 'email');
   const boxes: ActionBox[] = !brief ? [] : ([
-    { key: 'signed', n: count('gen-signed'), ic: '✍️', label: 'Signed — ready to award', sub: 'open the pipeline and award it', nav: 'gen-proposals', cls: 'purple' },
-    { key: 'bids', n: count('bid'), ic: '⏰', label: 'Bids due soon', sub: 'due within 3 days', nav: 'pipeline', cls: 'red' },
+    { key: 'signed', n: count('gen-signed'), ic: '✍️', label: 'Signed — ready to award', sub: 'open the pipeline and award it', nav: 'generators/pipeline', cls: 'purple' },
+    { key: 'bids', n: count('bid'), ic: '⏰', label: 'Bids due soon', sub: 'due within 3 days', nav: 'electrical/bids', cls: 'red' },
     {
       key: 'leads', n: count('lead-call') + count('lead-stale'), ic: '📞', label: 'Leads need action',
-      sub: 'calls & no-response nudges', nav: 'gen-leads', cls: 'green',
+      sub: 'calls & no-response nudges', nav: 'generators/leads', cls: 'green',
     },
     { key: 'tasks', n: count('task'), ic: '✅', label: 'Follow-ups due', sub: 'today or overdue', nav: 'followups', cls: 'blue' },
     {
@@ -189,7 +196,7 @@ export default function CommandCenterPage({ onNav }: Props) {
         brief.intake.newToday > 0 && `${brief.intake.newToday} today`,
         brief.intake.newYesterday > 0 && `${brief.intake.newYesterday} yesterday`,
       ].filter(Boolean).join(' · ') || 'review and accept or decline',
-      nav: 'intake', cls: 'blue',
+      nav: 'electrical/intake', cls: 'blue',
     },
     {
       key: 'kohler',
@@ -199,7 +206,7 @@ export default function CommandCenterPage({ onNav }: Props) {
         brief.kohlerFunnel.newToday > 0 && `${brief.kohlerFunnel.newToday} today`,
         brief.kohlerFunnel.newYesterday > 0 && `${brief.kohlerFunnel.newYesterday} yesterday`,
       ].filter(Boolean).join(' · ') || `${brief.kohlerFunnel.received} this month`,
-      nav: 'gen-leads', cls: 'amber',
+      nav: 'generators/leads', cls: 'amber',
     },
   ] as ActionBox[]).filter(b => b.n > 0);
 
@@ -367,6 +374,8 @@ export default function CommandCenterPage({ onNav }: Props) {
           </div>
         </div>
       </div>
+
+      <HomeKpis bids={bids} gens={gens} wonJobs={wonJobs} repNames={repNames} onNav={onNav}/>
 
       <BriefDrawer
         item={drawerItem}

@@ -5,26 +5,21 @@ import { useToast } from './hooks/useToast';
 import { useAppSettings } from './hooks/useAppSettings';
 import LoginPage from './features/auth/LoginPage';
 import AppShell from './features/layout/AppShell';
-import DashboardPage from './features/dashboard/DashboardPage';
 import CommandCenterPage from './features/command-center/CommandCenterPage';
-import ElecPipelinePage from './features/pipeline/ElecPipelinePage';
-import GenPipelinePage from './features/gen-pipeline/GenPipelinePage';
-import PipelinePage from './features/pipeline/PipelinePage';
 import SalesByRepPage from './features/sales-by-rep/SalesByRepPage';
-import IntakeInboxPage from './features/intake/IntakeInboxPage';
 import BuilderPage from './features/builder/BuilderPage';
 import BidHubPage from './features/bid-hub/BidHubPage';
-import ElecProjectsPage from './features/elec-projects/ElecProjectsPage';
-import GenProjectsPage from './features/gen-projects/GenProjectsPage';
 import ContactsPage from './features/contacts/ContactsPage';
-import ReportingPage from './features/reporting/ReportingPage';
 import CommsPage from './features/comms/CommsPage';
 import DocsPage from './features/docs/DocsPage';
 import FollowupsPage from './features/followups/FollowupsPage';
-import LeadsPage from './features/leads/LeadsPage';
 import CalendarPage from './features/calendar/CalendarPage';
 import ProposalPublicPage from './pages/ProposalPublicPage';
 import SettingsPage from './features/settings/SettingsPage';
+import GeneratorsHubPage from './features/hubs/GeneratorsHubPage';
+import ElectricalHubPage from './features/hubs/ElectricalHubPage';
+import { coerceGenTab, coerceElecTab } from './features/hubs/constants';
+import { resolveLegacyPath } from './lib/legacyRoutes';
 import { PcWorkspace, PC_TABS, ConfirmedService } from './features/preconstruction/constants';
 import Toast from './components/Toast';
 import { AppProviders } from './contexts/AppContext';
@@ -54,12 +49,23 @@ export default function App() {
   const segments = location.pathname.replace(/^\/+/, '').split('/');
   const view = segments[0] || 'dashboard';
   const viewParam = segments[1] ? decodeURIComponent(segments[1]) : null;
+  // Division hub views (/generators/{tab}/{recordId?}, /electrical/{tab}/{recordId?})
+  // carry a tab as their second path segment and an optional record id as their third.
+  const isHubView = view === 'generators' || view === 'electrical';
+  const hubTab = isHubView ? (segments[1] ?? null) : null;
+  const hubRecordId = isHubView && segments[2] ? decodeURIComponent(segments[2]) : null;
+  // Old flat view URLs (bookmarks, backend-emitted links) redirect permanently to their
+  // new hub path; resolves to null for anything that isn't a legacy key.
+  const legacyTarget = resolveLegacyPath(location.pathname);
   const setView = useCallback(
     (v: string, recordId?: string) => navigate('/' + v + (recordId ? '/' + encodeURIComponent(recordId) : '')),
     [navigate],
   );
   // Strip a deep-link record id back out of the URL once the page has opened it.
-  const clearParam = useCallback(() => navigate('/' + view, { replace: true }), [navigate, view]);
+  // Hub views must keep the tab segment and only drop the record id.
+  const clearParam = useCallback(() => {
+    navigate(isHubView ? '/' + view + '/' + (hubTab ?? 'overview') : '/' + view, { replace: true });
+  }, [navigate, view, isHubView, hubTab]);
   const [bids, setBids] = useState<Bid[]>([]);
   const [gens, setGens] = useState<Gen[]>([]);
   const [wonJobs, setWonJobs] = useState<WonJob[]>([]);
@@ -163,7 +169,7 @@ export default function App() {
   // Open the add-bid flow, optionally pre-filling the GC (e.g. from a customer hub).
   const openNewBid = useCallback((gc?: string) => {
     setAddBidGc(gc);
-    setView('elec-proposals');
+    setView('electrical/bids');
     setOpenAddBid(true);
   }, [setView]);
 
@@ -187,6 +193,10 @@ export default function App() {
   }
 
   const renderView = () => {
+    // Old flat view URLs redirect permanently to their new hub path — checked
+    // first, before the loading gate, so a stale bookmark never flashes the
+    // "coming soon" default case.
+    if (legacyTarget) return <Navigate to={legacyTarget} replace/>;
     if (loading) {
       return (
         <div className="scroll view-enter">
@@ -196,56 +206,52 @@ export default function App() {
     }
     switch (view) {
       case 'dashboard':
-        return <CommandCenterPage onNav={setView} />;
-      case 'sales-dashboard':
+        return <CommandCenterPage bids={bids} gens={gens} wonJobs={wonJobs} repNames={repNames} onNav={setView} />;
+      case 'generators':
         return (
-          <DashboardPage
-            bids={bids} gens={gens} wonJobs={wonJobs}
-            repNames={repNames}
+          <GeneratorsHubPage
+            tab={coerceGenTab(hubTab)}
+            recordId={hubRecordId}
+            onSelectTab={key => setView('generators/' + key)}
+            onClearParam={clearParam}
             onNav={setView}
-          />
-        );
-      case 'pipeline':
-      case 'elec-proposals':
-      case 'gen-proposals':
-        return (
-          <PipelinePage
-            bids={bids} setBids={setBids}
             gens={gens} setGens={setGens}
-            setWonJobs={setWonJobs}
-            onOpenBid={(id, tab) => navigate('/bid/' + encodeURIComponent(id) + (tab ? '?tab=' + tab : ''))}
+            wonJobs={wonJobs} setWonJobs={setWonJobs}
+            flashId={flashId}
             onOpenBuilder={() => { setEditGen(null); setView('builder'); }}
             onEditGen={g => { setEditGen(g); setView('builder'); }}
+            onConverted={gen => setGens(prev => prev.some(g => g.id === gen.id) ? prev : [gen, ...prev])}
+          />
+        );
+      case 'electrical':
+        return (
+          <ElectricalHubPage
+            tab={coerceElecTab(hubTab)}
+            recordId={hubRecordId}
+            onSelectTab={key => setView('electrical/' + key)}
+            onClearParam={clearParam}
+            bids={bids} setBids={setBids}
+            wonJobs={wonJobs} setWonJobs={setWonJobs}
+            onOpenBid={(id, tab) => navigate('/bid/' + encodeURIComponent(id) + (tab ? '?tab=' + tab : ''))}
             flashId={flashId}
             openAddBid={openAddBid}
             onAddBidHandled={() => { setOpenAddBid(false); setAddBidGc(undefined); }}
             initialGc={addBidGc}
-            defaultTab={view === 'elec-proposals' ? 'electrical' : 'generator'}
-            openId={viewParam}
-            onClearParam={clearParam}
-            onNav={setView}
+            onBidAccepted={(bid) => { setBids(prev => [bid, ...prev]); setView('electrical/bids'); }}
+            onUnreadChange={setIntakeCount}
           />
         );
       case 'sales-by-rep':
         return <SalesByRepPage wonJobs={wonJobs} userRole={user.role}/>;
-      case 'intake':
-        return (
-          <IntakeInboxPage
-            onBidAccepted={(bid) => { setBids(prev => [bid, ...prev]); setView('elec-proposals'); }}
-            onUnreadChange={setIntakeCount}
-          />
-        );
       case 'builder':
         return (
           <BuilderPage
             setGens={setGens}
             setWonJobs={setWonJobs}
-            onSaved={() => { setEditGen(null); setView('gen-proposals'); }}
+            onSaved={() => { setEditGen(null); setView('generators/pipeline'); }}
             editGen={editGen}
           />
         );
-      case 'preconstruction':
-        return <Navigate to="/pipeline" replace/>;
       case 'bid':
         if (!viewParam) return <StubPage title="Bid"/>;
         return (
@@ -256,26 +262,10 @@ export default function App() {
             onNav={setView}
           />
         );
-      case 'elec-projects':
-        return <ElecProjectsPage bids={bids} setBids={setBids} setWonJobs={setWonJobs} openId={viewParam} onClearParam={clearParam}/>;
-      case 'gen-projects':
-        return <GenProjectsPage gens={gens} setGens={setGens} setWonJobs={setWonJobs} openId={viewParam} onClearParam={clearParam}/>;
       case 'contacts':
         return <ContactsPage onNewBid={openNewBid} onNav={setView}/>;
-      case 'reporting':
-        return <ReportingPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
       case 'calendar':
         return <CalendarPage bids={bids} gens={gens} wonJobs={wonJobs}/>;
-      case 'gen-leads':
-        return (
-          <LeadsPage
-            onNav={setView}
-            openLeadId={viewParam}
-            onClearParam={clearParam}
-            onEditGen={g => { setEditGen(g); setView('builder'); }}
-            onConverted={gen => setGens(prev => prev.some(g => g.id === gen.id) ? prev : [gen, ...prev])}
-          />
-        );
       case 'followups':
         return <FollowupsPage onCountChange={setFollowupCount}/>;
       case 'comms':

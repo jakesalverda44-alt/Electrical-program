@@ -54,7 +54,7 @@ export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, o
       <div className="scroll view-enter">
         <div style={{ padding: 64, textAlign: 'center', color: 'var(--text2)' }}>
           <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Bid not found</div>
-          <button className="btn" onClick={() => onNav('elec-proposals')}>Back to Pipeline</button>
+          <button className="btn" onClick={() => onNav('electrical/bids')}>Back to Pipeline</button>
         </div>
       </div>
     );
@@ -67,7 +67,7 @@ export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, o
     <div className="scroll view-enter">
       <div style={{ padding: 24 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-          <button className="close-x" onClick={() => onNav('elec-proposals')}>
+          <button className="close-x" onClick={() => onNav('electrical/bids')}>
             <Icon name="arrow" size={16} stroke={2} style={{ transform: 'rotate(180deg)' }}/>
           </button>
           <div style={{ flex: 1 }}>

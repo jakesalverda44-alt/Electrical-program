@@ -120,7 +120,7 @@ async function handleLeadFirstContact(leadId: string): Promise<void> {
         .then(ids => sendPushToUsers(ids, {
           title: 'New lead — needs a call',
           body: `${lead.name || 'A new lead'} has no usable email${lead.phone ? ` — call ${lead.phone}` : ''}`,
-          view: 'gen-leads',
+          view: 'generators/leads',
           id: lead.id,
           tag: `needscall:${lead.id}`,
         }))

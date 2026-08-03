@@ -46,24 +46,17 @@ function briefSub(): string {
 }
 
 const TB: Record<string, { title: string; sub: string | null }> = {
-  dashboard:        { title: 'Command Center',       sub: null },
-  'sales-dashboard':{ title: 'Sales Dashboard',      sub: null },
-  pipeline:        { title: 'Pipeline',              sub: 'Generator & Electrical proposals' },
-  'gen-proposals': { title: 'Generator Proposals',  sub: 'Kohler & Generac · In-house proposal builder' },
-  'elec-proposals':{ title: 'Electrical Proposals', sub: 'Electrical subcontracting · Bid tracking pipeline' },
+  dashboard:       { title: 'Home',                 sub: null },
+  generators:      { title: 'Generators',           sub: 'Leads · Proposals · Installs — Generator division' },
+  electrical:      { title: 'Electrical',           sub: 'Intake · Bids · Projects — Electrical division' },
   'sales-by-rep':  { title: 'Sales by Rep',         sub: 'Won jobs by salesperson · Generator & Electrical' },
-  'gen-projects':  { title: 'Generator Projects',   sub: 'Installation & commissioning pipeline' },
-  'elec-projects': { title: 'Electrical Projects',  sub: 'Construction & closeout pipeline' },
-  intake:          { title: 'Intake Inbox',          sub: 'Bid invitations · AI extraction · Accept or reject' },
   builder:         { title: 'Proposal Builder',      sub: null },
   comms:           { title: 'Communications',        sub: 'Email timeline, notes & follow-ups' },
   followups:       { title: 'Follow-ups',            sub: 'Tasks & reminders · Stay on top of every deal' },
   docs:            { title: 'Documents',             sub: 'Plan sets, contracts & attachments' },
-  reporting:       { title: 'Reporting',             sub: 'Pipeline analytics · Win rates · Forecast' },
   calendar:        { title: 'Calendar',              sub: 'Bid due dates · Won jobs · Project milestones' },
   contacts:        { title: 'Contacts',              sub: 'General contractors & manufacturer reps' },
   admin:           { title: 'Admin',                 sub: 'Users, roles & system configuration' },
-  'gen-leads':     { title: 'Generator Leads',       sub: 'Lead tracking · Generator division' },
 };
 
 export default function AppShell({
@@ -96,27 +89,16 @@ export default function AppShell({
   };
 
   const nav: NavGroup[] = [
-    // Command Center stands alone — it's the morning home base, not a sales report.
     { group: '', items: [
-      { id: 'dashboard',       label: 'Command Center',  icon: 'dashboard' },
-    ]},
-    { group: 'Sales', items: [
-      { id: 'sales-dashboard', label: 'Sales Dashboard', icon: 'trend' },
-      { id: 'gen-leads', label: 'Generator Leads', icon: 'users', tone: 'amber' },
-      { id: 'pipeline',  label: 'Pipeline',        icon: 'pipeline', count: genProposalCount + elecProposalCount },
-      { id: 'intake',    label: 'Intake Inbox',    icon: 'bell', count: newIncoming },
-    ]},
-    { group: 'Projects', items: [
-      { id: 'gen-projects',    label: 'Generator Projects',  icon: 'bolt', tone: 'amber', count: genProjectCount },
-      { id: 'elec-projects',   label: 'Electrical Projects', icon: 'checkc', count: elecProjectCount },
+      { id: 'dashboard',  label: 'Home',       icon: 'dashboard' },
+      { id: 'generators', label: 'Generators', icon: 'bolt', tone: 'amber', count: genProposalCount },
+      { id: 'electrical', label: 'Electrical', icon: 'pipeline', count: elecProposalCount + newIncoming },
     ]},
     { group: 'Workspace', items: [
-      { id: 'builder',   label: 'Proposal Builder', icon: 'doc' },
-      { id: 'followups', label: 'Follow-ups',        icon: 'checkc', count: followupCount },
-      { id: 'docs',      label: 'Documents',         icon: 'clip' },
-      { id: 'reporting', label: 'Reporting',         icon: 'trend' },
-      { id: 'calendar',  label: 'Calendar',          icon: 'clock' },
-      { id: 'contacts',  label: 'Contacts',          icon: 'users' },
+      { id: 'contacts',  label: 'Contacts',   icon: 'users' },
+      { id: 'calendar',  label: 'Calendar',   icon: 'clock' },
+      { id: 'followups', label: 'Follow-ups', icon: 'checkc', count: followupCount },
+      { id: 'docs',      label: 'Documents',  icon: 'clip' },
     ]},
   ];
 
@@ -125,37 +107,29 @@ export default function AppShell({
 
   const tbBase = TB[view] || TB['dashboard'];
   // Dynamic subtitles, evaluated per render so they never go stale in an open tab.
-  const tb = view === 'sales-dashboard'
-    ? { ...tbBase, sub: `${new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })} · Accurate Power & Technology` }
-    : tbBase.sub === null && tbBase.title === 'Command Center'
-      ? { ...tbBase, sub: briefSub() }
-      : tbBase;
+  const tb = tbBase.sub === null && tbBase.title === 'Home'
+    ? { ...tbBase, sub: briefSub() }
+    : tbBase;
   const initials = user.name.split(' ').map(w => w[0]).join('').slice(0, 2);
 
   const mobileBottomNav = [
-    { id: 'dashboard',  label: 'Home',     icon: 'dashboard', count: 0 },
-    { id: 'gen-leads',  label: 'Leads',    icon: 'users',     count: 0 },
-    { id: 'pipeline',   label: 'Pipeline', icon: 'pipeline',  count: genProposalCount + elecProposalCount },
+    { id: 'dashboard',           label: 'Home',       icon: 'dashboard', count: 0 },
+    { id: 'generators/pipeline', label: 'Generators', icon: 'bolt',      count: genProposalCount },
+    { id: 'electrical/bids',     label: 'Electrical', icon: 'pipeline',  count: elecProposalCount },
   ];
 
   const mobileMoreNav = [
-    { id: 'sales-dashboard', label: 'Sales Dashboard',   icon: 'trend',    count: 0 },
-    { id: 'gen-projects',    label: 'Generator Projects', icon: 'bolt',     count: genProjectCount },
-    { id: 'elec-projects',   label: 'Elec. Projects',    icon: 'checkc',   count: elecProjectCount },
-    { id: 'followups',       label: 'Follow-ups',         icon: 'checkc',   count: followupCount },
-    { id: 'intake',          label: 'Intake Inbox',       icon: 'bell',     count: newIncoming },
-    { id: 'builder',         label: 'Proposal Builder',   icon: 'doc',      count: 0 },
-    { id: 'docs',            label: 'Documents',          icon: 'clip',     count: 0 },
-    { id: 'reporting',       label: 'Reporting',          icon: 'trend',    count: 0 },
-    { id: 'calendar',        label: 'Calendar',           icon: 'clock',    count: 0 },
-    { id: 'contacts',        label: 'Contacts',           icon: 'users',    count: 0 },
+    { id: 'contacts',  label: 'Contacts',   icon: 'users',  count: 0 },
+    { id: 'calendar',  label: 'Calendar',   icon: 'clock',  count: 0 },
+    { id: 'followups', label: 'Follow-ups', icon: 'checkc', count: followupCount },
+    { id: 'docs',      label: 'Documents',  icon: 'clip',   count: 0 },
     ...(canAdmin ? [{ id: 'admin', label: 'Settings', icon: 'gear', count: 0 }] : []),
   ];
 
   const renderActions = () => {
-    if (view === 'sales-dashboard' || view === 'gen-proposals')
+    if (view === 'generators')
       return <button className="btn amber" onClick={onNewProposal}><Icon name="plus" size={16} stroke={2.4}/>New Proposal</button>;
-    if (view === 'elec-proposals')
+    if (view === 'electrical')
       return <>
         <button className="btn ghost" onClick={onOpenImport} style={{ position: 'relative' }}>
           <Icon name="cloud" size={16} stroke={1.9}/>Import from OneDrive
@@ -254,7 +228,7 @@ export default function AppShell({
       {/* Mobile bottom navigation */}
       <nav className="mobile-nav">
         {mobileBottomNav.map(it => (
-          <button key={it.id} className={'mobile-nav-btn' + (view === it.id ? ' active' : '')} onClick={() => onNav(it.id)}>
+          <button key={it.id} className={'mobile-nav-btn' + (view === it.id.split('/')[0] ? ' active' : '')} onClick={() => onNav(it.id)}>
             <div style={{ position: 'relative', display: 'inline-flex' }}>
               <Icon name={it.icon} size={22} stroke={1.8}/>
               {it.count > 0 && <span className="mobile-nav-badge">{it.count}</span>}

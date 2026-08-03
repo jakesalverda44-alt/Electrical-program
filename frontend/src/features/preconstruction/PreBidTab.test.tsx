@@ -215,6 +215,10 @@ describe('Quantity comparison + cost drivers', () => {
     // SITE UTILITIES: subject 8/4000*1000 = 2.0, comp 4/8000*1000 = 0.5.
     await waitFor(() => expect(screen.getByText(/2\.0 \/1k SF/)).toBeTruthy());
     expect(screen.getByText(/0\.5 \/1k SF/)).toBeTruthy();
+    // Delta must be (subject - comp) / comp, not the inverse: (2.0 - 0.5) / 0.5 = +300%.
+    // A prior version of this exact feature shipped an inverted delta once already —
+    // this assertion is the regression guard for that class of bug.
+    expect(screen.getByText('+300%')).toBeTruthy();
     // LIGHTING & CONTROLS exists only on the subject — a gap, not hidden.
     expect(screen.getByText(/Not in Big Store.s takeoff/i)).toBeTruthy();
   });

@@ -29,7 +29,7 @@ export function useGenPipeline({ gens, setGens, setWonJobs, showToast, onNav, on
     wonToast: wonJob => ({
       title: '🎉 Job won!',
       sub: `${wonJob.salesperson_name} · ${moneyFull(wonJob.value)} · ${wonJob.customer}`,
-      action: onNav ? { label: 'View in Projects →', onClick: () => onNav('gen-projects') } : undefined,
+      action: onNav ? { label: 'View in Projects →', onClick: () => onNav('generators/jobs') } : undefined,
     }),
     onMoved: (gen, stage, prevStage) => {
       if (stage === 'awarded' && prevStage !== 'awarded') onAwarded?.(gen);

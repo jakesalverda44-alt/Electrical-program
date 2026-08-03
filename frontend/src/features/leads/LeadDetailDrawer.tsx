@@ -138,7 +138,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
       if (data.stage === 'converted' && data.linked_gen_id) {
         if (data.proposal && onConverted) onConverted(data.proposal);
         onClose();
-        onNav('gen-proposals');
+        onNav('generators/pipeline');
         return;
       }
       await refreshActivity();
@@ -190,7 +190,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
       onClose();
       onEditGen(gen);
     } else {
-      onNav('gen-proposals');
+      onNav('generators/pipeline');
     }
   };
 
@@ -460,7 +460,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
               <button
                 className="btn ghost"
                 style={{ fontSize: 13, color: 'var(--amber)', borderColor: 'rgba(245,158,11,.4)' }}
-                onClick={() => { onClose(); onNav('gen-proposals'); }}
+                onClick={() => { onClose(); onNav('generators/pipeline'); }}
               >
                 <Icon name="bolt" size={13} stroke={2}/>View in Generator Pipeline
               </button>
