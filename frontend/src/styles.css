@@ -263,6 +263,11 @@ button{font-family:inherit}
 .adv-btn{width:28px;height:28px;border-radius:8px;border:1px solid var(--border2);background:var(--surface2);color:var(--text2);display:flex;align-items:center;justify-content:center;cursor:pointer}
 .adv-btn:hover{background:var(--blue);color:#fff;border-color:var(--blue)}
 .adv-btn.amber:hover{background:var(--amber);color:#11192a;border-color:var(--amber)}
+/* touch devices: stage-advance always visible, comfortable target */
+@media (hover: none) and (pointer: coarse) {
+  .bcard-adv { opacity: 1; }
+  .adv-btn { width: 40px; height: 40px; }
+}
 .pipe-toolbar{display:flex;align-items:center;gap:10px;padding:20px 28px 0}
 .pipe-toolbar .chip{padding:7px 14px;border-radius:20px;border:1px solid var(--border2);background:var(--surface);font-size:12.5px;font-weight:700;color:var(--text2);cursor:pointer}
 .pipe-toolbar .chip.active{background:var(--text);color:var(--bg);border-color:var(--text)}
@@ -291,6 +296,9 @@ button{font-family:inherit}
 .comm-filter{font:inherit;font-size:12.5px;font-weight:600;color:var(--text);background:var(--surface);border:1px solid var(--border2);border-radius:9px;padding:7px 11px;cursor:pointer;outline:none}
 .comm-filter:focus{border-color:var(--blue)}
 .ctable .sub{color:var(--text3);font-weight:600;font-size:12px}
+/* generic horizontal scroll wrapper for data tables */
+.table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.table-scroll .ctable{min-width:560px}
 .tag-div{font-size:10.5px;font-weight:800;padding:3px 9px;border-radius:6px;text-transform:uppercase;letter-spacing:.03em}
 .tag-div.elec{background:var(--blue-soft);color:#8FB4F5}
 .tag-div.gen{background:var(--amber-soft);color:#EAB861}
@@ -514,7 +522,7 @@ button{font-family:inherit}
 /* ── Mobile responsive ───────────────────────────────────────────── */
 @media (max-width: 768px) {
   /* App shell — stack vertically, full height via min-height */
-  .app { flex-direction: column; height: auto; min-height: 100dvh; min-height: 100vh; padding-bottom: 64px; }
+  .app { flex-direction: column; height: auto; min-height: 100dvh; min-height: 100vh; padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
 
   /* Hide desktop sidebar completely */
   .sidebar { display: none !important; }
@@ -563,7 +571,7 @@ button{font-family:inherit}
 
   /* Drawers — slide up from bottom */
   .drawer { width: 100% !important; right: 0 !important; border-radius: 18px 18px 0 0 !important; max-height: 85vh !important; }
-  .drawer-overlay { align-items: flex-end !important; }
+  .drawer-overlay { align-items: flex-end !important; z-index: 240; }
   /* The fixed bottom nav (z-index 200) overlays the bottom of the drawer; pad the
      scroll area so the last section clears it instead of being hidden behind it. */
   .drawer-body { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 20px) !important; }
@@ -612,6 +620,7 @@ button{font-family:inherit}
     border-radius: 20px 20px 0 0 !important;
     overflow-y: auto !important;
     box-shadow: 0 -8px 32px rgba(0,0,0,.3) !important;
+    z-index: 240 !important;
   }
 
   /* Search bar — cap width so it doesn't bleed off screen */
@@ -619,7 +628,6 @@ button{font-family:inherit}
 
   /* Sales dashboard — chart labels squish on small screens */
   .sd-chart { height: 140px !important; gap: 6px !important; }
-  .sd-col .amt { font-size: 9px !important; }
 
   /* Sales dashboard hero pills wrap nicely */
   .sd-pills { gap: 6px !important; }
@@ -632,7 +640,8 @@ button{font-family:inherit}
 @media (max-width: 480px) {
   .stats { grid-template-columns: 1fr !important; }
   .field-row3 { grid-template-columns: 1fr !important; }
-  .split { flex-direction: column !important; }
+  .field-row { grid-template-columns: 1fr; }
+  .split { grid-template-columns: 1fr !important; }
   .split-card { min-width: 0 !important; }
   .page-title { font-size: 15px !important; }
 }

@@ -185,6 +185,7 @@ export default function ContactsPage({ onNewBid, onNav }: Props) {
             ) : filtered.length === 0 ? (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>No customers match</div>
             ) : (
+              <div className="table-scroll">
               <table className="ctable">
                 <thead>
                   <tr>
@@ -213,6 +214,7 @@ export default function ContactsPage({ onNewBid, onNav }: Props) {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
         </div>

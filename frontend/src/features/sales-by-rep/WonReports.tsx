@@ -78,6 +78,7 @@ export default function WonReports({ records, salespeople }: Props) {
               By Salesperson
             </span>
           </div>
+          <div className="table-scroll">
           <table className="ctable">
             <thead>
               <tr>
@@ -99,6 +100,7 @@ export default function WonReports({ records, salespeople }: Props) {
               )}
             </tbody>
           </table>
+          </div>
         </div>
 
         {/* Electrical vs Generator */}

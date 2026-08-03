@@ -1059,6 +1059,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     <Icon name="x" size={13} stroke={2}/>Clear All
                   </button>
                 </div>
+                <div className="table-scroll">
                 <table className="ctable">
                   <thead><tr><th>File</th><th>Type</th><th>Size</th><th>Sheet Type</th><th></th></tr></thead>
                   <tbody>
@@ -1090,6 +1091,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     })}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
 
@@ -1727,6 +1729,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>No RFIs yet</div>
             ) : (
               <div className="panel">
+                <div className="table-scroll">
                 <table className="ctable">
                   <thead><tr><th>#</th><th>Question</th><th>Status</th><th></th></tr></thead>
                   <tbody>
@@ -1752,6 +1755,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
           </div>
@@ -2036,7 +2040,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       {estimateSaved && <span style={{ fontSize: 12, color: 'var(--green)', fontWeight: 700 }}>✓ Saved</span>}
                     </div>
                   </div>
-                  <div style={{ overflowX: 'auto' }}>
+                  <div className="table-scroll" style={{ overflowX: 'auto' }}>
                     <table className="ctable" style={{ minWidth: 640 }}>
                       <thead>
                         <tr>
@@ -2160,6 +2164,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   {historicalCosts.length === 0 ? 'No awarded jobs yet. Win bids to build your historical cost database.' : 'No jobs match the selected filter.'}
                 </div>
               ) : (
+                <div className="table-scroll">
                 <table className="ctable">
                   <thead>
                     <tr>
@@ -2220,6 +2225,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     })}
                   </tbody>
                 </table>
+                </div>
               )}
             </div>
           </div>

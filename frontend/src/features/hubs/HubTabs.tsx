@@ -13,7 +13,7 @@ interface HubTabsProps {
 export default function HubTabs({ tabs, active, accent, onSelect, counts }: HubTabsProps) {
   const activeColor = accent === 'amber' ? 'var(--amber)' : 'var(--blue)';
   return (
-    <div style={{ display: 'flex', gap: 4, padding: '0 16px', borderBottom: '1px solid var(--border)' }}>
+    <div style={{ display: 'flex', gap: 4, padding: '0 16px', borderBottom: '1px solid var(--border)', overflowX: 'auto', whiteSpace: 'nowrap' }}>
       {tabs.map(t => {
         const isActive = active === t.key;
         const count = counts?.[t.key];
@@ -31,6 +31,8 @@ export default function HubTabs({ tabs, active, accent, onSelect, counts }: HubT
               color: isActive ? activeColor : 'var(--text3)',
               cursor: 'pointer',
               transition: 'color .15s',
+              flexShrink: 0,
+              minHeight: 44,
             }}
           >
             {t.label}
