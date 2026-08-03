@@ -578,6 +578,10 @@ button{font-family:inherit}
 
   /* Builder */
   .builder-layout { grid-template-columns: 1fr !important; padding: 12px !important; }
+  /* Real touch-target height for form fields on a phone (44px is the standard
+     iOS/Android minimum tap target — these render smaller via INPUT_STYLE's
+     '9px 12px' padding otherwise). */
+  .builder-layout input, .builder-layout select { min-height: 44px; }
 
   /* Settings */
   .settings-layout { flex-direction: column !important; }
@@ -635,6 +639,18 @@ button{font-family:inherit}
 
   /* Tighter side padding on phone (Command Center handles its own in command-center.css) */
   .sd-root { padding: 12px 14px 80px !important; }
+}
+
+/* ── Customer-facing proposal embed (public e-sign page) ─────────────────
+   The real mobile sizing (page padding, font-size floors) lives in
+   ProposalPreview's docStyle/pageStyle/fs() inline styles — inline styles beat
+   plain stylesheet rules, so fighting them here would do nothing. This block
+   only covers what CAN'T be an inline style: capping the document's width to
+   its (already-padded) mobile container instead of a fixed 780px max-width.
+   Desktop/print/PDF (the non-embed render path) never gets the
+   .proposal-embed class, so this cannot affect them. */
+@media (max-width: 768px) {
+  .proposal-embed > div { max-width: 100% !important; }
 }
 
 @media (max-width: 480px) {
