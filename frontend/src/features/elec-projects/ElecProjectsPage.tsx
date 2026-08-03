@@ -481,6 +481,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
           </div>
           {data.cos.length > 0 && (
             <div className="panel">
+              <div className="table-scroll">
               <table className="ctable">
                 <thead><tr><th>#</th><th>Description</th><th>Amount</th><th>Status</th><th>Submitted</th></tr></thead>
                 <tbody>
@@ -497,6 +498,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
           {data.cos.length === 0 && <Empty text="No change orders yet"/>}
@@ -536,6 +538,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
           </div>
           {data.cos.length === 0 ? <Empty text="No change orders yet"/> : (
             <div className="panel">
+              <div className="table-scroll">
               <table className="ctable">
                 <thead><tr><th>#</th><th>Description</th><th>Amount</th><th>Status</th><th>Submitted</th><th></th></tr></thead>
                 <tbody>
@@ -574,6 +577,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </div>
@@ -621,6 +625,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
           </div>
           {data.payApps.length === 0 ? <Empty text="No pay applications yet"/> : (
             <div className="panel">
+              <div className="table-scroll">
               <table className="ctable">
                 <thead><tr><th>App #</th><th>Period</th><th>Scheduled Value</th><th>% Complete</th><th>Amount Billed</th><th>Status</th><th></th></tr></thead>
                 <tbody>
@@ -646,6 +651,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </div>
@@ -678,6 +684,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
           </div>
           {data.rfis.length === 0 ? <Empty text="No RFIs yet"/> : (
             <div className="panel">
+              <div className="table-scroll">
               <table className="ctable">
                 <thead><tr><th>RFI #</th><th>Question</th><th>To</th><th>Submitted</th><th>Due</th><th>Status</th></tr></thead>
                 <tbody>
@@ -705,6 +712,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </div>
@@ -744,6 +752,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
           </div>
           {data.keyMats.length === 0 ? <Empty text="No key materials tracked yet"/> : (
             <div className="panel">
+              <div className="table-scroll">
               <table className="ctable">
                 <thead><tr><th>Material</th><th>Supplier</th><th>PO #</th><th>Order Date</th><th>ETA</th><th>Status</th><th></th></tr></thead>
                 <tbody>
@@ -769,6 +778,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </div>
@@ -1167,6 +1177,7 @@ function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
         <Empty text="No documents uploaded for this project yet"/>
       ) : (
         <div className="panel">
+          <div className="table-scroll">
           <table className="ctable">
             <thead><tr><th>File</th><th>Type</th><th>Size</th><th>Uploaded</th><th></th></tr></thead>
             <tbody>
@@ -1185,6 +1196,7 @@ function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>

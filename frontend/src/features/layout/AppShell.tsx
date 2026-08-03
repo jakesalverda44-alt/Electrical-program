@@ -6,6 +6,7 @@ import ProfileModal from '../../components/ProfileModal';
 import aptLogo from '../../assets/apt-logo.png';
 import { Bid, Gen, User } from '../../types';
 import { isPrivileged } from '../../hooks/useAuth';
+import { useInstallPrompt } from '../../hooks/useInstallPrompt';
 import { useUser } from '../../contexts/AppContext';
 
 type View = string;
@@ -67,6 +68,7 @@ export default function AppShell({
   bids = [], gens = [], showToast,
 }: Props) {
   const user = useUser();
+  const { canInstall, promptInstall, isIos, isStandalone, iosHintDismissed, dismissIosHint } = useInstallPrompt();
   const [profileDropOpen, setProfileDropOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileTab, setProfileTab] = useState<'profile' | 'password'>('profile');
@@ -248,6 +250,28 @@ export default function AppShell({
           <div className="mobile-more-overlay" onClick={() => setMoreOpen(false)}/>
           <div className="mobile-more-sheet">
             <div className="mobile-more-handle"/>
+            {isIos && !isStandalone && !iosHintDismissed && (
+              <div className="mobile-more-ios-hint">
+                <span>Install this app: Share → Add to Home Screen</span>
+                <button
+                  type="button"
+                  className="mobile-more-ios-hint-close"
+                  onClick={dismissIosHint}
+                  aria-label="Dismiss install hint"
+                >
+                  <Icon name="x" size={16} stroke={2}/>
+                </button>
+              </div>
+            )}
+            {canInstall && (
+              <button
+                className="mobile-more-item"
+                onClick={() => { promptInstall(); setMoreOpen(false); }}
+              >
+                <span className="mobile-more-item-ic"><Icon name="cloudup" size={20} stroke={1.8}/></span>
+                Install App
+              </button>
+            )}
             {mobileMoreNav.map(it => (
               <button key={it.id} className="mobile-more-item" onClick={() => { onNav(it.id); setMoreOpen(false); }}>
                 <span className="mobile-more-item-ic"><Icon name={it.icon} size={20} stroke={1.8}/></span>

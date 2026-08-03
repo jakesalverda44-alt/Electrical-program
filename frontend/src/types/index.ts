@@ -182,6 +182,7 @@ export interface Lead {
   last_activity_at?: string | null;
   site_visit_at?: string | null;
   site_visit_needs_time?: boolean;
+  survey_data?: Record<string, unknown> | null;
 }
 
 export interface LeadActivity {

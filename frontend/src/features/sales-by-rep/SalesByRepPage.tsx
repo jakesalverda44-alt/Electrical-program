@@ -132,6 +132,7 @@ export default function SalesByRepPage({ wonJobs, userRole }: Props) {
                 No won jobs match these filters.
               </div>
             ) : (
+              <div className="table-scroll">
               <table className="ctable">
                 <thead>
                   <tr>
@@ -184,6 +185,7 @@ export default function SalesByRepPage({ wonJobs, userRole }: Props) {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
         )}

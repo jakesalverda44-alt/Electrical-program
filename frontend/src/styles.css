@@ -245,7 +245,7 @@ button{font-family:inherit}
 .sum-empty{color:var(--text3);font-size:12.5px;font-weight:600;line-height:1.6;text-align:center;padding:30px 10px}
 
 /* ── Toast ─────────────────────────────────────────────── */
-.toast-wrap{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:10px;align-items:center}
+.toast-wrap{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);z-index:350;display:flex;flex-direction:column;gap:10px;align-items:center}
 .toast{display:flex;align-items:center;gap:12px;background:var(--surface2);border:1px solid var(--border2);border-radius:13px;padding:13px 18px 13px 14px;box-shadow:var(--shadow);animation:toastIn .35s cubic-bezier(.2,.8,.3,1)}
 .toast .t-ic{width:34px;height:34px;border-radius:9px;background:var(--green-soft);color:var(--green);display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .toast b{font-size:13.5px;font-weight:800}
@@ -263,6 +263,11 @@ button{font-family:inherit}
 .adv-btn{width:28px;height:28px;border-radius:8px;border:1px solid var(--border2);background:var(--surface2);color:var(--text2);display:flex;align-items:center;justify-content:center;cursor:pointer}
 .adv-btn:hover{background:var(--blue);color:#fff;border-color:var(--blue)}
 .adv-btn.amber:hover{background:var(--amber);color:#11192a;border-color:var(--amber)}
+/* touch devices: stage-advance always visible, comfortable target */
+@media (hover: none) and (pointer: coarse) {
+  .bcard-adv { opacity: 1; }
+  .adv-btn { width: 40px; height: 40px; }
+}
 .pipe-toolbar{display:flex;align-items:center;gap:10px;padding:20px 28px 0}
 .pipe-toolbar .chip{padding:7px 14px;border-radius:20px;border:1px solid var(--border2);background:var(--surface);font-size:12.5px;font-weight:700;color:var(--text2);cursor:pointer}
 .pipe-toolbar .chip.active{background:var(--text);color:var(--bg);border-color:var(--text)}
@@ -291,6 +296,9 @@ button{font-family:inherit}
 .comm-filter{font:inherit;font-size:12.5px;font-weight:600;color:var(--text);background:var(--surface);border:1px solid var(--border2);border-radius:9px;padding:7px 11px;cursor:pointer;outline:none}
 .comm-filter:focus{border-color:var(--blue)}
 .ctable .sub{color:var(--text3);font-weight:600;font-size:12px}
+/* generic horizontal scroll wrapper for data tables */
+.table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.table-scroll .ctable{min-width:560px}
 .tag-div{font-size:10.5px;font-weight:800;padding:3px 9px;border-radius:6px;text-transform:uppercase;letter-spacing:.03em}
 .tag-div.elec{background:var(--blue-soft);color:#8FB4F5}
 .tag-div.gen{background:var(--amber-soft);color:#EAB861}
@@ -514,7 +522,7 @@ button{font-family:inherit}
 /* ── Mobile responsive ───────────────────────────────────────────── */
 @media (max-width: 768px) {
   /* App shell — stack vertically, full height via min-height */
-  .app { flex-direction: column; height: auto; min-height: 100dvh; min-height: 100vh; padding-bottom: 64px; }
+  .app { flex-direction: column; height: auto; min-height: 100dvh; min-height: 100vh; padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
 
   /* Hide desktop sidebar completely */
   .sidebar { display: none !important; }
@@ -563,13 +571,23 @@ button{font-family:inherit}
 
   /* Drawers — slide up from bottom */
   .drawer { width: 100% !important; right: 0 !important; border-radius: 18px 18px 0 0 !important; max-height: 85vh !important; }
-  .drawer-overlay { align-items: flex-end !important; }
+  .drawer-overlay { align-items: flex-end !important; z-index: 240; }
   /* The fixed bottom nav (z-index 200) overlays the bottom of the drawer; pad the
      scroll area so the last section clears it instead of being hidden behind it. */
   .drawer-body { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 20px) !important; }
 
   /* Builder */
   .builder-layout { grid-template-columns: 1fr !important; padding: 12px !important; }
+  /* Section's inner 2-col field grid and the State/Zip subgrid: desktop keeps the
+     original '1fr 1fr' / '80px 1fr' literals (set inline in BuilderPage.tsx) —
+     collapse to a single column only below the mobile breakpoint, same pattern
+     as .builder-layout above. */
+  .builder-field-grid, .builder-statezip-grid { grid-template-columns: 1fr !important; }
+  /* Real touch-target height for form fields on a phone (44px is the standard
+     iOS/Android minimum tap target — these render smaller via INPUT_STYLE's
+     '9px 12px' padding otherwise). Excludes checkboxes/radios so their native
+     small square isn't stretched into a 44px box. */
+  .builder-layout input:not([type="checkbox"]):not([type="radio"]), .builder-layout select { min-height: 44px; }
 
   /* Settings */
   .settings-layout { flex-direction: column !important; }
@@ -612,6 +630,7 @@ button{font-family:inherit}
     border-radius: 20px 20px 0 0 !important;
     overflow-y: auto !important;
     box-shadow: 0 -8px 32px rgba(0,0,0,.3) !important;
+    z-index: 240 !important;
   }
 
   /* Search bar — cap width so it doesn't bleed off screen */
@@ -619,7 +638,6 @@ button{font-family:inherit}
 
   /* Sales dashboard — chart labels squish on small screens */
   .sd-chart { height: 140px !important; gap: 6px !important; }
-  .sd-col .amt { font-size: 9px !important; }
 
   /* Sales dashboard hero pills wrap nicely */
   .sd-pills { gap: 6px !important; }
@@ -629,10 +647,23 @@ button{font-family:inherit}
   .sd-root { padding: 12px 14px 80px !important; }
 }
 
+/* ── Customer-facing proposal embed (public e-sign page) ─────────────────
+   The real mobile sizing (page padding, font-size floors) lives in
+   ProposalPreview's docStyle/pageStyle/fs() inline styles — inline styles beat
+   plain stylesheet rules, so fighting them here would do nothing. This block
+   only covers what CAN'T be an inline style: capping the document's width to
+   its (already-padded) mobile container instead of a fixed 780px max-width.
+   Desktop/print/PDF (the non-embed render path) never gets the
+   .proposal-embed class, so this cannot affect them. */
+@media (max-width: 768px) {
+  .proposal-embed > div { max-width: 100% !important; }
+}
+
 @media (max-width: 480px) {
   .stats { grid-template-columns: 1fr !important; }
   .field-row3 { grid-template-columns: 1fr !important; }
-  .split { flex-direction: column !important; }
+  .field-row { grid-template-columns: 1fr; }
+  .split { grid-template-columns: 1fr !important; }
   .split-card { min-width: 0 !important; }
   .page-title { font-size: 15px !important; }
 }
@@ -721,6 +752,21 @@ button{font-family:inherit}
     display: flex; align-items: center; justify-content: center;
     background: var(--surface2); color: var(--text2); flex-shrink: 0;
   }
+  /* iOS "Add to Home Screen" hint — beforeinstallprompt never fires on Safari */
+  .mobile-more-ios-hint {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface2); border: 1px solid var(--border2);
+    border-radius: 12px; padding: 8px 4px 8px 14px; margin-bottom: 10px;
+    font-size: 13px; font-weight: 600; color: var(--text2); line-height: 1.35;
+  }
+  .mobile-more-ios-hint span { flex: 1; }
+  .mobile-more-ios-hint-close {
+    flex-shrink: 0; width: 44px; height: 44px;
+    display: flex; align-items: center; justify-content: center;
+    border: none; background: none; color: var(--text3);
+    cursor: pointer; border-radius: 10px; padding: 0;
+  }
+  .mobile-more-ios-hint-close:active { background: var(--surface3); }
 }
 
 

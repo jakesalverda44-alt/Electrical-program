@@ -4,6 +4,7 @@ import api from '../../api/client';
 import { Lead, LeadActivity } from '../../types';
 import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_LABELS } from './constants';
 import SiteVisitModal from './SiteVisitModal';
+import LeadSiteSurvey from './LeadSiteSurvey';
 import { Gen } from '../../types';
 
 interface Props {
@@ -64,6 +65,8 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
   const [deleting, setDeleting] = useState(false);
   const [showSiteVisit, setShowSiteVisit] = useState(false);
   const [handingOff, setHandingOff] = useState(false);
+  const [showSurvey, setShowSurvey] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -181,16 +184,25 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
 
   const createGen = async () => {
     setActionsOpen(false);
-    const { data: gen } = await api.post<Gen>(`/leads/${lead.id}/create-gen`);
-    // Refresh lead to get linked_gen_id
-    const { data: updated } = await api.get<Lead>(`/leads/${lead.id}`);
-    setLead(updated);
-    onUpdated(updated);
-    if (onEditGen) {
-      onClose();
-      onEditGen(gen);
-    } else {
-      onNav('generators/pipeline');
+    setGenError(null);
+    try {
+      const { data: gen } = await api.post<Gen>(`/leads/${lead.id}/create-gen`);
+      // Refresh lead to get linked_gen_id
+      const { data: updated } = await api.get<Lead>(`/leads/${lead.id}`);
+      setLead(updated);
+      onUpdated(updated);
+      if (onEditGen) {
+        onClose();
+        onEditGen(gen);
+      } else {
+        onNav('generators/pipeline');
+      }
+    } catch {
+      // Fire-and-forget was silent before — the survey's "Build Proposal from Survey"
+      // CTA and the Actions-menu "Create Generator Record" both land here, so surface
+      // the failure inline rather than leaving the user staring at a drawer that just
+      // didn't do anything.
+      setGenError("Couldn't create the proposal — check connection and try again.");
     }
   };
 
@@ -264,10 +276,37 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
             </div>
           )}
 
+          {genError && (
+            <div style={{
+              fontSize: 12.5, fontWeight: 600, color: '#E06A6A', padding: '10px 14px',
+              borderRadius: 9, background: 'rgba(224,106,106,.1)', border: '1px solid rgba(224,106,106,.35)',
+            }}>
+              {genError}
+            </div>
+          )}
+
+          {/* Site Survey entry — the mobile field-visit questionnaire. Once a proposal
+              already exists there's nothing left for the survey to feed, so we point
+              at the linked proposal instead of offering to (re)run it. */}
+          {lead.linked_gen_id ? (
+            <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+              Proposal already exists for this lead — see Linked Generator Proposal below.
+            </div>
+          ) : (
+            <button
+              className="btn amber"
+              style={{ justifyContent: 'center' }}
+              onClick={() => setShowSurvey(true)}
+            >
+              <Icon name="clip" size={14} stroke={2} />
+              {lead.survey_data && Object.keys(lead.survey_data).length > 0 ? 'Resume Site Survey' : 'Start Site Survey'}
+            </button>
+          )}
+
           {/* Contact Info */}
           <div className="dtl-section" style={{ marginTop: 16 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>Contact</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
               <div>
                 <label style={lbl}>Phone</label>
                 <input style={inp} value={lead.phone ?? ''} onChange={field('phone')} placeholder="(555) 555-5555"/>
@@ -286,7 +325,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
           {/* Lead Details */}
           <div className="dtl-section">
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>Lead Details</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
               <div>
                 <label style={lbl}>Source</label>
                 <select style={{ ...inp }} value={lead.source} onChange={field('source')}>
@@ -495,6 +534,15 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
           saving={handingOff}
           onConfirm={doHandoff}
           onClose={() => setShowSiteVisit(false)}
+        />
+      )}
+
+      {showSurvey && (
+        <LeadSiteSurvey
+          lead={lead}
+          onUpdated={updated => { setLead(updated); onUpdated(updated); }}
+          onBuildProposal={() => { setShowSurvey(false); createGen(); }}
+          onClose={() => setShowSurvey(false)}
         />
       )}
     </div>

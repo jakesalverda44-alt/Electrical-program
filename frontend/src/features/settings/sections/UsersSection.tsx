@@ -32,6 +32,7 @@ export function UsersSection() {
 
       {loading ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div> : (
         <div className="panel" style={{ overflow: 'hidden' }}>
+          <div className="table-scroll">
           <table className="ctable">
             <thead>
               <tr>
@@ -75,6 +76,7 @@ export function UsersSection() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 

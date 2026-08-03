@@ -289,6 +289,7 @@ export default function DocsPage({ bids, gens }: Props) {
               </div>
             ) : (
               <div className="panel">
+                <div className="table-scroll">
                 <table className="ctable">
                   <thead>
                     <tr><th>Document</th><th>Category</th><th>Linked To</th><th>Uploaded</th><th>Size</th><th></th></tr>
@@ -341,6 +342,7 @@ export default function DocsPage({ bids, gens }: Props) {
                     })}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
           </div>
