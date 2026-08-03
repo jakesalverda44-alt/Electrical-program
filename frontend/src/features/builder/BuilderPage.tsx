@@ -49,10 +49,10 @@ function Section({ title, icon, children }: { title: string; icon: string; child
           {title}
         </span>
       </div>
-      {/* auto-fit collapses to a single column once two 150px fields no longer fit
-          side by side — same 2-up look on desktop, stacked full-width fields on a
-          narrow phone viewport, no media query needed. */}
-      <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14 }}>
+      {/* Desktop grid is the original literal '1fr 1fr' — the mobile collapse to a
+          single column happens in styles.css (.builder-field-grid, 768px block),
+          same '!important' pattern .builder-layout itself already uses. */}
+      <div className="builder-field-grid" style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         {children}
       </div>
     </div>
@@ -234,7 +234,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
               <input style={INPUT_STYLE} value={form.city} onChange={e => set('city', e.target.value)} placeholder="City"/>
             </Field>
             <Field label="State / Zip">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(80px, 1fr))', gap: 8 }}>
+              <div className="builder-statezip-grid" style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: 8 }}>
                 <input style={INPUT_STYLE} value={form.state} onChange={e => set('state', e.target.value)}/>
                 <input style={INPUT_STYLE} value={form.zip}   onChange={e => set('zip',   e.target.value)} placeholder="ZIP"/>
               </div>

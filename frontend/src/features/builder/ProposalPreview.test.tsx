@@ -87,4 +87,50 @@ describe('ProposalPreview embed vs non-embed rendering', () => {
     const label = getByText('Prepared For');
     expect(label.style.fontSize).toBe('8px');
   });
+
+  // Fix-round-1 minor #3: fontSize:10 sites (SigBlock labels, Disclosures heading,
+  // spec-sheet model line, the Proposal No. value cell) were left unwrapped —
+  // still needs the embed+mobile floor even though 10 is close to the 11px floor.
+  it('floors the fontSize:10 sites too (SigBlock label, Disclosures heading) in embed+mobile, and leaves them untouched otherwise', () => {
+    mockMatchMedia(true);
+    const embedRender = render(<ProposalPreview embed form={form} totals={totals} proposalNo="P-1"/>);
+    const aptLabel = embedRender.getAllByText('"APT" Accurate Power Technology, Inc.')[0];
+    const disclosuresHeading = embedRender.getAllByText('General Disclosures:')[0];
+    expect(parseFloat(aptLabel.style.fontSize)).toBeGreaterThanOrEqual(11);
+    expect(parseFloat(disclosuresHeading.style.fontSize)).toBeGreaterThanOrEqual(11);
+    embedRender.unmount();
+
+    const nonEmbedRender = render(<ProposalPreview embed={false} form={form} totals={totals} proposalNo="P-1" onBack={() => {}}/>);
+    const aptLabel2 = nonEmbedRender.getAllByText('"APT" Accurate Power Technology, Inc.')[0];
+    const disclosuresHeading2 = nonEmbedRender.getAllByText('General Disclosures:')[0];
+    expect(aptLabel2.style.fontSize).toBe('10px');
+    expect(disclosuresHeading2.style.fontSize).toBe('10px');
+  });
+
+  // Fix-round-1 minor #4: the customer-info-grid Proposal No. VALUE cell (source
+  // fontSize 10) sits directly under its own LABEL cell (source fontSize 8).
+  // Before this fix, embed+mobile floored only the label to 11px while the value
+  // stayed at 10px — a hierarchy inversion where the label rendered bigger than
+  // the value it labels. Navigated via DOM structure (not getAllByText index)
+  // since proposalNo text also repeats once per page via PageHeader.
+  it('never lets the Proposal No. value render smaller than its own label after embed+mobile flooring', () => {
+    mockMatchMedia(true);
+    const { getByText } = render(<ProposalPreview embed form={form} totals={totals} proposalNo="P-1"/>);
+
+    // Row 1 of the customer-info table: Prepared For | (blank) | Proposal No. | (blank)
+    const headerRow = getByText('Prepared For').closest('tr') as HTMLTableRowElement;
+    const labelCell = headerRow.children[2] as HTMLElement;
+    expect(labelCell.textContent).toBe('Proposal No.');
+
+    // Row 2: customer name (colSpan 2) | proposal number value (colSpan 2)
+    const valueRow = headerRow.nextElementSibling as HTMLTableRowElement;
+    const valueCell = valueRow.children[1] as HTMLElement;
+    expect(valueCell.textContent).toBe('P-1');
+
+    const labelSize = parseFloat(labelCell.style.fontSize);
+    const valueSize = parseFloat(valueCell.style.fontSize);
+    expect(labelSize).toBeGreaterThanOrEqual(11);
+    expect(valueSize).toBeGreaterThanOrEqual(11);
+    expect(valueSize).toBeGreaterThanOrEqual(labelSize);
+  });
 });

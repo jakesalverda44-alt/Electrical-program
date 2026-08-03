@@ -115,7 +115,7 @@ function SigBlock({ signatureImage, signedDate, buyerName, fs = identityFs }: { 
   return (
     <div style={{ display: 'flex', background: GRAY_L, border: '1px solid #E5E7EB' }}>
       <div style={cell}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, marginBottom: 6 }}>"APT" Accurate Power Technology, Inc.</div>
+        <div style={{ fontSize: fs(10), fontWeight: 700, color: NAVY, marginBottom: 6 }}>"APT" Accurate Power Technology, Inc.</div>
         <div style={line}/>
         <div style={lbl}>By: Authorized Representative</div>
         <div style={{ height: 10 }}/>
@@ -124,7 +124,7 @@ function SigBlock({ signatureImage, signedDate, buyerName, fs = identityFs }: { 
       </div>
       <div style={{ width: 1, background: '#E5E7EB' }}/>
       <div style={cell}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, marginBottom: 6 }}>"BUYER"</div>
+        <div style={{ fontSize: fs(10), fontWeight: 700, color: NAVY, marginBottom: 6 }}>"BUYER"</div>
         {/* Buyer printed name */}
         <div style={{ minHeight: 14 }}>{buyerName && <span style={{ fontSize: 11, fontWeight: 700, color: GRAY_D }}>{buyerName}</span>}</div>
         <div style={line}/>
@@ -141,7 +141,7 @@ function SigBlock({ signatureImage, signedDate, buyerName, fs = identityFs }: { 
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ minHeight: 34, display: 'flex', alignItems: 'flex-end' }}>
-              {signedDate && <span style={{ fontSize: 10, color: GRAY_D, marginBottom: 2 }}>{signedDate}</span>}
+              {signedDate && <span style={{ fontSize: fs(10), color: GRAY_D, marginBottom: 2 }}>{signedDate}</span>}
             </div>
             <div style={line}/>
             <div style={lbl}>Date</div>
@@ -317,7 +317,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                 </tr>
                 <tr style={{ background: BLUE_L }}>
                   <td style={{ padding: '5px 8px', fontWeight: 800, color: '#1B3A6B', fontSize: 11 }} colSpan={2}>{form.customer || '—'}</td>
-                  <td style={{ padding: '5px 8px', fontWeight: 700, color: ACCENT, fontSize: 10 }} colSpan={2}>{proposalNo}</td>
+                  <td style={{ padding: '5px 8px', fontWeight: 700, color: ACCENT, fontSize: fs(10) }} colSpan={2}>{proposalNo}</td>
                 </tr>
                 <tr style={{ background: BLUE_M }}>
                   <td style={{ padding: '4px 8px', fontWeight: 700, color: GRAY_M, fontSize: fs(8), textTransform: 'uppercase', letterSpacing: '.05em' }}>Attn / Contact</td>
@@ -516,7 +516,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
               <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine} fs={fs}/>
               <SectionHeading title={`${form.brand} ${form.size} Generator — Product Specifications`}/>
-              <div style={{ textAlign: 'center', fontSize: 10, fontWeight: 700, color: '#1B3A6B', marginTop: -10, marginBottom: 14 }}>Model: {spec.model}</div>
+              <div style={{ textAlign: 'center', fontSize: fs(10), fontWeight: 700, color: '#1B3A6B', marginTop: -10, marginBottom: 14 }}>Model: {spec.model}</div>
 
               <SpecTable header="ELECTRICAL SPECIFICATIONS" rows={[
                 ['Rated Output (LP)', form.size, 'Operating Speed', spec.rpm + ' RPM'],
@@ -681,7 +681,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
               <strong>Insurance:</strong>&nbsp; APT is licensed and insured according to the laws of the State of Florida. APT carries general liability coverage, commercial automobile coverage, and worker's compensation coverage. Certificates of insurance are available on request. APT is a Drug-Free Workplace.
             </p>
 
-            <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, marginBottom: 8 }}>General Disclosures:</div>
+            <div style={{ fontSize: fs(10), fontWeight: 700, color: NAVY, marginBottom: 8 }}>General Disclosures:</div>
             {[
               'APT does not guarantee the Buyer any homeowner’s insurance discount.',
               'Scheduled installation dates may be postponed due to weather such as heavy rain or electrical storms. During severe weather conditions, scheduled disconnects may be postponed due to municipality resource allocations or re-routes.',

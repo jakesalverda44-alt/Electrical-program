@@ -578,10 +578,16 @@ button{font-family:inherit}
 
   /* Builder */
   .builder-layout { grid-template-columns: 1fr !important; padding: 12px !important; }
+  /* Section's inner 2-col field grid and the State/Zip subgrid: desktop keeps the
+     original '1fr 1fr' / '80px 1fr' literals (set inline in BuilderPage.tsx) —
+     collapse to a single column only below the mobile breakpoint, same pattern
+     as .builder-layout above. */
+  .builder-field-grid, .builder-statezip-grid { grid-template-columns: 1fr !important; }
   /* Real touch-target height for form fields on a phone (44px is the standard
      iOS/Android minimum tap target — these render smaller via INPUT_STYLE's
-     '9px 12px' padding otherwise). */
-  .builder-layout input, .builder-layout select { min-height: 44px; }
+     '9px 12px' padding otherwise). Excludes checkboxes/radios so their native
+     small square isn't stretched into a 44px box. */
+  .builder-layout input:not([type="checkbox"]):not([type="radio"]), .builder-layout select { min-height: 44px; }
 
   /* Settings */
   .settings-layout { flex-direction: column !important; }
