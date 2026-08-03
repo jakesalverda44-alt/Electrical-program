@@ -36,7 +36,7 @@ export default function ElecOverviewTab({ bids, wonJobs, onSelectTab }: Props) {
   const dueSoon = bids
     .filter(b => b.stage === 'due')
     .slice()
-    .sort((a, b) => dayOf(a.due).getTime() - dayOf(b.due).getTime())
+    .sort((a, b) => a.due_days - b.due_days)
     .slice(0, 5);
 
   return (
@@ -139,7 +139,7 @@ export default function ElecOverviewTab({ bids, wonJobs, onSelectTab }: Props) {
                 {b.name}
                 <span style={{ color: 'var(--text3)', fontWeight: 600 }}> · {b.gc}</span>
               </span>
-              <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{fmtDate(b.due)}</span>
+              <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{b.due}</span>
               <span
                 className="num"
                 style={{ fontSize: 12, fontWeight: 800, minWidth: 60, textAlign: 'right', color: b.due_days <= 3 ? 'var(--orange)' : 'var(--text2)' }}

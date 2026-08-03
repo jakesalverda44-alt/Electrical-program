@@ -8,9 +8,8 @@ interface HubTabsProps {
   counts?: Record<string, number>;    // optional badge per tab key
 }
 
-// Underline tab bar, styled to match the pipeline tab bar it replaces
-// (frontend/src/features/pipeline/PipelinePage.tsx) — amber accent for the
-// generators hub, blue for the electrical hub.
+// Underline tab bar, styled to match the pre-hub pipeline tab bars it
+// replaced — amber accent for the generators hub, blue for the electrical hub.
 export default function HubTabs({ tabs, active, accent, onSelect, counts }: HubTabsProps) {
   const activeColor = accent === 'amber' ? 'var(--amber)' : 'var(--blue)';
   return (
