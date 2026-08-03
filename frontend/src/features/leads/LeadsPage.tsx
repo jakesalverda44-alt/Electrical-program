@@ -321,7 +321,7 @@ export default function LeadsPage({ onNav, openLeadId, onClearParam, onEditGen, 
             )}
           </div>
         ) : isMobile ? (
-          <div className="lead-cards" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {filtered.map(lead => (
               <LeadCard key={lead.id} lead={lead} stageInfo={stageInfo(lead.stage)} onClick={() => setDetail(lead)} />
             ))}
@@ -465,6 +465,7 @@ function LeadCard({ lead, stageInfo: si, onClick }: {
           style={{
             alignSelf: 'flex-start', fontSize: 13, fontWeight: 700, textDecoration: 'none',
             padding: '6px 14px', borderRadius: 8, background: 'var(--green-soft)', color: 'var(--green)',
+            display: 'inline-flex', alignItems: 'center', minHeight: 44,
           }}
         >
           Call {lead.phone}
