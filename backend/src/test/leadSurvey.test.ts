@@ -59,4 +59,25 @@ describe('lead survey_data', () => {
     expect(formData.gasLine).toBeUndefined();
     expect(formData.phone).toBe('555-0100');
   });
+
+  it('site-scheduled handoff (convertLeadToProposal) merges survey_data into the proposal form_data', async (ctx) => {
+    if (!(await dbAvailable())) return ctx.skip();
+    const u = await makeUser('owner');
+    const lead = await createLead(u.token, `Survey Handoff ${Date.now()}`);
+
+    const survey = { jobType: 'swap-out', brand: 'Generac', base: 'stand-small', gasLine: true, notes: 'gate code 1234' };
+    await request(app).patch(`/api/leads/${lead.id}`).set(auth(u.token))
+      .send({ survey_data: survey }).expect(200);
+
+    const res = await request(app).patch(`/api/leads/${lead.id}`).set(auth(u.token))
+      .send({ stage: 'site-scheduled' }).expect(200);
+
+    const formData = res.body.proposal.form_data;
+    expect(formData.jobType).toBe('swap-out');
+    expect(formData.brand).toBe('Generac');
+    expect(formData.pad).toBe(false);
+    expect(formData.genStand).toBe('small');
+    expect(formData.gasLine).toBe(true);
+    expect(formData.notes).toContain('gate code 1234');
+  });
 });

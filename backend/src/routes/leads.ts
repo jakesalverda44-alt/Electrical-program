@@ -238,6 +238,7 @@ type LeadRow = {
   contact_method: string; linked_gen_id: string | null;
   salesperson_id: string | null; salesperson_name: string | null;
   site_visit_at: string | Date | null; site_visit_needs_time: boolean;
+  survey_data: Record<string, unknown> | null;
 };
 
 // FL-based business — render the site-visit time in Eastern for activity logs.
@@ -260,6 +261,9 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
 
   if (!genId) {
     const addr = leadAddressToProposal(lead.address);
+    // Same merge shape as create-gen (~:780): survey answers spread over the
+    // contact-derived fields, survey notes appended to the lead's own notes.
+    const surveyFields = surveyToGenFormFields(lead.survey_data ?? {});
     const formData = {
       customer: lead.name,
       attn:     lead.name,
@@ -269,8 +273,9 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
       zip:      addr.zip,
       phone:    lead.phone ?? '',
       email:    lead.email ?? '',
-      notes:    lead.notes ?? '',
+      notes:    [lead.notes, (lead.survey_data as { notes?: string } | null)?.notes].filter(Boolean).join('\n'),
       lead_source: lead.source,
+      ...surveyFields,
     };
     const { rows } = await pool.query(
       `INSERT INTO generator_proposals
