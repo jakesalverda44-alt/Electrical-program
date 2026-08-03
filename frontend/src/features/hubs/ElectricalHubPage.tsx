@@ -32,14 +32,14 @@ export default function ElectricalHubPage({
   onBidAccepted, onUnreadChange,
 }: Props) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div className="hub-page">
       <HubTabs
         tabs={ELEC_HUB_TABS}
         active={tab}
         accent="blue"
         onSelect={key => onSelectTab(key as ElecHubTab)}
       />
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div className="hub-body">
         {tab === 'overview' && (
           <ElecOverviewTab bids={bids} wonJobs={wonJobs} onSelectTab={onSelectTab}/>
         )}

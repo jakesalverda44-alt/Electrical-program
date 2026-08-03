@@ -28,14 +28,14 @@ export default function GeneratorsHubPage({
   gens, setGens, wonJobs, setWonJobs, flashId, onOpenBuilder, onEditGen, onConverted,
 }: Props) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div className="hub-page">
       <HubTabs
         tabs={GEN_HUB_TABS}
         active={tab}
         accent="amber"
         onSelect={key => onSelectTab(key as GenHubTab)}
       />
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div className="hub-body">
         {tab === 'overview' && (
           <GenOverviewTab gens={gens} wonJobs={wonJobs} onSelectTab={onSelectTab}/>
         )}
