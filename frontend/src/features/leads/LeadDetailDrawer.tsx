@@ -4,6 +4,7 @@ import api from '../../api/client';
 import { Lead, LeadActivity } from '../../types';
 import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_LABELS } from './constants';
 import SiteVisitModal from './SiteVisitModal';
+import LeadSiteSurvey from './LeadSiteSurvey';
 import { Gen } from '../../types';
 
 interface Props {
@@ -64,6 +65,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
   const [deleting, setDeleting] = useState(false);
   const [showSiteVisit, setShowSiteVisit] = useState(false);
   const [handingOff, setHandingOff] = useState(false);
+  const [showSurvey, setShowSurvey] = useState(false);
   const actionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -262,6 +264,24 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
                 );
               })}
             </div>
+          )}
+
+          {/* Site Survey entry — the mobile field-visit questionnaire. Once a proposal
+              already exists there's nothing left for the survey to feed, so we point
+              at the linked proposal instead of offering to (re)run it. */}
+          {lead.linked_gen_id ? (
+            <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+              Proposal already exists for this lead — see Linked Generator Proposal below.
+            </div>
+          ) : (
+            <button
+              className="btn amber"
+              style={{ justifyContent: 'center' }}
+              onClick={() => setShowSurvey(true)}
+            >
+              <Icon name="clip" size={14} stroke={2} />
+              {lead.survey_data && Object.keys(lead.survey_data).length > 0 ? 'Resume Site Survey' : 'Start Site Survey'}
+            </button>
           )}
 
           {/* Contact Info */}
@@ -495,6 +515,15 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
           saving={handingOff}
           onConfirm={doHandoff}
           onClose={() => setShowSiteVisit(false)}
+        />
+      )}
+
+      {showSurvey && (
+        <LeadSiteSurvey
+          lead={lead}
+          onUpdated={updated => { setLead(updated); onUpdated(updated); }}
+          onBuildProposal={() => { setShowSurvey(false); createGen(); }}
+          onClose={() => setShowSurvey(false)}
         />
       )}
     </div>
