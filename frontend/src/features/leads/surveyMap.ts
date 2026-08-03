@@ -3,6 +3,13 @@
 // Field names deliberately mirror GenForm in features/builder/genData.ts so the
 // output of surveyToGenFormFields can be merged directly over blankGenForm /
 // defaults downstream. This module stays dependency-free (no import of genData).
+//
+// Keep in step with the backend mirror in backend/src/routes/leads.ts (LeadSurvey type
+// + surveyToGenFormFields there) — same field names/rules verbatim, except that copy
+// deliberately drops `notes` (its caller merges lead.notes and survey_data.notes
+// together instead). This frontend copy only drives the wizard's UI/branching
+// (LeadSiteSurvey.tsx); the backend copy is the one actually applied to conversions
+// (create-gen / site-scheduled handoff), so treat it as the live mapper of record.
 
 export interface LeadSurvey {
   jobType?: 'new-install' | 'swap-out';

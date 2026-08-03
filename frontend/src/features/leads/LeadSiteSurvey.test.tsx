@@ -4,7 +4,11 @@ import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/re
 import LeadSiteSurvey from './LeadSiteSurvey';
 import { Lead } from '../../types';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  patch.mockReset();
+  get.mockReset();
+});
 
 const get = vi.fn();
 const patch = vi.fn();
@@ -102,5 +106,60 @@ describe('LeadSiteSurvey', () => {
     await waitFor(() => expect(screen.getByText('Build Proposal from Survey')).toBeTruthy());
     fireEvent.click(screen.getByText('Build Proposal from Survey'));
     await waitFor(() => expect(onBuildProposal).toHaveBeenCalled());
+  });
+
+  it('(f) Build Proposal does not fire the callback and shows an error when the final save fails', async () => {
+    const { onBuildProposal } = setup();
+    fireEvent.click(screen.getByText('New Install'));
+    await clickNextTimes(8); // -> Finish
+    await waitFor(() => expect(screen.getByText('Build Proposal from Survey')).toBeTruthy());
+
+    patch.mockRejectedValueOnce(new Error('network error'));
+    fireEvent.click(screen.getByText('Build Proposal from Survey'));
+
+    await waitFor(() => expect(screen.getByText(/Couldn't save your answers/i)).toBeTruthy());
+    expect(onBuildProposal).not.toHaveBeenCalled();
+  });
+
+  it('(g) Save & Close stays open and shows an error when unsaved answers fail to persist', async () => {
+    const { onClose } = setup();
+    fireEvent.click(screen.getByText('New Install'));
+    await clickNextTimes(7); // Job Type -> ... -> Notes (index 7), all still saving fine
+
+    // Every save from here on fails — including the fire-and-forget step-change save
+    // that fires when leaving Notes, so the wizard reaches Finish still carrying an
+    // unsaved edit.
+    patch.mockRejectedValue(new Error('network error'));
+    fireEvent.change(screen.getByPlaceholderText(/anything else worth noting/i), {
+      target: { value: 'ladder access only' },
+    });
+    await new Promise(r => setTimeout(r, 0));
+    fireEvent.click(screen.getByText('Next')); // Notes -> Finish (best-effort save fails silently)
+    await new Promise(r => setTimeout(r, 0));
+
+    await waitFor(() => expect(screen.getByText('Save & Close')).toBeTruthy());
+    fireEvent.click(screen.getByText('Save & Close'));
+
+    await waitFor(() => expect(screen.getByText(/Couldn't save your answers/i)).toBeTruthy());
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('(h) does not PATCH on close when nothing changed since the last successful save', async () => {
+    const { onClose } = setup();
+    const closeBtn = document.querySelector('.drawer .close-x') as HTMLButtonElement;
+    fireEvent.click(closeBtn);
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it('(i) does not re-PATCH on step change once an answer has already been saved', async () => {
+    setup();
+    fireEvent.click(screen.getByText('New Install'));
+    fireEvent.click(screen.getByText('Next')); // Job Type -> Unit; saves { jobType: 'new-install' }
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByText('Next')); // Unit -> Fuel; no new answers since the last save
+    await new Promise(r => setTimeout(r, 0));
+    expect(patch).toHaveBeenCalledTimes(1);
   });
 });

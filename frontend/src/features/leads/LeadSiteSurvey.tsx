@@ -86,26 +86,45 @@ function QLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+const SAVE_ERROR_MSG = "Couldn't save your answers — check connection and try again";
+
 export default function LeadSiteSurvey({ lead, onUpdated, onBuildProposal, onClose }: Props) {
   const [survey, setSurvey] = useState<LeadSurvey>(() => (lead.survey_data as LeadSurvey | null) ?? {});
   const [stepIndex, setStepIndex] = useState(0);
   const [showFinish, setShowFinish] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFirstRender = useRef(true);
+  // Serialized snapshot of the last *successfully* persisted survey — lets close/step-change
+  // skip the PATCH entirely when nothing changed since then (avoids zero-change PATCH noise
+  // against leadWriteLimiter) and lets us tell "closing with nothing to lose" apart from
+  // "closing with answers that failed to save."
+  const lastSavedRef = useRef<string>(JSON.stringify((lead.survey_data as LeadSurvey | null) ?? {}));
 
   const steps = ALL_STEPS.filter(s => s.id !== 'swapout' || survey.jobType === 'swap-out');
   const clampedIndex = Math.min(stepIndex, steps.length - 1);
   const currentStep = steps[clampedIndex];
 
-  async function saveNow() {
+  function isDirty() {
+    return JSON.stringify(survey) !== lastSavedRef.current;
+  }
+
+  // Never throws — callers that must know whether the save actually landed (Build
+  // Proposal, Save & Close, close-with-unsaved-changes) check the returned boolean and
+  // surface SAVE_ERROR_MSG themselves. Intermediate debounced/step-change saves ignore
+  // the result and stay best-effort/silent by design.
+  async function saveNow(): Promise<boolean> {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    const serialized = JSON.stringify(survey);
     try {
       const { data } = await api.patch<Lead>(`/leads/${lead.id}`, { survey_data: survey });
       onUpdated(data);
+      lastSavedRef.current = serialized;
+      setSaveError(null);
+      return true;
     } catch {
-      // Best-effort autosave — a network hiccup shouldn't block navigating the wizard;
-      // the next debounced/step-change save will retry with the latest answers.
+      return false;
     }
   }
 
@@ -123,7 +142,7 @@ export default function LeadSiteSurvey({ lead, onUpdated, onBuildProposal, onClo
   }
 
   function goNext() {
-    saveNow();
+    if (isDirty()) saveNow();
     if (clampedIndex + 1 >= steps.length) {
       setShowFinish(true);
     } else {
@@ -133,22 +152,26 @@ export default function LeadSiteSurvey({ lead, onUpdated, onBuildProposal, onClo
 
   function goBack() {
     if (showFinish) { setShowFinish(false); return; }
-    saveNow();
+    if (isDirty()) saveNow();
     setStepIndex(i => Math.max(0, i - 1));
   }
 
-  async function handleClose() {
-    await saveNow();
-    onClose();
+  // Shared by the header ×, the backdrop click, and "Save & Close": nothing to save ->
+  // close immediately; unsaved answers that fail to persist -> surface the error and
+  // stay open rather than silently dropping them.
+  async function closeWithSaveGuard() {
+    if (!isDirty()) { onClose(); return; }
+    const ok = await saveNow();
+    if (ok) onClose();
+    else setSaveError(SAVE_ERROR_MSG);
   }
 
-  async function handleSaveClose() {
-    await saveNow();
-    onClose();
-  }
+  const handleClose = closeWithSaveGuard;
+  const handleSaveClose = closeWithSaveGuard;
 
   async function handleBuildProposal() {
-    await saveNow();
+    const ok = await saveNow();
+    if (!ok) { setSaveError(SAVE_ERROR_MSG); return; }
     onBuildProposal();
   }
 
@@ -347,6 +370,15 @@ export default function LeadSiteSurvey({ lead, onUpdated, onBuildProposal, onClo
               />
             ))}
           </div>
+
+          {saveError && (
+            <div style={{
+              padding: '10px 14px', borderRadius: 9, fontSize: 12.5, fontWeight: 600,
+              background: 'rgba(224,106,106,.1)', border: '1px solid rgba(224,106,106,.35)', color: '#E06A6A',
+            }}>
+              {saveError}
+            </div>
+          )}
 
           {showFinish ? (
             <>

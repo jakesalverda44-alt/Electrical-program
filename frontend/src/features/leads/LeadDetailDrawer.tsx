@@ -66,6 +66,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
   const [showSiteVisit, setShowSiteVisit] = useState(false);
   const [handingOff, setHandingOff] = useState(false);
   const [showSurvey, setShowSurvey] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -183,16 +184,25 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
 
   const createGen = async () => {
     setActionsOpen(false);
-    const { data: gen } = await api.post<Gen>(`/leads/${lead.id}/create-gen`);
-    // Refresh lead to get linked_gen_id
-    const { data: updated } = await api.get<Lead>(`/leads/${lead.id}`);
-    setLead(updated);
-    onUpdated(updated);
-    if (onEditGen) {
-      onClose();
-      onEditGen(gen);
-    } else {
-      onNav('generators/pipeline');
+    setGenError(null);
+    try {
+      const { data: gen } = await api.post<Gen>(`/leads/${lead.id}/create-gen`);
+      // Refresh lead to get linked_gen_id
+      const { data: updated } = await api.get<Lead>(`/leads/${lead.id}`);
+      setLead(updated);
+      onUpdated(updated);
+      if (onEditGen) {
+        onClose();
+        onEditGen(gen);
+      } else {
+        onNav('generators/pipeline');
+      }
+    } catch {
+      // Fire-and-forget was silent before — the survey's "Build Proposal from Survey"
+      // CTA and the Actions-menu "Create Generator Record" both land here, so surface
+      // the failure inline rather than leaving the user staring at a drawer that just
+      // didn't do anything.
+      setGenError("Couldn't create the proposal — check connection and try again.");
     }
   };
 
@@ -263,6 +273,15 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
                   </button>
                 );
               })}
+            </div>
+          )}
+
+          {genError && (
+            <div style={{
+              fontSize: 12.5, fontWeight: 600, color: '#E06A6A', padding: '10px 14px',
+              borderRadius: 9, background: 'rgba(224,106,106,.1)', border: '1px solid rgba(224,106,106,.35)',
+            }}>
+              {genError}
             </div>
           )}
 
