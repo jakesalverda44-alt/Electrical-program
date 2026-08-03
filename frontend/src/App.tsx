@@ -252,8 +252,6 @@ export default function App() {
             editGen={editGen}
           />
         );
-      case 'preconstruction':
-        return <Navigate to="/pipeline" replace/>;
       case 'bid':
         if (!viewParam) return <StubPage title="Bid"/>;
         return (
