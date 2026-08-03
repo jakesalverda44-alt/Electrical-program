@@ -2,6 +2,7 @@ import React from 'react';
 import { Bid, WonJob } from '../../types';
 import HubTabs from './HubTabs';
 import { ELEC_HUB_TABS, ElecHubTab } from './constants';
+import ElecOverviewTab from './ElecOverviewTab';
 import IntakeInboxPage from '../intake/IntakeInboxPage';
 import ElecPipelinePage from '../pipeline/ElecPipelinePage';
 import ElecProjectsPage from '../elec-projects/ElecProjectsPage';
@@ -13,6 +14,7 @@ interface Props {
   onClearParam: () => void;
   bids: Bid[];
   setBids: (fn: (prev: Bid[]) => Bid[]) => void;
+  wonJobs: WonJob[];
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
   onOpenBid: (id: string, tab?: string) => void;
   flashId: string | null;
@@ -25,7 +27,7 @@ interface Props {
 
 export default function ElectricalHubPage({
   tab, recordId, onSelectTab, onClearParam,
-  bids, setBids, setWonJobs, onOpenBid, flashId,
+  bids, setBids, wonJobs, setWonJobs, onOpenBid, flashId,
   openAddBid, onAddBidHandled, initialGc,
   onBidAccepted, onUnreadChange,
 }: Props) {
@@ -39,7 +41,7 @@ export default function ElectricalHubPage({
       />
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {tab === 'overview' && (
-          <div className="scroll view-enter" style={{ padding: 32 }}>Overview — coming in Task 5</div>
+          <ElecOverviewTab bids={bids} wonJobs={wonJobs} onSelectTab={onSelectTab}/>
         )}
         {tab === 'intake' && (
           <IntakeInboxPage

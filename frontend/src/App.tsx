@@ -216,7 +216,7 @@ export default function App() {
             onClearParam={clearParam}
             onNav={setView}
             gens={gens} setGens={setGens}
-            setWonJobs={setWonJobs}
+            wonJobs={wonJobs} setWonJobs={setWonJobs}
             flashId={flashId}
             onOpenBuilder={() => { setEditGen(null); setView('builder'); }}
             onEditGen={g => { setEditGen(g); setView('builder'); }}
@@ -231,7 +231,7 @@ export default function App() {
             onSelectTab={key => setView('electrical/' + key)}
             onClearParam={clearParam}
             bids={bids} setBids={setBids}
-            setWonJobs={setWonJobs}
+            wonJobs={wonJobs} setWonJobs={setWonJobs}
             onOpenBid={(id, tab) => navigate('/bid/' + encodeURIComponent(id) + (tab ? '?tab=' + tab : ''))}
             flashId={flashId}
             openAddBid={openAddBid}

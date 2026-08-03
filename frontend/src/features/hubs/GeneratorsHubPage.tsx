@@ -2,6 +2,7 @@ import React from 'react';
 import { Gen, WonJob } from '../../types';
 import HubTabs from './HubTabs';
 import { GEN_HUB_TABS, GenHubTab } from './constants';
+import GenOverviewTab from './GenOverviewTab';
 import LeadsPage from '../leads/LeadsPage';
 import GenPipelinePage from '../gen-pipeline/GenPipelinePage';
 import GenProjectsPage from '../gen-projects/GenProjectsPage';
@@ -14,6 +15,7 @@ interface Props {
   onNav: (v: string) => void;
   gens: Gen[];
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
+  wonJobs: WonJob[];
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
   flashId: string | null;
   onOpenBuilder: () => void;
@@ -23,7 +25,7 @@ interface Props {
 
 export default function GeneratorsHubPage({
   tab, recordId, onSelectTab, onClearParam, onNav,
-  gens, setGens, setWonJobs, flashId, onOpenBuilder, onEditGen, onConverted,
+  gens, setGens, wonJobs, setWonJobs, flashId, onOpenBuilder, onEditGen, onConverted,
 }: Props) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -35,7 +37,7 @@ export default function GeneratorsHubPage({
       />
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {tab === 'overview' && (
-          <div className="scroll view-enter" style={{ padding: 32 }}>Overview — coming in Task 5</div>
+          <GenOverviewTab gens={gens} wonJobs={wonJobs} onSelectTab={onSelectTab}/>
         )}
         {tab === 'leads' && (
           <LeadsPage
