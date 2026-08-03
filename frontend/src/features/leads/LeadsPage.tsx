@@ -6,6 +6,7 @@ import { Gen } from '../../types';
 import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_COLORS, INTEREST_LABELS } from './constants';
 import AddLeadModal from './AddLeadModal';
 import LeadDetailDrawer from './LeadDetailDrawer';
+import { useIsMobile } from '../../hooks/useIsMobile';
 
 interface Props {
   onNav: (view: string) => void;
@@ -35,6 +36,18 @@ function followUpMeta(d?: string | null): { label: string; color: string } | nul
   if (days === 0) return { label: 'Today', color: 'var(--amber)' };
   if (days === 1) return { label: 'Tomorrow', color: 'var(--amber)' };
   return { label: fmtDate(d)!, color: 'var(--text3)' };
+}
+
+// There's no dedicated "stage entered" timestamp — last_activity_at (falling back to
+// created_at, same reference the drawer's overdue check uses) is the best available
+// proxy for "how long has this lead been sitting in its current stage".
+function daysInStageLabel(lead: Lead): string {
+  const ref = lead.last_activity_at ?? lead.created_at;
+  if (!ref) return '—';
+  const days = Math.floor((Date.now() - new Date(ref).getTime()) / 86400000);
+  if (days <= 0) return 'Today';
+  if (days === 1) return '1 day';
+  return `${days} days`;
 }
 
 interface LeadAction {
@@ -92,6 +105,7 @@ const PRIORITY_META: Record<number, { label: string; color: string }> = {
 };
 
 export default function LeadsPage({ onNav, openLeadId, onClearParam, onEditGen, onConverted }: Props) {
+  const isMobile = useIsMobile();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [actions, setActions] = useState<LeadAction[]>([]);
   const [loading, setLoading] = useState(true);
@@ -170,7 +184,7 @@ export default function LeadsPage({ onNav, openLeadId, onClearParam, onEditGen, 
 
   return (
     <div className="scroll view-enter">
-      <div style={{ padding: '20px 24px', maxWidth: 1100, margin: '0 auto' }}>
+      <div style={{ padding: isMobile ? '12px 14px' : '20px 24px', maxWidth: 1100, margin: '0 auto' }}>
 
         {/* Action queue: every lead that needs something, most urgent first */}
         {actions.length > 0 && (
@@ -306,6 +320,12 @@ export default function LeadsPage({ onNav, openLeadId, onClearParam, onEditGen, 
               <div style={{ fontSize: 14, color: 'var(--text2)' }}>No leads match the current filters.</div>
             )}
           </div>
+        ) : isMobile ? (
+          <div className="lead-cards" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {filtered.map(lead => (
+              <LeadCard key={lead.id} lead={lead} stageInfo={stageInfo(lead.stage)} onClick={() => setDetail(lead)} />
+            ))}
+          </div>
         ) : (
           <div style={{ background: 'var(--surface)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
             {/* Table header */}
@@ -393,6 +413,62 @@ export default function LeadsPage({ onNav, openLeadId, onClearParam, onEditGen, 
           onEditGen={onEditGen}
           onConverted={onConverted}
         />
+      )}
+    </div>
+  );
+}
+
+// Mobile-width row replacement for the 7-column desktop grid: a stacked card with
+// name/source up top, stage + days-in-stage below, and a tap-to-call phone link.
+// Tapping the card body (but not the phone link) opens the same detail drawer as the
+// desktop row.
+function LeadCard({ lead, stageInfo: si, onClick }: {
+  lead: Lead; stageInfo?: { key: string; label: string; color: string }; onClick: () => void;
+}) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
+        padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 8,
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--text)' }}>{lead.name}</div>
+          {lead.address && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{lead.address}</div>}
+        </div>
+        <span style={{
+          flex: 'none', fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 20,
+          background: 'var(--surface-2, rgba(0,0,0,.05))', color: 'var(--text3)',
+        }}>
+          {SOURCE_LABELS[lead.source] ?? lead.source}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{
+          display: 'inline-block', padding: '2px 10px', borderRadius: 20,
+          fontSize: 11.5, fontWeight: 700,
+          background: si ? si.color + '22' : 'transparent',
+          color: si?.color ?? 'var(--text3)',
+        }}>
+          {si?.label ?? lead.stage}
+        </span>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>{daysInStageLabel(lead)} in stage</span>
+      </div>
+
+      {lead.phone && (
+        <a
+          href={`tel:${lead.phone.replace(/[^\d+]/g, '')}`}
+          onClick={e => e.stopPropagation()}
+          style={{
+            alignSelf: 'flex-start', fontSize: 13, fontWeight: 700, textDecoration: 'none',
+            padding: '6px 14px', borderRadius: 8, background: 'var(--green-soft)', color: 'var(--green)',
+          }}
+        >
+          Call {lead.phone}
+        </a>
       )}
     </div>
   );

@@ -287,7 +287,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
           {/* Contact Info */}
           <div className="dtl-section" style={{ marginTop: 16 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>Contact</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
               <div>
                 <label style={lbl}>Phone</label>
                 <input style={inp} value={lead.phone ?? ''} onChange={field('phone')} placeholder="(555) 555-5555"/>
@@ -306,7 +306,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
           {/* Lead Details */}
           <div className="dtl-section">
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>Lead Details</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
               <div>
                 <label style={lbl}>Source</label>
                 <select style={{ ...inp }} value={lead.source} onChange={field('source')}>
