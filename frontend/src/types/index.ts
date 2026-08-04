@@ -103,6 +103,10 @@ export interface Gen {
   sent_at?: string;
   viewed_at?: string;
   signed_at?: string;
+  /** Buyer's drawn signature (data URL), stamped into both signature blocks. */
+  signature_data?: string | null;
+  /** Buyer's drawn initials (data URL), stamped onto every "CUST INT" rule. */
+  initials_data?: string | null;
   drive_job_folder_id?: string;
   drive_engineering_folder_id?: string;
   drive_permit_folder_id?: string;

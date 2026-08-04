@@ -8,6 +8,7 @@ import api from '../../api/client';
 import BuildFromNotesModal from '../builder/BuildFromNotesModal';
 import AwardKickoffModal, { useKickoffDocs, kickoffStatus, KICKOFF_ROWS } from './AwardKickoffModal';
 import SiteVisitChecklist from './SiteVisitChecklist';
+import SignedContractCard from './SignedContractCard';
 import SurveyMarkupEditor from './SurveyMarkupEditor';
 import DocSlot from './DocSlot';
 import { parseSizerFile } from './sizerParse';
@@ -354,6 +355,11 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             <DocSlot genId={gen.id} category="sizer_report" label="Sizer Report" onUploaded={autofillFromSizer}/>
             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>Uploading a sizer auto-fills the Site Visit Checklist — review &amp; edit it in the Checklist tab.</div>
           </div>
+
+          {/* The executed contract gets its own row above the general file list — it is
+              the one document anyone opening a signed job is looking for, and burying it
+              among site photos is how a missing archive went unnoticed. */}
+          <SignedContractCard gen={gen}/>
 
           {/* Photos & files up top so site-visit capture is one tap on mobile, not
               buried below every action button. */}

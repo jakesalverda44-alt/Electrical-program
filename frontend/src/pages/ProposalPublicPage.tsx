@@ -4,6 +4,7 @@ import SignatureCanvas from 'react-signature-canvas';
 import { GenForm } from '../features/builder/genData';
 import { GenTotals, calcGenTotals, migrateGenForm } from '../features/builder/genCalc';
 import ProposalPreview from '../features/builder/ProposalPreview';
+import { buildContractPdf, signedContractFilename } from '../lib/signedContractPdf';
 
 interface GenData {
   id: string;
@@ -19,6 +20,8 @@ interface GenData {
   proposal_no?: string;
   form_data?: Partial<GenForm> | string | null;
   totals_data?: Partial<GenTotals> | string | null;
+  signature_data?: string | null;
+  initials_data?: string | null;
 }
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -38,9 +41,13 @@ export default function ProposalPublicPage() {
   const [signing, setSigning] = useState(false);
   const [signError, setSignError] = useState('');
   const [cleared, setCleared] = useState(false);
+  const [hasSig, setHasSig] = useState(false);
+  const [hasInit, setHasInit] = useState(false);
   const [signedSig, setSignedSig] = useState<string | null>(null);
+  const [signedInitials, setSignedInitials] = useState<string | null>(null);
   const [signedDate, setSignedDate] = useState<string>('');
   const sigRef = useRef<SignatureCanvas>(null);
+  const initRef = useRef<SignatureCanvas>(null);
   const sigWrapRef = useRef<HTMLDivElement>(null);
   const contractRef = useRef<HTMLDivElement>(null);
 
@@ -51,6 +58,16 @@ export default function ProposalPublicPage() {
       .then(r => { if (!r.ok) throw new Error(); return r.json(); })
       .then(data => {
         setGen(data);
+        // Seed the marks from the stored record, not just from an in-session signing:
+        // a customer reopening their link should see the executed contract, not a
+        // blank one with an "accepted" banner over it.
+        if (data.signed_at) {
+          if (data.signature_data) setSignedSig(data.signature_data);
+          if (data.initials_data) setSignedInitials(data.initials_data);
+          setSignedDate(new Date(data.signed_at).toLocaleDateString('en-US', {
+            month: 'long', day: 'numeric', year: 'numeric',
+          }));
+        }
         setStatus(data.signed_at ? 'signed' : 'ready');
       })
       .catch(() => setStatus('error'));
@@ -58,20 +75,24 @@ export default function ProposalPublicPage() {
 
   const handleSign = async () => {
     if (!sigRef.current || sigRef.current.isEmpty()) return;
+    if (!initRef.current || initRef.current.isEmpty()) return;
     setSigning(true);
     setSignError('');
     const signatureData = sigRef.current.toDataURL('image/png');
+    const initialsData = initRef.current.toDataURL('image/png');
     try {
       const res = await fetch(`${API}/gens/p/${token}/sign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ signatureData }),
+        body: JSON.stringify({ signatureData, initialsData }),
       });
       if (!res.ok) throw new Error();
-      // Embed the signature into the on-page contract, let it paint, then rasterize
-      // the FULL signed sales agreement to a PDF and archive it to the job's Drive folder.
+      // Embed the signature and initials into the on-page contract, let it paint, then
+      // rasterize the FULL signed sales agreement to a PDF and archive it to the job's
+      // Drive folder.
       const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
       setSignedSig(signatureData);
+      setSignedInitials(initialsData);
       setSignedDate(today);
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
       await saveSignedPdf();
@@ -83,38 +104,36 @@ export default function ProposalPublicPage() {
     }
   };
 
-  // Rasterize the full signed contract (already rendered on the page) to a multi-page
-  // PDF and upload it. jspdf/html2canvas load on demand. Non-fatal on failure —
-  // signing itself already succeeded server-side.
+  // Rasterize the full signed contract (already rendered on the page) and upload it.
+  // Non-fatal: signing itself already succeeded server-side, so a failure here must not
+  // block the customer. But it is NOT silent — this runs on the buyer's phone, where an
+  // 8-page rasterize can exhaust memory or lose the tab, and a swallowed error meant the
+  // job quietly ended up with no archived contract and nobody knew. The report lets the
+  // rep see it, and they can rebuild the identical PDF from the gen card.
   const saveSignedPdf = async () => {
     if (!contractRef.current) return;
     try {
-      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
-        import('html2canvas'),
-        import('jspdf'),
-      ]);
-      const canvas = await html2canvas(contractRef.current, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
-      const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
-      const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
-      const imgH = canvas.height * (pageW / canvas.width);
-      const imgData = canvas.toDataURL('image/png');
-      let heightLeft = imgH;
-      let position = 0;
-      pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-      heightLeft -= pageH;
-      while (heightLeft > 0) {
-        position = heightLeft - imgH;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-        heightLeft -= pageH;
-      }
+      const blob = await buildContractPdf(contractRef.current);
       const fd = new FormData();
-      fd.append('file', pdf.output('blob'), `Signed Contract - ${gen?.customer ?? 'Customer'}.pdf`);
-      await fetch(`${API}/gens/p/${token}/proposal-pdf`, { method: 'POST', body: fd });
-    } catch {
-      /* non-fatal */
+      fd.append('file', blob, signedContractFilename(gen?.customer ?? ''));
+      const res = await fetch(`${API}/gens/p/${token}/proposal-pdf`, { method: 'POST', body: fd });
+      if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
+    } catch (err) {
+      reportArchiveFailure(err);
     }
+  };
+
+  // Best-effort telemetry for the case above. Deliberately swallows its own errors:
+  // if we cannot even report the failure, there is nothing further to do, and the
+  // customer must not see an error on a signing that actually worked.
+  const reportArchiveFailure = (err: unknown) => {
+    try {
+      fetch(`${API}/gens/p/${token}/archive-failed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: err instanceof Error ? err.message : String(err) }),
+      }).catch(() => {});
+    } catch { /* nothing left to try */ }
   };
 
   if (status === 'loading') return <CenteredMsg>Loading your proposal…</CenteredMsg>;
@@ -155,6 +174,7 @@ export default function ProposalPublicPage() {
               totals={totals as GenTotals}
               proposalNo={gen.proposal_no || ''}
               signatureImage={signedSig ?? undefined}
+              initialsImage={signedInitials ?? undefined}
               signedDate={signedDate || undefined}
             />
           </div>
@@ -180,15 +200,29 @@ export default function ProposalPublicPage() {
           <div style={{ background: '#fff', borderRadius: 12, boxShadow: '0 2px 12px rgba(0,0,0,.08)', padding: '28px' }}>
             <div style={{ fontWeight: 800, fontSize: 16, color: '#1e293b', marginBottom: 4 }}>Sign to Accept This Proposal</div>
             <div style={{ fontSize: 13, color: '#64748b', marginBottom: 20 }}>
-              Draw your signature below using your mouse or finger, then click <strong>Accept &amp; Sign</strong>.
+              Draw your signature and your initials below, then click <strong>Accept &amp; Sign</strong>.
+              Your initials are applied to each page of the agreement that calls for them.
             </div>
 
-            <div ref={sigWrapRef} style={{ border: '2px solid #e2e8f0', borderRadius: 9, overflow: 'hidden', marginBottom: 14, background: '#fafafa' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#475569', marginBottom: 6 }}>Signature</div>
+            <div ref={sigWrapRef} style={{ border: '2px solid #e2e8f0', borderRadius: 9, overflow: 'hidden', marginBottom: 16, background: '#fafafa' }}>
               <SignatureCanvas
                 ref={sigRef}
                 penColor="#1B3A6B"
                 canvasProps={{ style: { width: '100%', height: 160, display: 'block' } }}
                 onBegin={() => { setCleared(false); setSignError(''); }}
+                onEnd={() => setHasSig(!sigRef.current?.isEmpty())}
+              />
+            </div>
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#475569', marginBottom: 6 }}>Initials</div>
+            <div style={{ border: '2px solid #e2e8f0', borderRadius: 9, overflow: 'hidden', marginBottom: 14, background: '#fafafa', maxWidth: 220 }}>
+              <SignatureCanvas
+                ref={initRef}
+                penColor="#1B3A6B"
+                canvasProps={{ style: { width: '100%', height: 90, display: 'block' } }}
+                onBegin={() => { setSignError(''); }}
+                onEnd={() => setHasInit(!initRef.current?.isEmpty())}
               />
             </div>
 
@@ -199,12 +233,20 @@ export default function ProposalPublicPage() {
             )}
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'space-between', alignItems: 'center' }}>
-              <button onClick={() => { sigRef.current?.clear(); setCleared(true); setSignError(''); }}
+              <button onClick={() => {
+                  sigRef.current?.clear(); initRef.current?.clear();
+                  setHasSig(false); setHasInit(false);
+                  setCleared(true); setSignError('');
+                }}
                 style={{ fontSize: 13, fontWeight: 600, color: '#64748b', background: 'none', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 16px', cursor: 'pointer' }}>
                 Clear
               </button>
-              <button onClick={handleSign} disabled={signing}
-                style={{ background: '#1B3A6B', color: '#fff', border: 'none', borderRadius: 9, padding: '12px 32px', fontWeight: 800, fontSize: 15, cursor: signing ? 'not-allowed' : 'pointer', opacity: signing ? .7 : 1, display: 'flex', alignItems: 'center', gap: 8 }}>
+              {/* Both marks are required: signing with an empty initials box would leave
+                  every "CUST INT" line on the agreement blank, which is the exact gap
+                  that sent people back to printing and wet-signing. */}
+              <button onClick={handleSign} disabled={signing || !hasSig || !hasInit}
+                title={!hasSig || !hasInit ? 'Draw both your signature and your initials' : undefined}
+                style={{ background: '#1B3A6B', color: '#fff', border: 'none', borderRadius: 9, padding: '12px 32px', fontWeight: 800, fontSize: 15, cursor: (signing || !hasSig || !hasInit) ? 'not-allowed' : 'pointer', opacity: (signing || !hasSig || !hasInit) ? .55 : 1, display: 'flex', alignItems: 'center', gap: 8 }}>
                 {signing ? 'Saving…' : 'Accept & Sign'}
               </button>
             </div>

@@ -134,3 +134,73 @@ describe('ProposalPreview embed vs non-embed rendering', () => {
     expect(valueSize).toBeGreaterThanOrEqual(labelSize);
   });
 });
+
+// The sales contract is initialed page by page on paper. E-signing used to fill only
+// the two signature blocks, leaving all six "CUST INT" rules and the effective-date
+// blank empty — which is why signed deals kept going back to print-and-wet-sign.
+describe('signed marks: initials and effective date', () => {
+  const form = blankGenForm();
+  form.customer = 'Jane Homeowner';
+  const totals = calcGenTotals(form);
+  const INITIALS = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
+  const SIGNATURE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUf==';
+
+  it('leaves every CUST INT spot as a blank rule when the proposal is unsigned', () => {
+    mockMatchMedia(false);
+    const { container } = render(
+      <ProposalPreview embed form={form} totals={totals} proposalNo="P-1"/>
+    );
+    const blanks = [...container.querySelectorAll('div')]
+      .filter(el => el.childElementCount === 0 && el.textContent === 'CUST INT ________');
+    expect(blanks).toHaveLength(6);
+    expect(container.querySelectorAll('img[alt="Customer initials"]')).toHaveLength(0);
+  });
+
+  it('stamps the drawn initials on all six CUST INT spots once signed', () => {
+    mockMatchMedia(false);
+    const { container } = render(
+      <ProposalPreview embed form={form} totals={totals} proposalNo="P-1"
+        signatureImage={SIGNATURE} initialsImage={INITIALS} signedDate="August 3, 2026"/>
+    );
+    const marks = container.querySelectorAll('img[alt="Customer initials"]');
+    expect(marks).toHaveLength(6);
+    marks.forEach(m => expect(m.getAttribute('src')).toBe(INITIALS));
+    // No blank rules left behind.
+    expect([...container.querySelectorAll('div')]
+      .filter(el => el.textContent === 'CUST INT ________')).toHaveLength(0);
+  });
+
+  it('still stamps the signature at both buyer blocks alongside the initials', () => {
+    mockMatchMedia(false);
+    const { container } = render(
+      <ProposalPreview embed form={form} totals={totals} proposalNo="P-1"
+        signatureImage={SIGNATURE} initialsImage={INITIALS} signedDate="August 3, 2026"/>
+    );
+    expect(container.querySelectorAll('img[alt="Buyer signature"]')).toHaveLength(2);
+  });
+
+  it('fills the Sales Agreement effective date from the signing date, and falls back to a rule when unsigned', () => {
+    mockMatchMedia(false);
+    const signed = render(
+      <ProposalPreview embed form={form} totals={totals} proposalNo="P-1"
+        signatureImage={SIGNATURE} initialsImage={INITIALS} signedDate="August 3, 2026"/>
+    );
+    expect(signed.container.textContent).toContain('entered into effective August 3, 2026');
+    cleanup();
+
+    const unsigned = render(<ProposalPreview embed form={form} totals={totals} proposalNo="P-1"/>);
+    expect(unsigned.container.textContent).toContain('entered into effective ________________________');
+  });
+
+  it('does not stamp initials when only a signature is on file (older signed proposals)', () => {
+    mockMatchMedia(false);
+    const { container } = render(
+      <ProposalPreview embed form={form} totals={totals} proposalNo="P-1"
+        signatureImage={SIGNATURE} signedDate="August 3, 2026"/>
+    );
+    expect(container.querySelectorAll('img[alt="Buyer signature"]')).toHaveLength(2);
+    expect(container.querySelectorAll('img[alt="Customer initials"]')).toHaveLength(0);
+    expect([...container.querySelectorAll('div')]
+      .filter(el => el.textContent === 'CUST INT ________')).toHaveLength(6);
+  });
+});
