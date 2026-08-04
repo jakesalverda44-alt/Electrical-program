@@ -9,7 +9,8 @@ import CalendarEventPickerModal from './CalendarEventPickerModal';
 import api from '../../api/client';
 import { moneyShort as money } from '../../lib/money';
 import PipelineBoard from '../../components/PipelineBoard';
-import { useShowToast } from '../../contexts/AppContext';
+import { useShowToast, useUser } from '../../contexts/AppContext';
+import { cardAttentionFor } from './cardAttention';
 
 function fmtVisit(ts?: string | null) {
   if (!ts) return null;
@@ -64,6 +65,7 @@ interface Props {
 
 export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuilder, flashId, onEditGen, openId, onClearParam, onNav }: Props) {
   const showToast = useShowToast();
+  const me = useUser();
   const [detail, setDetail] = useState<Gen | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -157,6 +159,25 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
 
   const daysSince = (ts?: string) => ts ? Math.floor((Date.now() - new Date(ts).getTime()) / 86400000) : 0;
 
+  // Renders the marker from cardAttention.ts. The decision of WHAT to say lives there,
+  // pure and tested; this only picks the colour.
+  const cardAttention = (g: Gen) => {
+    const a = cardAttentionFor(g);
+    if (!a) return null;
+    const tone = a.kind === 'act'
+      ? { color: 'var(--amber)', background: 'var(--amber-soft)' }
+      : a.kind === 'warn'
+        ? { color: 'var(--orange)', background: 'var(--orange-soft)' }
+        : { color: 'var(--text3)', background: 'var(--surface2)' };
+    return (
+      <span className="badge" style={{ ...tone, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <Icon name={a.kind === 'act' ? 'edit' : 'clock'} size={11} stroke={2}/>{a.text}
+      </span>
+    );
+  };
+
+  // Siblings are listed nested under the leading card, where no column implies their
+  // stage — so they keep the badge the primary card no longer needs.
   const genBadge = (g: Gen) => {
     if (g.stage === 'building') return <span className="badge urgent">Building</span>;
     if (g.stage === 'sent') {
@@ -240,37 +261,58 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
 
               <div className="bcard-name">{g.customer}</div>
 
-              <div className="bcard-meta1">
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  fontSize: 11, fontWeight: 800, padding: '2px 7px', borderRadius: 5,
-                  textTransform: 'uppercase', letterSpacing: '.04em',
-                  background: g.mfr === 'Kohler' ? 'var(--blue-soft)' : 'var(--amber-soft)',
-                  color: g.mfr === 'Kohler' ? 'var(--blue)' : 'var(--amber)',
-                }}>
-                  <Icon name="bolt" size={11} stroke={2}/>{g.mfr}
-                </span>
-                <span style={{ color: 'var(--text3)', fontWeight: 600 }}>{g.model}</span>
-              </div>
+              {/* Skipped entirely on a proposal with no machine picked yet — the brand
+                  pill on its own was a bare lightning bolt saying nothing. */}
+              {(g.mfr || g.kw || g.model) && (
+                <div className="bcard-meta1">
+                  {g.mfr && (
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                      fontSize: 11, fontWeight: 800, padding: '2px 7px', borderRadius: 5,
+                      textTransform: 'uppercase', letterSpacing: '.04em',
+                      background: g.mfr === 'Kohler' ? 'var(--blue-soft)' : 'var(--amber-soft)',
+                      color: g.mfr === 'Kohler' ? 'var(--blue)' : 'var(--amber)',
+                    }}>
+                      <Icon name="bolt" size={11} stroke={2}/>{g.mfr}
+                    </span>
+                  )}
+                  {/* kW belongs beside the brand. The model number said the same thing a
+                      third time and means nothing when scanning a column. */}
+                  <span style={{ color: 'var(--text3)', fontWeight: 600 }}>
+                    {g.kw ? `${Number(g.kw)}kW` : g.model}
+                    {Number(g.addons) > 0 ? ` · ${g.addons} add-on${Number(g.addons) === 1 ? '' : 's'}` : ''}
+                  </span>
+                </div>
+              )}
 
-              <div className="bcard-loc">
-                <Icon name="pin" size={12} stroke={1.8}/>{g.loc}
-              </div>
+              {/* A pin next to an em dash is worse than no row at all. */}
+              {g.loc && g.loc.trim() && g.loc.trim() !== '—' && (
+                <div className="bcard-loc">
+                  <Icon name="pin" size={12} stroke={1.8}/>{g.loc}
+                </div>
+              )}
 
               <div className="bcard-foot">
                 <span className="bcard-amt num">{money(Number(g.amount))}</span>
-                {genBadge(g)}
+                {/* No stage badge on the leading card — it sits in the stage's own
+                    column, so the badge only ever repeated the heading. What the column
+                    can't say is whether this one needs attention, so say that instead. */}
+                {cardAttention(g)}
               </div>
 
-              <div className="bcard-row">
-                <span>{g.kw}kW · {g.addons} add-ons</span>
-                <span className="bcard-rep" title={g.salesperson_name}>
-                  <span className="avatar" style={{ width: 20, height: 20, fontSize: 9, flexShrink: 0 }}>
-                    {initials(g.salesperson_name || '?')}
+              {/* The rep only earns a line when it isn't you. On a board where most
+                  cards are the same person, it was the same face down the column. */}
+              {g.salesperson_name && g.salesperson_id && g.salesperson_id !== me.id && (
+                <div className="bcard-row">
+                  <span/>
+                  <span className="bcard-rep" title={g.salesperson_name}>
+                    <span className="avatar" style={{ width: 20, height: 20, fontSize: 9, flexShrink: 0 }}>
+                      {initials(g.salesperson_name || '?')}
+                    </span>
+                    {g.salesperson_name?.split(' ')[0]}
                   </span>
-                  {g.salesperson_name?.split(' ')[0]}
-                </span>
-              </div>
+                </div>
+              )}
 
               {(g.site_visit_at || g.site_visit_needs_time) && (
                 <div className="bcard-row" style={{ marginTop: 4 }}>
