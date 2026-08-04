@@ -39,6 +39,10 @@ interface Props {
   /** True when the page just awarded this gen — opens the kickoff modal once. */
   autoKickoff?: boolean;
   onAutoKickoffHandled?: () => void;
+  /** True when the board arrow was used on a signed card — opens the countersign
+   *  confirmation straight away instead of awarding silently. */
+  autoCountersign?: boolean;
+  onAutoCountersignHandled?: () => void;
   /** Other proposals for the same customer not already grouped with this one —
    *  candidates to retroactively link as alternate options. */
   linkCandidates?: Gen[];
@@ -50,7 +54,7 @@ interface Props {
 
 interface Draft { customer: string; loc: string; mfr: string; model: string; kw: string; amount: string; addons: string; date_won: string; }
 
-export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated, autoKickoff, onAutoKickoffHandled, linkCandidates, onLink, groupSiblings }: Props) {
+export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated, autoKickoff, onAutoKickoffHandled, autoCountersign, onAutoCountersignHandled, linkCandidates, onLink, groupSiblings }: Props) {
   const canDelete = isPrivileged(useUser());
   const showToast = useShowToast();
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed' || gen.stage === 'superseded';
@@ -69,6 +73,9 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
   useEffect(() => {
     if (autoKickoff) { setShowKickoff(true); onAutoKickoffHandled?.(); }
   }, [autoKickoff, onAutoKickoffHandled]);
+  useEffect(() => {
+    if (autoCountersign) { setCountersignTick(t => t + 1); onAutoCountersignHandled?.(); }
+  }, [autoCountersign, onAutoCountersignHandled]);
   const kickoffDocs = useKickoffDocs(gen.id);
 
   const startEdit = () => {
@@ -227,12 +234,20 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
               const isActive = gen.stage === s.key;
               // "Signed" is set automatically when the customer signs the proposal.
               const lockedSigned = s.key === 'signed' && !isActive && !gen.signed_at;
+              // Awarding a signed-but-unexecuted proposal goes through countersigning,
+              // so the signature and the supersede warning can't be skipped by picking
+              // the stage directly. A proposal awarded on paper (never e-signed) still
+              // moves straight here — there is no contract to countersign.
+              const viaCountersign = s.key === 'awarded' && !isActive
+                && !!gen.signed_at && !gen.countersigned_at;
               return (
                 <button
                   key={s.key}
                   className={'dtl-stage' + (isActive ? ' on' : '')}
                   disabled={lockedSigned}
-                  title={lockedSigned ? 'Set automatically when the customer signs the proposal' : undefined}
+                  title={lockedSigned
+                    ? 'Set automatically when the customer signs the proposal'
+                    : viaCountersign ? 'Countersign the contract to award this' : undefined}
                   style={{
                     ...(isActive ? {
                       background: s.color,
@@ -241,7 +256,11 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
                     } : undefined),
                     ...(lockedSigned ? { opacity: .4, cursor: 'not-allowed' } : undefined),
                   }}
-                  onClick={() => { if (!lockedSigned) onStage(s.key); }}
+                  onClick={() => {
+                    if (lockedSigned) return;
+                    if (viaCountersign) { setCountersignTick(t => t + 1); return; }
+                    onStage(s.key);
+                  }}
                 >
                   {s.label}
                 </button>

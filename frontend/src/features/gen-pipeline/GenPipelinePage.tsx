@@ -68,6 +68,9 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
   const [logOpen, setLogOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [autoKickoff, setAutoKickoff] = useState(false);
+  // Set when the board arrow is used on a signed card: opens the record with the
+  // countersign confirmation already up, rather than awarding behind the rep's back.
+  const [autoCountersign, setAutoCountersign] = useState(false);
 
   // Open the deep-linked proposal's drawer once, then strip the id from the URL.
   const openedParam = useRef<string | null>(null);
@@ -219,8 +222,16 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
                 <div className="bcard-adv">
                   <button
                     className="adv-btn amber"
-                    title="Advance stage"
-                    onClick={e => { e.stopPropagation(); advance(g.id); }}
+                    title={g.stage === 'signed' ? 'Countersign & award' : 'Advance stage'}
+                    onClick={e => {
+                      e.stopPropagation();
+                      // A signed proposal is awarded by countersigning it, which books the
+                      // won job and supersedes the group's other options. The arrow used to
+                      // do all of that silently; now it opens the record and asks for the
+                      // signature, so there is one path to award and one warning.
+                      if (g.stage === 'signed') { setDetail(g); setAutoCountersign(true); return; }
+                      advance(g.id);
+                    }}
                   >
                     <Icon name="arrow" size={15} stroke={2.2}/>
                   </button>
@@ -326,6 +337,8 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
           onUpdated={(g, wj) => { setGens(prev => prev.map(x => x.id === g.id ? g : x)); setDetail(g); if (wj) setWonJobs(prev => prev.map(w => w.proposal_id === g.id ? wj : w)); }}
           autoKickoff={autoKickoff}
           onAutoKickoffHandled={() => setAutoKickoff(false)}
+          autoCountersign={autoCountersign}
+          onAutoCountersignHandled={() => setAutoCountersign(false)}
         />
       )}
 

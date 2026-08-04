@@ -17,15 +17,28 @@ export function useGenPipeline({ gens, setGens, setWonJobs, showToast, onNav, on
     items: gens, setItems: setGens, setWonJobs, showToast,
     endpoint: 'gens', responseKey: 'gen', confirmStage: 'declined',
     advanceOrder: ['building', 'sent', 'awarded'],
-    // 'signed' is set automatically by the customer's signature; both 'sent'
-    // (paper/verbal award) and 'signed' advance to 'awarded'.
-    nextStageMap: { building: 'sent', sent: 'awarded', signed: 'awarded' },
-    guardMove: (g, stage) => stage === 'signed' && g.stage !== 'signed' && !g.signed_at
-      ? {
+    // 'signed' is set automatically by the customer's signature. 'sent' advances
+    // straight to 'awarded' for a deal won on paper with no e-signature; a signed
+    // proposal is awarded by countersigning instead, handled on the card and drawer.
+    nextStageMap: { building: 'sent', sent: 'awarded' },
+    guardMove: (g, stage) => {
+      if (stage === 'signed' && g.stage !== 'signed' && !g.signed_at) {
+        return {
           title: 'Signed is automatic',
           sub: 'Send the proposal — when the customer signs it online, the card moves here on its own.',
-        }
-      : null,
+        };
+      }
+      // Dragging a signed card onto Awarded would book the won job and supersede the
+      // group's other options without a signature or a warning. Awarding a signed
+      // contract goes through countersigning, which does both.
+      if (stage === 'awarded' && g.signed_at && !g.countersigned_at) {
+        return {
+          title: 'Countersign to award this',
+          sub: 'Open the proposal and use Countersign & award — it executes the contract and books the job.',
+        };
+      }
+      return null;
+    },
     wonToast: wonJob => ({
       title: '🎉 Job won!',
       sub: `${wonJob.salesperson_name} · ${moneyFull(wonJob.value)} · ${wonJob.customer}`,
