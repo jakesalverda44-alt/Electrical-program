@@ -67,6 +67,21 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Labelling a survey in a ~480px drawer means squinting at a letter-size drawing.
+  // Full screen and zoom are about being able to see what you are marking up.
+  const [fullscreen, setFullscreen] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panFrom = useRef<{ mx: number; my: number; px: number; py: number } | null>(null);
+
+  // Escape leaves full screen. Bound on the document because the overlay is a plain div
+  // — a keydown handler on it would only fire once something inside had focus.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [fullscreen]);
   const [uploading, setUploading] = useState(false);
 
   const drag = useRef<{ kind: 'move' | 'resize' | 'rotate' | 'label'; id: string; startX: number; startY: number; orig: Marker } | null>(null);
@@ -115,7 +130,17 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
         setImgUrl(canvas.toDataURL('image/png'));
         setNatural({ w: viewport.width, h: viewport.height });
       } else {
-        const url = URL.createObjectURL(blob);
+        // A data URL, not an object URL. html2canvas rasterizes the export inside a
+        // cloned document where a blob: href does not resolve, so an image survey
+        // exported as a broken-image icon — a finalized PDF with no survey in it. The
+        // PDF branch above already produces a data URL via canvas, which is why that
+        // path was fine.
+        const url = await new Promise<string>((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(String(fr.result));
+          fr.onerror = () => reject(fr.error);
+          fr.readAsDataURL(blob);
+        });
         const dims = await new Promise<{ w: number; h: number }>(resolve => {
           const img = new Image();
           img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
@@ -153,12 +178,20 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
     }
   };
 
-  const svgPoint = (e: React.MouseEvent) => {
-    const svg = svgRef.current!;
-    const rect = svg.getBoundingClientRect();
-    const scaleX = (natural?.w || 1) / rect.width;
-    const scaleY = (natural?.h || 1) / rect.height;
-    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+  // Screen point -> survey coordinates, via the SVG's own transform matrix. The old
+  // version divided natural size by the element's on-screen rect, which only held while
+  // the viewBox showed the whole survey — the moment it zooms, that maths puts markers
+  // in the wrong place. getScreenCTM accounts for whatever the viewBox currently is.
+  const svgPoint = (e: { clientX: number; clientY: number }) => {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const p = pt.matrixTransform(ctm.inverse());
+    return { x: p.x, y: p.y };
   };
 
   const addMarker = (e: React.MouseEvent) => {
@@ -186,6 +219,16 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
   };
 
   const onMouseMove = (e: React.MouseEvent) => {
+    // Panning takes precedence: while zoomed in, dragging empty space moves the view.
+    const p = panFrom.current;
+    if (p && natural) {
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (rect) {
+        const perPxX = view.w / rect.width, perPxY = view.h / rect.height;
+        setPan(clampPan(p.px - (e.clientX - p.mx) * perPxX, p.py - (e.clientY - p.my) * perPxY, zoom));
+      }
+      return;
+    }
     const d = drag.current;
     if (!d) return;
     const { x, y } = svgPoint(e);
@@ -209,7 +252,15 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
       return m;
     }));
   };
-  const onMouseUp = () => { drag.current = null; };
+  const onMouseUp = () => { drag.current = null; panFrom.current = null; };
+
+  // Only start a pan on empty survey — a mousedown that lands on a marker belongs to
+  // that marker's own drag handler, and placing a marker shouldn't move the view.
+  const onSvgMouseDown = (e: React.MouseEvent) => {
+    if (placing || zoom === 1) return;
+    if ((e.target as Element).tagName !== 'image') return;
+    panFrom.current = { mx: e.clientX, my: e.clientY, px: pan.x, py: pan.y };
+  };
 
   const selected = markers.find(m => m.id === selectedId) || null;
   const setSelectedLabel = (label: string) => setMarkers(prev => prev.map(m => m.id === selectedId ? { ...m, label } : m));
@@ -234,6 +285,12 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
     if (!exportRef.current) return;
     setExporting(true);
     try {
+      // The export rasterizes what is on screen, so a zoomed-in view would produce a PDF
+      // of one corner of the survey. Show the whole thing first and let it paint.
+      if (zoom !== 1) {
+        resetView();
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
+      }
       await save(true);
       const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
       const canvas = await html2canvas(exportRef.current, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
@@ -267,10 +324,58 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
     </button>
   );
 
-  const viewBox = natural ? `0 0 ${natural.w} ${natural.h}` : '0 0 100 100';
+  // Zoom and pan are expressed purely as the viewBox, so markers stay in survey
+  // coordinates and nothing about the saved data changes when the view moves.
+  const MAX_ZOOM = 8;
+  const view = natural
+    ? { w: natural.w / zoom, h: natural.h / zoom }
+    : { w: 100, h: 100 };
+  const viewBox = natural
+    ? `${pan.x} ${pan.y} ${view.w} ${view.h}`
+    : '0 0 100 100';
+
+  // Keep the visible window inside the survey, so zooming out or panning can't strand
+  // the user on blank space with no way back.
+  const clampPan = (x: number, y: number, z: number) => {
+    if (!natural) return { x: 0, y: 0 };
+    const vw = natural.w / z, vh = natural.h / z;
+    return {
+      x: Math.min(Math.max(0, x), Math.max(0, natural.w - vw)),
+      y: Math.min(Math.max(0, y), Math.max(0, natural.h - vh)),
+    };
+  };
+
+  /** Zoom about a fixed survey point — the cursor for the wheel, the centre for the
+   *  buttons — so the thing being looked at stays put instead of sliding away. */
+  const zoomTo = (next: number, focus?: { x: number; y: number }) => {
+    if (!natural) return;
+    const z = Math.min(MAX_ZOOM, Math.max(1, next));
+    const f = focus ?? { x: pan.x + view.w / 2, y: pan.y + view.h / 2 };
+    const nvw = natural.w / z, nvh = natural.h / z;
+    setZoom(z);
+    setPan(clampPan(f.x - nvw / 2, f.y - nvh / 2, z));
+  };
+
+  const resetView = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
+
+  const onWheel = (e: React.WheelEvent) => {
+    if (!natural) return;
+    e.preventDefault();
+    zoomTo(zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), svgPoint(e));
+  };
 
   return (
-    <div style={{ marginTop: 4 }}>
+    <div
+      style={fullscreen
+        // Above the drawer (240) and the mobile nav (200): while labelling, this is the
+        // only thing on screen.
+        ? {
+            position: 'fixed', inset: 0, zIndex: 300, background: 'var(--bg, #0b1220)',
+            padding: '14px 16px', overflow: 'auto',
+            display: 'flex', flexDirection: 'column',
+          }
+        : { marginTop: 4 }}
+    >
       <input ref={fileRef} type="file" accept="application/pdf,image/*" style={{ display: 'none' }}
         onChange={e => { const f = e.target.files?.[0]; if (f) uploadSurvey(f); }}/>
 
@@ -289,10 +394,32 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
             {toolbarBtn('service', 'bolt')}
             {toolbarBtn('gas', 'flame')}
             {toolbarBtn('generator', 'gear')}
-            <button className="btn ghost" disabled={uploading} onClick={() => fileRef.current?.click()} style={{ fontSize: 12, height: 30, padding: '0 12px', marginLeft: 'auto' }}>
-              Replace Survey File
-            </button>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginLeft: 'auto' }}>
+              <button className="btn ghost" onClick={() => zoomTo(zoom / 1.4)} disabled={zoom <= 1}
+                title="Zoom out" aria-label="Zoom out"
+                style={{ fontSize: 14, height: 30, width: 30, padding: 0, justifyContent: 'center' }}>−</button>
+              <button className="btn ghost" onClick={resetView} disabled={zoom === 1}
+                title="Fit the whole survey" style={{ fontSize: 11.5, height: 30, padding: '0 8px', minWidth: 52 }}>
+                {Math.round(zoom * 100)}%
+              </button>
+              <button className="btn ghost" onClick={() => zoomTo(zoom * 1.4)} disabled={zoom >= MAX_ZOOM}
+                title="Zoom in" aria-label="Zoom in"
+                style={{ fontSize: 14, height: 30, width: 30, padding: 0, justifyContent: 'center' }}>+</button>
+              <button className="btn ghost" onClick={() => setFullscreen(f => !f)}
+                title={fullscreen ? 'Exit full screen' : 'Label full screen'}
+                style={{ fontSize: 12, height: 30, padding: '0 10px' }}>
+                {fullscreen ? 'Exit full screen' : 'Full screen'}
+              </button>
+              <button className="btn ghost" disabled={uploading} onClick={() => fileRef.current?.click()} style={{ fontSize: 12, height: 30, padding: '0 12px' }}>
+                Replace Survey File
+              </button>
+            </div>
           </div>
+          {zoom > 1 && (
+            <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>
+              Drag the survey to move around. Scroll to zoom.
+            </div>
+          )}
           {placing && <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>Click on the survey to place it.</div>}
 
           {selected && (
@@ -305,10 +432,25 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
           )}
           {selected && <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>Drag the marker to reposition, or drag its label text to move the wording clear of the survey.</div>}
 
-          <div ref={exportRef} style={{ background: '#fff', border: '1px solid var(--border2)', borderRadius: 10, overflow: 'hidden', position: 'relative' }}>
+          <div ref={exportRef} style={{
+            background: '#fff', border: '1px solid var(--border2)', borderRadius: 10,
+            overflow: 'hidden', position: 'relative',
+            // Full screen gives the drawing the rest of the window instead of a
+            // drawer-width column.
+            ...(fullscreen ? { flex: 1, minHeight: 0, display: 'flex' } : {}),
+          }}>
             {imgUrl && natural && (
-              <svg ref={svgRef} viewBox={viewBox} style={{ width: '100%', display: 'block', cursor: placing ? 'crosshair' : 'default' }}
-                onClick={addMarker} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
+              <svg ref={svgRef} viewBox={viewBox}
+                style={{
+                  width: '100%', display: 'block',
+                  // Full screen: fit the drawing to the available height rather than
+                  // letting a tall survey run off the bottom of the screen.
+                  ...(fullscreen ? { height: '100%', maxHeight: '100%' } : {}),
+                  cursor: placing ? 'crosshair' : panFrom.current ? 'grabbing' : zoom > 1 ? 'grab' : 'default',
+                  touchAction: 'none',
+                }}
+                onClick={addMarker} onMouseDown={onSvgMouseDown} onMouseMove={onMouseMove}
+                onMouseUp={onMouseUp} onMouseLeave={onMouseUp} onWheel={onWheel}>
                 <image href={imgUrl} x={0} y={0} width={natural.w} height={natural.h}/>
                 {markers.map(m => {
                   const isSel = m.id === selectedId;
