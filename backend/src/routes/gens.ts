@@ -71,6 +71,44 @@ async function supersedeGroupSiblings(client: PoolClient, groupId: string, award
   return superseded;
 }
 
+// Award a generator proposal: book its won_jobs row at the current commission
+// rate, ensure the project registry row exists, log an "awarded" activity entry,
+// and reclassify any sibling options in its group as superseded. Both award
+// entry points — dragging the pipeline card to Awarded (PATCH /:id/stage) and
+// countersigning a signed proposal (POST /:id/countersign) — call this same
+// helper so an award always means exactly the same four things happened,
+// regardless of which door it came through.
+async function awardGen(
+  client: PoolClient,
+  gen: Record<string, any>,
+): Promise<{ wonJob: Record<string, unknown> | null; superseded: Record<string, unknown>[] }> {
+  const rate = await commissionRate();
+  const { rows: wj } = await client.query(
+    `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, salesperson_id,
+                            commission_rate, commission_amount, commission_status, commission_earned_at)
+     VALUES ($1,$2,$3,'Generator',$4,$5,$6,$7,'earned',now())
+     ON CONFLICT (proposal_id) DO NOTHING
+     RETURNING *`,
+    [gen.salesperson_name || 'Unknown', gen.customer, gen.id, gen.amount, gen.salesperson_id || null,
+     rate, commissionAmount(gen.amount, rate)]
+  );
+  const wonJob = wj[0] || null;
+  await ensureProject(client, {
+    id: gen.id, sourceType: 'gen', customerId: gen.customer_id,
+    name: gen.customer, contractValue: gen.amount,
+  });
+  await client.query(
+    `INSERT INTO activity (kind, div, text) VALUES ('awarded','gen',$1)`,
+    [`${gen.customer} awarded — ${gen.salesperson_name}`]
+  );
+
+  let superseded: Record<string, unknown>[] = [];
+  if (gen.group_id) {
+    superseded = await supersedeGroupSiblings(client, gen.group_id, gen);
+  }
+  return { wonJob, superseded };
+}
+
 router.get('/benchmark', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT kw, amount FROM generator_proposals WHERE stage = 'awarded' AND kw > 0 AND amount > 0 AND deleted_at IS NULL`
@@ -271,29 +309,7 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     let wonJob = null;
     let superseded: Record<string, unknown>[] = [];
     if (stage === 'awarded' && gen.stage !== 'awarded') {
-      const rate = await commissionRate();
-      const { rows: wj } = await client.query(
-        `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, salesperson_id,
-                                commission_rate, commission_amount, commission_status, commission_earned_at)
-         VALUES ($1,$2,$3,'Generator',$4,$5,$6,$7,'earned',now())
-         ON CONFLICT (proposal_id) DO NOTHING
-         RETURNING *`,
-        [gen.salesperson_name || 'Unknown', gen.customer, gen.id, gen.amount, gen.salesperson_id || null,
-         rate, commissionAmount(gen.amount, rate)]
-      );
-      wonJob = wj[0] || null;
-      await ensureProject(client, {
-        id: gen.id, sourceType: 'gen', customerId: gen.customer_id,
-        name: gen.customer, contractValue: gen.amount,
-      });
-      await client.query(
-        `INSERT INTO activity (kind, div, text) VALUES ('awarded','gen',$1)`,
-        [`${gen.customer} awarded — ${gen.salesperson_name}`]
-      );
-
-      if (gen.group_id) {
-        superseded = await supersedeGroupSiblings(client, gen.group_id, gen);
-      }
+      ({ wonJob, superseded } = await awardGen(client, gen));
     } else if (stage !== gen.stage) {
       const labels: Record<string, string> = {
         building: 'Building', sent: 'Proposal Sent', signed: 'Signed', declined: 'Declined',
@@ -355,6 +371,84 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     client.release();
   }
 });
+
+// Countersign a signed proposal: stamp APT's own signature/date onto it and, in the
+// same transaction, award the deal. Countersigning is a second, independent trigger
+// for the same award behavior a pipeline-drag-to-Awarded fires — see awardGen — so a
+// single tap here books a won job, earns commission, creates a project, and
+// reclassifies every sibling option in the group as superseded. The frontend's
+// confirmation dialog is expected to say so before this endpoint is ever called.
+router.post('/:id/countersign', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+
+  // A contract the customer has not signed cannot be executed by APT's side of it.
+  if (!gen.signed_at) {
+    return res.status(409).json({ error: 'This proposal has not been signed by the customer yet.' });
+  }
+
+  // The caller's reusable saved signature (Settings > My Signature) is what gets
+  // copied onto the proposal below — without one there is nothing to countersign with.
+  const { rows: callerRows } = await pool.query('SELECT signature_data FROM users WHERE id=$1', [req.user!.id]);
+  const signatureData: string | null = callerRows[0]?.signature_data || null;
+  if (!signatureData) {
+    return res.status(400).json({ error: 'Save your signature in Settings before countersigning.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Re-read the row under a lock rather than trusting the copy loadOwnedGen already
+    // fetched: a double tap (double submit, a retry on a slow network) can race past
+    // the checks above, and only a lock taken inside the transaction guarantees the
+    // idempotency check below actually holds — one stamp and one award, never two.
+    const { rows: locked } = await client.query(
+      'SELECT * FROM generator_proposals WHERE id=$1 FOR UPDATE', [gen.id]
+    );
+    if (!locked.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Not found' });
+    }
+    let current = locked[0];
+
+    // Already countersigned: return it unchanged rather than re-stamping or re-awarding.
+    if (current.countersigned_at) {
+      await client.query('ROLLBACK');
+      return res.json({ gen: current, wonJob: null, superseded: [] });
+    }
+
+    // awardGen (below) books the won job and superseding but, unlike the stage route,
+    // never touches the stage column itself — that update lives here alongside the
+    // signature stamp so a countersigned proposal actually reads as Awarded.
+    const { rows: stamped } = await client.query(
+      `UPDATE generator_proposals
+       SET countersigned_at = now(), countersignature_data = $1, countersigned_by = $2,
+           stage = 'awarded', updated_at = now()
+       WHERE id = $3
+       RETURNING *`,
+      [signatureData, req.user!.id, current.id]
+    );
+    current = stamped[0];
+
+    const { wonJob, superseded } = await awardGen(client, current);
+
+    await client.query('COMMIT');
+
+    await writeAudit(req, {
+      action: 'countersign', entityType: 'gen', entityId: current.id,
+      summary: `Countersigned and awarded generator proposal "${current.customer}" — $${Number(current.amount || 0).toLocaleString()}`,
+      before: { countersigned_at: null }, after: { countersigned_at: current.countersigned_at, stage: 'awarded' },
+    });
+
+    res.json({ gen: current, wonJob, superseded });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+}));
 
 // Retroactively link two already-existing proposals as alternate options for the
 // same opportunity — for cases that weren't created via Duplicate (so never got a

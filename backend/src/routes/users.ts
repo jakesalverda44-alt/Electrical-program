@@ -1,8 +1,10 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, isPrivileged, AuthRequest } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
+import { validateBody } from '../utils/validate';
 
 const router = Router();
 
@@ -11,6 +13,21 @@ const SAFE_COLS = 'id, name, email, phone, job_title, role, status, last_login, 
 router.get('/', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(`SELECT ${SAFE_COLS} FROM users ORDER BY name`);
   res.json(rows);
+});
+
+// The caller's own row. GET /auth/me returns only decoded JWT claims and never touches
+// the database, so it cannot carry signature_data — and the countersign flow has to know
+// on page load whether a signature exists before it offers to use one. Scoped to self:
+// the bulk list above deliberately omits signature_data so nobody's signature image
+// leaks through a route used for name lookups.
+// Must be registered before /:id so Express matches /me first.
+router.get('/me', requireAuth, async (req: AuthRequest, res) => {
+  const { rows } = await pool.query(
+    `SELECT ${SAFE_COLS}, signature_data FROM users WHERE id=$1`,
+    [req.user!.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  res.json(rows[0]);
 });
 
 // Self-service profile update — any authenticated user can update their own safe fields.
@@ -35,6 +52,27 @@ router.put('/me', requireAuth, async (req: AuthRequest, res) => {
     res.json(rows[0]);
   } catch (err: any) {
     if (err.code === '23505') return res.status(409).json({ error: 'Email already in use' });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+const signatureSchema = z.object({ signature_data: z.string().min(1) });
+
+// Save the current user's reusable signature (Settings > My Signature), drawn on the
+// same SignatureCanvas the customer uses to sign a proposal. Self-service like PUT
+// /me — any authenticated user may set their own, no admin gate — since countersigning
+// is gated on the *caller's* saved signature, not anyone else's.
+router.patch('/me/signature', requireAuth, validateBody(signatureSchema), async (req: AuthRequest, res) => {
+  const { signature_data } = req.body as { signature_data: string };
+  try {
+    const { rows } = await pool.query(
+      `UPDATE users SET signature_data=$1 WHERE id=$2 RETURNING ${SAFE_COLS}, signature_data`,
+      [signature_data, req.user!.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
 });
