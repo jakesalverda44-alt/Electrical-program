@@ -308,6 +308,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
         <GenDetailDrawer
           key={detail.id}
           gen={gens.find(g => g.id === detail.id) || detail}
+          groupSiblings={gens.filter(g => g.id !== detail.id && !!g.group_id && g.group_id === detail.group_id)}
           linkCandidates={gens.filter(g =>
             g.id !== detail.id &&
             g.customer === detail.customer &&

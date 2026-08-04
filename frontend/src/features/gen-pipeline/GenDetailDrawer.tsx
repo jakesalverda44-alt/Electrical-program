@@ -40,11 +40,14 @@ interface Props {
    *  candidates to retroactively link as alternate options. */
   linkCandidates?: Gen[];
   onLink?: (targetId: string) => void;
+  /** Other options already grouped with this one — named in the countersign warning,
+   *  since executing this contract supersedes them. */
+  groupSiblings?: Gen[];
 }
 
 interface Draft { customer: string; loc: string; mfr: string; model: string; kw: string; amount: string; addons: string; date_won: string; }
 
-export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated, autoKickoff, onAutoKickoffHandled, linkCandidates, onLink }: Props) {
+export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated, autoKickoff, onAutoKickoffHandled, linkCandidates, onLink, groupSiblings }: Props) {
   const canDelete = isPrivileged(useUser());
   const showToast = useShowToast();
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed' || gen.stage === 'superseded';
@@ -359,7 +362,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           {/* The executed contract gets its own row above the general file list — it is
               the one document anyone opening a signed job is looking for, and burying it
               among site photos is how a missing archive went unnoticed. */}
-          <SignedContractCard gen={gen}/>
+          <SignedContractCard gen={gen} siblings={groupSiblings} onUpdated={g => onUpdated(g)}/>
 
           {/* Photos & files up top so site-visit capture is one tap on mobile, not
               buried below every action button. */}

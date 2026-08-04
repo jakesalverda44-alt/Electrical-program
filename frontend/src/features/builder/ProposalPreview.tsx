@@ -73,6 +73,10 @@ interface Props {
   initialsImage?: string;
   /** Date the customer signed (display string). */
   signedDate?: string;
+  /** APT countersignature image (data URL) and its date. Present once the contract is
+   *  executed by both parties. */
+  countersignImage?: string;
+  countersignDate?: string;
 }
 
 // ── Shared layout helpers ────────────────────────────────────────────────────
@@ -111,17 +115,25 @@ function SectionHeading({ title }: { title: string }) {
   );
 }
 
-function SigBlock({ signatureImage, signedDate, buyerName, fs = identityFs }: { signatureImage?: string; signedDate?: string; buyerName?: string; fs?: FontFn }) {
+function SigBlock({ signatureImage, signedDate, countersignImage, countersignDate, buyerName, fs = identityFs }: { signatureImage?: string; signedDate?: string; countersignImage?: string; countersignDate?: string; buyerName?: string; fs?: FontFn }) {
   const line = { height: 1, background: '#D1D5DB', marginBottom: 4 };
   const lbl = { fontSize: fs(9), color: GRAY_M, fontWeight: 600 as const };
   const cell: React.CSSProperties = { padding: '8px 12px', flex: 1 };
   return (
     <div style={{ display: 'flex', background: GRAY_L, border: '1px solid #E5E7EB' }}>
+      {/* APT side — filled once someone countersigns, which is what takes the contract
+          from "signed by the buyer" to executed by both parties. */}
       <div style={cell}>
         <div style={{ fontSize: fs(10), fontWeight: 700, color: NAVY, marginBottom: 6 }}>"APT" Accurate Power Technology, Inc.</div>
+        {countersignImage
+          ? <img src={countersignImage} alt="APT signature" style={{ height: 34, maxWidth: '100%', objectFit: 'contain', display: 'block', marginBottom: 2 }}/>
+          : <div style={{ height: 34 }}/>}
         <div style={line}/>
         <div style={lbl}>By: Authorized Representative</div>
         <div style={{ height: 10 }}/>
+        <div style={{ minHeight: 14, display: 'flex', alignItems: 'flex-end' }}>
+          {countersignDate && <span style={{ fontSize: fs(10), color: GRAY_D, marginBottom: 2 }}>{countersignDate}</span>}
+        </div>
         <div style={line}/>
         <div style={lbl}>Date</div>
       </div>
@@ -214,7 +226,7 @@ function SpecTable({ header, rows, fs = identityFs }: { header: string; rows: [s
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
-export default function ProposalPreview({ form, totals, proposalNo, onBack, appSettings, genId, embed, signatureImage, initialsImage, signedDate }: Props) {
+export default function ProposalPreview({ form, totals, proposalNo, onBack, appSettings, genId, embed, signatureImage, initialsImage, signedDate, countersignImage, countersignDate }: Props) {
   const co = appSettings ?? DEFAULT_APP_SETTINGS;
   const previewRef = useRef<HTMLDivElement>(null);
   const [savingDrive, setSavingDrive] = useState(false);
@@ -454,7 +466,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
               By accepting this proposal, Buyer acknowledges receipt of and agrees to all terms and conditions contained in the attached Disclosures and Sales Agreement, both incorporated herein by reference, including payment terms, non-refundability of the deposit, and waiver of all warranties, express or implied.
             </p>
 
-            <SigBlock signatureImage={signatureImage} signedDate={signedDate} buyerName={form.customer} fs={fs}/>
+            <SigBlock signatureImage={signatureImage} signedDate={signedDate} countersignImage={countersignImage} countersignDate={countersignDate} buyerName={form.customer} fs={fs}/>
           </div>
 
           {/* ═══ PAGE 2 (OPTIONAL) — PRICE BREAKDOWN ══════════════════════ */}
@@ -673,7 +685,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             <p style={{ fontSize: fs(9), lineHeight: '14px', color: GRAY_D, marginTop: 12, marginBottom: 14 }}>
               <strong>In Witness Whereof</strong>, the parties hereto have executed this Agreement on the day and year first above written.
             </p>
-            <SigBlock signatureImage={signatureImage} signedDate={signedDate} buyerName={form.customer} fs={fs}/>
+            <SigBlock signatureImage={signatureImage} signedDate={signedDate} countersignImage={countersignImage} countersignDate={countersignDate} buyerName={form.customer} fs={fs}/>
 
             <CustInitFooter initialsImage={initialsImage} fs={fs}/>
           </div>

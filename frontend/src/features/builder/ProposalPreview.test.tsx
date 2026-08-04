@@ -204,3 +204,47 @@ describe('signed marks: initials and effective date', () => {
       .filter(el => el.textContent === 'CUST INT ________')).toHaveLength(6);
   });
 });
+
+// A contract signed by the buyer but never countersigned is only half executed — the APT
+// column ("By: Authorized Representative" / "Date") stayed blank forever before this.
+describe('countersignature', () => {
+  const form = blankGenForm();
+  form.customer = 'Jane Homeowner';
+  const totals = calcGenTotals(form);
+  const SIGNATURE = 'data:image/png;base64,BUYER';
+  const COUNTERSIGN = 'data:image/png;base64,APT';
+
+  it('leaves the APT side blank when the contract has not been countersigned', () => {
+    mockMatchMedia(false);
+    const { container } = render(
+      <ProposalPreview embed form={form} totals={totals} proposalNo="P-1"
+        signatureImage={SIGNATURE} signedDate="August 4, 2026"/>
+    );
+    expect(container.querySelectorAll('img[alt="APT signature"]')).toHaveLength(0);
+    expect(container.querySelectorAll('img[alt="Buyer signature"]')).toHaveLength(2);
+  });
+
+  it('stamps the APT signature and date at both signature blocks once countersigned', () => {
+    mockMatchMedia(false);
+    const { container } = render(
+      <ProposalPreview embed form={form} totals={totals} proposalNo="P-1"
+        signatureImage={SIGNATURE} signedDate="August 4, 2026"
+        countersignImage={COUNTERSIGN} countersignDate="August 5, 2026"/>
+    );
+    const apt = container.querySelectorAll('img[alt="APT signature"]');
+    expect(apt).toHaveLength(2);
+    apt.forEach(i => expect(i.getAttribute('src')).toBe(COUNTERSIGN));
+    expect(container.textContent).toContain('August 5, 2026');
+  });
+
+  it('does not disturb the buyer side when countersigned', () => {
+    mockMatchMedia(false);
+    const { container } = render(
+      <ProposalPreview embed form={form} totals={totals} proposalNo="P-1"
+        signatureImage={SIGNATURE} initialsImage={'data:image/png;base64,INIT'} signedDate="August 4, 2026"
+        countersignImage={COUNTERSIGN} countersignDate="August 5, 2026"/>
+    );
+    expect(container.querySelectorAll('img[alt="Buyer signature"]')).toHaveLength(2);
+    expect(container.querySelectorAll('img[alt="Customer initials"]')).toHaveLength(6);
+  });
+});

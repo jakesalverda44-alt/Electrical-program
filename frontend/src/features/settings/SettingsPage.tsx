@@ -12,13 +12,14 @@ import { AIPermissionsSection } from './sections/AIPermissionsSection';
 import { IntegrationsSection } from './sections/IntegrationsSection';
 import { NotificationsSection } from './sections/NotificationsSection';
 import { SecuritySection } from './sections/SecuritySection';
+import { SignatureSection } from './sections/SignatureSection';
 import { TrashSection } from './sections/TrashSection';
 import { AuditSection } from './sections/AuditSection';
 import { CommissionsSection } from './sections/CommissionsSection';
 import { UnitCostSection } from './sections/UnitCostSection';
 
 
-type SectionId = 'company' | 'proposal-defaults' | 'gen-pricing' | 'users' | 'email' | 'ai' | 'ai-permissions' | 'integrations' | 'notifications' | 'security' | 'trash' | 'audit' | 'commissions' | 'unit-costs';
+type SectionId = 'company' | 'proposal-defaults' | 'gen-pricing' | 'users' | 'email' | 'ai' | 'ai-permissions' | 'integrations' | 'notifications' | 'security' | 'signature' | 'trash' | 'audit' | 'commissions' | 'unit-costs';
 
 const NAV: { group: string; items: { id: SectionId; label: string; icon: string }[] }[] = [
   { group: 'Organization', items: [
@@ -43,6 +44,7 @@ const NAV: { group: string; items: { id: SectionId; label: string; icon: string 
   ]},
   { group: 'System', items: [
     { id: 'notifications',    label: 'Notifications',   icon: 'bell'     },
+    { id: 'signature',        label: 'My Signature',    icon: 'edit'     },
     { id: 'security',         label: 'Security',        icon: 'shield'   },
     { id: 'audit',            label: 'Audit Log',       icon: 'clip'     },
     { id: 'trash',            label: 'Trash',           icon: 'trash'    },
@@ -107,6 +109,7 @@ export default function SettingsPage() {
           {active === 'ai-permissions'    && <AIPermissionsSection settings={settings} onSaved={onSettingsSaved}/>}
           {active === 'integrations'      && <IntegrationsSection/>}
           {active === 'notifications'     && <NotificationsSection settings={settings} onSaved={onSettingsSaved}/>}
+          {active === 'signature'         && <SignatureSection/>}
           {active === 'security'          && <SecuritySection    settings={settings} onSaved={onSettingsSaved}/>}
           {active === 'unit-costs'         && <UnitCostSection/>}
           {active === 'audit'             && <AuditSection/>}

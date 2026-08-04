@@ -107,6 +107,11 @@ export interface Gen {
   signature_data?: string | null;
   /** Buyer's drawn initials (data URL), stamped onto every "CUST INT" rule. */
   initials_data?: string | null;
+  /** Set once APT countersigns — the point the contract is executed by both parties
+   *  and, per the award flow, the deal is booked as won. */
+  countersigned_at?: string | null;
+  countersignature_data?: string | null;
+  countersigned_by?: string | null;
   drive_job_folder_id?: string;
   drive_engineering_folder_id?: string;
   drive_permit_folder_id?: string;
