@@ -55,9 +55,12 @@ interface Props {
    *  executing the contract supersedes every one of them. */
   siblings?: Gen[];
   onUpdated?: (gen: Gen) => void;
+  /** Incremented by the drawer action bar to open the confirmation from up there,
+   *  so there is still only one place that executes a contract. */
+  requestCountersign?: number;
 }
 
-export default function SignedContractCard({ gen, siblings = [], onUpdated }: Props) {
+export default function SignedContractCard({ gen, siblings = [], onUpdated, requestCountersign = 0 }: Props) {
   const showToast = useShowToast();
   const [docs, setDocs] = useState<DocRow[] | null>(null);
   const [building, setBuilding] = useState(false);
@@ -79,6 +82,12 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated }: Pr
       .then(r => setDocs(r.data))
       .catch(() => setDocs([]));
   }, [gen.id, signedAt]);
+
+  // The drawer's action bar asks for the confirmation rather than executing anything
+  // itself, so the warning that lists superseded siblings is never bypassed.
+  useEffect(() => {
+    if (requestCountersign > 0 && signedAt && !countersignedAt) setConfirming(true);
+  }, [requestCountersign, signedAt, countersignedAt]);
 
   const executedDoc = docs?.find(isExecutedContract) ?? null;
   const signedDoc = docs?.find(isSignedContract) ?? null;
