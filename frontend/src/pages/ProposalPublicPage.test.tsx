@@ -42,7 +42,9 @@ vi.mock('../features/builder/ProposalPreview', () => ({
     <div data-testid="doc"
       data-signature={String(props.signatureImage ?? '')}
       data-initials={String(props.initialsImage ?? '')}
-      data-signed-date={String(props.signedDate ?? '')}/>
+      data-signed-date={String(props.signedDate ?? '')}
+      data-countersign={String(props.countersignImage ?? '')}
+      data-countersign-date={String(props.countersignDate ?? '')}/>
   ),
 }));
 
@@ -166,5 +168,46 @@ describe('signing', () => {
       expect(body.signatureData).toBeTruthy();
       expect(body.initialsData).toBeTruthy();
     });
+  });
+});
+
+// Once APT countersigns, the customer's own link has to show the executed document.
+// It previously rendered only the buyer's marks, so a contract signed by both parties
+// still looked signed on one side to the person who signed it.
+describe('a countersigned proposal', () => {
+  it('renders APT\'s signature and date alongside the buyer\'s', async () => {
+    vi.stubGlobal('fetch', mockFetch({
+      ...GEN,
+      stage: 'awarded',
+      signed_at: '2026-08-04T12:00:00.000Z',
+      signature_data: 'data:image/png;base64,buyer',
+      initials_data: 'data:image/png;base64,init',
+      countersigned_at: '2026-08-05T12:00:00.000Z',
+      countersignature_data: 'data:image/png;base64,apt',
+    }));
+    renderPage();
+
+    const doc = await screen.findByTestId('doc');
+    await waitFor(() => {
+      expect(doc.getAttribute('data-countersign')).toBe('data:image/png;base64,apt');
+    });
+    expect(doc.getAttribute('data-countersign-date')).toBe('August 5, 2026');
+    expect(doc.getAttribute('data-signature')).toBe('data:image/png;base64,buyer');
+  });
+
+  it('passes nothing for the APT side while it is still only buyer-signed', async () => {
+    vi.stubGlobal('fetch', mockFetch({
+      ...GEN,
+      stage: 'signed',
+      signed_at: '2026-08-04T12:00:00.000Z',
+      signature_data: 'data:image/png;base64,buyer',
+      countersigned_at: null,
+      countersignature_data: null,
+    }));
+    renderPage();
+
+    const doc = await screen.findByTestId('doc');
+    await waitFor(() => expect(doc.getAttribute('data-signature')).toBe('data:image/png;base64,buyer'));
+    expect(doc.getAttribute('data-countersign')).toBe('');
   });
 });
