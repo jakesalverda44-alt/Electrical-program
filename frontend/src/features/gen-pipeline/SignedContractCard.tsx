@@ -91,8 +91,11 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
 
   const executedDoc = docs?.find(isExecutedContract) ?? null;
   const signedDoc = docs?.find(isSignedContract) ?? null;
-  // Once executed, the executed copy is the one worth opening.
-  const current = executedDoc ?? signedDoc;
+  // Once countersigned, only the executed copy counts as archived. A job whose sole
+  // contract is the buyer-signed PDF is out of date — it shows one signature where the
+  // record now has two — so the card offers to file the current one rather than an Open
+  // button that quietly hands over the superseded version.
+  const current = countersignedAt ? executedDoc : (executedDoc ?? signedDoc);
 
   const form = useMemo(() => {
     const raw = parseSnapshot<GenForm>(g.form_data);
@@ -148,12 +151,25 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
       const name = executed ? executedContractFilename(g.customer) : signedContractFilename(g.customer);
       const fd = new FormData();
       fd.append('file', blob, name);
+
+      let data: DocRow;
+      if (executed) {
+        // Dedicated route: the executed copy supersedes the buyer-signed one server-side,
+        // so a countersigned job carries a single, current contract. Doing it here rather
+        // than deleting from the client keeps it working for non-admins.
+        ({ data } = await api.post<DocRow>(`/gens/${gen.id}/executed-contract`, fd, { timeout: 120_000 }));
+        // Drop the superseded contract rows locally to match what the server just did,
+        // keeping every other document on the record.
+        setDocs(prev => [data, ...(prev ?? []).filter(d => d.category !== 'contract')]);
+        return true;
+      }
+
       fd.append('linked_id', gen.id);
       fd.append('linked_name', g.customer);
       fd.append('div', 'gen');
       fd.append('category', 'contract');
       fd.append('display_name', name);
-      const { data } = await api.post<DocRow>('/documents', fd, { timeout: 120_000 });
+      ({ data } = await api.post<DocRow>('/documents', fd, { timeout: 120_000 }));
 
       setDocs(prev => [data, ...(prev ?? [])]);
       return true;

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, cleanup, screen, waitFor, fireEvent } from '@testing-library/react';
 import SignedContractCard from './SignedContractCard';
 import { Gen } from '../../types';
+import { blankGenForm, calcGenTotals } from '../builder/genCalc';
 
 const get = vi.fn();
 const post = vi.fn();
@@ -31,8 +32,8 @@ const BASE = {
   customer: 'Jane Homeowner',
   stage: 'signed',
   proposal_no: 'P-1',
-  form_data: null,
-  totals_data: null,
+  form_data: blankGenForm(),
+  totals_data: calcGenTotals(blankGenForm()),
 } as unknown as Gen;
 
 beforeEach(() => {
@@ -120,7 +121,11 @@ describe('countersign confirmation', () => {
   });
 
   it('sends the user to Settings when they have no signature saved', async () => {
-    post.mockRejectedValue({ response: { status: 400, data: { error: 'No signature on file' } } });
+    // Only the countersign call fails — a blanket rejection would also break the
+    // archive that follows a success, and its toast would mask this one.
+    post.mockImplementation((url: string) => String(url).includes('/countersign')
+      ? Promise.reject({ response: { status: 400, data: { error: 'No signature on file' } } })
+      : Promise.resolve({ data: {} }));
     render(<SignedContractCard gen={signed}/>);
     await waitFor(() => screen.getByRole('button', { name: 'Countersign' }));
     fireEvent.click(screen.getByRole('button', { name: 'Countersign' }));
@@ -128,7 +133,64 @@ describe('countersign confirmation', () => {
 
     await waitFor(() => {
       expect(showToast).toHaveBeenCalled();
-      expect(showToast.mock.calls[0][0].title).toMatch(/No signature/);
+      expect(showToast.mock.calls.some(c => /No signature/.test(c[0].title))).toBe(true);
     });
+  });
+});
+
+// Once APT countersigns, the executed copy replaces the buyer-signed one. Both used to
+// sit on the job, and the kickoff email attaches every document in the contract
+// category — so it sent two contracts and the older, less complete one led.
+describe('the executed copy supersedes the signed one', () => {
+  const countersigned = {
+    ...BASE,
+    signed_at: '2026-08-04T12:00:00.000Z',
+    countersigned_at: '2026-08-05T12:00:00.000Z',
+  } as Gen;
+
+  it('treats a job whose only contract predates countersigning as not archived', async () => {
+    get.mockResolvedValue({ data: [
+      { id: 'd1', name: 'Signed Proposal - Jane Homeowner.pdf', category: 'contract' },
+    ] });
+    render(<SignedContractCard gen={countersigned}/>);
+
+    // Offering Open here would hand over the superseded, one-signature version.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild' })).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Open' })).toBeNull();
+  });
+
+  it('opens the executed copy once it exists', async () => {
+    get.mockResolvedValue({ data: [
+      { id: 'd1', name: 'Signed Proposal - Jane Homeowner.pdf', category: 'contract' },
+      { id: 'd2', name: 'Executed Contract - Jane Homeowner.pdf', category: 'contract' },
+    ] });
+    render(<SignedContractCard gen={countersigned}/>);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open' })).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Rebuild' })).toBeNull();
+  });
+
+  it('files it through the route that supersedes, not the generic upload', async () => {
+    get.mockResolvedValue({ data: [] });
+    post.mockResolvedValue({ data: { id: 'd9', name: 'Executed Contract - Jane Homeowner.pdf', category: 'contract' } });
+    render(<SignedContractCard gen={countersigned}/>);
+
+    await waitFor(() => screen.getByRole('button', { name: 'Rebuild' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
+
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(String(post.mock.calls[0][0])).toBe('/gens/gen-1/executed-contract');
+  });
+
+  it('still uses the generic upload for a buyer-signed rebuild', async () => {
+    get.mockResolvedValue({ data: [] });
+    post.mockResolvedValue({ data: { id: 'd8', name: 'Signed Proposal - Jane Homeowner.pdf', category: 'contract' } });
+    render(<SignedContractCard gen={{ ...BASE, signed_at: '2026-08-04T12:00:00.000Z' }}/>);
+
+    await waitFor(() => screen.getByRole('button', { name: 'Rebuild' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
+
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(String(post.mock.calls[0][0])).toBe('/documents');
   });
 });
