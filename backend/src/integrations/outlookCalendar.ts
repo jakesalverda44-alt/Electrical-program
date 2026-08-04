@@ -1,6 +1,7 @@
 import { pool } from '../db/pool';
 import { logger } from '../utils/logger';
 import { getGraphToken, GRAPH_BASE } from './graphAuth';
+import { parseAddress } from '../utils/address';
 
 export interface TodayEvent {
   id: string;
@@ -141,6 +142,19 @@ export async function pushBidDueToCalendar(
  * Non-blocking: any failure (incl. missing GRAPH_* config) is logged and swallowed so
  * the Site Scheduled handoff always succeeds. No-op when there is no scheduled time yet.
  */
+/**
+ * Calendar subject for a site visit: who, then where.
+ *
+ * A day of "Site Visit – Name" entries says nothing about whether they are twenty
+ * minutes apart or an hour, so the city goes in the title where it is readable from the
+ * month view without opening anything. Falls back to the plain name when the address
+ * can't be parsed into a city — a half-built title is worse than a short one.
+ */
+export function siteVisitSubject(name: string, address: string | null | undefined): string {
+  const city = parseAddress(address).city;
+  return city ? `Site Visit – ${name} – ${city}` : `Site Visit – ${name}`;
+}
+
 export async function pushSiteVisitToCalendar(proposalId: string, lead: SiteVisitLead): Promise<void> {
   if (!lead.site_visit_at) return; // "no time yet" — nothing to put on the calendar
   try {
@@ -155,7 +169,7 @@ export async function pushSiteVisitToCalendar(proposalId: string, lead: SiteVisi
     ].filter(Boolean) as string[];
 
     const event = {
-      subject: `Site Visit – ${lead.name}`,
+      subject: siteVisitSubject(lead.name, lead.address),
       start: { dateTime: toGraphDateTime(start), timeZone: EVENT_TZ },
       end:   { dateTime: toGraphDateTime(end),   timeZone: EVENT_TZ },
       location: { displayName: lead.address || '' },
