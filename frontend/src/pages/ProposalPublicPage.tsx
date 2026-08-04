@@ -190,7 +190,7 @@ export default function ProposalPublicPage() {
             </div>
             <div style={{ fontSize: 22, fontWeight: 900, color: '#1e293b', marginBottom: 8 }}>Proposal Accepted</div>
             <div style={{ fontSize: 14, color: '#475569', lineHeight: 1.6, maxWidth: 400, margin: '0 auto' }}>
-              Thank you, {gen?.customer}. We have received your signature and will be in touch shortly to schedule your installation.
+              Thank you, {gen?.customer}. We have received your signature and will be in touch shortly with next steps.
             </div>
             <div style={{ marginTop: 20, fontSize: 13, color: '#64748b', paddingTop: 16, borderTop: '1px solid #f1f5f9' }}>
               Questions? Reply to our email or call us directly.
