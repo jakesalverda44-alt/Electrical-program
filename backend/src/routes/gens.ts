@@ -1455,4 +1455,59 @@ router.post('/p/:token/proposal-pdf', upload.single('file'), asyncHandler(async 
   }
 }));
 
+// ── File the fully executed contract, replacing the buyer-signed copy ───────────
+// Once APT countersigns, the buyer-signed PDF is superseded: it shows one signature
+// where the executed copy shows both. Leaving both on the job meant the kickoff email
+// attached two contracts — it pulls every document in the 'contract' category — and
+// whoever opened it had to work out which was current.
+//
+// The supersede happens here rather than the client calling DELETE /documents/:id,
+// because that route is admin-only: a non-admin countersigning would silently have
+// been left with both. The old row is soft-deleted, so it stays recoverable from
+// Settings → Trash rather than being destroyed.
+router.post('/:id/executed-contract', requireAuth, upload.single('file'), asyncHandler(async (req: AuthRequest, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: 'file required' });
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+  if (!gen.countersigned_at) return res.status(409).json({ error: 'Proposal is not countersigned' });
+
+  const name = `Executed Contract - ${gen.customer}.pdf`;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Replace rather than accumulate: an earlier executed copy (a rebuild) goes too.
+    await client.query(
+      `UPDATE documents SET deleted_at = now()
+        WHERE linked_id = $1 AND category = 'contract' AND deleted_at IS NULL`,
+      [gen.id]
+    );
+
+    const { rows } = await client.query(
+      `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
+       VALUES ($1,$2,'gen',$3,$3,'contract',$4,'application/pdf',$5,$6)
+       RETURNING id, name, display_name, category, file_size, file_type, created_at`,
+      [gen.id, gen.customer, name, file.size, req.user!.name, file.buffer.toString('base64')]
+    );
+
+    await client.query('COMMIT');
+
+    // Same Drive destination the buyer-signed copy uses, so the job folder holds the
+    // executed version alongside its history.
+    const driveDate = new Date().toISOString().split('T')[0];
+    uploadFile(`Executed Contract — ${gen.customer} — ${driveDate}.pdf`, 'application/pdf', file.buffer,
+      gen.drive_contract_folder_id ?? GENERATOR_PROPOSALS_FOLDER)
+      .catch(err => logger.error({ err, genId: gen.id }, '[drive] Executed contract upload failed'));
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    logger.error({ err, genId: gen.id }, 'Executed contract upload failed');
+    throw err;
+  } finally {
+    client.release();
+  }
+}));
+
 export default router;
