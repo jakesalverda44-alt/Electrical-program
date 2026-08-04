@@ -22,6 +22,8 @@ interface GenData {
   totals_data?: Partial<GenTotals> | string | null;
   signature_data?: string | null;
   initials_data?: string | null;
+  countersigned_at?: string | null;
+  countersignature_data?: string | null;
 }
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -46,6 +48,11 @@ export default function ProposalPublicPage() {
   const [signedSig, setSignedSig] = useState<string | null>(null);
   const [signedInitials, setSignedInitials] = useState<string | null>(null);
   const [signedDate, setSignedDate] = useState<string>('');
+  // APT's countersignature, once someone has executed the contract. The customer's own
+  // link is where they go back to read what they agreed to, so it has to show the
+  // executed document rather than one that still looks signed on only one side.
+  const [countersign, setCountersign] = useState<string | null>(null);
+  const [countersignDate, setCountersignDate] = useState<string>('');
   const sigRef = useRef<SignatureCanvas>(null);
   const initRef = useRef<SignatureCanvas>(null);
   const sigWrapRef = useRef<HTMLDivElement>(null);
@@ -65,6 +72,12 @@ export default function ProposalPublicPage() {
           if (data.signature_data) setSignedSig(data.signature_data);
           if (data.initials_data) setSignedInitials(data.initials_data);
           setSignedDate(new Date(data.signed_at).toLocaleDateString('en-US', {
+            month: 'long', day: 'numeric', year: 'numeric',
+          }));
+        }
+        if (data.countersigned_at) {
+          if (data.countersignature_data) setCountersign(data.countersignature_data);
+          setCountersignDate(new Date(data.countersigned_at).toLocaleDateString('en-US', {
             month: 'long', day: 'numeric', year: 'numeric',
           }));
         }
@@ -176,6 +189,8 @@ export default function ProposalPublicPage() {
               signatureImage={signedSig ?? undefined}
               initialsImage={signedInitials ?? undefined}
               signedDate={signedDate || undefined}
+              countersignImage={countersign ?? undefined}
+              countersignDate={countersignDate || undefined}
             />
           </div>
         )}
