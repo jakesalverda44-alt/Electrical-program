@@ -310,7 +310,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
         <div style={docStyle}>
 
           {/* ═══ PAGE 1 — COVER ════════════════════════════════════════════ */}
-          <div style={pageStyle}>
+          <div style={pageStyle} data-doc-page>
             <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine} fs={fs}/>
 
             <SectionHeading title="PROPOSAL"/>
@@ -459,7 +459,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
 
           {/* ═══ PAGE 2 (OPTIONAL) — PRICE BREAKDOWN ══════════════════════ */}
           {form.includeBreakdown && (
-            <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
+            <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break" data-doc-page>
               <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine} fs={fs}/>
               <SectionHeading title="PRICE BREAKDOWN"/>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: fs(9), marginBottom: 10 }}>
@@ -525,7 +525,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
 
           {/* ═══ SPEC SHEET ════════════════════════════════════════════════ */}
           {spec && (
-            <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
+            <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break" data-doc-page>
               <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine} fs={fs}/>
               <SectionHeading title={`${form.brand} ${form.size} Generator — Product Specifications`}/>
               <div style={{ textAlign: 'center', fontSize: fs(10), fontWeight: 700, color: '#1B3A6B', marginTop: -10, marginBottom: 14 }}>Model: {spec.model}</div>
@@ -590,7 +590,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
           )}
 
           {/* ═══ SALES AGREEMENT — PAGE 1 ══════════════════════════════════ */}
-          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
+          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break" data-doc-page>
             <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine} fs={fs}/>
             <SectionHeading title="SALES AGREEMENT"/>
 
@@ -617,7 +617,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
           </div>
 
           {/* ═══ SALES AGREEMENT — PAGE 2 ══════════════════════════════════ */}
-          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
+          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break" data-doc-page>
             <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine} fs={fs}/>
             <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, textAlign: 'center', marginTop: 16, marginBottom: 4 }}>SALES AGREEMENT (continued)</div>
             <div style={{ height: 2, background: ACCENT, marginBottom: 14 }}/>
@@ -637,7 +637,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
           </div>
 
           {/* ═══ SALES AGREEMENT — PAGE 3 ══════════════════════════════════ */}
-          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
+          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break" data-doc-page>
             <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine} fs={fs}/>
             <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, textAlign: 'center', marginTop: 16, marginBottom: 4 }}>SALES AGREEMENT (continued)</div>
             <div style={{ height: 2, background: ACCENT, marginBottom: 14 }}/>
@@ -658,7 +658,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
           </div>
 
           {/* ═══ SALES AGREEMENT — PAGE 4 ══════════════════════════════════ */}
-          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
+          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break" data-doc-page>
             <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine} fs={fs}/>
             <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, textAlign: 'center', marginTop: 16, marginBottom: 4 }}>SALES AGREEMENT (continued)</div>
             <div style={{ height: 2, background: ACCENT, marginBottom: 14 }}/>
@@ -679,7 +679,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
           </div>
 
           {/* ═══ EXHIBIT A — DISCLOSURES (PAGE 1) ══════════════════════════ */}
-          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
+          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break" data-doc-page>
             <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine} fs={fs}/>
             <SectionHeading title="EXHIBIT A: DISCLOSURES"/>
 
@@ -718,7 +718,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
           </div>
 
           {/* ═══ EXHIBIT A — DISCLOSURES (PAGE 2) ══════════════════════════ */}
-          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break">
+          <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break" data-doc-page>
             <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine} fs={fs}/>
             <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, textAlign: 'center', marginTop: 16, marginBottom: 4 }}>EXHIBIT A: DISCLOSURES (continued)</div>
             <div style={{ height: 2, background: ACCENT, marginBottom: 14 }}/>
