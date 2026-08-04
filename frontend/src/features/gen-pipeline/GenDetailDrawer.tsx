@@ -9,6 +9,9 @@ import BuildFromNotesModal from '../builder/BuildFromNotesModal';
 import AwardKickoffModal, { useKickoffDocs, kickoffStatus, KICKOFF_ROWS } from './AwardKickoffModal';
 import SiteVisitChecklist from './SiteVisitChecklist';
 import SignedContractCard from './SignedContractCard';
+import ProposalActionBar from './ProposalActionBar';
+import DrawerSection from './DrawerSection';
+import SendProposalModal from '../builder/SendProposalModal';
 import SurveyMarkupEditor from './SurveyMarkupEditor';
 import DocSlot from './DocSlot';
 import { parseSizerFile } from './sizerParse';
@@ -58,6 +61,11 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<Draft>({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '', date_won: '' });
   const [showKickoff, setShowKickoff] = useState(!!autoKickoff);
+  const [showSend, setShowSend] = useState(false);
+  // Bumped by the action bar's "Countersign & award" so the contract card opens its own
+  // confirmation — the signature and its warning live there, and duplicating them in the
+  // header would give two places to execute a contract.
+  const [countersignTick, setCountersignTick] = useState(0);
   useEffect(() => {
     if (autoKickoff) { setShowKickoff(true); onAutoKickoffHandled?.(); }
   }, [autoKickoff, onAutoKickoffHandled]);
@@ -187,7 +195,22 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             <SurveyMarkupEditor gen={gen} onUpdated={g => onUpdated(g)}/>
           ) : (
           <>
-          <div className="dtl-amt">{moneyFull(Number(gen.amount))}</div>
+          {/* Who, where it stands, and the one thing to do next — before any read-only
+              detail, because that is what the drawer is opened for. */}
+          <ProposalActionBar
+            gen={gen}
+            canDelete={canDelete}
+            closingJob={closingJob}
+            onView={() => window.open(`${window.location.origin}/p/${gen.proposal_token}?preview=1`, '_blank', 'noopener')}
+            onEdit={() => { onClose(); onEditGen(gen); }}
+            onSend={() => setShowSend(true)}
+            onCountersign={() => setCountersignTick(t => t + 1)}
+            onKickoff={() => setShowKickoff(true)}
+            onAddOption={() => onDuplicate(gen)}
+            onBuildFromNotes={() => setShowBuildNotes(true)}
+            onCloseJob={handleCloseJob}
+            onDelete={() => onDelete(gen)}
+          />
 
           {gen.stage === 'superseded' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600,
@@ -226,8 +249,12 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             })}
           </div>
 
-          {/* Lifecycle timeline */}
-          <div className="dtl-stage-label" style={{ marginTop: 16 }}>Lifecycle</div>
+          {/* Lifecycle timeline — folded by default: the action bar already says where
+              the deal stands, so the full history is for when someone asks. */}
+          <DrawerSection
+            title="Lifecycle"
+            hint={gen.signed_at ? 'Signed' : gen.viewed_at ? 'Viewed' : gen.sent_at ? 'Sent' : 'Building'}
+          >
           <div style={{ marginBottom: 4 }}>
             {(() => {
               const steps: { label: string; done: boolean; when: string | null }[] = [
@@ -256,6 +283,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
               ));
             })()}
           </div>
+          </DrawerSection>
 
           {pendingDeclined && (
             <div className="lost-confirm">
@@ -317,6 +345,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
               </div>
             </div>
           ) : (
+            <DrawerSection title="Details" hint={[gen.mfr, gen.model].filter(Boolean).join(' ') || undefined}>
             <div className="dtl-section">
               <div className="dtl-row"><span className="dtl-k">Manufacturer</span>
                 <span className="dtl-v">
@@ -349,11 +378,13 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
                 <Icon name="doc" size={14} stroke={1.9}/>Edit Details
               </button>
             </div>
+            </DrawerSection>
           )}
 
           {/* Sizer report — usually run on Generac/Kohler's own sizing tool and saved
               off-CRM, then attached here once the job's underway. */}
-          <div className="dtl-section" style={{ marginTop: 16 }}>
+          <DrawerSection title="Documents" defaultOpen>
+          <div className="dtl-section">
             <div className="dtl-stage-label" style={{ marginBottom: 8 }}>Sizer Report</div>
             <DocSlot genId={gen.id} category="sizer_report" label="Sizer Report" onUploaded={autofillFromSizer}/>
             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>Uploading a sizer auto-fills the Site Visit Checklist — review &amp; edit it in the Checklist tab.</div>
@@ -362,22 +393,13 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           {/* The executed contract gets its own row above the general file list — it is
               the one document anyone opening a signed job is looking for, and burying it
               among site photos is how a missing archive went unnoticed. */}
-          <SignedContractCard gen={gen} siblings={groupSiblings} onUpdated={g => onUpdated(g)}/>
+          <SignedContractCard gen={gen} siblings={groupSiblings} onUpdated={g => onUpdated(g)} requestCountersign={countersignTick}/>
 
           {/* Photos & files up top so site-visit capture is one tap on mobile, not
               buried below every action button. */}
           <RecordFiles linkedId={gen.id} linkedName={gen.customer} div="gen" cameraFirst title="Photos & Files"
             emptyHint="No files yet. Snap site-visit photos, or attach the proposal, PO, permit, signed contract, or delivery/startup docs."/>
-
-          {gen.proposal_token && (
-            <button
-              className="btn ghost"
-              style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
-              onClick={() => window.open(`${window.location.origin}/p/${gen.proposal_token}?preview=1`, '_blank', 'noopener')}
-            >
-              <Icon name="eye" size={15} stroke={1.9}/>View customer proposal
-            </button>
-          )}
+          </DrawerSection>
 
           {gen.stage === 'awarded' && (
             <div className="dtl-section" style={{ marginTop: 16 }}>
@@ -405,62 +427,10 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             </div>
           )}
 
-          {!isTerminal && (
-            <button
-              className="btn ghost"
-              style={{ width: '100%', justifyContent: 'center', marginTop: 8, color: 'var(--blue)', borderColor: 'rgba(59,130,246,.4)' }}
-              onClick={() => setShowBuildNotes(true)}
-            >
-              <Icon name="bolt" size={14} stroke={2}/>Build from Site Notes
-            </button>
-          )}
-
-          {gen.stage === 'awarded' && !gen.closed_at && (
-            <button
-              className="btn ghost"
-              style={{ width: '100%', justifyContent: 'center', color: 'var(--green)', borderColor: 'rgba(52,197,136,.4)', marginTop: 8 }}
-              disabled={closingJob}
-              onClick={handleCloseJob}
-            >
-              <Icon name="check" size={14} stroke={2.2}/>{closingJob ? 'Closing…' : 'Close Job'}
-            </button>
-          )}
-
-          {/* Deleting a proposal is admin-only on the server (owner/administrator/manager).
-              Hide the button for everyone else so they don't hit a 403 "Delete failed". */}
-          {canDelete && (
-            <button
-              className="btn ghost"
-              style={{ width: '100%', justifyContent: 'center', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)', marginTop: 8 }}
-              onClick={() => onDelete(gen)}
-            >
-              <Icon name="x" size={14} stroke={2}/>Delete Proposal
-            </button>
-          )}
-
-          {!isTerminal && (
-            <button
-              className="btn amber"
-              style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
-              onClick={() => { onClose(); onEditGen(gen); }}
-            >
-              <Icon name="doc" size={15} stroke={1.9}/>Edit in Proposal Builder
-            </button>
-          )}
-
-          {/* Duplicate into a new draft so the customer can be offered more than one
-              option (different size/brand/pricing) without re-entering their details.
-              Only offered on active proposals — terminal ones (signed/awarded/declined)
-              are not re-offered from here. */}
-          {!isTerminal && (
-            <button
-              className="btn ghost"
-              style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
-              onClick={() => onDuplicate(gen)}
-            >
-              <Icon name="copy" size={14} stroke={1.9}/>Duplicate for New Option
-            </button>
-          )}
+          {/* View, Edit, Send, Build from notes, Close job, Duplicate and Delete all
+              moved into the action bar at the top of this tab. They used to sit here, in
+              a stack of seven full-width buttons below every read-only field, which put
+              Delete one row from Edit and hid Send entirely. */}
 
           {/* Retroactively link an already-existing proposal for this customer as an
               alternate option — for pairs not created via Duplicate, so they never
@@ -522,6 +492,25 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
 
         </div>
       </div>
+
+      {/* Sending used to live only in the builder, reachable after a save, so there was
+          no way to resend from the record a rep is actually looking at. */}
+      {showSend && (
+        <SendProposalModal
+          genId={gen.id}
+          defaultEmail={(() => {
+            const f = gen.form_data;
+            const parsed = typeof f === 'string' ? (() => { try { return JSON.parse(f); } catch { return null; } })() : f;
+            return (parsed as { email?: string } | null)?.email || '';
+          })()}
+          proposalNo={gen.proposal_no || ''}
+          spec={`${gen.kw ? `${gen.kw}kW ` : ''}${gen.mfr || ''}`.trim()}
+          total={moneyFull(Number(gen.amount))}
+          deposit={moneyFull(Number(gen.amount) / 2)}
+          onSent={updated => { setShowSend(false); onUpdated(updated); }}
+          onClose={() => setShowSend(false)}
+        />
+      )}
 
       {showBuildNotes && (
         <BuildFromNotesModal
