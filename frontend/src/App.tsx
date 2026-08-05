@@ -207,7 +207,8 @@ export default function App() {
     switch (view) {
       case 'dashboard':
         return <CommandCenterPage bids={bids} gens={gens} wonJobs={wonJobs} repNames={repNames} onNav={setView}
-          onEditGen={g => { setEditGen(g); setView('builder'); }} />;
+          onEditGen={g => { setEditGen(g); setView('builder'); }}
+          onConverted={gen => setGens(prev => prev.some(g => g.id === gen.id) ? prev : [gen, ...prev])} />;
       case 'generators':
         return (
           <GeneratorsHubPage

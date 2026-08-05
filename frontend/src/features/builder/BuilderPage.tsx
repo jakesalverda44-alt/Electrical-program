@@ -180,7 +180,9 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
       if (editGen) {
         const r = await api.patch(`/gens/${editGen.id}`, payload);
         const updatedGen: Gen = r.data.gen ?? r.data;
-        setGens(prev => prev.map(g => g.id === editGen.id ? updatedGen : g));
+        setGens(prev => prev.some(g => g.id === editGen.id)
+          ? prev.map(g => g.id === editGen.id ? updatedGen : g)
+          : [updatedGen, ...prev]);
         if (r.data.wonJob && setWonJobs) {
           setWonJobs(prev => prev.map(w => w.proposal_id === editGen.id ? r.data.wonJob : w));
         }

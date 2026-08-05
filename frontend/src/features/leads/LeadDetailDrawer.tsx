@@ -191,6 +191,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
       const { data: updated } = await api.get<Lead>(`/leads/${lead.id}`);
       setLead(updated);
       onUpdated(updated);
+      if (onConverted) onConverted(gen);
       if (onEditGen) {
         onClose();
         onEditGen(gen);
