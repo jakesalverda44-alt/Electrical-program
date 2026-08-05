@@ -119,9 +119,10 @@ interface Props {
   repNames?: string[];
   onNav: (v: string) => void;
   onEditGen: (gen: Gen) => void;
+  onConverted?: (gen: Gen) => void;
 }
 
-export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav, onEditGen }: Props) {
+export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav, onEditGen, onConverted }: Props) {
   const user = useUser();
   const showToast = useShowToast();
   const [brief, setBrief] = useState<BriefPayload | null>(null);
@@ -201,6 +202,7 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
     try {
       const { data } = await api.post<Gen>(`/leads/${surveyLead.id}/create-gen`);
       setSurveyLead(null);
+      if (onConverted) onConverted(data);
       onEditGen(data);
     } catch {
       showToast({ title: "Couldn't create the proposal", sub: 'Check connection and try again.' });
