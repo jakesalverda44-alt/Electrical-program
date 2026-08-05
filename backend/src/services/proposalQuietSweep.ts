@@ -24,6 +24,20 @@ async function numericSetting(key: string, fallback: number): Promise<number> {
 }
 
 /**
+ * Resolve a proposal's salesperson to an id that actually exists in `users`.
+ *
+ * Historic rows can carry a salesperson_id with no matching user (data imported
+ * around the Render database move landed orphans that the FK would have blocked).
+ * Assigning such an id blows up on tasks_assigned_to_fkey / the notifications FK,
+ * so treat it as unassigned instead — a triage-able task beats no task at all.
+ */
+export async function resolveOwner(salespersonId: string | null): Promise<string | null> {
+  if (!salespersonId) return null;
+  const { rows } = await pool.query(`SELECT 1 FROM users WHERE id = $1`, [salespersonId]);
+  return rows.length ? salespersonId : null;
+}
+
+/**
  * Insert a follow-up task (and, when there's an owner, a notification) for one quiet
  * proposal. Dedup is enforced by the caller's NOT EXISTS query — this just performs
  * the insert for a candidate that has already been confirmed to have no prior task
@@ -36,15 +50,22 @@ async function createFollowup(
 ): Promise<void> {
   const notes = `Sent ${dateOnly(g.sent_at)}. ${g.viewed_at ? `Viewed ${dateOnly(g.viewed_at)}` : 'Never viewed'}.`;
   const dueDate = new Date().toISOString().slice(0, 10);
+  const owner = await resolveOwner(g.salesperson_id);
+  if (g.salesperson_id && !owner) {
+    logger.warn(
+      { genId: g.id, salespersonId: g.salesperson_id },
+      '[proposal-quiet-sweep] proposal owner is not a known user — leaving follow-up unassigned'
+    );
+  }
 
   await pool.query(
     `INSERT INTO tasks (title, notes, due_date, linked_type, linked_id, linked_name, assigned_to)
      VALUES ($1,$2,$3,'gen',$4,$5,$6)`,
-    [title, notes, dueDate, g.id, g.customer, g.salesperson_id]
+    [title, notes, dueDate, g.id, g.customer, owner]
   );
 
-  if (g.salesperson_id) {
-    await createNotification(g.salesperson_id, {
+  if (owner) {
+    await createNotification(owner, {
       type: 'proposal_quiet',
       title,
       body: notes,
@@ -52,6 +73,26 @@ async function createFollowup(
       linkId: g.id,
       dedupKey: `proposal-quiet-${tier}-${g.id}`,
     });
+  }
+}
+
+/**
+ * createFollowup for one candidate, isolated so a single bad row can't abort the whole
+ * sweep. Before this, one failing insert skipped every remaining Tier A candidate *and*
+ * the entire Tier B pass, so follow-ups stopped being created site-wide.
+ * Returns whether the follow-up was created.
+ */
+async function tryCreateFollowup(
+  g: QuietProposal,
+  title: string,
+  tier: 'a' | 'b',
+): Promise<boolean> {
+  try {
+    await createFollowup(g, title, tier);
+    return true;
+  } catch (err) {
+    logger.error({ err, genId: g.id, tier }, '[proposal-quiet-sweep] follow-up insert failed');
+    return false;
   }
 }
 
@@ -91,8 +132,7 @@ export async function sweepQuietProposals(now: Date = new Date()): Promise<{ cre
     );
     for (const g of quiet as QuietProposal[]) {
       const title = `Proposal quiet ${quietDays}d — ${g.customer}`;
-      await createFollowup(g, title, 'a');
-      created++;
+      if (await tryCreateFollowup(g, title, 'a')) created++;
     }
 
     // Tier B — sent, viewed, still unsigned, quiet long enough since the view.
@@ -108,8 +148,7 @@ export async function sweepQuietProposals(now: Date = new Date()): Promise<{ cre
     );
     for (const g of viewedUnsigned as QuietProposal[]) {
       const title = `Proposal viewed but unsigned — ${g.customer}`;
-      await createFollowup(g, title, 'b');
-      created++;
+      if (await tryCreateFollowup(g, title, 'b')) created++;
     }
   } catch (err) {
     logger.error({ err }, '[proposal-quiet-sweep] failed');
