@@ -479,7 +479,9 @@ describe('GC name canonicalization (integration)', () => {
       .send({})
       .expect(200);
 
-    expect(accepted.body.customer_id).toBe(seed.body.customer_id);
-    expect(accepted.body.gc).toBe(base);
+    // POST /:id/accept wraps its result as { bid, teamDraftLink } (the frontend reads
+    // r.data.bid) — unlike POST /bids, which returns the bid flat. Assert the same shape.
+    expect(accepted.body.bid.customer_id).toBe(seed.body.customer_id);
+    expect(accepted.body.bid.gc).toBe(base);
   });
 });
