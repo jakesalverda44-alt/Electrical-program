@@ -29,6 +29,19 @@ describe('parseAddress', () => {
   it('falls back to street when it cannot confidently split', () => {
     expect(parseAddress('Some freeform location')).toEqual({ street: 'Some freeform location', city: '', state: '', zip: '' });
   });
+
+  // Regression: a comma-free address that happens to contain a zip (so `!state && !zip`
+  // was false) used to fall through with street left blank, silently dropping the whole
+  // address. The street must never come back empty when the input had content.
+  it('keeps the whole string as street when a zip is embedded with no comma to split on', () => {
+    expect(parseAddress('123 Main St Eustis FL 32726'))
+      .toEqual({ street: '123 Main St Eustis FL 32726', city: '', state: '', zip: '32726' });
+  });
+
+  it('keeps the whole string as street for a bare state with no comma either', () => {
+    expect(parseAddress('123 Main St Eustis FL'))
+      .toEqual({ street: '123 Main St Eustis FL', city: '', state: '', zip: '' });
+  });
 });
 
 describe('leadAddressToProposal', () => {
@@ -40,5 +53,11 @@ describe('leadAddressToProposal', () => {
   it('falls back to the raw address when unparseable', () => {
     expect(leadAddressToProposal('Freeform place'))
       .toEqual({ address: 'Freeform place', city: '', state: '', zip: '', loc: 'Freeform place' });
+  });
+
+  it('never returns an empty address when a comma-free input contains a zip', () => {
+    const result = leadAddressToProposal('123 Main St Eustis FL 32726');
+    expect(result.address).toBe('123 Main St Eustis FL 32726');
+    expect(result.zip).toBe('32726');
   });
 });
