@@ -34,8 +34,42 @@ export function describeWeatherCode(code: number): { label: string; emoji: strin
 }
 
 const TTL_MS = 15 * 60_000;      // serve a good reading for 15 minutes
-const FAIL_TTL_MS = 2 * 60_000;  // back off for 2 minutes after a failure
+const FAIL_TTL_MS = 2 * 60_000;  // first retry 2 minutes after a failure
+const MAX_FAIL_TTL_MS = 60 * 60_000; // …doubling up to an hour while it keeps failing
+const RATE_LIMIT_TTL_MS = 30 * 60_000; // a 429 with no Retry-After: wait half an hour
+const STALE_OK_MS = 6 * 60 * 60_000; // keep showing the last good reading for 6 hours
 const FETCH_TIMEOUT_MS = 5_000;
+
+/** Carries the HTTP status so the backoff can treat rate limiting differently. */
+export class ForecastHttpError extends Error {
+  constructor(readonly status: number, readonly retryAfterMs: number | null) {
+    super(`forecast HTTP ${status}`);
+  }
+}
+
+/** Retry-After is either delta-seconds or an HTTP date. Null when absent/unparseable. */
+export function parseRetryAfter(header: string | null, now = Date.now()): number | null {
+  if (!header) return null;
+  const secs = Number(header.trim());
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? null : Math.max(0, at - now);
+}
+
+/**
+ * How long to wait before the next attempt after `failures` consecutive failures.
+ *
+ * The old flat 2-minute backoff was shorter than the 15-minute success TTL, so a rate
+ * limit made the app hit Open-Meteo *harder* than when it was working — ~30 calls an
+ * hour, all rejected, which is what kept it rate-limited. Back off exponentially, and
+ * on a 429 start at the server's Retry-After (or half an hour) instead.
+ */
+export function backoffMs(failures: number, err?: unknown): number {
+  if (err instanceof ForecastHttpError && err.status === 429) {
+    return Math.min(err.retryAfterMs ?? RATE_LIMIT_TTL_MS, MAX_FAIL_TTL_MS);
+  }
+  return Math.min(FAIL_TTL_MS * 2 ** Math.max(0, failures - 1), MAX_FAIL_TTL_MS);
+}
 
 // Shop location fallback (Eustis, FL) so weather works even when the company
 // city/zip settings are empty or the geocoder is unreachable.
@@ -44,6 +78,13 @@ const DEFAULT_LOC = { lat: 28.8528, lon: -81.6856, name: 'Eustis' };
 let geo: { key: string; lat: number; lon: number; name: string } | null = null;
 let wx: { at: number; ttl: number; data: BriefWeather | null } | null = null;
 let inflight: Promise<BriefWeather | null> | null = null;
+let failures = 0;
+let lastGood: { at: number; data: BriefWeather } | null = null;
+
+/** Reset module caches. Test-only. */
+export function __resetWeatherCache(): void {
+  geo = null; wx = null; inflight = null; failures = 0; lastGood = null;
+}
 
 /**
  * Resolve the company location to lat/lon, cached until the settings change.
@@ -91,7 +132,9 @@ async function fetchWeather(): Promise<BriefWeather | null> {
     + '&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max'
     + '&temperature_unit=fahrenheit&timezone=America%2FNew_York&forecast_days=1';
   const resp = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (!resp.ok) throw new Error(`forecast HTTP ${resp.status}`);
+  if (!resp.ok) {
+    throw new ForecastHttpError(resp.status, parseRetryAfter(resp.headers.get('retry-after')));
+  }
   const json = (await resp.json()) as {
     current?: { temperature_2m?: number; weather_code?: number };
     daily?: { temperature_2m_max?: number[]; temperature_2m_min?: number[]; precipitation_probability_max?: number[] };
@@ -110,19 +153,33 @@ async function fetchWeather(): Promise<BriefWeather | null> {
   };
 }
 
-/** Cached current weather for the company location. Never throws. */
+/**
+ * Cached current weather for the company location. Never throws.
+ *
+ * While a refresh is failing, keep serving the last good reading for up to
+ * STALE_OK_MS — six-hour-old weather beats the widget vanishing for an hour
+ * because Open-Meteo rate-limited one poll.
+ */
 export async function getWeather(): Promise<BriefWeather | null> {
   if (wx && Date.now() - wx.at < wx.ttl) return wx.data;
   if (inflight) return inflight;
   inflight = (async () => {
     try {
       const data = await fetchWeather();
+      failures = 0;
+      if (data) lastGood = { at: Date.now(), data };
       wx = { at: Date.now(), ttl: data ? TTL_MS : FAIL_TTL_MS, data };
       return data;
     } catch (err) {
-      logger.warn({ err }, '[weather] fetch failed');
-      wx = { at: Date.now(), ttl: FAIL_TTL_MS, data: null };
-      return null;
+      failures++;
+      const ttl = backoffMs(failures, err);
+      const stale = lastGood && Date.now() - lastGood.at < STALE_OK_MS ? lastGood.data : null;
+      logger.warn(
+        { err, failures, retryInMs: ttl, servingStale: Boolean(stale) },
+        '[weather] fetch failed'
+      );
+      wx = { at: Date.now(), ttl, data: stale };
+      return stale;
     } finally {
       inflight = null;
     }

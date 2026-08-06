@@ -14,6 +14,19 @@ export const BID_SUBFOLDER_NAMES = ['Plans', 'Bid Proposals'];
 export const AWARD_SUBFOLDER_NAMES = ['Submittals', 'RFIs', 'Change Orders', 'Photos', 'Contract & Invoices'];
 export const SUBFOLDER_NAMES = [...BID_SUBFOLDER_NAMES, ...AWARD_SUBFOLDER_NAMES];
 
+/**
+ * Every folder above lives in a Shared Drive. Drive v3 hides shared-drive items from
+ * a request unless it opts in, and — worse for writes — a `files.create` without this
+ * flag is treated as a My Drive create, which a service account cannot do:
+ *
+ *   storageQuotaExceeded: Service Accounts do not have storage quota.
+ *
+ * So every call that touches a file or folder must carry `supportsAllDrives`, and every
+ * listing must also carry `includeItemsFromAllDrives` or it comes back empty.
+ */
+const SHARED_DRIVE = { supportsAllDrives: true } as const;
+const SHARED_DRIVE_LIST = { supportsAllDrives: true, includeItemsFromAllDrives: true } as const;
+
 function getCredentials(): Record<string, unknown> | null {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) return null;
@@ -50,18 +63,19 @@ export function jobFolderName(name: string, loc?: string | null): string {
 export async function renameFolder(folderId: string, newName: string): Promise<void> {
   const drive = getDriveClient();
   if (!drive) return;
-  await drive.files.update({ fileId: folderId, requestBody: { name: newName }, fields: 'id' });
+  await drive.files.update({ fileId: folderId, requestBody: { name: newName }, fields: 'id', ...SHARED_DRIVE });
 }
 
 async function getOrCreateSubfolder(name: string, parentId: string): Promise<string | null> {
   const drive = getDriveClient();
   if (!drive) return null;
   const q = `name = ${JSON.stringify(name)} and mimeType = 'application/vnd.google-apps.folder' and '${parentId}' in parents and trashed = false`;
-  const { data } = await drive.files.list({ q, fields: 'files(id)', pageSize: 1 });
+  const { data } = await drive.files.list({ q, fields: 'files(id)', pageSize: 1, ...SHARED_DRIVE_LIST });
   if (data.files?.length) return data.files[0].id!;
   const { data: created } = await drive.files.create({
     requestBody: { name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
     fields: 'id',
+    ...SHARED_DRIVE,
   });
   return created.id ?? null;
 }
@@ -78,6 +92,7 @@ export async function createJobFolder(
   const { data } = await drive.files.create({
     requestBody: { name: jobName, mimeType: 'application/vnd.google-apps.folder', parents: [gcFolderId] },
     fields: 'id',
+    ...SHARED_DRIVE,
   });
   return data.id ?? null;
 }
@@ -101,8 +116,8 @@ export async function getFileMedia(fileId: string): Promise<{ stream: Readable; 
   const drive = getDriveClient();
   if (!drive) return null;
   try {
-    const meta = await drive.files.get({ fileId, fields: 'mimeType, name' });
-    const resp = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'stream' });
+    const meta = await drive.files.get({ fileId, fields: 'mimeType, name', ...SHARED_DRIVE });
+    const resp = await drive.files.get({ fileId, alt: 'media', ...SHARED_DRIVE }, { responseType: 'stream' });
     return {
       stream: resp.data as unknown as Readable,
       mimeType: (meta.data.mimeType as string) || 'application/octet-stream',
@@ -123,6 +138,7 @@ export async function createSubfolders(parentId: string, names: string[] = SUBFO
       const { data } = await drive.files.create({
         requestBody: { name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
         fields: 'id',
+        ...SHARED_DRIVE,
       });
       if (data.id) result[name] = data.id;
     } catch (err) {
@@ -136,13 +152,14 @@ async function moveToParent(fileId: string, newParentId: string): Promise<void> 
   const drive = getDriveClient();
   if (!drive) return;
   try {
-    const { data } = await drive.files.get({ fileId, fields: 'parents' });
+    const { data } = await drive.files.get({ fileId, fields: 'parents', ...SHARED_DRIVE });
     const currentParents = (data.parents ?? []).join(',');
     await drive.files.update({
       fileId,
       addParents: newParentId,
       removeParents: currentParents || undefined,
       fields: 'id, parents',
+      ...SHARED_DRIVE,
     });
   } catch (err) {
     console.error(`[drive] moveToParent "${fileId}" → "${newParentId}" failed:`, err);
@@ -175,6 +192,7 @@ export async function listFolderFiles(folderId: string): Promise<{
       fields: 'files(id,name,mimeType,webViewLink,thumbnailLink,size,createdTime)',
       orderBy: 'createdTime desc',
       pageSize: 100,
+      ...SHARED_DRIVE_LIST,
     });
     return (data.files ?? []) as { id: string; name: string; mimeType: string; webViewLink?: string; thumbnailLink?: string; size?: string; createdTime?: string; }[];
   } catch (err) {
@@ -196,6 +214,7 @@ export async function uploadFile(
     requestBody: { name, mimeType, parents: [parentId] },
     media: { mimeType, body },
     fields: 'id',
+    ...SHARED_DRIVE,
   });
   return data.id ?? null;
 }
