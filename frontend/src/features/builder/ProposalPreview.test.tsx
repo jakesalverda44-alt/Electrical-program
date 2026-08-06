@@ -248,3 +248,36 @@ describe('countersignature', () => {
     expect(container.querySelectorAll('img[alt="Customer initials"]')).toHaveLength(6);
   });
 });
+
+describe('Silver Service promo line items', () => {
+  it('states nothing about Silver Service when the promo is not selected', () => {
+    mockMatchMedia(false);
+    const noneForm = { ...blankGenForm(), customer: 'Jane Homeowner', silverServicePromo: 'none' as const };
+    const { container } = render(
+      <ProposalPreview embed form={noneForm} totals={calcGenTotals(noneForm)} proposalNo="P-1"/>
+    );
+    expect(container.textContent).not.toContain('Silver Service');
+  });
+
+  it('states 1 year explicitly in the scope-of-work line item', () => {
+    mockMatchMedia(false);
+    const oneYearForm = { ...blankGenForm(), customer: 'Jane Homeowner', silverServicePromo: '1yr' as const };
+    const { getByText } = render(
+      <ProposalPreview embed form={oneYearForm} totals={calcGenTotals(oneYearForm)} proposalNo="P-1"/>
+    );
+    expect(getByText('1-Year Silver Service — Included')).toBeTruthy();
+  });
+
+  it('states 2 years explicitly in both the scope-of-work line item and the price breakdown', () => {
+    mockMatchMedia(false);
+    const twoYearForm = {
+      ...blankGenForm(), customer: 'Jane Homeowner',
+      silverServicePromo: '2yr' as const, includeBreakdown: true,
+    };
+    const { getByText } = render(
+      <ProposalPreview embed form={twoYearForm} totals={calcGenTotals(twoYearForm)} proposalNo="P-1"/>
+    );
+    expect(getByText('2-Year Silver Service — Included')).toBeTruthy();
+    expect(getByText('2-Year Silver Service — Promo (FREE)')).toBeTruthy();
+  });
+});

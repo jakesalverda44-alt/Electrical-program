@@ -416,9 +416,9 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                     desc: 'Provide and install a whole-home surge protective device at the electrical service equipment per manufacturer requirements and local codes.',
                     shade: true,
                   }] : []),
-                  ...(form.silverServicePromo ? [{
-                    title: '1-Year Silver Service — Included',
-                    desc: (<>APT includes 1 year of Silver Service preventative maintenance at no additional cost — <s>{fmtDec(DEFAULT_PRICES.silverService)}</s>{' '}<strong>FREE</strong> (Promo).</>),
+                  ...(form.silverServicePromo !== 'none' ? [{
+                    title: `${form.silverServicePromo === '2yr' ? 2 : 1}-Year Silver Service — Included`,
+                    desc: (<>APT includes {form.silverServicePromo === '2yr' ? 2 : 1} year{form.silverServicePromo === '2yr' ? 's' : ''} of Silver Service preventative maintenance at no additional cost — <s>{fmtDec(DEFAULT_PRICES.silverService * (form.silverServicePromo === '2yr' ? 2 : 1))}</s>{' '}<strong>FREE</strong> (Promo).</>),
                     shade: false,
                   }] : []),
                   {
@@ -497,7 +497,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                     { label: 'Extended Warranty (10-Year)', tax: 'taxable', amt: taxableWarranty, show: form.extWarranty === 'paid' },
                     { label: `Extended Warranty (10-Year) — ${form.brand === 'Kohler' ? 'Kohler Promo' : 'Included by APT'} (FREE${form.brand === 'Kohler' && warrantyPromoRange ? `, valid ${warrantyPromoRange}` : ''})`, tax: 'taxable', amt: 0, show: form.extWarranty === 'promo' },
                     { label: 'Emergency Panel', tax: 'taxable', amt: taxableEmPanel, show: taxableEmPanel > 0 },
-                    { label: '1-Year Silver Service — Promo (FREE)', tax: '', amt: 0, show: !!form.silverServicePromo },
+                    { label: `${form.silverServicePromo === '2yr' ? 2 : 1}-Year Silver Service — Promo (FREE)`, tax: '', amt: 0, show: form.silverServicePromo !== 'none' },
                     { label: `Labor & Electrical${form.extraWire > 0 ? ` + ${form.extraWire} ft extra wire` : ''}`, tax: '', amt: totals.laborAmt + totals.extraWireAmt, show: true },
                     { label: 'Gas Line', tax: '', amt: totals.gasLineAmt, show: totals.gasLineAmt > 0 },
                     { label: 'Permit Fee', tax: '', amt: totals.permitAmt, show: true },

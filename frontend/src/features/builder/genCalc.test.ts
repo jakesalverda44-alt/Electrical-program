@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { blankGenForm, calcGenTotals, migrateGenForm } from './genCalc';
+import { blankGenForm, calcGenTotals, migrateGenForm, genPriceRows } from './genCalc';
 import { GenForm } from './genData';
 
 describe('calcGenTotals', () => {
@@ -98,6 +98,40 @@ describe('calcGenTotals', () => {
     expect(big.genStandAmt).toBe(2500);
     expect(big.padAmt).toBe(0);
   });
+
+  it('a free Silver Service promo (either year count) adds no tax', () => {
+    const oneYear = calcGenTotals({ ...blankGenForm(), silverServicePromo: '1yr', taxRate: 7 });
+    const twoYear = calcGenTotals({ ...blankGenForm(), silverServicePromo: '2yr', taxRate: 7 });
+    const none    = calcGenTotals({ ...blankGenForm(), silverServicePromo: 'none', taxRate: 7 });
+    expect(oneYear.tax).toBe(none.tax);
+    expect(twoYear.tax).toBe(none.tax);
+  });
+});
+
+describe('genPriceRows — Silver Service line item', () => {
+  const fmt = (n: number) => `$${n}`;
+
+  it('omits the line when no promo is selected', () => {
+    const form = { ...blankGenForm(), silverServicePromo: 'none' as const };
+    const rows = genPriceRows(form, calcGenTotals(form), fmt);
+    expect(rows.some(r => r.label.includes('Silver Service'))).toBe(false);
+  });
+
+  it('states 1 year and its $395 value explicitly', () => {
+    const form = { ...blankGenForm(), silverServicePromo: '1yr' as const };
+    const rows = genPriceRows(form, calcGenTotals(form), fmt);
+    const row = rows.find(r => r.label.includes('Silver Service'));
+    expect(row?.label).toBe('1-Year Silver Service — Promo: $395 → FREE');
+    expect(row?.amount).toBe('$0');
+  });
+
+  it('states 2 years and the doubled $790 value explicitly', () => {
+    const form = { ...blankGenForm(), silverServicePromo: '2yr' as const };
+    const rows = genPriceRows(form, calcGenTotals(form), fmt);
+    const row = rows.find(r => r.label.includes('Silver Service'));
+    expect(row?.label).toBe('2-Year Silver Service — Promo: $790 → FREE');
+    expect(row?.amount).toBe('$0');
+  });
 });
 
 describe('migrateGenForm', () => {
@@ -126,5 +160,19 @@ describe('migrateGenForm', () => {
     const current = { ...blankGenForm(), smmQty: 2 };
     const migrated = migrateGenForm(current as unknown as Record<string, unknown>);
     expect(migrated).toEqual(current);
+  });
+
+  it('translates the old boolean silverServicePromo (true) into the 1yr enum', () => {
+    const migrated = migrateGenForm({ silverServicePromo: true });
+    expect(migrated.silverServicePromo).toBe('1yr');
+  });
+
+  it('translates the old boolean silverServicePromo (false) and missing values into none', () => {
+    expect(migrateGenForm({ silverServicePromo: false }).silverServicePromo).toBe('none');
+    expect(migrateGenForm({}).silverServicePromo).toBe('none');
+  });
+
+  it('leaves an already-migrated silverServicePromo string untouched', () => {
+    expect(migrateGenForm({ silverServicePromo: '2yr' }).silverServicePromo).toBe('2yr');
   });
 });
