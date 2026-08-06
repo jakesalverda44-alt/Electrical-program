@@ -56,8 +56,14 @@ export function parseAddress(full: string | null | undefined): ParsedAddress {
     // "Street, STATE ZIP" vs "City, STATE ZIP" — a leading number signals a street.
     if (/^\d/.test(parts[0])) street = parts[0];
     else city = parts[0];
-  } else if (!state && !zip) {
-    // Single segment with no state/zip — couldn't split; keep it as the street.
+  } else {
+    // A single segment with no comma to split on. Even when a zip (or, rarely, a bare
+    // state) was found inside it, there's no reliable boundary to pull a city out —
+    // keep the whole original text as the street rather than dropping it. This used to
+    // require `!state && !zip`, so a segment like "123 Main St Eustis FL 32726" (zip
+    // found, state not — normalizeState only matches an isolated token, not one
+    // embedded in a longer string) fell through with street left blank, silently
+    // discarding the entire address. Keep in sync with backend/src/utils/address.ts.
     street = parts[0];
   }
 

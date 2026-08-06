@@ -38,11 +38,24 @@ const input: React.CSSProperties = {
 };
 const label: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 4, display: 'block' };
 
+// leads.address is stored as one combined string, parsed back into street/city/state/zip
+// on conversion to a proposal (backend/src/utils/address.ts). That parser is reliable for
+// this exact "Street, City, ST ZIP" comma-delimited shape — same format Kohler leads
+// arrive in — so building it from the modal's separate fields guarantees the full address
+// carries over instead of depending on however the rep happened to type it in one box.
+export function buildCombinedAddress(address: string, city: string, state: string, zip: string): string {
+  const cityStateZip = [city.trim(), [state.trim(), zip.trim()].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  return [address.trim(), cityStateZip].filter(Boolean).join(', ');
+}
+
 export default function AddLeadModal({ onClose, onAdded }: Props) {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
+  const [city, setCity] = useState('');
+  const [state, setState] = useState('FL');
+  const [zip, setZip] = useState('');
   const [source, setSource] = useState<string>('call-in');
   const [contactMethod, setContactMethod] = useState<'phone' | 'email'>('phone');
   const [notes, setNotes] = useState('');
@@ -55,12 +68,15 @@ export default function AddLeadModal({ onClose, onAdded }: Props) {
     try {
       const { data } = await api.post<Lead>('/leads', {
         name: name.trim(),
-        phone: phone.trim() || null,
-        email: email.trim() || null,
-        address: address.trim() || null,
+        // leadCreateSchema's optional fields (z.string().optional()) accept undefined,
+        // not null — sending null on a blank field fails validation with "Invalid
+        // input" and the lead never saves. Omit the key instead.
+        phone: phone.trim() || undefined,
+        email: email.trim() || undefined,
+        address: buildCombinedAddress(address, city, state, zip) || undefined,
         source,
         contact_method: contactMethod,
-        notes: notes.trim() || null,
+        notes: notes.trim() || undefined,
       });
       onAdded(data);
     } catch (err: unknown) {
@@ -103,7 +119,21 @@ export default function AddLeadModal({ onClose, onAdded }: Props) {
           </div>
           <div>
             <label style={label}>Address</label>
-            <input style={input} value={address} onChange={e => setAddress(e.target.value)} placeholder="123 Main St, City, State"/>
+            <input style={input} value={address} onChange={e => setAddress(e.target.value)} placeholder="123 Main St"/>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 1fr', gap: 12 }}>
+            <div>
+              <label style={label}>City</label>
+              <input style={input} value={city} onChange={e => setCity(e.target.value)} placeholder="City"/>
+            </div>
+            <div>
+              <label style={label}>State</label>
+              <input style={input} value={state} onChange={e => setState(e.target.value)} maxLength={2}/>
+            </div>
+            <div>
+              <label style={label}>Zip</label>
+              <input style={input} value={zip} onChange={e => setZip(e.target.value)} placeholder="ZIP"/>
+            </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
