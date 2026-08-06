@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { pool } from '../db/pool';
 import { dbAvailable, makeUser } from './harness';
-import { sweepQuietProposals } from '../services/proposalQuietSweep';
+import { sweepQuietProposals, resolveOwner } from '../services/proposalQuietSweep';
 
 describe('sweepQuietProposals', () => {
   let ok = false;
@@ -152,5 +152,16 @@ describe('sweepQuietProposals', () => {
       [genIds]
     );
     expect(rows.length).toBe(0);
+  });
+
+  it('(f) an owner id with no matching user resolves to unassigned instead of throwing', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('salesperson');
+
+    // A real user resolves to itself; an id with no `users` row resolves to null so the
+    // follow-up lands unassigned rather than blowing up on tasks_assigned_to_fkey.
+    expect(await resolveOwner(u.id)).toBe(u.id);
+    expect(await resolveOwner('00000000-0000-0000-0000-0000000000ff')).toBeNull();
+    expect(await resolveOwner(null)).toBeNull();
   });
 });
