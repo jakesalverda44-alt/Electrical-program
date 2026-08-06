@@ -8,3 +8,6 @@ backend/dist/
 
 # local dev launcher runtime (pids + logs)
 .crm/
+
+# extension config holds the live AUTOMATION_API_KEY — see config.example.js
+browser-extension/*/config.js

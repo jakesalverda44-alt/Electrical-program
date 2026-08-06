@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Kohler Lead → CRM",
+  "version": "1.0",
+  "description": "Adds a Pull into CRM button on Kohler PartnerHQ opportunity pages.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://home-energy.my.site.com/*",
+    "https://electrical-program.onrender.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://home-energy.my.site.com/partnerhq/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
