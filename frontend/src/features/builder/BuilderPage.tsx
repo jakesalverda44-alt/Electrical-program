@@ -423,10 +423,13 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
                 </Field>
               </>
             )}
-            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, gridColumn: '1' }}>
-              <input type="checkbox" checked={!!form.silverServicePromo} onChange={e => set('silverServicePromo', e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
-              1-Year Silver Service — Promo (FREE, $395 value)
-            </label>
+            <Field label="Silver Service">
+              <select style={SELECT_STYLE} value={form.silverServicePromo} onChange={e => set('silverServicePromo', e.target.value)}>
+                <option value="none">None</option>
+                <option value="1yr">1-Year — Promo (FREE, $395 value)</option>
+                <option value="2yr">2-Year — Promo (FREE, $790 value)</option>
+              </select>
+            </Field>
           </Section>
 
           {/* Section 5: Pricing & Terms */}

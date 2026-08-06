@@ -818,6 +818,8 @@ Enum fields:
                 extension; "promo" is the free 10-year upgrade — for Kohler it's a time-boxed
                 manufacturer promo (use extWarrantyPromoStart/End), for Generac it's an
                 APT-included no-charge upgrade with no date range
+  silverServicePromo — "none" | "1yr" | "2yr"  (default: "none") — free Silver Service
+                preventative-maintenance promo add-on, if mentioned
   discountType— "$" | "%"  (default: "$")
 
 Boolean fields (true/false):
@@ -827,7 +829,6 @@ Boolean fields (true/false):
   gasLine   — gas line disconnect & reconnect — only applies to swap-out jobs  (default: false)
   removal   — remove existing unit  (default: false)
   includeBreakdown — (default: false)
-  silverServicePromo — 1 year of Silver Service included free (promo add-on)  (default: false)
 
 String fields (enum, "" if not mentioned):
   genSide  — "Left" | "Right" | "" — which side of the house the generator sits on
@@ -900,7 +901,7 @@ async function extractFormFromNotes(notes: string): Promise<Record<string, unkno
     atsSize: '200A', atsQty: 1, fuel: 'Natural Gas', jobType: 'new-install', liftType: 'none', genStand: 'none',
     extWarranty: 'none', extWarrantyPromoStart: '', extWarrantyPromoEnd: '',
     pad: true, smmQty: 1, surgeProQty: 0, battery: true, emPanel: false, gasLine: false,
-    removal: false, extraWire: 0, removalFee: 500, silverServicePromo: false,
+    removal: false, extraWire: 0, removalFee: 500, silverServicePromo: 'none',
     feedFt: 0, genSide: '', panelRel: '', panelFt: 0,
     labor: ADDON_P.labor, permit: ADDON_P.permit, startup: ADDON_P.startup,
     discount: 0, discountType: '$', taxRate: 7, validDays: 30, depositPct: 50,
@@ -1095,7 +1096,8 @@ function buildAwardKickoffEmail(gen: Record<string, any>): { subject: string; ht
   if (form.panelRel) pos.push(String(form.panelRel).toLowerCase());
   if (Number(form.panelFt) > 0 && form.panelRel !== 'Next to panel') pos.push(`~${form.panelFt} ft from panel`);
   if (pos.length) lines.push(`Generator: ${pos.join(', ')}.`);
-  if (form.silverServicePromo) lines.push('Included 1 year free Silver Service.');
+  if (form.silverServicePromo === '1yr') lines.push('Included 1 year free Silver Service.');
+  if (form.silverServicePromo === '2yr') lines.push('Included 2 years free Silver Service.');
   if (form.notes && String(form.notes).trim()) lines.push(String(form.notes).trim());
 
   const deposit = Number(totals.deposit) || 0;

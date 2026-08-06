@@ -305,8 +305,8 @@ export interface GenForm {
    *  manufacturer promo, so it has no date range. */
   extWarrantyPromoStart: string;
   extWarrantyPromoEnd: string;
-  /** Promo add-on: 1 year of Silver Service included at no charge. */
-  silverServicePromo: boolean;
+  /** Promo add-on: 1 or 2 years of Silver Service included at no charge. */
+  silverServicePromo: 'none' | '1yr' | '2yr';
   /** Internal site-detail fields — not shown on the customer proposal, used for the
    *  award kickoff email to the ops team. */
   feedFt: number;
