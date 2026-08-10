@@ -289,6 +289,12 @@ describe('migrateGenForm', () => {
     expect(migrateGenForm({ silverServicePromo: '2yr' }).silverServicePromo).toBe('2yr');
   });
 
+  it('defaults a proposal saved before the charger add-on to no charger', () => {
+    const migrated = migrateGenForm({});
+    expect(migrated.evCharger).toBe(false);
+    expect(migrated.evChargerTier).toBe('f6to15');
+  });
+
   it('gives a proposal saved before custom items an empty list', () => {
     expect(migrateGenForm({}).customItems).toEqual([]);
   });
@@ -302,5 +308,61 @@ describe('migrateGenForm', () => {
   it('leaves a real customItems list untouched', () => {
     const items = [item()];
     expect(migrateGenForm({ customItems: items }).customItems).toEqual(items);
+  });
+});
+
+describe('calcGenTotals — bundled EV charger', () => {
+  const base = () => ({ ...blankGenForm(), taxRate: 7 });
+
+  it('is off by default and costs nothing', () => {
+    const form = blankGenForm();
+    expect(form.evCharger).toBe(false);
+    expect(calcGenTotals(form).evChargerAmt).toBe(0);
+  });
+
+  it('charges the same tier prices as a standalone charger quote', () => {
+    expect(calcGenTotals({ ...base(), evCharger: true, evChargerTier: 'le5' }).evChargerAmt).toBe(675);
+    expect(calcGenTotals({ ...base(), evCharger: true, evChargerTier: 'f6to15' }).evChargerAmt).toBe(993);
+    expect(calcGenTotals({ ...base(), evCharger: true, evChargerTier: 'f16to25' }).evChargerAmt).toBe(1275);
+  });
+
+  it('joins the non-taxable base, so it raises the total but never the tax', () => {
+    const without = calcGenTotals(base());
+    const withCharger = calcGenTotals({ ...base(), evCharger: true, evChargerTier: 'f6to15' });
+
+    expect(withCharger.nonTaxableBase).toBe(without.nonTaxableBase + 993);
+    expect(withCharger.taxableBase).toBe(without.taxableBase);
+    expect(withCharger.tax).toBe(without.tax);
+    expect(withCharger.total).toBe(without.total + 993);
+  });
+
+  it('costs nothing when the tier is set but the box is unchecked', () => {
+    const t = calcGenTotals({ ...base(), evCharger: false, evChargerTier: 'f16to25' });
+    expect(t.evChargerAmt).toBe(0);
+  });
+
+  it('still prorates a discount correctly with a charger on the job', () => {
+    const t = calcGenTotals({ ...base(), evCharger: true, evChargerTier: 'f16to25', discount: 10, discountType: '%' });
+    expect(t.taxableBase + t.nonTaxableBase).toBe(t.subtotal);
+    expect(t.taxedAmount).toBeCloseTo(t.taxableBase - (t.discountAmt * t.taxableBase) / t.subtotal, 6);
+    expect(t.tax).toBe(Math.round(t.taxedAmount * 0.07));
+  });
+});
+
+describe('genPriceRows — bundled EV charger', () => {
+  const fmt = (n: number) => `$${n}`;
+
+  it('names the tier on its own row when quoted', () => {
+    const form = { ...blankGenForm(), evCharger: true, evChargerTier: 'f16to25' as const };
+    const rows = genPriceRows(form, calcGenTotals(form), fmt);
+    const row = rows.find(r => r.label.startsWith('Tesla Wall Connector'));
+    expect(row?.label).toBe('Tesla Wall Connector Installation — 16 to 25 feet');
+    expect(row?.amount).toBe('$1275');
+  });
+
+  it('omits the row when the charger is not part of the job', () => {
+    const form = { ...blankGenForm(), evCharger: false };
+    const rows = genPriceRows(form, calcGenTotals(form), fmt);
+    expect(rows.some(r => r.label.includes('Wall Connector'))).toBe(false);
   });
 });

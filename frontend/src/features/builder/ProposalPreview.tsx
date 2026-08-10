@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { GenForm } from './genData';
 import { GenTotals, genPriceRows, genModelNo, loadCenterFor, activeCustomItems, customItemAmount } from './genCalc';
 import { GEN_SPEC_DETAIL, DEFAULT_PRICES } from './genData';
+import { evTierLabel } from './evData';
 import { AppSettings, DEFAULT_APP_SETTINGS } from '../../hooks/useAppSettings';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import api from '../../api/client';
@@ -288,6 +289,11 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                       : 'Gas installation and connections are NOT included in this proposal.',
                     shade: false,
                   },
+                  ...(form.evCharger ? [{
+                    title: 'Tesla Wall Connector Installation',
+                    desc: `Furnish and install a dedicated circuit from the existing panel to the charger location (${evTierLabel(form.evChargerTier).toLowerCase()}), including breaker, wire, conduit, mounting, terminations and testing. The Tesla Wall Connector is supplied by the customer.`,
+                    shade: false,
+                  }] : []),
                   // Custom line items collapse into ONE scope row rather than one row each:
                   // page 1 is the page the customer signs, so the extras have to be visible
                   // here, but a numbered entry per item would bury the actual install scope.
@@ -353,6 +359,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                     { label: 'Gas Line', tax: '', amt: totals.gasLineAmt, show: totals.gasLineAmt > 0 },
                     { label: 'Permit Fee', tax: '', amt: totals.permitAmt, show: true },
                     { label: 'Startup & Commissioning', tax: '', amt: totals.startupAmt, show: true },
+                    ...(totals.evChargerAmt > 0 ? [{ label: `Tesla Wall Connector Installation — ${evTierLabel(form.evChargerTier)}`, tax: '', amt: totals.evChargerAmt, show: true }] : []),
                     // Custom items list individually here, each carrying the tax status the rep set.
                     ...customItems.map(it => ({ label: it.desc.trim(), tax: it.taxable ? 'taxable' : '', amt: customItemAmount(it), show: true })),
                     ...(totals.liftAmt > 0 ? [{ label: form.liftType === 'lull' ? 'Lull' : 'Crane', tax: '', amt: totals.liftAmt, show: true }] : []),

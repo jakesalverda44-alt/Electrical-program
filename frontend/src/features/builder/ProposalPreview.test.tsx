@@ -355,3 +355,40 @@ describe('custom line items', () => {
     expect(getByText('Courtesy credit').closest('tr')?.textContent).toContain('-$200.00');
   });
 });
+
+describe('bundled EV charger on a generator proposal', () => {
+  const withCharger = (over: Partial<GenForm> = {}) => ({
+    ...blankGenForm(), customer: 'Jane Homeowner', evCharger: true, evChargerTier: 'f16to25' as const, ...over,
+  });
+
+  it('adds a charger scope row naming the distance tier', () => {
+    mockMatchMedia(false);
+    const form = withCharger();
+    const { getByText } = render(
+      <ProposalPreview embed form={form} totals={calcGenTotals(form)} proposalNo="P-1"/>
+    );
+    const row = getByText('Tesla Wall Connector Installation').closest('tr');
+    expect(row?.textContent).toContain('16 to 25 feet');
+    expect(row?.textContent).toContain('supplied by the customer');
+  });
+
+  it('leaves the proposal untouched when no charger is quoted', () => {
+    mockMatchMedia(false);
+    const form = { ...blankGenForm(), customer: 'Jane Homeowner', evCharger: false };
+    const { container } = render(
+      <ProposalPreview embed form={form} totals={calcGenTotals(form)} proposalNo="P-1"/>
+    );
+    expect(container.textContent).not.toContain('Wall Connector');
+  });
+
+  it('bills the charger as non-taxable on the breakdown', () => {
+    mockMatchMedia(false);
+    const form = withCharger({ includeBreakdown: true });
+    const { getByText } = render(
+      <ProposalPreview embed form={form} totals={calcGenTotals(form)} proposalNo="P-1"/>
+    );
+    const row = getByText('Tesla Wall Connector Installation — 16 to 25 feet').closest('tr');
+    expect(row?.textContent).toContain('$1,275.00');
+    expect(row?.textContent).not.toContain('taxable');
+  });
+});

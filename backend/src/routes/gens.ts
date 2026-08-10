@@ -744,6 +744,13 @@ const ADDON_P = {
   lull: 1100, crane: 1800, extendedWarranty: 1100, silverService: 395,
   labor: 3000, permit: 1250, startup: 695,
   genStandSmall: 2000, genStandBig: 2500,
+  // Bundled Tesla Wall Connector install, by distance tier — mirrors EV_PRICES in
+  // frontend/src/features/builder/evData.ts.
+  evLe5: 675, evF6to15: 993, evF16to25: 1275,
+};
+
+const EV_TIER_PRICE: Record<string, number> = {
+  le5: ADDON_P.evLe5, f6to15: ADDON_P.evF6to15, f16to25: ADDON_P.evF16to25,
 };
 
 interface CustomItem { id?: string; desc?: string; amount?: unknown; taxable?: unknown }
@@ -792,6 +799,9 @@ function calcFormTotals(g: Record<string, unknown>) {
   const startupAmt  = coolingType === 'liquid-cooled' ? ADDON_P.startupLC : (Number(g.startup) || ADDON_P.startup);
   // A custom item is goods or work depending on the salesperson's per-item flag, which is
   // what decides the base it joins below.
+  // A bundled charger install joins the non-taxable base with the other labor: the customer
+  // supplies the charger, and the generator's own equipment lines carry the job's sales tax.
+  const evChargerAmt = g.evCharger ? (EV_TIER_PRICE[String(g.evChargerTier)] ?? 0) : 0;
   const customSums = customItemSums(g.customItems);
   const customTaxableAmt    = customSums.taxable;
   const customNonTaxableAmt = customSums.nonTaxable;
@@ -801,7 +811,7 @@ function calcFormTotals(g: Record<string, unknown>) {
   // labor, permit, startup, lift, removal and the gas line are services, and extra wire
   // is shown to the customer inside the non-taxable "Labor & Electrical" line.
   const taxableBase    = genP + padAmt + genStandAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt + customTaxableAmt;
-  const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt + customNonTaxableAmt;
+  const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt + evChargerAmt + customNonTaxableAmt;
   const subtotal    = taxableBase + nonTaxableBase;
   const discountAmt = g.discountType === '%'
     ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
@@ -813,7 +823,7 @@ function calcFormTotals(g: Record<string, unknown>) {
   const tax         = Math.round(taxedAmount * ((Number(g.taxRate) || 7) / 100));
   const total       = netSubtotal + tax;
   const deposit     = Math.round(total * ((Number(g.depositPct) || 50) / 100));
-  return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, customTaxableAmt, customNonTaxableAmt, customTotal, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
+  return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, evChargerAmt, customTaxableAmt, customNonTaxableAmt, customTotal, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
 }
 
 const BUILD_FROM_NOTES_SYSTEM = `You are an expert generator installation estimator. Extract a proposal form (GenForm) from field site visit notes.
@@ -939,6 +949,7 @@ async function extractFormFromNotes(notes: string): Promise<Record<string, unkno
     labor: ADDON_P.labor, permit: ADDON_P.permit, startup: ADDON_P.startup,
     discount: 0, discountType: '$', taxRate: 7, validDays: 30, depositPct: 50,
     notes: '', includeBreakdown: false, customItems: [],
+    evCharger: false, evChargerTier: 'f6to15',
     ...parsed,
   };
   // Custom line items are free text with a price attached, so a hallucinated one would put an
@@ -1173,6 +1184,10 @@ export function buildAwardKickoffEmail(gen: Record<string, any>): { subject: str
   if (form.panelRel) pos.push(String(form.panelRel).toLowerCase());
   if (Number(form.panelFt) > 0 && form.panelRel !== 'Next to panel') pos.push(`~${form.panelFt} ft from panel`);
   if (pos.length) lines.push(`Generator: ${pos.join(', ')}.`);
+  if (form.evCharger) {
+    const tier = EV_TIER_LABELS[String(form.evChargerTier)];
+    lines.push(`Also installing a customer-supplied Tesla Wall Connector${tier ? ` — ${tier} from the feeding panel` : ''}.`);
+  }
   if (form.silverServicePromo === '1yr') lines.push('Included 1 year free Silver Service.');
   if (form.silverServicePromo === '2yr') lines.push('Included 2 years free Silver Service.');
   if (form.notes && String(form.notes).trim()) lines.push(String(form.notes).trim());

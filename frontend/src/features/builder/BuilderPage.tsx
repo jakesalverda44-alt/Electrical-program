@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { GenForm, CustomItem, GEN_SIZE_LABELS } from './genData';
+import { EV_TIERS, EV_PRICES } from './evData';
 import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo, loadCenterFor, migrateGenForm, getGenPrice } from './genCalc';
 import ProposalPreview from './ProposalPreview';
 import EvBuilderPage from './EvBuilderPage';
@@ -476,6 +477,37 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
                 <option value="2yr">2-Year — Promo (FREE, $790 value)</option>
               </select>
             </Field>
+            {/* Charger riding along on the generator job. Priced off the same distance tiers
+                as a standalone EV quote, so there is one price list to maintain. */}
+            <div style={{ gridColumn: '1 / -1' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                <input type="checkbox" checked={!!form.evCharger} onChange={e => set('evCharger', e.target.checked)}
+                  style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
+                Tesla Wall Connector Install (customer supplies the charger)
+              </label>
+              {form.evCharger && (
+                <div style={{ marginTop: 10, paddingLeft: 26 }}>
+                  <Field label="Distance — Panel to Charger">
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {EV_TIERS.map(t => (
+                        <label key={t.key} style={{
+                          display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+                          padding: '8px 12px', borderRadius: 9, flex: '1 1 160px',
+                          border: `1px solid ${form.evChargerTier === t.key ? 'var(--accent)' : 'var(--border2)'}`,
+                          background: form.evChargerTier === t.key ? 'var(--blue-soft)' : 'var(--surface)',
+                        }}>
+                          <input type="radio" name="gen-ev-distance" checked={form.evChargerTier === t.key}
+                            onChange={() => set('evChargerTier', t.key)}
+                            style={{ accentColor: 'var(--accent)', width: 15, height: 15 }}/>
+                          <span style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{t.short}</span>
+                          <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text2)' }}>{fmt(EV_PRICES[t.key])}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </Field>
+                </div>
+              )}
+            </div>
           </Section>
 
           {/* Section 5: Pricing & Terms */}

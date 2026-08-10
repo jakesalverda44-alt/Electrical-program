@@ -330,6 +330,11 @@ export interface GenForm {
   discount: number;
   discountType: '%' | '$';
   taxRate: number;
+  /** Tesla Wall Connector install riding along on a generator job. Priced off the same
+   *  distance tiers as a standalone charger quote (EV_PRICES in evData), so one price list
+   *  serves both. The charger itself is customer-supplied either way. */
+  evCharger: boolean;
+  evChargerTier: 'le5' | 'f6to15' | 'f16to25';
   customItems: CustomItem[];
   notes: string;
   includeBreakdown: boolean;
