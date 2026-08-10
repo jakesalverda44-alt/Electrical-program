@@ -30,6 +30,10 @@ export interface AppSettings {
   gen_default_deposit_pct: string;
   gen_default_valid_days: string;
   gen_pricing_table: string;
+  // EV charger quotes. Tax is a flat dollar passthrough, not a rate — see evData.
+  ev_default_tax: string;
+  ev_default_valid_days: string;
+  ev_default_deposit_pct: string;
   proposal_default_message: string;
   gas_contacts_text: string;
   // Email
@@ -89,6 +93,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   gen_default_surge_pro: '395', gen_default_battery: '185', gen_default_extra_wire: '25',
   gen_default_lull: '1100', gen_default_crane: '1800',
   gen_default_deposit_pct: '50', gen_default_valid_days: '30', gen_pricing_table: '',
+  ev_default_tax: '50', ev_default_valid_days: '30', ev_default_deposit_pct: '0',
   proposal_default_message: 'Thank you for the opportunity to provide you with back-up power at your home.', gas_contacts_text: '',
   email_resend_api_key: '', email_from_address: '', email_from_name: '', email_reply_to: '', email_signature: '', frontend_url: '',
   ai_anthropic_key: '', ai_model: 'claude-sonnet-4-6',

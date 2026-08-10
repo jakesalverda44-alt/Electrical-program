@@ -96,7 +96,16 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
   const activeCount = gens.filter(g => g.stage === 'building' || g.stage === 'sent' || g.stage === 'signed').length;
   const activeValue = sum(gens.filter(g => g.stage === 'building' || g.stage === 'sent' || g.stage === 'signed'));
 
-  const genGroups = useMemo(() => groupGens(gens), [gens]);
+  // Generator and EV charger proposals share this board. Rows written before EV quotes
+  // existed have no product_type client-side until they're refetched, so anything that
+  // isn't explicitly an EV charger counts as a generator.
+  const [productFilter, setProductFilter] = useState<'all' | 'generator' | 'ev_charger'>('all');
+  const visibleGens = useMemo(() => gens.filter(g => {
+    if (productFilter === 'all') return true;
+    const type = g.product_type === 'ev_charger' ? 'ev_charger' : 'generator';
+    return type === productFilter;
+  }), [gens, productFilter]);
+  const genGroups = useMemo(() => groupGens(visibleGens), [visibleGens]);
 
   const handleStageFromDrawer = (stage: GenStageKey) => {
     if (!detail) return;
@@ -201,6 +210,16 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
     <div className="scroll view-enter">
       {/* Toolbar */}
       <div className="pipe-toolbar">
+        <div style={{ display: 'flex', borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
+          {([['all', 'All'], ['generator', 'Generators'], ['ev_charger', 'EV Chargers']] as const).map(([key, label]) => (
+            <button key={key} type="button" onClick={() => setProductFilter(key)}
+              style={{ padding: '6px 12px', fontSize: 12, fontWeight: 700, border: 'none', cursor: 'pointer',
+                background: productFilter === key ? 'var(--accent)' : 'var(--surface)',
+                color: productFilter === key ? '#fff' : 'var(--text2)' }}>
+              {label}
+            </button>
+          ))}
+        </div>
         <span className="spacer"/>
         <span className="pipe-summary">
           Active value <b>{money(activeValue)}</b> · {activeCount} open
@@ -270,14 +289,19 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
                       display: 'inline-flex', alignItems: 'center', gap: 4,
                       fontSize: 11, fontWeight: 800, padding: '2px 7px', borderRadius: 5,
                       textTransform: 'uppercase', letterSpacing: '.04em',
-                      background: g.mfr === 'Kohler' ? 'var(--blue-soft)' : 'var(--amber-soft)',
-                      color: g.mfr === 'Kohler' ? 'var(--blue)' : 'var(--amber)',
+                      // EV charger jobs get their own colour so a mixed column is scannable
+                      // — the two product lines otherwise look identical at card size.
+                      background: g.product_type === 'ev_charger' ? 'var(--green-soft)'
+                        : g.mfr === 'Kohler' ? 'var(--blue-soft)' : 'var(--amber-soft)',
+                      color: g.product_type === 'ev_charger' ? 'var(--green)'
+                        : g.mfr === 'Kohler' ? 'var(--blue)' : 'var(--amber)',
                     }}>
                       <Icon name="bolt" size={11} stroke={2}/>{g.mfr}
                     </span>
                   )}
                   {/* kW belongs beside the brand. The model number said the same thing a
-                      third time and means nothing when scanning a column. */}
+                      third time and means nothing when scanning a column. An EV job has no
+                      kW rating, so it falls through to the model ("Wall Connector"). */}
                   <span style={{ color: 'var(--text3)', fontWeight: 600 }}>
                     {g.kw ? `${Number(g.kw)}kW` : g.model}
                     {Number(g.addons) > 0 ? ` · ${g.addons} add-on${Number(g.addons) === 1 ? '' : 's'}` : ''}

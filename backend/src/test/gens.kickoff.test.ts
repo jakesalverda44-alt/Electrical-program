@@ -3,7 +3,7 @@ import request from 'supertest';
 import { app } from '../index';
 import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth } from './harness';
-import { missingKickoffLabels } from '../routes/gens';
+import { missingKickoffLabels, buildAwardKickoffEmail } from '../routes/gens';
 
 describe('missingKickoffLabels', () => {
   it('lists labels for absent categories, excluding contract', () => {
@@ -63,5 +63,53 @@ describe('kickoff email gating', () => {
     const { rows } = await pool.query('SELECT kickoff_email_drafted_at, stage FROM generator_proposals WHERE id=$1', [gen.id]);
     expect(rows[0].stage).toBe('awarded');
     expect(rows[0].kickoff_email_drafted_at).toBeNull();
+  });
+});
+
+describe('kickoff email by product type', () => {
+  it('describes the charger job, not a generator, for an EV proposal', () => {
+    const { subject, html } = buildAwardKickoffEmail({
+      product_type: 'ev_charger',
+      customer: 'Jane Homeowner',
+      form_data: {
+        city: 'Eustis', phone: '(352) 555-0100', email: 'jane@example.com', address: '12 Oak St',
+        distanceTier: 'f16to25', panelUpgrade: true,
+        customItems: [{ id: 'a', desc: 'Extra 40 ft of run', amount: 400, taxable: false }],
+      },
+      totals_data: { deposit: 0 },
+    });
+
+    expect(subject).toBe('New EV Charger Install - Jane Homeowner - Eustis');
+    expect(html).toContain('customer-supplied Tesla Wall Connector');
+    expect(html).toContain('16 to 25 feet');
+    expect(html).toContain('service upgrade to 200A');
+    expect(html).toContain('Extra 40 ft of run');
+    // The generator body would otherwise emit "We will be installing a ." here.
+    expect(html).not.toContain('SMM');
+    expect(html).not.toContain('em-panel');
+  });
+
+  it('still builds the generator body for a generator proposal', () => {
+    const { subject, html } = buildAwardKickoffEmail({
+      product_type: 'generator',
+      customer: 'John Buyer',
+      mfr: 'Kohler',
+      form_data: { brand: 'Kohler', size: '20KW', city: 'Tavares', atsQty: 1, atsSize: '200A', smmQty: 1, fuel: 'LP' },
+      totals_data: { deposit: 7500 },
+    });
+
+    expect(subject).toBe('New Kohler Install - John Buyer - Tavares');
+    expect(html).toContain('Kohler 20KW Generator');
+    expect(html).toContain('SMM: Yes (1).');
+    expect(html).toContain('deposit of $7,500');
+  });
+
+  it('treats a proposal with no product_type as a generator', () => {
+    const { subject } = buildAwardKickoffEmail({
+      customer: 'Legacy Row', mfr: 'Generac',
+      form_data: { brand: 'Generac', size: '22KW', city: 'Mount Dora' },
+      totals_data: {},
+    });
+    expect(subject).toBe('New Generac Install - Legacy Row - Mount Dora');
   });
 });

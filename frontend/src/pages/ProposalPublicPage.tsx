@@ -3,7 +3,10 @@ import { useParams } from 'react-router-dom';
 import SignatureCanvas from 'react-signature-canvas';
 import { GenForm } from '../features/builder/genData';
 import { GenTotals, calcGenTotals, migrateGenForm } from '../features/builder/genCalc';
+import { EvTotals, calcEvTotals, migrateEvForm } from '../features/builder/evCalc';
+import { EvForm } from '../features/builder/evData';
 import ProposalPreview from '../features/builder/ProposalPreview';
+import EvProposalPreview from '../features/builder/EvProposalPreview';
 import { buildContractPdf, signedContractFilename } from '../lib/signedContractPdf';
 
 interface GenData {
@@ -16,6 +19,7 @@ interface GenData {
   tax: number;
   addons: number;
   stage: string;
+  product_type?: 'generator' | 'ev_charger';
   signed_at?: string;
   proposal_no?: string;
   form_data?: Partial<GenForm> | string | null;
@@ -152,7 +156,18 @@ export default function ProposalPublicPage() {
   if (status === 'loading') return <CenteredMsg>Loading your proposal…</CenteredMsg>;
   if (status === 'error')   return <CenteredMsg>Proposal not found or the link has expired. Please contact us.</CenteredMsg>;
 
-  const rawForm = parseSnapshot<GenForm>(gen?.form_data);
+  // An EV charger proposal renders its own document: the generator one would show the
+  // customer a scope, spec sheet and sales agreement for equipment they aren't buying.
+  const isEv = gen?.product_type === 'ev_charger';
+  const rawEvForm = isEv ? parseSnapshot<EvForm>(gen?.form_data as never) : null;
+  const evForm = rawEvForm ? migrateEvForm(rawEvForm as unknown as Record<string, unknown>) as unknown as EvForm : null;
+  // A stored snapshot is what the customer was actually quoted, so it wins; recomputing is
+  // the fallback for a proposal saved without one.
+  const evTotals: EvTotals | null = isEv
+    ? ((parseSnapshot<EvTotals>(gen?.totals_data as never) as EvTotals | null) ?? (evForm ? calcEvTotals(evForm) : null))
+    : null;
+
+  const rawForm = isEv ? null : parseSnapshot<GenForm>(gen?.form_data);
   // Older sent/signed proposals used pre-unification field names (ats/smm/surgePro/lcATS/
   // additionalATS) — migrate so those scope-of-work lines still render correctly if a
   // customer revisits an old link.
@@ -179,7 +194,21 @@ export default function ProposalPublicPage() {
             blocks, sales agreement, disclosures, spec sheet, and the price breakdown only
             when the rep enabled it on the proposal. */}
         {/* Full sales contract — the actual document the customer is signing */}
-        {form && totals && gen && (
+        {isEv && evForm && evTotals && gen && (
+          <div ref={contractRef} style={{ marginBottom: 28, borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,.08)', background: '#fff' }}>
+            <EvProposalPreview
+              embed
+              form={evForm}
+              totals={evTotals}
+              proposalNo={gen.proposal_no || ''}
+              signatureImage={signedSig ?? undefined}
+              signedDate={signedDate || undefined}
+              countersignImage={countersign ?? undefined}
+              countersignDate={countersignDate || undefined}
+            />
+          </div>
+        )}
+        {!isEv && form && totals && gen && (
           <div ref={contractRef} style={{ marginBottom: 28, borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,.08)', background: '#fff' }}>
             <ProposalPreview
               embed

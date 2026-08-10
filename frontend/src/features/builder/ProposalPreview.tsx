@@ -6,60 +6,19 @@ import { AppSettings, DEFAULT_APP_SETTINGS } from '../../hooks/useAppSettings';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import api from '../../api/client';
 
-// The sign sits outside the currency symbol — a credit line reads "-$200.00", not "$-200.00".
-// Only a negative custom line item can reach these as a negative today.
-function fmt(n: number) { return (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US'); }
-function fmtDec(n: number) {
-  return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-// Parses a bare "YYYY-MM-DD" as a local calendar date (not UTC midnight) so the
-// displayed promo date can't shift a day off in negative-UTC timezones.
-function fmtDateLocal(iso: string): string {
-  if (!iso) return '';
-  const [y, m, d] = iso.split('-').map(Number);
-  if (!y || !m || !d) return iso;
-  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-}
+// Branding, page furniture, signature blocks, clause helpers and money formatters are
+// shared with the EV charger proposal — see proposalChrome. The Sales Agreement and
+// Disclosures pages below stay here: they read as generator sales terms throughout.
+import {
+  NAVY, ACCENT, GOLD, GRAY_D, GRAY_M, GRAY_L, BLUE_L, BLUE_M,
+  fmt, fmtDec, fmtDateLocal,
+  embedFontSize, embedDocStyle, embedPageStyle,
+  identityFs, PageHeader, SectionHeading, SigBlock, Clause, SubClause, CustInitFooter,
+} from './proposalChrome';
+import type { FontFn } from './proposalChrome';
 
-const NAVY   = '#0F2044';
-const ACCENT = '#2563EB';
-const GOLD   = '#C9A84C';
-const GRAY_D = '#1F2937';
-const GRAY_M = '#6B7280';
-const GRAY_L = '#F3F4F6';
-const BLUE_L = '#EFF6FF';
-const BLUE_M = '#DBEAFE';
-
-// ── Embed-mode (public e-sign page) sizing helpers ──────────────────────────
-// The source contract document uses 8-9px body copy — fine on a printed page or
-// the in-app desktop preview, illegible in the ~271px-wide mobile signing view
-// (the mobile-field-pack audit's worst customer-facing finding). These are pure
-// functions of (embed, isMobile) so they're unit-testable without rendering the
-// full multi-page document, and so every hardcoded fontSize/padding site in the
-// component can share one gate: print/PDF (embed=false) and desktop embed never
-// change; only embed+mobile bumps sizes.
-export function embedFontSize(n: number, embed: boolean, isMobile: boolean): number {
-  return embed && isMobile ? Math.max(n, 11) : n;
-}
-
-export function embedDocStyle(embed: boolean, isMobile: boolean): React.CSSProperties {
-  return {
-    maxWidth: 780, margin: '0 auto', fontFamily: 'inherit',
-    background: '#fff', fontSize: embed && isMobile ? 12 : 10, color: GRAY_D,
-  };
-}
-
-export function embedPageStyle(embed: boolean, isMobile: boolean): React.CSSProperties {
-  return {
-    padding: embed && isMobile ? '0 12px 24px' : '0 36px 36px', marginBottom: 0,
-  };
-}
-
-// Shared shape for the `fs` size-derivation function threaded into the small
-// layout sub-components below. Defaults to identity so any sub-component used
-// outside the ProposalPreview render (e.g. future reuse, tests) is a no-op.
-type FontFn = (n: number) => number;
-const identityFs: FontFn = n => n;
+// Re-exported so existing importers (and the preview's own test suite) keep their path.
+export { embedFontSize, embedDocStyle, embedPageStyle };
 
 interface Props {
   form: GenForm;
@@ -81,128 +40,6 @@ interface Props {
    *  executed by both parties. */
   countersignImage?: string;
   countersignDate?: string;
-}
-
-// ── Shared layout helpers ────────────────────────────────────────────────────
-
-function PageHeader({ proposalNo, companyName, phone, licLine, fs = identityFs }: { proposalNo: string; companyName: string; phone?: string; licLine?: string; fs?: FontFn }) {
-  return (
-    <div style={{ background: NAVY, padding: '10px 20px 0', marginBottom: 0, position: 'relative' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 10 }}>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 900, color: '#fff', letterSpacing: '-0.3px' }}>
-            {companyName}
-          </div>
-          {phone && (
-            <div style={{ fontSize: fs(9.5), color: '#93C5FD', marginTop: 2 }}>{phone}</div>
-          )}
-          {licLine && (
-            <div style={{ fontSize: fs(9), color: '#4A6A8A', marginTop: 1 }}>{licLine}</div>
-          )}
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: fs(8), color: '#4A6A8A', textTransform: 'uppercase', letterSpacing: '.08em' }}>Proposal No.</div>
-          <div style={{ fontSize: 11, fontWeight: 800, color: '#fff', marginTop: 1 }}>{proposalNo}</div>
-        </div>
-      </div>
-      <div style={{ height: 3, background: GOLD, marginLeft: -20, marginRight: -20 }}/>
-    </div>
-  );
-}
-
-function SectionHeading({ title }: { title: string }) {
-  return (
-    <>
-      <div style={{ fontSize: 18, fontWeight: 900, color: NAVY, textAlign: 'center', marginTop: 20, marginBottom: 4 }}>{title}</div>
-      <div style={{ height: 2, background: ACCENT, marginBottom: 14 }}/>
-    </>
-  );
-}
-
-function SigBlock({ signatureImage, signedDate, countersignImage, countersignDate, buyerName, fs = identityFs }: { signatureImage?: string; signedDate?: string; countersignImage?: string; countersignDate?: string; buyerName?: string; fs?: FontFn }) {
-  const line = { height: 1, background: '#D1D5DB', marginBottom: 4 };
-  const lbl = { fontSize: fs(9), color: GRAY_M, fontWeight: 600 as const };
-  const cell: React.CSSProperties = { padding: '8px 12px', flex: 1 };
-  return (
-    <div style={{ display: 'flex', background: GRAY_L, border: '1px solid #E5E7EB' }}>
-      {/* APT side — filled once someone countersigns, which is what takes the contract
-          from "signed by the buyer" to executed by both parties. */}
-      <div style={cell}>
-        <div style={{ fontSize: fs(10), fontWeight: 700, color: NAVY, marginBottom: 6 }}>"APT" Accurate Power Technology, Inc.</div>
-        {countersignImage
-          ? <img src={countersignImage} alt="APT signature" style={{ height: 34, maxWidth: '100%', objectFit: 'contain', display: 'block', marginBottom: 2 }}/>
-          : <div style={{ height: 34 }}/>}
-        <div style={line}/>
-        <div style={lbl}>By: Authorized Representative</div>
-        <div style={{ height: 10 }}/>
-        <div style={{ minHeight: 14, display: 'flex', alignItems: 'flex-end' }}>
-          {countersignDate && <span style={{ fontSize: fs(10), color: GRAY_D, marginBottom: 2 }}>{countersignDate}</span>}
-        </div>
-        <div style={line}/>
-        <div style={lbl}>Date</div>
-      </div>
-      <div style={{ width: 1, background: '#E5E7EB' }}/>
-      <div style={cell}>
-        <div style={{ fontSize: fs(10), fontWeight: 700, color: NAVY, marginBottom: 6 }}>"BUYER"</div>
-        {/* Buyer printed name */}
-        <div style={{ minHeight: 14 }}>{buyerName && <span style={{ fontSize: 11, fontWeight: 700, color: GRAY_D }}>{buyerName}</span>}</div>
-        <div style={line}/>
-        <div style={lbl}>Name</div>
-        <div style={{ height: 10 }}/>
-        <div style={{ display: 'flex', gap: 16 }}>
-          <div style={{ flex: 1 }}>
-            {/* Captured signature image, when signed */}
-            {signatureImage
-              ? <img src={signatureImage} alt="Buyer signature" style={{ height: 34, maxWidth: '100%', objectFit: 'contain', display: 'block', marginBottom: 2 }}/>
-              : <div style={{ height: 34 }}/>}
-            <div style={line}/>
-            <div style={lbl}>Signature</div>
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ minHeight: 34, display: 'flex', alignItems: 'flex-end' }}>
-              {signedDate && <span style={{ fontSize: fs(10), color: GRAY_D, marginBottom: 2 }}>{signedDate}</span>}
-            </div>
-            <div style={line}/>
-            <div style={lbl}>Date</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Clause helpers ───────────────────────────────────────────────────────────
-function Clause({ num, label, text, fs = identityFs }: { num: string; label?: string; text: React.ReactNode; fs?: FontFn }) {
-  return (
-    <div style={{ marginBottom: 9, fontSize: fs(9), lineHeight: '14px', color: GRAY_D, textAlign: 'justify' }}>
-      <span style={{ textDecoration: 'underline', fontWeight: 700 }}>{num}.{label ? ` ${label}.` : ''}</span>{'  '}{text}
-    </div>
-  );
-}
-function SubClause({ label, text, fs = identityFs }: { label: string; text: React.ReactNode; fs?: FontFn }) {
-  return (
-    <div style={{ marginBottom: 8, fontSize: fs(9), lineHeight: '14px', color: GRAY_D, textAlign: 'justify', paddingLeft: 18 }}>
-      <span style={{ textDecoration: 'underline', fontWeight: 700 }}>{label}.</span>{'  '}{text}
-    </div>
-  );
-}
-// Customer-initials line that appears at the foot of each Sales Agreement / Exhibit
-// page in the source document ("CUST INT ______"). When the buyer has e-signed, their
-// drawn initials are stamped onto the rule the same way SigBlock stamps the signature —
-// on paper these get initialed page by page, so leaving them blank on an e-signed
-// contract left it looking half-executed.
-function CustInitFooter({ initialsImage, fs = identityFs }: { initialsImage?: string; fs?: FontFn } = {}) {
-  return (
-    <div style={{ marginTop: 16, textAlign: 'right', fontSize: fs(8.5), color: GRAY_M, fontWeight: 700, letterSpacing: '.03em' }}>
-      {initialsImage ? (
-        <span style={{ display: 'inline-flex', alignItems: 'flex-end', gap: 6 }}>
-          CUST INT
-          <img src={initialsImage} alt="Customer initials"
-            style={{ height: 22, maxWidth: 90, objectFit: 'contain', display: 'block' }}/>
-        </span>
-      ) : 'CUST INT ________'}
-    </div>
-  );
 }
 
 // ── Spec table helper ────────────────────────────────────────────────────────

@@ -128,8 +128,19 @@ Instead, the chrome it already contains gets extracted into
 
 - `PageHeader`, `SectionHeading`, `SigBlock`
 - the page/doc style helpers (`embedFontSize`, `embedDocStyle`, `embedPageStyle`)
-- the money formatters
-- the disclosures and Sales Agreement pages, which are product-independent
+- the money formatters and the clause/initials-footer helpers
+
+**Corrected during implementation:** this section originally also listed the Disclosures and
+Sales Agreement pages as product-independent. They are not. Those pages read as generator
+sales terms throughout — "ALL GENERATOR SALES ARE FINAL", APT ordering a built-to-order unit
+from the manufacturer, a security interest in that unit, a 50%-at-signing draw schedule,
+hurricane-season install ordering. None of it describes installing equipment the customer
+already owns, and putting it in front of an EV customer would misstate the deal.
+
+The EV document therefore **ends at the signature block** and carries no contract terms.
+APT needs EV-specific terms from its attorney before any can appear; dropping them in is a
+small change to `EvProposalPreview` once that language exists. A test asserts the EV
+document contains no generator sales terms, so this can't drift back in by accident.
 
 `ProposalPreview.tsx` then imports them rather than defining them, and a new
 `EvProposalPreview.tsx` composes the same chrome with EV-specific content. The generator

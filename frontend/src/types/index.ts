@@ -75,6 +75,9 @@ export interface BidEstimate {
 
 export interface Gen {
   id: string;
+  /** What the proposal sells. Rows created before EV charger quotes existed read as
+   *  'generator' through the column default, so this is never absent server-side. */
+  product_type?: 'generator' | 'ev_charger';
   customer: string;
   loc: string;
   mfr: string;

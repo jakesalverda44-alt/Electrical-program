@@ -147,8 +147,15 @@ router.get('/', requireAuth, async (req: AuthRequest, res) => {
 
 router.post('/', requireAuth, async (req: AuthRequest, res) => {
   const { customer, loc, mfr, model, kw, amount, tax, addons, proposal_no, form_data, totals_data,
-          stage, date_won, commission_paid } = req.body;
+          stage, date_won, commission_paid, product_type } = req.body;
   if (!customer?.trim()) return res.status(400).json({ error: 'Customer required' });
+
+  // Anything but a known product falls back to 'generator' rather than tripping the column's
+  // CHECK constraint with a 500 — the client picks this, so a bad value is a client bug.
+  const productType = product_type === 'ev_charger' ? 'ev_charger' : 'generator';
+  // An EV charger job has no kW rating and sends null; coercing it to 0 would render as a
+  // 0 kW generator everywhere the pipeline shows equipment.
+  const kwValue = kw === null || kw === undefined || kw === '' ? null : (Number(kw) || 0);
 
   // Historical jobs finished before the CRM existed are logged directly at their final
   // stage rather than dragged through the pipeline, so none of the stage-change side
@@ -167,15 +174,15 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
       `INSERT INTO generator_proposals (
          customer, loc, mfr, model, kw, amount, tax, addons,
          proposal_no, form_data, totals_data,
-         salesperson_id, salesperson_name, customer_id, stage
+         salesperson_id, salesperson_name, customer_id, stage, product_type
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14,$15) RETURNING *`,
-      [customer.trim(), (loc || '').trim() || '—', mfr, model, Number(kw) || 0,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16) RETURNING *`,
+      [customer.trim(), (loc || '').trim() || '—', mfr, model, kwValue,
        Number(amount) || 0, Number(tax) || 0, Number(addons) || 0,
        proposal_no || null,
        form_data !== undefined ? JSON.stringify(form_data) : null,
        totals_data !== undefined ? JSON.stringify(totals_data) : null,
-       user.id, user.name, customerId, initialStage]
+       user.id, user.name, customerId, initialStage, productType]
     );
     const gen = rows[0];
 
@@ -594,7 +601,11 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (loc      !== undefined) { fields.push(`loc=$${i++}`);      vals.push(loc.trim() || '—'); }
   if (mfr      !== undefined) { fields.push(`mfr=$${i++}`);      vals.push(mfr); }
   if (model    !== undefined) { fields.push(`model=$${i++}`);    vals.push(model); }
-  if (kw       !== undefined) { fields.push(`kw=$${i++}`);       vals.push(Number(kw)); }
+  // null kw is meaningful: an EV charger job has no kW rating, and Number(null) would
+  // store it as a 0 kW generator. product_type is deliberately not patchable — the type is
+  // fixed when the proposal is created, so changing it can't silently rewrite what a
+  // customer was quoted.
+  if (kw       !== undefined) { fields.push(`kw=$${i++}`);       vals.push(kw === null || kw === '' ? null : Number(kw)); }
   if (amount   !== undefined) { fields.push(`amount=$${i++}`);   vals.push(Number(amount)); }
   if (tax      !== undefined) { fields.push(`tax=$${i++}`);      vals.push(Number(tax)); }
   if (addons   !== undefined) { fields.push(`addons=$${i++}`);   vals.push(Number(addons)); }
@@ -1099,7 +1110,47 @@ export function missingKickoffLabels(existingCategories: string[]): string[] {
     .map(c => AWARD_DOC_LABELS[c]);
 }
 
-function buildAwardKickoffEmail(gen: Record<string, any>): { subject: string; html: string } {
+const EV_TIER_LABELS: Record<string, string> = {
+  le5: '5 feet or less',
+  f6to15: '6 to 15 feet',
+  f16to25: '16 to 25 feet',
+};
+
+/** The EV charger version of the kickoff note. The generator body below describes a unit,
+ *  its ATS, fuel and pad position — none of which exist on a charger job, which would have
+ *  emailed ops "We will be installing a ." */
+function buildEvKickoffEmail(gen: Record<string, any>): { subject: string; html: string } {
+  const form: Record<string, any> = (gen.form_data && typeof gen.form_data === 'object') ? gen.form_data : {};
+  const totals: Record<string, any> = (gen.totals_data && typeof gen.totals_data === 'object') ? gen.totals_data : {};
+  const city = form.city || '';
+  const subject = `New EV Charger Install - ${gen.customer || '[customer]'}${city ? ` - ${city}` : ''}`;
+
+  const tier = EV_TIER_LABELS[String(form.distanceTier)] || '';
+  const lines: string[] = ['We will be installing a customer-supplied Tesla Wall Connector.'];
+  if (tier) lines.push(`Run from the feeding panel to the charger: ${tier}.`);
+  lines.push(form.panelUpgrade ? 'Includes a service upgrade to 200A.' : 'No service upgrade.');
+  const extras: string[] = Array.isArray(form.customItems)
+    ? form.customItems.filter((it: any) => it && typeof it.desc === 'string' && it.desc.trim()).map((it: any) => String(it.desc).trim())
+    : [];
+  if (extras.length) lines.push(`Additional work: ${extras.join('; ')}.`);
+  if (form.notes && String(form.notes).trim()) lines.push(String(form.notes).trim());
+
+  const deposit = Number(totals.deposit) || 0;
+  const depLine = deposit ? `Customer made a deposit of $${deposit.toLocaleString()}.` : '';
+  const contactRows = [gen.customer, form.phone, form.email, form.address].filter(Boolean).map(String);
+
+  const parts: string[] = [
+    `<p>${contactRows.map(r => escapeHtml(r)).join('<br>')}</p>`,
+    `<p>${lines.map(l => escapeHtml(l)).join('<br>')}</p>`,
+  ];
+  if (depLine) parts.push(`<p>${escapeHtml(depLine)}</p>`);
+
+  return { subject, html: parts.join('\n') };
+}
+
+export function buildAwardKickoffEmail(gen: Record<string, any>): { subject: string; html: string } {
+  if (gen.product_type === 'ev_charger') return buildEvKickoffEmail(gen);
+
   const form: Record<string, any> = (gen.form_data && typeof gen.form_data === 'object') ? gen.form_data : {};
   const totals: Record<string, any> = (gen.totals_data && typeof gen.totals_data === 'object') ? gen.totals_data : {};
   const brand = form.brand || gen.mfr || '';
