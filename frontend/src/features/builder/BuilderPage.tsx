@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import { GenForm, CustomItem, GEN_SIZE_LABELS } from './genData';
 import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo, loadCenterFor, migrateGenForm, getGenPrice } from './genCalc';
 import ProposalPreview from './ProposalPreview';
+import EvBuilderPage from './EvBuilderPage';
 import SendProposalModal from './SendProposalModal';
 import api from '../../api/client';
 import { Gen, WonJob } from '../../types';
@@ -107,6 +108,40 @@ function genToForm(g: Gen): GenForm {
 }
 
 export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: Props) {
+  // Which product this proposal sells. Editing an existing proposal is locked to the type
+  // it was written as: flipping it would orphan the saved form data and, on a sent or
+  // signed proposal, silently change what the customer was quoted.
+  const [productType, setProductType] = useState<'generator' | 'ev_charger'>(
+    () => editGen?.product_type === 'ev_charger' ? 'ev_charger' : 'generator',
+  );
+  const productSwitch = editGen ? null : (
+    <div className="panel" style={{ marginBottom: 16 }}>
+      <div style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+          Proposal Type
+        </span>
+        <div style={{ display: 'flex', borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
+          {([['generator', 'Generator'], ['ev_charger', 'EV Charger']] as const).map(([key, label]) => (
+            <button key={key} type="button" onClick={() => setProductType(key)}
+              style={{ padding: '7px 14px', fontSize: 12, fontWeight: 700, border: 'none', cursor: 'pointer',
+                background: productType === key ? 'var(--accent)' : 'var(--surface)',
+                color: productType === key ? '#fff' : 'var(--text2)' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  if (productType === 'ev_charger') {
+    return <EvBuilderPage setGens={setGens} onSaved={onSaved} editGen={editGen} productSwitch={productSwitch}/>;
+  }
+
+  return <GeneratorBuilder setGens={setGens} setWonJobs={setWonJobs} onSaved={onSaved} editGen={editGen} productSwitch={productSwitch}/>;
+}
+
+function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch }: Props & { productSwitch?: React.ReactNode }) {
   const showToast = useShowToast();
   const { settings: s } = useSettings();
   const [form, setForm] = useState<GenForm>(() => editGen ? genToForm(editGen) : blankGenForm(s));
@@ -174,6 +209,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
     setSaving(true);
     try {
       const payload = {
+        product_type: 'generator' as const,
         customer:   form.customer,
         loc:        [form.city, form.state].filter(Boolean).join(', ') || form.address || '—',
         mfr:        form.brand,
@@ -230,6 +266,7 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
     <div className="scroll view-enter">
       <div className="builder-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, padding: '20px 28px 40px', alignItems: 'start' }}>
         <div>
+          {productSwitch}
           {/* Section 1: Customer & Site */}
           <Section title="Customer & Site" icon="building">
             <Field label="Customer Name">
