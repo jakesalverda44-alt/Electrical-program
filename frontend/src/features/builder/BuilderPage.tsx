@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
-import { GenForm, GEN_SIZE_LABELS } from './genData';
+import { GenForm, CustomItem, GEN_SIZE_LABELS } from './genData';
 import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo, loadCenterFor, migrateGenForm, getGenPrice } from './genCalc';
 import ProposalPreview from './ProposalPreview';
 import SendProposalModal from './SendProposalModal';
@@ -10,7 +10,8 @@ import { useSettings, useShowToast } from '../../contexts/AppContext';
 import { parseAddress } from '../../lib/address';
 import { flTaxRate } from '../../lib/flSalesTax';
 
-function fmt(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
+// Sign outside the currency symbol, matching the proposal document: "-$200", not "$-200".
+function fmt(n: number) { return (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US'); }
 
 interface Props {
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
@@ -152,6 +153,14 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
     }
     return next;
   });
+
+  // Custom line items. Tolerates a form loaded before the field existed, though
+  // migrateGenForm normally fills it in on the way in.
+  const customItems: CustomItem[] = Array.isArray(form.customItems) ? form.customItems : [];
+  const addCustomItem = () => set('customItems', [...customItems, { id: crypto.randomUUID(), desc: '', amount: 0, taxable: false }]);
+  const patchCustomItem = (id: string, patch: Partial<CustomItem>) =>
+    set('customItems', customItems.map(it => it.id === id ? { ...it, ...patch } : it));
+  const removeCustomItem = (id: string) => set('customItems', customItems.filter(it => it.id !== id));
 
   const totals = calcGenTotals(form);
   const sizes  = getGenSizes(form);
@@ -471,6 +480,45 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
               <input type="checkbox" checked={!!form.includeBreakdown} onChange={e => set('includeBreakdown', e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
               Include Price Breakdown Page
             </label>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <Field label="Custom Line Items">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {customItems.map(it => (
+                    <div key={it.id} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input style={{ ...INPUT_STYLE, flex: '1 1 200px', width: 'auto' }} value={it.desc}
+                        placeholder="Description — e.g. Relocate hose bib"
+                        onChange={e => patchCustomItem(it.id, { desc: e.target.value })}/>
+                      {/* No min={0}: a negative amount is a deliberate feature, reading on the
+                          proposal as a named credit. A part-typed value like "-" parses to NaN,
+                          which is dropped so the field keeps whatever the rep is mid-way through
+                          typing instead of snapping back to a number. */}
+                      <input type="number" step={1} style={{ ...INPUT_STYLE, flex: '0 0 120px', width: 120 }} value={it.amount}
+                        onChange={e => { const n = Number(e.target.value); if (Number.isFinite(n)) patchCustomItem(it.id, { amount: n }); }}/>
+                      <label title="Charge sales tax on this item" style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--text2)', flexShrink: 0 }}>
+                        <input type="checkbox" checked={!!it.taxable} onChange={e => patchCustomItem(it.id, { taxable: e.target.checked })}
+                          style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
+                        Tax
+                      </label>
+                      <button type="button" onClick={() => removeCustomItem(it.id)} aria-label={`Remove ${it.desc.trim() || 'line item'}`}
+                        style={{ flexShrink: 0, width: 32, height: 32, borderRadius: 9, cursor: 'pointer', fontSize: 14, fontWeight: 700,
+                          border: '1px solid var(--border2)', background: 'var(--surface)', color: 'var(--text3)' }}>
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <button type="button" onClick={addCustomItem}
+                      style={{ padding: '7px 12px', borderRadius: 9, cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                        border: '1px solid var(--border2)', background: 'var(--surface)', color: 'var(--text2)' }}>
+                      + Add Item
+                    </button>
+                    <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+                      Check “Tax” for parts and materials; leave it clear for labor.
+                    </span>
+                  </div>
+                </div>
+              </Field>
+            </div>
             <div style={{ gridColumn: '1 / -1' }}>
               <Field label="Notes">
                 <textarea style={{ ...INPUT_STYLE, height: 72, resize: 'vertical' }} value={form.notes} onChange={e => set('notes', e.target.value)} placeholder="Additional terms or notes…"/>

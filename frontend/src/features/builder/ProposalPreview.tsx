@@ -1,13 +1,17 @@
 import React, { useRef, useState } from 'react';
 import { GenForm } from './genData';
-import { GenTotals, genPriceRows, genModelNo, loadCenterFor } from './genCalc';
+import { GenTotals, genPriceRows, genModelNo, loadCenterFor, activeCustomItems, customItemAmount } from './genCalc';
 import { GEN_SPEC_DETAIL, DEFAULT_PRICES } from './genData';
 import { AppSettings, DEFAULT_APP_SETTINGS } from '../../hooks/useAppSettings';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import api from '../../api/client';
 
-function fmt(n: number) { return '$' + Math.round(n).toLocaleString('en-US'); }
-function fmtDec(n: number) { return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+// The sign sits outside the currency symbol — a credit line reads "-$200.00", not "$-200.00".
+// Only a negative custom line item can reach these as a negative today.
+function fmt(n: number) { return (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US'); }
+function fmtDec(n: number) {
+  return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 // Parses a bare "YYYY-MM-DD" as a local calendar date (not UTC midnight) so the
 // displayed promo date can't shift a day off in negative-UTC timezones.
 function fmtDateLocal(iso: string): string {
@@ -291,6 +295,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
   const taxableWarranty = totals.extWarrantyAmt;
   const taxableEmPanel  = totals.emPanelAmt;
   const nonTaxable   = totals.laborAmt + totals.permitAmt + totals.startupAmt + totals.extraWireAmt + totals.liftAmt + totals.removalFee;
+  const customItems  = activeCustomItems(form);
   // Promo date range for the extended-warranty scope line / breakdown row, if set.
   const warrantyPromoRange = [fmtDateLocal(form.extWarrantyPromoStart), fmtDateLocal(form.extWarrantyPromoEnd)].filter(Boolean).join(' – ');
 
@@ -446,6 +451,15 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                       : 'Gas installation and connections are NOT included in this proposal.',
                     shade: false,
                   },
+                  // Custom line items collapse into ONE scope row rather than one row each:
+                  // page 1 is the page the customer signs, so the extras have to be visible
+                  // here, but a numbered entry per item would bury the actual install scope.
+                  // Prices stay on the breakdown page, like every other scope row.
+                  ...(customItems.length ? [{
+                    title: 'Additional Work Included',
+                    desc: customItems.map(it => `• ${it.desc.trim()}`).join('\n'),
+                    shade: true,
+                  }] : []),
                   // Builder "Notes" field — appended as its own line item when filled in.
                   ...(form.notes && form.notes.trim() ? [{
                     title: 'Additional Notes',
@@ -502,6 +516,8 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                     { label: 'Gas Line', tax: '', amt: totals.gasLineAmt, show: totals.gasLineAmt > 0 },
                     { label: 'Permit Fee', tax: '', amt: totals.permitAmt, show: true },
                     { label: 'Startup & Commissioning', tax: '', amt: totals.startupAmt, show: true },
+                    // Custom items list individually here, each carrying the tax status the rep set.
+                    ...customItems.map(it => ({ label: it.desc.trim(), tax: it.taxable ? 'taxable' : '', amt: customItemAmount(it), show: true })),
                     ...(totals.liftAmt > 0 ? [{ label: form.liftType === 'lull' ? 'Lull' : 'Crane', tax: '', amt: totals.liftAmt, show: true }] : []),
                     ...(totals.removalFee > 0 ? [{ label: form.jobType === 'swap-out' ? 'Removal / Disposal of Existing Generator' : 'Removal / Haul-Off', tax: '', amt: totals.removalFee, show: true }] : []),
                   ].filter(r => r.show).map((r, i) => (

@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { blankGenForm, calcGenTotals, migrateGenForm, genPriceRows } from './genCalc';
-import { GenForm } from './genData';
+import { blankGenForm, calcGenTotals, migrateGenForm, genPriceRows, activeCustomItems } from './genCalc';
+import { GenForm, CustomItem } from './genData';
+
+function item(over: Partial<CustomItem> = {}): CustomItem {
+  return { id: 'i1', desc: 'Relocate hose bib', amount: 350, taxable: false, ...over };
+}
 
 describe('calcGenTotals', () => {
   it('computes subtotal, tax, total and 50% deposit consistently', () => {
@@ -108,6 +112,115 @@ describe('calcGenTotals', () => {
   });
 });
 
+describe('calcGenTotals — custom line items', () => {
+  const base = () => ({ ...blankGenForm(), taxRate: 7 });
+
+  it('a taxable item raises the taxable base and the tax charged', () => {
+    const none = calcGenTotals(base());
+    const t = calcGenTotals({ ...base(), customItems: [item({ amount: 400, taxable: true })] });
+
+    expect(t.customTaxableAmt).toBe(400);
+    expect(t.customNonTaxableAmt).toBe(0);
+    expect(t.taxableBase).toBe(none.taxableBase + 400);
+    expect(t.nonTaxableBase).toBe(none.nonTaxableBase);
+    expect(t.tax).toBe(Math.round(t.taxableBase * 0.07));
+    expect(t.tax).toBeGreaterThan(none.tax);
+  });
+
+  it('a non-taxable item raises the total but never the tax', () => {
+    const none = calcGenTotals(base());
+    const t = calcGenTotals({ ...base(), customItems: [item({ amount: 400, taxable: false })] });
+
+    expect(t.customNonTaxableAmt).toBe(400);
+    expect(t.nonTaxableBase).toBe(none.nonTaxableBase + 400);
+    expect(t.taxableBase).toBe(none.taxableBase);
+    expect(t.tax).toBe(none.tax);
+    expect(t.total).toBe(none.total + 400);
+  });
+
+  it('splits a mix into both bases and keeps the discount prorated across them', () => {
+    const form: GenForm = {
+      ...base(),
+      discount: 10,
+      discountType: '%',
+      customItems: [
+        item({ id: 'a', desc: 'Extra 60A breaker', amount: 185, taxable: true }),
+        item({ id: 'b', desc: 'Relocate hose bib', amount: 350, taxable: false }),
+      ],
+    };
+    const t = calcGenTotals(form);
+
+    expect(t.customTaxableAmt).toBe(185);
+    expect(t.customNonTaxableAmt).toBe(350);
+    expect(t.customTotal).toBe(535);
+    expect(t.taxableBase + t.nonTaxableBase).toBe(t.subtotal);
+    expect(t.taxedAmount).toBeCloseTo(t.taxableBase - (t.discountAmt * t.taxableBase) / t.subtotal, 6);
+    expect(t.tax).toBe(Math.round(t.taxedAmount * 0.07));
+  });
+
+  it('ignores a row whose description was never filled in', () => {
+    const none = calcGenTotals(base());
+    const t = calcGenTotals({ ...base(), customItems: [item({ desc: '   ', amount: 900, taxable: true })] });
+
+    expect(t.customTotal).toBe(0);
+    expect(t.subtotal).toBe(none.subtotal);
+    expect(t.tax).toBe(none.tax);
+  });
+
+  it('reads a negative amount as a credit against the subtotal', () => {
+    const none = calcGenTotals(base());
+    const t = calcGenTotals({ ...base(), customItems: [item({ desc: 'Courtesy credit', amount: -200, taxable: false })] });
+
+    expect(t.customTotal).toBe(-200);
+    expect(t.subtotal).toBe(none.subtotal - 200);
+    expect(t.total).toBe(none.total - 200);
+  });
+
+  it('treats a non-finite amount as zero rather than poisoning the total', () => {
+    const none = calcGenTotals(base());
+    const t = calcGenTotals({ ...base(), customItems: [item({ amount: NaN as unknown as number, taxable: true })] });
+
+    expect(t.customTotal).toBe(0);
+    expect(t.total).toBe(none.total);
+  });
+
+  it('survives a form whose customItems came back malformed', () => {
+    const none = calcGenTotals(base());
+    const t = calcGenTotals({ ...base(), customItems: null as unknown as CustomItem[] });
+    expect(t.total).toBe(none.total);
+  });
+});
+
+describe('activeCustomItems', () => {
+  it('keeps only the described rows, in order', () => {
+    const items = [
+      item({ id: 'a', desc: 'First' }),
+      item({ id: 'b', desc: '' }),
+      item({ id: 'c', desc: 'Second' }),
+    ];
+    expect(activeCustomItems({ customItems: items }).map(i => i.id)).toEqual(['a', 'c']);
+  });
+});
+
+describe('genPriceRows — custom line items', () => {
+  const fmt = (n: number) => `$${n}`;
+
+  it('lists each described item with its own amount', () => {
+    const form = { ...blankGenForm(), customItems: [item({ desc: 'Extra 60A breaker', amount: 185, taxable: true })] };
+    const rows = genPriceRows(form, calcGenTotals(form), fmt);
+    const row = rows.find(r => r.label === 'Extra 60A breaker');
+    expect(row?.amount).toBe('$185');
+  });
+
+  it('omits a row with no description', () => {
+    // 187 rather than a round number: it can't collide with a catalog price (the battery
+    // maintainer is $185) and so proves the row itself is absent.
+    const form = { ...blankGenForm(), customItems: [item({ desc: '', amount: 187 })] };
+    const rows = genPriceRows(form, calcGenTotals(form), fmt);
+    expect(rows.some(r => r.amount === '$187')).toBe(false);
+  });
+});
+
 describe('genPriceRows — Silver Service line item', () => {
   const fmt = (n: number) => `$${n}`;
 
@@ -174,5 +287,20 @@ describe('migrateGenForm', () => {
 
   it('leaves an already-migrated silverServicePromo string untouched', () => {
     expect(migrateGenForm({ silverServicePromo: '2yr' }).silverServicePromo).toBe('2yr');
+  });
+
+  it('gives a proposal saved before custom items an empty list', () => {
+    expect(migrateGenForm({}).customItems).toEqual([]);
+  });
+
+  it('coerces a malformed customItems value to an empty list', () => {
+    expect(migrateGenForm({ customItems: null }).customItems).toEqual([]);
+    expect(migrateGenForm({ customItems: 'nope' }).customItems).toEqual([]);
+    expect(migrateGenForm({ customItems: { a: 1 } }).customItems).toEqual([]);
+  });
+
+  it('leaves a real customItems list untouched', () => {
+    const items = [item()];
+    expect(migrateGenForm({ customItems: items }).customItems).toEqual(items);
   });
 });

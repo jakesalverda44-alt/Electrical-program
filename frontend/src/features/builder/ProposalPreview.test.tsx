@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import ProposalPreview, { embedFontSize, embedDocStyle, embedPageStyle } from './ProposalPreview';
 import { blankGenForm, calcGenTotals } from './genCalc';
+import { CustomItem, GenForm } from './genData';
 
 afterEach(cleanup);
 
@@ -279,5 +280,78 @@ describe('Silver Service promo line items', () => {
     );
     expect(getByText('2-Year Silver Service — Included')).toBeTruthy();
     expect(getByText('2-Year Silver Service — Promo (FREE)')).toBeTruthy();
+  });
+});
+
+describe('custom line items', () => {
+  const withItems = (customItems: CustomItem[], extra: Partial<GenForm> = {}) => ({
+    ...blankGenForm(), customer: 'Jane Homeowner', customItems, ...extra,
+  });
+
+  it('omits the scope row entirely when there are no items', () => {
+    mockMatchMedia(false);
+    const form = withItems([]);
+    const { container } = render(
+      <ProposalPreview embed form={form} totals={calcGenTotals(form)} proposalNo="P-1"/>
+    );
+    expect(container.textContent).not.toContain('Additional Work Included');
+  });
+
+  it('collapses every item into one scope row, listing each description', () => {
+    mockMatchMedia(false);
+    const form = withItems([
+      { id: 'a', desc: 'Relocate hose bib', amount: 350, taxable: false },
+      { id: 'b', desc: 'Extra 60A breaker', amount: 187, taxable: true },
+    ]);
+    const { getAllByText, getByText } = render(
+      <ProposalPreview embed form={form} totals={calcGenTotals(form)} proposalNo="P-1"/>
+    );
+    // One row, not one per item.
+    expect(getAllByText('Additional Work Included')).toHaveLength(1);
+    const row = getByText('Additional Work Included').closest('tr');
+    expect(row?.textContent).toContain('Relocate hose bib');
+    expect(row?.textContent).toContain('Extra 60A breaker');
+  });
+
+  it('keeps the scope row off the proposal when the only item is undescribed', () => {
+    mockMatchMedia(false);
+    const form = withItems([{ id: 'a', desc: '   ', amount: 350, taxable: false }]);
+    const { container } = render(
+      <ProposalPreview embed form={form} totals={calcGenTotals(form)} proposalNo="P-1"/>
+    );
+    expect(container.textContent).not.toContain('Additional Work Included');
+  });
+
+  it('breaks the items out individually on the price breakdown, with each tax status', () => {
+    mockMatchMedia(false);
+    const form = withItems(
+      [
+        { id: 'a', desc: 'Relocate hose bib', amount: 350, taxable: false },
+        { id: 'b', desc: 'Extra 60A breaker', amount: 187, taxable: true },
+      ],
+      { includeBreakdown: true },
+    );
+    const { getByText } = render(
+      <ProposalPreview embed form={form} totals={calcGenTotals(form)} proposalNo="P-1"/>
+    );
+    const nonTaxableRow = getByText('Relocate hose bib').closest('tr');
+    expect(nonTaxableRow?.textContent).toContain('$350.00');
+    expect(nonTaxableRow?.textContent).not.toContain('taxable');
+
+    const taxableRow = getByText('Extra 60A breaker').closest('tr');
+    expect(taxableRow?.textContent).toContain('$187.00');
+    expect(taxableRow?.textContent).toContain('taxable');
+  });
+
+  it('shows a negative item as a credit on the breakdown', () => {
+    mockMatchMedia(false);
+    const form = withItems(
+      [{ id: 'a', desc: 'Courtesy credit', amount: -200, taxable: false }],
+      { includeBreakdown: true },
+    );
+    const { getByText } = render(
+      <ProposalPreview embed form={form} totals={calcGenTotals(form)} proposalNo="P-1"/>
+    );
+    expect(getByText('Courtesy credit').closest('tr')?.textContent).toContain('-$200.00');
   });
 });
