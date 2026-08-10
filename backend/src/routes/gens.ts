@@ -735,6 +735,22 @@ const ADDON_P = {
   genStandSmall: 2000, genStandBig: 2500,
 };
 
+interface CustomItem { id?: string; desc?: string; amount?: unknown; taxable?: unknown }
+
+/** Mirrors activeCustomItems/customItemAmount in frontend/src/features/builder/genCalc.ts:
+ *  a row with no description contributes nothing, and a non-finite amount reads as 0. */
+function customItemSums(raw: unknown): { taxable: number; nonTaxable: number } {
+  const items: CustomItem[] = Array.isArray(raw) ? raw : [];
+  let taxable = 0, nonTaxable = 0;
+  for (const it of items) {
+    if (!it || typeof it.desc !== 'string' || it.desc.trim() === '') continue;
+    const n = Number(it.amount);
+    if (!Number.isFinite(n)) continue;
+    if (it.taxable) taxable += n; else nonTaxable += n;
+  }
+  return { taxable, nonTaxable };
+}
+
 function calcFormTotals(g: Record<string, unknown>) {
   const coolingType = String(g.coolingType || 'air-cooled');
   const brand = String(g.brand || 'Kohler');
@@ -763,12 +779,18 @@ function calcFormTotals(g: Record<string, unknown>) {
   const laborAmt    = Number(g.labor)   || ADDON_P.labor;
   const permitAmt   = Number(g.permit)  || ADDON_P.permit;
   const startupAmt  = coolingType === 'liquid-cooled' ? ADDON_P.startupLC : (Number(g.startup) || ADDON_P.startup);
+  // A custom item is goods or work depending on the salesperson's per-item flag, which is
+  // what decides the base it joins below.
+  const customSums = customItemSums(g.customItems);
+  const customTaxableAmt    = customSums.taxable;
+  const customNonTaxableAmt = customSums.nonTaxable;
+  const customTotal         = customTaxableAmt + customNonTaxableAmt;
   // Keep in step with calcGenTotals in frontend/src/features/builder/genCalc.ts.
   // Sales tax applies to tangible goods only, matching the proposal's price breakdown:
   // labor, permit, startup, lift, removal and the gas line are services, and extra wire
   // is shown to the customer inside the non-taxable "Labor & Electrical" line.
-  const taxableBase    = genP + padAmt + genStandAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt;
-  const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
+  const taxableBase    = genP + padAmt + genStandAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt + customTaxableAmt;
+  const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt + customNonTaxableAmt;
   const subtotal    = taxableBase + nonTaxableBase;
   const discountAmt = g.discountType === '%'
     ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
@@ -780,7 +802,7 @@ function calcFormTotals(g: Record<string, unknown>) {
   const tax         = Math.round(taxedAmount * ((Number(g.taxRate) || 7) / 100));
   const total       = netSubtotal + tax;
   const deposit     = Math.round(total * ((Number(g.depositPct) || 50) / 100));
-  return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
+  return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, customTaxableAmt, customNonTaxableAmt, customTotal, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
 }
 
 const BUILD_FROM_NOTES_SYSTEM = `You are an expert generator installation estimator. Extract a proposal form (GenForm) from field site visit notes.
@@ -905,9 +927,13 @@ async function extractFormFromNotes(notes: string): Promise<Record<string, unkno
     feedFt: 0, genSide: '', panelRel: '', panelFt: 0,
     labor: ADDON_P.labor, permit: ADDON_P.permit, startup: ADDON_P.startup,
     discount: 0, discountType: '$', taxRate: 7, validDays: 30, depositPct: 50,
-    notes: '', includeBreakdown: false,
+    notes: '', includeBreakdown: false, customItems: [],
     ...parsed,
   };
+  // Custom line items are free text with a price attached, so a hallucinated one would put an
+  // invented charge on a customer's proposal. The field is left out of the prompt and forced
+  // empty here regardless of what came back — the salesperson types these.
+  form.customItems = [];
   // Always enforce battery=true on new-install regardless of AI output
   form.battery = form.jobType === 'swap-out' ? (parsed.battery ?? true) : true;
   // A Gen Stand replaces the concrete pad — don't let both come back true from the AI.

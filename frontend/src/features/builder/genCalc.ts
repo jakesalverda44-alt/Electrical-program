@@ -1,4 +1,4 @@
-import { DEFAULT_PRICES, LC_MODELS, GEN_SPECS, NEW_INSTALL_ONLY, LOAD_CENTER_UNITS, GenForm } from './genData';
+import { DEFAULT_PRICES, LC_MODELS, GEN_SPECS, NEW_INSTALL_ONLY, LOAD_CENTER_UNITS, GenForm, CustomItem } from './genData';
 
 interface DefaultOverrides {
   gen_default_labor?: string;
@@ -24,6 +24,7 @@ export function blankGenForm(overrides?: DefaultOverrides): GenForm {
     startup: Number(overrides?.gen_default_startup)  || DEFAULT_PRICES.startup,
     discount: 0, discountType: '$',
     taxRate:  Number(overrides?.gen_default_tax_rate) || 7,
+    customItems: [],
     notes: '',
     includeBreakdown: false,
     jobType: 'new-install',
@@ -69,7 +70,24 @@ export function migrateGenForm(raw: Record<string, unknown>): Record<string, unk
   if (out.panelFt === undefined) out.panelFt = 0;
   if (out.genPriceOverride === undefined) out.genPriceOverride = null;
   if (out.genStand === undefined) out.genStand = 'none';
+  // Checked with isArray rather than for undefined so a proposal holding a malformed value
+  // (null, an object, a string) also lands on an empty list instead of crashing the builder.
+  if (!Array.isArray(out.customItems)) out.customItems = [];
   return out;
+}
+
+/** Custom items that count: a row the salesperson started but left undescribed contributes
+ *  nothing to any total and renders nowhere, so a half-typed row can't move the price. */
+export function activeCustomItems(g: Pick<GenForm, 'customItems'>): CustomItem[] {
+  if (!Array.isArray(g.customItems)) return [];
+  return g.customItems.filter(it => it && typeof it.desc === 'string' && it.desc.trim() !== '');
+}
+
+/** Coerces a hand-typed amount to a usable number. Non-finite (empty input, NaN) → 0.
+ *  Negative amounts are kept: they read on the proposal as a named credit. */
+export function customItemAmount(item: Pick<CustomItem, 'amount'>): number {
+  const n = Number(item.amount);
+  return Number.isFinite(n) ? n : 0;
 }
 
 export function getGenSizes(form: Pick<GenForm, 'brand' | 'coolingType' | 'jobType'>): string[] {
@@ -135,6 +153,12 @@ export interface GenTotals {
   emPanelAmt: number;
   gasLineAmt: number;
   extraWireAmt: number;
+  /** Hand-typed line items flagged as goods — folded into taxableBase. */
+  customTaxableAmt: number;
+  /** Hand-typed line items flagged as services — folded into nonTaxableBase. */
+  customNonTaxableAmt: number;
+  /** Both of the above; for display only. */
+  customTotal: number;
   subtotal: number;
   discountAmt: number;
   /** Tangible goods, before discount — the only lines sales tax applies to. */
@@ -174,14 +198,20 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const laborAmt   = Number(g.labor);
   const permitAmt  = Number(g.permit);
   const startupAmt = g.coolingType === 'liquid-cooled' ? DEFAULT_PRICES.startupLC : Number(g.startup);
+  // A custom item can be either goods or work, so the salesperson's per-item flag — not the
+  // item's position in this list — decides which base it joins.
+  const custom = activeCustomItems(g);
+  const customTaxableAmt    = custom.filter(it =>  it.taxable).reduce((sum, it) => sum + customItemAmount(it), 0);
+  const customNonTaxableAmt = custom.filter(it => !it.taxable).reduce((sum, it) => sum + customItemAmount(it), 0);
+  const customTotal         = customTaxableAmt + customNonTaxableAmt;
 
   // Sales tax applies to tangible goods only — matching what the proposal's price
   // breakdown tells the customer. Labor, permit fees, startup/commissioning, lift and
   // removal are services; the gas line is an install, and extra wire is presented to
   // the customer bundled into the non-taxable "Labor & Electrical" line.
   // A promo extended warranty is $0 here, so it contributes no tax by construction.
-  const taxableBase    = genP + padAmt + genStandAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt;
-  const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt;
+  const taxableBase    = genP + padAmt + genStandAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt + customTaxableAmt;
+  const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt + customNonTaxableAmt;
   const subtotal   = taxableBase + nonTaxableBase;
   const discountAmt = g.discountType === '%'
     ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
@@ -196,7 +226,7 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const total      = netSubtotal + tax;
   const deposit    = Math.round(total * ((Number(g.depositPct) || 50) / 100));
 
-  return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
+  return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, customTaxableAmt, customNonTaxableAmt, customTotal, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
 }
 
 export function genPriceRows(g: GenForm, t: GenTotals, fmt: (n: number) => string) {
@@ -220,6 +250,9 @@ export function genPriceRows(g: GenForm, t: GenTotals, fmt: (n: number) => strin
     const years = g.silverServicePromo === '2yr' ? 2 : 1;
     const value = DEFAULT_PRICES.silverService * years;
     rows.push({ label: `${years}-Year Silver Service — Promo: $${value.toLocaleString()} → FREE`, amount: fmt(0) });
+  }
+  for (const it of activeCustomItems(g)) {
+    rows.push({ label: it.desc.trim(), amount: fmt(customItemAmount(it)) });
   }
   if (t.liftAmt)     rows.push({ label: g.liftType === 'lull' ? 'Lull' : 'Crane', amount: fmt(t.liftAmt) });
   if (t.removalFee)  rows.push({ label: 'Removal / Haul-Off', amount: fmt(t.removalFee) });

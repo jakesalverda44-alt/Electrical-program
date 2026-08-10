@@ -267,6 +267,17 @@ export const GEN_SPEC_DETAIL: Record<string, Record<string, GenSpecDetail>> = {
   },
 };
 
+/** A one-off, hand-typed line item — anything the customer wants that the priced catalog
+ *  above doesn't cover. `taxable` decides which base the amount lands in, since a custom
+ *  item can be a part (taxable goods) or work (non-taxable service) and only the
+ *  salesperson knows which. A negative amount reads as a named credit on the proposal. */
+export interface CustomItem {
+  id: string;
+  desc: string;
+  amount: number;
+  taxable: boolean;
+}
+
 export interface GenForm {
   customer: string;
   attn: string;
@@ -319,6 +330,7 @@ export interface GenForm {
   discount: number;
   discountType: '%' | '$';
   taxRate: number;
+  customItems: CustomItem[];
   notes: string;
   includeBreakdown: boolean;
   jobType: 'new-install' | 'swap-out';
