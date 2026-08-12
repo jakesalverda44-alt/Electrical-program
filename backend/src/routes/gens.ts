@@ -769,6 +769,15 @@ function customItemSums(raw: unknown): { taxable: number; nonTaxable: number } {
   return { taxable, nonTaxable };
 }
 
+/** Mirrors roundCents in frontend/src/features/builder/money.ts — proposal money rounds to
+ *  the cent, not the dollar, so tax and deposit keep the cents the contract is written in. */
+function roundCents(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  const scaled = n * 100;
+  const rounded = scaled < 0 ? -Math.round(-scaled) : Math.round(scaled);
+  return rounded / 100;
+}
+
 function calcFormTotals(g: Record<string, unknown>) {
   const coolingType = String(g.coolingType || 'air-cooled');
   const brand = String(g.brand || 'Kohler');
@@ -819,15 +828,15 @@ function calcFormTotals(g: Record<string, unknown>) {
   const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt + evChargerAmt + customNonTaxableAmt;
   const subtotal    = taxableBase + nonTaxableBase;
   const discountAmt = g.discountType === '%'
-    ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
+    ? roundCents(subtotal * ((Number(g.discount) || 0) / 100))
     : (Number(g.discount) || 0);
   const taxedAmount = subtotal > 0
     ? Math.max(0, taxableBase - (discountAmt * taxableBase) / subtotal)
     : 0;
-  const netSubtotal = subtotal - discountAmt;
-  const tax         = Math.round(taxedAmount * ((Number(g.taxRate) || 7) / 100));
-  const total       = netSubtotal + tax;
-  const deposit     = Math.round(total * ((Number(g.depositPct) || 50) / 100));
+  const netSubtotal = roundCents(subtotal - discountAmt);
+  const tax         = roundCents(taxedAmount * ((Number(g.taxRate) || 7) / 100));
+  const total       = roundCents(netSubtotal + tax);
+  const deposit     = roundCents(total * ((Number(g.depositPct) || 50) / 100));
   return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, evChargerAmt, customTaxableAmt, customNonTaxableAmt, customTotal, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
 }
 

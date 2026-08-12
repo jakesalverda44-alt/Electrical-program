@@ -1,5 +1,6 @@
 import { EV_PRICES, EvForm, EvDistanceTier, evInstallPrice, evTierLabel } from './evData';
 import { activeCustomItems, customItemAmount } from './genCalc';
+import { roundCents } from './money';
 
 interface EvDefaultOverrides {
   ev_default_tax?: string;
@@ -61,9 +62,9 @@ export function calcEvTotals(e: EvForm): EvTotals {
 
   const subtotal = tierAmt + panelUpgradeAmt + customTotal;
   const discountAmt = e.discountType === '%'
-    ? Math.round(subtotal * ((Number(e.discount) || 0) / 100))
+    ? roundCents(subtotal * ((Number(e.discount) || 0) / 100))
     : (Number(e.discount) || 0);
-  const netSubtotal = subtotal - discountAmt;
+  const netSubtotal = roundCents(subtotal - discountAmt);
 
   // Flat, never derived. There is no taxable/non-taxable split here as there is on a
   // generator quote: the customer already bought the only piece of equipment, so what's
@@ -71,8 +72,8 @@ export function calcEvTotals(e: EvForm): EvTotals {
   const taxRaw = Number(e.taxAmount);
   const tax = Number.isFinite(taxRaw) ? taxRaw : 0;
 
-  const total = netSubtotal + tax;
-  const deposit = Math.round(total * ((Number(e.depositPct) || 0) / 100));
+  const total = roundCents(netSubtotal + tax);
+  const deposit = roundCents(total * ((Number(e.depositPct) || 0) / 100));
 
   return { tierAmt, panelUpgradeAmt, customTotal, subtotal, discountAmt, netSubtotal, tax, total, deposit };
 }

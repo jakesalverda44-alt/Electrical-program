@@ -1,5 +1,6 @@
 import { DEFAULT_PRICES, LC_MODELS, GEN_SPECS, NEW_INSTALL_ONLY, LOAD_CENTER_UNITS, GenForm, CustomItem } from './genData';
 import { evInstallPrice, evTierLabel } from './evData';
+import { roundCents } from './money';
 
 interface DefaultOverrides {
   gen_default_labor?: string;
@@ -225,17 +226,17 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt + evChargerAmt + customNonTaxableAmt;
   const subtotal   = taxableBase + nonTaxableBase;
   const discountAmt = g.discountType === '%'
-    ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
+    ? roundCents(subtotal * ((Number(g.discount) || 0) / 100))
     : (Number(g.discount) || 0);
   // A discount is given against the whole job, so it reduces the taxable base only in
   // proportion to that base's share of the contract.
   const taxedAmount = subtotal > 0
     ? Math.max(0, taxableBase - (discountAmt * taxableBase) / subtotal)
     : 0;
-  const netSubtotal = subtotal - discountAmt;
-  const tax        = Math.round(taxedAmount * (Number(g.taxRate) / 100));
-  const total      = netSubtotal + tax;
-  const deposit    = Math.round(total * ((Number(g.depositPct) || 50) / 100));
+  const netSubtotal = roundCents(subtotal - discountAmt);
+  const tax        = roundCents(taxedAmount * (Number(g.taxRate) / 100));
+  const total      = roundCents(netSubtotal + tax);
+  const deposit    = roundCents(total * ((Number(g.depositPct) || 50) / 100));
 
   return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, evChargerAmt, customTaxableAmt, customNonTaxableAmt, customTotal, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
 }

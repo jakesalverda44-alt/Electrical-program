@@ -62,7 +62,7 @@ describe('calcEvTotals — discount', () => {
 
   it('applies a percentage discount against the subtotal', () => {
     const t = calcEvTotals({ ...blankEvForm(), distanceTier: 'f16to25', discount: 10, discountType: '%' });
-    expect(t.discountAmt).toBe(Math.round(1275 * 0.1));
+    expect(t.discountAmt).toBe(Math.round(1275 * 0.1 * 100) / 100);
     expect(t.netSubtotal).toBe(1275 - t.discountAmt);
   });
 });
@@ -102,7 +102,7 @@ describe('calcEvTotals — deposit', () => {
 
   it('computes from the percentage when the rep sets one', () => {
     const t = calcEvTotals({ ...blankEvForm(), depositPct: 50 });
-    expect(t.deposit).toBe(Math.round(t.total * 0.5));
+    expect(t.deposit).toBe(Math.round(t.total * 0.5 * 100) / 100);
   });
 });
 
@@ -196,5 +196,19 @@ describe('evPriceRows — install price override', () => {
     const rows = evPriceRows(form, calcEvTotals(form), (n: number) => `$${n}`);
     expect(rows[0].label).toBe('Wall Connector Installation — 5 feet or less');
     expect(rows[0].amount).toBe('$750');
+  });
+});
+
+describe('calcEvTotals — money keeps its cents', () => {
+  it('carries a hand-typed price with cents through to the total', () => {
+    const t = calcEvTotals({ ...blankEvForm(), tierPriceOverride: 993.75, taxAmount: 50.25 });
+    expect(t.tierAmt).toBe(993.75);
+    expect(t.total).toBe(1044);
+  });
+
+  it('computes a percentage discount and the deposit to the cent', () => {
+    const t = calcEvTotals({ ...blankEvForm(), tierPriceOverride: 993.75, discount: 7.5, discountType: '%', depositPct: 50 });
+    expect(t.discountAmt).toBe(Math.round(993.75 * 0.075 * 100) / 100);
+    expect(t.deposit).toBe(Math.round(t.total * 0.5 * 100) / 100);
   });
 });

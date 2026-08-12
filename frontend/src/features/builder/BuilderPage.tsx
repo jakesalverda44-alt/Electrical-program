@@ -13,7 +13,17 @@ import { parseAddress } from '../../lib/address';
 import { flTaxRate } from '../../lib/flSalesTax';
 
 // Sign outside the currency symbol, matching the proposal document: "-$200", not "$-200".
-function fmt(n: number) { return (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US'); }
+// Shows cents only when an amount has them, so a $15,430 job stays readable while a
+// $675.50 one is stated exactly. The proposal document itself always prints two decimals
+// (fmtDec) — this is the in-app summary chrome.
+function fmt(n: number) {
+  const abs = Math.abs(n);
+  const hasCents = Math.round(abs * 100) % 100 !== 0;
+  return (n < 0 ? '-$' : '$') + abs.toLocaleString('en-US', {
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: 2,
+  });
+}
 
 interface Props {
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
@@ -319,7 +329,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
               </select>
             </Field>
             <Field label="Generator Cost">
-              <input type="number" min={0} style={INPUT_STYLE}
+              <input type="number" min={0} step="0.01" style={INPUT_STYLE}
                 value={form.genPriceOverride ?? ''}
                 placeholder={String(getGenPrice({ ...form, genPriceOverride: null }))}
                 onChange={e => set('genPriceOverride', e.target.value === '' ? null : Number(e.target.value))}/>
@@ -401,7 +411,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
             )}
             {form.jobType === 'swap-out' && (
               <Field label="Removal / Disposal Fee ($)">
-                <input type="number" min={0} style={INPUT_STYLE} value={form.removalFee} onChange={e => set('removalFee', Number(e.target.value))}/>
+                <input type="number" min={0} step="0.01" style={INPUT_STYLE} value={form.removalFee} onChange={e => set('removalFee', Number(e.target.value))}/>
               </Field>
             )}
             <Field label="Extra Wire (ft)">
@@ -511,7 +521,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
                   <div style={{ marginTop: 12 }}>
                     <Field label="Charger Install Price">
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <input type="number" style={{ ...INPUT_STYLE, flex: '1 1 140px', width: 'auto' }}
+                        <input type="number" step="0.01" style={{ ...INPUT_STYLE, flex: '1 1 140px', width: 'auto' }}
                           value={form.evChargerPriceOverride ?? evTierPrice(form.evChargerTier)}
                           onChange={e => {
                             const n = Number(e.target.value);
@@ -540,17 +550,17 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
           {/* Section 5: Pricing & Terms */}
           <Section title="Pricing & Terms" icon="dollar">
             <Field label="Labor">
-              <input type="number" min={0} style={INPUT_STYLE} value={form.labor} onChange={e => set('labor', Number(e.target.value))}/>
+              <input type="number" min={0} step="0.01" style={INPUT_STYLE} value={form.labor} onChange={e => set('labor', Number(e.target.value))}/>
             </Field>
             <Field label="Permit">
-              <input type="number" min={0} style={INPUT_STYLE} value={form.permit} onChange={e => set('permit', Number(e.target.value))}/>
+              <input type="number" min={0} step="0.01" style={INPUT_STYLE} value={form.permit} onChange={e => set('permit', Number(e.target.value))}/>
             </Field>
             <Field label="Startup">
-              <input type="number" min={0} style={INPUT_STYLE} value={form.startup} onChange={e => set('startup', Number(e.target.value))}/>
+              <input type="number" min={0} step="0.01" style={INPUT_STYLE} value={form.startup} onChange={e => set('startup', Number(e.target.value))}/>
             </Field>
             <Field label={`Discount (${form.discountType === '%' ? '%' : '$'})`}>
               <div style={{ display: 'flex', gap: 6 }}>
-                <input type="number" min={0} style={{ ...INPUT_STYLE, flex: 1 }} value={form.discount} onChange={e => set('discount', Number(e.target.value))}/>
+                <input type="number" min={0} step="0.01" style={{ ...INPUT_STYLE, flex: 1 }} value={form.discount} onChange={e => set('discount', Number(e.target.value))}/>
                 <div style={{ display: 'flex', borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)', flexShrink: 0 }}>
                   {(['$', '%'] as const).map(t => (
                     <button key={t} onClick={() => set('discountType', t)}
@@ -588,7 +598,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
                           proposal as a named credit. A part-typed value like "-" parses to NaN,
                           which is dropped so the field keeps whatever the rep is mid-way through
                           typing instead of snapping back to a number. */}
-                      <input type="number" step={1} style={{ ...INPUT_STYLE, flex: '0 0 120px', width: 120 }} value={it.amount}
+                      <input type="number" step="0.01" style={{ ...INPUT_STYLE, flex: '0 0 120px', width: 120 }} value={it.amount}
                         onChange={e => { const n = Number(e.target.value); if (Number.isFinite(n)) patchCustomItem(it.id, { amount: n }); }}/>
                       <label title="Charge sales tax on this item" style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--text2)', flexShrink: 0 }}>
                         <input type="checkbox" checked={!!it.taxable} onChange={e => patchCustomItem(it.id, { taxable: e.target.checked })}
