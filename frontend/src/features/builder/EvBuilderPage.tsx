@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import Icon from '../../components/Icon';
-import { EvForm, EV_TIERS, EV_PRICES, evTierLabel } from './evData';
+import { EvForm, EV_TIERS, EV_PRICES, evTierLabel, evTierPrice } from './evData';
 import { CustomItem } from './genData';
 import { blankEvForm, calcEvTotals, migrateEvForm, evProposalNo } from './evCalc';
 import EvProposalPreview from './EvProposalPreview';
@@ -94,7 +94,13 @@ export default function EvBuilderPage({ setGens, onSaved, editGen, productSwitch
   const [showSend, setShowSend] = useState(false);
   const [savedGenId, setSavedGenId] = useState<string | null>(editGen?.id ?? null);
 
-  const set = (key: keyof EvForm, val: unknown) => setForm(prev => ({ ...prev, [key]: val }));
+  const set = (key: keyof EvForm, val: unknown) => setForm(prev => {
+    const next = { ...prev, [key]: val };
+    // Picking a different tier means you want that tier's price — otherwise an override
+    // typed for the old tier would quietly ride along on the new one.
+    if (key === 'distanceTier') next.tierPriceOverride = null;
+    return next;
+  });
 
   const customItems: CustomItem[] = Array.isArray(form.customItems) ? form.customItems : [];
   const addCustomItem = () => set('customItems', [...customItems, { id: crypto.randomUUID(), desc: '', amount: 0, taxable: false }]);
@@ -213,6 +219,30 @@ export default function EvBuilderPage({ setGens, onSaved, editGen, productSwitch
                   ))}
                 </div>
               </Field>
+              <div style={{ marginTop: 12 }}>
+                <Field label="Install Price">
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input type="number" style={{ ...INPUT_STYLE, flex: '1 1 140px', width: 'auto' }}
+                      value={form.tierPriceOverride ?? evTierPrice(form.distanceTier)}
+                      onChange={e => {
+                        const n = Number(e.target.value);
+                        if (Number.isFinite(n)) set('tierPriceOverride', n);
+                      }}/>
+                    {form.tierPriceOverride !== null && (
+                      <button type="button" onClick={() => set('tierPriceOverride', null)}
+                        style={{ padding: '7px 12px', borderRadius: 9, cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                          border: '1px solid var(--border2)', background: 'var(--surface)', color: 'var(--text2)' }}>
+                        Reset to {fmt(evTierPrice(form.distanceTier))}
+                      </button>
+                    )}
+                  </div>
+                </Field>
+                {form.tierPriceOverride !== null && (
+                  <div style={{ fontSize: 11, color: 'var(--amber)', fontWeight: 700, marginTop: 6 }}>
+                    Custom price — standard {evTierLabel(form.distanceTier).toLowerCase()} rate is {fmt(evTierPrice(form.distanceTier))}
+                  </div>
+                )}
+              </div>
               <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
                 Runs past 25 ft: quote the 16–25 ft tier and add the overage as a custom line item below.
               </div>

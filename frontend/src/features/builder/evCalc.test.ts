@@ -157,3 +157,44 @@ describe('evProposalNo', () => {
     expect(evProposalNo()).toMatch(/^JSEV-\d{8}-\d{3}$/);
   });
 });
+
+describe('calcEvTotals — install price override', () => {
+  it('defaults to no override, charging the tier price', () => {
+    const form = blankEvForm();
+    expect(form.tierPriceOverride).toBe(null);
+    expect(calcEvTotals(form).tierAmt).toBe(993);
+  });
+
+  it('charges the typed price instead of the tier price', () => {
+    const t = calcEvTotals({ ...blankEvForm(), distanceTier: 'le5', tierPriceOverride: 750 });
+    expect(t.tierAmt).toBe(750);
+    expect(t.subtotal).toBe(750);
+  });
+
+  it('accepts an override of zero — a giveaway install is not a missing override', () => {
+    expect(calcEvTotals({ ...blankEvForm(), tierPriceOverride: 0 }).tierAmt).toBe(0);
+  });
+
+  it('falls back to the tier price when the override is non-finite', () => {
+    const t = calcEvTotals({ ...blankEvForm(), distanceTier: 'f16to25', tierPriceOverride: NaN as unknown as number });
+    expect(t.tierAmt).toBe(1275);
+  });
+
+  it('flows the override through to the total', () => {
+    const t = calcEvTotals({ ...blankEvForm(), tierPriceOverride: 1500, taxAmount: 50 });
+    expect(t.total).toBe(1550);
+  });
+
+  it('migrates a form saved before the override existed to no override', () => {
+    expect(migrateEvForm({}).tierPriceOverride).toBe(null);
+  });
+});
+
+describe('evPriceRows — install price override', () => {
+  it('still names the tier, at the overridden amount', () => {
+    const form: EvForm = { ...blankEvForm(), distanceTier: 'le5', tierPriceOverride: 750 };
+    const rows = evPriceRows(form, calcEvTotals(form), (n: number) => `$${n}`);
+    expect(rows[0].label).toBe('Wall Connector Installation — 5 feet or less');
+    expect(rows[0].amount).toBe('$750');
+  });
+});

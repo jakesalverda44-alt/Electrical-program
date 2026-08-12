@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { GenForm, CustomItem, GEN_SIZE_LABELS } from './genData';
-import { EV_TIERS, EV_PRICES } from './evData';
+import { EV_TIERS, EV_PRICES, evTierPrice, evTierLabel } from './evData';
 import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo, loadCenterFor, migrateGenForm, getGenPrice } from './genCalc';
 import ProposalPreview from './ProposalPreview';
 import EvBuilderPage from './EvBuilderPage';
@@ -179,6 +179,9 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
     if (key === 'brand' && next.brand !== 'Kohler' && prev.extWarranty === 'promo') {
       next.extWarranty = 'none';
     }
+    // Picking a different charger tier means you want that tier's price — otherwise an
+    // override typed for the old tier would quietly ride along on the new one.
+    if (key === 'evChargerTier') next.evChargerPriceOverride = null;
     // Editing the address re-derives the FL sales-tax rate (rep can still override the
     // Tax Rate field afterward — that's a 'taxRate' change, which isn't re-derived here).
     if (key === 'city' || key === 'state' || key === 'zip') {
@@ -505,6 +508,30 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
                       ))}
                     </div>
                   </Field>
+                  <div style={{ marginTop: 12 }}>
+                    <Field label="Charger Install Price">
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <input type="number" style={{ ...INPUT_STYLE, flex: '1 1 140px', width: 'auto' }}
+                          value={form.evChargerPriceOverride ?? evTierPrice(form.evChargerTier)}
+                          onChange={e => {
+                            const n = Number(e.target.value);
+                            if (Number.isFinite(n)) set('evChargerPriceOverride', n);
+                          }}/>
+                        {form.evChargerPriceOverride !== null && (
+                          <button type="button" onClick={() => set('evChargerPriceOverride', null)}
+                            style={{ padding: '7px 12px', borderRadius: 9, cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                              border: '1px solid var(--border2)', background: 'var(--surface)', color: 'var(--text2)' }}>
+                            Reset to {fmt(evTierPrice(form.evChargerTier))}
+                          </button>
+                        )}
+                      </div>
+                    </Field>
+                    {form.evChargerPriceOverride !== null && (
+                      <div style={{ fontSize: 11, color: 'var(--amber)', fontWeight: 700, marginTop: 6 }}>
+                        Custom price — standard {evTierLabel(form.evChargerTier).toLowerCase()} rate is {fmt(evTierPrice(form.evChargerTier))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

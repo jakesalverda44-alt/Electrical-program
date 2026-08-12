@@ -1,5 +1,5 @@
 import { DEFAULT_PRICES, LC_MODELS, GEN_SPECS, NEW_INSTALL_ONLY, LOAD_CENTER_UNITS, GenForm, CustomItem } from './genData';
-import { EV_PRICES, evTierLabel } from './evData';
+import { evInstallPrice, evTierLabel } from './evData';
 
 interface DefaultOverrides {
   gen_default_labor?: string;
@@ -19,7 +19,7 @@ export function blankGenForm(overrides?: DefaultOverrides): GenForm {
     liftType: 'none', genStand: 'none', removal: false,
     extWarranty: 'none', extWarrantyPromoStart: '', extWarrantyPromoEnd: '',
     silverServicePromo: 'none',
-    evCharger: false, evChargerTier: 'f6to15',
+    evCharger: false, evChargerTier: 'f6to15', evChargerPriceOverride: null,
     feedFt: 0, genSide: '', panelRel: '', panelFt: 0,
     labor:   Number(overrides?.gen_default_labor)    || DEFAULT_PRICES.labor,
     permit:  Number(overrides?.gen_default_permit)   || DEFAULT_PRICES.permit,
@@ -77,6 +77,7 @@ export function migrateGenForm(raw: Record<string, unknown>): Record<string, unk
   if (!Array.isArray(out.customItems)) out.customItems = [];
   if (out.evCharger === undefined) out.evCharger = false;
   if (out.evChargerTier === undefined) out.evChargerTier = 'f6to15';
+  if (out.evChargerPriceOverride === undefined) out.evChargerPriceOverride = null;
   return out;
 }
 
@@ -209,7 +210,7 @@ export function calcGenTotals(g: GenForm): GenTotals {
   // A bundled charger install is priced off the standalone tier list, and joins the
   // non-taxable base with the other labor: the customer supplies the charger itself, and
   // the generator's own equipment lines already carry the job's sales tax.
-  const evChargerAmt = g.evCharger ? (EV_PRICES[g.evChargerTier] ?? 0) : 0;
+  const evChargerAmt = g.evCharger ? evInstallPrice(g.evChargerTier, g.evChargerPriceOverride) : 0;
   const custom = activeCustomItems(g);
   const customTaxableAmt    = custom.filter(it =>  it.taxable).reduce((sum, it) => sum + customItemAmount(it), 0);
   const customNonTaxableAmt = custom.filter(it => !it.taxable).reduce((sum, it) => sum + customItemAmount(it), 0);

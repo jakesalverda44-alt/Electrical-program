@@ -1,4 +1,4 @@
-import { EV_PRICES, EvForm, EvDistanceTier, evTierPrice, evTierLabel } from './evData';
+import { EV_PRICES, EvForm, EvDistanceTier, evInstallPrice, evTierLabel } from './evData';
 import { activeCustomItems, customItemAmount } from './genCalc';
 
 interface EvDefaultOverrides {
@@ -11,6 +11,7 @@ export function blankEvForm(overrides?: EvDefaultOverrides): EvForm {
   return {
     customer: '', attn: '', address: '', city: '', state: 'FL', zip: '', phone: '', email: '',
     distanceTier: 'f6to15',
+    tierPriceOverride: null,
     panelUpgrade: false,
     customItems: [],
     discount: 0, discountType: '$',
@@ -31,6 +32,7 @@ export function migrateEvForm(raw: Record<string, unknown>): Record<string, unkn
   const out = { ...raw };
   if (!Array.isArray(out.customItems)) out.customItems = [];
   if (out.distanceTier === undefined) out.distanceTier = 'f6to15';
+  if (out.tierPriceOverride === undefined) out.tierPriceOverride = null;
   if (out.panelUpgrade === undefined) out.panelUpgrade = false;
   if (out.taxAmount === undefined) out.taxAmount = EV_PRICES.tax;
   if (out.depositPct === undefined) out.depositPct = 0;
@@ -51,7 +53,7 @@ export interface EvTotals {
 }
 
 export function calcEvTotals(e: EvForm): EvTotals {
-  const tierAmt = evTierPrice(e.distanceTier as EvDistanceTier);
+  const tierAmt = evInstallPrice(e.distanceTier as EvDistanceTier, e.tierPriceOverride);
   const panelUpgradeAmt = e.panelUpgrade ? EV_PRICES.panelUpgrade : 0;
   // Custom items share the generator helpers: a row with no description contributes
   // nothing, and a non-finite amount reads as 0.

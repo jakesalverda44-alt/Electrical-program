@@ -801,7 +801,12 @@ function calcFormTotals(g: Record<string, unknown>) {
   // what decides the base it joins below.
   // A bundled charger install joins the non-taxable base with the other labor: the customer
   // supplies the charger, and the generator's own equipment lines carry the job's sales tax.
-  const evChargerAmt = g.evCharger ? (EV_TIER_PRICE[String(g.evChargerTier)] ?? 0) : 0;
+  const evOverride = Number(g.evChargerPriceOverride);
+  const evChargerAmt = g.evCharger
+    ? (g.evChargerPriceOverride !== null && g.evChargerPriceOverride !== undefined && Number.isFinite(evOverride)
+        ? evOverride
+        : (EV_TIER_PRICE[String(g.evChargerTier)] ?? 0))
+    : 0;
   const customSums = customItemSums(g.customItems);
   const customTaxableAmt    = customSums.taxable;
   const customNonTaxableAmt = customSums.nonTaxable;
@@ -949,7 +954,7 @@ async function extractFormFromNotes(notes: string): Promise<Record<string, unkno
     labor: ADDON_P.labor, permit: ADDON_P.permit, startup: ADDON_P.startup,
     discount: 0, discountType: '$', taxRate: 7, validDays: 30, depositPct: 50,
     notes: '', includeBreakdown: false, customItems: [],
-    evCharger: false, evChargerTier: 'f6to15',
+    evCharger: false, evChargerTier: 'f6to15', evChargerPriceOverride: null,
     ...parsed,
   };
   // Custom line items are free text with a price attached, so a hallucinated one would put an

@@ -366,3 +366,33 @@ describe('genPriceRows — bundled EV charger', () => {
     expect(rows.some(r => r.label.includes('Wall Connector'))).toBe(false);
   });
 });
+
+describe('calcGenTotals — bundled charger price override', () => {
+  const base = () => ({ ...blankGenForm(), taxRate: 7, evCharger: true as const });
+
+  it('defaults to no override, charging the tier price', () => {
+    expect(blankGenForm().evChargerPriceOverride).toBe(null);
+    expect(calcGenTotals({ ...base(), evChargerTier: 'f16to25' }).evChargerAmt).toBe(1275);
+  });
+
+  it('charges the typed price instead', () => {
+    const t = calcGenTotals({ ...base(), evChargerTier: 'f16to25', evChargerPriceOverride: 900 });
+    expect(t.evChargerAmt).toBe(900);
+  });
+
+  it('keeps the overridden charger non-taxable', () => {
+    const without = calcGenTotals({ ...blankGenForm(), taxRate: 7 });
+    const t = calcGenTotals({ ...base(), evChargerPriceOverride: 900 });
+    expect(t.nonTaxableBase).toBe(without.nonTaxableBase + 900);
+    expect(t.tax).toBe(without.tax);
+  });
+
+  it('ignores the override entirely when the charger is not on the job', () => {
+    const t = calcGenTotals({ ...blankGenForm(), evCharger: false, evChargerPriceOverride: 900 });
+    expect(t.evChargerAmt).toBe(0);
+  });
+
+  it('migrates a proposal saved before the override existed to no override', () => {
+    expect(migrateGenForm({}).evChargerPriceOverride).toBe(null);
+  });
+});
