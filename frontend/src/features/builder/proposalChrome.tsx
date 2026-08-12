@@ -22,7 +22,14 @@ export const BLUE_M = '#DBEAFE';
 
 // The sign sits outside the currency symbol — a credit line reads "-$200.00", not
 // "$-200.00". Only a negative custom line item can reach these as a negative today.
-export function fmt(n: number) { return (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US'); }
+export function fmt(n: number) {
+  const abs = Math.abs(n);
+  const hasCents = Math.round(abs * 100) % 100 !== 0;
+  return (n < 0 ? '-$' : '$') + abs.toLocaleString('en-US', {
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: 2,
+  });
+}
 export function fmtDec(n: number) {
   return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }

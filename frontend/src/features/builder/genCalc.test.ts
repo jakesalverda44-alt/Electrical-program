@@ -22,7 +22,7 @@ describe('calcGenTotals', () => {
     expect(t.total).toBe(t.netSubtotal + t.tax);
 
     // Deposit is half the total (rounded)
-    expect(t.deposit).toBe(Math.round(t.total * 0.5));
+    expect(t.deposit).toBe(Math.round(t.total * 0.5 * 100) / 100);
   });
 
   it('taxes goods only — labor, permit and startup are never taxed', () => {
@@ -39,8 +39,8 @@ describe('calcGenTotals', () => {
 
     // The service lines carry real money that must stay out of the tax base.
     expect(t.laborAmt + t.permitAmt + t.startupAmt).toBeGreaterThan(0);
-    expect(t.tax).toBe(Math.round(t.taxableBase * 0.07));
-    expect(t.tax).toBeLessThan(Math.round(t.subtotal * 0.07));
+    expect(t.tax).toBe(Math.round(t.taxableBase * 0.07 * 100) / 100);
+    expect(t.tax).toBeLessThan(Math.round(t.subtotal * 0.07 * 100) / 100);
   });
 
   it('a free promo extended warranty adds no tax', () => {
@@ -56,9 +56,9 @@ describe('calcGenTotals', () => {
   it('spreads a percentage discount pro-rata across taxable and non-taxable', () => {
     const form: GenForm = { ...blankGenForm(), discount: 10, discountType: '%', taxRate: 7 };
     const t = calcGenTotals(form);
-    expect(t.discountAmt).toBe(Math.round(t.subtotal * 0.1));
+    expect(t.discountAmt).toBe(Math.round(t.subtotal * 0.1 * 100) / 100);
     expect(t.taxedAmount).toBeCloseTo(t.taxableBase - (t.discountAmt * t.taxableBase) / t.subtotal, 6);
-    expect(t.tax).toBe(Math.round(t.taxedAmount * 0.07));
+    expect(t.tax).toBe(Math.round(t.taxedAmount * 0.07 * 100) / 100);
   });
 
   it('applies a flat dollar discount pro-rata to the tax base', () => {
@@ -123,7 +123,7 @@ describe('calcGenTotals — custom line items', () => {
     expect(t.customNonTaxableAmt).toBe(0);
     expect(t.taxableBase).toBe(none.taxableBase + 400);
     expect(t.nonTaxableBase).toBe(none.nonTaxableBase);
-    expect(t.tax).toBe(Math.round(t.taxableBase * 0.07));
+    expect(t.tax).toBe(Math.round(t.taxableBase * 0.07 * 100) / 100);
     expect(t.tax).toBeGreaterThan(none.tax);
   });
 
@@ -155,7 +155,7 @@ describe('calcGenTotals — custom line items', () => {
     expect(t.customTotal).toBe(535);
     expect(t.taxableBase + t.nonTaxableBase).toBe(t.subtotal);
     expect(t.taxedAmount).toBeCloseTo(t.taxableBase - (t.discountAmt * t.taxableBase) / t.subtotal, 6);
-    expect(t.tax).toBe(Math.round(t.taxedAmount * 0.07));
+    expect(t.tax).toBe(Math.round(t.taxedAmount * 0.07 * 100) / 100);
   });
 
   it('ignores a row whose description was never filled in', () => {
@@ -345,7 +345,7 @@ describe('calcGenTotals — bundled EV charger', () => {
     const t = calcGenTotals({ ...base(), evCharger: true, evChargerTier: 'f16to25', discount: 10, discountType: '%' });
     expect(t.taxableBase + t.nonTaxableBase).toBe(t.subtotal);
     expect(t.taxedAmount).toBeCloseTo(t.taxableBase - (t.discountAmt * t.taxableBase) / t.subtotal, 6);
-    expect(t.tax).toBe(Math.round(t.taxedAmount * 0.07));
+    expect(t.tax).toBe(Math.round(t.taxedAmount * 0.07 * 100) / 100);
   });
 });
 
@@ -394,5 +394,41 @@ describe('calcGenTotals — bundled charger price override', () => {
 
   it('migrates a proposal saved before the override existed to no override', () => {
     expect(migrateGenForm({}).evChargerPriceOverride).toBe(null);
+  });
+});
+
+describe('calcGenTotals — money keeps its cents', () => {
+  it('charges tax to the cent instead of the nearest dollar', () => {
+    // 7% of a taxable base carrying cents lands on a fraction of a dollar; rounding that
+    // to $47 is money the contract never accounts for.
+    const form: GenForm = { ...blankGenForm(), genPriceOverride: 675.5, taxRate: 7 };
+    const t = calcGenTotals(form);
+    expect(t.tax).toBe(Math.round(t.taxedAmount * 0.07 * 100) / 100);
+    expect(Number.isInteger(t.tax)).toBe(false);
+  });
+
+  it('carries cents from a hand-typed price all the way to the total', () => {
+    const form: GenForm = { ...blankGenForm(), labor: 3000.25, taxRate: 7 };
+    const t = calcGenTotals(form);
+    expect(t.laborAmt).toBe(3000.25);
+    expect(t.total).toBe(Math.round(t.total * 100) / 100);
+    expect(t.total % 1).not.toBe(0);
+  });
+
+  it('computes a percentage discount to the cent', () => {
+    const form: GenForm = { ...blankGenForm(), genPriceOverride: 675.5, discount: 7.5, discountType: '%' };
+    const t = calcGenTotals(form);
+    expect(t.discountAmt).toBe(Math.round(t.subtotal * 0.075 * 100) / 100);
+  });
+
+  it('computes the deposit to the cent', () => {
+    const form: GenForm = { ...blankGenForm(), labor: 3000.25, depositPct: 50 };
+    const t = calcGenTotals(form);
+    expect(t.deposit).toBe(Math.round(t.total * 0.5 * 100) / 100);
+  });
+
+  it('leaves whole-dollar jobs on whole dollars', () => {
+    const t = calcGenTotals(blankGenForm());
+    expect(t.total).toBe(Math.round(t.total * 100) / 100);
   });
 });

@@ -11,7 +11,17 @@ import { useSettings, useShowToast } from '../../contexts/AppContext';
 import { parseAddress } from '../../lib/address';
 
 // Sign outside the currency symbol, matching the proposal document: "-$200", not "$-200".
-function fmt(n: number) { return (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US'); }
+// Shows cents only when an amount has them, so a $15,430 job stays readable while a
+// $675.50 one is stated exactly. The proposal document itself always prints two decimals
+// (fmtDec) — this is the in-app summary chrome.
+function fmt(n: number) {
+  const abs = Math.abs(n);
+  const hasCents = Math.round(abs * 100) % 100 !== 0;
+  return (n < 0 ? '-$' : '$') + abs.toLocaleString('en-US', {
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: 2,
+  });
+}
 
 const INPUT_STYLE: React.CSSProperties = {
   width: '100%', font: 'inherit', fontSize: 13, fontWeight: 600,
@@ -222,7 +232,7 @@ export default function EvBuilderPage({ setGens, onSaved, editGen, productSwitch
               <div style={{ marginTop: 12 }}>
                 <Field label="Install Price">
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <input type="number" style={{ ...INPUT_STYLE, flex: '1 1 140px', width: 'auto' }}
+                    <input type="number" step="0.01" style={{ ...INPUT_STYLE, flex: '1 1 140px', width: 'auto' }}
                       value={form.tierPriceOverride ?? evTierPrice(form.distanceTier)}
                       onChange={e => {
                         const n = Number(e.target.value);
@@ -259,7 +269,7 @@ export default function EvBuilderPage({ setGens, onSaved, editGen, productSwitch
           <Section title="Pricing & Terms" icon="dollar">
             <Field label={`Discount (${form.discountType === '%' ? '%' : '$'})`}>
               <div style={{ display: 'flex', gap: 6 }}>
-                <input type="number" min={0} style={{ ...INPUT_STYLE, flex: 1 }} value={form.discount} onChange={e => set('discount', Number(e.target.value))}/>
+                <input type="number" min={0} step="0.01" style={{ ...INPUT_STYLE, flex: 1 }} value={form.discount} onChange={e => set('discount', Number(e.target.value))}/>
                 <div style={{ display: 'flex', borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)', flexShrink: 0 }}>
                   {(['$', '%'] as const).map(t => (
                     <button key={t} type="button" onClick={() => set('discountType', t)}
@@ -275,7 +285,7 @@ export default function EvBuilderPage({ setGens, onSaved, editGen, productSwitch
             {/* A flat dollar amount, not a rate: an EV quote's tax is a passthrough of the tax
                 APT paid on materials, so a percentage of the contract would drift from it. */}
             <Field label="Sales Tax ($)">
-              <input type="number" min={0} style={INPUT_STYLE} value={form.taxAmount} onChange={e => set('taxAmount', Number(e.target.value))}/>
+              <input type="number" min={0} step="0.01" style={INPUT_STYLE} value={form.taxAmount} onChange={e => set('taxAmount', Number(e.target.value))}/>
             </Field>
             <Field label="Proposal Valid For (days)">
               <input type="number" min={1} max={365} style={INPUT_STYLE} value={form.validDays} onChange={e => set('validDays', Number(e.target.value))}/>
@@ -298,7 +308,7 @@ export default function EvBuilderPage({ setGens, onSaved, editGen, productSwitch
                       {/* No min={0}: a negative amount reads on the proposal as a named credit.
                           A part-typed value like "-" parses to NaN and is dropped, so the field
                           keeps what the rep is mid-way through typing. */}
-                      <input type="number" step={1} style={{ ...INPUT_STYLE, flex: '0 0 120px', width: 120 }} value={it.amount}
+                      <input type="number" step="0.01" style={{ ...INPUT_STYLE, flex: '0 0 120px', width: 120 }} value={it.amount}
                         onChange={e => { const n = Number(e.target.value); if (Number.isFinite(n)) patchCustomItem(it.id, { amount: n }); }}/>
                       <button type="button" onClick={() => removeCustomItem(it.id)} aria-label={`Remove ${it.desc.trim() || 'line item'}`}
                         style={{ flexShrink: 0, width: 32, height: 32, borderRadius: 9, cursor: 'pointer', fontSize: 14, fontWeight: 700,
