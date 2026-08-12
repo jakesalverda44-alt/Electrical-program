@@ -1,4 +1,5 @@
 import { DEFAULT_PRICES, LC_MODELS, GEN_SPECS, NEW_INSTALL_ONLY, LOAD_CENTER_UNITS, GenForm, CustomItem } from './genData';
+import { EV_PRICES, evTierLabel } from './evData';
 
 interface DefaultOverrides {
   gen_default_labor?: string;
@@ -18,6 +19,7 @@ export function blankGenForm(overrides?: DefaultOverrides): GenForm {
     liftType: 'none', genStand: 'none', removal: false,
     extWarranty: 'none', extWarrantyPromoStart: '', extWarrantyPromoEnd: '',
     silverServicePromo: 'none',
+    evCharger: false, evChargerTier: 'f6to15',
     feedFt: 0, genSide: '', panelRel: '', panelFt: 0,
     labor:   Number(overrides?.gen_default_labor)    || DEFAULT_PRICES.labor,
     permit:  Number(overrides?.gen_default_permit)   || DEFAULT_PRICES.permit,
@@ -73,6 +75,8 @@ export function migrateGenForm(raw: Record<string, unknown>): Record<string, unk
   // Checked with isArray rather than for undefined so a proposal holding a malformed value
   // (null, an object, a string) also lands on an empty list instead of crashing the builder.
   if (!Array.isArray(out.customItems)) out.customItems = [];
+  if (out.evCharger === undefined) out.evCharger = false;
+  if (out.evChargerTier === undefined) out.evChargerTier = 'f6to15';
   return out;
 }
 
@@ -153,6 +157,8 @@ export interface GenTotals {
   emPanelAmt: number;
   gasLineAmt: number;
   extraWireAmt: number;
+  /** Bundled Tesla Wall Connector install — non-taxable, like the other labor lines. */
+  evChargerAmt: number;
   /** Hand-typed line items flagged as goods — folded into taxableBase. */
   customTaxableAmt: number;
   /** Hand-typed line items flagged as services — folded into nonTaxableBase. */
@@ -200,6 +206,10 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const startupAmt = g.coolingType === 'liquid-cooled' ? DEFAULT_PRICES.startupLC : Number(g.startup);
   // A custom item can be either goods or work, so the salesperson's per-item flag — not the
   // item's position in this list — decides which base it joins.
+  // A bundled charger install is priced off the standalone tier list, and joins the
+  // non-taxable base with the other labor: the customer supplies the charger itself, and
+  // the generator's own equipment lines already carry the job's sales tax.
+  const evChargerAmt = g.evCharger ? (EV_PRICES[g.evChargerTier] ?? 0) : 0;
   const custom = activeCustomItems(g);
   const customTaxableAmt    = custom.filter(it =>  it.taxable).reduce((sum, it) => sum + customItemAmount(it), 0);
   const customNonTaxableAmt = custom.filter(it => !it.taxable).reduce((sum, it) => sum + customItemAmount(it), 0);
@@ -211,7 +221,7 @@ export function calcGenTotals(g: GenForm): GenTotals {
   // the customer bundled into the non-taxable "Labor & Electrical" line.
   // A promo extended warranty is $0 here, so it contributes no tax by construction.
   const taxableBase    = genP + padAmt + genStandAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt + customTaxableAmt;
-  const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt + customNonTaxableAmt;
+  const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt + evChargerAmt + customNonTaxableAmt;
   const subtotal   = taxableBase + nonTaxableBase;
   const discountAmt = g.discountType === '%'
     ? Math.round(subtotal * ((Number(g.discount) || 0) / 100))
@@ -226,7 +236,7 @@ export function calcGenTotals(g: GenForm): GenTotals {
   const total      = netSubtotal + tax;
   const deposit    = Math.round(total * ((Number(g.depositPct) || 50) / 100));
 
-  return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, customTaxableAmt, customNonTaxableAmt, customTotal, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
+  return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, evChargerAmt, customTaxableAmt, customNonTaxableAmt, customTotal, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
 }
 
 export function genPriceRows(g: GenForm, t: GenTotals, fmt: (n: number) => string) {
@@ -250,6 +260,9 @@ export function genPriceRows(g: GenForm, t: GenTotals, fmt: (n: number) => strin
     const years = g.silverServicePromo === '2yr' ? 2 : 1;
     const value = DEFAULT_PRICES.silverService * years;
     rows.push({ label: `${years}-Year Silver Service — Promo: $${value.toLocaleString()} → FREE`, amount: fmt(0) });
+  }
+  if (t.evChargerAmt) {
+    rows.push({ label: `Tesla Wall Connector Installation — ${evTierLabel(g.evChargerTier)}`, amount: fmt(t.evChargerAmt) });
   }
   for (const it of activeCustomItems(g)) {
     rows.push({ label: it.desc.trim(), amount: fmt(customItemAmount(it)) });
