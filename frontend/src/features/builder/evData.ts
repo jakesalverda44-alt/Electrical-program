@@ -28,6 +28,16 @@ export function evTierPrice(tier: EvDistanceTier): number {
   return EV_PRICES[tier] ?? 0;
 }
 
+/** The install price actually charged: a hand-typed override when the rep set one,
+ *  otherwise the tier's standard price. Mirrors getGenPrice/genPriceOverride on the
+ *  generator side. A non-finite override (empty field, NaN) falls back to the tier. */
+export function evInstallPrice(tier: EvDistanceTier, override?: number | null): number {
+  if (override !== null && override !== undefined && Number.isFinite(Number(override))) {
+    return Number(override);
+  }
+  return evTierPrice(tier);
+}
+
 export function evTierLabel(tier: EvDistanceTier): string {
   return EV_TIERS.find(t => t.key === tier)?.label ?? '';
 }
@@ -47,6 +57,9 @@ export interface EvForm {
 
   /** Exactly one tier is charged — the run from the feeding panel to the charger. */
   distanceTier: EvDistanceTier;
+  /** Hand-typed install price. Null uses the tier's standard price. Cleared whenever the
+   *  tier changes, so switching tiers can't silently keep the old tier's number. */
+  tierPriceOverride: number | null;
   /** Service upgrade to 200A. Rare, and charged flat when it comes up. */
   panelUpgrade: boolean;
 

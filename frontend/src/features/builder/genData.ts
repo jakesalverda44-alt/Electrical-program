@@ -335,6 +335,9 @@ export interface GenForm {
    *  serves both. The charger itself is customer-supplied either way. */
   evCharger: boolean;
   evChargerTier: 'le5' | 'f6to15' | 'f16to25';
+  /** Hand-typed price for the bundled charger install. Null uses the tier's standard
+   *  price; cleared whenever the tier changes. */
+  evChargerPriceOverride: number | null;
   customItems: CustomItem[];
   notes: string;
   includeBreakdown: boolean;
