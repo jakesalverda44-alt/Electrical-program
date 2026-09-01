@@ -15,7 +15,13 @@ BACK_PID="$RUN/backend.pid"
 FRONT_PID="$RUN/frontend.pid"
 BACK_LOG="$RUN/backend.log"
 FRONT_LOG="$RUN/frontend.log"
-DB_CONTAINER="electrical-program-db-1"
+# Resolved from docker compose rather than hardcoded: the container name is
+# derived from the checkout's directory name, which differs between machines.
+db_container() {
+  local id
+  id="$(cd "$REPO" && docker compose ps -q db 2>/dev/null | head -1)"
+  [ -n "$id" ] && echo "$id" || echo "electrical-program-db-1"
+}
 
 port_busy() { lsof -ti tcp:"$1" >/dev/null 2>&1; }
 alive()     { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
@@ -24,7 +30,7 @@ start_db() {
   echo "▸ Postgres (Docker)…"
   (cd "$REPO" && docker compose up -d db >/dev/null 2>&1)
   for _ in $(seq 1 30); do
-    if docker exec "$DB_CONTAINER" pg_isready -U postgres >/dev/null 2>&1; then
+    if docker exec "$(db_container)" pg_isready -U postgres >/dev/null 2>&1; then
       echo "  ✓ database ready"; return 0
     fi
     sleep 1
@@ -103,8 +109,8 @@ cmd_reset_db() {
 cmd_status() {
   local email; email="$(grep -E '^SEED_ADMIN_EMAIL=' "$REPO/backend/.env" 2>/dev/null | cut -d= -f2-)"
   echo "── CRM sandbox status ─────────────────────────────"
-  docker exec "$DB_CONTAINER" pg_isready -U postgres >/dev/null 2>&1 \
-    && echo "  Postgres : up (container $DB_CONTAINER)" \
+  docker exec "$(db_container)" pg_isready -U postgres >/dev/null 2>&1 \
+    && echo "  Postgres : up (container $(db_container))" \
     || echo "  Postgres : DOWN"
   port_busy 3001 && echo "  Backend  : up   → http://localhost:3001/api/health" || echo "  Backend  : down"
   port_busy 3000 && echo "  Frontend : up   → http://localhost:3000"            || echo "  Frontend : down"
@@ -125,7 +131,7 @@ cmd_logs() {
 
 cmd_seed() {
   echo "▸ Seeding sample data…"
-  docker exec -i "$DB_CONTAINER" psql -U postgres -d electrical_crm \
+  docker exec -i "$(db_container)" psql -U postgres -d electrical_crm \
     < "$REPO/database/seed_sample_data.sql"
 }
 
