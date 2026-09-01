@@ -1,14 +1,62 @@
-# Running the Electrical CRM locally on a Mac
+# Working on the Electrical CRM on a Mac
 
-This gets a complete, self-contained copy of the CRM running on your MacBook —
-its own database, its own data, no connection to the live Render deployment.
-Nothing you do locally can affect production.
+Two different jobs, two different amounts of setup. Start with the first one —
+most work only needs that.
 
 ---
 
-## First time: three steps
+## Just editing the code
 
-### 1. Install the three prerequisites
+If you want the code on your Mac to read and edit in your terminal, this is the
+whole setup:
+
+```bash
+git clone https://github.com/jakesalverda44-alt/Electrical-program.git
+cd Electrical-program
+```
+
+That's it. No Docker, no Postgres, no database. Edit anything, commit, push.
+
+Worth adding, still no database required:
+
+```bash
+brew install node        # if you don't have it — needs Node 20+
+cd backend  && npm install
+cd ../frontend && npm install
+```
+
+That buys you working autocomplete and go-to-definition in your editor, plus:
+
+```bash
+cd backend && npm run typecheck   # catch type errors before pushing
+cd backend && npm test            # tests that need a database skip themselves
+```
+
+Same two commands work in `frontend/`.
+
+### Getting your edits back up
+
+```bash
+git add -A
+git commit -m "what changed"
+git push
+```
+
+Push to a branch and open a PR rather than committing to `main` — `main` is what
+Render deploys, so a push there goes live.
+
+---
+
+## Actually running the app
+
+Only needed when you want to click through a change in a browser instead of just
+editing it. This gives you a complete, self-contained copy — its own database,
+its own data, no connection to the live Render deployment. Nothing you do
+locally can affect production.
+
+### First time: three steps
+
+#### 1. Install the three prerequisites
 
 ```bash
 # Homebrew (skip if you already have it)
@@ -22,14 +70,16 @@ Then **open Docker Desktop once** from Applications and wait for the whale icon
 in the menu bar to stop animating. Docker has to be running for the database to
 start.
 
-### 2. Get the code
+#### 2. Get the code
+
+Already done if you followed the section above.
 
 ```bash
 git clone https://github.com/jakesalverda44-alt/Electrical-program.git
 cd Electrical-program
 ```
 
-### 3. Run setup
+#### 3. Run setup
 
 ```bash
 ./setup-mac.sh
@@ -42,7 +92,7 @@ generated once and not stored anywhere else.
 
 ---
 
-## Every day after that
+### Every day after that
 
 ```bash
 ./crm.sh              # start database + backend + frontend
@@ -65,7 +115,7 @@ touches your local copy.
 
 ---
 
-## What's actually running
+### What's actually running
 
 | Piece | Where | What it is |
 |---|---|---|
@@ -86,7 +136,7 @@ later does nothing; to get a new login, use `./crm.sh reset-db`.
 
 ---
 
-## Optional integrations
+### Optional integrations
 
 The AI proposal builder, Google Drive folders, Cloudinary uploads, and the Zapier
 lead hooks are all **off** on a local copy. The app runs fine without them —
@@ -99,7 +149,7 @@ paste in a key, then `./crm.sh restart`. See `.env.example` for what each one is
 
 ---
 
-## Loading your real data (optional)
+### Loading your real data (optional)
 
 The local copy starts empty. If you want a snapshot of live data to work with:
 
@@ -122,7 +172,7 @@ delete `~/crm-snapshot.sql` when you're done with it.
 
 ---
 
-## When something goes wrong
+### When something goes wrong
 
 **`Cannot connect to the Docker daemon`** — Docker Desktop isn't running. Open
 it from Applications and wait for the menu-bar whale to settle.
