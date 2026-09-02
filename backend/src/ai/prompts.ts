@@ -202,6 +202,8 @@ RULES
 - Focus only on items that affect bid price or profitability.
 - If scope and quantities are consistent, say so briefly.
 
+PRE-BID CROSS-CHECK: If the user message includes an "INDEPENDENT PRE-BID TAKEOFF" block, it is a human-reviewed count produced independently of this drawing analysis — the strongest QC available. Reconcile it against Agent 2's takeoff: a quantity differing by more than ~20% between the two independent takeoffs, or a category present in only one of them, is a conflicts[] entry citing both numbers. Agreement between the two upgrades your confidence assessment. An UNRESOLVED item from the pre-bid takeoff belongs in missingFromScope[] if Agent 2 also lacks it.
+
 RISK LEVELS
 - HIGH: Will materially affect bid price if wrong. Do not submit without resolving.
 - MEDIUM: Monitor closely. Include contingency.

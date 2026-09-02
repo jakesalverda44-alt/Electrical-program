@@ -33,6 +33,7 @@ import { buildAgent4UserMessage } from '../ai/agent4Message';
 import { parseMoney } from '../utils/money';
 import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
+import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
 const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'warehouse', 'restaurant', 'medical', 'retail', 'other'];
@@ -584,6 +585,23 @@ async function runPipeline(
   // ── Agent 3 ─────────────────────────────────────────────────────────────────
   try {
     await updateStatus('agent3_running');
+
+    // Task 6 — feed Agent 3 the independent pre-bid takeoff (Cowork package,
+    // bid_takeoffs kind='prebid') when one exists, so QC can reconcile two
+    // independent counts instead of checking Agent 2 against Agent 1's own
+    // numbers alone. A missing/unreadable pre-bid row degrades to today's
+    // behavior — never let this block the run.
+    let prebidCrossCheck: string | null = null;
+    try {
+      const { rows: prebidRows } = await pool.query(
+        `SELECT categories, line_items FROM bid_takeoffs WHERE bid_id=$1 AND kind='prebid'`,
+        [bidId]
+      );
+      prebidCrossCheck = buildPrebidCrossCheck(prebidRows[0] ?? null);
+    } catch (err) {
+      logger.warn({ err, bidId }, '[takeoff] pre-bid cross-check load failed — continuing without it');
+    }
+
     const resp = await callWithRetry(() => client.messages.create({
       model: config.modelA3,
       max_tokens: config.maxTokensA3,
@@ -592,7 +610,7 @@ async function runPipeline(
       messages: [{
         role: 'user',
         // Task 4.1 — compact in the request body (both prior agents' outputs).
-        content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}\n\n---\n\nESTIMATOR OUTPUT:\n\n${compactForHandoff(agent2Output)}`,
+        content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}\n\n---\n\nESTIMATOR OUTPUT:\n\n${compactForHandoff(agent2Output)}${prebidCrossCheck ? `\n\n---\n\n${prebidCrossCheck}` : ''}`,
       }],
     }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
     agent3Output = extractText(resp);
