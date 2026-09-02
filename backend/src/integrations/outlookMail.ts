@@ -24,6 +24,9 @@ export interface GraphMailMessage {
   receivedDateTime: string;
   bodyPreview: string;
   body: string;               // full plain-text-ish body for date parsing
+  bodyHtml: string | null;    // raw HTML body when the message is HTML, else null — lets
+                               // format-specific parsers (e.g. Procore) pull real <a href> links
+                               // that toPlainText() strips out of `body`. Purely additive.
   webLink: string;
   categories: string[];
   hasAttachments: boolean;
@@ -66,6 +69,7 @@ function mapRaw(m: GraphMessageRaw): GraphMailMessage {
     receivedDateTime: m.receivedDateTime || new Date().toISOString(),
     bodyPreview: (m.bodyPreview || '').trim(),
     body: toPlainText(m.body?.content || m.bodyPreview || '', m.body?.contentType),
+    bodyHtml: m.body?.contentType?.toLowerCase() === 'html' ? (m.body?.content || null) : null,
     webLink: m.webLink || '',
     categories: m.categories || [],
     hasAttachments: !!m.hasAttachments,

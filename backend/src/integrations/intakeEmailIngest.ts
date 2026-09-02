@@ -1,6 +1,8 @@
 import { pool } from '../db/pool';
 import { logger } from '../utils/logger';
 import { fetchTaggedBidEmails, listAttachmentNames, GraphMailMessage } from './outlookMail';
+import { extractCandidates } from '../utils/customerMatch';
+import { detectFormat, parseProcore, ProcoreLinks } from './intakeFormats';
 
 // Light, NO-AI parsing + ingest of "new bid"-tagged Outlook emails into the Intake Inbox.
 // Every imported item is fully editable in the review UI before it becomes a bid.
@@ -97,13 +99,28 @@ export function parseDueDate(text: string, now = new Date()): string | null {
   return null;
 }
 
+// Some senders (Procore) duplicate the project name a second time in the same string —
+// once as the leading segment, once again later — with nothing to distinguish them but the
+// separator between the two copies. Collapses "X: ... X ..." down to "X" when the leading
+// segment (before the first separator) reappears verbatim later in the string. Guarded by a
+// minimum length so a one-character/word "lead" (e.g. the "7" in "7-Eleven") never falsely
+// triggers on an unrelated later occurrence.
+function collapseSelfDuplication(s: string): string {
+  const m = /^(.+?)\s*[:\-–—]\s*/.exec(s);
+  if (!m) return s;
+  const lead = m[1].trim();
+  if (lead.length >= 4 && s.slice(m[0].length).includes(lead)) return lead;
+  return s;
+}
+
 /**
  * Derive a clean project name from the subject by stripping common invitation prefixes
- * and trailing "due ..." fragments. Falls back to the raw subject. Handles the three
- * shapes we actually receive:
+ * and trailing "due ..." fragments. Falls back to the raw subject. Handles the shapes we
+ * actually receive:
  *   - "Invitation to Bid - Firestone - (Prototype)"            (prefix + separator)
  *   - "Invitation to Bid from <GC> for <Project>"              (Kingdom-style)
  *   - "Reminder to submit your Bid for <Project>"              (Procore-style)
+ *   - "<Project>: Invitation to bid on <Project>"              (Procore-style, suffix + self-dup)
  */
 export function parseProjectName(subject: string): string {
   let s = subject.trim();
@@ -124,9 +141,16 @@ export function parseProjectName(subject: string): string {
     }
   }
 
+  // Procore-style: the invitation phrase runs as a SUFFIX instead of a prefix
+  // ("<Project>: Invitation to bid on <Project>") — cut everything from it onward.
+  s = s.replace(/[:\-–—]\s*(?:invitation|invite|reminder)\s+to\s+(?:bid|submit)\b.*$/i, '');
+
   // Drop a trailing "… - Bids Due 6/20" fragment and any dangling separator.
   s = s.replace(/\s*[-–—|(]?\s*(bids?\s*due|due\s*date|due|proposals?\s*due)\b.*$/i, '');
   s = s.replace(/\s*[-–—|]\s*$/, '').trim();
+
+  s = collapseSelfDuplication(s);
+
   return s || subject.trim();
 }
 
@@ -148,7 +172,7 @@ export function parseGc(subject: string, fromName: string | null, fromEmail: str
 // Free-mail and bid-platform domains that identify a *person* or a *relay service* — never
 // a specific general contractor. We must not treat two invitations sharing one of these
 // domains as coming from the same GC.
-const NON_GC_DOMAINS = new Set([
+export const NON_GC_DOMAINS = new Set([
   'gmail.com', 'googlemail.com', 'yahoo.com', 'ymail.com', 'outlook.com', 'hotmail.com',
   'live.com', 'msn.com', 'aol.com', 'icloud.com', 'me.com', 'mac.com', 'comcast.net',
   'att.net', 'verizon.net', 'sbcglobal.net', 'bellsouth.net', 'proton.me', 'protonmail.com',
@@ -220,32 +244,77 @@ function snippet(text: string, max = 400): string {
 /**
  * Contact for the invitation: prefer a sender display name that's an actual person
  * (i.e. different from the GC company we derived), otherwise fall back to the address
- * the email came from. So Kingdom → "Ian Nichols", Summit → "estimating@summitgc.net".
+ * the email came from — UNLESS that address is on a known relay/free-mail domain
+ * (NON_GC_DOMAINS), which is never a usable contact. So Kingdom → "Ian Nichols", Summit →
+ * "estimating@summitgc.net", a Procore relay → null (blank beats junk; the reviewer still
+ * sees the sender in the FROM OUTLOOK panel).
  */
 export function parseContact(fromName: string | null, fromEmail: string | null, gc: string | null): string | null {
   const name = fromName?.trim();
   if (name && name !== (gc || '').trim()) return name;
-  return (fromEmail && fromEmail.trim()) || name || null;
+  const email = fromEmail?.trim();
+  if (email) {
+    const domain = emailDomain(email);
+    if (domain && NON_GC_DOMAINS.has(domain)) return null;
+    return email;
+  }
+  return name || null;
+}
+
+/**
+ * Unwrap a raw GC string for the intake DISPLAY prefill only — accept-time
+ * canonicalization (resolveCustomer) is untouched and remains the source of truth for the
+ * bid's final GC. Runs the same junk-wrapper unwrapping used at accept time
+ * (extractCandidates) so the reviewer sees "Bay to Bay Properties, LLC" instead of
+ * "Estimating Department (Bay to Bay Properties, LLC)" while the item is still pending.
+ */
+export function displayGc(raw: string | null): string | null {
+  if (!raw || !raw.trim()) return raw;
+  const [candidate] = extractCandidates(raw.trim());
+  return candidate?.trim() || raw;
 }
 
 async function importOne(msg: GraphMailMessage): Promise<boolean> {
-  const name = parseProjectName(msg.subject) || '(no subject)';
+  // Format-specific parser (Procore today) — its non-null fields win over the generic parse,
+  // field by field; the generic parse fills in whatever a format parser didn't find.
+  const format = detectFormat(msg);
+  const fmt = format === 'procore' ? parseProcore(msg) : null;
+
+  const name = fmt?.name || parseProjectName(msg.subject) || '(no subject)';
+  const genericRawGc = parseGc(msg.subject, msg.fromName, msg.from);
   // Keep one GC company mapped to one name — reuse the name already on file for this
   // sender's domain when we have one, so the same GC doesn't land under several spellings.
-  const gc = await canonicalGc(parseGc(msg.subject, msg.fromName, msg.from), msg.from);
-  const loc = parseLocation(msg.subject, msg.body);
-  const contact = parseContact(msg.fromName, msg.from, gc);
-  const due = parseDueDate(`${msg.subject}\n${msg.body}`);
+  // (canonicalGc is a pass-through on relay/free-mail domains like procoretech.com, so this
+  // is a no-op for Procore senders — exactly the case where domain-based reuse shouldn't apply.)
+  const rawGc = await canonicalGc(fmt?.gc || genericRawGc, msg.from);
+  const loc = fmt?.loc || parseLocation(msg.subject, msg.body);
+  // parseContact's "is the sender name just the GC company?" check must compare against the
+  // GENERIC raw gc (pre-unwrap) — it's the same string parseGc fell back to from fromName in
+  // the junk-wrapped case, so they're equal there; unwrapping first would make them look
+  // "different" and wrongly hand the junk-wrapped string back as the contact.
+  const contact = fmt?.contact || parseContact(msg.fromName, msg.from, genericRawGc);
+  // Unwrap junk wrappers ("Estimating Department (Bay to Bay Properties, LLC)") for the
+  // DISPLAY/prefill only — accept-time canonicalization is untouched. Idempotent when fmt.gc
+  // is already unwrapped (extractCandidates on a plain name is a no-op).
+  const gc = displayGc(rawGc);
+  const due = fmt?.due || parseDueDate(`${msg.subject}\n${msg.body}`);
+  const dueTime = fmt?.dueTime || null;
+  const links: ProcoreLinks = (fmt?.links && Object.keys(fmt.links).length) ? fmt.links : {};
   // Prefer the full (HTML-stripped) body over bodyPreview, which on Mailchimp-style
-  // senders is mostly invisible spacer padding. snippet() strips those either way.
-  const body = snippet(msg.body?.trim() ? msg.body : msg.bodyPreview);
+  // senders is mostly invisible spacer padding. snippet() strips those either way. This is
+  // the raw email snippet shown in the FROM OUTLOOK panel — always the real email, never
+  // replaced by the parser summary.
+  const bodySnippet = snippet(msg.body?.trim() ? msg.body : msg.bodyPreview);
+  // Notes prefill: a format parser's one-line summary when present, otherwise today's
+  // behavior (the raw snippet).
+  const notes = fmt?.summary || bodySnippet;
 
   // Dedupe on the Graph message id. For an item already imported, backfill a missing
-  // location/contact/due while it's still pending — never overwrite a value the reviewer set
-  // or any other field. This lets a Refresh fill these in on items imported earlier (e.g.
-  // ones whose due date the older parser couldn't read).
+  // location/contact/due/links/due_time while it's still pending — never overwrite a value
+  // the reviewer set or any other field. This lets a Refresh fill these in on items imported
+  // earlier (e.g. ones whose due date the older parser couldn't read).
   const { rows: existing } = await pool.query(
-    'SELECT id, status, loc, contact, due FROM intake_items WHERE graph_message_id=$1', [msg.id]
+    'SELECT id, status, loc, contact, due, due_time, links FROM intake_items WHERE graph_message_id=$1', [msg.id]
   );
   if (existing.length) {
     const ex = existing[0];
@@ -255,6 +324,10 @@ async function importOne(msg: GraphMailMessage): Promise<boolean> {
       if ((ex.loc == null || ex.loc === '') && loc) { vals.push(loc); sets.push(`loc=$${vals.length}`); }
       if ((ex.contact == null || ex.contact === '') && contact) { vals.push(contact); sets.push(`contact=$${vals.length}`); }
       if ((ex.due == null || ex.due === '') && due) { vals.push(due); sets.push(`due=$${vals.length}`); }
+      if ((ex.due_time == null || ex.due_time === '') && dueTime) { vals.push(dueTime); sets.push(`due_time=$${vals.length}`); }
+      if ((!ex.links || Object.keys(ex.links).length === 0) && Object.keys(links).length) {
+        vals.push(JSON.stringify(links)); sets.push(`links=$${vals.length}::jsonb`);
+      }
       if (sets.length) {
         vals.push(ex.id);
         await pool.query(`UPDATE intake_items SET ${sets.join(', ')}, updated_at=now() WHERE id=$${vals.length}`, vals);
@@ -267,11 +340,11 @@ async function importOne(msg: GraphMailMessage): Promise<boolean> {
   try {
     await pool.query(
       `INSERT INTO intake_items
-         (name, gc, loc, contact, due, notes, source, status, body_snippet, graph_message_id,
-          web_link, from_email, received_at, attachment_names, created_by_name)
-       VALUES ($1,$2,$3,$4,$5,$6,'email','pending',$7,$8,$9,$10,$11,$12,$13)
+         (name, gc, loc, contact, due, due_time, notes, source, status, body_snippet, links,
+          graph_message_id, web_link, from_email, received_at, attachment_names, created_by_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'email','pending',$8,$9::jsonb,$10,$11,$12,$13,$14,$15)
        ON CONFLICT (graph_message_id) WHERE graph_message_id IS NOT NULL DO NOTHING`,
-      [name, gc, loc, contact, due, body, body,
+      [name, gc, loc, contact, due, dueTime, notes, bodySnippet, JSON.stringify(links),
        msg.id, msg.webLink, msg.from, msg.receivedDateTime, attachmentNames.length ? attachmentNames : null,
        'Outlook (new bid)']
     );

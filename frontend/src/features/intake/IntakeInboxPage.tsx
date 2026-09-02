@@ -15,6 +15,7 @@ interface IntakeItem {
   sheets: number | null;
   sq_ft: number | null;
   due: string | null;
+  due_time: string | null;       // e.g. "3:00 PM" — read-only display alongside `due`
   notes: string | null;
   source: string;
   status: 'pending' | 'accepted' | 'declined';
@@ -28,9 +29,14 @@ interface IntakeItem {
   received_at: string | null;
   body_snippet: string | null;
   attachment_names: string[] | null;
+  // Links a format parser pulled out of the invitation (Procore's "View in Procore" /
+  // "Download Documents"), e.g. { procore?: string; documents?: string }.
+  links: { procore?: string; documents?: string } | null;
   // Set when the "new bid" email was sent to the team from the Accept panel.
   team_notified_at: string | null;
   team_notified_to: string[] | null;
+  // Duplicate/REBID hints (pending items only) — informational, no auto-merge.
+  similar?: { kind: 'intake' | 'bid'; id: string; name: string; stage?: string }[];
 }
 
 const DECLINE_REASONS = [
@@ -53,6 +59,11 @@ const inputStyle: React.CSSProperties = {
   width: '100%', boxSizing: 'border-box', font: 'inherit', fontSize: 13, fontWeight: 600,
   color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border2)',
   borderRadius: 9, padding: '8px 10px', outline: 'none',
+};
+
+const outlookLinkStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700,
+  color: 'var(--blue)', textDecoration: 'none',
 };
 
 export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props) {
@@ -235,7 +246,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
     );
   };
 
-  const FormFields = (form: typeof BLANK, set: (k: keyof typeof BLANK, v: string) => void) => (
+  const FormFields = (form: typeof BLANK, set: (k: keyof typeof BLANK, v: string) => void, dueTime?: string | null) => (
     <>
       {([['name', 'Bid Name *'], ['gc', 'General Contractor'], ['loc', 'Location'], ['contact', 'Contact']] as const).map(([k, label]) => (
         <div key={k} style={{ marginBottom: 12 }}>
@@ -245,7 +256,12 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
       ))}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10, marginBottom: 12 }}>
         <div>
-          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 5 }}>Due Date</label>
+          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', display: 'block', marginBottom: 5 }}>
+            Due Date
+            {/* Read-only — the date input above stays the one editable field; the parsed
+                clock reading (if any) has nowhere else to live yet. */}
+            {dueTime && <span style={{ textTransform: 'none', letterSpacing: 0, color: 'var(--text2)', fontWeight: 600 }}> · {dueTime}</span>}
+          </label>
           <input type="date" style={inputStyle} value={form.due} onChange={e => set('due', e.target.value)} />
         </div>
         <div>
@@ -316,17 +332,57 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
               ))}
             </div>
           )}
-          {selected.web_link && (
-            <a href={selected.web_link} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'var(--blue)', textDecoration: 'none' }}>
-              <Icon name="doc" size={13} stroke={2}/> Open original email
-            </a>
+          {(selected.web_link || selected.links?.procore || selected.links?.documents) && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+              {selected.web_link && (
+                <a href={selected.web_link} target="_blank" rel="noopener noreferrer" style={outlookLinkStyle}>
+                  <Icon name="doc" size={13} stroke={2}/> Open original email
+                </a>
+              )}
+              {selected.links?.procore && (
+                <a href={selected.links.procore} target="_blank" rel="noopener noreferrer" style={outlookLinkStyle}>
+                  <Icon name="cloud" size={13} stroke={2}/> Open in Procore
+                </a>
+              )}
+              {selected.links?.documents && (
+                <a href={selected.links.documents} target="_blank" rel="noopener noreferrer" style={outlookLinkStyle}>
+                  <Icon name="cloudup" size={13} stroke={2}/> Download Documents
+                </a>
+              )}
+            </div>
           )}
         </div>
       )}
 
       {selected.status === 'pending' ? (
         <>
-          {FormFields(edit, (k, v) => setEdit(prev => ({ ...prev, [k]: v })))}
+          {/* Duplicate/REBID hints — informational only, no auto-merge. */}
+          {selected.similar && selected.similar.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+              {selected.similar.map(s => (
+                <div key={`${s.kind}-${s.id}`} style={{
+                  display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 700,
+                  color: 'var(--amber-d, var(--amber))', background: 'var(--amber-soft)',
+                  border: '1px solid var(--amber)', borderRadius: 8, padding: '7px 10px', lineHeight: 1.4,
+                }}>
+                  <Icon name="sync" size={13} stroke={2.2} style={{ flexShrink: 0 }}/>
+                  {s.kind === 'bid' ? (
+                    <span>
+                      Possible rebid of{' '}
+                      {/* Full navigation (not client-side routing) — keeps this component
+                          Router-context-free, matching how it's unit-tested. */}
+                      <a href={`/bid/${s.id}`} style={{ color: 'inherit', textDecoration: 'underline' }}>“{s.name}”</a>
+                      {' '}(bid — {s.stage || 'active'})
+                    </span>
+                  ) : (
+                    <span>Possible duplicate of “{s.name}” (pending intake)</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {FormFields(edit, (k, v) => setEdit(prev => ({ ...prev, [k]: v })), selected.due_time)}
 
           {/* Opt-in: email this new commercial bid to the team (off by default). */}
           <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px', marginBottom: 12 }}>

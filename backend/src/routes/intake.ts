@@ -12,6 +12,7 @@ import { uploadFile } from '../services/googleDrive';
 import { logger } from '../utils/logger';
 import { sendBidNotification, getBidNotifyEmails } from '../email/bidNotification';
 import { isGraphMailConfigured } from '../email/graphMailer';
+import { findSimilar, SimilarCandidate } from '../utils/intakeSimilar';
 
 const router = Router();
 
@@ -95,7 +96,25 @@ router.get('/', requireAuth, async (_req, res) => {
      WHERE status = 'pending' OR updated_at > now() - interval '7 days'
      ORDER BY (status <> 'pending'), created_at DESC`
   );
-  res.json(rows);
+
+  // Duplicate/REBID hints, informational only — pending items get up to 3 "similar" chips
+  // computed against every OTHER pending intake item and every non-deleted bid. This is the
+  // list payload the detail pane already reads from, so no extra round-trip on item-select.
+  const pending = rows.filter(r => r.status === 'pending');
+  let withSimilar = rows;
+  if (pending.length) {
+    const { rows: bidRows } = await pool.query(`SELECT id, name, stage FROM bids WHERE deleted_at IS NULL`);
+    const bidCandidates: SimilarCandidate[] = bidRows.map(b => ({ kind: 'bid', id: b.id, name: b.name, stage: b.stage }));
+    withSimilar = rows.map(item => {
+      if (item.status !== 'pending') return item;
+      const intakeCandidates: SimilarCandidate[] = pending
+        .filter(o => o.id !== item.id)
+        .map(o => ({ kind: 'intake', id: o.id, name: o.name }));
+      const similar = findSimilar(item.name, [...intakeCandidates, ...bidCandidates]);
+      return { ...item, similar };
+    });
+  }
+  res.json(withSimilar);
 });
 
 // Manually add an incoming bid to the inbox.
@@ -143,7 +162,15 @@ router.post('/:id/accept', requireAuth, async (req: AuthRequest, res) => {
     const loc     = o.loc ?? it.loc;
     const contact = o.contact ?? it.contact;
     const amount  = o.amount ?? it.amount;
-    const notes   = o.notes ?? it.notes;
+    let   notes   = o.notes ?? it.notes;
+    // Email-sourced items are prefilled with the format parser's one-line summary (or the raw
+    // snippet, for senders with no format parser). If the reviewer cleared it, don't file the
+    // bid with blank notes when we have the original email snippet on hand — carry that
+    // forward instead of losing the invitation's context entirely. (due_time has no home on
+    // bids — out of scope — so it isn't carried through here.)
+    if ((typeof notes !== 'string' || !notes.trim()) && it.source === 'email' && it.body_snippet) {
+      notes = it.body_snippet;
+    }
     const due     = o.due ?? it.due;
     const sqFt    = o.sq_ft ?? it.sq_ft;
     // intake_items carries no project_type/brand columns of its own — these are pass-through
