@@ -148,7 +148,7 @@ export function parseGc(subject: string, fromName: string | null, fromEmail: str
 // Free-mail and bid-platform domains that identify a *person* or a *relay service* — never
 // a specific general contractor. We must not treat two invitations sharing one of these
 // domains as coming from the same GC.
-const NON_GC_DOMAINS = new Set([
+export const NON_GC_DOMAINS = new Set([
   'gmail.com', 'googlemail.com', 'yahoo.com', 'ymail.com', 'outlook.com', 'hotmail.com',
   'live.com', 'msn.com', 'aol.com', 'icloud.com', 'me.com', 'mac.com', 'comcast.net',
   'att.net', 'verizon.net', 'sbcglobal.net', 'bellsouth.net', 'proton.me', 'protonmail.com',
