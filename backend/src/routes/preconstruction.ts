@@ -165,7 +165,13 @@ function summarizePrep(blocks: Agent1Block[]): PrepSummary {
   let imageBlocks = 0;
   let documentBlocks = 0;
   for (const b of blocks) {
-    if (b.type === 'text' && b.text.startsWith('--- Sheet:')) {
+    // FIX-4 (post-review) — a real sheet-label block always starts with
+    // '--- Sheet:' (colon). pdfText.ts's EXTRACTED TEXT header starts with
+    // '--- Sheet <label> p<N> — EXTRACTED TEXT ...' (no colon) and must never
+    // be mistaken for a sheet label — the colon requirement already excludes
+    // it, and the explicit exclusion below makes that intent unmistakable
+    // rather than relying solely on the colon's presence.
+    if (b.type === 'text' && b.text.startsWith('--- Sheet:') && !b.text.includes('EXTRACTED TEXT')) {
       current = { sheet: b.text.replace(/^--- Sheet:\s*/, '').replace(/\s*---$/, ''), tiles: 0 };
       sheets.push(current);
     } else if (b.type === 'image') {

@@ -315,14 +315,19 @@ export async function pdfToTiledImageBlocksByPage(
           const w = Math.min(width - left, cw + 2 * ox);
           const h = Math.min(height - top, ch + 2 * oy);
           if (w <= 0 || h <= 0) continue;
+          // FIX-6 (post-review): JPEG, not PNG — a PNG tile of dense line-art
+          // runs ~0.5-1MB; 20 pages x up to 15 tiles/page (Task 3's schedule
+          // cap) risks OOM and a giant request body. quality:85 keeps text
+          // legible (this is a lossy re-encode of an already-downscaled
+          // raster, not the source drawing) at a fraction of the size.
           const out = await sharp(file)
             .extract({ left, top, width: w, height: h })
             .resize({ width: maxLongEdge, height: maxLongEdge, fit: 'inside', withoutEnlargement: true })
-            .png()
+            .jpeg({ quality: 85 })
             .toBuffer();
           tiles.push({
             type: 'image',
-            source: { type: 'base64', media_type: 'image/png', data: out.toString('base64') },
+            source: { type: 'base64', media_type: 'image/jpeg', data: out.toString('base64') },
           });
         }
       }
@@ -493,7 +498,13 @@ export async function buildAgent1Content(
             const sel = labelByPage.get(group.page);
             const label = sel?.label ?? f.filename;
             const groupCls = sel?.cls ?? cls;
-            blocks.push({ type: 'text', text: `--- Sheet ${label} (${groupCls}) ---` });
+            // FIX-4 (post-review) — the colon matters: preconstruction.ts's
+            // summarizePrep matches '--- Sheet:' (with colon) to tell a real
+            // sheet label apart from pdfText.ts's '--- Sheet <label> p<N> —
+            // EXTRACTED TEXT ...' header, which deliberately has no colon.
+            // Omitting it here broke per-sheet tile logging for every
+            // page-selected PDF (Task 2's classification path).
+            blocks.push({ type: 'text', text: `--- Sheet: ${label} (${groupCls}) ---` });
             addTextBlockForPage(label, pageTexts, group.page);
             blocks.push(...group.tiles);
           }

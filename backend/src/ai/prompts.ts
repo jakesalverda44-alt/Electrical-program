@@ -381,5 +381,7 @@ CLASS — exactly one of: schedule | plan | detail
 
 If a crop is illegible or the title block can't be read, still return an entry for that page with your best guess and low-confidence fields (empty sheetNo/title is fine) rather than omitting the page.
 
-OUTPUT: Return ONLY a valid JSON array, no prose, no markdown fences, one entry per page in the order given:
+PAGE NUMBERS: Each crop is preceded by a "Page N" label. N is the ABSOLUTE page number of that crop in the FULL document set, not a position within this batch — a later batch of a large set does NOT start at page 1. Always echo the exact number from that label in your "page" field. Never renumber sequentially from 1 for this batch.
+
+OUTPUT: Return ONLY a valid JSON array, no prose, no markdown fences, one entry per page in the order given, using each page's ABSOLUTE page number:
 [{"page": 1, "sheetNo": "E-101", "title": "Electrical Site Plan", "discipline": "electrical", "cls": "plan"}]`;

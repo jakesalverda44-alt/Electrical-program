@@ -5,6 +5,7 @@ import {
   reviveIfAllDropped,
   titleBlockCropRect,
   parseClassifierJSON,
+  reoffsetIfRelative,
   formatSheetLabel,
   type PageClassification,
 } from './pageClassifier';
@@ -119,6 +120,36 @@ describe('titleBlockCropRect (pure crop geometry)', () => {
   });
 });
 
+// FIX-5 (post-review): a classifier response for batch 2+ of a large PDF must
+// echo the ABSOLUTE page numbers given in the prompt, not renumber 1..N
+// relative to the batch — otherwise every byPage lookup misses.
+describe('reoffsetIfRelative (pure)', () => {
+  it('re-offsets a relative 1..N response to the expected absolute page numbers', () => {
+    expect(reoffsetIfRelative([1, 2, 3], [21, 22, 23])).toEqual([21, 22, 23]);
+  });
+
+  it('leaves a genuinely absolute response untouched', () => {
+    expect(reoffsetIfRelative([21, 22, 23], [21, 22, 23])).toEqual([21, 22, 23]);
+  });
+
+  it('does not "correct" a legitimate single-batch run that really does start at page 1', () => {
+    expect(reoffsetIfRelative([1, 2, 3], [1, 2, 3])).toEqual([1, 2, 3]);
+  });
+
+  it('leaves a mismatched-length response untouched (parseClassifierJSON handles gaps separately)', () => {
+    expect(reoffsetIfRelative([1, 2], [21, 22, 23])).toEqual([1, 2]);
+  });
+
+  it('leaves an out-of-order or non-sequential response untouched', () => {
+    expect(reoffsetIfRelative([2, 1, 3], [21, 22, 23])).toEqual([2, 1, 3]);
+    expect(reoffsetIfRelative([1, 3, 5], [21, 22, 23])).toEqual([1, 3, 5]);
+  });
+
+  it('is a no-op on an empty response', () => {
+    expect(reoffsetIfRelative([], [])).toEqual([]);
+  });
+});
+
 describe('parseClassifierJSON (pure, tolerant)', () => {
   it('parses a clean JSON array', () => {
     const text = '[{"page":1,"sheetNo":"E-101","title":"Site Plan","discipline":"electrical","cls":"plan"}]';
@@ -138,22 +169,25 @@ describe('parseClassifierJSON (pure, tolerant)', () => {
     const text = '[{"page":1,"sheetNo":"E-101","title":"","discipline":"electrical","cls":"plan"}]';
     const result = parseClassifierJSON(text, [1, 2, 3]);
     expect(result).toHaveLength(3);
-    expect(result[1]).toEqual({ page: 2, sheetNo: '', title: '', discipline: 'unknown', cls: 'plan' });
+    // FIX-5 (post-review): the default cls for a page missing from the
+    // response is 'schedule' (highest detail), not 'plan' — silent
+    // degradation to the lowest-fidelity class is never the safe default.
+    expect(result[1]).toEqual({ page: 2, sheetNo: '', title: '', discipline: 'unknown', cls: 'schedule' });
     expect(result[2].discipline).toBe('unknown');
   });
 
-  it('falls back to unknown/plan for an invalid discipline or cls value', () => {
+  it('falls back to unknown/schedule for an invalid discipline or cls value', () => {
     const text = '[{"page":1,"sheetNo":"X","title":"Y","discipline":"not-a-real-discipline","cls":"not-a-real-cls"}]';
     const result = parseClassifierJSON(text, [1]);
     expect(result[0].discipline).toBe('unknown');
-    expect(result[0].cls).toBe('plan');
+    expect(result[0].cls).toBe('schedule');
   });
 
   it('handles total parse failure (non-JSON garbage) as fully unclassified', () => {
     const result = parseClassifierJSON('not json at all, sorry!', [1, 2]);
     expect(result).toEqual([
-      { page: 1, sheetNo: '', title: '', discipline: 'unknown', cls: 'plan' },
-      { page: 2, sheetNo: '', title: '', discipline: 'unknown', cls: 'plan' },
+      { page: 1, sheetNo: '', title: '', discipline: 'unknown', cls: 'schedule' },
+      { page: 2, sheetNo: '', title: '', discipline: 'unknown', cls: 'schedule' },
     ]);
   });
 
@@ -162,6 +196,21 @@ describe('parseClassifierJSON (pure, tolerant)', () => {
     const result = parseClassifierJSON(text, [1, 2]);
     expect(result[0].discipline).toBe('unknown'); // page 1 never showed up validly
     expect(result[1]).toMatchObject({ page: 2, discipline: 'electrical', cls: 'detail' });
+  });
+
+  // FIX-5 (post-review) end to end: batch 2 of a large PDF (absolute pages
+  // 21-23) comes back numbered 1-3 (relative) — without the re-offset, every
+  // one of these would miss its byPage lookup and fall back to unclassified.
+  it('recovers a batch-2 response that renumbered its pages 1..N instead of using absolute page numbers', () => {
+    const text = '[{"page":1,"sheetNo":"E-21","discipline":"electrical","cls":"plan"},' +
+      '{"page":2,"sheetNo":"E-22","discipline":"electrical","cls":"schedule"},' +
+      '{"page":3,"sheetNo":"E-23","discipline":"architectural","cls":"detail"}]';
+    const result = parseClassifierJSON(text, [21, 22, 23]);
+    expect(result).toEqual([
+      { page: 21, sheetNo: 'E-21', title: '', discipline: 'electrical', cls: 'plan' },
+      { page: 22, sheetNo: 'E-22', title: '', discipline: 'electrical', cls: 'schedule' },
+      { page: 23, sheetNo: 'E-23', title: '', discipline: 'architectural', cls: 'detail' },
+    ]);
   });
 });
 

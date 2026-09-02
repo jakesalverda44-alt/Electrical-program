@@ -131,11 +131,35 @@ export function formatSheetLabel(sheetNo: string, title: string, fallback: strin
 }
 
 /* ---------------------------------------------------------------------------
+ * Pure — FIX-5 (post-review): tolerate a classifier response numbered 1..N
+ * relative to its own batch instead of echoing the ABSOLUTE page numbers the
+ * "Page N:" labels give it (batch 2+ of a large PDF would otherwise come back
+ * silently mis-keyed — every byPage lookup misses and every page falls back
+ * to unclassified). Detected ONLY when the raw response is EXACTLY the
+ * relative sequence [1, 2, ..., N] in order and that is not ALSO what was
+ * actually expected (a single-batch run legitimately starts at page 1, and
+ * must not be "corrected" into something else) — anything else (a partial
+ * response, out-of-order pages, genuine absolute numbers) is left untouched.
+ * ------------------------------------------------------------------------- */
+export function reoffsetIfRelative(rawPages: number[], expectedPages: number[]): number[] {
+  if (rawPages.length === 0 || rawPages.length !== expectedPages.length) return rawPages;
+  const isRelativeSequence = rawPages.every((p, i) => p === i + 1);
+  const alreadyAbsolute = expectedPages.every((p, i) => p === i + 1);
+  if (isRelativeSequence && !alreadyAbsolute) return expectedPages;
+  return rawPages;
+}
+
+/* ---------------------------------------------------------------------------
  * Pure: tolerant JSON-array parse for the classifier response. Strips markdown
- * fences, tolerates missing/invalid fields per entry, and guarantees one entry
- * per expected page — any page missing from the parsed array (total parse
- * failure, or the model just skipped it) is filled in as 'unknown'/'plan' so it
- * is never silently dropped from the inventory (default-include philosophy).
+ * fences, tolerates missing/invalid fields per entry, re-offsets a relative-
+ * numbered batch back to absolute page numbers (FIX-5, reoffsetIfRelative
+ * above), and guarantees one entry per expected page — any page missing from
+ * the parsed array (total parse failure, or the model just skipped it) is
+ * filled in as 'unknown'/'schedule' (FIX-5: schedule, not plan — the lowest-
+ * detail class must never be the silent default; schedule matches
+ * documentPrep.ts's own "safer = more detail" philosophy for an unknown
+ * sheet) so it is never silently dropped from the inventory or degraded to
+ * the lowest fidelity (default-include philosophy).
  * ------------------------------------------------------------------------- */
 export function parseClassifierJSON(text: string, expectedPages: number[]): PageClassification[] {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -150,27 +174,35 @@ export function parseClassifierJSON(text: string, expectedPages: number[]): Page
     }
   }
 
-  const byPage = new Map<number, PageClassification>();
+  const rawEntries: Array<{ r: Record<string, unknown>; page: number }> = [];
   if (Array.isArray(arr)) {
     for (const raw of arr) {
       if (!raw || typeof raw !== 'object') continue;
       const r = raw as Record<string, unknown>;
       const page = Number(r.page);
       if (!Number.isFinite(page)) continue;
-      const disciplineRaw = typeof r.discipline === 'string' ? r.discipline : '';
-      const clsRaw = typeof r.cls === 'string' ? r.cls : '';
-      byPage.set(page, {
-        page,
-        sheetNo: typeof r.sheetNo === 'string' ? r.sheetNo : '',
-        title: typeof r.title === 'string' ? r.title : '',
-        discipline: VALID_DISCIPLINES.has(disciplineRaw as Discipline) ? (disciplineRaw as Discipline) : 'unknown',
-        cls: VALID_CLASSES.has(clsRaw as SheetClass) ? (clsRaw as SheetClass) : 'plan',
-      });
+      rawEntries.push({ r, page });
     }
   }
 
+  const correctedPages = reoffsetIfRelative(rawEntries.map(e => e.page), expectedPages);
+
+  const byPage = new Map<number, PageClassification>();
+  rawEntries.forEach(({ r }, i) => {
+    const page = correctedPages[i];
+    const disciplineRaw = typeof r.discipline === 'string' ? r.discipline : '';
+    const clsRaw = typeof r.cls === 'string' ? r.cls : '';
+    byPage.set(page, {
+      page,
+      sheetNo: typeof r.sheetNo === 'string' ? r.sheetNo : '',
+      title: typeof r.title === 'string' ? r.title : '',
+      discipline: VALID_DISCIPLINES.has(disciplineRaw as Discipline) ? (disciplineRaw as Discipline) : 'unknown',
+      cls: VALID_CLASSES.has(clsRaw as SheetClass) ? (clsRaw as SheetClass) : 'schedule',
+    });
+  });
+
   return expectedPages.map(page => byPage.get(page) ?? {
-    page, sheetNo: '', title: '', discipline: 'unknown', cls: 'plan',
+    page, sheetNo: '', title: '', discipline: 'unknown', cls: 'schedule',
   });
 }
 
@@ -249,12 +281,17 @@ export async function classifyPages(
     const batch = crops.slice(i, i + CLASSIFY_BATCH_SIZE);
     const content: Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> = [];
     for (const c of batch) {
-      content.push({ type: 'text', text: `Page ${c.page}:` });
+      // FIX-5 (post-review): c.page is the page's ABSOLUTE number in the full
+      // document (renderTitleBlockCrops preserves pdftoppm's real page
+      // numbers) — never 1-based within this batch, even for batch 2+ of a
+      // >20-page PDF. The instruction below makes that explicit so the model
+      // echoes it back rather than renumbering from 1.
+      content.push({ type: 'text', text: `Page ${c.page} (absolute page number in the full document):` });
       content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: c.jpeg.toString('base64') } });
     }
     content.push({
       type: 'text',
-      text: `Classify each of the ${batch.length} title-block crops above from "${filename}", in the order given. Return the STRICT JSON array only.`,
+      text: `Classify each of the ${batch.length} title-block crops above from "${filename}", in the order given. Each crop's "Page N" label states its ABSOLUTE page number in the full document — echo that exact number back in the "page" field of your JSON output; do NOT renumber starting from 1 for this batch. Return the STRICT JSON array only.`,
     });
 
     const resp = await callWithRetry(() => client.messages.create({

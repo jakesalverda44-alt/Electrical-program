@@ -52,6 +52,22 @@ describe('buildAgent1Content', () => {
     expect(labels[1]).toContain('(plan)');
   });
 
+  // FIX-6 (post-review): a rasterized PDF page's tiles are JPEG, not PNG — a
+  // PNG tile of dense line-art runs ~0.5-1MB; 20 pages x up to 15 tiles/page
+  // risks OOM and a giant request body. A plain uploaded image (tested above)
+  // still passes through in its own original format — this is about tiles
+  // documentPrep itself generates from a rasterized PDF page.
+  it('encodes rasterized PDF tiles as JPEG, not PNG', async (ctx) => {
+    if (!(await isPdftoppmAvailable())) return ctx.skip();
+    const files: PrepFile[] = [{ filename: 'E-601 Panel Schedule.pdf', buffer: buildTestPdf(['some content']), ext: 'pdf' }];
+    const blocks = await buildAgent1Content(files);
+    const tiles = blocks.filter((b): b is Extract<typeof b, { type: 'image' }> => b.type === 'image');
+    expect(tiles.length).toBeGreaterThan(0);
+    for (const tile of tiles) {
+      expect(tile.source.type === 'base64' && tile.source.media_type).toBe('image/jpeg');
+    }
+  });
+
   it('falls back to a document block for PDFs when pdftoppm is unavailable', async () => {
     // In CI/dev without poppler-utils this exercises the graceful fallback path.
     if (await isPdftoppmAvailable()) return; // skip where poppler is actually installed
@@ -179,7 +195,7 @@ describe('buildAgent1Content — page-level selection (Task 2)', () => {
     }];
     const blocks = await buildAgent1Content(files);
 
-    const labels = blocks.filter(b => b.type === 'text' && b.text.startsWith('--- Sheet')).map(b => (b as { text: string }).text);
+    const labels = blocks.filter(b => b.type === 'text' && b.text.startsWith('--- Sheet:')).map(b => (b as { text: string }).text);
     expect(labels.some(l => l.includes('E1.1 "Panel Schedules"') && l.includes('(schedule)'))).toBe(true);
     expect(labels.some(l => l.includes('E2.1 "Lighting Plan"') && l.includes('(plan)'))).toBe(true);
     // No generic whole-file label — page-level labels replace it entirely.
@@ -200,9 +216,34 @@ describe('buildAgent1Content — page-level selection (Task 2)', () => {
     const imageCount = blocks.filter(b => b.type === 'image').length;
     expect(imageCount).toBeGreaterThan(0);
     // Exactly one sheet label (page 1's) — page 2 produced no label, no text, no tiles.
-    const sheetLabels = blocks.filter(b => b.type === 'text' && b.text.startsWith('--- Sheet')).map(b => (b as { text: string }).text);
+    const sheetLabels = blocks.filter(b => b.type === 'text' && b.text.startsWith('--- Sheet:')).map(b => (b as { text: string }).text);
     expect(sheetLabels).toHaveLength(1);
     expect(sheetLabels[0]).toContain('E1.1');
+  });
+
+  // FIX-4 (post-review): a page with >=200 chars of extracted text produces
+  // BOTH an EXTRACTED TEXT block ('--- Sheet <label> p<N> — EXTRACTED TEXT
+  // ...', no colon) and a real sheet-label block ('--- Sheet: <label> (<cls>)
+  // ---', with colon) for the same page — the label-counting assertions above
+  // must only match the latter, or a text-rich fixture would silently double
+  // the "sheet" count.
+  it('a text-rich page (>=200 chars) still yields exactly one real sheet label, not two', async (ctx) => {
+    if (!(await popplerReady())) return ctx.skip();
+    const richText = 'PANEL SCHEDULE - PANEL A: 225A 3PH 4W, FED FROM MDP, LOCATION ELEC ROOM 101. '.repeat(4);
+    expect(richText.length).toBeGreaterThanOrEqual(200);
+    const pdf = buildTestPdf([richText]);
+    const files: PrepFile[] = [{
+      filename: 'combined-set.pdf',
+      buffer: pdf,
+      ext: 'pdf',
+      pageSelection: [{ page: 1, label: 'E1.1 "Panel Schedules"', cls: 'schedule' }],
+    }];
+    const blocks = await buildAgent1Content(files);
+
+    expect(blocks.some(b => b.type === 'text' && b.text.includes('EXTRACTED TEXT'))).toBe(true); // sanity: the text block IS present
+    const sheetLabels = blocks.filter(b => b.type === 'text' && b.text.startsWith('--- Sheet:')).map(b => (b as { text: string }).text);
+    expect(sheetLabels).toHaveLength(1);
+    expect(sheetLabels[0]).toContain('E1.1 "Panel Schedules"');
   });
 
   it('falls back to whole-file behavior when pageSelection is absent', async (ctx) => {
@@ -210,7 +251,7 @@ describe('buildAgent1Content — page-level selection (Task 2)', () => {
     const pdf = buildTestPdf(['page one', 'page two']);
     const files: PrepFile[] = [{ filename: 'no-classification.pdf', buffer: pdf, ext: 'pdf' }];
     const blocks = await buildAgent1Content(files);
-    const labels = blocks.filter(b => b.type === 'text' && b.text.startsWith('--- Sheet')).map(b => (b as { text: string }).text);
+    const labels = blocks.filter(b => b.type === 'text' && b.text.startsWith('--- Sheet:')).map(b => (b as { text: string }).text);
     expect(labels).toHaveLength(1);
     expect(labels[0]).toContain('no-classification.pdf');
   });
