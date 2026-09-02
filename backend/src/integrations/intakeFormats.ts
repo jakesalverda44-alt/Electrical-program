@@ -102,16 +102,21 @@ export function parseProcoreGc(body: string, fromName: string | null): string | 
 
 const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.-]+/g;
 
+// Our own domain — Procore invitations routinely end with "Bid Submission via email to
+// <our estimating address>", which is the RECIPIENT, not the GC's contact. Without this
+// exclusion the body scan below would fill the contact field with our own email.
+const OWN_DOMAINS = new Set(['accuratepowerandtechnology.com']);
+
 /**
  * The relay address a Procore notification comes from is never a usable contact (null is the
  * correct default). On the rare invitation that names an actual person's email in the body —
- * on a real company domain, not another relay/free-mail domain — use that instead.
+ * on a real company domain, not another relay/free-mail domain and not our own — use that.
  */
 export function parseProcoreContact(body: string): string | null {
   const matches = (body || '').match(EMAIL_RE) || [];
   for (const e of matches) {
     const domain = emailDomain(e);
-    if (domain && !NON_GC_DOMAINS.has(domain)) return e;
+    if (domain && !NON_GC_DOMAINS.has(domain) && !OWN_DOMAINS.has(domain)) return e;
   }
   return null;
 }

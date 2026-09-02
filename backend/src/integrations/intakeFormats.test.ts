@@ -126,4 +126,13 @@ describe('parseProcore — resilience', () => {
     });
     expect(parseProcore(msg).contact).toBe('john@baytobayproperties.com');
   });
+
+  it('never treats our own submission address as the contact', () => {
+    // Procore invitations routinely end with "Bid Submission via email to <our address>" —
+    // that is the recipient, not the GC's contact.
+    const msg = procoreMsg({
+      body: PROCORE_BODY + ' Bid Submission via email to jakes@accuratepowerandtechnology.com',
+    });
+    expect(parseProcore(msg).contact).toBeNull();
+  });
 });
