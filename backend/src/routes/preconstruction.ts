@@ -31,6 +31,8 @@ import { storeDocument } from '../utils/storeDocument';
 import { mergeAgent1Batches } from '../ai/mergeAgent1';
 import { buildAgent4UserMessage } from '../ai/agent4Message';
 import { parseMoney } from '../utils/money';
+import { compactForHandoff } from '../ai/compactPayload';
+import { analysisIsEmpty } from '../ai/emptyAnalysis';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
 const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'warehouse', 'restaurant', 'medical', 'retail', 'other'];
@@ -518,6 +520,21 @@ async function runPipeline(
     }
     agent1JSON = parsedAgent1;
 
+    // Task 4.2 — empty-analysis guard: if every batch failed to parse,
+    // mergeAgent1Batches still returns a valid-looking {} that would otherwise
+    // flow straight into Agents 2-3, billing two more paid calls for nothing.
+    if (analysisIsEmpty(agent1JSON)) {
+      await pool.query(
+        `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
+        [
+          'Drawing analysis found no electrical content. Check that the right sheets were uploaded (see the prep inventory) — the run was stopped before Agents 2–3 to avoid billing for an empty takeoff.',
+          bidId,
+        ]
+      );
+      logger.warn({ bidId }, '[takeoff] Agent 1 analysis empty — stopped before Agent 2/3');
+      return;
+    }
+
     await pool.query(
       `UPDATE takeoff_results SET status='agent1_complete', agent1_output=$1 WHERE bid_id=$2`,
       [agent1Output, bidId]
@@ -542,7 +559,9 @@ async function runPipeline(
       system: [{ type: 'text', text: config.promptA2 || AGENT2_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
-        content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${agent1Output}`,
+        // Task 4.1 — compact (no 2-space indent) in the request body; storage
+        // and the UI keep the pretty agent1Output exactly as today.
+        content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}`,
       }],
     }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
     agent2Output = extractText(resp);
@@ -572,7 +591,8 @@ async function runPipeline(
       system: [{ type: 'text', text: config.promptA3 || AGENT3_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
-        content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${agent1Output}\n\n---\n\nESTIMATOR OUTPUT:\n\n${agent2Output}`,
+        // Task 4.1 — compact in the request body (both prior agents' outputs).
+        content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}\n\n---\n\nESTIMATOR OUTPUT:\n\n${compactForHandoff(agent2Output)}`,
       }],
     }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
     agent3Output = extractText(resp);
