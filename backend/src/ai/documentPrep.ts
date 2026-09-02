@@ -26,6 +26,13 @@ import path from 'path';
 import sharp from 'sharp';
 import Anthropic from '@anthropic-ai/sdk';
 import { logger } from '../utils/logger';
+import {
+  isPdftotextAvailable,
+  extractPdfPageTexts,
+  pageTextBlock,
+  MIN_CHARS_FOR_TEXT_BLOCK,
+  TOTAL_TEXT_CAP,
+} from './pdfText';
 
 const execFileP = promisify(execFile);
 
@@ -109,14 +116,23 @@ export async function isPdftoppmAvailable(): Promise<boolean> {
   return pdftoppmAvailable;
 }
 
+/** Tiles for a single rasterized PDF page, grouped so callers (e.g. buildAgent1Content)
+ *  can interleave a per-page EXTRACTED TEXT block before that page's tiles. */
+export interface PdfPageTiles {
+  /** 1-based page number, matching pdftotext's page order. */
+  page: number;
+  tiles: ImageBlock[];
+}
+
 /* ---------------------------------------------------------------------------
- * 2) Rasterize a PDF to PNG pages, then tile each page into overlapping crops.
- *    Throws if pdftoppm is unavailable or rasterization fails — callers fall back.
+ * 2) Rasterize a PDF to PNG pages, then tile each page into overlapping crops,
+ *    grouped by page. Throws if pdftoppm is unavailable or rasterization fails
+ *    — callers fall back.
  * ------------------------------------------------------------------------- */
-export async function pdfToTiledImageBlocks(
+export async function pdfToTiledImageBlocksByPage(
   pdfBuffer: Buffer,
   opts: { dpi?: number; tileInches?: number; overlap?: number; maxTilesPerPage?: number; maxLongEdge?: number } = {}
-): Promise<ImageBlock[]> {
+): Promise<PdfPageTiles[]> {
   const { dpi = 170, tileInches = 11, overlap = 0.08, maxTilesPerPage = 9, maxLongEdge = 1568 } = opts;
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'apt-prep-'));
   try {
@@ -125,9 +141,9 @@ export async function pdfToTiledImageBlocks(
     await execFileP('pdftoppm', ['-png', '-r', String(dpi), pdfPath, path.join(tmp, 'pg')]);
     const pages = (await fs.readdir(tmp)).filter(f => f.endsWith('.png')).sort();
 
-    const blocks: ImageBlock[] = [];
-    for (const pg of pages) {
-      const file = path.join(tmp, pg);
+    const result: PdfPageTiles[] = [];
+    for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
+      const file = path.join(tmp, pages[pageIdx]);
       const meta = await sharp(file).metadata();
       const width = meta.width ?? 0;
       const height = meta.height ?? 0;
@@ -144,6 +160,7 @@ export async function pdfToTiledImageBlocks(
       const ox = Math.round(cw * overlap);
       const oy = Math.round(ch * overlap);
 
+      const tiles: ImageBlock[] = [];
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
           const left = Math.max(0, c * cw - ox);
@@ -156,17 +173,27 @@ export async function pdfToTiledImageBlocks(
             .resize({ width: maxLongEdge, height: maxLongEdge, fit: 'inside', withoutEnlargement: true })
             .png()
             .toBuffer();
-          blocks.push({
+          tiles.push({
             type: 'image',
             source: { type: 'base64', media_type: 'image/png', data: out.toString('base64') },
           });
         }
       }
+      result.push({ page: pageIdx + 1, tiles });
     }
-    return blocks;
+    return result;
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
+}
+
+/** Flat convenience wrapper over pdfToTiledImageBlocksByPage — page grouping discarded. */
+export async function pdfToTiledImageBlocks(
+  pdfBuffer: Buffer,
+  opts: { dpi?: number; tileInches?: number; overlap?: number; maxTilesPerPage?: number; maxLongEdge?: number } = {}
+): Promise<ImageBlock[]> {
+  const grouped = await pdfToTiledImageBlocksByPage(pdfBuffer, opts);
+  return grouped.flatMap(g => g.tiles);
 }
 
 /** A single `document` block for a PDF — the low-fidelity fallback path. */
@@ -211,6 +238,7 @@ export async function buildAgent1Content(
   opts: { maxTilesPerPage?: number } = {}
 ): Promise<Agent1Block[]> {
   const popplerOk = await isPdftoppmAvailable();
+  const pdftotextOk = await isPdftotextAvailable();
 
   // order: schedules first, then details, then plans
   const order: Record<SheetClass, number> = { schedule: 0, detail: 1, plan: 2 };
@@ -219,25 +247,70 @@ export async function buildAgent1Content(
   );
 
   const blocks: Agent1Block[] = [];
+
+  // Text-extract-first budget: shared across every PDF in this run (Task 1 —
+  // playbook rule #1). Once the total cap is hit, one marker block is emitted
+  // and no further page text is added — tiles keep flowing normally either way.
+  let totalTextChars = 0;
+  let totalCapHit = false;
+  const addTextBlockForPage = (sheetLabel: string, pageTexts: string[], pageNo: number) => {
+    if (totalCapHit) return;
+    const text = pageTexts[pageNo - 1];
+    if (!text || text.length < MIN_CHARS_FOR_TEXT_BLOCK) return;
+    const block = pageTextBlock(sheetLabel, pageNo, text);
+    if (totalTextChars + block.text.length > TOTAL_TEXT_CAP) {
+      blocks.push({ type: 'text', text: '[additional page text omitted — cap reached]' });
+      totalCapHit = true;
+      return;
+    }
+    blocks.push(block);
+    totalTextChars += block.text.length;
+  };
+
   for (const f of sorted) {
     const cls = classifySheet(f.filename);
     // A tiny label block so Agent 1 knows which sheet the following tiles belong to.
     blocks.push({ type: 'text', text: `--- Sheet: ${f.filename} (${cls}) ---` });
 
     if (f.ext === 'pdf') {
+      // Extract page text first (independent of tiling — schedules are sometimes
+      // raster and plans always need vision, so text is additive, never a
+      // replacement). Extraction failure is non-fatal: continue tile-only.
+      let pageTexts: string[] = [];
+      if (pdftotextOk) {
+        try {
+          pageTexts = await extractPdfPageTexts(f.buffer);
+        } catch (err) {
+          logger.warn({ err, file: f.filename }, '[docprep] pdftotext extraction failed — continuing without page text');
+        }
+      }
+
       if (!popplerOk) {
+        // No tiling available. Fallback matrix: pdftotext present -> text blocks
+        // + document block (an improvement over today's document-only); pdftotext
+        // absent -> today's behavior exactly (document block only).
+        pageTexts.forEach((_, i) => addTextBlockForPage(f.filename, pageTexts, i + 1));
         blocks.push(pdfDocumentBlock(f.buffer));
         continue;
       }
       try {
-        const tiles = await pdfToTiledImageBlocks(f.buffer, {
+        const pageGroups = await pdfToTiledImageBlocksByPage(f.buffer, {
           tileInches: tileInchesFor(cls),
           maxTilesPerPage: opts.maxTilesPerPage,
         });
-        if (tiles.length) blocks.push(...tiles);
-        else blocks.push(pdfDocumentBlock(f.buffer)); // empty rasterization -> fall back
+        if (pageGroups.length) {
+          for (const group of pageGroups) {
+            addTextBlockForPage(f.filename, pageTexts, group.page);
+            blocks.push(...group.tiles);
+          }
+        } else {
+          // empty rasterization -> fall back
+          pageTexts.forEach((_, i) => addTextBlockForPage(f.filename, pageTexts, i + 1));
+          blocks.push(pdfDocumentBlock(f.buffer));
+        }
       } catch (err) {
         logger.warn({ err, file: f.filename }, '[docprep] PDF tiling failed — falling back to document block');
+        pageTexts.forEach((_, i) => addTextBlockForPage(f.filename, pageTexts, i + 1));
         blocks.push(pdfDocumentBlock(f.buffer));
       }
     } else {

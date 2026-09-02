@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { classifySheet, buildAgent1Content, isPdftoppmAvailable, type PrepFile } from './documentPrep';
+import { isPdftotextAvailable, PAGE_TEXT_CAP, TOTAL_TEXT_CAP } from './pdfText';
+import { buildTestPdf } from '../test/fixtures/buildTestPdf';
 
 describe('classifySheet', () => {
   it('flags dense schedule sheets', () => {
@@ -54,4 +56,74 @@ describe('buildAgent1Content', () => {
     expect(blocks.some(b => b.type === 'document')).toBe(true);
     expect(blocks.some(b => b.type === 'image')).toBe(false);
   });
+});
+
+// Task 2 (phase 2 takeoff fidelity): text-extract first — pdftotext runs before
+// tiling and a per-page EXTRACTED TEXT block is inserted ahead of that page's
+// tiles whenever the sheet has enough real text to matter. Poppler is installed
+// on this dev Mac (verified 2026-09-02, poppler 26.08) so these run for real
+// rather than skip; they still gate on availability so a machine without
+// poppler-utils skips cleanly instead of failing.
+describe('buildAgent1Content — text-extract-first (Task 1)', () => {
+  async function popplerReady() {
+    return (await isPdftoppmAvailable()) && (await isPdftotextAvailable());
+  }
+
+  it('inserts an EXTRACTED TEXT block before that page\'s tiles for a text-rich page', async (ctx) => {
+    if (!(await popplerReady())) return ctx.skip();
+    // ASCII only — buildTestPdf writes latin1 PDF string literals, and non-ASCII
+    // (e.g. an em dash) corrupts the content stream and truncates extraction.
+    const richText = 'PANEL SCHEDULE - PANEL A: 225A 3PH 4W, FED FROM MDP, LOCATION ELEC ROOM 101. '.repeat(4);
+    expect(richText.length).toBeGreaterThanOrEqual(200);
+    const files: PrepFile[] = [{ filename: 'E-601 Panel Schedule.pdf', buffer: buildTestPdf([richText]), ext: 'pdf' }];
+    const blocks = await buildAgent1Content(files);
+
+    const textBlockIdx = blocks.findIndex(
+      b => b.type === 'text' && b.text.includes('EXTRACTED TEXT (machine-read, treat as FIRM source)')
+    );
+    const firstImageIdx = blocks.findIndex(b => b.type === 'image');
+    expect(textBlockIdx).toBeGreaterThan(-1);
+    expect(firstImageIdx).toBeGreaterThan(-1);
+    expect(textBlockIdx).toBeLessThan(firstImageIdx); // block ordering: text before tiles for the same page
+    expect((blocks[textBlockIdx] as { text: string }).text).toContain('PANEL A: 225A 3PH');
+  });
+
+  it('skips the text block for a page under the 200-char gate (raster/drawing-only)', async (ctx) => {
+    if (!(await popplerReady())) return ctx.skip();
+    const sparseText = 'E-201'; // well under 200 chars — a title-block-only / drawing-only page
+    const files: PrepFile[] = [{ filename: 'E-201 Lighting-Plan.pdf', buffer: buildTestPdf([sparseText]), ext: 'pdf' }];
+    const blocks = await buildAgent1Content(files);
+
+    expect(blocks.some(b => b.type === 'text' && b.text.includes('EXTRACTED TEXT'))).toBe(false);
+    expect(blocks.some(b => b.type === 'image')).toBe(true); // tiles are still produced regardless
+  });
+
+  it('caps a single page\'s extracted text at PAGE_TEXT_CAP with a visible marker', async (ctx) => {
+    if (!(await popplerReady())) return ctx.skip();
+    const hugeText = 'Q'.repeat(PAGE_TEXT_CAP + 1000);
+    const files: PrepFile[] = [{ filename: 'E-601 Panel Schedule.pdf', buffer: buildTestPdf([hugeText]), ext: 'pdf' }];
+    const blocks = await buildAgent1Content(files);
+
+    const textBlock = blocks.find(b => b.type === 'text' && b.text.includes('EXTRACTED TEXT')) as { text: string } | undefined;
+    expect(textBlock).toBeDefined();
+    expect(textBlock!.text).toContain('[TEXT TRUNCATED]');
+    expect(textBlock!.text.length).toBeLessThan(hugeText.length);
+  }, 20_000);
+
+  it('caps total extracted text across the run at TOTAL_TEXT_CAP with one omitted marker', async (ctx) => {
+    if (!(await popplerReady())) return ctx.skip();
+    // 14 pages at ~14k chars each (over the per-page cap, so each contributes
+    // ~PAGE_TEXT_CAP to the running total) comfortably exceeds the 150k total cap.
+    const pageText = 'R'.repeat(PAGE_TEXT_CAP + 2000);
+    const pages = Array.from({ length: 14 }, () => pageText);
+    const files: PrepFile[] = [{ filename: 'E-601 Panel Schedule.pdf', buffer: buildTestPdf(pages), ext: 'pdf' }];
+    const blocks = await buildAgent1Content(files);
+
+    const textBlocks = blocks.filter(b => b.type === 'text' && b.text.includes('EXTRACTED TEXT')) as { text: string }[];
+    const omittedMarkers = blocks.filter(b => b.type === 'text' && b.text === '[additional page text omitted — cap reached]');
+    expect(omittedMarkers).toHaveLength(1); // exactly one marker, not one per remaining page
+    const totalChars = textBlocks.reduce((sum, b) => sum + b.text.length, 0);
+    expect(totalChars).toBeLessThanOrEqual(TOTAL_TEXT_CAP);
+    expect(textBlocks.length).toBeLessThan(pages.length); // some pages' text was genuinely dropped
+  }, 30_000);
 });

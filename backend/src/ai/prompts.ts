@@ -14,6 +14,7 @@ RULES
 - Every extracted item must include a source sheet reference.
 - Flag ECFECI items (Electrical Contractor Furnished, Electrical Contractor Installed) — panels, switchgear, ATS, generator, lighting fixtures and controls.
 - Keep scope notes to items that directly affect electrical bid scope.
+- When a sheet is preceded by an "EXTRACTED TEXT" block, its text was machine-read directly from the PDF (not OCR) — treat its numbers as the primary source for that sheet, mark quantities read from it VERIFIED, and use the image tiles for that sheet to resolve layout, symbols, and anything the extracted text is missing.
 
 OUTPUT
 Return ONLY valid compact JSON — no prose, no markdown, no explanation.
