@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import api from '../../api/client';
 
-interface ImportResult { sqFtApplied: boolean; suggestedBrand: string | null }
+interface ImportResult { sqFtApplied: boolean; suggestedBrand: string | null; warnings: string[] }
 
 const rowStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, fontSize: 13,
@@ -35,7 +35,11 @@ export default function PreBidUpload({ bidId, hasScope, hasTakeoff, onImported }
     if (takeoffFile) fd.append('takeoff', takeoffFile);
     try {
       const { data } = await api.post(`/preconstruction/${bidId}/import-prebid`, fd);
-      setResult({ sqFtApplied: !!data?.sqFtApplied, suggestedBrand: data?.suggestedBrand ?? null });
+      setResult({
+        sqFtApplied: !!data?.sqFtApplied,
+        suggestedBrand: data?.suggestedBrand ?? null,
+        warnings: Array.isArray(data?.warnings) ? data.warnings : [],
+      });
       setBrandApplied(false);
       setScopeFile(null);
       setTakeoffFile(null);
@@ -90,6 +94,9 @@ export default function PreBidUpload({ bidId, hasScope, hasTakeoff, onImported }
 
         {result && (
           <div style={{ marginTop: 12, fontSize: 12.5 }}>
+            {result.warnings.map((w, i) => (
+              <div key={i} style={{ color: 'var(--amber)', fontSize: 12.5, marginBottom: 6 }}>{w}</div>
+            ))}
             {result.sqFtApplied && (
               <div style={{ color: 'var(--muted)' }}>Square footage filled from the takeoff.</div>
             )}

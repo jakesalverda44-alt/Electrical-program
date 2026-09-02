@@ -154,6 +154,44 @@ describe('import-prebid', () => {
     expect(Number(rows[0].item_count)).toBe(99);
   });
 
+  it('imports a junk .docx/.xlsx as an honest empty success, not a crash or a silent no-op', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `Junk ${Date.now()}`, gc: 'G' }).expect(200);
+
+    // Neither buffer is a real zip container — parseTakeoffWorkbook's raw
+    // `new AdmZip(buf)` would throw on this without the route's try/catch;
+    // parsePrebidScope already tolerates it internally (extractDocxParagraphs).
+    const r = await request(app)
+      .post(`/api/preconstruction/${bid.body.id}/import-prebid`).set(auth(u.token))
+      .attach('takeoff', Buffer.from('not actually a spreadsheet'), 'junk.xlsx')
+      .attach('scope', Buffer.from('not actually a document'), 'junk.docx')
+      .expect(200);
+
+    expect(r.body.takeoff).toBeNull();
+    expect(r.body.scope).toBeNull();
+    expect(r.body.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/takeoff workbook did not match/i),
+      expect.stringMatching(/scope document did not match/i),
+    ]));
+
+    const { rows: takeoffRows } = await pool.query(
+      `SELECT 1 FROM bid_takeoffs WHERE bid_id=$1 AND kind='prebid'`, [bid.body.id]
+    );
+    expect(takeoffRows).toHaveLength(0);
+    const { rows: scopeRows } = await pool.query(
+      'SELECT 1 FROM bid_prebid_scope WHERE bid_id=$1', [bid.body.id]
+    );
+    expect(scopeRows).toHaveLength(0);
+
+    // Files are still filed even though nothing was imported (keep()'s job).
+    const { rows: docRows } = await pool.query(
+      `SELECT category FROM documents WHERE linked_id=$1 ORDER BY category`, [bid.body.id]
+    );
+    expect(docRows.map(d => d.category)).toEqual(['prebid_scope', 'prebid_takeoff']);
+  });
+
   it('reads the package back', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');
@@ -373,4 +411,94 @@ describe('prebid-analyze', () => {
     expect(rows[0].ai_status).toBeNull();
     expect(rows[0].ai_comparison_against).toBeNull();
   });
+});
+
+describe('run-agent4 price validation', () => {
+  it('rejects a garbage price with 400 and never stamps agent4_status running', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `Price ${Date.now()}`, gc: 'G' }).expect(200);
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, agent2_output, agent4_status) VALUES ($1,'{}','untouched')`,
+      [bid.body.id]
+    );
+    const r = await request(app)
+      .post(`/api/preconstruction/${bid.body.id}/run-agent4`).set(auth(u.token))
+      .send({ price: 'not-a-price', internalNotes: '' })
+      .expect(400);
+    expect(r.body.error).toMatch(/price/i);
+    const { rows } = await pool.query(
+      'SELECT agent4_status FROM takeoff_results WHERE bid_id=$1', [bid.body.id]);
+    expect(rows[0].agent4_status).toBe('untouched');
+  });
+
+  it('rejects a zero or negative price with 400', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `PriceNeg ${Date.now()}`, gc: 'G' }).expect(200);
+    await request(app)
+      .post(`/api/preconstruction/${bid.body.id}/run-agent4`).set(auth(u.token))
+      .send({ price: '-5', internalNotes: '' })
+      .expect(400);
+  });
+});
+
+describe('generate-docx files every generated proposal', () => {
+  it('writes a documents row (category proposal) after a successful build', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `Filed ${Date.now()}`, gc: 'G' }).expect(200);
+    const bidId = bid.body.id as string;
+    // A minimal-but-valid ProposalJSON — every field is optional, and the price
+    // comes from agent4_price (parseMoney-validated), not data.totalPrice, so an
+    // otherwise-empty object is enough to exercise buildProposalDocx end to end.
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, agent2_output, agent4_output, agent4_price, agent4_status)
+       VALUES ($1,'{}','{}',425000,'complete')`,
+      [bidId]
+    );
+
+    const res = await request(app)
+      .get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token))
+      .expect(200);
+    expect(res.headers['content-type']).toMatch(/wordprocessingml/);
+
+    // No CLOUDINARY_*/Drive folder configured in the test environment, so
+    // storeDocument falls back to storing the bytes as base64 on the row itself —
+    // still enough to prove the filing happened, independent of external storage.
+    const { rows } = await pool.query(
+      `SELECT category, linked_id, file_data IS NOT NULL AS has_data
+       FROM documents WHERE linked_id=$1 AND category='proposal'`,
+      [bidId]
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].linked_id).toBe(bidId);
+    expect(rows[0].has_data).toBe(true);
+  });
+
+  it('generating twice yields two documents rows (version history, not replaceExisting)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `FiledTwice ${Date.now()}`, gc: 'G' }).expect(200);
+    const bidId = bid.body.id as string;
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, agent2_output, agent4_output, agent4_price, agent4_status)
+       VALUES ($1,'{}','{}',425000,'complete')`,
+      [bidId]
+    );
+
+    await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token)).expect(200);
+    await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token)).expect(200);
+
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS n FROM documents WHERE linked_id=$1 AND category='proposal'`,
+      [bidId]
+    );
+    expect(rows[0].n).toBe(2);
+  });
+
 });

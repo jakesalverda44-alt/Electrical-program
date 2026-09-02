@@ -135,8 +135,15 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     const bid = cur[0];
 
     // Update stage; stamp lifecycle timestamps the first time each is reached.
+    // loss_reason/competitor are only WRITTEN when the new stage is 'lost' — moving
+    // off lost (e.g. lost -> due to reopen, then back to lost) used to null them out
+    // unconditionally, erasing the reason recorded the first time. Any other stage
+    // move now leaves the existing values untouched.
     const { rows } = await client.query(
-      `UPDATE bids SET stage=$1, loss_reason=$3, competitor=$4, updated_at=now(),
+      `UPDATE bids SET stage=$1,
+         loss_reason = CASE WHEN $1='lost' THEN $3 ELSE loss_reason END,
+         competitor  = CASE WHEN $1='lost' THEN $4 ELSE competitor  END,
+         updated_at=now(),
          submitted_at = CASE WHEN $1 IN ('submitted','awarded') THEN COALESCE(submitted_at, now()) ELSE submitted_at END,
          awarded_at   = CASE WHEN $1 = 'awarded' THEN COALESCE(awarded_at, now()) ELSE awarded_at END
        WHERE id=$2 RETURNING *`,

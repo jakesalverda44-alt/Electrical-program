@@ -5,7 +5,7 @@
     "dev": "ts-node-dev --respawn src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "vitest run",
+    "test": "NODE_ENV=test DB_NAME=electrical_crm_test vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

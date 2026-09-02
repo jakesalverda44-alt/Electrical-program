@@ -54,6 +54,10 @@ export interface BidMeta {
   projectAddress?: string;
   gcName?: string;
   gcContact?: string;
+  // The DB-validated agent4_price (see run-agent4's parseMoney gate), pre-formatted
+  // by the caller. Authoritative over data.totalPrice, the LLM's echo of what the
+  // estimator typed — same precedence pattern as projectName/gcName above.
+  totalPrice?: string;
 }
 
 // Format any date-ish input as "Month DD, YYYY" (e.g. "June 8, 2026"). Falls
@@ -197,7 +201,10 @@ export async function buildProposalDocx(data: ProposalJSON, bidMeta: BidMeta = {
   const projectName   = toStr(bidMeta.projectName)   || toStr(data.projectName) || '—';
   const projectAddr   = toStr(bidMeta.projectAddress) || toStr(data.projectAddress);
   const jobNumber     = toStr(data.jobNumber);
-  const totalPrice    = toStr(data.totalPrice)       || 'TBD';
+  const totalPrice    = toStr(bidMeta.totalPrice) || toStr(data.totalPrice);
+  if (!totalPrice) {
+    throw new Error('Proposal has no price — re-run the proposal step');
+  }
 
   const children: (Paragraph | Table)[] = [];
 

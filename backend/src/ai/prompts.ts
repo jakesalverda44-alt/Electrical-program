@@ -267,6 +267,7 @@ SCOPE STYLE:
 - Max 25 words per bullet. Condensed — detail lives in the takeoff table, not the narrative.
 - If Agent 2 has items marked MANUAL COUNT REQUIRED, write the scope bullet with TBD language and add it to rfisToResolve.
 - Incorporate all internal review notes into the correct scope sections before finalizing output.
+- When the user message includes an "ESTIMATOR-EDITED SCOPE OF WORK (AUTHORITATIVE)" block, its content is authoritative for the proposal sections it covers — map each titled section into the A–F output section that matches its *meaning* (not its letter; the section titles come from the CRM's own scope editor, which uses a different lettering than this A–F output), and prefer its wording over the Agent 2 scope for that section. Sections not covered by the block fall back to the Agent 2 scope as before.
 
 STANDARD SCOPE OF WORK OPENING — always exactly these 6 bullets in this order:
 1. The project is understood to be electrical work and has been reviewed and quoted as such.

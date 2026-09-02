@@ -19,6 +19,9 @@ import { parseTakeoffWorkbook } from '../utils/takeoffParse';
 import { parsePrebidScope } from '../utils/prebidScopeParse';
 import { parseAccubidBreakdown } from '../utils/accubidParse';
 import { storeDocument } from '../utils/storeDocument';
+import { mergeAgent1Batches } from '../ai/mergeAgent1';
+import { buildAgent4UserMessage } from '../ai/agent4Message';
+import { parseMoney } from '../utils/money';
 
 // Cap on tiles rasterized per PDF page (cost control — see Stage 0 doc prep).
 const MAX_TILES_PER_PAGE = 9;
@@ -329,33 +332,11 @@ async function runPipeline(
         [JSON.stringify(batchUsage), config.model, bidId]
       ).catch(() => {});
 
-      // Merge batch results
-      const merged: Record<string, unknown[]> & { project_info?: unknown; confidence_scores?: unknown } = {
-        panels: [], feeders: [], transformers: [], generators: [], ats: [],
-        lighting: [], devices: [], equipment: [], conduit: [], wire: [],
-        notes: [], sheet_inventory: [], sheet_references: [], warnings: [],
-        systems_identified: [],
-      };
-      const seenPanels = new Set<string>();
-      for (const r of batchResults) {
-        for (const key of Object.keys(merged) as (keyof typeof merged)[]) {
-          if (!Array.isArray(r[key])) continue;
-          for (const item of r[key] as Record<string, unknown>[]) {
-            if (key === 'panels' && item.name) {
-              const sig = `${item.name}:${item.source_sheet}`;
-              if (seenPanels.has(sig)) {
-                (item as Record<string,unknown>).cross_reference = 'CROSS-REFERENCE — VERIFY';
-              } else {
-                seenPanels.add(sig);
-              }
-            }
-            (merged[key] as unknown[]).push(item);
-          }
-        }
-      }
-      if (batchResults[0]) merged.project_info = batchResults[0].project_info;
-      if (batchResults[0]) merged.confidence_scores = batchResults[0].confidence_scores;
-      agent1JSON = merged as unknown as Record<string, unknown>;
+      // Merge batch results — generic merge over the actual AGENT1_SYSTEM schema
+      // (project, service, panels, equipment, quantities, allowances, ecfeciItems,
+      // flags, scopeNotes, missingSheets), not a hardcoded legacy key list.
+      // See backend/src/ai/mergeAgent1.ts for the merge rules.
+      agent1JSON = mergeAgent1Batches(batchResults);
       agent1Output = JSON.stringify(agent1JSON, null, 2);
     }
 
@@ -453,7 +434,7 @@ async function runPipeline(
       WHERE bid_id=$3
     `, [
       JSON.stringify(a1.panels ?? []),
-      JSON.stringify(a1.lighting ?? []),
+      JSON.stringify(a1.quantities ?? []),
       bidId,
     ]);
 
@@ -641,10 +622,25 @@ router.post('/:bidId/import-prebid', requireAuth, documentUpload.fields([
 
   let takeoffSummary: { categories: unknown[]; itemCount: number; unresolvedCount: number } | null = null;
   let parsedSqFt: number | null = null;
+  // Surfaced to the estimator instead of a silent "0 items imported" — the file is
+  // still saved to Files either way via keep() above, so nothing is lost.
+  const warnings: string[] = [];
 
   if (takeoffFile) {
     await keep(takeoffFile, 'prebid_takeoff');
-    const t = parseTakeoffWorkbook(takeoffFile.buffer);
+    // parseTakeoffWorkbook opens the buffer as a zip (new AdmZip(buf)) with no
+    // internal guard, unlike parsePrebidScope's extractDocxParagraphs — a
+    // genuinely corrupt/non-xlsx upload throws here instead of yielding zero
+    // items. Caught and folded into the same "empty success" path as an
+    // unrecognized-but-valid workbook: the file is still filed via keep() above,
+    // and an honest warning beats a 500 that makes the estimator re-upload blind.
+    let t: ReturnType<typeof parseTakeoffWorkbook>;
+    try {
+      t = parseTakeoffWorkbook(takeoffFile.buffer);
+    } catch (err) {
+      logger.error({ err, bidId }, '[import-prebid] takeoff workbook parse threw');
+      t = { sqFt: null, price: null, categories: [], lineItems: [], keyFindings: [] };
+    }
     parsedSqFt = t.sqFt;
     if (t.lineItems.length) {
       await pool.query(
@@ -661,6 +657,8 @@ router.post('/:bidId/import-prebid', requireAuth, documentUpload.fields([
         itemCount: t.lineItems.length,
         unresolvedCount: t.lineItems.filter(i => i.qty === null).length,
       };
+    } else {
+      warnings.push('Takeoff workbook did not match the expected format — nothing was imported (the file was still saved to Files).');
     }
   }
 
@@ -671,17 +669,24 @@ router.post('/:bidId/import-prebid', requireAuth, documentUpload.fields([
     await keep(scopeFile, 'prebid_scope');
     const s = parsePrebidScope(scopeFile.buffer);
     suggestedBrand = s.suggestedBrand;
-    await pool.query(
-      `INSERT INTO bid_prebid_scope (bid_id, meta, furnish_model, furnish_note,
-         general_items, sections, source_file, updated_at)
-       VALUES ($1,$2::jsonb,$3,$4,$5::jsonb,$6::jsonb,$7,now())
-       ON CONFLICT (bid_id) DO UPDATE SET
-         meta=$2::jsonb, furnish_model=$3, furnish_note=$4, general_items=$5::jsonb,
-         sections=$6::jsonb, source_file=$7, updated_at=now()`,
-      [bidId, JSON.stringify(s.meta), s.furnishModel, s.furnishNote,
-       JSON.stringify(s.generalItems), JSON.stringify(s.sections), scopeFile.originalname]
-    );
-    scopeSummary = { sections: s.sections, furnishModel: s.furnishModel };
+    // Zero sections AND empty meta means the parser found nothing recognizable —
+    // upserting anyway would leave an empty bid_prebid_scope row that lets
+    // prebid-analyze burn a paid AI call on nothing.
+    if (s.sections.length === 0 && Object.keys(s.meta).length === 0) {
+      warnings.push('Scope document did not match the expected format — nothing was imported (the file was still saved to Files).');
+    } else {
+      await pool.query(
+        `INSERT INTO bid_prebid_scope (bid_id, meta, furnish_model, furnish_note,
+           general_items, sections, source_file, updated_at)
+         VALUES ($1,$2::jsonb,$3,$4,$5::jsonb,$6::jsonb,$7,now())
+         ON CONFLICT (bid_id) DO UPDATE SET
+           meta=$2::jsonb, furnish_model=$3, furnish_note=$4, general_items=$5::jsonb,
+           sections=$6::jsonb, source_file=$7, updated_at=now()`,
+        [bidId, JSON.stringify(s.meta), s.furnishModel, s.furnishNote,
+         JSON.stringify(s.generalItems), JSON.stringify(s.sections), scopeFile.originalname]
+      );
+      scopeSummary = { sections: s.sections, furnishModel: s.furnishModel };
+    }
   }
 
   // Comparable matching ranks on square footage, so a bid without one cannot be compared
@@ -695,7 +700,7 @@ router.post('/:bidId/import-prebid', requireAuth, documentUpload.fields([
 
   // brand is returned as a suggestion only. It outranks project_type in comp ranking, so
   // a wrong auto-set would silently skew every future comparison on this job.
-  res.json({ takeoff: takeoffSummary, scope: scopeSummary, sqFtApplied, suggestedBrand });
+  res.json({ takeoff: takeoffSummary, scope: scopeSummary, sqFtApplied, suggestedBrand, warnings });
 }));
 
 // GET prebid — the stored package for this bid, for the Pre-Bid tab.
@@ -1030,8 +1035,11 @@ router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), 
   res.json(rows[0] || null);
 });
 
-// GET historical cost comps from real won jobs data
-router.get('/costs', requireAuth, async (_req, res) => {
+// GET historical cost comps from real won jobs data. Scoped like /comparables — a
+// restricted rep only pulls comps from their own bids, not the whole company's
+// pricing history (owner/admin: ownScopeId returns null, no filter applied).
+router.get('/costs', requireAuth, async (req: AuthRequest, res) => {
+  const scope = ownScopeId(req.user!);
   const { rows } = await pool.query(`
     SELECT b.name, b.amount, b.sheets, b.gc, b.loc, b.sq_ft, b.project_type,
            EXTRACT(YEAR FROM b.updated_at) as year,
@@ -1039,17 +1047,20 @@ router.get('/costs', requireAuth, async (_req, res) => {
     FROM bids b
     LEFT JOIN bid_estimates be ON be.bid_id = b.id
     WHERE b.stage = 'awarded' AND b.amount IS NOT NULL AND b.deleted_at IS NULL
+      AND ($1::uuid IS NULL OR b.salesperson_id = $1::uuid)
     ORDER BY b.updated_at DESC
     LIMIT 30
-  `);
+  `, [scope]);
   res.json(rows);
 });
 
-// GET bid intelligence stats
+// GET bid intelligence stats. Same scoping as /costs — a restricted rep's GC/overall
+// win-rate stats are computed over their own bids only, not company-wide.
 router.get('/intelligence/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const bid = await loadAccessibleBid(res, req.user!, req.params.bidId);
   if (!bid) return;
 
+  const scope = ownScopeId(req.user!);
   const { rows: gcStats } = await pool.query(`
     SELECT
       COUNT(*) FILTER (WHERE stage='awarded') as won,
@@ -1057,14 +1068,16 @@ router.get('/intelligence/:bidId', requireAuth, async (req: AuthRequest, res) =>
       COUNT(*) FILTER (WHERE stage IN ('awarded','lost')) as total,
       AVG(amount) FILTER (WHERE stage='awarded') as avg_won_amount
     FROM bids WHERE gc=$1 AND deleted_at IS NULL
-  `, [bid.gc]);
+      AND ($2::uuid IS NULL OR salesperson_id = $2::uuid)
+  `, [bid.gc, scope]);
 
   const { rows: overall } = await pool.query(`
     SELECT
       COUNT(*) FILTER (WHERE stage='awarded') as won,
       COUNT(*) FILTER (WHERE stage='lost') as lost
     FROM bids WHERE deleted_at IS NULL
-  `);
+      AND ($1::uuid IS NULL OR salesperson_id = $1::uuid)
+  `, [scope]);
 
   const gc = gcStats[0];
   const ov = overall[0];
@@ -1226,6 +1239,14 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   const { price, internalNotes } = req.body as { price?: string; internalNotes?: string };
 
   if (!price?.trim()) return res.status(400).json({ error: 'price is required' });
+  // Validate before any DB write — a "$" or comma in the price must never reach
+  // agent4_price NUMERIC(12,2) and crash after the paid Agent 4 call. Parsed here,
+  // before agent4_status is stamped 'running', so a bad price never leaves the run
+  // half-started.
+  const parsedPrice = parseMoney(price);
+  if (parsedPrice === null) {
+    return res.status(400).json({ error: 'Price must be a positive number (e.g. 425000 or $425,000).' });
+  }
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
 
   const { rows: trRows } = await pool.query(
@@ -1245,6 +1266,17 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   const agent1Output = (trRows[0].agent1_output as string) || '';
   const agent2Output = (trRows[0].agent2_output as string) || '';
 
+  // The estimator's edited Scope of Work (bid_workspaces.scope) and the saved
+  // estimate (bid_estimates) are the estimator's actual work — Agent 4 needs both,
+  // not just the raw Agent 2 output, so their edits and pricing survive into the
+  // proposal. Both are optional; a bid can reach Agent 4 without either.
+  const [{ rows: wsRows }, { rows: estRows }] = await Promise.all([
+    pool.query('SELECT scope FROM bid_workspaces WHERE bid_id=$1', [bidId]),
+    pool.query('SELECT grand_total, overhead_pct, profit_pct, subtotals FROM bid_estimates WHERE bid_id=$1', [bidId]),
+  ]);
+  const workspaceScope = (wsRows[0]?.scope as Record<string, string> | undefined) ?? null;
+  const savedEstimate = estRows[0] ?? null;
+
   // Mark as running and respond immediately — don't wait for AI
   await pool.query(
     `UPDATE takeoff_results SET agent4_status='running', agent4_error=NULL, agent4_output=NULL WHERE bid_id=$1`,
@@ -1253,20 +1285,14 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   res.json({ status: 'running' });
 
   // Run AI call in background
-  const userMsg = [
-    `PROPOSAL REQUEST`,
-    ``,
-    `Total Bid Price: ${price.trim()}`,
-    ``,
-    `Internal Notes from Estimator:`,
-    (internalNotes?.trim() || '(none)'),
-    ``,
-    `--- DRAWING ANALYSIS (Agent 1) ---`,
-    agent1Output.slice(0, 8000),
-    ``,
-    `--- SCOPE & ESTIMATE (Agent 2) ---`,
+  const userMsg = buildAgent4UserMessage({
+    price,
+    internalNotes,
+    agent1Output,
     agent2Output,
-  ].join('\n');
+    workspaceScope,
+    savedEstimate,
+  });
 
   (async () => {
     try {
@@ -1294,7 +1320,13 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
           agent4_model=$4, usage_agent4=$5,
           agent4_status='complete', agent4_error=NULL
         WHERE bid_id=$6`,
-        [JSON.stringify(parsed), price.trim(), internalNotes?.trim() || null, config.modelA4, JSON.stringify(resp.usage), bidId]
+        [JSON.stringify(parsed), parsedPrice, internalNotes?.trim() || null, config.modelA4, JSON.stringify(resp.usage), bidId]
+      );
+      // The proposal price is the later, more authoritative number — sync it into
+      // the pipeline the same way the estimate save already does.
+      await pool.query(
+        'UPDATE bids SET amount=$1 WHERE id=$2 AND deleted_at IS NULL',
+        [parsedPrice, bidId]
       );
       logger.info({ bidId }, '[agent4] Proposal generated successfully');
     } catch (err) {
@@ -1314,12 +1346,21 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
 
   const { rows: trRows } = await pool.query(
-    'SELECT agent4_output FROM takeoff_results WHERE bid_id=$1',
+    'SELECT agent4_output, agent4_price FROM takeoff_results WHERE bid_id=$1',
     [bidId]
   );
   if (!trRows.length || !trRows[0].agent4_output) {
     return res.status(404).json({ error: 'No proposal data found. Run Agent 4 first.' });
   }
+
+  // agent4_price NUMERIC(12,2) is the authoritative, DB-validated price (see
+  // run-agent4's parseMoney gate) — format it here rather than trusting whatever
+  // string the LLM echoed back into data.totalPrice.
+  const rawPrice = trRows[0].agent4_price as string | number | null;
+  const priceNum = rawPrice === null || rawPrice === undefined ? null : Number(rawPrice);
+  const formattedPrice = priceNum !== null && Number.isFinite(priceNum)
+    ? `$${priceNum.toLocaleString('en-US', { minimumFractionDigits: Number.isInteger(priceNum) ? 0 : 2, maximumFractionDigits: 2 })}`
+    : undefined;
 
   let proposalData: ProposalJSON;
   try {
@@ -1351,10 +1392,41 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
       projectAddress: bid?.loc,
       gcName: bid?.gc,
       gcContact: bid?.contact,
+      totalPrice: formattedPrice,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-docx] buildProposalDocx threw');
     return res.status(500).json({ error: `Document build failed: ${err instanceof Error ? err.message : String(err)}` });
+  }
+
+  // File the generated proposal so the Files tab keeps a version history — every
+  // generate-docx call is a new row (replaceExisting is intentionally omitted).
+  // storeDocument (div:'elec', category:'proposal') also uploads these same bytes
+  // to the bid's drive_estimates_folder_id via the same uploadFile helper the
+  // fire-and-forget Scope JSON upload above uses, so this one call covers both
+  // "file it" and "put it in Drive" — a second, separate Drive upload of the
+  // identical buffer would just leave two copies of the same file in that folder.
+  // Storage failure must not block the download — losing the download is worse
+  // than a missed filing (same trade-off as import-prebid's keep()).
+  const dateStr = new Date().toISOString().split('T')[0];
+  const storageFilename = `Proposal - ${asciiName} - ${dateStr}.docx`;
+  try {
+    await storeDocument({
+      file: {
+        buffer: buf,
+        originalname: storageFilename,
+        mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        size: buf.length,
+      } as Express.Multer.File,
+      linkedId: bidId,
+      linkedName: bidName,
+      div: 'elec',
+      category: 'proposal',
+      displayName: storageFilename,
+      uploadedBy: req.user!.name,
+    });
+  } catch (err) {
+    logger.error({ err, bidId }, '[generate-docx] storeDocument failed');
   }
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');

@@ -8,6 +8,7 @@ import { moneyFull } from '../../lib/money';
 import FilePreviewModal from '../../components/FilePreviewModal';
 import { useDocPreview } from '../../components/useDocPreview';
 import { buildScopeFromPrebid, PrebidSection } from './prebidScope';
+import { overridesFromEstimate } from './estimateHydrate';
 import PreBidTab from './PreBidTab';
 
 interface Props {
@@ -285,6 +286,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [svcPanel,    setSvcPanel]    = useState(() => ws.confirmedService?.panel    ?? '');
   const [propPrice,  setPropPrice]  = useState('');
   const [propNotes,  setPropNotes]  = useState('');
+  // A 400 from run-agent4 (e.g. an unparseable price) happens synchronously, before
+  // agent4_status is ever touched — the polling-driven "Agent 4 Did Not Complete"
+  // panel below (agent4Status === 'error') can't show it. Surfaced separately, inline.
+  const [agent4StartError, setAgent4StartError] = useState<string | null>(null);
   const [agent4Running, setAgent4Running] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const [importBidFile, setImportBidFile] = useState<File | null>(null);
@@ -463,6 +468,30 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }).catch(() => {});
   }, [bid.id]);
 
+  // Hydrate overhead/profit/overrides from the saved bid_estimates row once it
+  // loads. Without this, App.tsx's restore-on-refresh hardcodes
+  // estimateOverrides={}, overheadPct=10, profitPct=15 even when bid_estimates
+  // holds the estimator's real values — a refresh silently resets pricing.
+  // Only apply while the workspace's local pricing state is still pristine
+  // (untouched since restore): a saved estimate that resolves after the estimator
+  // has already started editing this session must never clobber their edits.
+  useEffect(() => {
+    if (!savedEstimate) return;
+    const current = wsRef.current;
+    const isPristine = current.overheadPct === 10 && current.profitPct === 15
+      && Object.keys(current.estimateOverrides).length === 0;
+    if (!isPristine) return;
+    const overrides = overridesFromEstimate(savedEstimate.line_items);
+    const hasRealValues = savedEstimate.overhead_pct !== 10 || savedEstimate.profit_pct !== 15
+      || Object.keys(overrides).length > 0;
+    if (!hasRealValues) return;
+    set({
+      overheadPct: savedEstimate.overhead_pct,
+      profitPct: savedEstimate.profit_pct,
+      estimateOverrides: overrides,
+    });
+  }, [savedEstimate]);
+
   // Pre-fill service fields from Agent 1 output when it becomes available (skips already-filled fields)
   useEffect(() => {
     const agent1 = aiResults?.agent1_output as string | undefined;
@@ -604,6 +633,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const saveEstimate = async () => {
     const items = computePricingItems();
     if (!items.length) return;
+    // A category missing from the unit-cost library silently prices at $0 — flag
+    // it here too (mirrors the Pricing tab banner) so a rep saving without ever
+    // opening that tab still sees the grand total is understated.
+    const zeroCostCount = items.filter(li => li.unit_cost === 0 && !li.overridden).length;
     setSavingEstimate(true);
     try {
       const { data } = await api.put(`/estimates/${bid.id}`, {
@@ -614,7 +647,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       setSavedEstimate(data);
       setEstimateSaved(true);
       setTimeout(() => setEstimateSaved(false), 3000);
-      showToast({ title: 'Estimate saved', sub: `Grand total: ${moneyFull(data.grand_total)}` });
+      showToast({
+        title: 'Estimate saved',
+        sub: zeroCostCount > 0
+          ? `Grand total: ${moneyFull(data.grand_total)} — ${zeroCostCount} line item${zeroCostCount === 1 ? '' : 's'} priced at $0 (no unit cost)`
+          : `Grand total: ${moneyFull(data.grand_total)}`,
+      });
     } finally {
       setSavingEstimate(false);
     }
@@ -630,10 +668,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       showToast({ title: 'Price required', sub: 'Enter the total bid price before generating the proposal' });
       return;
     }
+    setAgent4StartError(null);
     setAgent4Running(true);
     try {
       await api.post(`/preconstruction/${bid.id}/run-agent4`, {
-        price: propPrice,
+        // Strip $/commas/whitespace before POSTing — the box keeps whatever the
+        // estimator typed, the server only ever sees a clean numeric string.
+        price: propPrice.replace(/[$,\s]/g, ''),
         internalNotes: propNotes,
       });
       // Backend returns immediately — poll for completion
@@ -641,6 +682,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     } catch (err) {
       setAgent4Running(false);
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to start Agent 4';
+      setAgent4StartError(msg);
       showToast({ title: 'Agent 4 error', sub: msg });
     }
   };
@@ -1812,7 +1854,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, marginBottom: 16 }}>
                   <div>
                     <label style={labelStyle}>Total Bid Price ($)</label>
-                    <input type="number" value={propPrice} onChange={e => setPropPrice(e.target.value)}
+                    <input type="number" value={propPrice}
+                      onChange={e => { setPropPrice(e.target.value); setAgent4StartError(null); }}
                       placeholder="e.g. 285000" style={fieldStyle}/>
                   </div>
                   <div>
@@ -1822,6 +1865,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       rows={3} style={{ ...fieldStyle, resize: 'vertical', lineHeight: 1.5 }}/>
                   </div>
                 </div>
+                {agent4StartError && (
+                  <div style={{
+                    marginBottom: 16, padding: '10px 14px', borderRadius: 8,
+                    background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.4)',
+                    color: 'var(--amber)', fontSize: 12.5, fontWeight: 700,
+                  }}>
+                    {agent4StartError}
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                   <button className="btn" onClick={runAgent4Proposal}
                     disabled={agent4Running || !propPrice.trim() || !aiResults?.agent2_output}
@@ -1984,6 +2036,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         const totalOverhead = totalDirect * (ws.overheadPct / 100);
         const totalProfit   = (totalDirect + totalOverhead) * (ws.profitPct / 100);
         const grandTotal    = totalDirect + totalOverhead + totalProfit;
+        // A category missing from the unit-cost library resolves to unit_cost 0
+        // (lookupUnitCost's ?? 0 fallback) and silently prices that line at $0 —
+        // the grand total then understates the bid with no visible signal. A
+        // user-overridden $0 is a deliberate choice, not a missing-cost gap, so
+        // it's excluded here.
+        const zeroCostCount = pricingLineItems.filter(li => li.unit_cost === 0 && !li.overridden).length;
         const compCount = savedEstimate?.comp_count ?? 0;
         const confidence = savedEstimate?.confidence ?? (compCount >= 3 ? 'HIGH' : compCount >= 1 ? 'MEDIUM' : 'LOW');
         const confColor = confidence === 'HIGH' ? 'var(--green)' : confidence === 'MEDIUM' ? 'var(--amber)' : 'var(--text3)';
@@ -2067,17 +2125,29 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                                   <td className="num" style={{ textAlign: 'right' }}>{li.qty}</td>
                                   <td className="sub">{li.unit}</td>
                                   <td style={{ textAlign: 'right', padding: '4px 8px' }}>
-                                    <input
-                                      type="number"
-                                      min={0}
-                                      value={li.unit_cost}
-                                      onChange={e => {
-                                        const key = `${li.category}||${li.item}`;
-                                        const val = Number(e.target.value);
-                                        set({ estimateOverrides: { ...ws.estimateOverrides, [key]: val } });
-                                      }}
-                                      style={{ width: 90, textAlign: 'right', font: 'inherit', fontSize: 13, fontWeight: 700, color: li.overridden ? 'var(--blue)' : 'var(--text)', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 6, padding: '4px 8px', outline: 'none' }}
-                                    />
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+                                      {li.unit_cost === 0 && !li.overridden && (
+                                        <span title="No unit cost found in the cost library — priced at $0, understating the total"
+                                          style={{
+                                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                            width: 15, height: 15, borderRadius: '50%', flexShrink: 0,
+                                            background: 'var(--amber)', color: '#fff', fontSize: 10, fontWeight: 900, lineHeight: 1,
+                                          }}>
+                                          !
+                                        </span>
+                                      )}
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        value={li.unit_cost}
+                                        onChange={e => {
+                                          const key = `${li.category}||${li.item}`;
+                                          const val = Number(e.target.value);
+                                          set({ estimateOverrides: { ...ws.estimateOverrides, [key]: val } });
+                                        }}
+                                        style={{ width: 90, textAlign: 'right', font: 'inherit', fontSize: 13, fontWeight: 700, color: li.overridden ? 'var(--blue)' : li.unit_cost === 0 ? 'var(--amber)' : 'var(--text)', background: 'var(--surface2)', border: li.unit_cost === 0 && !li.overridden ? '1px solid rgba(224,165,59,.5)' : '1px solid var(--border2)', borderRadius: 6, padding: '4px 8px', outline: 'none' }}
+                                      />
+                                    </div>
                                   </td>
                                   <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{moneyFull(li.total)}</td>
                                 </tr>
@@ -2093,6 +2163,18 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     </table>
                   </div>
                 </div>
+
+                {zeroCostCount > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', background: 'var(--amber-soft)',
+                    border: '1px solid rgba(224,165,59,.4)', borderRadius: 10, fontSize: 12.5, fontWeight: 700, color: 'var(--amber)', marginBottom: 16 }}>
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+                      background: 'var(--amber)', color: '#fff', fontSize: 12, fontWeight: 900, lineHeight: 1,
+                    }}>!</span>
+                    {zeroCostCount} line item{zeroCostCount === 1 ? '' : 's'} {zeroCostCount === 1 ? 'has' : 'have'} no unit cost and {zeroCostCount === 1 ? 'is' : 'are'} priced at $0 — the grand total is understated.
+                  </div>
+                )}
 
                 <div className="panel" style={{ padding: '16px 20px' }}>
                   <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 14 }}>Summary</div>
