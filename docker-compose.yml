@@ -1,4 +1,7 @@
 version: '3.9'
+# Pinned so the project (container/volume names like electrical-program-db-1)
+# survives folder renames — compose otherwise derives it from the directory name.
+name: electrical-program
 services:
   db:
     image: postgres:16-alpine
