@@ -143,7 +143,15 @@ router.post('/:id/accept', requireAuth, async (req: AuthRequest, res) => {
     const loc     = o.loc ?? it.loc;
     const contact = o.contact ?? it.contact;
     const amount  = o.amount ?? it.amount;
-    const notes   = o.notes ?? it.notes;
+    let   notes   = o.notes ?? it.notes;
+    // Email-sourced items are prefilled with the format parser's one-line summary (or the raw
+    // snippet, for senders with no format parser). If the reviewer cleared it, don't file the
+    // bid with blank notes when we have the original email snippet on hand — carry that
+    // forward instead of losing the invitation's context entirely. (due_time has no home on
+    // bids — out of scope — so it isn't carried through here.)
+    if ((typeof notes !== 'string' || !notes.trim()) && it.source === 'email' && it.body_snippet) {
+      notes = it.body_snippet;
+    }
     const due     = o.due ?? it.due;
     const sqFt    = o.sq_ft ?? it.sq_ft;
     // intake_items carries no project_type/brand columns of its own — these are pass-through
