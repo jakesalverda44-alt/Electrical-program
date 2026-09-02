@@ -13,6 +13,7 @@ const ALL_KEYS = [
   'ai_temperature',
   'ai_prompt_agent1', 'ai_prompt_agent2', 'ai_prompt_agent3', 'ai_prompt_agent4',
   'ai_reply_draft_model', 'ai_build_from_notes_model',
+  'ai_prep_classifier_model',
   'ai_prep_dpi_schedule', 'ai_prep_dpi_plan', 'ai_prep_tiles_schedule', 'ai_prep_tiles_plan',
 ];
 
@@ -204,6 +205,23 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
       <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 4 }}>
         <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8, marginTop: 12 }}>
           Document Prep
+        </div>
+        {/* FIX-8 (post-review) — ai_prep_classifier_model is read in loadAIConfig
+            (Task 2's cheap page-classification model) but had no field here,
+            so it was never actually settable from the UI. */}
+        <div style={{ maxWidth: 300, marginBottom: 4 }}>
+          {(() => {
+            const cur = vals.ai_prep_classifier_model;
+            const models = cur && !TEXT_MODELS.includes(cur) ? [cur, ...TEXT_MODELS] : TEXT_MODELS;
+            return (
+              <Field label="Page Classifier Model" desc="Task 2's cheap title-block page classifier. Default: claude-haiku-4-5-20251001.">
+                <select style={{ ...inputStyle, appearance: 'none' }} value={vals.ai_prep_classifier_model} onChange={set('ai_prep_classifier_model')}>
+                  <option value="">claude-haiku-4-5-20251001 (default)</option>
+                  {models.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </Field>
+            );
+          })()}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0 16px', maxWidth: 640 }}>
           {DOC_PREP_ROWS.map(row => (

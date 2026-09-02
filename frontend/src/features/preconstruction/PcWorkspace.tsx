@@ -633,11 +633,26 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
   const computePricingItems = (): EstimateLineItem[] => {
     if (savedEstimate?.line_items?.length) {
+      // FIX-3 (post-review) — a saved estimate's rows may predate confidence
+      // tracking (or otherwise lack it), which left the chips/counts/toast
+      // permanently dead on any bid with a saved estimate — re-running the
+      // takeoff never helped, since this branch never looked at the fresh
+      // takeoff again. Build the fresh takeoff alongside the saved rows and
+      // backfill each saved row's MISSING confidence by key, never
+      // overwriting a confidence value the saved row already has.
+      const freshItems = buildLineItemsFromTakeoff(
+        aiResults?.agent2_output as string | undefined,
+        unitCostLib,
+        bid.project_type,
+        ws.estimateOverrides
+      );
+      const freshConfidenceByKey = new Map(freshItems.map(li => [`${li.category}||${li.item}`, li.confidence]));
       return savedEstimate.line_items.map(li => {
         const key = `${li.category}||${li.item}`;
         const ov = ws.estimateOverrides[key];
         const unit_cost = ov !== undefined ? ov : li.unit_cost;
-        return { ...li, unit_cost, total: li.qty * unit_cost, overridden: ov !== undefined || li.overridden };
+        const confidence = li.confidence !== undefined ? li.confidence : freshConfidenceByKey.get(key);
+        return { ...li, unit_cost, total: li.qty * unit_cost, overridden: ov !== undefined || li.overridden, confidence };
       });
     }
     return buildLineItemsFromTakeoff(

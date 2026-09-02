@@ -273,3 +273,77 @@ describe('PcWorkspace Pricing tab — confidence chips (Task 5)', () => {
     expect(call.sub).not.toMatch(/verification/);
   });
 });
+
+// FIX-3 (post-review): computePricingItems short-circuited to
+// savedEstimate.line_items whenever a saved estimate existed — old rows
+// saved before confidence tracking existed have no `confidence` field, so
+// chips/counts/toast never appeared and re-running the takeoff didn't help
+// (this branch never looked at the fresh takeoff again). Confidence must be
+// backfilled by category||item from a freshly-built takeoff, without ever
+// overwriting a confidence value the saved row already carries.
+function mockApiWithFreshTakeoff(estimate: BidEstimate | null, agent2Output: string) {
+  get.mockImplementation((url: string) => {
+    if (url === `/estimates/${bid.id}`) return Promise.resolve({ data: estimate });
+    if (url === '/estimates/unit-costs') return Promise.resolve({ data: { global: {}, by_project_type: {} } });
+    if (url === `/preconstruction/${bid.id}/results`) return Promise.resolve({ data: { status: 'complete', agent2_output: agent2Output } });
+    if (url.startsWith('/documents?linked_id=')) return Promise.resolve({ data: [] });
+    return Promise.resolve({ data: null });
+  });
+  post.mockResolvedValue({ data: {} });
+  put.mockResolvedValue({ data: {} });
+  del.mockResolvedValue({ data: {} });
+}
+
+describe('PcWorkspace Pricing tab — confidence backfill on a saved estimate (FIX-3)', () => {
+  it('backfills a saved line item\'s missing confidence from a fresh agent2 takeoff, without overwriting a confidence the saved row already has', async () => {
+    const estimate: BidEstimate = {
+      bid_id: 'b1',
+      overhead_pct: 10,
+      profit_pct: 15,
+      line_items: [
+        // Saved before confidence tracking existed — no `confidence` field at all.
+        { category: 'LIGHTING', item: 'Wall Pack Fixture', qty: 2, unit: 'EA', unit_cost: 175, total: 350, overridden: false },
+        // Already carries its own confidence — must NOT be clobbered by the fresh takeoff's value.
+        { category: 'BRANCH POWER', item: 'Duplex Receptacle', qty: 10, unit: 'EA', unit_cost: 25, total: 250, overridden: false, confidence: 'ASSUMED' },
+      ],
+      subtotals: {}, total_direct: 600, total_overhead: 0, total_profit: 0, grand_total: 600,
+      comp_count: 0, confidence: 'LOW',
+    };
+    const agent2Output = JSON.stringify({
+      takeoff: [
+        { category: 'LIGHTING', item: 'Wall Pack Fixture', qty: 2, unit: 'EA', confidence: 'VERIFIED' },
+        { category: 'BRANCH POWER', item: 'Duplex Receptacle', qty: 10, unit: 'EA', confidence: 'VERIFIED' },
+      ],
+    });
+    mockApiWithFreshTakeoff(estimate, agent2Output);
+    renderPricingTab();
+
+    await waitFor(() => expect(screen.getByText('Wall Pack Fixture')).toBeTruthy());
+    // Backfilled from the fresh takeoff: VERIFIED -> FIRM chip.
+    expect(screen.getByText('FIRM')).toBeTruthy();
+    // Not overwritten: the saved row's own ASSUMED -> APPROX chip survives.
+    expect(screen.getByText('APPROX')).toBeTruthy();
+    expect(screen.getByText(/1 FIRM · 1 APPROX · 0 VERIFY/)).toBeTruthy();
+  });
+
+  it('leaves chips absent when the fresh takeoff has no matching row to backfill from', async () => {
+    const estimate: BidEstimate = {
+      bid_id: 'b1',
+      overhead_pct: 10,
+      profit_pct: 15,
+      line_items: [
+        { category: 'LIGHTING', item: 'Wall Pack Fixture', qty: 2, unit: 'EA', unit_cost: 175, total: 350, overridden: false },
+      ],
+      subtotals: {}, total_direct: 350, total_overhead: 0, total_profit: 0, grand_total: 350,
+      comp_count: 0, confidence: 'LOW',
+    };
+    // No agent2_output at all — nothing to backfill from.
+    mockApiWithFreshTakeoff(estimate, '');
+    renderPricingTab();
+
+    await waitFor(() => expect(screen.getByText('Wall Pack Fixture')).toBeTruthy());
+    expect(screen.queryByText('FIRM')).toBeNull();
+    expect(screen.queryByText('APPROX')).toBeNull();
+    expect(screen.queryByText('VERIFY')).toBeNull();
+  });
+});
