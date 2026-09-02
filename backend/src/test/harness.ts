@@ -48,7 +48,12 @@ export interface TestUser { id: string; name: string; email: string; role: strin
 /** Create a user with the given role and return a signed token for it. */
 export async function makeUser(role: string): Promise<TestUser> {
   seq++;
-  const email = `it_${role}_${Date.now()}_${seq}@test.local`;
+  // pid + random suffix: `seq` is per-worker module state and Date.now() has
+  // millisecond resolution, so two parallel vitest workers minting the same role
+  // in the same millisecond used to collide on users_email_key (flaky failures
+  // in whichever test files ran together that time).
+  const uniq = `${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
+  const email = `it_${role}_${Date.now()}_${seq}_${uniq}@test.local`;
   const name = `IT ${role} ${seq}`;
   const { rows } = await pool.query(
     `INSERT INTO users (name, email, role, password_hash, status) VALUES ($1,$2,$3,'x','active') RETURNING id`,
