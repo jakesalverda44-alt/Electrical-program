@@ -406,3 +406,61 @@ describe('run-agent4 price validation', () => {
       .expect(400);
   });
 });
+
+describe('generate-docx files every generated proposal', () => {
+  it('writes a documents row (category proposal) after a successful build', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `Filed ${Date.now()}`, gc: 'G' }).expect(200);
+    const bidId = bid.body.id as string;
+    // A minimal-but-valid ProposalJSON — every field is optional, and the price
+    // comes from agent4_price (parseMoney-validated), not data.totalPrice, so an
+    // otherwise-empty object is enough to exercise buildProposalDocx end to end.
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, agent2_output, agent4_output, agent4_price, agent4_status)
+       VALUES ($1,'{}','{}',425000,'complete')`,
+      [bidId]
+    );
+
+    const res = await request(app)
+      .get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token))
+      .expect(200);
+    expect(res.headers['content-type']).toMatch(/wordprocessingml/);
+
+    // No CLOUDINARY_*/Drive folder configured in the test environment, so
+    // storeDocument falls back to storing the bytes as base64 on the row itself —
+    // still enough to prove the filing happened, independent of external storage.
+    const { rows } = await pool.query(
+      `SELECT category, linked_id, file_data IS NOT NULL AS has_data
+       FROM documents WHERE linked_id=$1 AND category='proposal'`,
+      [bidId]
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].linked_id).toBe(bidId);
+    expect(rows[0].has_data).toBe(true);
+  });
+
+  it('generating twice yields two documents rows (version history, not replaceExisting)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `FiledTwice ${Date.now()}`, gc: 'G' }).expect(200);
+    const bidId = bid.body.id as string;
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, agent2_output, agent4_output, agent4_price, agent4_status)
+       VALUES ($1,'{}','{}',425000,'complete')`,
+      [bidId]
+    );
+
+    await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token)).expect(200);
+    await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token)).expect(200);
+
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS n FROM documents WHERE linked_id=$1 AND category='proposal'`,
+      [bidId]
+    );
+    expect(rows[0].n).toBe(2);
+  });
+
+});

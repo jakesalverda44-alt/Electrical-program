@@ -1367,6 +1367,36 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
     return res.status(500).json({ error: `Document build failed: ${err instanceof Error ? err.message : String(err)}` });
   }
 
+  // File the generated proposal so the Files tab keeps a version history — every
+  // generate-docx call is a new row (replaceExisting is intentionally omitted).
+  // storeDocument (div:'elec', category:'proposal') also uploads these same bytes
+  // to the bid's drive_estimates_folder_id via the same uploadFile helper the
+  // fire-and-forget Scope JSON upload above uses, so this one call covers both
+  // "file it" and "put it in Drive" — a second, separate Drive upload of the
+  // identical buffer would just leave two copies of the same file in that folder.
+  // Storage failure must not block the download — losing the download is worse
+  // than a missed filing (same trade-off as import-prebid's keep()).
+  const dateStr = new Date().toISOString().split('T')[0];
+  const storageFilename = `Proposal - ${asciiName} - ${dateStr}.docx`;
+  try {
+    await storeDocument({
+      file: {
+        buffer: buf,
+        originalname: storageFilename,
+        mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        size: buf.length,
+      } as Express.Multer.File,
+      linkedId: bidId,
+      linkedName: bidName,
+      div: 'elec',
+      category: 'proposal',
+      displayName: storageFilename,
+      uploadedBy: req.user!.name,
+    });
+  } catch (err) {
+    logger.error({ err, bidId }, '[generate-docx] storeDocument failed');
+  }
+
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Content-Length', buf.length);
