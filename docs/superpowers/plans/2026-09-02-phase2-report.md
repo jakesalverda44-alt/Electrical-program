@@ -277,3 +277,291 @@ Not pushed, per instructions.
   new commits are the two from this session (`0f20021`, `89858c0`) plus this
   report's commit.
 - One commit per task; no `--amend`, no force operations, nothing pushed.
+
+## Post-review fixes
+
+An adversarial review of the merged phase found eight defects (FIX-1 through
+FIX-8 below), all verified against the code before fixing. This section
+covers the fix round, executed as its own set of commits on
+`feat/phase2-takeoff-fidelity` after the six tasks above.
+
+### FIX-1 (HIGH) — restore the filename fallback for purely non-electrical PDFs
+
+**Commit `20ac159`.** `documentPrep.ts`'s per-file `isElectricalSheet` filter
+stopped applying to PDFs once Task 2 switched to page-level classification —
+combined with `pageClassifier.selectPages`'s per-file all-excluded guard
+(which falls back to including *every* page when a real selection would be
+empty), a purely architectural PDF uploaded alongside a real electrical set
+(e.g. `"A101 Architectural.pdf"`) rode that guard straight into full tiling
+and billing.
+
+- `selectPages` now returns `{ pages, allExcluded }` instead of a bare
+  array — the guard firing is a fact callers can inspect, not something
+  baked silently into the returned page list.
+- `isElectricalSheet` moved from `preconstruction.ts` to `documentPrep.ts`
+  (exported) so `pageClassifier.ts` can use it without a circular import.
+- New pure `pageClassifier.shouldDropWholeFile(classifications, filename)`:
+  true only when the guard fired AND the filename itself reads as
+  non-electrical — an electrical/ambiguous filename keeps today's
+  include-everything fallback exactly as before.
+- New pure `pageClassifier.reviveIfAllDropped(files)`: the whole-upload
+  safety net — if every classified PDF in a batch would be dropped, revert
+  every drop rather than sending Agent 1 nothing (mirrors the pre-existing
+  `isElectricalSheet`-based `filesToSend` guard for non-PDF images).
+- `preconstruction.ts`'s `classifyAndSelectPdfPages` (later folded into
+  FIX-2's `prepOnePdf`) applies the drop decision and records dropped pages
+  in `prep_inventory` with `included: false` and a `reason` string instead
+  of vanishing silently.
+- Tests (`pageClassifier.test.ts`): `shouldDropWholeFile` — architectural
+  filename + all-non-electrical pages drops; electrical filename + all-other
+  pages does not drop; ambiguous filename does not drop; a real (non-guard)
+  selection is never dropped regardless of filename. `reviveIfAllDropped` —
+  reverts when every file is dropped; leaves drops alone when at least one
+  file survives; no-op on empty input. `selectPages`'s existing tests
+  updated for the new `{pages, allExcluded}` shape.
+
+### FIX-2 (HIGH, own commit) — batch Agent 1 by estimated token budget, not file count
+
+**Commit `390e962`.** Stage 0 split work into one Agent 1 call per
+`BATCH_SIZE` *files* (1 file/call whenever more than one PDF was uploaded,
+otherwise the whole upload in a single call) — unrelated to how much content
+a call actually carries. A single combined PDF with ~19 selected pages went
+out as ONE call: at up to 15 tiles/page (Task 3's schedule-class cap) and
+~3000 estimated tokens/tile, that's comfortably over the 200k context window
+and matches the plan's own "~400s timeout" headline scenario. This was also
+the fix that required addressing the reviewer's F6 finding
+(`extractPdfPageTexts` running twice per PDF).
+
+**New `backend/src/ai/agent1Batching.ts`** (pure packing + one non-pure
+block-builder):
+- `TOKENS_PER_TILE = 3000` — approximates Anthropic's `(width_px *
+  height_px) / 750` vision pricing post the 1568px-long-edge downscale;
+  documented in the module comment rather than measuring each tile's actual
+  pixel dimensions (the whole point is estimating *before* paying the
+  rasterization cost).
+- `tilesForClass(cls)` — a class's `maxTilesPerPage` (Task 3) doubles as the
+  natural full-grid tile count for a standard 36x24 sheet at that class's
+  target tile size, so it's a reasonable pre-rasterization estimate.
+- `estimatePageTokens(cls, textChars)` = `tilesForClass(cls) *
+  TOKENS_PER_TILE + ceil(textChars / 4) + PAGE_TOKEN_OVERHEAD(200)`.
+- `orderScheduleFirst(units)` — stable sort, schedule pages before detail
+  before plan, across the *whole* upload (not just within one file).
+- `packPagesByBudget(units, budget)` — greedy packer: appends to the
+  current batch until it would exceed `AGENT1_INPUT_BUDGET = 100_000`, then
+  starts a new one; a single unit whose own estimate exceeds the budget gets
+  isolated into its own batch rather than blocking the packer.
+- `buildBlocksForBatch(units)` — the non-pure counterpart: groups a batch's
+  PDF-page units by filename (one `tilesForSelectedPdfPages` call per file
+  per batch, regardless of how the packer interleaved pages from different
+  files), then reassembles blocks in the batch's original packed order. The
+  Task 1 total-text cap (`TOTAL_TEXT_CAP`) is now scoped **per batch**
+  rather than per whole run — its purpose was always to protect a single
+  Agent 1 call's context window, which is now this batch's job exactly once
+  per call instead of once for a possibly-multi-call upload.
+
+**`preconstruction.ts` restructuring:**
+- `prepOnePdf` — classification, page selection, and text extraction run
+  **exactly once per file** (fixes F6). Returns `pages: PdfPageSelection[] |
+  null`: non-null whenever a page count is known, either from a real
+  classification or, when classification fails outright but `pdftotext`
+  still succeeded, a synthesized uniform filename-based selection (today's
+  whole-file `classifySheet` guess) covering every known page — so even a
+  classifier failure still packs by the token budget instead of going out
+  as one oversized call. `pages` is `null` only in the true last-resort
+  case (poppler entirely unavailable, or `pdftotext` also unavailable/failed
+  after classification did) — that PDF goes out as a single opaque document
+  block, sized to force it into its own batch since its true size is
+  unknown.
+- `prepareAgent1Upload` — builds one `Agent1WorkUnit` per page (or per
+  whole file for images/opaque fallbacks) across the *entire* upload, wires
+  in FIX-1's drop/revive logic, orders schedule-first, packs by budget, and
+  turns each packed batch into Agent 1 content blocks.
+- `runPipeline`'s Agent 1 section now iterates `agent1Batches` (however many
+  the packer produced) instead of file-count-derived batches; a single
+  batch still takes the pre-existing single-pass code path (`agent1Batches.length
+  <= 1`), multiple batches still go through the pre-existing
+  `mergeAgent1Batches` merge path — neither downstream path changed.
+
+**Two other fixes ride along in this same rewritten code** (both touch
+lines this restructuring necessarily rewrites — not practically separable
+into their own commits):
+- **FIX-5's inventory `classified` flag** — `PrepInventoryEntry` gained
+  `classified: boolean`, set from `c.discipline !== 'unknown'` inside
+  `prepOnePdf`'s inventory-building code.
+- **FIX-7 (LOW)** — `usage_agent1` now persists the FULL Anthropic `usage`
+  shape. Single-pass path: `{ ...resp.usage, input_tokens: ..., output_tokens:
+  ... }` (spreads `cache_creation_input_tokens`/`cache_read_input_tokens`
+  through, only overriding the two token counts to fold in classifier
+  usage). Multi-batch path: a new `mergeUsage(a, b)` helper sums every
+  numeric field across batches (and classifier usage) instead of reshaping
+  down to just `input_tokens`/`output_tokens`.
+
+**Tests** (`agent1Batching.test.ts`, 14 cases): `tilesForClass` /
+`estimatePageTokens` composition; `orderScheduleFirst` grouping, stability,
+non-mutation; `packPagesByBudget` — fits-in-one, splits-at-budget,
+oversized-single-page isolation, ordering preserved across all batches,
+empty input. A **realistic 62-page/19-selected-page scenario** (3 schedule +
+2 detail + 14 plan pages, matching a plausible c-store electrical section
+mix) asserts every resulting batch is `<= AGENT1_INPUT_BUDGET` and that
+every page appears exactly once across the batches in order.
+
+**Plan-verification trace update (supersedes the original Task 2 trace item
+"(b) a 62-page set with 19 electrical pages tiles only ~19 pages plus
+cover"):** with the realistic mix above, `packPagesByBudget` produces
+**5 calls**, each measured under the 100k-token budget:
+
+```
+batch 1: pages [44,45]          ~90,650 est. tokens (2 schedule pages)
+batch 2: pages [46,47,48]       ~99,975 est. tokens (1 schedule + 2 detail)
+batch 3: pages [49,50,51,52,53] ~91,625 est. tokens (5 plan)
+batch 4: pages [54,55,56,57,58] ~91,625 est. tokens (5 plan)
+batch 5: pages [59,60,61,62]    ~73,300 est. tokens (4 plan)
+```
+
+The exact call count depends on the real set's class mix — an all-plan
+section would pack tighter (closer to 2 calls); a schedule-heavy section
+(every schedule page near the ~44k-token/page estimate the reviewer's own
+math used) packs looser. What's invariant, and what this fix actually
+guarantees, is that **every batch fits under budget** — the headline
+scenario (one oversized call, ~400s timeout risk) cannot happen regardless
+of mix.
+
+### FIX-3 (MED-HIGH) — confidence chips were dead on any bid with a saved estimate
+
+**Commit `3dfdf4d`.** `PcWorkspace.tsx`'s `computePricingItems` short-circuited
+to `savedEstimate.line_items` whenever a saved estimate existed — old rows
+(saved before confidence tracking existed, or from any other path that
+didn't carry it) have no `confidence` field, so the chips, header count, and
+save-toast clause never appeared, and re-running the takeoff didn't help
+because this branch never looked at the fresh takeoff again.
+
+`computePricingItems` now also builds the fresh takeoff (`buildLineItemsFromTakeoff`
+off `aiResults?.agent2_output`) whenever a saved estimate exists, and
+backfills each saved row's confidence by `category||item` key from the
+fresh build — **only when the saved row's own `confidence` is `undefined`**,
+never overwriting a value the saved row already carries.
+
+Tests (`PcWorkspacePricing.test.tsx`, 2 new cases): a saved estimate with
+one row missing confidence and one row carrying its own (`ASSUMED`) +
+a fresh agent2 takeoff with `VERIFIED` values for both — asserts the
+missing row backfills to a FIRM chip while the existing row's APPROX chip
+is untouched (header count `1 FIRM · 1 APPROX · 0 VERIFY`); a saved estimate
+with no matching fresh-takeoff row renders no chips at all (nothing to
+backfill from).
+
+### FIX-4 (MED) — sheet-label/EXTRACTED-TEXT header collision broke per-sheet logging
+
+**Commit `daea4ad`.** The page-selection tiling path in `documentPrep.ts`
+emitted `--- Sheet <label> ---` (no colon) while `preconstruction.ts`'s
+`summarizePrep` matches `'--- Sheet:'` (with colon) to attribute tiles to a
+sheet for logging — so per-sheet tile counts silently broke for every
+page-classified PDF (Task 2's whole point). Fixed by adding the colon back;
+`summarizePrep` additionally now explicitly excludes any block containing
+`'EXTRACTED TEXT'` (pdfText.ts's per-page text header, which is `'--- Sheet
+<label> p<N> — EXTRACTED TEXT ...'` — no colon) so the two header shapes can
+never be confused regardless of future label text.
+
+The `documentPrep.test.ts` assertions that counted "sheets" via
+`b.text.startsWith('--- Sheet')` (no colon) were fragile in exactly the way
+the review flagged — they'd also match an EXTRACTED TEXT header. Updated to
+`startsWith('--- Sheet:')`, and a new test proves it: a page with >=200
+chars of text (which *does* produce an EXTRACTED TEXT block, per Task 1)
+still yields exactly one real sheet label, not two.
+
+### FIX-5 (MED) — unclassifiable pages defaulted to the lowest fidelity class
+
+**Commit `daea4ad`** (classifier-side pieces) **+ `390e962`** (the
+inventory `classified` flag, which lands inside FIX-2's rewritten
+`prepOnePdf` — see FIX-2 above). `pageClassifier.parseClassifierJSON`
+defaulted a missing/invalid page entry to `cls: 'plan'` — 16"/130DPI, ~98
+px/in, the *lowest*-fidelity class, directly contradicting
+`documentPrep.ts`'s own stated "safer = more detail" philosophy for an
+unknown sheet. Both default sites (missing entry entirely; present but
+invalid `cls` value) now default to `'schedule'` (8"/200DPI, the highest
+per-class fidelity) instead.
+
+Also hardened batch numbering: `pageClassifier.ts`'s per-crop content block
+now reads `"Page N (absolute page number in the full document):"`, the
+per-batch instruction text explicitly says not to renumber from 1, and
+`PAGE_CLASSIFIER_SYSTEM` (`prompts.ts`) gained a "PAGE NUMBERS" section
+making the same point. A new pure `reoffsetIfRelative(rawPages,
+expectedPages)` tolerates a model that ignores all of that and returns a
+relative `1..N` sequence anyway: detected only when the raw response is
+*exactly* `[1, 2, ..., N]` in order and that's not *also* what was actually
+expected (so a legitimate single-batch run starting at page 1 is never
+"corrected" into something wrong) — anything else (partial response,
+out-of-order, genuine absolute numbers) is left untouched.
+`parseClassifierJSON` applies the re-offset before building its `byPage`
+lookup, so a relative-numbered batch 2+ no longer has every page silently
+fall back to `unknown`.
+
+Tests (`pageClassifier.test.ts`): `reoffsetIfRelative` — re-offsets a
+relative response to the expected absolute numbers; leaves a genuinely
+absolute response untouched; does not "correct" a legitimate page-1-start
+run; leaves a mismatched-length or out-of-order response untouched; no-op
+on empty input. `parseClassifierJSON`'s existing default-value tests
+updated to `'schedule'`; a new end-to-end case feeds a batch-2-shaped
+1-3-numbered response with `expectedPages [21,22,23]` and asserts it
+resolves to real classifications keyed by 21/22/23, not three `unknown`
+entries.
+
+### FIX-6 (MED) — tiles now encode as JPEG, not PNG
+
+**Commit `daea4ad`.** `documentPrep.ts`'s tile extraction emitted every
+tile as PNG (`~0.5-1MB` each for dense line-art); 20 pages x up to 15
+tiles/page (Task 3's schedule-class cap) risked OOM and a giant request
+body. Switched to `.jpeg({ quality: 85 })` / `image/jpeg` — a lossy
+re-encode of an already-downscaled raster, not the source drawing, so text
+legibility at that quality is unaffected in practice.
+
+A plain uploaded image (e.g. a `.png` the estimator attaches directly) is
+unaffected — that's a straight passthrough of the original file's own
+media type (`imageToBlock`), never a generated tile.
+
+Test (`documentPrep.test.ts`): rasterizes a real PDF page through
+`buildAgent1Content` and asserts every resulting `image` block's
+`media_type` is `image/jpeg`.
+
+### FIX-7 (LOW) — usage_agent1 lost its cache fields on the single-pass path
+
+**Commit `390e962`**, folded into FIX-2 (see above — same rewritten usage-
+merging code). Summary: single-pass path spreads `resp.usage` before
+overriding `input_tokens`/`output_tokens`, so `cache_creation_input_tokens`/
+`cache_read_input_tokens` survive; the multi-batch path sums every numeric
+usage field across batches via a new `mergeUsage` helper instead of
+reshaping down to two fields.
+
+### FIX-8 (LOW) — ai_prep_classifier_model was unsettable from the UI
+
+**Commit `3dfdf4d`.** `ai_prep_classifier_model` was already read in
+`loadAIConfig` and present in `AppSettings`, but `AISection.tsx` had no
+field for it. Added as a model `<select>` in the "Document Prep" section
+(following the existing per-agent model-dropdown pattern), defaulting to
+`claude-haiku-4-5-20251001`.
+
+### Verification (post-review fix round)
+
+- `cd backend && npm run typecheck` — clean. `npm test` — **470 tests
+  total, 469 pass, 1 fail** (the same pre-existing `integration.test.ts`
+  Kohler-brief failure documented above — untouched by this round's diff,
+  confirmed still failing identically before and after).
+- `cd frontend && npm run typecheck` — clean. `npm test` — **324 tests
+  total, 315 pass, 9 fail** — exactly the 9 pre-existing failures documented
+  above (PWA install-prompt x7, CustomerHub preview x2) — untouched by this
+  round's diff.
+- Working tree clean after each commit; no `--amend`, no force operations,
+  nothing pushed.
+
+### Commits (post-review fix round, in order)
+
+- `20ac159` — FIX-1 (drop purely non-electrical PDFs).
+- `390e962` — FIX-2, own commit as required (token-budget batching; carries
+  FIX-5's inventory flag and FIX-7 as unavoidable same-code riders).
+- `daea4ad` — FIX-4 + FIX-5's classifier-side pieces + FIX-6 (sheet-label
+  colon, safer classifier default, absolute page numbering, JPEG tiles).
+- `3dfdf4d` — FIX-3 + FIX-8 (confidence backfill, classifier model setting).
+- (this section's commit) — report update, committed last per instructions.
+
+Out of scope for this round, per instructions: prompt-text sanitization
+(deferred to Phase 3), classifier cost attribution changes, and any further
+temp-file write reduction beyond FIX-2(a)'s single-extraction change.
