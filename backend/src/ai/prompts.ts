@@ -14,6 +14,7 @@ RULES
 - Every extracted item must include a source sheet reference.
 - Flag ECFECI items (Electrical Contractor Furnished, Electrical Contractor Installed) — panels, switchgear, ATS, generator, lighting fixtures and controls.
 - Keep scope notes to items that directly affect electrical bid scope.
+- When a sheet is preceded by an "EXTRACTED TEXT" block, its text was machine-read directly from the PDF (not OCR) — treat its numbers as the primary source for that sheet, mark quantities read from it VERIFIED, and use the image tiles for that sheet to resolve layout, symbols, and anything the extracted text is missing.
 
 OUTPUT
 Return ONLY valid compact JSON — no prose, no markdown, no explanation.
@@ -201,6 +202,8 @@ RULES
 - Focus only on items that affect bid price or profitability.
 - If scope and quantities are consistent, say so briefly.
 
+PRE-BID CROSS-CHECK: If the user message includes an "INDEPENDENT PRE-BID TAKEOFF" block, it is a human-reviewed count produced independently of this drawing analysis — the strongest QC available. Reconcile it against Agent 2's takeoff: a quantity differing by more than ~20% between the two independent takeoffs, or a category present in only one of them, is a conflicts[] entry citing both numbers. Agreement between the two upgrades your confidence assessment. An UNRESOLVED item from the pre-bid takeoff belongs in missingFromScope[] if Agent 2 also lacks it.
+
 RISK LEVELS
 - HIGH: Will materially affect bid price if wrong. Do not submit without resolving.
 - MEDIUM: Monitor closely. Include contingency.
@@ -354,3 +357,31 @@ Return ONLY valid JSON, no prose or code fences:
   "missingScope": ["..."],
   "notes": "..."
 }`;
+
+// Phase 2 Task 2 — page classification by title block, not filename. Each crop is
+// the right-25%-of-page strip (title blocks live there or bottom-right on most
+// arch/eng sheet formats) at low resolution — cheap enough to run on every page
+// of a combined set before deciding which pages are worth tiling at full fidelity.
+export const PAGE_CLASSIFIER_SYSTEM = `You are a construction document sheet classifier. You are given a numbered sequence of title-block crops (the right edge of each page) from one PDF set.
+
+For EACH crop, read its title block and identify: the sheet number, the sheet title, which discipline it belongs to, and whether it is a schedule, a plan, or a detail sheet. Identify sheets by their title block, never by any filename.
+
+DISCIPLINE — exactly one of: electrical | fuel | lowvoltage | cover | architectural | civil | structural | mechanical | plumbing | other
+- electrical: any E-series sheet — power, lighting, one-lines, panel/equipment schedules, grounding.
+- fuel: fuel-island / dispenser / tank / canopy sheets on a c-store or gas station set — electrical scope routinely lives on these even without an E-prefix.
+- lowvoltage: tele/data, security, fire alarm, sound/intercom sheets (often T-, FA-, or LV-prefixed).
+- cover: the title/cover sheet, index, or general notes sheet for the whole set.
+- architectural, civil, structural, mechanical, plumbing: sheets clearly in that other trade's discipline (A-, C-, S-, M-, P-series).
+- other: anything that doesn't fit the above (e.g. landscape, survey).
+
+CLASS — exactly one of: schedule | plan | detail
+- schedule: dense tables — panel schedules, luminaire/fixture schedules, one-line/riser diagrams, equipment schedules, load calcs.
+- plan: floor/site/photometric/power/lighting plans showing the building or site layout.
+- detail: enlarged details, legends, notes, abbreviations, mounting details.
+
+If a crop is illegible or the title block can't be read, still return an entry for that page with your best guess and low-confidence fields (empty sheetNo/title is fine) rather than omitting the page.
+
+PAGE NUMBERS: Each crop is preceded by a "Page N" label. N is the ABSOLUTE page number of that crop in the FULL document set, not a position within this batch — a later batch of a large set does NOT start at page 1. Always echo the exact number from that label in your "page" field. Never renumber sequentially from 1 for this batch.
+
+OUTPUT: Return ONLY a valid JSON array, no prose, no markdown fences, one entry per page in the order given, using each page's ABSOLUTE page number:
+[{"page": 1, "sheetNo": "E-101", "title": "Electrical Site Plan", "discipline": "electrical", "cls": "plan"}]`;

@@ -13,7 +13,20 @@ const ALL_KEYS = [
   'ai_temperature',
   'ai_prompt_agent1', 'ai_prompt_agent2', 'ai_prompt_agent3', 'ai_prompt_agent4',
   'ai_reply_draft_model', 'ai_build_from_notes_model',
+  'ai_prep_classifier_model',
+  'ai_prep_dpi_schedule', 'ai_prep_dpi_plan', 'ai_prep_tiles_schedule', 'ai_prep_tiles_plan',
 ];
+
+// Task 3 (phase 2 takeoff fidelity): per-class DPI / max-tiles-per-page overrides
+// for Stage 0 doc prep. tileInches itself isn't configurable — it's the fixed
+// lever the fidelity math is built on (see documentPrep.ts's tileSettingsFor);
+// only rendering cost (DPI) and billing cost (tile count) are settings-driven.
+const DOC_PREP_ROWS = [
+  { label: 'Schedule DPI',  key: 'ai_prep_dpi_schedule',   placeholder: '200', min: 72,  max: 300 },
+  { label: 'Plan DPI',      key: 'ai_prep_dpi_plan',       placeholder: '130', min: 72,  max: 300 },
+  { label: 'Schedule Tiles/Page', key: 'ai_prep_tiles_schedule', placeholder: '15', min: 1, max: 24 },
+  { label: 'Plan Tiles/Page',     key: 'ai_prep_tiles_plan',     placeholder: '6',  min: 1, max: 24 },
+] as const;
 
 const AGENT_LABELS = ['Drawing Analysis', 'Scope & Estimate', 'QA Review', 'Proposal Formatter'];
 const PROMPT_KEYS = ['ai_prompt_agent1', 'ai_prompt_agent2', 'ai_prompt_agent3', 'ai_prompt_agent4'] as const;
@@ -187,6 +200,41 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
           </div>
         );
       })()}
+
+      {/* Task 3 (phase 2 takeoff fidelity): per-class doc-prep tuning. */}
+      <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 4 }}>
+        <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8, marginTop: 12 }}>
+          Document Prep
+        </div>
+        {/* FIX-8 (post-review) — ai_prep_classifier_model is read in loadAIConfig
+            (Task 2's cheap page-classification model) but had no field here,
+            so it was never actually settable from the UI. */}
+        <div style={{ maxWidth: 300, marginBottom: 4 }}>
+          {(() => {
+            const cur = vals.ai_prep_classifier_model;
+            const models = cur && !TEXT_MODELS.includes(cur) ? [cur, ...TEXT_MODELS] : TEXT_MODELS;
+            return (
+              <Field label="Page Classifier Model" desc="Task 2's cheap title-block page classifier. Default: claude-haiku-4-5-20251001.">
+                <select style={{ ...inputStyle, appearance: 'none' }} value={vals.ai_prep_classifier_model} onChange={set('ai_prep_classifier_model')}>
+                  <option value="">claude-haiku-4-5-20251001 (default)</option>
+                  {models.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </Field>
+            );
+          })()}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0 16px', maxWidth: 640 }}>
+          {DOC_PREP_ROWS.map(row => (
+            <Field key={row.key} label={row.label} desc={`Default: ${row.placeholder}`}>
+              <input type="number" style={inputStyle} value={vals[row.key]} onChange={set(row.key)}
+                min={row.min} max={row.max} placeholder={row.placeholder}/>
+            </Field>
+          ))}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: -6, marginBottom: 4 }}>
+          More tiles per page or higher DPI reads finer detail but costs more input tokens per run. Leave blank for the built-in defaults.
+        </div>
+      </div>
 
       <Field label="Temperature (0–1)" desc="Shared across all agents. Lower = more deterministic, higher = more creative.">
         <input type="number" style={{ ...inputStyle, maxWidth: 120 }} value={vals.ai_temperature} onChange={set('ai_temperature')} min={0} max={1} step={0.1}/>

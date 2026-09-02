@@ -57,6 +57,13 @@ export interface EstimateLineItem {
   unit_cost: number;
   total: number;
   overridden: boolean;
+  // Task 5 (phase 2 takeoff fidelity): the takeoff row's raw confidence (Agent
+  // 1/2 vocabulary — VERIFIED/ASSUMED/NOT SHOWN, or already-playbook FIRM/
+  // APPROX/VERIFY on an imported takeoff). Optional — older saved estimates
+  // predate this field. See confidence.ts's confidenceToPlaybook for the
+  // code-level mapping used to render it; the agent prompts themselves are
+  // unchanged.
+  confidence?: string;
 }
 
 export interface BidEstimate {

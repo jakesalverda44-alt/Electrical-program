@@ -13,7 +13,23 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
 import { drawingUpload, documentUpload } from '../utils/upload';
 import { uploadFile, getFileMedia } from '../services/googleDrive';
-import { buildAgent1Content, type PrepFile, type Agent1Block } from '../ai/documentPrep';
+import {
+  isPdftoppmAvailable, computePrepFidelity, parseTileOverrideSetting,
+  isElectricalSheet, classifySheet,
+  TILE_DPI_MIN, TILE_DPI_MAX, TILE_COUNT_MIN, TILE_COUNT_MAX,
+  type Agent1Block, type PdfPageSelection, type TileSettingsOverrides,
+} from '../ai/documentPrep';
+import { isPdftotextAvailable, extractPdfPageTexts } from '../ai/pdfText';
+import {
+  renderTitleBlockCrops, classifyPages, selectPages, formatSheetLabel,
+  shouldDropWholeFile, reviveIfAllDropped,
+  type PageClassification,
+} from '../ai/pageClassifier';
+import {
+  TOKENS_PER_TILE, PAGE_TOKEN_OVERHEAD, AGENT1_INPUT_BUDGET,
+  estimatePageTokens, orderScheduleFirst, packPagesByBudget, buildBlocksForBatch,
+  type Agent1WorkUnit,
+} from '../ai/agent1Batching';
 import { extractDocxText, extractPdfText, parseBidDocText } from '../utils/bidDocParse';
 import { parseTakeoffWorkbook } from '../utils/takeoffParse';
 import { parsePrebidScope } from '../utils/prebidScopeParse';
@@ -22,9 +38,9 @@ import { storeDocument } from '../utils/storeDocument';
 import { mergeAgent1Batches } from '../ai/mergeAgent1';
 import { buildAgent4UserMessage } from '../ai/agent4Message';
 import { parseMoney } from '../utils/money';
-
-// Cap on tiles rasterized per PDF page (cost control — see Stage 0 doc prep).
-const MAX_TILES_PER_PAGE = 9;
+import { compactForHandoff } from '../ai/compactPayload';
+import { analysisIsEmpty } from '../ai/emptyAnalysis';
+import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
 const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'warehouse', 'restaurant', 'medical', 'retail', 'other'];
@@ -37,6 +53,8 @@ interface AIConfig {
   modelA2: string;
   modelA3: string;
   modelA4: string;
+  /** Task 2 — cheap model used to classify pages by title block before tiling. */
+  modelClassifier: string;
   maxTokensA1: number;
   maxTokensA2: number;
   maxTokensA3: number;
@@ -46,6 +64,8 @@ interface AIConfig {
   promptA2: string;
   promptA3: string;
   promptA4: string;
+  /** Task 3 — per-class DPI / max-tiles-per-page overrides for Stage 0 doc prep. */
+  tileOverrides: TileSettingsOverrides;
 }
 
 const DEFAULT_AI_MODEL = 'claude-sonnet-4-6';
@@ -63,15 +83,17 @@ function parseNumberSetting(value: string, fallback: number, min: number, max: n
 
 async function loadAIConfig(): Promise<AIConfig> {
   const [
-    modelSetting, modelA2Setting, modelA3Setting, modelA4Setting,
+    modelSetting, modelA2Setting, modelA3Setting, modelA4Setting, modelClassifierSetting,
     maxA1Setting, maxA2Setting, maxA3Setting, maxA4Setting,
     temperatureSetting,
     promptA1Setting, promptA2Setting, promptA3Setting, promptA4Setting,
+    dpiScheduleSetting, dpiPlanSetting, tilesScheduleSetting, tilesPlanSetting,
   ] = await Promise.all([
     getSetting('ai_model'),
     getSetting('ai_takeoff_agent2_model'),
     getSetting('ai_takeoff_agent3_model'),
     getSetting('ai_takeoff_agent4_model'),
+    getSetting('ai_prep_classifier_model'),
     getSetting('ai_max_tokens_agent1'),
     getSetting('ai_max_tokens_agent2'),
     getSetting('ai_max_tokens_agent3'),
@@ -81,6 +103,10 @@ async function loadAIConfig(): Promise<AIConfig> {
     getSetting('ai_prompt_agent2'),
     getSetting('ai_prompt_agent3'),
     getSetting('ai_prompt_agent4'),
+    getSetting('ai_prep_dpi_schedule'),
+    getSetting('ai_prep_dpi_plan'),
+    getSetting('ai_prep_tiles_schedule'),
+    getSetting('ai_prep_tiles_plan'),
   ]);
   const defaultModel = (process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim();
   return {
@@ -88,6 +114,7 @@ async function loadAIConfig(): Promise<AIConfig> {
     modelA2: (modelA2Setting || 'claude-haiku-4-5-20251001'),
     modelA3: (modelA3Setting || 'claude-haiku-4-5-20251001'),
     modelA4: (modelA4Setting || 'claude-sonnet-4-6'),
+    modelClassifier: (modelClassifierSetting || 'claude-haiku-4-5-20251001'),
     maxTokensA1: parseNumberSetting(maxA1Setting || '', DEFAULT_MAX_TOKENS_A1, 256, 64000),
     maxTokensA2: parseNumberSetting(maxA2Setting || '', DEFAULT_MAX_TOKENS_A2, 256, 64000),
     maxTokensA3: parseNumberSetting(maxA3Setting || '', DEFAULT_MAX_TOKENS_A3, 256, 64000),
@@ -97,6 +124,16 @@ async function loadAIConfig(): Promise<AIConfig> {
     promptA2: (promptA2Setting || '').trim(),
     promptA3: (promptA3Setting || '').trim(),
     promptA4: (promptA4Setting || '').trim(),
+    tileOverrides: {
+      schedule: {
+        dpi: parseTileOverrideSetting(dpiScheduleSetting || '', TILE_DPI_MIN, TILE_DPI_MAX),
+        maxTilesPerPage: parseTileOverrideSetting(tilesScheduleSetting || '', TILE_COUNT_MIN, TILE_COUNT_MAX),
+      },
+      plan: {
+        dpi: parseTileOverrideSetting(dpiPlanSetting || '', TILE_DPI_MIN, TILE_DPI_MAX),
+        maxTilesPerPage: parseTileOverrideSetting(tilesPlanSetting || '', TILE_COUNT_MIN, TILE_COUNT_MAX),
+      },
+    },
   };
 }
 
@@ -106,21 +143,6 @@ function describeAIError(err: unknown): string {
   const detail = e.error?.message || e.response?.data?.error || e.response?.data?.message || e.message || 'Unknown error';
   return `${status}: ${detail}`;
 }
-
-// ── Electrical sheet filter ────────────────────────────────────────────────────
-// Positive include: electrical sheet prefixes OR any keyword that signals electrical
-// scope — fixture/lighting/luminaire/schedule. Keyword matches win over the exclude
-// list, so a "Lighting Fixture Schedule" sheet is never dropped regardless of prefix.
-const ELEC_INCLUDE = /^E\d|electrical|one.?line|panel.?sched|equip.?sched|fixture|lumin|lighting|schedule/i;
-const EXCLUDE_ONLY = /^(A|S|C|L|M|P|G|FP|PL|CV|CI|LS)\d/i;
-
-function isElectricalSheet(filename: string): boolean {
-  const base = filename.replace(/\.[^.]+$/, '');
-  if (ELEC_INCLUDE.test(base)) return true;
-  if (EXCLUDE_ONLY.test(base)) return false;
-  return true; // uncertain — include
-}
-
 
 // ── Helper: extract text from Anthropic response ──────────────────────────────
 function extractText(response: Anthropic.Message): string {
@@ -143,7 +165,13 @@ function summarizePrep(blocks: Agent1Block[]): PrepSummary {
   let imageBlocks = 0;
   let documentBlocks = 0;
   for (const b of blocks) {
-    if (b.type === 'text' && b.text.startsWith('--- Sheet:')) {
+    // FIX-4 (post-review) — a real sheet-label block always starts with
+    // '--- Sheet:' (colon). pdfText.ts's EXTRACTED TEXT header starts with
+    // '--- Sheet <label> p<N> — EXTRACTED TEXT ...' (no colon) and must never
+    // be mistaken for a sheet label — the colon requirement already excludes
+    // it, and the explicit exclusion below makes that intent unmistakable
+    // rather than relying solely on the colon's presence.
+    if (b.type === 'text' && b.text.startsWith('--- Sheet:') && !b.text.includes('EXTRACTED TEXT')) {
       current = { sheet: b.text.replace(/^--- Sheet:\s*/, '').replace(/\s*---$/, ''), tiles: 0 };
       sheets.push(current);
     } else if (b.type === 'image') {
@@ -205,20 +233,259 @@ function legacyContentBlocks(batchFiles: Express.Multer.File[]): Agent1Block[] {
   return blocks;
 }
 
-/** Stage 0 — Document Prep: tile dense sheets into legible image blocks. Falls
- *  back to legacy document/image blocks if prep fails (e.g. poppler missing). */
-async function buildAgent1Blocks(bidId: string, batchFiles: Express.Multer.File[]): Promise<Agent1Block[]> {
-  const prepFiles: PrepFile[] = batchFiles.map(f => ({
-    filename: f.originalname,
-    buffer: f.buffer,
-    ext: (f.originalname.split('.').pop() ?? '').toLowerCase(),
-  }));
-  try {
-    return await buildAgent1Content(prepFiles, { maxTilesPerPage: MAX_TILES_PER_PAGE });
-  } catch (err) {
-    logger.warn({ err, bidId }, '[takeoff] Stage 0 document prep failed — falling back to document blocks');
-    return legacyContentBlocks(batchFiles);
+/** One row of the persisted prep inventory (takeoff_results.prep_inventory) —
+ *  Task 2.3: makes a low-fidelity run visible instead of a single silent log
+ *  line, and gives a durable record of every page's classification. */
+interface PrepInventoryEntry {
+  file: string;
+  page: number;
+  sheetNo: string;
+  title: string;
+  discipline: string;
+  cls: string;
+  included: boolean;
+  textChars: number;
+  /** FIX-5 (phase 2 post-review) — false when the classifier never actually
+   *  placed this page (discipline defaulted to 'unknown': missing from its
+   *  response entirely, or an invalid discipline value). Recorded distinctly
+   *  so silent degradation is visible in the inventory rather than reading as
+   *  a confident "other/schedule" classification. */
+  classified: boolean;
+  /** FIX-1 (phase 2 post-review) — set only when this page's file was dropped
+   *  entirely (a non-electrical filename with every page classified as a
+   *  non-electrical discipline), so a low-fidelity/zero-content run is visible
+   *  in the inventory instead of a silent per-page `included: false`. */
+  reason?: string;
+}
+
+/** FIX-2 (phase 2 post-review) — per-PDF Stage 0 prep result. Classification,
+ *  page selection, and text extraction all run ONCE per file here (fixes the
+ *  reviewer's F6 finding that extractPdfPageTexts used to run twice per PDF —
+ *  once for inventory char counts, once again during block-building).
+ *
+ *  `pages` is non-null whenever a page count is known — either from a real
+ *  title-block classification, or, when that classification failed outright,
+ *  synthesized from pdftotext's page count (already extracted for Task 1)
+ *  with a uniform filename-based class (today's whole-file classifySheet
+ *  guess) — so even a classifier failure still packs by the same token budget
+ *  instead of going out as one oversized call. `pages` is null only in the
+ *  true last-resort case where no page count could be determined at all
+ *  (poppler entirely unavailable, or pdftotext also unavailable/failed after
+ *  classification did) — that PDF goes out as a single opaque document block. */
+interface PdfPrepResult {
+  filename: string;
+  buffer: Buffer;
+  pageTexts: string[];
+  pages: PdfPageSelection[] | null;
+  /** What `pages` would be if a drop (FIX-1) gets reverted by the whole-upload
+   *  safety net. Equal to `pages` whenever dropFile is false. */
+  revivedPages: PdfPageSelection[] | null;
+  dropFile: boolean;
+  inventory: PrepInventoryEntry[];
+  usage: { input_tokens: number; output_tokens: number };
+}
+
+const NO_USAGE = { input_tokens: 0, output_tokens: 0 };
+
+/** FIX-2 — classify one PDF's pages by title block, select which are worth
+ *  full-fidelity tiling, and extract its page text — all exactly once. Never
+ *  throws; a classification failure must never kill the run (plan
+ *  requirement), it just degrades to the filename-based whole-file fallback
+ *  (still page-split when the page count is known — see PdfPrepResult above).
+ *
+ *  FIX-1 (phase 2 post-review): when selectPages' all-excluded guard fires
+ *  (every page classified as a non-electrical discipline) AND the filename
+ *  itself reads as non-electrical, the whole file is dropped (`dropFile`)
+ *  instead of riding the guard's include-everything fallback. */
+async function prepOnePdf(
+  client: Anthropic,
+  classifierModel: string,
+  buffer: Buffer,
+  filename: string
+): Promise<PdfPrepResult> {
+  let pageTexts: string[] = [];
+  if (await isPdftotextAvailable()) {
+    try {
+      pageTexts = await extractPdfPageTexts(buffer);
+    } catch (err) {
+      logger.warn({ err, filename }, '[takeoff] pdftotext extraction failed');
+    }
   }
+
+  const fallback = (): PdfPrepResult => {
+    if (!pageTexts.length) {
+      // No page count available at all — true opaque whole-file fallback.
+      return { filename, buffer, pageTexts, pages: null, revivedPages: null, dropFile: false, inventory: [], usage: NO_USAGE };
+    }
+    // Classifier couldn't run, but the page count IS known — synthesize a
+    // uniform filename-based page selection (today's whole-file classifySheet
+    // guess) so this PDF still packs by the token budget instead of one call.
+    const cls = classifySheet(filename);
+    const pages: PdfPageSelection[] = pageTexts.map((_, i) => ({ page: i + 1, label: filename, cls }));
+    return { filename, buffer, pageTexts, pages, revivedPages: pages, dropFile: false, inventory: [], usage: NO_USAGE };
+  };
+
+  if (!(await isPdftoppmAvailable())) return fallback();
+
+  let crops: Awaited<ReturnType<typeof renderTitleBlockCrops>> = [];
+  try {
+    crops = await renderTitleBlockCrops(buffer);
+  } catch (err) {
+    logger.warn({ err, filename }, '[takeoff] title-block crop rendering failed — whole-file fallback');
+  }
+  if (!crops.length) return fallback();
+
+  let classified: Awaited<ReturnType<typeof classifyPages>>;
+  try {
+    classified = await classifyPages(client, classifierModel, crops, filename);
+  } catch (err) {
+    logger.warn({ err, filename }, '[takeoff] page classification AI call failed — whole-file fallback');
+    return fallback();
+  }
+
+  const { classifications, usage } = classified;
+  const dropFile = shouldDropWholeFile(classifications, filename);
+  const { pages: guardPages } = selectPages(classifications);
+  const guardPageSet = new Set(guardPages);
+  const toSelection = (pageSet: Set<number>): PdfPageSelection[] =>
+    classifications
+      .filter(c => pageSet.has(c.page))
+      .map(c => ({
+        page: c.page,
+        label: formatSheetLabel(c.sheetNo, c.title, `${filename} p${c.page}`),
+        cls: c.cls,
+      }));
+
+  const revivedPages = toSelection(guardPageSet);
+  const pages = dropFile ? [] : revivedPages;
+
+  const inventory: PrepInventoryEntry[] = classifications.map(c => ({
+    file: filename,
+    page: c.page,
+    sheetNo: c.sheetNo,
+    title: c.title,
+    discipline: c.discipline,
+    cls: c.cls,
+    included: !dropFile && guardPageSet.has(c.page),
+    textChars: pageTexts[c.page - 1]?.length ?? 0,
+    // FIX-5 — 'unknown' discipline means the classifier never actually placed
+    // this page (missing from its response, or an invalid value) rather than
+    // confidently deciding it belongs to some other discipline.
+    classified: c.discipline !== 'unknown',
+    ...(dropFile ? { reason: 'all pages excluded by discipline; filename read as non-electrical' } : {}),
+  }));
+
+  return { filename, buffer, pageTexts, pages, revivedPages, dropFile, inventory, usage };
+}
+
+interface AgentUploadPrepResult {
+  /** One Agent 1 call's content blocks per batch — length 1 for an upload
+   *  that fits in a single call (the single-pass path stays unchanged). */
+  batches: Agent1Block[][];
+  inventory: PrepInventoryEntry[];
+  classifierUsage: { input_tokens: number; output_tokens: number };
+}
+
+/** FIX-2 (phase 2 post-review) — Stage 0 for the WHOLE upload, run once:
+ *  classify + select pages + extract text per file (a), build one work unit
+ *  per page with an estimated input-token cost (b), and greedily pack those
+ *  units — schedule-first across the whole upload, not just within one file —
+ *  into batches that each fit under AGENT1_INPUT_BUDGET (c). Replaces the old
+ *  per-FILE-count BATCH_SIZE split, which had no relationship to how much
+ *  content a call actually carried (a single combined PDF with ~19 selected
+ *  pages used to go out as ONE call, well over the context window). */
+async function prepareAgent1Upload(
+  filesToSend: Express.Multer.File[],
+  client: Anthropic,
+  classifierModel: string,
+  tileOverrides: TileSettingsOverrides
+): Promise<AgentUploadPrepResult> {
+  const inventory: PrepInventoryEntry[] = [];
+  const classifierUsage = { input_tokens: 0, output_tokens: 0 };
+  const units: Agent1WorkUnit[] = [];
+
+  const pdfResults: Array<{ prep: PdfPrepResult; dropFile: boolean }> = [];
+  const opaqueFallbacks: PdfPrepResult[] = [];
+
+  for (const f of filesToSend) {
+    const ext = (f.originalname.split('.').pop() ?? '').toLowerCase();
+    if (ext !== 'pdf') {
+      units.push({
+        kind: 'image', filename: f.originalname, buffer: f.buffer, ext,
+        cls: classifySheet(f.originalname), estTokens: TOKENS_PER_TILE + PAGE_TOKEN_OVERHEAD,
+      });
+      continue;
+    }
+    const prep = await prepOnePdf(client, classifierModel, f.buffer, f.originalname);
+    classifierUsage.input_tokens += prep.usage.input_tokens;
+    classifierUsage.output_tokens += prep.usage.output_tokens;
+    if (prep.pages === null) opaqueFallbacks.push(prep);
+    else pdfResults.push({ prep, dropFile: prep.dropFile });
+  }
+
+  // FIX-1's whole-upload safety net: never drop every classified PDF. Only
+  // PDFs with a real classification outcome participate — the opaque
+  // fallback and known-page-count classifier-failure cases are never dropped
+  // in the first place, so they're not part of this decision.
+  for (const { prep, dropFile } of reviveIfAllDropped(pdfResults)) {
+    const wasRevived = prep.dropFile && !dropFile;
+    inventory.push(...prep.inventory.map(entry => (wasRevived ? { ...entry, included: true, reason: undefined } : entry)));
+    if (dropFile) continue;
+    const pages = wasRevived ? prep.revivedPages! : prep.pages!;
+    for (const sel of pages) {
+      const text = prep.pageTexts[sel.page - 1] ?? '';
+      units.push({
+        kind: 'pdf-page', filename: prep.filename, buffer: prep.buffer, page: sel.page,
+        label: sel.label, cls: sel.cls, pageText: text,
+        estTokens: estimatePageTokens(sel.cls, text.length, tileOverrides),
+      });
+    }
+  }
+
+  for (const prep of opaqueFallbacks) {
+    const cls = classifySheet(prep.filename);
+    // Page count unknown — never guess low enough to risk under-batching a
+    // large document; force it into its own batch (a rare double-fallback
+    // path: poppler missing entirely, or pdftotext also unavailable/failed).
+    const estTokens = prep.pageTexts.length
+      ? prep.pageTexts.length * TOKENS_PER_TILE + Math.ceil(prep.pageTexts.join('').length / 4) + PAGE_TOKEN_OVERHEAD
+      : AGENT1_INPUT_BUDGET + 1;
+    units.push({ kind: 'document-fallback', filename: prep.filename, buffer: prep.buffer, cls, pageTexts: prep.pageTexts, estTokens });
+  }
+
+  const ordered = orderScheduleFirst(units);
+  const pageBatches = packPagesByBudget(ordered, AGENT1_INPUT_BUDGET);
+
+  const batches: Agent1Block[][] = [];
+  for (const batch of pageBatches) {
+    try {
+      batches.push(await buildBlocksForBatch(batch, { tileOverrides }));
+    } catch (err) {
+      const filenames = new Set(batch.map(u => u.filename));
+      logger.warn({ err, files: [...filenames] }, '[takeoff] Stage 0 block building failed for a batch — falling back to legacy document blocks for its files');
+      const batchFiles = filesToSend.filter(f => filenames.has(f.originalname));
+      batches.push(legacyContentBlocks(batchFiles));
+    }
+  }
+
+  return { batches, inventory, classifierUsage };
+}
+
+/** FIX-7 (phase 2 post-review) — merge two Anthropic `usage` objects field by
+ *  field (every numeric field summed; the first non-numeric value for any
+ *  other field wins), so cache_creation_input_tokens/cache_read_input_tokens
+ *  and any other fields survive a merge instead of being reshaped down to
+ *  just input_tokens/output_tokens. */
+function mergeUsage(a: Record<string, unknown>, b: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...a };
+  for (const [k, v] of Object.entries(b)) {
+    if (typeof v === 'number') {
+      merged[k] = (typeof merged[k] === 'number' ? (merged[k] as number) : 0) + v;
+    } else if (merged[k] === undefined) {
+      merged[k] = v;
+    }
+  }
+  return merged;
 }
 
 function compactOutput(text: string, max = 500): string {
@@ -243,26 +510,49 @@ async function runPipeline(
 
   // ── Agent 1 ─────────────────────────────────────────────────────────────────
   try {
-    // Filter to electrical sheets
-    const electricalFiles = files.filter(f => isElectricalSheet(f.originalname));
-    const filesToSend = electricalFiles.length > 0 ? electricalFiles : files;
+    // Task 2: the whole-FILE isElectricalSheet filter only applies to non-PDF
+    // images now — every PDF passes through here unfiltered, and gets filtered
+    // PAGE-BY-PAGE inside prepareAgent1Upload via pageClassifier.ts's title-block
+    // classification instead (a combined building set no longer sends 40+
+    // non-electrical pages just because the file itself has electrical pages).
+    const isPdfFile = (f: Express.Multer.File) => (f.originalname.split('.').pop() || '').toLowerCase() === 'pdf';
+    const pdfFiles = files.filter(isPdfFile);
+    const nonPdfFiles = files.filter(f => !isPdfFile(f));
+    const electricalNonPdf = nonPdfFiles.filter(f => isElectricalSheet(f.originalname));
+    const nonPdfToSend = electricalNonPdf.length > 0 ? electricalNonPdf : nonPdfFiles;
+    const filesToSend = [...pdfFiles, ...nonPdfToSend];
     const droppedFiles = files.filter(f => !filesToSend.includes(f));
     logger.info({
       bidId,
       sent: filesToSend.map(f => f.originalname),
       dropped: droppedFiles.map(f => f.originalname),
-    }, '[takeoff] Agent 1 sheet filter — files sent vs. dropped');
+    }, '[takeoff] Agent 1 sheet filter — files sent vs. dropped (PDFs page-filtered separately)');
 
-    // Build document/image blocks
-    // When multiple PDFs are present, send 1 per batch — each PDF may have many pages
-    // and combined token output easily hits the max_tokens hard limit.
-    const pdfCount = filesToSend.filter(f => (f.originalname.split('.').pop() || '').toLowerCase() === 'pdf').length;
-    const BATCH_SIZE = pdfCount > 1 ? 1 : 20;
+    // Task 2.3 — a run-level fidelity flag so a low-fidelity run is visible
+    // instead of silent (problem 7 in the phase 2 plan).
+    const prepFidelity = computePrepFidelity(await isPdftoppmAvailable(), await isPdftotextAvailable());
+
+    // FIX-2 (phase 2 post-review) — classification, page selection, and text
+    // extraction all run ONCE for the whole upload, building one work unit per
+    // page with an estimated input-token cost, then packing those units
+    // (schedule-first across the whole upload) into calls that each stay
+    // under AGENT1_INPUT_BUDGET. Replaces the old per-FILE-count BATCH_SIZE
+    // split, which had no relationship to how much content a call actually
+    // carried. If Stage 0 prep fails outright for the whole upload, fall back
+    // to a single legacy document-block call rather than losing the run.
+    let uploadPrep: AgentUploadPrepResult;
+    try {
+      uploadPrep = await prepareAgent1Upload(filesToSend, client, config.modelClassifier, config.tileOverrides);
+    } catch (err) {
+      logger.warn({ err, bidId }, '[takeoff] Stage 0 document prep failed for the whole upload — falling back to one legacy document-block call');
+      uploadPrep = { batches: [legacyContentBlocks(filesToSend)], inventory: [], classifierUsage: { ...NO_USAGE } };
+    }
+    const { batches: agent1Batches, inventory: prepInventory, classifierUsage } = uploadPrep;
     let agent1JSON: Record<string, unknown> = {};
 
-    if (filesToSend.length <= BATCH_SIZE) {
-      // Single pass — Stage 0 doc prep tiles dense sheets so Agent 1 can read them.
-      const contentBlocks = await buildAgent1Blocks(bidId, filesToSend);
+    if (agent1Batches.length <= 1) {
+      // Single pass — everything fit under budget in one call.
+      const contentBlocks = agent1Batches[0] ?? [];
       const prep = summarizePrep(contentBlocks);
       contentBlocks.push({
         type: 'text',
@@ -281,30 +571,34 @@ async function runPipeline(
       , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
       agent1Output = extractText(resp);
       logAgent1Response(bidId, resp, agent1Output, 'single', prep);
+      // Task 2.4 — classifier usage is part of drawing analysis, folded into
+      // usage_agent1 rather than a new column. FIX-7 — persist the FULL
+      // resp.usage shape (cache_creation_input_tokens/cache_read_input_tokens
+      // included), not just input/output tokens.
+      const mergedUsage = {
+        ...resp.usage,
+        input_tokens: (resp.usage?.input_tokens ?? 0) + classifierUsage.input_tokens,
+        output_tokens: (resp.usage?.output_tokens ?? 0) + classifierUsage.output_tokens,
+      };
       await pool.query(
-        `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2 WHERE bid_id=$3`,
-        [JSON.stringify(resp.usage), config.model, bidId]
+        `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
+        [JSON.stringify(mergedUsage), config.model, JSON.stringify(prepInventory), prepFidelity, bidId]
       ).catch(() => {});
 
     } else {
-      // Batched: split into groups of BATCH_SIZE, merge JSON
-      const batches: Express.Multer.File[][] = [];
-      for (let i = 0; i < filesToSend.length; i += BATCH_SIZE) {
-        batches.push(filesToSend.slice(i, i + BATCH_SIZE));
-      }
+      // Batched: N token-budgeted calls (mergeAgent1Batches already merges results).
       const batchResults: Record<string, unknown>[] = [];
-      let batchUsage = { input_tokens: 0, output_tokens: 0 };
+      let batchUsage: Record<string, unknown> = { ...NO_USAGE };
 
-      for (let bi = 0; bi < batches.length; bi++) {
-        const batch = batches[bi];
-        const contentBlocks = await buildAgent1Blocks(bidId, batch);
+      for (let bi = 0; bi < agent1Batches.length; bi++) {
+        const contentBlocks = agent1Batches[bi];
         const prep = summarizePrep(contentBlocks);
         contentBlocks.push({
           type: 'text',
-          text: `Analyze batch ${bi + 1} of ${batches.length} electrical plan files and provide Drawing Analyzer JSON output. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if this sheet contains no electrical equipment, you MUST return a valid JSON object with the sheet in sheet_inventory and equipment arrays empty.`,
+          text: `Analyze batch ${bi + 1} of ${agent1Batches.length} electrical plan pages and provide Drawing Analyzer JSON output. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if this sheet contains no electrical equipment, you MUST return a valid JSON object with the sheet in sheet_inventory and equipment arrays empty.`,
         });
 
-        logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${batches.length}`, prep);
+        logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${agent1Batches.length}`, prep);
         const bResp = await callWithRetry(() =>
           client.messages.stream({
             model: config.model,
@@ -315,21 +609,20 @@ async function runPipeline(
           }).finalMessage()
         , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
-        logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${batches.length}`, prep);
+        logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${agent1Batches.length}`, prep);
         if (!bText.trim()) {
-          logger.warn({ bidId, batch: `${bi + 1}/${batches.length}`, files: batch.map(f => f.originalname) },
+          logger.warn({ bidId, batch: `${bi + 1}/${agent1Batches.length}` },
             '[takeoff] Agent 1 batch returned empty output — skipping');
         }
         const parsed = parseAIJSON(bText);
         if (parsed) batchResults.push(parsed);
-        if (bResp.usage) {
-          batchUsage.input_tokens  += bResp.usage.input_tokens  ?? 0;
-          batchUsage.output_tokens += bResp.usage.output_tokens ?? 0;
-        }
+        // FIX-7 — sum the full usage shape across batches, not just input/output.
+        if (bResp.usage) batchUsage = mergeUsage(batchUsage, bResp.usage as unknown as Record<string, unknown>);
       }
+      batchUsage = mergeUsage(batchUsage, classifierUsage);
       await pool.query(
-        `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2 WHERE bid_id=$3`,
-        [JSON.stringify(batchUsage), config.model, bidId]
+        `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
+        [JSON.stringify(batchUsage), config.model, JSON.stringify(prepInventory), prepFidelity, bidId]
       ).catch(() => {});
 
       // Merge batch results — generic merge over the actual AGENT1_SYSTEM schema
@@ -355,6 +648,21 @@ async function runPipeline(
     }
     agent1JSON = parsedAgent1;
 
+    // Task 4.2 — empty-analysis guard: if every batch failed to parse,
+    // mergeAgent1Batches still returns a valid-looking {} that would otherwise
+    // flow straight into Agents 2-3, billing two more paid calls for nothing.
+    if (analysisIsEmpty(agent1JSON)) {
+      await pool.query(
+        `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
+        [
+          'Drawing analysis found no electrical content. Check that the right sheets were uploaded (see the prep inventory) — the run was stopped before Agents 2–3 to avoid billing for an empty takeoff.',
+          bidId,
+        ]
+      );
+      logger.warn({ bidId }, '[takeoff] Agent 1 analysis empty — stopped before Agent 2/3');
+      return;
+    }
+
     await pool.query(
       `UPDATE takeoff_results SET status='agent1_complete', agent1_output=$1 WHERE bid_id=$2`,
       [agent1Output, bidId]
@@ -379,7 +687,9 @@ async function runPipeline(
       system: [{ type: 'text', text: config.promptA2 || AGENT2_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
-        content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${agent1Output}`,
+        // Task 4.1 — compact (no 2-space indent) in the request body; storage
+        // and the UI keep the pretty agent1Output exactly as today.
+        content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}`,
       }],
     }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
     agent2Output = extractText(resp);
@@ -402,6 +712,23 @@ async function runPipeline(
   // ── Agent 3 ─────────────────────────────────────────────────────────────────
   try {
     await updateStatus('agent3_running');
+
+    // Task 6 — feed Agent 3 the independent pre-bid takeoff (Cowork package,
+    // bid_takeoffs kind='prebid') when one exists, so QC can reconcile two
+    // independent counts instead of checking Agent 2 against Agent 1's own
+    // numbers alone. A missing/unreadable pre-bid row degrades to today's
+    // behavior — never let this block the run.
+    let prebidCrossCheck: string | null = null;
+    try {
+      const { rows: prebidRows } = await pool.query(
+        `SELECT categories, line_items FROM bid_takeoffs WHERE bid_id=$1 AND kind='prebid'`,
+        [bidId]
+      );
+      prebidCrossCheck = buildPrebidCrossCheck(prebidRows[0] ?? null);
+    } catch (err) {
+      logger.warn({ err, bidId }, '[takeoff] pre-bid cross-check load failed — continuing without it');
+    }
+
     const resp = await callWithRetry(() => client.messages.create({
       model: config.modelA3,
       max_tokens: config.maxTokensA3,
@@ -409,7 +736,8 @@ async function runPipeline(
       system: [{ type: 'text', text: config.promptA3 || AGENT3_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
-        content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${agent1Output}\n\n---\n\nESTIMATOR OUTPUT:\n\n${agent2Output}`,
+        // Task 4.1 — compact in the request body (both prior agents' outputs).
+        content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}\n\n---\n\nESTIMATOR OUTPUT:\n\n${compactForHandoff(agent2Output)}${prebidCrossCheck ? `\n\n---\n\n${prebidCrossCheck}` : ''}`,
       }],
     }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
     agent3Output = extractText(resp);

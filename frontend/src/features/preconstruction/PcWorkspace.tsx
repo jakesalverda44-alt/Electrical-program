@@ -9,6 +9,7 @@ import FilePreviewModal from '../../components/FilePreviewModal';
 import { useDocPreview } from '../../components/useDocPreview';
 import { buildScopeFromPrebid, PrebidSection } from './prebidScope';
 import { overridesFromEstimate } from './estimateHydrate';
+import { confidenceToPlaybook } from './confidence';
 import PreBidTab from './PreBidTab';
 
 interface Props {
@@ -202,6 +203,18 @@ function isPdfOrImage(d: { file_type?: string; name?: string }) {
     || n.endsWith('.pdf') || n.endsWith('.jpg') || n.endsWith('.jpeg') || n.endsWith('.png');
 }
 
+// Small colored pill — lifted to module scope (Task 5) so the Pricing tab's
+// FIRM/APPROX/VERIFY confidence chips reuse the exact styling the Agent 2
+// structured view already uses for its own confidence badges.
+function pill(label: string, color: string) {
+  return (
+    <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 99, fontSize: 11,
+      fontWeight: 700, background: color + '22', color }}>
+      {label}
+    </span>
+  );
+}
+
 function lookupUnitCost(
   cat: string,
   lib: { global: Record<string,number>; by_project_type: Record<string,Record<string,number>> },
@@ -231,7 +244,12 @@ function buildLineItemsFromTakeoff(
       const key = `${row.category}||${row.item}`;
       const base = lookupUnitCost(row.category, lib, projectType);
       const unit_cost = overrides[key] !== undefined ? overrides[key] : base;
-      return { category: row.category, item: row.item, qty: row.qty, unit: row.unit || 'EA', unit_cost, total: row.qty * unit_cost, overridden: overrides[key] !== undefined };
+      return {
+        category: row.category, item: row.item, qty: row.qty, unit: row.unit || 'EA', unit_cost,
+        total: row.qty * unit_cost, overridden: overrides[key] !== undefined,
+        // Task 5 — carried through so the Pricing tab can render a FIRM/APPROX/VERIFY chip.
+        confidence: row.confidence,
+      };
     });
   } catch {
     return [];
@@ -615,11 +633,26 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
   const computePricingItems = (): EstimateLineItem[] => {
     if (savedEstimate?.line_items?.length) {
+      // FIX-3 (post-review) — a saved estimate's rows may predate confidence
+      // tracking (or otherwise lack it), which left the chips/counts/toast
+      // permanently dead on any bid with a saved estimate — re-running the
+      // takeoff never helped, since this branch never looked at the fresh
+      // takeoff again. Build the fresh takeoff alongside the saved rows and
+      // backfill each saved row's MISSING confidence by key, never
+      // overwriting a confidence value the saved row already has.
+      const freshItems = buildLineItemsFromTakeoff(
+        aiResults?.agent2_output as string | undefined,
+        unitCostLib,
+        bid.project_type,
+        ws.estimateOverrides
+      );
+      const freshConfidenceByKey = new Map(freshItems.map(li => [`${li.category}||${li.item}`, li.confidence]));
       return savedEstimate.line_items.map(li => {
         const key = `${li.category}||${li.item}`;
         const ov = ws.estimateOverrides[key];
         const unit_cost = ov !== undefined ? ov : li.unit_cost;
-        return { ...li, unit_cost, total: li.qty * unit_cost, overridden: ov !== undefined || li.overridden };
+        const confidence = li.confidence !== undefined ? li.confidence : freshConfidenceByKey.get(key);
+        return { ...li, unit_cost, total: li.qty * unit_cost, overridden: ov !== undefined || li.overridden, confidence };
       });
     }
     return buildLineItemsFromTakeoff(
@@ -637,6 +670,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     // it here too (mirrors the Pricing tab banner) so a rep saving without ever
     // opening that tab still sees the grand total is understated.
     const zeroCostCount = items.filter(li => li.unit_cost === 0 && !li.overridden).length;
+    // Task 5.3 — surface VERIFY-confidence items in the same save toast, so a
+    // rep who saves without ever opening the confidence chips still sees them.
+    const verifyCount = items.filter(li => confidenceToPlaybook(li.confidence) === 'VERIFY').length;
     setSavingEstimate(true);
     try {
       const { data } = await api.put(`/estimates/${bid.id}`, {
@@ -647,12 +683,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       setSavedEstimate(data);
       setEstimateSaved(true);
       setTimeout(() => setEstimateSaved(false), 3000);
-      showToast({
-        title: 'Estimate saved',
-        sub: zeroCostCount > 0
-          ? `Grand total: ${moneyFull(data.grand_total)} — ${zeroCostCount} line item${zeroCostCount === 1 ? '' : 's'} priced at $0 (no unit cost)`
-          : `Grand total: ${moneyFull(data.grand_total)}`,
-      });
+      const parts = [`Grand total: ${moneyFull(data.grand_total)}`];
+      if (zeroCostCount > 0) parts.push(`${zeroCostCount} line item${zeroCostCount === 1 ? '' : 's'} priced at $0 (no unit cost)`);
+      if (verifyCount > 0) parts.push(`${verifyCount} item${verifyCount === 1 ? '' : 's'} need${verifyCount === 1 ? 's' : ''} verification`);
+      showToast({ title: 'Estimate saved', sub: parts.join(' · ') });
     } finally {
       setSavingEstimate(false);
     }
@@ -1300,6 +1334,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         const totalIn  = (usageA1?.input_tokens  ?? 0) + (usageA2?.input_tokens  ?? 0) + (usageA3?.input_tokens  ?? 0) + (usageA4?.input_tokens  ?? 0);
         const totalOut = (usageA1?.output_tokens ?? 0) + (usageA2?.output_tokens ?? 0) + (usageA3?.output_tokens ?? 0) + (usageA4?.output_tokens ?? 0);
         const totalCost = (costA1 ?? 0) + (costA2 ?? 0) + (costA3 ?? 0) + (costA4 ?? 0);
+        // Task 2 (phase 2 takeoff fidelity): surface the page-classification
+        // inventory so a low-fidelity run is visible instead of a silent log
+        // line — "Prep: 14 of 62 pages sent (tiled+text)".
+        const prepInventory = aiResults?.prep_inventory as Array<{ included?: boolean }> | null | undefined;
+        const prepFidelity = aiResults?.prep_fidelity as string | null | undefined;
+        const prepPagesSent  = prepInventory?.filter(p => p.included).length ?? 0;
+        const prepPagesTotal = prepInventory?.length ?? 0;
         const agent1 = aiResults?.agent1_output as string | undefined;
         const agent2 = aiResults?.agent2_output as string | undefined;
         const agent3 = aiResults?.agent3_output as string | undefined;
@@ -1436,6 +1477,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     ↓ All
                   </button>
                 </div>
+                {/* Prep inventory — one line, visible instead of a silent low-fidelity run */}
+                {prepFidelity && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12.5, fontWeight: 700,
+                    color: prepFidelity === 'document-fallback' ? 'var(--amber)' : 'var(--text3)' }}>
+                    <Icon name={prepFidelity === 'document-fallback' ? 'shield' : 'doc'} size={13} stroke={2}/>
+                    Prep: {prepPagesSent} of {prepPagesTotal} page{prepPagesTotal === 1 ? '' : 's'} sent ({prepFidelity})
+                  </div>
+                )}
                 {/* Run cost summary */}
                 {aiResults?.status === 'complete' && hasUsage && (
                   <div style={{ marginBottom: 16, border: '1px solid var(--border2)', borderRadius: 10, overflow: 'hidden', fontSize: 12.5 }}>
@@ -1496,12 +1545,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
                   const riskColor = (r: string) =>
                     r === 'HIGH' ? '#EF4444' : r === 'MEDIUM' ? '#F59E0B' : 'var(--green)';
-                  const pill = (label: string, color: string) => (
-                    <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 99, fontSize: 11,
-                      fontWeight: 700, background: color + '22', color }}>
-                      {label}
-                    </span>
-                  );
 
                   // ── Agent 2 structured view ──────────────────────────────
                   if (t.key === 'agent2' && parsed) {
@@ -2042,6 +2085,18 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         // user-overridden $0 is a deliberate choice, not a missing-cost gap, so
         // it's excluded here.
         const zeroCostCount = pricingLineItems.filter(li => li.unit_cost === 0 && !li.overridden).length;
+        // Task 5 — confidence survives to the estimator's screen: a per-row
+        // FIRM/APPROX/VERIFY chip plus a header count, mapped from the raw
+        // Agent 1/2 vocabulary via confidenceToPlaybook (code-level only — the
+        // agent prompts' own VERIFIED/ASSUMED vocabulary is unchanged).
+        const confCounts = pricingLineItems.reduce((acc, li) => {
+          const c = confidenceToPlaybook(li.confidence);
+          if (c) acc[c] = (acc[c] ?? 0) + 1;
+          return acc;
+        }, {} as Record<'FIRM' | 'APPROX' | 'VERIFY', number>);
+        const hasConfCounts = Object.keys(confCounts).length > 0;
+        const confChipColor = (c: 'FIRM' | 'APPROX' | 'VERIFY') =>
+          c === 'FIRM' ? 'var(--green)' : 'var(--amber)';
         const compCount = savedEstimate?.comp_count ?? 0;
         const confidence = savedEstimate?.confidence ?? (compCount >= 3 ? 'HIGH' : compCount >= 1 ? 'MEDIUM' : 'LOW');
         const confColor = confidence === 'HIGH' ? 'var(--green)' : confidence === 'MEDIUM' ? 'var(--amber)' : 'var(--text3)';
@@ -2086,6 +2141,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   <div className="panel-hdr">
                     <span className="panel-title">Line-Item Estimate</span>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      {hasConfCounts && (
+                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)' }}>
+                          {confCounts.FIRM ?? 0} FIRM · {confCounts.APPROX ?? 0} APPROX · {confCounts.VERIFY ?? 0} VERIFY
+                        </span>
+                      )}
                       {savedEstimate && (
                         <span style={{ fontSize: 12, fontWeight: 700, color: confColor }}>
                           {confidence} confidence · {savedEstimate.comp_count} comp{savedEstimate.comp_count !== 1 ? 's' : ''}
@@ -2108,6 +2168,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                           <th>Unit</th>
                           <th style={{ textAlign: 'right' }}>Unit Cost</th>
                           <th style={{ textAlign: 'right' }}>Total</th>
+                          <th>Confidence</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2116,7 +2177,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                           return (
                             <React.Fragment key={cat}>
                               <tr style={{ background: 'var(--surface2)' }}>
-                                <td colSpan={6} style={{ fontWeight: 800, fontSize: 12, color: 'var(--text2)', padding: '8px 16px', textTransform: 'uppercase', letterSpacing: '.04em' }}>{cat}</td>
+                                <td colSpan={7} style={{ fontWeight: 800, fontSize: 12, color: 'var(--text2)', padding: '8px 16px', textTransform: 'uppercase', letterSpacing: '.04em' }}>{cat}</td>
                               </tr>
                               {items.map((li, idx) => (
                                 <tr key={idx}>
@@ -2150,11 +2211,18 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                                     </div>
                                   </td>
                                   <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{moneyFull(li.total)}</td>
+                                  <td>
+                                    {(() => {
+                                      const c = confidenceToPlaybook(li.confidence);
+                                      return c ? pill(c, confChipColor(c)) : null;
+                                    })()}
+                                  </td>
                                 </tr>
                               ))}
                               <tr style={{ borderTop: '2px solid var(--border)' }}>
                                 <td colSpan={5} style={{ textAlign: 'right', fontWeight: 700, fontSize: 12, color: 'var(--text2)', padding: '6px 16px' }}>{cat} Subtotal</td>
                                 <td className="num" style={{ textAlign: 'right', fontWeight: 900 }}>{moneyFull(catTotal)}</td>
+                                <td/>
                               </tr>
                             </React.Fragment>
                           );
