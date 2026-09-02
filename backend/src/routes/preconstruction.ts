@@ -14,10 +14,10 @@ import { logger } from '../utils/logger';
 import { drawingUpload, documentUpload } from '../utils/upload';
 import { uploadFile, getFileMedia } from '../services/googleDrive';
 import {
-  buildAgent1Content, isPdftoppmAvailable, computePrepFidelity, parseTileOverrideSetting,
-  isElectricalSheet,
+  isPdftoppmAvailable, computePrepFidelity, parseTileOverrideSetting,
+  isElectricalSheet, classifySheet,
   TILE_DPI_MIN, TILE_DPI_MAX, TILE_COUNT_MIN, TILE_COUNT_MAX,
-  type PrepFile, type Agent1Block, type PdfPageSelection, type TileSettingsOverrides,
+  type Agent1Block, type PdfPageSelection, type TileSettingsOverrides,
 } from '../ai/documentPrep';
 import { isPdftotextAvailable, extractPdfPageTexts } from '../ai/pdfText';
 import {
@@ -25,6 +25,11 @@ import {
   shouldDropWholeFile, reviveIfAllDropped,
   type PageClassification,
 } from '../ai/pageClassifier';
+import {
+  TOKENS_PER_TILE, PAGE_TOKEN_OVERHEAD, AGENT1_INPUT_BUDGET,
+  estimatePageTokens, orderScheduleFirst, packPagesByBudget, buildBlocksForBatch,
+  type Agent1WorkUnit,
+} from '../ai/agent1Batching';
 import { extractDocxText, extractPdfText, parseBidDocText } from '../utils/bidDocParse';
 import { parseTakeoffWorkbook } from '../utils/takeoffParse';
 import { parsePrebidScope } from '../utils/prebidScopeParse';
@@ -234,6 +239,12 @@ interface PrepInventoryEntry {
   cls: string;
   included: boolean;
   textChars: number;
+  /** FIX-5 (phase 2 post-review) — false when the classifier never actually
+   *  placed this page (discipline defaulted to 'unknown': missing from its
+   *  response entirely, or an invalid discipline value). Recorded distinctly
+   *  so silent degradation is visible in the inventory rather than reading as
+   *  a confident "other/schedule" classification. */
+  classified: boolean;
   /** FIX-1 (phase 2 post-review) — set only when this page's file was dropped
    *  entirely (a non-electrical filename with every page classified as a
    *  non-electrical discipline), so a low-fidelity/zero-content run is visible
@@ -241,84 +252,106 @@ interface PrepInventoryEntry {
   reason?: string;
 }
 
-interface Agent1PrepResult {
-  blocks: Agent1Block[];
+/** FIX-2 (phase 2 post-review) — per-PDF Stage 0 prep result. Classification,
+ *  page selection, and text extraction all run ONCE per file here (fixes the
+ *  reviewer's F6 finding that extractPdfPageTexts used to run twice per PDF —
+ *  once for inventory char counts, once again during block-building).
+ *
+ *  `pages` is non-null whenever a page count is known — either from a real
+ *  title-block classification, or, when that classification failed outright,
+ *  synthesized from pdftotext's page count (already extracted for Task 1)
+ *  with a uniform filename-based class (today's whole-file classifySheet
+ *  guess) — so even a classifier failure still packs by the same token budget
+ *  instead of going out as one oversized call. `pages` is null only in the
+ *  true last-resort case where no page count could be determined at all
+ *  (poppler entirely unavailable, or pdftotext also unavailable/failed after
+ *  classification did) — that PDF goes out as a single opaque document block. */
+interface PdfPrepResult {
+  filename: string;
+  buffer: Buffer;
+  pageTexts: string[];
+  pages: PdfPageSelection[] | null;
+  /** What `pages` would be if a drop (FIX-1) gets reverted by the whole-upload
+   *  safety net. Equal to `pages` whenever dropFile is false. */
+  revivedPages: PdfPageSelection[] | null;
+  dropFile: boolean;
   inventory: PrepInventoryEntry[];
-  classifierUsage: { input_tokens: number; output_tokens: number };
+  usage: { input_tokens: number; output_tokens: number };
 }
 
-/** Task 2 — classify one PDF's pages by title block and select which are worth
- *  full-fidelity tiling. Returns null when classification can't run at all
- *  (poppler missing, no crops, or the AI call fails outright after retries) —
- *  callers fall back to today's whole-file behavior for that PDF. Never throws;
- *  a classification failure must never kill the run (plan requirement).
+const NO_USAGE = { input_tokens: 0, output_tokens: 0 };
+
+/** FIX-2 — classify one PDF's pages by title block, select which are worth
+ *  full-fidelity tiling, and extract its page text — all exactly once. Never
+ *  throws; a classification failure must never kill the run (plan
+ *  requirement), it just degrades to the filename-based whole-file fallback
+ *  (still page-split when the page count is known — see PdfPrepResult above).
  *
  *  FIX-1 (phase 2 post-review): when selectPages' all-excluded guard fires
  *  (every page classified as a non-electrical discipline) AND the filename
  *  itself reads as non-electrical, the whole file is dropped (`dropFile`)
- *  instead of riding the guard's include-everything fallback — a purely
- *  architectural PDF no longer gets tiled and billed just because it shares a
- *  batch with real electrical sheets. `revivedPageSelection` carries what the
- *  selection would have been without the drop, so a caller-level safety net
- *  can still send everything if every file in the upload would otherwise be
- *  dropped (never send nothing). */
-async function classifyAndSelectPdfPages(
+ *  instead of riding the guard's include-everything fallback. */
+async function prepOnePdf(
   client: Anthropic,
-  model: string,
+  classifierModel: string,
   buffer: Buffer,
   filename: string
-): Promise<{
-  pageSelection: PdfPageSelection[];
-  revivedPageSelection: PdfPageSelection[];
-  dropFile: boolean;
-  inventory: PrepInventoryEntry[];
-  usage: { input_tokens: number; output_tokens: number };
-} | null> {
-  if (!(await isPdftoppmAvailable())) return null;
+): Promise<PdfPrepResult> {
+  let pageTexts: string[] = [];
+  if (await isPdftotextAvailable()) {
+    try {
+      pageTexts = await extractPdfPageTexts(buffer);
+    } catch (err) {
+      logger.warn({ err, filename }, '[takeoff] pdftotext extraction failed');
+    }
+  }
 
-  let crops: Awaited<ReturnType<typeof renderTitleBlockCrops>>;
+  const fallback = (): PdfPrepResult => {
+    if (!pageTexts.length) {
+      // No page count available at all — true opaque whole-file fallback.
+      return { filename, buffer, pageTexts, pages: null, revivedPages: null, dropFile: false, inventory: [], usage: NO_USAGE };
+    }
+    // Classifier couldn't run, but the page count IS known — synthesize a
+    // uniform filename-based page selection (today's whole-file classifySheet
+    // guess) so this PDF still packs by the token budget instead of one call.
+    const cls = classifySheet(filename);
+    const pages: PdfPageSelection[] = pageTexts.map((_, i) => ({ page: i + 1, label: filename, cls }));
+    return { filename, buffer, pageTexts, pages, revivedPages: pages, dropFile: false, inventory: [], usage: NO_USAGE };
+  };
+
+  if (!(await isPdftoppmAvailable())) return fallback();
+
+  let crops: Awaited<ReturnType<typeof renderTitleBlockCrops>> = [];
   try {
     crops = await renderTitleBlockCrops(buffer);
   } catch (err) {
     logger.warn({ err, filename }, '[takeoff] title-block crop rendering failed — whole-file fallback');
-    return null;
   }
-  if (!crops.length) return null;
+  if (!crops.length) return fallback();
 
   let classified: Awaited<ReturnType<typeof classifyPages>>;
   try {
-    classified = await classifyPages(client, model, crops, filename);
+    classified = await classifyPages(client, classifierModel, crops, filename);
   } catch (err) {
     logger.warn({ err, filename }, '[takeoff] page classification AI call failed — whole-file fallback');
-    return null;
+    return fallback();
   }
 
   const { classifications, usage } = classified;
   const dropFile = shouldDropWholeFile(classifications, filename);
   const { pages: guardPages } = selectPages(classifications);
-  const selectedPages = new Set(dropFile ? [] : guardPages);
-  const revivedPages = new Set(guardPages);
-
-  // Char counts are for the inventory display only — never gates selection —
-  // so a pdftotext failure here just leaves textChars at 0, nothing more.
-  const textCharsByPage = new Map<number, number>();
-  if (await isPdftotextAvailable()) {
-    try {
-      const pageTexts = await extractPdfPageTexts(buffer);
-      pageTexts.forEach((t, i) => textCharsByPage.set(i + 1, t.length));
-    } catch (err) {
-      logger.warn({ err, filename }, '[takeoff] pdftotext (inventory char counts) failed');
-    }
-  }
-
-  const toSelection = (pages: Set<number>): PdfPageSelection[] =>
+  const guardPageSet = new Set(guardPages);
+  const toSelection = (pageSet: Set<number>): PdfPageSelection[] =>
     classifications
-      .filter(c => pages.has(c.page))
+      .filter(c => pageSet.has(c.page))
       .map(c => ({
         page: c.page,
         label: formatSheetLabel(c.sheetNo, c.title, `${filename} p${c.page}`),
         cls: c.cls,
       }));
+
+  const revivedPages = toSelection(guardPageSet);
+  const pages = dropFile ? [] : revivedPages;
 
   const inventory: PrepInventoryEntry[] = classifications.map(c => ({
     file: filename,
@@ -327,82 +360,126 @@ async function classifyAndSelectPdfPages(
     title: c.title,
     discipline: c.discipline,
     cls: c.cls,
-    included: selectedPages.has(c.page),
-    textChars: textCharsByPage.get(c.page) ?? 0,
+    included: !dropFile && guardPageSet.has(c.page),
+    textChars: pageTexts[c.page - 1]?.length ?? 0,
+    // FIX-5 — 'unknown' discipline means the classifier never actually placed
+    // this page (missing from its response, or an invalid value) rather than
+    // confidently deciding it belongs to some other discipline.
+    classified: c.discipline !== 'unknown',
     ...(dropFile ? { reason: 'all pages excluded by discipline; filename read as non-electrical' } : {}),
   }));
 
-  return {
-    pageSelection: toSelection(selectedPages),
-    revivedPageSelection: toSelection(revivedPages),
-    dropFile,
-    inventory,
-    usage,
-  };
+  return { filename, buffer, pageTexts, pages, revivedPages, dropFile, inventory, usage };
 }
 
-/** Stage 0 — Document Prep: classify PDF pages by title block (Task 2), then
- *  tile only the selected pages into legible image blocks with extracted text
- *  (Task 1). Falls back to legacy document/image blocks if prep fails outright
- *  (e.g. poppler missing); a per-PDF classification failure just means that PDF
- *  goes through whole-file (today's behavior), never kills the whole batch. */
-async function buildAgent1Blocks(
-  bidId: string,
-  batchFiles: Express.Multer.File[],
+interface AgentUploadPrepResult {
+  /** One Agent 1 call's content blocks per batch — length 1 for an upload
+   *  that fits in a single call (the single-pass path stays unchanged). */
+  batches: Agent1Block[][];
+  inventory: PrepInventoryEntry[];
+  classifierUsage: { input_tokens: number; output_tokens: number };
+}
+
+/** FIX-2 (phase 2 post-review) — Stage 0 for the WHOLE upload, run once:
+ *  classify + select pages + extract text per file (a), build one work unit
+ *  per page with an estimated input-token cost (b), and greedily pack those
+ *  units — schedule-first across the whole upload, not just within one file —
+ *  into batches that each fit under AGENT1_INPUT_BUDGET (c). Replaces the old
+ *  per-FILE-count BATCH_SIZE split, which had no relationship to how much
+ *  content a call actually carried (a single combined PDF with ~19 selected
+ *  pages used to go out as ONE call, well over the context window). */
+async function prepareAgent1Upload(
+  filesToSend: Express.Multer.File[],
   client: Anthropic,
   classifierModel: string,
   tileOverrides: TileSettingsOverrides
-): Promise<Agent1PrepResult> {
+): Promise<AgentUploadPrepResult> {
   const inventory: PrepInventoryEntry[] = [];
   const classifierUsage = { input_tokens: 0, output_tokens: 0 };
+  const units: Agent1WorkUnit[] = [];
 
-  // FIX-1 (phase 2 post-review): a PDF the classifier says to drop entirely
-  // (see classifyAndSelectPdfPages) is held back here rather than pushed
-  // straight into prepFiles, so the whole-batch safety net below can still
-  // revive it if every file in this batch would otherwise be dropped.
-  interface Dropped { prepFile: PrepFile; revivedPageSelection: PdfPageSelection[]; dropFile: boolean }
-  const prepFiles: PrepFile[] = [];
-  const dropped: Dropped[] = [];
+  const pdfResults: Array<{ prep: PdfPrepResult; dropFile: boolean }> = [];
+  const opaqueFallbacks: PdfPrepResult[] = [];
 
-  for (const f of batchFiles) {
+  for (const f of filesToSend) {
     const ext = (f.originalname.split('.').pop() ?? '').toLowerCase();
-    const prepFile: PrepFile = { filename: f.originalname, buffer: f.buffer, ext };
-    if (ext === 'pdf') {
-      const classified = await classifyAndSelectPdfPages(client, classifierModel, f.buffer, f.originalname);
-      if (classified) {
-        inventory.push(...classified.inventory);
-        classifierUsage.input_tokens += classified.usage.input_tokens;
-        classifierUsage.output_tokens += classified.usage.output_tokens;
-        if (classified.dropFile) {
-          dropped.push({ prepFile, revivedPageSelection: classified.revivedPageSelection, dropFile: true });
-          continue;
-        }
-        prepFile.pageSelection = classified.pageSelection;
-      }
+    if (ext !== 'pdf') {
+      units.push({
+        kind: 'image', filename: f.originalname, buffer: f.buffer, ext,
+        cls: classifySheet(f.originalname), estTokens: TOKENS_PER_TILE + PAGE_TOKEN_OVERHEAD,
+      });
+      continue;
     }
-    prepFiles.push(prepFile);
+    const prep = await prepOnePdf(client, classifierModel, f.buffer, f.originalname);
+    classifierUsage.input_tokens += prep.usage.input_tokens;
+    classifierUsage.output_tokens += prep.usage.output_tokens;
+    if (prep.pages === null) opaqueFallbacks.push(prep);
+    else pdfResults.push({ prep, dropFile: prep.dropFile });
   }
 
-  // Whole-batch safety net: never send nothing. Only revive when EVERY file
-  // that reached this batch was dropped (prepFiles is empty but files were
-  // dropped) — a batch with at least one surviving file leaves the drop(s) as
-  // decided, matching the plan's "if this would drop every file, send
-  // everything" requirement without second-guessing an individual drop that
-  // didn't leave the batch empty.
-  if (prepFiles.length === 0 && dropped.length > 0) {
-    const revived = reviveIfAllDropped(dropped);
-    for (const d of revived) {
-      prepFiles.push({ ...d.prepFile, pageSelection: d.revivedPageSelection });
+  // FIX-1's whole-upload safety net: never drop every classified PDF. Only
+  // PDFs with a real classification outcome participate — the opaque
+  // fallback and known-page-count classifier-failure cases are never dropped
+  // in the first place, so they're not part of this decision.
+  for (const { prep, dropFile } of reviveIfAllDropped(pdfResults)) {
+    const wasRevived = prep.dropFile && !dropFile;
+    inventory.push(...prep.inventory.map(entry => (wasRevived ? { ...entry, included: true, reason: undefined } : entry)));
+    if (dropFile) continue;
+    const pages = wasRevived ? prep.revivedPages! : prep.pages!;
+    for (const sel of pages) {
+      const text = prep.pageTexts[sel.page - 1] ?? '';
+      units.push({
+        kind: 'pdf-page', filename: prep.filename, buffer: prep.buffer, page: sel.page,
+        label: sel.label, cls: sel.cls, pageText: text,
+        estTokens: estimatePageTokens(sel.cls, text.length, tileOverrides),
+      });
     }
   }
 
-  try {
-    const blocks = await buildAgent1Content(prepFiles, { tileOverrides });
-    return { blocks, inventory, classifierUsage };
-  } catch (err) {
-    logger.warn({ err, bidId }, '[takeoff] Stage 0 document prep failed — falling back to document blocks');
-    return { blocks: legacyContentBlocks(batchFiles), inventory, classifierUsage };
+  for (const prep of opaqueFallbacks) {
+    const cls = classifySheet(prep.filename);
+    // Page count unknown — never guess low enough to risk under-batching a
+    // large document; force it into its own batch (a rare double-fallback
+    // path: poppler missing entirely, or pdftotext also unavailable/failed).
+    const estTokens = prep.pageTexts.length
+      ? prep.pageTexts.length * TOKENS_PER_TILE + Math.ceil(prep.pageTexts.join('').length / 4) + PAGE_TOKEN_OVERHEAD
+      : AGENT1_INPUT_BUDGET + 1;
+    units.push({ kind: 'document-fallback', filename: prep.filename, buffer: prep.buffer, cls, pageTexts: prep.pageTexts, estTokens });
   }
+
+  const ordered = orderScheduleFirst(units);
+  const pageBatches = packPagesByBudget(ordered, AGENT1_INPUT_BUDGET);
+
+  const batches: Agent1Block[][] = [];
+  for (const batch of pageBatches) {
+    try {
+      batches.push(await buildBlocksForBatch(batch, { tileOverrides }));
+    } catch (err) {
+      const filenames = new Set(batch.map(u => u.filename));
+      logger.warn({ err, files: [...filenames] }, '[takeoff] Stage 0 block building failed for a batch — falling back to legacy document blocks for its files');
+      const batchFiles = filesToSend.filter(f => filenames.has(f.originalname));
+      batches.push(legacyContentBlocks(batchFiles));
+    }
+  }
+
+  return { batches, inventory, classifierUsage };
+}
+
+/** FIX-7 (phase 2 post-review) — merge two Anthropic `usage` objects field by
+ *  field (every numeric field summed; the first non-numeric value for any
+ *  other field wins), so cache_creation_input_tokens/cache_read_input_tokens
+ *  and any other fields survive a merge instead of being reshaped down to
+ *  just input_tokens/output_tokens. */
+function mergeUsage(a: Record<string, unknown>, b: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...a };
+  for (const [k, v] of Object.entries(b)) {
+    if (typeof v === 'number') {
+      merged[k] = (typeof merged[k] === 'number' ? (merged[k] as number) : 0) + v;
+    } else if (merged[k] === undefined) {
+      merged[k] = v;
+    }
+  }
+  return merged;
 }
 
 function compactOutput(text: string, max = 500): string {
@@ -429,7 +506,7 @@ async function runPipeline(
   try {
     // Task 2: the whole-FILE isElectricalSheet filter only applies to non-PDF
     // images now — every PDF passes through here unfiltered, and gets filtered
-    // PAGE-BY-PAGE inside buildAgent1Blocks via pageClassifier.ts's title-block
+    // PAGE-BY-PAGE inside prepareAgent1Upload via pageClassifier.ts's title-block
     // classification instead (a combined building set no longer sends 40+
     // non-electrical pages just because the file itself has electrical pages).
     const isPdfFile = (f: Express.Multer.File) => (f.originalname.split('.').pop() || '').toLowerCase() === 'pdf';
@@ -448,20 +525,28 @@ async function runPipeline(
     // Task 2.3 — a run-level fidelity flag so a low-fidelity run is visible
     // instead of silent (problem 7 in the phase 2 plan).
     const prepFidelity = computePrepFidelity(await isPdftoppmAvailable(), await isPdftotextAvailable());
-    const prepInventory: PrepInventoryEntry[] = [];
 
-    // Build document/image blocks
-    // When multiple PDFs are present, send 1 per batch — each PDF may have many pages
-    // and combined token output easily hits the max_tokens hard limit.
-    const pdfCount = filesToSend.filter(f => (f.originalname.split('.').pop() || '').toLowerCase() === 'pdf').length;
-    const BATCH_SIZE = pdfCount > 1 ? 1 : 20;
+    // FIX-2 (phase 2 post-review) — classification, page selection, and text
+    // extraction all run ONCE for the whole upload, building one work unit per
+    // page with an estimated input-token cost, then packing those units
+    // (schedule-first across the whole upload) into calls that each stay
+    // under AGENT1_INPUT_BUDGET. Replaces the old per-FILE-count BATCH_SIZE
+    // split, which had no relationship to how much content a call actually
+    // carried. If Stage 0 prep fails outright for the whole upload, fall back
+    // to a single legacy document-block call rather than losing the run.
+    let uploadPrep: AgentUploadPrepResult;
+    try {
+      uploadPrep = await prepareAgent1Upload(filesToSend, client, config.modelClassifier, config.tileOverrides);
+    } catch (err) {
+      logger.warn({ err, bidId }, '[takeoff] Stage 0 document prep failed for the whole upload — falling back to one legacy document-block call');
+      uploadPrep = { batches: [legacyContentBlocks(filesToSend)], inventory: [], classifierUsage: { ...NO_USAGE } };
+    }
+    const { batches: agent1Batches, inventory: prepInventory, classifierUsage } = uploadPrep;
     let agent1JSON: Record<string, unknown> = {};
 
-    if (filesToSend.length <= BATCH_SIZE) {
-      // Single pass — Stage 0 doc prep tiles dense sheets so Agent 1 can read them.
-      const prepResult = await buildAgent1Blocks(bidId, filesToSend, client, config.modelClassifier, config.tileOverrides);
-      const contentBlocks = prepResult.blocks;
-      prepInventory.push(...prepResult.inventory);
+    if (agent1Batches.length <= 1) {
+      // Single pass — everything fit under budget in one call.
+      const contentBlocks = agent1Batches[0] ?? [];
       const prep = summarizePrep(contentBlocks);
       contentBlocks.push({
         type: 'text',
@@ -481,10 +566,13 @@ async function runPipeline(
       agent1Output = extractText(resp);
       logAgent1Response(bidId, resp, agent1Output, 'single', prep);
       // Task 2.4 — classifier usage is part of drawing analysis, folded into
-      // usage_agent1 rather than a new column.
+      // usage_agent1 rather than a new column. FIX-7 — persist the FULL
+      // resp.usage shape (cache_creation_input_tokens/cache_read_input_tokens
+      // included), not just input/output tokens.
       const mergedUsage = {
-        input_tokens: (resp.usage?.input_tokens ?? 0) + prepResult.classifierUsage.input_tokens,
-        output_tokens: (resp.usage?.output_tokens ?? 0) + prepResult.classifierUsage.output_tokens,
+        ...resp.usage,
+        input_tokens: (resp.usage?.input_tokens ?? 0) + classifierUsage.input_tokens,
+        output_tokens: (resp.usage?.output_tokens ?? 0) + classifierUsage.output_tokens,
       };
       await pool.query(
         `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
@@ -492,28 +580,19 @@ async function runPipeline(
       ).catch(() => {});
 
     } else {
-      // Batched: split into groups of BATCH_SIZE, merge JSON
-      const batches: Express.Multer.File[][] = [];
-      for (let i = 0; i < filesToSend.length; i += BATCH_SIZE) {
-        batches.push(filesToSend.slice(i, i + BATCH_SIZE));
-      }
+      // Batched: N token-budgeted calls (mergeAgent1Batches already merges results).
       const batchResults: Record<string, unknown>[] = [];
-      let batchUsage = { input_tokens: 0, output_tokens: 0 };
+      let batchUsage: Record<string, unknown> = { ...NO_USAGE };
 
-      for (let bi = 0; bi < batches.length; bi++) {
-        const batch = batches[bi];
-        const prepResult = await buildAgent1Blocks(bidId, batch, client, config.modelClassifier, config.tileOverrides);
-        const contentBlocks = prepResult.blocks;
-        prepInventory.push(...prepResult.inventory);
-        batchUsage.input_tokens  += prepResult.classifierUsage.input_tokens;
-        batchUsage.output_tokens += prepResult.classifierUsage.output_tokens;
+      for (let bi = 0; bi < agent1Batches.length; bi++) {
+        const contentBlocks = agent1Batches[bi];
         const prep = summarizePrep(contentBlocks);
         contentBlocks.push({
           type: 'text',
-          text: `Analyze batch ${bi + 1} of ${batches.length} electrical plan files and provide Drawing Analyzer JSON output. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if this sheet contains no electrical equipment, you MUST return a valid JSON object with the sheet in sheet_inventory and equipment arrays empty.`,
+          text: `Analyze batch ${bi + 1} of ${agent1Batches.length} electrical plan pages and provide Drawing Analyzer JSON output. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if this sheet contains no electrical equipment, you MUST return a valid JSON object with the sheet in sheet_inventory and equipment arrays empty.`,
         });
 
-        logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${batches.length}`, prep);
+        logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${agent1Batches.length}`, prep);
         const bResp = await callWithRetry(() =>
           client.messages.stream({
             model: config.model,
@@ -524,18 +603,17 @@ async function runPipeline(
           }).finalMessage()
         , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
-        logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${batches.length}`, prep);
+        logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${agent1Batches.length}`, prep);
         if (!bText.trim()) {
-          logger.warn({ bidId, batch: `${bi + 1}/${batches.length}`, files: batch.map(f => f.originalname) },
+          logger.warn({ bidId, batch: `${bi + 1}/${agent1Batches.length}` },
             '[takeoff] Agent 1 batch returned empty output — skipping');
         }
         const parsed = parseAIJSON(bText);
         if (parsed) batchResults.push(parsed);
-        if (bResp.usage) {
-          batchUsage.input_tokens  += bResp.usage.input_tokens  ?? 0;
-          batchUsage.output_tokens += bResp.usage.output_tokens ?? 0;
-        }
+        // FIX-7 — sum the full usage shape across batches, not just input/output.
+        if (bResp.usage) batchUsage = mergeUsage(batchUsage, bResp.usage as unknown as Record<string, unknown>);
       }
+      batchUsage = mergeUsage(batchUsage, classifierUsage);
       await pool.query(
         `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
         [JSON.stringify(batchUsage), config.model, JSON.stringify(prepInventory), prepFidelity, bidId]

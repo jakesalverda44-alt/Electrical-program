@@ -344,7 +344,7 @@ export async function pdfToTiledImageBlocks(
 }
 
 /** A single `document` block for a PDF — the low-fidelity fallback path. */
-function pdfDocumentBlock(buffer: Buffer): DocumentBlock {
+export function pdfDocumentBlock(buffer: Buffer): DocumentBlock {
   return {
     type: 'document',
     source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') },
@@ -357,7 +357,7 @@ function pdfDocumentBlock(buffer: Buffer): DocumentBlock {
  *    type, so we transcode it (and any non-standard type) to jpeg via sharp.
  *    Returns null if the bytes can't be decoded at all.
  * ------------------------------------------------------------------------- */
-async function imageToBlock(buffer: Buffer, ext: string): Promise<ImageBlock | null> {
+export async function imageToBlock(buffer: Buffer, ext: string): Promise<ImageBlock | null> {
   const passthrough = IMG_MEDIA[ext];
   if (passthrough) {
     return { type: 'image', source: { type: 'base64', media_type: passthrough, data: buffer.toString('base64') } };
@@ -389,7 +389,7 @@ export function computePrepFidelity(popplerOk: boolean, pdftotextOk: boolean): '
  *  group can use its own tileInches, DPI, and tile-count cap (Task 3) in one
  *  pdftoppm call per group. Results are merged back in ascending page order —
  *  the per-class grouping must not reorder the sheet. */
-async function tilesForSelectedPdfPages(
+export async function tilesForSelectedPdfPages(
   buffer: Buffer,
   pageSelection: PdfPageSelection[],
   tileOverrides?: TileSettingsOverrides
