@@ -9,6 +9,7 @@ import FilePreviewModal from '../../components/FilePreviewModal';
 import { useDocPreview } from '../../components/useDocPreview';
 import { buildScopeFromPrebid, PrebidSection } from './prebidScope';
 import { overridesFromEstimate } from './estimateHydrate';
+import { confidenceToPlaybook } from './confidence';
 import PreBidTab from './PreBidTab';
 
 interface Props {
@@ -202,6 +203,18 @@ function isPdfOrImage(d: { file_type?: string; name?: string }) {
     || n.endsWith('.pdf') || n.endsWith('.jpg') || n.endsWith('.jpeg') || n.endsWith('.png');
 }
 
+// Small colored pill — lifted to module scope (Task 5) so the Pricing tab's
+// FIRM/APPROX/VERIFY confidence chips reuse the exact styling the Agent 2
+// structured view already uses for its own confidence badges.
+function pill(label: string, color: string) {
+  return (
+    <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 99, fontSize: 11,
+      fontWeight: 700, background: color + '22', color }}>
+      {label}
+    </span>
+  );
+}
+
 function lookupUnitCost(
   cat: string,
   lib: { global: Record<string,number>; by_project_type: Record<string,Record<string,number>> },
@@ -231,7 +244,12 @@ function buildLineItemsFromTakeoff(
       const key = `${row.category}||${row.item}`;
       const base = lookupUnitCost(row.category, lib, projectType);
       const unit_cost = overrides[key] !== undefined ? overrides[key] : base;
-      return { category: row.category, item: row.item, qty: row.qty, unit: row.unit || 'EA', unit_cost, total: row.qty * unit_cost, overridden: overrides[key] !== undefined };
+      return {
+        category: row.category, item: row.item, qty: row.qty, unit: row.unit || 'EA', unit_cost,
+        total: row.qty * unit_cost, overridden: overrides[key] !== undefined,
+        // Task 5 — carried through so the Pricing tab can render a FIRM/APPROX/VERIFY chip.
+        confidence: row.confidence,
+      };
     });
   } catch {
     return [];
@@ -637,6 +655,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     // it here too (mirrors the Pricing tab banner) so a rep saving without ever
     // opening that tab still sees the grand total is understated.
     const zeroCostCount = items.filter(li => li.unit_cost === 0 && !li.overridden).length;
+    // Task 5.3 — surface VERIFY-confidence items in the same save toast, so a
+    // rep who saves without ever opening the confidence chips still sees them.
+    const verifyCount = items.filter(li => confidenceToPlaybook(li.confidence) === 'VERIFY').length;
     setSavingEstimate(true);
     try {
       const { data } = await api.put(`/estimates/${bid.id}`, {
@@ -647,12 +668,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       setSavedEstimate(data);
       setEstimateSaved(true);
       setTimeout(() => setEstimateSaved(false), 3000);
-      showToast({
-        title: 'Estimate saved',
-        sub: zeroCostCount > 0
-          ? `Grand total: ${moneyFull(data.grand_total)} — ${zeroCostCount} line item${zeroCostCount === 1 ? '' : 's'} priced at $0 (no unit cost)`
-          : `Grand total: ${moneyFull(data.grand_total)}`,
-      });
+      const parts = [`Grand total: ${moneyFull(data.grand_total)}`];
+      if (zeroCostCount > 0) parts.push(`${zeroCostCount} line item${zeroCostCount === 1 ? '' : 's'} priced at $0 (no unit cost)`);
+      if (verifyCount > 0) parts.push(`${verifyCount} item${verifyCount === 1 ? '' : 's'} need${verifyCount === 1 ? 's' : ''} verification`);
+      showToast({ title: 'Estimate saved', sub: parts.join(' · ') });
     } finally {
       setSavingEstimate(false);
     }
@@ -1511,12 +1530,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
                   const riskColor = (r: string) =>
                     r === 'HIGH' ? '#EF4444' : r === 'MEDIUM' ? '#F59E0B' : 'var(--green)';
-                  const pill = (label: string, color: string) => (
-                    <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 99, fontSize: 11,
-                      fontWeight: 700, background: color + '22', color }}>
-                      {label}
-                    </span>
-                  );
 
                   // ── Agent 2 structured view ──────────────────────────────
                   if (t.key === 'agent2' && parsed) {
@@ -2057,6 +2070,18 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         // user-overridden $0 is a deliberate choice, not a missing-cost gap, so
         // it's excluded here.
         const zeroCostCount = pricingLineItems.filter(li => li.unit_cost === 0 && !li.overridden).length;
+        // Task 5 — confidence survives to the estimator's screen: a per-row
+        // FIRM/APPROX/VERIFY chip plus a header count, mapped from the raw
+        // Agent 1/2 vocabulary via confidenceToPlaybook (code-level only — the
+        // agent prompts' own VERIFIED/ASSUMED vocabulary is unchanged).
+        const confCounts = pricingLineItems.reduce((acc, li) => {
+          const c = confidenceToPlaybook(li.confidence);
+          if (c) acc[c] = (acc[c] ?? 0) + 1;
+          return acc;
+        }, {} as Record<'FIRM' | 'APPROX' | 'VERIFY', number>);
+        const hasConfCounts = Object.keys(confCounts).length > 0;
+        const confChipColor = (c: 'FIRM' | 'APPROX' | 'VERIFY') =>
+          c === 'FIRM' ? 'var(--green)' : 'var(--amber)';
         const compCount = savedEstimate?.comp_count ?? 0;
         const confidence = savedEstimate?.confidence ?? (compCount >= 3 ? 'HIGH' : compCount >= 1 ? 'MEDIUM' : 'LOW');
         const confColor = confidence === 'HIGH' ? 'var(--green)' : confidence === 'MEDIUM' ? 'var(--amber)' : 'var(--text3)';
@@ -2101,6 +2126,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   <div className="panel-hdr">
                     <span className="panel-title">Line-Item Estimate</span>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      {hasConfCounts && (
+                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)' }}>
+                          {confCounts.FIRM ?? 0} FIRM · {confCounts.APPROX ?? 0} APPROX · {confCounts.VERIFY ?? 0} VERIFY
+                        </span>
+                      )}
                       {savedEstimate && (
                         <span style={{ fontSize: 12, fontWeight: 700, color: confColor }}>
                           {confidence} confidence · {savedEstimate.comp_count} comp{savedEstimate.comp_count !== 1 ? 's' : ''}
@@ -2123,6 +2153,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                           <th>Unit</th>
                           <th style={{ textAlign: 'right' }}>Unit Cost</th>
                           <th style={{ textAlign: 'right' }}>Total</th>
+                          <th>Confidence</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2131,7 +2162,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                           return (
                             <React.Fragment key={cat}>
                               <tr style={{ background: 'var(--surface2)' }}>
-                                <td colSpan={6} style={{ fontWeight: 800, fontSize: 12, color: 'var(--text2)', padding: '8px 16px', textTransform: 'uppercase', letterSpacing: '.04em' }}>{cat}</td>
+                                <td colSpan={7} style={{ fontWeight: 800, fontSize: 12, color: 'var(--text2)', padding: '8px 16px', textTransform: 'uppercase', letterSpacing: '.04em' }}>{cat}</td>
                               </tr>
                               {items.map((li, idx) => (
                                 <tr key={idx}>
@@ -2165,11 +2196,18 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                                     </div>
                                   </td>
                                   <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{moneyFull(li.total)}</td>
+                                  <td>
+                                    {(() => {
+                                      const c = confidenceToPlaybook(li.confidence);
+                                      return c ? pill(c, confChipColor(c)) : null;
+                                    })()}
+                                  </td>
                                 </tr>
                               ))}
                               <tr style={{ borderTop: '2px solid var(--border)' }}>
                                 <td colSpan={5} style={{ textAlign: 'right', fontWeight: 700, fontSize: 12, color: 'var(--text2)', padding: '6px 16px' }}>{cat} Subtotal</td>
                                 <td className="num" style={{ textAlign: 'right', fontWeight: 900 }}>{moneyFull(catTotal)}</td>
+                                <td/>
                               </tr>
                             </React.Fragment>
                           );

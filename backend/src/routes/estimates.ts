@@ -42,7 +42,10 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const { line_items, overhead_pct, profit_pct } = req.body as {
-    line_items: { category: string; item: string; qty: number; unit: string; unit_cost: number; total: number; overridden: boolean }[];
+    // Task 5 (phase 2 takeoff fidelity): confidence is additive, type-only here
+    // — no migration needed, line_items is already JSONB and this route already
+    // round-trips whatever fields the frontend sends via JSON.stringify below.
+    line_items: { category: string; item: string; qty: number; unit: string; unit_cost: number; total: number; overridden: boolean; confidence?: string }[];
     overhead_pct: number;
     profit_pct: number;
   };

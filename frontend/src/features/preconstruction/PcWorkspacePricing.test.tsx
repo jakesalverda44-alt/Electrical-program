@@ -8,10 +8,10 @@
 // `ws` in state and feeds onUpdate back in, the same round-trip a refresh does).
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import React, { useState } from 'react';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
 import PcWorkspaceView from './PcWorkspace';
 import { blankWorkspace, PcWorkspace } from './constants';
-import { Bid, BidEstimate } from '../../types';
+import { Bid, BidEstimate, Toast } from '../../types';
 
 afterEach(cleanup);
 
@@ -150,5 +150,126 @@ describe('PcWorkspace Pricing tab — survives a refresh', () => {
 
     await waitFor(() => expect(screen.getByText('Pull Station')).toBeTruthy());
     expect(screen.queryByText(/no unit cost/i)).toBeNull();
+  });
+});
+
+// Task 5 (phase 2 takeoff fidelity): confidence survives to the estimator's
+// screen — a FIRM/APPROX/VERIFY chip per row, a header count, and a
+// VERIFY-count line added to the save toast.
+function renderPricingTabWithToast(showToast: (t: Toast) => void) {
+  const ws: PcWorkspace = { ...blankWorkspace('b1', 'Test Job', 0), activeTab: 'pricing' as const };
+  function Wrapper() {
+    const [w, setW] = useState<PcWorkspace>(ws);
+    return (
+      <PcWorkspaceView
+        ws={w}
+        bid={bid}
+        onUpdate={setW}
+        onBack={() => {}}
+        onConverted={() => {}}
+        onBidUpdated={() => {}}
+        showToast={showToast}
+        embedded
+      />
+    );
+  }
+  return render(<Wrapper/>);
+}
+
+describe('PcWorkspace Pricing tab — confidence chips (Task 5)', () => {
+  it('renders a FIRM chip for VERIFIED and an APPROX chip for ASSUMED, and a header count', async () => {
+    const estimate: BidEstimate = {
+      bid_id: 'b1',
+      overhead_pct: 10,
+      profit_pct: 15,
+      line_items: [
+        { category: 'LIGHTING', item: 'Wall Pack Fixture', qty: 2, unit: 'EA', unit_cost: 175, total: 350, overridden: false, confidence: 'VERIFIED' },
+        { category: 'BRANCH POWER', item: 'Duplex Receptacle', qty: 10, unit: 'EA', unit_cost: 25, total: 250, overridden: false, confidence: 'ASSUMED' },
+        { category: 'LOW VOLTAGE', item: 'Data Cable', qty: 500, unit: 'LF', unit_cost: 1, total: 500, overridden: false, confidence: 'NOT SHOWN' },
+      ],
+      subtotals: {}, total_direct: 1100, total_overhead: 0, total_profit: 0, grand_total: 1100,
+      comp_count: 0, confidence: 'LOW',
+    };
+    mockApi(estimate);
+    renderPricingTab();
+
+    await waitFor(() => expect(screen.getByText('Wall Pack Fixture')).toBeTruthy());
+    expect(screen.getByText('FIRM')).toBeTruthy();
+    expect(screen.getByText('APPROX')).toBeTruthy();
+    expect(screen.getByText('VERIFY')).toBeTruthy();
+    // Header count: "1 FIRM · 1 APPROX · 1 VERIFY"
+    expect(screen.getByText(/1 FIRM · 1 APPROX · 1 VERIFY/)).toBeTruthy();
+  });
+
+  it('renders no chip and no header count when no line item carries a recognizable confidence', async () => {
+    const estimate: BidEstimate = {
+      bid_id: 'b1',
+      overhead_pct: 10,
+      profit_pct: 15,
+      line_items: [
+        { category: 'LIGHTING', item: 'Wall Pack Fixture', qty: 2, unit: 'EA', unit_cost: 175, total: 350, overridden: false },
+      ],
+      subtotals: {}, total_direct: 350, total_overhead: 0, total_profit: 0, grand_total: 350,
+      comp_count: 0, confidence: 'LOW',
+    };
+    mockApi(estimate);
+    renderPricingTab();
+
+    await waitFor(() => expect(screen.getByText('Wall Pack Fixture')).toBeTruthy());
+    expect(screen.queryByText('FIRM')).toBeNull();
+    expect(screen.queryByText('APPROX')).toBeNull();
+    expect(screen.queryByText('VERIFY')).toBeNull();
+    expect(screen.queryByText(/FIRM ·/)).toBeNull();
+  });
+
+  it('adds a VERIFY-count line to the save toast when VERIFY items are present', async () => {
+    const estimate: BidEstimate = {
+      bid_id: 'b1',
+      overhead_pct: 10,
+      profit_pct: 15,
+      line_items: [
+        { category: 'LOW VOLTAGE', item: 'Data Cable', qty: 500, unit: 'LF', unit_cost: 1, total: 500, overridden: false, confidence: 'NOT SHOWN' },
+        { category: 'LOW VOLTAGE', item: 'Conduit', qty: 200, unit: 'LF', unit_cost: 2, total: 400, overridden: false, confidence: 'NOT SHOWN' },
+        { category: 'LIGHTING', item: 'Wall Pack Fixture', qty: 2, unit: 'EA', unit_cost: 175, total: 350, overridden: false, confidence: 'VERIFIED' },
+      ],
+      subtotals: {}, total_direct: 1250, total_overhead: 0, total_profit: 0, grand_total: 1250,
+      comp_count: 0, confidence: 'LOW',
+    };
+    mockApi(estimate);
+    put.mockResolvedValue({ data: { ...estimate, grand_total: 1250 } });
+    const showToast = vi.fn();
+    renderPricingTabWithToast(showToast);
+
+    await waitFor(() => expect(screen.getByText('Wall Pack Fixture')).toBeTruthy());
+    fireEvent.click(screen.getByText('Save Estimate'));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    const call = showToast.mock.calls[showToast.mock.calls.length - 1][0];
+    expect(call.title).toBe('Estimate saved');
+    expect(call.sub).toMatch(/2 items need verification/);
+  });
+
+  it('does not mention verification in the save toast when no VERIFY items are present', async () => {
+    const estimate: BidEstimate = {
+      bid_id: 'b1',
+      overhead_pct: 10,
+      profit_pct: 15,
+      line_items: [
+        { category: 'LIGHTING', item: 'Wall Pack Fixture', qty: 2, unit: 'EA', unit_cost: 175, total: 350, overridden: false, confidence: 'VERIFIED' },
+      ],
+      subtotals: {}, total_direct: 350, total_overhead: 0, total_profit: 0, grand_total: 350,
+      comp_count: 0, confidence: 'LOW',
+    };
+    mockApi(estimate);
+    put.mockResolvedValue({ data: { ...estimate, grand_total: 350 } });
+    const showToast = vi.fn();
+    renderPricingTabWithToast(showToast);
+
+    await waitFor(() => expect(screen.getByText('Wall Pack Fixture')).toBeTruthy());
+    fireEvent.click(screen.getByText('Save Estimate'));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    const call = showToast.mock.calls[showToast.mock.calls.length - 1][0];
+    expect(call.sub).not.toMatch(/verification/);
   });
 });
