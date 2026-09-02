@@ -19,6 +19,7 @@ import { parseTakeoffWorkbook } from '../utils/takeoffParse';
 import { parsePrebidScope } from '../utils/prebidScopeParse';
 import { parseAccubidBreakdown } from '../utils/accubidParse';
 import { storeDocument } from '../utils/storeDocument';
+import { mergeAgent1Batches } from '../ai/mergeAgent1';
 
 // Cap on tiles rasterized per PDF page (cost control — see Stage 0 doc prep).
 const MAX_TILES_PER_PAGE = 9;
@@ -329,33 +330,11 @@ async function runPipeline(
         [JSON.stringify(batchUsage), config.model, bidId]
       ).catch(() => {});
 
-      // Merge batch results
-      const merged: Record<string, unknown[]> & { project_info?: unknown; confidence_scores?: unknown } = {
-        panels: [], feeders: [], transformers: [], generators: [], ats: [],
-        lighting: [], devices: [], equipment: [], conduit: [], wire: [],
-        notes: [], sheet_inventory: [], sheet_references: [], warnings: [],
-        systems_identified: [],
-      };
-      const seenPanels = new Set<string>();
-      for (const r of batchResults) {
-        for (const key of Object.keys(merged) as (keyof typeof merged)[]) {
-          if (!Array.isArray(r[key])) continue;
-          for (const item of r[key] as Record<string, unknown>[]) {
-            if (key === 'panels' && item.name) {
-              const sig = `${item.name}:${item.source_sheet}`;
-              if (seenPanels.has(sig)) {
-                (item as Record<string,unknown>).cross_reference = 'CROSS-REFERENCE — VERIFY';
-              } else {
-                seenPanels.add(sig);
-              }
-            }
-            (merged[key] as unknown[]).push(item);
-          }
-        }
-      }
-      if (batchResults[0]) merged.project_info = batchResults[0].project_info;
-      if (batchResults[0]) merged.confidence_scores = batchResults[0].confidence_scores;
-      agent1JSON = merged as unknown as Record<string, unknown>;
+      // Merge batch results — generic merge over the actual AGENT1_SYSTEM schema
+      // (project, service, panels, equipment, quantities, allowances, ecfeciItems,
+      // flags, scopeNotes, missingSheets), not a hardcoded legacy key list.
+      // See backend/src/ai/mergeAgent1.ts for the merge rules.
+      agent1JSON = mergeAgent1Batches(batchResults);
       agent1Output = JSON.stringify(agent1JSON, null, 2);
     }
 
@@ -453,7 +432,7 @@ async function runPipeline(
       WHERE bid_id=$3
     `, [
       JSON.stringify(a1.panels ?? []),
-      JSON.stringify(a1.lighting ?? []),
+      JSON.stringify(a1.quantities ?? []),
       bidId,
     ]);
 
