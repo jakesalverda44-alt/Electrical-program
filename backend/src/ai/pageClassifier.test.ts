@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   selectPages,
+  shouldDropWholeFile,
+  reviveIfAllDropped,
   titleBlockCropRect,
   parseClassifierJSON,
   formatSheetLabel,
@@ -26,7 +28,7 @@ describe('selectPages (pure)', () => {
       page({ page: 10, discipline: 'plumbing' }),
       page({ page: 11, discipline: 'other' }),
     ];
-    expect(selectPages(inv)).toEqual([1, 2, 3, 4, 5]);
+    expect(selectPages(inv)).toEqual({ pages: [1, 2, 3, 4, 5], allExcluded: false });
   });
 
   it('default-includes a page the classifier could not place at all (unknown)', () => {
@@ -34,7 +36,7 @@ describe('selectPages (pure)', () => {
       page({ page: 1, discipline: 'architectural' }),
       page({ page: 2, discipline: 'unknown' }),
     ];
-    expect(selectPages(inv)).toEqual([2]);
+    expect(selectPages(inv)).toEqual({ pages: [2], allExcluded: false });
   });
 
   it('never excludes everything — falls back to including all pages when selection would be empty', () => {
@@ -43,11 +45,61 @@ describe('selectPages (pure)', () => {
       page({ page: 2, discipline: 'civil' }),
       page({ page: 3, discipline: 'structural' }),
     ];
-    expect(selectPages(inv)).toEqual([1, 2, 3]);
+    expect(selectPages(inv)).toEqual({ pages: [1, 2, 3], allExcluded: true });
   });
 
-  it('returns empty for an empty inventory (nothing to guard against)', () => {
-    expect(selectPages([])).toEqual([]);
+  it('returns empty (not the all-excluded guard) for an empty inventory — nothing to guard against', () => {
+    expect(selectPages([])).toEqual({ pages: [], allExcluded: false });
+  });
+});
+
+// FIX-1 (post-review): a purely architectural/non-electrical PDF must not ride
+// selectPages' all-excluded guard to "include everything" — the whole-file
+// filename check decides whether that fallback is trustworthy.
+describe('shouldDropWholeFile (pure)', () => {
+  it('drops a PDF whose pages are all non-electrical AND whose filename reads as non-electrical', () => {
+    const inv: PageClassification[] = [
+      page({ page: 1, discipline: 'architectural' }),
+      page({ page: 2, discipline: 'architectural' }),
+    ];
+    expect(shouldDropWholeFile(inv, 'A101 Architectural.pdf')).toBe(true);
+  });
+
+  it('does not drop when the filename is electrical, even if every page classified as another discipline', () => {
+    const inv: PageClassification[] = [
+      page({ page: 1, discipline: 'other' }),
+      page({ page: 2, discipline: 'other' }),
+    ];
+    expect(shouldDropWholeFile(inv, 'E-101 Electrical Site Plan.pdf')).toBe(false);
+  });
+
+  it('does not drop when the filename is ambiguous (uncertain — include)', () => {
+    const inv: PageClassification[] = [page({ page: 1, discipline: 'civil' })];
+    expect(shouldDropWholeFile(inv, 'combined-set.pdf')).toBe(false);
+  });
+
+  it('does not drop when the guard never fired (a real selection exists)', () => {
+    const inv: PageClassification[] = [
+      page({ page: 1, discipline: 'electrical' }),
+      page({ page: 2, discipline: 'architectural' }),
+    ];
+    expect(shouldDropWholeFile(inv, 'A101 Architectural.pdf')).toBe(false);
+  });
+});
+
+describe('reviveIfAllDropped (pure)', () => {
+  it('reverts every drop when all files would otherwise be dropped', () => {
+    const files = [{ id: 1, dropFile: true }, { id: 2, dropFile: true }];
+    expect(reviveIfAllDropped(files)).toEqual([{ id: 1, dropFile: false }, { id: 2, dropFile: false }]);
+  });
+
+  it('leaves drops in place when at least one file survives', () => {
+    const files = [{ id: 1, dropFile: true }, { id: 2, dropFile: false }];
+    expect(reviveIfAllDropped(files)).toEqual(files);
+  });
+
+  it('is a no-op on an empty list', () => {
+    expect(reviveIfAllDropped([])).toEqual([]);
   });
 });
 

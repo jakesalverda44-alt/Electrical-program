@@ -26,7 +26,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { callWithRetry } from './retry';
 import { PAGE_CLASSIFIER_SYSTEM } from './prompts';
 import { logger } from '../utils/logger';
-import type { SheetClass } from './documentPrep';
+import { isElectricalSheet, type SheetClass } from './documentPrep';
 
 const execFileP = promisify(execFile);
 
@@ -66,14 +66,54 @@ export function titleBlockCropRect(width: number, height: number): { left: numbe
   return { left, top: 0, width: Math.max(1, width - left), height: Math.max(1, height) };
 }
 
+/** Result of selectPages — the guard signals when it had to fall back to
+ *  including every page (FIX-1, phase 2 post-review) so callers can decide
+ *  whether that fallback is actually safe for this file (see
+ *  shouldDropWholeFile below) instead of blindly trusting it. */
+export interface PageSelectionResult {
+  pages: number[];
+  /** true when SELECT_DISCIPLINES matched nothing and `pages` is the
+   *  include-everything guard fallback, not a real selection. */
+  allExcluded: boolean;
+}
+
 /* ---------------------------------------------------------------------------
  * Pure: which pages to actually tile at full fidelity. Never excludes
  * everything — same guard as today's whole-file isElectricalSheet filter.
  * ------------------------------------------------------------------------- */
-export function selectPages(inventory: PageClassification[]): number[] {
-  if (inventory.length === 0) return [];
+export function selectPages(inventory: PageClassification[]): PageSelectionResult {
+  if (inventory.length === 0) return { pages: [], allExcluded: false };
   const selected = inventory.filter(p => SELECT_DISCIPLINES.has(p.discipline)).map(p => p.page);
-  return selected.length > 0 ? selected : inventory.map(p => p.page);
+  if (selected.length > 0) return { pages: selected, allExcluded: false };
+  return { pages: inventory.map(p => p.page), allExcluded: true };
+}
+
+/* ---------------------------------------------------------------------------
+ * Pure — FIX-1 (phase 2 post-review): a purely architectural/other-discipline
+ * PDF (e.g. "A101 Architectural.pdf") makes selectPages' all-excluded guard
+ * fire and fall back to including every page — tiling and billing a file that
+ * is clearly not electrical scope. Trust that fallback only when the filename
+ * ITSELF is ambiguous/electrical; when the filename also reads as non-electrical
+ * (isElectricalSheet returns false), the whole file should be dropped instead.
+ * A real (non-guard) page selection always wins regardless of filename.
+ * ------------------------------------------------------------------------- */
+export function shouldDropWholeFile(inventory: PageClassification[], filename: string): boolean {
+  return selectPages(inventory).allExcluded && !isElectricalSheet(filename);
+}
+
+/* ---------------------------------------------------------------------------
+ * Pure — FIX-1: the whole-upload safety net. shouldDropWholeFile can fire for
+ * every PDF in an upload (e.g. the estimator mistakenly uploaded only an
+ * architectural set) — dropping all of them would send Agent 1 nothing at
+ * all. Mirrors the pre-existing isElectricalSheet-based filesToSend guard for
+ * non-PDF images: never drop every file, revert every drop instead when that
+ * would be the outcome.
+ * ------------------------------------------------------------------------- */
+export function reviveIfAllDropped<T extends { dropFile: boolean }>(files: T[]): T[] {
+  if (files.length > 0 && files.every(f => f.dropFile)) {
+    return files.map(f => ({ ...f, dropFile: false }));
+  }
+  return files;
 }
 
 /* ---------------------------------------------------------------------------

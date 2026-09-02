@@ -68,6 +68,24 @@ export interface PrepFile {
   pageSelection?: PdfPageSelection[];
 }
 
+// ── Electrical sheet filter (filename-based) ───────────────────────────────────
+// Positive include: electrical sheet prefixes OR any keyword that signals electrical
+// scope — fixture/lighting/luminaire/schedule. Keyword matches win over the exclude
+// list, so a "Lighting Fixture Schedule" sheet is never dropped regardless of prefix.
+// Moved here from preconstruction.ts (FIX-1, phase 2 post-review) so pageClassifier.ts
+// can consult it too — a PDF whose page-level classification excludes every page
+// (pageClassifier.ts's selectPages all-excluded guard) is only safe to drop entirely
+// when the filename itself also reads as non-electrical.
+const ELEC_INCLUDE = /^E\d|electrical|one.?line|panel.?sched|equip.?sched|fixture|lumin|lighting|schedule/i;
+const EXCLUDE_ONLY = /^(A|S|C|L|M|P|G|FP|PL|CV|CI|LS)\d/i;
+
+export function isElectricalSheet(filename: string): boolean {
+  const base = filename.replace(/\.[^.]+$/, '');
+  if (ELEC_INCLUDE.test(base)) return true;
+  if (EXCLUDE_ONLY.test(base)) return false;
+  return true; // uncertain — include
+}
+
 /** Image extensions that already map to a Claude-supported media type. */
 const IMG_MEDIA: Record<string, 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'> = {
   jpg: 'image/jpeg',

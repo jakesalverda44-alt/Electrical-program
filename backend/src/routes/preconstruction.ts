@@ -15,12 +15,14 @@ import { drawingUpload, documentUpload } from '../utils/upload';
 import { uploadFile, getFileMedia } from '../services/googleDrive';
 import {
   buildAgent1Content, isPdftoppmAvailable, computePrepFidelity, parseTileOverrideSetting,
+  isElectricalSheet,
   TILE_DPI_MIN, TILE_DPI_MAX, TILE_COUNT_MIN, TILE_COUNT_MAX,
   type PrepFile, type Agent1Block, type PdfPageSelection, type TileSettingsOverrides,
 } from '../ai/documentPrep';
 import { isPdftotextAvailable, extractPdfPageTexts } from '../ai/pdfText';
 import {
   renderTitleBlockCrops, classifyPages, selectPages, formatSheetLabel,
+  shouldDropWholeFile, reviveIfAllDropped,
   type PageClassification,
 } from '../ai/pageClassifier';
 import { extractDocxText, extractPdfText, parseBidDocText } from '../utils/bidDocParse';
@@ -137,21 +139,6 @@ function describeAIError(err: unknown): string {
   return `${status}: ${detail}`;
 }
 
-// ── Electrical sheet filter ────────────────────────────────────────────────────
-// Positive include: electrical sheet prefixes OR any keyword that signals electrical
-// scope — fixture/lighting/luminaire/schedule. Keyword matches win over the exclude
-// list, so a "Lighting Fixture Schedule" sheet is never dropped regardless of prefix.
-const ELEC_INCLUDE = /^E\d|electrical|one.?line|panel.?sched|equip.?sched|fixture|lumin|lighting|schedule/i;
-const EXCLUDE_ONLY = /^(A|S|C|L|M|P|G|FP|PL|CV|CI|LS)\d/i;
-
-function isElectricalSheet(filename: string): boolean {
-  const base = filename.replace(/\.[^.]+$/, '');
-  if (ELEC_INCLUDE.test(base)) return true;
-  if (EXCLUDE_ONLY.test(base)) return false;
-  return true; // uncertain — include
-}
-
-
 // ── Helper: extract text from Anthropic response ──────────────────────────────
 function extractText(response: Anthropic.Message): string {
   return response.content
@@ -247,6 +234,11 @@ interface PrepInventoryEntry {
   cls: string;
   included: boolean;
   textChars: number;
+  /** FIX-1 (phase 2 post-review) — set only when this page's file was dropped
+   *  entirely (a non-electrical filename with every page classified as a
+   *  non-electrical discipline), so a low-fidelity/zero-content run is visible
+   *  in the inventory instead of a silent per-page `included: false`. */
+  reason?: string;
 }
 
 interface Agent1PrepResult {
@@ -259,13 +251,29 @@ interface Agent1PrepResult {
  *  full-fidelity tiling. Returns null when classification can't run at all
  *  (poppler missing, no crops, or the AI call fails outright after retries) —
  *  callers fall back to today's whole-file behavior for that PDF. Never throws;
- *  a classification failure must never kill the run (plan requirement). */
+ *  a classification failure must never kill the run (plan requirement).
+ *
+ *  FIX-1 (phase 2 post-review): when selectPages' all-excluded guard fires
+ *  (every page classified as a non-electrical discipline) AND the filename
+ *  itself reads as non-electrical, the whole file is dropped (`dropFile`)
+ *  instead of riding the guard's include-everything fallback — a purely
+ *  architectural PDF no longer gets tiled and billed just because it shares a
+ *  batch with real electrical sheets. `revivedPageSelection` carries what the
+ *  selection would have been without the drop, so a caller-level safety net
+ *  can still send everything if every file in the upload would otherwise be
+ *  dropped (never send nothing). */
 async function classifyAndSelectPdfPages(
   client: Anthropic,
   model: string,
   buffer: Buffer,
   filename: string
-): Promise<{ pageSelection: PdfPageSelection[]; inventory: PrepInventoryEntry[]; usage: { input_tokens: number; output_tokens: number } } | null> {
+): Promise<{
+  pageSelection: PdfPageSelection[];
+  revivedPageSelection: PdfPageSelection[];
+  dropFile: boolean;
+  inventory: PrepInventoryEntry[];
+  usage: { input_tokens: number; output_tokens: number };
+} | null> {
   if (!(await isPdftoppmAvailable())) return null;
 
   let crops: Awaited<ReturnType<typeof renderTitleBlockCrops>>;
@@ -286,7 +294,10 @@ async function classifyAndSelectPdfPages(
   }
 
   const { classifications, usage } = classified;
-  const selectedPages = new Set(selectPages(classifications));
+  const dropFile = shouldDropWholeFile(classifications, filename);
+  const { pages: guardPages } = selectPages(classifications);
+  const selectedPages = new Set(dropFile ? [] : guardPages);
+  const revivedPages = new Set(guardPages);
 
   // Char counts are for the inventory display only — never gates selection —
   // so a pdftotext failure here just leaves textChars at 0, nothing more.
@@ -300,13 +311,14 @@ async function classifyAndSelectPdfPages(
     }
   }
 
-  const pageSelection: PdfPageSelection[] = classifications
-    .filter(c => selectedPages.has(c.page))
-    .map(c => ({
-      page: c.page,
-      label: formatSheetLabel(c.sheetNo, c.title, `${filename} p${c.page}`),
-      cls: c.cls,
-    }));
+  const toSelection = (pages: Set<number>): PdfPageSelection[] =>
+    classifications
+      .filter(c => pages.has(c.page))
+      .map(c => ({
+        page: c.page,
+        label: formatSheetLabel(c.sheetNo, c.title, `${filename} p${c.page}`),
+        cls: c.cls,
+      }));
 
   const inventory: PrepInventoryEntry[] = classifications.map(c => ({
     file: filename,
@@ -317,9 +329,16 @@ async function classifyAndSelectPdfPages(
     cls: c.cls,
     included: selectedPages.has(c.page),
     textChars: textCharsByPage.get(c.page) ?? 0,
+    ...(dropFile ? { reason: 'all pages excluded by discipline; filename read as non-electrical' } : {}),
   }));
 
-  return { pageSelection, inventory, usage };
+  return {
+    pageSelection: toSelection(selectedPages),
+    revivedPageSelection: toSelection(revivedPages),
+    dropFile,
+    inventory,
+    usage,
+  };
 }
 
 /** Stage 0 — Document Prep: classify PDF pages by title block (Task 2), then
@@ -336,7 +355,14 @@ async function buildAgent1Blocks(
 ): Promise<Agent1PrepResult> {
   const inventory: PrepInventoryEntry[] = [];
   const classifierUsage = { input_tokens: 0, output_tokens: 0 };
+
+  // FIX-1 (phase 2 post-review): a PDF the classifier says to drop entirely
+  // (see classifyAndSelectPdfPages) is held back here rather than pushed
+  // straight into prepFiles, so the whole-batch safety net below can still
+  // revive it if every file in this batch would otherwise be dropped.
+  interface Dropped { prepFile: PrepFile; revivedPageSelection: PdfPageSelection[]; dropFile: boolean }
   const prepFiles: PrepFile[] = [];
+  const dropped: Dropped[] = [];
 
   for (const f of batchFiles) {
     const ext = (f.originalname.split('.').pop() ?? '').toLowerCase();
@@ -344,13 +370,30 @@ async function buildAgent1Blocks(
     if (ext === 'pdf') {
       const classified = await classifyAndSelectPdfPages(client, classifierModel, f.buffer, f.originalname);
       if (classified) {
-        prepFile.pageSelection = classified.pageSelection;
         inventory.push(...classified.inventory);
         classifierUsage.input_tokens += classified.usage.input_tokens;
         classifierUsage.output_tokens += classified.usage.output_tokens;
+        if (classified.dropFile) {
+          dropped.push({ prepFile, revivedPageSelection: classified.revivedPageSelection, dropFile: true });
+          continue;
+        }
+        prepFile.pageSelection = classified.pageSelection;
       }
     }
     prepFiles.push(prepFile);
+  }
+
+  // Whole-batch safety net: never send nothing. Only revive when EVERY file
+  // that reached this batch was dropped (prepFiles is empty but files were
+  // dropped) — a batch with at least one surviving file leaves the drop(s) as
+  // decided, matching the plan's "if this would drop every file, send
+  // everything" requirement without second-guessing an individual drop that
+  // didn't leave the batch empty.
+  if (prepFiles.length === 0 && dropped.length > 0) {
+    const revived = reviveIfAllDropped(dropped);
+    for (const d of revived) {
+      prepFiles.push({ ...d.prepFile, pageSelection: d.revivedPageSelection });
+    }
   }
 
   try {
