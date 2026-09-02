@@ -285,6 +285,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [svcPanel,    setSvcPanel]    = useState(() => ws.confirmedService?.panel    ?? '');
   const [propPrice,  setPropPrice]  = useState('');
   const [propNotes,  setPropNotes]  = useState('');
+  // A 400 from run-agent4 (e.g. an unparseable price) happens synchronously, before
+  // agent4_status is ever touched — the polling-driven "Agent 4 Did Not Complete"
+  // panel below (agent4Status === 'error') can't show it. Surfaced separately, inline.
+  const [agent4StartError, setAgent4StartError] = useState<string | null>(null);
   const [agent4Running, setAgent4Running] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const [importBidFile, setImportBidFile] = useState<File | null>(null);
@@ -630,10 +634,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       showToast({ title: 'Price required', sub: 'Enter the total bid price before generating the proposal' });
       return;
     }
+    setAgent4StartError(null);
     setAgent4Running(true);
     try {
       await api.post(`/preconstruction/${bid.id}/run-agent4`, {
-        price: propPrice,
+        // Strip $/commas/whitespace before POSTing — the box keeps whatever the
+        // estimator typed, the server only ever sees a clean numeric string.
+        price: propPrice.replace(/[$,\s]/g, ''),
         internalNotes: propNotes,
       });
       // Backend returns immediately — poll for completion
@@ -641,6 +648,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     } catch (err) {
       setAgent4Running(false);
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to start Agent 4';
+      setAgent4StartError(msg);
       showToast({ title: 'Agent 4 error', sub: msg });
     }
   };
@@ -1812,7 +1820,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, marginBottom: 16 }}>
                   <div>
                     <label style={labelStyle}>Total Bid Price ($)</label>
-                    <input type="number" value={propPrice} onChange={e => setPropPrice(e.target.value)}
+                    <input type="number" value={propPrice}
+                      onChange={e => { setPropPrice(e.target.value); setAgent4StartError(null); }}
                       placeholder="e.g. 285000" style={fieldStyle}/>
                   </div>
                   <div>
@@ -1822,6 +1831,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       rows={3} style={{ ...fieldStyle, resize: 'vertical', lineHeight: 1.5 }}/>
                   </div>
                 </div>
+                {agent4StartError && (
+                  <div style={{
+                    marginBottom: 16, padding: '10px 14px', borderRadius: 8,
+                    background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.4)',
+                    color: 'var(--amber)', fontSize: 12.5, fontWeight: 700,
+                  }}>
+                    {agent4StartError}
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                   <button className="btn" onClick={runAgent4Proposal}
                     disabled={agent4Running || !propPrice.trim() || !aiResults?.agent2_output}

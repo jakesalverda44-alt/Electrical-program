@@ -374,3 +374,35 @@ describe('prebid-analyze', () => {
     expect(rows[0].ai_comparison_against).toBeNull();
   });
 });
+
+describe('run-agent4 price validation', () => {
+  it('rejects a garbage price with 400 and never stamps agent4_status running', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `Price ${Date.now()}`, gc: 'G' }).expect(200);
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, agent2_output, agent4_status) VALUES ($1,'{}','untouched')`,
+      [bid.body.id]
+    );
+    const r = await request(app)
+      .post(`/api/preconstruction/${bid.body.id}/run-agent4`).set(auth(u.token))
+      .send({ price: 'not-a-price', internalNotes: '' })
+      .expect(400);
+    expect(r.body.error).toMatch(/price/i);
+    const { rows } = await pool.query(
+      'SELECT agent4_status FROM takeoff_results WHERE bid_id=$1', [bid.body.id]);
+    expect(rows[0].agent4_status).toBe('untouched');
+  });
+
+  it('rejects a zero or negative price with 400', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `PriceNeg ${Date.now()}`, gc: 'G' }).expect(200);
+    await request(app)
+      .post(`/api/preconstruction/${bid.body.id}/run-agent4`).set(auth(u.token))
+      .send({ price: '-5', internalNotes: '' })
+      .expect(400);
+  });
+});

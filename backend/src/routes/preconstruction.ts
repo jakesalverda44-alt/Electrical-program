@@ -21,6 +21,7 @@ import { parseAccubidBreakdown } from '../utils/accubidParse';
 import { storeDocument } from '../utils/storeDocument';
 import { mergeAgent1Batches } from '../ai/mergeAgent1';
 import { buildAgent4UserMessage } from '../ai/agent4Message';
+import { parseMoney } from '../utils/money';
 
 // Cap on tiles rasterized per PDF page (cost control — see Stage 0 doc prep).
 const MAX_TILES_PER_PAGE = 9;
@@ -1206,6 +1207,14 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   const { price, internalNotes } = req.body as { price?: string; internalNotes?: string };
 
   if (!price?.trim()) return res.status(400).json({ error: 'price is required' });
+  // Validate before any DB write — a "$" or comma in the price must never reach
+  // agent4_price NUMERIC(12,2) and crash after the paid Agent 4 call. Parsed here,
+  // before agent4_status is stamped 'running', so a bad price never leaves the run
+  // half-started.
+  const parsedPrice = parseMoney(price);
+  if (parsedPrice === null) {
+    return res.status(400).json({ error: 'Price must be a positive number (e.g. 425000 or $425,000).' });
+  }
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
 
   const { rows: trRows } = await pool.query(
@@ -1279,7 +1288,13 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
           agent4_model=$4, usage_agent4=$5,
           agent4_status='complete', agent4_error=NULL
         WHERE bid_id=$6`,
-        [JSON.stringify(parsed), price.trim(), internalNotes?.trim() || null, config.modelA4, JSON.stringify(resp.usage), bidId]
+        [JSON.stringify(parsed), parsedPrice, internalNotes?.trim() || null, config.modelA4, JSON.stringify(resp.usage), bidId]
+      );
+      // The proposal price is the later, more authoritative number — sync it into
+      // the pipeline the same way the estimate save already does.
+      await pool.query(
+        'UPDATE bids SET amount=$1 WHERE id=$2 AND deleted_at IS NULL',
+        [parsedPrice, bidId]
       );
       logger.info({ bidId }, '[agent4] Proposal generated successfully');
     } catch (err) {
@@ -1299,12 +1314,21 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
 
   const { rows: trRows } = await pool.query(
-    'SELECT agent4_output FROM takeoff_results WHERE bid_id=$1',
+    'SELECT agent4_output, agent4_price FROM takeoff_results WHERE bid_id=$1',
     [bidId]
   );
   if (!trRows.length || !trRows[0].agent4_output) {
     return res.status(404).json({ error: 'No proposal data found. Run Agent 4 first.' });
   }
+
+  // agent4_price NUMERIC(12,2) is the authoritative, DB-validated price (see
+  // run-agent4's parseMoney gate) — format it here rather than trusting whatever
+  // string the LLM echoed back into data.totalPrice.
+  const rawPrice = trRows[0].agent4_price as string | number | null;
+  const priceNum = rawPrice === null || rawPrice === undefined ? null : Number(rawPrice);
+  const formattedPrice = priceNum !== null && Number.isFinite(priceNum)
+    ? `$${priceNum.toLocaleString('en-US', { minimumFractionDigits: Number.isInteger(priceNum) ? 0 : 2, maximumFractionDigits: 2 })}`
+    : undefined;
 
   let proposalData: ProposalJSON;
   try {
@@ -1336,6 +1360,7 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
       projectAddress: bid?.loc,
       gcName: bid?.gc,
       gcContact: bid?.contact,
+      totalPrice: formattedPrice,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-docx] buildProposalDocx threw');
