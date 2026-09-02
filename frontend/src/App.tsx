@@ -125,6 +125,16 @@ export default function App() {
             confirmedService:  (row.confirmed_service as ConfirmedService | null) ?? undefined,
             aiRunning:         false,
             aiLog:             [],
+            // Intentionally pristine defaults, not the estimator's real pricing state —
+            // bid_workspaces (this restore's source) never carried estimateOverrides /
+            // overheadPct / profitPct; that state lives in bid_estimates instead.
+            // PcWorkspaceView's saved-estimate hydration effect (see estimateHydrate.ts)
+            // detects this exact pristine shape and overwrites it with the real
+            // overhead_pct / profit_pct / line-item overrides once bid_estimates loads,
+            // the same way it already restores confirmedService from a different table.
+            // Do not "fix" this by threading real values through here — a bid without a
+            // saved estimate yet has no real values to restore, and this is the correct
+            // starting point for the hydration effect's pristine check either way.
             estimateOverrides: {},
             overheadPct:       10,
             profitPct:         15,
