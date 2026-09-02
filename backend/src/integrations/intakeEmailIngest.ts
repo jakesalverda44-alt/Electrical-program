@@ -1,6 +1,7 @@
 import { pool } from '../db/pool';
 import { logger } from '../utils/logger';
 import { fetchTaggedBidEmails, listAttachmentNames, GraphMailMessage } from './outlookMail';
+import { extractCandidates } from '../utils/customerMatch';
 
 // Light, NO-AI parsing + ingest of "new bid"-tagged Outlook emails into the Intake Inbox.
 // Every imported item is fully editable in the review UI before it becomes a bid.
@@ -97,13 +98,28 @@ export function parseDueDate(text: string, now = new Date()): string | null {
   return null;
 }
 
+// Some senders (Procore) duplicate the project name a second time in the same string —
+// once as the leading segment, once again later — with nothing to distinguish them but the
+// separator between the two copies. Collapses "X: ... X ..." down to "X" when the leading
+// segment (before the first separator) reappears verbatim later in the string. Guarded by a
+// minimum length so a one-character/word "lead" (e.g. the "7" in "7-Eleven") never falsely
+// triggers on an unrelated later occurrence.
+function collapseSelfDuplication(s: string): string {
+  const m = /^(.+?)\s*[:\-–—]\s*/.exec(s);
+  if (!m) return s;
+  const lead = m[1].trim();
+  if (lead.length >= 4 && s.slice(m[0].length).includes(lead)) return lead;
+  return s;
+}
+
 /**
  * Derive a clean project name from the subject by stripping common invitation prefixes
- * and trailing "due ..." fragments. Falls back to the raw subject. Handles the three
- * shapes we actually receive:
+ * and trailing "due ..." fragments. Falls back to the raw subject. Handles the shapes we
+ * actually receive:
  *   - "Invitation to Bid - Firestone - (Prototype)"            (prefix + separator)
  *   - "Invitation to Bid from <GC> for <Project>"              (Kingdom-style)
  *   - "Reminder to submit your Bid for <Project>"              (Procore-style)
+ *   - "<Project>: Invitation to bid on <Project>"              (Procore-style, suffix + self-dup)
  */
 export function parseProjectName(subject: string): string {
   let s = subject.trim();
@@ -124,9 +140,16 @@ export function parseProjectName(subject: string): string {
     }
   }
 
+  // Procore-style: the invitation phrase runs as a SUFFIX instead of a prefix
+  // ("<Project>: Invitation to bid on <Project>") — cut everything from it onward.
+  s = s.replace(/[:\-–—]\s*(?:invitation|invite|reminder)\s+to\s+(?:bid|submit)\b.*$/i, '');
+
   // Drop a trailing "… - Bids Due 6/20" fragment and any dangling separator.
   s = s.replace(/\s*[-–—|(]?\s*(bids?\s*due|due\s*date|due|proposals?\s*due)\b.*$/i, '');
   s = s.replace(/\s*[-–—|]\s*$/, '').trim();
+
+  s = collapseSelfDuplication(s);
+
   return s || subject.trim();
 }
 
@@ -220,21 +243,50 @@ function snippet(text: string, max = 400): string {
 /**
  * Contact for the invitation: prefer a sender display name that's an actual person
  * (i.e. different from the GC company we derived), otherwise fall back to the address
- * the email came from. So Kingdom → "Ian Nichols", Summit → "estimating@summitgc.net".
+ * the email came from — UNLESS that address is on a known relay/free-mail domain
+ * (NON_GC_DOMAINS), which is never a usable contact. So Kingdom → "Ian Nichols", Summit →
+ * "estimating@summitgc.net", a Procore relay → null (blank beats junk; the reviewer still
+ * sees the sender in the FROM OUTLOOK panel).
  */
 export function parseContact(fromName: string | null, fromEmail: string | null, gc: string | null): string | null {
   const name = fromName?.trim();
   if (name && name !== (gc || '').trim()) return name;
-  return (fromEmail && fromEmail.trim()) || name || null;
+  const email = fromEmail?.trim();
+  if (email) {
+    const domain = emailDomain(email);
+    if (domain && NON_GC_DOMAINS.has(domain)) return null;
+    return email;
+  }
+  return name || null;
+}
+
+/**
+ * Unwrap a raw GC string for the intake DISPLAY prefill only — accept-time
+ * canonicalization (resolveCustomer) is untouched and remains the source of truth for the
+ * bid's final GC. Runs the same junk-wrapper unwrapping used at accept time
+ * (extractCandidates) so the reviewer sees "Bay to Bay Properties, LLC" instead of
+ * "Estimating Department (Bay to Bay Properties, LLC)" while the item is still pending.
+ */
+export function displayGc(raw: string | null): string | null {
+  if (!raw || !raw.trim()) return raw;
+  const [candidate] = extractCandidates(raw.trim());
+  return candidate?.trim() || raw;
 }
 
 async function importOne(msg: GraphMailMessage): Promise<boolean> {
   const name = parseProjectName(msg.subject) || '(no subject)';
   // Keep one GC company mapped to one name — reuse the name already on file for this
   // sender's domain when we have one, so the same GC doesn't land under several spellings.
-  const gc = await canonicalGc(parseGc(msg.subject, msg.fromName, msg.from), msg.from);
+  const rawGc = await canonicalGc(parseGc(msg.subject, msg.fromName, msg.from), msg.from);
   const loc = parseLocation(msg.subject, msg.body);
-  const contact = parseContact(msg.fromName, msg.from, gc);
+  // parseContact's "is the sender name just the GC company?" check must compare against the
+  // RAW gc (pre-unwrap) — it's the same string parseGc fell back to from fromName in the
+  // junk-wrapped case, so they're equal there; unwrapping first would make them look
+  // "different" and wrongly hand the junk-wrapped string back as the contact.
+  const contact = parseContact(msg.fromName, msg.from, rawGc);
+  // Unwrap junk wrappers ("Estimating Department (Bay to Bay Properties, LLC)") for the
+  // DISPLAY/prefill only — accept-time canonicalization is untouched.
+  const gc = displayGc(rawGc);
   const due = parseDueDate(`${msg.subject}\n${msg.body}`);
   // Prefer the full (HTML-stripped) body over bodyPreview, which on Mailchimp-style
   // senders is mostly invisible spacer padding. snippet() strips those either way.

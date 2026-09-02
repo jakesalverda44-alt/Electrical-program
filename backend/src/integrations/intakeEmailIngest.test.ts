@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDueDate, parseProjectName, parseGc, parseLocation, parseContact, emailDomain } from './intakeEmailIngest';
+import { parseDueDate, parseProjectName, parseGc, parseLocation, parseContact, emailDomain, displayGc } from './intakeEmailIngest';
 
 const NOW = new Date('2026-06-10T12:00:00Z');
 
@@ -146,7 +146,30 @@ describe('parseContact', () => {
   });
 
   it('uses the email when there is no display name', () => {
-    expect(parseContact(null, 'noreply@procoretech.com', 'Bay to Bay Properties')).toBe('noreply@procoretech.com');
+    expect(parseContact(null, 'estimating@summitgc.net', 'Bay to Bay Properties')).toBe('estimating@summitgc.net');
+  });
+
+  it('never returns an address on a known relay/free-mail domain — blank beats junk', () => {
+    // procoretech.com is a Procore relay used by many GCs, never a real contact.
+    expect(parseContact(null, 'noreply@procoretech.com', 'Bay to Bay Properties')).toBeNull();
+    expect(parseContact('Bay to Bay Properties', 'noreply@procoretech.com', 'Bay to Bay Properties')).toBeNull();
+    // A free-mail sender address is likewise never a usable GC contact.
+    expect(parseContact(null, 'someone@gmail.com', 'Some GC')).toBeNull();
+  });
+});
+
+describe('displayGc', () => {
+  it('unwraps a junk-wrapped sender display name to the parenthetical legal name', () => {
+    expect(displayGc('Estimating Department (Bay to Bay Properties, LLC)')).toBe('Bay to Bay Properties, LLC');
+  });
+
+  it('leaves an already-clean GC name unchanged', () => {
+    expect(displayGc('Kingdom Construction')).toBe('Kingdom Construction');
+  });
+
+  it('passes through null/empty', () => {
+    expect(displayGc(null)).toBeNull();
+    expect(displayGc('')).toBe('');
   });
 });
 
@@ -179,5 +202,27 @@ describe('parseProjectName', () => {
 
   it('keeps a hyphenated project after the invitation prefix (Summit)', () => {
     expect(parseProjectName('Invitation to Bid - Firestone - (Prototype)')).toBe('Firestone - (Prototype)');
+  });
+
+  it('strips a SUFFIX invitation phrase and its duplicated project name (Procore)', () => {
+    expect(parseProjectName(
+      '7-Eleven #42901 (REBID) - Tampa, FL: Invitation to bid on 7-Eleven #42901 (REBID) - Tampa, FL'
+    )).toBe('7-Eleven #42901 (REBID) - Tampa, FL');
+  });
+
+  it('strips a suffix "reminder to submit" phrase too', () => {
+    expect(parseProjectName('Winter Haven Retrofit: Reminder to submit your bid on Winter Haven Retrofit'))
+      .toBe('Winter Haven Retrofit');
+  });
+
+  it('collapses an "X: ... X" self-duplicated subject with no invitation phrase', () => {
+    expect(parseProjectName('Nick & Moes Winter Haven: see attached for Nick & Moes Winter Haven scope'))
+      .toBe('Nick & Moes Winter Haven');
+  });
+
+  it('does not collapse when the leading segment before the separator is too short', () => {
+    // "ABC" (3 chars) is below the 4-char guard — must not fire the self-duplication collapse
+    // just because it happens to reappear later in the string.
+    expect(parseProjectName('ABC: Onsite kit ABC required')).toBe('ABC: Onsite kit ABC required');
   });
 });
