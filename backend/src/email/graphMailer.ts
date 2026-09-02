@@ -1,10 +1,21 @@
 import { getGraphToken, GRAPH_BASE } from '../integrations/graphAuth';
 import { resolveSignature } from './signature';
+import { logger } from '../utils/logger';
 
 // Shared Microsoft Graph sendMail helper (app-only auth). All outbound mail —
 // lead first contact, nudges, proposal sends, internal notifications — goes out
 // from this mailbox so replies land back in the shared inbox. SMTP is
 // intentionally not used: the tenant blocks SMTP AUTH and app passwords.
+
+// SAFETY (added after the 2026-09-02 incident: a test run sent dozens of real
+// emails through real Graph credentials). Every send path below short-circuits
+// to a no-op under test — vitest sets NODE_ENV=test by default, and the backend
+// `test` script sets it explicitly too — or when EMAIL_DISABLED=true is set
+// (e.g. for a manual local run against real-ish config without wanting mail to
+// actually go out).
+function emailMuted(): boolean {
+  return process.env.NODE_ENV === 'test' || process.env.EMAIL_DISABLED === 'true';
+}
 
 export const SEND_AS = 'JakeS@accuratepowerandtechnology.com';
 // Internal heads-up address for team notifications (needs-call, proposal signed).
@@ -33,6 +44,11 @@ export function isGraphMailConfigured(): boolean {
 }
 
 export async function graphSendMail({ to, subject, html, attachments, appendSignature = true }: SendArgs): Promise<void> {
+  if (emailMuted()) {
+    const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
+    logger.info({ to: toList, subject }, '[graphMailer] NO-OP send (muted: NODE_ENV=test or EMAIL_DISABLED=true) — no email sent');
+    return;
+  }
   const token = await getGraphToken();
   const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
 
@@ -78,6 +94,11 @@ export async function graphSendMail({ to, subject, html, attachments, appendSign
  * recipients/subject/body/attachments handling as graphSendMail, including the signature.
  */
 export async function graphCreateDraft({ to, subject, html, attachments, appendSignature = true }: SendArgs): Promise<{ id: string; webLink: string }> {
+  if (emailMuted()) {
+    const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
+    logger.info({ to: toList, subject }, '[graphMailer] NO-OP draft (muted: NODE_ENV=test or EMAIL_DISABLED=true) — no draft created');
+    return { id: 'noop-test-draft', webLink: '' };
+  }
   const token = await getGraphToken();
   const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
 

@@ -15,9 +15,27 @@ export async function dbAvailable(): Promise<boolean> {
   if (ready !== null) return ready;
   try {
     await pool.query('SELECT 1');
+    // Belt-and-suspenders guard (added after the 2026-09-02 incident: the test
+    // suite ran against the live dev DB and created hundreds of fake rows). The
+    // package.json `test` script sets DB_NAME=electrical_crm_test, but that alone
+    // is one env var away from disaster — a DATABASE_URL left set, a script edited
+    // back, a test run from an IDE with its own env. Refuse outright, don't skip,
+    // if the connected database is the live one, regardless of how it got connected.
+    const { rows } = await pool.query('SELECT current_database() AS db');
+    const currentDb = rows[0]?.db;
+    if (currentDb === 'electrical_crm') {
+      throw new Error(
+        `Refusing to run tests against the live database "electrical_crm". ` +
+        `Tests must run against "electrical_crm_test" (set DB_NAME=electrical_crm_test). ` +
+        `See the 2026-09-02 incident note in the phase 1 plan.`
+      );
+    }
     await runMigrations();
     ready = true;
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('Refusing to run tests against the live database')) {
+      throw err;
+    }
     ready = false;
   }
   return ready;
