@@ -47,6 +47,31 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
     profit_pct: number;
   };
 
+  // Reject malformed input before it reaches NUMERIC columns — a NaN or a
+  // non-array here used to propagate straight into the DB write below.
+  if (!Array.isArray(line_items)) {
+    return res.status(400).json({ error: 'line_items must be an array' });
+  }
+  for (const li of line_items) {
+    const qty = Number(li.qty);
+    const unitCost = Number(li.unit_cost);
+    if (!Number.isFinite(qty) || !Number.isFinite(unitCost)) {
+      return res.status(400).json({
+        error: `Invalid qty or unit_cost for line item "${li.item ?? li.category ?? '?'}" — both must be numbers`,
+      });
+    }
+    li.qty = qty;
+    li.unit_cost = unitCost;
+  }
+  const overheadPct = Number(overhead_pct);
+  const profitPct = Number(profit_pct);
+  if (!Number.isFinite(overheadPct) || overheadPct < 0 || overheadPct > 100) {
+    return res.status(400).json({ error: 'overhead_pct must be a number between 0 and 100' });
+  }
+  if (!Number.isFinite(profitPct) || profitPct < 0 || profitPct > 100) {
+    return res.status(400).json({ error: 'profit_pct must be a number between 0 and 100' });
+  }
+
   // Compute subtotals per category
   const subtotals: Record<string, number> = {};
   let total_direct = 0;
@@ -56,8 +81,8 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
     total_direct += li.total;
   }
 
-  const total_overhead = total_direct * (overhead_pct / 100);
-  const total_profit   = (total_direct + total_overhead) * (profit_pct / 100);
+  const total_overhead = total_direct * (overheadPct / 100);
+  const total_profit   = (total_direct + total_overhead) * (profitPct / 100);
   const grand_total    = total_direct + total_overhead + total_profit;
 
   // Count comps: awarded bids of same project_type with a known amount — either a saved
@@ -89,7 +114,7 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
        total_direct=$6, total_overhead=$7, total_profit=$8, grand_total=$9,
        comp_count=$10, confidence=$11, updated_at=now()
      RETURNING *`,
-    [bidId, overhead_pct, profit_pct, JSON.stringify(line_items), JSON.stringify(subtotals),
+    [bidId, overheadPct, profitPct, JSON.stringify(line_items), JSON.stringify(subtotals),
      total_direct, total_overhead, total_profit, grand_total, comp_count, confidence]
   );
 

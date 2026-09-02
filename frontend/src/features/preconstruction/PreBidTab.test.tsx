@@ -175,6 +175,31 @@ describe('Upload panel', () => {
     await waitFor(() => expect(patch).toHaveBeenCalledWith('/bids/b1', { brand: 'ACME Retail' }));
     await waitFor(() => expect(screen.getByText(/Applied\./)).toBeTruthy());
   });
+
+  it('surfaces backend warnings from a junk upload in the amber error style', async () => {
+    get.mockImplementation((url: string) =>
+      Promise.resolve({ data: url.includes('/prebid-comparables') ? { comparables: [] } : { takeoff: null, scope: null } }));
+    post.mockResolvedValue({
+      data: {
+        takeoff: null, scope: null, sqFtApplied: false, suggestedBrand: null,
+        warnings: [
+          'Takeoff workbook did not match the expected format — nothing was imported (the file was still saved to Files).',
+          'Scope document did not match the expected format — nothing was imported (the file was still saved to Files).',
+        ],
+      },
+    });
+
+    const { container } = render(<PreBidTab bidId="b1" onSectionsLoaded={() => {}}/>);
+    await waitFor(() => expect(screen.getByText(/Scope narrative/i)).toBeTruthy());
+    const inputs = container.querySelectorAll('input[type="file"]');
+    fireEvent.change(inputs[1], { target: { files: [new File(['x'], 'junk.xlsx')] } });
+    fireEvent.click(screen.getByRole('button', { name: /^Upload$/ }));
+
+    const takeoffWarning = await waitFor(() => screen.getByText(/Takeoff workbook did not match/i));
+    const scopeWarning = screen.getByText(/Scope document did not match/i);
+    expect((takeoffWarning as HTMLElement).style.color).toBe('var(--amber)');
+    expect((scopeWarning as HTMLElement).style.color).toBe('var(--amber)');
+  });
 });
 
 describe('Quantity comparison + cost drivers', () => {

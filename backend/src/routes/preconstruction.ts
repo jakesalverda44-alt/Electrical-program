@@ -622,10 +622,25 @@ router.post('/:bidId/import-prebid', requireAuth, documentUpload.fields([
 
   let takeoffSummary: { categories: unknown[]; itemCount: number; unresolvedCount: number } | null = null;
   let parsedSqFt: number | null = null;
+  // Surfaced to the estimator instead of a silent "0 items imported" — the file is
+  // still saved to Files either way via keep() above, so nothing is lost.
+  const warnings: string[] = [];
 
   if (takeoffFile) {
     await keep(takeoffFile, 'prebid_takeoff');
-    const t = parseTakeoffWorkbook(takeoffFile.buffer);
+    // parseTakeoffWorkbook opens the buffer as a zip (new AdmZip(buf)) with no
+    // internal guard, unlike parsePrebidScope's extractDocxParagraphs — a
+    // genuinely corrupt/non-xlsx upload throws here instead of yielding zero
+    // items. Caught and folded into the same "empty success" path as an
+    // unrecognized-but-valid workbook: the file is still filed via keep() above,
+    // and an honest warning beats a 500 that makes the estimator re-upload blind.
+    let t: ReturnType<typeof parseTakeoffWorkbook>;
+    try {
+      t = parseTakeoffWorkbook(takeoffFile.buffer);
+    } catch (err) {
+      logger.error({ err, bidId }, '[import-prebid] takeoff workbook parse threw');
+      t = { sqFt: null, price: null, categories: [], lineItems: [], keyFindings: [] };
+    }
     parsedSqFt = t.sqFt;
     if (t.lineItems.length) {
       await pool.query(
@@ -642,6 +657,8 @@ router.post('/:bidId/import-prebid', requireAuth, documentUpload.fields([
         itemCount: t.lineItems.length,
         unresolvedCount: t.lineItems.filter(i => i.qty === null).length,
       };
+    } else {
+      warnings.push('Takeoff workbook did not match the expected format — nothing was imported (the file was still saved to Files).');
     }
   }
 
@@ -652,17 +669,24 @@ router.post('/:bidId/import-prebid', requireAuth, documentUpload.fields([
     await keep(scopeFile, 'prebid_scope');
     const s = parsePrebidScope(scopeFile.buffer);
     suggestedBrand = s.suggestedBrand;
-    await pool.query(
-      `INSERT INTO bid_prebid_scope (bid_id, meta, furnish_model, furnish_note,
-         general_items, sections, source_file, updated_at)
-       VALUES ($1,$2::jsonb,$3,$4,$5::jsonb,$6::jsonb,$7,now())
-       ON CONFLICT (bid_id) DO UPDATE SET
-         meta=$2::jsonb, furnish_model=$3, furnish_note=$4, general_items=$5::jsonb,
-         sections=$6::jsonb, source_file=$7, updated_at=now()`,
-      [bidId, JSON.stringify(s.meta), s.furnishModel, s.furnishNote,
-       JSON.stringify(s.generalItems), JSON.stringify(s.sections), scopeFile.originalname]
-    );
-    scopeSummary = { sections: s.sections, furnishModel: s.furnishModel };
+    // Zero sections AND empty meta means the parser found nothing recognizable —
+    // upserting anyway would leave an empty bid_prebid_scope row that lets
+    // prebid-analyze burn a paid AI call on nothing.
+    if (s.sections.length === 0 && Object.keys(s.meta).length === 0) {
+      warnings.push('Scope document did not match the expected format — nothing was imported (the file was still saved to Files).');
+    } else {
+      await pool.query(
+        `INSERT INTO bid_prebid_scope (bid_id, meta, furnish_model, furnish_note,
+           general_items, sections, source_file, updated_at)
+         VALUES ($1,$2::jsonb,$3,$4,$5::jsonb,$6::jsonb,$7,now())
+         ON CONFLICT (bid_id) DO UPDATE SET
+           meta=$2::jsonb, furnish_model=$3, furnish_note=$4, general_items=$5::jsonb,
+           sections=$6::jsonb, source_file=$7, updated_at=now()`,
+        [bidId, JSON.stringify(s.meta), s.furnishModel, s.furnishNote,
+         JSON.stringify(s.generalItems), JSON.stringify(s.sections), scopeFile.originalname]
+      );
+      scopeSummary = { sections: s.sections, furnishModel: s.furnishModel };
+    }
   }
 
   // Comparable matching ranks on square footage, so a bid without one cannot be compared
@@ -676,7 +700,7 @@ router.post('/:bidId/import-prebid', requireAuth, documentUpload.fields([
 
   // brand is returned as a suggestion only. It outranks project_type in comp ranking, so
   // a wrong auto-set would silently skew every future comparison on this job.
-  res.json({ takeoff: takeoffSummary, scope: scopeSummary, sqFtApplied, suggestedBrand });
+  res.json({ takeoff: takeoffSummary, scope: scopeSummary, sqFtApplied, suggestedBrand, warnings });
 }));
 
 // GET prebid — the stored package for this bid, for the Pre-Bid tab.
@@ -1011,8 +1035,11 @@ router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), 
   res.json(rows[0] || null);
 });
 
-// GET historical cost comps from real won jobs data
-router.get('/costs', requireAuth, async (_req, res) => {
+// GET historical cost comps from real won jobs data. Scoped like /comparables — a
+// restricted rep only pulls comps from their own bids, not the whole company's
+// pricing history (owner/admin: ownScopeId returns null, no filter applied).
+router.get('/costs', requireAuth, async (req: AuthRequest, res) => {
+  const scope = ownScopeId(req.user!);
   const { rows } = await pool.query(`
     SELECT b.name, b.amount, b.sheets, b.gc, b.loc, b.sq_ft, b.project_type,
            EXTRACT(YEAR FROM b.updated_at) as year,
@@ -1020,17 +1047,20 @@ router.get('/costs', requireAuth, async (_req, res) => {
     FROM bids b
     LEFT JOIN bid_estimates be ON be.bid_id = b.id
     WHERE b.stage = 'awarded' AND b.amount IS NOT NULL AND b.deleted_at IS NULL
+      AND ($1::uuid IS NULL OR b.salesperson_id = $1::uuid)
     ORDER BY b.updated_at DESC
     LIMIT 30
-  `);
+  `, [scope]);
   res.json(rows);
 });
 
-// GET bid intelligence stats
+// GET bid intelligence stats. Same scoping as /costs — a restricted rep's GC/overall
+// win-rate stats are computed over their own bids only, not company-wide.
 router.get('/intelligence/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const bid = await loadAccessibleBid(res, req.user!, req.params.bidId);
   if (!bid) return;
 
+  const scope = ownScopeId(req.user!);
   const { rows: gcStats } = await pool.query(`
     SELECT
       COUNT(*) FILTER (WHERE stage='awarded') as won,
@@ -1038,14 +1068,16 @@ router.get('/intelligence/:bidId', requireAuth, async (req: AuthRequest, res) =>
       COUNT(*) FILTER (WHERE stage IN ('awarded','lost')) as total,
       AVG(amount) FILTER (WHERE stage='awarded') as avg_won_amount
     FROM bids WHERE gc=$1 AND deleted_at IS NULL
-  `, [bid.gc]);
+      AND ($2::uuid IS NULL OR salesperson_id = $2::uuid)
+  `, [bid.gc, scope]);
 
   const { rows: overall } = await pool.query(`
     SELECT
       COUNT(*) FILTER (WHERE stage='awarded') as won,
       COUNT(*) FILTER (WHERE stage='lost') as lost
     FROM bids WHERE deleted_at IS NULL
-  `);
+      AND ($1::uuid IS NULL OR salesperson_id = $1::uuid)
+  `, [scope]);
 
   const gc = gcStats[0];
   const ov = overall[0];

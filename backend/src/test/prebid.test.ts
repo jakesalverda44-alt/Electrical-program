@@ -154,6 +154,44 @@ describe('import-prebid', () => {
     expect(Number(rows[0].item_count)).toBe(99);
   });
 
+  it('imports a junk .docx/.xlsx as an honest empty success, not a crash or a silent no-op', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `Junk ${Date.now()}`, gc: 'G' }).expect(200);
+
+    // Neither buffer is a real zip container — parseTakeoffWorkbook's raw
+    // `new AdmZip(buf)` would throw on this without the route's try/catch;
+    // parsePrebidScope already tolerates it internally (extractDocxParagraphs).
+    const r = await request(app)
+      .post(`/api/preconstruction/${bid.body.id}/import-prebid`).set(auth(u.token))
+      .attach('takeoff', Buffer.from('not actually a spreadsheet'), 'junk.xlsx')
+      .attach('scope', Buffer.from('not actually a document'), 'junk.docx')
+      .expect(200);
+
+    expect(r.body.takeoff).toBeNull();
+    expect(r.body.scope).toBeNull();
+    expect(r.body.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/takeoff workbook did not match/i),
+      expect.stringMatching(/scope document did not match/i),
+    ]));
+
+    const { rows: takeoffRows } = await pool.query(
+      `SELECT 1 FROM bid_takeoffs WHERE bid_id=$1 AND kind='prebid'`, [bid.body.id]
+    );
+    expect(takeoffRows).toHaveLength(0);
+    const { rows: scopeRows } = await pool.query(
+      'SELECT 1 FROM bid_prebid_scope WHERE bid_id=$1', [bid.body.id]
+    );
+    expect(scopeRows).toHaveLength(0);
+
+    // Files are still filed even though nothing was imported (keep()'s job).
+    const { rows: docRows } = await pool.query(
+      `SELECT category FROM documents WHERE linked_id=$1 ORDER BY category`, [bid.body.id]
+    );
+    expect(docRows.map(d => d.category)).toEqual(['prebid_scope', 'prebid_takeoff']);
+  });
+
   it('reads the package back', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');
