@@ -20,6 +20,7 @@ import { parsePrebidScope } from '../utils/prebidScopeParse';
 import { parseAccubidBreakdown } from '../utils/accubidParse';
 import { storeDocument } from '../utils/storeDocument';
 import { mergeAgent1Batches } from '../ai/mergeAgent1';
+import { buildAgent4UserMessage } from '../ai/agent4Message';
 
 // Cap on tiles rasterized per PDF page (cost control — see Stage 0 doc prep).
 const MAX_TILES_PER_PAGE = 9;
@@ -1224,6 +1225,17 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   const agent1Output = (trRows[0].agent1_output as string) || '';
   const agent2Output = (trRows[0].agent2_output as string) || '';
 
+  // The estimator's edited Scope of Work (bid_workspaces.scope) and the saved
+  // estimate (bid_estimates) are the estimator's actual work — Agent 4 needs both,
+  // not just the raw Agent 2 output, so their edits and pricing survive into the
+  // proposal. Both are optional; a bid can reach Agent 4 without either.
+  const [{ rows: wsRows }, { rows: estRows }] = await Promise.all([
+    pool.query('SELECT scope FROM bid_workspaces WHERE bid_id=$1', [bidId]),
+    pool.query('SELECT grand_total, overhead_pct, profit_pct, subtotals FROM bid_estimates WHERE bid_id=$1', [bidId]),
+  ]);
+  const workspaceScope = (wsRows[0]?.scope as Record<string, string> | undefined) ?? null;
+  const savedEstimate = estRows[0] ?? null;
+
   // Mark as running and respond immediately — don't wait for AI
   await pool.query(
     `UPDATE takeoff_results SET agent4_status='running', agent4_error=NULL, agent4_output=NULL WHERE bid_id=$1`,
@@ -1232,20 +1244,14 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   res.json({ status: 'running' });
 
   // Run AI call in background
-  const userMsg = [
-    `PROPOSAL REQUEST`,
-    ``,
-    `Total Bid Price: ${price.trim()}`,
-    ``,
-    `Internal Notes from Estimator:`,
-    (internalNotes?.trim() || '(none)'),
-    ``,
-    `--- DRAWING ANALYSIS (Agent 1) ---`,
-    agent1Output.slice(0, 8000),
-    ``,
-    `--- SCOPE & ESTIMATE (Agent 2) ---`,
+  const userMsg = buildAgent4UserMessage({
+    price,
+    internalNotes,
+    agent1Output,
     agent2Output,
-  ].join('\n');
+    workspaceScope,
+    savedEstimate,
+  });
 
   (async () => {
     try {
