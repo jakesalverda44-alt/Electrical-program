@@ -1300,6 +1300,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         const totalIn  = (usageA1?.input_tokens  ?? 0) + (usageA2?.input_tokens  ?? 0) + (usageA3?.input_tokens  ?? 0) + (usageA4?.input_tokens  ?? 0);
         const totalOut = (usageA1?.output_tokens ?? 0) + (usageA2?.output_tokens ?? 0) + (usageA3?.output_tokens ?? 0) + (usageA4?.output_tokens ?? 0);
         const totalCost = (costA1 ?? 0) + (costA2 ?? 0) + (costA3 ?? 0) + (costA4 ?? 0);
+        // Task 2 (phase 2 takeoff fidelity): surface the page-classification
+        // inventory so a low-fidelity run is visible instead of a silent log
+        // line — "Prep: 14 of 62 pages sent (tiled+text)".
+        const prepInventory = aiResults?.prep_inventory as Array<{ included?: boolean }> | null | undefined;
+        const prepFidelity = aiResults?.prep_fidelity as string | null | undefined;
+        const prepPagesSent  = prepInventory?.filter(p => p.included).length ?? 0;
+        const prepPagesTotal = prepInventory?.length ?? 0;
         const agent1 = aiResults?.agent1_output as string | undefined;
         const agent2 = aiResults?.agent2_output as string | undefined;
         const agent3 = aiResults?.agent3_output as string | undefined;
@@ -1436,6 +1443,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     ↓ All
                   </button>
                 </div>
+                {/* Prep inventory — one line, visible instead of a silent low-fidelity run */}
+                {prepFidelity && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12.5, fontWeight: 700,
+                    color: prepFidelity === 'document-fallback' ? 'var(--amber)' : 'var(--text3)' }}>
+                    <Icon name={prepFidelity === 'document-fallback' ? 'shield' : 'doc'} size={13} stroke={2}/>
+                    Prep: {prepPagesSent} of {prepPagesTotal} page{prepPagesTotal === 1 ? '' : 's'} sent ({prepFidelity})
+                  </div>
+                )}
                 {/* Run cost summary */}
                 {aiResults?.status === 'complete' && hasUsage && (
                   <div style={{ marginBottom: 16, border: '1px solid var(--border2)', borderRadius: 10, overflow: 'hidden', fontSize: 12.5 }}>

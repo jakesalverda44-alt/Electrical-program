@@ -43,11 +43,29 @@ type DocumentBlock = Anthropic.DocumentBlockParam;
 type TextBlock = Anthropic.TextBlockParam;
 export type Agent1Block = ImageBlock | DocumentBlock | TextBlock;
 
+/** Task 2 — one selected page from pageClassifier.ts's classify -> selectPages,
+ *  carrying its real sheet identity (not the filename) and its own class. */
+export interface PdfPageSelection {
+  page: number;
+  /** e.g. `E1.1 "Panel Schedules"` — see pageClassifier.ts's formatSheetLabel. */
+  label: string;
+  cls: SheetClass;
+}
+
 export interface PrepFile {
   filename: string;
   buffer: Buffer;
   /** lower-cased extension without dot, e.g. "pdf", "jpg", "heic" */
   ext: string;
+  /**
+   * Task 2 — page-level classification for a PDF (from pageClassifier.ts).
+   * When present and non-empty, only these pages are processed (text + tiles),
+   * each labeled with its real sheet identity and its own class driving tile
+   * size — replacing the whole-file filename-based classification below.
+   * Absent/empty -> today's whole-file behavior (also the fallback when
+   * classification fails entirely for this PDF).
+   */
+  pageSelection?: PdfPageSelection[];
 }
 
 /** Image extensions that already map to a Claude-supported media type. */
@@ -124,26 +142,63 @@ export interface PdfPageTiles {
   tiles: ImageBlock[];
 }
 
+/** Pure: group a set of page numbers into contiguous [first, last] runs, sorted
+ *  ascending — used to rasterize only the requested pages via pdftoppm's -f/-l
+ *  range flags (never rasterize an excluded page at high DPI). */
+export function contiguousPageRanges(pages: number[]): Array<[number, number]> {
+  const sorted = [...new Set(pages)].sort((a, b) => a - b);
+  const ranges: Array<[number, number]> = [];
+  for (const p of sorted) {
+    const last = ranges[ranges.length - 1];
+    if (last && p === last[1] + 1) last[1] = p;
+    else ranges.push([p, p]);
+  }
+  return ranges;
+}
+
 /* ---------------------------------------------------------------------------
  * 2) Rasterize a PDF to PNG pages, then tile each page into overlapping crops,
- *    grouped by page. Throws if pdftoppm is unavailable or rasterization fails
- *    — callers fall back.
+ *    grouped by page. An optional `pages` list restricts rasterization to just
+ *    those pages (Task 2 — page selection from pageClassifier.ts): pdftoppm's
+ *    -f/-l range flags are used per contiguous run so an excluded page is never
+ *    rasterized at high DPI. Throws if pdftoppm is unavailable or rasterization
+ *    fails — callers fall back.
  * ------------------------------------------------------------------------- */
 export async function pdfToTiledImageBlocksByPage(
   pdfBuffer: Buffer,
-  opts: { dpi?: number; tileInches?: number; overlap?: number; maxTilesPerPage?: number; maxLongEdge?: number } = {}
+  opts: { dpi?: number; tileInches?: number; overlap?: number; maxTilesPerPage?: number; maxLongEdge?: number; pages?: number[] } = {}
 ): Promise<PdfPageTiles[]> {
-  const { dpi = 170, tileInches = 11, overlap = 0.08, maxTilesPerPage = 9, maxLongEdge = 1568 } = opts;
+  const { dpi = 170, tileInches = 11, overlap = 0.08, maxTilesPerPage = 9, maxLongEdge = 1568, pages } = opts;
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'apt-prep-'));
   try {
     const pdfPath = path.join(tmp, 'in.pdf');
     await fs.writeFile(pdfPath, pdfBuffer);
-    await execFileP('pdftoppm', ['-png', '-r', String(dpi), pdfPath, path.join(tmp, 'pg')]);
-    const pages = (await fs.readdir(tmp)).filter(f => f.endsWith('.png')).sort();
+
+    if (pages && pages.length) {
+      for (const [first, last] of contiguousPageRanges(pages)) {
+        await execFileP('pdftoppm', [
+          '-png', '-r', String(dpi), '-f', String(first), '-l', String(last),
+          pdfPath, path.join(tmp, 'pg'),
+        ]);
+      }
+    } else {
+      await execFileP('pdftoppm', ['-png', '-r', String(dpi), pdfPath, path.join(tmp, 'pg')]);
+    }
+
+    // pdftoppm names output files with the PDF's real page number (zero-padded to
+    // the document's total page count), not renumbered from 1 — parse it back out
+    // rather than relying on array/sort order, which matters once -f/-l is used.
+    const pngFiles = (await fs.readdir(tmp)).filter(f => f.endsWith('.png'));
+    const pageFiles: Array<{ page: number; file: string }> = [];
+    for (const f of pngFiles) {
+      const m = f.match(/-(\d+)\.png$/);
+      if (!m) continue;
+      pageFiles.push({ page: Number(m[1]), file: path.join(tmp, f) });
+    }
+    pageFiles.sort((a, b) => a.page - b.page);
 
     const result: PdfPageTiles[] = [];
-    for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
-      const file = path.join(tmp, pages[pageIdx]);
+    for (const { page: pageNo, file } of pageFiles) {
       const meta = await sharp(file).metadata();
       const width = meta.width ?? 0;
       const height = meta.height ?? 0;
@@ -179,7 +234,7 @@ export async function pdfToTiledImageBlocksByPage(
           });
         }
       }
-      result.push({ page: pageIdx + 1, tiles });
+      result.push({ page: pageNo, tiles });
     }
     return result;
   } finally {
@@ -228,6 +283,43 @@ async function imageToBlock(buffer: Buffer, ext: string): Promise<ImageBlock | n
   }
 }
 
+/** Task 2.3 — a run-level fidelity flag so a low-fidelity run is visible instead
+ *  of silent (problem 7 in the phase 2 plan): 'tiled+text' when both poppler
+ *  tools are present, 'tiled' when only rasterization is (no text extraction),
+ *  'document-fallback' when neither is and every PDF goes as a raw document
+ *  block. Pure — takes the two availability flags rather than calling out. */
+export function computePrepFidelity(popplerOk: boolean, pdftotextOk: boolean): 'tiled+text' | 'tiled' | 'document-fallback' {
+  if (!popplerOk) return 'document-fallback';
+  return pdftotextOk ? 'tiled+text' : 'tiled';
+}
+
+/** Task 2 — tile only the selected pages of a PDF, grouped by class so each
+ *  group can use its own tileInches (and, from Task 3, its own DPI) in one
+ *  pdftoppm call per group. Results are merged back in ascending page order —
+ *  the per-class grouping must not reorder the sheet. */
+async function tilesForSelectedPdfPages(
+  buffer: Buffer,
+  pageSelection: PdfPageSelection[],
+  maxTilesPerPage?: number
+): Promise<PdfPageTiles[]> {
+  const byCls = new Map<SheetClass, number[]>();
+  for (const p of pageSelection) {
+    if (!byCls.has(p.cls)) byCls.set(p.cls, []);
+    byCls.get(p.cls)!.push(p.page);
+  }
+  const all: PdfPageTiles[] = [];
+  for (const [cls, pages] of byCls) {
+    const grouped = await pdfToTiledImageBlocksByPage(buffer, {
+      pages,
+      tileInches: tileInchesFor(cls),
+      maxTilesPerPage,
+    });
+    all.push(...grouped);
+  }
+  all.sort((a, b) => a.page - b.page);
+  return all;
+}
+
 /* ---------------------------------------------------------------------------
  * 4) Orchestrator: files -> ordered Agent-1 content blocks.
  *    Schedule sheets are tiled tightest and placed FIRST (where Agent 1 reads
@@ -269,8 +361,14 @@ export async function buildAgent1Content(
 
   for (const f of sorted) {
     const cls = classifySheet(f.filename);
-    // A tiny label block so Agent 1 knows which sheet the following tiles belong to.
-    blocks.push({ type: 'text', text: `--- Sheet: ${f.filename} (${cls}) ---` });
+    const hasPageSelection = f.ext === 'pdf' && !!f.pageSelection && f.pageSelection.length > 0;
+
+    // Whole-file label block — skipped when page-level classification is in
+    // play (Task 2): each selected page gets its own real-identity label below
+    // instead of one filename-based label for the whole PDF.
+    if (!hasPageSelection) {
+      blocks.push({ type: 'text', text: `--- Sheet: ${f.filename} (${cls}) ---` });
+    }
 
     if (f.ext === 'pdf') {
       // Extract page text first (independent of tiling — schedules are sometimes
@@ -283,6 +381,34 @@ export async function buildAgent1Content(
         } catch (err) {
           logger.warn({ err, file: f.filename }, '[docprep] pdftotext extraction failed — continuing without page text');
         }
+      }
+
+      if (hasPageSelection) {
+        const selection = f.pageSelection!;
+        const labelByPage = new Map(selection.map(p => [p.page, p]));
+        if (!popplerOk) {
+          // Classification implies rasterization already worked once (title-block
+          // crops), but guard anyway: fall back to text-only + one document block.
+          for (const p of selection) addTextBlockForPage(p.label, pageTexts, p.page);
+          blocks.push(pdfDocumentBlock(f.buffer));
+          continue;
+        }
+        try {
+          const pageGroups = await tilesForSelectedPdfPages(f.buffer, selection, opts.maxTilesPerPage);
+          for (const group of pageGroups) {
+            const sel = labelByPage.get(group.page);
+            const label = sel?.label ?? f.filename;
+            const groupCls = sel?.cls ?? cls;
+            blocks.push({ type: 'text', text: `--- Sheet ${label} (${groupCls}) ---` });
+            addTextBlockForPage(label, pageTexts, group.page);
+            blocks.push(...group.tiles);
+          }
+        } catch (err) {
+          logger.warn({ err, file: f.filename }, '[docprep] selected-page PDF tiling failed — falling back to document block');
+          for (const p of selection) addTextBlockForPage(p.label, pageTexts, p.page);
+          blocks.push(pdfDocumentBlock(f.buffer));
+        }
+        continue;
       }
 
       if (!popplerOk) {
