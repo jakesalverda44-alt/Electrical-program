@@ -12,6 +12,7 @@ import { uploadFile } from '../services/googleDrive';
 import { logger } from '../utils/logger';
 import { sendBidNotification, getBidNotifyEmails } from '../email/bidNotification';
 import { isGraphMailConfigured } from '../email/graphMailer';
+import { findSimilar, SimilarCandidate } from '../utils/intakeSimilar';
 
 const router = Router();
 
@@ -95,7 +96,25 @@ router.get('/', requireAuth, async (_req, res) => {
      WHERE status = 'pending' OR updated_at > now() - interval '7 days'
      ORDER BY (status <> 'pending'), created_at DESC`
   );
-  res.json(rows);
+
+  // Duplicate/REBID hints, informational only — pending items get up to 3 "similar" chips
+  // computed against every OTHER pending intake item and every non-deleted bid. This is the
+  // list payload the detail pane already reads from, so no extra round-trip on item-select.
+  const pending = rows.filter(r => r.status === 'pending');
+  let withSimilar = rows;
+  if (pending.length) {
+    const { rows: bidRows } = await pool.query(`SELECT id, name, stage FROM bids WHERE deleted_at IS NULL`);
+    const bidCandidates: SimilarCandidate[] = bidRows.map(b => ({ kind: 'bid', id: b.id, name: b.name, stage: b.stage }));
+    withSimilar = rows.map(item => {
+      if (item.status !== 'pending') return item;
+      const intakeCandidates: SimilarCandidate[] = pending
+        .filter(o => o.id !== item.id)
+        .map(o => ({ kind: 'intake', id: o.id, name: o.name }));
+      const similar = findSimilar(item.name, [...intakeCandidates, ...bidCandidates]);
+      return { ...item, similar };
+    });
+  }
+  res.json(withSimilar);
 });
 
 // Manually add an incoming bid to the inbox.

@@ -31,6 +31,8 @@ interface IntakeItem {
   // Set when the "new bid" email was sent to the team from the Accept panel.
   team_notified_at: string | null;
   team_notified_to: string[] | null;
+  // Duplicate/REBID hints (pending items only) — informational, no auto-merge.
+  similar?: { kind: 'intake' | 'bid'; id: string; name: string; stage?: string }[];
 }
 
 const DECLINE_REASONS = [
@@ -326,6 +328,32 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
 
       {selected.status === 'pending' ? (
         <>
+          {/* Duplicate/REBID hints — informational only, no auto-merge. */}
+          {selected.similar && selected.similar.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+              {selected.similar.map(s => (
+                <div key={`${s.kind}-${s.id}`} style={{
+                  display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 700,
+                  color: 'var(--amber-d, var(--amber))', background: 'var(--amber-soft)',
+                  border: '1px solid var(--amber)', borderRadius: 8, padding: '7px 10px', lineHeight: 1.4,
+                }}>
+                  <Icon name="sync" size={13} stroke={2.2} style={{ flexShrink: 0 }}/>
+                  {s.kind === 'bid' ? (
+                    <span>
+                      Possible rebid of{' '}
+                      {/* Full navigation (not client-side routing) — keeps this component
+                          Router-context-free, matching how it's unit-tested. */}
+                      <a href={`/bid/${s.id}`} style={{ color: 'inherit', textDecoration: 'underline' }}>“{s.name}”</a>
+                      {' '}(bid — {s.stage || 'active'})
+                    </span>
+                  ) : (
+                    <span>Possible duplicate of “{s.name}” (pending intake)</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           {FormFields(edit, (k, v) => setEdit(prev => ({ ...prev, [k]: v })))}
 
           {/* Opt-in: email this new commercial bid to the team (off by default). */}
