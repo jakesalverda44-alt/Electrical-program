@@ -105,13 +105,73 @@ export function classifySheet(filename: string): SheetClass {
   return 'schedule';
 }
 
-/** real-inches per tile target for each class (smaller = higher effective resolution) */
-function tileInchesFor(cls: SheetClass): number {
-  switch (cls) {
-    case 'schedule': return 11; // ~120-140 px/in after downscale — reads 8-pt schedule text
-    case 'detail':   return 14;
-    case 'plan':     return 16; // counting symbols needs less detail
-  }
+/**
+ * Task 3 — the fidelity math, fixed.
+ * -----------------------------------------------------------------------------
+ * Every tile gets downscaled to maxLongEdge = 1568px (the Anthropic vision API's
+ * hard ceiling), so effective legibility is `1568 / tileInches` px per real inch
+ * — raster DPI beyond that ceiling is wasted, and the lever that actually gains
+ * resolution is smaller tiles, not more DPI. The old flat tileInches (11/14/16)
+ * plus a flat maxTilesPerPage=9 cap forced a 36x24 sheet to ~12"-wide schedule
+ * tiles (a 3x3 grid) — barely past the 142 px/in ceiling those tiles already hit.
+ *
+ * New per-class targets:
+ *   schedule: 8" tiles -> 1568/8 = 196 px/in ceiling. A 36x24 sheet needs a 5x3
+ *             grid (15 tiles) to hit 8" tiles both ways — maxTilesPerPage raised
+ *             to 15 so the shrink loop doesn't force bigger (blurrier) tiles.
+ *             DPI 200 — just above the 196 px/in ceiling, no more.
+ *   detail:   12" tiles, maxTiles 9 (today's cap rarely binds here), DPI 170
+ *             (near today's default — legend/notes text is midsize).
+ *   plan:     16" tiles, maxTiles 6 (today's 9-cap rarely binds; lower here
+ *             saves memory on 36x24 rasters), DPI 130 (counting symbols needs
+ *             less resolution than reading schedule text).
+ * Only DPI and the max-tiles-per-page cap are settings-configurable (tileInches
+ * is the fixed lever the math above is built on — see plan Task 3).
+ */
+export interface TileClassSettings {
+  tileInches: number;
+  maxTilesPerPage: number;
+  dpi: number;
+}
+
+const DEFAULT_TILE_SETTINGS: Record<SheetClass, TileClassSettings> = {
+  schedule: { tileInches: 8,  maxTilesPerPage: 15, dpi: 200 },
+  detail:   { tileInches: 12, maxTilesPerPage: 9,  dpi: 170 },
+  plan:     { tileInches: 16, maxTilesPerPage: 6,  dpi: 130 },
+};
+
+/** Settings-driven overrides — DPI and tile-count cap only, per class. */
+export type TileSettingsOverrides = Partial<Record<SheetClass, Partial<Pick<TileClassSettings, 'dpi' | 'maxTilesPerPage'>>>>;
+
+/** Pure: resolve one class's effective tile settings, applying any override. */
+export function tileSettingsFor(cls: SheetClass, overrides?: TileSettingsOverrides): TileClassSettings {
+  const base = DEFAULT_TILE_SETTINGS[cls];
+  const o = overrides?.[cls];
+  return {
+    tileInches: base.tileInches,
+    maxTilesPerPage: o?.maxTilesPerPage ?? base.maxTilesPerPage,
+    dpi: o?.dpi ?? base.dpi,
+  };
+}
+
+/** DPI clamp for the ai_prep_dpi_* settings (Task 3). */
+export const TILE_DPI_MIN = 72;
+export const TILE_DPI_MAX = 300;
+/** Tile-count clamp for the ai_prep_tiles_* settings (Task 3). */
+export const TILE_COUNT_MIN = 1;
+export const TILE_COUNT_MAX = 24;
+
+/**
+ * Pure: parse one ai_prep_dpi_ or ai_prep_tiles_ setting string into a clamped
+ * override value — an empty/invalid setting means "no override" (undefined),
+ * so tileSettingsFor falls back to its own built-in default rather than a
+ * hardcoded fallback here. Clamped, never thrown on garbage input.
+ */
+export function parseTileOverrideSetting(value: string, min: number, max: number): number | undefined {
+  if (!value.trim()) return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.min(max, Math.max(min, n));
 }
 
 /* ---------------------------------------------------------------------------
@@ -154,6 +214,25 @@ export function contiguousPageRanges(pages: number[]): Array<[number, number]> {
     else ranges.push([p, p]);
   }
   return ranges;
+}
+
+/** Pure: how many columns/rows of tiles cover a rasterized page — start from
+ *  ceil(dimension / tilePx) each way, then shrink the larger axis one step at a
+ *  time until the grid fits within maxTilesPerPage (never below 1x1). Task 3
+ *  raised schedule's cap to 15 specifically so this shrink loop doesn't force
+ *  bigger (blurrier) tiles on a dense 36x24 sheet — see tileSettingsFor. */
+export function computeTileGrid(
+  widthPx: number,
+  heightPx: number,
+  tilePx: number,
+  maxTilesPerPage: number
+): { cols: number; rows: number } {
+  let cols = Math.max(1, Math.ceil(widthPx / tilePx));
+  let rows = Math.max(1, Math.ceil(heightPx / tilePx));
+  while (cols * rows > maxTilesPerPage && (cols > 1 || rows > 1)) {
+    if (cols >= rows) cols--; else rows--;
+  }
+  return { cols, rows };
 }
 
 /* ---------------------------------------------------------------------------
@@ -204,12 +283,7 @@ export async function pdfToTiledImageBlocksByPage(
       const height = meta.height ?? 0;
       if (!width || !height) continue;
 
-      const tilePx = Math.round(tileInches * dpi);
-      let cols = Math.max(1, Math.ceil(width / tilePx));
-      let rows = Math.max(1, Math.ceil(height / tilePx));
-      while (cols * rows > maxTilesPerPage && (cols > 1 || rows > 1)) {
-        if (cols >= rows) cols--; else rows--;
-      }
+      const { cols, rows } = computeTileGrid(width, height, Math.round(tileInches * dpi), maxTilesPerPage);
       const cw = Math.ceil(width / cols);
       const ch = Math.ceil(height / rows);
       const ox = Math.round(cw * overlap);
@@ -294,13 +368,13 @@ export function computePrepFidelity(popplerOk: boolean, pdftotextOk: boolean): '
 }
 
 /** Task 2 — tile only the selected pages of a PDF, grouped by class so each
- *  group can use its own tileInches (and, from Task 3, its own DPI) in one
+ *  group can use its own tileInches, DPI, and tile-count cap (Task 3) in one
  *  pdftoppm call per group. Results are merged back in ascending page order —
  *  the per-class grouping must not reorder the sheet. */
 async function tilesForSelectedPdfPages(
   buffer: Buffer,
   pageSelection: PdfPageSelection[],
-  maxTilesPerPage?: number
+  tileOverrides?: TileSettingsOverrides
 ): Promise<PdfPageTiles[]> {
   const byCls = new Map<SheetClass, number[]>();
   for (const p of pageSelection) {
@@ -309,10 +383,12 @@ async function tilesForSelectedPdfPages(
   }
   const all: PdfPageTiles[] = [];
   for (const [cls, pages] of byCls) {
+    const settings = tileSettingsFor(cls, tileOverrides);
     const grouped = await pdfToTiledImageBlocksByPage(buffer, {
       pages,
-      tileInches: tileInchesFor(cls),
-      maxTilesPerPage,
+      tileInches: settings.tileInches,
+      maxTilesPerPage: settings.maxTilesPerPage,
+      dpi: settings.dpi,
     });
     all.push(...grouped);
   }
@@ -327,7 +403,7 @@ async function tilesForSelectedPdfPages(
  * ------------------------------------------------------------------------- */
 export async function buildAgent1Content(
   files: PrepFile[],
-  opts: { maxTilesPerPage?: number } = {}
+  opts: { tileOverrides?: TileSettingsOverrides } = {}
 ): Promise<Agent1Block[]> {
   const popplerOk = await isPdftoppmAvailable();
   const pdftotextOk = await isPdftotextAvailable();
@@ -394,7 +470,7 @@ export async function buildAgent1Content(
           continue;
         }
         try {
-          const pageGroups = await tilesForSelectedPdfPages(f.buffer, selection, opts.maxTilesPerPage);
+          const pageGroups = await tilesForSelectedPdfPages(f.buffer, selection, opts.tileOverrides);
           for (const group of pageGroups) {
             const sel = labelByPage.get(group.page);
             const label = sel?.label ?? f.filename;
@@ -420,9 +496,11 @@ export async function buildAgent1Content(
         continue;
       }
       try {
+        const settings = tileSettingsFor(cls, opts.tileOverrides);
         const pageGroups = await pdfToTiledImageBlocksByPage(f.buffer, {
-          tileInches: tileInchesFor(cls),
-          maxTilesPerPage: opts.maxTilesPerPage,
+          tileInches: settings.tileInches,
+          maxTilesPerPage: settings.maxTilesPerPage,
+          dpi: settings.dpi,
         });
         if (pageGroups.length) {
           for (const group of pageGroups) {

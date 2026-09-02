@@ -14,8 +14,9 @@ import { logger } from '../utils/logger';
 import { drawingUpload, documentUpload } from '../utils/upload';
 import { uploadFile, getFileMedia } from '../services/googleDrive';
 import {
-  buildAgent1Content, isPdftoppmAvailable, computePrepFidelity,
-  type PrepFile, type Agent1Block, type PdfPageSelection,
+  buildAgent1Content, isPdftoppmAvailable, computePrepFidelity, parseTileOverrideSetting,
+  TILE_DPI_MIN, TILE_DPI_MAX, TILE_COUNT_MIN, TILE_COUNT_MAX,
+  type PrepFile, type Agent1Block, type PdfPageSelection, type TileSettingsOverrides,
 } from '../ai/documentPrep';
 import { isPdftotextAvailable, extractPdfPageTexts } from '../ai/pdfText';
 import {
@@ -30,9 +31,6 @@ import { storeDocument } from '../utils/storeDocument';
 import { mergeAgent1Batches } from '../ai/mergeAgent1';
 import { buildAgent4UserMessage } from '../ai/agent4Message';
 import { parseMoney } from '../utils/money';
-
-// Cap on tiles rasterized per PDF page (cost control — see Stage 0 doc prep).
-const MAX_TILES_PER_PAGE = 9;
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
 const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'warehouse', 'restaurant', 'medical', 'retail', 'other'];
@@ -56,6 +54,8 @@ interface AIConfig {
   promptA2: string;
   promptA3: string;
   promptA4: string;
+  /** Task 3 — per-class DPI / max-tiles-per-page overrides for Stage 0 doc prep. */
+  tileOverrides: TileSettingsOverrides;
 }
 
 const DEFAULT_AI_MODEL = 'claude-sonnet-4-6';
@@ -77,6 +77,7 @@ async function loadAIConfig(): Promise<AIConfig> {
     maxA1Setting, maxA2Setting, maxA3Setting, maxA4Setting,
     temperatureSetting,
     promptA1Setting, promptA2Setting, promptA3Setting, promptA4Setting,
+    dpiScheduleSetting, dpiPlanSetting, tilesScheduleSetting, tilesPlanSetting,
   ] = await Promise.all([
     getSetting('ai_model'),
     getSetting('ai_takeoff_agent2_model'),
@@ -92,6 +93,10 @@ async function loadAIConfig(): Promise<AIConfig> {
     getSetting('ai_prompt_agent2'),
     getSetting('ai_prompt_agent3'),
     getSetting('ai_prompt_agent4'),
+    getSetting('ai_prep_dpi_schedule'),
+    getSetting('ai_prep_dpi_plan'),
+    getSetting('ai_prep_tiles_schedule'),
+    getSetting('ai_prep_tiles_plan'),
   ]);
   const defaultModel = (process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim();
   return {
@@ -109,6 +114,16 @@ async function loadAIConfig(): Promise<AIConfig> {
     promptA2: (promptA2Setting || '').trim(),
     promptA3: (promptA3Setting || '').trim(),
     promptA4: (promptA4Setting || '').trim(),
+    tileOverrides: {
+      schedule: {
+        dpi: parseTileOverrideSetting(dpiScheduleSetting || '', TILE_DPI_MIN, TILE_DPI_MAX),
+        maxTilesPerPage: parseTileOverrideSetting(tilesScheduleSetting || '', TILE_COUNT_MIN, TILE_COUNT_MAX),
+      },
+      plan: {
+        dpi: parseTileOverrideSetting(dpiPlanSetting || '', TILE_DPI_MIN, TILE_DPI_MAX),
+        maxTilesPerPage: parseTileOverrideSetting(tilesPlanSetting || '', TILE_COUNT_MIN, TILE_COUNT_MAX),
+      },
+    },
   };
 }
 
@@ -313,7 +328,8 @@ async function buildAgent1Blocks(
   bidId: string,
   batchFiles: Express.Multer.File[],
   client: Anthropic,
-  classifierModel: string
+  classifierModel: string,
+  tileOverrides: TileSettingsOverrides
 ): Promise<Agent1PrepResult> {
   const inventory: PrepInventoryEntry[] = [];
   const classifierUsage = { input_tokens: 0, output_tokens: 0 };
@@ -335,7 +351,7 @@ async function buildAgent1Blocks(
   }
 
   try {
-    const blocks = await buildAgent1Content(prepFiles, { maxTilesPerPage: MAX_TILES_PER_PAGE });
+    const blocks = await buildAgent1Content(prepFiles, { tileOverrides });
     return { blocks, inventory, classifierUsage };
   } catch (err) {
     logger.warn({ err, bidId }, '[takeoff] Stage 0 document prep failed — falling back to document blocks');
@@ -397,7 +413,7 @@ async function runPipeline(
 
     if (filesToSend.length <= BATCH_SIZE) {
       // Single pass — Stage 0 doc prep tiles dense sheets so Agent 1 can read them.
-      const prepResult = await buildAgent1Blocks(bidId, filesToSend, client, config.modelClassifier);
+      const prepResult = await buildAgent1Blocks(bidId, filesToSend, client, config.modelClassifier, config.tileOverrides);
       const contentBlocks = prepResult.blocks;
       prepInventory.push(...prepResult.inventory);
       const prep = summarizePrep(contentBlocks);
@@ -440,7 +456,7 @@ async function runPipeline(
 
       for (let bi = 0; bi < batches.length; bi++) {
         const batch = batches[bi];
-        const prepResult = await buildAgent1Blocks(bidId, batch, client, config.modelClassifier);
+        const prepResult = await buildAgent1Blocks(bidId, batch, client, config.modelClassifier, config.tileOverrides);
         const contentBlocks = prepResult.blocks;
         prepInventory.push(...prepResult.inventory);
         batchUsage.input_tokens  += prepResult.classifierUsage.input_tokens;
