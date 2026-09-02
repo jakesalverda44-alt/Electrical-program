@@ -44,6 +44,16 @@ correctness breaks, verified against the code:
 
 ## Ground rules for execution
 
+- **SAFETY (added 2026-09-02 after incident): never run tests against the live
+  `electrical_crm` database.** On 2026-09-02 the backend test suite ran against the
+  live dev DB (the developer's Docker Postgres is always up, so the "skip without a
+  DB" gate passed) and created hundreds of fake bids/leads/users — and, because
+  `.env` holds real Microsoft Graph credentials and `graphMailer` has no test guard,
+  sent dozens of real emails. Task 0 below fixes both. Until Task 0 is committed,
+  do not run `npm test` in the backend at all — typecheck only.
+- **Work in an isolated git worktree, not the main checkout.** The developer's dev
+  server runs `ts-node-dev --respawn` against the main checkout; editing files there
+  restarts his live app into half-edited code.
 - Branch: `feat/phase1-estimating-chain`. One commit per task below, imperative messages.
 - TDD where a pure function is involved: write the test first, watch it fail, implement.
 - **Read every file you touch before editing it.** Line numbers here were verified on
@@ -59,6 +69,29 @@ correctness breaks, verified against the code:
   `feature-report.md` in the repo root.
 
 ---
+
+## Task 0 — Test isolation and email safety (PREREQUISITE — commit before any test run)
+
+**Files:** `backend/package.json`, `backend/src/test/harness.ts`,
+`backend/src/email/graphMailer.ts`.
+
+1. **Point the test suite at the isolated database.** The database
+   `electrical_crm_test` already exists in the same Docker Postgres. Change the
+   backend `test` script to force it, e.g.
+   `"test": "DB_NAME=electrical_crm_test vitest run"` (match however the script
+   currently invokes vitest). The pool (`db/pool.ts`) already reads `DB_NAME`.
+2. **Belt-and-suspenders guard in the harness.** In `harness.ts` `dbAvailable()`,
+   before returning true, query `SELECT current_database()` and hard-fail (throw
+   with a clear message, do not skip) if it is `electrical_crm` — the live DB must
+   be unreachable from tests even if someone later edits the script.
+3. **Mute all outbound email under test.** In `graphMailer.ts`'s send function(s),
+   short-circuit to a no-op (log + return a success-shaped result) when
+   `process.env.NODE_ENV === 'test'` or `EMAIL_DISABLED === 'true'`. Vitest sets
+   `NODE_ENV=test` by default — verify that holds here; if not, set it in the test
+   script alongside `DB_NAME`.
+4. Verify: run one DB-gated test file and confirm (a) rows land in
+   `electrical_crm_test` only, (b) zero emails go out (grep for the mailer's no-op
+   log line). Commit as its own commit before any other task's test runs.
 
 ## Task 1 — Fix the Agent 1 batch merge
 
