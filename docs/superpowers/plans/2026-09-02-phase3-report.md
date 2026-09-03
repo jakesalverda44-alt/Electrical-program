@@ -314,3 +314,223 @@ skill's verbatim text, which is the intended trip-wire:
   confirmed via `git status`/`git diff` scoped to this repo only (the skill
   folder isn't part of this repo).
 - Working tree is clean at the end of this session (verified below).
+
+## Post-review fixes
+
+An adversarial review of the above (glue-code audit, not a re-check of the
+ports themselves — those were found faithful) surfaced 13 defects. All 13
+fixed on `feat/phase3-bid-standard`, seven commits, in order:
+
+| Commit | Fix(es) |
+|---|---|
+| `319c452` | FIX-1, FIX-6, FIX-13 — ECFECI placement windows, internal-kind ECFECI count, `field verif\w*` |
+| `1521b07` | FIX-2 — legacy `allowances[]` folded into Section D |
+| `72df0c4` | FIX-7 (part 1) — Section C exact-3 rule; deleted dead `SECTION_LIMITS`/`TAKEOFF_COLUMNS_GC` |
+| `c2e6d02` | FIX-8, FIX-10 — required brand assets; `APT_Bid_[Slug]_[Slug].docx` naming |
+| `813b034` | FIX-3, FIX-4, FIX-7 (part 2), FIX-9, FIX-11 — pre-bid filing, takeoff-xlsx gate, `validateBidData` wiring, preview no longer writes, legacy price 422 |
+| `41f03a0` | FIX-5 — repointed the confidence-guard test at a real leak vector |
+| `3166659` | FIX-12 — busy-state on the .docx download button |
+
+### FIX-1 (HIGH) — ECFECI placement no longer hard-blocks a legitimately omitted section
+
+`verifyBid.ts`'s placement check hardcoded each window's terminator string
+("B. Branch Power", "D. Site"). A bid that legitimately omits Section B or D
+(e.g. an interior-only job) never contains that literal string, so the old
+`between()` treated the window as "ECFECI missing" unconditionally — a
+permanent 422 with no workaround short of inventing a section that doesn't
+apply to the job.
+
+Fixed: each window's terminator is now whichever `SECTION_HEADERS` marker
+actually appears next in the text (in canonical A→B→C→D→E→F→exclusions→
+takeoff→terms order), or end-of-text when none of the later markers appear at
+all; a window whose *own* start marker is absent is skipped entirely rather
+than counted as a failure. Verified: a compliant bid omitting Section D
+passes, one omitting Section B passes, and ECFECI genuinely missing from
+Section A still fails regardless of what's omitted around it
+(`backend/src/bidstd/verifyBid.test.ts`).
+
+### FIX-2 (HIGH) — legacy `allowances[]` no longer silently dropped
+
+`legacyProposalToBidData` mapped the pre-Phase-3 `ProposalJSON` shape onto
+`BidData` but never read `old.allowances` — the field wasn't even declared
+on `LegacyProposalJSON`'s type, so a re-downloaded legacy proposal with
+priced ALLOWANCES content lost it with no error, no warning, nothing filed
+differently. Added the field and `formatLegacyAllowanceBullet()`, which maps
+each legacy allowance onto a Section D bullet in the standard's own phrasing
+(`"<footage>' allowance — <item>"`, the unit spelled out when it isn't LF,
+notes appended parenthetically when present), appending to whatever D
+already has or creating it — the same fold pattern `composeBidData`'s own
+`allowances_bullets` handling already uses for the new shape. Verified: a
+legacy row with allowances renders a docx whose text contains the allowance
+line (`backend/src/utils/proposalDocx.test.ts`).
+
+### FIX-3 (HIGH) — pre-bid regeneration no longer deletes imported pre-bid documents
+
+`generate-prebid-package` passed `replaceExisting: true` to `storeDocument`
+under the `prebid_scope`/`prebid_takeoff` categories — the exact same two
+categories `import-prebid` files a human-uploaded pre-bid package under.
+`replaceExisting` is `DELETE FROM documents WHERE linked_id=$1 AND
+category=$2`, with no way to distinguish "the AI's own last generation" from
+"what Chris uploaded by hand" — every regeneration silently destroyed the
+estimator's imported documents. Fixed by dropping `replaceExisting`
+entirely; each generation now files new dated rows (`<name> - <date>.docx`/
+`.xlsx`), the same version-history convention `generate-docx` already used.
+Verified: import-prebid document rows survive a `generate-prebid-package`
+call — before/after row counts and IDs checked directly
+(`backend/src/test/bidStandardGeneration.test.ts`).
+
+### FIX-4 (MED) — `generate-takeoff-xlsx` now gated
+
+The GC-facing takeoff spreadsheet shipped with no verification gate at all,
+unlike `generate-docx` (which has always run `verifyBidDocx(kind:'gc')`).
+Added `verifyBidText(takeoffAsText(bidData), 'gc')` before filing/streaming;
+failure 422s with `failures[]` and files nothing, same response shape as the
+docx path. Verified: a takeoff item carrying "TBD" blocks with 422 and files
+nothing (`backend/src/test/bidStandardGeneration.test.ts`).
+
+### FIX-5 (MED) — the confidence-guard test was vacuous; repointed at a real vector
+
+The original test sent an old-shape `ProposalJSON` body whose `takeoff[]`
+rows carried a stray `confidence` field — but `legacyProposalToBidData` (the
+only code that ever reads an old-shape row) never mapped `confidence` onto
+the composed item at all. The docx was guaranteed conf-free by construction;
+the test could never fail regardless of whether `renderBidDocx`'s rendering
+logic was correct. Repointed at the two real, live confidence paths: a
+new-shape compose where a takeoff item carries Agent 4's own `conf` echo,
+and — higher priority — a saved `bid_estimates.line_items` confidence value
+that overrides it, both exercised, then `renderBidDocx`'s GC docx text
+asserted free of FIRM/APPROX/VERIFY/VERIFIED/ASSUMED. Kept a legacy-shape
+case too (cheap, and still a real if narrower guarantee, since that path
+structurally can't carry `conf` through at all)
+(`backend/src/test/proposalDocxConfidenceGuard.test.ts`).
+
+### FIX-6 (MED) — internal documents keep the ECFECI count check (coordinator decision)
+
+**Divergence disclosure, both directions:**
+
+1. **verify.sh v4 runs its ECFECI ≥3 occurrence-count check on every document
+   it verifies** — GC-facing or internal — with no kind distinction in the
+   shell script at all. The original port had `verifyBidText`'s `kind:
+   'internal'` branch skip the count check entirely alongside
+   banned-language/square-footage, which was *not* faithful to verify.sh:
+   the pre-bid scope carries Sections A–F (PROJECT_INSTRUCTIONS §14) and is
+   expected to keep the ECFECI language just as much as the GC bid. Restored
+   per the coordinator's decision: the count check now runs for both kinds.
+2. **The ECFECI mandated-placement-window check (between Section A/B and
+   between C/D) is this port's own invention, beyond verify.sh** — there is
+   no such check anywhere in `verify.sh`; it was added during Task 4 per the
+   plan's own instruction (PROJECT_INSTRUCTIONS §7's placement guidance) as
+   a stricter GC-facing rule. It stays GC-only: the pre-bid scope is
+   internal working content for Chris, not the two most price-sensitive,
+   customer-facing sections the placement rule is really about.
+
+Internal-kind tests updated to assert both halves of this: an internal doc
+still fails when its ECFECI count is under 3, and an internal doc is *not*
+held to the placement windows (3+ mentions anywhere is enough)
+(`backend/src/bidstd/verifyBid.test.ts`).
+
+### FIX-7 (MED) — `validateBidData` wired in; Section C rule added; dead constants removed
+
+`validateBidData` (`bidData.ts`) was fully-implemented dead code — nothing
+in the app ever called it, despite a route comment in `preconstruction.ts`
+claiming it "runs on the COMPOSED BidData in generate-docx." Wired it into
+`composeCurrentBidData` (the one function shared by all three generate
+routes), applied to the new-shape (`composeBidData`) path only — a legacy
+row was never subject to this gate, per `legacyProposalToBidData`'s own
+docstring, and stays exempt. `generate-docx` and `generate-takeoff-xlsx`
+(both GC-facing, subject to the standard's non-negotiables) validate by
+default; `generate-prebid-package` opts out (`validate: false`) since it's a
+deliberately more lenient internal deliverable with its own existing, more
+specific "no scope data" 400. Failures surface as `422
+{failures:[{check:'data', detail}]}`. Fixed the stale route comment to
+describe what actually runs now.
+
+Added rule while there: **Section C, when present, must have exactly 3
+bullets** — the standard's one non-negotiable exact count
+(PROJECT_INSTRUCTIONS §6). Also deleted `SECTION_LIMITS` and
+`TAKEOFF_COLUMNS_GC` (`boilerplate.ts`) rather than wire them to nothing
+meaningful: both were dead constants exercised only by their own
+drift-lock tests, and `TAKEOFF_COLUMNS_GC` had gone stale — it locked
+`'SOURCE / NOTES'` as the takeoff xlsx's column headers, but
+`takeoffXlsx.ts` has emitted `'SOURCE / BASIS / NOTES'` since Task 3, so the
+test was green while asserting something false about the actual xlsx
+output.
+
+### FIX-8 (MED) — missing brand assets now throw instead of silently degrading
+
+`proposalDocx.ts`'s `loadLogo`/`loadSignature` fell back through a chain of
+old filenames (`logo.png`, `signature.png`, ...) that `build_bid.js` has no
+equivalent of at all — its own `image()` helper is a bare
+`fs.readFileSync(file)` with no existence check, so a missing asset throws
+there. An environment missing `APT_Logo_2026.jpg`/`Jake_2026_Signature.png`
+would silently render old branding (or none) at the 2026 layout's fixed
+280×224/500×167 dimensions, with no signal anything was wrong. Matched
+build_bid.js's strictness: `loadRequiredAsset` now throws a clear "Required
+brand asset missing: `<file>` (`<label>`) — expected at `<path>`" error,
+surfacing as the route's existing 500 "Document build failed" — deleted the
+invented fallback chain.
+
+### FIX-9 (LOW) — preview no longer writes to the database
+
+`GET /proposal-preview` shared `composeCurrentBidData` with the generate
+endpoints, including its "persist a freshly-generated job number" branch —
+a GET request writing `bids.job_number`. Added a `persist` option (default
+`true`); the preview route now passes `persist: false`, showing the
+would-be job number (still computed — `composeBidData`/`jobNumber` is pure)
+without stamping it onto the row. Persistence stays exclusive to
+`generate-docx`/`generate-takeoff-xlsx`/`generate-prebid-package`. Verified:
+preview returns a well-formed job number while `bids.job_number` stays
+`NULL` (`backend/src/test/bidStandardGeneration.test.ts`).
+
+### FIX-10 (LOW) — bid docx filenames follow the standard's naming
+
+Generated proposals were always named `Proposal - <bid name>.docx`,
+ignoring `project_slug`/`location_slug` already sitting on the composed
+`BidData` unused. Added `bidDocxFilename()`, building
+`APT_Bid_[ProjectSlug]_[LocationSlug].docx` per PROJECT_INSTRUCTIONS §15's
+deliverables table (matching the desktop skill's own examples, e.g.
+`APT_Bid_SampleProject_Eustis.docx`) — `output_filename` wins when set on
+the data, and it falls back to the pre-existing `Proposal - <name>.docx`
+naming when a slug comes out blank. The ASCII header-safety strip (HTTP
+headers must be Latin-1) is kept, applied on top of whichever name is
+chosen.
+
+### FIX-11 (LOW) — legacy path with no price now 422s instead of 500ing
+
+The new-shape branch of `composeCurrentBidData` has always required a
+DB-validated `agent4_price` before returning, 422ing otherwise; the legacy
+branch had no equivalent guard, so a legacy row with neither `agent4_price`
+nor its own embedded `totalPrice` string sailed through only to blow up
+later as an uncaught 500 inside `renderBidDocx`'s own "Proposal has no
+price" throw. Same 422, same message, as the new path now.
+
+### FIX-12 (LOW) — busy-state on the .docx download button
+
+`downloadDocx` (`PcWorkspace.tsx`) had no busy-state, unlike its
+`downloadTakeoffXlsx`/`generatePrebidPackage` siblings — a double-click
+could fire two overlapping `generate-docx` requests, each filing its own
+copy. Added `docxBusy`, set/cleared around the request identically to the
+xlsx button, with a "Building…" label while in flight.
+
+### FIX-13 (LOW) — "field verify" banned-language check extended to inflected forms
+
+`/field verify/gi` didn't catch "to be field verified," "field
+verification," etc. — the exact same estimator-language meaning, just
+inflected. Changed to `/field verif\w*/gi`, consistent with the existing
+RFI/counted/TBD word-boundary tightening (documented deviations from
+verify.sh's plain substring matching, same reasoning).
+
+### Verification (post-review fixes)
+
+- **Backend**: `npm test` — **659 passed, 1 failed** (the same known
+  pre-existing Kohler-funnel flake, `integration.test.ts`; re-confirmed
+  unrelated to this round by running it against the pre-fix commit
+  (`4feea63`) in a scratch worktree — identical failure there, no file this
+  round touched is anywhere near it).
+- **Frontend**: `npm test -- --run` — **326 passed, 9 failed**, all 9 the
+  same known pre-existing failures (2 in `CustomerHub.test.tsx`, 7 in
+  `useInstallPrompt.test.ts`).
+- Full `tsc --noEmit` clean on both sides.
+- Working tree clean at the end of this round; no pushes; no dev servers
+  started; no live-DB access (same `harness.ts` guard as the original
+  session).
