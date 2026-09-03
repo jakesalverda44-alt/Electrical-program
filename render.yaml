@@ -26,12 +26,14 @@ services:
         sync: false
       - key: GRAPH_CLIENT_SECRET
         sync: false
+      # Production runs on Supabase Postgres, not a Render-managed database —
+      # a declared `databases:` block here previously created and pointed at
+      # a SEPARATE Render Postgres instance nobody used for real data (the
+      # legacy trap behind the 2026-09-02 wrong-database restore: a restore
+      # run against the connection this key pointed at landed on the empty
+      # decoy, not Supabase, and looked like data loss). Set the real
+      # Supabase connection string in the Render dashboard (Environment
+      # tab); sync:false keeps it dashboard-managed and out of git. See
+      # docs/DEPLOY.md before ever changing this value.
       - key: DATABASE_URL
-        fromDatabase:
-          name: accurate-power-db
-          property: connectionString
-
-databases:
-  - name: accurate-power-db
-    databaseName: electrical_crm
-    plan: free
+        sync: false
