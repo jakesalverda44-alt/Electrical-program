@@ -42,6 +42,7 @@ import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
 import { composeBidData, ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
+import { resolveUniqueJobNumber } from '../bidstd/boilerplate';
 import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
 import { renderPrebidScopeDocx, prebidScopeFilename } from '../bidstd/prebidScopeDocx';
 import { verifyBidDocx, verifyBidText } from '../bidstd/verifyBid';
@@ -1825,10 +1826,29 @@ export async function composeCurrentBidData(
     };
     const { data, jobNumberGenerated } = composeBidData(bidRow, parsed as Agent4Output, formattedPrice, { savedLineItems });
     if (jobNumberGenerated && persist) {
+      // Task 6.2 — two bids generated the same day compute the identical
+      // JS.MMDDYYYY (jobNumber() is a pure function of today's date only),
+      // so the second one used to silently collide with the first. Only a
+      // FRESHLY GENERATED number ever passes through resolveUniqueJobNumber
+      // — an existing/manually-entered job_number (jobNumberGenerated
+      // false) is never touched.
+      const { rows: collisions } = await pool.query(
+        `SELECT job_number FROM bids
+          WHERE deleted_at IS NULL AND id <> $1 AND job_number LIKE $2`,
+        [bidId, `${data.job_number}%`]
+      );
+      const taken = new Set(
+        (collisions as { job_number: string }[])
+          .map(r => r.job_number)
+          .filter(n => n === data.job_number || new RegExp(`^${data.job_number.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+$`).test(n))
+      );
+      data.job_number = resolveUniqueJobNumber(data.job_number, taken);
+
       // composeBidData is pure and never writes to the DB — persist the
-      // freshly-generated job number so it's stable on every future
-      // regeneration of this bid's documents. FIX-9: skipped when
-      // opts.persist is false (the preview route) — a GET must never write.
+      // freshly-generated (and now collision-free) job number so it's
+      // stable on every future regeneration of this bid's documents.
+      // FIX-9: skipped when opts.persist is false (the preview route) — a
+      // GET must never write.
       await pool.query('UPDATE bids SET job_number=$2 WHERE id=$1 AND deleted_at IS NULL', [bidId, data.job_number]);
     }
     bidData = data;

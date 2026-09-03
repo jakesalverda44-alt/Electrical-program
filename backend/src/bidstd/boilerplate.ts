@@ -99,3 +99,26 @@ export function jobNumber(date: Date): string {
   const yyyy = String(date.getFullYear());
   return `JS.${mm}${dd}${yyyy}`;
 }
+
+/**
+ * Phase 4 Task 6.2 — same-day job_number collision (Phase 3 review finding):
+ * two proposals generated the same day both compute the identical
+ * JS.MMDDYYYY from jobNumber(), so the second one silently overwrote the
+ * first's number wherever they collided. Pure: given the freshly-computed
+ * candidate and the set of job_numbers already taken by OTHER non-deleted
+ * bids, returns the candidate unchanged if free, or the first
+ * "<candidate>-2", "<candidate>-3", ... that isn't. Only ever called on a
+ * freshly GENERATED number (composeCurrentBidData's jobNumberGenerated
+ * branch) — an existing/manually-entered job_number is never passed
+ * through this function, so it's never touched.
+ */
+export function resolveUniqueJobNumber(candidate: string, takenByOthers: ReadonlySet<string>): string {
+  if (!takenByOthers.has(candidate)) return candidate;
+  let n = 2;
+  let attempt = `${candidate}-${n}`;
+  while (takenByOthers.has(attempt)) {
+    n += 1;
+    attempt = `${candidate}-${n}`;
+  }
+  return attempt;
+}

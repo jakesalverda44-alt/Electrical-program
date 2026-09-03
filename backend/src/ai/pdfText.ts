@@ -18,6 +18,7 @@ import os from 'os';
 import fs from 'fs/promises';
 import path from 'path';
 import { logger } from '../utils/logger';
+import { sanitizeForPrompt } from './sanitizeForPrompt';
 
 const execFileP = promisify(execFile);
 
@@ -98,7 +99,12 @@ export function pageTextBlock(
   opts: { cap?: number } = {}
 ): Agent1TextBlock {
   const cap = opts.cap ?? PAGE_TEXT_CAP;
-  const capped = text.length > cap ? `${text.slice(0, cap)}\n[TEXT TRUNCATED]` : text;
+  // Phase 4 Task 6.1 (Phase 2 F8) — sanitize BEFORE capping: the extracted
+  // text is untrusted (it's the PDF's own text layer) and must never be
+  // able to embed a line that impersonates this function's own "--- Sheet
+  // ... ---" delimiter grammar.
+  const clean = sanitizeForPrompt(text);
+  const capped = clean.length > cap ? `${clean.slice(0, cap)}\n[TEXT TRUNCATED]` : clean;
   return {
     type: 'text',
     text: `--- Sheet ${sheetLabel} p${pageNo} — EXTRACTED TEXT (machine-read, treat as FIRM source) ---\n${capped}`,

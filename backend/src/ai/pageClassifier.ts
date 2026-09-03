@@ -25,6 +25,7 @@ import sharp from 'sharp';
 import Anthropic from '@anthropic-ai/sdk';
 import { callWithRetry } from './retry';
 import { PAGE_CLASSIFIER_SYSTEM } from './prompts';
+import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { logger } from '../utils/logger';
 import { isElectricalSheet, type SheetClass } from './documentPrep';
 
@@ -276,6 +277,10 @@ export async function classifyPages(
 ): Promise<ClassifyPagesResult> {
   const classifications: PageClassification[] = [];
   const usage = { input_tokens: 0, output_tokens: 0 };
+  // Phase 4 Task 6.1 (Phase 2 F8) — the uploaded filename is untrusted and
+  // gets interpolated straight into the classification prompt below; never
+  // let it impersonate the pipeline's own delimiter grammar.
+  const safeFilename = sanitizeForPrompt(filename);
 
   for (let i = 0; i < crops.length; i += CLASSIFY_BATCH_SIZE) {
     const batch = crops.slice(i, i + CLASSIFY_BATCH_SIZE);
@@ -291,7 +296,7 @@ export async function classifyPages(
     }
     content.push({
       type: 'text',
-      text: `Classify each of the ${batch.length} title-block crops above from "${filename}", in the order given. Each crop's "Page N" label states its ABSOLUTE page number in the full document — echo that exact number back in the "page" field of your JSON output; do NOT renumber starting from 1 for this batch. Return the STRICT JSON array only.`,
+      text: `Classify each of the ${batch.length} title-block crops above from "${safeFilename}", in the order given. Each crop's "Page N" label states its ABSOLUTE page number in the full document — echo that exact number back in the "page" field of your JSON output; do NOT renumber starting from 1 for this batch. Return the STRICT JSON array only.`,
     });
 
     const resp = await callWithRetry(() => client.messages.create({
