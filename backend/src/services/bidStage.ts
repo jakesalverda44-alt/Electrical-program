@@ -57,7 +57,11 @@ export async function transitionBidStage(
        submitted_at = CASE WHEN $1 IN ('submitted','awarded') THEN COALESCE(submitted_at, now()) ELSE submitted_at END,
        awarded_at   = CASE WHEN $1 = 'awarded' THEN COALESCE(awarded_at, now()) ELSE awarded_at END
      WHERE id=$2 RETURNING *`,
-    [stage, bid.id, stage === 'lost' ? (opts.lossReason ?? null) : null, stage === 'lost' ? (opts.competitor ?? null) : null]
+    // FIX-9 (post-review) — `??` only falls back on null/undefined, so an
+    // empty-string loss_reason/competitor (a form field cleared, then
+    // submitted) stored '' instead of NULL — a behavior drift from main's
+    // `||`, which treats '' the same as "not provided." Restored.
+    [stage, bid.id, stage === 'lost' ? (opts.lossReason || null) : null, stage === 'lost' ? (opts.competitor || null) : null]
   );
   const updated = rows[0];
 
