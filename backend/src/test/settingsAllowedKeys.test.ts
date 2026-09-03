@@ -25,6 +25,15 @@ describe('PUT/GET /api/settings — elec_followup_* round-trip (FIX-4)', () => {
     const byKey = Object.fromEntries((res.body as { key: string; value: string }[]).map(r => [r.key, r.value]));
     expect(byKey.elec_followup_quiet_days).toBe('9');
     expect(byKey.elec_followup_viewed_days).toBe('4');
+
+    // Reset — app_settings is a single shared row per key, and
+    // services/proposalQuietSweep.ts's bid sweep (bidQuietSweep.test.ts)
+    // reads these same two keys with defaults ('' falls back to the
+    // default, per numericSetting's `raw || String(fallback)`). Leaving a
+    // custom value here would silently change that other suite's cutoffs.
+    await request(app).put('/api/settings').set(auth(admin.token))
+      .send({ elec_followup_quiet_days: '', elec_followup_viewed_days: '' })
+      .expect(200);
   });
 });
 
