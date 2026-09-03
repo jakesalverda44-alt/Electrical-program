@@ -1,7 +1,12 @@
-// Phase 4 Task 3.4 — POST /bids/p/:token/sign: stamps + awards + won_job
-// created, through the SAME shared stage-transition path (services/bidStage.ts)
-// PATCH /:id/stage uses; double-sign is idempotent (never re-stamps/re-awards);
-// an oversized signature data URL is rejected.
+// Phase 4 Task 3.4 / post-review FIX-6/FIX-8 — POST /bids/p/:token/sign:
+// stamps + awards + won_job created, through the SAME shared
+// stage-transition path (services/bidStage.ts) PATCH /:id/stage uses;
+// double-sign is idempotent (never re-stamps/re-awards); an oversized
+// signature data URL is rejected; a fresh sign requires proposal_sent_at
+// AND stage IN ('due','submitted') — a never-sent or lost/already-decided
+// bid's link can no longer flip it to awarded; a successful e-sign award
+// lands a system-actor audit_log row (writeAudit requires an authenticated
+// user, which this public route doesn't have).
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import { app } from '../index';
@@ -20,6 +25,14 @@ async function createBid(token: string, amount = 250_000) {
     })
     .expect(200);
   return res.body as { id: string; proposal_token: string; stage: string; salesperson_id: string };
+}
+
+/** Stamp proposal_sent_at directly — FIX-6 requires a sent proposal before
+ *  a fresh sign is accepted; sending for real is exercised by
+ *  bidSendProposal.test.ts, so tests here that only care about the sign
+ *  path stamp it directly rather than filing/sending a real proposal. */
+async function markSent(bidId: string) {
+  await pool.query(`UPDATE bids SET proposal_sent_at = now() WHERE id = $1`, [bidId]);
 }
 
 const SMALL_SIG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
@@ -72,11 +85,48 @@ describe('POST /bids/p/:token/sign', () => {
     expect(res.body.error).toBe('Proposal not found');
   });
 
+  it('404s when the proposal was never sent', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await createBid(u.token);
+    const res = await request(app).post(`/api/bids/p/${bid.proposal_token}/sign`)
+      .send({ signerName: 'John Smith', signatureDataUrl: SMALL_SIG })
+      .expect(404);
+    expect(res.body.error).toBe('Proposal not found');
+    const { rows } = await pool.query('SELECT proposal_signed_at, stage FROM bids WHERE id=$1', [bid.id]);
+    expect(rows[0].proposal_signed_at).toBeNull();
+    expect(rows[0].stage).toBe('due');
+  });
+
+  // FIX-6 — the exact scenario the review flagged: migration 094 backfilled
+  // proposal_token onto every existing bid, so a LOST bid's old link must
+  // not be able to flip it to awarded (with commission) via a stale sign.
+  it('409s signing a lost bid, with no award side effects', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await createBid(u.token, 120_000);
+    await markSent(bid.id);
+    await request(app).patch(`/api/bids/${bid.id}/stage`).set(auth(u.token))
+      .send({ stage: 'lost', loss_reason: 'Price' }).expect(200);
+
+    const res = await request(app).post(`/api/bids/p/${bid.proposal_token}/sign`)
+      .send({ signerName: 'John Smith', signatureDataUrl: SMALL_SIG })
+      .expect(409);
+    expect(res.body.error).toMatch(/no longer available/);
+
+    const { rows: bidRows } = await pool.query('SELECT proposal_signed_at, stage FROM bids WHERE id=$1', [bid.id]);
+    expect(bidRows[0].proposal_signed_at).toBeNull();
+    expect(bidRows[0].stage).toBe('lost');
+    const { rows: wonJobRows } = await pool.query(`SELECT * FROM won_jobs WHERE proposal_id=$1`, [bid.id]);
+    expect(wonJobRows.length).toBe(0);
+  });
+
   it('stamps signature/signer, writes proposal_activity, awards through the shared stage path, and creates won_jobs', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');
     const bid = await createBid(u.token, 300_000);
     expect(bid.stage).toBe('due');
+    await markSent(bid.id);
 
     const res = await request(app).post(`/api/bids/p/${bid.proposal_token}/sign`)
       .send({ signerName: 'John Smith', signatureDataUrl: SMALL_SIG })
@@ -110,12 +160,23 @@ describe('POST /bids/p/:token/sign', () => {
     );
     expect(activityRows.length).toBe(1);
     expect(activityRows[0].direction).toBe('in');
+
+    // FIX-8 — the public sign route has no req.user to attribute a normal
+    // writeAudit to; a system-actor audit_log row records the award anyway.
+    const { rows: auditRows } = await pool.query(
+      `SELECT action, entity_type, entity_id, user_id, user_name FROM audit_log
+        WHERE entity_type='bid' AND entity_id=$1 AND action='award'`, [bid.id]
+    );
+    expect(auditRows.length).toBe(1);
+    expect(auditRows[0].user_id).toBeNull();
+    expect(auditRows[0].user_name).toMatch(/Customer e-signature \(John Smith\)/);
   });
 
   it('a second sign attempt is idempotent — returns the signed state unchanged, never re-stamps or re-awards', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');
     const bid = await createBid(u.token, 150_000);
+    await markSent(bid.id);
     await request(app).post(`/api/bids/p/${bid.proposal_token}/sign`)
       .send({ signerName: 'John Smith', signatureDataUrl: SMALL_SIG })
       .expect(200);
@@ -141,17 +202,28 @@ describe('POST /bids/p/:token/sign', () => {
     expect(activityRows.length).toBe(1);
   });
 
-  it('signing a bid already manually awarded stamps the signature without double-awarding', async (ctx) => {
+  // FIX-6 — a bid manually awarded through the pipeline (e.g. after the GC
+  // called to say "you got it," ahead of a formal e-sign) is no longer
+  // `due`/`submitted`, so its still-valid, previously-sent link 409s
+  // instead of silently "stamping the signature" (the old behavior here
+  // this replaces) — no double-award, and importantly no NEW won_jobs row.
+  it('409s signing a bid already manually awarded, with no duplicate award', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');
     const bid = await createBid(u.token, 90_000);
+    await markSent(bid.id);
     await request(app).patch(`/api/bids/${bid.id}/stage`).set(auth(u.token)).send({ stage: 'awarded' }).expect(200);
 
     const res = await request(app).post(`/api/bids/p/${bid.proposal_token}/sign`)
       .send({ signerName: 'John Smith', signatureDataUrl: SMALL_SIG })
-      .expect(200);
-    expect(res.body.bid.stage).toBe('awarded');
+      .expect(409);
+    expect(res.body.error).toMatch(/no longer available/);
 
+    const { rows: bidRows } = await pool.query('SELECT proposal_signed_at, stage FROM bids WHERE id=$1', [bid.id]);
+    expect(bidRows[0].proposal_signed_at).toBeNull();
+    expect(bidRows[0].stage).toBe('awarded');
+
+    // Exactly the ONE won_job from the manual award — no second row.
     const { rows: wonJobRows } = await pool.query(`SELECT * FROM won_jobs WHERE proposal_id=$1`, [bid.id]);
     expect(wonJobRows.length).toBe(1);
   });

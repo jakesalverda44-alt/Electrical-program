@@ -89,6 +89,18 @@ describe('GET /bids/p/:token', () => {
     expect(res.body.error).toBe('Proposal not found');
   });
 
+  // FIX-6 — a proposal that was never sent has nothing legitimate to show
+  // publicly, even with a gate-passed snapshot on file (e.g. generated but
+  // not yet sent) — the review's "unsent-bid view -> 404" case.
+  it('404s when the proposal was never sent, even with a gate-passed snapshot on file', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await createBid(u.token);
+    await fileBidData(bid.id, 'Never Sent Project');
+    const res = await request(app).get(`/api/bids/p/${bid.proposal_token}`).expect(404);
+    expect(res.body.error).toBe('Proposal not found');
+  });
+
   // FIX-3(f) — snapshot served matches filed content: no live compose, no
   // verify, no docx render on the view path — the page renders directly
   // from the filed, gate-passed bid_data.json.
@@ -97,6 +109,7 @@ describe('GET /bids/p/:token', () => {
     const u = await makeUser('owner');
     const bid = await createBid(u.token);
     await fileBidData(bid.id, 'Filed Snapshot Project');
+    await markSent(bid.id);
 
     const res = await request(app).get(`/api/bids/p/${bid.proposal_token}?preview=1`).expect(200);
     expect(res.body.html).toContain('Filed Snapshot Project');
@@ -116,6 +129,7 @@ describe('GET /bids/p/:token', () => {
     // compose (composeCurrentBidData) would fail outright. The filed
     // snapshot is the ONLY thing the view path ever reads.
     await fileBidData(bid.id, 'Gate Ran At Filing Time');
+    await markSent(bid.id);
 
     const res = await request(app).get(`/api/bids/p/${bid.proposal_token}?preview=1`).expect(200);
     expect(res.body.html).toContain('Gate Ran At Filing Time');
@@ -126,6 +140,7 @@ describe('GET /bids/p/:token', () => {
     const u = await makeUser('owner');
     const bid = await createBid(u.token);
     await fileBidData(bid.id, bid.id);
+    await markSent(bid.id);
 
     await request(app).get(`/api/bids/p/${bid.proposal_token}?preview=1`).expect(200);
     const { rows } = await pool.query('SELECT proposal_viewed_at FROM bids WHERE id=$1', [bid.id]);
@@ -140,6 +155,7 @@ describe('GET /bids/p/:token', () => {
     const u = await makeUser('owner');
     const bid = await createBid(u.token);
     await fileBidData(bid.id, bid.id);
+    await markSent(bid.id);
 
     const first = await request(app).get(`/api/bids/p/${bid.proposal_token}`).expect(200);
     expect(first.body.bid.proposal_viewed_at).not.toBeNull();

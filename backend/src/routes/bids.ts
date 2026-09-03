@@ -2,7 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
-import { writeAudit } from '../utils/audit';
+import { writeAudit, writeAuditAs } from '../utils/audit';
 import { setProjectDeleted } from '../utils/project';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { logger } from '../utils/logger';
@@ -777,6 +777,12 @@ router.get('/p/:token', publicViewLimiter, asyncHandler(async (req, res) => {
   if (!rows.length) return res.status(404).json(PROPOSAL_NOT_FOUND);
   const bid = rows[0];
 
+  // FIX-6 (post-review, blocking) — a proposal that was never sent
+  // (including a lost bid's old link, which migration 094 backfilled a
+  // token onto just like every other bid) has nothing legitimate to show
+  // publicly. Same uniform 404 as an unknown/malformed token.
+  if (!bid.proposal_sent_at) return res.status(404).json(PROPOSAL_NOT_FOUND);
+
   const loaded = await loadFiledBidData(bid.id);
   if (!loaded) return res.status(404).json(PROPOSAL_NOT_FOUND);
 
@@ -893,6 +899,25 @@ router.post('/p/:token/sign', publicSignLimiter, asyncHandler(async (req, res) =
       return res.json({ ok: true, bid: publicBidProjection(preSign), alreadySigned: true, wonJob: null });
     }
 
+    // FIX-6 (post-review, blocking) — a fresh sign, below, always requires a
+    // proposal that was actually sent. Migration 094 backfilled
+    // proposal_token onto EVERY existing bid, so a lost bid's (or a never-
+    // sent bid's) old link is otherwise still a live "sign" endpoint that
+    // can flip lost -> awarded, with commission, on a stale link. Same
+    // uniform 404 as an unknown/malformed token — a public prober can't
+    // tell "never sent" apart from "doesn't exist."
+    if (!preSign.proposal_sent_at) {
+      await client.query('ROLLBACK');
+      return res.status(404).json(PROPOSAL_NOT_FOUND);
+    }
+    // A sent proposal can still be stale — the estimator marked it lost, or
+    // it was already manually awarded through the pipeline. Only a proposal
+    // still actually awaiting a decision can be accepted here.
+    if (!['due', 'submitted'].includes(preSign.stage)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'This proposal is no longer available for acceptance' });
+    }
+
     // FIX-3(d) — pin the signature to the exact bid_data.json document that
     // was on screen (the most recent gate-passed snapshot at sign time —
     // the same one loadFiledBidData would serve to a GET right now), not to
@@ -937,10 +962,24 @@ router.post('/p/:token/sign', publicSignLimiter, asyncHandler(async (req, res) =
         logger.error({ err, phase, bidId: preSign.id }, '[bids] sign-triggered award Drive step failed'));
     }
 
-    // A public, unauthenticated action never writes to the privileged
-    // audit_log (writeAudit requires an authenticated req.user — matches
-    // gens' public sign route, which also skips it); the `activity` table
-    // entry transitionBidStage already wrote is this action's audit trail.
+    // FIX-8 (post-review) — a public, unauthenticated action has no
+    // req.user for the normal writeAudit(req, ...) to attribute this to
+    // (gens' public sign route has the same gap and also used to skip
+    // auditing entirely). writeAuditAs records it under an explicit
+    // system-actor label instead, so an award via e-signature still shows
+    // up in the audit trail — same 'award' action PATCH /:id/stage logs for
+    // a manual drag. Only fires when this call actually performed the
+    // award (never on the "already awarded" branch above).
+    if (signedBid.stage !== 'awarded') {
+      // Awaited (writeAuditAs never throws — it catches its own errors) so
+      // the audit_log row is guaranteed to exist by the time the caller
+      // sees the 200 response below.
+      await writeAuditAs({ id: null, name: `Customer e-signature (${name})` }, {
+        action: 'award', entityType: 'bid', entityId: preSign.id,
+        summary: `Awarded bid "${finalBid.name}" (${finalBid.gc}) via e-signature — $${Number(finalBid.amount || 0).toLocaleString()}`,
+        before: { stage: signedBid.stage }, after: { stage: 'awarded', value: finalBid.amount },
+      });
+    }
 
     res.json({ ok: true, bid: publicBidProjection(finalBid), wonJob });
 
