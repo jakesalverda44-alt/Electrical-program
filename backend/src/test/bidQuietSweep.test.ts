@@ -7,61 +7,47 @@ const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
 const NOW = new Date('2026-09-03T12:00:00Z');
 const ago = (n: number) => new Date(NOW.getTime() - n * 86_400_000);
 
-// Phase 4 Task 4.3 — the pure eligibility function, unit-tested with a full
-// sent/viewed/signed/stage matrix (no DB).
+// Post-merge rework (2026-09-03) — the bid quiet-sweep collapsed to ONE
+// tier: proposal_sent_at set + stage still `submitted` + quiet long enough.
+// The "viewed, not signed" tier is gone along with the public proposal page
+// it depended on (proposal_viewed_at is no longer written by anything).
 describe('classifyBidQuietTier (pure)', () => {
   const quietDays = 5;
-  const viewedDays = 3;
 
   it('stage other than submitted is never eligible, regardless of everything else', () => {
     for (const stage of ['due', 'awarded', 'lost']) {
       expect(classifyBidQuietTier(
-        { stage, sentAt: ago(30), viewedAt: null, signedAt: null }, NOW, quietDays, viewedDays,
-      )).toBeNull();
+        { stage, sentAt: ago(30), signedAt: null }, NOW, quietDays,
+      )).toBe(false);
     }
   });
 
   it('never sent (sentAt null) is never eligible', () => {
     expect(classifyBidQuietTier(
-      { stage: 'submitted', sentAt: null, viewedAt: null, signedAt: null }, NOW, quietDays, viewedDays,
-    )).toBeNull();
+      { stage: 'submitted', sentAt: null, signedAt: null }, NOW, quietDays,
+    )).toBe(false);
   });
 
   it('already signed is never eligible, even if quiet a long time', () => {
     expect(classifyBidQuietTier(
-      { stage: 'submitted', sentAt: ago(30), viewedAt: null, signedAt: ago(1) }, NOW, quietDays, viewedDays,
-    )).toBeNull();
-    expect(classifyBidQuietTier(
-      { stage: 'submitted', sentAt: ago(30), viewedAt: ago(20), signedAt: ago(1) }, NOW, quietDays, viewedDays,
-    )).toBeNull();
+      { stage: 'submitted', sentAt: ago(30), signedAt: ago(1) }, NOW, quietDays,
+    )).toBe(false);
   });
 
-  it('Tier A: sent, never viewed, quiet longer than quietDays', () => {
+  it('sent, quiet longer than quietDays, is eligible', () => {
     expect(classifyBidQuietTier(
-      { stage: 'submitted', sentAt: ago(6), viewedAt: null, signedAt: null }, NOW, quietDays, viewedDays,
-    )).toBe('A');
+      { stage: 'submitted', sentAt: ago(6), signedAt: null }, NOW, quietDays,
+    )).toBe(true);
   });
 
-  it('sent, never viewed, but not yet quiet long enough is not eligible', () => {
+  it('sent but not yet quiet long enough is not eligible', () => {
     expect(classifyBidQuietTier(
-      { stage: 'submitted', sentAt: ago(4), viewedAt: null, signedAt: null }, NOW, quietDays, viewedDays,
-    )).toBeNull();
+      { stage: 'submitted', sentAt: ago(4), signedAt: null }, NOW, quietDays,
+    )).toBe(false);
     // Exactly at the boundary is strict-less-than, matching sweepQuietProposals' own cutoff.
     expect(classifyBidQuietTier(
-      { stage: 'submitted', sentAt: ago(5), viewedAt: null, signedAt: null }, NOW, quietDays, viewedDays,
-    )).toBeNull();
-  });
-
-  it('Tier B: viewed but unsigned, quiet (since the view) longer than viewedDays', () => {
-    expect(classifyBidQuietTier(
-      { stage: 'submitted', sentAt: ago(10), viewedAt: ago(4), signedAt: null }, NOW, quietDays, viewedDays,
-    )).toBe('B');
-  });
-
-  it('viewed recently is not eligible for either tier', () => {
-    expect(classifyBidQuietTier(
-      { stage: 'submitted', sentAt: ago(10), viewedAt: ago(1), signedAt: null }, NOW, quietDays, viewedDays,
-    )).toBeNull();
+      { stage: 'submitted', sentAt: ago(5), signedAt: null }, NOW, quietDays,
+    )).toBe(false);
   });
 });
 
@@ -76,23 +62,22 @@ describe('sweepQuietBids (integration)', () => {
     salespersonId: string | null;
     stage: string;
     sentAt: Date | null;
-    viewedAt: Date | null;
     signedAt?: Date | null;
   }): Promise<string> {
     const gc = `Quiet Sweep GC ${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const { rows } = await pool.query(
-      `INSERT INTO bids (name, gc, salesperson_id, stage, proposal_sent_at, proposal_viewed_at, proposal_signed_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-      [opts.name, gc, opts.salespersonId, opts.stage, opts.sentAt, opts.viewedAt, opts.signedAt ?? null]
+      `INSERT INTO bids (name, gc, salesperson_id, stage, proposal_sent_at, proposal_signed_at)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [opts.name, gc, opts.salespersonId, opts.stage, opts.sentAt, opts.signedAt ?? null]
     );
     return rows[0].id as string;
   }
 
-  it('creates a Tier A task for a bid sent 6 days ago, never viewed, still submitted', async (ctx) => {
+  it('creates a quiet-follow-up task for a bid sent 6 days ago, still submitted', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('salesperson');
     const bidId = await createBid({
-      name: 'Quiet Plaza', salespersonId: u.id, stage: 'submitted', sentAt: daysAgo(6), viewedAt: null,
+      name: 'Quiet Plaza', salespersonId: u.id, stage: 'submitted', sentAt: daysAgo(6),
     });
 
     const { created } = await sweepQuietBids();
@@ -109,7 +94,7 @@ describe('sweepQuietBids (integration)', () => {
     if (!ok) return ctx.skip();
     const u = await makeUser('salesperson');
     const bidId = await createBid({
-      name: 'Repeat Plaza', salespersonId: u.id, stage: 'submitted', sentAt: daysAgo(6), viewedAt: null,
+      name: 'Repeat Plaza', salespersonId: u.id, stage: 'submitted', sentAt: daysAgo(6),
     });
 
     await sweepQuietBids();
@@ -123,27 +108,26 @@ describe('sweepQuietBids (integration)', () => {
     expect(afterClose[0].status).toBe('done');
   });
 
-  it('viewed 4 days ago, unsigned, creates a Tier B task', async (ctx) => {
+  it('not yet quiet long enough is skipped', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('salesperson');
     const bidId = await createBid({
-      name: 'Stalled Plaza', salespersonId: u.id, stage: 'submitted', sentAt: daysAgo(10), viewedAt: daysAgo(4),
+      name: 'Fresh Plaza', salespersonId: u.id, stage: 'submitted', sentAt: daysAgo(1),
     });
 
     await sweepQuietBids();
     const { rows } = await pool.query(`SELECT * FROM tasks WHERE linked_type='bid' AND linked_id=$1`, [bidId]);
-    expect(rows.length).toBe(1);
-    expect(rows[0].title).toBe('Proposal viewed but unsigned — Stalled Plaza');
+    expect(rows.length).toBe(0);
   });
 
   it('a bid no longer in `submitted` (e.g. awarded, or reopened to due) is skipped entirely', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('salesperson');
     const awardedId = await createBid({
-      name: 'Awarded Plaza', salespersonId: u.id, stage: 'awarded', sentAt: daysAgo(30), viewedAt: daysAgo(30),
+      name: 'Awarded Plaza', salespersonId: u.id, stage: 'awarded', sentAt: daysAgo(30),
     });
     const dueId = await createBid({
-      name: 'Reopened Plaza', salespersonId: u.id, stage: 'due', sentAt: daysAgo(30), viewedAt: null,
+      name: 'Reopened Plaza', salespersonId: u.id, stage: 'due', sentAt: daysAgo(30),
     });
 
     await sweepQuietBids();
@@ -158,7 +142,7 @@ describe('sweepQuietBids (integration)', () => {
     const u = await makeUser('salesperson');
     const bidId = await createBid({
       name: 'Signed Plaza', salespersonId: u.id, stage: 'submitted',
-      sentAt: daysAgo(30), viewedAt: daysAgo(20), signedAt: daysAgo(1),
+      sentAt: daysAgo(30), signedAt: daysAgo(1),
     });
     await sweepQuietBids();
     const { rows } = await pool.query(`SELECT * FROM tasks WHERE linked_type='bid' AND linked_id=$1`, [bidId]);

@@ -139,26 +139,27 @@ export function NotificationsSection({ settings, onSaved }: { settings: AppSetti
   const [prefs,   setPrefs]   = useState<Record<string, boolean>>(parsePrefs);
   const [reminders, setReminders] = useState<ReminderPrefs>(() => parseReminders(settings.notifications_json));
   const [remIn,   setRemIn]   = useState('');
-  // Phase 4 Task 4.2 — electrical proposal quiet-sweep delays (plain
-  // top-level app_settings keys, same pattern as ProposalDefaultsSection's
-  // numeric fields — not part of the notifications_json blob).
+  // Phase 4 Task 4.2 — electrical proposal quiet-sweep delay (a plain
+  // top-level app_settings key, same pattern as ProposalDefaultsSection's
+  // numeric fields — not part of the notifications_json blob). Post-merge
+  // rework (2026-09-03) removed the "viewed, not signed" tier — the public
+  // proposal page it depended on is gone — so there's just the one delay now.
   const [elecQuietDays,  setElecQuietDays]  = useState(settings.elec_followup_quiet_days);
-  const [elecViewedDays, setElecViewedDays] = useState(settings.elec_followup_viewed_days);
   const [orig,    setOrig]    = useState('');
   const [saving,  setSaving]  = useState(false);
   const [saved,   setSaved]   = useState(false);
 
-  const snapshot = (p: Record<string, boolean>, r: ReminderPrefs, quiet: string, viewed: string) =>
-    JSON.stringify({ p, r, quiet, viewed });
+  const snapshot = (p: Record<string, boolean>, r: ReminderPrefs, quiet: string) =>
+    JSON.stringify({ p, r, quiet });
 
   useEffect(() => {
     const p = parsePrefs(); const r = parseReminders(settings.notifications_json);
     setPrefs(p); setReminders(r);
-    setElecQuietDays(settings.elec_followup_quiet_days); setElecViewedDays(settings.elec_followup_viewed_days);
-    setOrig(snapshot(p, r, settings.elec_followup_quiet_days, settings.elec_followup_viewed_days));
+    setElecQuietDays(settings.elec_followup_quiet_days);
+    setOrig(snapshot(p, r, settings.elec_followup_quiet_days));
   }, [settings]);
 
-  const hasChanges = snapshot(prefs, reminders, elecQuietDays, elecViewedDays) !== orig;
+  const hasChanges = snapshot(prefs, reminders, elecQuietDays) !== orig;
   const toggle     = (k: string) => setPrefs(p => ({ ...p, [k]: !p[k] }));
 
   const setRem = (key: string, patch: Partial<ReminderTypePref>) =>
@@ -177,9 +178,8 @@ export function NotificationsSection({ settings, onSaved }: { settings: AppSetti
       await api.put('/settings', {
         notifications_json:  JSON.stringify({ ...prefs, reminders }),
         elec_followup_quiet_days: elecQuietDays,
-        elec_followup_viewed_days: elecViewedDays,
       });
-      setOrig(snapshot(prefs, reminders, elecQuietDays, elecViewedDays)); onSaved();
+      setOrig(snapshot(prefs, reminders, elecQuietDays)); onSaved();
       setSaved(true); setTimeout(() => setSaved(false), 3000);
     } finally { setSaving(false); }
   };
@@ -234,23 +234,21 @@ export function NotificationsSection({ settings, onSaved }: { settings: AppSetti
         })}
       </div>
 
-      {/* Phase 4 Task 4.2 — electrical proposal quiet-sweep delays, next to
+      {/* Phase 4 Task 4.2 — electrical proposal quiet-sweep delay, next to
           the reminder settings above (there's no equivalent UI for the
           generator pipeline's own gen_followup_* settings yet — those are
-          still app_settings-only). */}
+          still app_settings-only). Post-merge rework (2026-09-03) — one
+          tier only: the "viewed, not signed" tier depended on the public
+          proposal page, which is gone (GCs get a PDF/docx by email and
+          respond via contract/PO, not a web link). */}
       <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Electrical Proposal Follow-ups</div>
       <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
         Auto-create a follow-up task when a sent electrical proposal has gone quiet.
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
-        <Field label="Never viewed — days before quiet" desc="Sent but never opened.">
+        <Field label="Days before quiet" desc="Marked Submitted but no update since.">
           <input type="number" min={0} max={60} value={elecQuietDays}
             onChange={e => setElecQuietDays(String(Math.max(0, parseInt(e.target.value) || 0)))}
-            style={{ ...inputStyle, width: 100 }}/>
-        </Field>
-        <Field label="Viewed, not signed — days before quiet" desc="Opened but never accepted.">
-          <input type="number" min={0} max={60} value={elecViewedDays}
-            onChange={e => setElecViewedDays(String(Math.max(0, parseInt(e.target.value) || 0)))}
             style={{ ...inputStyle, width: 100 }}/>
         </Field>
       </div>
