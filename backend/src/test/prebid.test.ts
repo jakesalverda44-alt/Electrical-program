@@ -445,6 +445,33 @@ describe('run-agent4 price validation', () => {
   });
 });
 
+// Task 6 — generate-docx now hard-gates on verifyBidDocx(kind:'gc'), so
+// agent4_output must be gate-passing content (Agent 4's new data-only shape,
+// 3+ ECFECI mentions in the right sections) rather than '{}' — an empty
+// object 422s before ever reaching storeDocument. Post-review FIX-7 also
+// wired validateBidData into composeCurrentBidData, which enforces Section
+// C's exact-3-bullets rule — this fixture's C uses fixture_types to fold in
+// its 3rd bullet, the same pattern composeBidData's own tests use.
+const GATE_PASSING_AGENT4_OUTPUT = JSON.stringify({
+  sections: [
+    { title: 'A. Service & Distribution', bullets: [
+      'Service entrance assembly and MDP (ECFECI).',
+      'Distribution gear (ECFECI): panels A, B.',
+    ] },
+    { title: 'B. Branch Power', bullets: ['Branch circuit wiring per plan.'] },
+    { title: 'C. Lighting & Controls', bullets: [
+      'Complete lighting package (ECFECI) — Southern Lighting Source.',
+      'Controls & testing: occupancy sensors and photocells.',
+    ] },
+    { title: 'D. Site Lighting, Underground Work & Allowances', bullets: ['Site lighting per photometric plan.'] },
+  ],
+  fixture_types: ['A'],
+  exclusions: ['Standard exclusions apply.'],
+  takeoff: [{ name: 'Service & Distribution', items: [
+    { item: '1.1', description: 'Panel (ECFECI)', unit: 'EA', qty: 1, source: 'E1.0 Riser' },
+  ] }],
+});
+
 describe('generate-docx files every generated proposal', () => {
   it('writes a documents row (category proposal) after a successful build', async (ctx) => {
     if (!ok) return ctx.skip();
@@ -452,13 +479,12 @@ describe('generate-docx files every generated proposal', () => {
     const bid = await request(app).post('/api/bids').set(auth(u.token))
       .send({ name: `Filed ${Date.now()}`, gc: 'G' }).expect(200);
     const bidId = bid.body.id as string;
-    // A minimal-but-valid ProposalJSON — every field is optional, and the price
-    // comes from agent4_price (parseMoney-validated), not data.totalPrice, so an
-    // otherwise-empty object is enough to exercise buildProposalDocx end to end.
+    // The price comes from agent4_price (parseMoney-validated), not from
+    // any field inside agent4_output.
     await pool.query(
       `INSERT INTO takeoff_results (bid_id, agent2_output, agent4_output, agent4_price, agent4_status)
-       VALUES ($1,'{}','{}',425000,'complete')`,
-      [bidId]
+       VALUES ($1,'{}',$2,425000,'complete')`,
+      [bidId, GATE_PASSING_AGENT4_OUTPUT]
     );
 
     const res = await request(app)
@@ -487,8 +513,8 @@ describe('generate-docx files every generated proposal', () => {
     const bidId = bid.body.id as string;
     await pool.query(
       `INSERT INTO takeoff_results (bid_id, agent2_output, agent4_output, agent4_price, agent4_status)
-       VALUES ($1,'{}','{}',425000,'complete')`,
-      [bidId]
+       VALUES ($1,'{}',$2,425000,'complete')`,
+      [bidId, GATE_PASSING_AGENT4_OUTPUT]
     );
 
     await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token)).expect(200);

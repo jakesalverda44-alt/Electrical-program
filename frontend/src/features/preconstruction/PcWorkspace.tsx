@@ -11,6 +11,7 @@ import { buildScopeFromPrebid, PrebidSection } from './prebidScope';
 import { overridesFromEstimate } from './estimateHydrate';
 import { confidenceToPlaybook } from './confidence';
 import PreBidTab from './PreBidTab';
+import { BidDataPreview, VerifyFailure, bulletText } from './bidDataPreview';
 
 interface Props {
   ws: PcWorkspace;
@@ -309,6 +310,20 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // panel below (agent4Status === 'error') can't show it. Surfaced separately, inline.
   const [agent4StartError, setAgent4StartError] = useState<string | null>(null);
   const [agent4Running, setAgent4Running] = useState(false);
+  // Task 7 — the composed BidData (same shape whether agent4_output is in
+  // Agent 4's new data-only contract or the pre-Phase-3 legacy shape; the
+  // backend's adapter normalizes either).
+  const [proposalPreview, setProposalPreview] = useState<BidDataPreview | null>(null);
+  // The 422 verify-gate's failures[] (Task 6/7) — a doctored/incomplete
+  // proposal never downloads silently; this panel tells the estimator
+  // exactly what to fix.
+  const [verifyFailures, setVerifyFailures] = useState<VerifyFailure[] | null>(null);
+  // FIX-12 — downloadDocx had no busy-state, unlike its xlsx/prebid
+  // siblings, so a double-click could double-file the same generation.
+  const [docxBusy, setDocxBusy] = useState(false);
+  const [xlsxBusy, setXlsxBusy] = useState(false);
+  const [prebidBusy, setPrebidBusy] = useState(false);
+  const [prebidResult, setPrebidResult] = useState<{ scopeDocumentId: string | null; takeoffDocumentId: string | null } | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importBidFile, setImportBidFile] = useState<File | null>(null);
   const [importTakeoffFile, setImportTakeoffFile] = useState<File | null>(null);
@@ -520,6 +535,16 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     setSvcPanel(v => v || p.panel);
   }, [aiResults?.agent1_output]);
 
+  // Task 7 — load the composed BidData preview whenever a completed proposal
+  // is on file (covers both a fresh Agent 4 run finishing via pollAgent4's
+  // setAiResults, and reconnecting to an already-complete proposal on mount).
+  useEffect(() => {
+    if (aiResults?.agent4_status !== 'complete') { setProposalPreview(null); return; }
+    api.get(`/preconstruction/${bid.id}/proposal-preview`)
+      .then(r => setProposalPreview(r.data))
+      .catch(() => setProposalPreview(null));
+  }, [bid.id, aiResults?.agent4_status]);
+
   // Pre-fill proposal price from saved estimate grand total
   useEffect(() => {
     if (savedEstimate?.grand_total && !propPrice) {
@@ -704,6 +729,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }
     setAgent4StartError(null);
     setAgent4Running(true);
+    // A re-run invalidates whatever gate failures / pre-bid links were showing.
+    setVerifyFailures(null);
+    setPrebidResult(null);
     try {
       await api.post(`/preconstruction/${bid.id}/run-agent4`, {
         // Strip $/commas/whitespace before POSTing — the box keeps whatever the
@@ -721,29 +749,95 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }
   };
 
+  // Reads the {error, failures[]} JSON off a failed blob-response request —
+  // shared by downloadDocx/downloadTakeoffXlsx/generatePrebidPackage so a
+  // gate failure or any other server error always surfaces a real message
+  // instead of a generic "download failed" (Task 7.2 — the download button
+  // never silently fails).
+  async function readBlobError(err: unknown, fallback: string): Promise<{ sub: string; failures: VerifyFailure[] | null }> {
+    let sub = fallback;
+    let failures: VerifyFailure[] | null = null;
+    try {
+      const axiosErr = err as { response?: { data?: Blob } };
+      if (axiosErr.response?.data instanceof Blob) {
+        const text = await axiosErr.response.data.text();
+        const json = JSON.parse(text) as { error?: string; failures?: VerifyFailure[] };
+        if (json.error) sub = json.error;
+        if (Array.isArray(json.failures)) failures = json.failures;
+      }
+    } catch { /* ignore parse failure — fallback message stands */ }
+    return { sub, failures };
+  }
+
+  function triggerDownload(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename.replace(/[<>:"/\\|?*]/g, '-');
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   const downloadDocx = async () => {
+    setVerifyFailures(null);
+    setDocxBusy(true);
     try {
       const response = await api.get(`/preconstruction/${bid.id}/generate-docx`, { responseType: 'blob' });
-      const blob = new Blob([response.data as BlobPart], {
-        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `Proposal — ${bid.name}.docx`.replace(/[<>:"/\\|?*]/g, '-');
-      a.click();
-      URL.revokeObjectURL(url);
+      triggerDownload(
+        new Blob([response.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+        `Proposal — ${bid.name}.docx`
+      );
     } catch (err: unknown) {
-      let sub = 'Could not generate the proposal document';
-      try {
-        const axiosErr = err as { response?: { data?: Blob } };
-        if (axiosErr.response?.data instanceof Blob) {
-          const text = await axiosErr.response.data.text();
-          const json = JSON.parse(text) as { error?: string };
-          if (json.error) sub = json.error;
-        }
-      } catch { /* ignore parse failure */ }
+      const { sub, failures } = await readBlobError(err, 'Could not generate the proposal document');
+      if (failures?.length) setVerifyFailures(failures);
       showToast({ title: 'Download failed', sub });
+    } finally {
+      setDocxBusy(false);
+    }
+  };
+
+  const downloadTakeoffXlsx = async () => {
+    setXlsxBusy(true);
+    try {
+      const response = await api.get(`/preconstruction/${bid.id}/generate-takeoff-xlsx`, { responseType: 'blob' });
+      triggerDownload(
+        new Blob([response.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+        `Takeoff — ${bid.name}.xlsx`
+      );
+    } catch (err: unknown) {
+      const { sub } = await readBlobError(err, 'Could not generate the takeoff spreadsheet');
+      showToast({ title: 'Download failed', sub });
+    } finally {
+      setXlsxBusy(false);
+    }
+  };
+
+  // Task 6.3's endpoint — internal pre-bid package (scope docx + confidence-
+  // coded takeoff xlsx) for Chris. Links both filed documents on success via
+  // the same /documents/:id/download route the Files panel uses.
+  const generatePrebidPackage = async () => {
+    setPrebidBusy(true);
+    setPrebidResult(null);
+    try {
+      const { data } = await api.post(`/preconstruction/${bid.id}/generate-prebid-package`);
+      setPrebidResult({ scopeDocumentId: data.scopeDocumentId ?? null, takeoffDocumentId: data.takeoffDocumentId ?? null });
+      showToast({ title: 'Pre-bid package generated', sub: 'Scope + takeoff filed for Chris — download links below' });
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { error?: string; failures?: VerifyFailure[] } } };
+      const body = axiosErr.response?.data;
+      if (body?.failures?.length) setVerifyFailures(body.failures);
+      showToast({ title: 'Pre-bid package failed', sub: body?.error ?? 'Could not generate the pre-bid package' });
+    } finally {
+      setPrebidBusy(false);
+    }
+  };
+
+  const downloadFiledDocument = async (docId: string, filename: string) => {
+    try {
+      const response = await api.get(`/documents/${docId}/download`, { responseType: 'blob' });
+      triggerDownload(response.data as Blob, filename);
+    } catch {
+      showToast({ title: 'Download failed', sub: 'Please try again from the Files tab.' });
     }
   };
 
@@ -1850,23 +1944,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         const agent4Raw    = aiResults?.agent4_output as string | undefined;
         const agent4Status = aiResults?.agent4_status as string | undefined;
         const agent4ErrMsg = aiResults?.agent4_error  as string | undefined;
-        let propData: Record<string, unknown> | null = null;
+        // A parsed agent4_output existing is enough to know a proposal is on
+        // file and drives the button/badge state — the actual preview content
+        // (Task 7) comes from proposalPreview, the composed BidData, which
+        // already normalizes both Agent 4's new shape and a pre-Phase-3
+        // legacy row into one consistent structure server-side.
         let propParseError = false;
         if (agent4Raw) {
-          try { propData = JSON.parse(agent4Raw); }
+          try { JSON.parse(agent4Raw); }
           catch { propParseError = true; }
         }
-        // Safely convert any item that Claude may have returned as an object instead of a string
-        const toStr = (v: unknown): string => {
-          if (typeof v === 'string') return v;
-          if (v && typeof v === 'object') {
-            const o = v as Record<string, unknown>;
-            return [o.item, o.text, o.description, o.question, o.risks, o.risk, o.note]
-              .filter(Boolean).map(String).join(' — ') || JSON.stringify(v);
-          }
-          return String(v ?? '');
-        };
-        const sow = propData?.scopeOfWork as Record<string, string[]> | undefined;
+        const hasProposal = !!agent4Raw && !propParseError;
         const fieldStyle: React.CSSProperties = {
           width: '100%', font: 'inherit', fontSize: 13, fontWeight: 600,
           color: 'var(--text)', background: 'var(--surface)',
@@ -1887,7 +1975,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   <span className="pt-ic"><Icon name="doc" size={14} stroke={1.9}/></span>
                   Agent 4 — Proposal Formatter
                 </span>
-                {propData && (
+                {hasProposal && (
                   <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--green)' }}>
                     <Icon name="check" size={12} stroke={2.2}/> Proposal ready
                   </span>
@@ -1923,14 +2011,19 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     style={{ fontSize: 13 }}>
                     {agent4Running
                       ? 'Generating proposal…'
-                      : (propData || propParseError || agent4Status === 'error') ? '↺ Re-run Agent 4' : 'Run Agent 4 — Generate Proposal'}
+                      : (hasProposal || propParseError || agent4Status === 'error') ? '↺ Re-run Agent 4' : 'Run Agent 4 — Generate Proposal'}
                   </button>
-                  {propData && (
-                    <button className="btn" onClick={downloadDocx} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
-                      <Icon name="doc" size={14} stroke={1.9}/> Download .docx
+                  {hasProposal && (
+                    <button className="btn" onClick={downloadDocx} disabled={docxBusy} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
+                      <Icon name="doc" size={14} stroke={1.9}/> {docxBusy ? 'Building…' : 'Download .docx'}
                     </button>
                   )}
-                  {propData && (
+                  {hasProposal && (
+                    <button className="btn ghost" onClick={downloadTakeoffXlsx} disabled={xlsxBusy} style={{ fontSize: 13 }}>
+                      <Icon name="doc" size={14} stroke={1.9}/> {xlsxBusy ? 'Building…' : 'Download Takeoff (.xlsx)'}
+                    </button>
+                  )}
+                  {hasProposal && (
                     <button className="btn" onClick={() => setConvertOpen(true)}
                       style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)', marginLeft: 'auto' }}>
                       <Icon name="check" size={14} stroke={2.2}/> Mark as Awarded
@@ -1944,6 +2037,83 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 )}
               </div>
             </div>
+
+            {/* Task 6.3 — internal-only pre-bid package for Chris, from the
+                same composed BidData the GC docx/xlsx render from. */}
+            {hasProposal && (
+              <div className="panel" style={{ marginBottom: 16 }}>
+                <div className="panel-hdr">
+                  <span className="panel-title">
+                    <span className="pt-ic"><Icon name="users" size={14} stroke={1.9}/></span>
+                    Pre-Bid Package for Chris
+                    <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 800, color: 'var(--amber)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                      Internal only
+                    </span>
+                  </span>
+                </div>
+                <div style={{ padding: '14px 20px' }}>
+                  <div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.6, marginBottom: 12 }}>
+                    Generates the internal scope docx (no price, no signature) and a confidence-coded
+                    takeoff xlsx for Chris to price against, filed under this bid&apos;s Pre-Bid documents.
+                  </div>
+                  <button className="btn ghost" onClick={generatePrebidPackage} disabled={prebidBusy} style={{ fontSize: 13 }}>
+                    <Icon name="doc" size={14} stroke={1.9}/> {prebidBusy ? 'Generating…' : 'Generate Pre-Bid Package for Chris'}
+                  </button>
+                  {prebidResult && (
+                    <div style={{ marginTop: 12, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                      {prebidResult.scopeDocumentId && (
+                        <button onClick={() => downloadFiledDocument(prebidResult.scopeDocumentId!, `PreBid Scope — ${bid.name}.docx`)}
+                          style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                          <Icon name="doc" size={12} stroke={2}/> Download Pre-Bid Scope
+                        </button>
+                      )}
+                      {prebidResult.takeoffDocumentId && (
+                        <button onClick={() => downloadFiledDocument(prebidResult.takeoffDocumentId!, `PreBid Takeoff — ${bid.name}.xlsx`)}
+                          style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                          <Icon name="doc" size={12} stroke={2}/> Download Pre-Bid Takeoff
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Task 6/7 — the verify gate's failures never fail silently: list
+                each check + its matched text with re-run guidance. */}
+            {verifyFailures && verifyFailures.length > 0 && (
+              <div className="panel" style={{ marginBottom: 16, borderColor: 'rgba(224,106,106,.4)' }}>
+                <div className="panel-hdr" style={{ background: 'rgba(224,106,106,.12)' }}>
+                  <span className="panel-title" style={{ color: 'var(--red)' }}>
+                    <span className="pt-ic" style={{ background: 'rgba(224,106,106,.2)', color: 'var(--red)' }}>
+                      <Icon name="x" size={14} stroke={2.2}/>
+                    </span>
+                    Proposal Did Not Pass Verification
+                  </span>
+                </div>
+                <div style={{ padding: '12px 20px', fontSize: 13, color: 'var(--text2)' }}>
+                  <div style={{ marginBottom: 10, lineHeight: 1.6 }}>
+                    This document did not pass the bid-standard checks below — fix the estimator notes/scope and{' '}
+                    <strong>↺ Re-run Agent 4</strong> above before sending it to the GC.
+                  </div>
+                  {verifyFailures.map((f, i) => (
+                    <div key={i} style={{ marginBottom: 10, padding: '8px 12px', background: 'rgba(224,106,106,.08)', borderRadius: 8, border: '1px solid rgba(224,106,106,.25)' }}>
+                      <div style={{ fontWeight: 800, color: 'var(--red)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 3 }}>
+                        {f.check.replace(/_/g, ' ')}
+                      </div>
+                      <div style={{ marginBottom: f.matches.length ? 4 : 0 }}>{f.detail}</div>
+                      {f.matches.length > 0 && (
+                        <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                          Matched: {f.matches.map((m, mi) => (
+                            <code key={mi} style={{ background: 'var(--surface3)', padding: '1px 5px', borderRadius: 4, marginRight: 5 }}>{m}</code>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Agent 4 in-progress indicator */}
             {agent4Running && (
@@ -1971,76 +2141,82 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 </div>
               </div>
             )}
-            {/* Proposal preview */}
-            {propData && (
+            {/* Proposal preview — Task 7: the composed BidData, sections by
+                their real titles, exclusions, alternates, terms, price from
+                the bid record. Same panel renders a legacy-shape row too —
+                the backend's adapter already normalized it. */}
+            {proposalPreview && (
               <div className="panel">
                 <div className="panel-hdr">
                   <span className="panel-title">Proposal Preview</span>
                 </div>
                 <div style={{ padding: '16px 20px', fontSize: 13 }}>
                   {/* Header row */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16, padding: '12px 16px', background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border2)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16, padding: '12px 16px', background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border2)' }}>
                     <div>
                       <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Prepared For</div>
-                      <div style={{ fontWeight: 700, color: 'var(--text)' }}>{String(propData.gcName ?? '—')}</div>
-                      {propData.gcContact ? <div style={{ color: 'var(--text3)' }}>{String(propData.gcContact)}</div> : null}
+                      <div style={{ fontWeight: 700, color: 'var(--text)' }}>{proposalPreview.client || '—'}</div>
+                      {proposalPreview.contact ? <div style={{ color: 'var(--text3)' }}>{proposalPreview.contact}</div> : null}
                     </div>
                     <div>
                       <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Project</div>
-                      <div style={{ fontWeight: 700, color: 'var(--text)' }}>{String(propData.projectName ?? bid.name)}</div>
-                      {propData.projectAddress ? <div style={{ color: 'var(--text3)' }}>{String(propData.projectAddress)}</div> : null}
+                      <div style={{ fontWeight: 700, color: 'var(--text)' }}>{proposalPreview.project_name || bid.name}</div>
+                      {proposalPreview.project_address ? <div style={{ color: 'var(--text3)' }}>{proposalPreview.project_address}</div> : null}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Job Number</div>
+                      <div style={{ fontWeight: 700, color: 'var(--text)' }}>{proposalPreview.job_number || '—'}</div>
                     </div>
                   </div>
 
                   {/* Price */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'rgba(31,56,100,.06)', border: '1px solid rgba(31,56,100,.2)', borderRadius: 8, marginBottom: 16 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>Total Proposed Contract Value:</div>
-                    <div style={{ fontSize: 20, fontWeight: 900, color: '#1F3864' }}>{String(propData.totalPrice ?? propPrice)}</div>
+                    <div style={{ fontSize: 20, fontWeight: 900, color: '#1F3864' }}>{proposalPreview.total_price || propPrice}</div>
                   </div>
 
-                  {/* Scope sections */}
-                  {sow && (
+                  {/* Scope sections — real titles, straight off the composed data */}
+                  {proposalPreview.sections.length > 0 && (
                     <div style={{ marginBottom: 16 }}>
                       <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Scope of Work</div>
-                      {[
-                        ['A. Service & Distribution',                  sow.A_ServiceDistribution],
-                        ['B. Branch Power',                            sow.B_BranchPower],
-                        ['C. Lighting & Controls',                     sow.C_LightingControls],
-                        ['D. Site Lighting, Underground & Allowances', sow.D_SiteLightingUnderground],
-                        ['E. Low Voltage Infrastructure',              sow.E_LowVoltage],
-                        ['F. Project Coordination & Closeout',         sow.F_Coordination],
-                      ].map(([label, bullets]) => {
-                        const arr = bullets as string[] | undefined;
-                        if (!arr?.length) return null;
-                        return (
-                          <div key={label as string} style={{ marginBottom: 10 }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: '#1F3864', marginBottom: 4 }}>{label as string}</div>
-                            <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
-                              {arr.map((b, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{toStr(b)}</li>)}
-                            </ul>
-                          </div>
-                        );
-                      })}
+                      {proposalPreview.sections.map((s, si) => (
+                        <div key={si} style={{ marginBottom: 10 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: '#1F3864', marginBottom: 4 }}>{s.title}</div>
+                          <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
+                            {s.bullets.map((b, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{bulletText(b)}</li>)}
+                          </ul>
+                        </div>
+                      ))}
                     </div>
                   )}
 
                   {/* Exclusions */}
-                  {Array.isArray(propData.exclusions) && (propData.exclusions as string[]).length > 0 && (
+                  {proposalPreview.exclusions.length > 0 && (
                     <div style={{ marginBottom: 16 }}>
                       <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Exclusions</div>
                       <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
-                        {(propData.exclusions as unknown[]).map((e, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{toStr(e)}</li>)}
+                        {proposalPreview.exclusions.map((e, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{bulletText(e)}</li>)}
                       </ul>
                     </div>
                   )}
 
-                  {/* RFIs to resolve */}
-                  {Array.isArray(propData.rfisToResolve) && (propData.rfisToResolve as string[]).length > 0 && (
-                    <div style={{ padding: '10px 14px', background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.35)', borderRadius: 8 }}>
-                      <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--amber)', marginBottom: 6 }}>⚠ Open Items to Resolve Before Sending</div>
-                      <ul style={{ margin: 0, paddingLeft: 18 }}>
-                        {(propData.rfisToResolve as unknown[]).map((r, i) => <li key={i} style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 3 }}>{toStr(r)}</li>)}
+                  {/* Alternates */}
+                  {!!proposalPreview.alternates?.length && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Alternates</div>
+                      <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
+                        {proposalPreview.alternates.map((a, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{bulletText(a)}</li>)}
                       </ul>
+                    </div>
+                  )}
+
+                  {/* Terms */}
+                  {proposalPreview.terms.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Terms, Conditions &amp; Special Requirements</div>
+                      <ol style={{ margin: 0, paddingLeft: 18 }}>
+                        {proposalPreview.terms.map((t, i) => <li key={i} style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{bulletText(t)}</li>)}
+                      </ol>
                     </div>
                   )}
                 </div>

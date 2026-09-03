@@ -1,0 +1,281 @@
+{
+  "_comment": "Fill this out per job. Every string here lands verbatim in the docx. Run the banned-language scan in verify.sh before sending.",
+  "output_filename": "APT_Bid_SampleProject_Eustis.docx",
+  "project_slug": "SampleProject",
+  "location_slug": "Eustis",
+  "date": "September 2, 2026",
+  "client": "Sample General Contractor, LLC",
+  "contact": "John Smith",
+  "email": "jsmith@samplegc.com",
+  "project_name": "Sample Retail Center",
+  "project_address": "1234 Main Street, Eustis, FL 32726",
+  "job_number": "JS.09022026",
+  "plan_date": "07.15.2026",
+  "_takeoff_only": "building_area and interior_breakdown appear on the XLSX header ONLY - never on the bid document. See docs/Bid_Output_Standards.md.",
+  "building_area": "3,569 SF gross footprint (A1.0 site plan)   |   3,412 SF net interior (A6.0 Finish Schedule)",
+  "interior_breakdown": "Sales floor 1,880 SF   |   Kitchen 640 SF   |   Cooler/freezer 410 SF   |   Restrooms 190 SF   |   Back of house 292 SF",
+  "total_price": "$248,750.00",
+  "prebid": {
+    "to": "Chris (Estimator)",
+    "from": "Jake Salverda, Commercial A.E.",
+    "owner": "Sample Retail Holdings, LLC",
+    "engineer": "Sample Engineering, Inc. - J. Doe, P.E. FL #00000",
+    "received": "07.18.2026",
+    "sheets": "E0.1, E1.0, E1.1, E1.6, E2.0, E2.1, E2.4, E3.0",
+    "flags": [
+      "Title block on E1.0 reads a different street address than the architectural set - bidding the architectural address.",
+      "E1.1 Panel Schedules is raster; counts read from 200 DPI crops, not text extraction."
+    ]
+  },
+  "scope": [
+    "The project is understood to be electrical work and has been reviewed and quoted as such.",
+    "All work to be completed during normal business hours, 8:00 AM - 4:00 PM, Monday through Friday.",
+    "Installation per plan. All changes will require a written Change Order approved by the Owner before work proceeds.",
+    "Based on the electrical specifications, schedules, and drawing set dated 07.15.2026. Sheets: E0.1, E1.0, E1.1, E2.0, E2.1, E3.0.",
+    "Coordinate with Sample General Contractor for scheduling, tie-ins, and required access.",
+    "Submit for and obtain all required electrical permits prior to commencement of work."
+  ],
+  "sections": [
+    {
+      "title": "A. Service & Distribution",
+      "bullets": [
+        "Accurate Power & Technology will furnish and install the complete 800A, 120/208V, 3-phase, 4-wire service entrance assembly and MDP (ECFECI), fed by the utility pad-mount transformer secondary.",
+        {
+          "b": "Distribution gear (ECFECI): ",
+          "t": "panels A, B, C, K, L and S, with feeders and disconnects throughout."
+        },
+        "Surge protective device, lighting contactors, time clock and photocell control at the main distribution section (ECFECI).",
+        "Complete grounding and bonding system per NEC Article 250, including ground rods, water main bond and structural steel bond."
+      ]
+    },
+    {
+      "title": "B. Branch Power",
+      "bullets": [
+        "Branch raceway, conductors and devices throughout - receptacles, GFCI receptacles, floor boxes, and equipment connections per the device and equipment power schedules.",
+        "HVAC and refrigeration disconnects, roof-top unit connections, and door hardware power as shown."
+      ]
+    },
+    {
+      "title": "C. Lighting & Controls",
+      "bullets": [
+        {
+          "b": "Complete lighting package (ECFECI)",
+          "t": " - procured through the Southern Lighting Source national account (770-242-4000). EC to receive, inventory, and install all fixtures per schedule."
+        },
+        "Controls & testing: occupancy sensors, photocells, lighting contactors and dimming controls as shown; functional testing prior to final inspection.",
+        "Fixture types per schedule: A, AE, B1, B1E, B2, C, CE, F, FE, G, GE, LP, P1, P2, X2, R1."
+      ]
+    },
+    {
+      "title": "D. Site Lighting, Underground Work & Allowances",
+      "bullets": [
+        "Site and pole lighting per the photometric plan, including fixtures, poles and pole wiring.",
+        "Underground conduit to be Schedule 40 PVC with a minimum 24\" cover; all above-grade conduit to be rigid galvanized steel through the 6\" transition elbow.",
+        "160' allowance - service feeder from the utility transformer secondary to the main distribution panel.",
+        "225' allowance - incoming network / telecommunications conduit from the property line to the IT rack."
+      ]
+    },
+    {
+      "title": "E. Low Voltage Infrastructure (Conduit & Boxes Only)",
+      "bullets": [
+        "Conduit, junction boxes and pull strings for security, tele/data and sound/intercom systems - cabling, devices and programming by Owner's vendor.",
+        "Fire alarm sprinkler monitoring conduit and boxes per the FA sheets."
+      ]
+    },
+    {
+      "title": "F. Project Coordination & Closeout",
+      "bullets": [
+        "Coordination with the General Contractor, other trades and the serving utility; arc-flash labeling, firestopping, conductor color coding, junction box labeling and typed panel directories.",
+        "As-built drawings, O&M manuals, one-year warranty on labor and materials, and all required inspections and testing."
+      ]
+    }
+  ],
+  "exclusions": [
+    "Tele/data, security and sound system cabling, devices and programming by others. EC provides conduit and boxes only.",
+    "Utility company transformer, primary-side work and utility fees are excluded. EC provides 8' of conductor slack at the transformer secondary.",
+    "Concrete pole bases, trenching backfill compaction testing, painting, patching and finish restoration are excluded.",
+    "This proposal is based on the equipment quantities, ratings and configuration shown in the package dated 07.15.26. Revisions to quantities, ratings or locations will be addressed by Change Order.",
+    "Temporary power beyond a single temporary service pole is excluded.",
+    "Items not shown on the electrical drawings at the time of bid are excluded."
+  ],
+  "takeoff": [
+    {
+      "name": "Service & Distribution",
+      "items": [
+        {
+          "item": "1.1",
+          "description": "800A 120/208V 3PH 4W service entrance assembly, NEMA 3R (ECFECI)",
+          "unit": "EA",
+          "qty": 1,
+          "conf": "FIRM",
+          "source": "E1.6 Riser Diagram",
+          "furnish_by": "APT (ECFECI)"
+        },
+        {
+          "item": "1.2",
+          "description": "225A MLO branch panelboard, 42-circuit (ECFECI)",
+          "unit": "EA",
+          "qty": 4,
+          "conf": "FIRM",
+          "source": "E1.1 Panel Schedules",
+          "furnish_by": "APT (ECFECI)"
+        },
+        {
+          "item": "1.3",
+          "description": "Service feeder, 3-1/2\" conduit, 4#300 KCMIL + #2/0 GND",
+          "unit": "SET",
+          "qty": 3,
+          "conf": "FIRM",
+          "source": "E1.6 Feeder Schedule",
+          "furnish_by": ""
+        }
+      ]
+    },
+    {
+      "name": "Interior Lighting",
+      "items": [
+        {
+          "item": "2.1",
+          "description": "Type A - 2x4 LED recessed troffer",
+          "unit": "EA",
+          "qty": 13,
+          "conf": "FIRM",
+          "source": "E2.0 Luminaire Schedule",
+          "furnish_by": ""
+        },
+        {
+          "item": "2.2",
+          "description": "Type AE - 2x4 LED troffer w/ emergency battery pack",
+          "unit": "EA",
+          "qty": 7,
+          "conf": "FIRM",
+          "source": "E2.0 Luminaire Schedule",
+          "furnish_by": ""
+        }
+      ]
+    },
+    {
+      "name": "Exterior / Site Lighting",
+      "items": [
+        {
+          "item": "3.1",
+          "description": "Type J1 - LED area light, 20' mounting height",
+          "unit": "EA",
+          "qty": 6,
+          "conf": "FIRM",
+          "source": "E2.4 Site Photometric",
+          "furnish_by": ""
+        },
+        {
+          "item": "3.2",
+          "description": "17' square steel pole on 3' concrete base (base by others)",
+          "unit": "EA",
+          "qty": 19,
+          "conf": "FIRM",
+          "source": "E2.4 Pole Schedule",
+          "furnish_by": ""
+        }
+      ]
+    },
+    {
+      "name": "Lighting Controls",
+      "items": [
+        {
+          "item": "4.1",
+          "description": "Ceiling-mount occupancy sensor w/ power pack",
+          "unit": "EA",
+          "qty": 20,
+          "conf": "FIRM",
+          "source": "E2.1 Control Plan",
+          "furnish_by": ""
+        }
+      ]
+    },
+    {
+      "name": "Branch Power",
+      "items": [
+        {
+          "item": "5.1",
+          "description": "20A 125V duplex receptacle, spec grade",
+          "unit": "EA",
+          "qty": 125,
+          "conf": "FIRM",
+          "source": "E1.0 Receptacle Schedule",
+          "furnish_by": ""
+        },
+        {
+          "item": "5.2",
+          "description": "Equipment connection - kitchen equipment schedule",
+          "unit": "EA",
+          "qty": 44,
+          "conf": "FIRM",
+          "source": "E1.3 Kitchen Equip. Schedule",
+          "furnish_by": ""
+        }
+      ]
+    },
+    {
+      "name": "Site / Underground / Allowances",
+      "items": [
+        {
+          "item": "6.1",
+          "description": "Service feeder allowance - transformer secondary to MDP",
+          "unit": "LF",
+          "qty": 160,
+          "conf": "FIRM",
+          "source": "Allowance per Section D",
+          "furnish_by": ""
+        }
+      ]
+    },
+    {
+      "name": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+      "items": [
+        {
+          "item": "7.1",
+          "description": "3/4\" EMT + 4-11/16\" box w/ pull string, data outlet",
+          "unit": "EA",
+          "qty": 18,
+          "conf": "FIRM",
+          "source": "E2.1 Data Plan",
+          "furnish_by": ""
+        }
+      ]
+    },
+    {
+      "name": "Grounding",
+      "items": [
+        {
+          "item": "8.1",
+          "description": "5/8\" x 10' copper-clad ground rod w/ exothermic connection",
+          "unit": "EA",
+          "qty": 3,
+          "conf": "FIRM",
+          "source": "E1.6 Grounding Detail",
+          "furnish_by": ""
+        }
+      ]
+    }
+  ],
+  "terms": [
+    "Based on electrical drawings and SOW dated 07.15.2026. All work per NEC 2020, FBC 2023, and FFPC 2021.",
+    "Price valid for 30 days from date of proposal. Material costs subject to market fluctuation at time of order.",
+    "A deposit of 25% of the contract value is required upon execution of this agreement to initiate material procurement.",
+    "Lighting package to be procured through the Southern Lighting Source national account. EC to receive, inventory, and install.",
+    "Equipment lead times subject to market and manufacturer availability. APT not responsible for vendor delays.",
+    "All changes to the approved scope require a written Change Order signed by the Owner prior to proceeding.",
+    "Painting, patching, concrete cutting, and finish restoration are excluded from this scope.",
+    "Low-voltage cabling, devices, and programming (security, tele/data, sound/intercom) by Owner's vendor. EC provides conduit and boxes only.",
+    "Utility company transformer, primary-side work, and utility fees excluded. EC provides 8' conductor slack at transformer secondary.",
+    "All work performed under valid permits in compliance with local, state, and AHJ requirements."
+  ],
+  "alternates": [
+    "VE Option 1 - Substitute aluminum service feeders in lieu of copper: DEDUCT $6,400.00."
+  ],
+  "takeoff_notes": [
+    "Confidence key: FIRM = read directly off a schedule, panel or riser. APPROX = visual symbol count from plans, stated range. VERIFY = partial or inferred, confirm before pricing.",
+    "Panel circuit summary: A 54 ckt / B 54 / C 72 / K 42 / L 42 / S 42 - totals reconcile to the 125 receptacle and 44 kitchen equipment rows.",
+    "HVAC reconciliation: 3 RTUs + 6 remote condensers on the roof plan match the 17 HVAC/R connections in the equipment power schedule.",
+    "Emergency-battery fixtures are carried as separate rows from their standard counterparts (battery-pack premium)."
+  ]
+}

@@ -24,11 +24,10 @@ interface Props {
   elecProposalCount?: number;
   genProjectCount?: number;
   elecProjectCount?: number;
-  newIncoming?: number;
+  intakeUnread?: number;
   followupCount?: number;
   onNewProposal?: () => void;
   onNewBid?: () => void;
-  onOpenImport?: () => void;
   bids?: Bid[];
   gens?: Gen[];
   showToast?: (t: { title: string; sub?: string }) => void;
@@ -62,9 +61,9 @@ const TB: Record<string, { title: string; sub: string | null }> = {
 
 export default function AppShell({
   view, onNav, onLogout, children,
-  genProposalCount = 0, elecProposalCount = 0, genProjectCount = 0, elecProjectCount = 0, newIncoming = 0,
+  genProposalCount = 0, elecProposalCount = 0, genProjectCount = 0, elecProjectCount = 0, intakeUnread = 0,
   followupCount = 0,
-  onNewProposal, onNewBid, onOpenImport,
+  onNewProposal, onNewBid,
   bids = [], gens = [], showToast,
 }: Props) {
   const user = useUser();
@@ -94,7 +93,7 @@ export default function AppShell({
     { group: '', items: [
       { id: 'dashboard',  label: 'Home',       icon: 'dashboard' },
       { id: 'generators', label: 'Generators', icon: 'bolt', tone: 'amber', count: genProposalCount },
-      { id: 'electrical', label: 'Electrical', icon: 'pipeline', count: elecProposalCount + newIncoming },
+      { id: 'electrical', label: 'Electrical', icon: 'pipeline', count: elecProposalCount + intakeUnread },
     ]},
     { group: 'Workspace', items: [
       { id: 'contacts',  label: 'Contacts',   icon: 'users' },
@@ -132,13 +131,7 @@ export default function AppShell({
     if (view === 'generators')
       return <button className="btn amber" onClick={onNewProposal}><Icon name="plus" size={16} stroke={2.4}/>New Proposal</button>;
     if (view === 'electrical')
-      return <>
-        <button className="btn ghost" onClick={onOpenImport} style={{ position: 'relative' }}>
-          <Icon name="cloud" size={16} stroke={1.9}/>Import from OneDrive
-          {newIncoming > 0 && <span className="btn-badge">{newIncoming}</span>}
-        </button>
-        <button className="btn" onClick={onNewBid}><Icon name="plus" size={16} stroke={2.4}/>New Bid</button>
-      </>;
+      return <button className="btn" onClick={onNewBid}><Icon name="plus" size={16} stroke={2.4}/>New Bid</button>;
     if (view === 'comms')
       return <button className="btn ghost"><Icon name="plus" size={16} stroke={2}/>Add Note</button>;
     return null;
