@@ -318,6 +318,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // proposal never downloads silently; this panel tells the estimator
   // exactly what to fix.
   const [verifyFailures, setVerifyFailures] = useState<VerifyFailure[] | null>(null);
+  // FIX-12 — downloadDocx had no busy-state, unlike its xlsx/prebid
+  // siblings, so a double-click could double-file the same generation.
+  const [docxBusy, setDocxBusy] = useState(false);
   const [xlsxBusy, setXlsxBusy] = useState(false);
   const [prebidBusy, setPrebidBusy] = useState(false);
   const [prebidResult, setPrebidResult] = useState<{ scopeDocumentId: string | null; takeoffDocumentId: string | null } | null>(null);
@@ -777,6 +780,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
   const downloadDocx = async () => {
     setVerifyFailures(null);
+    setDocxBusy(true);
     try {
       const response = await api.get(`/preconstruction/${bid.id}/generate-docx`, { responseType: 'blob' });
       triggerDownload(
@@ -787,6 +791,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       const { sub, failures } = await readBlobError(err, 'Could not generate the proposal document');
       if (failures?.length) setVerifyFailures(failures);
       showToast({ title: 'Download failed', sub });
+    } finally {
+      setDocxBusy(false);
     }
   };
 
@@ -2008,8 +2014,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       : (hasProposal || propParseError || agent4Status === 'error') ? '↺ Re-run Agent 4' : 'Run Agent 4 — Generate Proposal'}
                   </button>
                   {hasProposal && (
-                    <button className="btn" onClick={downloadDocx} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
-                      <Icon name="doc" size={14} stroke={1.9}/> Download .docx
+                    <button className="btn" onClick={downloadDocx} disabled={docxBusy} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
+                      <Icon name="doc" size={14} stroke={1.9}/> {docxBusy ? 'Building…' : 'Download .docx'}
                     </button>
                   )}
                   {hasProposal && (
