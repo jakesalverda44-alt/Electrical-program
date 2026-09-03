@@ -403,15 +403,17 @@ function toStr(v: unknown): string {
 }
 
 /**
- * Kept working during the Task 5 transition: maps the pre-Phase-3 Agent 4
- * output shape onto BidData via legacyProposalToBidData (Task 5.3's single
- * adapter — no duplicate mapping logic here), applies the same bid-row/
- * validated-price precedence generate-docx has always used, and renders
- * through the exact same renderBidDocx used for the new shape.
+ * Maps the pre-Phase-3 Agent 4 output shape onto a full BidData via
+ * legacyProposalToBidData (Task 5.3's single adapter — no duplicate mapping
+ * logic here) and applies the bid-row/validated-price precedence
+ * generate-docx has always used. Exported (Task 6) so the route can compose
+ * the BidData for a legacy-shape row the same way it does for the new shape
+ * — one compose→render→verify→file pipeline regardless of which shape
+ * agent4_output is in.
  */
-export async function buildProposalDocx(data: ProposalJSON, bidMeta: BidMeta = {}): Promise<Buffer> {
+export function legacyProposalWithBidMeta(data: ProposalJSON, bidMeta: BidMeta = {}): BidData {
   const partial = legacyProposalToBidData(data as LegacyProposalJSON);
-  const bidData: BidData = {
+  return {
     project_slug: partial.project_slug || 'Project',
     location_slug: partial.location_slug || 'FL',
     date: partial.date || new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
@@ -429,5 +431,13 @@ export async function buildProposalDocx(data: ProposalJSON, bidMeta: BidMeta = {
     takeoff: partial.takeoff || [],
     terms: partial.terms || [],
   };
-  return renderBidDocx(bidData);
+}
+
+/**
+ * Kept working during the Task 5 transition: maps the pre-Phase-3 Agent 4
+ * output shape onto BidData and renders it through the exact same
+ * renderBidDocx used for the new shape.
+ */
+export async function buildProposalDocx(data: ProposalJSON, bidMeta: BidMeta = {}): Promise<Buffer> {
+  return renderBidDocx(legacyProposalWithBidMeta(data, bidMeta));
 }

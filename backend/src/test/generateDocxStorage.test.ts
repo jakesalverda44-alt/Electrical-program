@@ -28,10 +28,30 @@ describe('generate-docx — storage failure does not block the download', () => 
     const bid = await request(app).post('/api/bids').set(auth(u.token))
       .send({ name: `StorageFail ${Date.now()}`, gc: 'G' }).expect(200);
     const bidId = bid.body.id as string;
+    // Task 6 — generate-docx hard-gates on verifyBidDocx, so agent4_output
+    // must be gate-passing content (Agent 4's new data-only shape) rather
+    // than '{}', or the route 422s before ever reaching storeDocument.
+    const agent4Output = JSON.stringify({
+      sections: [
+        { title: 'A. Service & Distribution', bullets: [
+          'Service entrance assembly and MDP (ECFECI).',
+          'Distribution gear (ECFECI): panels A, B.',
+        ] },
+        { title: 'B. Branch Power', bullets: ['Branch circuit wiring per plan.'] },
+        { title: 'C. Lighting & Controls', bullets: [
+          'Complete lighting package (ECFECI) — Southern Lighting Source.',
+        ] },
+        { title: 'D. Site Lighting, Underground Work & Allowances', bullets: ['Site lighting per photometric plan.'] },
+      ],
+      exclusions: ['Standard exclusions apply.'],
+      takeoff: [{ name: 'Service & Distribution', items: [
+        { item: '1.1', description: 'Panel (ECFECI)', unit: 'EA', qty: 1, source: 'E1.0 Riser' },
+      ] }],
+    });
     await pool.query(
       `INSERT INTO takeoff_results (bid_id, agent2_output, agent4_output, agent4_price, agent4_status)
-       VALUES ($1,'{}','{}',425000,'complete')`,
-      [bidId]
+       VALUES ($1,'{}',$2,425000,'complete')`,
+      [bidId, agent4Output]
     );
 
     const res = await request(app)

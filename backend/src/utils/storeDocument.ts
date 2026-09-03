@@ -17,6 +17,9 @@ export const CATEGORY_TO_FOLDER: Record<string, string> = {
   invoice:        'drive_contracts_folder_id',
   proposal:       'drive_estimates_folder_id',
   takeoff:        'drive_estimates_folder_id',
+  // Phase 3 Task 6 — the composed BidData filed alongside the docx/xlsx so
+  // the desktop APT_Bid_System and the CRM stay interchangeable.
+  bid_data:       'drive_estimates_folder_id',
   cost_breakdown: 'drive_estimates_folder_id',
   prebid_takeoff: 'drive_estimates_folder_id',
   prebid_scope:   'drive_estimates_folder_id',

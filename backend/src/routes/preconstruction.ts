@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Response } from 'express';
 import { pool } from '../db/pool';
 import { requireAuth, requireAIPermission, AuthRequest, ownScopeId } from '../middleware/auth';
 import { loadAccessibleBid } from '../utils/ownership';
@@ -6,7 +6,7 @@ import { getSetting } from '../db/getSetting';
 import Anthropic from '@anthropic-ai/sdk';
 import AdmZip from 'adm-zip';
 import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM, AGENT4_SYSTEM, PREBID_COMPARE_SYSTEM } from '../ai/prompts';
-import { buildProposalDocx, ProposalJSON, renderBidDocx } from '../utils/proposalDocx';
+import { buildProposalDocx, ProposalJSON, renderBidDocx, legacyProposalWithBidMeta } from '../utils/proposalDocx';
 import { callWithRetry } from '../ai/retry';
 import { parseAIJSON, extractJSONText } from '../ai/json';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -41,7 +41,11 @@ import { parseMoney } from '../utils/money';
 import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
-import { composeBidData, ComposeBidRow } from '../bidstd/composeBidData';
+import { composeBidData, ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
+import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
+import { renderPrebidScopeDocx, prebidScopeFilename } from '../bidstd/prebidScopeDocx';
+import { verifyBidDocx, verifyBidText } from '../bidstd/verifyBid';
+import { BidData } from '../bidstd/bidData';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
 const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'warehouse', 'restaurant', 'medical', 'retail', 'other'];
@@ -1682,22 +1686,30 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   })().catch(err => logger.error({ err, bidId }, '[agent4] Uncaught background error'));
 }));
 
-// GET generate-docx — build and return the .docx proposal file
-router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res) => {
-  const { bidId } = req.params;
-  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+// ── Task 6: shared BidData composition ──────────────────────────────────────
+// generate-docx, generate-takeoff-xlsx and generate-prebid-package all need
+// the SAME composed BidData for a bid — one bid_data.json feeds every
+// deterministic builder, exactly like the desktop APT_Bid_System. This is
+// the one place that loads agent4_output + the bid row, detects the shape
+// (Task 5's new data-only contract vs. a pre-Phase-3 legacy row), and
+// composes it — no response writing here, so each route decides its own
+// status codes for a given failure.
+type ComposeCurrentBidDataResult =
+  | { ok: true; bidData: BidData; bidName: string; asciiName: string }
+  | { ok: false; status: number; error: string };
 
+async function composeCurrentBidData(bidId: string): Promise<ComposeCurrentBidDataResult> {
   const { rows: trRows } = await pool.query(
     'SELECT agent4_output, agent4_price FROM takeoff_results WHERE bid_id=$1',
     [bidId]
   );
   if (!trRows.length || !trRows[0].agent4_output) {
-    return res.status(404).json({ error: 'No proposal data found. Run Agent 4 first.' });
+    return { ok: false, status: 404, error: 'No proposal data found. Run Agent 4 first.' };
   }
 
   // agent4_price NUMERIC(12,2) is the authoritative, DB-validated price (see
   // run-agent4's parseMoney gate) — format it here rather than trusting whatever
-  // string the LLM echoed back into data.totalPrice.
+  // string the LLM echoed back into the data blob.
   const rawPrice = trRows[0].agent4_price as string | number | null;
   const priceNum = rawPrice === null || rawPrice === undefined ? null : Number(rawPrice);
   const formattedPrice = priceNum !== null && Number.isFinite(priceNum)
@@ -1706,71 +1718,113 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
 
   const raw = trRows[0].agent4_output as string;
   const parsed = parseAIJSON(raw);
-  if (!parsed) return res.status(422).json({ error: 'Proposal data could not be parsed. Re-run Agent 4 to regenerate.' });
+  if (!parsed) return { ok: false, status: 422, error: 'Proposal data could not be parsed. Re-run Agent 4 to regenerate.' };
 
-  const { rows: bidRows } = await pool.query(
-    'SELECT name, loc, gc, contact, sq_ft, job_number FROM bids WHERE id=$1 AND deleted_at IS NULL',
-    [bidId]
-  );
+  const [{ rows: bidRows }, { rows: estRows }] = await Promise.all([
+    pool.query(
+      'SELECT name, loc, gc, contact, sq_ft, job_number FROM bids WHERE id=$1 AND deleted_at IS NULL',
+      [bidId]
+    ),
+    pool.query('SELECT line_items FROM bid_estimates WHERE bid_id=$1', [bidId]),
+  ]);
   const bid = bidRows[0] as { name?: string; loc?: string; gc?: string; contact?: string; sq_ft?: number | string | null; job_number?: string | null } | undefined;
   const bidName = bid?.name ?? bidId;
   // HTTP headers must be Latin-1. Strip any non-ASCII (em dashes, accents, etc.)
   // from the filename or res.setHeader throws ERR_INVALID_CHAR.
   const asciiName = bidName.replace(/[^\x20-\x7E]/g, '').trim() || 'proposal';
-  const filename = `Proposal - ${asciiName}.docx`.replace(/[<>:"/\\|?*\r\n]/g, '-');
+  // Phase 2's saved per-item confidence (bid_estimates.line_items) — the
+  // authority composeBidData prefers over whatever Agent 4 itself echoed.
+  // Harmless to always pass through: neither GC renderer (docx/xlsx) ever
+  // surfaces `conf`, only the pre-bid xlsx does.
+  const savedLineItems = (estRows[0]?.line_items ?? []) as SavedConfidenceItem[];
+
+  let bidData: BidData;
+  if (isAgent4Shape(parsed)) {
+    if (!formattedPrice) {
+      return { ok: false, status: 422, error: 'No validated price on file for this proposal. Re-run Agent 4.' };
+    }
+    const bidRow: ComposeBidRow = {
+      name: bid?.name, loc: bid?.loc, gc: bid?.gc, contact: bid?.contact,
+      sq_ft: bid?.sq_ft ?? null, job_number: bid?.job_number ?? null,
+    };
+    const { data, jobNumberGenerated } = composeBidData(bidRow, parsed as Agent4Output, formattedPrice, { savedLineItems });
+    if (jobNumberGenerated) {
+      // composeBidData is pure and never writes to the DB — persist the
+      // freshly-generated job number so it's stable on every future
+      // regeneration of this bid's documents.
+      await pool.query('UPDATE bids SET job_number=$2 WHERE id=$1 AND deleted_at IS NULL', [bidId, data.job_number]);
+    }
+    bidData = data;
+  } else {
+    // The bid record is the authoritative source for the project name — the
+    // stored data blob's own projectName/gcName are ignored in favor of what
+    // the estimator entered. Same precedence pattern either shape.
+    bidData = legacyProposalWithBidMeta(parsed as unknown as ProposalJSON, {
+      projectName: bid?.name,
+      projectAddress: bid?.loc,
+      gcName: bid?.gc,
+      gcContact: bid?.contact,
+      totalPrice: formattedPrice,
+    });
+  }
+
+  return { ok: true, bidData, bidName, asciiName };
+}
+
+/** Flatten every takeoff item's text fields — the pre-bid scope docx never
+ *  renders the takeoff table, so its own placeholder scan can't see this
+ *  content; folded into the same verifyBidText pass so a stray "[BRACKET]"
+ *  in a takeoff item's description/source still gates the pre-bid package. */
+function takeoffAsText(bidData: BidData): string {
+  return bidData.takeoff
+    .flatMap(cat => [
+      cat.name,
+      ...cat.items.flatMap(it => [it.item, it.description, it.unit, String(it.qty ?? ''), it.source, it.conf, it.furnish_by].filter(Boolean)),
+    ])
+    .join('\n');
+}
+
+// GET generate-docx — build and return the .docx proposal file
+router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+
+  const loaded = await composeCurrentBidData(bidId);
+  if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error });
+  const { bidData, bidName, asciiName } = loaded;
 
   let buf: Buffer;
   try {
-    // Task 5 — Agent 4's new data-only contract (sections[]/takeoff[]) is
-    // composed with the bid row (project name/address/GC/contact, same
-    // authority as the legacy path below) and the validated price, then
-    // rendered through the standard renderer. A pre-Phase-3 row (old
-    // scopeOfWork shape) still renders via the legacy adapter — the bid-row/
-    // validated-price precedence is identical either way.
-    if (isAgent4Shape(parsed)) {
-      if (!formattedPrice) {
-        return res.status(422).json({ error: 'No validated price on file for this proposal. Re-run Agent 4.' });
-      }
-      const bidRow: ComposeBidRow = {
-        name: bid?.name, loc: bid?.loc, gc: bid?.gc, contact: bid?.contact,
-        sq_ft: bid?.sq_ft ?? null, job_number: bid?.job_number ?? null,
-      };
-      const { data, jobNumberGenerated } = composeBidData(bidRow, parsed as Agent4Output, formattedPrice);
-      if (jobNumberGenerated) {
-        // composeBidData is pure and never writes to the DB — persist the
-        // freshly-generated job number back so it's stable on every future
-        // regeneration of this bid's documents.
-        await pool.query('UPDATE bids SET job_number=$2 WHERE id=$1 AND deleted_at IS NULL', [bidId, data.job_number]);
-      }
-      buf = await renderBidDocx(data);
-    } else {
-      // The bid record is the authoritative source for the project name — the
-      // stored data blob's own projectName/gcName are ignored in favor of what
-      // the estimator entered.
-      buf = await buildProposalDocx(parsed as unknown as ProposalJSON, {
-        projectName: bid?.name,
-        projectAddress: bid?.loc,
-        gcName: bid?.gc,
-        gcContact: bid?.contact,
-        totalPrice: formattedPrice,
-      });
-    }
+    buf = await renderBidDocx(bidData);
   } catch (err) {
-    logger.error({ err, bidId }, '[generate-docx] document build threw');
+    logger.error({ err, bidId }, '[generate-docx] renderBidDocx threw');
     return res.status(500).json({ error: `Document build failed: ${err instanceof Error ? err.message : String(err)}` });
   }
 
-  // File the generated proposal so the Files tab keeps a version history — every
-  // generate-docx call is a new row (replaceExisting is intentionally omitted).
-  // storeDocument (div:'elec', category:'proposal') also uploads these same bytes
-  // to the bid's drive_estimates_folder_id via the same uploadFile helper the
-  // fire-and-forget Scope JSON upload above uses, so this one call covers both
-  // "file it" and "put it in Drive" — a second, separate Drive upload of the
-  // identical buffer would just leave two copies of the same file in that folder.
-  // Storage failure must not block the download — losing the download is worse
-  // than a missed filing (same trade-off as import-prebid's keep()).
+  // Task 6 — hard verify gate: on failure, file nothing and never send the
+  // docx. Mirrors verify.sh v4's "exits non-zero — do not deliver a file
+  // that failed it."
+  const verifyResult = await verifyBidDocx(buf, { kind: 'gc' });
+  if (!verifyResult.pass) {
+    return res.status(422).json({
+      error: 'This proposal did not pass the bid-standard verification gate.',
+      failures: verifyResult.failures,
+    });
+  }
+
+  const filename = `Proposal - ${asciiName}.docx`.replace(/[<>:"/\\|?*\r\n]/g, '-');
   const dateStr = new Date().toISOString().split('T')[0];
   const storageFilename = `Proposal - ${asciiName} - ${dateStr}.docx`;
+
+  // File everything: the docx (version history — every generate-docx call is
+  // a new row, replaceExisting intentionally omitted, same as before), the
+  // composed bid_data.json (so the desktop APT_Bid_System and the CRM stay
+  // interchangeable — either can read the other's bid_data.json), and the
+  // PDF when soffice produced one. storeDocument (div:'elec') also uploads
+  // to Drive via the same uploadFile helper, so this covers both "file it"
+  // and "put it in Drive." Storage failure must never block the download —
+  // losing the download is worse than a missed filing (same trade-off as
+  // import-prebid's keep()).
   try {
     await storeDocument({
       file: {
@@ -1787,13 +1841,204 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
       uploadedBy: req.user!.name,
     });
   } catch (err) {
-    logger.error({ err, bidId }, '[generate-docx] storeDocument failed');
+    logger.error({ err, bidId }, '[generate-docx] storeDocument (proposal) failed');
+  }
+
+  try {
+    const bidDataJson = Buffer.from(JSON.stringify(bidData, null, 2));
+    const bidDataFilename = `${asciiName}_bid_data.json`;
+    await storeDocument({
+      file: {
+        buffer: bidDataJson,
+        originalname: bidDataFilename,
+        mimetype: 'application/json',
+        size: bidDataJson.length,
+      } as Express.Multer.File,
+      linkedId: bidId,
+      linkedName: bidName,
+      div: 'elec',
+      category: 'bid_data',
+      displayName: bidDataFilename,
+      uploadedBy: req.user!.name,
+    });
+  } catch (err) {
+    logger.error({ err, bidId }, '[generate-docx] storeDocument (bid_data) failed');
+  }
+
+  if (verifyResult.pdf) {
+    try {
+      const pdfFilename = `Proposal - ${asciiName} - ${dateStr}.pdf`;
+      await storeDocument({
+        file: {
+          buffer: verifyResult.pdf,
+          originalname: pdfFilename,
+          mimetype: 'application/pdf',
+          size: verifyResult.pdf.length,
+        } as Express.Multer.File,
+        linkedId: bidId,
+        linkedName: bidName,
+        div: 'elec',
+        category: 'proposal',
+        displayName: pdfFilename,
+        uploadedBy: req.user!.name,
+      });
+    } catch (err) {
+      logger.error({ err, bidId }, '[generate-docx] storeDocument (pdf) failed');
+    }
   }
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Content-Length', buf.length);
   res.send(buf);
+}));
+
+// GET generate-takeoff-xlsx — GC-mode quantity takeoff from the same
+// composed BidData used by generate-docx, so the two documents can never
+// drift apart (Task 3's takeoffXlsx.ts).
+router.get('/:bidId/generate-takeoff-xlsx', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+
+  const loaded = await composeCurrentBidData(bidId);
+  if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error });
+  const { bidData, bidName } = loaded;
+
+  let xlsx: Awaited<ReturnType<typeof renderTakeoffXlsx>>;
+  try {
+    xlsx = await renderTakeoffXlsx(bidData, { prebid: false });
+  } catch (err) {
+    logger.error({ err, bidId }, '[generate-takeoff-xlsx] renderTakeoffXlsx threw');
+    return res.status(500).json({ error: `Takeoff build failed: ${err instanceof Error ? err.message : String(err)}` });
+  }
+
+  try {
+    await storeDocument({
+      file: {
+        buffer: xlsx.buffer,
+        originalname: xlsx.filename,
+        mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        size: xlsx.buffer.length,
+      } as Express.Multer.File,
+      linkedId: bidId,
+      linkedName: bidName,
+      div: 'elec',
+      category: 'takeoff',
+      displayName: xlsx.filename,
+      uploadedBy: req.user!.name,
+    });
+  } catch (err) {
+    logger.error({ err, bidId }, '[generate-takeoff-xlsx] storeDocument failed');
+  }
+
+  const asciiFilename = xlsx.filename.replace(/[^\x20-\x7E]/g, '').trim() || 'takeoff.xlsx';
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${asciiFilename}"`);
+  res.setHeader('Content-Length', xlsx.buffer.length);
+  res.send(xlsx.buffer);
+}));
+
+// POST generate-prebid-package — ports build_prebid.js + build_takeoff.py
+// --prebid: the internal scope docx (PRE-BID PACKAGE — INTERNAL USE banner,
+// To Chris/From Jake header, no price/signature/closing) and the confidence-
+// coded pre-bid xlsx, from the SAME composed BidData. Filed under the
+// existing prebid_scope / prebid_takeoff categories (revisions overwrite in
+// place, same convention as import-prebid). Verified with kind:'internal'
+// (placeholders still gate; banned-language/SF/ECFECI relax — pre-bid scope
+// legitimately carries estimator language per PROJECT_INSTRUCTIONS §14).
+router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { bidId } = req.params;
+  const bid = await loadAccessibleBid(res, req.user!, bidId);
+  if (!bid) return;
+
+  const loaded = await composeCurrentBidData(bidId);
+  if (!loaded.ok) {
+    return res.status(400).json({ error: `Cannot generate a pre-bid package: ${loaded.error}` });
+  }
+  const { bidData, bidName } = loaded;
+
+  if (!bidData.sections.length) {
+    return res.status(400).json({ error: 'No scope data to build a pre-bid package from. Run Agent 4 first.' });
+  }
+
+  let scopeDocx: Buffer;
+  try {
+    scopeDocx = await renderPrebidScopeDocx(bidData);
+  } catch (err) {
+    logger.error({ err, bidId }, '[generate-prebid-package] renderPrebidScopeDocx threw');
+    return res.status(500).json({ error: `Pre-bid scope build failed: ${err instanceof Error ? err.message : String(err)}` });
+  }
+
+  let xlsx: Awaited<ReturnType<typeof renderTakeoffXlsx>>;
+  try {
+    xlsx = await renderTakeoffXlsx(bidData, { prebid: true });
+  } catch (err) {
+    logger.error({ err, bidId }, '[generate-prebid-package] renderTakeoffXlsx threw');
+    return res.status(500).json({ error: `Pre-bid takeoff build failed: ${err instanceof Error ? err.message : String(err)}` });
+  }
+
+  // Verify the scope docx's own text PLUS every takeoff item's text fields
+  // (the scope docx never renders the takeoff table, so its own extracted
+  // text can't see them) in one pass — verifyBidText is the pure core
+  // (Task 4), reused directly here rather than verifyBidDocx (which is
+  // docx/PDF-specific and can't read an xlsx).
+  const combinedText = `${extractDocxText(scopeDocx)}\n${takeoffAsText(bidData)}`;
+  const verifyResult = verifyBidText(combinedText, 'internal');
+  if (!verifyResult.pass) {
+    return res.status(422).json({
+      error: 'The pre-bid package did not pass verification.',
+      failures: verifyResult.failures,
+    });
+  }
+
+  const scopeFilename = prebidScopeFilename(bidData);
+  let scopeDoc: { id: string } | null = null;
+  try {
+    scopeDoc = await storeDocument({
+      file: {
+        buffer: scopeDocx,
+        originalname: scopeFilename,
+        mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        size: scopeDocx.length,
+      } as Express.Multer.File,
+      linkedId: bidId,
+      linkedName: bidName,
+      div: 'elec',
+      category: 'prebid_scope',
+      displayName: scopeFilename,
+      uploadedBy: req.user!.name,
+      replaceExisting: true,
+    });
+  } catch (err) {
+    logger.error({ err, bidId }, '[generate-prebid-package] storeDocument (scope) failed');
+  }
+
+  let takeoffDoc: { id: string } | null = null;
+  try {
+    takeoffDoc = await storeDocument({
+      file: {
+        buffer: xlsx.buffer,
+        originalname: xlsx.filename,
+        mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        size: xlsx.buffer.length,
+      } as Express.Multer.File,
+      linkedId: bidId,
+      linkedName: bidName,
+      div: 'elec',
+      category: 'prebid_takeoff',
+      displayName: xlsx.filename,
+      uploadedBy: req.user!.name,
+      replaceExisting: true,
+    });
+  } catch (err) {
+    logger.error({ err, bidId }, '[generate-prebid-package] storeDocument (takeoff) failed');
+  }
+
+  if (!scopeDoc && !takeoffDoc) {
+    return res.status(500).json({ error: 'Pre-bid package built but could not be filed. Try again.' });
+  }
+
+  res.json({ scopeDocumentId: scopeDoc?.id ?? null, takeoffDocumentId: takeoffDoc?.id ?? null });
 }));
 
 export default router;

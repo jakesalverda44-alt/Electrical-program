@@ -45,7 +45,10 @@ describe('generate-docx — confidence never leaks into the GC-facing document',
       openingStatement: 'The project is understood to be electrical work.',
       scopeOfWork: {
         standard6Bullets: ['All work per plan.'],
-        A_ServiceDistribution: ['Service entrance assembly and MDP (ECFECI).'],
+        A_ServiceDistribution: [
+          'Service entrance assembly and MDP (ECFECI).',
+          'Distribution gear (ECFECI): panels A, B, with feeders and disconnects throughout.',
+        ],
         B_BranchPower: ['Branch circuit wiring per plan.'],
         C_LightingControls: ['Complete lighting package (ECFECI).', 'Controls and testing.', 'LED fixtures per schedule.'],
         D_SiteLightingUnderground: ['Site lighting per allowance.'],
