@@ -405,7 +405,14 @@ router.post('/:id/send-proposal', requireAuth, async (req: AuthRequest, res) => 
   const html = buildBidSubmittalHtml({ bodyText, proposalLink: link });
 
   try {
-    await graphSendMail({ to, cc: cc.length ? cc : undefined, subject, html, attachments });
+    // FIX-5 (post-review) — buildBidSubmittalHtml already appends the
+    // template's own "Thanks, Jake Salverda / ... / 352-801-8997" sign-off
+    // (bidSubmittalEmail.ts's JAKE_SIGNATURE_LINES). Without
+    // appendSignature:false, graphSendMail tacks the branded HTML signature
+    // on again after it — two sign-offs in one email. leadFirstContact.ts's
+    // sends do this correctly; this call (and email-prebid-chris's draft,
+    // below) didn't.
+    await graphSendMail({ to, cc: cc.length ? cc : undefined, subject, html, attachments, appendSignature: false });
   } catch (err) {
     logger.error({ err, bidId: bid.id }, '[bids] send-proposal failed');
     return res.status(502).json({ error: 'Email delivery failed (Outlook). Try again or copy the proposal link.', link });
@@ -498,7 +505,10 @@ router.post('/:id/email-prebid-chris', requireAuth, async (req: AuthRequest, res
 
   let draft;
   try {
-    draft = await graphCreateDraft({ to, subject, html, attachments });
+    // FIX-5 (post-review) — buildPrebidChrisBodyHtml already ends with its
+    // own "Jake" sign-off; appendSignature:false stops the branded HTML
+    // signature from being appended a second time.
+    draft = await graphCreateDraft({ to, subject, html, attachments, appendSignature: false });
   } catch (err) {
     logger.error({ err, bidId: bid.id }, '[bids] email-prebid-chris draft failed');
     return res.status(502).json({ error: 'Could not create the draft. Check the mail configuration.' });

@@ -58,6 +58,16 @@ describe('buildBidSubmittalHtml', () => {
     expect(html).not.toContain('View and accept online');
   });
 
+  // FIX-5 (post-review) — the route sends this HTML with
+  // appendSignature:false (graphSendMail would otherwise tack the branded
+  // HTML signature on again after this). Locks that the built body's own
+  // template sign-off is genuinely the LAST thing in it, so there's nothing
+  // for a caller to accidentally duplicate a second sign-off onto.
+  it("ends with Jake's own template sign-off — nothing rendered after it", () => {
+    const html = buildBidSubmittalHtml({ bodyText: defaultSubmittalBodyText(BID), proposalLink: 'https://example.com/bp/abc123' });
+    expect(html.trim().endsWith('352-801-8997</div>')).toBe(true);
+  });
+
   // GUARD (Task 1.2): the built body must NEVER contain the bid amount, in
   // any of its usual formattings, even though a full bid row (amount and
   // all) is a valid input to every builder in this file.
@@ -89,6 +99,13 @@ describe('internal Chris email', () => {
     expect(html).toContain('Confidence coded — FIRM off the schedules, APPROX are symbol counts with ranges, VERIFY needs a second look.');
     expect(html).toContain('Notes at the bottom of the takeoff.');
     expect(html).toContain('Jake');
+  });
+
+  // FIX-5 (post-review) — same appendSignature:false rule as the GC email:
+  // the body's own "Jake" sign-off must be the last thing in it.
+  it("ends with Jake's own sign-off — nothing rendered after it", () => {
+    const html = buildPrebidChrisBodyHtml({ ...BID, planDate: '07.15.2026' });
+    expect(html.trim().endsWith('Jake</div>')).toBe(true);
   });
 
   // GUARD: same rule applies to the internal email — the template never
