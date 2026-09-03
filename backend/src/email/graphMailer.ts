@@ -98,14 +98,16 @@ export async function graphSendMail({ to, cc, subject, html, attachments, append
  * draft's id and webLink so the caller can surface an "open in Outlook" link. Same
  * recipients/subject/body/attachments handling as graphSendMail, including the signature.
  */
-export async function graphCreateDraft({ to, subject, html, attachments, appendSignature = true }: SendArgs): Promise<{ id: string; webLink: string }> {
+export async function graphCreateDraft({ to, cc, subject, html, attachments, appendSignature = true }: SendArgs): Promise<{ id: string; webLink: string }> {
   if (emailMuted()) {
     const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
-    logger.info({ to: toList, subject }, '[graphMailer] NO-OP draft (muted: NODE_ENV=test or EMAIL_DISABLED=true) — no draft created');
+    const ccList = cc ? (Array.isArray(cc) ? cc : [cc]).filter(Boolean) : [];
+    logger.info({ to: toList, cc: ccList, subject }, '[graphMailer] NO-OP draft (muted: NODE_ENV=test or EMAIL_DISABLED=true) — no draft created');
     return { id: 'noop-test-draft', webLink: '' };
   }
   const token = await getGraphToken();
   const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
+  const ccList = cc ? (Array.isArray(cc) ? cc : [cc]).filter(Boolean) : [];
 
   let content = html;
   const allAttachments: GraphAttachment[] = attachments ? [...attachments] : [];
@@ -120,6 +122,7 @@ export async function graphCreateDraft({ to, subject, html, attachments, appendS
     body: { contentType: 'HTML', content },
     toRecipients: toList.map(address => ({ emailAddress: { address } })),
   };
+  if (ccList.length) message.ccRecipients = ccList.map(address => ({ emailAddress: { address } }));
   if (allAttachments.length) message.attachments = allAttachments;
 
   // POSTing to /messages creates the message as a draft in the Drafts folder.

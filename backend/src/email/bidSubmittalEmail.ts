@@ -47,18 +47,18 @@ function nl2br(text: string): string {
 }
 
 /**
- * Build the final HTML actually sent to the GC. `bodyText` is whatever the
- * sender edited (defaults to defaultSubmittalBodyText's template); the
- * proposal link line and Jake's four-line signature are ALWAYS appended by
- * this function, never editable, so "View and accept online: <link>" and the
- * signature can never be stripped by an edit — see Task 1.3.
+ * Build the final HTML placed in the Outlook draft. `bodyText` is whatever
+ * the sender edited (defaults to defaultSubmittalBodyText's template);
+ * Jake's four-line signature is ALWAYS appended by this function, never
+ * editable, so it can never be stripped by an edit — see Task 1.3.
+ *
+ * Post-merge rework (2026-09-03) — GCs never e-sign a web page; they
+ * execute via contract/PO. The "View and accept online: <link>" line (and
+ * the public proposal_token link it pointed at) is gone entirely — see
+ * docs/superpowers/plans/2026-09-03-phase4-report.md's rework section.
  */
-export function buildBidSubmittalHtml(opts: { bodyText: string; proposalLink?: string }): string {
+export function buildBidSubmittalHtml(opts: { bodyText: string }): string {
   const blocks: string[] = [nl2br(opts.bodyText || '')];
-  if (opts.proposalLink) {
-    const escapedLink = escapeHtml(opts.proposalLink);
-    blocks.push(`View and accept online: <a href="${escapedLink}">${escapedLink}</a>`);
-  }
   blocks.push(['Thanks,', ...JAKE_SIGNATURE_LINES].map(escapeHtml).join('<br>'));
   return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.6;">${blocks.join('<br><br>')}</div>`;
 }
