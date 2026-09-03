@@ -33,6 +33,23 @@ interface Props {
 
 const STEP_ORDER: PcStepKey[] = ['intake','takeoff','scope','estimate','review','proposal','submitted'];
 
+// Fence-tolerant JSON parse for an agent's raw output (```json ... ``` or
+// bare) — shared by the Agent 2/3 structured-view render below and Task
+// 5.2's "Import from AI analysis" RFI button, rather than each keeping its
+// own copy of the same try/parse dance.
+function parseAgentJson(raw: string | undefined | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const trimmed = raw.trim();
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = fenced ? fenced[1].trim() : trimmed;
+    const start = candidate.indexOf('{');
+    return JSON.parse(start >= 0 ? candidate.slice(start) : candidate) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 // Parse Agent 2's "Scope of Work" prose into its lettered sections (A–H).
 // Tolerant of markdown headers (#, *, -) and ".", ")" after the letter.
 function parseScopeSections(agent2: string): Record<string, string> {
@@ -281,7 +298,7 @@ function parseAgent1Service(output: string): { voltage: string; ampacity: string
 export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings, embedded, onGoFiles }: Props) {
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
-  const [rfiSuggesting, setRfiSuggesting] = useState(false);
+  const [rfiSubmitting, setRfiSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fileObjectsRef = useRef<File[]>([]);
   const [aiResults, setAiResults] = useState<Record<string, unknown> | null>(null);
@@ -629,37 +646,62 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     showToast({ title: 'Project data confirmed', sub: 'Pricing is now unlocked' });
   };
 
-  const suggestRfis = () => {
-    const scopeText = Object.values(ws.scope).join(' ').toLowerCase();
-    const existing = new Set(ws.rfis.map(r => r.question.toLowerCase().slice(0, 30)));
-    const SUGGESTIONS: { keywords: string[]; question: string }[] = [
-      { keywords: ['service','distribution','panel','switchboard'],  question: 'What is the available fault current at the utility service point?' },
-      { keywords: ['service','distribution','panel','meter'],        question: 'Confirm service entrance rating and metering configuration with utility.' },
-      { keywords: ['lighting','fixture','led'],                      question: 'Are lighting fixture submittals required prior to rough-in?' },
-      { keywords: ['generator','transfer','ats'],                    question: 'What is the intended load profile for the generator? Confirm ATS type (open vs. closed transition).' },
-      { keywords: ['fire alarm','fa','smoke'],                       question: 'Who is the fire alarm system designer of record? Is a separate permit required?' },
-      { keywords: ['data','low voltage','cat','network'],            question: 'What is the structured cabling category requirement (Cat6 / Cat6A)? Who terminates?' },
-      { keywords: ['conduit','raceway','underground','duct bank'],   question: 'Confirm conduit type and burial depth requirements for underground runs.' },
-      { keywords: ['motor','mechanical','hvac','equipment'],         question: 'Confirm motor HP, voltage, and phase for all mechanical equipment to ensure proper circuit sizing.' },
-      { keywords: ['parking','site','exterior','pole'],              question: 'Is a photometric plan required for exterior lighting? Confirm pole base details.' },
-      { keywords: ['rough','inspection','trim'],                     question: 'What is the AHJ inspection sequence (rough-in, above-ceiling, final)?' },
-    ];
-    setRfiSuggesting(true);
-    setTimeout(() => {
-      const matched = SUGGESTIONS.filter(s =>
-        s.keywords.some(k => scopeText.includes(k)) &&
-        !existing.has(s.question.toLowerCase().slice(0, 30))
-      );
-      const toAdd = (matched.length ? matched : SUGGESTIONS.slice(0, 3)).slice(0, 5);
-      const newRfis = toAdd.map(s => ({ id: Date.now().toString() + Math.random(), question: s.question, submitted: false, answer: '' }));
-      set({ rfis: [...ws.rfis, ...newRfis] });
-      setRfiSuggesting(false);
-    }, 600);
+  // Phase 4 Task 5.2 — "Suggest RFIs" stops being fake: no more hardcoded
+  // keyword table / setTimeout theater. Imports Agent 2's real rfis[] (each
+  // {item, risk, question} — see takeoff_results.agent2_output, the same
+  // JSON this tab's Agent 2 structured view already renders), deduping
+  // against the existing workspace RFIs by question text (case/whitespace-
+  // insensitive) and against duplicates within the imported batch itself.
+  const importRfisFromAnalysis = () => {
+    const parsed = parseAgentJson(aiResults?.agent2_output as string | undefined);
+    const rawRfis = (parsed?.rfis as Array<Record<string, unknown>> | undefined) ?? [];
+    if (!rawRfis.length) {
+      showToast({ title: 'No AI analysis available', sub: 'Run the 3-agent analysis first.' });
+      return;
+    }
+    const norm = (s: string) => s.trim().toLowerCase();
+    const existing = new Set(ws.rfis.map(r => norm(r.question)));
+    const seen = new Set<string>();
+    const toAdd = rawRfis
+      .map(r => String(r.question ?? '').trim())
+      .filter(q => {
+        if (!q) return false;
+        const key = norm(q);
+        if (existing.has(key) || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    if (!toAdd.length) {
+      showToast({ title: 'Nothing new to import', sub: 'Every AI-suggested RFI is already on this list.' });
+      return;
+    }
+    const newRfis = toAdd.map(q => ({ id: Date.now().toString() + Math.random(), question: q, submitted: false, answer: '' }));
+    set({ rfis: [...ws.rfis, ...newRfis] });
+    showToast({ title: `Imported ${newRfis.length} RFI${newRfis.length === 1 ? '' : 's'}`, sub: 'From the AI analysis' });
   };
 
-  const submitRfi = (id: string) => {
-    set({ rfis: ws.rfis.map(r => r.id === id ? { ...r, submitted: true } : r) });
-    showToast({ title: 'RFI submitted', sub: 'GC will be notified' });
+  // Phase 4 Task 5.1 — RFI submit becomes real: drafts (never sends) an
+  // Outlook email to the bid contact listing every currently-open RFI, then
+  // marks them submitted only once the draft actually succeeds. Replaces the
+  // old per-row client-only "Submit" (fake "GC will be notified" toast).
+  const submitOpenRfis = async () => {
+    const openCount = ws.rfis.filter(r => !r.submitted).length;
+    if (!openCount) return;
+    setRfiSubmitting(true);
+    try {
+      const { data } = await api.post(`/preconstruction/${bid.id}/rfi-draft`);
+      set({ rfis: ws.rfis.map(r => (r.submitted ? r : { ...r, submitted: true })) });
+      showToast({
+        title: `${data.submittedCount} RFI${data.submittedCount === 1 ? '' : 's'} drafted`,
+        sub: 'Review and send from Outlook.',
+        ...(data.draftWebLink ? { action: { label: 'Open in Outlook', onClick: () => window.open(data.draftWebLink, '_blank') } } : {}),
+      });
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to draft the RFI email';
+      showToast({ title: 'Draft failed', sub: msg });
+    } finally {
+      setRfiSubmitting(false);
+    }
   };
 
   const computePricingItems = (): EstimateLineItem[] => {
@@ -1654,14 +1696,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   );
 
                   // Try to parse JSON for structured agents (fence-tolerant)
-                  let parsed: Record<string, unknown> | null = null;
-                  try {
-                    const raw = t.output.trim();
-                    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-                    const candidate = fenced ? fenced[1].trim() : raw;
-                    const start = candidate.indexOf('{');
-                    parsed = JSON.parse(start >= 0 ? candidate.slice(start) : candidate) as Record<string, unknown>;
-                  } catch { /* raw text */ }
+                  const parsed = parseAgentJson(t.output);
 
                   const riskColor = (r: string) =>
                     r === 'HIGH' ? '#EF4444' : r === 'MEDIUM' ? '#F59E0B' : 'var(--green)';
@@ -1916,19 +1951,33 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         );
       }
 
-      case 'rfis':
+      case 'rfis': {
+        const openCount = ws.rfis.filter(r => !r.submitted).length;
+        const hasAnalysis = !!aiResults?.agent2_output;
         return (
           <div style={{ padding: '20px 24px' }}>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-              <input style={{ flex: 1, font: 'inherit', fontSize: 13, fontWeight: 600, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 9, padding: '9px 12px', outline: 'none' }}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+              <input style={{ flex: 1, minWidth: 200, font: 'inherit', fontSize: 13, fontWeight: 600, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 9, padding: '9px 12px', outline: 'none' }}
                 value={newRfi} onChange={e => setNewRfi(e.target.value)} placeholder="Enter RFI question…"
                 onKeyDown={e => e.key === 'Enter' && addRfi()}/>
               <button className="btn" onClick={addRfi} style={{ fontSize: 13 }}>
                 <Icon name="plus" size={14} stroke={2.2}/> Add RFI
               </button>
-              <button className="btn ghost" onClick={suggestRfis} disabled={rfiSuggesting} style={{ fontSize: 13, color: 'var(--blue)' }}>
-                <Icon name="sparkle" size={14} stroke={1.9}/> {rfiSuggesting ? 'Thinking…' : 'Suggest RFIs'}
+              {/* Task 5.2 — real import from Agent 2's rfis[], not a fake
+                  keyword-matched suggestion. */}
+              <button className="btn ghost" onClick={importRfisFromAnalysis} disabled={!hasAnalysis}
+                title={!hasAnalysis ? 'Run the 3-agent plan analysis first' : undefined}
+                style={{ fontSize: 13, color: 'var(--blue)' }}>
+                <Icon name="sparkle" size={14} stroke={1.9}/> Import from AI analysis
               </button>
+              {/* Task 5.1 — a single batch action drafts ONE Outlook email
+                  listing every currently-open RFI (no more per-row fake
+                  "submit"). */}
+              {openCount > 0 && (
+                <button className="btn" onClick={submitOpenRfis} disabled={rfiSubmitting} style={{ fontSize: 13 }}>
+                  <Icon name="send" size={14} stroke={1.9}/> {rfiSubmitting ? 'Drafting…' : `Submit ${openCount} Open RFI${openCount === 1 ? '' : 's'} to GC`}
+                </button>
+              )}
             </div>
             {ws.rfis.length === 0 ? (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>No RFIs yet</div>
@@ -1936,7 +1985,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               <div className="panel">
                 <div className="table-scroll">
                 <table className="ctable">
-                  <thead><tr><th>#</th><th>Question</th><th>Status</th><th></th></tr></thead>
+                  <thead><tr><th>#</th><th>Question</th><th>Status</th></tr></thead>
                   <tbody>
                     {ws.rfis.map((r, i) => (
                       <tr key={r.id}>
@@ -1949,13 +1998,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                             {r.submitted ? 'Submitted' : 'Draft'}
                           </span>
                         </td>
-                        <td>
-                          {!r.submitted && (
-                            <button className="btn ghost" onClick={() => submitRfi(r.id)} style={{ height: 28, fontSize: 11, padding: '0 10px' }}>
-                              Submit
-                            </button>
-                          )}
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1965,6 +2007,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             )}
           </div>
         );
+      }
 
       case 'proposal': {
         const agent4Raw    = aiResults?.agent4_output as string | undefined;

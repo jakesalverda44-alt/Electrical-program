@@ -46,6 +46,8 @@ import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
 import { renderPrebidScopeDocx, prebidScopeFilename } from '../bidstd/prebidScopeDocx';
 import { verifyBidDocx, verifyBidText } from '../bidstd/verifyBid';
 import { BidData, validateBidData } from '../bidstd/bidData';
+import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
+import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
 const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'warehouse', 'restaurant', 'medical', 'retail', 'other'];
@@ -1357,6 +1359,49 @@ router.put('/:bidId/workspace', requireAuth, async (req: AuthRequest, res) => {
   );
   res.json(rows[0]);
 });
+
+// ── Phase 4 Task 5.1: RFI submit becomes real ───────────────────────────────
+// Builds an Outlook DRAFT (never sends) to the bid's contact listing every
+// currently-open RFI, numbered, with the question text — then marks those
+// RFIs submitted:true in the workspace, but ONLY after the draft actually
+// succeeds (a failed draft must never silently mark RFIs as sent).
+router.post('/:bidId/rfi-draft', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  const bid = await loadAccessibleBid(res, req.user!, bidId);
+  if (!bid) return;
+
+  const { rows: wsRows } = await pool.query('SELECT rfis FROM bid_workspaces WHERE bid_id=$1', [bidId]);
+  const rfis = (wsRows[0]?.rfis ?? []) as { id: string; question: string; submitted: boolean; answer: string }[];
+  const open = rfis.filter(r => !r.submitted && (r.question || '').trim());
+  if (!open.length) return res.status(400).json({ error: 'No open RFIs to submit.' });
+
+  const emailMatch = /[^\s@]+@[^\s@]+\.[^\s@]+/.exec(bid.contact || '');
+  const to = emailMatch ? [emailMatch[0]] : [];
+  if (!to.length) {
+    return res.status(400).json({ error: 'No contact email on file for this bid — add one before submitting RFIs.' });
+  }
+  if (!isGraphMailConfigured()) {
+    return res.status(503).json({ error: 'Email is not configured (Microsoft Graph).' });
+  }
+
+  let draft;
+  try {
+    draft = await graphCreateDraft({
+      to,
+      subject: rfiDraftSubject(bid.name),
+      html: buildRfiDraftHtml(bid.name, open),
+    });
+  } catch (err) {
+    logger.error({ err, bidId }, '[preconstruction] rfi-draft failed');
+    return res.status(502).json({ error: 'Could not create the draft. Check the mail configuration.' });
+  }
+
+  const openIds = new Set(open.map(r => r.id));
+  const updatedRfis = rfis.map(r => (openIds.has(r.id) ? { ...r, submitted: true } : r));
+  await pool.query('UPDATE bid_workspaces SET rfis=$1, updated_at=now() WHERE bid_id=$2', [JSON.stringify(updatedRfis), bidId]);
+
+  res.json({ draftWebLink: draft.webLink, submittedCount: open.length, rfis: updatedRfis });
+}));
 
 // GET results for a bid
 router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), async (req: AuthRequest, res) => {

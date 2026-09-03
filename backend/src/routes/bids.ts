@@ -254,7 +254,18 @@ router.post('/:id/notify-team', requireAuth, async (req: AuthRequest, res) => {
     summary: `Drafted new-bid email for "${bid.name}" to ${result.to.length} recipient${result.to.length === 1 ? '' : 's'}`
       + (attachedNames.length ? ` with ${attachedNames.length} file${attachedNames.length === 1 ? '' : 's'}` : ''),
   });
-  res.json({ draftWebLink: result.draftWebLink, to: result.to, attachedNames, skipped });
+
+  // Phase 4 Task 5.4 — the columns exist (074_bids_team_notified.sql) but
+  // were never written; the "Sent to team" mark this enables lives on the
+  // bid's own detail drawer (distinct from intake's own accept-time stamp
+  // on intake_items — see routes/intake.ts's /:id/accept).
+  const { rows: stamped } = await pool.query(
+    `UPDATE bids SET team_notified_at = now(), team_notified_to = $1, updated_at = now()
+      WHERE id = $2 RETURNING team_notified_at, team_notified_to`,
+    [result.to, bid.id]
+  );
+
+  res.json({ draftWebLink: result.draftWebLink, to: result.to, attachedNames, skipped, ...stamped[0] });
 });
 
 // ── Phase 4 Task 1.3: send the filed proposal to the GC ─────────────────────
