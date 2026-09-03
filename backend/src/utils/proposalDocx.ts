@@ -148,15 +148,22 @@ function extToImgType(name: string): ImgType {
   return ext === 'png' ? 'png' : ext === 'gif' ? 'gif' : ext === 'bmp' ? 'bmp' : 'jpg';
 }
 
-/** Resolve the first candidate asset filename that exists in `assetsDir`. */
-function loadAsset(assetsDir: string, names: string[]): { buf: Buffer; type: ImgType } | null {
-  for (const name of names) {
-    const p = path.join(assetsDir, name);
-    if (fs.existsSync(p)) {
-      return { buf: fs.readFileSync(p), type: extToImgType(name) };
-    }
+// FIX-8 — build_bid.js's own `image()` reads the brand asset with a bare
+// fs.readFileSync (no existence check, no fallback) — a missing file throws.
+// This port had invented a fallback chain to old logo.png/signature.png that
+// build_bid.js has no equivalent of, so a production environment missing the
+// 2026 assets would silently render an old/wrong-size logo (or none at all)
+// instead of failing loudly. Matched build_bid.js's strictness: throw with a
+// clear message when the required asset is missing.
+// Exported so proposalDocx.test.ts can exercise the missing-asset error path
+// directly (against a scratch directory) rather than mocking `fs` against the
+// real checked-in brand assets.
+export function loadRequiredAsset(assetsDir: string, filename: string, label: string): { buf: Buffer; type: ImgType } {
+  const p = path.join(assetsDir, filename);
+  if (!fs.existsSync(p)) {
+    throw new Error(`Required brand asset missing: ${filename} (${label}) — expected at ${p}`);
   }
-  return null;
+  return { buf: fs.readFileSync(p), type: extToImgType(filename) };
 }
 
 function image(
@@ -243,14 +250,29 @@ function assetsDir(): string {
   return path.resolve(__dirname, '../../assets');
 }
 
-function loadLogo(): { buf: Buffer; type: ImgType } | null {
-  // Official 2026 assets first, old generic names as a fallback so an
-  // environment missing the new files still renders (no signature/logo).
-  return loadAsset(assetsDir(), ['APT_Logo_2026.jpg', 'logo.png', 'logo.jpg', 'logo.jpeg']);
+function loadLogo(): { buf: Buffer; type: ImgType } {
+  return loadRequiredAsset(assetsDir(), 'APT_Logo_2026.jpg', 'company logo');
 }
 
-function loadSignature(): { buf: Buffer; type: ImgType } | null {
-  return loadAsset(assetsDir(), ['Jake_2026_Signature.png', 'signature.png', 'signature.jpg', 'sig.png', 'sig.jpg']);
+function loadSignature(): { buf: Buffer; type: ImgType } {
+  return loadRequiredAsset(assetsDir(), 'Jake_2026_Signature.png', 'signature');
+}
+
+/** `APT_Bid_[ProjectSlug]_[LocationSlug].docx` (PROJECT_INSTRUCTIONS §15
+ *  deliverables table) — FIX-10. `data.output_filename`, when set, always
+ *  wins. Falls back to the pre-Phase-3 "Proposal - <fallbackAsciiName>.docx"
+ *  naming when either slug comes out blank — composeBidData/
+ *  legacyProposalToBidData's own slug() helper already guards against this
+ *  in practice (defaulting to 'Project'/'FL'), but a hand-built or partial
+ *  BidData could still hit it, and today's naming is a safer fallback than
+ *  an "APT_Bid__.docx" with an empty segment. */
+export function bidDocxFilename(data: BidData, fallbackAsciiName: string): string {
+  const outputFilename = (data.output_filename || '').trim();
+  if (outputFilename) return outputFilename;
+  const project = (data.project_slug || '').trim();
+  const location = (data.location_slug || '').trim();
+  if (project && location) return `APT_Bid_${project}_${location}.docx`;
+  return `Proposal - ${fallbackAsciiName}.docx`;
 }
 
 /**
@@ -272,7 +294,7 @@ export async function renderBidDocx(data: BidData): Promise<Buffer> {
   const body: (Paragraph | Table)[] = [];
 
   // 1. Logo
-  if (logo) body.push(image(logo, 280, 224));
+  body.push(image(logo, 280, 224));
 
   // 2. Header block
   body.push(line(data.date));
@@ -317,7 +339,7 @@ export async function renderBidDocx(data: BidData): Promise<Buffer> {
 
   // 15. Signature / acceptance block
   body.push(line(CLOSING.respectfully, { before: 240, after: 40, keepNext: true }));
-  if (sig) body.push(image(sig, 500, 167, AlignmentType.LEFT, true));
+  body.push(image(sig, 500, 167, AlignmentType.LEFT, true));
   body.push(line(CLOSING.costBasis, { align: AlignmentType.CENTER, before: 60, after: 160, keepNext: true }));
   body.push(line(CLOSING.acceptance, { after: 200, keepNext: true }));
   body.push(line(CLOSING.print, { after: 120, keepNext: true }));

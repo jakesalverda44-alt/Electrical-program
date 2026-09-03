@@ -3,8 +3,9 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import AdmZip from 'adm-zip';
-import { renderBidDocx, buildProposalDocx, ProposalJSON } from './proposalDocx';
+import { renderBidDocx, buildProposalDocx, bidDocxFilename, loadRequiredAsset, ProposalJSON } from './proposalDocx';
 import { extractDocxText } from './bidDocParse';
 import { BidData } from '../bidstd/bidData';
 import { SECTION_HEADERS, CLOSING } from '../bidstd/boilerplate';
@@ -117,6 +118,42 @@ describe('renderBidDocx', () => {
 
   it('throws when total_price is missing', async () => {
     await expect(renderBidDocx({ ...fixture, total_price: '' })).rejects.toThrow(/no price/i);
+  });
+
+  // FIX-8 — a missing brand asset must throw a clear error (matching
+  // build_bid.js's own strictness), never silently render old/no branding.
+  // Exercised against a scratch directory (never the real checked-in
+  // backend/assets/) so this never touches real files on disk.
+  describe('brand asset strictness (FIX-8)', () => {
+    it('throws a clear error when a required asset file is missing', () => {
+      expect(() => loadRequiredAsset(tmpdir(), 'APT_Logo_2026.jpg', 'company logo'))
+        .toThrow(/Required brand asset missing: APT_Logo_2026\.jpg \(company logo\)/);
+    });
+
+    it('renderBidDocx uses the real checked-in assets and does not throw', async () => {
+      // Sanity check the other direction: the actual backend/assets/ files
+      // are present, so the standard render path is unaffected by FIX-8.
+      await expect(renderBidDocx(fixture)).resolves.toBeInstanceOf(Buffer);
+    });
+  });
+
+  describe('bidDocxFilename (FIX-10)', () => {
+    it('builds APT_Bid_[ProjectSlug]_[LocationSlug].docx from the composed slugs', () => {
+      expect(bidDocxFilename(
+        { ...fixture, output_filename: undefined, project_slug: 'CircleK4521', location_slug: 'Eustis' },
+        'fallback'
+      )).toBe('APT_Bid_CircleK4521_Eustis.docx');
+    });
+
+    it('prefers an explicit output_filename when set', () => {
+      expect(bidDocxFilename({ ...fixture, output_filename: 'Custom_Name.docx' }, 'fallback'))
+        .toBe('Custom_Name.docx');
+    });
+
+    it('falls back to "Proposal - <fallbackAsciiName>.docx" when a slug is blank', () => {
+      expect(bidDocxFilename({ ...fixture, output_filename: undefined, project_slug: '', location_slug: 'Eustis' }, 'Circle K 4521'))
+        .toBe('Proposal - Circle K 4521.docx');
+    });
   });
 });
 
