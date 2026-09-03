@@ -64,6 +64,14 @@ describe('POST /bids/p/:token/sign', () => {
       .expect(404);
   });
 
+  it('404s on a malformed (non-UUID) token instead of hanging', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const res = await request(app).post('/api/bids/p/not-a-uuid/sign')
+      .send({ signerName: 'John Smith', signatureDataUrl: SMALL_SIG })
+      .expect(404);
+    expect(res.body.error).toBe('Proposal not found');
+  });
+
   it('stamps signature/signer, writes proposal_activity, awards through the shared stage path, and creates won_jobs', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');

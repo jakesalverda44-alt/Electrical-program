@@ -54,7 +54,15 @@ describe('GET /bids/p/:token', () => {
     const u = await makeUser('owner');
     const bid = await createBid(u.token);
     const res = await request(app).get(`/api/bids/p/${bid.proposal_token}`).expect(404);
-    expect(res.body.error).toMatch(/not available/);
+    // FIX-2 (post-review) — uniform 404 body across every public-route
+    // failure mode (malformed token / unknown token / nothing to show yet).
+    expect(res.body.error).toBe('Proposal not found');
+  });
+
+  it('404s on a malformed (non-UUID) token instead of hanging', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const res = await request(app).get(`/api/bids/p/not-a-uuid`).expect(404);
+    expect(res.body.error).toBe('Proposal not found');
   });
 
   it('falls back to the last-filed bid_data.json when there is no current Agent 4 composition, and renders its HTML', async (ctx) => {
@@ -142,5 +150,11 @@ describe('GET /bids/p/:token/download', () => {
   it('404s on an unknown token', async (ctx) => {
     if (!ok) return ctx.skip();
     await request(app).get('/api/bids/p/00000000-0000-0000-0000-000000000000/download').expect(404);
+  });
+
+  it('404s on a malformed (non-UUID) token instead of hanging', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const res = await request(app).get('/api/bids/p/not-a-uuid/download').expect(404);
+    expect(res.body.error).toBe('Proposal not found');
   });
 });

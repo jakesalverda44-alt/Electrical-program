@@ -5,6 +5,7 @@ import { writeAudit } from '../utils/audit';
 import { setProjectDeleted } from '../utils/project';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { logger } from '../utils/logger';
+import { asyncHandler } from '../utils/asyncHandler';
 import { sendBidNotification } from '../email/bidNotification';
 import { loadBidDocumentsAsAttachments, fetchDocBytes, attachmentFileName, DocRow } from '../email/bidAttachments';
 import { graphSendMail, graphCreateDraft, isGraphMailConfigured, GraphAttachment, TEAM_NOTIFY_TO } from '../email/graphMailer';
@@ -286,6 +287,49 @@ async function loadMostRecentBidDoc(bidId: string, category: string, mimetype: s
     [bidId, category, mimetype]
   );
   return rows[0] ?? null;
+}
+
+// ── Post-review FIX-1/FIX-2 — the public (no-auth) proposal surface ─────────
+// Every /p/:token route below is reachable by anyone who has (or guesses) a
+// token, so it gets its own, deliberately narrow contract:
+//   - token shape is validated BEFORE it ever reaches a query. proposal_token
+//     is a Postgres UUID column; a non-UUID string makes the driver throw
+//     22P02 (invalid input syntax), and on bare (non-asyncHandler) express 4
+//     handlers that rejection was never forwarded to res — the request just
+//     hung. Every one of these routes is wrapped in asyncHandler AND checks
+//     the token shape up front so a malformed token 404s immediately.
+//   - every failure mode (malformed token / unknown token / nothing to show
+//     yet) returns the SAME body, so the response never tells a prober which
+//     case it hit.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isValidToken(token: string): boolean {
+  return typeof token === 'string' && UUID_RE.test(token);
+}
+const PROPOSAL_NOT_FOUND = { error: 'Proposal not found' };
+
+/**
+ * The public page's exact field contract (frontend/src/pages/
+ * BidProposalPublicPage.tsx's `PublicBid` interface) — id/name/gc/stage/
+ * proposal_token/proposal_sent_at/proposal_viewed_at/proposal_signed_at/
+ * signer_name, nothing else. The full `bids` row also carries notes,
+ * loss_reason, competitor, amount, salesperson_id/customer_id, team_notified
+ * fields, Drive folder ids, and signature_data — none of that belongs on an
+ * unauthenticated response. signature_data in particular is NEVER returned
+ * publicly: proposal_signed_at + signer_name are enough to render the
+ * signed state.
+ */
+function publicBidProjection(bid: Record<string, any>) {
+  return {
+    id: bid.id,
+    name: bid.name,
+    gc: bid.gc,
+    stage: bid.stage,
+    proposal_token: bid.proposal_token,
+    proposal_sent_at: bid.proposal_sent_at,
+    proposal_viewed_at: bid.proposal_viewed_at,
+    proposal_signed_at: bid.proposal_signed_at,
+    signer_name: bid.signer_name,
+  };
 }
 
 router.post('/:id/send-proposal', requireAuth, async (req: AuthRequest, res) => {
@@ -694,16 +738,17 @@ async function loadPublicBidData(bidId: string): Promise<{ bidData: BidData; fro
   }
 }
 
-router.get('/p/:token', async (req, res) => {
+router.get('/p/:token', asyncHandler(async (req, res) => {
+  if (!isValidToken(req.params.token)) return res.status(404).json(PROPOSAL_NOT_FOUND);
   const { rows } = await pool.query(
     'SELECT * FROM bids WHERE proposal_token = $1 AND deleted_at IS NULL',
     [req.params.token]
   );
-  if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
+  if (!rows.length) return res.status(404).json(PROPOSAL_NOT_FOUND);
   const bid = rows[0];
 
   const loaded = await loadPublicBidData(bid.id);
-  if (!loaded) return res.status(404).json({ error: 'Proposal not available yet' });
+  if (!loaded) return res.status(404).json(PROPOSAL_NOT_FOUND);
 
   // In-app previews pass ?preview=1 — fetch without recording a customer
   // "view" (mirrors gens.ts's /p/:token).
@@ -751,34 +796,35 @@ router.get('/p/:token', async (req, res) => {
   }
 
   res.json({
-    bid: withDueDays(current),
+    bid: publicBidProjection(current),
     html: renderBidHtml(loaded.bidData),
     fromFallback: loaded.fromFallback,
   });
-});
+}));
 
 // Streams the exact bytes of the most recently FILED proposal .docx (never a
 // fresh render) with a content-disposition filename from the standard's own
 // naming (APT_Bid_[ProjectSlug]_[LocationSlug].docx).
-router.get('/p/:token/download', async (req, res) => {
+router.get('/p/:token/download', asyncHandler(async (req, res) => {
+  if (!isValidToken(req.params.token)) return res.status(404).json(PROPOSAL_NOT_FOUND);
   const { rows } = await pool.query(
     'SELECT id FROM bids WHERE proposal_token = $1 AND deleted_at IS NULL',
     [req.params.token]
   );
-  if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
+  if (!rows.length) return res.status(404).json(PROPOSAL_NOT_FOUND);
   const bidId = rows[0].id as string;
 
   const doc = await loadMostRecentBidDoc(bidId, 'proposal', PROPOSAL_DOCX_MIME);
-  if (!doc) return res.status(404).json({ error: 'No proposal document on file yet' });
+  if (!doc) return res.status(404).json(PROPOSAL_NOT_FOUND);
   const bytes = await fetchDocBytes(doc);
-  if (!bytes) return res.status(404).json({ error: 'Proposal document could not be loaded' });
+  if (!bytes) return res.status(404).json(PROPOSAL_NOT_FOUND);
 
   const filename = attachmentFileName(doc.display_name, doc.name, doc.file_type).replace(/[<>:"/\\|?*\r\n]/g, '-');
   res.setHeader('Content-Type', PROPOSAL_DOCX_MIME);
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Content-Length', bytes.length);
   res.send(bytes);
-});
+}));
 
 // ── Phase 4 Task 3: accept & e-sign -> auto-award (no auth) ─────────────────
 // Ports gens.ts's POST /p/:token/sign (non-empty signature required,
@@ -787,7 +833,8 @@ router.get('/p/:token/download', async (req, res) => {
 // signature gets a clear 400 instead of body-parser's raw 413.
 const MAX_SIGNATURE_DATA_URL_LENGTH = 60_000;
 
-router.post('/p/:token/sign', async (req, res) => {
+router.post('/p/:token/sign', asyncHandler(async (req, res) => {
+  if (!isValidToken(req.params.token)) return res.status(404).json(PROPOSAL_NOT_FOUND);
   const { signerName, signatureDataUrl } = req.body || {};
   if (!signatureDataUrl || typeof signatureDataUrl !== 'string') {
     return res.status(400).json({ error: 'Signature required' });
@@ -807,14 +854,14 @@ router.post('/p/:token/sign', async (req, res) => {
       `SELECT * FROM bids WHERE proposal_token = $1 AND deleted_at IS NULL FOR UPDATE`,
       [req.params.token]
     );
-    if (!locked.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Proposal not found' }); }
+    if (!locked.length) { await client.query('ROLLBACK'); return res.status(404).json(PROPOSAL_NOT_FOUND); }
     const preSign = locked[0];
 
     // Idempotent — a second sign attempt returns the already-signed state
     // unchanged, never re-stamps or re-awards.
     if (preSign.proposal_signed_at) {
       await client.query('ROLLBACK');
-      return res.json({ ok: true, bid: withDueDays(preSign), alreadySigned: true, wonJob: null });
+      return res.json({ ok: true, bid: publicBidProjection(preSign), alreadySigned: true, wonJob: null });
     }
 
     const { rows: signedRows } = await client.query(
@@ -856,7 +903,7 @@ router.post('/p/:token/sign', async (req, res) => {
     // gens' public sign route, which also skips it); the `activity` table
     // entry transitionBidStage already wrote is this action's audit trail.
 
-    res.json({ ok: true, bid: withDueDays(finalBid), wonJob });
+    res.json({ ok: true, bid: publicBidProjection(finalBid), wonJob });
 
     // Fire-and-forget: notify Jake — in-app notification + web push + a
     // team-mailbox email heads-up. Mirrors gens.ts's /p/:token/sign exactly.
@@ -913,6 +960,6 @@ router.post('/p/:token/sign', async (req, res) => {
   } finally {
     client.release();
   }
-});
+}));
 
 export default router;
