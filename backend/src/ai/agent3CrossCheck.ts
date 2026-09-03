@@ -10,6 +10,7 @@
 //
 // Makes no AI/DB calls — pure formatting off the already-loaded row.
 import type { TakeoffCategory, TakeoffLineItem } from '../utils/takeoffParse';
+import { sanitizeForPrompt } from './sanitizeForPrompt';
 
 /** Cap on the cross-check block sent to Agent 3 — mirrors pdfText.ts's per-run caps. */
 export const CROSS_CHECK_CAP = 20_000;
@@ -54,15 +55,21 @@ export function buildPrebidCrossCheck(prebid: PrebidTakeoffRow | null | undefine
     ...firstSeenOrder.filter(cat => !namedOrder.includes(cat)),
   ];
 
+  // Phase 4 Task 6.1 (Phase 2 F8) — category names and item descriptions
+  // are untrusted (parsed straight off an uploaded workbook — see
+  // takeoffParse.ts) and land directly in this same delimiter-framed
+  // block; sanitize before interpolating so neither can impersonate this
+  // module's own PREBID_CROSS_CHECK_HEADER (or any other "--- ... ---"
+  // prompt delimiter used elsewhere in the pipeline).
   const lines: string[] = [PREBID_CROSS_CHECK_HEADER];
   for (const cat of categoryOrder) {
-    lines.push('', `${cat}:`);
+    lines.push('', `${sanitizeForPrompt(cat)}:`);
     for (const item of byCategory.get(cat)!) {
       const qty = item.qty === null || item.qty === undefined
         ? 'UNRESOLVED'
         : `${item.qty} ${item.unit ?? ''}`.trim();
       const conf = item.confidence ? ` [${item.confidence}]` : '';
-      lines.push(`- ${item.description} — ${qty}${conf}`);
+      lines.push(`- ${sanitizeForPrompt(item.description ?? '')} — ${qty}${conf}`);
     }
   }
 

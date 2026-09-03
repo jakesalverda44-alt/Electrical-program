@@ -126,6 +126,23 @@ export default function PreBidTab({ bidId, onSectionsLoaded }: {
         </div>
       )}
 
+      {/* Phase 4 Task 5.3 — key_findings was fetched and typed but never
+          rendered; the estimator's actual takeoff notes (confidence key,
+          panel/HVAC reconciliation, etc. — see BidData.takeoff_notes)
+          were invisible on this tab. */}
+      {takeoff && takeoff.key_findings.length > 0 && (
+        <div className="panel" style={{ marginBottom: 14 }}>
+          <div className="panel-hdr">
+            <span className="panel-title">Key findings</span>
+          </div>
+          <div style={{ padding: '10px 16px', fontSize: 13 }}>
+            {takeoff.key_findings.map((finding, i) => (
+              <div key={i} style={{ marginBottom: 6, color: 'var(--muted)' }}>{finding}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {unresolved.length > 0 && (
         <div className="panel" style={{ marginBottom: 14 }}>
           <div className="panel-hdr">

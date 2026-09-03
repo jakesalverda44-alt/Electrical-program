@@ -5,7 +5,7 @@
 // around (see the plan's "skill files win" rule).
 import { describe, expect, it } from 'vitest';
 import {
-  standardScope6, standardTerms, jobNumber,
+  standardScope6, standardTerms, jobNumber, resolveUniqueJobNumber,
   SECTION_HEADERS, CLOSING, PREBID_BANNER,
   TAKEOFF_CATEGORIES,
 } from './boilerplate';
@@ -115,5 +115,28 @@ describe('jobNumber', () => {
 
   it('handles a double-digit month and day with no padding needed', () => {
     expect(jobNumber(new Date(2026, 11, 25))).toBe('JS.12252026'); // Dec 25, 2026
+  });
+});
+
+// Phase 4 Task 6.2 — same-day job_number collision (Phase 3 review finding).
+describe('resolveUniqueJobNumber', () => {
+  it('returns the candidate unchanged when nothing else holds it', () => {
+    expect(resolveUniqueJobNumber('JS.09022026', new Set())).toBe('JS.09022026');
+    expect(resolveUniqueJobNumber('JS.09022026', new Set(['JS.09012026']))).toBe('JS.09022026');
+  });
+
+  it('suffixes -2 when the base candidate is already taken', () => {
+    expect(resolveUniqueJobNumber('JS.09022026', new Set(['JS.09022026']))).toBe('JS.09022026-2');
+  });
+
+  it('finds the first free suffix when -2 is also taken', () => {
+    const taken = new Set(['JS.09022026', 'JS.09022026-2', 'JS.09022026-3']);
+    expect(resolveUniqueJobNumber('JS.09022026', taken)).toBe('JS.09022026-4');
+  });
+
+  it('does not get confused by an unrelated job_number that merely starts with the same prefix', () => {
+    // e.g. a different day's number should never block this one.
+    const taken = new Set(['JS.09022026', 'JS.090220260']);
+    expect(resolveUniqueJobNumber('JS.09022026', taken)).toBe('JS.09022026-2');
   });
 });

@@ -171,8 +171,14 @@ describe('generate-docx — verify gate (Task 6)', () => {
 
     await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token)).expect(200);
 
+    // Phase 4 Task 6.2 — same-day collision detection may suffix this
+    // (-2, -3, ...) if another bid generated earlier today already holds
+    // the plain JS.MMDDYYYY; the exact "-N, first free" arithmetic is
+    // covered precisely by boilerplate.test.ts's resolveUniqueJobNumber
+    // unit tests, so this just confirms a job number was generated and
+    // persisted in the right family of formats.
     const { rows } = await pool.query('SELECT job_number FROM bids WHERE id=$1', [bidId]);
-    expect(rows[0].job_number).toMatch(/^JS\.\d{8}$/);
+    expect(rows[0].job_number).toMatch(/^JS\.\d{8}(-\d+)?$/);
   });
 
   it('a legacy-shape (pre-Phase-3) agent4_output still renders and files (backward compatible)', async (ctx) => {

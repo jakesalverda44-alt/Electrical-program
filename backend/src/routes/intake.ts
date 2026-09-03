@@ -252,6 +252,15 @@ router.post('/:id/accept', requireAuth, async (req: AuthRequest, res) => {
       try {
         const result = await sendBidNotification(bid, { name: user.name }, { to, force: true, draft: true });
         teamDraftLink = result.draftWebLink ?? null;
+        // Phase 4 Task 5.4 — the columns exist (073_intake_team_notified.sql)
+        // but were never written; IntakeInboxPage's "Sent to team" badge
+        // reads these two fields off the intake item itself.
+        if (result.to.length) {
+          await pool.query(
+            `UPDATE intake_items SET team_notified_at = now(), team_notified_to = $1, updated_at = now() WHERE id = $2`,
+            [result.to, req.params.id]
+          );
+        }
       } catch (err) {
         logger.error({ err, bidId: bid.id }, '[intake] team bid draft failed');
       }

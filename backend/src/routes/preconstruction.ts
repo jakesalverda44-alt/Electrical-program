@@ -42,10 +42,13 @@ import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
 import { composeBidData, ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
+import { resolveUniqueJobNumber } from '../bidstd/boilerplate';
 import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
 import { renderPrebidScopeDocx, prebidScopeFilename } from '../bidstd/prebidScopeDocx';
 import { verifyBidDocx, verifyBidText } from '../bidstd/verifyBid';
 import { BidData, validateBidData } from '../bidstd/bidData';
+import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
+import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
 const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'warehouse', 'restaurant', 'medical', 'retail', 'other'];
@@ -1353,6 +1356,58 @@ router.put('/:bidId/workspace', requireAuth, async (req: AuthRequest, res) => {
   res.json(rows[0]);
 });
 
+// ── Phase 4 Task 5.1: RFI submit becomes real ───────────────────────────────
+// Builds an Outlook DRAFT (never sends) to the bid's contact listing every
+// currently-open RFI, numbered, with the question text — then marks those
+// RFIs submitted:true in the workspace, but ONLY after the draft actually
+// succeeds (a failed draft must never silently mark RFIs as sent).
+router.post('/:bidId/rfi-draft', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  const bid = await loadAccessibleBid(res, req.user!, bidId);
+  if (!bid) return;
+
+  const { rows: wsRows } = await pool.query('SELECT rfis FROM bid_workspaces WHERE bid_id=$1', [bidId]);
+  const rfis = (wsRows[0]?.rfis ?? []) as { id: string; question: string; submitted: boolean; answer: string }[];
+  const open = rfis.filter(r => !r.submitted && (r.question || '').trim());
+  if (!open.length) return res.status(400).json({ error: 'No open RFIs to submit.' });
+
+  const emailMatch = /[^\s@]+@[^\s@]+\.[^\s@]+/.exec(bid.contact || '');
+  const to = emailMatch ? [emailMatch[0]] : [];
+  if (!to.length) {
+    return res.status(400).json({ error: 'No contact email on file for this bid — add one before submitting RFIs.' });
+  }
+  if (!isGraphMailConfigured()) {
+    return res.status(503).json({ error: 'Email is not configured (Microsoft Graph).' });
+  }
+
+  let draft;
+  try {
+    draft = await graphCreateDraft({
+      to,
+      subject: rfiDraftSubject(bid.name),
+      html: buildRfiDraftHtml(bid.name, open),
+    });
+  } catch (err) {
+    logger.error({ err, bidId }, '[preconstruction] rfi-draft failed');
+    return res.status(502).json({ error: 'Could not create the draft. Check the mail configuration.' });
+  }
+
+  const openIds = open.map(r => r.id);
+  const openIdSet = new Set(openIds);
+  const updatedRfis = rfis.map(r => (openIdSet.has(r.id) ? { ...r, submitted: true } : r));
+  await pool.query('UPDATE bid_workspaces SET rfis=$1, updated_at=now() WHERE bid_id=$2', [JSON.stringify(updatedRfis), bidId]);
+
+  // FIX-11 (post-review) — `submittedIds` is the actual list of RFI ids this
+  // call marked submitted (blank-question RFIs are excluded from `open`
+  // above and so never appear here). The client used to mark EVERY
+  // currently-unsubmitted RFI as submitted on any successful response,
+  // which drifted from this list the moment a blank-question RFI existed —
+  // it would show as submitted client-side while staying unsubmitted
+  // server-side. `rfis` (the full updated array) is still included too, as
+  // the more authoritative source of truth if a caller wants it.
+  res.json({ draftWebLink: draft.webLink, submittedCount: open.length, submittedIds: openIds, rfis: updatedRfis });
+}));
+
 // GET results for a bid
 router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), async (req: AuthRequest, res) => {
   if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
@@ -1691,11 +1746,11 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
 // (Task 5's new data-only contract vs. a pre-Phase-3 legacy row), and
 // composes it — no response writing here, so each route decides its own
 // status codes for a given failure.
-type ComposeCurrentBidDataResult =
+export type ComposeCurrentBidDataResult =
   | { ok: true; bidData: BidData; bidName: string; asciiName: string }
   | { ok: false; status: number; error: string; failures?: { check: string; detail: string }[] };
 
-interface ComposeCurrentBidDataOptions {
+export interface ComposeCurrentBidDataOptions {
   /** FIX-9 — GET /proposal-preview composes ephemerally (shows the
    *  would-be job number) without writing it back; only the generate
    *  endpoints (a GET writing the DB is otherwise a footgun) persist a
@@ -1713,7 +1768,11 @@ interface ComposeCurrentBidDataOptions {
   validate?: boolean;
 }
 
-async function composeCurrentBidData(
+// Exported (Phase 4 Task 2.2) so the public proposal page (routes/bids.ts's
+// GET /p/:token) can compose the SAME BidData this file's generate-*
+// endpoints do, with persist:false — one composition function, not a
+// second copy of the legacy-shape/precedence logic living in bids.ts.
+export async function composeCurrentBidData(
   bidId: string,
   opts: ComposeCurrentBidDataOptions = {},
 ): Promise<ComposeCurrentBidDataResult> {
@@ -1770,10 +1829,29 @@ async function composeCurrentBidData(
     };
     const { data, jobNumberGenerated } = composeBidData(bidRow, parsed as Agent4Output, formattedPrice, { savedLineItems });
     if (jobNumberGenerated && persist) {
+      // Task 6.2 — two bids generated the same day compute the identical
+      // JS.MMDDYYYY (jobNumber() is a pure function of today's date only),
+      // so the second one used to silently collide with the first. Only a
+      // FRESHLY GENERATED number ever passes through resolveUniqueJobNumber
+      // — an existing/manually-entered job_number (jobNumberGenerated
+      // false) is never touched.
+      const { rows: collisions } = await pool.query(
+        `SELECT job_number FROM bids
+          WHERE deleted_at IS NULL AND id <> $1 AND job_number LIKE $2`,
+        [bidId, `${data.job_number}%`]
+      );
+      const taken = new Set(
+        (collisions as { job_number: string }[])
+          .map(r => r.job_number)
+          .filter(n => n === data.job_number || new RegExp(`^${data.job_number.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+$`).test(n))
+      );
+      data.job_number = resolveUniqueJobNumber(data.job_number, taken);
+
       // composeBidData is pure and never writes to the DB — persist the
-      // freshly-generated job number so it's stable on every future
-      // regeneration of this bid's documents. FIX-9: skipped when
-      // opts.persist is false (the preview route) — a GET must never write.
+      // freshly-generated (and now collision-free) job number so it's
+      // stable on every future regeneration of this bid's documents.
+      // FIX-9: skipped when opts.persist is false (the preview route) — a
+      // GET must never write.
       await pool.query('UPDATE bids SET job_number=$2 WHERE id=$1 AND deleted_at IS NULL', [bidId, data.job_number]);
     }
     bidData = data;
@@ -1911,6 +1989,11 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
       category: 'proposal',
       displayName: storageFilename,
       uploadedBy: req.user!.name,
+      // FIX-3 (post-review) — this row is only ever filed after
+      // verifyBidDocx(kind:'gc') passed, above. gate_passed marks it as the
+      // only kind of 'proposal' row the public /download and send-proposal
+      // paths will ever serve or attach.
+      gatePassed: true,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-docx] storeDocument (proposal) failed');
@@ -1932,6 +2015,11 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
       category: 'bid_data',
       displayName: bidDataFilename,
       uploadedBy: req.user!.name,
+      // FIX-3 (post-review) — the public proposal page (routes/bids.ts's
+      // GET /p/:token) renders directly from the most recent gate_passed
+      // bid_data.json instead of composing/verifying live; this is the row
+      // it reads.
+      gatePassed: true,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-docx] storeDocument (bid_data) failed');
@@ -1953,6 +2041,7 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
         category: 'proposal',
         displayName: pdfFilename,
         uploadedBy: req.user!.name,
+        gatePassed: true,
       });
     } catch (err) {
       logger.error({ err, bidId }, '[generate-docx] storeDocument (pdf) failed');
@@ -2010,6 +2099,7 @@ router.get('/:bidId/generate-takeoff-xlsx', requireAuth, requireAIPermission('vi
       category: 'takeoff',
       displayName: xlsx.filename,
       uploadedBy: req.user!.name,
+      gatePassed: true,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-takeoff-xlsx] storeDocument failed');
@@ -2112,6 +2202,7 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
       category: 'prebid_scope',
       displayName: scopeStorageFilename,
       uploadedBy: req.user!.name,
+      gatePassed: true,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-prebid-package] storeDocument (scope) failed');
@@ -2133,6 +2224,7 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
       category: 'prebid_takeoff',
       displayName: takeoffStorageFilename,
       uploadedBy: req.user!.name,
+      gatePassed: true,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-prebid-package] storeDocument (takeoff) failed');

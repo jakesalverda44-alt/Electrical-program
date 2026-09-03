@@ -37,6 +37,20 @@ const ALLOWED_KEYS = [
   'currency_code',
   'notifications_json',
   'security_session_timeout',
+  // FIX-4 (post-review) — Task 4.2's quiet-proposal follow-up settings UI
+  // (Settings > Notifications) posts these two keys, but they were missing
+  // from ALLOWED_KEYS, so PUT /api/settings silently discarded every save
+  // (the loop below only writes a key present in this list) — the UI
+  // showed success with nothing actually persisted. services/
+  // proposalQuietSweep.ts already reads both (numericSetting, with
+  // defaults) — this just lets a save actually reach them.
+  'elec_followup_quiet_days', 'elec_followup_viewed_days',
+  // FIX-11 (post-review) — the internal pre-bid-package recipient
+  // ("Chris") was hardcoded in the frontend (PcWorkspace.tsx). Moved to an
+  // app_setting so it's configurable without a code change; the server
+  // (POST /bids/:id/email-prebid-chris) reads it and defaults to the
+  // previously-hardcoded address when unset.
+  'prebid_chris_email',
 ];
 
 const INTERNAL_KEYS = ['jwt_secret'];

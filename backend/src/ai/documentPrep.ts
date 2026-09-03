@@ -26,6 +26,7 @@ import path from 'path';
 import sharp from 'sharp';
 import Anthropic from '@anthropic-ai/sdk';
 import { logger } from '../utils/logger';
+import { sanitizeForPrompt } from './sanitizeForPrompt';
 import {
   isPdftotextAvailable,
   extractPdfPageTexts,
@@ -465,8 +466,13 @@ export async function buildAgent1Content(
     // Whole-file label block — skipped when page-level classification is in
     // play (Task 2): each selected page gets its own real-identity label below
     // instead of one filename-based label for the whole PDF.
+    // FIX-7 (post-review) — f.filename is an uploaded, untrusted filename
+    // interpolated straight into this module's own "--- Sheet: ... ---"
+    // delimiter grammar; sanitize it the same way pdfText.ts's pageTextBlock
+    // sanitizes extracted page text (this was flagged as out-of-scope by the
+    // executor when that sanitization landed — that restriction is lifted).
     if (!hasPageSelection) {
-      blocks.push({ type: 'text', text: `--- Sheet: ${f.filename} (${cls}) ---` });
+      blocks.push({ type: 'text', text: `--- Sheet: ${sanitizeForPrompt(f.filename)} (${cls}) ---` });
     }
 
     if (f.ext === 'pdf') {
@@ -504,7 +510,10 @@ export async function buildAgent1Content(
             // EXTRACTED TEXT ...' header, which deliberately has no colon.
             // Omitting it here broke per-sheet tile logging for every
             // page-selected PDF (Task 2's classification path).
-            blocks.push({ type: 'text', text: `--- Sheet: ${label} (${groupCls}) ---` });
+            // FIX-7 (post-review) — `label` is either pageClassifier's
+            // real-sheet-identity label or the uploaded filename, both
+            // untrusted; sanitize before it lands in this delimiter line.
+            blocks.push({ type: 'text', text: `--- Sheet: ${sanitizeForPrompt(label)} (${groupCls}) ---` });
             addTextBlockForPage(label, pageTexts, group.page);
             blocks.push(...group.tiles);
           }

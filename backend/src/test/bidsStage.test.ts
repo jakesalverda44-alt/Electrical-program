@@ -48,6 +48,25 @@ describe('PATCH /bids/:id/stage — loss_reason and competitor survive a reopen'
     expect(lost2.body.bid.competitor).toBe('Beta Electric');
   });
 
+  // FIX-9 (post-review) — a same-day rewrite of this shared stage path
+  // switched `|| null` to `?? null`, which only falls back on
+  // null/undefined, not ''. An empty-string loss_reason/competitor (a form
+  // field cleared before submitting the "lost" move) then stored '' in the
+  // column instead of NULL — restored the `||` semantics.
+  it('stores NULL, not empty string, for an empty-string loss_reason/competitor', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `EmptyLoss ${Date.now()}`, gc: 'G' }).expect(200);
+    const id = bid.body.id as string;
+
+    const lost = await request(app).patch(`/api/bids/${id}/stage`).set(auth(u.token))
+      .send({ stage: 'lost', loss_reason: '', competitor: '' })
+      .expect(200);
+    expect(lost.body.bid.loss_reason).toBeNull();
+    expect(lost.body.bid.competitor).toBeNull();
+  });
+
   it('a bid never marked lost has null loss_reason/competitor through ordinary stage moves', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');

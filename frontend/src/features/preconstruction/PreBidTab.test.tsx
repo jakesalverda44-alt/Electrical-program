@@ -110,6 +110,23 @@ describe('PreBidTab', () => {
     expect(screen.getByRole('button', { name: /^Upload$/ })).toBeTruthy();
   });
 
+  // Phase 4 Task 5.3 — key_findings was fetched and typed but never rendered.
+  it('renders key_findings under the takeoff rollup', async () => {
+    get.mockImplementation((url: string) =>
+      Promise.resolve({ data: url.includes('/prebid-comparables') ? { comparables: [] } : pkg }));
+    render(<PreBidTab bidId="b1" onSectionsLoaded={() => {}}/>);
+    await waitFor(() => expect(screen.getByText('Key findings')).toBeTruthy());
+    expect(screen.getByText('Confidence key:')).toBeTruthy();
+  });
+
+  it('omits the key findings panel entirely when there are none', async () => {
+    get.mockImplementation((url: string) =>
+      Promise.resolve({ data: url.includes('/prebid-comparables') ? { comparables: [] } : { ...pkg, takeoff: { ...pkg.takeoff, key_findings: [] } } }));
+    render(<PreBidTab bidId="b1" onSectionsLoaded={() => {}}/>);
+    await waitFor(() => expect(screen.getByText('Site Light Pole')).toBeTruthy());
+    expect(screen.queryByText('Key findings')).toBeNull();
+  });
+
   it('hands parsed sections up so the Scope tab can import them', async () => {
     get.mockImplementation((url: string) =>
       Promise.resolve({ data: url.includes('/prebid-comparables') ? { comparables: [] } : pkg }));
