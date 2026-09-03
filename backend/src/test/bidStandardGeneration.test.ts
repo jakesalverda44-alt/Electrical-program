@@ -28,12 +28,17 @@ const CLEAN_AGENT4_OUTPUT = {
   exclusions: ['Painting and patching are excluded from this scope.'],
   fixture_types: ['A', 'AE'],
   allowances_bullets: ["160' allowance - service feeder from transformer secondary to MDP."],
+  // FIX-4 — generate-takeoff-xlsx now runs verifyBidText(kind:'gc') on the
+  // takeoff's own flattened text (item/description/unit/qty/source/conf/
+  // furnish_by), independent of the sections/scope text — so this fixture's
+  // takeoff needs its own 3+ ECFECI mentions to stay gate-passing (real
+  // gear-line takeoffs naturally carry several, per PROJECT_INSTRUCTIONS §7).
   takeoff: [
     { name: 'Service & Distribution', items: [
       { item: '1.1', description: '800A service entrance assembly (ECFECI)', unit: 'EA', qty: 1, source: 'E1.6 Riser Diagram', conf: 'VERIFIED' },
     ] },
     { name: 'Interior Lighting', items: [
-      { item: '2.1', description: 'Type A troffer', unit: 'EA', qty: 20, source: 'E2.0 Luminaire Schedule', conf: 'ASSUMED' },
+      { item: '2.1', description: 'Type A troffer (ECFECI)', unit: 'EA', qty: 20, source: 'E2.0 Luminaire Schedule', conf: 'ASSUMED', furnish_by: 'APT (ECFECI)' },
     ] },
   ],
 };
@@ -100,6 +105,24 @@ describe('proposal-preview (Task 7)', () => {
       .expect(200);
     expect(res.body.sections[0].title).toBe('A. Service & Distribution');
     expect(res.body.total_price).toBe('$248,750'); // agent4_price wins, not the '$50,000' in the blob
+  });
+
+  // FIX-9 — a GET must never write. Preview shows the would-be job number
+  // (composeBidData/jobNumber is pure and always computes one when the bid
+  // row has none) without persisting it; only the generate-* endpoints do.
+  it('computes an ephemeral job number for preview without persisting it', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBidWithAgent4(u.token, 'PreviewJobNo', CLEAN_AGENT4_OUTPUT);
+
+    const res = await request(app)
+      .get(`/api/preconstruction/${bidId}/proposal-preview`).set(auth(u.token))
+      .expect(200);
+    expect(res.body.job_number).toMatch(/^JS\.\d{8}$/);
+
+    const { rows } = await pool.query('SELECT job_number FROM bids WHERE id=$1', [bidId]);
+    expect(rows[0].job_number).toBeNull();
   });
 });
 
@@ -173,6 +196,35 @@ describe('generate-docx — verify gate (Task 6)', () => {
       .expect(200);
     expect(res.headers['content-type']).toMatch(/wordprocessingml/);
   });
+
+  // FIX-11 — the new-shape branch has always required a validated price
+  // before returning (422); the legacy branch didn't, so a legacy row with
+  // neither agent4_price nor its own embedded totalPrice sailed through
+  // composeCurrentBidData only to 500 later inside renderBidDocx's own price
+  // guard. Same 422 as the new path now.
+  it('a legacy-shape row with no validated price 422s instead of 500ing', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `LegacyNoPrice ${Date.now()}`, gc: 'G' }).expect(200);
+    const bidId = bid.body.id as string;
+    const legacyNoPrice = {
+      scopeOfWork: { A_ServiceDistribution: ['Service entrance (ECFECI).'] },
+      exclusions: ['Painting excluded.'],
+      // no totalPrice field at all, and agent4_price is NULL below.
+    };
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, agent2_output, agent4_output, agent4_price, agent4_status)
+       VALUES ($1,'{}',$2,NULL,'complete')`,
+      [bidId, JSON.stringify(legacyNoPrice)]
+    );
+
+    const res = await request(app)
+      .get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token))
+      .expect(422);
+    expect(res.body.error).toMatch(/no validated price/i);
+  });
 });
 
 describe('generate-takeoff-xlsx (Task 6)', () => {
@@ -204,6 +256,34 @@ describe('generate-takeoff-xlsx (Task 6)', () => {
       `SELECT category FROM documents WHERE linked_id=$1 AND category='takeoff'`, [bidId]
     );
     expect(rows.length).toBe(1);
+  });
+
+  // FIX-4 — generate-takeoff-xlsx previously shipped a GC-facing file with
+  // no verification gate at all (unlike generate-docx). A takeoff item
+  // carrying "TBD" must now block with 422 and file nothing.
+  it('blocks with 422 and files nothing when a takeoff item carries banned language ("TBD")', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const doctoredTakeoff = {
+      ...CLEAN_AGENT4_OUTPUT,
+      takeoff: CLEAN_AGENT4_OUTPUT.takeoff.map((cat, i) =>
+        i === 0
+          ? { ...cat, items: [...cat.items, { item: '1.2', description: 'Panel count TBD', unit: 'EA', qty: 1, source: 'Field' }] }
+          : cat
+      ),
+    };
+    const bidId = await makeBidWithAgent4(u.token, 'XlsxTBD', doctoredTakeoff);
+
+    const res = await request(app)
+      .get(`/api/preconstruction/${bidId}/generate-takeoff-xlsx`).set(auth(u.token))
+      .expect(422);
+    expect(res.body.failures.some((f: { check: string }) => f.check === 'banned_language')).toBe(true);
+
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS n FROM documents WHERE linked_id=$1 AND category='takeoff'`, [bidId]
+    );
+    expect(rows[0].n).toBe(0);
   });
 });
 
@@ -286,6 +366,43 @@ describe('generate-prebid-package (Task 6)', () => {
       .post(`/api/preconstruction/${bidId}/generate-prebid-package`).set(auth(u.token))
       .expect(422);
     expect(res.body.failures.some((f: { check: string }) => f.check === 'placeholders')).toBe(true);
+  });
+
+  // FIX-3 — generate-prebid-package used replaceExisting:true on the SAME
+  // prebid_scope/prebid_takeoff categories import-prebid files human-
+  // uploaded documents under — every regeneration hard-deleted whatever the
+  // estimator had imported. Import-prebid docs must now survive.
+  it('import-prebid document rows survive a generate-prebid-package call', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBidWithAgent4(u.token, 'PrebidKeepImports', CLEAN_AGENT4_OUTPUT);
+
+    await request(app)
+      .post(`/api/preconstruction/${bidId}/import-prebid`).set(auth(u.token))
+      .attach('takeoff', Buffer.from('not actually a spreadsheet'), 'imported.xlsx')
+      .attach('scope', Buffer.from('not actually a document'), 'imported.docx')
+      .expect(200);
+
+    const before = await pool.query(
+      `SELECT id, category FROM documents WHERE linked_id=$1 ORDER BY category`, [bidId]
+    );
+    expect(before.rows.map(r => r.category)).toEqual(['prebid_scope', 'prebid_takeoff']);
+    const importedIds = before.rows.map(r => r.id as string);
+
+    await request(app)
+      .post(`/api/preconstruction/${bidId}/generate-prebid-package`).set(auth(u.token))
+      .expect(200);
+
+    const after = await pool.query(
+      `SELECT id, category FROM documents WHERE linked_id=$1 ORDER BY category`, [bidId]
+    );
+    // 2 imported + 2 newly generated = 4 rows, not 2 — the imports weren't
+    // deleted, and the generation still filed its own new rows.
+    expect(after.rows.length).toBe(4);
+    for (const id of importedIds) {
+      expect(after.rows.some(r => r.id === id)).toBe(true);
+    }
   });
 
   it('400s with a clear message when there is no scope data at all', async (ctx) => {

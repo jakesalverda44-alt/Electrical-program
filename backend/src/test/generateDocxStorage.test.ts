@@ -40,9 +40,14 @@ describe('generate-docx — storage failure does not block the download', () => 
         { title: 'B. Branch Power', bullets: ['Branch circuit wiring per plan.'] },
         { title: 'C. Lighting & Controls', bullets: [
           'Complete lighting package (ECFECI) — Southern Lighting Source.',
+          'Controls & testing: occupancy sensors and photocells.',
         ] },
         { title: 'D. Site Lighting, Underground Work & Allowances', bullets: ['Site lighting per photometric plan.'] },
       ],
+      // Post-review FIX-7 — validateBidData now enforces Section C's exact-3
+      // rule; fixture_types folds the 3rd bullet in, same pattern used
+      // throughout composeBidData's own tests.
+      fixture_types: ['A'],
       exclusions: ['Standard exclusions apply.'],
       takeoff: [{ name: 'Service & Distribution', items: [
         { item: '1.1', description: 'Panel (ECFECI)', unit: 'EA', qty: 1, source: 'E1.0 Riser' },
