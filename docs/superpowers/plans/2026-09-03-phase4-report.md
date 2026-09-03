@@ -339,3 +339,214 @@ the Phase 3-review job_number same-day collision) are closed.
   shows only calls into `graphMailer.ts`'s exports, no raw `fetch`/SMTP).
 - **The GC submittal body cannot contain the amount**:
   `bidSubmittalEmail.test.ts`'s GUARD tests (Task 1).
+
+## Post-review fixes
+
+An adversarial review of this phase's PUBLIC surface (the unauthenticated
+`/bids/p/:token*` routes) found several serious defects, tracked as
+FIX-1 through FIX-11 below. All are addressed, each in its own commit
+(FIX-3 alone, per the review's instruction; the others grouped where they
+share a route or a file). `git log 609c82d..HEAD` on
+`feat/phase4-delivery` shows the full sequence:
+
+| # | Commit | Status |
+|---|---|---|
+| FIX-1 (blocking) | `73ade8f` | done |
+| FIX-2 (blocking) | `73ade8f` | done |
+| FIX-3 (blocking) | `8ff0949` | done |
+| FIX-4 | `5c150e4` (+ `070cde3` fixup) | done |
+| FIX-5 | `80f1842` | done |
+| FIX-6 (blocking) | `d954020` | done |
+| FIX-7 | `75c7320` | done |
+| FIX-8 | `d954020` | done |
+| FIX-9 | `3273f85` | done |
+| FIX-10 | `febe466` | done |
+| FIX-11 | `5c3f0dc` | done |
+
+### FIX-1 (blocking) — public data disclosure — done, `73ade8f`
+
+`GET /bids/p/:token` returned the ENTIRE `bids` row — notes, loss_reason,
+competitor, amount, salesperson/customer ids, team_notified_to, Drive
+folder ids, and `signature_data` — to anyone holding the token. Replaced
+with `publicBidProjection()`, an explicit 9-field projection matching the
+frontend's `PublicBid` contract (`BidProposalPublicPage.tsx`).
+`signature_data` is never returned publicly; `proposal_signed_at` +
+`signer_name` are enough to render the signed state. Applied to all
+three public bid routes (view, sign-idempotent, sign-award) — the
+disclosure was present in the sign responses too, not just the GET the
+review cited by line number.
+
+### FIX-2 (blocking) — hang on malformed token — done, `73ade8f`
+
+All three `/p/:token*` routes are now wrapped in `asyncHandler`
+(`utils/asyncHandler.ts`) and validate the token's UUID shape up front
+(`proposal_token` is a UUID column; a non-UUID string previously made
+Postgres throw `22P02` with the rejection never reaching `res`, hanging
+the request). Every failure mode — malformed token, unknown token,
+nothing to show yet — now returns the identical `{error:'Proposal not
+found'}` body.
+
+### FIX-3 (blocking, own commit) — filed snapshot, gated, rate-limited — done, `8ff0949`
+
+Redesigned as specified:
+- Migration `095_public_bid_gate.sql` adds `documents.gate_passed`
+  (default `false`) and `bids.signed_document_id` (FK to `documents`).
+- The three Phase 3 generate-* routes (`generate-docx`,
+  `generate-takeoff-xlsx`, `generate-prebid-package`) set
+  `gate_passed=true` on every row they file, only after their own verify
+  gate passes (`utils/storeDocument.ts` gained a `gatePassed` input).
+  Nothing else ever sets it.
+- `loadMostRecentBidDoc` now filters on `gate_passed=true` — the one
+  query `send-proposal`, `email-prebid-chris`, and public `/download` all
+  share, so send-proposal now 409s whenever no gate-passed docx exists.
+- `GET /p/:token` no longer composes/renders/verifies anything live: it
+  loads the most recent gate-passed `bid_data.json` and renders straight
+  from it (`renderBidHtml`). No live compose, no docx render, no verify
+  gate, no `soffice` probe on the view path.
+- `POST /p/:token/sign` records `signed_document_id` — the
+  `bid_data.json` document on screen at sign time.
+- `express-rate-limit` on all three public routes (60/15min view+
+  download, 20/15min sign), mirroring `routes/auth.ts`'s `authLimiter`.
+
+Tests rewritten per the review's (f): no-snapshot -> 404; a filed-but-
+not-gate-passed document (bid_data.json or docx) is treated as if
+nothing were filed; the snapshot renders verbatim; and the previously-
+missing case — a bid with no current composition at all (no
+`takeoff_results` row — the strongest form of "would fail the gate")
+still serves its filed snapshot fine, because the view path never
+re-composes or re-verifies.
+
+### FIX-4 — dead settings — done, `5c150e4` (+ `070cde3` fixup)
+
+`elec_followup_quiet_days`/`elec_followup_viewed_days` added to
+`routes/settings.ts`'s `ALLOWED_KEYS`. Round-trip test added
+(`settingsAllowedKeys.test.ts`). **Self-caught regression**: that test's
+first version set both keys to non-default values and never reset them
+— `app_settings` is a single shared row per key, so the custom values
+leaked into `bidQuietSweep.test.ts`'s integration tests (which rely on
+the 5/3-day defaults), causing 3 unrelated failures on a full-suite run.
+Caught during the full-suite verification pass below, fixed in `070cde3`
+(reset both keys to `''` at the end of the test — `numericSetting`'s
+`raw || String(fallback)` falls back to the default), and the
+already-polluted rows cleaned out of `electrical_crm_test` directly.
+Documented here because it's the same class of test-isolation bug
+Deviation 6 in the original report called out.
+
+### FIX-5 — double signature — done, `80f1842`
+
+`send-proposal`'s `graphSendMail` call and `email-prebid-chris`'s
+`graphCreateDraft` call now pass `appendSignature: false` — both bodies
+(`bidSubmittalEmail.ts`) already end with the authority template's own
+sign-off, and without the flag `graphMailer` appended the branded HTML
+signature a second time. `leadFirstContact.ts` already did this
+correctly. Extended `bidSubmittalEmail.test.ts` to lock that each
+builder's own sign-off is genuinely the last thing in the rendered body.
+
+### FIX-6 (blocking) — sign gating — done, `d954020`
+
+`GET /p/:token` and `POST /p/:token/sign` both now require
+`proposal_sent_at IS NOT NULL` (else the uniform 404) — migration 094's
+blanket token backfill meant a lost or never-sent bid's link was
+otherwise still live. A fresh sign additionally requires
+`stage IN ('due','submitted')`, else 409
+`{error:'This proposal is no longer available for acceptance'}` (the
+existing generic error-banner UI on the public page already renders this
+message; no separate UI state was needed). The signed-idempotency
+short-circuit is unchanged and still takes priority. Tests: signing a
+lost bid 409s with no `won_jobs`/audit side effects; signing an
+already-(manually-)awarded bid 409s with no duplicate award (replacing a
+prior test that asserted the old, now-incorrect behavior); viewing or
+signing an unsent bid 404s.
+
+### FIX-7 — sanitization gap — done, `75c7320`
+
+`sanitizeForPrompt` now also covers `pdfText.ts`'s `sheetLabel` (was
+interpolated unsanitized into the function's own trusted delimiter,
+right next to the already-sanitized page text) and `documentPrep.ts`'s
+two label sites (~469 filename, ~507 `sel.label`) that a prior task
+explicitly left out of scope. Tests at all three sites confirm a hostile
+label/filename containing the `--- ... ---` delimiter grammar arrives
+defanged.
+
+### FIX-8 — audit on e-sign award — done, `d954020`
+
+Added `writeAuditAs` (`utils/audit.ts`) — `writeAudit` is now a thin
+wrapper over it — which takes an explicit actor instead of `req.user`,
+for actions with no authenticated request behind them. The sign route
+calls it with actor name `"Customer e-signature (<signerName>)"` and
+null `user_id`, recording the same `'award'` action a manual
+`PATCH /:id/stage` drag logs. Test confirms exactly one `audit_log`
+`'award'` row exists after a sign-triggered award.
+
+### FIX-9 — behavior drift — done, `3273f85`
+
+`services/bidStage.ts` restored `opts.lossReason || null` /
+`opts.competitor || null` (was `?? null`, which doesn't fall back on an
+empty string) — matches main's original semantics. Test added for the
+empty-string case.
+
+### FIX-10 — DEPLOY.md corrections — done, `febe466`
+
+(a) Explicit warning that `EMAIL_DISABLED` mutes only the outbound Graph
+mail call — the smoke list's send-proposal and rfi-draft steps still, for
+real, advance stage/move the Drive folder and mark RFIs submitted; both
+steps now specify a throwaway bid. (b) A new "Before syncing the
+blueprint" section: verify `DATABASE_URL` currently resolves to a
+Supabase host and copy the value somewhere safe before syncing — with an
+explicit STOP if the host shown is `*.render.com`. (c) Noted migration
+094's volatile-default full-table rewrite of `bids` (quiet-window
+deploy) and added a `pg_dump --schema-only` snapshot step before
+deploying 094/095; migration 095 (this same post-review round) is now
+listed alongside 094.
+
+### FIX-11 — nits (one commit) — done, `5c3f0dc`
+
+- The sign route's try/catch/finally now guards only the transaction
+  itself; Drive folder moves, the audit write, the response, and
+  notifications all live outside it in their own locally-guarded block,
+  so a post-commit failure is logged, never turned into a second
+  `res.status(500)` after a response may already be sent.
+- `bidSubmittalEmail.test.ts`'s amount-guard tests gained decimal
+  variants ($248,750.00 / 248750.00).
+- `rfi-draft` now returns `submittedIds` (the exact ids it actually
+  drafted); the frontend marks only those ids submitted instead of every
+  currently-unsubmitted RFI, so a blank-question RFI (excluded
+  server-side) correctly stays unsubmitted client-side too.
+- Chris's email moved out of the hardcoded frontend value into an
+  `prebid_chris_email` app_setting (added to `ALLOWED_KEYS`, defaulting
+  to the previously-hardcoded address); the server resolves it,
+  the frontend stopped hardcoding it.
+- Removed the unused `loc` local in `defaultPrebidChrisSubject`.
+
+## Post-review: final test counts
+
+- **Backend** (`npm test`, `electrical_crm_test`): **760 passed, 1
+  failed** — the same pre-existing, documented Kohler-brief flake
+  (`command center brief (integration) > surfaces a needs-call Kohler
+  lead as a lead-call item with a tel: CTA`), unrelated to this round.
+  23 new/extended test files' worth of coverage added across the 11
+  fixes; no new failures.
+- **Frontend** (`npm test`): **340 passed, 9 failed** — the same 9
+  pre-existing failures in the same two known files
+  (`useInstallPrompt.test.ts`, `CustomerHub.test.tsx`), unrelated to this
+  round. One new test added (`PcWorkspaceRfi.test.tsx`'s blank-question-
+  RFI case) and passing.
+- `npx tsc --noEmit` clean on both `backend/` and `frontend/` as of the
+  final commit.
+
+## Post-review: safety confirmation
+
+- **Tests only ever ran against `electrical_crm_test`**, via `npm test`
+  (`NODE_ENV=test DB_NAME=electrical_crm_test`) or the equivalent direct
+  `vitest run` invocations used while iterating on individual fixes.
+  `harness.ts`'s live-DB guard was never tripped.
+- **Never ran a dev server.** All verification was `npx tsc --noEmit` and
+  `vitest`/`npm test`.
+- **Zero real emails sent** — no new or changed email pathway bypasses
+  `graphMailer.ts`; `graphSendMail`/`graphCreateDraft` still self-mute
+  under `NODE_ENV=test`. FIX-5's `appendSignature:false` change and
+  FIX-11's Chris-email-as-setting change are both additive to existing
+  `graphMailer` call sites, not new send paths.
+- **No pushes.** All work is local commits on `feat/phase4-delivery` in
+  the `Electrical-program-wt-phase4` worktree.
+- **Clean tree** as of the final commit (verified below).
