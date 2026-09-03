@@ -51,9 +51,13 @@ export interface Bid {
   date_won?: string | null;
   team_notified_at?: string | null;
   team_notified_to?: string[] | null;
-  // Phase 4 Task 1/2/3 — send-to-GC delivery, public proposal page view
-  // tracking, and e-sign (mirrors generator_proposals' token/sent/viewed/
-  // signed columns from 020_gen_proposal_email_signature.sql).
+  // Phase 4 Task 1/2/3 columns. Post-merge rework (2026-09-03) removed the
+  // public proposal page + e-sign flow entirely (GCs execute via
+  // contract/PO, not a web signature) — proposal_token/proposal_viewed_at/
+  // proposal_signed_at/signer_name are no longer written by anything and
+  // stay only because dropping them isn't worth a migration. proposal_sent_at/
+  // proposal_sent_to ARE still live: draft-proposal's markSubmitted stamps
+  // them exactly as the old send did.
   proposal_token?: string | null;
   proposal_sent_at?: string | null;
   proposal_sent_to?: string[] | null;

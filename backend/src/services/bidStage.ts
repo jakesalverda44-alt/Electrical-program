@@ -13,11 +13,14 @@ import {
 
 // Phase 4 Task 1.3/3.1 — the shared bid stage-transition path. Extracted
 // verbatim from PATCH /:id/stage (routes/bids.ts) so every entry point that
-// moves a bid's stage — the manual pipeline drag, send-proposal's auto-
-// advance due -> submitted, and the public e-sign route's auto-award ->
-// awarded — produces IDENTICAL side effects (won_job, project registration,
-// activity feed, Drive folder moves). Nothing here is new behavior; it is
-// the existing PATCH /:id/stage body, unchanged, moved so it can be called
+// moves a bid's stage — the manual pipeline drag and draft-proposal's
+// markSubmitted auto-advance due -> submitted — produces IDENTICAL side
+// effects (won_job, project registration, activity feed, Drive folder
+// moves). (Post-merge rework, 2026-09-03: the public e-sign route's
+// auto-award -> awarded is gone — GCs execute via contract/PO, not a web
+// signature; awards now only ever happen through the manual pipeline drag.)
+// Nothing here is new behavior; it is the existing PATCH /:id/stage body,
+// unchanged, moved so it can be called
 // from more than one route without copy-pasting it.
 
 export type BidStage = 'due' | 'submitted' | 'awarded' | 'lost';
