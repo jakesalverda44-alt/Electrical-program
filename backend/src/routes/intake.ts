@@ -144,6 +144,18 @@ router.post('/:id/read', requireAuth, async (req: AuthRequest, res) => {
   res.json(rows[0]);
 });
 
+// Mark an intake item unread — the reviewer opened it but hasn't decided yet and wants the
+// blue-dot reminder back. Pending items only: an accepted/rejected item going "unread" would
+// inflate the sidebar badge with items that no longer need a decision.
+router.post('/:id/unread', requireAuth, async (req: AuthRequest, res) => {
+  const { rows } = await pool.query(
+    `UPDATE intake_items SET read_at = NULL WHERE id=$1 AND status='pending' RETURNING id, read_at`,
+    [req.params.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Not found or not pending' });
+  res.json(rows[0]);
+});
+
 // Accept → create a bid (owned by the accepter) and mark the item accepted.
 // Optional body fields override the stored values (the reviewer may edit first).
 router.post('/:id/accept', requireAuth, async (req: AuthRequest, res) => {

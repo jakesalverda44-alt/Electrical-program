@@ -332,7 +332,8 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
               ))}
             </div>
           )}
-          {(selected.web_link || selected.links?.procore || selected.links?.documents) && (
+          {(selected.web_link || selected.links?.procore || selected.links?.documents
+            || (selected.status === 'pending' && selected.read_at)) && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
               {selected.web_link && (
                 <a href={selected.web_link} target="_blank" rel="noopener noreferrer" style={outlookLinkStyle}>
@@ -348,6 +349,26 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
                 <a href={selected.links.documents} target="_blank" rel="noopener noreferrer" style={outlookLinkStyle}>
                   <Icon name="cloudup" size={13} stroke={2}/> Download Documents
                 </a>
+              )}
+              {selected.status === 'pending' && selected.read_at && (
+                <button
+                  onClick={() => {
+                    const id = selected.id;
+                    // Optimistic: blue dot comes back immediately; revert on failure.
+                    setItems(prev => prev.map(i => i.id === id ? { ...i, read_at: null } : i));
+                    setSelected(prev => prev && prev.id === id ? { ...prev, read_at: null } : prev);
+                    api.post(`/intake/${id}/unread`)
+                      .then(() => showToast({ title: 'Marked unread', sub: 'It will show as new until you open it again' }))
+                      .catch(() => {
+                        const stamp = new Date().toISOString();
+                        setItems(prev => prev.map(i => i.id === id ? { ...i, read_at: stamp } : i));
+                        setSelected(prev => prev && prev.id === id ? { ...prev, read_at: stamp } : prev);
+                        showToast({ title: 'Could not mark unread' });
+                      });
+                  }}
+                  style={{ ...outlookLinkStyle, background: 'none', border: 'none', cursor: 'pointer', font: 'inherit' }}>
+                  <Icon name="clock" size={13} stroke={2}/> Mark unread
+                </button>
               )}
             </div>
           )}
