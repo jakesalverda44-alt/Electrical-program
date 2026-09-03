@@ -75,4 +75,36 @@ describe('validateBidData', () => {
     };
     expect(validateBidData(data)).toEqual([]);
   });
+
+  // FIX-7 — Section C's bullet count is the standard's one non-negotiable
+  // exact count.
+  describe('Section C exact-3-bullets rule', () => {
+    it('flags Section C with fewer than 3 bullets', () => {
+      const problems = validateBidData({
+        ...fixture,
+        sections: fixture.sections.map(s =>
+          s.title === 'C. Lighting & Controls' ? { ...s, bullets: s.bullets.slice(0, 1) } : s
+        ),
+      });
+      expect(problems.some(p => /"C\. Lighting & Controls" must have exactly 3 bullets \(got 1\)/.test(p))).toBe(true);
+    });
+
+    it('flags Section C with more than 3 bullets', () => {
+      const problems = validateBidData({
+        ...fixture,
+        sections: fixture.sections.map(s =>
+          s.title === 'C. Lighting & Controls' ? { ...s, bullets: [...s.bullets, 'A 4th bullet.'] } : s
+        ),
+      });
+      expect(problems.some(p => /must have exactly 3 bullets \(got 4\)/.test(p))).toBe(true);
+    });
+
+    it('does not gate a BidData that legitimately omits Section C entirely', () => {
+      const problems = validateBidData({
+        ...fixture,
+        sections: fixture.sections.filter(s => s.title !== 'C. Lighting & Controls'),
+      });
+      expect(problems.some(p => /Lighting & Controls/.test(p))).toBe(false);
+    });
+  });
 });

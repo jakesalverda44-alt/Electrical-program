@@ -1,4 +1,6 @@
-// Phase 3 Task 1 — the bid_data contract.
+// Phase 3 Task 1 — the bid_data contract; post-review FIX-7 wired
+// validateBidData into the generate routes (see composeCurrentBidData in
+// backend/src/routes/preconstruction.ts) and added the Section C rule below.
 //
 // Mirrors the APT_Bid_System v4 skill's `scripts/bid_data.example.json` exactly
 // (copied verbatim to backend/src/test/fixtures/bidstd/bid_data.example.json —
@@ -8,6 +10,7 @@
 // AI fills this data, code renders the documents. See
 // ~/.claude/skills/apt-electrical-bid/PROJECT_INSTRUCTIONS.md for the standard
 // this shape encodes.
+import { SECTION_HEADERS } from './boilerplate';
 
 /** A takeoff line item. `qty` may be a plain number or a string (e.g. an
  *  unresolved "VERIFY" count carried as text) — never coerced here. */
@@ -134,6 +137,18 @@ export function validateBidData(data: Partial<BidData> | null | undefined): stri
       if (isBlank(s?.title)) problems.push(`section ${i + 1} is missing a title`);
       if (!Array.isArray(s?.bullets) || s.bullets.length === 0) problems.push(`section "${label}" has no bullets`);
     });
+
+    // FIX-7 — Section C's bullet count is the standard's one non-negotiable
+    // exact count (PROJECT_INSTRUCTIONS §6: "C 3-3"; boilerplate.ts's own
+    // TAKEOFF_COLUMNS_GC/SECTION_LIMITS locked the same rule but were never
+    // wired to anything). Only checked when Section C is present — a job
+    // that legitimately omits it entirely (no lighting scope) isn't gated.
+    const sectionC = d.sections.find(s => s?.title === SECTION_HEADERS.C);
+    if (sectionC && (!Array.isArray(sectionC.bullets) || sectionC.bullets.length !== 3)) {
+      problems.push(
+        `section "${SECTION_HEADERS.C}" must have exactly 3 bullets (got ${Array.isArray(sectionC.bullets) ? sectionC.bullets.length : 0})`
+      );
+    }
   }
 
   if (!Array.isArray(d.exclusions) || d.exclusions.length === 0) {

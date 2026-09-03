@@ -57,17 +57,6 @@ export const SECTION_HEADERS = {
   terms: 'TERMS, CONDITIONS & SPECIAL REQUIREMENTS',
 } as const;
 
-/** Per-section bullet-count rules (PROJECT_INSTRUCTIONS §6). Section D has no
- *  fixed count (conduit spec bullets + one bullet per allowance), so it's
- *  intentionally absent here. */
-export const SECTION_LIMITS: Record<'A' | 'B' | 'C' | 'E' | 'F', { min: number; max: number }> = {
-  A: { min: 3, max: 4 },
-  B: { min: 1, max: 2 },
-  C: { min: 3, max: 3 },
-  E: { min: 1, max: 2 },
-  F: { min: 1, max: 2 },
-};
-
 /** Standard closing block strings (PROJECT_INSTRUCTIONS §10), verbatim. */
 export const CLOSING = {
   respectfully: 'Respectfully,',
@@ -81,9 +70,6 @@ export const CLOSING = {
 
 /** Pre-bid banner text (PROJECT_INSTRUCTIONS §14 / build_prebid.js), verbatim. */
 export const PREBID_BANNER = 'PRE-BID PACKAGE  —  INTERNAL USE';
-
-/** Standard takeoff table column headers (PROJECT_INSTRUCTIONS §11). */
-export const TAKEOFF_COLUMNS_GC = ['ITEM', 'DESCRIPTION', 'UNIT', 'QTY', 'SOURCE / NOTES'] as const;
 
 /** The 8 standard takeoff categories, always in this order (PROJECT_INSTRUCTIONS §11). */
 export const TAKEOFF_CATEGORIES = [

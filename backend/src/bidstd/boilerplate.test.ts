@@ -6,8 +6,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   standardScope6, standardTerms, jobNumber,
-  SECTION_HEADERS, SECTION_LIMITS, CLOSING, PREBID_BANNER,
-  TAKEOFF_COLUMNS_GC, TAKEOFF_CATEGORIES,
+  SECTION_HEADERS, CLOSING, PREBID_BANNER,
+  TAKEOFF_CATEGORIES,
 } from './boilerplate';
 
 describe('standardScope6', () => {
@@ -67,18 +67,6 @@ describe('SECTION_HEADERS', () => {
   });
 });
 
-describe('SECTION_LIMITS', () => {
-  it('matches PROJECT_INSTRUCTIONS §6 (A 3-4, B max 2, C exactly 3, E 1-2, F 1-2)', () => {
-    expect(SECTION_LIMITS).toEqual({
-      A: { min: 3, max: 4 },
-      B: { min: 1, max: 2 },
-      C: { min: 3, max: 3 },
-      E: { min: 1, max: 2 },
-      F: { min: 1, max: 2 },
-    });
-  });
-});
-
 describe('CLOSING block', () => {
   it('matches the standard closing block strings verbatim', () => {
     expect(CLOSING.respectfully).toBe('Respectfully,');
@@ -99,11 +87,7 @@ describe('PREBID_BANNER', () => {
   });
 });
 
-describe('TAKEOFF_COLUMNS_GC / TAKEOFF_CATEGORIES', () => {
-  it('matches the GC-facing column headers', () => {
-    expect(TAKEOFF_COLUMNS_GC).toEqual(['ITEM', 'DESCRIPTION', 'UNIT', 'QTY', 'SOURCE / NOTES']);
-  });
-
+describe('TAKEOFF_CATEGORIES', () => {
   it('matches the 8 standard categories in order', () => {
     expect(TAKEOFF_CATEGORIES).toEqual([
       'Service & Distribution',
