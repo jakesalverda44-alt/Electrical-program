@@ -27,6 +27,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { BidData, TakeoffCategory, Bullet } from '../bidstd/bidData';
 import { SECTION_HEADERS, CLOSING } from '../bidstd/boilerplate';
+import { legacyProposalToBidData, LegacyProposalJSON } from '../bidstd/composeBidData';
 
 /* ---------------------------------------------------------------- CONSTANTS
  * Ported verbatim from build_bid.js v4. */
@@ -390,7 +391,7 @@ export interface BidMeta {
 }
 
 // Claude occasionally returns array items as objects instead of strings.
-// Flatten any such value to a readable string so the docx builder never crashes.
+// Flatten any such value to a readable string.
 function toStr(v: unknown): string {
   if (typeof v === 'string') return v;
   if (v && typeof v === 'object') {
@@ -401,88 +402,32 @@ function toStr(v: unknown): string {
   return String(v ?? '');
 }
 
-// Format any date-ish input as "Month DD, YYYY" (e.g. "June 8, 2026"). Falls
-// back to today when the value is missing or unparseable — never emits ISO.
-function formatDate(v: unknown): string {
-  const today = new Date();
-  const fmt = (d: Date) =>
-    d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-  const s = toStr(v).trim();
-  if (!s) return fmt(today);
-  const parsed = new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T00:00:00` : s);
-  return isNaN(parsed.getTime()) ? fmt(today) : fmt(parsed);
-}
-
-// The old A_ServiceDistribution.. F_Coordination keys, mapped onto the new
-// standard section titles — same six sections, same order, canonical names.
-const LEGACY_SECTION_MAP: [keyof NonNullable<ProposalJSON['scopeOfWork']>, string][] = [
-  ['A_ServiceDistribution', SECTION_HEADERS.A],
-  ['B_BranchPower', SECTION_HEADERS.B],
-  ['C_LightingControls', SECTION_HEADERS.C],
-  ['D_SiteLightingUnderground', SECTION_HEADERS.D],
-  ['E_LowVoltage', SECTION_HEADERS.E],
-  ['F_Coordination', SECTION_HEADERS.F],
-];
-
-/**
- * Minimal legacy adapter used only to keep buildProposalDocx rendering during
- * the Task 5 transition. This is intentionally NOT the full-fidelity
- * legacyProposalToBidData adapter (backend/src/bidstd/composeBidData.ts,
- * Task 5.3) — it doesn't need to satisfy validateBidData or the verify gate,
- * only to render the old shape through the new template without throwing.
- */
-function legacyToBidData(data: ProposalJSON, bidMeta: BidMeta): BidData {
-  const projectName = toStr(bidMeta.projectName) || toStr(data.projectName) || '—';
-  const projectAddress = toStr(bidMeta.projectAddress) || toStr(data.projectAddress);
-  const client = toStr(bidMeta.gcName) || toStr(data.gcName) || '—';
-  const totalPrice = toStr(bidMeta.totalPrice) || toStr(data.totalPrice);
-
-  const sow = data.scopeOfWork ?? {};
-  const sections = LEGACY_SECTION_MAP
-    .map(([key, title]) => ({
-      title,
-      bullets: (sow[key] ?? []).map(toStr).filter(b => b.trim().length > 0),
-    }))
-    .filter(s => s.bullets.length > 0);
-
-  const takeoffByCategory = new Map<string, BidData['takeoff'][number]>();
-  for (const t of data.takeoff ?? []) {
-    const name = toStr(t.category) || 'Uncategorized';
-    if (!takeoffByCategory.has(name)) takeoffByCategory.set(name, { name, items: [] });
-    takeoffByCategory.get(name)!.items.push({
-      item: toStr(t.item),
-      description: toStr(t.description),
-      unit: toStr(t.unit),
-      qty: t.qty ?? '',
-      source: toStr(t.sourceNotes),
-    });
-  }
-
-  return {
-    project_slug: projectName.replace(/[^a-z0-9]+/gi, '') || 'Project',
-    location_slug: (projectAddress.split(',')[1] || '').trim().replace(/[^a-z0-9]+/gi, '') || 'FL',
-    date: formatDate(data.date),
-    client,
-    contact: toStr(bidMeta.gcContact) || toStr(data.gcContact) || undefined,
-    email: toStr(data.gcEmail) || undefined,
-    project_name: projectName,
-    project_address: projectAddress,
-    job_number: toStr(data.jobNumber),
-    total_price: totalPrice,
-    scope: (sow.standard6Bullets ?? []).map(toStr),
-    sections,
-    exclusions: (data.exclusions ?? []).map(toStr),
-    takeoff: [...takeoffByCategory.values()],
-    terms: (data.terms ?? []).map(toStr),
-  };
-}
-
 /**
  * Kept working during the Task 5 transition: maps the pre-Phase-3 Agent 4
- * output shape onto BidData and renders it through the exact same
- * renderBidDocx used for the new shape.
+ * output shape onto BidData via legacyProposalToBidData (Task 5.3's single
+ * adapter — no duplicate mapping logic here), applies the same bid-row/
+ * validated-price precedence generate-docx has always used, and renders
+ * through the exact same renderBidDocx used for the new shape.
  */
 export async function buildProposalDocx(data: ProposalJSON, bidMeta: BidMeta = {}): Promise<Buffer> {
-  const bidData = legacyToBidData(data, bidMeta);
+  const partial = legacyProposalToBidData(data as LegacyProposalJSON);
+  const bidData: BidData = {
+    project_slug: partial.project_slug || 'Project',
+    location_slug: partial.location_slug || 'FL',
+    date: partial.date || new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+    client: toStr(bidMeta.gcName) || partial.client || '—',
+    contact: toStr(bidMeta.gcContact) || partial.contact || undefined,
+    email: partial.email,
+    project_name: toStr(bidMeta.projectName) || partial.project_name || '—',
+    project_address: toStr(bidMeta.projectAddress) || partial.project_address || '',
+    job_number: partial.job_number || '',
+    plan_date: partial.plan_date,
+    total_price: toStr(bidMeta.totalPrice) || partial.total_price || '',
+    scope: partial.scope || [],
+    sections: partial.sections || [],
+    exclusions: partial.exclusions || [],
+    takeoff: partial.takeoff || [],
+    terms: partial.terms || [],
+  };
   return renderBidDocx(bidData);
 }

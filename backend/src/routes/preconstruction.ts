@@ -6,7 +6,7 @@ import { getSetting } from '../db/getSetting';
 import Anthropic from '@anthropic-ai/sdk';
 import AdmZip from 'adm-zip';
 import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM, AGENT4_SYSTEM, PREBID_COMPARE_SYSTEM } from '../ai/prompts';
-import { buildProposalDocx, ProposalJSON } from '../utils/proposalDocx';
+import { buildProposalDocx, ProposalJSON, renderBidDocx } from '../utils/proposalDocx';
 import { callWithRetry } from '../ai/retry';
 import { parseAIJSON, extractJSONText } from '../ai/json';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -36,11 +36,12 @@ import { parsePrebidScope } from '../utils/prebidScopeParse';
 import { parseAccubidBreakdown } from '../utils/accubidParse';
 import { storeDocument } from '../utils/storeDocument';
 import { mergeAgent1Batches } from '../ai/mergeAgent1';
-import { buildAgent4UserMessage } from '../ai/agent4Message';
+import { buildAgent4UserMessage, isAgent4Shape, Agent4Output } from '../ai/agent4Message';
 import { parseMoney } from '../utils/money';
 import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
+import { composeBidData, ComposeBidRow } from '../bidstd/composeBidData';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
 const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'warehouse', 'restaurant', 'medical', 'retail', 'other'];
@@ -1642,6 +1643,19 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
         );
         return;
       }
+      // Task 5.4 — light shape check on the new data-only contract (sections[]
+      // and takeoff[] present). Not a full validateBidData pass (that runs on
+      // the COMPOSED BidData in generate-docx, after the bid row is merged in)
+      // — just enough to catch a response that isn't even attempting the new
+      // shape before it's persisted and silently produces a blank proposal.
+      if (!isAgent4Shape(parsed)) {
+        logger.warn({ bidId, preview: rawText.slice(0, 300) }, '[agent4] Response parsed as JSON but is not the expected shape (sections[]/takeoff[] missing)');
+        await pool.query(
+          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2`,
+          ['AI response was valid JSON but missing the expected sections/takeoff arrays. Try re-running Agent 4.', bidId]
+        );
+        return;
+      }
       await pool.query(
         `UPDATE takeoff_results SET
           agent4_output=$1, agent4_price=$2, agent4_notes=$3,
@@ -1690,21 +1704,15 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
     ? `$${priceNum.toLocaleString('en-US', { minimumFractionDigits: Number.isInteger(priceNum) ? 0 : 2, maximumFractionDigits: 2 })}`
     : undefined;
 
-  let proposalData: ProposalJSON;
-  try {
-    const raw = trRows[0].agent4_output as string;
-    const parsed = parseAIJSON(raw);
-    if (!parsed) return res.status(422).json({ error: 'Proposal data could not be parsed. Re-run Agent 4 to regenerate.' });
-    proposalData = parsed as unknown as ProposalJSON;
-  } catch {
-    return res.status(422).json({ error: 'Proposal data is not valid JSON. Re-run Agent 4 to regenerate.' });
-  }
+  const raw = trRows[0].agent4_output as string;
+  const parsed = parseAIJSON(raw);
+  if (!parsed) return res.status(422).json({ error: 'Proposal data could not be parsed. Re-run Agent 4 to regenerate.' });
 
   const { rows: bidRows } = await pool.query(
-    'SELECT name, loc, gc, contact FROM bids WHERE id=$1 AND deleted_at IS NULL',
+    'SELECT name, loc, gc, contact, sq_ft, job_number FROM bids WHERE id=$1 AND deleted_at IS NULL',
     [bidId]
   );
-  const bid = bidRows[0] as { name?: string; loc?: string; gc?: string; contact?: string } | undefined;
+  const bid = bidRows[0] as { name?: string; loc?: string; gc?: string; contact?: string; sq_ft?: number | string | null; job_number?: string | null } | undefined;
   const bidName = bid?.name ?? bidId;
   // HTTP headers must be Latin-1. Strip any non-ASCII (em dashes, accents, etc.)
   // from the filename or res.setHeader throws ERR_INVALID_CHAR.
@@ -1713,17 +1721,42 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
 
   let buf: Buffer;
   try {
-    // The bid record is the authoritative source for the project name — Agent 4's
-    // generated projectName is ignored in favor of what the estimator entered.
-    buf = await buildProposalDocx(proposalData, {
-      projectName: bid?.name,
-      projectAddress: bid?.loc,
-      gcName: bid?.gc,
-      gcContact: bid?.contact,
-      totalPrice: formattedPrice,
-    });
+    // Task 5 — Agent 4's new data-only contract (sections[]/takeoff[]) is
+    // composed with the bid row (project name/address/GC/contact, same
+    // authority as the legacy path below) and the validated price, then
+    // rendered through the standard renderer. A pre-Phase-3 row (old
+    // scopeOfWork shape) still renders via the legacy adapter — the bid-row/
+    // validated-price precedence is identical either way.
+    if (isAgent4Shape(parsed)) {
+      if (!formattedPrice) {
+        return res.status(422).json({ error: 'No validated price on file for this proposal. Re-run Agent 4.' });
+      }
+      const bidRow: ComposeBidRow = {
+        name: bid?.name, loc: bid?.loc, gc: bid?.gc, contact: bid?.contact,
+        sq_ft: bid?.sq_ft ?? null, job_number: bid?.job_number ?? null,
+      };
+      const { data, jobNumberGenerated } = composeBidData(bidRow, parsed as Agent4Output, formattedPrice);
+      if (jobNumberGenerated) {
+        // composeBidData is pure and never writes to the DB — persist the
+        // freshly-generated job number back so it's stable on every future
+        // regeneration of this bid's documents.
+        await pool.query('UPDATE bids SET job_number=$2 WHERE id=$1 AND deleted_at IS NULL', [bidId, data.job_number]);
+      }
+      buf = await renderBidDocx(data);
+    } else {
+      // The bid record is the authoritative source for the project name — the
+      // stored data blob's own projectName/gcName are ignored in favor of what
+      // the estimator entered.
+      buf = await buildProposalDocx(parsed as unknown as ProposalJSON, {
+        projectName: bid?.name,
+        projectAddress: bid?.loc,
+        gcName: bid?.gc,
+        gcContact: bid?.contact,
+        totalPrice: formattedPrice,
+      });
+    }
   } catch (err) {
-    logger.error({ err, bidId }, '[generate-docx] buildProposalDocx threw');
+    logger.error({ err, bidId }, '[generate-docx] document build threw');
     return res.status(500).json({ error: `Document build failed: ${err instanceof Error ? err.message : String(err)}` });
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAgent4UserMessage, AGENT1_TEXT_CAP } from './agent4Message';
+import { buildAgent4UserMessage, AGENT1_TEXT_CAP, isAgent4Shape } from './agent4Message';
 
 const baseInput = {
   price: '$425,000',
@@ -90,5 +90,32 @@ describe('buildAgent4UserMessage', () => {
     const msg = buildAgent4UserMessage(baseInput);
     expect(msg).toContain('--- SCOPE & ESTIMATE (Agent 2) ---');
     expect(msg).toContain(baseInput.agent2Output);
+  });
+});
+
+describe('isAgent4Shape', () => {
+  it('true for a minimal new-shape object (sections + takeoff arrays)', () => {
+    expect(isAgent4Shape({ sections: [], takeoff: [] })).toBe(true);
+    expect(isAgent4Shape({ sections: [{ title: 'A. Service & Distribution', bullets: [] }], takeoff: [{ name: 'x', items: [] }] })).toBe(true);
+  });
+
+  it('false for an empty object', () => {
+    expect(isAgent4Shape({})).toBe(false);
+  });
+
+  it('false for the old (pre-Phase-3) ProposalJSON shape', () => {
+    expect(isAgent4Shape({ scopeOfWork: { A_ServiceDistribution: [] }, totalPrice: '$1' })).toBe(false);
+  });
+
+  it('false for null/undefined/non-objects', () => {
+    expect(isAgent4Shape(null)).toBe(false);
+    expect(isAgent4Shape(undefined)).toBe(false);
+    expect(isAgent4Shape('a string')).toBe(false);
+    expect(isAgent4Shape(42)).toBe(false);
+  });
+
+  it('false when only one of sections/takeoff is an array', () => {
+    expect(isAgent4Shape({ sections: [], takeoff: 'not an array' })).toBe(false);
+    expect(isAgent4Shape({ sections: 'not an array', takeoff: [] })).toBe(false);
   });
 });

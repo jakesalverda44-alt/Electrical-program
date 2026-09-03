@@ -106,3 +106,71 @@ export function buildAgent4UserMessage(input: Agent4MessageInput): string {
 
   return lines.join('\n');
 }
+
+/* ============================================================================
+ * Phase 3 Task 5 — Agent 4's new (data-only) output contract.
+ *
+ * Agent 4 (AGENT4_SYSTEM, prompts.ts) now emits ONLY project-specific data —
+ * no boilerplate, no letterhead, no closing block, no totalPrice (the bid
+ * record's validated agent4_price is authoritative — see run-agent4). The
+ * shape here is the single source of truth for both the run-agent4 shape
+ * check below and composeBidData.ts's input type.
+ * ========================================================================== */
+
+/** One takeoff line item as Agent 4 emits it — `conf`/`furnish_by` optional,
+ *  everything else Agent 4 is expected to fill even when blank. */
+export interface Agent4TakeoffItem {
+  item?: string;
+  description?: string;
+  unit?: string;
+  qty?: number | string;
+  source?: string;
+  /** FIRM / APPROX / VERIFY (or Agent 2's VERIFIED/ASSUMED/NOT SHOWN, which
+   *  composeBidData normalizes) — composeBidData prefers the saved estimate's
+   *  authoritative value over this echo when both are available. */
+  conf?: string;
+  furnish_by?: string;
+}
+
+export interface Agent4TakeoffCategory {
+  name: string;
+  items?: Agent4TakeoffItem[];
+}
+
+export interface Agent4Section {
+  title: string;
+  bullets?: (string | { b: string; t: string })[];
+}
+
+/** Agent 4's full output contract — see AGENT4_SYSTEM's OUTPUT block. */
+export interface Agent4Output {
+  plan_date?: string;
+  sheets?: string[];
+  sections?: Agent4Section[];
+  exclusions?: (string | { b: string; t: string })[];
+  /** Already-formatted bullet strings, one per allowance — composeBidData
+   *  appends them to Section D rather than trusting free-form AI phrasing
+   *  for this fixed template ("XXX' allowance - ..."). */
+  allowances_bullets?: string[];
+  /** Raw fixture-type codes (e.g. ["A","AE","B1"]) — composeBidData builds
+   *  Section C's fixed 3rd bullet ("Fixture types per schedule: ...") from
+   *  this instead of trusting AI-formatted prose for a simple joined list. */
+  fixture_types?: string[];
+  takeoff?: Agent4TakeoffCategory[];
+  alternates?: (string | { b: string; t: string })[];
+  takeoff_notes?: string[];
+}
+
+/**
+ * Light shape check run after parsing Agent 4's JSON (run-agent4) — not a
+ * full schema validation (that's bidData.ts's validateBidData, run on the
+ * COMPOSED BidData, not on Agent 4's raw output), just enough to catch a
+ * response that isn't even attempting the new contract (e.g. an empty
+ * object, or something that parsed as JSON but isn't this shape at all)
+ * before it's persisted and silently produces a blank proposal later.
+ */
+export function isAgent4Shape(parsed: unknown): parsed is Agent4Output {
+  if (!parsed || typeof parsed !== 'object') return false;
+  const p = parsed as Record<string, unknown>;
+  return Array.isArray(p.sections) && Array.isArray(p.takeoff);
+}
