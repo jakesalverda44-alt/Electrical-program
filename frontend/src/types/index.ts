@@ -51,6 +51,15 @@ export interface Bid {
   date_won?: string | null;
   team_notified_at?: string | null;
   team_notified_to?: string[] | null;
+  // Phase 4 Task 1/2/3 — send-to-GC delivery, public proposal page view
+  // tracking, and e-sign (mirrors generator_proposals' token/sent/viewed/
+  // signed columns from 020_gen_proposal_email_signature.sql).
+  proposal_token?: string | null;
+  proposal_sent_at?: string | null;
+  proposal_sent_to?: string[] | null;
+  proposal_viewed_at?: string | null;
+  proposal_signed_at?: string | null;
+  signer_name?: string | null;
 }
 
 export interface EstimateLineItem {

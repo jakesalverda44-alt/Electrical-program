@@ -21,7 +21,7 @@ function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   });
 }
 
-interface DocRow {
+export interface DocRow {
   id: string;
   name: string | null;
   display_name: string | null;
@@ -32,7 +32,7 @@ interface DocRow {
   storage_url: string | null;
 }
 
-async function fetchDocBytes(doc: DocRow): Promise<Buffer | null> {
+export async function fetchDocBytes(doc: DocRow): Promise<Buffer | null> {
   if (doc.file_data) return Buffer.from(doc.file_data, 'base64');
   if (doc.storage_url) {
     const drive = /\/file\/d\/([^/?#]+)/.exec(doc.storage_url);

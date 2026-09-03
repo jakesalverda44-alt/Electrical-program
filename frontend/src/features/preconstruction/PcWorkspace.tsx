@@ -12,6 +12,7 @@ import { overridesFromEstimate } from './estimateHydrate';
 import { confidenceToPlaybook } from './confidence';
 import PreBidTab from './PreBidTab';
 import { BidDataPreview, VerifyFailure, bulletText } from './bidDataPreview';
+import SendBidProposalModal from './SendBidProposalModal';
 
 interface Props {
   ws: PcWorkspace;
@@ -314,6 +315,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // Agent 4's new data-only contract or the pre-Phase-3 legacy shape; the
   // backend's adapter normalizes either).
   const [proposalPreview, setProposalPreview] = useState<BidDataPreview | null>(null);
+  // Phase 4 Task 1.4 — Send Proposal modal.
+  const [sendProposalOpen, setSendProposalOpen] = useState(false);
+  // Phase 4 Task 1.5 — Email to Chris (draft) button state.
+  const [chrisDraftBusy, setChrisDraftBusy] = useState(false);
+  const [chrisDraftLink, setChrisDraftLink] = useState<string | null>(null);
   // The 422 verify-gate's failures[] (Task 6/7) — a doctored/incomplete
   // proposal never downloads silently; this panel tells the estimator
   // exactly what to fix.
@@ -829,6 +835,26 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       showToast({ title: 'Pre-bid package failed', sub: body?.error ?? 'Could not generate the pre-bid package' });
     } finally {
       setPrebidBusy(false);
+    }
+  };
+
+  // Phase 4 Task 1.5 — internal draft to Chris (chrise@accuratepowerandtechnology.com,
+  // same "Chris" the pre-bid package template addresses) with the just-filed
+  // scope docx + takeoff xlsx attached. Never sends — Jake reviews in Outlook.
+  const emailPrebidToChris = async () => {
+    setChrisDraftBusy(true);
+    setChrisDraftLink(null);
+    try {
+      const { data } = await api.post(`/bids/${bid.id}/email-prebid-chris`, {
+        to: ['chrise@accuratepowerandtechnology.com'],
+      });
+      setChrisDraftLink(data.draftWebLink || null);
+      showToast({ title: 'Draft created', sub: 'Review and send it from Outlook.' });
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to create the draft';
+      showToast({ title: 'Draft failed', sub: msg });
+    } finally {
+      setChrisDraftBusy(false);
     }
   };
 
@@ -2023,6 +2049,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       <Icon name="doc" size={14} stroke={1.9}/> {xlsxBusy ? 'Building…' : 'Download Takeoff (.xlsx)'}
                     </button>
                   )}
+                  {/* Phase 4 Task 1.4 — send the filed .docx to the GC. Enabled
+                      once a proposal exists; the backend 409s (surfaced via the
+                      modal's error state) if nothing has been downloaded/filed yet. */}
+                  {hasProposal && (
+                    <button className="btn ghost" onClick={() => setSendProposalOpen(true)} style={{ fontSize: 13, color: 'var(--blue)' }}>
+                      <Icon name="send" size={14} stroke={1.9}/> Send Proposal
+                    </button>
+                  )}
                   {hasProposal && (
                     <button className="btn" onClick={() => setConvertOpen(true)}
                       style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)', marginLeft: 'auto' }}>
@@ -2035,8 +2069,31 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     ⚠ Run the 3-agent plan analysis first — Agent 4 needs scope data from Agent 2.
                   </div>
                 )}
+                {bid.proposal_sent_at && (
+                  <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>
+                    <Icon name="check" size={12} stroke={2.2} style={{ color: 'var(--green)' }}/>{' '}
+                    Sent {new Date(bid.proposal_sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    {bid.proposal_sent_to?.[0] ? ` to ${bid.proposal_sent_to[0]}${bid.proposal_sent_to.length > 1 ? ` +${bid.proposal_sent_to.length - 1}` : ''}` : ''}
+                    {bid.proposal_viewed_at && ' · Viewed'}
+                    {bid.proposal_signed_at && ' · Signed'}
+                  </div>
+                )}
               </div>
             </div>
+
+            {sendProposalOpen && (
+              <SendBidProposalModal
+                bid={bid}
+                onClose={() => setSendProposalOpen(false)}
+                onSent={({ bid: updatedBid, stageAdvanced }) => {
+                  onBidUpdated(updatedBid);
+                  showToast({
+                    title: 'Proposal sent',
+                    sub: stageAdvanced ? 'Stage advanced to Submitted' : 'Delivered to the GC',
+                  });
+                }}
+              />
+            )}
 
             {/* Task 6.3 — internal-only pre-bid package for Chris, from the
                 same composed BidData the GC docx/xlsx render from. */}
@@ -2072,6 +2129,22 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                           style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
                           <Icon name="doc" size={12} stroke={2}/> Download Pre-Bid Takeoff
                         </button>
+                      )}
+                    </div>
+                  )}
+                  {/* Phase 4 Task 1.5 — a DRAFT (never a send) to Chris with
+                      both filed pre-bid files attached; Jake reviews/sends
+                      from Outlook, same as the "Email Bid to Team" pattern. */}
+                  {prebidResult && (prebidResult.scopeDocumentId || prebidResult.takeoffDocumentId) && (
+                    <div style={{ marginTop: 12 }}>
+                      <button className="btn ghost" onClick={emailPrebidToChris} disabled={chrisDraftBusy} style={{ fontSize: 12.5 }}>
+                        <Icon name="mail" size={13} stroke={1.9}/> {chrisDraftBusy ? 'Drafting…' : 'Email to Chris (draft)'}
+                      </button>
+                      {chrisDraftLink && (
+                        <a href={chrisDraftLink} target="_blank" rel="noreferrer"
+                          style={{ marginLeft: 10, fontSize: 12, fontWeight: 700, color: 'var(--blue)' }}>
+                          Open draft in Outlook →
+                        </a>
                       )}
                     </div>
                   )}

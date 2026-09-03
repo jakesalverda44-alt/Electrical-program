@@ -2,12 +2,17 @@ import { Router } from 'express';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
-import { ensureProject, setProjectDeleted } from '../utils/project';
-import { commissionRate, commissionAmount } from '../utils/commission';
+import { setProjectDeleted } from '../utils/project';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { logger } from '../utils/logger';
 import { sendBidNotification } from '../email/bidNotification';
-import { loadBidDocumentsAsAttachments } from '../email/bidAttachments';
+import { loadBidDocumentsAsAttachments, fetchDocBytes, attachmentFileName, DocRow } from '../email/bidAttachments';
+import { graphSendMail, graphCreateDraft, isGraphMailConfigured, GraphAttachment } from '../email/graphMailer';
+import {
+  defaultSubmittalSubject, defaultSubmittalBodyText, buildBidSubmittalHtml,
+  defaultPrebidChrisSubject, buildPrebidChrisBodyHtml,
+} from '../email/bidSubmittalEmail';
+import { getSetting } from '../db/getSetting';
 import { resolveCustomer } from './customers';
 import {
   createJobFolder,
@@ -15,13 +20,13 @@ import {
   moveJobToStage,
   jobFolderName,
   BID_SUBFOLDER_NAMES,
-  AWARD_SUBFOLDER_NAMES,
   ESTIMATING_ACTIVE_BIDS_ROOT,
   ESTIMATING_SUBMITTED_BIDS_ROOT,
   ACTIVE_PROJECTS_ROOT,
   listFolderFiles,
   COMPLETED_PROJECTS_ROOT,
 } from '../services/googleDrive';
+import { VALID_BID_STAGES, transitionBidStage, applyBidStagePostCommit } from '../services/bidStage';
 
 const router = Router();
 
@@ -121,8 +126,7 @@ router.post('/', requireAuth, async (req: AuthRequest, res) => {
 
 router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
   const { stage } = req.body;
-  const valid = ['due', 'submitted', 'awarded', 'lost'];
-  if (!valid.includes(stage)) return res.status(400).json({ error: 'Invalid stage' });
+  if (!VALID_BID_STAGES.includes(stage)) return res.status(400).json({ error: 'Invalid stage' });
   if (!(await loadOwnedBid(req, res))) return;
 
   const client = await pool.connect();
@@ -134,72 +138,20 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
     if (!cur.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Not found' }); }
     const bid = cur[0];
 
-    // Update stage; stamp lifecycle timestamps the first time each is reached.
-    // loss_reason/competitor are only WRITTEN when the new stage is 'lost' — moving
-    // off lost (e.g. lost -> due to reopen, then back to lost) used to null them out
-    // unconditionally, erasing the reason recorded the first time. Any other stage
-    // move now leaves the existing values untouched.
-    const { rows } = await client.query(
-      `UPDATE bids SET stage=$1,
-         loss_reason = CASE WHEN $1='lost' THEN $3 ELSE loss_reason END,
-         competitor  = CASE WHEN $1='lost' THEN $4 ELSE competitor  END,
-         updated_at=now(),
-         submitted_at = CASE WHEN $1 IN ('submitted','awarded') THEN COALESCE(submitted_at, now()) ELSE submitted_at END,
-         awarded_at   = CASE WHEN $1 = 'awarded' THEN COALESCE(awarded_at, now()) ELSE awarded_at END
-       WHERE id=$2 RETURNING *`,
-      [stage, req.params.id, stage === 'lost' ? (req.body.loss_reason || null) : null, stage === 'lost' ? (req.body.competitor || null) : null]
-    );
-
-    // If transitioning TO awarded (not already awarded), create won-job record
-    let wonJob = null;
-    if (stage === 'awarded' && bid.stage !== 'awarded') {
-      const rate = await commissionRate();
-      const { rows: wj } = await client.query(
-        `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, salesperson_id,
-                                commission_rate, commission_amount, commission_status, commission_earned_at)
-         VALUES ($1,$2,$3,'Electrical',$4,$5,$6,$7,'earned',now())
-         ON CONFLICT (proposal_id) DO NOTHING
-         RETURNING *`,
-        [bid.salesperson_name, bid.name, bid.id, bid.amount, bid.salesperson_id || null,
-         rate, commissionAmount(bid.amount, rate)]
-      );
-      wonJob = wj[0] || null;
-
-      // Awarded work becomes a first-class project (shares the bid id).
-      await ensureProject(client, {
-        id: bid.id, sourceType: 'elec', customerId: bid.customer_id,
-        name: bid.name, contractValue: bid.amount,
-      });
-
-      await client.query(
-        `INSERT INTO activity (kind, div, text)
-         VALUES ('awarded','elec',$1)`,
-        [`${bid.name} awarded — ${bid.salesperson_name}`]
-      );
-    } else if (stage !== bid.stage) {
-      const labels: Record<string, string> = { due:'Bids Due', submitted:'Submitted', lost:'Lost' };
-      await client.query(
-        `INSERT INTO activity (kind, div, text) VALUES ($1,'elec',$2)`,
-        [stage === 'lost' ? 'lost' : 'new', `${bid.name} moved to ${labels[stage] || stage}`]
-      );
-    }
+    // Phase 4 Task 1.3/3.1 — the shared stage-transition path (see
+    // services/bidStage.ts): stage + lifecycle timestamps, won_job/project on
+    // award, and the activity feed all happen there so the auto-advance on
+    // send and the auto-award on e-sign produce IDENTICAL side effects to
+    // this manual pipeline-drag entry point.
+    const { bid: updated, wonJob } = await transitionBidStage(client, bid, stage, {
+      lossReason: req.body.loss_reason, competitor: req.body.competitor,
+    });
 
     await client.query('COMMIT');
 
-    // Fire-and-forget: move Drive folder to the correct stage location
-    if (bid.drive_job_folder_id && stage !== bid.stage) {
-      const stageRoots: Record<string, string> = {
-        due:       ESTIMATING_ACTIVE_BIDS_ROOT,
-        submitted: ESTIMATING_SUBMITTED_BIDS_ROOT,
-        awarded:   ACTIVE_PROJECTS_ROOT,
-        // lost: no move — folder stays in Submitted Bids
-      };
-      const destRoot = stageRoots[stage];
-      if (destRoot) {
-        moveJobToStage(bid.drive_job_folder_id, bid.gc, destRoot)
-          .catch(err => console.error('[drive] moveJobToStage on stage change failed:', err));
-      }
-    }
+    // Fire-and-forget: move Drive folder to the correct stage location, and
+    // (on first award) create the award-only subfolders.
+    applyBidStagePostCommit(bid, stage, (err, phase) => console.error(`[drive] ${phase} on stage change failed:`, err));
 
     if (stage === 'awarded' && bid.stage !== 'awarded') {
       await writeAudit(req, {
@@ -207,38 +159,8 @@ router.patch('/:id/stage', requireAuth, async (req: AuthRequest, res) => {
         summary: `Awarded bid "${bid.name}" (${bid.gc}) — $${Number(bid.amount || 0).toLocaleString()}`,
         before: { stage: bid.stage }, after: { stage: 'awarded', value: bid.amount },
       });
-      // Awarded = job is starting, not finished — folder stays in Active Projects.
-      // Folder moves to Completed Projects only when the job is closed out.
-      //
-      // Now that the job is a real project, add the remaining project subfolders
-      // (Plans + Bid Proposals already exist from the bid stage). Skip if already
-      // created (guard against re-award).
-      if (bid.drive_job_folder_id && !bid.drive_submittals_folder_id) {
-        (async () => {
-          try {
-            const subfolders = await createSubfolders(bid.drive_job_folder_id, AWARD_SUBFOLDER_NAMES);
-            await pool.query(
-              `UPDATE bids SET
-                 drive_photos_folder_id=$1, drive_contracts_folder_id=$2,
-                 drive_submittals_folder_id=$3, drive_rfis_folder_id=$4,
-                 drive_change_orders_folder_id=$5
-               WHERE id=$6`,
-              [
-                subfolders['Photos'] || null,
-                subfolders['Contract & Invoices'] || null,
-                subfolders['Submittals'] || null,
-                subfolders['RFIs'] || null,
-                subfolders['Change Orders'] || null,
-                bid.id,
-              ],
-            );
-          } catch (err) {
-            console.error('[drive] Awarded subfolder creation failed:', err);
-          }
-        })();
-      }
     }
-    res.json({ bid: withDueDays(rows[0]), wonJob });
+    res.json({ bid: withDueDays(updated), wonJob });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);
@@ -324,6 +246,197 @@ router.post('/:id/notify-team', requireAuth, async (req: AuthRequest, res) => {
       + (attachedNames.length ? ` with ${attachedNames.length} file${attachedNames.length === 1 ? '' : 's'}` : ''),
   });
   res.json({ draftWebLink: result.draftWebLink, to: result.to, attachedNames, skipped });
+});
+
+// ── Phase 4 Task 1.3: send the filed proposal to the GC ─────────────────────
+// Sends via Microsoft Graph (graphSendMail) — the same muted-under-test path
+// every other outbound email in this app uses. NEVER re-renders the proposal:
+// it attaches exactly the bytes of the most recent FILED, gate-passed .docx
+// (the `documents` row generate-docx wrote after verifyBidDocx passed), so
+// what the GC receives is provably what got reviewed and downloaded.
+const PROPOSAL_DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const TAKEOFF_XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+async function loadMostRecentBidDoc(bidId: string, category: string, mimetype: string): Promise<DocRow | null> {
+  const { rows } = await pool.query<DocRow>(
+    `SELECT id, name, display_name, category, file_type, file_size, file_data, storage_url
+       FROM documents
+      WHERE linked_id = $1 AND category = $2 AND file_type = $3 AND deleted_at IS NULL
+      ORDER BY created_at DESC LIMIT 1`,
+    [bidId, category, mimetype]
+  );
+  return rows[0] ?? null;
+}
+
+router.post('/:id/send-proposal', requireAuth, async (req: AuthRequest, res) => {
+  const bid = await loadOwnedBid(req, res);
+  if (!bid) return;
+
+  const to = Array.isArray(req.body?.to)
+    ? (req.body.to as unknown[]).map(e => String(e).trim()).filter(Boolean)
+    : [];
+  if (!to.length) return res.status(400).json({ error: 'Add at least one recipient.' });
+  const cc = Array.isArray(req.body?.cc)
+    ? (req.body.cc as unknown[]).map(e => String(e).trim()).filter(Boolean)
+    : [];
+
+  const subject = String(req.body?.subject || '').trim() || defaultSubmittalSubject(bid);
+  const bodyText = req.body?.bodyText !== undefined ? String(req.body.bodyText) : defaultSubmittalBodyText(bid);
+  const includeTakeoff = !!req.body?.includeTakeoff;
+
+  // Never re-render at send time — 409 if there's no filed docx yet.
+  const proposalDoc = await loadMostRecentBidDoc(bid.id, 'proposal', PROPOSAL_DOCX_MIME);
+  if (!proposalDoc) {
+    return res.status(409).json({ error: 'No filed proposal on file yet. Generate/download the proposal .docx first.' });
+  }
+  const proposalBytes = await fetchDocBytes(proposalDoc);
+  if (!proposalBytes) {
+    return res.status(409).json({ error: 'The filed proposal document could not be loaded. Try re-downloading it first.' });
+  }
+
+  const attachments: GraphAttachment[] = [{
+    '@odata.type': '#microsoft.graph.fileAttachment',
+    name: attachmentFileName(proposalDoc.display_name, proposalDoc.name, proposalDoc.file_type),
+    contentType: proposalDoc.file_type || PROPOSAL_DOCX_MIME,
+    contentBytes: proposalBytes.toString('base64'),
+    isInline: false,
+    contentId: `bid-proposal-${proposalDoc.id}`,
+  }];
+
+  // The takeoff only goes with it when the estimator opts in (per the
+  // authority template: "The takeoff goes with it only if the GC asked for it").
+  if (includeTakeoff) {
+    const takeoffDoc = await loadMostRecentBidDoc(bid.id, 'takeoff', TAKEOFF_XLSX_MIME);
+    if (takeoffDoc) {
+      const takeoffBytes = await fetchDocBytes(takeoffDoc);
+      if (takeoffBytes) {
+        attachments.push({
+          '@odata.type': '#microsoft.graph.fileAttachment',
+          name: attachmentFileName(takeoffDoc.display_name, takeoffDoc.name, takeoffDoc.file_type),
+          contentType: takeoffDoc.file_type || TAKEOFF_XLSX_MIME,
+          contentBytes: takeoffBytes.toString('base64'),
+          isInline: false,
+          contentId: `bid-takeoff-${takeoffDoc.id}`,
+        });
+      }
+    }
+  }
+
+  if (!isGraphMailConfigured()) {
+    return res.status(503).json({ error: 'Email is not configured (Microsoft Graph). Copy the proposal link and send it yourself.' });
+  }
+
+  const frontendUrl = await getSetting('frontend_url');
+  // Never fall back to localhost — matches gens.ts's /:id/send.
+  const baseUrl = (frontendUrl || process.env.FRONTEND_URL || 'https://electrical-program.onrender.com').replace(/\/$/, '');
+  const link = `${baseUrl}/bp/${bid.proposal_token}`;
+  const html = buildBidSubmittalHtml({ bodyText, proposalLink: link });
+
+  try {
+    await graphSendMail({ to, cc: cc.length ? cc : undefined, subject, html, attachments });
+  } catch (err) {
+    logger.error({ err, bidId: bid.id }, '[bids] send-proposal failed');
+    return res.status(502).json({ error: 'Email delivery failed (Outlook). Try again or copy the proposal link.', link });
+  }
+
+  // Email is out — stamp sent, log the timeline, and — if the bid is still
+  // `due` — advance it to `submitted` through the SAME shared stage path the
+  // manual PATCH /:id/stage uses (Task 1.3: "extract/reuse, don't duplicate").
+  const client = await pool.connect();
+  let updatedBid = bid;
+  let wonJob = null;
+  try {
+    await client.query('BEGIN');
+    const { rows: sentRows } = await client.query(
+      `UPDATE bids SET proposal_sent_at = now(), proposal_sent_to = $1, updated_at = now()
+        WHERE id = $2 RETURNING *`,
+      [to, bid.id]
+    );
+    updatedBid = sentRows[0];
+    await client.query(
+      `INSERT INTO proposal_activity (bid_id, kind, direction, text, created_by)
+       VALUES ($1,'sent','out',$2,$3)`,
+      [bid.id, `Proposal emailed to ${to.join(', ')}`, req.user!.name]
+    );
+    await client.query(
+      `INSERT INTO activity (kind, div, text) VALUES ('sent','elec',$1)`,
+      [`${bid.name} proposal sent to ${to[0]}${to.length > 1 ? ` +${to.length - 1}` : ''}`]
+    );
+
+    let stageAdvanced = false;
+    if (updatedBid.stage === 'due') {
+      const { bid: staged, wonJob: staWonJob } = await transitionBidStage(client, updatedBid, 'submitted');
+      updatedBid = staged;
+      wonJob = staWonJob;
+      stageAdvanced = true;
+    }
+    await client.query('COMMIT');
+    if (stageAdvanced) {
+      applyBidStagePostCommit(bid, 'submitted', (err, phase) => logger.error({ err, phase, bidId: bid.id }, '[bids] send-proposal stage-advance Drive step failed'));
+    }
+  } catch (err) {
+    await client.query('ROLLBACK');
+    logger.error({ err, bidId: bid.id }, '[bids] send-proposal post-send stamp failed (email already sent)');
+    return res.status(500).json({ error: 'Email sent, but the bid record could not be updated. Refresh to check its status.' });
+  } finally {
+    client.release();
+  }
+
+  res.json({ bid: withDueDays(updatedBid), wonJob, link, stageAdvanced: updatedBid.stage === 'submitted' && bid.stage === 'due' });
+});
+
+// ── Phase 4 Task 1.5: the internal Chris pre-bid-package email ──────────────
+// A DRAFT, not a send — Jake reviews/sends from Outlook, same as notify-team.
+router.post('/:id/email-prebid-chris', requireAuth, async (req: AuthRequest, res) => {
+  const bid = await loadOwnedBid(req, res);
+  if (!bid) return;
+
+  const to = Array.isArray(req.body?.to)
+    ? (req.body.to as unknown[]).map(e => String(e).trim()).filter(Boolean)
+    : [];
+  if (!to.length) return res.status(400).json({ error: 'Add at least one recipient (Chris).' });
+
+  const scopeDoc = await loadMostRecentBidDoc(bid.id, 'prebid_scope', PROPOSAL_DOCX_MIME);
+  const takeoffDoc = await loadMostRecentBidDoc(bid.id, 'prebid_takeoff', TAKEOFF_XLSX_MIME);
+  if (!scopeDoc && !takeoffDoc) {
+    return res.status(409).json({ error: 'No pre-bid package on file yet. Generate it first.' });
+  }
+
+  const attachments: GraphAttachment[] = [];
+  for (const doc of [scopeDoc, takeoffDoc]) {
+    if (!doc) continue;
+    const bytes = await fetchDocBytes(doc);
+    if (!bytes) continue;
+    attachments.push({
+      '@odata.type': '#microsoft.graph.fileAttachment',
+      name: attachmentFileName(doc.display_name, doc.name, doc.file_type),
+      contentType: doc.file_type || 'application/octet-stream',
+      contentBytes: bytes.toString('base64'),
+      isInline: false,
+      contentId: `bid-prebid-${doc.id}`,
+    });
+  }
+
+  if (!isGraphMailConfigured()) {
+    return res.status(503).json({ error: 'Email is not configured. Set up Microsoft Graph (GRAPH_* env vars) to create the draft.' });
+  }
+
+  const subject = String(req.body?.subject || '').trim() || defaultPrebidChrisSubject(bid);
+  const html = buildPrebidChrisBodyHtml({ ...bid, planDate: req.body?.planDate ?? null });
+
+  let draft;
+  try {
+    draft = await graphCreateDraft({ to, subject, html, attachments });
+  } catch (err) {
+    logger.error({ err, bidId: bid.id }, '[bids] email-prebid-chris draft failed');
+    return res.status(502).json({ error: 'Could not create the draft. Check the mail configuration.' });
+  }
+
+  await writeAudit(req, {
+    action: 'notify_team_draft', entityType: 'bid', entityId: bid.id,
+    summary: `Drafted pre-bid package email for "${bid.name}" to ${to.join(', ')}`,
+  });
+  res.json({ draftWebLink: draft.webLink, to });
 });
 
 // Bid qualification score — computed from historical data, no AI key needed

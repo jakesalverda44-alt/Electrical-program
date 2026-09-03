@@ -32,6 +32,8 @@ export interface GraphAttachment {
 
 export interface SendArgs {
   to: string | string[];
+  /** Optional cc list — Phase 4's send-to-GC flow is the first caller. */
+  cc?: string | string[];
   subject: string;
   html: string;
   attachments?: GraphAttachment[];
@@ -43,14 +45,16 @@ export function isGraphMailConfigured(): boolean {
   return !!(process.env.GRAPH_TENANT_ID && process.env.GRAPH_CLIENT_ID && process.env.GRAPH_CLIENT_SECRET);
 }
 
-export async function graphSendMail({ to, subject, html, attachments, appendSignature = true }: SendArgs): Promise<void> {
+export async function graphSendMail({ to, cc, subject, html, attachments, appendSignature = true }: SendArgs): Promise<void> {
   if (emailMuted()) {
     const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
-    logger.info({ to: toList, subject }, '[graphMailer] NO-OP send (muted: NODE_ENV=test or EMAIL_DISABLED=true) — no email sent');
+    const ccList = cc ? (Array.isArray(cc) ? cc : [cc]).filter(Boolean) : [];
+    logger.info({ to: toList, cc: ccList, subject }, '[graphMailer] NO-OP send (muted: NODE_ENV=test or EMAIL_DISABLED=true) — no email sent');
     return;
   }
   const token = await getGraphToken();
   const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
+  const ccList = cc ? (Array.isArray(cc) ? cc : [cc]).filter(Boolean) : [];
 
   // Append the signature (branded-with-logo by default, or the custom setting) unless the
   // caller already embedded one. Merge any inline logo attachment with the caller's.
@@ -67,6 +71,7 @@ export async function graphSendMail({ to, subject, html, attachments, appendSign
     body: { contentType: 'HTML', content },
     toRecipients: toList.map(address => ({ emailAddress: { address } })),
   };
+  if (ccList.length) message.ccRecipients = ccList.map(address => ({ emailAddress: { address } }));
   if (allAttachments.length) message.attachments = allAttachments;
 
   const resp = await fetch(
