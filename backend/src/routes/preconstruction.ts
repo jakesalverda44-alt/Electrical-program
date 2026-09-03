@@ -1697,11 +1697,11 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
 // (Task 5's new data-only contract vs. a pre-Phase-3 legacy row), and
 // composes it — no response writing here, so each route decides its own
 // status codes for a given failure.
-type ComposeCurrentBidDataResult =
+export type ComposeCurrentBidDataResult =
   | { ok: true; bidData: BidData; bidName: string; asciiName: string }
   | { ok: false; status: number; error: string; failures?: { check: string; detail: string }[] };
 
-interface ComposeCurrentBidDataOptions {
+export interface ComposeCurrentBidDataOptions {
   /** FIX-9 — GET /proposal-preview composes ephemerally (shows the
    *  would-be job number) without writing it back; only the generate
    *  endpoints (a GET writing the DB is otherwise a footgun) persist a
@@ -1719,7 +1719,11 @@ interface ComposeCurrentBidDataOptions {
   validate?: boolean;
 }
 
-async function composeCurrentBidData(
+// Exported (Phase 4 Task 2.2) so the public proposal page (routes/bids.ts's
+// GET /p/:token) can compose the SAME BidData this file's generate-*
+// endpoints do, with persist:false — one composition function, not a
+// second copy of the legacy-shape/precedence logic living in bids.ts.
+export async function composeCurrentBidData(
   bidId: string,
   opts: ComposeCurrentBidDataOptions = {},
 ): Promise<ComposeCurrentBidDataResult> {

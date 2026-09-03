@@ -14,6 +14,13 @@ import {
 } from '../email/bidSubmittalEmail';
 import { getSetting } from '../db/getSetting';
 import { resolveCustomer } from './customers';
+import { composeCurrentBidData } from './preconstruction';
+import { renderBidDocx } from '../utils/proposalDocx';
+import { verifyBidDocx } from '../bidstd/verifyBid';
+import { BidData } from '../bidstd/bidData';
+import { renderBidHtml } from '../bidstd/proposalHtml';
+import { createNotification } from '../notifications/engine';
+import { ownerAdminIds } from '../notifications/prefs';
 import {
   createJobFolder,
   createSubfolders,
@@ -639,6 +646,125 @@ router.delete('/:id/purge', requireAuth, requireAdmin, async (req: AuthRequest, 
   } finally {
     client.release();
   }
+});
+
+// ── Phase 4 Task 2: public proposal page (no auth) ──────────────────────────
+// Loads the CURRENT composed BidData (same composeCurrentBidData every
+// generate-* endpoint uses, persist:false — a GET never writes a job number)
+// and runs the SAME verify gate generate-docx does. A bid whose current
+// composition doesn't pass (an estimator mid-revision, say) doesn't fail the
+// viewer for a customer who already has the link — it falls back to the
+// bid_data.json filed alongside the last generated docx (generate-docx always
+// files one), so the public page renders exactly what was actually filed/
+// sent, never an in-progress edit that hasn't cleared the gate.
+async function loadPublicBidData(bidId: string): Promise<{ bidData: BidData; fromFallback: boolean } | null> {
+  try {
+    const loaded = await composeCurrentBidData(bidId, { persist: false });
+    if (loaded.ok) {
+      const buf = await renderBidDocx(loaded.bidData);
+      const verifyResult = await verifyBidDocx(buf, { kind: 'gc' });
+      if (verifyResult.pass) return { bidData: loaded.bidData, fromFallback: false };
+    }
+  } catch (err) {
+    logger.error({ err, bidId }, '[bids] public page: current composition failed — falling back to the last filed bid_data.json');
+  }
+
+  const filedDoc = await loadMostRecentBidDoc(bidId, 'bid_data', 'application/json');
+  if (!filedDoc) return null;
+  const bytes = await fetchDocBytes(filedDoc);
+  if (!bytes) return null;
+  try {
+    return { bidData: JSON.parse(bytes.toString('utf8')) as BidData, fromFallback: true };
+  } catch (err) {
+    logger.error({ err, bidId }, '[bids] public page: filed bid_data.json could not be parsed');
+    return null;
+  }
+}
+
+router.get('/p/:token', async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT * FROM bids WHERE proposal_token = $1 AND deleted_at IS NULL',
+    [req.params.token]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
+  const bid = rows[0];
+
+  const loaded = await loadPublicBidData(bid.id);
+  if (!loaded) return res.status(404).json({ error: 'Proposal not available yet' });
+
+  // In-app previews pass ?preview=1 — fetch without recording a customer
+  // "view" (mirrors gens.ts's /p/:token).
+  const isPreview = !!req.query.preview;
+  let current = bid;
+  if (!isPreview) {
+    const wasUnviewed = !bid.proposal_viewed_at;
+    const { rows: viewedRows } = await pool.query(
+      `UPDATE bids SET proposal_viewed_at = COALESCE(proposal_viewed_at, now())
+        WHERE id = $1 RETURNING *`,
+      [bid.id]
+    );
+    current = viewedRows[0];
+
+    if (wasUnviewed) {
+      await pool.query(
+        `INSERT INTO proposal_activity (bid_id, kind, direction, text) VALUES ($1,'viewed','in',$2)`,
+        [bid.id, 'Proposal viewed']
+      );
+
+      // Fire-and-forget: notify Jake on first view (opt-in via Settings >
+      // Notifications, same "Proposal Viewed" toggle gens' proposal_viewed
+      // pref covers — mirrors gens' proposal-signed notification's gating).
+      (async () => {
+        try {
+          const raw = await getSetting('notifications_json');
+          const notifPrefs = raw ? JSON.parse(raw) : {};
+          if (!notifPrefs.proposal_viewed) return;
+          const targets = current.salesperson_id ? [current.salesperson_id] : await ownerAdminIds();
+          for (const uid of targets) {
+            await createNotification(uid, {
+              type: 'bid_proposal_viewed',
+              title: 'Proposal viewed',
+              body: `${current.name} (${current.gc}) — the proposal link was opened`,
+              linkView: 'electrical/bids',
+              linkId: current.id,
+              dedupKey: `bidviewed:${current.id}`,
+            });
+          }
+        } catch (err) {
+          logger.error({ err, bidId: bid.id }, '[notify] bid proposal-viewed notification failed');
+        }
+      })();
+    }
+  }
+
+  res.json({
+    bid: withDueDays(current),
+    html: renderBidHtml(loaded.bidData),
+    fromFallback: loaded.fromFallback,
+  });
+});
+
+// Streams the exact bytes of the most recently FILED proposal .docx (never a
+// fresh render) with a content-disposition filename from the standard's own
+// naming (APT_Bid_[ProjectSlug]_[LocationSlug].docx).
+router.get('/p/:token/download', async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT id FROM bids WHERE proposal_token = $1 AND deleted_at IS NULL',
+    [req.params.token]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
+  const bidId = rows[0].id as string;
+
+  const doc = await loadMostRecentBidDoc(bidId, 'proposal', PROPOSAL_DOCX_MIME);
+  if (!doc) return res.status(404).json({ error: 'No proposal document on file yet' });
+  const bytes = await fetchDocBytes(doc);
+  if (!bytes) return res.status(404).json({ error: 'Proposal document could not be loaded' });
+
+  const filename = attachmentFileName(doc.display_name, doc.name, doc.file_type).replace(/[<>:"/\\|?*\r\n]/g, '-');
+  res.setHeader('Content-Type', PROPOSAL_DOCX_MIME);
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Length', bytes.length);
+  res.send(bytes);
 });
 
 export default router;
