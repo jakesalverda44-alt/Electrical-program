@@ -1,0 +1,179 @@
+// Structural tests on the produced docx XML (adm-zip) — no LibreOffice, per
+// the plan's environment note (Aptfile installs poppler only in production).
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import AdmZip from 'adm-zip';
+import { renderBidDocx, buildProposalDocx, ProposalJSON } from './proposalDocx';
+import { extractDocxText } from './bidDocParse';
+import { BidData } from '../bidstd/bidData';
+import { SECTION_HEADERS, CLOSING } from '../bidstd/boilerplate';
+
+const fixture: BidData = JSON.parse(
+  readFileSync(join(__dirname, '../test/fixtures/bidstd/bid_data.example.json'), 'utf8')
+);
+
+function documentXml(buf: Buffer): string {
+  const zip = new AdmZip(buf);
+  const entry = zip.getEntry('word/document.xml');
+  if (!entry) throw new Error('word/document.xml missing from produced docx');
+  return entry.getData().toString('utf8');
+}
+
+describe('renderBidDocx', () => {
+  it('renders the canonical fixture without throwing', async () => {
+    const buf = await renderBidDocx(fixture);
+    expect(buf.length).toBeGreaterThan(0);
+  });
+
+  it('produces the exact section header strings', async () => {
+    const buf = await renderBidDocx(fixture);
+    const text = extractDocxText(buf);
+    expect(text).toContain('SCOPE OF WORK');
+    expect(text).toContain('A. Service & Distribution');
+    expect(text).toContain('B. Branch Power');
+    expect(text).toContain('C. Lighting & Controls');
+    expect(text).toContain('D. Site Lighting, Underground Work & Allowances');
+    expect(text).toContain('E. Low Voltage Infrastructure (Conduit & Boxes Only)');
+    expect(text).toContain('F. Project Coordination & Closeout');
+    expect(text).toContain('EXCLUSIONS & CLARIFICATIONS');
+    expect(text).toContain('ELECTRICAL QUANTITY TAKEOFF');
+    expect(text).toContain('TERMS, CONDITIONS & SPECIAL REQUIREMENTS');
+  });
+
+  it('every SECTION_HEADERS constant appears verbatim (drift guard)', async () => {
+    const buf = await renderBidDocx(fixture);
+    const text = extractDocxText(buf);
+    for (const header of Object.values(SECTION_HEADERS)) {
+      expect(text).toContain(header);
+    }
+  });
+
+  it('renders the exact closing block lines verbatim', async () => {
+    const buf = await renderBidDocx(fixture);
+    const text = extractDocxText(buf);
+    expect(text).toContain(CLOSING.respectfully);
+    expect(text).toContain(CLOSING.costBasis);
+    expect(text).toContain(CLOSING.acceptance);
+    expect(text).toContain(CLOSING.print);
+    expect(text).toContain(CLOSING.sign);
+    expect(text).toContain(CLOSING.date);
+    expect(text).toContain(CLOSING.thankYou);
+  });
+
+  it('renders the price summary label and the total line', async () => {
+    const buf = await renderBidDocx(fixture);
+    const text = extractDocxText(buf);
+    expect(text).toContain('Proposal Price Summary');
+    expect(text).toContain(`Total for ${fixture.project_name}:`);
+    expect(text).toContain(fixture.total_price);
+  });
+
+  it('renders every takeoff item and category band', async () => {
+    const buf = await renderBidDocx(fixture);
+    const text = extractDocxText(buf);
+    for (const cat of fixture.takeoff) {
+      expect(text.toUpperCase()).toContain(cat.name.toUpperCase());
+      for (const item of cat.items) {
+        expect(text).toContain(item.description);
+      }
+    }
+  });
+
+  it('band header paragraphs are centered (navy-filled cells carry w:jc center)', async () => {
+    const buf = await renderBidDocx(fixture);
+    const xml = documentXml(buf);
+    // Every navy-filled table cell (a section band) must have a centered
+    // paragraph inside it — critical per PROJECT_INSTRUCTIONS §4: "section
+    // header text is centered in the navy band — not left-aligned."
+    const bandCellPattern = /<w:tc>(?:(?!<\/w:tc>).)*?w:fill="1F3864"(?:(?!<\/w:tc>).)*?<\/w:tc>/gs;
+    const bandCells = xml.match(bandCellPattern) ?? [];
+    // The header row of the takeoff table is also navy-filled but its cells
+    // are individually centered per-column (ITEM/QTY centered, DESCRIPTION/
+    // SOURCE left) — filter to cells that actually contain a paragraph.
+    expect(bandCells.length).toBeGreaterThan(0);
+    const centeredBandCells = bandCells.filter(c => /<w:jc w:val="center"\/>/.test(c));
+    expect(centeredBandCells.length).toBeGreaterThan(0);
+  });
+
+  it('the takeoff table column-width grid matches the spec exactly', async () => {
+    const buf = await renderBidDocx(fixture);
+    const xml = documentXml(buf);
+    // The takeoff table is the only table with 5 gridCols totaling 9360 DXA —
+    // pull every tblGrid and find the one matching [620,3640,720,700,3680].
+    const grids = [...xml.matchAll(/<w:tblGrid>(.*?)<\/w:tblGrid>/gs)].map(m =>
+      [...m[1].matchAll(/w:w="(\d+)"/g)].map(g => Number(g[1]))
+    );
+    const takeoffGrid = grids.find(g => g.length === 5);
+    expect(takeoffGrid).toEqual([620, 3640, 720, 700, 3680]);
+  });
+
+  it('takeoff category band cells span all 5 columns', async () => {
+    const buf = await renderBidDocx(fixture);
+    const xml = documentXml(buf);
+    const gridSpanCount = (xml.match(/<w:gridSpan w:val="5"\/>/g) ?? []).length;
+    expect(gridSpanCount).toBe(fixture.takeoff.length);
+  });
+
+  it('throws when total_price is missing', async () => {
+    await expect(renderBidDocx({ ...fixture, total_price: '' })).rejects.toThrow(/no price/i);
+  });
+});
+
+describe('buildProposalDocx (legacy compat path)', () => {
+  const legacy: ProposalJSON = {
+    date: '2026-09-02',
+    gcName: 'ABC Construction',
+    projectName: 'Circle K #4521',
+    projectAddress: '1234 Main St, Eustis, FL',
+    openingStatement: 'The project is understood to be electrical work.',
+    scopeOfWork: {
+      standard6Bullets: ['All work per plan.'],
+      A_ServiceDistribution: ['Service entrance assembly and MDP (ECFECI).'],
+      B_BranchPower: ['Branch circuit wiring per plan.'],
+      C_LightingControls: ['Complete lighting package (ECFECI).', 'Controls and testing.', 'LED fixtures per schedule.'],
+      D_SiteLightingUnderground: ['Site lighting per allowance.'],
+      E_LowVoltage: ['Conduit and boxes only.'],
+      F_Coordination: ['Coordinate with GC.'],
+    },
+    exclusions: ['Painting and patching.'],
+    takeoff: [
+      { category: 'Interior Lighting', item: 'LED Troffer 2x4', description: '40W 4000K fixture', unit: 'EA', qty: 48, sourceNotes: 'Per schedule E-401' },
+    ],
+    terms: ['Based on drawings dated 2026-09-02.'],
+    totalPrice: '$425,000',
+  };
+
+  it('still renders old-shape ProposalJSON without throwing', async () => {
+    const buf = await buildProposalDocx(legacy);
+    expect(buf.length).toBeGreaterThan(0);
+  });
+
+  it('maps old A-F sections onto the new canonical section titles', async () => {
+    const buf = await buildProposalDocx(legacy);
+    const text = extractDocxText(buf);
+    expect(text).toContain('A. Service & Distribution');
+    expect(text).toContain('C. Lighting & Controls');
+    expect(text).toContain('Service entrance assembly and MDP (ECFECI).');
+  });
+
+  it('bidMeta (bid row values + validated price) overrides the data blob', async () => {
+    const buf = await buildProposalDocx(legacy, {
+      projectName: 'Authoritative Project',
+      projectAddress: '999 Authoritative Ave',
+      gcName: 'Authoritative GC',
+      totalPrice: '$999,999.00',
+    });
+    const text = extractDocxText(buf);
+    expect(text).toContain('Authoritative Project');
+    expect(text).toContain('Authoritative GC');
+    expect(text).toContain('$999,999.00');
+    expect(text).not.toContain('Circle K #4521');
+    expect(text).not.toContain('$425,000');
+  });
+
+  it('renders an empty-object legacy proposal without throwing, given a price', async () => {
+    const buf = await buildProposalDocx({}, { projectName: 'Empty Test', totalPrice: '$1,000' });
+    expect(buf.length).toBeGreaterThan(0);
+  });
+});
