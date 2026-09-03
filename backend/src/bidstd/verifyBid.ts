@@ -19,6 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { extractDocxText } from '../utils/bidDocParse';
 import { logger } from '../utils/logger';
+import { SECTION_HEADERS } from './boilerplate';
 
 const execFileAsync = promisify(execFile);
 
@@ -55,12 +56,16 @@ const PLACEHOLDER_RE = /\[[A-Z][A-Z0-9 ()/&._-]{1,60}\]/g;
 // Construction|TBD'. Deviation from verify.sh (documented in the plan and
 // the Phase 3 report): word boundaries added on RFI/counted/TBD so
 // "Discounted"/"accounted" can't false-positive — this fixes a known nit in
-// verify.sh itself.
+// verify.sh itself. Also extended "field verify" to inflected forms ("field
+// verified", "field verification", etc.) — same tightening spirit as the
+// RFI/counted/TBD word-boundary fix, since "to be field verified" carries
+// the exact same estimator-language meaning verify.sh's plain substring was
+// trying to catch.
 const BANNED_PATTERNS: RegExp[] = [
   /\bRFI\b/gi,
   /please confirm/gi,
   /clarification requested/gi,
-  /field verify/gi,
+  /field verif\w*/gi,
   /\bcounted\b/gi,
   /±/g,
   /↳/g,
@@ -83,33 +88,74 @@ function scanBanned(text: string): string[] {
 // ── Check 3: square footage (GC only) ────────────────────────────────────────
 const SQFT_RE = /[0-9,]+ *(?:SF|S\.F\.|sq\.? ?ft)/gi;
 
-// ── Check 4: ECFECI presence + mandated placements (GC only) ────────────────
-// verify.sh: occurrence count >= 3. Plan adds: assert the three mandated
-// placements exist by checking ECFECI appears at least once between
-// "A. Service & Distribution" / "B. Branch Power", and once between
-// "C. Lighting & Controls" / "D. Site" (PROJECT_INSTRUCTIONS §7).
-function checkEcfeci(text: string): VerifyFailure | null {
+// ── Check 4: ECFECI presence (both kinds) + mandated placements (GC only) ───
+// verify.sh v4 runs the occurrence-count check (>= 3) on EVERY document it
+// verifies, GC-facing or internal — the pre-bid scope carries Sections A-F
+// (PROJECT_INSTRUCTIONS §14) and must keep the ECFECI language just as much
+// as the GC bid does. The mandated-placement-window check below (ECFECI
+// between A/B and between C/D) is this port's OWN addition beyond verify.sh
+// (there is no such check in the shell script) — kept GC-only, since it's a
+// stricter invented rule about the two most price-sensitive sections, not
+// something the pre-bid scope needs to satisfy.
+function checkEcfeciCount(text: string): VerifyFailure | null {
   const occurrences = text.match(/ECFECI/g) ?? [];
+  if (occurrences.length < 3) {
+    return {
+      check: 'ecfeci',
+      detail: `only ${occurrences.length} ECFECI occurrence(s) — expected at least 3 (Section A x2, Section C x1, plus takeoff gear lines)`,
+      matches: [],
+    };
+  }
+  return null;
+}
+
+// Every section-band marker, in document order — the candidate pool a
+// window's terminator is drawn from.
+const SECTION_MARKER_ORDER: readonly string[] = [
+  SECTION_HEADERS.A, SECTION_HEADERS.B, SECTION_HEADERS.C, SECTION_HEADERS.D,
+  SECTION_HEADERS.E, SECTION_HEADERS.F,
+  SECTION_HEADERS.exclusions, SECTION_HEADERS.takeoff, SECTION_HEADERS.terms,
+];
+
+/**
+ * Does `startMarker`'s window contain ECFECI? The window runs from
+ * `startMarker` to whichever SECTION_MARKER_ORDER marker actually appears
+ * next in the text (skipping any that are absent — e.g. a legitimately
+ * omitted Section B or D on an interior-only job), or to end-of-text when
+ * none of the later markers appear at all. Returns null (skip — not a
+ * failure) when `startMarker` itself isn't present in the text.
+ */
+function ecfeciWindow(text: string, startMarker: string): { ok: boolean; terminator: string } | null {
+  const start = text.indexOf(startMarker);
+  if (start === -1) return null;
+
+  const searchFrom = start + startMarker.length;
+  const candidates = SECTION_MARKER_ORDER.slice(SECTION_MARKER_ORDER.indexOf(startMarker) + 1);
+
+  let terminatorIdx = -1;
+  let terminator = 'end of document';
+  for (const marker of candidates) {
+    const idx = text.indexOf(marker, searchFrom);
+    if (idx !== -1 && (terminatorIdx === -1 || idx < terminatorIdx)) {
+      terminatorIdx = idx;
+      terminator = marker;
+    }
+  }
+
+  const end = terminatorIdx === -1 ? text.length : terminatorIdx;
+  return { ok: /ECFECI/.test(text.slice(start, end)), terminator };
+}
+
+function checkEcfeciPlacement(text: string): VerifyFailure | null {
   const problems: string[] = [];
 
-  if (occurrences.length < 3) {
-    problems.push(
-      `only ${occurrences.length} ECFECI occurrence(s) — expected at least 3 (Section A x2, Section C x1, plus takeoff gear lines)`
-    );
+  const winA = ecfeciWindow(text, SECTION_HEADERS.A);
+  if (winA && !winA.ok) {
+    problems.push(`ECFECI not found between "${SECTION_HEADERS.A}" and "${winA.terminator}"`);
   }
-
-  const between = (startMarker: string, endMarker: string): boolean => {
-    const start = text.indexOf(startMarker);
-    const end = text.indexOf(endMarker);
-    if (start === -1 || end === -1 || start >= end) return false;
-    return /ECFECI/.test(text.slice(start, end));
-  };
-
-  if (!between('A. Service & Distribution', 'B. Branch Power')) {
-    problems.push('ECFECI not found between "A. Service & Distribution" and "B. Branch Power"');
-  }
-  if (!between('C. Lighting & Controls', 'D. Site')) {
-    problems.push('ECFECI not found between "C. Lighting & Controls" and "D. Site"');
+  const winC = ecfeciWindow(text, SECTION_HEADERS.C);
+  if (winC && !winC.ok) {
+    problems.push(`ECFECI not found between "${SECTION_HEADERS.C}" and "${winC.terminator}"`);
   }
 
   return problems.length ? { check: 'ecfeci', detail: problems.join('; '), matches: [] } : null;
@@ -118,10 +164,13 @@ function checkEcfeci(text: string): VerifyFailure | null {
 /**
  * The pure text-based core of the gate — no I/O, no external tools. Runs
  * unconditionally in every environment (including production, which has no
- * LibreOffice). `kind: 'internal'` (pre-bid package) skips banned-language,
- * square-footage, and ECFECI — pre-bid scope legitimately carries estimator
- * language and square footage per PROJECT_INSTRUCTIONS §14 — but keeps the
- * placeholder scan.
+ * LibreOffice). `kind: 'internal'` (pre-bid package) skips banned-language
+ * and square-footage — pre-bid scope legitimately carries estimator language
+ * and square footage per PROJECT_INSTRUCTIONS §14 — but keeps the
+ * placeholder scan AND the ECFECI occurrence-count check (verify.sh v4 runs
+ * that count on every document, GC-facing or internal; only the GC-only
+ * placement-window check, this port's own addition beyond verify.sh, is
+ * skipped for internal).
  */
 export function verifyBidText(text: string, kind: VerifyKind): VerifyTextResult {
   const failures: VerifyFailure[] = [];
@@ -134,6 +183,11 @@ export function verifyBidText(text: string, kind: VerifyKind): VerifyTextResult 
       matches: placeholders,
     });
   }
+
+  // ECFECI occurrence count — both kinds (verify.sh v4 parity: it runs the
+  // count check on every document it verifies, not just the GC bid).
+  const ecfeciCount = checkEcfeciCount(text);
+  if (ecfeciCount) failures.push(ecfeciCount);
 
   if (kind === 'gc') {
     const banned = scanBanned(text);
@@ -154,7 +208,7 @@ export function verifyBidText(text: string, kind: VerifyKind): VerifyTextResult 
       });
     }
 
-    const ecfeci = checkEcfeci(text);
+    const ecfeci = checkEcfeciPlacement(text);
     if (ecfeci) failures.push(ecfeci);
   }
 

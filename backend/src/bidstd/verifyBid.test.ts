@@ -112,20 +112,94 @@ describe('verifyBidText — pure core, GC kind', () => {
     expect(f).toBeTruthy();
     expect(f!.matches).toContain('counted');
   });
+
+  // FIX-13 — "field verify" extended to inflected forms.
+  it('"to be field verified" trips the banned-language check (inflected form)', () => {
+    const result = verifyBidText(`${CLEAN_TEXT}\nExact panel location to be field verified.`, 'gc');
+    const f = result.failures.find(f => f.check === 'banned_language');
+    expect(f).toBeTruthy();
+    expect(f!.matches.some(m => /field verified/i.test(m))).toBe(true);
+  });
+
+  // FIX-1 — a window's terminator is "the next SECTION_HEADERS marker
+  // actually present," and a window whose START marker is absent is
+  // skipped entirely, so a job that legitimately omits a lettered section
+  // never hard-blocks on ECFECI placement.
+  it('passes when Section D is legitimately omitted (interior-only job)', () => {
+    const text = [
+      'A. Service & Distribution',
+      'Service entrance assembly and MDP (ECFECI).',
+      'Distribution gear (ECFECI): panels A, B.',
+      'B. Branch Power',
+      'Branch circuits per plan.',
+      'C. Lighting & Controls',
+      'Complete lighting package (ECFECI).',
+      'E. Low Voltage Infrastructure (Conduit & Boxes Only)',
+      'Conduit and boxes only.',
+    ].join('\n');
+    const result = verifyBidText(text, 'gc');
+    expect(result.pass).toBe(true);
+    expect(result.failures).toEqual([]);
+  });
+
+  it('passes when Section B is legitimately omitted', () => {
+    const text = [
+      'A. Service & Distribution',
+      'Service entrance assembly and MDP (ECFECI).',
+      'Distribution gear (ECFECI): panels A, B.',
+      'C. Lighting & Controls',
+      'Complete lighting package (ECFECI).',
+      'D. Site Lighting, Underground Work & Allowances',
+      'Site lighting per plan.',
+    ].join('\n');
+    const result = verifyBidText(text, 'gc');
+    expect(result.pass).toBe(true);
+    expect(result.failures).toEqual([]);
+  });
+
+  it('still fails when ECFECI is genuinely missing from Section A, even with B/D both omitted', () => {
+    const text = [
+      'A. Service & Distribution',
+      'Service entrance assembly and MDP.', // no ECFECI
+      'C. Lighting & Controls',
+      'Complete lighting package (ECFECI). Distribution gear (ECFECI). Panels (ECFECI).',
+    ].join('\n');
+    const result = verifyBidText(text, 'gc');
+    const f = result.failures.find(f => f.check === 'ecfeci');
+    expect(f).toBeTruthy();
+    expect(f!.detail).toMatch(/A\. Service & Distribution/);
+  });
 });
 
-describe('verifyBidText — internal kind relaxes banned/SF/ECFECI, keeps placeholders', () => {
-  it('an internal doc with estimator language, SF, and no ECFECI still passes', () => {
-    const text = 'This item was field verify counted at 1,234 SF. No ECFECI language here at all.';
+describe('verifyBidText — internal kind relaxes banned/SF/ECFECI-placement, keeps placeholders + ECFECI count', () => {
+  it('an internal doc with estimator language, SF, and 3+ ECFECI mentions anywhere still passes (no placement requirement)', () => {
+    const text = 'This item was field verify counted at 1,234 SF. ECFECI. ECFECI. ECFECI.';
     const result = verifyBidText(text, 'internal');
     expect(result.pass).toBe(true);
     expect(result.failures).toEqual([]);
   });
 
   it('an internal doc still fails on an unfilled placeholder', () => {
-    const result = verifyBidText('Received from [SOURCE NAME].', 'internal');
+    const result = verifyBidText('Received from [SOURCE NAME]. ECFECI. ECFECI. ECFECI.', 'internal');
     expect(result.pass).toBe(false);
     expect(result.failures[0].check).toBe('placeholders');
+  });
+
+  // FIX-6 — verify.sh v4 runs the ECFECI >= 3 count check on internal
+  // documents too; the port previously skipped it entirely for kind:internal.
+  it('an internal doc still fails when ECFECI count is under 3', () => {
+    const text = 'This item was field verify counted at 1,234 SF. No ECFECI language here at all.';
+    const result = verifyBidText(text, 'internal');
+    expect(result.pass).toBe(false);
+    const f = result.failures.find(f => f.check === 'ecfeci');
+    expect(f).toBeTruthy();
+    expect(f!.detail).toMatch(/only 1 ECFECI/);
+  });
+
+  it('an internal doc is not held to the GC-only placement windows — ECFECI anywhere, 3+ times, is enough', () => {
+    const text = 'No section headers at all here. ECFECI ECFECI ECFECI — plenty of mentions, wrong shape entirely.';
+    const result = verifyBidText(text, 'internal');
+    expect(result.pass).toBe(true);
   });
 });
 
