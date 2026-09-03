@@ -84,6 +84,12 @@ export interface AppSettings {
   bid_notify_emails: string;
   // Gen award kickoff email
   award_recipients: string;
+  // Phase 4 Task 4 — electrical proposal quiet-sweep follow-up delays
+  // (services/proposalQuietSweep.ts's sweepQuietBids), the bids-side
+  // counterpart to the generator pipeline's own (unsurfaced) gen_followup_*
+  // settings.
+  elec_followup_quiet_days: string;
+  elec_followup_viewed_days: string;
   // Estimating
   unit_cost_library: string;
   // Other
@@ -119,6 +125,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   currency_code: 'USD',
   bid_notify_enabled: 'true', bid_notify_emails: '[]',
   award_recipients: '[]',
+  elec_followup_quiet_days: '5', elec_followup_viewed_days: '3',
   unit_cost_library: '',
   notifications_json: '{}', security_session_timeout: '480',
 };
