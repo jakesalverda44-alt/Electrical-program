@@ -113,7 +113,7 @@ declares which keys exist and how they're sourced (`generateValue`,
 | `GOOGLE_IMPERSONATE_EMAIL` | Domain-wide-delegation impersonation target for the Drive service account | Set in the dashboard if the service account uses DWD. |
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | Large document upload storage | Set in the dashboard. |
 | `ANTHROPIC_API_KEY` | Default AI key (Agent 1-4, pre-bid analysis, classifier) — overridable per-install via the `ai_anthropic_key` app_setting | Set in the dashboard. |
-| `FRONTEND_URL` | Fallback base URL for public links (proposal/bid tokens) when the `frontend_url` app_setting is blank | The app_setting (Settings screen) wins when set; this is the floor so a blank setting never falls back to `localhost` in a public link. Should be the production URL. |
+| `FRONTEND_URL` | Fallback base URL for public links (the generator pipeline's `/p/:token` proposal page) when the `frontend_url` app_setting is blank | The app_setting (Settings screen) wins when set; this is the floor so a blank setting never falls back to `localhost` in a public link. Should be the production URL. Post-merge rework (2026-09-03) removed the electrical bid's own public `/bp/:token` page — `bids.proposal_token` is now unused — so this setting only matters for the generator pipeline's link today. |
 | `CORS_ORIGIN` | Allowed CORS origin(s); falls back to `FRONTEND_URL` | Only needed if the frontend is ever served from a different origin than the backend. |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` / `SEED_ADMIN_NAME` | First-boot admin bootstrap — only used when the `users` table is empty | Leave unset on an already-seeded database (i.e. always, in practice, after the first deploy) so it's a no-op. |
 | `LOG_LEVEL` | Overrides the default (`info` in production) | Optional. |
@@ -122,8 +122,10 @@ declares which keys exist and how they're sourced (`generateValue`,
 
 Zapier/optional integrations aside, the load-bearing ones for this phase's
 delivery loop are `GRAPH_TENANT_ID`/`GRAPH_CLIENT_ID`/`GRAPH_CLIENT_SECRET`
-(send-to-GC, RFI drafts, Chris drafts, sign notifications all route through
-them) and `EMAIL_DISABLED` as the brake if anything looks wrong post-deploy.
+(draft-proposal, RFI drafts, and Chris drafts all route through them —
+draft-proposal is a `graphCreateDraft` call, never `graphSendMail`; see the
+rework note below) and `EMAIL_DISABLED` as the brake if anything looks
+wrong post-deploy.
 
 ## Migrations landing with this deploy
 
@@ -141,6 +143,15 @@ Main is currently at migration `093`. This phase adds two:
   rows, Postgres has to rewrite every existing row to backfill the
   default — same class of "whole-table rewrite" caution as `094` below,
   though `documents` is typically far smaller than `bids`.
+
+**Post-merge rework (2026-09-03) — no down-migration.** `094`/`095`'s
+`proposal_token`/`proposal_viewed_at`/`proposal_signed_at`/`signer_name`/
+`signature_data`/`bids.signed_document_id` columns are no longer written or
+read by anything (the public proposal page + e-sign flow they backed was
+removed — see `docs/superpowers/plans/2026-09-03-phase4-report.md`'s
+"Post-merge rework" section). They stay in the schema; nothing here drops
+them. `proposal_sent_at`/`proposal_sent_to` remain live, stamped by
+`draft-proposal`'s "Mark bid as Submitted" option.
 
 **`094` in particular rewrites the entire `bids` table** — it adds a
 column (`proposal_token`) with a **volatile** default
@@ -177,19 +188,30 @@ includes this phase's changes, **with `EMAIL_DISABLED=true` set first** for
 anything that sends or drafts mail — flip it off only once you've confirmed
 the feature works and are ready for a real send.
 
-**Use a real, throwaway bid for steps 4 and 6 — not a real GC's live bid**
+**Use a real, throwaway bid for steps 4 and 5 — not a real GC's live bid**
 (post-review FIX-10). `EMAIL_DISABLED=true` mutes only the outbound Graph
 mail call; it does NOT mute anything else those two routes do. Step 4
-(send-proposal) still, for real: stamps `proposal_sent_at`, advances the
-bid's stage `due → submitted` if applicable, and moves the Drive job
-folder to the submitted-bids location. Step 6 (RFI draft) still, for
-real: flips the bid's open RFIs to `submitted:true` in the workspace.
-None of that is reversible with a config flip the way a muted email is —
-running these against a bid that actually matters will visibly move it
-in the pipeline and mark its RFIs submitted whether or not any email
-actually went out. Create (or reuse) a bid named something like `zzz
-smoke test — do not use` for these two checks, and delete/trash it
-afterward.
+(draft-proposal, with "Mark bid as Submitted" checked) still, for real:
+stamps `proposal_sent_at`, advances the bid's stage `due → submitted` if
+applicable, and moves the Drive job folder to the submitted-bids location.
+Step 5 (RFI draft) still, for real: flips the bid's open RFIs to
+`submitted:true` in the workspace. None of that is reversible with a
+config flip the way a muted draft is — running these against a bid that
+actually matters will visibly move it in the pipeline and mark its RFIs
+submitted whether or not a draft actually landed in Outlook. Create (or
+reuse) a bid named something like `zzz smoke test — do not use` for these
+two checks, and delete/trash it afterward.
+
+Post-merge rework (2026-09-03) removed the public proposal page and e-sign
+flow entirely (GCs execute via contract/PO, not a web signature) — there is
+no longer a "real send to a GC" side effect anywhere in this app.
+**draft-proposal only ever creates an Outlook DRAFT** (`graphCreateDraft`,
+never `graphSendMail`) sitting in the mailbox's Drafts folder; nothing
+reaches a GC's inbox until Jake opens it in Outlook and clicks Send
+himself. So step 4 below carries no "flip EMAIL_DISABLED off and do one
+real send" follow-up the way the old send-to-GC step did — there's nothing
+downstream of the app to verify beyond "did a draft land in Drafts with
+the right attachment."
 
 1. **Intake refresh** — Electrical hub → Intake tab → trigger a refresh;
    confirm items load and (if any are accepted during this check) the
@@ -201,23 +223,22 @@ afterward.
    **Download .docx**; confirm it either downloads cleanly or shows the
    verify-gate's failure list (never a silent 500). Check the **Key
    findings** panel under the takeoff rollup renders when present.
-4. **Send-to-GC dry check — use the throwaway bid, not step 2/3's bid if
-   that one is real.** With `EMAIL_DISABLED=true` still set, open **Send
-   Proposal**, fill in a real-looking recipient, and send. Confirm: a 200
-   response, the sent-status chip appears, the stage auto-advances
+4. **Draft-to-GC dry check — use the throwaway bid, not step 2/3's bid if
+   that one is real.** With `EMAIL_DISABLED=true` still set, open **Draft
+   Proposal Email**, fill in a real-looking recipient, leave "Mark bid as
+   Submitted" checked, and click **Create Outlook Draft**. Confirm: a 200
+   response, the toast reports which format got attached (PDF or Word),
+   the "Marked Submitted" chip appears, the stage auto-advances
    `due → submitted` if applicable, and — check the Render logs — a
-   `[graphMailer] NO-OP send (muted...)` line, proving nothing actually
-   went out. The stage advance and Drive folder move happen regardless of
-   `EMAIL_DISABLED` (see the callout above) — that's exactly why this step
-   uses the throwaway bid. Only then unset `EMAIL_DISABLED` and do one
-   real send to a real internal test address before trusting the path for
-   GCs.
-5. **Public proposal page** — open the bid's public link (`/bp/:token`)
-   in an incognito window; confirm the HTML renders, the Download button
-   works, and `proposal_viewed_at` stamps (check the bid record) on that
-   first load. (This step is safe against a real bid — it's read/view-only
-   until you actually sign.)
-6. **RFI draft — use the throwaway bid.** From the RFI tab, with at least
+   `[graphMailer] NO-OP draft (muted...)` line, proving no draft was
+   actually created in Outlook. The stage advance and Drive folder move
+   happen regardless of `EMAIL_DISABLED` (see the callout above) — that's
+   exactly why this step uses the throwaway bid. Only then unset
+   `EMAIL_DISABLED` and confirm once, for real, that a draft with the
+   right attachment actually lands in the Drafts folder — it is still only
+   a draft, so there is no live-send risk to gate behind a real internal
+   test address the way the old send-to-GC step needed.
+5. **RFI draft — use the throwaway bid.** From the RFI tab, with at least
    one open RFI and a usable contact email, click **Submit Open RFIs to
    GC**; confirm (with `EMAIL_DISABLED=true`) the RFIs flip to Submitted
    and the response indicates a draft was created, without an actual
