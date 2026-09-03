@@ -62,6 +62,39 @@ check the host in the connection string (Supabase hosts look like
 in `.render.com` / `.frankfurt-postgres.render.com` etc. — if you see that,
 stop and verify with Jake before proceeding).
 
+## Before syncing the blueprint (post-review FIX-10)
+
+`render.yaml`'s `DATABASE_URL` is declared `sync: false` (dashboard-
+managed) — the 2026-09-02 incident happened specifically because a
+`render.yaml` change involving `DATABASE_URL` (that removed
+`databases:`/`fromDatabase` block) interacted badly with what was actually
+set in the dashboard at the time. Whenever you are about to push a
+`render.yaml` change and let Render "sync" the blueprint against the live
+service — this deploy included, since this phase's `render.yaml` cleanup
+is exactly that kind of change — do this FIRST, every time, before
+syncing:
+
+1. Open the Render dashboard → this service → Environment tab.
+2. Find `DATABASE_URL` and confirm its host is Supabase's — either
+   `db.<project-ref>.supabase.co` or `aws-0-<region>.pooler.supabase.com`
+   (see above). **If it shows a `.render.com` host instead, STOP.** Do not
+   sync the blueprint. Investigate and verify with Jake first — that
+   means `DATABASE_URL` is currently pointed at the wrong (decoy) database
+   and syncing on top of that will not fix it.
+3. Once confirmed Supabase: copy the full connection string value
+   somewhere safe (a password manager entry, not a scratch file left
+   lying around) BEFORE syncing. A `fromDatabase` → `sync: false`
+   transition (or any blueprint sync touching an env var Render considers
+   "managed by the blueprint") has a real chance of blanking or resetting
+   a `sync: false` var that had no explicit `value`/`fromDatabase` binding
+   in the old blueprint — having the real value in hand means a blanked
+   `DATABASE_URL` is a two-minute paste-it-back-in fix instead of a
+   scramble to find the Supabase project again.
+4. Sync the blueprint. Immediately re-check `DATABASE_URL` in the
+   dashboard against what you copied in step 3. If it changed or is
+   empty, paste the saved value back in before the next deploy/restart
+   picks up a bad or missing connection string.
+
 ## Environment variables production needs
 
 Set these in the Render dashboard (Environment tab) — `render.yaml` only
@@ -94,18 +127,47 @@ them) and `EMAIL_DISABLED` as the brake if anything looks wrong post-deploy.
 
 ## Migrations landing with this deploy
 
-Main is currently at migration `093`. This phase adds one:
+Main is currently at migration `093`. This phase adds two:
 
 - **`094_bid_delivery.sql`** — adds `proposal_token`/`proposal_sent_at`/
   `proposal_sent_to`/`proposal_viewed_at`/`proposal_signed_at`/
   `signer_name`/`signature_data` to `bids`, and makes `proposal_activity`
   (from `059_lead_proposal_handoff.sql`) serve both `generator_proposals`
   and `bids` via a nullable `bid_id` + exactly-one-parent `CHECK`.
+- **`095_public_bid_gate.sql`** (post-review FIX-3) — adds
+  `documents.gate_passed` (`BOOLEAN NOT NULL DEFAULT false`) and
+  `bids.signed_document_id` (FK to `documents`). Note the `NOT NULL
+  DEFAULT false` on `gate_passed`: on a `documents` table with existing
+  rows, Postgres has to rewrite every existing row to backfill the
+  default — same class of "whole-table rewrite" caution as `094` below,
+  though `documents` is typically far smaller than `bids`.
+
+**`094` in particular rewrites the entire `bids` table** — it adds a
+column (`proposal_token`) with a **volatile** default
+(`gen_random_uuid()`), which Postgres cannot apply as a fast metadata-only
+change; it has to compute and write a new value into every existing row.
+On a `bids` table with a lot of history this can take real time and hold
+a lock. Deploy `094` (and `095`, same session) in a quiet window, not
+during business hours, and see the `pg_dump` note immediately below.
+
+**Before deploying `094`/`095`: take a schema-only snapshot.** From a
+machine with `psql`/`pg_dump` and the Supabase connection string (see
+"Before syncing the blueprint" above for how to get it safely):
+
+```
+pg_dump --schema-only --no-owner "$SUPABASE_DATABASE_URL" > pre_094_095_schema_snapshot.sql
+```
+
+This is a schema (not data) backup — cheap, fast, and exactly what you'd
+need to compare against or roll a botched migration's DDL back by hand.
+It is not a substitute for Supabase's own data backups/PITR, just an
+extra, fast local artifact to have on hand before a migration that
+rewrites a live table.
 
 (Migrations `090`/`091` don't exist in this repo — a gap in the numbering,
 not missing files; `runMigrations()` just applies whichever `.sql` files
 are present, so this is harmless.) All of `089_prep_inventory.sql` through
-`094_bid_delivery.sql` apply automatically on the next deploy's boot, in
+`095_public_bid_gate.sql` apply automatically on the next deploy's boot, in
 filename order, in one pass — no manual step.
 
 ## Post-deploy smoke list
@@ -113,7 +175,21 @@ filename order, in one pass — no manual step.
 Run through these against production immediately after a deploy that
 includes this phase's changes, **with `EMAIL_DISABLED=true` set first** for
 anything that sends or drafts mail — flip it off only once you've confirmed
-the feature works and are ready for a real send:
+the feature works and are ready for a real send.
+
+**Use a real, throwaway bid for steps 4 and 6 — not a real GC's live bid**
+(post-review FIX-10). `EMAIL_DISABLED=true` mutes only the outbound Graph
+mail call; it does NOT mute anything else those two routes do. Step 4
+(send-proposal) still, for real: stamps `proposal_sent_at`, advances the
+bid's stage `due → submitted` if applicable, and moves the Drive job
+folder to the submitted-bids location. Step 6 (RFI draft) still, for
+real: flips the bid's open RFIs to `submitted:true` in the workspace.
+None of that is reversible with a config flip the way a muted email is —
+running these against a bid that actually matters will visibly move it
+in the pipeline and mark its RFIs submitted whether or not any email
+actually went out. Create (or reuse) a bid named something like `zzz
+smoke test — do not use` for these two checks, and delete/trash it
+afterward.
 
 1. **Intake refresh** — Electrical hub → Intake tab → trigger a refresh;
    confirm items load and (if any are accepted during this check) the
@@ -125,21 +201,29 @@ the feature works and are ready for a real send:
    **Download .docx**; confirm it either downloads cleanly or shows the
    verify-gate's failure list (never a silent 500). Check the **Key
    findings** panel under the takeoff rollup renders when present.
-4. **Send-to-GC dry check** — with `EMAIL_DISABLED=true` still set, open
-   **Send Proposal** on that bid, fill in a real-looking recipient, and
-   send. Confirm: a 200 response, the sent-status chip appears, the stage
-   auto-advances `due → submitted` if applicable, and — check the Render
-   logs — a `[graphMailer] NO-OP send (muted...)` line, proving nothing
-   actually went out. Only then unset `EMAIL_DISABLED` and do one real
-   send to a real internal test address before trusting the path for GCs.
+4. **Send-to-GC dry check — use the throwaway bid, not step 2/3's bid if
+   that one is real.** With `EMAIL_DISABLED=true` still set, open **Send
+   Proposal**, fill in a real-looking recipient, and send. Confirm: a 200
+   response, the sent-status chip appears, the stage auto-advances
+   `due → submitted` if applicable, and — check the Render logs — a
+   `[graphMailer] NO-OP send (muted...)` line, proving nothing actually
+   went out. The stage advance and Drive folder move happen regardless of
+   `EMAIL_DISABLED` (see the callout above) — that's exactly why this step
+   uses the throwaway bid. Only then unset `EMAIL_DISABLED` and do one
+   real send to a real internal test address before trusting the path for
+   GCs.
 5. **Public proposal page** — open the bid's public link (`/bp/:token`)
    in an incognito window; confirm the HTML renders, the Download button
    works, and `proposal_viewed_at` stamps (check the bid record) on that
-   first load.
-6. **RFI draft** — from the RFI tab, with at least one open RFI and a
-   usable contact email, click **Submit Open RFIs to GC**; confirm (with
-   `EMAIL_DISABLED=true`) the RFIs flip to Submitted and the response
-   indicates a draft was created, without an actual email going out.
+   first load. (This step is safe against a real bid — it's read/view-only
+   until you actually sign.)
+6. **RFI draft — use the throwaway bid.** From the RFI tab, with at least
+   one open RFI and a usable contact email, click **Submit Open RFIs to
+   GC**; confirm (with `EMAIL_DISABLED=true`) the RFIs flip to Submitted
+   and the response indicates a draft was created, without an actual
+   email going out. The RFIs are marked Submitted for real regardless of
+   `EMAIL_DISABLED` — that's why this one also needs the throwaway bid,
+   not a real open RFI you still need answered.
 
 If any of these fail, `EMAIL_DISABLED=true` is the fastest way to keep
 looking without risking a real send while you investigate — it does not
