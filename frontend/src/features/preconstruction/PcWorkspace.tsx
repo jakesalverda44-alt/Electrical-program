@@ -2100,12 +2100,16 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       <Icon name="doc" size={14} stroke={1.9}/> {xlsxBusy ? 'Building…' : 'Download Takeoff (.xlsx)'}
                     </button>
                   )}
-                  {/* Phase 4 Task 1.4 — send the filed .docx to the GC. Enabled
-                      once a proposal exists; the backend 409s (surfaced via the
-                      modal's error state) if nothing has been downloaded/filed yet. */}
+                  {/* Phase 4 Task 1.4, reworked post-merge (2026-09-03) —
+                      creates an Outlook draft with the filed proposal
+                      attached; Jake reviews and sends it himself (GCs
+                      execute via contract/PO, not a web e-sign page).
+                      Enabled once a proposal exists; the backend 409s
+                      (surfaced via the modal's error state) if nothing has
+                      been downloaded/filed yet. */}
                   {hasProposal && (
                     <button className="btn ghost" onClick={() => setSendProposalOpen(true)} style={{ fontSize: 13, color: 'var(--blue)' }}>
-                      <Icon name="send" size={14} stroke={1.9}/> Send Proposal
+                      <Icon name="mail" size={14} stroke={1.9}/> Draft Proposal Email
                     </button>
                   )}
                   {hasProposal && (
@@ -2120,13 +2124,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     ⚠ Run the 3-agent plan analysis first — Agent 4 needs scope data from Agent 2.
                   </div>
                 )}
+                {/* proposal_sent_at still stamps from draft-proposal's markSubmitted
+                    checkbox (Task 4) — proposal_viewed_at/proposal_signed_at are no
+                    longer written by anything (the public proposal page is gone),
+                    so this chip no longer reports them. */}
                 {bid.proposal_sent_at && (
                   <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>
                     <Icon name="check" size={12} stroke={2.2} style={{ color: 'var(--green)' }}/>{' '}
-                    Sent {new Date(bid.proposal_sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                    {bid.proposal_sent_to?.[0] ? ` to ${bid.proposal_sent_to[0]}${bid.proposal_sent_to.length > 1 ? ` +${bid.proposal_sent_to.length - 1}` : ''}` : ''}
-                    {bid.proposal_viewed_at && ' · Viewed'}
-                    {bid.proposal_signed_at && ' · Signed'}
+                    Marked Submitted {new Date(bid.proposal_sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    {bid.proposal_sent_to?.[0] ? ` — to ${bid.proposal_sent_to[0]}${bid.proposal_sent_to.length > 1 ? ` +${bid.proposal_sent_to.length - 1}` : ''}` : ''}
                   </div>
                 )}
               </div>
@@ -2136,11 +2142,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               <SendBidProposalModal
                 bid={bid}
                 onClose={() => setSendProposalOpen(false)}
-                onSent={({ bid: updatedBid, stageAdvanced }) => {
+                onSent={({ bid: updatedBid, stageAdvanced, attached }) => {
                   onBidUpdated(updatedBid);
                   showToast({
-                    title: 'Proposal sent',
-                    sub: stageAdvanced ? 'Stage advanced to Submitted' : 'Delivered to the GC',
+                    title: 'Outlook draft created',
+                    sub: [
+                      attached === 'pdf' ? 'PDF attached' : 'Word attached — install LibreOffice for PDF',
+                      stageAdvanced ? 'Stage advanced to Submitted' : null,
+                    ].filter(Boolean).join(' · '),
                   });
                 }}
               />
