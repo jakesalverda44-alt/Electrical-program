@@ -15,7 +15,6 @@ import DocsPage from './features/docs/DocsPage';
 import FollowupsPage from './features/followups/FollowupsPage';
 import CalendarPage from './features/calendar/CalendarPage';
 import ProposalPublicPage from './pages/ProposalPublicPage';
-import BidProposalPublicPage from './pages/BidProposalPublicPage';
 import SettingsPage from './features/settings/SettingsPage';
 import GeneratorsHubPage from './features/hubs/GeneratorsHubPage';
 import ElectricalHubPage from './features/hubs/ElectricalHubPage';
@@ -196,7 +195,6 @@ export default function App() {
           <Route path="/login" element={<LoginPage onLogin={handleLogin}/>}/>
           <Route path="/reset-password" element={<LoginPage onLogin={handleLogin}/>}/>
           <Route path="/p/:token" element={<ProposalPublicPage/>}/>
-          <Route path="/bp/:token" element={<BidProposalPublicPage/>}/>
           <Route path="*" element={<Navigate to="/login" replace/>}/>
         </Routes>
         {toast && <Toast toast={toast}/>}
@@ -329,7 +327,6 @@ export default function App() {
     <Routes>
       {/* Public proposal stays reachable even when signed in */}
       <Route path="/p/:token" element={<ProposalPublicPage/>}/>
-      <Route path="/bp/:token" element={<BidProposalPublicPage/>}/>
       {/* Auth pages are meaningless when already signed in */}
       <Route path="/login" element={<Navigate to="/dashboard" replace/>}/>
       <Route path="/reset-password" element={<Navigate to="/dashboard" replace/>}/>

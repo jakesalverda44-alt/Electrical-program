@@ -1991,8 +1991,7 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
       uploadedBy: req.user!.name,
       // FIX-3 (post-review) — this row is only ever filed after
       // verifyBidDocx(kind:'gc') passed, above. gate_passed marks it as the
-      // only kind of 'proposal' row the public /download and send-proposal
-      // paths will ever serve or attach.
+      // only kind of 'proposal' row draft-proposal will ever attach.
       gatePassed: true,
     });
   } catch (err) {

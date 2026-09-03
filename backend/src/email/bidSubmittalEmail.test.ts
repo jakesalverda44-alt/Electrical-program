@@ -47,45 +47,37 @@ describe('buildBidSubmittalHtml', () => {
     expect(html).toContain('352-801-8997');
   });
 
-  it('inserts "View and accept online: <link>" above the signature when a link is given', () => {
-    const html = buildBidSubmittalHtml({ bodyText: defaultSubmittalBodyText(BID), proposalLink: 'https://example.com/bp/abc123' });
-    const linkIdx = html.indexOf('View and accept online');
-    const sigIdx = html.indexOf('Jake Salverda');
-    expect(linkIdx).toBeGreaterThan(-1);
-    expect(sigIdx).toBeGreaterThan(-1);
-    expect(linkIdx).toBeLessThan(sigIdx);
-    expect(html).toContain('https://example.com/bp/abc123');
-  });
-
-  it('omits the link line entirely when no link is given', () => {
+  // Post-merge rework (2026-09-03) — GCs never e-sign a web page; the
+  // "View and accept online: <link>" line (and the proposalLink param that
+  // produced it) is gone entirely. See buildBidSubmittalHtml's own comment.
+  it('never renders a "View and accept online" link — the drafted email has no public link', () => {
     const html = buildBidSubmittalHtml({ bodyText: defaultSubmittalBodyText(BID) });
     expect(html).not.toContain('View and accept online');
   });
 
-  // FIX-5 (post-review) — the route sends this HTML with
-  // appendSignature:false (graphSendMail would otherwise tack the branded
-  // HTML signature on again after this). Locks that the built body's own
-  // template sign-off is genuinely the LAST thing in it, so there's nothing
-  // for a caller to accidentally duplicate a second sign-off onto.
+  // FIX-5 (post-review) — the route creates this HTML with
+  // appendSignature:false (graphCreateDraft would otherwise tack the
+  // branded HTML signature on again after this). Locks that the built
+  // body's own template sign-off is genuinely the LAST thing in it, so
+  // there's nothing for a caller to accidentally duplicate a second
+  // sign-off onto.
   it("ends with Jake's own template sign-off — nothing rendered after it", () => {
-    const html = buildBidSubmittalHtml({ bodyText: defaultSubmittalBodyText(BID), proposalLink: 'https://example.com/bp/abc123' });
+    const html = buildBidSubmittalHtml({ bodyText: defaultSubmittalBodyText(BID) });
     expect(html.trim().endsWith('352-801-8997</div>')).toBe(true);
   });
 
   // GUARD (Task 1.2): the built body must NEVER contain the bid amount, in
   // any of its usual formattings, even though a full bid row (amount and
   // all) is a valid input to every builder in this file.
-  it('GUARD: never contains the bid amount, in any body/link combination', () => {
+  it('GUARD: never contains the bid amount, in any formatting', () => {
     const forbidden = ['425000', '425,000', '$425,000', '$425000'];
     const subject = defaultSubmittalSubject(BID);
     const bodyText = defaultSubmittalBodyText(BID);
-    const htmlNoLink = buildBidSubmittalHtml({ bodyText });
-    const htmlWithLink = buildBidSubmittalHtml({ bodyText, proposalLink: 'https://example.com/bp/abc123' });
+    const html = buildBidSubmittalHtml({ bodyText });
     for (const needle of forbidden) {
       expect(subject).not.toContain(needle);
       expect(bodyText).not.toContain(needle);
-      expect(htmlNoLink).not.toContain(needle);
-      expect(htmlWithLink).not.toContain(needle);
+      expect(html).not.toContain(needle);
     }
   });
 
@@ -95,13 +87,11 @@ describe('buildBidSubmittalHtml', () => {
     const forbidden = ['248750.00', '248750', '248,750.00', '248,750', '$248,750.00', '$248750.00', '$248,750', '$248750'];
     const subject = defaultSubmittalSubject(DECIMAL_BID);
     const bodyText = defaultSubmittalBodyText(DECIMAL_BID);
-    const htmlNoLink = buildBidSubmittalHtml({ bodyText });
-    const htmlWithLink = buildBidSubmittalHtml({ bodyText, proposalLink: 'https://example.com/bp/abc123' });
+    const html = buildBidSubmittalHtml({ bodyText });
     for (const needle of forbidden) {
       expect(subject).not.toContain(needle);
       expect(bodyText).not.toContain(needle);
-      expect(htmlNoLink).not.toContain(needle);
-      expect(htmlWithLink).not.toContain(needle);
+      expect(html).not.toContain(needle);
     }
   });
 });

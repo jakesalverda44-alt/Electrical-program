@@ -5,7 +5,7 @@ import Icon from '../../components/Icon';
 
 interface Props {
   bid: Bid;
-  onSent: (result: { bid: Bid; wonJob: unknown; stageAdvanced: boolean; link: string }) => void;
+  onSent: (result: { bid: Bid; wonJob: unknown; stageAdvanced: boolean; webLink: string; attached: 'pdf' | 'docx' }) => void;
   onClose: () => void;
 }
 
@@ -23,10 +23,12 @@ function defaultBodyText(bid: Bid): string {
   return `Hey,\n\nPlease find attached our electrical proposal for the ${project}${loc ? ` at ${loc}` : ''}.\nLet us know if you have any clarifications.`;
 }
 
-// Phase 4 Task 1.4 — mirrors SendProposalModal.tsx's (gens) UX for the
-// electrical Send Proposal flow: prefilled recipient, editable subject/body,
-// include-takeoff checkbox (off by default per the authority template's
-// rule), explicit Send button with busy state.
+// Post-merge rework (2026-09-03) — Jake corrected the product design after
+// reviewing Phase 4: GCs never e-sign a web page, they execute via
+// contract/PO. So this modal no longer "sends" anything — it creates an
+// Outlook DRAFT (with the filed proposal attached) that Jake reviews and
+// sends himself. See backend/src/routes/bids.ts's POST /:id/draft-proposal
+// and docs/superpowers/plans/2026-09-03-phase4-report.md's rework section.
 export default function SendBidProposalModal({ bid, onSent, onClose }: Props) {
   const prefill = bid.contact && EMAIL_RE.test(bid.contact.trim()) ? bid.contact.trim() : '';
   const [to,      setTo]      = useState(prefill);
@@ -34,32 +36,39 @@ export default function SendBidProposalModal({ bid, onSent, onClose }: Props) {
   const [subject, setSubject] = useState(defaultSubject(bid));
   const [bodyText, setBodyText] = useState(defaultBodyText(bid));
   const [includeTakeoff, setIncludeTakeoff] = useState(false);
-  const [status,  setStatus]  = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [markSubmitted, setMarkSubmitted] = useState(true);
+  const [status,  setStatus]  = useState<'idle' | 'drafting' | 'drafted' | 'error'>('idle');
   const [errMsg,  setErrMsg]  = useState('');
-  const [sentTo,  setSentTo]  = useState('');
+  const [webLink, setWebLink] = useState('');
+  const [attached, setAttached] = useState<'pdf' | 'docx'>('pdf');
   const [stageAdvanced, setStageAdvanced] = useState(false);
 
   const parseList = (v: string) => v.split(/[,;]/).map(s => s.trim()).filter(Boolean);
 
-  const send = async () => {
+  const draft = async () => {
     const toList = parseList(to);
     if (!toList.length) return;
-    setStatus('sending');
+    setStatus('drafting');
     setErrMsg('');
     try {
-      const r = await api.post(`/bids/${bid.id}/send-proposal`, {
+      const r = await api.post(`/bids/${bid.id}/draft-proposal`, {
         to: toList,
         cc: parseList(cc),
         subject,
         bodyText,
         includeTakeoff,
+        markSubmitted,
       });
-      setSentTo(toList[0]);
+      setWebLink(r.data.webLink || '');
+      setAttached(r.data.attached === 'docx' ? 'docx' : 'pdf');
       setStageAdvanced(!!r.data.stageAdvanced);
-      onSent({ bid: r.data.bid, wonJob: r.data.wonJob, stageAdvanced: !!r.data.stageAdvanced, link: r.data.link });
-      setStatus('sent');
+      onSent({
+        bid: r.data.bid, wonJob: r.data.wonJob, stageAdvanced: !!r.data.stageAdvanced,
+        webLink: r.data.webLink || '', attached: r.data.attached === 'docx' ? 'docx' : 'pdf',
+      });
+      setStatus('drafted');
     } catch (e: any) {
-      setErrMsg(e?.response?.data?.error || e?.message || 'Failed to send');
+      setErrMsg(e?.response?.data?.error || e?.message || 'Failed to create the draft');
       setStatus('error');
     }
   };
@@ -69,25 +78,35 @@ export default function SendBidProposalModal({ bid, onSent, onClose }: Props) {
       <div style={{ background: 'var(--surface)', borderRadius: 14, width: 520, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 8px 40px rgba(0,0,0,.25)' }}>
         <div style={{ background: 'var(--navy, #1B3A6B)', padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Icon name="send" size={16} stroke={2} style={{ color: '#fff' }}/>
-            <span style={{ color: '#fff', fontWeight: 800, fontSize: 15 }}>Send Proposal to GC</span>
+            <Icon name="mail" size={16} stroke={2} style={{ color: '#fff' }}/>
+            <span style={{ color: '#fff', fontWeight: 800, fontSize: 15 }}>Draft Proposal Email</span>
           </div>
           <button onClick={onClose} style={{ border: 'none', background: 'none', color: 'rgba(255,255,255,.7)', cursor: 'pointer', padding: 4 }}>
             <Icon name="x" size={16} stroke={2}/>
           </button>
         </div>
 
-        {status === 'sent' ? (
+        {status === 'drafted' ? (
           <div style={{ padding: '40px 28px', textAlign: 'center' }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
-            <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--text)', marginBottom: 6 }}>Proposal Sent</div>
-            <div style={{ fontSize: 13, color: 'var(--text3)' }}>An email was delivered to <strong>{sentTo}</strong></div>
+            <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--text)', marginBottom: 6 }}>Draft Created</div>
+            <div style={{ fontSize: 13, color: 'var(--text3)' }}>
+              {attached === 'pdf' ? 'PDF attached' : 'Word attached — install LibreOffice for PDF'}
+            </div>
             {stageAdvanced && (
               <div style={{ fontSize: 12.5, color: 'var(--green)', fontWeight: 700, marginTop: 8 }}>Stage advanced to Submitted</div>
             )}
-            <button onClick={onClose} style={{ marginTop: 24, padding: '10px 28px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 9, fontWeight: 700, cursor: 'pointer', fontSize: 14 }}>
-              Done
-            </button>
+            {webLink && (
+              <a href={webLink} target="_blank" rel="noreferrer"
+                style={{ display: 'inline-block', marginTop: 14, fontSize: 13, fontWeight: 700, color: 'var(--blue)' }}>
+                Open draft in Outlook →
+              </a>
+            )}
+            <div>
+              <button onClick={onClose} style={{ marginTop: 24, padding: '10px 28px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 9, fontWeight: 700, cursor: 'pointer', fontSize: 14 }}>
+                Done
+              </button>
+            </div>
           </div>
         ) : (
           <div style={{ padding: '20px 24px 24px' }}>
@@ -105,15 +124,28 @@ export default function SendBidProposalModal({ bid, onSent, onClose }: Props) {
                 style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}/>
             </Field>
             <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 16 }}>
-              The public proposal link and Jake&apos;s signature are added automatically below your message.
+              Jake&apos;s signature is added automatically below your message. This creates a draft in
+              Outlook — nothing is sent until you review and send it yourself.
             </div>
 
-            <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 20 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 14 }}>
               <input type="checkbox" checked={includeTakeoff}
                 onChange={e => setIncludeTakeoff(e.target.checked)}
                 style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
               Include takeoff spreadsheet
               <span style={{ fontWeight: 500, color: 'var(--text3)' }}>(only if the GC asked for it)</span>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 20 }}>
+              <input type="checkbox" checked={markSubmitted}
+                onChange={e => setMarkSubmitted(e.target.checked)}
+                style={{ accentColor: 'var(--green)', width: 16, height: 16, marginTop: 2 }}/>
+              <span>
+                Mark bid as Submitted
+                <span style={{ display: 'block', fontWeight: 500, color: 'var(--text3)', fontSize: 11.5, marginTop: 2 }}>
+                  Advances the stage now, before you send — the draft still needs to be reviewed and sent from Outlook.
+                </span>
+              </span>
             </label>
 
             {status === 'error' && (
@@ -126,9 +158,9 @@ export default function SendBidProposalModal({ bid, onSent, onClose }: Props) {
               <button onClick={onClose} style={{ padding: '10px 20px', border: '1px solid var(--border2)', background: 'none', borderRadius: 9, cursor: 'pointer', fontWeight: 600, fontSize: 13, color: 'var(--text2)' }}>
                 Cancel
               </button>
-              <button onClick={send} disabled={status === 'sending' || !parseList(to).length}
-                style={{ padding: '10px 24px', background: 'var(--navy, #1B3A6B)', color: '#fff', border: 'none', borderRadius: 9, fontWeight: 700, fontSize: 14, cursor: status === 'sending' ? 'not-allowed' : 'pointer', opacity: status === 'sending' ? .7 : 1, display: 'flex', alignItems: 'center', gap: 8 }}>
-                {status === 'sending' ? 'Sending…' : <><Icon name="send" size={14} stroke={2} style={{ color: '#fff' }}/> Send Proposal</>}
+              <button onClick={draft} disabled={status === 'drafting' || !parseList(to).length}
+                style={{ padding: '10px 24px', background: 'var(--navy, #1B3A6B)', color: '#fff', border: 'none', borderRadius: 9, fontWeight: 700, fontSize: 14, cursor: status === 'drafting' ? 'not-allowed' : 'pointer', opacity: status === 'drafting' ? .7 : 1, display: 'flex', alignItems: 'center', gap: 8 }}>
+                {status === 'drafting' ? 'Creating draft…' : <><Icon name="mail" size={14} stroke={2} style={{ color: '#fff' }}/> Create Outlook Draft</>}
               </button>
             </div>
           </div>

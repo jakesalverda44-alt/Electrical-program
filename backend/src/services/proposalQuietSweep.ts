@@ -156,20 +156,26 @@ export async function sweepQuietProposals(now: Date = new Date()): Promise<{ cre
   return { created };
 }
 
-// ── Phase 4 Task 4: the same sweep, extended with an electrical bids pass ──
-// (rather than forking a copy of the file) — bids use `bids`/proposal_*
-// columns and elec_followup_* settings instead of generator_proposals'
-// sent_at/viewed_at/signed_at and gen_followup_*, but the tiers, dedup
-// convention, and follow-up-task shape are identical.
+// ── Phase 4 Task 4, simplified post-merge (2026-09-03) — the electrical
+// bids pass (rather than forking a copy of the file) — bids use `bids`/
+// proposal_* columns and elec_followup_quiet_days instead of
+// generator_proposals' sent_at/gen_followup_quiet_days, but the dedup
+// convention and follow-up-task shape are identical.
+//
+// Originally this had two tiers (never-viewed vs. viewed-but-unsigned),
+// mirroring the generator pipeline's sweep. The public proposal page + view
+// tracking that Tier B depended on (proposal_viewed_at) is gone — Jake
+// corrected the product design after Phase 4 shipped: GCs never open a web
+// link to view/sign a proposal, they get a PDF/docx by email and respond
+// via contract/PO. There's nothing left to distinguish "viewed" from "not
+// viewed," so this collapses to ONE tier: sent + still `submitted` + quiet
+// long enough, full stop. elec_followup_viewed_days is gone (removed from
+// ALLOWED_KEYS and the Notifications UI); elec_followup_quiet_days stays.
 const DEFAULT_ELEC_QUIET_DAYS = 5;
-const DEFAULT_ELEC_VIEWED_DAYS = 3;
-
-export type QuietTier = 'A' | 'B' | null;
 
 export interface BidQuietEligibilityInput {
   stage: string;
   sentAt: Date | string | null;
-  viewedAt: Date | string | null;
   signedAt: Date | string | null;
 }
 
@@ -177,30 +183,23 @@ export interface BidQuietEligibilityInput {
  * Pure eligibility check — no DB, no I/O. A bid qualifies for a follow-up
  * only while it's still sitting in `submitted` (an awarded/lost/reopened
  * bid is no longer "waiting on the GC" in the sense this sweep cares
- * about) and has never been signed. Tier A: sent, never viewed, quiet for
- * at least `quietDays`. Tier B: viewed but unsigned, quiet (since the
- * view) for at least `viewedDays`. Mirrors sweepQuietProposals' own
- * strict-less-than cutoff semantics (a bid becomes eligible once MORE
- * than the configured number of days has elapsed, not merely "at least"
- * — same as the gens SQL's `sent_at < cutoff`).
+ * about), has never been signed/awarded, and has been quiet (since send)
+ * for at least `quietDays`. Mirrors sweepQuietProposals' own strict-less-
+ * than cutoff semantics (a bid becomes eligible once MORE than the
+ * configured number of days has elapsed, not merely "at least" — same as
+ * the gens SQL's `sent_at < cutoff`).
  */
 export function classifyBidQuietTier(
   input: BidQuietEligibilityInput,
   now: Date,
   quietDays: number,
-  viewedDays: number,
-): QuietTier {
-  if (input.stage !== 'submitted') return null;
-  if (!input.sentAt) return null;
-  if (input.signedAt) return null;
+): boolean {
+  if (input.stage !== 'submitted') return false;
+  if (!input.sentAt) return false;
+  if (input.signedAt) return false;
 
-  if (!input.viewedAt) {
-    const quietCutoff = new Date(now.getTime() - quietDays * 86_400_000);
-    return new Date(input.sentAt) < quietCutoff ? 'A' : null;
-  }
-
-  const viewedCutoff = new Date(now.getTime() - viewedDays * 86_400_000);
-  return new Date(input.viewedAt) < viewedCutoff ? 'B' : null;
+  const quietCutoff = new Date(now.getTime() - quietDays * 86_400_000);
+  return new Date(input.sentAt) < quietCutoff;
 }
 
 interface QuietBidRow {
@@ -210,11 +209,10 @@ interface QuietBidRow {
   salesperson_id: string | null;
   stage: string;
   proposal_sent_at: Date;
-  proposal_viewed_at: Date | null;
 }
 
-async function createBidFollowup(b: QuietBidRow, title: string, tier: 'a' | 'b'): Promise<void> {
-  const notes = `Sent ${dateOnly(b.proposal_sent_at)}. ${b.proposal_viewed_at ? `Viewed ${dateOnly(b.proposal_viewed_at)}` : 'Never viewed'}.`;
+async function createBidFollowup(b: QuietBidRow, title: string): Promise<void> {
+  const notes = `Sent ${dateOnly(b.proposal_sent_at)}.`;
   const dueDate = new Date().toISOString().slice(0, 10);
   const owner = await resolveOwner(b.salesperson_id);
   if (b.salesperson_id && !owner) {
@@ -237,59 +235,58 @@ async function createBidFollowup(b: QuietBidRow, title: string, tier: 'a' | 'b')
       body: notes,
       linkView: 'electrical/bids',
       linkId: b.id,
-      dedupKey: `bid-proposal-quiet-${tier}-${b.id}`,
+      dedupKey: `bid-proposal-quiet-${b.id}`,
     });
   }
 }
 
-async function tryCreateBidFollowup(b: QuietBidRow, title: string, tier: 'a' | 'b'): Promise<boolean> {
+async function tryCreateBidFollowup(b: QuietBidRow, title: string): Promise<boolean> {
   try {
-    await createBidFollowup(b, title, tier);
+    await createBidFollowup(b, title);
     return true;
   } catch (err) {
-    logger.error({ err, bidId: b.id, tier }, '[proposal-quiet-sweep] bid follow-up insert failed');
+    logger.error({ err, bidId: b.id }, '[proposal-quiet-sweep] bid follow-up insert failed');
     return false;
   }
 }
 
 /**
- * Sweep sent-but-unsigned electrical bids and create a one-time auto
- * follow-up task per bid per tier — same dedup convention as
- * sweepQuietProposals (title-prefix match against `tasks`, regardless of
- * open/done status, so a follow-up is created at most once per bid per
- * tier ever, even if the delay setting changes later). Fetches a broad
- * candidate pool (sent, unsigned, not deleted) and lets the pure
- * classifyBidQuietTier decide eligibility/tier per row, so the cutoff
- * logic lives in exactly one place and is independently unit-testable.
+ * Sweep sent-but-unawarded electrical bids and create a one-time auto
+ * follow-up task per bid — same dedup convention as sweepQuietProposals
+ * (title-prefix match against `tasks`, regardless of open/done status, so
+ * a follow-up is created at most once per bid ever, even if the delay
+ * setting changes later). Fetches a broad candidate pool (sent, not
+ * deleted) and lets the pure classifyBidQuietTier decide eligibility per
+ * row, so the cutoff logic lives in exactly one place and is
+ * independently unit-testable.
  */
 export async function sweepQuietBids(now: Date = new Date()): Promise<{ created: number }> {
   let created = 0;
   try {
     const quietDays = await numericSetting('elec_followup_quiet_days', DEFAULT_ELEC_QUIET_DAYS);
-    const viewedDays = await numericSetting('elec_followup_viewed_days', DEFAULT_ELEC_VIEWED_DAYS);
 
     const { rows: candidates } = await pool.query<QuietBidRow>(
-      `SELECT id, name, gc, salesperson_id, stage, proposal_sent_at, proposal_viewed_at
+      `SELECT id, name, gc, salesperson_id, stage, proposal_sent_at
          FROM bids
         WHERE deleted_at IS NULL AND proposal_sent_at IS NOT NULL AND proposal_signed_at IS NULL`
     );
 
     for (const b of candidates) {
-      const tier = classifyBidQuietTier(
-        { stage: b.stage, sentAt: b.proposal_sent_at, viewedAt: b.proposal_viewed_at, signedAt: null },
-        now, quietDays, viewedDays,
+      const eligible = classifyBidQuietTier(
+        { stage: b.stage, sentAt: b.proposal_sent_at, signedAt: null },
+        now, quietDays,
       );
-      if (!tier) continue;
+      if (!eligible) continue;
 
-      const titlePrefix = tier === 'A' ? 'Proposal quiet' : 'Proposal viewed but unsigned';
+      const titlePrefix = 'Proposal quiet';
       const { rows: existing } = await pool.query(
         `SELECT 1 FROM tasks WHERE linked_type = 'bid' AND linked_id = $1 AND title LIKE $2`,
         [b.id, `${titlePrefix}%`]
       );
       if (existing.length) continue;
 
-      const title = tier === 'A' ? `Proposal quiet ${quietDays}d — ${b.name}` : `Proposal viewed but unsigned — ${b.name}`;
-      if (await tryCreateBidFollowup(b, title, tier === 'A' ? 'a' : 'b')) created++;
+      const title = `Proposal quiet ${quietDays}d — ${b.name}`;
+      if (await tryCreateBidFollowup(b, title)) created++;
     }
   } catch (err) {
     logger.error({ err }, '[proposal-quiet-sweep] bids pass failed');

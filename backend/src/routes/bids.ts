@@ -1,27 +1,19 @@
 import { Router } from 'express';
-import rateLimit from 'express-rate-limit';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
-import { writeAudit, writeAuditAs } from '../utils/audit';
+import { writeAudit } from '../utils/audit';
 import { setProjectDeleted } from '../utils/project';
 import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { logger } from '../utils/logger';
-import { asyncHandler } from '../utils/asyncHandler';
 import { sendBidNotification } from '../email/bidNotification';
 import { loadBidDocumentsAsAttachments, fetchDocBytes, attachmentFileName, DocRow } from '../email/bidAttachments';
-import { graphSendMail, graphCreateDraft, isGraphMailConfigured, GraphAttachment, TEAM_NOTIFY_TO } from '../email/graphMailer';
-import { escapeHtml } from '../utils/escapeHtml';
-import { sendPushToUsers } from '../integrations/webPush';
+import { graphCreateDraft, isGraphMailConfigured, GraphAttachment } from '../email/graphMailer';
 import {
   defaultSubmittalSubject, defaultSubmittalBodyText, buildBidSubmittalHtml,
   defaultPrebidChrisSubject, buildPrebidChrisBodyHtml,
 } from '../email/bidSubmittalEmail';
 import { getSetting } from '../db/getSetting';
 import { resolveCustomer } from './customers';
-import { BidData } from '../bidstd/bidData';
-import { renderBidHtml } from '../bidstd/proposalHtml';
-import { createNotification } from '../notifications/engine';
-import { ownerAdminIds } from '../notifications/prefs';
 import {
   createJobFolder,
   createSubfolders,
@@ -267,25 +259,32 @@ router.post('/:id/notify-team', requireAuth, async (req: AuthRequest, res) => {
   res.json({ draftWebLink: result.draftWebLink, to: result.to, attachedNames, skipped, ...stamped[0] });
 });
 
-// ── Phase 4 Task 1.3: send the filed proposal to the GC ─────────────────────
-// Sends via Microsoft Graph (graphSendMail) — the same muted-under-test path
-// every other outbound email in this app uses. NEVER re-renders the proposal:
-// it attaches exactly the bytes of the most recent FILED, gate-passed .docx
-// (the `documents` row generate-docx wrote after verifyBidDocx passed), so
-// what the GC receives is provably what got reviewed and downloaded.
+// ── Post-merge rework (2026-09-03) — draft the GC submittal in Outlook ──────
+// Jake corrected the product design after reviewing Phase 4: GCs never
+// e-sign a web page — they execute via contract/PO. So this NEVER sends
+// (graphSendMail is never called here — draft-proposal uses graphCreateDraft
+// exclusively) and the public /p/:token proposal page + e-sign surface is
+// gone entirely (see docs/superpowers/plans/2026-09-03-phase4-report.md's
+// rework section). Jake reviews the Outlook draft and sends it himself.
+//
+// Still NEVER re-renders the proposal: it attaches exactly the bytes of the
+// most recent FILED, gate-passed PDF when one exists (falling back to the
+// .docx when soffice didn't produce a PDF at generate-docx time), so what
+// the GC receives is provably what got reviewed and downloaded.
 const PROPOSAL_DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const PROPOSAL_PDF_MIME = 'application/pdf';
 const TAKEOFF_XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 // FIX-3 (post-review) — gate_passed = true always, everywhere this is
 // called. "Most recent filed" was never actually gated on having passed
 // verifyBid's gate — a document filed under the same category by something
 // other than a generate-* route (import-bid, a manual upload, POST
-// /documents) could otherwise be picked up here and, via send-proposal,
-// emailed to a GC as though it were the reviewed proposal. gate_passed is
-// set ONLY by the Phase 3 generate-docx/generate-takeoff-xlsx/generate-
-// prebid-package routes, and only on the rows they file after their own
-// verify gate passes (see utils/storeDocument.ts) — so this query can only
-// ever return something that's actually been through that gate.
+// /documents) could otherwise be picked up here and, via draft-proposal,
+// end up attached to a GC's draft as though it were the reviewed proposal.
+// gate_passed is set ONLY by the Phase 3 generate-docx/generate-takeoff-
+// xlsx/generate-prebid-package routes, and only on the rows they file after
+// their own verify gate passes (see utils/storeDocument.ts) — so this query
+// can only ever return something that's actually been through that gate.
 async function loadMostRecentBidDoc(bidId: string, category: string, mimetype: string): Promise<DocRow | null> {
   const { rows } = await pool.query<DocRow>(
     `SELECT id, name, display_name, category, file_type, file_size, file_data, storage_url
@@ -297,50 +296,19 @@ async function loadMostRecentBidDoc(bidId: string, category: string, mimetype: s
   return rows[0] ?? null;
 }
 
-// ── Post-review FIX-1/FIX-2 — the public (no-auth) proposal surface ─────────
-// Every /p/:token route below is reachable by anyone who has (or guesses) a
-// token, so it gets its own, deliberately narrow contract:
-//   - token shape is validated BEFORE it ever reaches a query. proposal_token
-//     is a Postgres UUID column; a non-UUID string makes the driver throw
-//     22P02 (invalid input syntax), and on bare (non-asyncHandler) express 4
-//     handlers that rejection was never forwarded to res — the request just
-//     hung. Every one of these routes is wrapped in asyncHandler AND checks
-//     the token shape up front so a malformed token 404s immediately.
-//   - every failure mode (malformed token / unknown token / nothing to show
-//     yet) returns the SAME body, so the response never tells a prober which
-//     case it hit.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function isValidToken(token: string): boolean {
-  return typeof token === 'string' && UUID_RE.test(token);
-}
-const PROPOSAL_NOT_FOUND = { error: 'Proposal not found' };
-
-/**
- * The public page's exact field contract (frontend/src/pages/
- * BidProposalPublicPage.tsx's `PublicBid` interface) — id/name/gc/stage/
- * proposal_token/proposal_sent_at/proposal_viewed_at/proposal_signed_at/
- * signer_name, nothing else. The full `bids` row also carries notes,
- * loss_reason, competitor, amount, salesperson_id/customer_id, team_notified
- * fields, Drive folder ids, and signature_data — none of that belongs on an
- * unauthenticated response. signature_data in particular is NEVER returned
- * publicly: proposal_signed_at + signer_name are enough to render the
- * signed state.
- */
-function publicBidProjection(bid: Record<string, any>) {
-  return {
-    id: bid.id,
-    name: bid.name,
-    gc: bid.gc,
-    stage: bid.stage,
-    proposal_token: bid.proposal_token,
-    proposal_sent_at: bid.proposal_sent_at,
-    proposal_viewed_at: bid.proposal_viewed_at,
-    proposal_signed_at: bid.proposal_signed_at,
-    signer_name: bid.signer_name,
-  };
-}
-
-router.post('/:id/send-proposal', requireAuth, async (req: AuthRequest, res) => {
+// `body: {to, cc?, subject, bodyText, includeTakeoff?, markSubmitted?}` —
+// creates an Outlook DRAFT (Drafts folder, never sent) with the proposal
+// attached, prefilled subject/body Jake can edit before drafting. Same
+// 409-if-no-gate-passed-doc precondition the old send-proposal had.
+//
+// markSubmitted (default true, mirrors the modal's checkbox default) —
+// when true, stamps proposal_sent_at/proposal_sent_to and advances a `due`
+// bid to `submitted` through the shared bidStage path, exactly as the old
+// send did (the columns/stage semantics mean "Jake told the GC," which is
+// still true once he's about to send the draft — see the modal's own
+// explanation copy). When false, this is a draft-only dry run: no stamps,
+// no stage change, no Drive folder move.
+router.post('/:id/draft-proposal', requireAuth, async (req: AuthRequest, res) => {
   const bid = await loadOwnedBid(req, res);
   if (!bid) return;
 
@@ -355,9 +323,18 @@ router.post('/:id/send-proposal', requireAuth, async (req: AuthRequest, res) => 
   const subject = String(req.body?.subject || '').trim() || defaultSubmittalSubject(bid);
   const bodyText = req.body?.bodyText !== undefined ? String(req.body.bodyText) : defaultSubmittalBodyText(bid);
   const includeTakeoff = !!req.body?.includeTakeoff;
+  const markSubmitted = req.body?.markSubmitted !== false;
 
-  // Never re-render at send time — 409 if there's no filed docx yet.
-  const proposalDoc = await loadMostRecentBidDoc(bid.id, 'proposal', PROPOSAL_DOCX_MIME);
+  // Never re-render at draft time — prefer the PDF (a GC can always open a
+  // PDF; not everyone has Word), falling back to the docx when no PDF was
+  // produced (soffice/LibreOffice unavailable at generate-docx time). 409
+  // if neither a gate-passed PDF nor docx exists yet.
+  let proposalDoc = await loadMostRecentBidDoc(bid.id, 'proposal', PROPOSAL_PDF_MIME);
+  let attachedFormat: 'pdf' | 'docx' = 'pdf';
+  if (!proposalDoc) {
+    proposalDoc = await loadMostRecentBidDoc(bid.id, 'proposal', PROPOSAL_DOCX_MIME);
+    attachedFormat = 'docx';
+  }
   if (!proposalDoc) {
     return res.status(409).json({ error: 'No filed proposal on file yet. Generate/download the proposal .docx first.' });
   }
@@ -369,7 +346,7 @@ router.post('/:id/send-proposal', requireAuth, async (req: AuthRequest, res) => 
   const attachments: GraphAttachment[] = [{
     '@odata.type': '#microsoft.graph.fileAttachment',
     name: attachmentFileName(proposalDoc.display_name, proposalDoc.name, proposalDoc.file_type),
-    contentType: proposalDoc.file_type || PROPOSAL_DOCX_MIME,
+    contentType: proposalDoc.file_type || (attachedFormat === 'pdf' ? PROPOSAL_PDF_MIME : PROPOSAL_DOCX_MIME),
     contentBytes: proposalBytes.toString('base64'),
     isInline: false,
     contentId: `bid-proposal-${proposalDoc.id}`,
@@ -395,30 +372,36 @@ router.post('/:id/send-proposal', requireAuth, async (req: AuthRequest, res) => 
   }
 
   if (!isGraphMailConfigured()) {
-    return res.status(503).json({ error: 'Email is not configured (Microsoft Graph). Copy the proposal link and send it yourself.' });
+    return res.status(503).json({ error: 'Email is not configured (Microsoft Graph). Set it up under Integrations first.' });
   }
 
-  const frontendUrl = await getSetting('frontend_url');
-  // Never fall back to localhost — matches gens.ts's /:id/send.
-  const baseUrl = (frontendUrl || process.env.FRONTEND_URL || 'https://electrical-program.onrender.com').replace(/\/$/, '');
-  const link = `${baseUrl}/bp/${bid.proposal_token}`;
-  const html = buildBidSubmittalHtml({ bodyText, proposalLink: link });
+  // No public link — GCs execute via contract/PO, not a web e-sign page.
+  const html = buildBidSubmittalHtml({ bodyText });
 
+  let draft;
   try {
-    // FIX-5 (post-review) — buildBidSubmittalHtml already appends the
-    // template's own "Thanks, Jake Salverda / ... / 352-801-8997" sign-off
-    // (bidSubmittalEmail.ts's JAKE_SIGNATURE_LINES). Without
-    // appendSignature:false, graphSendMail tacks the branded HTML signature
-    // on again after it — two sign-offs in one email. leadFirstContact.ts's
-    // sends do this correctly; this call (and email-prebid-chris's draft,
-    // below) didn't.
-    await graphSendMail({ to, cc: cc.length ? cc : undefined, subject, html, attachments, appendSignature: false });
+    // FIX-5 (post-review, still true here) — buildBidSubmittalHtml already
+    // appends the template's own "Thanks, Jake Salverda / ... /
+    // 352-801-8997" sign-off (bidSubmittalEmail.ts's JAKE_SIGNATURE_LINES).
+    // Without appendSignature:false, graphCreateDraft tacks the branded
+    // HTML signature on again after it — two sign-offs in one draft.
+    draft = await graphCreateDraft({ to, cc: cc.length ? cc : undefined, subject, html, attachments, appendSignature: false });
   } catch (err) {
-    logger.error({ err, bidId: bid.id }, '[bids] send-proposal failed');
-    return res.status(502).json({ error: 'Email delivery failed (Outlook). Try again or copy the proposal link.', link });
+    logger.error({ err, bidId: bid.id }, '[bids] draft-proposal failed');
+    return res.status(502).json({ error: 'Could not create the draft. Check the mail configuration.' });
   }
 
-  // Email is out — stamp sent, log the timeline, and — if the bid is still
+  if (!markSubmitted) {
+    // Draft-only: no stamps, no stage change — just log that a draft exists.
+    await pool.query(
+      `INSERT INTO proposal_activity (bid_id, kind, direction, text, created_by)
+       VALUES ($1,'draft_created','out',$2,$3)`,
+      [bid.id, `Proposal draft created for ${to.join(', ')}`, req.user!.name]
+    );
+    return res.json({ webLink: draft.webLink, attached: attachedFormat, bid: withDueDays(bid), wonJob: null, stageAdvanced: false });
+  }
+
+  // markSubmitted — stamp sent, log the timeline, and — if the bid is still
   // `due` — advance it to `submitted` through the SAME shared stage path the
   // manual PATCH /:id/stage uses (Task 1.3: "extract/reuse, don't duplicate").
   const client = await pool.connect();
@@ -434,12 +417,12 @@ router.post('/:id/send-proposal', requireAuth, async (req: AuthRequest, res) => 
     updatedBid = sentRows[0];
     await client.query(
       `INSERT INTO proposal_activity (bid_id, kind, direction, text, created_by)
-       VALUES ($1,'sent','out',$2,$3)`,
-      [bid.id, `Proposal emailed to ${to.join(', ')}`, req.user!.name]
+       VALUES ($1,'draft_created','out',$2,$3)`,
+      [bid.id, `Proposal draft created for ${to.join(', ')}`, req.user!.name]
     );
     await client.query(
-      `INSERT INTO activity (kind, div, text) VALUES ('sent','elec',$1)`,
-      [`${bid.name} proposal sent to ${to[0]}${to.length > 1 ? ` +${to.length - 1}` : ''}`]
+      `INSERT INTO activity (kind, div, text) VALUES ('draft_created','elec',$1)`,
+      [`${bid.name} proposal draft created for ${to[0]}${to.length > 1 ? ` +${to.length - 1}` : ''}`]
     );
 
     let stageAdvanced = false;
@@ -451,17 +434,16 @@ router.post('/:id/send-proposal', requireAuth, async (req: AuthRequest, res) => 
     }
     await client.query('COMMIT');
     if (stageAdvanced) {
-      applyBidStagePostCommit(bid, 'submitted', (err, phase) => logger.error({ err, phase, bidId: bid.id }, '[bids] send-proposal stage-advance Drive step failed'));
+      applyBidStagePostCommit(bid, 'submitted', (err, phase) => logger.error({ err, phase, bidId: bid.id }, '[bids] draft-proposal stage-advance Drive step failed'));
     }
+    res.json({ webLink: draft.webLink, attached: attachedFormat, bid: withDueDays(updatedBid), wonJob, stageAdvanced: updatedBid.stage === 'submitted' && bid.stage === 'due' });
   } catch (err) {
     await client.query('ROLLBACK');
-    logger.error({ err, bidId: bid.id }, '[bids] send-proposal post-send stamp failed (email already sent)');
-    return res.status(500).json({ error: 'Email sent, but the bid record could not be updated. Refresh to check its status.' });
+    logger.error({ err, bidId: bid.id }, '[bids] draft-proposal post-draft stamp failed (draft already created)');
+    res.status(500).json({ error: 'Draft created, but the bid record could not be updated. Refresh to check its status.' });
   } finally {
     client.release();
   }
-
-  res.json({ bid: withDueDays(updatedBid), wonJob, link, stageAdvanced: updatedBid.stage === 'submitted' && bid.stage === 'due' });
 });
 
 // ── Phase 4 Task 1.5: the internal Chris pre-bid-package email ──────────────
@@ -732,354 +714,5 @@ router.delete('/:id/purge', requireAuth, requireAdmin, async (req: AuthRequest, 
     client.release();
   }
 });
-
-// ── Phase 4 Task 2 / post-review FIX-3: public proposal page (no auth) ──────
-// Serves a FILED, GATE-PASSED snapshot — never a live compose. The old
-// version here composed the bid's CURRENT BidData on every single view (an
-// unauthenticated, unrate-limited route), rendered a full docx from it, and
-// ran verifyBidDocx — which execSync-probes for `soffice` on PATH — on every
-// request. That's a blocking-call-per-view DoS surface, and worse: on a
-// verify failure it fell back to "the most recent bid_data.json filed
-// alongside the last generated docx," but that fallback was never actually
-// checked for having passed the verify gate itself, so a document filed
-// under the same category by something other than generate-docx (an
-// import, a manual upload) could theoretically be what a customer — or,
-// via send-proposal, a GC — ends up seeing. And because the page composed
-// live while the emailed docx was a filed snapshot, the two could silently
-// diverge, and a signature would pin to nothing in particular.
-//
-// The fix: load the most recent GATE-PASSED bid_data.json document
-// (loadMostRecentBidDoc, filtered on gate_passed=true — see FIX-3 above)
-// and render straight from it. No compose, no docx render, no verify, no
-// soffice probe on the view path — the gate already ran once, at filing
-// time, in generate-docx. This also pins what the customer sees to
-// EXACTLY what was filed/sent, byte-for-byte the same BidData the emailed
-// docx came from.
-async function loadFiledBidData(bidId: string): Promise<{ bidData: BidData; documentId: string } | null> {
-  const filedDoc = await loadMostRecentBidDoc(bidId, 'bid_data', 'application/json');
-  if (!filedDoc) return null;
-  const bytes = await fetchDocBytes(filedDoc);
-  if (!bytes) return null;
-  try {
-    return { bidData: JSON.parse(bytes.toString('utf8')) as BidData, documentId: filedDoc.id };
-  } catch (err) {
-    logger.error({ err, bidId }, '[bids] public page: filed bid_data.json could not be parsed');
-    return null;
-  }
-}
-
-// FIX-3(e) — rate limit the public routes (mirrors routes/auth.ts's
-// authLimiter). Viewing/downloading a sent proposal is a normal, repeatable
-// customer action (a GC may reopen the link several times), so the view/
-// download limit is generous; signing is a one-time action per proposal, so
-// its limit is tighter.
-const publicViewLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: PROPOSAL_NOT_FOUND,
-});
-const publicSignLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many attempts. Please try again in a few minutes.' },
-});
-
-router.get('/p/:token', publicViewLimiter, asyncHandler(async (req, res) => {
-  if (!isValidToken(req.params.token)) return res.status(404).json(PROPOSAL_NOT_FOUND);
-  const { rows } = await pool.query(
-    'SELECT * FROM bids WHERE proposal_token = $1 AND deleted_at IS NULL',
-    [req.params.token]
-  );
-  if (!rows.length) return res.status(404).json(PROPOSAL_NOT_FOUND);
-  const bid = rows[0];
-
-  // FIX-6 (post-review, blocking) — a proposal that was never sent
-  // (including a lost bid's old link, which migration 094 backfilled a
-  // token onto just like every other bid) has nothing legitimate to show
-  // publicly. Same uniform 404 as an unknown/malformed token.
-  if (!bid.proposal_sent_at) return res.status(404).json(PROPOSAL_NOT_FOUND);
-
-  const loaded = await loadFiledBidData(bid.id);
-  if (!loaded) return res.status(404).json(PROPOSAL_NOT_FOUND);
-
-  // In-app previews pass ?preview=1 — fetch without recording a customer
-  // "view" (mirrors gens.ts's /p/:token).
-  const isPreview = !!req.query.preview;
-  let current = bid;
-  if (!isPreview) {
-    const wasUnviewed = !bid.proposal_viewed_at;
-    const { rows: viewedRows } = await pool.query(
-      `UPDATE bids SET proposal_viewed_at = COALESCE(proposal_viewed_at, now())
-        WHERE id = $1 RETURNING *`,
-      [bid.id]
-    );
-    current = viewedRows[0];
-
-    if (wasUnviewed) {
-      await pool.query(
-        `INSERT INTO proposal_activity (bid_id, kind, direction, text) VALUES ($1,'viewed','in',$2)`,
-        [bid.id, 'Proposal viewed']
-      );
-
-      // Fire-and-forget: notify Jake on first view (opt-in via Settings >
-      // Notifications, same "Proposal Viewed" toggle gens' proposal_viewed
-      // pref covers — mirrors gens' proposal-signed notification's gating).
-      (async () => {
-        try {
-          const raw = await getSetting('notifications_json');
-          const notifPrefs = raw ? JSON.parse(raw) : {};
-          if (!notifPrefs.proposal_viewed) return;
-          const targets = current.salesperson_id ? [current.salesperson_id] : await ownerAdminIds();
-          for (const uid of targets) {
-            await createNotification(uid, {
-              type: 'bid_proposal_viewed',
-              title: 'Proposal viewed',
-              body: `${current.name} (${current.gc}) — the proposal link was opened`,
-              linkView: 'electrical/bids',
-              linkId: current.id,
-              dedupKey: `bidviewed:${current.id}`,
-            });
-          }
-        } catch (err) {
-          logger.error({ err, bidId: bid.id }, '[notify] bid proposal-viewed notification failed');
-        }
-      })();
-    }
-  }
-
-  res.json({
-    bid: publicBidProjection(current),
-    html: renderBidHtml(loaded.bidData),
-  });
-}));
-
-// Streams the exact bytes of the most recently FILED, gate-passed proposal
-// .docx (never a fresh render) with a content-disposition filename from the
-// standard's own naming (APT_Bid_[ProjectSlug]_[LocationSlug].docx).
-router.get('/p/:token/download', publicViewLimiter, asyncHandler(async (req, res) => {
-  if (!isValidToken(req.params.token)) return res.status(404).json(PROPOSAL_NOT_FOUND);
-  const { rows } = await pool.query(
-    'SELECT id FROM bids WHERE proposal_token = $1 AND deleted_at IS NULL',
-    [req.params.token]
-  );
-  if (!rows.length) return res.status(404).json(PROPOSAL_NOT_FOUND);
-  const bidId = rows[0].id as string;
-
-  const doc = await loadMostRecentBidDoc(bidId, 'proposal', PROPOSAL_DOCX_MIME);
-  if (!doc) return res.status(404).json(PROPOSAL_NOT_FOUND);
-  const bytes = await fetchDocBytes(doc);
-  if (!bytes) return res.status(404).json(PROPOSAL_NOT_FOUND);
-
-  const filename = attachmentFileName(doc.display_name, doc.name, doc.file_type).replace(/[<>:"/\\|?*\r\n]/g, '-');
-  res.setHeader('Content-Type', PROPOSAL_DOCX_MIME);
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.setHeader('Content-Length', bytes.length);
-  res.send(bytes);
-}));
-
-// ── Phase 4 Task 3: accept & e-sign -> auto-award (no auth) ─────────────────
-// Ports gens.ts's POST /p/:token/sign (non-empty signature required,
-// idempotent re-sign) and adds an explicit size cap on the data URL — kept
-// well under express.json()'s global 100kb body limit so an oversized
-// signature gets a clear 400 instead of body-parser's raw 413.
-const MAX_SIGNATURE_DATA_URL_LENGTH = 60_000;
-
-router.post('/p/:token/sign', publicSignLimiter, asyncHandler(async (req, res) => {
-  if (!isValidToken(req.params.token)) return res.status(404).json(PROPOSAL_NOT_FOUND);
-  const { signerName, signatureDataUrl } = req.body || {};
-  if (!signatureDataUrl || typeof signatureDataUrl !== 'string') {
-    return res.status(400).json({ error: 'Signature required' });
-  }
-  if (signatureDataUrl.length > MAX_SIGNATURE_DATA_URL_LENGTH) {
-    return res.status(400).json({ error: 'Signature image is too large — please sign again with a smaller/simpler signature.' });
-  }
-  const name = String(signerName || '').trim();
-  if (!name) return res.status(400).json({ error: 'Typed name required' });
-
-  // FIX-11 (post-review) — everything that can still fail the REQUEST (bad
-  // input, an unknown/stale token, a DB error) has to happen inside this
-  // try/catch, ending in either an early return or a COMMIT. Everything
-  // that happens AFTER a successful COMMIT — Drive folder moves, the audit
-  // write, the response itself, notifications — must live OUTSIDE it: the
-  // old shape had all of that inside the same try, so a throw from any of
-  // it landed in the catch below, which would attempt `client.query
-  // ('ROLLBACK')` (a harmless no-op post-commit) and then a SECOND
-  // `res.status(500).json(...)` — which throws ERR_HTTP_HEADERS_SENT if a
-  // response had already gone out. Post-commit failures are logged, never
-  // turned into a second response.
-  const client = await pool.connect();
-  let preSign: Record<string, any>;
-  let signedBid: Record<string, any>;
-  let finalBid: Record<string, any>;
-  let wonJob: Record<string, unknown> | null = null;
-
-  try {
-    await client.query('BEGIN');
-    // Locked so a double-tap / retry on a slow network can't race past the
-    // idempotency check below and sign (or award) twice.
-    const { rows: locked } = await client.query(
-      `SELECT * FROM bids WHERE proposal_token = $1 AND deleted_at IS NULL FOR UPDATE`,
-      [req.params.token]
-    );
-    if (!locked.length) { await client.query('ROLLBACK'); return res.status(404).json(PROPOSAL_NOT_FOUND); }
-    preSign = locked[0];
-
-    // Idempotent — a second sign attempt returns the already-signed state
-    // unchanged, never re-stamps or re-awards.
-    if (preSign.proposal_signed_at) {
-      await client.query('ROLLBACK');
-      return res.json({ ok: true, bid: publicBidProjection(preSign), alreadySigned: true, wonJob: null });
-    }
-
-    // FIX-6 (post-review, blocking) — a fresh sign, below, always requires a
-    // proposal that was actually sent. Migration 094 backfilled
-    // proposal_token onto EVERY existing bid, so a lost bid's (or a never-
-    // sent bid's) old link is otherwise still a live "sign" endpoint that
-    // can flip lost -> awarded, with commission, on a stale link. Same
-    // uniform 404 as an unknown/malformed token — a public prober can't
-    // tell "never sent" apart from "doesn't exist."
-    if (!preSign.proposal_sent_at) {
-      await client.query('ROLLBACK');
-      return res.status(404).json(PROPOSAL_NOT_FOUND);
-    }
-    // A sent proposal can still be stale — the estimator marked it lost, or
-    // it was already manually awarded through the pipeline. Only a proposal
-    // still actually awaiting a decision can be accepted here.
-    if (!['due', 'submitted'].includes(preSign.stage)) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'This proposal is no longer available for acceptance' });
-    }
-
-    // FIX-3(d) — pin the signature to the exact bid_data.json document that
-    // was on screen (the most recent gate-passed snapshot at sign time —
-    // the same one loadFiledBidData would serve to a GET right now), not to
-    // "whatever the bid composes to on some future date." Best-effort: if
-    // for some reason no gate-passed snapshot exists yet (e.g. the docx
-    // filed but the bid_data.json write failed independently), the
-    // signature still records — signed_document_id just stays null.
-    const filedDoc = await loadMostRecentBidDoc(preSign.id, 'bid_data', 'application/json');
-
-    const { rows: signedRows } = await client.query(
-      `UPDATE bids SET proposal_signed_at = now(), signer_name = $1, signature_data = $2,
-         signed_document_id = $3, updated_at = now()
-        WHERE id = $4 RETURNING *`,
-      [name, signatureDataUrl, filedDoc?.id ?? null, preSign.id]
-    );
-    signedBid = signedRows[0];
-
-    await client.query(
-      `INSERT INTO proposal_activity (bid_id, kind, direction, text) VALUES ($1,'signed','in',$2)`,
-      [preSign.id, `Proposal signed by ${name}`]
-    );
-
-    // Auto-award through the SAME shared stage-transition path the manual
-    // PATCH /:id/stage drag uses (services/bidStage.ts) — won_job, project
-    // registration, and the activity-feed entry all fire identically,
-    // whether the trigger is a rep's drag or the customer's signature.
-    finalBid = signedBid;
-    if (signedBid.stage !== 'awarded') {
-      const result = await transitionBidStage(client, signedBid, 'awarded');
-      finalBid = result.bid;
-      wonJob = result.wonJob;
-    }
-
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    logger.error({ err }, '[bids] sign failed');
-    return res.status(500).json({ error: 'Server error' });
-  } finally {
-    client.release();
-  }
-
-  // Transaction committed successfully — the sign + (possible) award is
-  // durable. Everything below is best-effort follow-through: it must never
-  // throw into a second response. The Drive move + audit write are awaited
-  // (both are internally error-safe) so they're guaranteed done by the time
-  // the caller sees the 200 below; the extra try/catch here is belt-and-
-  // suspenders against a future change to either making that untrue.
-  const justAwarded = signedBid!.stage !== 'awarded';
-  try {
-    if (justAwarded) {
-      // Fire-and-forget Drive side effects — same helper the manual award
-      // path uses (PATCH /:id/stage), so folder moves/subfolder creation
-      // are byte-for-byte the same regardless of which door the award came
-      // through.
-      applyBidStagePostCommit(signedBid!, 'awarded', (err, phase) =>
-        logger.error({ err, phase, bidId: preSign!.id }, '[bids] sign-triggered award Drive step failed'));
-
-      // FIX-8 (post-review) — a public, unauthenticated action has no
-      // req.user for the normal writeAudit(req, ...) to attribute this to
-      // (gens' public sign route has the same gap and also used to skip
-      // auditing entirely). writeAuditAs records it under an explicit
-      // system-actor label instead, so an award via e-signature still
-      // shows up in the audit trail — same 'award' action PATCH /:id/stage
-      // logs for a manual drag. Only fires when THIS call performed the
-      // award.
-      await writeAuditAs({ id: null, name: `Customer e-signature (${name})` }, {
-        action: 'award', entityType: 'bid', entityId: preSign!.id,
-        summary: `Awarded bid "${finalBid!.name}" (${finalBid!.gc}) via e-signature — $${Number(finalBid!.amount || 0).toLocaleString()}`,
-        before: { stage: signedBid!.stage }, after: { stage: 'awarded', value: finalBid!.amount },
-      });
-    }
-  } catch (err) {
-    logger.error({ err, bidId: preSign!.id }, '[bids] sign post-commit follow-through failed');
-  }
-
-  res.json({ ok: true, bid: publicBidProjection(finalBid!), wonJob });
-
-  // Fire-and-forget: notify Jake — in-app notification + web push + a
-  // team-mailbox email heads-up. Mirrors gens.ts's /p/:token/sign exactly.
-  (async () => {
-    try {
-      const raw = await getSetting('notifications_json');
-      const notifPrefs = raw ? JSON.parse(raw) : {};
-      if (!notifPrefs.proposal_signed) return;
-      const targets = finalBid!.salesperson_id ? [finalBid!.salesperson_id] : await ownerAdminIds();
-      for (const uid of targets) {
-        await createNotification(uid, {
-          type: 'bid_proposal_signed',
-          title: 'Proposal signed',
-          body: `${finalBid!.name} (${finalBid!.gc}) accepted and signed their proposal`,
-          linkView: 'electrical/bids',
-          linkId: finalBid!.id,
-          dedupKey: `bidsigned:${finalBid!.id}`,
-        });
-      }
-      const amt = Number(finalBid!.amount || 0);
-      sendPushToUsers(targets, {
-        title: '🎉 Proposal signed',
-        body: `${finalBid!.name}${amt ? ` — $${amt.toLocaleString()}` : ''}`,
-        view: 'electrical/bids',
-        id: finalBid!.id,
-        tag: `bidsigned:${finalBid!.id}`,
-      }).catch(() => {});
-    } catch (err) {
-      logger.error({ err }, '[notify] bid proposal signed notification failed');
-    }
-  })();
-
-  if (isGraphMailConfigured()) {
-    (async () => {
-      try {
-        const amt = Number(finalBid!.amount || 0);
-        await graphSendMail({
-          to: TEAM_NOTIFY_TO,
-          subject: `🎉 Proposal signed — ${finalBid!.name}${amt ? ` ($${amt.toLocaleString()})` : ''}`,
-          html: `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.6;">
-            <p><b>${escapeHtml(finalBid!.gc)}</b> just signed the electrical proposal for <b>${escapeHtml(finalBid!.name)}</b>${amt ? ` — <b>$${amt.toLocaleString()}</b>` : ''}.</p>
-            <p>Signed by ${escapeHtml(name)}. The job has been automatically moved to Awarded.</p>
-          </div>`,
-        });
-      } catch (err) {
-        logger.error({ err, bidId: preSign!.id }, '[notify] bid proposal signed email failed');
-      }
-    })();
-  }
-}));
 
 export default router;

@@ -550,3 +550,199 @@ listed alongside 094.
 - **No pushes.** All work is local commits on `feat/phase4-delivery` in
   the `Electrical-program-wt-phase4` worktree.
 - **Clean tree** as of the final commit (verified below).
+
+---
+
+## Post-merge rework: draft-based delivery (2026-09-03)
+
+**Branch:** `feat/proposal-draft-flow` (worktree: `../Electrical-program-wt-draftflow`)
+**Execution:** Sonnet 5
+**Commits:** `6c62294` (Task 1), `23dd832` (Task 2), `6ca3141` (Task 3),
+`7ad8482` (Task 4), this doc commit (Task 5)
+**Trigger:** Jake (the estimator) reviewed the merged Phase 4 feature and
+corrected the product design: **GCs never e-sign a web page — they execute
+via contract/PO.** The send flow needed to become an Outlook draft Jake
+reviews and sends himself, with the bid PDF (or docx) attached, and the
+entire public-page/e-sign surface needed to come out.
+
+This is a user-directed rework of already-merged, already-shipped work —
+not a bug fix, not a new feature on top. Phase 4's send-to-GC/public-page/
+e-sign/quiet-sweep loop was built and merged in good faith against the
+original plan; this is Jake correcting the plan itself after seeing it
+work, and the code following that correction.
+
+### Task 1 — Send becomes an Outlook draft — done
+
+- `POST /:id/send-proposal` is gone; `POST /:id/draft-proposal` replaces it
+  (one endpoint, not two) — `backend/src/routes/bids.ts`. Body
+  `{to, cc?, subject, bodyText, includeTakeoff?, markSubmitted?}`. Uses
+  `graphCreateDraft` exclusively (`graphSendMail` is never called from this
+  route, or anywhere else in `bids.ts` — the whole file no longer imports
+  it) with `appendSignature:false`, same 409-if-no-gate-passed-doc
+  precondition the old send-proposal had.
+- **PDF preferred, docx fallback.** `generate-docx` (`routes/preconstruction.ts`)
+  already files both a gate-passed `.docx` and, when `soffice`/LibreOffice
+  produced one, a gate-passed `.pdf` under the same `category='proposal'`.
+  draft-proposal now tries the PDF first (`loadMostRecentBidDoc(..., 'application/pdf')`),
+  falls back to the docx, and reports which one it attached —
+  `response {webLink, attached:'pdf'|'docx', ...}` — so the modal can tell
+  Jake "PDF attached" vs. "Word attached — install LibreOffice for PDF."
+- `graphCreateDraft` (`backend/src/email/graphMailer.ts`) gained `cc`
+  support (it silently dropped the `cc` argument before — only
+  `graphSendMail` honored it) since the modal's Cc field now has to reach
+  an actual draft, not a send.
+- `bidSubmittalEmail.ts`'s `buildBidSubmittalHtml` no longer takes a
+  `proposalLink` — the "View and accept online: `<link>`" line is gone
+  entirely, not just conditionally omitted. There is no public link to
+  point it at anymore (Task 2).
+- `markSubmitted` (default `true`, mirrors the modal's checkbox default):
+  when true, stamps `proposal_sent_at`/`proposal_sent_to` and advances
+  `due → submitted` through the shared `bidStage.ts` path — byte-for-byte
+  the same DB side effects the old send had, because "Jake told the GC"
+  is still true once he's about to send the reviewed draft. When false,
+  it's a draft-only dry run: no stamps, no stage change, no Drive folder
+  move. Either way a `proposal_activity` row is written with
+  `kind='draft_created'` (was `'sent'`) — draft-proposal never claims an
+  email actually went out, because it never does.
+- The amount-absent guard stays and is stronger: `bidDraftProposal.test.ts`
+  spies on the (test-muted) `graphCreateDraft` call itself and asserts the
+  actual `subject`/`html` args never carry the bid amount, rather than
+  only checking the builder functions in isolation.
+
+### Task 2 — Public proposal page + e-sign surface removed — done
+
+- Deleted: `GET /bids/p/:token`, `GET /bids/p/:token/download`,
+  `POST /bids/p/:token/sign` and their rate-limiter wiring
+  (`publicViewLimiter`/`publicSignLimiter`, `express-rate-limit` import) —
+  all from `backend/src/routes/bids.ts`. Deleted `backend/src/bidstd/proposalHtml.ts`
+  and `proposalHtml.test.ts` (nothing else imported `renderBidHtml`).
+  Deleted `frontend/src/pages/BidProposalPublicPage.tsx` and the `/bp/:token`
+  route from `frontend/src/App.tsx` (both the signed-out and signed-in
+  route trees).
+- Deleted the viewed/signed notification paths the old `GET /p/:token` and
+  `POST /p/:token/sign` routes fired (`bid_proposal_viewed`/
+  `bid_proposal_signed` in-app notifications, the push notification, and
+  the "🎉 Proposal signed" team email) — they went with the routes that
+  produced them. The generator pipeline's own, separate `proposal_viewed`/
+  `proposal_signed` notification-preference toggles (Settings >
+  Notifications) are untouched — those back `gens.ts`'s still-live public
+  page, a different feature.
+- Removed now-dead helpers: `publicBidProjection`, `isValidToken`/
+  `UUID_RE`, `loadFiledBidData`, `MAX_SIGNATURE_DATA_URL_LENGTH`. Left
+  `loadMostRecentBidDoc` (still load-bearing for draft-proposal) and
+  `writeAuditAs` (`backend/src/utils/audit.ts`) — the latter is still used
+  internally by `writeAudit` itself, just no longer called directly for a
+  system-actor e-sign audit row (there is no more e-sign to audit).
+- **Database columns left in place, no down-migration.** `bids.proposal_token`/
+  `proposal_viewed_at`/`proposal_signed_at`/`signer_name`/`signature_data`/
+  `signed_document_id` (from `094_bid_delivery.sql`/`095_public_bid_gate.sql`)
+  are now written and read by nothing — dropping them isn't worth a
+  migration against a live table. Comments were added at the natural
+  reference points (`frontend/src/types/index.ts`'s `Bid` interface,
+  `docs/DEPLOY.md`'s migration notes) flagging them unused.
+  `proposal_sent_at`/`proposal_sent_to` remain fully live — Task 1's
+  `markSubmitted` still stamps them.
+- Deleted `backend/src/test/bidPublicProposal.test.ts` and
+  `backend/src/test/bidSign.test.ts` (the feature they tested is gone).
+
+### Task 3 — Quiet sweep simplifies to one tier — done
+
+- `services/proposalQuietSweep.ts`'s electrical-bid pass
+  (`classifyBidQuietTier`/`sweepQuietBids`) collapses from two tiers
+  (never-viewed vs. viewed-but-unsigned) to one: `proposal_sent_at` set +
+  stage still `submitted` + quiet ≥ `elec_followup_quiet_days` → task
+  "Proposal quiet {N}d — {bid name}". The "viewed" tier depended on
+  `proposal_viewed_at`, which Task 2 stopped writing entirely — there is
+  nothing left to distinguish "viewed" from "not viewed."
+  `classifyBidQuietTier` now returns a plain `boolean`, not a tier tag.
+  (The generator pipeline's separate `sweepQuietProposals`/
+  `gen_followup_viewed_days` two-tier sweep is untouched — its own public
+  page and view-tracking are unaffected by this rework.)
+- `elec_followup_viewed_days` removed from `routes/settings.ts`'s
+  `ALLOWED_KEYS` and from the Notifications section UI
+  (`frontend/src/features/settings/sections/NotificationsSection.tsx`,
+  `frontend/src/hooks/useAppSettings.ts`). A previously-saved value for
+  that key stays in `app_settings` as a harmless orphan — no longer
+  readable or writable through the app. `elec_followup_quiet_days` is
+  unchanged.
+- `backend/src/test/bidQuietSweep.test.ts` rewritten for the single-tier
+  function/behavior. `backend/src/test/settingsAllowedKeys.test.ts` updated:
+  the `elec_followup_quiet_days` round-trip stays, plus a new assertion
+  that a PUT to `elec_followup_viewed_days` no longer reaches the row.
+
+### Task 4 — Modal rework — done
+
+- `SendBidProposalModal.tsx` (component name unchanged — only its
+  behavior/copy changed, to keep the diff to actual behavior) retitled to
+  "Draft Proposal Email"; posts to `/bids/:id/draft-proposal`. Fields: To
+  (prefilled from `bid.contact` when it looks like an email), Cc, Subject
+  (prefilled/editable), Message (prefilled from the authority template,
+  editable), "Include takeoff spreadsheet" checkbox, and a new "Mark bid
+  as Submitted" checkbox — default checked, with a one-line explanation
+  that the draft still needs to be reviewed and sent from Outlook. Primary
+  button "Create Outlook Draft" with a busy state
+  ("Creating draft…"). On success: "Draft Created," which format got
+  attached ("PDF attached" / "Word attached — install LibreOffice for
+  PDF"), a "Stage advanced to Submitted" line when applicable, and an
+  "Open draft in Outlook →" link to the returned `webLink`.
+- `PcWorkspace.tsx`: the trigger button is now "Draft Proposal Email"
+  (mail icon, not send icon); the success toast reports the attached
+  format + stage-advance status instead of "Proposal sent." The
+  sent-status chip still reads `proposal_sent_at` exactly as before
+  (Task 4's ask), just reworded ("Marked Submitted" instead of "Sent") and
+  no longer reports Viewed/Signed, since nothing writes those anymore.
+- `SendBidProposalModal.test.tsx` rewritten for the new title, fields,
+  endpoint, `markSubmitted` behavior, and the pdf/docx-aware success copy.
+
+### Task 5 — Docs — done
+
+- `docs/DEPLOY.md`: removed the public-proposal-page smoke item entirely;
+  reworded the send-to-GC smoke step for the draft flow — noted that
+  draft-proposal only ever creates an Outlook draft (`graphCreateDraft`,
+  never `graphSendMail`), so there is no "real send to a GC" side effect
+  anywhere in the app to gate behind a real test address, while
+  `markSubmitted`'s stage-advance + Drive folder move are still real and
+  still need the throwaway bid. Updated the `FRONTEND_URL` row and the
+  migrations section to flag the now-unused columns and point at this
+  section.
+- This section.
+
+## Post-merge rework: final test counts
+
+- **Backend** (`npm test`, `electrical_crm_test`): **731 passed, 1
+  failed** — the same pre-existing, documented Kohler-brief flake
+  (`command center brief (integration) > surfaces a needs-call Kohler
+  lead as a lead-call item with a tel: CTA`), unrelated to this rework.
+  New/rewritten coverage: `bidDraftProposal.test.ts` (replaces
+  `bidSendProposal.test.ts`), `bidQuietSweep.test.ts` (single-tier),
+  `settingsAllowedKeys.test.ts` (viewed-key removal), `bidSubmittalEmail.test.ts`
+  (link-line removal). Deleted: `bidPublicProposal.test.ts`, `bidSign.test.ts`,
+  `proposalHtml.test.ts`.
+- **Frontend** (`npm test`): **343 passed, 9 failed** — the same 9
+  pre-existing failures in the same two known files
+  (`useInstallPrompt.test.ts`, `CustomerHub.test.tsx`), unrelated to this
+  rework. `SendBidProposalModal.test.tsx` rewritten and passing (9 tests).
+  Deleted: none (`BidProposalPublicPage.tsx` had no dedicated test file).
+- `npx tsc --noEmit` clean on both `backend/` and `frontend/` as of the
+  final commit.
+
+## Post-merge rework: safety confirmation
+
+- **Tests only ever ran against `electrical_crm_test`**, via `npm test`
+  (`NODE_ENV=test DB_NAME=electrical_crm_test`) or the equivalent direct
+  `vitest run` invocations used while iterating. `harness.ts`'s live-DB
+  guard was never tripped; `electrical_crm` (the live/local DB) was never
+  touched.
+- **Never ran a dev server.** All verification was `npx tsc --noEmit` and
+  `vitest`/`npm test`.
+- **Zero real emails/drafts sent or created.** Every email path in
+  `bids.ts` (draft-proposal, notify-team, email-prebid-chris) goes through
+  `graphMailer.ts`'s `graphCreateDraft`/`graphSendMail`, both of which
+  still self-mute under `NODE_ENV=test`. `graphSendMail` is no longer
+  imported by `routes/bids.ts` at all — draft-proposal cannot send a real
+  email even in production; it can only ever create a draft Jake sends
+  himself.
+- **No pushes.** All work is local commits on `feat/proposal-draft-flow`
+  in the `Electrical-program-wt-draftflow` worktree, which never touches
+  `Local Version`.
+- **Clean tree** as of the final commit (verified below).

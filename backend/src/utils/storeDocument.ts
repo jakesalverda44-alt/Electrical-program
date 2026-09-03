@@ -59,10 +59,11 @@ export interface StoreDocumentInput {
    * generate-prebid-package), and only after their own gate has passed —
    * every other caller of storeDocument (manual uploads, import-bid,
    * notify-team attachments, etc.) leaves this at its default `false`.
-   * Public-facing reads (the proposal page, /download, send-proposal) only
-   * ever consider gate_passed=true rows, so a document that was never
-   * verified — including one filed under category='proposal' by something
-   * other than generate-docx — can never reach a GC.
+   * draft-proposal (the Outlook draft that attaches this document — see
+   * routes/bids.ts) only ever considers gate_passed=true rows, so a
+   * document that was never verified — including one filed under
+   * category='proposal' by something other than generate-docx — can never
+   * reach a GC.
    */
   gatePassed?: boolean;
 }

@@ -37,14 +37,20 @@ const ALLOWED_KEYS = [
   'currency_code',
   'notifications_json',
   'security_session_timeout',
-  // FIX-4 (post-review) — Task 4.2's quiet-proposal follow-up settings UI
-  // (Settings > Notifications) posts these two keys, but they were missing
-  // from ALLOWED_KEYS, so PUT /api/settings silently discarded every save
-  // (the loop below only writes a key present in this list) — the UI
-  // showed success with nothing actually persisted. services/
-  // proposalQuietSweep.ts already reads both (numericSetting, with
-  // defaults) — this just lets a save actually reach them.
-  'elec_followup_quiet_days', 'elec_followup_viewed_days',
+  // FIX-4 (post-review) — Task 4.2's quiet-proposal follow-up setting
+  // (Settings > Notifications) posts this key, but it was missing from
+  // ALLOWED_KEYS, so PUT /api/settings silently discarded the save (the
+  // loop below only writes a key present in this list) — the UI showed
+  // success with nothing actually persisted. services/proposalQuietSweep.ts
+  // already reads it (numericSetting, with a default) — this just lets a
+  // save actually reach it.
+  //
+  // Post-merge rework (2026-09-03) — elec_followup_viewed_days was removed:
+  // the bid quiet-sweep collapsed to one tier once the "viewed" tracking it
+  // depended on (the public proposal page) went away. Any previously-saved
+  // value for that key is now orphaned in app_settings — harmless, just
+  // never read or writable again.
+  'elec_followup_quiet_days',
   // FIX-11 (post-review) — the internal pre-bid-package recipient
   // ("Chris") was hardcoded in the frontend (PcWorkspace.tsx). Moved to an
   // app_setting so it's configurable without a code change; the server
