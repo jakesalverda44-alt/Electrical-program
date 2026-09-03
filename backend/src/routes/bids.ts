@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
@@ -17,9 +18,6 @@ import {
 } from '../email/bidSubmittalEmail';
 import { getSetting } from '../db/getSetting';
 import { resolveCustomer } from './customers';
-import { composeCurrentBidData } from './preconstruction';
-import { renderBidDocx } from '../utils/proposalDocx';
-import { verifyBidDocx } from '../bidstd/verifyBid';
 import { BidData } from '../bidstd/bidData';
 import { renderBidHtml } from '../bidstd/proposalHtml';
 import { createNotification } from '../notifications/engine';
@@ -278,11 +276,21 @@ router.post('/:id/notify-team', requireAuth, async (req: AuthRequest, res) => {
 const PROPOSAL_DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const TAKEOFF_XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
+// FIX-3 (post-review) — gate_passed = true always, everywhere this is
+// called. "Most recent filed" was never actually gated on having passed
+// verifyBid's gate — a document filed under the same category by something
+// other than a generate-* route (import-bid, a manual upload, POST
+// /documents) could otherwise be picked up here and, via send-proposal,
+// emailed to a GC as though it were the reviewed proposal. gate_passed is
+// set ONLY by the Phase 3 generate-docx/generate-takeoff-xlsx/generate-
+// prebid-package routes, and only on the rows they file after their own
+// verify gate passes (see utils/storeDocument.ts) — so this query can only
+// ever return something that's actually been through that gate.
 async function loadMostRecentBidDoc(bidId: string, category: string, mimetype: string): Promise<DocRow | null> {
   const { rows } = await pool.query<DocRow>(
     `SELECT id, name, display_name, category, file_type, file_size, file_data, storage_url
        FROM documents
-      WHERE linked_id = $1 AND category = $2 AND file_type = $3 AND deleted_at IS NULL
+      WHERE linked_id = $1 AND category = $2 AND file_type = $3 AND deleted_at IS NULL AND gate_passed = true
       ORDER BY created_at DESC LIMIT 1`,
     [bidId, category, mimetype]
   );
@@ -705,40 +713,62 @@ router.delete('/:id/purge', requireAuth, requireAdmin, async (req: AuthRequest, 
   }
 });
 
-// ── Phase 4 Task 2: public proposal page (no auth) ──────────────────────────
-// Loads the CURRENT composed BidData (same composeCurrentBidData every
-// generate-* endpoint uses, persist:false — a GET never writes a job number)
-// and runs the SAME verify gate generate-docx does. A bid whose current
-// composition doesn't pass (an estimator mid-revision, say) doesn't fail the
-// viewer for a customer who already has the link — it falls back to the
-// bid_data.json filed alongside the last generated docx (generate-docx always
-// files one), so the public page renders exactly what was actually filed/
-// sent, never an in-progress edit that hasn't cleared the gate.
-async function loadPublicBidData(bidId: string): Promise<{ bidData: BidData; fromFallback: boolean } | null> {
-  try {
-    const loaded = await composeCurrentBidData(bidId, { persist: false });
-    if (loaded.ok) {
-      const buf = await renderBidDocx(loaded.bidData);
-      const verifyResult = await verifyBidDocx(buf, { kind: 'gc' });
-      if (verifyResult.pass) return { bidData: loaded.bidData, fromFallback: false };
-    }
-  } catch (err) {
-    logger.error({ err, bidId }, '[bids] public page: current composition failed — falling back to the last filed bid_data.json');
-  }
-
+// ── Phase 4 Task 2 / post-review FIX-3: public proposal page (no auth) ──────
+// Serves a FILED, GATE-PASSED snapshot — never a live compose. The old
+// version here composed the bid's CURRENT BidData on every single view (an
+// unauthenticated, unrate-limited route), rendered a full docx from it, and
+// ran verifyBidDocx — which execSync-probes for `soffice` on PATH — on every
+// request. That's a blocking-call-per-view DoS surface, and worse: on a
+// verify failure it fell back to "the most recent bid_data.json filed
+// alongside the last generated docx," but that fallback was never actually
+// checked for having passed the verify gate itself, so a document filed
+// under the same category by something other than generate-docx (an
+// import, a manual upload) could theoretically be what a customer — or,
+// via send-proposal, a GC — ends up seeing. And because the page composed
+// live while the emailed docx was a filed snapshot, the two could silently
+// diverge, and a signature would pin to nothing in particular.
+//
+// The fix: load the most recent GATE-PASSED bid_data.json document
+// (loadMostRecentBidDoc, filtered on gate_passed=true — see FIX-3 above)
+// and render straight from it. No compose, no docx render, no verify, no
+// soffice probe on the view path — the gate already ran once, at filing
+// time, in generate-docx. This also pins what the customer sees to
+// EXACTLY what was filed/sent, byte-for-byte the same BidData the emailed
+// docx came from.
+async function loadFiledBidData(bidId: string): Promise<{ bidData: BidData; documentId: string } | null> {
   const filedDoc = await loadMostRecentBidDoc(bidId, 'bid_data', 'application/json');
   if (!filedDoc) return null;
   const bytes = await fetchDocBytes(filedDoc);
   if (!bytes) return null;
   try {
-    return { bidData: JSON.parse(bytes.toString('utf8')) as BidData, fromFallback: true };
+    return { bidData: JSON.parse(bytes.toString('utf8')) as BidData, documentId: filedDoc.id };
   } catch (err) {
     logger.error({ err, bidId }, '[bids] public page: filed bid_data.json could not be parsed');
     return null;
   }
 }
 
-router.get('/p/:token', asyncHandler(async (req, res) => {
+// FIX-3(e) — rate limit the public routes (mirrors routes/auth.ts's
+// authLimiter). Viewing/downloading a sent proposal is a normal, repeatable
+// customer action (a GC may reopen the link several times), so the view/
+// download limit is generous; signing is a one-time action per proposal, so
+// its limit is tighter.
+const publicViewLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: PROPOSAL_NOT_FOUND,
+});
+const publicSignLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please try again in a few minutes.' },
+});
+
+router.get('/p/:token', publicViewLimiter, asyncHandler(async (req, res) => {
   if (!isValidToken(req.params.token)) return res.status(404).json(PROPOSAL_NOT_FOUND);
   const { rows } = await pool.query(
     'SELECT * FROM bids WHERE proposal_token = $1 AND deleted_at IS NULL',
@@ -747,7 +777,7 @@ router.get('/p/:token', asyncHandler(async (req, res) => {
   if (!rows.length) return res.status(404).json(PROPOSAL_NOT_FOUND);
   const bid = rows[0];
 
-  const loaded = await loadPublicBidData(bid.id);
+  const loaded = await loadFiledBidData(bid.id);
   if (!loaded) return res.status(404).json(PROPOSAL_NOT_FOUND);
 
   // In-app previews pass ?preview=1 — fetch without recording a customer
@@ -798,14 +828,13 @@ router.get('/p/:token', asyncHandler(async (req, res) => {
   res.json({
     bid: publicBidProjection(current),
     html: renderBidHtml(loaded.bidData),
-    fromFallback: loaded.fromFallback,
   });
 }));
 
-// Streams the exact bytes of the most recently FILED proposal .docx (never a
-// fresh render) with a content-disposition filename from the standard's own
-// naming (APT_Bid_[ProjectSlug]_[LocationSlug].docx).
-router.get('/p/:token/download', asyncHandler(async (req, res) => {
+// Streams the exact bytes of the most recently FILED, gate-passed proposal
+// .docx (never a fresh render) with a content-disposition filename from the
+// standard's own naming (APT_Bid_[ProjectSlug]_[LocationSlug].docx).
+router.get('/p/:token/download', publicViewLimiter, asyncHandler(async (req, res) => {
   if (!isValidToken(req.params.token)) return res.status(404).json(PROPOSAL_NOT_FOUND);
   const { rows } = await pool.query(
     'SELECT id FROM bids WHERE proposal_token = $1 AND deleted_at IS NULL',
@@ -833,7 +862,7 @@ router.get('/p/:token/download', asyncHandler(async (req, res) => {
 // signature gets a clear 400 instead of body-parser's raw 413.
 const MAX_SIGNATURE_DATA_URL_LENGTH = 60_000;
 
-router.post('/p/:token/sign', asyncHandler(async (req, res) => {
+router.post('/p/:token/sign', publicSignLimiter, asyncHandler(async (req, res) => {
   if (!isValidToken(req.params.token)) return res.status(404).json(PROPOSAL_NOT_FOUND);
   const { signerName, signatureDataUrl } = req.body || {};
   if (!signatureDataUrl || typeof signatureDataUrl !== 'string') {
@@ -864,10 +893,20 @@ router.post('/p/:token/sign', asyncHandler(async (req, res) => {
       return res.json({ ok: true, bid: publicBidProjection(preSign), alreadySigned: true, wonJob: null });
     }
 
+    // FIX-3(d) — pin the signature to the exact bid_data.json document that
+    // was on screen (the most recent gate-passed snapshot at sign time —
+    // the same one loadFiledBidData would serve to a GET right now), not to
+    // "whatever the bid composes to on some future date." Best-effort: if
+    // for some reason no gate-passed snapshot exists yet (e.g. the docx
+    // filed but the bid_data.json write failed independently), the
+    // signature still records — signed_document_id just stays null.
+    const filedDoc = await loadMostRecentBidDoc(preSign.id, 'bid_data', 'application/json');
+
     const { rows: signedRows } = await client.query(
-      `UPDATE bids SET proposal_signed_at = now(), signer_name = $1, signature_data = $2, updated_at = now()
-        WHERE id = $3 RETURNING *`,
-      [name, signatureDataUrl, preSign.id]
+      `UPDATE bids SET proposal_signed_at = now(), signer_name = $1, signature_data = $2,
+         signed_document_id = $3, updated_at = now()
+        WHERE id = $4 RETURNING *`,
+      [name, signatureDataUrl, filedDoc?.id ?? null, preSign.id]
     );
     const signedBid = signedRows[0];
 

@@ -1986,6 +1986,11 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
       category: 'proposal',
       displayName: storageFilename,
       uploadedBy: req.user!.name,
+      // FIX-3 (post-review) — this row is only ever filed after
+      // verifyBidDocx(kind:'gc') passed, above. gate_passed marks it as the
+      // only kind of 'proposal' row the public /download and send-proposal
+      // paths will ever serve or attach.
+      gatePassed: true,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-docx] storeDocument (proposal) failed');
@@ -2007,6 +2012,11 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
       category: 'bid_data',
       displayName: bidDataFilename,
       uploadedBy: req.user!.name,
+      // FIX-3 (post-review) — the public proposal page (routes/bids.ts's
+      // GET /p/:token) renders directly from the most recent gate_passed
+      // bid_data.json instead of composing/verifying live; this is the row
+      // it reads.
+      gatePassed: true,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-docx] storeDocument (bid_data) failed');
@@ -2028,6 +2038,7 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
         category: 'proposal',
         displayName: pdfFilename,
         uploadedBy: req.user!.name,
+        gatePassed: true,
       });
     } catch (err) {
       logger.error({ err, bidId }, '[generate-docx] storeDocument (pdf) failed');
@@ -2085,6 +2096,7 @@ router.get('/:bidId/generate-takeoff-xlsx', requireAuth, requireAIPermission('vi
       category: 'takeoff',
       displayName: xlsx.filename,
       uploadedBy: req.user!.name,
+      gatePassed: true,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-takeoff-xlsx] storeDocument failed');
@@ -2187,6 +2199,7 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
       category: 'prebid_scope',
       displayName: scopeStorageFilename,
       uploadedBy: req.user!.name,
+      gatePassed: true,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-prebid-package] storeDocument (scope) failed');
@@ -2208,6 +2221,7 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
       category: 'prebid_takeoff',
       displayName: takeoffStorageFilename,
       uploadedBy: req.user!.name,
+      gatePassed: true,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-prebid-package] storeDocument (takeoff) failed');

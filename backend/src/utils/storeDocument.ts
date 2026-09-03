@@ -52,6 +52,19 @@ export interface StoreDocumentInput {
   uploadedBy: string;
   /** Replace any existing document in this category for this record instead of stacking duplicates. */
   replaceExisting?: boolean;
+  /**
+   * FIX-3 (post-review) — mark this row as having passed the bid-standard
+   * verify gate (`verifyBid.ts`) before being filed. Set ONLY by the Phase 3
+   * generate-* routes (generate-docx, generate-takeoff-xlsx,
+   * generate-prebid-package), and only after their own gate has passed —
+   * every other caller of storeDocument (manual uploads, import-bid,
+   * notify-team attachments, etc.) leaves this at its default `false`.
+   * Public-facing reads (the proposal page, /download, send-proposal) only
+   * ever consider gate_passed=true rows, so a document that was never
+   * verified — including one filed under category='proposal' by something
+   * other than generate-docx — can never reach a GC.
+   */
+  gatePassed?: boolean;
 }
 
 async function resolveDriveFolder(linkedId: string, div: string, category: string): Promise<string | null> {
@@ -116,12 +129,12 @@ export async function storeDocument(input: StoreDocumentInput) {
 
   const { rows } = await pool.query(
     `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category,
-                            file_size, file_type, uploaded_by, storage_url, file_data)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                            file_size, file_type, uploaded_by, storage_url, file_data, gate_passed)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      RETURNING id, linked_id, linked_name, div, name, display_name, category, file_size,
-               file_type, storage_url, uploaded_by, created_at`,
+               file_type, storage_url, uploaded_by, created_at, gate_passed`,
     [linkedId || null, linkedName || null, div, file.originalname, displayName, category,
-     file.size, file.mimetype || '', uploadedBy, storageUrl || null, fileData]
+     file.size, file.mimetype || '', uploadedBy, storageUrl || null, fileData, !!input.gatePassed]
   );
   return rows[0];
 }

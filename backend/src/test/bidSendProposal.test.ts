@@ -36,12 +36,13 @@ async function createBid(token: string, overrides: Record<string, unknown> = {})
   return res.body as { id: string; proposal_token: string; stage: string };
 }
 
-async function fileProposalDoc(bidId: string, bidName: string) {
+async function fileProposalDoc(bidId: string, bidName: string, opts: { gatePassed?: boolean } = {}) {
+  const { gatePassed = true } = opts;
   await pool.query(
-    `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
+    `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data, gate_passed)
      VALUES ($1,$2,'elec','proposal.docx','proposal.docx','proposal',10,
-             'application/vnd.openxmlformats-officedocument.wordprocessingml.document','test',$3)`,
-    [bidId, bidName, Buffer.from('fake docx bytes').toString('base64')]
+             'application/vnd.openxmlformats-officedocument.wordprocessingml.document','test',$3,$4)`,
+    [bidId, bidName, Buffer.from('fake docx bytes').toString('base64'), gatePassed]
   );
 }
 
@@ -50,6 +51,20 @@ describe('POST /bids/:id/send-proposal', () => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');
     const bid = await createBid(u.token);
+    const res = await request(app).post(`/api/bids/${bid.id}/send-proposal`).set(auth(u.token))
+      .send({ to: ['gc@example.com'] })
+      .expect(409);
+    expect(res.body.error).toMatch(/No filed proposal/);
+  });
+
+  // FIX-3(b) — send-proposal 409s when no GATE-PASSED docx exists, even if
+  // a same-category document was filed by something other than
+  // generate-docx (an import, a manual upload) and never actually verified.
+  it('409s when a filed proposal docx exists but is NOT gate-passed', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await createBid(u.token);
+    await fileProposalDoc(bid.id, bid.id, { gatePassed: false });
     const res = await request(app).post(`/api/bids/${bid.id}/send-proposal`).set(auth(u.token))
       .send({ to: ['gc@example.com'] })
       .expect(409);
@@ -120,9 +135,9 @@ describe('POST /bids/:id/send-proposal', () => {
     // File a SECOND, newer proposal doc — the send must pick this one (most recent).
     await new Promise(r => setTimeout(r, 10));
     await pool.query(
-      `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
+      `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data, gate_passed)
        VALUES ($1,$2,'elec','proposal-v2.docx','proposal-v2.docx','proposal',10,
-               'application/vnd.openxmlformats-officedocument.wordprocessingml.document','test',$3)`,
+               'application/vnd.openxmlformats-officedocument.wordprocessingml.document','test',$3,true)`,
       [bid.id, bid.id, Buffer.from('second version bytes').toString('base64')]
     );
     await request(app).post(`/api/bids/${bid.id}/send-proposal`).set(auth(u.token))
@@ -149,9 +164,9 @@ describe('POST /bids/:id/email-prebid-chris', () => {
     const u = await makeUser('owner');
     const bid = await createBid(u.token);
     await pool.query(
-      `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
+      `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data, gate_passed)
        VALUES ($1,$2,'elec','scope.docx','scope.docx','prebid_scope',10,
-               'application/vnd.openxmlformats-officedocument.wordprocessingml.document','test',$3)`,
+               'application/vnd.openxmlformats-officedocument.wordprocessingml.document','test',$3,true)`,
       [bid.id, bid.id, Buffer.from('scope bytes').toString('base64')]
     );
     const res = await request(app).post(`/api/bids/${bid.id}/email-prebid-chris`).set(auth(u.token))
