@@ -7,7 +7,9 @@ import { parseDueDays, withDueDays, formatDue } from '../utils/dueDate';
 import { logger } from '../utils/logger';
 import { sendBidNotification } from '../email/bidNotification';
 import { loadBidDocumentsAsAttachments, fetchDocBytes, attachmentFileName, DocRow } from '../email/bidAttachments';
-import { graphSendMail, graphCreateDraft, isGraphMailConfigured, GraphAttachment } from '../email/graphMailer';
+import { graphSendMail, graphCreateDraft, isGraphMailConfigured, GraphAttachment, TEAM_NOTIFY_TO } from '../email/graphMailer';
+import { escapeHtml } from '../utils/escapeHtml';
+import { sendPushToUsers } from '../integrations/webPush';
 import {
   defaultSubmittalSubject, defaultSubmittalBodyText, buildBidSubmittalHtml,
   defaultPrebidChrisSubject, buildPrebidChrisBodyHtml,
@@ -765,6 +767,141 @@ router.get('/p/:token/download', async (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Content-Length', bytes.length);
   res.send(bytes);
+});
+
+// ── Phase 4 Task 3: accept & e-sign -> auto-award (no auth) ─────────────────
+// Ports gens.ts's POST /p/:token/sign (non-empty signature required,
+// idempotent re-sign) and adds an explicit size cap on the data URL — kept
+// well under express.json()'s global 100kb body limit so an oversized
+// signature gets a clear 400 instead of body-parser's raw 413.
+const MAX_SIGNATURE_DATA_URL_LENGTH = 60_000;
+
+router.post('/p/:token/sign', async (req, res) => {
+  const { signerName, signatureDataUrl } = req.body || {};
+  if (!signatureDataUrl || typeof signatureDataUrl !== 'string') {
+    return res.status(400).json({ error: 'Signature required' });
+  }
+  if (signatureDataUrl.length > MAX_SIGNATURE_DATA_URL_LENGTH) {
+    return res.status(400).json({ error: 'Signature image is too large — please sign again with a smaller/simpler signature.' });
+  }
+  const name = String(signerName || '').trim();
+  if (!name) return res.status(400).json({ error: 'Typed name required' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Locked so a double-tap / retry on a slow network can't race past the
+    // idempotency check below and sign (or award) twice.
+    const { rows: locked } = await client.query(
+      `SELECT * FROM bids WHERE proposal_token = $1 AND deleted_at IS NULL FOR UPDATE`,
+      [req.params.token]
+    );
+    if (!locked.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Proposal not found' }); }
+    const preSign = locked[0];
+
+    // Idempotent — a second sign attempt returns the already-signed state
+    // unchanged, never re-stamps or re-awards.
+    if (preSign.proposal_signed_at) {
+      await client.query('ROLLBACK');
+      return res.json({ ok: true, bid: withDueDays(preSign), alreadySigned: true, wonJob: null });
+    }
+
+    const { rows: signedRows } = await client.query(
+      `UPDATE bids SET proposal_signed_at = now(), signer_name = $1, signature_data = $2, updated_at = now()
+        WHERE id = $3 RETURNING *`,
+      [name, signatureDataUrl, preSign.id]
+    );
+    const signedBid = signedRows[0];
+
+    await client.query(
+      `INSERT INTO proposal_activity (bid_id, kind, direction, text) VALUES ($1,'signed','in',$2)`,
+      [preSign.id, `Proposal signed by ${name}`]
+    );
+
+    // Auto-award through the SAME shared stage-transition path the manual
+    // PATCH /:id/stage drag uses (services/bidStage.ts) — won_job, project
+    // registration, and the activity-feed entry all fire identically,
+    // whether the trigger is a rep's drag or the customer's signature.
+    let finalBid = signedBid;
+    let wonJob: Record<string, unknown> | null = null;
+    if (signedBid.stage !== 'awarded') {
+      const result = await transitionBidStage(client, signedBid, 'awarded');
+      finalBid = result.bid;
+      wonJob = result.wonJob;
+    }
+
+    await client.query('COMMIT');
+
+    // Fire-and-forget Drive side effects — same helper the manual award
+    // path uses (PATCH /:id/stage), so folder moves/subfolder creation are
+    // byte-for-byte the same regardless of which door the award came through.
+    if (signedBid.stage !== 'awarded') {
+      applyBidStagePostCommit(signedBid, 'awarded', (err, phase) =>
+        logger.error({ err, phase, bidId: preSign.id }, '[bids] sign-triggered award Drive step failed'));
+    }
+
+    // A public, unauthenticated action never writes to the privileged
+    // audit_log (writeAudit requires an authenticated req.user — matches
+    // gens' public sign route, which also skips it); the `activity` table
+    // entry transitionBidStage already wrote is this action's audit trail.
+
+    res.json({ ok: true, bid: withDueDays(finalBid), wonJob });
+
+    // Fire-and-forget: notify Jake — in-app notification + web push + a
+    // team-mailbox email heads-up. Mirrors gens.ts's /p/:token/sign exactly.
+    (async () => {
+      try {
+        const raw = await getSetting('notifications_json');
+        const notifPrefs = raw ? JSON.parse(raw) : {};
+        if (!notifPrefs.proposal_signed) return;
+        const targets = finalBid.salesperson_id ? [finalBid.salesperson_id] : await ownerAdminIds();
+        for (const uid of targets) {
+          await createNotification(uid, {
+            type: 'bid_proposal_signed',
+            title: 'Proposal signed',
+            body: `${finalBid.name} (${finalBid.gc}) accepted and signed their proposal`,
+            linkView: 'electrical/bids',
+            linkId: finalBid.id,
+            dedupKey: `bidsigned:${finalBid.id}`,
+          });
+        }
+        const amt = Number(finalBid.amount || 0);
+        sendPushToUsers(targets, {
+          title: '🎉 Proposal signed',
+          body: `${finalBid.name}${amt ? ` — $${amt.toLocaleString()}` : ''}`,
+          view: 'electrical/bids',
+          id: finalBid.id,
+          tag: `bidsigned:${finalBid.id}`,
+        }).catch(() => {});
+      } catch (err) {
+        logger.error({ err }, '[notify] bid proposal signed notification failed');
+      }
+    })();
+
+    if (isGraphMailConfigured()) {
+      (async () => {
+        try {
+          const amt = Number(finalBid.amount || 0);
+          await graphSendMail({
+            to: TEAM_NOTIFY_TO,
+            subject: `🎉 Proposal signed — ${finalBid.name}${amt ? ` ($${amt.toLocaleString()})` : ''}`,
+            html: `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.6;">
+              <p><b>${escapeHtml(finalBid.gc)}</b> just signed the electrical proposal for <b>${escapeHtml(finalBid.name)}</b>${amt ? ` — <b>$${amt.toLocaleString()}</b>` : ''}.</p>
+              <p>Signed by ${escapeHtml(name)}. The job has been automatically moved to Awarded.</p>
+            </div>`,
+          });
+        } catch (err) {
+          logger.error({ err, bidId: preSign.id }, '[notify] bid proposal signed email failed');
+        }
+      })();
+    }
+  } catch (err) {
+    await client.query('ROLLBACK');
+    logger.error({ err }, '[bids] sign failed');
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
 });
 
 export default router;
