@@ -54,10 +54,18 @@ export function findSimilar(
   for (const c of candidates) {
     const key = similarKey(c.name);
     if (key.length < MIN_KEY_LEN) continue;
-    if (key === subjectKey || key.includes(subjectKey) || subjectKey.includes(key)) {
+    if (key === subjectKey) {
       out.push(c);
-      if (out.length >= max) break;
+    } else if (key.includes(subjectKey) || subjectKey.includes(key)) {
+      // Containment (one name inside the other) requires the SHORTER side to
+      // carry at least two tokens — a bare brand name ("AutoZone") is contained
+      // in every store's invite and would chip against every same-brand bid in
+      // the pipeline. Same single-token-containment ban customerMatch.ts uses
+      // for GC canonicalization (the DR Horton / Horton Group lesson).
+      const shorter = key.length <= subjectKey.length ? key : subjectKey;
+      if (shorter.split(' ').length >= 2) out.push(c);
     }
+    if (out.length >= max) break;
   }
   return out;
 }

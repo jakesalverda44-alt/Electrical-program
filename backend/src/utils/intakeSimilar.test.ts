@@ -73,3 +73,22 @@ describe('findSimilar', () => {
     expect(findSimilar('Nick & Moes Winter Haven', many, 2)).toHaveLength(2);
   });
 });
+
+describe('single-token containment ban', () => {
+  it('a bare brand-name bid does not chip against every same-brand invite', () => {
+    const candidates = [
+      { kind: 'bid' as const, id: '1', name: 'AutoZone', stage: 'submitted' },
+      { kind: 'bid' as const, id: '2', name: 'AutoZone', stage: 'lost' },
+      { kind: 'bid' as const, id: '3', name: 'AutoZone #9300 - Nokomis, FL', stage: 'due' },
+    ];
+    const hits = findSimilar('AutoZone #9300 - Nokomis, FL: Invitation to bid on AutoZone #9300 - Nokomis, FL', candidates);
+    expect(hits.map(h => h.id)).toEqual(['3']);
+  });
+
+  it('multi-token containment still matches', () => {
+    const hits = findSimilar('7-Eleven #42901 (REBID) - Tampa, FL', [
+      { kind: 'bid' as const, id: 'a', name: '7-Eleven #42901 - Tampa, FL', stage: 'submitted' },
+    ]);
+    expect(hits).toHaveLength(1);
+  });
+});
