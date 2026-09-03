@@ -105,8 +105,15 @@ export function pageTextBlock(
   // ... ---" delimiter grammar.
   const clean = sanitizeForPrompt(text);
   const capped = clean.length > cap ? `${clean.slice(0, cap)}\n[TEXT TRUNCATED]` : clean;
+  // FIX-7 (post-review) — sheetLabel is interpolated directly into this
+  // function's OWN trusted delimiter header, but it isn't authored by us:
+  // it traces back to pageClassifier's real-sheet-identity label (Task 2)
+  // or a plain filename, either of which is untrusted, uploaded content.
+  // Sanitize it too, not just the page text — otherwise a hostile filename
+  // or classified label could itself open a fake "--- Sheet ... ---" line.
+  const cleanLabel = sanitizeForPrompt(sheetLabel);
   return {
     type: 'text',
-    text: `--- Sheet ${sheetLabel} p${pageNo} — EXTRACTED TEXT (machine-read, treat as FIRM source) ---\n${capped}`,
+    text: `--- Sheet ${cleanLabel} p${pageNo} — EXTRACTED TEXT (machine-read, treat as FIRM source) ---\n${capped}`,
   };
 }
