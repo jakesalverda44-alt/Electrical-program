@@ -140,6 +140,9 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
     brand: bid.brand ?? '',
     project_type: bid.project_type ?? '',
     sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '',
+    // Phase 3 — auto-generates on first proposal/pre-bid-package generation
+    // (JS.MMDDYYYY) but editable here like every other bid field.
+    job_number: bid.job_number ?? '',
     date_won: bid.date_won ? String(bid.date_won).slice(0, 10) : '',
   });
 
@@ -153,6 +156,7 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
     contact: bid.contact ?? '', brand: bid.brand ?? '',
     project_type: bid.project_type ?? '',
     sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '',
+    job_number: bid.job_number ?? '',
     date_won: bid.date_won ? String(bid.date_won).slice(0, 10) : '',
   });
 
@@ -171,6 +175,7 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
         brand: form.brand,
         project_type: form.project_type || null,
         sq_ft: form.sq_ft === '' ? null : Number(form.sq_ft),
+        job_number: form.job_number,
         ...(bid.stage === 'awarded' && form.date_won ? { date_won: form.date_won } : {}),
       });
       onBidUpdated(data.bid ?? data);
@@ -225,7 +230,12 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        {!editMode && bid.job_number ? (
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)' }}>
+            Job No. <span style={{ color: 'var(--text2)' }}>{bid.job_number}</span>
+          </div>
+        ) : <span/>}
         {!isTerminal && (
           <button className="btn ghost" style={{ height: 30, fontSize: 12, padding: '0 10px' }}
             onClick={() => { setEditMode(e => !e); resetForm(); }}>
@@ -246,6 +256,10 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
             { label: 'Contact', key: 'contact' as const },
             { label: 'Brand', key: 'brand' as const },
             { label: 'Square Footage', key: 'sq_ft' as const, type: 'number' },
+            // Auto-generates (JS.MMDDYYYY) on first proposal/pre-bid-package
+            // generation — editable here for a correction, same as every
+            // other field.
+            { label: 'Job Number', key: 'job_number' as const },
           ].map(({ label, key, required, type }) => (
             <div key={key}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>{label}</div>

@@ -1784,6 +1784,20 @@ function takeoffAsText(bidData: BidData): string {
     .join('\n');
 }
 
+// GET proposal-preview — the composed BidData, for the Proposal tab preview
+// (Task 7). Thin: reuses composeCurrentBidData, no render/verify/file step —
+// the frontend renders sections/exclusions/terms/alternates directly from
+// this instead of re-implementing the legacy-vs-new-shape/precedence logic
+// client-side.
+router.get('/:bidId/proposal-preview', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+
+  const loaded = await composeCurrentBidData(bidId);
+  if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error });
+  res.json(loaded.bidData);
+}));
+
 // GET generate-docx — build and return the .docx proposal file
 router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { bidId } = req.params;

@@ -41,6 +41,10 @@ export interface Bid {
   closed_at?: string;
   co_approved_total?: number;
   sq_ft?: number | null;
+  // Phase 3 — JS.MMDDYYYY, auto-generated on first proposal/pre-bid-package
+  // generation (backend/src/bidstd/boilerplate.ts's jobNumber()) but editable
+  // here like any other bid field.
+  job_number?: string | null;
   project_type?: string | null;
   // Chain/prototype name (AutoZone, 7-Eleven) — drives same-brand bid comparison.
   brand?: string | null;

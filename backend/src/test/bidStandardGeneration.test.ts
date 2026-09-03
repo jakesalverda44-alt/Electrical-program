@@ -56,6 +56,53 @@ async function makeBidWithAgent4(token: string, name: string, output: unknown, p
   return bidId;
 }
 
+describe('proposal-preview (Task 7)', () => {
+  it('returns the composed BidData — sections by real titles, exclusions, terms, price', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBidWithAgent4(u.token, 'Preview', CLEAN_AGENT4_OUTPUT);
+
+    const res = await request(app)
+      .get(`/api/preconstruction/${bidId}/proposal-preview`).set(auth(u.token))
+      .expect(200);
+    expect(res.body.sections.map((s: { title: string }) => s.title)).toContain('A. Service & Distribution');
+    expect(res.body.exclusions).toContain('Painting and patching are excluded from this scope.');
+    expect(res.body.terms).toHaveLength(10);
+    expect(res.body.total_price).toBe('$248,750');
+    // conf is present on the composed data but never rendered by the GC docx/xlsx.
+    expect(res.body.takeoff[0].items[0].conf).toBe('FIRM');
+  });
+
+  it('404s when there is no proposal data yet', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `PreviewNone ${Date.now()}`, gc: 'G' }).expect(200);
+    await request(app)
+      .get(`/api/preconstruction/${bid.body.id}/proposal-preview`).set(auth(u.token))
+      .expect(404);
+  });
+
+  it('renders a legacy-shape row through the adapter path too', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const legacy = {
+      scopeOfWork: { A_ServiceDistribution: ['Service entrance (ECFECI).'] },
+      exclusions: ['Painting excluded.'],
+      totalPrice: '$50,000',
+    };
+    const bidId = await makeBidWithAgent4(u.token, 'PreviewLegacy', legacy);
+    const res = await request(app)
+      .get(`/api/preconstruction/${bidId}/proposal-preview`).set(auth(u.token))
+      .expect(200);
+    expect(res.body.sections[0].title).toBe('A. Service & Distribution');
+    expect(res.body.total_price).toBe('$248,750'); // agent4_price wins, not the '$50,000' in the blob
+  });
+});
+
 describe('generate-docx — verify gate (Task 6)', () => {
   it('blocks a doctored document with 422 + failures[], and files nothing', async (ctx) => {
     if (!ok) return ctx.skip();
