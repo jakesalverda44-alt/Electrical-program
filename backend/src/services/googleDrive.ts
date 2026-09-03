@@ -28,6 +28,14 @@ const SHARED_DRIVE = { supportsAllDrives: true } as const;
 const SHARED_DRIVE_LIST = { supportsAllDrives: true, includeItemsFromAllDrives: true } as const;
 
 function getCredentials(): Record<string, unknown> | null {
+  // SAFETY: under test, behave exactly like a machine with no Drive creds —
+  // every caller already degrades gracefully when Drive is unconfigured. A
+  // full-suite run from a checkout with the real service account in .env was
+  // creating actual folders in the production Drive (found 2026-09-03).
+  // (googleDrive.test.ts mocks googleapis and opts back in via DRIVE_ALLOW_IN_TESTS
+  // to exercise the client parameters — no real API is reachable through the mock.)
+  if (process.env.DRIVE_ALLOW_IN_TESTS !== 'true'
+      && (process.env.NODE_ENV === 'test' || process.env.DRIVE_DISABLED === 'true')) return null;
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) return null;
   try {

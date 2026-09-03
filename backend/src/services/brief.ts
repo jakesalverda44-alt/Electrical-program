@@ -1,5 +1,6 @@
 import { pool } from '../db/pool';
 import { logger } from '../utils/logger';
+import { isGraphMailConfigured } from '../email/graphMailer';
 import { ownScopeId, isPrivileged } from '../middleware/auth';
 import { parseDueDays } from '../utils/dueDate';
 import { advanceToContacted } from '../routes/leads';
@@ -86,7 +87,10 @@ const TTL_MS = 90_000;
 export function invalidateGraphSnapshot(): void { snap = null; }
 
 function graphConfigured(): boolean {
-  return !!(process.env.GRAPH_TENANT_ID && process.env.GRAPH_CLIENT_ID && process.env.GRAPH_CLIENT_SECRET);
+  // Delegates to graphMailer's check, which reports unconfigured under test
+  // even when real creds sit in .env — the brief must never reach live
+  // Microsoft 365 data from a test run.
+  return isGraphMailConfigured();
 }
 
 /** First day of the current month in Eastern time, as an ISO instant. */

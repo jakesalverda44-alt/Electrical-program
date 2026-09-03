@@ -98,10 +98,16 @@ export async function storeDocument(input: StoreDocumentInput) {
   const category = input.category || 'other';
   const displayName = input.displayName?.trim() || file.originalname;
 
-  const driveFolderId = linkedId ? await resolveDriveFolder(linkedId, div, category) : null;
+  // SAFETY: under test, never touch real cloud storage — always take the
+  // base64-in-row path. Same class of guard as graphMailer's email mute: a
+  // full-suite run from a checkout with real Cloudinary/Drive creds in .env
+  // was uploading test artifacts to production storage (found 2026-09-03).
+  const cloudMuted = process.env.NODE_ENV === 'test' || process.env.CLOUD_STORAGE_DISABLED === 'true';
+
+  const driveFolderId = !cloudMuted && linkedId ? await resolveDriveFolder(linkedId, div, category) : null;
 
   let storageUrl: string | null = null;
-  if (isCloudStorageConfigured()) {
+  if (!cloudMuted && isCloudStorageConfigured()) {
     try {
       storageUrl = await uploadToCloud(file.buffer, file.originalname, file.mimetype);
     } catch (err) {

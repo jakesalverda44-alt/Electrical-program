@@ -12,6 +12,12 @@ export const GRAPH_MAILBOX = 'JakeS@accuratepowerandtechnology.com';
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
 export async function getGraphToken(): Promise<string> {
+  // SAFETY: under test, refuse real Graph auth even when creds exist in .env —
+  // callers must behave like an unconfigured machine (they all handle this
+  // throw), and no test may ever reach live Microsoft 365 data.
+  if (process.env.NODE_ENV === 'test' || process.env.EMAIL_DISABLED === 'true') {
+    throw new Error('Graph auth is muted under test (NODE_ENV=test / EMAIL_DISABLED)');
+  }
   const tenant = process.env.GRAPH_TENANT_ID;
   const clientId = process.env.GRAPH_CLIENT_ID;
   const clientSecret = process.env.GRAPH_CLIENT_SECRET;

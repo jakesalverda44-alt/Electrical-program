@@ -23,6 +23,9 @@ vi.mock('googleapis', () => ({
  */
 describe('googleDrive shared-drive support', () => {
   beforeEach(() => {
+    // Opt back in past the test-env Drive mute — googleapis is fully mocked
+    // above, so no real API is reachable here.
+    process.env.DRIVE_ALLOW_IN_TESTS = 'true';
     process.env.GOOGLE_SERVICE_ACCOUNT_JSON = JSON.stringify({ client_email: 'x@y.iam.gserviceaccount.com' });
     for (const fn of Object.values(files)) fn.mockClear();
   });

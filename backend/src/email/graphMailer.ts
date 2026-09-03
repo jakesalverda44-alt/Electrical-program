@@ -42,6 +42,10 @@ export interface SendArgs {
 }
 
 export function isGraphMailConfigured(): boolean {
+  // Under test, report unconfigured even when real Graph creds sit in .env —
+  // tests must behave identically on a machine with credentials and one
+  // without (tests that need the configured path vi.mock this function).
+  if (emailMuted()) return false;
   return !!(process.env.GRAPH_TENANT_ID && process.env.GRAPH_CLIENT_ID && process.env.GRAPH_CLIENT_SECRET);
 }
 
