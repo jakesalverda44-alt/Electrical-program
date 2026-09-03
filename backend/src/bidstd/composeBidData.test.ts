@@ -217,4 +217,42 @@ describe('legacyProposalToBidData', () => {
     expect(mapped.sections).toEqual([]);
     expect(mapped.takeoff).toEqual([]);
   });
+
+  // FIX-2 — old-shape allowances[{item,footage,unit,notes}] must survive
+  // into a Section D bullet, not be silently dropped.
+  describe('allowances -> Section D bullets (FIX-2)', () => {
+    it('appends an LF allowance onto an existing Section D, in the standard phrasing', () => {
+      const withAllowances = {
+        ...oldShape,
+        allowances: [{ item: 'Site lighting feeder', footage: 160, unit: 'LF', notes: 'Per site plan' }],
+      };
+      const mapped = legacyProposalToBidData(withAllowances);
+      const d = mapped.sections?.find(s => s.title === SECTION_HEADERS.D);
+      expect(d).toBeTruthy();
+      expect(d!.bullets).toContain('Site lighting per allowance.');
+      expect(d!.bullets.some(b => typeof b === 'string' && /^160' allowance — Site lighting feeder \(Per site plan\)$/.test(b))).toBe(true);
+    });
+
+    it('creates Section D when it was otherwise empty, and includes the unit when it is not LF', () => {
+      const noD = { ...oldShape, scopeOfWork: { ...oldShape.scopeOfWork, D_SiteLightingUnderground: [] } };
+      const withAllowances = {
+        ...noD,
+        allowances: [{ item: 'Underground conduit', footage: 400, unit: 'EA', notes: '' }],
+      };
+      const mapped = legacyProposalToBidData(withAllowances);
+      const d = mapped.sections?.find(s => s.title === SECTION_HEADERS.D);
+      expect(d).toBeTruthy();
+      expect(d!.bullets).toEqual(['400 EA allowance — Underground conduit']);
+    });
+
+    it('omits a trailing notes parenthetical when notes is blank', () => {
+      const withAllowances = {
+        ...oldShape,
+        allowances: [{ item: 'Parking lot lighting', footage: 250, unit: 'LF' }],
+      };
+      const mapped = legacyProposalToBidData(withAllowances);
+      const d = mapped.sections?.find(s => s.title === SECTION_HEADERS.D);
+      expect(d!.bullets).toContain("250' allowance — Parking lot lighting");
+    });
+  });
 });

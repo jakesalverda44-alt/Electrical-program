@@ -217,6 +217,11 @@ export interface LegacyProposalJSON {
   sheets?: string[];
   scopeOfWork?: LegacyScopeOfWork;
   exclusions?: string[];
+  /** Old-shape priced allowances (pre-Phase-3 Agent 4 could emit these
+   *  directly rather than Section D bullets) — FIX-2: folded into Section D
+   *  bullets below in the standard's own phrasing so a re-downloaded legacy
+   *  proposal doesn't silently lose its priced ALLOWANCES content. */
+  allowances?: Array<{ item?: string; footage?: number | string; unit?: string; notes?: string }>;
   takeoff?: Array<{ category?: string; item?: string; description?: string; unit?: string; qty?: number; sourceNotes?: string }>;
   terms?: string[];
   totalPrice?: string;
@@ -252,6 +257,24 @@ const LEGACY_SECTION_MAP: [keyof LegacyScopeOfWork, string][] = [
   ['F_Coordination', SECTION_HEADERS.F],
 ];
 
+// FIX-2 — old-shape allowances (`{item, footage, unit, notes}`) never had a
+// bullet-string form the way the new contract's allowances_bullets[] does;
+// format them in the standard's own phrasing so a legacy proposal's priced
+// ALLOWANCES content survives into the rendered Section D rather than being
+// silently dropped on a re-download.
+function formatLegacyAllowanceBullet(a: { item?: string; footage?: number | string; unit?: string; notes?: string }): string {
+  const item = toStr(a.item).trim();
+  const footage = toStr(a.footage).trim();
+  const unit = toStr(a.unit).trim();
+  const notes = toStr(a.notes).trim();
+  const isLf = !unit || unit.toUpperCase() === 'LF';
+  const qty = footage || '0';
+  const base = isLf
+    ? `${qty}' allowance — ${item}`
+    : `${qty} ${unit} allowance — ${item}`;
+  return notes ? `${base} (${notes})` : base;
+}
+
 /**
  * Maps the pre-Phase-3 ProposalJSON shape onto Partial<BidData>. Deliberately
  * NOT required to satisfy validateBidData or the verify gate (an old
@@ -270,6 +293,17 @@ export function legacyProposalToBidData(old: LegacyProposalJSON): Partial<BidDat
       bullets: (sow[key] ?? []).map(toStr).filter(b => b.trim().length > 0),
     }))
     .filter(s => s.bullets.length > 0);
+
+  // FIX-2 — fold old-shape allowances into Section D, appending to whatever
+  // bullets D already has (creating the section if it was empty/absent).
+  const allowanceBullets = (old.allowances ?? [])
+    .map(formatLegacyAllowanceBullet)
+    .filter(b => b.trim().length > 0);
+  if (allowanceBullets.length) {
+    const d = sections.find(s => s.title === SECTION_HEADERS.D);
+    if (d) d.bullets.push(...allowanceBullets);
+    else sections.push({ title: SECTION_HEADERS.D, bullets: allowanceBullets });
+  }
 
   const takeoffByCategory = new Map<string, TakeoffCategory>();
   for (const t of old.takeoff ?? []) {

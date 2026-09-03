@@ -176,4 +176,17 @@ describe('buildProposalDocx (legacy compat path)', () => {
     const buf = await buildProposalDocx({}, { projectName: 'Empty Test', totalPrice: '$1,000' });
     expect(buf.length).toBeGreaterThan(0);
   });
+
+  // FIX-2 — a legacy row's priced allowances[] must not be silently dropped
+  // on a re-download; they render as Section D bullets.
+  it('folds legacy allowances[] into a rendered Section D bullet', async () => {
+    const legacyWithAllowances: ProposalJSON = {
+      ...legacy,
+      allowances: [{ item: 'Underground conduit', footage: 400, unit: 'LF', notes: 'Per site plan' }],
+    };
+    const buf = await buildProposalDocx(legacyWithAllowances);
+    const text = extractDocxText(buf);
+    expect(text).toContain('D. Site Lighting, Underground Work & Allowances');
+    expect(text).toMatch(/400' allowance — Underground conduit \(Per site plan\)/);
+  });
 });
