@@ -569,7 +569,6 @@ async function runPipeline(
         client.messages.stream({
           model: config.model,
           max_tokens: config.maxTokensA1,
-          temperature: config.temperature,
           system: [{ type: 'text', text: config.promptA1 || AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: contentBlocks }],
         }).finalMessage()
@@ -608,8 +607,7 @@ async function runPipeline(
           client.messages.stream({
             model: config.model,
             max_tokens: config.maxTokensA1,
-            temperature: config.temperature,
-            system: [{ type: 'text', text: config.promptA1 || AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
+              system: [{ type: 'text', text: config.promptA1 || AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
             messages: [{ role: 'user', content: contentBlocks }],
           }).finalMessage()
         , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
@@ -688,7 +686,6 @@ async function runPipeline(
     const resp = await callWithRetry(() => client.messages.create({
       model: config.modelA2,
       max_tokens: config.maxTokensA2,
-      temperature: config.temperature,
       system: [{ type: 'text', text: config.promptA2 || AGENT2_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
@@ -737,7 +734,6 @@ async function runPipeline(
     const resp = await callWithRetry(() => client.messages.create({
       model: config.modelA3,
       max_tokens: config.maxTokensA3,
-      temperature: config.temperature,
       system: [{ type: 'text', text: config.promptA3 || AGENT3_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{
         role: 'user',
@@ -1246,7 +1242,6 @@ router.post('/:bidId/prebid-analyze', requireAuth, requireAIPermission('run_anal
         const resp = await callWithRetry(() => client.messages.create({
           model: config.modelA2,
           max_tokens: config.maxTokensA2,
-          temperature: config.temperature,
           system: [{ type: 'text', text: PREBID_COMPARE_SYSTEM, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: `Compare these two pre-bid packages.\n\n${payload}` }],
         }), { onRetry: (a, _e, d) => console.warn(`[prebid-analyze] transient error, retry ${a} in ${d}ms`) });
@@ -1632,8 +1627,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
       const resp = await callWithRetry(() => client.messages.create({
         model: config.modelA4,
         max_tokens: config.maxTokensA4,
-        temperature: config.temperature,
-        system: [{ type: 'text', text: config.promptA4 || AGENT4_SYSTEM, cache_control: { type: 'ephemeral' } }],
+          system: [{ type: 'text', text: config.promptA4 || AGENT4_SYSTEM, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: userMsg }],
       }), { onRetry: (a, _e, d) => logger.warn(`[agent4] retry ${a} in ${d}ms`) });
 
