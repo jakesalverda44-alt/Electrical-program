@@ -310,7 +310,7 @@ export default function App() {
         elecProposalCount={elecProposalCount}
         genProjectCount={genProjectCount}
         elecProjectCount={elecProjectCount}
-        newIncoming={intakeCount}
+        intakeUnread={intakeCount}
         followupCount={followupCount}
         onNewProposal={() => setView('builder')}
         onNewBid={() => openNewBid()}
