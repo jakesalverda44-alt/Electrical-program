@@ -174,4 +174,49 @@ describe('POST /bids/:id/email-prebid-chris', () => {
       .expect(200);
     expect(res.body.to).toEqual(['chris@example.com']);
   });
+
+  // FIX-11 (post-review) — the recipient no longer has to be supplied by
+  // the caller: it resolves from the `prebid_chris_email` app_setting (the
+  // frontend stopped hardcoding it), falling back to the previously-
+  // hardcoded address when that setting is unset.
+  it('defaults the recipient to the previously-hardcoded address when no "to" is given and no setting is configured', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await createBid(u.token);
+    await pool.query(
+      `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data, gate_passed)
+       VALUES ($1,$2,'elec','scope.docx','scope.docx','prebid_scope',10,
+               'application/vnd.openxmlformats-officedocument.wordprocessingml.document','test',$3,true)`,
+      [bid.id, bid.id, Buffer.from('scope bytes').toString('base64')]
+    );
+    const res = await request(app).post(`/api/bids/${bid.id}/email-prebid-chris`).set(auth(u.token))
+      .send({})
+      .expect(200);
+    expect(res.body.to).toEqual(['chrise@accuratepowerandtechnology.com']);
+  });
+
+  it('uses the prebid_chris_email app_setting when configured and no "to" is given', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const admin = await makeUser('owner');
+    await request(app).put('/api/settings').set(auth(admin.token))
+      .send({ prebid_chris_email: 'chris.custom@example.com' })
+      .expect(200);
+
+    const bid = await createBid(admin.token);
+    await pool.query(
+      `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data, gate_passed)
+       VALUES ($1,$2,'elec','scope.docx','scope.docx','prebid_scope',10,
+               'application/vnd.openxmlformats-officedocument.wordprocessingml.document','test',$3,true)`,
+      [bid.id, bid.id, Buffer.from('scope bytes').toString('base64')]
+    );
+    const res = await request(app).post(`/api/bids/${bid.id}/email-prebid-chris`).set(auth(admin.token))
+      .send({})
+      .expect(200);
+    expect(res.body.to).toEqual(['chris.custom@example.com']);
+
+    // Reset so this doesn't leak into other tests in the same suite run.
+    await request(app).put('/api/settings').set(auth(admin.token))
+      .send({ prebid_chris_email: '' })
+      .expect(200);
+  });
 });

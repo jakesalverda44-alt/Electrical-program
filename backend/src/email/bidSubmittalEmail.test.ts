@@ -13,6 +13,10 @@ import {
 } from './bidSubmittalEmail';
 
 const BID: SubmittalBidLike = { name: 'Test Plaza', loc: '123 Main St, Orlando, FL', amount: 425_000 };
+// FIX-11 (post-review) — a decimal amount (the shape agent4_price/won_jobs
+// values actually carry: NUMERIC(12,2)) exercises formattings the integer
+// BID above never does ($248,750.00 / 248750.00).
+const DECIMAL_BID: SubmittalBidLike = { name: 'Test Plaza', loc: '123 Main St, Orlando, FL', amount: 248_750.00 };
 
 describe('defaultSubmittalSubject', () => {
   it('matches "[Project Name] – [Location] | Electrical Proposal" verbatim', () => {
@@ -84,6 +88,22 @@ describe('buildBidSubmittalHtml', () => {
       expect(htmlWithLink).not.toContain(needle);
     }
   });
+
+  // FIX-11 (post-review) — same guard, decimal amount variants ($248,750.00 /
+  // 248750.00), the shape a real bid's amount actually carries (NUMERIC(12,2)).
+  it('GUARD: never contains a decimal bid amount, in any formatting', () => {
+    const forbidden = ['248750.00', '248750', '248,750.00', '248,750', '$248,750.00', '$248750.00', '$248,750', '$248750'];
+    const subject = defaultSubmittalSubject(DECIMAL_BID);
+    const bodyText = defaultSubmittalBodyText(DECIMAL_BID);
+    const htmlNoLink = buildBidSubmittalHtml({ bodyText });
+    const htmlWithLink = buildBidSubmittalHtml({ bodyText, proposalLink: 'https://example.com/bp/abc123' });
+    for (const needle of forbidden) {
+      expect(subject).not.toContain(needle);
+      expect(bodyText).not.toContain(needle);
+      expect(htmlNoLink).not.toContain(needle);
+      expect(htmlWithLink).not.toContain(needle);
+    }
+  });
 });
 
 describe('internal Chris email', () => {
@@ -113,6 +133,14 @@ describe('internal Chris email', () => {
   it('GUARD: never contains the bid amount', () => {
     const html = buildPrebidChrisBodyHtml(BID);
     for (const needle of ['425000', '425,000', '$425,000']) {
+      expect(html).not.toContain(needle);
+    }
+  });
+
+  // FIX-11 (post-review) — decimal amount variant, same as the GC email's guard.
+  it('GUARD: never contains a decimal bid amount', () => {
+    const html = buildPrebidChrisBodyHtml(DECIMAL_BID);
+    for (const needle of ['248750.00', '248,750.00', '$248,750.00', '$248750.00']) {
       expect(html).not.toContain(needle);
     }
   });

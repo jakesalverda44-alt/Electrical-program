@@ -67,8 +67,11 @@ export function buildBidSubmittalHtml(opts: { bodyText: string; proposalLink?: s
 // A different email entirely (per the template): drafted, never sent.
 
 export function defaultPrebidChrisSubject(bid: SubmittalBidLike): string {
+  // FIX-11 (post-review) — this subject never included location (per the
+  // template's "[Project Name] – Pre-Bid Scope + Takeoff" verbatim, unlike
+  // the GC submittal subject which does); the `loc` local computed here was
+  // dead — removed.
   const project = (bid.name || '').trim() || 'Project';
-  const loc = (bid.loc || '').trim() || 'Location';
   return `${project} – Pre-Bid Scope + Takeoff`;
 }
 

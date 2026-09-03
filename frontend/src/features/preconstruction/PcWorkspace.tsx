@@ -690,7 +690,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     setRfiSubmitting(true);
     try {
       const { data } = await api.post(`/preconstruction/${bid.id}/rfi-draft`);
-      set({ rfis: ws.rfis.map(r => (r.submitted ? r : { ...r, submitted: true })) });
+      // FIX-11 (post-review) — mark ONLY the ids the server actually
+      // submitted (data.submittedIds), not every currently-unsubmitted RFI.
+      // A blank-question RFI is excluded server-side (rfi-draft only drafts
+      // RFIs with real question text) and must stay unsubmitted client-side
+      // too — marking it submitted here used to silently drift the UI from
+      // the actual server state.
+      const submittedIds = new Set<string>(data.submittedIds ?? []);
+      set({ rfis: ws.rfis.map(r => (submittedIds.has(r.id) ? { ...r, submitted: true } : r)) });
       showToast({
         title: `${data.submittedCount} RFI${data.submittedCount === 1 ? '' : 's'} drafted`,
         sub: 'Review and send from Outlook.',
@@ -880,16 +887,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }
   };
 
-  // Phase 4 Task 1.5 — internal draft to Chris (chrise@accuratepowerandtechnology.com,
-  // same "Chris" the pre-bid package template addresses) with the just-filed
-  // scope docx + takeoff xlsx attached. Never sends — Jake reviews in Outlook.
+  // Phase 4 Task 1.5 — internal draft to Chris (the same "Chris" the
+  // pre-bid package template addresses) with the just-filed scope docx +
+  // takeoff xlsx attached. Never sends — Jake reviews in Outlook.
+  // FIX-11 (post-review) — the recipient no longer hardcoded here: the
+  // server resolves it from the `prebid_chris_email` app_setting (falling
+  // back to the previously-hardcoded address if that setting is unset).
   const emailPrebidToChris = async () => {
     setChrisDraftBusy(true);
     setChrisDraftLink(null);
     try {
-      const { data } = await api.post(`/bids/${bid.id}/email-prebid-chris`, {
-        to: ['chrise@accuratepowerandtechnology.com'],
-      });
+      const { data } = await api.post(`/bids/${bid.id}/email-prebid-chris`, {});
       setChrisDraftLink(data.draftWebLink || null);
       showToast({ title: 'Draft created', sub: 'Review and send it from Outlook.' });
     } catch (err: unknown) {

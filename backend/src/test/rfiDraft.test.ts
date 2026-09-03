@@ -67,11 +67,38 @@ describe('POST /preconstruction/:bidId/rfi-draft', () => {
     const res = await request(app).post(`/api/preconstruction/${bidId}/rfi-draft`).set(auth(u.token)).expect(200);
     expect(res.body.submittedCount).toBe(2);
     expect(res.body.draftWebLink).toBeDefined();
+    // FIX-11 (post-review) — submittedIds is the exact list the client
+    // should use to mark rows submitted, rather than "everything currently
+    // unsubmitted."
+    expect(res.body.submittedIds.sort()).toEqual(['2', '3']);
 
     const { rows } = await pool.query('SELECT rfis FROM bid_workspaces WHERE bid_id=$1', [bidId]);
     const rfis = rows[0].rfis as { id: string; submitted: boolean }[];
     expect(rfis.find(r => r.id === '1')!.submitted).toBe(true);
     expect(rfis.find(r => r.id === '2')!.submitted).toBe(true);
     expect(rfis.find(r => r.id === '3')!.submitted).toBe(true);
+  });
+
+  // FIX-11 (post-review) — the client/server mismatch this test guards
+  // against: a blank-question RFI is excluded from `open` (server never
+  // drafts or marks it), so it must be absent from submittedIds and stay
+  // unsubmitted, even though the client used to mark every currently-
+  // unsubmitted RFI regardless.
+  it('excludes a blank-question RFI from submittedIds and leaves it unsubmitted', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bidId = await createBidWithContact(u.token, 'gc@example.com');
+    await seedRfis(bidId, [
+      { id: '1', question: 'Confirm service entrance rating.', submitted: false, answer: '' },
+      { id: '2', question: '   ', submitted: false, answer: '' },
+    ]);
+
+    const res = await request(app).post(`/api/preconstruction/${bidId}/rfi-draft`).set(auth(u.token)).expect(200);
+    expect(res.body.submittedIds).toEqual(['1']);
+
+    const { rows } = await pool.query('SELECT rfis FROM bid_workspaces WHERE bid_id=$1', [bidId]);
+    const rfis = rows[0].rfis as { id: string; submitted: boolean }[];
+    expect(rfis.find(r => r.id === '1')!.submitted).toBe(true);
+    expect(rfis.find(r => r.id === '2')!.submitted).toBe(false);
   });
 });

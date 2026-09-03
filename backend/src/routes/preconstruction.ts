@@ -1397,11 +1397,20 @@ router.post('/:bidId/rfi-draft', requireAuth, asyncHandler(async (req: AuthReque
     return res.status(502).json({ error: 'Could not create the draft. Check the mail configuration.' });
   }
 
-  const openIds = new Set(open.map(r => r.id));
-  const updatedRfis = rfis.map(r => (openIds.has(r.id) ? { ...r, submitted: true } : r));
+  const openIds = open.map(r => r.id);
+  const openIdSet = new Set(openIds);
+  const updatedRfis = rfis.map(r => (openIdSet.has(r.id) ? { ...r, submitted: true } : r));
   await pool.query('UPDATE bid_workspaces SET rfis=$1, updated_at=now() WHERE bid_id=$2', [JSON.stringify(updatedRfis), bidId]);
 
-  res.json({ draftWebLink: draft.webLink, submittedCount: open.length, rfis: updatedRfis });
+  // FIX-11 (post-review) — `submittedIds` is the actual list of RFI ids this
+  // call marked submitted (blank-question RFIs are excluded from `open`
+  // above and so never appear here). The client used to mark EVERY
+  // currently-unsubmitted RFI as submitted on any successful response,
+  // which drifted from this list the moment a blank-question RFI existed —
+  // it would show as submitted client-side while staying unsubmitted
+  // server-side. `rfis` (the full updated array) is still included too, as
+  // the more authoritative source of truth if a caller wants it.
+  res.json({ draftWebLink: draft.webLink, submittedCount: open.length, submittedIds: openIds, rfis: updatedRfis });
 }));
 
 // GET results for a bid

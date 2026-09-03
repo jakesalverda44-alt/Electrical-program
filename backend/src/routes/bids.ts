@@ -466,14 +466,24 @@ router.post('/:id/send-proposal', requireAuth, async (req: AuthRequest, res) => 
 
 // ── Phase 4 Task 1.5: the internal Chris pre-bid-package email ──────────────
 // A DRAFT, not a send — Jake reviews/sends from Outlook, same as notify-team.
+// FIX-11 (post-review) — the recipient used to be hardcoded in the frontend
+// (PcWorkspace.tsx). DEFAULT_PREBID_CHRIS_EMAIL is only the last-resort
+// fallback now — the real default lives in the `prebid_chris_email`
+// app_setting (Settings screen), configurable without a code change.
+const DEFAULT_PREBID_CHRIS_EMAIL = 'chrise@accuratepowerandtechnology.com';
+
 router.post('/:id/email-prebid-chris', requireAuth, async (req: AuthRequest, res) => {
   const bid = await loadOwnedBid(req, res);
   if (!bid) return;
 
-  const to = Array.isArray(req.body?.to)
+  let to = Array.isArray(req.body?.to)
     ? (req.body.to as unknown[]).map(e => String(e).trim()).filter(Boolean)
     : [];
-  if (!to.length) return res.status(400).json({ error: 'Add at least one recipient (Chris).' });
+  if (!to.length) {
+    const configured = (await getSetting('prebid_chris_email'))?.trim();
+    if (configured) to = [configured];
+  }
+  if (!to.length) to = [DEFAULT_PREBID_CHRIS_EMAIL];
 
   const scopeDoc = await loadMostRecentBidDoc(bid.id, 'prebid_scope', PROPOSAL_DOCX_MIME);
   const takeoffDoc = await loadMostRecentBidDoc(bid.id, 'prebid_takeoff', TAKEOFF_XLSX_MIME);
@@ -890,7 +900,23 @@ router.post('/p/:token/sign', publicSignLimiter, asyncHandler(async (req, res) =
   const name = String(signerName || '').trim();
   if (!name) return res.status(400).json({ error: 'Typed name required' });
 
+  // FIX-11 (post-review) — everything that can still fail the REQUEST (bad
+  // input, an unknown/stale token, a DB error) has to happen inside this
+  // try/catch, ending in either an early return or a COMMIT. Everything
+  // that happens AFTER a successful COMMIT — Drive folder moves, the audit
+  // write, the response itself, notifications — must live OUTSIDE it: the
+  // old shape had all of that inside the same try, so a throw from any of
+  // it landed in the catch below, which would attempt `client.query
+  // ('ROLLBACK')` (a harmless no-op post-commit) and then a SECOND
+  // `res.status(500).json(...)` — which throws ERR_HTTP_HEADERS_SENT if a
+  // response had already gone out. Post-commit failures are logged, never
+  // turned into a second response.
   const client = await pool.connect();
+  let preSign: Record<string, any>;
+  let signedBid: Record<string, any>;
+  let finalBid: Record<string, any>;
+  let wonJob: Record<string, unknown> | null = null;
+
   try {
     await client.query('BEGIN');
     // Locked so a double-tap / retry on a slow network can't race past the
@@ -900,7 +926,7 @@ router.post('/p/:token/sign', publicSignLimiter, asyncHandler(async (req, res) =
       [req.params.token]
     );
     if (!locked.length) { await client.query('ROLLBACK'); return res.status(404).json(PROPOSAL_NOT_FOUND); }
-    const preSign = locked[0];
+    preSign = locked[0];
 
     // Idempotent — a second sign attempt returns the already-signed state
     // unchanged, never re-stamps or re-awards.
@@ -943,7 +969,7 @@ router.post('/p/:token/sign', publicSignLimiter, asyncHandler(async (req, res) =
         WHERE id = $4 RETURNING *`,
       [name, signatureDataUrl, filedDoc?.id ?? null, preSign.id]
     );
-    const signedBid = signedRows[0];
+    signedBid = signedRows[0];
 
     await client.query(
       `INSERT INTO proposal_activity (bid_id, kind, direction, text) VALUES ($1,'signed','in',$2)`,
@@ -954,8 +980,7 @@ router.post('/p/:token/sign', publicSignLimiter, asyncHandler(async (req, res) =
     // PATCH /:id/stage drag uses (services/bidStage.ts) — won_job, project
     // registration, and the activity-feed entry all fire identically,
     // whether the trigger is a rep's drag or the customer's signature.
-    let finalBid = signedBid;
-    let wonJob: Record<string, unknown> | null = null;
+    finalBid = signedBid;
     if (signedBid.stage !== 'awarded') {
       const result = await transitionBidStage(client, signedBid, 'awarded');
       finalBid = result.bid;
@@ -963,90 +988,97 @@ router.post('/p/:token/sign', publicSignLimiter, asyncHandler(async (req, res) =
     }
 
     await client.query('COMMIT');
-
-    // Fire-and-forget Drive side effects — same helper the manual award
-    // path uses (PATCH /:id/stage), so folder moves/subfolder creation are
-    // byte-for-byte the same regardless of which door the award came through.
-    if (signedBid.stage !== 'awarded') {
-      applyBidStagePostCommit(signedBid, 'awarded', (err, phase) =>
-        logger.error({ err, phase, bidId: preSign.id }, '[bids] sign-triggered award Drive step failed'));
-    }
-
-    // FIX-8 (post-review) — a public, unauthenticated action has no
-    // req.user for the normal writeAudit(req, ...) to attribute this to
-    // (gens' public sign route has the same gap and also used to skip
-    // auditing entirely). writeAuditAs records it under an explicit
-    // system-actor label instead, so an award via e-signature still shows
-    // up in the audit trail — same 'award' action PATCH /:id/stage logs for
-    // a manual drag. Only fires when this call actually performed the
-    // award (never on the "already awarded" branch above).
-    if (signedBid.stage !== 'awarded') {
-      // Awaited (writeAuditAs never throws — it catches its own errors) so
-      // the audit_log row is guaranteed to exist by the time the caller
-      // sees the 200 response below.
-      await writeAuditAs({ id: null, name: `Customer e-signature (${name})` }, {
-        action: 'award', entityType: 'bid', entityId: preSign.id,
-        summary: `Awarded bid "${finalBid.name}" (${finalBid.gc}) via e-signature — $${Number(finalBid.amount || 0).toLocaleString()}`,
-        before: { stage: signedBid.stage }, after: { stage: 'awarded', value: finalBid.amount },
-      });
-    }
-
-    res.json({ ok: true, bid: publicBidProjection(finalBid), wonJob });
-
-    // Fire-and-forget: notify Jake — in-app notification + web push + a
-    // team-mailbox email heads-up. Mirrors gens.ts's /p/:token/sign exactly.
-    (async () => {
-      try {
-        const raw = await getSetting('notifications_json');
-        const notifPrefs = raw ? JSON.parse(raw) : {};
-        if (!notifPrefs.proposal_signed) return;
-        const targets = finalBid.salesperson_id ? [finalBid.salesperson_id] : await ownerAdminIds();
-        for (const uid of targets) {
-          await createNotification(uid, {
-            type: 'bid_proposal_signed',
-            title: 'Proposal signed',
-            body: `${finalBid.name} (${finalBid.gc}) accepted and signed their proposal`,
-            linkView: 'electrical/bids',
-            linkId: finalBid.id,
-            dedupKey: `bidsigned:${finalBid.id}`,
-          });
-        }
-        const amt = Number(finalBid.amount || 0);
-        sendPushToUsers(targets, {
-          title: '🎉 Proposal signed',
-          body: `${finalBid.name}${amt ? ` — $${amt.toLocaleString()}` : ''}`,
-          view: 'electrical/bids',
-          id: finalBid.id,
-          tag: `bidsigned:${finalBid.id}`,
-        }).catch(() => {});
-      } catch (err) {
-        logger.error({ err }, '[notify] bid proposal signed notification failed');
-      }
-    })();
-
-    if (isGraphMailConfigured()) {
-      (async () => {
-        try {
-          const amt = Number(finalBid.amount || 0);
-          await graphSendMail({
-            to: TEAM_NOTIFY_TO,
-            subject: `🎉 Proposal signed — ${finalBid.name}${amt ? ` ($${amt.toLocaleString()})` : ''}`,
-            html: `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.6;">
-              <p><b>${escapeHtml(finalBid.gc)}</b> just signed the electrical proposal for <b>${escapeHtml(finalBid.name)}</b>${amt ? ` — <b>$${amt.toLocaleString()}</b>` : ''}.</p>
-              <p>Signed by ${escapeHtml(name)}. The job has been automatically moved to Awarded.</p>
-            </div>`,
-          });
-        } catch (err) {
-          logger.error({ err, bidId: preSign.id }, '[notify] bid proposal signed email failed');
-        }
-      })();
-    }
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     logger.error({ err }, '[bids] sign failed');
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   } finally {
     client.release();
+  }
+
+  // Transaction committed successfully — the sign + (possible) award is
+  // durable. Everything below is best-effort follow-through: it must never
+  // throw into a second response. The Drive move + audit write are awaited
+  // (both are internally error-safe) so they're guaranteed done by the time
+  // the caller sees the 200 below; the extra try/catch here is belt-and-
+  // suspenders against a future change to either making that untrue.
+  const justAwarded = signedBid!.stage !== 'awarded';
+  try {
+    if (justAwarded) {
+      // Fire-and-forget Drive side effects — same helper the manual award
+      // path uses (PATCH /:id/stage), so folder moves/subfolder creation
+      // are byte-for-byte the same regardless of which door the award came
+      // through.
+      applyBidStagePostCommit(signedBid!, 'awarded', (err, phase) =>
+        logger.error({ err, phase, bidId: preSign!.id }, '[bids] sign-triggered award Drive step failed'));
+
+      // FIX-8 (post-review) — a public, unauthenticated action has no
+      // req.user for the normal writeAudit(req, ...) to attribute this to
+      // (gens' public sign route has the same gap and also used to skip
+      // auditing entirely). writeAuditAs records it under an explicit
+      // system-actor label instead, so an award via e-signature still
+      // shows up in the audit trail — same 'award' action PATCH /:id/stage
+      // logs for a manual drag. Only fires when THIS call performed the
+      // award.
+      await writeAuditAs({ id: null, name: `Customer e-signature (${name})` }, {
+        action: 'award', entityType: 'bid', entityId: preSign!.id,
+        summary: `Awarded bid "${finalBid!.name}" (${finalBid!.gc}) via e-signature — $${Number(finalBid!.amount || 0).toLocaleString()}`,
+        before: { stage: signedBid!.stage }, after: { stage: 'awarded', value: finalBid!.amount },
+      });
+    }
+  } catch (err) {
+    logger.error({ err, bidId: preSign!.id }, '[bids] sign post-commit follow-through failed');
+  }
+
+  res.json({ ok: true, bid: publicBidProjection(finalBid!), wonJob });
+
+  // Fire-and-forget: notify Jake — in-app notification + web push + a
+  // team-mailbox email heads-up. Mirrors gens.ts's /p/:token/sign exactly.
+  (async () => {
+    try {
+      const raw = await getSetting('notifications_json');
+      const notifPrefs = raw ? JSON.parse(raw) : {};
+      if (!notifPrefs.proposal_signed) return;
+      const targets = finalBid!.salesperson_id ? [finalBid!.salesperson_id] : await ownerAdminIds();
+      for (const uid of targets) {
+        await createNotification(uid, {
+          type: 'bid_proposal_signed',
+          title: 'Proposal signed',
+          body: `${finalBid!.name} (${finalBid!.gc}) accepted and signed their proposal`,
+          linkView: 'electrical/bids',
+          linkId: finalBid!.id,
+          dedupKey: `bidsigned:${finalBid!.id}`,
+        });
+      }
+      const amt = Number(finalBid!.amount || 0);
+      sendPushToUsers(targets, {
+        title: '🎉 Proposal signed',
+        body: `${finalBid!.name}${amt ? ` — $${amt.toLocaleString()}` : ''}`,
+        view: 'electrical/bids',
+        id: finalBid!.id,
+        tag: `bidsigned:${finalBid!.id}`,
+      }).catch(() => {});
+    } catch (err) {
+      logger.error({ err }, '[notify] bid proposal signed notification failed');
+    }
+  })();
+
+  if (isGraphMailConfigured()) {
+    (async () => {
+      try {
+        const amt = Number(finalBid!.amount || 0);
+        await graphSendMail({
+          to: TEAM_NOTIFY_TO,
+          subject: `🎉 Proposal signed — ${finalBid!.name}${amt ? ` ($${amt.toLocaleString()})` : ''}`,
+          html: `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.6;">
+            <p><b>${escapeHtml(finalBid!.gc)}</b> just signed the electrical proposal for <b>${escapeHtml(finalBid!.name)}</b>${amt ? ` — <b>$${amt.toLocaleString()}</b>` : ''}.</p>
+            <p>Signed by ${escapeHtml(name)}. The job has been automatically moved to Awarded.</p>
+          </div>`,
+        });
+      } catch (err) {
+        logger.error({ err, bidId: preSign!.id }, '[notify] bid proposal signed email failed');
+      }
+    })();
   }
 }));
 

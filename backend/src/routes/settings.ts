@@ -45,6 +45,12 @@ const ALLOWED_KEYS = [
   // proposalQuietSweep.ts already reads both (numericSetting, with
   // defaults) — this just lets a save actually reach them.
   'elec_followup_quiet_days', 'elec_followup_viewed_days',
+  // FIX-11 (post-review) — the internal pre-bid-package recipient
+  // ("Chris") was hardcoded in the frontend (PcWorkspace.tsx). Moved to an
+  // app_setting so it's configurable without a code change; the server
+  // (POST /bids/:id/email-prebid-chris) reads it and defaults to the
+  // previously-hardcoded address when unset.
+  'prebid_chris_email',
 ];
 
 const INTERNAL_KEYS = ['jwt_secret'];

@@ -127,7 +127,9 @@ describe('PcWorkspace RFI tab — Submit to GC (Task 5.1)', () => {
     baseMocks({});
     post.mockImplementation((url: string) => {
       if (url === `/preconstruction/${bid.id}/rfi-draft`) {
-        return Promise.resolve({ data: { draftWebLink: 'https://outlook.office.com/draft/1', submittedCount: 1 } });
+        // FIX-11 (post-review) — the client now marks rows submitted from
+        // submittedIds, not "everything currently unsubmitted."
+        return Promise.resolve({ data: { draftWebLink: 'https://outlook.office.com/draft/1', submittedCount: 1, submittedIds: ['r1'] } });
       }
       return Promise.resolve({ data: {} });
     });
@@ -142,6 +144,40 @@ describe('PcWorkspace RFI tab — Submit to GC (Task 5.1)', () => {
     const row = screen.getByText('Confirm service entrance rating.').closest('tr')!;
     await waitFor(() => expect(within(row).getByText('Submitted')).toBeTruthy());
     expect(screen.queryByText(/Submit.*Open RFI/)).toBeNull();
+  });
+
+  // FIX-11 (post-review) — the mismatch this locks against: a blank-question
+  // RFI is never included in the server's submittedIds (rfi-draft only
+  // drafts RFIs with real question text), so it must stay unsubmitted
+  // client-side too, even when the batch call otherwise succeeds.
+  it('leaves a blank-question RFI unsubmitted when submittedIds excludes it', async () => {
+    baseMocks({});
+    post.mockImplementation((url: string) => {
+      if (url === `/preconstruction/${bid.id}/rfi-draft`) {
+        return Promise.resolve({ data: { draftWebLink: 'https://outlook.office.com/draft/1', submittedCount: 1, submittedIds: ['r1'] } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    renderRfiTab([
+      { id: 'r1', question: 'Confirm service entrance rating.', submitted: false, answer: '' },
+      { id: 'r2', question: '   ', submitted: false, answer: '' },
+    ]);
+
+    await waitFor(() => expect(screen.getByText(/Submit \d+ Open RFIs? to GC/)).toBeTruthy());
+    fireEvent.click(screen.getByText(/Submit \d+ Open RFIs? to GC/));
+
+    const submittedRow = await waitFor(() => screen.getByText('Confirm service entrance rating.').closest('tr')!);
+    await waitFor(() => expect(within(submittedRow).getByText('Submitted')).toBeTruthy());
+
+    // Exactly ONE RFI table row shows "Submitted" — the blank-question row
+    // (excluded from submittedIds) still shows "Draft", not "Submitted".
+    // (Scoped to <tbody> rows — the step progress bar elsewhere on the page
+    // has its own unrelated "Submitted" label.)
+    const rfiRows = within(submittedRow.closest('tbody')!).getAllByRole('row');
+    expect(rfiRows).toHaveLength(2);
+    const statuses = rfiRows.map(r => within(r).getByRole('cell', { name: /Submitted|Draft/ }).textContent);
+    expect(statuses.filter(s => s === 'Submitted')).toHaveLength(1);
+    expect(statuses.filter(s => s === 'Draft')).toHaveLength(1);
   });
 
   it('the batch submit button is hidden once there are no open RFIs', async () => {
