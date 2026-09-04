@@ -176,6 +176,8 @@ export interface Toast {
   title: string;
   sub?: string;
   action?: { label: string; onClick: () => void };
+  /** Defaults to 'success'. See components/Toast.tsx. */
+  variant?: 'success' | 'error' | 'info';
 }
 
 export interface Customer {

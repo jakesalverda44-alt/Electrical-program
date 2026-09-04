@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import { WonJob } from '../../types';
 import { isPrivileged } from '../../hooks/useAuth';
 import api from '../../api/client';
+import { useMutation } from '../../hooks/useMutation';
 import WonReports from './WonReports';
 import { moneyFull } from '../../lib/money';
 
@@ -24,12 +25,23 @@ export default function SalesByRepPage({ wonJobs, userRole }: Props) {
   const [rows, setRows] = useState<WonJob[]>(wonJobs);
   useEffect(() => setRows(wonJobs), [wonJobs]);
 
-  const togglePaid = async (j: WonJob) => {
+  // This was the one site in the tree already rolling back correctly (the audit
+  // called it out as the template). It just never said anything on failure, so
+  // the toggle appeared to flip back on its own.
+  const { run: runTogglePaid } = useMutation(
+    async (j: WonJob, next: 'paid' | 'earned') => { await api.patch(`/won-jobs/${j.id}/commission`, { status: next }); },
+    {
+      optimistic: (j, next) => {
+        setRows(prev => prev.map(r => r.id === j.id ? { ...r, commission_status: next } : r));
+        return () => setRows(prev => prev.map(r => r.id === j.id ? { ...r, commission_status: j.commission_status } : r));
+      },
+      errorToast: (message) => ({ title: 'Commission not updated', sub: message }),
+    },
+  );
+
+  const togglePaid = (j: WonJob) => {
     if (!canManage) return;
-    const next = j.commission_status === 'paid' ? 'earned' : 'paid';
-    setRows(prev => prev.map(r => r.id === j.id ? { ...r, commission_status: next } : r));
-    try { await api.patch(`/won-jobs/${j.id}/commission`, { status: next }); }
-    catch { setRows(prev => prev.map(r => r.id === j.id ? { ...r, commission_status: j.commission_status } : r)); }
+    runTogglePaid(j, j.commission_status === 'paid' ? 'earned' : 'paid');
   };
 
   // Dynamic salesperson list from data

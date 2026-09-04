@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../../../api/client';
+import { useMutation } from '../../../hooks/useMutation';
 import Icon from '../../../components/Icon';
 import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
@@ -8,16 +9,17 @@ import { Field, SectionTitle, SaveBar, Toggle, RolePill, inputStyle, initials, t
 export function SecuritySection({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
   const [timeout, setTimeout_] = useState(settings.security_session_timeout || '480');
   const [orig, setOrig] = useState(settings.security_session_timeout || '480');
-  const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
 
   useEffect(() => { setTimeout_(settings.security_session_timeout || '480'); setOrig(settings.security_session_timeout || '480'); }, [settings]);
 
-  const save = async () => {
-    setSaving(true);
-    try { await api.put('/settings', { security_session_timeout: timeout }); setOrig(timeout); onSaved(); setSaved(true); setTimeout(() => setSaved(false), 3000); }
-    finally { setSaving(false); }
-  };
+  const { run: save, saving } = useMutation(
+    async () => { await api.put('/settings', { security_session_timeout: timeout }); },
+    {
+      onSuccess: () => { setOrig(timeout); onSaved(); setSaved(true); setTimeout(() => setSaved(false), 3000); },
+      errorTitle: 'Could not save security settings',
+    },
+  );
 
   return (
     <div>

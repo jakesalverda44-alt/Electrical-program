@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../../api/client';
+import { useMutation } from '../../../hooks/useMutation';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, Toggle, inputStyle } from '../shared';
 
@@ -18,7 +19,6 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
   const [awardEmails, setAwardEmails] = useState<string[]>(parseEmails(settings.award_recipients));
   const [awardEmailIn, setAwardEmailIn] = useState('');
   const [orig, setOrig] = useState('');
-  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [testTo, setTestTo] = useState('');
   const [testing, setTesting] = useState(false);
@@ -50,20 +50,24 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
     setAwardEmailIn('');
   };
 
-  const save = async () => {
-    setSaving(true);
-    try {
+  const { run: save, saving } = useMutation(
+    async () => {
       await api.put('/settings', {
         ...vals,
         bid_notify_enabled: bidOn ? 'true' : 'false',
         bid_notify_emails: JSON.stringify(emails),
         award_recipients: JSON.stringify(awardEmails),
       });
-      setOrig(snapshot(vals, bidOn, emails, awardEmails));
-      onSaved();
-      setSaved(true); setTimeout(() => setSaved(false), 3000);
-    } finally { setSaving(false); }
-  };
+    },
+    {
+      onSuccess: () => {
+        setOrig(snapshot(vals, bidOn, emails, awardEmails));
+        onSaved();
+        setSaved(true); setTimeout(() => setSaved(false), 3000);
+      },
+      errorTitle: 'Could not save email settings',
+    },
+  );
 
   const testSend = async () => {
     setTesting(true); setTestResult('idle');

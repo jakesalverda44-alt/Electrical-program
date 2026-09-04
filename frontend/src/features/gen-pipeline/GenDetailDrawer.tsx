@@ -5,6 +5,7 @@ import { GEN_STAGES, GenStageKey } from './constants';
 import RecordFiles from '../../components/RecordFiles';
 import { moneyFull } from '../../lib/money';
 import api from '../../api/client';
+import { useMutation } from '../../hooks/useMutation';
 import BuildFromNotesModal from '../builder/BuildFromNotesModal';
 import AwardKickoffModal, { useKickoffDocs, kickoffStatus, KICKOFF_ROWS } from './AwardKickoffModal';
 import SiteVisitChecklist from './SiteVisitChecklist';
@@ -58,11 +59,9 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
   const canDelete = isPrivileged(useUser());
   const showToast = useShowToast();
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed' || gen.stage === 'superseded';
-  const [closingJob, setClosingJob] = useState(false);
   const [showBuildNotes, setShowBuildNotes] = useState(false);
   const [editing, setEditing] = useState(false);
   const [tab, setTab] = useState<'overview' | 'checklist' | 'survey'>('overview');
-  const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<Draft>({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '', date_won: '' });
   const [showKickoff, setShowKickoff] = useState(!!autoKickoff);
   const [showSend, setShowSend] = useState(false);
@@ -92,9 +91,8 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
     setEditing(true);
   };
 
-  const saveEdit = async () => {
-    setSaving(true);
-    try {
+  const { run: saveEdit, saving } = useMutation(
+    async () => {
       const { data } = await api.patch(`/gens/${gen.id}`, {
         customer: draft.customer.trim(),
         loc: draft.loc.trim(),
@@ -105,14 +103,17 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
         addons: Number(draft.addons) || 0,
         ...(gen.stage === 'awarded' && draft.date_won ? { date_won: draft.date_won } : {}),
       });
-      const updated = data.gen ?? data;
-      onUpdated(updated, data.wonJob ?? null);
-      setEditing(false);
-      showToast({ title: 'Details updated', sub: updated.customer });
-    } finally {
-      setSaving(false);
-    }
-  };
+      return data;
+    },
+    {
+      onSuccess: (data) => {
+        onUpdated(data.gen ?? data, data.wonJob ?? null);
+        setEditing(false);
+      },
+      successToast: (data) => ({ title: 'Details updated', sub: (data.gen ?? data).customer }),
+      errorTitle: 'Could not save those details',
+    },
+  );
 
   const set = (k: keyof Draft) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setDraft(d => ({ ...d, [k]: e.target.value }));
@@ -157,19 +158,21 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
         ? { title: 'Checklist auto-filled from sizer', sub: 'Open the Checklist tab to review' }
         : { title: 'Sizer uploaded', sub: "Couldn't read checklist data from it" });
     } catch {
-      showToast({ title: 'Sizer uploaded', sub: 'Auto-fill failed — enter checklist manually' });
+      showToast({ variant: 'info', title: 'Sizer uploaded', sub: 'Auto-fill failed — enter checklist manually' });
     }
   };
 
-  const handleCloseJob = async () => {
-    if (!window.confirm(`Mark "${gen.customer}" as closed/complete? This will move the Drive folder to Completed Generator Jobs and remove it from the active pipeline.`)) return;
-    setClosingJob(true);
-    try {
+  const { run: runCloseJob, saving: closingJob } = useMutation(
+    async () => {
       const { data } = await api.post(`/gens/${gen.id}/close`);
-      onClosed(data);
-    } finally {
-      setClosingJob(false);
-    }
+      return data;
+    },
+    { onSuccess: (data) => onClosed(data), errorTitle: 'Could not close this job' },
+  );
+
+  const handleCloseJob = () => {
+    if (!window.confirm(`Mark "${gen.customer}" as closed/complete? This will move the Drive folder to Completed Generator Jobs and remove it from the active pipeline.`)) return;
+    runCloseJob();
   };
 
   return (

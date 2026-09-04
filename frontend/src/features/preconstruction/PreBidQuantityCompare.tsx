@@ -1,7 +1,7 @@
 // Per-category quantity comparison + cost drivers for the Pre-Bid tab. Both panels read
 // the same GET /compare?kind=prebid payload, so they share one fetch.
-import { useEffect, useState } from 'react';
-import api from '../../api/client';
+
+import { useApi } from '../../hooks/useApi';
 import { per1kSf } from '../bid-hub/compareMath';
 
 interface Subcategory { name: string; itemCount: number; totals: Record<string, number> }
@@ -61,25 +61,13 @@ function findDrivers(subject: CompareJob | undefined, comp: CompareJob | undefin
 export default function PreBidQuantityCompare({ bidId, compId, compName }: {
   bidId: string; compId: string; compName: string;
 }) {
-  const [jobs, setJobs] = useState<CompareJob[]>([]);
-  const [categoryNames, setCategoryNames] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    api.get(`/preconstruction/${bidId}/compare`, { params: { kind: 'prebid', against: compId } })
-      .then(r => {
-        if (cancelled) return;
-        setJobs(r.data?.jobs ?? []);
-        setCategoryNames(r.data?.categoryNames ?? []);
-      })
-      .catch(() => { if (!cancelled) setError('Could not load the quantity comparison.'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [bidId, compId]);
+  const { data, loading, error: loadError } = useApi<{ jobs?: CompareJob[]; categoryNames?: string[] }>(
+    `/preconstruction/${bidId}/compare`,
+    { params: { kind: 'prebid', against: compId } },
+  );
+  const jobs = data?.jobs ?? [];
+  const categoryNames = data?.categoryNames ?? [];
+  const error = loadError ? 'Could not load the quantity comparison.' : null;
 
   if (loading) return <div style={{ padding: 16, fontSize: 12.5, color: 'var(--muted)' }}>Loading comparison…</div>;
   if (error) return <div style={{ padding: 16, fontSize: 12.5, color: 'var(--amber)' }}>{error}</div>;

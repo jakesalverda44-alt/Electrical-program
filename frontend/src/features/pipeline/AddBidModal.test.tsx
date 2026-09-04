@@ -34,7 +34,8 @@ describe('AddBidModal comps preview', () => {
     });
     render(<AddBidModal onClose={() => {}} onAdded={() => {}}/>);
     fireEvent.change(screen.getByLabelText(/brand/i), { target: { value: 'Old Brand' } });
-    await waitFor(() => expect(get).toHaveBeenCalledWith(expect.stringContaining('comparables-preview')), { timeout: 2000 });
+    // useApi passes an axios config (params + abort signal) as the second arg.
+    await waitFor(() => expect(get).toHaveBeenCalledWith(expect.stringContaining('comparables-preview'), expect.anything()), { timeout: 2000 });
 
     // Clear the query before the in-flight request resolves.
     fireEvent.change(screen.getByLabelText(/brand/i), { target: { value: '' } });

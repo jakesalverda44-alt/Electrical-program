@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import api from '../api/client';
+import { clearSession, isTokenExpired, signalUnauthorized } from '../api/session';
 import { User } from '../types';
 
 // Roles with administrative rights (mirror of the backend PRIVILEGED_ROLES).
@@ -26,9 +27,24 @@ export function useAuth() {
     () => new URLSearchParams(window.location.search).get('mscode')
   );
 
+  // Restoring a session is not just "is there a user in storage": an expired or
+  // unparseable token used to boot the app fully signed in, fire the bootstrap
+  // requests, collect 401s and only then eject the user (audit code #7). Treat
+  // anything we cannot vouch for as signed out, and clear it on the way past so
+  // the next reload does not repeat the flash.
   const [user, setUser] = useState<User | null>(() => {
-    const s = localStorage.getItem('crm_user');
-    return s ? JSON.parse(s) : null;
+    const stored = localStorage.getItem('crm_user');
+    if (!stored) return null;
+    if (isTokenExpired(localStorage.getItem('crm_token'))) {
+      clearSession();
+      return null;
+    }
+    try {
+      return JSON.parse(stored) as User;
+    } catch {
+      clearSession();
+      return null;
+    }
   });
 
   // Handle ?mscode=... redirect from Microsoft OAuth: exchange the one-time
@@ -46,7 +62,9 @@ export function useAuth() {
         setUser(data.user as User);
       } catch {
         window.history.replaceState({}, '', window.location.pathname);
-        window.location.href = '/login?error=' + encodeURIComponent('Microsoft sign-in failed. Please try again.');
+        // Route rather than reload: App.tsx's crm:unauthorized listener puts us
+        // on /login with this message.
+        signalUnauthorized({ next: '/dashboard', error: 'Microsoft sign-in failed. Please try again.' });
       }
     })();
   }, [pendingMsCode]);
@@ -60,8 +78,7 @@ export function useAuth() {
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('crm_token');
-    localStorage.removeItem('crm_user');
+    clearSession();
     setUser(null);
   }, []);
 

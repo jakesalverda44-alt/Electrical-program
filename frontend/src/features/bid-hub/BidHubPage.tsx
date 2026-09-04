@@ -6,6 +6,7 @@ import { PcWorkspace, blankWorkspace } from '../preconstruction/constants';
 import PcWorkspaceView from '../preconstruction/PcWorkspace';
 import { ELEC_STAGES } from '../pipeline/constants';
 import { useUser, useShowToast, useSettings } from '../../contexts/AppContext';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import OverviewTab from './OverviewTab';
 import ActivityTab from './ActivityTab';
 import BidCompare from '../preconstruction/BidCompare';
@@ -41,6 +42,7 @@ export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, o
   const tab: HubTab = HUB_TABS.some(t => t.key === rawTab) ? (rawTab as HubTab) : 'overview';
 
   const bid = bids.find(b => b.id === bidId);
+  usePageTitle(bid ? bid.name : 'Bid');
 
   React.useEffect(() => {
     if (!pcData[bidId] && bid) {

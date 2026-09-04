@@ -22,19 +22,42 @@ import { coerceGenTab, coerceElecTab } from './features/hubs/constants';
 import { resolveLegacyPath } from './lib/legacyRoutes';
 import { PcWorkspace, PC_TABS, ConfirmedService } from './features/preconstruction/constants';
 import Toast from './components/Toast';
+import ErrorBoundary from './components/ErrorBoundary';
+import BootError from './components/BootError';
+import NotFound from './components/NotFound';
+import Icon from './components/Icon';
+import { usePageTitle } from './hooks/usePageTitle';
 import { AppProviders } from './contexts/AppContext';
-import api from './api/client';
+import { useConfirmLeave } from './contexts/UnsavedGuardContext';
+import { UNAUTHORIZED_EVENT, UnauthorizedDetail } from './api/session';
+import { useApi } from './hooks/useApi';
 import { Bid, Gen, WonJob, Activity } from './types';
 
-function StubPage({ title }: { title: string }) {
-  return (
-    <div className="scroll view-enter">
-      <div style={{ padding: 32, color: 'var(--text2)', fontSize: 15 }}>
-        <b>{title}</b> — coming soon
-      </div>
-    </div>
-  );
+interface DashboardPayload {
+  bids: Bid[];
+  gens: Gen[];
+  wonJobs: WonJob[];
+  activity: Activity[];
 }
+
+// StubPage is gone: every view in the switch below is shipped, so there was no
+// genuinely-planned view left for it to represent — and its "coming soon" copy
+// was what made a typo'd URL look like a feature (audit code #17 / ux #17).
+
+/** Tab title per view; the record-level pages set their own from the record. */
+const VIEW_TITLES: Record<string, string> = {
+  dashboard: 'Dashboard',
+  generators: 'Generators',
+  electrical: 'Electrical',
+  'sales-by-rep': 'Sales by Rep',
+  builder: 'Proposal Builder',
+  contacts: 'Contacts',
+  calendar: 'Calendar',
+  followups: 'Follow-ups',
+  comms: 'Communications',
+  docs: 'Documents',
+  admin: 'Settings',
+};
 
 export default function App() {
   const { user, login, logout } = useAuth();
@@ -57,9 +80,16 @@ export default function App() {
   // Old flat view URLs (bookmarks, backend-emitted links) redirect permanently to their
   // new hub path; resolves to null for anything that isn't a legacy key.
   const legacyTarget = resolveLegacyPath(location.pathname);
+  // Every in-app navigation goes through here — the sidebar and mobile nav
+  // (AppShell's `onNav`), the hub tab switches, global search, notification
+  // deep links — so guarding this one function covers all of them, and
+  // `useNavigate` is used nowhere else in the tree.
+  const confirmLeave = useConfirmLeave();
   const setView = useCallback(
-    (v: string, recordId?: string) => navigate('/' + v + (recordId ? '/' + encodeURIComponent(recordId) : '')),
-    [navigate],
+    (v: string, recordId?: string) => confirmLeave(
+      () => navigate('/' + v + (recordId ? '/' + encodeURIComponent(recordId) : '')),
+    ),
+    [navigate, confirmLeave],
   );
   // Strip a deep-link record id back out of the URL once the page has opened it.
   // Hub views must keep the tab segment and only drop the record id.
@@ -71,7 +101,6 @@ export default function App() {
   const [wonJobs, setWonJobs] = useState<WonJob[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
   const [repNames, setRepNames] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
   const [flashId, setFlashId] = useState<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
@@ -88,17 +117,31 @@ export default function App() {
     flashTimer.current = setTimeout(() => setFlashId(null), 1800);
   }, []);
 
+  // Three independent reads rather than one Promise.all: a failing /users or
+  // /preconstruction/workspaces used to reject the whole chain and leave the app
+  // rendering a legitimate-looking "no records" state for the entire pipeline.
+  const dashApi = useApi<DashboardPayload>('/dashboard', { enabled: !!user });
+  const usersApi = useApi<Array<{ name: string }>>('/users', { enabled: !!user });
+  const workspacesApi = useApi<Array<Record<string, unknown>>>('/preconstruction/workspaces', { enabled: !!user });
+
   useEffect(() => {
-    if (!user) return;
-    setLoading(true);
-    Promise.all([api.get('/dashboard'), api.get('/users'), api.get('/preconstruction/workspaces')])
-      .then(([dash, users, workspaces]) => {
-        const bidsData: Bid[] = dash.data.bids;
-        setBids(bidsData);
-        setGens(dash.data.gens);
-        setWonJobs(dash.data.wonJobs);
-        setActivity(dash.data.activity);
-        setRepNames(users.data.map((u: { name: string }) => u.name));
+    if (!dashApi.data) return;
+    setBids(dashApi.data.bids);
+    setGens(dashApi.data.gens);
+    setWonJobs(dashApi.data.wonJobs);
+    setActivity(dashApi.data.activity);
+  }, [dashApi.data]);
+
+  useEffect(() => {
+    if (!usersApi.data) return;
+    setRepNames(usersApi.data.map(u => u.name));
+  }, [usersApi.data]);
+
+  useEffect(() => {
+    const bidsData = dashApi.data?.bids;
+    const workspaceRows = workspacesApi.data;
+    if (!bidsData || !workspaceRows) return;
+    {
         // Restore persisted workspace state
         const restored: Record<string, PcWorkspace> = {};
         // 'compare' tab was retired from the workspace tab bar (Task 12) — Compare now
@@ -106,7 +149,7 @@ export default function App() {
         // active_tab='compare'; coerce anything not in the current tab list back to
         // 'overview' so restoring an old workspace never lands on a dead tab.
         const validTabs = new Set(PC_TABS.map(t => t.key as string));
-        for (const row of (workspaces.data as Array<Record<string, unknown>>)) {
+        for (const row of workspaceRows) {
           const bid = bidsData.find(b => b.id === row.bid_id);
           if (!bid) continue;
           const persistedTab = row.active_tab as string | undefined;
@@ -141,26 +184,65 @@ export default function App() {
           };
         }
         setPcData(restored);
-      })
-      .finally(() => setLoading(false));
-  }, [user]);
+    }
+  }, [dashApi.data, workspacesApi.data]);
 
   // Keep the Intake Inbox sidebar badge live (unread bids) regardless of the open page:
   // fetch on login and poll every 60s. Local actions (opening/importing) also update it
   // immediately via the page's onUnreadChange callback.
-  const loadIntakeUnread = useCallback(() => {
-    api.get('/intake/unread-count').then(r => setIntakeCount(r.data.unread ?? 0)).catch(() => {});
-  }, []);
+  // optional: a failed badge poll is not worth interrupting the user for — the
+  // count simply keeps its previous value until the next tick succeeds.
+  const intakeApi = useApi<{ unread?: number }>('/intake/unread-count', { enabled: !!user });
+  useEffect(() => {
+    if (intakeApi.data) setIntakeCount(intakeApi.data.unread ?? 0);
+  }, [intakeApi.data]);
+  const reloadIntakeUnread = intakeApi.reload;
   useEffect(() => {
     if (!user) return;
-    loadIntakeUnread();
-    const t = setInterval(loadIntakeUnread, 60_000);
+    const t = setInterval(reloadIntakeUnread, 60_000);
     return () => clearInterval(t);
-  }, [user, loadIntakeUnread]);
+  }, [user, reloadIntakeUnread]);
+
+  // The api client fires crm:unauthorized instead of hard-navigating, so an
+  // expired session becomes a client-side route change that remembers where the
+  // user was. Registered once, above the !user early return.
+  // The bootstrap fires several requests in parallel, so an expired session
+  // produces a BURST of 401s. Only the first one still knows where the user
+  // was — by the time the second arrives the path is already /login, and it
+  // computed an empty `next` and replaced the good one away. Latch on the first
+  // event and ignore the rest until a fresh sign-in.
+  const ejectedRef = useRef(false);
+  // The router's location, not window.location: the listener's deps are kept
+  // stable so it does not resubscribe on every navigation, and a ref is how it
+  // still reads the current page. (It also makes the eject testable under
+  // MemoryRouter, where window.location never moves.)
+  const herePathRef = useRef('');
+  herePathRef.current = location.pathname + location.search;
+  useEffect(() => {
+    const onUnauthorized = (e: Event) => {
+      if (ejectedRef.current) return;
+      ejectedRef.current = true;
+      const detail = (e as CustomEvent<UnauthorizedDetail>).detail ?? {};
+      const next = detail.next ?? herePathRef.current;
+      const params = new URLSearchParams();
+      if (next && next !== '/' && !next.startsWith('/login')) params.set('next', next);
+      if (detail.error) params.set('error', detail.error);
+      logout();
+      navigate('/login' + (params.toString() ? '?' + params.toString() : ''), { replace: true });
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, [logout, navigate]);
+
+  // Re-arm once a session exists again, so a later expiry still ejects.
+  useEffect(() => { if (user) ejectedRef.current = false; }, [user]);
 
   const handleLogin = async (email: string, password: string) => {
     await login(email, password);
-    navigate('/dashboard');
+    // Honour ?next= so an expired session returns the user to the page that
+    // bounced them, not to the dashboard.
+    const next = new URLSearchParams(window.location.search).get('next');
+    navigate(next && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/login') ? next : '/dashboard');
   };
 
   const handleNewBid = useCallback((bid: Bid) => {
@@ -177,11 +259,44 @@ export default function App() {
   }, []);
 
   // Open the add-bid flow, optionally pre-filling the GC (e.g. from a customer hub).
+  // `setView` is guarded, but arming the modal was not: answering "Keep
+  // editing" still left Add Bid queued to open on the next visit. Both halves
+  // now happen only if the navigation is actually allowed to proceed.
   const openNewBid = useCallback((gc?: string) => {
-    setAddBidGc(gc);
-    setView('electrical/bids');
-    setOpenAddBid(true);
-  }, [setView]);
+    confirmLeave(() => {
+      setAddBidGc(gc);
+      navigate('/electrical/bids');
+      setOpenAddBid(true);
+    });
+  }, [confirmLeave, navigate]);
+
+  // The dashboard payload is what every board and stat reads from, so it alone
+  // gates first paint; /users and /preconstruction/workspaces enrich the shell.
+  const loading = dashApi.loading;
+
+  // A failed /users or /preconstruction/workspaces degrades one feature each
+  // (the rep filter, restored estimator workspaces) and must not blank the app,
+  // but the user still has to be told the page is not showing everything.
+  const partialFailures = [
+    usersApi.error ? 'the salesperson list' : null,
+    workspacesApi.error ? 'saved estimating workspaces' : null,
+  ].filter(Boolean) as string[];
+  const [warningDismissed, setWarningDismissed] = useState(false);
+  useEffect(() => { if (partialFailures.length === 0) setWarningDismissed(false); }, [partialFailures.length]);
+
+  const retryBootstrap = useCallback(() => {
+    dashApi.reload();
+    usersApi.reload();
+    workspacesApi.reload();
+  }, [dashApi.reload, usersApi.reload, workspacesApi.reload]);
+
+  // Record-level pages set their own title; everything else comes from the view.
+  // NOTE: every hook in this component must stay ABOVE the `if (!user)` return
+  // below. Signing in and being ejected by a 401 both flip `user` in place, so
+  // a hook below it changes the hook count between renders and React throws
+  // "Rendered more/fewer hooks than during the previous render" — which would
+  // take out the very 401 eject the api client exists to deliver.
+  usePageTitle(user && view !== 'bid' ? (VIEW_TITLES[view] ?? null) : null);
 
   const genProposalCount  = gens.filter(g => g.stage !== 'awarded' && g.stage !== 'declined').length;
   const elecProposalCount = bids.filter(b => b.stage === 'due' || b.stage === 'submitted').length;
@@ -244,7 +359,9 @@ export default function App() {
             onClearParam={clearParam}
             bids={bids} setBids={setBids}
             wonJobs={wonJobs} setWonJobs={setWonJobs}
-            onOpenBid={(id, tab) => navigate('/bid/' + encodeURIComponent(id) + (tab ? '?tab=' + tab : ''))}
+            onOpenBid={(id, tab) => confirmLeave(
+              () => navigate('/bid/' + encodeURIComponent(id) + (tab ? '?tab=' + tab : '')),
+            )}
             flashId={flashId}
             openAddBid={openAddBid}
             onAddBidHandled={() => { setOpenAddBid(false); setAddBidGc(undefined); }}
@@ -265,7 +382,7 @@ export default function App() {
           />
         );
       case 'bid':
-        if (!viewParam) return <StubPage title="Bid"/>;
+        if (!viewParam) return <NotFound path={view} onHome={() => setView('dashboard')}/>;
         return (
           <BidHubPage
             bidId={viewParam}
@@ -296,16 +413,48 @@ export default function App() {
         }
         return <SettingsPage/>;
       default:
-        return <StubPage title={view.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}/>;
+        return <NotFound path={view} onHome={() => setView('dashboard')}/>;
     }
   };
+
+  // The dashboard is the app's data; without it there is nothing honest to
+  // render, so it replaces the shell rather than emptying it.
+  if (dashApi.error) {
+    return (
+      <>
+        <BootError message={dashApi.error + '.'} onRetry={retryBootstrap} retrying={dashApi.loading}/>
+        {toast && <Toast toast={toast}/>}
+      </>
+    );
+  }
+
+  const warningBar = partialFailures.length > 0 && !warningDismissed && (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px',
+      background: 'var(--amber-soft)', borderBottom: '1px solid rgba(224,165,59,.3)',
+      color: 'var(--amber)', fontSize: 12.5, fontWeight: 600,
+    }}>
+      <Icon name="alert" size={15} stroke={2}/>
+      <span style={{ flex: 1 }}>
+        Some of this page didn't load: {partialFailures.join(' and ')}. Everything else is up to date.
+      </span>
+      <button onClick={retryBootstrap}
+        style={{ background: 'none', border: 'none', color: 'inherit', font: 'inherit', textDecoration: 'underline', cursor: 'pointer' }}>
+        Retry
+      </button>
+      <button onClick={() => setWarningDismissed(true)} aria-label="Dismiss"
+        style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', display: 'flex', padding: 2 }}>
+        <Icon name="x" size={14} stroke={2}/>
+      </button>
+    </div>
+  );
 
   const shell = (
     <AppProviders user={user} showToast={showToast} settings={settings} reloadSettings={reloadSettings}>
       <AppShell
         view={view}
         onNav={setView}
-        onLogout={logout}
+        onLogout={() => confirmLeave(logout)}
         genProposalCount={genProposalCount}
         elecProposalCount={elecProposalCount}
         genProjectCount={genProjectCount}
@@ -317,7 +466,13 @@ export default function App() {
         bids={bids} gens={gens}
         showToast={showToast}
       >
-        {renderView()}
+        {warningBar}
+        {/* A second boundary, inside the shell: a render crash in one page keeps
+            the nav and the rest of the app usable (audit code #19). The root
+            boundary in main.tsx still catches anything above this. */}
+        <ErrorBoundary variant="page" resetKey={location.pathname}>
+          {renderView()}
+        </ErrorBoundary>
       </AppShell>
       {toast && <Toast toast={toast}/>}
     </AppProviders>

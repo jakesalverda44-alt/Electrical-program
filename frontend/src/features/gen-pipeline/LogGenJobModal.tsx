@@ -2,6 +2,7 @@
 // completed before the CRM existed. Records the job at its final stage directly, so no
 // pipeline side effects (Drive folders, "moved to…" activity) fire for finished work.
 import React, { useState } from 'react';
+import { useDirtyDismiss } from '../../hooks/useDirtyDismiss';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { Gen, WonJob } from '../../types';
@@ -21,12 +22,18 @@ const STAGES = [
   { value: 'building', label: 'Building — draft'             },
 ];
 
+const BLANK = {
+  customer: '', loc: '', mfr: 'Kohler', model: '', kw: '',
+  amount: '', tax: '', stage: 'awarded', date_won: '', proposal_no: '',
+};
+
 export default function LogGenJobModal({ onClose, onAdded }: Props) {
-  const [f, setF] = useState({
-    customer: '', loc: '', mfr: 'Kohler', model: '', kw: '',
-    amount: '', tax: '', stage: 'awarded', date_won: '', proposal_no: '',
-  });
+  const [f, setF] = useState(BLANK);
   const [commissionPaid, setCommissionPaid] = useState(true);
+  // Backdrop click and Escape ask first, but only when something was typed.
+  const isDirty = JSON.stringify(f) !== JSON.stringify(BLANK) || !commissionPaid;
+  const { requestClose, discardDialog } = useDirtyDismiss(isDirty, onClose);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -64,11 +71,12 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
   };
 
   return (
-    <div className="overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+    <>
+    <div className="overlay" onMouseDown={e => e.target === e.currentTarget && requestClose()}>
       <div className="modal">
         <div className="modal-hdr">
           <h3>Log Existing Generator Job</h3>
-          <button className="close-x" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
+          <button className="close-x" aria-label="Close" onClick={requestClose}><Icon name="x" size={16} stroke={2}/></button>
         </div>
         <form onSubmit={submit}>
           <div className="modal-body">
@@ -143,7 +151,7 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
             {error && <div className="login-error">{error}</div>}
           </div>
           <div className="modal-foot">
-            <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn ghost" onClick={requestClose}>Cancel</button>
             <button type="submit" className="btn" disabled={!ok || saving}>
               {saving ? 'Logging…' : 'Log Job'}
             </button>
@@ -151,5 +159,7 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
         </form>
       </div>
     </div>
+    {discardDialog}
+    </>
   );
 }

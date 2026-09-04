@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
+import { reportError } from '../../lib/reportError';
 import { Lead } from '../../types';
 import { Gen } from '../../types';
 import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_COLORS, INTEREST_LABELS } from './constants';
@@ -108,29 +110,19 @@ export default function LeadsPage({ onNav, openLeadId, onClearParam, onEditGen, 
   const isMobile = useIsMobile();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [actions, setActions] = useState<LeadAction[]>([]);
-  const [loading, setLoading] = useState(true);
   const [stageFilter, setStageFilter] = useState<LeadStageKey | 'all'>('all');
   const [contactFilter, setContactFilter] = useState<'all' | 'email' | 'phone'>('all');
   const [sort, setSort] = useState<SortKey>('smart');
   const [detail, setDetail] = useState<Lead | null>(null);
   const [showAdd, setShowAdd] = useState(false);
 
-  const loadActions = useCallback(() => {
-    api.get<LeadAction[]>('/leads/action-queue')
-      .then(({ data }) => setActions(data))
-      .catch(() => {});
-  }, []);
+  const { data: loadedActions, reload: loadActions } = useApi<LeadAction[]>('/leads/action-queue');
+  useEffect(() => { if (loadedActions) setActions(loadedActions); }, [loadedActions]);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    api.get<Lead[]>('/leads')
-      .then(({ data }) => setLeads(data))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-    loadActions();
-  }, [loadActions]);
+  const { data: loadedLeads, loading, reload: reloadLeads } = useApi<Lead[]>('/leads');
+  useEffect(() => { if (loadedLeads) setLeads(loadedLeads); }, [loadedLeads]);
 
-  useEffect(() => { load(); }, [load]);
+  const load = useCallback(() => { reloadLeads(); loadActions(); }, [reloadLeads, loadActions]);
 
   // Deep-link from global search / notifications: open the targeted lead's drawer.
   // Leads not on the board (e.g. a converted one) are fetched directly by id.
@@ -145,9 +137,12 @@ export default function LeadsPage({ onNav, openLeadId, onClearParam, onEditGen, 
       onClearParam?.();
     } else if (!loading) {
       openedParam.current = openLeadId;
+      // A one-shot lookup for a lead that is not on the board; it is keyed by
+      // the deep link rather than by render state, so it stays imperative.
       api.get<Lead>(`/leads/${openLeadId}`)
         .then(({ data }) => setDetail(data))
-        .catch(() => {})
+        // optional: the drawer just does not open for a lead that no longer exists
+        .catch(err => reportError(err, 'LeadsPage deep link'))
         .finally(() => onClearParam?.());
     }
   }, [openLeadId, leads, loading, onClearParam]);

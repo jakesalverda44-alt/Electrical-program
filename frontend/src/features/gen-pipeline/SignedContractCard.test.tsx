@@ -18,6 +18,7 @@ vi.mock('../../api/client', () => ({
 const showToast = vi.fn();
 vi.mock('../../contexts/AppContext', () => ({
   useShowToast: () => showToast,
+  useOptionalShowToast: () => showToast,
 }));
 
 // The full nine-page document is irrelevant here and slow to render.

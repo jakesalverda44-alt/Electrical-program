@@ -1,8 +1,8 @@
 // Overview-tab teaser for the Compare tab: the five closest past bids at a glance,
 // with a button through to the full Compare view for the real diff.
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import Icon from '../../components/Icon';
-import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { moneyShort } from '../../lib/money';
 
 interface SimilarBid {
@@ -22,24 +22,12 @@ function OutcomeBadge({ stage }: { stage: string }) {
 }
 
 export default function SimilarBidsPanel({ bidId, onGoCompare }: Props) {
-  const [rows, setRows] = useState<SimilarBid[]>([]);
-  const [noClassification, setNoClassification] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    api.get(`/preconstruction/${bidId}/comparables`)
-      .then(({ data }) => {
-        if (cancelled) return;
-        setRows((data.comparables ?? []).slice(0, 5));
-        const subj = data.bid;
-        setNoClassification(!subj?.brand && !subj?.project_type);
-      })
-      .catch(() => { if (!cancelled) { setRows([]); setNoClassification(false); } })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [bidId]);
+  const { data, loading } = useApi<{
+    comparables?: SimilarBid[];
+    bid?: { brand?: string | null; project_type?: string | null };
+  }>(`/preconstruction/${bidId}/comparables`);
+  const rows = (data?.comparables ?? []).slice(0, 5);
+  const noClassification = !!data && !data.bid?.brand && !data.bid?.project_type;
 
   return (
     <div className="panel">

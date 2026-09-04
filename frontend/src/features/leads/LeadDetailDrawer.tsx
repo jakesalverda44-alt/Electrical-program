@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import { Lead, LeadActivity } from '../../types';
 import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_LABELS } from './constants';
 import SiteVisitModal from './SiteVisitModal';
@@ -55,16 +57,12 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
   const [lead, setLead] = useState<Lead>(initialLead);
   const [activity, setActivity] = useState<LeadActivity[]>([]);
   const [dirty, setDirty] = useState<Partial<Lead>>({});
-  const [saving, setSaving] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [quickLogging, setQuickLogging] = useState<string | null>(null); // which kind is in-flight
   const [quickLogged, setQuickLogged] = useState<string | null>(null);  // brief ✓ confirmation
   const [noteText, setNoteText] = useState('');
   const [showNoteInput, setShowNoteInput] = useState(false);
-  const [noteLogging, setNoteLogging] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [showSiteVisit, setShowSiteVisit] = useState(false);
-  const [handingOff, setHandingOff] = useState(false);
   const [showSurvey, setShowSurvey] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -74,11 +72,8 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
     setDirty({});
   }, [initialLead.id]);
 
-  useEffect(() => {
-    api.get<{ activity: LeadActivity[] } & Lead>(`/leads/${lead.id}`)
-      .then(({ data }) => setActivity(data.activity || []))
-      .catch(() => {});
-  }, [lead.id]);
+  const { data: leadDetail } = useApi<{ activity: LeadActivity[] } & Lead>(`/leads/${lead.id}`);
+  useEffect(() => { if (leadDetail) setActivity(leadDetail.activity || []); }, [leadDetail]);
 
   useEffect(() => {
     if (!actionsOpen) return;
@@ -95,127 +90,174 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
     setDirty(p => ({ ...p, [key]: val }));
   };
 
-  const save = async () => {
-    if (!Object.keys(dirty).length) return;
-    setSaving(true);
-    try {
+  const { run: runSave, saving } = useMutation(
+    async () => {
       const { data } = await api.patch<Lead>(`/leads/${lead.id}`, dirty);
-      setLead(data);
-      setDirty({});
-      onUpdated(data);
-      // Refresh activity (stage change may have been logged)
-      await refreshActivity();
-    } finally {
-      setSaving(false);
-    }
-  };
+      return data;
+    },
+    {
+      onSuccess: async (data) => {
+        setLead(data);
+        setDirty({});
+        onUpdated(data);
+        // Refresh activity (stage change may have been logged)
+        await refreshActivity();
+      },
+      errorTitle: 'Save failed',
+    },
+  );
 
-  const setStage = async (stage: LeadStageKey) => {
+  const save = () => { if (Object.keys(dirty).length) runSave(); };
+
+  const { run: runSetStage } = useMutation(
+    async (stage: LeadStageKey) => {
+      const { data } = await api.patch<Lead>(`/leads/${lead.id}`, { stage });
+      return data;
+    },
+    {
+      onSuccess: async (data) => {
+        setLead(data);
+        setDirty({});
+        onUpdated(data);
+        await refreshActivity();
+      },
+      errorTitle: 'Could not change the stage',
+    },
+  );
+
+  const setStage = (stage: LeadStageKey) => {
     setActionsOpen(false);
     // Moving to "Site Scheduled" first asks for the visit date/time, then hands the
     // lead off to a proposal (see doHandoff).
     if (stage === 'site-scheduled') { setShowSiteVisit(true); return; }
-
-    const { data } = await api.patch<Lead>(`/leads/${lead.id}`, { stage });
-    setLead(data);
-    setDirty({});
-    onUpdated(data);
-    await refreshActivity();
+    runSetStage(stage);
   };
 
   // Complete the Site Scheduled handoff with the chosen site-visit datetime (or null
   // for "no time yet"). Converts the lead, pushes the new proposal into the Pipeline,
   // and navigates there.
-  const doHandoff = async (siteVisitAt: string | null) => {
-    setHandingOff(true);
-    try {
+  const { run: doHandoff, saving: handingOff } = useMutation(
+    async (siteVisitAt: string | null) => {
       const { data } = await api.patch<Lead & { proposal?: Gen }>(`/leads/${lead.id}`, {
         stage: 'site-scheduled',
         site_visit_at: siteVisitAt,
         site_visit_needs_time: !siteVisitAt,
       });
-      setShowSiteVisit(false);
-      setLead(data);
-      setDirty({});
-      onUpdated(data);
-      if (data.stage === 'converted' && data.linked_gen_id) {
-        if (data.proposal && onConverted) onConverted(data.proposal);
-        onClose();
-        onNav('generators/pipeline');
-        return;
-      }
-      await refreshActivity();
-    } finally {
-      setHandingOff(false);
-    }
-  };
+      return data;
+    },
+    {
+      onSuccess: async (data) => {
+        setShowSiteVisit(false);
+        setLead(data);
+        setDirty({});
+        onUpdated(data);
+        if (data.stage === 'converted' && data.linked_gen_id) {
+          if (data.proposal && onConverted) onConverted(data.proposal);
+          onClose();
+          onNav('generators/pipeline');
+          return;
+        }
+        await refreshActivity();
+      },
+      errorTitle: 'Could not schedule the site visit',
+    },
+  );
 
-  const refreshActivity = async () => {
-    const { data: full } = await api.get<{ activity: LeadActivity[] } & Lead>(`/leads/${lead.id}`);
-    setActivity(full.activity || []);
-    setLead(l => ({ ...l, last_activity_at: full.last_activity_at }));
-  };
+  // Cosmetic: the drawer's timeline is already showing something, so a failed
+  // refresh stays quiet rather than toasting over the save that just succeeded.
+  const { run: refreshActivity } = useMutation(
+    async () => {
+      const { data: full } = await api.get<{ activity: LeadActivity[] } & Lead>(`/leads/${lead.id}`);
+      return full;
+    },
+    {
+      onSuccess: (full) => {
+        setActivity(full.activity || []);
+        setLead(l => ({ ...l, last_activity_at: full.last_activity_at }));
+      },
+      errorToast: false,
+    },
+  );
 
-  const quickLog = async (kind: 'call' | 'text' | 'voicemail', direction: 'in' | 'out' = 'out') => {
-    setQuickLogging(kind);
-    try {
+  const { run: runQuickLog } = useMutation(
+    async (kind: 'call' | 'text' | 'voicemail', direction: 'in' | 'out') => {
       const { data } = await api.post<LeadActivity>(`/leads/${lead.id}/log-activity`, { kind, direction });
-      setActivity(prev => [data, ...prev]);
-      setLead(l => ({ ...l, last_activity_at: data.created_at }));
-      setQuickLogged(kind);
-      setTimeout(() => setQuickLogged(null), 2000);
-    } finally {
-      setQuickLogging(null);
-    }
+      return data;
+    },
+    {
+      onSuccess: (data, kind) => {
+        setActivity(prev => [data, ...prev]);
+        setLead(l => ({ ...l, last_activity_at: data.created_at }));
+        setQuickLogged(kind);
+        setTimeout(() => setQuickLogged(null), 2000);
+      },
+      onSettled: () => setQuickLogging(null),
+      errorTitle: 'Could not log that',
+    },
+  );
+
+  const quickLog = (kind: 'call' | 'text' | 'voicemail', direction: 'in' | 'out' = 'out') => {
+    setQuickLogging(kind);
+    runQuickLog(kind, direction);
   };
 
-  const logNote = async () => {
-    if (!noteText.trim()) return;
-    setNoteLogging(true);
-    try {
-      const { data } = await api.post<LeadActivity>(`/leads/${lead.id}/log-activity`, { kind: 'note', body: noteText.trim() });
-      setActivity(prev => [data, ...prev]);
-      setLead(l => ({ ...l, last_activity_at: data.created_at }));
-      setNoteText(''); setShowNoteInput(false);
-    } finally {
-      setNoteLogging(false);
-    }
-  };
+  const { run: runLogNote, saving: noteLogging } = useMutation(
+    async (body: string) => {
+      const { data } = await api.post<LeadActivity>(`/leads/${lead.id}/log-activity`, { kind: 'note', body });
+      return data;
+    },
+    {
+      onSuccess: (data) => {
+        setActivity(prev => [data, ...prev]);
+        setLead(l => ({ ...l, last_activity_at: data.created_at }));
+        setNoteText(''); setShowNoteInput(false);
+      },
+      errorTitle: 'Could not save that note',
+    },
+  );
 
-  const createGen = async () => {
-    setActionsOpen(false);
-    setGenError(null);
-    try {
+  const logNote = () => { if (noteText.trim()) runLogNote(noteText.trim()); };
+
+  const { run: runCreateGen } = useMutation(
+    async () => {
       const { data: gen } = await api.post<Gen>(`/leads/${lead.id}/create-gen`);
       // Refresh lead to get linked_gen_id
       const { data: updated } = await api.get<Lead>(`/leads/${lead.id}`);
-      setLead(updated);
-      onUpdated(updated);
-      if (onConverted) onConverted(gen);
-      if (onEditGen) {
-        onClose();
-        onEditGen(gen);
-      } else {
-        onNav('generators/pipeline');
-      }
-    } catch {
-      // Fire-and-forget was silent before — the survey's "Build Proposal from Survey"
-      // CTA and the Actions-menu "Create Generator Record" both land here, so surface
-      // the failure inline rather than leaving the user staring at a drawer that just
-      // didn't do anything.
-      setGenError("Couldn't create the proposal — check connection and try again.");
-    }
+      return { gen, updated };
+    },
+    {
+      onSuccess: ({ gen, updated }) => {
+        setLead(updated);
+        onUpdated(updated);
+        if (onConverted) onConverted(gen);
+        if (onEditGen) {
+          onClose();
+          onEditGen(gen);
+        } else {
+          onNav('generators/pipeline');
+        }
+      },
+      // This drawer surfaces the failure inline (the survey's "Build Proposal
+      // from Survey" CTA lands here too), so no toast on top of it.
+      errorToast: false,
+      onError: () => setGenError("Couldn't create the proposal — check connection and try again."),
+    },
+  );
+
+  const createGen = () => {
+    setActionsOpen(false);
+    setGenError(null);
+    runCreateGen();
   };
 
-  const deleteLead = async () => {
+  const { run: runDeleteLead, saving: deleting } = useMutation(
+    async () => { await api.delete(`/leads/${lead.id}`); },
+    { onSuccess: () => onDeleted(lead), errorToast: (m) => ({ title: 'Delete failed', sub: m }) },
+  );
+
+  const deleteLead = () => {
     if (!window.confirm(`Delete lead "${lead.name}"? This cannot be undone.`)) return;
-    setDeleting(true);
-    try {
-      await api.delete(`/leads/${lead.id}`);
-      onDeleted(lead);
-    } finally {
-      setDeleting(false);
-    }
+    runDeleteLead();
   };
 
   const hasChanges = Object.keys(dirty).length > 0;

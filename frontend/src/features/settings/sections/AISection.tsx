@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../../api/client';
+import { useApi } from '../../../hooks/useApi';
+import { useMutation } from '../../../hooks/useMutation';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, inputStyle } from '../shared';
 
@@ -44,7 +46,6 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
     Object.fromEntries(ALL_KEYS.map(k => [k, (settings as unknown as Record<string, string>)[k] ?? '']))
   );
   const [orig, setOrig] = useState(vals);
-  const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
   const [openPrompt, setOpenPrompt] = useState<number | null>(null);
   const [defaults, setDefaults] = useState<PromptDefaults | null>(null);
@@ -56,24 +57,19 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
   }, [settings]);
 
   // Fetch hardcoded defaults once; pre-populate empty prompt fields without dirtying the form
+  const { data: promptDefaults } = useApi<PromptDefaults>('/preconstruction/prompt-defaults');
   useEffect(() => {
-    api.get('/preconstruction/prompt-defaults')
-      .then(r => {
-        const map = r.data as PromptDefaults;
-        setDefaults(map);
-        setVals(prev => {
-          const next = { ...prev };
-          PROMPT_KEYS.forEach((pk, i) => { if (!next[pk]) next[pk] = map[AGT[i]]; });
-          return next;
-        });
-        setOrig(prev => {
-          const next = { ...prev };
-          PROMPT_KEYS.forEach((pk, i) => { if (!next[pk]) next[pk] = map[AGT[i]]; });
-          return next;
-        });
-      })
-      .catch(() => {});
-  }, []);
+    if (!promptDefaults) return;
+    const map = promptDefaults;
+    setDefaults(map);
+    const fill = (prev: Record<string, string>) => {
+      const next = { ...prev };
+      PROMPT_KEYS.forEach((pk, i) => { if (!next[pk]) next[pk] = map[AGT[i]]; });
+      return next;
+    };
+    setVals(fill);
+    setOrig(fill);
+  }, [promptDefaults]);
 
   const isCustomized = (pk: string, agentIdx: number): boolean => {
     if (!defaults) return vals[pk].trim().length > 0;
@@ -88,9 +84,8 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
     setVals(p => ({ ...p, [pk]: defaults?.[AGT[agentIdx]] ?? '' }));
   };
 
-  const save = async () => {
-    setSaving(true);
-    try {
+  const { run: save, saving } = useMutation(
+    async () => {
       const toSend = { ...vals };
       if (defaults) {
         PROMPT_KEYS.forEach((pk, i) => {
@@ -98,14 +93,17 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
         });
       }
       await api.put('/settings', toSend);
-      setOrig(vals);
-      onSaved();
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } finally {
-      setSaving(false);
-    }
-  };
+    },
+    {
+      onSuccess: () => {
+        setOrig(vals);
+        onSaved();
+        setSaved(true);
+        setTimeout(() => setSaved(false), 3000);
+      },
+      errorTitle: 'Could not save AI configuration',
+    },
+  );
 
   return (
     <div>

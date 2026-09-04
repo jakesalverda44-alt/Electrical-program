@@ -1,9 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, WonJob } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from '../pipeline/constants';
 import { PROJECT_TYPES, SCOPE_SECS } from '../preconstruction/constants';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
+import { useDirtyDismiss } from '../../hooks/useDirtyDismiss';
 import { moneyFull, moneyShort } from '../../lib/money';
 import { useStagePipeline } from '../../hooks/useStagePipeline';
 import { useShowToast } from '../../contexts/AppContext';
@@ -17,6 +20,27 @@ import SimilarBidsPanel from './SimilarBidsPanel';
 interface QualResult { score: number; reasons: string[]; gcWinRate: number | null; gcWon: number; gcLost: number; dueDays: number; }
 
 const LOSS_REASONS = ['Budget', 'Competitor', 'No Award', 'Scope Change', 'Timeline', 'Relationship', 'Other'];
+
+/** The edit form's pristine shape for a bid — the baseline for both the reset
+ *  and the "has the user actually changed anything" check. */
+function bidForm(bid: Bid) {
+  return {
+    name: bid.name,
+    gc: bid.gc,
+    loc: bid.loc,
+    amount: bid.amount != null ? String(bid.amount) : '',
+    due: bid.due,
+    sheets: bid.sheets ? String(bid.sheets) : '',
+    contact: bid.contact ?? '',
+    brand: bid.brand ?? '',
+    project_type: bid.project_type ?? '',
+    sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '',
+    // Phase 3 — auto-generates on first proposal/pre-bid-package generation
+    // (JS.MMDDYYYY) but editable here like every other bid field.
+    job_number: bid.job_number ?? '',
+    date_won: bid.date_won ? String(bid.date_won).slice(0, 10) : '',
+  };
+}
 
 interface OverviewProps {
   bid: Bid;
@@ -66,104 +90,80 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
   const [competitor, setCompetitor] = useState('');
 
   const [editMode, setEditMode] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [qualifying, setQualifying] = useState(false);
   const [qualResult, setQualResult] = useState<QualResult | null>(null);
-  const [winProb, setWinProb] = useState<{ pct: number; label: string } | null>(null);
-  const [closingJob, setClosingJob] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const { data: qualify } = useApi<QualResult>(`/bids/${bid.id}/qualify`);
   // "Email bid to team" (send the new-bid notification after the fact).
   const [notifyOpen, setNotifyOpen] = useState(false);
   const [notifyEmails, setNotifyEmails] = useState('');
-  const [sendingNotify, setSendingNotify] = useState(false);
   const [attachFiles, setAttachFiles] = useState(true);
-  const [fileCount, setFileCount] = useState<number | null>(null);
   const [draftLink, setDraftLink] = useState<string | null>(null);
-  const [teamDefaults, setTeamDefaults] = useState<{ emails: string[]; mailConfigured: boolean }>({ emails: [], mailConfigured: false });
+  const { data: notifyDefaults } = useApi<{ emails?: string[]; mailConfigured?: boolean }>('/intake/notify-defaults');
+  const teamDefaults = useMemo(
+    () => ({ emails: notifyDefaults?.emails ?? [], mailConfigured: !!notifyDefaults?.mailConfigured }),
+    [notifyDefaults],
+  );
 
-  useEffect(() => {
-    api.get('/intake/notify-defaults')
-      .then(({ data }) => setTeamDefaults({ emails: data?.emails ?? [], mailConfigured: !!data?.mailConfigured }))
-      .catch(() => {});
-  }, []);
+  // The attachable-file count is only meaningful while the notify dialog is
+  // open, so the request is scoped to that rather than fired from the click.
+  const { data: notifyDocs } = useApi<unknown[]>('/documents', {
+    params: { linked_id: bid.id },
+    enabled: notifyOpen,
+  });
+  const fileCount = Array.isArray(notifyDocs) ? notifyDocs.length : null;
 
   const openNotify = () => {
     setNotifyEmails(notifyEmails.trim() || teamDefaults.emails.join(', '));
     setAttachFiles(true);
     setDraftLink(null);
     setNotifyOpen(true);
-    api.get(`/documents?linked_id=${encodeURIComponent(bid.id)}`)
-      .then(({ data }) => setFileCount(Array.isArray(data) ? data.length : 0))
-      .catch(() => setFileCount(0));
   };
 
-  const handleNotifyTeam = async () => {
-    const emails = notifyEmails.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
-    if (!emails.length) return;
-    setSendingNotify(true);
-    try {
+  const { run: runNotifyTeam, saving: sendingNotify } = useMutation(
+    async (emails: string[]) => {
       const { data } = await api.post(`/bids/${bid.id}/notify-team`, { emails, attachFiles });
-      setDraftLink(data.draftWebLink || '');
-    } finally {
-      setSendingNotify(false);
-    }
+      return data as { draftWebLink?: string };
+    },
+    {
+      onSuccess: (data) => setDraftLink(data.draftWebLink || ''),
+      errorTitle: 'Could not email the team',
+    },
+  );
+
+  const handleNotifyTeam = () => {
+    const emails = notifyEmails.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+    if (emails.length) runNotifyTeam(emails);
   };
 
-  useEffect(() => {
-    api.get(`/bids/${bid.id}/qualify`).then(({ data }) => {
-      const pct = data.gcWinRate !== null ? data.gcWinRate : Math.round((data.score / 10) * 100);
-      const label = data.gcWinRate !== null
-        ? `${pct}% with ${bid.gc} (${data.gcWon}W / ${data.gcLost}L)`
-        : `${pct}% est. — no prior history with ${bid.gc}`;
-      setWinProb({ pct, label });
-    }).catch(() => {});
-  }, [bid.id]);
+  // Derived, not stored: a late response for a bid the user already navigated
+  // away from can no longer paint the previous GC's name onto this card.
+  const winProb = useMemo(() => {
+    if (!qualify) return null;
+    const pct = qualify.gcWinRate !== null ? qualify.gcWinRate : Math.round((qualify.score / 10) * 100);
+    const label = qualify.gcWinRate !== null
+      ? `${pct}% with ${bid.gc} (${qualify.gcWon}W / ${qualify.gcLost}L)`
+      : `${pct}% est. — no prior history with ${bid.gc}`;
+    return { pct, label };
+  }, [qualify, bid.gc]);
 
-  const runQualify = async () => {
-    setQualifying(true);
-    try {
-      const { data } = await api.get(`/bids/${bid.id}/qualify`);
-      setQualResult(data);
-    } finally {
-      setQualifying(false);
-    }
-  };
+  // A user-triggered read, so it goes through useMutation rather than useApi:
+  // useApi is for state that follows a key, this follows a click.
+  const { run: runQualify, saving: qualifying } = useMutation(
+    async () => {
+      const { data } = await api.get<QualResult>(`/bids/${bid.id}/qualify`);
+      return data;
+    },
+    { onSuccess: (data) => setQualResult(data), errorTitle: 'Could not score this bid' },
+  );
 
-  const [form, setForm] = useState({
-    name: bid.name,
-    gc: bid.gc,
-    loc: bid.loc,
-    amount: bid.amount != null ? String(bid.amount) : '',
-    due: bid.due,
-    sheets: bid.sheets ? String(bid.sheets) : '',
-    contact: bid.contact ?? '',
-    brand: bid.brand ?? '',
-    project_type: bid.project_type ?? '',
-    sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '',
-    // Phase 3 — auto-generates on first proposal/pre-bid-package generation
-    // (JS.MMDDYYYY) but editable here like every other bid field.
-    job_number: bid.job_number ?? '',
-    date_won: bid.date_won ? String(bid.date_won).slice(0, 10) : '',
-  });
+  const [form, setForm] = useState(() => bidForm(bid));
 
   const setField = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(prev => ({ ...prev, [k]: e.target.value }));
 
-  const resetForm = () => setForm({
-    name: bid.name, gc: bid.gc, loc: bid.loc,
-    amount: bid.amount != null ? String(bid.amount) : '',
-    due: bid.due, sheets: bid.sheets ? String(bid.sheets) : '',
-    contact: bid.contact ?? '', brand: bid.brand ?? '',
-    project_type: bid.project_type ?? '',
-    sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '',
-    job_number: bid.job_number ?? '',
-    date_won: bid.date_won ? String(bid.date_won).slice(0, 10) : '',
-  });
+  const resetForm = () => setForm(bidForm(bid));
 
-  const handleSave = async () => {
-    if (!form.name.trim() || !form.gc.trim()) return;
-    setSaving(true);
-    try {
+  const { run: runSave, saving } = useMutation(
+    async () => {
       const { data } = await api.patch(`/bids/${bid.id}`, {
         name: form.name,
         gc: form.gc,
@@ -178,40 +178,60 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
         job_number: form.job_number,
         ...(bid.stage === 'awarded' && form.date_won ? { date_won: form.date_won } : {}),
       });
-      onBidUpdated(data.bid ?? data);
-      if (data.wonJob) setWonJobs(prev => prev.map(w => w.proposal_id === bid.id ? data.wonJob : w));
-      setEditMode(false);
-    } finally {
-      setSaving(false);
-    }
+      return data;
+    },
+    {
+      onSuccess: (data) => {
+        onBidUpdated(data.bid ?? data);
+        if (data.wonJob) setWonJobs(prev => prev.map(w => w.proposal_id === bid.id ? data.wonJob : w));
+        setEditMode(false);
+      },
+      errorTitle: 'Save failed',
+    },
+  );
+
+  const handleSave = () => {
+    if (form.name.trim() && form.gc.trim()) runSave();
   };
 
-  const handleCloseJob = async () => {
+  // Leaving edit mode discards the form, so ask when it differs from the bid.
+  const editDirty = editMode && JSON.stringify(form) !== JSON.stringify(bidForm(bid));
+  const { requestClose: requestLeaveEdit, discardDialog: editDiscardDialog } =
+    useDirtyDismiss(editDirty, () => { setEditMode(false); resetForm(); }, { escape: false });
+
+  const { run: runCloseJob, saving: closingJob } = useMutation(
+    async () => { await api.post(`/bids/${bid.id}/close`); },
+    {
+      onSuccess: () => {
+        setBids(prev => prev.filter(b => b.id !== bid.id));
+        onNav('electrical/bids');
+      },
+      successToast: { title: 'Job closed', sub: `${bid.name} moved to Completed Projects` },
+      errorTitle: 'Could not close this job',
+    },
+  );
+
+  const handleCloseJob = () => {
     if (!window.confirm(`Mark "${bid.name}" as closed/complete? This will move the Drive folder to Completed Projects and remove it from the active pipeline.`)) return;
-    setClosingJob(true);
-    try {
-      await api.post(`/bids/${bid.id}/close`);
-      setBids(prev => prev.filter(b => b.id !== bid.id));
-      showToast({ title: 'Job closed', sub: `${bid.name} moved to Completed Projects` });
-      onNav('electrical/bids');
-    } finally {
-      setClosingJob(false);
-    }
+    runCloseJob();
   };
 
-  const handleDelete = async () => {
+  const { run: runDelete, saving: deleting } = useMutation(
+    async () => { await api.delete(`/bids/${bid.id}`); },
+    {
+      onSuccess: () => {
+        setBids(prev => prev.filter(b => b.id !== bid.id));
+        setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
+        onNav('electrical/bids');
+      },
+      successToast: { title: 'Bid deleted', sub: bid.name },
+      errorToast: (message) => ({ title: 'Delete failed', sub: message }),
+    },
+  );
+
+  const handleDelete = () => {
     if (!window.confirm(`Delete "${bid.name}" and its linked project/files/testing data? This cannot be undone.`)) return;
-    setDeleting(true);
-    try {
-      await api.delete(`/bids/${bid.id}`);
-      setBids(prev => prev.filter(b => b.id !== bid.id));
-      setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
-      showToast({ title: 'Bid deleted', sub: bid.name });
-      onNav('electrical/bids');
-    } catch {
-      showToast({ title: 'Delete failed', sub: 'Please try again' });
-      setDeleting(false);
-    }
+    runDelete();
   };
 
   const dueBadge = () => {
@@ -238,7 +258,7 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
         ) : <span/>}
         {!isTerminal && (
           <button className="btn ghost" style={{ height: 30, fontSize: 12, padding: '0 10px' }}
-            onClick={() => { setEditMode(e => !e); resetForm(); }}>
+            onClick={() => { if (editMode) requestLeaveEdit(); else { setEditMode(true); resetForm(); } }}>
             <Icon name={editMode ? 'x' : 'gear'} size={13} stroke={2}/>{editMode ? 'Cancel' : 'Edit'}
           </button>
         )}
@@ -565,6 +585,8 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
           )}
         </>
       )}
+
+      {editDiscardDialog}
     </div>
   );
 }

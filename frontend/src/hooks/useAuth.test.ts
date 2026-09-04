@@ -4,23 +4,10 @@
 // POST exchange, and the token/user only ever land in localStorage after that
 // call succeeds — never parsed out of the URL itself.
 //
-// This happy-dom version does not provide a global `localStorage` (confirmed:
-// other pre-existing tests — e.g. useInstallPrompt.test.ts — fail the same way
-// on main, unrelated to this change), so this file installs a minimal in-memory
-// shim for its own use rather than depend on the real thing being present.
+// `localStorage` comes from the suite-wide shim in `src/test/setup.ts` (Node's
+// own experimental global resolves to undefined and shadows happy-dom's).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
-
-function makeLocalStorageShim() {
-  let store: Record<string, string> = {};
-  return {
-    getItem: (k: string) => (k in store ? store[k] : null),
-    setItem: (k: string, v: string) => { store[k] = String(v); },
-    removeItem: (k: string) => { delete store[k]; },
-    clear: () => { store = {}; },
-  };
-}
-Object.defineProperty(globalThis, 'localStorage', { value: makeLocalStorageShim(), writable: true, configurable: true });
+import { act, renderHook, waitFor } from '@testing-library/react';
 
 const post = vi.fn();
 vi.mock('../api/client', () => ({
@@ -30,6 +17,14 @@ vi.mock('../api/client', () => ({
 }));
 
 import { useAuth } from './useAuth';
+
+const nowSec = () => Math.floor(Date.now() / 1000);
+
+/** An unsigned JWT — the client only ever reads the payload. */
+function jwt(payload: Record<string, unknown>): string {
+  const b64 = (o: unknown) => btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${b64({ alg: 'none', typ: 'JWT' })}.${b64(payload)}.sig`;
+}
 
 function setSearch(search: string) {
   window.history.replaceState({}, '', `/${search}`);
@@ -82,9 +77,76 @@ describe('useAuth — Microsoft OAuth code exchange (Task 7.4)', () => {
   });
 
   it('falls back to a stored session when there is no ?mscode', () => {
+    localStorage.setItem('crm_token', jwt({ exp: nowSec() + 3600 }));
     localStorage.setItem('crm_user', JSON.stringify({ id: 'u2', name: 'Bob', email: 'bob@x.com', role: 'salesperson' }));
     const { result } = renderHook(() => useAuth());
     expect(result.current.user).toEqual({ id: 'u2', name: 'Bob', email: 'bob@x.com', role: 'salesperson' });
     expect(post).not.toHaveBeenCalled();
+  });
+});
+
+// Audit code #7 (High) — "Session token in localStorage with no expiry check on
+// restore". The ordinary restore path was `const s =
+// localStorage.getItem('crm_user'); return s ? JSON.parse(s) : null;`, so an
+// expired token booted the app fully "logged in", fired the bootstrap requests,
+// collected 401s and only then ejected the user.
+describe('useAuth — session restore', () => {
+  it('treats an expired token as logged out and clears storage', () => {
+    localStorage.setItem('crm_token', jwt({ exp: nowSec() - 60 }));
+    localStorage.setItem('crm_user', JSON.stringify({ id: 'u3', name: 'Stale', email: 's@x.com', role: 'owner' }));
+
+    const { result } = renderHook(() => useAuth());
+
+    expect(result.current.user).toBeNull();
+    expect(localStorage.getItem('crm_token')).toBeNull();
+    expect(localStorage.getItem('crm_user')).toBeNull();
+    // No request was made on a session we already know is dead.
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('restores a session whose token is still valid', () => {
+    const user = { id: 'u4', name: 'Fresh', email: 'f@x.com', role: 'estimator' };
+    localStorage.setItem('crm_token', jwt({ exp: nowSec() + 600 }));
+    localStorage.setItem('crm_user', JSON.stringify(user));
+
+    const { result } = renderHook(() => useAuth());
+
+    expect(result.current.user).toEqual(user);
+    expect(localStorage.getItem('crm_token')).not.toBeNull();
+  });
+
+  it('treats an undecodable token, and one with no exp, as logged out', () => {
+    for (const token of ['not-a-jwt', jwt({ sub: 'u5' }), 'a.b.c']) {
+      localStorage.clear();
+      localStorage.setItem('crm_token', token);
+      localStorage.setItem('crm_user', JSON.stringify({ id: 'u5', name: 'X', email: 'x@x.com', role: 'owner' }));
+
+      const { result } = renderHook(() => useAuth());
+
+      expect(result.current.user).toBeNull();
+      expect(localStorage.getItem('crm_token')).toBeNull();
+    }
+  });
+
+  it('treats corrupt crm_user JSON as logged out rather than throwing on boot', () => {
+    localStorage.setItem('crm_token', jwt({ exp: nowSec() + 600 }));
+    localStorage.setItem('crm_user', '{not json');
+
+    const { result } = renderHook(() => useAuth());
+
+    expect(result.current.user).toBeNull();
+    expect(localStorage.getItem('crm_user')).toBeNull();
+  });
+
+  it('logout clears both keys', () => {
+    localStorage.setItem('crm_token', jwt({ exp: nowSec() + 600 }));
+    localStorage.setItem('crm_user', JSON.stringify({ id: 'u6', name: 'Y', email: 'y@x.com', role: 'owner' }));
+
+    const { result } = renderHook(() => useAuth());
+    act(() => result.current.logout());
+
+    expect(result.current.user).toBeNull();
+    expect(localStorage.getItem('crm_token')).toBeNull();
+    expect(localStorage.getItem('crm_user')).toBeNull();
   });
 });

@@ -1,7 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import { Bid } from '../../types';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
+import { useDirtyDismiss } from '../../hooks/useDirtyDismiss';
 import { useShowToast } from '../../contexts/AppContext';
 import { useIsMobile } from '../../hooks/useIsMobile';
 
@@ -70,7 +73,6 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   const showToast = useShowToast();
   const isMobile = useIsMobile();
   const [items, setItems] = useState<IntakeItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<IntakeItem | null>(null);
   const [edit, setEdit] = useState<typeof BLANK>(BLANK);
   const [declineOpen, setDeclineOpen] = useState(false);
@@ -78,18 +80,20 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   const [saving, setSaving] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [addForm, setAddForm] = useState<typeof BLANK>(BLANK);
+  // Cancel / back / navigating away from a half-typed intake row asks first.
+  const closeAddForm = () => { setAddOpen(false); setAddForm(BLANK); };
+  const { requestClose: requestCloseAdd, discardDialog: addDiscardDialog } =
+    useDirtyDismiss(addOpen && JSON.stringify(addForm) !== JSON.stringify(BLANK), closeAddForm);
   const [refreshing, setRefreshing] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
   // "Email new bid to the team" option (opt-in, off by default) + its editable recipients.
   const [notifyTeam, setNotifyTeam] = useState(false);
   const [notifyEmails, setNotifyEmails] = useState('');
-  const [teamDefaults, setTeamDefaults] = useState<{ emails: string[]; mailConfigured: boolean }>({ emails: [], mailConfigured: false });
-
-  useEffect(() => {
-    api.get('/intake/notify-defaults')
-      .then(r => setTeamDefaults({ emails: r.data?.emails ?? [], mailConfigured: !!r.data?.mailConfigured }))
-      .catch(() => setTeamDefaults({ emails: [], mailConfigured: false }));
-  }, []);
+  const { data: notifyDefaults } = useApi<{ emails?: string[]; mailConfigured?: boolean }>('/intake/notify-defaults');
+  const teamDefaults = useMemo(
+    () => ({ emails: notifyDefaults?.emails ?? [], mailConfigured: !!notifyDefaults?.mailConfigured }),
+    [notifyDefaults],
+  );
 
   const report = useCallback((list: IntakeItem[]) => {
     onUnreadChange?.(list.filter(i => !i.read_at).length);
@@ -99,15 +103,8 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   // all change the unread set, so report on every items change (not just on load).
   useEffect(() => { report(items); }, [items, report]);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    api.get('/intake')
-      .then(r => { setItems(r.data); report(r.data); })
-      .catch(() => { setItems([]); report([]); })
-      .finally(() => setLoading(false));
-  }, [report]);
-
-  useEffect(() => { load(); }, [load]);
+  const { data: loadedItems, loading, reload: load } = useApi<IntakeItem[]>('/intake');
+  useEffect(() => { if (loadedItems) setItems(loadedItems); }, [loadedItems]);
 
   const openItem = (item: IntakeItem) => {
     setSelected(item);
@@ -122,14 +119,41 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
     setNotifyTeam(false);
     setNotifyEmails(teamDefaults.emails.join(', '));
     // Opening an unread item marks it read (persisted), and updates the count locally.
-    if (!item.read_at) {
-      const stamp = new Date().toISOString();
-      setItems(prev => prev.map(i => i.id === item.id ? { ...i, read_at: stamp } : i));
-      api.post(`/intake/${item.id}/read`).catch(() => {
-        setItems(prev => prev.map(i => i.id === item.id ? { ...i, read_at: null } : i)); // revert on failure
-      });
-    }
+    if (!item.read_at) markRead(item.id);
   };
+
+  const { run: markRead } = useMutation(
+    async (itemId: string) => { await api.post(`/intake/${itemId}/read`); },
+    {
+      key: (itemId) => itemId,
+      optimistic: (itemId) => {
+        const stamp = new Date().toISOString();
+        setItems(prev => prev.map(i => i.id === itemId ? { ...i, read_at: stamp } : i));
+        return () => setItems(prev => prev.map(i => i.id === itemId ? { ...i, read_at: null } : i));
+      },
+      // optional: marking-as-read is a side effect of opening the item, not
+      // something the user asked for, so a failure only reverts the blue dot.
+      errorToast: false,
+    },
+  );
+
+  const { run: markUnread } = useMutation(
+    async (itemId: string) => { await api.post(`/intake/${itemId}/unread`); },
+    {
+      optimistic: (itemId) => {
+        // Blue dot comes back immediately; the rollback restores the timestamp.
+        const stamp = new Date().toISOString();
+        setItems(prev => prev.map(i => i.id === itemId ? { ...i, read_at: null } : i));
+        setSelected(prev => prev && prev.id === itemId ? { ...prev, read_at: null } : prev);
+        return () => {
+          setItems(prev => prev.map(i => i.id === itemId ? { ...i, read_at: stamp } : i));
+          setSelected(prev => prev && prev.id === itemId ? { ...prev, read_at: stamp } : prev);
+        };
+      },
+      successToast: { title: 'Marked unread', sub: 'It will show as new until you open it again' },
+      errorToast: () => ({ title: 'Could not mark unread' }),
+    },
+  );
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -140,7 +164,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
       load();
     } catch (err: unknown) {
       const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      showToast({ title: 'Refresh failed', sub: message || 'Could not reach the mailbox' });
+      showToast({ variant: 'error', title: 'Refresh failed', sub: message || 'Could not reach the mailbox' });
     } finally {
       setRefreshing(false);
     }
@@ -148,7 +172,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
 
   const handleAccept = async () => {
     if (!selected) return;
-    if (!edit.name.trim() || !edit.gc.trim()) { showToast({ title: 'Name and GC are required' }); return; }
+    if (!edit.name.trim() || !edit.gc.trim()) { showToast({ variant: 'error', title: 'Name and GC are required' }); return; }
     const teamEmails = notifyTeam
       ? notifyEmails.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
       : [];
@@ -171,7 +195,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
       load();
     } catch (err: unknown) {
       const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      showToast({ title: message || 'Failed to accept', sub: 'Please try again' });
+      showToast({ variant: 'error', title: message || 'Failed to accept', sub: 'Please try again' });
     } finally {
       setSaving(false);
     }
@@ -187,14 +211,14 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
       setDeclineOpen(false);
       load();
     } catch {
-      showToast({ title: 'Failed to decline', sub: 'Please try again' });
+      showToast({ variant: 'error', title: 'Failed to decline', sub: 'Please try again' });
     } finally {
       setSaving(false);
     }
   };
 
   const handleAdd = async () => {
-    if (!addForm.name.trim()) { showToast({ title: 'Name is required' }); return; }
+    if (!addForm.name.trim()) { showToast({ variant: 'error', title: 'Name is required' }); return; }
     setSaving(true);
     try {
       await api.post('/intake', addForm);
@@ -203,7 +227,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
       setAddOpen(false);
       load();
     } catch {
-      showToast({ title: 'Failed to add', sub: 'Please try again' });
+      showToast({ variant: 'error', title: 'Failed to add', sub: 'Please try again' });
     } finally {
       setSaving(false);
     }
@@ -284,7 +308,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   // state (no parallel state) — the list shows when neither is set, otherwise the
   // detail/add pane takes over full-width with a Back control.
   const showMobileList = !selected && !addOpen;
-  const goBackMobile = () => { setSelected(null); setAddOpen(false); };
+  const goBackMobile = () => { setSelected(null); requestCloseAdd(); };
 
   // Right pane content — identical on desktop to the pre-mobile markup; on mobile
   // the overflow/max-width tweaks let the document (not this div) own scrolling
@@ -295,7 +319,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
       {FormFields(addForm, (k, v) => setAddForm(prev => ({ ...prev, [k]: v })))}
       <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
         <button className="btn" onClick={handleAdd} disabled={saving} style={{ background: 'var(--green)', borderColor: 'var(--green)' }}>{saving ? 'Adding…' : 'Add to Inbox'}</button>
-        <button className="btn ghost" onClick={() => { setAddOpen(false); setAddForm(BLANK); }}>Cancel</button>
+        <button className="btn ghost" onClick={requestCloseAdd}>Cancel</button>
       </div>
     </div>
   ) : !selected ? (
@@ -353,18 +377,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
               {selected.status === 'pending' && selected.read_at && (
                 <button
                   onClick={() => {
-                    const id = selected.id;
-                    // Optimistic: blue dot comes back immediately; revert on failure.
-                    setItems(prev => prev.map(i => i.id === id ? { ...i, read_at: null } : i));
-                    setSelected(prev => prev && prev.id === id ? { ...prev, read_at: null } : prev);
-                    api.post(`/intake/${id}/unread`)
-                      .then(() => showToast({ title: 'Marked unread', sub: 'It will show as new until you open it again' }))
-                      .catch(() => {
-                        const stamp = new Date().toISOString();
-                        setItems(prev => prev.map(i => i.id === id ? { ...i, read_at: stamp } : i));
-                        setSelected(prev => prev && prev.id === id ? { ...prev, read_at: stamp } : prev);
-                        showToast({ title: 'Could not mark unread' });
-                      });
+                    markUnread(selected.id);
                   }}
                   style={{ ...outlookLinkStyle, background: 'none', border: 'none', cursor: 'pointer', font: 'inherit' }}>
                   <Icon name="clock" size={13} stroke={2}/> Mark unread
@@ -552,6 +565,8 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
           </div>
         ) : rightPane)}
       </div>
+
+      {addDiscardDialog}
     </div>
   );
 }

@@ -119,7 +119,8 @@ describe('CustomerHub edit save', () => {
 
     fireEvent.click(screen.getByText('Save changes'));
 
-    await waitFor(() => expect(showToast).toHaveBeenCalledWith({ title: 'Save failed', sub: 'email: Invalid email' }));
+    // variant 'error' so it does not render with the green success check (audit ux #3).
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith({ variant: 'error', title: 'Save failed', sub: 'email: Invalid email' }));
     // Edit mode stays open on failure — the Save button (and Cancel, not Edit) is still visible.
     expect(screen.getByText('Save changes')).toBeTruthy();
     expect(screen.getByText('Cancel')).toBeTruthy();

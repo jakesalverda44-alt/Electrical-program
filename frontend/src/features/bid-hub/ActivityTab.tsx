@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import Icon from '../../components/Icon';
 import { Bid } from '../../types';
 import api from '../../api/client';
+import { useMutation } from '../../hooks/useMutation';
 
 // Ported from features/pipeline/DetailDrawer.tsx L236-296 (lifecycle timeline +
 // lost-reason/competitor form). The timeline is read-only and unchanged.
@@ -30,17 +31,16 @@ interface ActivityProps { bid: Bid; onBidUpdated: (bid: Bid) => void; }
 export default function ActivityTab({ bid, onBidUpdated }: ActivityProps) {
   const [lossReason, setLossReason] = useState(bid.loss_reason || LOSS_REASONS[0]);
   const [competitor, setCompetitor] = useState(bid.competitor || '');
-  const [saving, setSaving] = useState(false);
-
-  const saveLossDetails = async () => {
-    setSaving(true);
-    try {
+  const { run: saveLossDetails, saving } = useMutation(
+    async () => {
       const { data } = await api.patch(`/bids/${bid.id}/stage`, { stage: 'lost', loss_reason: lossReason, competitor: competitor || undefined });
-      onBidUpdated(data.bid ?? data);
-    } finally {
-      setSaving(false);
-    }
-  };
+      return data;
+    },
+    {
+      onSuccess: (data) => onBidUpdated(data.bid ?? data),
+      errorTitle: 'Could not save the loss details',
+    },
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>

@@ -9,4 +9,9 @@ export default defineConfig({
       '/api': 'http://localhost:3001',
     },
   },
+  test: {
+    // Individual test files pick their own environment with a
+    // `// @vitest-environment` docblock; the default stays node.
+    setupFiles: ['./src/test/setup.ts'],
+  },
 });

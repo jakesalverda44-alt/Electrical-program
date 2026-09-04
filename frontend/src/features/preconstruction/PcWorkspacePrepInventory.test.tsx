@@ -33,7 +33,7 @@ const bid: Bid = {
 function mockApi(results: Record<string, unknown> | null) {
   get.mockImplementation((url: string) => {
     if (url === `/preconstruction/${bid.id}/results`) return Promise.resolve({ data: results });
-    if (url.startsWith('/documents?linked_id=')) return Promise.resolve({ data: [] });
+    if (url === '/documents') return Promise.resolve({ data: [] });
     return Promise.resolve({ data: null });
   });
   post.mockResolvedValue({ data: {} });

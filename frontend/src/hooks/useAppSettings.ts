@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
-import api from '../api/client';
+import { useState, useEffect } from 'react';
 import { setCurrency } from '../lib/money';
+import { useApi } from './useApi';
 
 export interface AppSettings {
   // Company
@@ -163,27 +163,22 @@ export function checkAIPermission(
 
 export function useAppSettings(authenticated: boolean) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
-  const [loaded, setLoaded] = useState(false);
 
-  const reload = useCallback(async () => {
-    try {
-      const r = await api.get('/settings');
-      const map: Partial<AppSettings> = {};
-      (r.data as { key: string; value: string }[]).forEach(s => {
-        (map as Record<string, string>)[s.key] = s.value;
-      });
-      setCurrency(map.currency_code);
-      setSettings(prev => ({ ...prev, ...map }));
-    } catch {
-      // fail silently — use defaults
-    } finally {
-      setLoaded(true);
-    }
-  }, []);
+  const { data, error, loading, reload } = useApi<{ key: string; value: string }[]>('/settings', {
+    enabled: authenticated,
+  });
 
   useEffect(() => {
-    if (authenticated) reload();
-  }, [authenticated, reload]);
+    if (!data) return;
+    const map: Partial<AppSettings> = {};
+    data.forEach(s => { (map as Record<string, string>)[s.key] = s.value; });
+    setCurrency(map.currency_code);
+    setSettings(prev => ({ ...prev, ...map }));
+  }, [data]);
+
+  // "Loaded" has always meant "we are done trying", not "we succeeded" — a
+  // failure still falls back to DEFAULT_APP_SETTINGS rather than blocking boot.
+  const loaded = authenticated ? (!loading && (!!data || !!error)) : true;
 
   return { settings, setSettings, loaded, reload };
 }

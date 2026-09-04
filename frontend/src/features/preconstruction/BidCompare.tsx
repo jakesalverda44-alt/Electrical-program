@@ -4,6 +4,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import { PROJECT_TYPES } from './constants';
 import { moneyFull } from '../../lib/money';
 import { per1kSf, median, deltaVsMedian, isOutlier } from '../bid-hub/compareMath';
@@ -107,47 +109,36 @@ const COST_HAS_DATA = (j: CompareJob) => COST_ROWS.some(spec => spec.raw(j) !== 
 export default function BidCompare({ bidId, brand, projectType }: {
   bidId: string; sqFt?: number | null; brand?: string | null; projectType?: string | null;
 }) {
-  const [comparables, setComparables] = useState<Comparable[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [jobs, setJobs] = useState<CompareJob[]>([]);
-  const [categoryNames, setCategoryNames] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [comparing, setComparing] = useState(false);
   const [openCategory, setOpenCategory] = useState<string | null>(null);
   const [lines, setLines] = useState<Record<string, TakeoffLine[]>>({});
   const [takeoffErrors, setTakeoffErrors] = useState<Record<string, string>>({});
-  const [error, setError] = useState<string | null>(null);
 
+  const { data: compData, loading, error: compError } = useApi<{ comparables?: Comparable[] }>(
+    `/preconstruction/${bidId}/comparables`,
+  );
+  const comparables = compData?.comparables ?? [];
+  // Preselect the three closest so the tab is useful without any clicking.
   useEffect(() => {
-    setLoading(true);
-    setError(null);
-    api.get(`/preconstruction/${bidId}/comparables`)
-      .then(r => {
-        const list: Comparable[] = r.data.comparables ?? [];
-        setComparables(list);
-        // Preselect the three closest so the tab is useful without any clicking.
-        setSelected(new Set(list.slice(0, 3).map(c => c.id)));
-      })
-      .catch(() => setError('Could not load comparable bids.'))
-      .finally(() => setLoading(false));
-  }, [bidId]);
+    if (!compData) return;
+    setSelected(new Set((compData.comparables ?? []).slice(0, 3).map(c => c.id)));
+  }, [compData]);
 
-  const runCompare = React.useCallback(async (ids: Set<string>) => {
-    if (!ids.size) { setJobs([]); setCategoryNames([]); return; }
-    setComparing(true);
-    setError(null);
-    try {
-      const { data } = await api.get(`/preconstruction/${bidId}/compare`, { params: { against: [...ids].join(',') } });
-      setJobs(data.jobs ?? []);
-      setCategoryNames(data.categoryNames ?? []);
-    } catch {
-      setError('Could not build the comparison.');
-    } finally {
-      setComparing(false);
-    }
-  }, [bidId]);
+  // The comparison is a function of the selection, so it is a keyed read rather
+  // than an imperative call: reselecting cancels the comparison already running.
+  const against = [...selected].join(',');
+  const { data: cmpData, loading: comparing, error: cmpError } = useApi<{
+    jobs?: CompareJob[]; categoryNames?: string[];
+  }>(`/preconstruction/${bidId}/compare`, {
+    params: { against },
+    enabled: !loading && selected.size > 0,
+  });
+  const jobs = selected.size ? (cmpData?.jobs ?? []) : [];
+  const categoryNames = selected.size ? (cmpData?.categoryNames ?? []) : [];
 
-  useEffect(() => { if (!loading) runCompare(selected); }, [loading, selected, runCompare]);
+  const error = compError ? 'Could not load comparable bids.'
+    : cmpError ? 'Could not build the comparison.'
+    : null;
 
   const toggle = (id: string) => setSelected(prev => {
     const next = new Set(prev);
@@ -155,11 +146,12 @@ export default function BidCompare({ bidId, brand, projectType }: {
     return next;
   });
 
-  const openDrill = async (category: string) => {
-    if (openCategory === category) { setOpenCategory(null); return; }
-    setOpenCategory(category);
-    const missing = jobs.filter(j => !lines[j.id]);
-    if (missing.length) {
+  // A per-row lazy cache fill: one request per job the drill-down does not have
+  // yet. useApi cannot express "N requests keyed by a growing set", so this runs
+  // through useMutation instead — each row still degrades to an empty list, and
+  // the 403 case keeps its own inline message.
+  const { run: runOpenDrill } = useMutation(
+    async (missing: CompareJob[]) => {
       const fetched = await Promise.all(missing.map(j =>
         api.get(`/preconstruction/${j.id}/takeoff`)
           .then(r => [j.id, (r.data?.line_items ?? []) as TakeoffLine[]] as const)
@@ -171,8 +163,19 @@ export default function BidCompare({ bidId, brand, projectType }: {
             return [j.id, [] as TakeoffLine[]] as const;
           })
       ));
-      setLines(prev => ({ ...prev, ...Object.fromEntries(fetched) }));
-    }
+      return fetched;
+    },
+    {
+      onSuccess: (fetched) => setLines(prev => ({ ...prev, ...Object.fromEntries(fetched) })),
+      errorTitle: 'Could not load the line items',
+    },
+  );
+
+  const openDrill = (category: string) => {
+    if (openCategory === category) { setOpenCategory(null); return; }
+    setOpenCategory(category);
+    const missing = jobs.filter(j => !lines[j.id]);
+    if (missing.length) runOpenDrill(missing);
   };
 
   // Per-SF figures are the only fair way to line up buildings of different sizes.

@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import { Bid, Gen, Activity } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 
 type CommKind = 'note' | 'call' | 'email' | 'meeting' | 'bid' | 'award' | 'system';
 
@@ -66,22 +67,21 @@ export default function CommsPage({ bids, gens, activity }: Props) {
   const systemEntries = useMemo(() => activity.map((a, i) => activityToEntry(a, i)), [activity]);
   const [persisted, setPersisted] = useState<CommEntry[]>([]);
 
+  const { data: commRows } = useApi<Record<string, string>[]>('/comms');
   useEffect(() => {
-    api.get('/comms').then(r => {
-      const rows: CommEntry[] = r.data.map((row: Record<string, string>) => ({
-        id: row.id,
-        kind: row.kind as CommKind,
-        div: row.div as CommEntry['div'],
-        subject: row.subject,
-        body: row.body ?? '',
-        linkedId: row.linked_id ?? '',
-        linkedName: row.linked_name ?? '',
-        author: row.author,
-        ts: row.created_at,
-      }));
-      setPersisted(rows);
-    }).catch(() => {});
-  }, []);
+    if (!commRows) return;
+    setPersisted(commRows.map(row => ({
+      id: row.id,
+      kind: row.kind as CommKind,
+      div: row.div as CommEntry['div'],
+      subject: row.subject,
+      body: row.body ?? '',
+      linkedId: row.linked_id ?? '',
+      linkedName: row.linked_name ?? '',
+      author: row.author,
+      ts: row.created_at,
+    })));
+  }, [commRows]);
 
   const entries = useMemo(() => {
     const ids = new Set(persisted.map(e => e.id));
@@ -113,7 +113,7 @@ export default function CommsPage({ bids, gens, activity }: Props) {
   }, [entries, filterKind, filterDiv, search]);
 
   const handleAdd = async () => {
-    if (!form.subject.trim()) { showToast({ title: 'Subject required' }); return; }
+    if (!form.subject.trim()) { showToast({ variant: 'error', title: 'Subject required' }); return; }
     const opt = linkOptions.find(o => o.id === form.linkedId);
     const div: CommEntry['div'] = form.linkedId.startsWith('bid:') ? 'elec' : form.linkedId.startsWith('gen:') ? 'gen' : 'general';
     try {
@@ -132,7 +132,7 @@ export default function CommsPage({ bids, gens, activity }: Props) {
       setAddOpen(false);
       showToast({ title: `${KIND_META[form.kind].label} logged` });
     } catch {
-      showToast({ title: 'Failed to save', sub: 'Please try again' });
+      showToast({ variant: 'error', title: 'Failed to save', sub: 'Please try again' });
     }
   };
 

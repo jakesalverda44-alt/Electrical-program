@@ -2,6 +2,8 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Gen } from '../../types';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import { useShowToast } from '../../contexts/AppContext';
 
 type DocCategory = 'plans' | 'contract' | 'proposal' | 'permit' | 'invoice' | 'other' | 'change_order' | 'submittal' | 'rfi' | 'photo';
@@ -52,7 +54,6 @@ export default function DocsPage({ bids, gens }: Props) {
   const showToast = useShowToast();
   const fileInput = useRef<HTMLInputElement>(null);
   const [docs,         setDocs]         = useState<Doc[]>([]);
-  const [loading,      setLoading]      = useState(true);
   const [filterCat,    setFilterCat]    = useState<DocCategory | 'all'>('all');
   const [filterDiv,    setFilterDiv]    = useState<'all' | 'elec' | 'gen' | 'general'>('all');
   const [search,       setSearch]       = useState('');
@@ -60,11 +61,9 @@ export default function DocsPage({ bids, gens }: Props) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [dragging,     setDragging]     = useState(false);
   const [selected,     setSelected]     = useState<Doc | null>(null);
-  const [uploading,    setUploading]    = useState(false);
 
-  useEffect(() => {
-    api.get('/documents').then(r => setDocs(r.data)).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  const { data: loadedDocs, loading } = useApi<Doc[]>('/documents');
+  useEffect(() => { if (loadedDocs) setDocs(loadedDocs); }, [loadedDocs]);
 
   const linkOptions = useMemo(() => [
     { id: '', name: '— No link —', div: 'general' as const },
@@ -74,17 +73,16 @@ export default function DocsPage({ bids, gens }: Props) {
 
   const handleFiles = (files: File[]) => { if (files.length > 0) setPendingFiles(files); };
 
-  const commitUpload = async () => {
-    if (pendingFiles.length === 0) { showToast({ title: 'Select files first' }); return; }
-    setUploading(true);
-    try {
+  const { run: runUpload, saving: uploading } = useMutation(
+    async () => {
       const opt = linkOptions.find(o => o.id === uploadForm.linkedId);
       const newDocs: Doc[] = [];
+      // Counted rather than toasted per file: there is one toast slot, so the
+      // per-file warning was immediately overwritten by the success toast —
+      // and with every file oversized the user got a green "0 files uploaded".
+      let skipped = 0;
       for (const f of pendingFiles) {
-        if (f.size > 50 * 1024 * 1024) {
-          showToast({ title: `"${f.name}" exceeds 50 MB — skipped` });
-          continue;
-        }
+        if (f.size > 50 * 1024 * 1024) { skipped++; continue; }
         const form = new FormData();
         form.append('file', f);
         form.append('display_name', uploadForm.name.trim() || f.name);
@@ -95,21 +93,36 @@ export default function DocsPage({ bids, gens }: Props) {
         const res = await api.post('/documents', form, { timeout: 120_000 });
         newDocs.push(res.data);
       }
-      setDocs(prev => [...newDocs, ...prev]);
-      setPendingFiles([]);
-      setUploadForm(BLANK);
-      showToast({ title: `${newDocs.length} file${newDocs.length > 1 ? 's' : ''} uploaded` });
-      if (fileInput.current) fileInput.current.value = '';
-    } catch (err: unknown) {
-      const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      showToast({ title: message || 'Upload failed. Please try again.' });
-    } finally {
-      setUploading(false);
-    }
+      return { newDocs, skipped };
+    },
+    {
+      onSuccess: ({ newDocs }) => {
+        setDocs(prev => [...newDocs, ...prev]);
+        setPendingFiles([]);
+        setUploadForm(BLANK);
+        if (fileInput.current) fileInput.current.value = '';
+      },
+      successToast: ({ newDocs, skipped }) => (skipped > 0
+        ? {
+          variant: 'info' as const,
+          title: `${newDocs.length} uploaded, ${skipped} skipped`,
+          sub: `${skipped} file${skipped > 1 ? 's' : ''} over the 50 MB limit`,
+        }
+        : { title: `${newDocs.length} file${newDocs.length > 1 ? 's' : ''} uploaded` }),
+      errorToast: (message) => ({ title: 'Upload failed', sub: message }),
+    },
+  );
+
+  const commitUpload = () => {
+    if (pendingFiles.length === 0) { showToast({ variant: 'error', title: 'Select files first' }); return; }
+    runUpload();
   };
 
   const downloadDoc = (doc: Doc) => {
-    const token = localStorage.getItem('token');
+    // 'crm_token', not 'token': the whole app stores the JWT under the former,
+    // so this was sending `Bearer null` and 401ing every time — and since task
+    // 2 made a 401 eject the user, the button had started logging people out.
+    const token = localStorage.getItem('crm_token');
     const a = document.createElement('a');
     a.href = `/api/documents/${doc.id}/download`;
     // include auth token via fetch + blob for authenticated download
@@ -120,15 +133,23 @@ export default function DocsPage({ bids, gens }: Props) {
         a.href = url; a.download = doc.display_name;
         a.click(); URL.revokeObjectURL(url);
       })
-      .catch(() => showToast({ title: 'Download failed' }));
+      .catch(() => showToast({ variant: 'error', title: 'Download failed' }));
   };
 
-  const deleteDoc = async (id: string) => {
-    await api.delete(`/documents/${id}`).catch(() => {});
-    setDocs(prev => prev.filter(d => d.id !== id));
-    if (selected?.id === id) setSelected(null);
-    showToast({ title: 'Document removed' });
-  };
+  // Audit ux #2: the DELETE was fire-and-forget, so a failure still removed the
+  // row and still said "Document removed" while the file stayed on the server.
+  const { run: deleteDoc } = useMutation(
+    async (id: string) => { await api.delete(`/documents/${id}`); return id; },
+    {
+      key: (id) => id,
+      onSuccess: (id) => {
+        setDocs(prev => prev.filter(d => d.id !== id));
+        if (selected?.id === id) setSelected(null);
+      },
+      successToast: { title: 'Document removed' },
+      errorToast: (message) => ({ title: 'Delete failed', sub: message }),
+    },
+  );
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();

@@ -149,7 +149,11 @@ export default function ProposalPublicPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: err instanceof Error ? err.message : String(err) }),
-      }).catch(() => {});
+      })
+        // This IS the failure report; the customer must not see an error on a
+        // signing that actually worked.
+        // optional: nothing further to try if the report itself cannot be sent.
+        .catch(() => {});
     } catch { /* nothing left to try */ }
   };
 

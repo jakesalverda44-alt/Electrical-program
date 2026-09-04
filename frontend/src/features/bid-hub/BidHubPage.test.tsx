@@ -21,6 +21,7 @@ vi.mock('../../api/client', () => ({
 
 vi.mock('../../contexts/AppContext', () => ({
   useShowToast: () => vi.fn(),
+  useOptionalShowToast: () => vi.fn(),
   useUser: () => ({ id: 'u1', name: 'Test User', email: 't@example.com', role: 'estimator' }),
   useSettings: () => ({ settings: {}, reloadSettings: vi.fn() }),
 }));

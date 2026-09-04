@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../../../api/client';
+import { useMutation } from '../../../hooks/useMutation';
 import Icon from '../../../components/Icon';
 import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
@@ -21,7 +22,6 @@ export function CompanySection({ settings, onSaved }: { settings: AppSettings; o
                  'currency_code'];
   const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(keys.map(k => [k, (settings as any)[k] ?? ''])));
   const [orig, setOrig] = useState(vals);
-  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -31,15 +31,17 @@ export function CompanySection({ settings, onSaved }: { settings: AppSettings; o
 
   const hasChanges = keys.some(k => vals[k] !== orig[k]);
 
-  const save = async () => {
-    setSaving(true);
-    try {
-      await api.put('/settings', vals);
-      setOrig(vals);
-      onSaved();
-      setSaved(true); setTimeout(() => setSaved(false), 3000);
-    } finally { setSaving(false); }
-  };
+  const { run: save, saving } = useMutation(
+    async () => { await api.put('/settings', vals); },
+    {
+      onSuccess: () => {
+        setOrig(vals);
+        onSaved();
+        setSaved(true); setTimeout(() => setSaved(false), 3000);
+      },
+      errorTitle: 'Could not save the company profile',
+    },
+  );
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setVals(p => ({ ...p, [k]: e.target.value }));
 

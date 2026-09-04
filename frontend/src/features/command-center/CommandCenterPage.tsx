@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import Icon from '../../components/Icon';
 import { useUser, useShowToast } from '../../contexts/AppContext';
 import { Bid, Gen, WonJob, BriefPayload, BriefAttentionItem, TodayEvent, Lead } from '../../types';
@@ -125,11 +127,8 @@ interface Props {
 export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav, onEditGen, onConverted }: Props) {
   const user = useUser();
   const showToast = useShowToast();
-  const [brief, setBrief] = useState<BriefPayload | null>(null);
-  const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(new Date());
   const [drawerItem, setDrawerItem] = useState<BriefAttentionItem | null>(null);
-  const [marking, setMarking] = useState(false);
   const [done, setDone] = useState<Set<string>>(loadDone);
   const [showSurveyPicker, setShowSurveyPicker] = useState(false);
   const [surveyLead, setSurveyLead] = useState<Lead | null>(null);
@@ -138,14 +137,11 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
     return isNaN(n) ? 0 : n;
   });
 
-  const load = useCallback(() => {
-    api.get<BriefPayload>('/brief')
-      .then(r => setBrief(r.data))
-      .catch(() => setBrief(null))
-      .finally(() => setLoading(false));
-  }, []);
+  // The interval still decides when to ask; the request, its cancellation and
+  // its failure state belong to useApi.
+  const { data: brief, loading, reload: load } = useApi<BriefPayload>('/brief');
 
-  useEffect(() => { load(); const t = setInterval(load, 60_000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { const t = setInterval(load, 60_000); return () => clearInterval(t); }, [load]);
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 30_000); return () => clearInterval(t); }, []);
 
   const toggleDone = (id: string) => setDone(prev => {
@@ -169,22 +165,22 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
           // of silently leaving it "done" here while the email stays unread there.
           toggleDone(item.id);
           const sub = err?.response?.data?.error || 'Check your Outlook connection and try again.';
-          showToast({ title: "Couldn't mark read in Outlook", sub });
+          showToast({ variant: 'error', title: "Couldn't mark read in Outlook", sub });
         });
     }
   };
 
-  const markContacted = async (leadId: string) => {
-    setMarking(true);
-    try {
-      await api.post(`/leads/${leadId}/log-activity`, { kind: 'call', direction: 'out' });
-      if (drawerItem) toggleDone(drawerItem.id);
-      setDrawerItem(null);
-      load();
-    } finally {
-      setMarking(false);
-    }
-  };
+  const { run: markContacted, saving: marking } = useMutation(
+    async (leadId: string) => { await api.post(`/leads/${leadId}/log-activity`, { kind: 'call', direction: 'out' }); },
+    {
+      onSuccess: () => {
+        if (drawerItem) toggleDone(drawerItem.id);
+        setDrawerItem(null);
+        load();
+      },
+      errorTitle: 'Could not log that call',
+    },
+  );
 
   // The picker hands back whichever lead the appointment (or the blank-survey fallback)
   // resolved to; mount the survey directly on it, same as LeadDetailDrawer does when a
@@ -205,7 +201,7 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
       if (onConverted) onConverted(data);
       onEditGen(data);
     } catch {
-      showToast({ title: "Couldn't create the proposal", sub: 'Check connection and try again.' });
+      showToast({ variant: 'error', title: "Couldn't create the proposal", sub: 'Check connection and try again.' });
     }
   };
 

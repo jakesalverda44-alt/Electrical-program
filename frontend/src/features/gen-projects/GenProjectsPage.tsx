@@ -4,6 +4,8 @@ import DriveImage from '../../components/DriveImage';
 import RecordFiles from '../../components/RecordFiles';
 import { Gen, WonJob, Toast } from '../../types';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import { moneyFull, moneyShort as money } from '../../lib/money';
 import { useShowToast } from '../../contexts/AppContext';
 
@@ -11,21 +13,12 @@ interface DrivePhoto { id: string; name: string; mimeType: string; webViewLink?:
 
 // Job-site photos for a generator project, pulled from the Drive "Photos" subfolder.
 function GenPhotos({ gen, showToast }: { gen: Gen; showToast: (t: Toast) => void }) {
-  const [photos, setPhotos] = useState<DrivePhoto[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: photoData, loading, reload: load } = useApi<DrivePhoto[]>(`/gens/${gen.id}/photos`);
+  const photos = photoData ?? [];
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const isImage = (m: string) => m.startsWith('image/');
-
-  const load = () => {
-    setLoading(true);
-    api.get(`/gens/${gen.id}/photos`)
-      .then(({ data }) => setPhotos(data))
-      .catch(() => setPhotos([]))
-      .finally(() => setLoading(false));
-  };
-  useEffect(load, [gen.id]);
 
   const upload = async (files: File[]) => {
     if (!files.length) return;
@@ -43,7 +36,7 @@ function GenPhotos({ gen, showToast }: { gen: Gen; showToast: (t: Toast) => void
       load();
       showToast({ title: `${files.length} photo${files.length > 1 ? 's' : ''} uploaded` });
     } catch {
-      showToast({ title: 'Upload failed', sub: 'Try again' });
+      showToast({ variant: 'error', title: 'Upload failed', sub: 'Try again' });
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -139,32 +132,36 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onC
     }
   }, [openId, awarded, onClearParam]);
   const [editDraft, setEditDraft] = useState({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '', date_won: '' });
-  const [editSaving, setEditSaving] = useState(false);
 
   const startDetailEdit = (g: Gen) => {
     setEditDraft({ customer: g.customer||'', loc: g.loc||'', mfr: g.mfr||'Kohler', model: g.model||'', kw: String(g.kw??''), amount: String(g.amount??''), addons: String(g.addons??''), date_won: g.date_won ? String(g.date_won).slice(0,10) : '' });
     setEditingDetail(true);
   };
 
-  const saveDetailEdit = async (g: Gen) => {
-    setEditSaving(true);
-    try {
+  const { run: saveDetailEdit, saving: editSaving } = useMutation(
+    async (g: Gen) => {
       const { data } = await api.patch(`/gens/${g.id}`, {
         customer: editDraft.customer.trim(), loc: editDraft.loc.trim(), mfr: editDraft.mfr,
         model: editDraft.model.trim(), kw: Number(editDraft.kw)||0,
         amount: Number(editDraft.amount)||0, addons: Number(editDraft.addons)||0,
         ...(editDraft.date_won ? { date_won: editDraft.date_won } : {}),
       });
-      const updated = data.gen ?? data;
-      setGens(prev => prev.map(x => x.id === updated.id ? updated : x));
-      setDetail(updated);
-      if (data.wonJob) setWonJobs(prev => prev.map(w => w.proposal_id === updated.id ? data.wonJob : w));
-      setEditingDetail(false);
-      showToast({ title: 'Details updated', sub: updated.customer });
-    } finally {
-      setEditSaving(false);
-    }
-  };
+      return data;
+    },
+    {
+      onSuccess: (data) => {
+        const updated = data.gen ?? data;
+        setGens(prev => prev.map(x => x.id === updated.id ? updated : x));
+        setDetail(updated);
+        if (data.wonJob) setWonJobs(prev => prev.map(w => w.proposal_id === updated.id ? data.wonJob : w));
+        setEditingDetail(false);
+      },
+      // The toast is the only confirmation this drawer gives, so it must come
+      // from the resolved response rather than from the click.
+      successToast: (data) => ({ title: 'Details updated', sub: (data.gen ?? data).customer }),
+      errorTitle: 'Could not save those details',
+    },
+  );
 
   const movePhase = async (id: string, phase: PhaseKey) => {
     const prevPhase = phases[id] ?? 'deposit';
@@ -177,7 +174,7 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onC
     } catch (err: unknown) {
       setPhases(prev => ({ ...prev, [id]: prevPhase }));
       const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      showToast({ title: 'Phase update failed', sub: message || 'Changes reverted' });
+      showToast({ variant: 'error', title: 'Phase update failed', sub: message || 'Changes reverted' });
     }
   };
 
@@ -201,7 +198,7 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onC
       setDetail(null);
       showToast({ title: 'Generator project deleted', sub: gen.customer });
     } catch {
-      showToast({ title: 'Delete failed', sub: 'Please try again' });
+      showToast({ variant: 'error', title: 'Delete failed', sub: 'Please try again' });
     }
   };
 

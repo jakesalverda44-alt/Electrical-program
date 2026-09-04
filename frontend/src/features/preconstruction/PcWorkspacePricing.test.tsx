@@ -37,7 +37,7 @@ function mockApi(estimate: BidEstimate | null) {
   get.mockImplementation((url: string) => {
     if (url === `/estimates/${bid.id}`) return Promise.resolve({ data: estimate });
     if (url === '/estimates/unit-costs') return Promise.resolve({ data: { global: {}, by_project_type: {} } });
-    if (url.startsWith('/documents?linked_id=')) return Promise.resolve({ data: [] });
+    if (url === '/documents') return Promise.resolve({ data: [] });
     return Promise.resolve({ data: null });
   });
   post.mockResolvedValue({ data: {} });
@@ -286,7 +286,7 @@ function mockApiWithFreshTakeoff(estimate: BidEstimate | null, agent2Output: str
     if (url === `/estimates/${bid.id}`) return Promise.resolve({ data: estimate });
     if (url === '/estimates/unit-costs') return Promise.resolve({ data: { global: {}, by_project_type: {} } });
     if (url === `/preconstruction/${bid.id}/results`) return Promise.resolve({ data: { status: 'complete', agent2_output: agent2Output } });
-    if (url.startsWith('/documents?linked_id=')) return Promise.resolve({ data: [] });
+    if (url === '/documents') return Promise.resolve({ data: [] });
     return Promise.resolve({ data: null });
   });
   post.mockResolvedValue({ data: {} });

@@ -1,8 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Toast, BidEstimate, EstimateLineItem } from '../../types';
 import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey, PROJECT_TYPES, ConfirmedService } from './constants';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
+import { reportError } from '../../lib/reportError';
+import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
+import { useMutation } from '../../hooks/useMutation';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
 import { moneyFull } from '../../lib/money';
 import FilePreviewModal from '../../components/FilePreviewModal';
@@ -208,6 +212,18 @@ function analysisErrorMessage(data: Record<string, unknown> | null | undefined) 
   return `${first.slice(0, 700)}...`;
 }
 
+// A stuck 'running' status used to poll every 3s for the rest of the session
+// (audit data #5). Ten minutes is well past the pipeline's real worst case.
+const POLL_DEADLINE_MS = 10 * 60 * 1000;
+const POLL_TIMEOUT_MESSAGE = 'Analysis timed out — check status in the Plan Review tab.';
+
+interface TakeoffOnFile {
+  categories: { name: string; itemCount: number; totals: Record<string, number> }[];
+  line_items: { category: string; description: string; unit: string; qty: number | null }[];
+  item_count: number;
+  source_file: string | null;
+}
+
 interface ProjectDoc { id: string; name: string; display_name: string; category: string; file_type: string; }
 
 // The AI vision pipeline can only read PDFs and images — this gates which project
@@ -305,14 +321,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [analysisTab, setAnalysisTab] = useState<'agent1'|'agent2'|'agent3'|'raw'>('agent1');
   const [copied, setCopied] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [historicalCosts, setHistoricalCosts] = useState<Array<Record<string,unknown>>>([]);
   const [expandedCostRow, setExpandedCostRow] = useState<number | null>(null);
   const [costTypeFilter, setCostTypeFilter] = useState<string>('all');
   const [savedEstimate, setSavedEstimate] = useState<BidEstimate | null>(null);
-  const [unitCostLib, setUnitCostLib] = useState<{ global: Record<string,number>; by_project_type: Record<string,Record<string,number>> }>({ global: {}, by_project_type: {} });
-  const [savingEstimate, setSavingEstimate] = useState(false);
   const [estimateSaved, setEstimateSaved] = useState(false);
-  const [bidIntel, setBidIntel] = useState<Record<string,unknown> | null>(null);
   const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
   // Populated by the pre-bid package fetch (Task 7). Empty until then, so the
   // "Import from Pre-Bid" button simply stays hidden.
@@ -343,8 +355,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [verifyFailures, setVerifyFailures] = useState<VerifyFailure[] | null>(null);
   // FIX-12 — downloadDocx had no busy-state, unlike its xlsx/prebid
   // siblings, so a double-click could double-file the same generation.
-  const [docxBusy, setDocxBusy] = useState(false);
-  const [xlsxBusy, setXlsxBusy] = useState(false);
   const [prebidBusy, setPrebidBusy] = useState(false);
   const [prebidResult, setPrebidResult] = useState<{ scopeDocumentId: string | null; takeoffDocumentId: string | null } | null>(null);
   const [importBusy, setImportBusy] = useState(false);
@@ -360,12 +370,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const importTakeoffRef = useRef<HTMLInputElement>(null);
   const importBreakdownRef = useRef<HTMLInputElement>(null);
   const [savingImport, setSavingImport] = useState(false);
-  const [takeoffOnFile, setTakeoffOnFile] = useState<{
-    categories: { name: string; itemCount: number; totals: Record<string, number> }[];
-    line_items: { category: string; description: string; unit: string; qty: number | null }[];
-    item_count: number;
-    source_file: string | null;
-  } | null>(null);
+  // Six independent reads, one hook each: each cancels on its own key change,
+  // so switching bids can no longer land bid A's takeoff on bid B's workspace.
+  const { data: historicalCostsData } = useApi<Array<Record<string, unknown>>>('/preconstruction/costs');
+  const historicalCosts = historicalCostsData ?? [];
+  const { data: takeoffOnFile, reload: reloadTakeoff } = useApi<TakeoffOnFile>(`/preconstruction/${bid.id}/takeoff`);
+  const { data: bidIntel } = useApi<Record<string, unknown>>(`/preconstruction/intelligence/${bid.id}`);
+  const { data: unitCostLibData } = useApi<{ global: Record<string, number>; by_project_type: Record<string, Record<string, number>> }>('/estimates/unit-costs');
+  const unitCostLib = unitCostLibData ?? { global: {}, by_project_type: {} };
   const [openTakeoffCat, setOpenTakeoffCat] = useState<string | null>(null);
   const pollRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
   const agent4PollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -374,24 +386,93 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const wsRef = useRef(ws);
   wsRef.current = ws;
 
+  // ── Autosave ──────────────────────────────────────────────────────────
+  // This PUT is the only persistence for estimator notes, scope text and RFIs,
+  // and it used to end in `.catch(() => {})` — a dropped connection lost an
+  // afternoon of pre-construction work with zero indication (audit code #6).
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const backoffRef = useRef(0);
+  // Armed in the effect BODY, not just cleared in its cleanup: React.StrictMode
+  // (main.tsx) mounts, unmounts and remounts every component in dev, and the
+  // live app runs under Vite dev. A flag only ever set false by the cleanup
+  // stayed false forever, so every `if (!aliveRef.current) return` below fired
+  // and the chip stuck on "Saving…" with no retries — all of task 7 inert in
+  // the one environment it was written for.
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+    };
+  }, []);
+
+  const workspacePayload = useCallback(() => {
+    const w = wsRef.current;
+    return {
+      step: w.step,
+      active_tab: w.activeTab,
+      notes: w.notes,
+      scope: w.scope,
+      rfis: w.rfis,
+      files: w.files,
+      ai_done: w.aiDone,
+      proposal_generated: w.proposalGenerated,
+      confirmed_service: w.confirmedService ?? null,
+    };
+  }, []);
+
+  // Retries always send the CURRENT payload, not the one that failed, so an
+  // edit made while a retry was pending is not silently dropped.
+  const saveWorkspace = useCallback(async () => {
+    setSaveState('saving');
+    try {
+      await api.put(`/preconstruction/${bid.id}/workspace`, workspacePayload());
+      if (!aliveRef.current) return;
+      backoffRef.current = 0;
+      setSaveState('saved');
+    } catch {
+      if (!aliveRef.current) return;
+      setSaveState('error');
+      const next = Math.min(30_000, backoffRef.current === 0 ? 2_000 : backoffRef.current * 2);
+      backoffRef.current = next;
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+      retryTimer.current = setTimeout(() => { void saveWorkspace(); }, next);
+    }
+  }, [bid.id, workspacePayload]);
+
+  // The mount guard is the payload we last acted on, not a "have we rendered
+  // once" boolean: a boolean is consumed by StrictMode's first mount and lets
+  // the remount write the no-op PUT it exists to prevent (audit data #16). A
+  // snapshot is idempotent — the remount sees identical values and skips — and
+  // it also drops the redundant PUT when this effect re-runs because
+  // `saveWorkspace`'s identity changed but nothing the user typed did.
+  const lastScheduledRef = useRef<string | null>(null);
+  // Declared before the autosave effect so it runs first: effects fire in
+  // declaration order, so a new bid resets the baseline before it is read.
+  useEffect(() => { lastScheduledRef.current = null; }, [bid.id]);
+
   // Auto-save workspace to DB 800ms after last change (skip ephemeral fields)
   useEffect(() => {
+    const snapshot = JSON.stringify(workspacePayload());
+    if (lastScheduledRef.current === null) {
+      // First render for this bid: what we are holding IS what the server sent.
+      lastScheduledRef.current = snapshot;
+      return;
+    }
+    if (lastScheduledRef.current === snapshot) return;
+    lastScheduledRef.current = snapshot;
+
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      api.put(`/preconstruction/${bid.id}/workspace`, {
-        step: ws.step,
-        active_tab: ws.activeTab,
-        notes: ws.notes,
-        scope: ws.scope,
-        rfis: ws.rfis,
-        files: ws.files,
-        ai_done: ws.aiDone,
-        proposal_generated: ws.proposalGenerated,
-        confirmed_service: ws.confirmedService ?? null,
-      }).catch(() => {});
+      // A fresh edit supersedes any pending retry and resets the backoff.
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+      backoffRef.current = 0;
+      void saveWorkspace();
     }, 800);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated, ws.confirmedService]);
+  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated, ws.confirmedService, saveWorkspace, workspacePayload]);
 
   function set(patchOrFn: Partial<PcWorkspace> | ((prev: PcWorkspace) => Partial<PcWorkspace>)) {
     const current = wsRef.current;
@@ -407,10 +488,38 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     if (idx < STEP_ORDER.length - 1) set({ step: STEP_ORDER[idx + 1] });
   };
 
+  // Pricing lives in `ws` (overhead %, profit %, per-line overrides) and is only
+  // persisted by the Pricing tab's explicit "Save Estimate", so leaving with
+  // unsaved pricing threw it away. An autosave stuck in `error` counts as
+  // unsaved too — that is the case task 7's retry chain cannot finish.
+  const pricingDirty = savedEstimate
+    ? (ws.overheadPct !== savedEstimate.overhead_pct
+      || ws.profitPct !== savedEstimate.profit_pct
+      || JSON.stringify(ws.estimateOverrides) !== JSON.stringify(overridesFromEstimate(savedEstimate.line_items)))
+    : (ws.overheadPct !== 10 || ws.profitPct !== 15 || Object.keys(ws.estimateOverrides).length > 0);
+  useUnsavedGuard(pricingDirty || saveState === 'error');
+
+  // ── Polling ───────────────────────────────────────────────────────────
+  // Both loops are recursive setTimeouts whose continuation runs after an
+  // `await`. The effect cleanup only ever cleared the pending timeout, so
+  // unmounting mid-flight let the continuation schedule a NEW timeout that
+  // nothing owned — an un-cancellable request every 3s for the rest of the
+  // session (audit data #5). `pollCancelled` is checked after every await,
+  // and a hard deadline stops a stuck 'running' status polling forever.
+  const pollCancelled = useRef(false);
+  const [pollTimedOut, setPollTimedOut] = useState<null | 'analysis' | 'proposal'>(null);
+
   const pollForResults = (startMs = Date.now(), shownAgent2 = false, shownAgent3 = false, failStreak = 0) => {
     pollRef.current = setTimeout(async () => {
+      if (pollCancelled.current) return;
+      if (Date.now() - startMs > POLL_DEADLINE_MS) {
+        setPollTimedOut('analysis');
+        set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${POLL_TIMEOUT_MESSAGE}`] }));
+        return;
+      }
       try {
         const { data } = await api.get(`/preconstruction/${bid.id}/results`);
+        if (pollCancelled.current) return;
         const elapsed = Date.now() - startMs;
         let nextA2 = shownAgent2, nextA3 = shownAgent3;
         if (!shownAgent2 && (elapsed > 90_000 || data?.status === 'agent1_complete' || data?.status === 'agent2_running')) {
@@ -449,6 +558,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           pollForResults(startMs, nextA2, nextA3, 0);
         }
       } catch {
+        if (pollCancelled.current) return;
         // Retry up to 5 times before giving up — handles transient connection drops
         if (failStreak < 5) {
           pollForResults(startMs, shownAgent2, shownAgent3, failStreak + 1);
@@ -459,10 +569,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }, 3000);
   };
 
-  const pollAgent4 = (failStreak = 0) => {
+  const pollAgent4 = (startMs = Date.now(), failStreak = 0) => {
     agent4PollRef.current = setTimeout(async () => {
+      if (pollCancelled.current) return;
+      if (Date.now() - startMs > POLL_DEADLINE_MS) {
+        setPollTimedOut('proposal');
+        setAgent4Running(false);
+        return;
+      }
       try {
         const { data } = await api.get(`/preconstruction/${bid.id}/results`);
+        if (pollCancelled.current) return;
         const status = data?.agent4_status as string | undefined;
         if (status === 'complete') {
           setAiResults(data);
@@ -472,24 +589,27 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           setAiResults(data);
           setAgent4Running(false);
           const errMsg = (data?.agent4_error as string | undefined) ?? 'Failed to generate proposal';
-          showToast({ title: 'Agent 4 error', sub: errMsg });
+          showToast({ variant: 'error', title: 'Agent 4 error', sub: errMsg });
         } else {
-          pollAgent4(0);
+          pollAgent4(startMs, 0);
         }
       } catch {
-        if (failStreak < 5) pollAgent4(failStreak + 1);
+        if (pollCancelled.current) return;
+        if (failStreak < 5) pollAgent4(startMs, failStreak + 1);
         else {
           setAgent4Running(false);
-          showToast({ title: 'Agent 4 error', sub: 'Could not reach server. The proposal may still be generating — check back in a moment.' });
+          showToast({ variant: 'error', title: 'Agent 4 error', sub: 'Could not reach server. The proposal may still be generating — check back in a moment.' });
         }
       }
     }, 3000);
   };
 
   useEffect(() => {
+    pollCancelled.current = false;
+    setPollTimedOut(null);
     const RUNNING_STATUSES = ['running', 'agent1_complete', 'agent2_running', 'agent2_complete', 'agent3_running'];
     api.get(`/preconstruction/${bid.id}/results`).then(r => {
-      if (!r.data) return;
+      if (pollCancelled.current || !r.data) return;
       setAiResults(r.data);
       // Reconnect polling if a pipeline was in progress when the page was refreshed
       if (RUNNING_STATUSES.includes(r.data?.status)) {
@@ -503,26 +623,29 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         setAgent4Running(true);
         pollAgent4();
       }
-    }).catch(() => {});
+    })
+      // Reconnects a pipeline that was already running when the page reloaded.
+      // optional: failing leaves the tab looking idle, recoverable by reopening.
+      .catch(err => reportError(err, 'PcWorkspace results reconnect'));
     return () => {
+      // Both the pending timeout AND the in-flight continuation: clearing the
+      // timeout alone is what let an orphaned loop survive an unmount.
+      pollCancelled.current = true;
       if (pollRef.current) clearTimeout(pollRef.current);
       if (agent4PollRef.current) clearTimeout(agent4PollRef.current);
     };
   }, [bid.id]);
 
-  useEffect(() => {
-    api.get('/preconstruction/costs').then(r => setHistoricalCosts(r.data || [])).catch(() => {});
-    api.get(`/preconstruction/${bid.id}/takeoff`).then(r => setTakeoffOnFile(r.data)).catch(() => {});
-    api.get(`/preconstruction/intelligence/${bid.id}`).then(r => setBidIntel(r.data)).catch(() => {});
-    api.get('/estimates/unit-costs').then(r => setUnitCostLib(r.data || { global: {}, by_project_type: {} })).catch(() => {});
-    api.get(`/estimates/${bid.id}`).then(r => { if (r.data) setSavedEstimate(r.data); }).catch(() => {});
-    // Unfiltered — the "From Project Files" panel shows every project document;
-    // eligibility for AI analysis (PDF/image only) is enforced per-row via
-    // isPdfOrImage() at render time, not by hiding files here.
-    api.get(`/documents?linked_id=${bid.id}`).then(r => {
-      setProjectDocs((r.data || []) as ProjectDoc[]);
-    }).catch(() => {});
-  }, [bid.id]);
+  const { data: savedEstimateData } = useApi<BidEstimate>(`/estimates/${bid.id}`);
+  useEffect(() => { if (savedEstimateData) setSavedEstimate(savedEstimateData); }, [savedEstimateData]);
+
+  // Unfiltered — the "From Project Files" panel shows every project document;
+  // eligibility for AI analysis (PDF/image only) is enforced per-row via
+  // isPdfOrImage() at render time, not by hiding files here.
+  const { data: projectDocsData, reload: reloadProjectDocs } = useApi<ProjectDoc[]>('/documents', {
+    params: { linked_id: bid.id },
+  });
+  useEffect(() => { if (projectDocsData) setProjectDocs(projectDocsData); }, [projectDocsData]);
 
   // Hydrate overhead/profit/overrides from the saved bid_estimates row once it
   // loads. Without this, App.tsx's restore-on-refresh hardcodes
@@ -561,12 +684,18 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // Task 7 — load the composed BidData preview whenever a completed proposal
   // is on file (covers both a fresh Agent 4 run finishing via pollAgent4's
   // setAiResults, and reconnecting to an already-complete proposal on mount).
+  const proposalReady = aiResults?.agent4_status === 'complete';
+  const { data: proposalPreviewData, error: proposalPreviewError } = useApi<BidDataPreview>(
+    `/preconstruction/${bid.id}/proposal-preview`,
+    { enabled: proposalReady },
+  );
   useEffect(() => {
-    if (aiResults?.agent4_status !== 'complete') { setProposalPreview(null); return; }
-    api.get(`/preconstruction/${bid.id}/proposal-preview`)
-      .then(r => setProposalPreview(r.data))
-      .catch(() => setProposalPreview(null));
-  }, [bid.id, aiResults?.agent4_status]);
+    // The pre-migration code was `.catch(() => setProposalPreview(null))`. Without
+    // the error branch a failed fetch left the PREVIOUS bid's preview on screen,
+    // which on this page is a proposal document with a customer name on it.
+    if (proposalPreviewError) { setProposalPreview(null); return; }
+    setProposalPreview(proposalReady ? (proposalPreviewData ?? null) : null);
+  }, [proposalReady, proposalPreviewData, proposalPreviewError]);
 
   // Pre-fill proposal price from saved estimate grand total
   useEffect(() => {
@@ -656,7 +785,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     const parsed = parseAgentJson(aiResults?.agent2_output as string | undefined);
     const rawRfis = (parsed?.rfis as Array<Record<string, unknown>> | undefined) ?? [];
     if (!rawRfis.length) {
-      showToast({ title: 'No AI analysis available', sub: 'Run the 3-agent analysis first.' });
+      showToast({ variant: 'info', title: 'No AI analysis available', sub: 'Run the 3-agent analysis first.' });
       return;
     }
     const norm = (s: string) => s.trim().toLowerCase();
@@ -672,7 +801,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         return true;
       });
     if (!toAdd.length) {
-      showToast({ title: 'Nothing new to import', sub: 'Every AI-suggested RFI is already on this list.' });
+      showToast({ variant: 'info', title: 'Nothing new to import', sub: 'Every AI-suggested RFI is already on this list.' });
       return;
     }
     const newRfis = toAdd.map(q => ({ id: Date.now().toString() + Math.random(), question: q, submitted: false, answer: '' }));
@@ -705,7 +834,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to draft the RFI email';
-      showToast({ title: 'Draft failed', sub: msg });
+      showToast({ variant: 'error', title: 'Draft failed', sub: msg });
     } finally {
       setRfiSubmitting(false);
     }
@@ -753,24 +882,34 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     // Task 5.3 — surface VERIFY-confidence items in the same save toast, so a
     // rep who saves without ever opening the confidence chips still sees them.
     const verifyCount = items.filter(li => confidenceToPlaybook(li.confidence) === 'VERIFY').length;
-    setSavingEstimate(true);
-    try {
-      const { data } = await api.put(`/estimates/${bid.id}`, {
+    await runSaveEstimate(items, zeroCostCount, verifyCount);
+  };
+
+  const { run: runSaveEstimate, saving: savingEstimate } = useMutation(
+    async (items: EstimateLineItem[], _zeroCostCount: number, _verifyCount: number) => {
+      const { data } = await api.put<BidEstimate>(`/estimates/${bid.id}`, {
         line_items: items,
         overhead_pct: ws.overheadPct,
         profit_pct: ws.profitPct,
       });
-      setSavedEstimate(data);
-      setEstimateSaved(true);
-      setTimeout(() => setEstimateSaved(false), 3000);
-      const parts = [`Grand total: ${moneyFull(data.grand_total)}`];
-      if (zeroCostCount > 0) parts.push(`${zeroCostCount} line item${zeroCostCount === 1 ? '' : 's'} priced at $0 (no unit cost)`);
-      if (verifyCount > 0) parts.push(`${verifyCount} item${verifyCount === 1 ? '' : 's'} need${verifyCount === 1 ? 's' : ''} verification`);
-      showToast({ title: 'Estimate saved', sub: parts.join(' · ') });
-    } finally {
-      setSavingEstimate(false);
-    }
-  };
+      return data;
+    },
+    {
+      showToast,
+      onSuccess: (data) => {
+        setSavedEstimate(data);
+        setEstimateSaved(true);
+        setTimeout(() => setEstimateSaved(false), 3000);
+      },
+      successToast: (data, _items, zeroCostCount, verifyCount) => {
+        const parts = [`Grand total: ${moneyFull(data.grand_total)}`];
+        if (zeroCostCount > 0) parts.push(`${zeroCostCount} line item${zeroCostCount === 1 ? '' : 's'} priced at $0 (no unit cost)`);
+        if (verifyCount > 0) parts.push(`${verifyCount} item${verifyCount === 1 ? '' : 's'} need${verifyCount === 1 ? 's' : ''} verification`);
+        return { title: 'Estimate saved', sub: parts.join(' · ') };
+      },
+      errorTitle: 'Estimate not saved',
+    },
+  );
 
   const generateProposal = () => {
     set({ proposalGenerated: true });
@@ -779,7 +918,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
   const runAgent4Proposal = async () => {
     if (!propPrice.trim()) {
-      showToast({ title: 'Price required', sub: 'Enter the total bid price before generating the proposal' });
+      showToast({ variant: 'error', title: 'Price required', sub: 'Enter the total bid price before generating the proposal' });
       return;
     }
     setAgent4StartError(null);
@@ -800,7 +939,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       setAgent4Running(false);
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to start Agent 4';
       setAgent4StartError(msg);
-      showToast({ title: 'Agent 4 error', sub: msg });
+      showToast({ variant: 'error', title: 'Agent 4 error', sub: msg });
     }
   };
 
@@ -833,39 +972,48 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     URL.revokeObjectURL(url);
   }
 
-  const downloadDocx = async () => {
-    setVerifyFailures(null);
-    setDocxBusy(true);
-    try {
+  // These read the API but they are actions, not state that follows a key, so
+  // they run through useMutation (busy flag + failure toast) rather than useApi.
+  // Both keep their own error handling: the failure body arrives as a Blob and
+  // has to be read before it can be shown.
+  const { run: runDownloadDocx, saving: docxBusy } = useMutation(
+    async () => {
       const response = await api.get(`/preconstruction/${bid.id}/generate-docx`, { responseType: 'blob' });
       triggerDownload(
         new Blob([response.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
         `Proposal — ${bid.name}.docx`
       );
-    } catch (err: unknown) {
-      const { sub, failures } = await readBlobError(err, 'Could not generate the proposal document');
-      if (failures?.length) setVerifyFailures(failures);
-      showToast({ title: 'Download failed', sub });
-    } finally {
-      setDocxBusy(false);
-    }
-  };
+    },
+    {
+      showToast,
+      errorToast: false,
+      onError: async (err) => {
+        const { sub, failures } = await readBlobError(err, 'Could not generate the proposal document');
+        if (failures?.length) setVerifyFailures(failures);
+        showToast({ variant: 'error', title: 'Download failed', sub });
+      },
+    },
+  );
 
-  const downloadTakeoffXlsx = async () => {
-    setXlsxBusy(true);
-    try {
+  const downloadDocx = () => { setVerifyFailures(null); runDownloadDocx(); };
+
+  const { run: downloadTakeoffXlsx, saving: xlsxBusy } = useMutation(
+    async () => {
       const response = await api.get(`/preconstruction/${bid.id}/generate-takeoff-xlsx`, { responseType: 'blob' });
       triggerDownload(
         new Blob([response.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
         `Takeoff — ${bid.name}.xlsx`
       );
-    } catch (err: unknown) {
-      const { sub } = await readBlobError(err, 'Could not generate the takeoff spreadsheet');
-      showToast({ title: 'Download failed', sub });
-    } finally {
-      setXlsxBusy(false);
-    }
-  };
+    },
+    {
+      showToast,
+      errorToast: false,
+      onError: async (err) => {
+        const { sub } = await readBlobError(err, 'Could not generate the takeoff spreadsheet');
+        showToast({ variant: 'error', title: 'Download failed', sub });
+      },
+    },
+  );
 
   // Task 6.3's endpoint — internal pre-bid package (scope docx + confidence-
   // coded takeoff xlsx) for Chris. Links both filed documents on success via
@@ -881,7 +1029,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       const axiosErr = err as { response?: { data?: { error?: string; failures?: VerifyFailure[] } } };
       const body = axiosErr.response?.data;
       if (body?.failures?.length) setVerifyFailures(body.failures);
-      showToast({ title: 'Pre-bid package failed', sub: body?.error ?? 'Could not generate the pre-bid package' });
+      showToast({ variant: 'error', title: 'Pre-bid package failed', sub: body?.error ?? 'Could not generate the pre-bid package' });
     } finally {
       setPrebidBusy(false);
     }
@@ -902,20 +1050,19 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       showToast({ title: 'Draft created', sub: 'Review and send it from Outlook.' });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to create the draft';
-      showToast({ title: 'Draft failed', sub: msg });
+      showToast({ variant: 'error', title: 'Draft failed', sub: msg });
     } finally {
       setChrisDraftBusy(false);
     }
   };
 
-  const downloadFiledDocument = async (docId: string, filename: string) => {
-    try {
+  const { run: downloadFiledDocument } = useMutation(
+    async (docId: string, filename: string) => {
       const response = await api.get(`/documents/${docId}/download`, { responseType: 'blob' });
       triggerDownload(response.data as Blob, filename);
-    } catch {
-      showToast({ title: 'Download failed', sub: 'Please try again from the Files tab.' });
-    }
-  };
+    },
+    { showToast, errorToast: () => ({ title: 'Download failed', sub: 'Please try again from the Files tab.' }) },
+  );
 
   const handleConvert = () => {
     setConvertOpen(false);
@@ -935,44 +1082,52 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     set({ files: [...ws.files, ...newFiles] });
 
     // Persist to Documents so files survive page refresh
-    Promise.all(files.map(f => {
-      const fd = new FormData();
-      fd.append('file', f);
-      fd.append('linked_id', bid.id);
-      fd.append('linked_name', bid.name);
-      fd.append('div', 'elec');
-      fd.append('category', 'plans');
-      fd.append('display_name', f.name);
-      return api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-    })).then(() => {
-      api.get(`/documents?linked_id=${bid.id}`).then(r => {
-        setProjectDocs((r.data || []) as ProjectDoc[]);
-      }).catch(() => {});
-    }).catch(() => {});
+    runPersistFiles(files);
   };
+
+  const { run: runPersistFiles } = useMutation(
+    async (files: File[]) => {
+      await Promise.all(files.map(f => {
+        const fd = new FormData();
+        fd.append('file', f);
+        fd.append('linked_id', bid.id);
+        fd.append('linked_name', bid.name);
+        fd.append('div', 'elec');
+        fd.append('category', 'plans');
+        fd.append('display_name', f.name);
+        return api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      }));
+    },
+    {
+      showToast,
+      onSuccess: () => reloadProjectDocs(),
+      // These files are already listed in the workspace; the toast says they
+      // will not survive a refresh, which is the part the estimator loses.
+      errorToast: (message) => ({ title: 'Files not saved to the project', sub: message }),
+    },
+  );
 
   // Always goes through the backend (authenticated blob fetch), never anchors
   // doc.storage_url directly: the raw Cloudinary URL is unauthenticated and skips
   // access checks. Mirrors RecordFiles' download().
-  const downloadProjectDoc = async (doc: ProjectDoc) => {
-    try {
+  const { run: downloadProjectDoc } = useMutation(
+    async (doc: ProjectDoc) => {
       const res = await api.get(`/documents/${doc.id}/download`, { responseType: 'blob' });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url; a.download = doc.display_name || doc.name;
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
-    } catch {
-      showToast({ title: 'Download failed', sub: 'Please re-upload this file.' });
-    }
-  };
+    },
+    { showToast, errorToast: () => ({ title: 'Download failed', sub: 'Please re-upload this file.' }) },
+  );
 
   // Same view/preview routing as RecordFiles' "Documents" list, shared via
   // useDocPreview: pdf/image open inline in a new tab, xlsx/xls/csv/docx render
   // in-app via FilePreviewModal, everything else falls through to download.
   const { preview: docPreview, view: viewProjectDoc, closePreview: closeDocPreview } = useDocPreview<ProjectDoc>(
     downloadProjectDoc,
-    message => showToast({ title: 'Preview failed', sub: message }),
+    message => showToast({ variant: 'error', title: 'Preview failed', sub: message }),
   );
 
   const removeFile = (id: string, name: string) => {
@@ -1023,16 +1178,16 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         scopeOfWork: data.scopeOfWork,
         takeoff: data.takeoff ?? null,
       });
-      if (!data.amount) showToast({ title: 'No amount found', sub: 'Couldn\'t find a total in that file — enter it manually below.' });
-      if (importTakeoffFile && !data.sqFt) showToast({ title: 'No sq ft found', sub: 'Couldn\'t find building area in the takeoff — enter it manually below.' });
+      if (!data.amount) showToast({ variant: 'info', title: 'No amount found', sub: 'Couldn\'t find a total in that file — enter it manually below.' });
+      if (importTakeoffFile && !data.sqFt) showToast({ variant: 'info', title: 'No sq ft found', sub: 'Couldn\'t find building area in the takeoff — enter it manually below.' });
       if (data.takeoff) {
         showToast({ title: 'Takeoff saved', sub: `${data.takeoff.itemCount} items across ${data.takeoff.categories.length} categories.` });
-        api.get(`/preconstruction/${bid.id}/takeoff`).then(r => setTakeoffOnFile(r.data)).catch(() => {});
+        reloadTakeoff();
       }
       if (data.breakdown?.laborHours) showToast({ title: 'Cost breakdown saved', sub: `${Number(data.breakdown.laborHours).toLocaleString()} labor hours on file.` });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to read those files';
-      showToast({ title: 'Import failed', sub: msg });
+      showToast({ variant: 'error', title: 'Import failed', sub: msg });
     } finally {
       setImportBusy(false);
     }
@@ -1069,7 +1224,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       setImportTakeoffFile(null);
       setImportBreakdownFile(null);
     } catch {
-      showToast({ title: 'Save failed', sub: 'Could not save the imported bid.' });
+      showToast({ variant: 'error', title: 'Save failed', sub: 'Could not save the imported bid.' });
     } finally {
       setSavingImport(false);
     }
@@ -1905,7 +2060,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         const importScope = () => {
           const scopeFill = buildScopeFromAgent2(agent2Scope);
           if (!Object.keys(scopeFill).length) {
-            showToast({ title: 'Nothing to import', sub: 'No scope sections found in the AI takeoff output' });
+            showToast({ variant: 'info', title: 'Nothing to import', sub: 'No scope sections found in the AI takeoff output' });
             return;
           }
           set({ scope: { ...ws.scope, ...scopeFill } });
@@ -1914,7 +2069,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         const importPrebid = () => {
           const fill = buildScopeFromPrebid(prebidSections);
           if (!Object.keys(fill).length) {
-            showToast({ title: 'Nothing to import', sub: 'No scope sections found in the pre-bid package' });
+            showToast({ variant: 'info', title: 'Nothing to import', sub: 'No scope sections found in the pre-bid package' });
             return;
           }
           set({ scope: { ...ws.scope, ...fill } });
@@ -2768,7 +2923,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       </div>
 
       {/* Tab strip */}
-      <div className="pc-tabs" style={{ display: 'flex', gap: 2, padding: '0 24px', borderBottom: '1px solid var(--border)', background: 'var(--panel)', overflowX: 'auto' }}>
+      <div className="pc-tabs" style={{ display: 'flex', gap: 2, padding: '0 24px', borderBottom: '1px solid var(--border)', background: 'var(--panel)', overflowX: 'auto', alignItems: 'center' }}>
         {PC_TABS.map(t => (
           <button key={t.key} onClick={() => onUpdate({ ...ws, activeTab: t.key as PcTabKey })} style={{
             border: 'none', cursor: 'pointer', font: 'inherit', fontSize: 13, fontWeight: 700,
@@ -2780,7 +2935,29 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             {t.label}
           </button>
         ))}
+        {/* Autosave is invisible when it works and used to be invisible when it
+            didn't. This is the only signal the estimator gets. */}
+        <span data-testid="pc-save-state" style={{ marginLeft: 'auto', paddingLeft: 12, whiteSpace: 'nowrap',
+          fontSize: 11.5, fontWeight: 700,
+          color: saveState === 'error' ? 'var(--red)' : 'var(--text3)' }}>
+          {saveState === 'saving' ? 'Saving…'
+            : saveState === 'saved' ? 'Saved'
+            : saveState === 'error' ? 'Not saved — retrying'
+            : ''}
+        </span>
       </div>
+      {pollTimedOut && (
+        <div data-testid="pc-poll-timeout" style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 24px',
+          background: 'var(--amber-soft)', borderBottom: '1px solid rgba(224,165,59,.3)',
+          color: 'var(--amber)', fontSize: 12.5, fontWeight: 700,
+        }}>
+          <Icon name="alert" size={14} stroke={2}/>
+          {pollTimedOut === 'analysis'
+            ? POLL_TIMEOUT_MESSAGE
+            : 'Proposal generation timed out — check status in the Proposal tab.'}
+        </div>
+      )}
 
       {/* Tab content */}
       {renderTab()}

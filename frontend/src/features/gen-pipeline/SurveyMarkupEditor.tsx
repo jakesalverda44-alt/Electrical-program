@@ -1,5 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
+import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import Icon from '../../components/Icon';
 import { Gen } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
@@ -86,33 +88,31 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
 
   const drag = useRef<{ kind: 'move' | 'resize' | 'rotate' | 'label'; id: string; startX: number; startY: number; orig: Marker } | null>(null);
 
-  // Load the raw "Survey" document + any saved markup on mount.
+  // Find the raw "Survey" document, then rehydrate any saved markup for it.
+  const { data: docRows, error: docsError } = useApi<DocRow[]>('/documents', {
+    params: { linked_id: gen.id },
+  });
+  const savedMarkup = gen.survey_markup;
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { data } = await api.get('/documents', { params: { linked_id: gen.id } });
-        const doc = (data as DocRow[]).find(d => d.category === 'survey') || null;
-        if (cancelled) return;
-        setSurveyDoc(doc);
-        const saved = parseMarkup(gen.survey_markup);
-        if (saved && doc && saved.baseDocId === doc.id) {
-          setMarkers(saved.markers);
-        }
-        if (doc) await loadDoc(doc);
-      } catch {
-        if (!cancelled) setSurveyDoc(null);
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gen.id]);
+    if (docsError) { setSurveyDoc(null); return; }
+    if (!docRows) return;
+    const doc = docRows.find(d => d.category === 'survey') || null;
+    setSurveyDoc(doc);
+    const saved = parseMarkup(savedMarkup);
+    if (saved && doc && saved.baseDocId === doc.id) setMarkers(saved.markers);
+  }, [docRows, docsError, savedMarkup]);
 
-  const loadDoc = async (doc: DocRow) => {
+  // The survey image itself is keyed on the doc, so switching gens cancels the
+  // previous download instead of racing it onto the new drawing.
+  const surveyDocId = surveyDoc && typeof surveyDoc === 'object' ? surveyDoc.id : null;
+  const { data: surveyBlob, loading: fetchingBlob, reload: reloadBlob } = useApi<Blob>(
+    surveyDocId ? `/documents/${surveyDocId}/view` : null,
+    { responseType: 'blob' },
+  );
+
+  const renderSurvey = useCallback(async (doc: DocRow, blob: Blob) => {
     setLoading(true);
     try {
-      const res = await api.get(`/documents/${doc.id}/view`, { responseType: 'blob' });
-      const blob: Blob = res.data;
       const isPdf = (doc.file_type || blob.type || '').includes('pdf');
       if (isPdf) {
         const pdfjsLib = await import('pdfjs-dist');
@@ -150,11 +150,16 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
         setNatural(dims);
       }
     } catch {
-      showToast({ title: 'Could not load the survey', sub: 'Try re-uploading it' });
+      showToast({ variant: 'error', title: 'Could not load the survey', sub: 'Try re-uploading it' });
     } finally {
       setLoading(false);
     }
-  };
+  }, [showToast]);
+
+  useEffect(() => {
+    if (!surveyBlob || !surveyDoc || typeof surveyDoc !== 'object') return;
+    renderSurvey(surveyDoc, surveyBlob);
+  }, [surveyBlob, surveyDoc, renderSurvey]);
 
   const uploadSurvey = async (file: File) => {
     setUploading(true);
@@ -169,9 +174,10 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
       setSurveyDoc(data);
       setMarkers([]);
       setSelectedId(null);
-      await loadDoc(data);
+      // Re-fetch even when the replacement reuses the same document id.
+      reloadBlob();
     } catch {
-      showToast({ title: 'Upload failed', sub: 'Try again' });
+      showToast({ variant: 'error', title: 'Upload failed', sub: 'Try again' });
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -266,6 +272,11 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
   const setSelectedLabel = (label: string) => setMarkers(prev => prev.map(m => m.id === selectedId ? { ...m, label } : m));
   const deleteSelected = () => { setMarkers(prev => prev.filter(m => m.id !== selectedId)); setSelectedId(null); };
 
+  // Markers live in memory until an explicit Save, so leaving mid-markup used
+  // to throw the labelling away without a word.
+  const [savedMarkers, setSavedMarkers] = useState(() => JSON.stringify(parseMarkup(gen.survey_markup)?.markers ?? []));
+  useUnsavedGuard(JSON.stringify(markers) !== savedMarkers);
+
   const save = async (silent = false) => {
     if (!surveyDoc || typeof surveyDoc !== 'object' || !natural) return;
     setSaving(true);
@@ -273,9 +284,10 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
       const markup: SurveyMarkup = { baseDocId: surveyDoc.id, naturalWidth: natural.w, naturalHeight: natural.h, markers };
       const { data } = await api.patch(`/gens/${gen.id}`, { survey_markup: markup });
       onUpdated(data.gen ?? data);
+      setSavedMarkers(JSON.stringify(markers));
       if (!silent) showToast({ title: 'Markup saved' });
     } catch {
-      showToast({ title: 'Save failed', sub: 'Try again' });
+      showToast({ variant: 'error', title: 'Save failed', sub: 'Try again' });
     } finally {
       setSaving(false);
     }
@@ -310,7 +322,7 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
       await api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       showToast({ title: 'Labeled survey saved', sub: 'Attached to this job' });
     } catch {
-      showToast({ title: 'Export failed', sub: 'Try again' });
+      showToast({ variant: 'error', title: 'Export failed', sub: 'Try again' });
     } finally {
       setExporting(false);
     }
@@ -379,7 +391,7 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
       <input ref={fileRef} type="file" accept="application/pdf,image/*" style={{ display: 'none' }}
         onChange={e => { const f = e.target.files?.[0]; if (f) uploadSurvey(f); }}/>
 
-      {surveyDoc === 'checking' || loading ? (
+      {surveyDoc === 'checking' || loading || fetchingBlob ? (
         <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, padding: '20px 0', textAlign: 'center' }}>Loading…</div>
       ) : !surveyDoc && !imgUrl ? (
         <div style={{ border: '1.5px dashed var(--border2)', borderRadius: 10, padding: 24, textAlign: 'center' }}>

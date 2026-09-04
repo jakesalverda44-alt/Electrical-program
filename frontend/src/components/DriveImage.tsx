@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Icon from './Icon';
-import api from '../api/client';
+import { useApi } from '../hooks/useApi';
 
 interface Props {
   fileId: string;
@@ -24,25 +24,21 @@ interface Props {
  * Fetches as a blob, shows a placeholder for non-images or while loading.
  */
 export default function DriveImage({ fileId, alt, height = 120, isImage = true, src }: Props) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const { data: blob, error } = useApi<Blob>(
+    isImage ? (src || `/documents/drive-file/${fileId}`) : null,
+    { responseType: 'blob' },
+  );
+  const failed = !!error;
 
+  // The object URL is a resource, not state: mint one per blob and revoke it
+  // when the blob is replaced or the component goes away.
+  const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
-    if (!isImage) return;
-    let revoked = false;
-    let objectUrl: string | null = null;
-    api.get(src || `/documents/drive-file/${fileId}`, { responseType: 'blob' })
-      .then(res => {
-        if (revoked) return;
-        objectUrl = URL.createObjectURL(res.data);
-        setUrl(objectUrl);
-      })
-      .catch(() => { if (!revoked) setFailed(true); });
-    return () => {
-      revoked = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [fileId, isImage, src]);
+    if (!blob) return;
+    const objectUrl = URL.createObjectURL(blob);
+    setUrl(objectUrl);
+    return () => { URL.revokeObjectURL(objectUrl); setUrl(null); };
+  }, [blob]);
 
   const placeholder = (
     <div style={{ height, background: 'var(--surface3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

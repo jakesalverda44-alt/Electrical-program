@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../../api/client';
+import { useApi } from '../../../hooks/useApi';
+import { useMutation } from '../../../hooks/useMutation';
 import { Field, SectionTitle, SaveBar, inputStyle } from '../shared';
 import { PROJECT_TYPES } from '../../preconstruction/constants';
 
@@ -24,17 +26,15 @@ const empty = (): CostLib => ({ global: {}, by_project_type: {} });
 export function UnitCostSection() {
   const [lib, setLib]       = useState<CostLib>(empty());
   const [orig, setOrig]     = useState<CostLib>(empty());
-  const [saving, setSaving] = useState(false);
   const [saved, setSaved]   = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
+  const { data: loaded } = useApi<CostLib>('/estimates/unit-costs');
   useEffect(() => {
-    api.get('/estimates/unit-costs').then(r => {
-      const data = r.data as CostLib;
-      setLib(data);
-      setOrig(JSON.parse(JSON.stringify(data)));
-    }).catch(() => {});
-  }, []);
+    if (!loaded) return;
+    setLib(loaded);
+    setOrig(JSON.parse(JSON.stringify(loaded)));
+  }, [loaded]);
 
   const setGlobal = (cat: string, val: string) => {
     const n = val === '' ? 0 : Number(val);
@@ -62,17 +62,17 @@ export function UnitCostSection() {
 
   const hasChanges = JSON.stringify(lib) !== JSON.stringify(orig);
 
-  const save = async () => {
-    setSaving(true);
-    try {
-      await api.put('/estimates/unit-costs', lib);
-      setOrig(JSON.parse(JSON.stringify(lib)));
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } finally {
-      setSaving(false);
-    }
-  };
+  const { run: save, saving } = useMutation(
+    async () => { await api.put('/estimates/unit-costs', lib); },
+    {
+      onSuccess: () => {
+        setOrig(JSON.parse(JSON.stringify(lib)));
+        setSaved(true);
+        setTimeout(() => setSaved(false), 3000);
+      },
+      errorTitle: 'Could not save unit costs',
+    },
+  );
 
   const toggleType = (val: string) => setExpanded(p => ({ ...p, [val]: !p[val] }));
 

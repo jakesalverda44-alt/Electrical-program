@@ -39,7 +39,7 @@ const TAKEOFF = {
 function mockApi() {
   get.mockImplementation((url: string) => {
     if (url.endsWith('/takeoff')) return Promise.resolve({ data: TAKEOFF });
-    if (url.startsWith('/documents?linked_id=')) return Promise.resolve({ data: [] });
+    if (url === '/documents') return Promise.resolve({ data: [] });
     return Promise.resolve({ data: null });
   });
   post.mockResolvedValue({ data: {} });

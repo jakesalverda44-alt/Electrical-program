@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
+import { usePageTitle } from '../../hooks/usePageTitle';
+import { useDirtyDismiss } from '../../hooks/useDirtyDismiss';
+import { useMutation } from '../../hooks/useMutation';
 import FilePreviewModal from '../../components/FilePreviewModal';
 import { previewKind } from '../../components/filePreview';
 import { Customer, CustomerDetail, Toast } from '../../types';
@@ -53,25 +57,24 @@ const MANAGER_ROLES = ['owner', 'administrator', 'sales_manager'];
 
 // Pick duplicate customer records and merge them into the current one.
 function MergeModal({ targetId, targetName, onClose, onMerged }: { targetId: string; targetName: string; onClose: () => void; onMerged: (n: number) => void }) {
-  const [all, setAll] = useState<Customer[]>([]);
+  const { data: allData } = useApi<Customer[]>('/customers');
+  const all = allData ?? [];
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [merging, setMerging] = useState(false);
-
-  useEffect(() => { api.get('/customers').then(({ data }) => setAll(data)); }, []);
 
   const options = all.filter(c => c.id !== targetId &&
     (!query || c.name.toLowerCase().includes(query.toLowerCase()) || (c.company || '').toLowerCase().includes(query.toLowerCase())));
   const toggle = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  const merge = async () => {
-    if (!selected.size) return;
-    setMerging(true);
-    try {
+  const { run: runMerge, saving: merging } = useMutation(
+    async () => {
       const { data } = await api.post(`/customers/${targetId}/merge`, { sourceIds: [...selected] });
-      onMerged(data.merged);
-    } finally { setMerging(false); }
-  };
+      return data as { merged: number };
+    },
+    { onSuccess: (data) => onMerged(data.merged), errorTitle: 'Merge failed' },
+  );
+
+  const merge = () => { if (selected.size) runMerge(); };
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
@@ -122,10 +125,21 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
   const [docCategory, setDocCategory] = useState('plans');
   const [preview, setPreview] = useState<{ title: string; kind: 'sheet' | 'doc'; buf: ArrayBuffer; docId: string } | null>(null);
 
-  const load = useCallback(() => {
-    api.get(`/customers/${id}`).then(({ data }) => { setDetail(data); setForm(data.customer); });
-  }, [id]);
-  useEffect(() => { load(); }, [load]);
+  const { data: loadedDetail, reload: load } = useApi<CustomerDetail>(`/customers/${id}`);
+  useEffect(() => {
+    if (!loadedDetail) return;
+    setDetail(loadedDetail);
+    setForm(loadedDetail.customer);
+  }, [loadedDetail]);
+
+  // Above the early return below: hooks cannot be conditional.
+  usePageTitle(detail?.customer.name ?? null);
+
+  // Leaving edit mode discards the form, so ask when it differs from the record.
+  const editDirty = editing && !!detail
+    && EDIT_FIELDS.some(([k]) => String(form[k] ?? '') !== String(detail.customer[k] ?? ''));
+  const { requestClose: requestLeaveEdit, discardDialog: editDiscardDialog } =
+    useDirtyDismiss(editDirty, () => setEditing(false), { escape: false });
 
   if (!detail) return <div className="scroll"><div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div></div>;
 
@@ -149,7 +163,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
       showToast?.({ title: 'Customer saved', sub: data.name });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to save customer.';
-      showToast?.({ title: 'Save failed', sub: msg });
+      showToast?.({ variant: 'error', title: 'Save failed', sub: msg });
     }
   };
 
@@ -242,7 +256,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
         setTimeout(() => URL.revokeObjectURL(url), 60_000);
       } catch {
         if (w) w.close();
-        showToast?.({ title: 'Preview failed', sub: 'Try downloading instead.' });
+        showToast?.({ variant: 'error', title: 'Preview failed', sub: 'Try downloading instead.' });
       }
       return;
     }
@@ -256,7 +270,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
       const buf = await res.arrayBuffer();
       setPreview({ title: doc.display_name || doc.name, kind, buf, docId: doc.id });
     } catch {
-      showToast?.({ title: 'Preview failed', sub: 'Downloading instead.' });
+      showToast?.({ variant: 'error', title: 'Preview failed', sub: 'Downloading instead.' });
       downloadDoc(doc.id, doc.display_name);
     }
   };
@@ -353,7 +367,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
                   <Icon name="users" size={13} stroke={2}/>Merge
                 </button>
               )}
-              <button className="btn ghost" onClick={() => { setForm(c); setEditing(e => !e); }} style={{ fontSize: 12.5 }}>
+              <button className="btn ghost" onClick={() => { if (editing) requestLeaveEdit(); else { setForm(c); setEditing(true); } }} style={{ fontSize: 12.5 }}>
                 <Icon name={editing ? 'x' : 'gear'} size={13} stroke={2}/>{editing ? 'Cancel' : 'Edit'}
               </button>
             </div>
@@ -505,6 +519,8 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
           onDownload={() => downloadDoc(preview.docId, preview.title)}
         />
       )}
+
+      {editDiscardDialog}
     </div>
   );
 }

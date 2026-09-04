@@ -20,6 +20,8 @@ const ICON_PATHS: Record<string, string> = {
   checkc: '<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.3 2.3 4.7-5"/>',
   filter: '<path d="M3 5h18l-7 8v6l-4-2v-4z"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  alert: '<path d="M12 3.2 1.8 20.8h20.4L12 3.2z"/><path d="M12 9.4v4.6"/><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none"/>',
+  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.9" r=".9" fill="currentColor" stroke="none"/>',
   spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/>',
   trend: '<path d="M3 17l6-6 4 4 8-8M21 7v5M21 7h-5"/>',
   doc: '<path d="M6 2h8l4 4v16H6zM14 2v4h4"/><path d="M9 13h6M9 17h6"/>',

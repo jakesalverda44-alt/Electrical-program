@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../../../api/client';
+import { useMutation } from '../../../hooks/useMutation';
 import Icon from '../../../components/Icon';
 import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
@@ -146,7 +147,6 @@ export function NotificationsSection({ settings, onSaved }: { settings: AppSetti
   // proposal page it depended on is gone — so there's just the one delay now.
   const [elecQuietDays,  setElecQuietDays]  = useState(settings.elec_followup_quiet_days);
   const [orig,    setOrig]    = useState('');
-  const [saving,  setSaving]  = useState(false);
   const [saved,   setSaved]   = useState(false);
 
   const snapshot = (p: Record<string, boolean>, r: ReminderPrefs, quiet: string) =>
@@ -172,17 +172,21 @@ export function NotificationsSection({ settings, onSaved }: { settings: AppSetti
     setRemIn('');
   };
 
-  const save = async () => {
-    setSaving(true);
-    try {
+  const { run: save, saving } = useMutation(
+    async () => {
       await api.put('/settings', {
         notifications_json:  JSON.stringify({ ...prefs, reminders }),
         elec_followup_quiet_days: elecQuietDays,
       });
-      setOrig(snapshot(prefs, reminders, elecQuietDays)); onSaved();
-      setSaved(true); setTimeout(() => setSaved(false), 3000);
-    } finally { setSaving(false); }
-  };
+    },
+    {
+      onSuccess: () => {
+        setOrig(snapshot(prefs, reminders, elecQuietDays)); onSaved();
+        setSaved(true); setTimeout(() => setSaved(false), 3000);
+      },
+      errorTitle: 'Could not save notification settings',
+    },
+  );
 
   return (
     <div>
