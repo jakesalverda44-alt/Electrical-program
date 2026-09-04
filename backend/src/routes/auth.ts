@@ -22,7 +22,7 @@ router.post('/login', authLimiter, async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
   try {
-    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
+    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1 AND status = \'active\'', [email.toLowerCase()]);
     const user = rows[0];
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     const valid = await bcrypt.compare(password, user.password_hash);
@@ -108,7 +108,7 @@ router.get('/microsoft/callback', async (req, res) => {
 
     // Look up user by email
     const { rows } = await pool.query(
-      'SELECT * FROM users WHERE LOWER(email)=$1 AND status!=\'inactive\'',
+      'SELECT * FROM users WHERE LOWER(email)=$1 AND status=\'active\'',
       [email]
     );
     if (!rows.length) {
@@ -138,7 +138,7 @@ router.get('/microsoft/callback', async (req, res) => {
 router.post('/forgot-password', authLimiter, async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Email required' });
-  const { rows } = await pool.query('SELECT id, name FROM users WHERE email=$1', [email.toLowerCase()]);
+  const { rows } = await pool.query('SELECT id, name FROM users WHERE email=$1 AND status=\'active\'', [email.toLowerCase()]);
   // Always respond OK to avoid user enumeration
   if (!rows.length) return res.json({ ok: true });
   const user = rows[0];
@@ -170,7 +170,7 @@ router.post('/reset-password', authLimiter, async (req, res) => {
     const payload = jwt.verify(token, getJwtSecret()) as { id: string; purpose: string };
     if (payload.purpose !== 'reset') return res.status(400).json({ error: 'Invalid token' });
     const { rows } = await pool.query(
-      'SELECT id FROM users WHERE id=$1 AND reset_token=$2 AND reset_token_expires > now()',
+      'SELECT id FROM users WHERE id=$1 AND reset_token=$2 AND reset_token_expires > now() AND status=\'active\'',
       [payload.id, token]
     );
     if (!rows.length) return res.status(400).json({ error: 'Token expired or already used' });
