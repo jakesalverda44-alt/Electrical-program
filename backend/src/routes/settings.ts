@@ -59,7 +59,12 @@ const ALLOWED_KEYS = [
   'prebid_chris_email',
 ];
 
-const INTERNAL_KEYS = ['jwt_secret'];
+// Credentials that must never leave the server via GET /api/settings, even to an
+// admin — vapid_private_key lets anyone who reads it forge push notifications to
+// staff phones (audit: Security #2, High). jwt_secret was already excluded.
+// vapid_public_key is intentionally NOT here: it is meant to be public (browsers
+// need it to create a push subscription).
+const INTERNAL_KEYS = ['jwt_secret', 'vapid_private_key'];
 
 router.get('/', requireAuth, async (_req, res) => {
   const { rows } = await pool.query('SELECT key, value FROM app_settings ORDER BY key');
