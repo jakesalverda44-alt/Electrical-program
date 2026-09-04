@@ -158,7 +158,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
       load();
     } catch (err: unknown) {
       const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      showToast({ title: 'Refresh failed', sub: message || 'Could not reach the mailbox' });
+      showToast({ variant: 'error', title: 'Refresh failed', sub: message || 'Could not reach the mailbox' });
     } finally {
       setRefreshing(false);
     }
@@ -189,7 +189,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
       load();
     } catch (err: unknown) {
       const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      showToast({ title: message || 'Failed to accept', sub: 'Please try again' });
+      showToast({ variant: 'error', title: message || 'Failed to accept', sub: 'Please try again' });
     } finally {
       setSaving(false);
     }
@@ -205,7 +205,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
       setDeclineOpen(false);
       load();
     } catch {
-      showToast({ title: 'Failed to decline', sub: 'Please try again' });
+      showToast({ variant: 'error', title: 'Failed to decline', sub: 'Please try again' });
     } finally {
       setSaving(false);
     }
@@ -221,7 +221,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
       setAddOpen(false);
       load();
     } catch {
-      showToast({ title: 'Failed to add', sub: 'Please try again' });
+      showToast({ variant: 'error', title: 'Failed to add', sub: 'Please try again' });
     } finally {
       setSaving(false);
     }

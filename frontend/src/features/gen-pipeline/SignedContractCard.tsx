@@ -178,7 +178,7 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
       setDocs(prev => [data, ...(prev ?? [])]);
       return true;
     } catch {
-      showToast({ title: 'Rebuild failed', sub: 'Try again, or print the proposal link instead.' });
+      showToast({ variant: 'error', title: 'Rebuild failed', sub: 'Try again, or print the proposal link instead.' });
       return false;
     } finally {
       setStaged(false);
@@ -208,7 +208,7 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
       if (status === 400) {
         showToast({ title: 'No signature on file', sub: 'Add your signature in Settings first.' });
       } else {
-        showToast({ title: "Couldn't countersign", sub: msg || 'Try again in a moment.' });
+        showToast({ variant: 'error', title: "Couldn't countersign", sub: msg || 'Try again in a moment.' });
       }
     } finally {
       setCountersigning(false);

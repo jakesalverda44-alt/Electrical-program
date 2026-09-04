@@ -36,7 +36,7 @@ function GenPhotos({ gen, showToast }: { gen: Gen; showToast: (t: Toast) => void
       load();
       showToast({ title: `${files.length} photo${files.length > 1 ? 's' : ''} uploaded` });
     } catch {
-      showToast({ title: 'Upload failed', sub: 'Try again' });
+      showToast({ variant: 'error', title: 'Upload failed', sub: 'Try again' });
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -174,7 +174,7 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onC
     } catch (err: unknown) {
       setPhases(prev => ({ ...prev, [id]: prevPhase }));
       const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      showToast({ title: 'Phase update failed', sub: message || 'Changes reverted' });
+      showToast({ variant: 'error', title: 'Phase update failed', sub: message || 'Changes reverted' });
     }
   };
 
@@ -198,7 +198,7 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onC
       setDetail(null);
       showToast({ title: 'Generator project deleted', sub: gen.customer });
     } catch {
-      showToast({ title: 'Delete failed', sub: 'Please try again' });
+      showToast({ variant: 'error', title: 'Delete failed', sub: 'Please try again' });
     }
   };
 

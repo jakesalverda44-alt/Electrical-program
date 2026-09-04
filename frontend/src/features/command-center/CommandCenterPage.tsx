@@ -165,7 +165,7 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
           // of silently leaving it "done" here while the email stays unread there.
           toggleDone(item.id);
           const sub = err?.response?.data?.error || 'Check your Outlook connection and try again.';
-          showToast({ title: "Couldn't mark read in Outlook", sub });
+          showToast({ variant: 'error', title: "Couldn't mark read in Outlook", sub });
         });
     }
   };
@@ -201,7 +201,7 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
       if (onConverted) onConverted(data);
       onEditGen(data);
     } catch {
-      showToast({ title: "Couldn't create the proposal", sub: 'Check connection and try again.' });
+      showToast({ variant: 'error', title: "Couldn't create the proposal", sub: 'Check connection and try again.' });
     }
   };
 

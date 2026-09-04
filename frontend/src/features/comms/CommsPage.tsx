@@ -132,7 +132,7 @@ export default function CommsPage({ bids, gens, activity }: Props) {
       setAddOpen(false);
       showToast({ title: `${KIND_META[form.kind].label} logged` });
     } catch {
-      showToast({ title: 'Failed to save', sub: 'Please try again' });
+      showToast({ variant: 'error', title: 'Failed to save', sub: 'Please try again' });
     }
   };
 

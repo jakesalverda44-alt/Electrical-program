@@ -32,7 +32,7 @@ export default function DocSlot({ genId, category, label, accept = 'application/
       onUploaded?.(file);
       onChanged?.();
     } catch {
-      showToast({ title: 'Upload failed', sub: 'Try again' });
+      showToast({ variant: 'error', title: 'Upload failed', sub: 'Try again' });
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = '';

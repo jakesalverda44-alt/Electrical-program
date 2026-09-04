@@ -123,7 +123,7 @@ export default function DocsPage({ bids, gens }: Props) {
         a.href = url; a.download = doc.display_name;
         a.click(); URL.revokeObjectURL(url);
       })
-      .catch(() => showToast({ title: 'Download failed' }));
+      .catch(() => showToast({ variant: 'error', title: 'Download failed' }));
   };
 
   // Audit ux #2: the DELETE was fire-and-forget, so a failure still removed the

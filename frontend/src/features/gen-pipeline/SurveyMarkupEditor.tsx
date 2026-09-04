@@ -149,7 +149,7 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
         setNatural(dims);
       }
     } catch {
-      showToast({ title: 'Could not load the survey', sub: 'Try re-uploading it' });
+      showToast({ variant: 'error', title: 'Could not load the survey', sub: 'Try re-uploading it' });
     } finally {
       setLoading(false);
     }
@@ -176,7 +176,7 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
       // Re-fetch even when the replacement reuses the same document id.
       reloadBlob();
     } catch {
-      showToast({ title: 'Upload failed', sub: 'Try again' });
+      showToast({ variant: 'error', title: 'Upload failed', sub: 'Try again' });
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -280,7 +280,7 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
       onUpdated(data.gen ?? data);
       if (!silent) showToast({ title: 'Markup saved' });
     } catch {
-      showToast({ title: 'Save failed', sub: 'Try again' });
+      showToast({ variant: 'error', title: 'Save failed', sub: 'Try again' });
     } finally {
       setSaving(false);
     }
@@ -315,7 +315,7 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
       await api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       showToast({ title: 'Labeled survey saved', sub: 'Attached to this job' });
     } catch {
-      showToast({ title: 'Export failed', sub: 'Try again' });
+      showToast({ variant: 'error', title: 'Export failed', sub: 'Try again' });
     } finally {
       setExporting(false);
     }

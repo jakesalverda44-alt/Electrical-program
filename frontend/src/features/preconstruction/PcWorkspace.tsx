@@ -477,7 +477,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           setAiResults(data);
           setAgent4Running(false);
           const errMsg = (data?.agent4_error as string | undefined) ?? 'Failed to generate proposal';
-          showToast({ title: 'Agent 4 error', sub: errMsg });
+          showToast({ variant: 'error', title: 'Agent 4 error', sub: errMsg });
         } else {
           pollAgent4(0);
         }
@@ -485,7 +485,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         if (failStreak < 5) pollAgent4(failStreak + 1);
         else {
           setAgent4Running(false);
-          showToast({ title: 'Agent 4 error', sub: 'Could not reach server. The proposal may still be generating — check back in a moment.' });
+          showToast({ variant: 'error', title: 'Agent 4 error', sub: 'Could not reach server. The proposal may still be generating — check back in a moment.' });
         }
       }
     }, 3000);
@@ -712,7 +712,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to draft the RFI email';
-      showToast({ title: 'Draft failed', sub: msg });
+      showToast({ variant: 'error', title: 'Draft failed', sub: msg });
     } finally {
       setRfiSubmitting(false);
     }
@@ -817,7 +817,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       setAgent4Running(false);
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to start Agent 4';
       setAgent4StartError(msg);
-      showToast({ title: 'Agent 4 error', sub: msg });
+      showToast({ variant: 'error', title: 'Agent 4 error', sub: msg });
     }
   };
 
@@ -907,7 +907,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       const axiosErr = err as { response?: { data?: { error?: string; failures?: VerifyFailure[] } } };
       const body = axiosErr.response?.data;
       if (body?.failures?.length) setVerifyFailures(body.failures);
-      showToast({ title: 'Pre-bid package failed', sub: body?.error ?? 'Could not generate the pre-bid package' });
+      showToast({ variant: 'error', title: 'Pre-bid package failed', sub: body?.error ?? 'Could not generate the pre-bid package' });
     } finally {
       setPrebidBusy(false);
     }
@@ -928,7 +928,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       showToast({ title: 'Draft created', sub: 'Review and send it from Outlook.' });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to create the draft';
-      showToast({ title: 'Draft failed', sub: msg });
+      showToast({ variant: 'error', title: 'Draft failed', sub: msg });
     } finally {
       setChrisDraftBusy(false);
     }
@@ -1005,7 +1005,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // in-app via FilePreviewModal, everything else falls through to download.
   const { preview: docPreview, view: viewProjectDoc, closePreview: closeDocPreview } = useDocPreview<ProjectDoc>(
     downloadProjectDoc,
-    message => showToast({ title: 'Preview failed', sub: message }),
+    message => showToast({ variant: 'error', title: 'Preview failed', sub: message }),
   );
 
   const removeFile = (id: string, name: string) => {
@@ -1056,8 +1056,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         scopeOfWork: data.scopeOfWork,
         takeoff: data.takeoff ?? null,
       });
-      if (!data.amount) showToast({ title: 'No amount found', sub: 'Couldn\'t find a total in that file — enter it manually below.' });
-      if (importTakeoffFile && !data.sqFt) showToast({ title: 'No sq ft found', sub: 'Couldn\'t find building area in the takeoff — enter it manually below.' });
+      if (!data.amount) showToast({ variant: 'info', title: 'No amount found', sub: 'Couldn\'t find a total in that file — enter it manually below.' });
+      if (importTakeoffFile && !data.sqFt) showToast({ variant: 'info', title: 'No sq ft found', sub: 'Couldn\'t find building area in the takeoff — enter it manually below.' });
       if (data.takeoff) {
         showToast({ title: 'Takeoff saved', sub: `${data.takeoff.itemCount} items across ${data.takeoff.categories.length} categories.` });
         reloadTakeoff();
@@ -1065,7 +1065,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       if (data.breakdown?.laborHours) showToast({ title: 'Cost breakdown saved', sub: `${Number(data.breakdown.laborHours).toLocaleString()} labor hours on file.` });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to read those files';
-      showToast({ title: 'Import failed', sub: msg });
+      showToast({ variant: 'error', title: 'Import failed', sub: msg });
     } finally {
       setImportBusy(false);
     }
@@ -1102,7 +1102,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       setImportTakeoffFile(null);
       setImportBreakdownFile(null);
     } catch {
-      showToast({ title: 'Save failed', sub: 'Could not save the imported bid.' });
+      showToast({ variant: 'error', title: 'Save failed', sub: 'Could not save the imported bid.' });
     } finally {
       setSavingImport(false);
     }

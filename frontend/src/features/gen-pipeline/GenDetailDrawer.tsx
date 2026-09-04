@@ -158,7 +158,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
         ? { title: 'Checklist auto-filled from sizer', sub: 'Open the Checklist tab to review' }
         : { title: 'Sizer uploaded', sub: "Couldn't read checklist data from it" });
     } catch {
-      showToast({ title: 'Sizer uploaded', sub: 'Auto-fill failed — enter checklist manually' });
+      showToast({ variant: 'info', title: 'Sizer uploaded', sub: 'Auto-fill failed — enter checklist manually' });
     }
   };
 

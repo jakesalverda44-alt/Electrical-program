@@ -128,7 +128,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
       // Drop straight into the builder so the rep can tweak the new option.
       onEditGen(data);
     } catch {
-      showToast({ title: 'Duplicate failed', sub: 'Please try again' });
+      showToast({ variant: 'error', title: 'Duplicate failed', sub: 'Please try again' });
     }
   };
 
@@ -144,7 +144,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
           : 'Awarding one will now supersede the other instead of counting it as a loss',
       });
     } catch {
-      showToast({ title: 'Link failed', sub: 'Please try again' });
+      showToast({ variant: 'error', title: 'Link failed', sub: 'Please try again' });
     }
   };
 
@@ -161,7 +161,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
       if (status === 403) {
         showToast({ title: 'Admin only', sub: 'Only an owner or administrator can delete proposals' });
       } else {
-        showToast({ title: 'Delete failed', sub: 'Please try again' });
+        showToast({ variant: 'error', title: 'Delete failed', sub: 'Please try again' });
       }
     }
   };

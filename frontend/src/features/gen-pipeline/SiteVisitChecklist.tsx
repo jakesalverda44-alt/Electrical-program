@@ -204,7 +204,7 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
       window.open(url, '_blank', 'noopener');
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch {
-      showToast({ title: 'Could not build blank form', sub: 'Try again' });
+      showToast({ variant: 'error', title: 'Could not build blank form', sub: 'Try again' });
     }
   };
 

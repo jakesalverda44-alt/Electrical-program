@@ -67,7 +67,7 @@ export default function AwardKickoffModal({ gen, onClose, onOpenTab, onUpdated, 
       onUpdated({ ...gen, kickoff_email_drafted_at: data.kickoff_email_drafted_at });
       onClose();
     } catch (e: any) {
-      showToast({ title: 'Could not create draft', sub: e?.response?.data?.error || 'Try again' });
+      showToast({ variant: 'error', title: 'Could not create draft', sub: e?.response?.data?.error || 'Try again' });
     } finally {
       setDrafting(false);
     }

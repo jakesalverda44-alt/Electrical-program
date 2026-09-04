@@ -250,7 +250,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
       setSavedGenId(r.data.id);
       return r.data.id as string;
     } catch {
-      showToast({ title: 'Save failed', sub: 'Please try again' });
+      showToast({ variant: 'error', title: 'Save failed', sub: 'Please try again' });
       return null;
     } finally {
       setSaving(false);
