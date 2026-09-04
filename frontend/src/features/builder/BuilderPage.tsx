@@ -222,7 +222,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
   // navigate away — used by both "Save to Pipeline" and "Send to Customer" so the
   // emailed proposal always reflects exactly what's on screen (form_data + totals_data).
   const persist = async (): Promise<string | null> => {
-    if (!form.customer.trim()) { showToast({ title: 'Customer name required' }); return null; }
+    if (!form.customer.trim()) { showToast({ variant: 'error', title: 'Customer name required' }); return null; }
     setSaving(true);
     try {
       const payload = {

@@ -125,7 +125,7 @@ export default function EvBuilderPage({ setGens, onSaved, editGen, productSwitch
   const totals = calcEvTotals(form);
 
   const persist = async (): Promise<string | null> => {
-    if (!form.customer.trim()) { showToast({ title: 'Customer name required' }); return null; }
+    if (!form.customer.trim()) { showToast({ variant: 'error', title: 'Customer name required' }); return null; }
     setSaving(true);
     try {
       const payload = {

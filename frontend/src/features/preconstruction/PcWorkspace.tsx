@@ -781,7 +781,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     const parsed = parseAgentJson(aiResults?.agent2_output as string | undefined);
     const rawRfis = (parsed?.rfis as Array<Record<string, unknown>> | undefined) ?? [];
     if (!rawRfis.length) {
-      showToast({ title: 'No AI analysis available', sub: 'Run the 3-agent analysis first.' });
+      showToast({ variant: 'info', title: 'No AI analysis available', sub: 'Run the 3-agent analysis first.' });
       return;
     }
     const norm = (s: string) => s.trim().toLowerCase();
@@ -797,7 +797,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         return true;
       });
     if (!toAdd.length) {
-      showToast({ title: 'Nothing new to import', sub: 'Every AI-suggested RFI is already on this list.' });
+      showToast({ variant: 'info', title: 'Nothing new to import', sub: 'Every AI-suggested RFI is already on this list.' });
       return;
     }
     const newRfis = toAdd.map(q => ({ id: Date.now().toString() + Math.random(), question: q, submitted: false, answer: '' }));
@@ -914,7 +914,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
   const runAgent4Proposal = async () => {
     if (!propPrice.trim()) {
-      showToast({ title: 'Price required', sub: 'Enter the total bid price before generating the proposal' });
+      showToast({ variant: 'error', title: 'Price required', sub: 'Enter the total bid price before generating the proposal' });
       return;
     }
     setAgent4StartError(null);
@@ -2056,7 +2056,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         const importScope = () => {
           const scopeFill = buildScopeFromAgent2(agent2Scope);
           if (!Object.keys(scopeFill).length) {
-            showToast({ title: 'Nothing to import', sub: 'No scope sections found in the AI takeoff output' });
+            showToast({ variant: 'info', title: 'Nothing to import', sub: 'No scope sections found in the AI takeoff output' });
             return;
           }
           set({ scope: { ...ws.scope, ...scopeFill } });
@@ -2065,7 +2065,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         const importPrebid = () => {
           const fill = buildScopeFromPrebid(prebidSections);
           if (!Object.keys(fill).length) {
-            showToast({ title: 'Nothing to import', sub: 'No scope sections found in the pre-bid package' });
+            showToast({ variant: 'info', title: 'Nothing to import', sub: 'No scope sections found in the pre-bid package' });
             return;
           }
           set({ scope: { ...ws.scope, ...fill } });

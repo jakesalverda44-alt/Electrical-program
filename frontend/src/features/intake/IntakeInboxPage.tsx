@@ -171,7 +171,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
 
   const handleAccept = async () => {
     if (!selected) return;
-    if (!edit.name.trim() || !edit.gc.trim()) { showToast({ title: 'Name and GC are required' }); return; }
+    if (!edit.name.trim() || !edit.gc.trim()) { showToast({ variant: 'error', title: 'Name and GC are required' }); return; }
     const teamEmails = notifyTeam
       ? notifyEmails.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
       : [];
@@ -217,7 +217,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   };
 
   const handleAdd = async () => {
-    if (!addForm.name.trim()) { showToast({ title: 'Name is required' }); return; }
+    if (!addForm.name.trim()) { showToast({ variant: 'error', title: 'Name is required' }); return; }
     setSaving(true);
     try {
       await api.post('/intake', addForm);

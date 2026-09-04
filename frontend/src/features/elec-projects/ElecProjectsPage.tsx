@@ -572,7 +572,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
               <div><FL>Submitted</FL><input type="date" value={coForm.submitted_date} onChange={e=>setCoForm(f=>({...f,submitted_date:e.target.value}))} style={INPUT}/></div>
               <button className="btn" style={{ fontSize:13 }}
                 onClick={async () => {
-                  if (!coForm.description.trim()) { showToast({title:'Description required'}); return; }
+                  if (!coForm.description.trim()) { showToast({variant:'error',title:'Description required'}); return; }
                   const res = await api.post(`/projects/elec/${id}/change-orders`, {
                     description:coForm.description, amount:Number(coForm.amount)||0,
                     status:coForm.status, submitted_date:coForm.submitted_date||null,
@@ -652,7 +652,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
               </div>
               <button className="btn" style={{ fontSize:13 }}
                 onClick={async () => {
-                  if (!paForm.period.trim()) { showToast({title:'Period required'}); return; }
+                  if (!paForm.period.trim()) { showToast({variant:'error',title:'Period required'}); return; }
                   const newPa: PayApp = {
                     id: Date.now().toString(),
                     number: data.payApps.length + 1,
@@ -719,7 +719,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
             </div>
             <button className="btn" style={{ fontSize:13 }}
               onClick={async()=>{
-                if (!rfiForm.question.trim()) { showToast({title:'Question required'}); return; }
+                if (!rfiForm.question.trim()) { showToast({variant:'error',title:'Question required'}); return; }
                 const res = await api.post(`/projects/elec/${id}/rfis`,{
                   question:rfiForm.question, submitted_to:rfiForm.submitted_to,
                   submitted_date:rfiForm.submitted_date||null, due_date:rfiForm.due_date||null,
@@ -787,7 +787,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
               </div>
               <button className="btn" style={{ fontSize:13 }}
                 onClick={async()=>{
-                  if (!kmForm.name.trim()) { showToast({title:'Material name required'}); return; }
+                  if (!kmForm.name.trim()) { showToast({variant:'error',title:'Material name required'}); return; }
                   const newKm: KeyMaterial = { id:Date.now().toString(), ...kmForm as any };
                   const updated = [...data.keyMats, newKm];
                   await api.put(`/projects/elec/${id}/section/key-materials`,{data:{items:updated}});
@@ -852,7 +852,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
               </div>
               <button className="btn" style={{ fontSize:13, whiteSpace:'nowrap' }}
                 onClick={async()=>{
-                  if (!fnForm.note.trim()) { showToast({title:'Note required'}); return; }
+                  if (!fnForm.note.trim()) { showToast({variant:'error',title:'Note required'}); return; }
                   const res = await api.post(`/projects/elec/${id}/field-notes`,{
                     note:fnForm.note, note_date:fnForm.note_date||null,
                     weather:fnForm.weather, crew_size:Number(fnForm.crew_size)||0,

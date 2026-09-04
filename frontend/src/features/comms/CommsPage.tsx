@@ -113,7 +113,7 @@ export default function CommsPage({ bids, gens, activity }: Props) {
   }, [entries, filterKind, filterDiv, search]);
 
   const handleAdd = async () => {
-    if (!form.subject.trim()) { showToast({ title: 'Subject required' }); return; }
+    if (!form.subject.trim()) { showToast({ variant: 'error', title: 'Subject required' }); return; }
     const opt = linkOptions.find(o => o.id === form.linkedId);
     const div: CommEntry['div'] = form.linkedId.startsWith('bid:') ? 'elec' : form.linkedId.startsWith('gen:') ? 'gen' : 'general';
     try {

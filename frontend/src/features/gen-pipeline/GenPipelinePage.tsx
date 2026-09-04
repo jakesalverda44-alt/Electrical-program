@@ -159,7 +159,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
     } catch (err) {
       const status = (err as { response?: { status?: number } }).response?.status;
       if (status === 403) {
-        showToast({ title: 'Admin only', sub: 'Only an owner or administrator can delete proposals' });
+        showToast({ variant: 'error', title: 'Admin only', sub: 'Only an owner or administrator can delete proposals' });
       } else {
         showToast({ variant: 'error', title: 'Delete failed', sub: 'Please try again' });
       }

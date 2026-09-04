@@ -140,7 +140,7 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
   // buyer-signed copy from the fully executed one.
   const archive = async (executed: boolean) => {
     if (!form || !totals) {
-      showToast({ title: "Can't rebuild this one", sub: 'The saved proposal data is incomplete.' });
+      showToast({ variant: 'error', title: "Can't rebuild this one", sub: 'The saved proposal data is incomplete.' });
       return false;
     }
     setBuilding(true);
@@ -206,7 +206,7 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
       const status = (err as { response?: { status?: number } })?.response?.status;
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       if (status === 400) {
-        showToast({ title: 'No signature on file', sub: 'Add your signature in Settings first.' });
+        showToast({ variant: 'error', title: 'No signature on file', sub: 'Add your signature in Settings first.' });
       } else {
         showToast({ variant: 'error', title: "Couldn't countersign", sub: msg || 'Try again in a moment.' });
       }

@@ -163,7 +163,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
       showToast?.({ title: 'Customer saved', sub: data.name });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to save customer.';
-      showToast?.({ title: 'Save failed', sub: msg });
+      showToast?.({ variant: 'error', title: 'Save failed', sub: msg });
     }
   };
 
@@ -256,7 +256,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
         setTimeout(() => URL.revokeObjectURL(url), 60_000);
       } catch {
         if (w) w.close();
-        showToast?.({ title: 'Preview failed', sub: 'Try downloading instead.' });
+        showToast?.({ variant: 'error', title: 'Preview failed', sub: 'Try downloading instead.' });
       }
       return;
     }
@@ -270,7 +270,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
       const buf = await res.arrayBuffer();
       setPreview({ title: doc.display_name || doc.name, kind, buf, docId: doc.id });
     } catch {
-      showToast?.({ title: 'Preview failed', sub: 'Downloading instead.' });
+      showToast?.({ variant: 'error', title: 'Preview failed', sub: 'Downloading instead.' });
       downloadDoc(doc.id, doc.display_name);
     }
   };
