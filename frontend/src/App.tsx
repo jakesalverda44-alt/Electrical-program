@@ -249,25 +249,6 @@ export default function App() {
     setOpenAddBid(true);
   }, [setView]);
 
-  const genProposalCount  = gens.filter(g => g.stage !== 'awarded' && g.stage !== 'declined').length;
-  const elecProposalCount = bids.filter(b => b.stage === 'due' || b.stage === 'submitted').length;
-  const genProjectCount   = gens.filter(g => g.stage === 'awarded').length;
-  const elecProjectCount  = bids.filter(b => b.stage === 'awarded').length;
-
-  if (!user) {
-    return (
-      <>
-        <Routes>
-          <Route path="/login" element={<LoginPage onLogin={handleLogin}/>}/>
-          <Route path="/reset-password" element={<LoginPage onLogin={handleLogin}/>}/>
-          <Route path="/p/:token" element={<ProposalPublicPage/>}/>
-          <Route path="*" element={<Navigate to="/login" replace/>}/>
-        </Routes>
-        {toast && <Toast toast={toast}/>}
-      </>
-    );
-  }
-
   // The dashboard payload is what every board and stat reads from, so it alone
   // gates first paint; /users and /preconstruction/workspaces enrich the shell.
   const loading = dashApi.loading;
@@ -289,7 +270,31 @@ export default function App() {
   }, [dashApi.reload, usersApi.reload, workspacesApi.reload]);
 
   // Record-level pages set their own title; everything else comes from the view.
-  usePageTitle(view === 'bid' ? null : (VIEW_TITLES[view] ?? null));
+  // NOTE: every hook in this component must stay ABOVE the `if (!user)` return
+  // below. Signing in and being ejected by a 401 both flip `user` in place, so
+  // a hook below it changes the hook count between renders and React throws
+  // "Rendered more/fewer hooks than during the previous render" — which would
+  // take out the very 401 eject the api client exists to deliver.
+  usePageTitle(user && view !== 'bid' ? (VIEW_TITLES[view] ?? null) : null);
+
+  const genProposalCount  = gens.filter(g => g.stage !== 'awarded' && g.stage !== 'declined').length;
+  const elecProposalCount = bids.filter(b => b.stage === 'due' || b.stage === 'submitted').length;
+  const genProjectCount   = gens.filter(g => g.stage === 'awarded').length;
+  const elecProjectCount  = bids.filter(b => b.stage === 'awarded').length;
+
+  if (!user) {
+    return (
+      <>
+        <Routes>
+          <Route path="/login" element={<LoginPage onLogin={handleLogin}/>}/>
+          <Route path="/reset-password" element={<LoginPage onLogin={handleLogin}/>}/>
+          <Route path="/p/:token" element={<ProposalPublicPage/>}/>
+          <Route path="*" element={<Navigate to="/login" replace/>}/>
+        </Routes>
+        {toast && <Toast toast={toast}/>}
+      </>
+    );
+  }
 
   const renderView = () => {
     // Old flat view URLs redirect permanently to their new hub path — checked
