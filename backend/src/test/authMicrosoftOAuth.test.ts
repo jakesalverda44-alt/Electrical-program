@@ -41,6 +41,14 @@ function mockMicrosoftTokenExchange(email: string, name: string) {
   }));
 }
 
+describe('GET /api/auth/microsoft has its own, looser rate limit (post-review re-review)', () => {
+  it('is not the shared 10/15min authLimiter — failed passwords must not burn the SSO budget', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const res = await request(app).get('/api/auth/microsoft');
+    expect(res.headers['ratelimit-limit']).toBe('30');
+  });
+});
+
 describe('GET /api/auth/microsoft/callback — CSRF state (Task 7.1, 7.2)', () => {
   it('redirects to the login page with ?error=oauth_state when no state is present', async (ctx) => {
     if (!ok) return ctx.skip();

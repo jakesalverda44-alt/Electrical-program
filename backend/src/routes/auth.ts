@@ -19,6 +19,21 @@ const authLimiter = rateLimit({
   message: { error: 'Too many attempts. Please try again in a few minutes.' },
 });
 
+// GET /microsoft is a browser navigation, not a credential guess — sharing
+// authLimiter's 10/15min bucket with /login, /forgot-password, and
+// /reset-password meant failed passwords could burn the whole office's SSO
+// budget behind Render's `trust proxy 1` + a shared NAT (non-blocker,
+// post-review re-review). Looser and separate: it only protects against the
+// oauthStates map being grown pointlessly fast, not credential stuffing —
+// there's no password to guess on this path.
+const msLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please try again in a few minutes.' },
+});
+
 router.post('/login', authLimiter, async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
@@ -93,7 +108,7 @@ function pruneMsExchangeCodes() {
 }
 
 // Step 1 — redirect to Microsoft login
-router.get('/microsoft', authLimiter, (_req, res) => {
+router.get('/microsoft', msLoginLimiter, (_req, res) => {
   const clientId = MS_CLIENT_ID();
   if (!clientId) return res.status(503).send('Microsoft login not configured. Add MICROSOFT_CLIENT_ID to environment.');
   pruneOauthStates();
