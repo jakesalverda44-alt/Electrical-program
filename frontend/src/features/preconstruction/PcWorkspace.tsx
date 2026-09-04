@@ -391,15 +391,21 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // and it used to end in `.catch(() => {})` — a dropped connection lost an
   // afternoon of pre-construction work with zero indication (audit code #6).
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  // The effect below fires once on mount with the just-restored values, which
-  // was a no-op PUT on every open (audit data #16).
-  const didMountRef = useRef(false);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backoffRef = useRef(0);
+  // Armed in the effect BODY, not just cleared in its cleanup: React.StrictMode
+  // (main.tsx) mounts, unmounts and remounts every component in dev, and the
+  // live app runs under Vite dev. A flag only ever set false by the cleanup
+  // stayed false forever, so every `if (!aliveRef.current) return` below fired
+  // and the chip stuck on "Saving…" with no retries — all of task 7 inert in
+  // the one environment it was written for.
   const aliveRef = useRef(true);
-  useEffect(() => () => {
-    aliveRef.current = false;
-    if (retryTimer.current) clearTimeout(retryTimer.current);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+    };
   }, []);
 
   const workspacePayload = useCallback(() => {
@@ -436,12 +442,28 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }
   }, [bid.id, workspacePayload]);
 
+  // The mount guard is the payload we last acted on, not a "have we rendered
+  // once" boolean: a boolean is consumed by StrictMode's first mount and lets
+  // the remount write the no-op PUT it exists to prevent (audit data #16). A
+  // snapshot is idempotent — the remount sees identical values and skips — and
+  // it also drops the redundant PUT when this effect re-runs because
+  // `saveWorkspace`'s identity changed but nothing the user typed did.
+  const lastScheduledRef = useRef<string | null>(null);
+  // Declared before the autosave effect so it runs first: effects fire in
+  // declaration order, so a new bid resets the baseline before it is read.
+  useEffect(() => { lastScheduledRef.current = null; }, [bid.id]);
+
   // Auto-save workspace to DB 800ms after last change (skip ephemeral fields)
   useEffect(() => {
-    if (!didMountRef.current) {
-      didMountRef.current = true;
+    const snapshot = JSON.stringify(workspacePayload());
+    if (lastScheduledRef.current === null) {
+      // First render for this bid: what we are holding IS what the server sent.
+      lastScheduledRef.current = snapshot;
       return;
     }
+    if (lastScheduledRef.current === snapshot) return;
+    lastScheduledRef.current = snapshot;
+
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       // A fresh edit supersedes any pending retry and resets the backoff.
@@ -450,7 +472,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       void saveWorkspace();
     }, 800);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated, ws.confirmedService, saveWorkspace]);
+  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated, ws.confirmedService, saveWorkspace, workspacePayload]);
 
   function set(patchOrFn: Partial<PcWorkspace> | ((prev: PcWorkspace) => Partial<PcWorkspace>)) {
     const current = wsRef.current;

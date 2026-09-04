@@ -82,6 +82,15 @@ function Harness() {
   );
 }
 
+/**
+ * The app really renders inside `<React.StrictMode>` (main.tsx) and Jake runs
+ * the live app under Vite dev, so dev's mount -> unmount -> remount is the
+ * environment task 7 has to work in. Review finding B2: it did not.
+ */
+function StrictHarness() {
+  return <React.StrictMode><Harness/></React.StrictMode>;
+}
+
 /** Flush pending promise callbacks without moving the clock. */
 const flush = () => act(async () => {});
 /** Move the clock, then let everything it woke up settle. */
@@ -255,5 +264,74 @@ describe('PcWorkspace results poll', () => {
     const callsAtTimeout = resultsGets();
     await tick(60_000);
     expect(resultsGets()).toBe(callsAtTimeout);
+  });
+});
+
+// Review finding B2 — every assertion above, re-run in the environment the
+// plan says the live app actually runs in. Before the fix all four failed:
+// `aliveRef` was only ever set false (by the simulated unmount's cleanup) and
+// never re-armed, so `saveWorkspace` early-returned forever; and the boolean
+// mount guard was consumed by the first mount, so the remount wrote the very
+// no-op PUT it existed to prevent.
+describe('PcWorkspace autosave under React.StrictMode', () => {
+  it('still writes no PUT just for opening the workspace', async () => {
+    mockApi();
+    render(<StrictHarness/>);
+
+    await tick(3000);
+
+    expect(workspacePuts()).toHaveLength(0);
+  });
+
+  it('still reaches "Saved" after a successful save', async () => {
+    mockApi();
+    render(<StrictHarness/>);
+    await flush();
+
+    fireEvent.change(screen.getByPlaceholderText(NOTES_PLACEHOLDER), { target: { value: 'survives the double mount' } });
+    await tick(900);
+
+    expect(workspacePuts()).toHaveLength(1);
+    expect(workspacePuts()[0][1]).toMatchObject({ notes: 'survives the double mount' });
+    expect(saveChip()).toBe('Saved');
+  });
+
+  it('still reaches "Not saved — retrying" and still retries after the backoff', async () => {
+    mockApi();
+    put.mockRejectedValue(offline());
+    render(<StrictHarness/>);
+    await flush();
+
+    fireEvent.change(screen.getByPlaceholderText(NOTES_PLACEHOLDER), { target: { value: 'an afternoon of work' } });
+    await tick(900);
+
+    expect(workspacePuts()).toHaveLength(1);
+    expect(saveChip()).toBe('Not saved — retrying');
+
+    // The 2s retry — the one that was never firing.
+    await tick(1900);
+    expect(workspacePuts()).toHaveLength(1);
+    await tick(200);
+    expect(workspacePuts()).toHaveLength(2);
+
+    // And it still recovers on its own.
+    put.mockResolvedValue({ data: {} });
+    await tick(4100);
+    expect(saveChip()).toBe('Saved');
+  });
+
+  it('reaches saveState "error", which is what arms the unsaved-changes guard', async () => {
+    // useUnsavedGuard(pricingDirty || saveState === 'error') was the fallback
+    // the struck pricing decision leaned on; a chip stuck on "Saving…" meant it
+    // never armed.
+    mockApi();
+    put.mockRejectedValue(offline());
+    render(<StrictHarness/>);
+    await flush();
+
+    fireEvent.change(screen.getByPlaceholderText(NOTES_PLACEHOLDER), { target: { value: 'unsaved' } });
+    await tick(900);
+
+    expect(saveChip()).toBe('Not saved — retrying');
   });
 });
