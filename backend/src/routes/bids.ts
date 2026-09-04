@@ -32,12 +32,36 @@ import { VALID_BID_STAGES, transitionBidStage, applyBidStagePostCommit } from '.
 
 const router = Router();
 
+// Task 6 (audit data #7) — every other column on `bids` is read from the list by
+// something in the frontend (grepped against the `Bid` interface in
+// frontend/src/types/index.ts and every consumer under frontend/src/features):
+// `notes` isn't in the `Bid` type at all (AddBidModal only ever writes it, on
+// create) and `signature_data` is neither in the type nor referenced anywhere,
+// and — unlike generator_proposals' form_data/totals_data/checklist_data/
+// survey_markup, which this batch deliberately leaves alone — is confirmed
+// unused: 0 of 35 local bids have ever had it set (nothing in routes/bids.ts
+// writes it; the public e-sign flow that would have was removed 2026-09-03
+// per the comment on the Bid type's proposal_token/signer_name fields).
+// `notes` itself is real, populated data (21/35 rows) — just never rendered
+// from this list — so it's dropped from the response, not the column.
+const BIDS_LIST_COLUMNS = `
+  id, name, loc, gc, due, due_days, amount, sheets, contact, stage,
+  salesperson_id, salesperson_name, created_at, updated_at, elec_project_phase,
+  loss_reason, competitor, customer_id, submitted_at, awarded_at, deleted_at,
+  org_id, drive_gc_folder_id, drive_job_folder_id, drive_plans_folder_id,
+  drive_estimates_folder_id, drive_photos_folder_id, drive_contracts_folder_id,
+  drive_submittals_folder_id, drive_rfis_folder_id, drive_change_orders_folder_id,
+  closed_at, project_type, sq_ft, source_email_link, team_notified_at,
+  team_notified_to, brand, job_number, proposal_token, proposal_sent_at,
+  proposal_sent_to, proposal_viewed_at, proposal_signed_at, signer_name,
+  signed_document_id`;
+
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
   const params: unknown[] = [];
   const where: string[] = ['deleted_at IS NULL', 'closed_at IS NULL'];
   if (scope) { params.push(scope); where.push(`salesperson_id = $${params.length}`); }
-  let sql = `SELECT * FROM bids WHERE ${where.join(' AND ')}`;
+  let sql = `SELECT ${BIDS_LIST_COLUMNS} FROM bids WHERE ${where.join(' AND ')}`;
   sql += ' ORDER BY created_at DESC';
   // Opt-in pagination: ?limit=N&offset=M. Omitted → return all rows (backward compatible).
   if (req.query.limit !== undefined) {
