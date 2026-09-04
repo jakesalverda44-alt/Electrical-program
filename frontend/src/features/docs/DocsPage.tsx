@@ -77,11 +77,12 @@ export default function DocsPage({ bids, gens }: Props) {
     async () => {
       const opt = linkOptions.find(o => o.id === uploadForm.linkedId);
       const newDocs: Doc[] = [];
+      // Counted rather than toasted per file: there is one toast slot, so the
+      // per-file warning was immediately overwritten by the success toast —
+      // and with every file oversized the user got a green "0 files uploaded".
+      let skipped = 0;
       for (const f of pendingFiles) {
-        if (f.size > 50 * 1024 * 1024) {
-          showToast({ variant: 'error', title: `"${f.name}" exceeds 50 MB — skipped` });
-          continue;
-        }
+        if (f.size > 50 * 1024 * 1024) { skipped++; continue; }
         const form = new FormData();
         form.append('file', f);
         form.append('display_name', uploadForm.name.trim() || f.name);
@@ -92,16 +93,22 @@ export default function DocsPage({ bids, gens }: Props) {
         const res = await api.post('/documents', form, { timeout: 120_000 });
         newDocs.push(res.data);
       }
-      return newDocs;
+      return { newDocs, skipped };
     },
     {
-      onSuccess: (newDocs) => {
+      onSuccess: ({ newDocs }) => {
         setDocs(prev => [...newDocs, ...prev]);
         setPendingFiles([]);
         setUploadForm(BLANK);
         if (fileInput.current) fileInput.current.value = '';
       },
-      successToast: (newDocs) => ({ title: `${newDocs.length} file${newDocs.length > 1 ? 's' : ''} uploaded` }),
+      successToast: ({ newDocs, skipped }) => (skipped > 0
+        ? {
+          variant: 'info' as const,
+          title: `${newDocs.length} uploaded, ${skipped} skipped`,
+          sub: `${skipped} file${skipped > 1 ? 's' : ''} over the 50 MB limit`,
+        }
+        : { title: `${newDocs.length} file${newDocs.length > 1 ? 's' : ''} uploaded` }),
       errorToast: (message) => ({ title: 'Upload failed', sub: message }),
     },
   );
@@ -112,7 +119,10 @@ export default function DocsPage({ bids, gens }: Props) {
   };
 
   const downloadDoc = (doc: Doc) => {
-    const token = localStorage.getItem('token');
+    // 'crm_token', not 'token': the whole app stores the JWT under the former,
+    // so this was sending `Bearer null` and 401ing every time — and since task
+    // 2 made a 401 eject the user, the button had started logging people out.
+    const token = localStorage.getItem('crm_token');
     const a = document.createElement('a');
     a.href = `/api/documents/${doc.id}/download`;
     // include auth token via fetch + blob for authenticated download
@@ -131,6 +141,7 @@ export default function DocsPage({ bids, gens }: Props) {
   const { run: deleteDoc } = useMutation(
     async (id: string) => { await api.delete(`/documents/${id}`); return id; },
     {
+      key: (id) => id,
       onSuccess: (id) => {
         setDocs(prev => prev.filter(d => d.id !== id));
         if (selected?.id === id) setSelected(null);

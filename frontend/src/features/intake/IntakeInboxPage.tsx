@@ -125,6 +125,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   const { run: markRead } = useMutation(
     async (itemId: string) => { await api.post(`/intake/${itemId}/read`); },
     {
+      key: (itemId) => itemId,
       optimistic: (itemId) => {
         const stamp = new Date().toISOString();
         setItems(prev => prev.map(i => i.id === itemId ? { ...i, read_at: stamp } : i));

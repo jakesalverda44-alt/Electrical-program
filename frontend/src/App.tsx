@@ -206,11 +206,24 @@ export default function App() {
   // The api client fires crm:unauthorized instead of hard-navigating, so an
   // expired session becomes a client-side route change that remembers where the
   // user was. Registered once, above the !user early return.
+  // The bootstrap fires several requests in parallel, so an expired session
+  // produces a BURST of 401s. Only the first one still knows where the user
+  // was — by the time the second arrives the path is already /login, and it
+  // computed an empty `next` and replaced the good one away. Latch on the first
+  // event and ignore the rest until a fresh sign-in.
+  const ejectedRef = useRef(false);
+  // The router's location, not window.location: the listener's deps are kept
+  // stable so it does not resubscribe on every navigation, and a ref is how it
+  // still reads the current page. (It also makes the eject testable under
+  // MemoryRouter, where window.location never moves.)
+  const herePathRef = useRef('');
+  herePathRef.current = location.pathname + location.search;
   useEffect(() => {
     const onUnauthorized = (e: Event) => {
+      if (ejectedRef.current) return;
+      ejectedRef.current = true;
       const detail = (e as CustomEvent<UnauthorizedDetail>).detail ?? {};
-      const here = window.location.pathname + window.location.search;
-      const next = detail.next ?? here;
+      const next = detail.next ?? herePathRef.current;
       const params = new URLSearchParams();
       if (next && next !== '/' && !next.startsWith('/login')) params.set('next', next);
       if (detail.error) params.set('error', detail.error);
@@ -220,6 +233,9 @@ export default function App() {
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, [logout, navigate]);
+
+  // Re-arm once a session exists again, so a later expiry still ejects.
+  useEffect(() => { if (user) ejectedRef.current = false; }, [user]);
 
   const handleLogin = async (email: string, password: string) => {
     await login(email, password);
@@ -243,11 +259,16 @@ export default function App() {
   }, []);
 
   // Open the add-bid flow, optionally pre-filling the GC (e.g. from a customer hub).
+  // `setView` is guarded, but arming the modal was not: answering "Keep
+  // editing" still left Add Bid queued to open on the next visit. Both halves
+  // now happen only if the navigation is actually allowed to proceed.
   const openNewBid = useCallback((gc?: string) => {
-    setAddBidGc(gc);
-    setView('electrical/bids');
-    setOpenAddBid(true);
-  }, [setView]);
+    confirmLeave(() => {
+      setAddBidGc(gc);
+      navigate('/electrical/bids');
+      setOpenAddBid(true);
+    });
+  }, [confirmLeave, navigate]);
 
   // The dashboard payload is what every board and stat reads from, so it alone
   // gates first paint; /users and /preconstruction/workspaces enrich the shell.

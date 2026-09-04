@@ -152,4 +152,51 @@ describe('App survives the user flipping in place', () => {
     }
   });
 
+  it('keeps ?next= when several requests 401 at once', async () => {
+    // The bootstrap fires several gets in parallel, so an expired session
+    // produces a burst. Only the first event still knows where the user was;
+    // the second used to read the already-rewritten /login path, compute an
+    // empty next, and `replace` the good one away.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      currentUser = USER;
+      render(<Host path="/docs"/>);
+      await waitFor(() => expect(document.querySelector('.sidebar')).toBeTruthy());
+
+      // Each in its own act(), so React commits the eject before the next 401
+      // lands — that is what a real burst of parallel responses looks like, and
+      // what made the later events read the already-rewritten /login path.
+      for (let i = 0; i < 3; i++) {
+        await act(async () => {
+          window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: {} }));
+        });
+      }
+
+      expect(await screen.findByText('Sign in to your account')).toBeTruthy();
+      expect(location).toBe('/login?next=%2Fdocs');
+      expect(errorSpy.mock.calls.flat().join(' ')).not.toMatch(/Rendered (more|fewer) hooks/);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('a later expiry still ejects after signing back in', async () => {
+    // The latch that fixes the burst must not make the SECOND expiry a no-op.
+    currentUser = USER;
+    render(<Host path="/docs"/>);
+    await waitFor(() => expect(document.querySelector('.sidebar')).toBeTruthy());
+
+    await act(async () => { window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: {} })); });
+    expect(await screen.findByText('Sign in to your account')).toBeTruthy();
+
+    // Sign back in, land somewhere, then expire again.
+    await act(async () => { setUser(USER); rerenderApp(); });
+    await waitFor(() => expect(document.querySelector('.sidebar')).toBeTruthy());
+    logout.mockClear();
+
+    await act(async () => { window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: {} })); });
+
+    expect(logout).toHaveBeenCalled();
+    expect(await screen.findByText('Sign in to your account')).toBeTruthy();
+  });
 });

@@ -104,6 +104,7 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
       return payload;
     },
     {
+      key: (userId, permKey) => `${userId}:${permKey}`,
       onSuccess: (payload, userId) => setOverrides(prev => ({ ...prev, [userId]: payload })),
       onSettled: () => setOverrideSaving(null),
       errorTitle: 'Could not save that override',

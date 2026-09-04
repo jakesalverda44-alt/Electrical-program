@@ -52,6 +52,21 @@ export interface UseMutationOptions<A extends unknown[], R> {
    * by components that take `showToast` as a prop (PcWorkspace).
    */
   showToast?: (t: Toast) => void;
+  /**
+   * Identifies WHAT a run is acting on, so the single-flight guard is per
+   * target instead of per hook.
+   *
+   * Without it one hook behind many rows or buttons — a status pill on every
+   * project card, one Save handler shared by five sections — drops the second
+   * click entirely, and silently: the guard returns before `optimistic`, `fn`,
+   * the toasts and `onError`, so nothing happens and nothing is said. With it,
+   * two different targets run concurrently and only a genuine double-click on
+   * the SAME target is collapsed onto the in-flight promise.
+   *
+   * Leave it off for a form with one submit button; that is the case the plain
+   * guard is right for.
+   */
+  key?: (...args: A) => string;
 }
 
 export interface UseMutationResult<A extends unknown[], R> {
@@ -76,8 +91,9 @@ export function useMutation<A extends unknown[], R>(
 
   // Refs, not the state: two clicks in the same tick both read the pre-render
   // value of `saving`, so the guard has to be something that updates instantly.
-  const busy = useRef(false);
-  const inFlight = useRef<Promise<R | undefined> | null>(null);
+  // Keyed by `opts.key(...args)` when given, else by one shared key, which is
+  // exactly the old per-hook behaviour.
+  const inFlight = useRef(new Map<string, Promise<R | undefined>>());
 
   // Held in a ref so `run` keeps a stable identity and callers can safely put
   // it in an effect's dependency list.
@@ -88,18 +104,26 @@ export function useMutation<A extends unknown[], R>(
   const toastRef = useRef(showToast);
   toastRef.current = showToast;
 
-  const run = useCallback(async (...args: A): Promise<R | undefined> => {
-    // Double-submit is a no-op: the second caller waits on the first request
-    // rather than starting a second one.
-    if (busy.current && inFlight.current) return inFlight.current;
+  const ONE = '\u0000single-flight';
 
+  const run = useCallback(async (...args: A): Promise<R | undefined> => {
     const opts = optsRef.current;
+    const key = opts.key ? opts.key(...args) : ONE;
+
+    // Double-submit on the same target is a no-op: the second caller waits on
+    // the first request rather than starting a second one.
+    const pending = inFlight.current.get(key);
+    if (pending) return pending;
+
     const rollback = opts.optimistic?.(...args);
 
-    busy.current = true;
     setSaving(true);
     setError(null);
 
+    // `fn` can throw synchronously, in which case the `finally` below runs
+    // before the `set` at the bottom — so the entry it deletes does not exist
+    // yet and a settled promise would be left in the map forever. Track that.
+    let settled = false;
     const promise = (async (): Promise<R | undefined> => {
       try {
         const result = await fnRef.current(...args);
@@ -124,16 +148,16 @@ export function useMutation<A extends unknown[], R>(
         if (opts.rethrow) throw err;
         return undefined;
       } finally {
-        // Cleared before `inFlight` is assigned below in the (rare) case where
-        // `fn` throws synchronously — the guard reads `busy`, so a settled
-        // promise left in `inFlight` is unreachable.
-        busy.current = false;
-        setSaving(false);
+        settled = true;
+        inFlight.current.delete(key);
+        // `saving` covers the hook, not one target: with a `key` there may be
+        // others still running, so only the last one out clears it.
+        if (inFlight.current.size === 0) setSaving(false);
         opts.onSettled?.(...args);
       }
     })();
 
-    inFlight.current = promise;
+    if (!settled) inFlight.current.set(key, promise);
     return promise;
   }, []);
 

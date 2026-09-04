@@ -685,13 +685,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // is on file (covers both a fresh Agent 4 run finishing via pollAgent4's
   // setAiResults, and reconnecting to an already-complete proposal on mount).
   const proposalReady = aiResults?.agent4_status === 'complete';
-  const { data: proposalPreviewData } = useApi<BidDataPreview>(
+  const { data: proposalPreviewData, error: proposalPreviewError } = useApi<BidDataPreview>(
     `/preconstruction/${bid.id}/proposal-preview`,
     { enabled: proposalReady },
   );
   useEffect(() => {
+    // The pre-migration code was `.catch(() => setProposalPreview(null))`. Without
+    // the error branch a failed fetch left the PREVIOUS bid's preview on screen,
+    // which on this page is a proposal document with a customer name on it.
+    if (proposalPreviewError) { setProposalPreview(null); return; }
     setProposalPreview(proposalReady ? (proposalPreviewData ?? null) : null);
-  }, [proposalReady, proposalPreviewData]);
+  }, [proposalReady, proposalPreviewData, proposalPreviewError]);
 
   // Pre-fill proposal price from saved estimate grand total
   useEffect(() => {

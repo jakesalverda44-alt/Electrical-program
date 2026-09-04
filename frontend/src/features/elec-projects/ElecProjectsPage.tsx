@@ -158,7 +158,7 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
       },
     }));
     },
-    { errorTitle: 'Could not open that project' },
+    { key: (id) => id, errorTitle: 'Could not open that project' },
   );
 
   const loadProject = useCallback((id: string) => {
@@ -191,10 +191,16 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
     async (id: string, phase: ElecPhase) => { await api.patch(`/bids/${id}/phase`, { phase }); },
     {
       optimistic: (id, phase) => {
-        const previous = phases[id];
+        // `phases` is seeded once from `awarded` and never re-synced, so a bid
+        // awarded after mount has no entry — rolling back to `undefined` would
+        // render 'signed' instead of its real phase. Fall back to the bid.
+        const previous = phases[id]
+          ?? (bids.find(b => b.id === id)?.elec_project_phase as ElecPhase | undefined)
+          ?? 'signed';
         setPhases(prev => ({ ...prev, [id]: phase }));
         return () => setPhases(prev => ({ ...prev, [id]: previous }));
       },
+      key: (id) => id,
       successToast: (_r, _id, phase) => ({ title: 'Status updated', sub: STATUS_META[phaseStatus(phase)].label }),
       errorToast: (message) => ({ title: 'Status not saved', sub: message }),
     },
@@ -419,6 +425,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
       return true as const;
     },
     {
+      key: (section) => section,
       successToast: { title: 'Saved' },
       errorToast: (message) => ({ title: 'Save failed', sub: message }),
     },
@@ -1208,6 +1215,7 @@ function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
   const { run: remove } = useMutation(
     async (docId: string) => { await api.delete(`/documents/${docId}`); return docId; },
     {
+      key: (docId) => docId,
       onSuccess: (docId) => onDocsChange(docs.filter(d => d.id !== docId)),
       successToast: { title: 'Document removed' },
       errorToast: (message) => ({ title: 'Delete failed', sub: message }),

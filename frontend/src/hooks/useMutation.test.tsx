@@ -152,3 +152,121 @@ describe('useMutation', () => {
     expect(onSuccess).toHaveBeenCalledWith('done', 'b1', 'permit');
   });
 });
+
+// Review non-blocker: the single-flight guard was per-HOOK. Where one hook
+// backs many targets with no `disabled` state — a status pill on every project
+// card, one Save handler behind five sections, a delete button on every row —
+// the second click was dropped entirely and silently: the guard returned before
+// `optimistic`, `fn`, the toasts and `onError`, so nothing happened and nothing
+// was said. `main` issued one request per call at all of those sites.
+describe('useMutation keyed single-flight', () => {
+  it('runs two different targets concurrently', async () => {
+    const pending = new Map<string, ReturnType<typeof deferred<string>>>();
+    const fn = vi.fn((id: string) => {
+      const d = deferred<string>();
+      pending.set(id, d);
+      return d.promise;
+    });
+
+    const { result } = renderHook(() => useMutation(fn, { key: (id: string) => id }), { wrapper });
+
+    let a: Promise<unknown> | undefined;
+    let b: Promise<unknown> | undefined;
+    act(() => {
+      a = result.current.run('bid-a');
+      b = result.current.run('bid-b');
+    });
+
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(fn).toHaveBeenNthCalledWith(1, 'bid-a');
+    expect(fn).toHaveBeenNthCalledWith(2, 'bid-b');
+
+    await act(async () => {
+      pending.get('bid-a')!.resolve('A');
+      pending.get('bid-b')!.resolve('B');
+      await Promise.all([a, b]);
+    });
+    await expect(a).resolves.toBe('A');
+    await expect(b).resolves.toBe('B');
+  });
+
+  it('still collapses a double-click on the SAME target onto the in-flight promise', async () => {
+    const first = deferred<string>();
+    const fn = vi.fn(() => first.promise);
+
+    const { result } = renderHook(() => useMutation(fn as (id: string) => Promise<string>, { key: (id: string) => id }), { wrapper });
+
+    let a: Promise<unknown> | undefined;
+    let b: Promise<unknown> | undefined;
+    act(() => {
+      a = result.current.run('bid-a');
+      b = result.current.run('bid-a');
+    });
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    await act(async () => { first.resolve('ok'); await Promise.all([a, b]); });
+    await expect(b).resolves.toBe('ok');
+  });
+
+  it('keeps `saving` true until the LAST concurrent target settles', async () => {
+    const pending = new Map<string, ReturnType<typeof deferred<string>>>();
+    const fn = vi.fn((id: string) => {
+      const d = deferred<string>();
+      pending.set(id, d);
+      return d.promise;
+    });
+
+    const { result } = renderHook(() => useMutation(fn, { key: (id: string) => id }), { wrapper });
+
+    act(() => { void result.current.run('a'); void result.current.run('b'); });
+    await waitFor(() => expect(result.current.saving).toBe(true));
+
+    await act(async () => { pending.get('a')!.resolve('A'); });
+    expect(result.current.saving).toBe(true);
+
+    await act(async () => { pending.get('b')!.resolve('B'); });
+    await waitFor(() => expect(result.current.saving).toBe(false));
+  });
+
+  it('runs the optimistic update and its rollback per target', async () => {
+    const applied: string[] = [];
+    const rolledBack: string[] = [];
+    const fn = vi.fn(async (id: string) => {
+      if (id === 'bad') throw httpError(500, {});
+      return id;
+    });
+
+    const { result } = renderHook(() => useMutation(fn, {
+      key: (id: string) => id,
+      optimistic: (id: string) => { applied.push(id); return () => { rolledBack.push(id); }; },
+      errorToast: false,
+    }), { wrapper });
+
+    await act(async () => { await Promise.all([result.current.run('good'), result.current.run('bad')]); });
+
+    expect(applied).toEqual(['good', 'bad']);
+    expect(rolledBack).toEqual(['bad']);
+  });
+
+  it('a target is runnable again once its own run has settled', async () => {
+    const fn = vi.fn().mockResolvedValue('ok');
+    const { result } = renderHook(() => useMutation(fn as (id: string) => Promise<string>, { key: (id: string) => id }), { wrapper });
+
+    await act(async () => { await result.current.run('a'); });
+    await act(async () => { await result.current.run('a'); });
+
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('without a key, behaviour is exactly as before', async () => {
+    const first = deferred<string>();
+    const fn = vi.fn(() => first.promise);
+
+    const { result } = renderHook(() => useMutation(fn as (id: string) => Promise<string>), { wrapper });
+
+    act(() => { void result.current.run('a'); void result.current.run('b'); });
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    await act(async () => { first.resolve('ok'); });
+  });
+});
