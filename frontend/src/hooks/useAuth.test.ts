@@ -4,23 +4,10 @@
 // POST exchange, and the token/user only ever land in localStorage after that
 // call succeeds — never parsed out of the URL itself.
 //
-// This happy-dom version does not provide a global `localStorage` (confirmed:
-// other pre-existing tests — e.g. useInstallPrompt.test.ts — fail the same way
-// on main, unrelated to this change), so this file installs a minimal in-memory
-// shim for its own use rather than depend on the real thing being present.
+// `localStorage` comes from the suite-wide shim in `src/test/setup.ts` (Node's
+// own experimental global resolves to undefined and shadows happy-dom's).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
-
-function makeLocalStorageShim() {
-  let store: Record<string, string> = {};
-  return {
-    getItem: (k: string) => (k in store ? store[k] : null),
-    setItem: (k: string, v: string) => { store[k] = String(v); },
-    removeItem: (k: string) => { delete store[k]; },
-    clear: () => { store = {}; },
-  };
-}
-Object.defineProperty(globalThis, 'localStorage', { value: makeLocalStorageShim(), writable: true, configurable: true });
 
 const post = vi.fn();
 vi.mock('../api/client', () => ({
