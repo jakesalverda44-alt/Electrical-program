@@ -1370,8 +1370,13 @@ router.get('/p/:token', async (req, res) => {
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
   const gen = rows[0];
   // form_data still needs its own server-side projection even with the column
-  // list above: the JSONB blob carries internal site-detail fields and price
-  // decomposition the rep may have chosen to hide (post-review fix for B3).
+  // list above: the JSONB blob carries genData.ts's declared internal
+  // site-detail fields (feedFt/genSide/panelRel/panelFt — see
+  // utils/publicFormData.ts's own comment for the exact source quote). The
+  // price-breakdown fields are NOT gated on includeBreakdown: totals_data
+  // (sent whole, above) already carries the same dollar figures ungated, and
+  // ProposalPreview.tsx reads several of them outside the breakdown block, so
+  // hiding that page was never a confidentiality boundary (post-review R3).
   gen.form_data = publicFormData(gen.form_data, gen.product_type);
   res.json(gen);
 });

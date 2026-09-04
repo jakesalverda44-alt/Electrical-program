@@ -1,20 +1,26 @@
-// Post-review fix B3 (Opus 5 adversarial review of fix/audit-batch1).
+// Post-review fixes B3 / R1 / R2 / R3 (Opus 5 adversarial review + re-review of
+// fix/audit-batch1).
 //
-// Task 3's column-list fix for GET /api/gens/p/:token still shipped `form_data`
-// whole: the JSONB blob carries fields genData.ts's own comment labels
-// "Internal site-detail fields — not shown on the customer proposal, used for
-// the award kickoff email to the ops team" (feedFt, genSide, panelRel,
-// panelFt), plus the full price decomposition (labor, permit, startup,
-// discount, discountType, taxRate) that ProposalPreview.tsx only ever renders
-// via pre-computed `totals.*Amt` fields — so a rep's decision to hide the
-// price-breakdown page (`includeBreakdown: false`) was cosmetic on an
-// unauthenticated link; the raw numbers still rode along in the JSON.
+// The first version of this projection gated the price-breakdown fields on
+// `includeBreakdown` and dropped the pre-unification legacy field names
+// entirely. That broke ProposalPublicPage.tsx's totals_data-missing fallback
+// (calcGenTotals/calcEvTotals need several of the dropped fields — a wrong
+// total/deposit on a signable page) and migrateGenForm's legacy-alias
+// translation (smm/surgePro/ats/lcATS/additionalATS). See
+// utils/publicFormData.ts's own comment for the full derivation (three
+// sources: the preview components' own reads, the real grep output against
+// genCalc.ts/evCalc.ts, and the five legacy aliases) and why the breakdown
+// gate was removed entirely (totals_data already ships the same figures
+// ungated, so hiding the breakdown page was never a confidentiality boundary).
 //
-// utils/publicFormData.ts projects the blob to exactly the keys
-// ProposalPreview.tsx / EvProposalPreview.tsx read for rendering (see that
-// file's own comment for the full trace, including the two genCalc helpers
-// they call — loadCenterFor needs coolingType; activeCustomItems /
-// customItemAmount need customItems and each item's own fields).
+// These tests check the ACTUAL behavioral requirement — every field the calc
+// functions and migration need survives projection, unconditionally — rather
+// than a hand-maintained key-set snapshot that would silently rot the next
+// time genCalc.ts/evCalc.ts grow a new input (see frontend/src/pages/
+// ProposalPublicPage.*.test.tsx for the end-to-end "the rendered total is
+// unaffected by projection" tests this backend suite can't run itself, since
+// backend can't import frontend calc code — cross-package import breaks
+// `tsc --noEmit`'s rootDir check, confirmed directly while writing this fix).
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import { app } from '../index';
@@ -24,15 +30,16 @@ let ok = false;
 beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
 
 const INTERNAL_SITE_DETAIL_KEYS = ['feedFt', 'genSide', 'panelRel', 'panelFt'];
-const GEN_BREAKDOWN_KEYS = ['labor', 'permit', 'startup', 'discount', 'discountType', 'taxRate'];
-const GEN_ALLOWED_BASE_KEYS = [
-  'customer', 'attn', 'address', 'city', 'state', 'zip', 'phone', 'email',
-  'brand', 'coolingType', 'size', 'atsSize', 'atsQty', 'fuel',
-  'smmQty', 'surgeProQty', 'genStand', 'extWarranty',
-  'extWarrantyPromoStart', 'extWarrantyPromoEnd', 'silverServicePromo',
-  'evCharger', 'evChargerTier', 'customItems', 'notes', 'includeBreakdown',
-  'jobType', 'validDays', 'depositPct', 'extraWire', 'liftType',
-].sort();
+// calcGenTotals inputs (genCalc.ts g.* grep) that a naive "hide the breakdown"
+// gate would have dropped — must now always survive, regardless of
+// includeBreakdown, because totals_data already carries the same dollar
+// figures ungated on the same route (post-review R3).
+const GEN_CALC_ONLY_KEYS = [
+  'battery', 'discount', 'discountType', 'emPanel', 'evChargerPriceOverride',
+  'gasLine', 'labor', 'pad', 'permit', 'removal', 'removalFee', 'startup',
+  'genPriceOverride', 'taxRate',
+];
+const GEN_LEGACY_ALIAS_KEYS = ['smm', 'surgePro', 'ats', 'lcATS', 'additionalATS'];
 
 function fullGenFormData(overrides: Record<string, unknown> = {}) {
   return {
@@ -46,8 +53,10 @@ function fullGenFormData(overrides: Record<string, unknown> = {}) {
     notes: 'none', jobType: 'new-install', validDays: 30, depositPct: 50, extraWire: 0, liftType: 'none',
     // Internal site-detail fields — must never leave the server.
     feedFt: 42, genSide: 'Left', panelRel: 'Same side as panel', panelFt: 12,
-    // Price-breakdown components — gated on includeBreakdown.
-    labor: 3000, permit: 1250, startup: 695, discount: 100, discountType: '$', taxRate: 7,
+    // calcGenTotals inputs — must always survive (not gated on includeBreakdown).
+    battery: true, discount: 100, discountType: '$', emPanel: true, evChargerPriceOverride: null,
+    gasLine: true, labor: 3000, pad: true, permit: 1250, removal: true, removalFee: 500,
+    startup: 695, genPriceOverride: null, taxRate: 7,
     ...overrides,
   };
 }
@@ -59,27 +68,47 @@ async function createGenWithForm(token: string, formData: Record<string, unknown
   return res.body as { id: string; proposal_token: string };
 }
 
-describe('Public proposal form_data projection (post-review B3)', () => {
-  it('drops internal site-detail fields and breakdown components when includeBreakdown is false', async (ctx) => {
+describe('Public proposal form_data projection (post-review B3/R1/R2/R3)', () => {
+  it('drops the internal site-detail fields regardless of includeBreakdown', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    for (const includeBreakdown of [false, true]) {
+      const gen = await createGenWithForm(u.token, fullGenFormData({ includeBreakdown }));
+      const res = await request(app).get(`/api/gens/p/${gen.proposal_token}?preview=1`).expect(200);
+      for (const key of INTERNAL_SITE_DETAIL_KEYS) expect(res.body.form_data).not.toHaveProperty(key);
+    }
+  });
+
+  it('always keeps the calcGenTotals-input fields, even when includeBreakdown is false', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');
     const gen = await createGenWithForm(u.token, fullGenFormData({ includeBreakdown: false }));
     const res = await request(app).get(`/api/gens/p/${gen.proposal_token}?preview=1`).expect(200);
     const formData = res.body.form_data;
-    for (const key of INTERNAL_SITE_DETAIL_KEYS) expect(formData).not.toHaveProperty(key);
-    for (const key of GEN_BREAKDOWN_KEYS) expect(formData).not.toHaveProperty(key);
-    expect(Object.keys(formData).sort()).toEqual(GEN_ALLOWED_BASE_KEYS);
+    for (const key of GEN_CALC_ONLY_KEYS) {
+      expect(formData).toHaveProperty(key);
+    }
+    // Spot-check actual values survive untouched, not just key presence.
+    expect(formData.labor).toBe(3000);
+    expect(formData.discount).toBe(100);
+    expect(formData.pad).toBe(true);
   });
 
-  it('includes the breakdown components when includeBreakdown is true, still drops site-detail fields', async (ctx) => {
+  it('passes through the pre-unification legacy field names when present', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');
-    const gen = await createGenWithForm(u.token, fullGenFormData({ includeBreakdown: true }));
+    const legacyForm = fullGenFormData({
+      smmQty: undefined, surgeProQty: undefined, atsSize: undefined, atsQty: undefined,
+      smm: true, surgePro: true, ats: '200A', lcATS: 'none', additionalATS: 0,
+    });
+    const gen = await createGenWithForm(u.token, legacyForm);
     const res = await request(app).get(`/api/gens/p/${gen.proposal_token}?preview=1`).expect(200);
-    const formData = res.body.form_data;
-    for (const key of INTERNAL_SITE_DETAIL_KEYS) expect(formData).not.toHaveProperty(key);
-    for (const key of GEN_BREAKDOWN_KEYS) expect(formData).toHaveProperty(key);
-    expect(Object.keys(formData).sort()).toEqual([...GEN_ALLOWED_BASE_KEYS, ...GEN_BREAKDOWN_KEYS].sort());
+    for (const key of GEN_LEGACY_ALIAS_KEYS) {
+      expect(res.body.form_data).toHaveProperty(key);
+    }
+    expect(res.body.form_data.smm).toBe(true);
+    expect(res.body.form_data.surgePro).toBe(true);
+    expect(res.body.form_data.ats).toBe('200A');
   });
 
   it('strips unexpected fields from custom line items', async (ctx) => {
@@ -92,7 +121,7 @@ describe('Public proposal form_data projection (post-review B3)', () => {
     expect(item).not.toHaveProperty('secretCostBasis');
   });
 
-  it('projects EV-charger form_data with the EV key list', async (ctx) => {
+  it('projects EV-charger form_data, keeping every calcEvTotals input (nothing gated)', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');
     const gen = await createGenWithForm(u.token, {
@@ -100,13 +129,14 @@ describe('Public proposal form_data projection (post-review B3)', () => {
       phone: '352-555-0199', email: 'ev@example.com',
       distanceTier: 'le5', tierPriceOverride: 500, panelUpgrade: false,
       customItems: [], notes: '', includeBreakdown: false,
-      validDays: 30, depositPct: 0, discount: 0, discountType: '$', taxAmount: 50,
+      validDays: 30, depositPct: 0, discount: 25, discountType: '$', taxAmount: 50,
     }, 'ev_charger');
     const res = await request(app).get(`/api/gens/p/${gen.proposal_token}?preview=1`).expect(200);
     const formData = res.body.form_data;
-    expect(formData).not.toHaveProperty('tierPriceOverride');
-    expect(formData).not.toHaveProperty('discount');
-    expect(formData).not.toHaveProperty('taxAmount');
+    expect(formData.tierPriceOverride).toBe(500);
+    expect(formData.discount).toBe(25);
+    expect(formData.discountType).toBe('$');
+    expect(formData.taxAmount).toBe(50);
     expect(formData.distanceTier).toBe('le5');
     expect(formData.panelUpgrade).toBe(false);
   });
