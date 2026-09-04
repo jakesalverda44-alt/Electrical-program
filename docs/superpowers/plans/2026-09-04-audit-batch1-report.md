@@ -3,7 +3,8 @@
 **Plan:** `docs/superpowers/plans/2026-09-04-audit-batch1-security-data.md` (Local Version, read-only reference)
 **Branch:** `fix/audit-batch1` (worktree: `../Electrical-program-wt-audit1`)
 **Execution:** Sonnet 5
-**Commits:** 12 (one per task), plus this report commit.
+**Commits:** 12 (one per task), plus this report commit, plus 3 post-review
+fix commits (below) and this section's own report-update commit.
 
 ## Summary
 
@@ -425,3 +426,193 @@ pre-existing (see phase4 report: "9 pre-existing failures in ...
   one Local Version side effect — a log line appended by Task 11's required
   dry run — is documented above under Task 11.
 - **Clean tree** as of the final (report) commit.
+
+---
+
+## Post-review fixes (2026-09-04)
+
+An Opus 5 adversarial review of the merged `fix/audit-batch1` branch returned
+**MERGE AFTER FIXES**: three blocking findings (B1, B2, B3) and four cheap
+non-blockers. All seven are addressed below, three commits (one per review
+item, per the reviewer's instruction), in the same worktree, same safety
+rules as the original batch.
+
+| # | Commit | Status |
+|---|---|---|
+| B1 + B2 (one commit) | `bc0f326` | done |
+| B3 | `65c4a85` | done |
+| Non-blockers (a)–(d), one commit | `7df8130` | done |
+
+### B1 + B2 — Drive proxy fails closed for every role, without breaking job photos — done, `bc0f326`
+
+- **B1**: `GET /api/documents/drive-file/:fileId`'s "no `documents` row → 403"
+  guard lived inside `if (scope)` (`ownScopeId` returns `null` for every role
+  except `salesperson`/`salesperson_legacy`), so a `read_only`, `technician`,
+  or `owner` account could still proxy an arbitrary Drive file id through the
+  service account. Moved the "no row → 403" check outside the scope gate so
+  it applies to every role; the ownership sub-check (uploader match or
+  `ownsLinkedRecord`) stays scoped to restricted reps only, unchanged.
+- **B2**: that fix alone would 403 job-site photo thumbnails for salespeople,
+  since `GET /gens/:id/photos` / `GET /bids/:id/photos` list a Drive Photos
+  subfolder directly (`listFolderFiles`) and those file ids never get a
+  `documents` row — same for a Cloudinary-stored upload, whose Drive id (if
+  any) is never persisted either. Added two owned-record routes,
+  `GET /gens/:id/photos/:fileId` (behind `loadOwnedGen`) and
+  `GET /bids/:id/photos/:fileId` (behind `loadOwnedBid`) — the explicitly
+  authorized exception to "nothing in the gens pipeline beyond the one public
+  route." Each confirms the requested file's parent folder equals that
+  record's own `drive_photos_folder_id` via a new `getFileParents()` helper
+  in `services/googleDrive.ts`, then streams via the existing `getFileMedia`.
+  `frontend/src/components/DriveImage.tsx` gained an optional `src` prop to
+  override the default `/documents/drive-file/:fileId` proxy;
+  `frontend/src/features/gen-projects/GenProjectsPage.tsx` and
+  `frontend/src/features/elec-projects/ElecProjectsPage.tsx` (the two photo
+  grids) now pass the matching owned route. No other file under
+  `frontend/src/features/` was touched for this fix.
+- Test: `backend/src/test/driveProxyOwnership.test.ts` (5 tests) — a
+  `read_only` and an `owner`-role user both 403 on an untracked file id
+  (B1); the owning salesperson 200s a photo whose Drive parent matches their
+  gen's photos folder (B2, `getFileParents`/`getFileMedia` mocked via a
+  partial `vi.mock` of `services/googleDrive`); a salesperson fetching a
+  photo under a gen they don't own gets 403/404 with Drive never consulted;
+  a file whose parent isn't the gen's photos folder 403s. Confirmed 4 of 5
+  fail on the pre-fix code (the 403/404 "not your gen" case incidentally
+  passes either way, since the new route doesn't exist pre-fix and Express
+  404s the unmatched path — an acceptable outcome under that test's own
+  `[403, 404]` assertion).
+
+### B3 — `form_data` projected server-side on the public link — done, `65c4a85`
+
+Task 3's explicit column list was correct, but `form_data` itself still
+shipped whole. New `backend/src/utils/publicFormData.ts` whitelists exactly
+the keys the two preview components read, applied to both branches of
+`GET /api/gens/p/:token`.
+
+**Every `form.*` access in `ProposalPreview.tsx`** (generator form), read
+directly from the file: `customer`, `attn`, `address`, `city`, `state`,
+`zip`, `phone`, `email`, `brand`, `size`, `atsQty`, `atsSize`, `jobType`,
+`validDays`, `depositPct`, `smmQty`, `surgeProQty`, `silverServicePromo`,
+`extWarranty`, `extWarrantyPromoStart`, `extWarrantyPromoEnd`, `genStand`,
+`evCharger`, `evChargerTier`, `notes`, `includeBreakdown`, `taxRate`
+(inside the `includeBreakdown` page only), `liftType` (same), `extraWire`
+(same) — plus two fields needed only **transitively**, because
+`ProposalPreview.tsx` calls these `genCalc` helpers in its own render body:
+`loadCenterFor(form)` needs `coolingType` (not read as `form.coolingType`
+literally anywhere else in the file, but required for the helper to return
+the right load-center label), and `activeCustomItems(form)` /
+`customItemAmount(item)` need `customItems` and each item's own `id`,
+`desc`, `amount`, `taxable`. `genModelNo` and `genPriceRows` are imported
+but never actually called in this file — no additional fields needed for
+those. `discount`, `discountType`, `labor`, `permit`, `startup` are
+**never read directly** by this component at all (the rendered breakdown
+table uses pre-computed `totals.laborAmt`/`totals.permitAmt`/
+`totals.startupAmt`, not the raw form fields) — but the raw values still
+rode along in the un-projected `form_data` JSON regardless of what the UI
+displayed, which is the actual leak B3 describes. Per the review's
+instruction, these are treated as breakdown components and shipped only
+when `includeBreakdown` is true (matching the page that would show that
+class of number), not added unconditionally.
+
+**Every `form.*` access in `EvProposalPreview.tsx`** (EV-charger form):
+`customer`, `attn`, `address`, `city`, `state`, `zip`, `phone`, `email`,
+`depositPct`, `validDays`, `panelUpgrade`, `notes`, `includeBreakdown`,
+`distanceTier` (via `evTierLabel(form.distanceTier)`) — plus `customItems`
+transitively via `activeCustomItems`/`customItemAmount`, same as the
+generator form. `discount`, `discountType`, `taxAmount` are never read
+directly (the breakdown table uses `totals.discountAmt`/`totals.tax`) —
+same treatment as the generator side's breakdown fields, gated on
+`includeBreakdown`. `tierPriceOverride` (the EV analog of
+`genPriceOverride`) is not read anywhere and is never sent at all, even
+with `includeBreakdown` true — it isn't a hidden cost figure (it's the same
+number `totals.tierAmt` already shows), but nothing in either preview
+component needs it, so it stays out of the whitelist by the "only what's
+read" rule.
+
+Confirmed `ProposalPublicPage.tsx` needs nothing beyond this: it only reads
+`data.form_data` as an opaque object to pass straight through to
+`ProposalPreview`/`EvProposalPreview` as the `form` prop (after
+`migrateGenForm`/`migrateEvForm`, which only ever fill in *missing* keys
+with defaults — they don't require extra keys to be present) — it does not
+read any `form.*` field itself.
+
+Test: `backend/src/test/gensPublicFormDataProjection.test.ts` (4 tests) —
+`includeBreakdown: false` drops both the internal site-detail keys
+(`feedFt`, `genSide`, `panelRel`, `panelFt`) and the breakdown keys, and the
+remaining key set matches the whitelist exactly (snapshotted);
+`includeBreakdown: true` keeps the breakdown keys present, still drops the
+site-detail keys; a custom line item's extra/unexpected field
+(`secretCostBasis`) is stripped down to `id`/`desc`/`amount`/`taxable`; an
+EV-charger proposal is projected with the EV key list and never carries
+`tierPriceOverride`/`discount`/`taxAmount`. Confirmed all 4 fail on the
+pre-fix code.
+
+### Non-blockers (a)–(d) — one commit, `7df8130`
+
+- **(a) `routes/auth.ts`**: `GET /api/auth/microsoft` now runs behind
+  `authLimiter` (it minted one unbounded `oauthStates` entry per
+  unauthenticated call). `oauthStates` is capped at 1000 entries with
+  oldest-first eviction (`Map` iteration order is insertion order) once
+  pruning expired entries isn't enough. An invalid/expired `state` on the
+  callback — a browser navigation, not an API call, and reachable in
+  practice by a backend restart mid-login dropping the in-memory map —
+  now redirects to `${frontendBase}/login?error=oauth_state` instead of a
+  raw JSON 400 the user would see verbatim. Updated
+  `authMicrosoftOAuth.test.ts`'s three affected assertions (no-state,
+  unknown-state, and the replay case) to expect the redirect.
+- **(b) `routes/leads.ts`**: the post-commit `closeLeadFollowups(lead.id)`
+  call is now wrapped in `.catch()` with a logged warning, mirroring
+  `pushSiteVisitToCalendar`'s existing best-effort handling just above it —
+  a throw there must not 500 a handoff that already committed successfully.
+  (Note: `closeLeadFollowups` already catches its own errors internally and
+  never actually rejects, so this is defense-in-depth against that
+  changing later, not a fix for an observed failure.) A failed `ROLLBACK`
+  in the handoff transaction's `catch` block now releases the client with
+  the error (`client.release(rollbackErr)`) instead of a plain
+  `client.release()`, so `pg` destroys a possibly-corrupted connection
+  instead of returning it to the pool; restructured to exactly one
+  `release()` call per exit path (no `finally`, which would have
+  double-released after the new error-path release).
+- **(c) `utils/upload.ts`**: `.dwg`/`.dxf` no longer map to the unofficial
+  `image/vnd.dwg`/`image/vnd.dxf` types — `documents.ts`'s inline check is
+  a bare `type.startsWith('image/')`, so these tripped it even though no
+  browser can actually render a CAD file as an image (not exploitable as
+  found, but contrary to the allowlist's intent). Now `application/acad`
+  and `application/dxf` respectively; `.dwf`/`.dwfx` (already `model/vnd.*`,
+  never matched `image/`) are unchanged.
+- **(d) `scripts/backup-prod-db.sh`**: the Supabase connection string now
+  passes into the container via `-e PGURL=...` and the dump runs as
+  `sh -c 'pg_dump "$PGURL"'`, keeping it out of `pg_dump`'s own argv inside
+  the container (visible to `docker top`/an in-container process listing)
+  rather than a literal command argument. `scripts/backup-db.sh`'s prune
+  glob changed from `electrical_crm-*.sql.gz` to `electrical_crm-[0-9]*.sql.gz`
+  (the local dump's date-stamp starts with a digit) so it can never match
+  `electrical_crm-prod-*.sql.gz` in the same `$DEST`, even if the two
+  scripts' retention policies diverge later. Re-ran the Task 11 dry run
+  (env file absent) after this change — same clean failure message, no
+  docker/pg_dump ever invoked.
+
+### Post-review: final test counts
+
+- **Backend** (`npm test`, `electrical_crm_test`): **762 passed, 4 failed,
+  7 skipped, out of 773** — same pre-existing test-isolation/parallelism
+  flakiness documented in the original report above (confirmed again by
+  re-running: `prebid.test.ts`, `bidStandardGeneration.test.ts`, and
+  `integration.test.ts`'s "Kohler lead" case, none of which any post-review
+  fix touches). Test count grew from 764 to 773 with the 9 new tests added
+  across the three post-review commits (5 + 4).
+- **Frontend** (`npm test`): **347 passed, 9 failed, out of 356** —
+  unchanged from the original report (no frontend test files added or
+  changed in the post-review round beyond the two call-site edits, which
+  have no dedicated test file of their own).
+- `npx tsc --noEmit` clean on both `backend/` and `frontend/` after each of
+  the three post-review commits.
+
+### Post-review: safety confirmation
+
+- **Tests only ever ran against `electrical_crm_test`.**
+- **`backup-prod-db.sh`'s dry run (re-run after fix (d))** used the env-file-absent
+  path only — never executed against prod, `.crm/prod-db.env` never created.
+- **Never ran a dev server, never touched Docker state.**
+- **No pushes.** All three post-review commits plus this report update are
+  local to `fix/audit-batch1` in the `Electrical-program-wt-audit1` worktree.
+- **Clean tree** as of this report-update commit.
