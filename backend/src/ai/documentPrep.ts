@@ -26,14 +26,6 @@ import path from 'path';
 import sharp from 'sharp';
 import Anthropic from '@anthropic-ai/sdk';
 import { logger } from '../utils/logger';
-import { sanitizeForPrompt } from './sanitizeForPrompt';
-import {
-  isPdftotextAvailable,
-  extractPdfPageTexts,
-  pageTextBlock,
-  MIN_CHARS_FOR_TEXT_BLOCK,
-  TOTAL_TEXT_CAP,
-} from './pdfText';
 
 const execFileP = promisify(execFile);
 
@@ -213,8 +205,8 @@ export async function isPdftoppmAvailable(): Promise<boolean> {
   return pdftoppmAvailable;
 }
 
-/** Tiles for a single rasterized PDF page, grouped so callers (e.g. buildAgent1Content)
- *  can interleave a per-page EXTRACTED TEXT block before that page's tiles. */
+/** Tiles for a single rasterized PDF page, grouped so a caller can interleave a
+ *  per-page EXTRACTED TEXT block before that page's tiles. */
 export interface PdfPageTiles {
   /** 1-based page number, matching pdftotext's page order. */
   page: number;
@@ -420,145 +412,9 @@ export async function tilesForSelectedPdfPages(
   return all;
 }
 
-/* ---------------------------------------------------------------------------
- * 4) Orchestrator: files -> ordered Agent-1 content blocks.
- *    Schedule sheets are tiled tightest and placed FIRST (where Agent 1 reads
- *    them best). Append the existing Agent-1 instruction text block after this.
- * ------------------------------------------------------------------------- */
-export async function buildAgent1Content(
-  files: PrepFile[],
-  opts: { tileOverrides?: TileSettingsOverrides } = {}
-): Promise<Agent1Block[]> {
-  const popplerOk = await isPdftoppmAvailable();
-  const pdftotextOk = await isPdftotextAvailable();
-
-  // order: schedules first, then details, then plans
-  const order: Record<SheetClass, number> = { schedule: 0, detail: 1, plan: 2 };
-  const sorted = [...files].sort(
-    (a, b) => order[classifySheet(a.filename)] - order[classifySheet(b.filename)]
-  );
-
-  const blocks: Agent1Block[] = [];
-
-  // Text-extract-first budget: shared across every PDF in this run (Task 1 —
-  // playbook rule #1). Once the total cap is hit, one marker block is emitted
-  // and no further page text is added — tiles keep flowing normally either way.
-  let totalTextChars = 0;
-  let totalCapHit = false;
-  const addTextBlockForPage = (sheetLabel: string, pageTexts: string[], pageNo: number) => {
-    if (totalCapHit) return;
-    const text = pageTexts[pageNo - 1];
-    if (!text || text.length < MIN_CHARS_FOR_TEXT_BLOCK) return;
-    const block = pageTextBlock(sheetLabel, pageNo, text);
-    if (totalTextChars + block.text.length > TOTAL_TEXT_CAP) {
-      blocks.push({ type: 'text', text: '[additional page text omitted — cap reached]' });
-      totalCapHit = true;
-      return;
-    }
-    blocks.push(block);
-    totalTextChars += block.text.length;
-  };
-
-  for (const f of sorted) {
-    const cls = classifySheet(f.filename);
-    const hasPageSelection = f.ext === 'pdf' && !!f.pageSelection && f.pageSelection.length > 0;
-
-    // Whole-file label block — skipped when page-level classification is in
-    // play (Task 2): each selected page gets its own real-identity label below
-    // instead of one filename-based label for the whole PDF.
-    // FIX-7 (post-review) — f.filename is an uploaded, untrusted filename
-    // interpolated straight into this module's own "--- Sheet: ... ---"
-    // delimiter grammar; sanitize it the same way pdfText.ts's pageTextBlock
-    // sanitizes extracted page text (this was flagged as out-of-scope by the
-    // executor when that sanitization landed — that restriction is lifted).
-    if (!hasPageSelection) {
-      blocks.push({ type: 'text', text: `--- Sheet: ${sanitizeForPrompt(f.filename)} (${cls}) ---` });
-    }
-
-    if (f.ext === 'pdf') {
-      // Extract page text first (independent of tiling — schedules are sometimes
-      // raster and plans always need vision, so text is additive, never a
-      // replacement). Extraction failure is non-fatal: continue tile-only.
-      let pageTexts: string[] = [];
-      if (pdftotextOk) {
-        try {
-          pageTexts = await extractPdfPageTexts(f.buffer);
-        } catch (err) {
-          logger.warn({ err, file: f.filename }, '[docprep] pdftotext extraction failed — continuing without page text');
-        }
-      }
-
-      if (hasPageSelection) {
-        const selection = f.pageSelection!;
-        const labelByPage = new Map(selection.map(p => [p.page, p]));
-        if (!popplerOk) {
-          // Classification implies rasterization already worked once (title-block
-          // crops), but guard anyway: fall back to text-only + one document block.
-          for (const p of selection) addTextBlockForPage(p.label, pageTexts, p.page);
-          blocks.push(pdfDocumentBlock(f.buffer));
-          continue;
-        }
-        try {
-          const pageGroups = await tilesForSelectedPdfPages(f.buffer, selection, opts.tileOverrides);
-          for (const group of pageGroups) {
-            const sel = labelByPage.get(group.page);
-            const label = sel?.label ?? f.filename;
-            const groupCls = sel?.cls ?? cls;
-            // FIX-4 (post-review) — the colon matters: preconstruction.ts's
-            // summarizePrep matches '--- Sheet:' (with colon) to tell a real
-            // sheet label apart from pdfText.ts's '--- Sheet <label> p<N> —
-            // EXTRACTED TEXT ...' header, which deliberately has no colon.
-            // Omitting it here broke per-sheet tile logging for every
-            // page-selected PDF (Task 2's classification path).
-            // FIX-7 (post-review) — `label` is either pageClassifier's
-            // real-sheet-identity label or the uploaded filename, both
-            // untrusted; sanitize before it lands in this delimiter line.
-            blocks.push({ type: 'text', text: `--- Sheet: ${sanitizeForPrompt(label)} (${groupCls}) ---` });
-            addTextBlockForPage(label, pageTexts, group.page);
-            blocks.push(...group.tiles);
-          }
-        } catch (err) {
-          logger.warn({ err, file: f.filename }, '[docprep] selected-page PDF tiling failed — falling back to document block');
-          for (const p of selection) addTextBlockForPage(p.label, pageTexts, p.page);
-          blocks.push(pdfDocumentBlock(f.buffer));
-        }
-        continue;
-      }
-
-      if (!popplerOk) {
-        // No tiling available. Fallback matrix: pdftotext present -> text blocks
-        // + document block (an improvement over today's document-only); pdftotext
-        // absent -> today's behavior exactly (document block only).
-        pageTexts.forEach((_, i) => addTextBlockForPage(f.filename, pageTexts, i + 1));
-        blocks.push(pdfDocumentBlock(f.buffer));
-        continue;
-      }
-      try {
-        const settings = tileSettingsFor(cls, opts.tileOverrides);
-        const pageGroups = await pdfToTiledImageBlocksByPage(f.buffer, {
-          tileInches: settings.tileInches,
-          maxTilesPerPage: settings.maxTilesPerPage,
-          dpi: settings.dpi,
-        });
-        if (pageGroups.length) {
-          for (const group of pageGroups) {
-            addTextBlockForPage(f.filename, pageTexts, group.page);
-            blocks.push(...group.tiles);
-          }
-        } else {
-          // empty rasterization -> fall back
-          pageTexts.forEach((_, i) => addTextBlockForPage(f.filename, pageTexts, i + 1));
-          blocks.push(pdfDocumentBlock(f.buffer));
-        }
-      } catch (err) {
-        logger.warn({ err, file: f.filename }, '[docprep] PDF tiling failed — falling back to document block');
-        pageTexts.forEach((_, i) => addTextBlockForPage(f.filename, pageTexts, i + 1));
-        blocks.push(pdfDocumentBlock(f.buffer));
-      }
-    } else {
-      const block = await imageToBlock(f.buffer, f.ext);
-      if (block) blocks.push(block);
-    }
-  }
-  return blocks;
-}
+// The Agent-1 content orchestrator that used to live here was deleted
+// 2026-09-04 (audit: Security #10, High) — it was referenced only by its own
+// test. The live route (routes/preconstruction.ts) calls
+// agent1Batching.ts's buildBlocksForBatch instead, which is where sanitization
+// of untrusted filenames/labels actually needs to (and now does) happen. See
+// git history if the removed function is ever needed again.

@@ -28,6 +28,7 @@ import {
   type TileSettingsOverrides,
 } from './documentPrep';
 import { pageTextBlock, MIN_CHARS_FOR_TEXT_BLOCK, TOTAL_TEXT_CAP } from './pdfText';
+import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { logger } from '../utils/logger';
 
 /**
@@ -212,13 +213,17 @@ export async function buildBlocksForBatch(
       continue;
     }
     if (u.kind === 'document-fallback') {
-      blocks.push({ type: 'text', text: `--- Sheet: ${u.filename} (${u.cls}) ---` });
+      // u.filename is the raw uploaded filename — attacker-controlled — and lands
+      // inside this delimiter grammar; sanitize it (audit: Security #10, High —
+      // this module's buildBlocksForBatch is what the live route actually calls).
+      blocks.push({ type: 'text', text: `--- Sheet: ${sanitizeForPrompt(u.filename)} (${sanitizeForPrompt(u.cls)}) ---` });
       u.pageTexts.forEach((text, i) => addText(u.filename, i + 1, text));
       blocks.push(pdfDocumentBlock(u.buffer));
       continue;
     }
-    // 'pdf-page'
-    blocks.push({ type: 'text', text: `--- Sheet: ${u.label} (${u.cls}) ---` });
+    // 'pdf-page' — u.label is built from the vision classifier's echoed sheet
+    // number/title, also attacker-influenceable via a hostile title block.
+    blocks.push({ type: 'text', text: `--- Sheet: ${sanitizeForPrompt(u.label)} (${sanitizeForPrompt(u.cls)}) ---` });
     addText(u.label, u.page, u.pageText);
     const tiles = tilesByKey.get(`${u.filename}#${u.page}`);
     if (tiles) blocks.push(...tiles);

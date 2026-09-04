@@ -1,3 +1,5 @@
+import { escapeHtml } from '../utils/escapeHtml';
+
 export function proposalEmailHtml(opts: {
   customerName: string;
   proposalNo: string;
@@ -13,8 +15,20 @@ export function proposalEmailHtml(opts: {
   /** Gas utility contact info — only passed when "Include gas contacts" is checked. */
   gasContacts?: string;
 }): string {
-  const { customerName, proposalNo, spec, total, deposit, link, senderNote, defaultMessage, gasContacts } = opts;
+  const link = opts.link;
   const validDays = opts.validDays || 30;
+  // This is a real send to the customer via graphSendMail, not a draft — every
+  // interpolated value must be escaped before it lands in the HTML body
+  // (audit: Security #9, High). nl2br runs AFTER escaping so it inserts real
+  // <br> tags rather than escaping its own markup.
+  const customerName = escapeHtml(opts.customerName);
+  const proposalNo = escapeHtml(opts.proposalNo);
+  const spec = opts.spec ? escapeHtml(opts.spec) : opts.spec;
+  const total = escapeHtml(opts.total);
+  const deposit = escapeHtml(opts.deposit);
+  const senderNote = opts.senderNote ? escapeHtml(opts.senderNote) : opts.senderNote;
+  const defaultMessage = opts.defaultMessage ? escapeHtml(opts.defaultMessage) : opts.defaultMessage;
+  const gasContacts = opts.gasContacts ? escapeHtml(opts.gasContacts) : opts.gasContacts;
   const nl2br = (s: string) => s.replace(/\n/g, '<br>');
   return `<!DOCTYPE html>
 <html lang="en">
