@@ -481,6 +481,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       ai_done: w.aiDone,
       proposal_generated: w.proposalGenerated,
       confirmed_service: w.confirmedService ?? null,
+      // Task 11 — struck from Batch 2: the continuous autosave now carries
+      // these too, not only the deliberate "Save Estimate" action.
+      overhead_pct: w.overheadPct,
+      profit_pct: w.profitPct,
+      estimate_overrides: w.estimateOverrides,
     };
   }, []);
 
@@ -533,7 +538,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       void saveWorkspace();
     }, 800);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated, ws.confirmedService, saveWorkspace, workspacePayload]);
+  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated, ws.confirmedService,
+      ws.overheadPct, ws.profitPct, ws.estimateOverrides, saveWorkspace, workspacePayload]);
 
   function set(patchOrFn: Partial<PcWorkspace> | ((prev: PcWorkspace) => Partial<PcWorkspace>)) {
     const current = wsRef.current;
@@ -731,6 +737,34 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       estimateOverrides: overrides,
     });
   }, [savedEstimate]);
+
+  // Task 11 — struck from Batch 2: bid_workspaces now also carries these
+  // three fields (via the continuous autosave, not just the "Save Estimate"
+  // action above). Same pristine gate as the bid_estimates hydration —
+  // whichever of the two sources resolves first while the workspace is
+  // still untouched wins; once either has hydrated, isPristine is false and
+  // the other becomes a no-op. In steady state both agree, since a Save
+  // Estimate also feeds the very next autosave.
+  const { data: workspaceRow } = useApi<{
+    overhead_pct: number | null; profit_pct: number | null; estimate_overrides: Record<string, number> | null;
+  } | null>(`/preconstruction/${bid.id}/workspace`);
+  useEffect(() => {
+    if (!workspaceRow) return;
+    const current = wsRef.current;
+    const isPristine = current.overheadPct === 10 && current.profitPct === 15
+      && Object.keys(current.estimateOverrides).length === 0;
+    if (!isPristine) return;
+    const overrides = workspaceRow.estimate_overrides || {};
+    const hasRealValues = (workspaceRow.overhead_pct != null && Number(workspaceRow.overhead_pct) !== 10)
+      || (workspaceRow.profit_pct != null && Number(workspaceRow.profit_pct) !== 15)
+      || Object.keys(overrides).length > 0;
+    if (!hasRealValues) return;
+    set({
+      overheadPct: workspaceRow.overhead_pct != null ? Number(workspaceRow.overhead_pct) : 10,
+      profitPct: workspaceRow.profit_pct != null ? Number(workspaceRow.profit_pct) : 15,
+      estimateOverrides: overrides,
+    });
+  }, [workspaceRow]);
 
   // Pre-fill service fields from Agent 1 output when it becomes available (skips already-filled fields)
   useEffect(() => {
