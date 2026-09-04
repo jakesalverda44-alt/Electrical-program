@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import type { PoolClient } from 'pg';
 import rateLimit from 'express-rate-limit';
 import { pool } from '../db/pool';
 import { requireAuth, requireAuthOrApiKey, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
@@ -259,8 +260,14 @@ function fmtSiteVisit(at: string | Date | null): string {
  * "Building" column (carrying the lead's contact details + full activity timeline),
  * links it to the originating lead in both directions, marks the lead 'converted', and
  * logs the conversion on both the lead and the new proposal. Returns the proposal id.
+ *
+ * All writes go through the caller's transaction `client` (audit: Data #3, High —
+ * this used to be six separate pool.query calls with no BEGIN, so a crash mid-flight
+ * could leave a lead marked converted with no proposal, or vice versa). Post-commit
+ * side effects (Drive/Outlook, notifications) are NOT this function's job — the
+ * caller runs those after COMMIT, exactly as routes/bids.ts / routes/gens.ts do.
  */
-async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string }): Promise<string> {
+async function convertLeadToProposal(client: PoolClient, lead: LeadRow, actingUser?: { name: string }): Promise<string> {
   const actor = actingUser?.name || 'System';
   let genId = lead.linked_gen_id;
 
@@ -282,7 +289,7 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
       lead_source: lead.source,
       ...surveyFields,
     };
-    const { rows } = await pool.query(
+    const { rows } = await client.query(
       `INSERT INTO generator_proposals
          (customer, loc, salesperson_id, salesperson_name, stage, form_data, lead_id,
           site_visit_at, site_visit_needs_time)
@@ -295,14 +302,14 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
     genId = rows[0].id as string;
 
     // Carry over the full lead activity timeline onto the proposal.
-    await pool.query(
+    await client.query(
       `INSERT INTO proposal_activity (proposal_id, kind, direction, text, created_by, created_at)
        SELECT $1, kind, direction, text, created_by, created_at
          FROM lead_activity WHERE lead_id = $2`,
       [genId, lead.id]
     );
   } else {
-    await pool.query(
+    await client.query(
       `UPDATE generator_proposals
           SET lead_id = COALESCE(lead_id, $1),
               site_visit_at = $2, site_visit_needs_time = $3
@@ -312,38 +319,30 @@ async function convertLeadToProposal(lead: LeadRow, actingUser?: { name: string 
   }
 
   // Site-visit photos/files attached to the lead follow it into the generator
-  // pipeline — re-link them to the proposal so they show under its Files.
-  await pool.query(
+  // pipeline — re-link them to the proposal so they show under its Files. No
+  // longer swallowed: inside the transaction, a real failure here must roll
+  // back the whole handoff rather than leave the lead converted with no files.
+  await client.query(
     `UPDATE documents SET linked_id=$1, div='gen', linked_name=$2 WHERE linked_id=$3 AND deleted_at IS NULL`,
     [genId, lead.name, lead.id]
-  ).catch(() => {});
+  );
 
   // Link forward + mark converted (removes it from the active leads board).
-  await pool.query(
+  await client.query(
     "UPDATE leads SET linked_gen_id=$1, stage='converted', updated_at=now() WHERE id=$2",
     [genId, lead.id]
   );
 
   // Log the conversion + the scheduled site visit on both sides.
   const visitText = `Site visit scheduled for ${fmtSiteVisit(lead.site_visit_at)}`;
-  await pool.query(
+  await client.query(
     "INSERT INTO lead_activity (lead_id, kind, created_by, text) VALUES ($1,'system',$2,$3),($1,'system',$2,$4)",
     [lead.id, actor, 'Site scheduled — converted to generator proposal', visitText]
-  ).catch(() => {});
-  await pool.query(
+  );
+  await client.query(
     "INSERT INTO proposal_activity (proposal_id, kind, created_by, text) VALUES ($1,'system',$2,$3),($1,'system',$2,$4)",
     [genId, actor, `Converted from lead "${lead.name}"`, visitText]
-  ).catch(() => {});
-
-  // Fire-and-forget Outlook calendar push (non-blocking; updates on re-run).
-  pushSiteVisitToCalendar(genId, {
-    id: lead.id, name: lead.name, address: lead.address, phone: lead.phone,
-    email: lead.email, notes: lead.notes, site_visit_at: lead.site_visit_at,
-    salesperson_name: lead.salesperson_name,
-  }).catch(() => {});
-
-  // A converted lead is terminal — close out any open follow-up tasks.
-  await closeLeadFollowups(lead.id);
+  );
 
   return genId;
 }
@@ -666,6 +665,64 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
   }
 
   params.push(lead.id);
+
+  if (isHandoff) {
+    // Atomic handoff (audit: Data #3, High): the dynamic-fields update, the
+    // site-visit stamp, and every write inside convertLeadToProposal now
+    // commit together or not at all, through one client — the pattern
+    // routes/bids.ts and routes/gens.ts already use. Before this, a crash
+    // mid-flight could leave a lead marked converted with no proposal.
+    const siteVisitAt = req.body.site_visit_at || null;
+    const needsTime = req.body.site_visit_needs_time ?? !siteVisitAt;
+
+    const client = await pool.connect();
+    let updated: LeadRow;
+    let genId: string;
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `UPDATE leads SET ${sets.join(', ')} WHERE id=$${params.length} RETURNING *`,
+        params
+      );
+      updated = rows[0];
+
+      // Capture the scheduled site visit on the lead before converting. "No time
+      // yet" arrives as a null datetime and flags the lead/proposal as needing one.
+      await client.query(
+        'UPDATE leads SET site_visit_at=$1, site_visit_needs_time=$2, updated_at=now() WHERE id=$3',
+        [siteVisitAt, needsTime, lead.id]
+      );
+      updated.site_visit_at = siteVisitAt;
+      updated.site_visit_needs_time = needsTime;
+
+      genId = await convertLeadToProposal(client, updated, req.user);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      const msg = inputErrorMessage(err);
+      if (msg) { res.status(400).json({ error: msg }); return; }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Post-commit side effects — Drive/Outlook and the follow-up close-out never
+    // run inside the transaction (audit: Data #3, High, item 3).
+    pushSiteVisitToCalendar(genId, {
+      id: lead.id, name: updated.name, address: updated.address, phone: updated.phone,
+      email: updated.email, notes: updated.notes, site_visit_at: updated.site_visit_at,
+      salesperson_name: updated.salesperson_name,
+    }).catch(() => {});
+    await closeLeadFollowups(lead.id);
+
+    const { rows: converted } = await pool.query('SELECT * FROM leads WHERE id=$1', [lead.id]);
+    // Return the new proposal too so the client can drop the new card into the Pipeline
+    // "Building" column without a manual refresh.
+    const { rows: gen } = await pool.query('SELECT * FROM generator_proposals WHERE id=$1', [genId]);
+    res.json({ ...converted[0], linked_gen_id: genId, proposal: gen[0] ?? null });
+    return;
+  }
+
   let rows;
   try {
     ({ rows } = await pool.query(
@@ -678,27 +735,6 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
     throw err;
   }
   const updated = rows[0];
-
-  if (isHandoff) {
-    // Capture the scheduled site visit on the lead before converting. "No time yet"
-    // arrives as a null datetime and flags the lead/proposal as needing a time.
-    const siteVisitAt = req.body.site_visit_at || null;
-    const needsTime = req.body.site_visit_needs_time ?? !siteVisitAt;
-    await pool.query(
-      'UPDATE leads SET site_visit_at=$1, site_visit_needs_time=$2, updated_at=now() WHERE id=$3',
-      [siteVisitAt, needsTime, lead.id]
-    );
-    updated.site_visit_at = siteVisitAt;
-    updated.site_visit_needs_time = needsTime;
-
-    const genId = await convertLeadToProposal(updated, req.user);
-    const { rows: converted } = await pool.query('SELECT * FROM leads WHERE id=$1', [lead.id]);
-    // Return the new proposal too so the client can drop the new card into the Pipeline
-    // "Building" column without a manual refresh.
-    const { rows: gen } = await pool.query('SELECT * FROM generator_proposals WHERE id=$1', [genId]);
-    res.json({ ...converted[0], linked_gen_id: genId, proposal: gen[0] ?? null });
-    return;
-  }
 
   // Log stage change, fire webhook, and schedule follow-up task when stage changes.
   if (req.body.stage && req.body.stage !== lead.stage) {
