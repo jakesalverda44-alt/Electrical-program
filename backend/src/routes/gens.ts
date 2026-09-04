@@ -7,6 +7,7 @@ import { proposalEmailHtml } from '../email/proposalEmail';
 import { graphSendMail, graphCreateDraft, isGraphMailConfigured, TEAM_NOTIFY_TO } from '../email/graphMailer';
 import { loadLinkedDocumentsAsAttachments } from '../email/bidAttachments';
 import { escapeHtml } from '../utils/escapeHtml';
+import { publicFormData } from '../utils/publicFormData';
 import { getSetting } from './settings';
 import { upsertCustomer } from './customers';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -27,6 +28,8 @@ import {
   moveJobToStage,
   listFolderFiles,
   ensureSubfolder,
+  getFileMedia,
+  getFileParents,
   GENERATOR_PROPOSALS_FOLDER,
   ACTIVE_GENERATOR_JOBS_ROOT,
   COMPLETED_GENERATOR_JOBS_ROOT,
@@ -1344,19 +1347,38 @@ router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
 });
 
 // ── Public: view proposal by token (no auth) ────────────────────────────────
+// Customer-safe column list: exactly what ProposalPublicPage.tsx (the ONLY
+// consumer of this route) reads. Explicitly excludes internal notes,
+// cost/margin fields, salesperson_id, Drive folder ids, org_id, *_by user
+// ids, and any JSONB fields not rendered here (checklist_data, survey_markup,
+// etc). Do not change this to SELECT * (audit: Security #3, High).
+const PUBLIC_PROPOSAL_COLUMNS = `
+  customer, product_type, proposal_no, form_data, totals_data,
+  signature_data, initials_data, signed_at, countersigned_at, countersignature_data
+`;
 router.get('/p/:token', async (req, res) => {
   // In-app previews pass ?preview=1 — fetch without recording a customer "view".
   const isPreview = !!req.query.preview;
   const sql = isPreview
-    ? `SELECT * FROM generator_proposals
+    ? `SELECT ${PUBLIC_PROPOSAL_COLUMNS} FROM generator_proposals
        WHERE proposal_token = $1 AND deleted_at IS NULL`
     : `UPDATE generator_proposals
        SET viewed_at = COALESCE(viewed_at, now())
        WHERE proposal_token = $1 AND deleted_at IS NULL
-       RETURNING *`;
+       RETURNING ${PUBLIC_PROPOSAL_COLUMNS}`;
   const { rows } = await pool.query(sql, [req.params.token]);
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
-  res.json(rows[0]);
+  const gen = rows[0];
+  // form_data still needs its own server-side projection even with the column
+  // list above: the JSONB blob carries genData.ts's declared internal
+  // site-detail fields (feedFt/genSide/panelRel/panelFt — see
+  // utils/publicFormData.ts's own comment for the exact source quote). The
+  // price-breakdown fields are NOT gated on includeBreakdown: totals_data
+  // (sent whole, above) already carries the same dollar figures ungated, and
+  // ProposalPreview.tsx reads several of them outside the breakdown block, so
+  // hiding that page was never a confidentiality boundary (post-review R3).
+  gen.form_data = publicFormData(gen.form_data, gen.product_type);
+  res.json(gen);
 });
 
 // List photos from the gen job's Drive "Photos" subfolder. Lazily creates the folder
@@ -1376,6 +1398,27 @@ router.get('/:id/photos', requireAuth, async (req: AuthRequest, res) => {
   const files = await listFolderFiles(photosFolderId);
   res.json(files);
 });
+
+// Stream one photo's bytes from this gen's Drive Photos folder. Job-site photos
+// are listed straight out of Drive and never get a `documents` row, so the
+// generic /documents/drive-file/:fileId proxy correctly fails closed on them
+// (post-review fix for B2) — this owned-record route authorizes by folder
+// membership instead: the file's parent must be this gen's own Photos folder.
+router.get('/:id/photos/:fileId', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+  if (!gen.drive_photos_folder_id) return res.status(404).json({ error: 'File not available' });
+  const parents = await getFileParents(req.params.fileId);
+  if (!parents || !parents.includes(gen.drive_photos_folder_id)) {
+    return res.status(403).json({ error: 'You do not have access to this file' });
+  }
+  const media = await getFileMedia(req.params.fileId);
+  if (!media) return res.status(404).json({ error: 'File not available' });
+  res.setHeader('Content-Type', media.mimeType);
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  media.stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
+  media.stream.pipe(res);
+}));
 
 // ── Public: sign proposal by token (no auth) ────────────────────────────────
 router.post('/p/:token/sign', async (req, res) => {

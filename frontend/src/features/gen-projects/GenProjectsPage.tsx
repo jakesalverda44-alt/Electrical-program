@@ -74,7 +74,7 @@ function GenPhotos({ gen, showToast }: { gen: Gen; showToast: (t: Toast) => void
           {photos.map(p => (
             <div key={p.id} onClick={() => p.webViewLink && window.open(p.webViewLink, '_blank')}
               style={{ cursor: p.webViewLink ? 'pointer' : 'default', borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border)' }}>
-              <DriveImage fileId={p.id} alt={p.name} height={84} isImage={isImage(p.mimeType)}/>
+              <DriveImage fileId={p.id} alt={p.name} height={84} isImage={isImage(p.mimeType)} src={`/gens/${gen.id}/photos/${p.id}`}/>
             </div>
           ))}
         </div>

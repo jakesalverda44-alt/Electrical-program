@@ -9,6 +9,7 @@ import { pool } from '../db/pool';
 import { logger } from './logger';
 import { uploadFile, ensureSubfolder } from '../services/googleDrive';
 import { uploadToCloud, isCloudStorageConfigured } from './cloudStorage';
+import { mimeTypeForFilename } from './upload';
 
 export const CATEGORY_TO_FOLDER: Record<string, string> = {
   plans:          'drive_plans_folder_id',
@@ -104,12 +105,17 @@ export async function storeDocument(input: StoreDocumentInput) {
   // was uploading test artifacts to production storage (found 2026-09-03).
   const cloudMuted = process.env.NODE_ENV === 'test' || process.env.CLOUD_STORAGE_DISABLED === 'true';
 
+  // The client's declared multipart Content-Type for the upload is attacker-controlled
+  // and must never be persisted or handed to a storage provider — derive the type
+  // from the filename extension instead (audit: Security #6, High).
+  const safeMimeType = mimeTypeForFilename(file.originalname);
+
   const driveFolderId = !cloudMuted && linkedId ? await resolveDriveFolder(linkedId, div, category) : null;
 
   let storageUrl: string | null = null;
   if (!cloudMuted && isCloudStorageConfigured()) {
     try {
-      storageUrl = await uploadToCloud(file.buffer, file.originalname, file.mimetype);
+      storageUrl = await uploadToCloud(file.buffer, file.originalname, safeMimeType);
     } catch (err) {
       logger.warn({ err }, '[cloudStorage] upload rejected — using Drive/DB fallback');
     }
@@ -118,7 +124,7 @@ export async function storeDocument(input: StoreDocumentInput) {
   let driveFileId: string | null = null;
   if (driveFolderId) {
     try {
-      driveFileId = await uploadFile(displayName, file.mimetype || 'application/octet-stream', file.buffer, driveFolderId);
+      driveFileId = await uploadFile(displayName, safeMimeType, file.buffer, driveFolderId);
     } catch (err) {
       logger.error({ err }, '[drive] upload failed');
     }
@@ -141,7 +147,7 @@ export async function storeDocument(input: StoreDocumentInput) {
      RETURNING id, linked_id, linked_name, div, name, display_name, category, file_size,
                file_type, storage_url, uploaded_by, created_at, gate_passed`,
     [linkedId || null, linkedName || null, div, file.originalname, displayName, category,
-     file.size, file.mimetype || '', uploadedBy, storageUrl || null, fileData, !!input.gatePassed]
+     file.size, safeMimeType, uploadedBy, storageUrl || null, fileData, !!input.gatePassed]
   );
   return rows[0];
 }

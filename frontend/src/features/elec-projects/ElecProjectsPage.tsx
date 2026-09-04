@@ -1077,7 +1077,7 @@ function PhotosTab({ bid, photos, onPhotosChange, showToast }: {
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.transform = 'translateY(0)'; }}>
               {/* Thumbnail area */}
               <div style={{ position:'relative' }}>
-                <DriveImage fileId={p.id} alt={p.name} height={120} isImage={isImage(p.mimeType)}/>
+                <DriveImage fileId={p.id} alt={p.name} height={120} isImage={isImage(p.mimeType)} src={`/bids/${bid.id}/photos/${p.id}`}/>
                 {!isImage(p.mimeType) && (
                   <div style={{ position:'absolute', top:6, right:6, background:'var(--surface)', borderRadius:6, padding:'2px 6px', fontSize:10, fontWeight:800, color:'var(--text3)' }}>
                     FILE

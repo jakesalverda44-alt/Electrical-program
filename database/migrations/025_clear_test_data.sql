@@ -1,15 +1,3 @@
--- Clear all test/demo data. Preserves users, app_settings, and all schema objects.
-TRUNCATE TABLE
-  takeoff_results,
-  bid_workspaces,
-  project_rfis,
-  project_field_notes,
-  project_change_orders,
-  project_sections,
-  communications,
-  documents,
-  activity,
-  won_jobs,
-  generator_proposals,
-  bids
-CASCADE;
+-- Historical one-time cleanup (applied 2026-0x-xx). Neutralized 2026-09-04:
+-- the TRUNCATE was removed so this file can never wipe data on a database whose
+-- schema_migrations table is missing. See git history for the original.

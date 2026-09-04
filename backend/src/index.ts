@@ -71,7 +71,26 @@ app.use(cors((req, cb) => {
   cb(null, { ...opts, origin: false });
 }));
 app.use(express.json());
-app.use(pinoHttp({ logger, autoLogging: { ignore: req => req.url === '/api/health' } }));
+
+// Every JWT and the AUTOMATION_API_KEY value would otherwise be written to the
+// log stream in plaintext at info level — a log leak becomes an
+// account-takeover vector (audit: Ops #7 / Security #12, High). Exported so
+// tests can verify the exact paths pino redacts, not a hand-copied duplicate.
+export const LOG_REDACT_PATHS = [
+  'req.headers.authorization', 'req.headers["x-api-key"]', 'req.headers.cookie', 'res.headers["set-cookie"]',
+];
+app.use(pinoHttp({
+  logger,
+  autoLogging: { ignore: req => req.url === '/api/health' },
+  redact: LOG_REDACT_PATHS,
+}));
+
+// Behind Render's proxy, req.ip is the proxy's own address without this, so
+// authLimiter (routes/auth.ts) becomes a single global bucket shared by every
+// user instead of one per real client IP (audit: Ops #13, Medium).
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
 
 app.use('/api/auth', authRouter);
 app.use('/api/dashboard', dashboardRouter);
@@ -108,7 +127,21 @@ app.get('/api/ai/usage/today', requireAuth, asyncHandler(async (_req: AuthReques
   res.json(rows);
 }));
 
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
+// If the Postgres pool degrades post-boot (a dropped Supabase connection, an
+// exhausted pool), a health check that never touches the DB reports healthy
+// while the app is actually broken (audit: Ops #13, Medium).
+app.get('/api/health', async (_req, res) => {
+  try {
+    await Promise.race([
+      pool.query('SELECT 1'),
+      new Promise((_resolve, reject) => setTimeout(() => reject(new Error('health check DB timeout')), 2000)),
+    ]);
+    res.json({ ok: true, db: true });
+  } catch (err) {
+    logger.error({ err }, '[health] DB check failed');
+    res.status(503).json({ ok: false, db: false });
+  }
+});
 
 if (process.env.NODE_ENV === 'production') {
   const staticPath = path.join(__dirname, '../../frontend/dist');

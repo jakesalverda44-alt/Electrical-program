@@ -2,6 +2,12 @@ node_modules/
 dist/
 *.env
 .env
+# *.env / .env only match a file literally ending in ".env" — they missed
+# backend/.env.pre-migration (a full local .env snapshot with JWT_SECRET and
+# SEED_ADMIN_PASSWORD in plaintext). .env.* catches any dotted variant;
+# keep .env.example trackable since it's a template, not a secret.
+.env.*
+!.env.example
 backend/node_modules/
 frontend/node_modules/
 backend/dist/

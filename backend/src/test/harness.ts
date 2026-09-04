@@ -20,20 +20,28 @@ export async function dbAvailable(): Promise<boolean> {
     // package.json `test` script sets DB_NAME=electrical_crm_test, but that alone
     // is one env var away from disaster — a DATABASE_URL left set, a script edited
     // back, a test run from an IDE with its own env. Refuse outright, don't skip,
-    // if the connected database is the live one, regardless of how it got connected.
+    // unless the connected database is unambiguously a test database.
+    //
+    // This is an ALLOWLIST, not a blocklist (audit: Ops #12) — the original check
+    // only refused the one literal name "electrical_crm". Supabase's default
+    // database name is "postgres", not "electrical_crm", so a DATABASE_URL
+    // pointed at production (e.g. left over from a sync script) would have
+    // sailed right through the old check. Requiring the "_test" suffix instead
+    // means ANY non-test database is refused, named or not.
     const { rows } = await pool.query('SELECT current_database() AS db');
-    const currentDb = rows[0]?.db;
-    if (currentDb === 'electrical_crm') {
+    const currentDb = rows[0]?.db as string | undefined;
+    if (!currentDb || !currentDb.endsWith('_test')) {
       throw new Error(
-        `Refusing to run tests against the live database "electrical_crm". ` +
-        `Tests must run against "electrical_crm_test" (set DB_NAME=electrical_crm_test). ` +
+        `Refusing to run tests against database "${currentDb}" — its name does not end in ` +
+        `"_test". Tests must run against a database whose name ends in "_test" ` +
+        `(e.g. electrical_crm_test — set DB_NAME=electrical_crm_test). ` +
         `See the 2026-09-02 incident note in the phase 1 plan.`
       );
     }
     await runMigrations();
     ready = true;
   } catch (err) {
-    if (err instanceof Error && err.message.startsWith('Refusing to run tests against the live database')) {
+    if (err instanceof Error && err.message.startsWith('Refusing to run tests against database')) {
       throw err;
     }
     ready = false;

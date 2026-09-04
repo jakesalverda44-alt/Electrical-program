@@ -137,6 +137,25 @@ export async function getFileMedia(fileId: string): Promise<{ stream: Readable; 
   }
 }
 
+/**
+ * A file's parent folder ids, or null if Drive is unavailable or the file
+ * can't be read. Used to authorize a proxied file id by folder membership
+ * rather than a `documents` row — job-site photos listed straight out of a
+ * project's Photos subfolder never get one (post-review fix, audit
+ * Security #5 follow-up).
+ */
+export async function getFileParents(fileId: string): Promise<string[] | null> {
+  const drive = getDriveClient();
+  if (!drive) return null;
+  try {
+    const { data } = await drive.files.get({ fileId, fields: 'parents', ...SHARED_DRIVE });
+    return (data.parents as string[] | undefined) ?? [];
+  } catch (err) {
+    console.error('[drive] getFileParents failed:', err);
+    return null;
+  }
+}
+
 export async function createSubfolders(parentId: string, names: string[] = SUBFOLDER_NAMES): Promise<Record<string, string>> {
   const drive = getDriveClient();
   if (!drive) return {};

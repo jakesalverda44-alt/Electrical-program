@@ -24,6 +24,8 @@ import {
   ESTIMATING_SUBMITTED_BIDS_ROOT,
   ACTIVE_PROJECTS_ROOT,
   listFolderFiles,
+  getFileMedia,
+  getFileParents,
   COMPLETED_PROJECTS_ROOT,
 } from '../services/googleDrive';
 import { VALID_BID_STAGES, transitionBidStage, applyBidStagePostCommit } from '../services/bidStage';
@@ -644,6 +646,27 @@ router.get('/:id/photos', requireAuth, async (req: AuthRequest, res) => {
   if (!bid.drive_photos_folder_id) return res.json([]);
   const files = await listFolderFiles(bid.drive_photos_folder_id);
   res.json(files);
+});
+
+// Stream one photo's bytes from this bid's Drive Photos folder. Job-site photos
+// are listed straight out of Drive and never get a `documents` row, so the
+// generic /documents/drive-file/:fileId proxy correctly fails closed on them
+// (post-review fix for B2) — this owned-record route authorizes by folder
+// membership instead: the file's parent must be this bid's own Photos folder.
+router.get('/:id/photos/:fileId', requireAuth, async (req: AuthRequest, res) => {
+  const bid = await loadOwnedBid(req, res);
+  if (!bid) return;
+  if (!bid.drive_photos_folder_id) return res.status(404).json({ error: 'File not available' });
+  const parents = await getFileParents(req.params.fileId);
+  if (!parents || !parents.includes(bid.drive_photos_folder_id)) {
+    return res.status(403).json({ error: 'You do not have access to this file' });
+  }
+  const media = await getFileMedia(req.params.fileId);
+  if (!media) return res.status(404).json({ error: 'File not available' });
+  res.setHeader('Content-Type', media.mimeType);
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  media.stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
+  media.stream.pipe(res);
 });
 
 // Soft delete — moves the bid (and its won-job revenue record) to the Trash.
