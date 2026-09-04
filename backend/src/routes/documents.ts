@@ -64,7 +64,15 @@ router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   // unpaginated by default) — `limit` here is opt-in, same convention as
   // bids/gens' existing ?limit=N.
   if (category) { params.push(category); conds.push(`category = $${params.length}`); }
-  if (q) { params.push(`%${q}%`); conds.push(`(name ILIKE $${params.length} OR display_name ILIKE $${params.length})`); }
+  // Post-review B1 — DocsPage's client-side fallback filter also matches
+  // linked_name (the project/GC the doc is attached to); the server-side q
+  // filter didn't, so once DocsPage started sending q to the server, rows
+  // that only matched by linked_name never reached the browser for the
+  // client filter to recover. linked_name joins the same OR.
+  if (q) {
+    params.push(`%${q}%`);
+    conds.push(`(name ILIKE $${params.length} OR display_name ILIKE $${params.length} OR linked_name ILIKE $${params.length})`);
+  }
   // Restricted reps only see documents they uploaded or linked to a bid/proposal
   // they own; managers/admins see all. Previously any logged-in user could list
   // every document by id (data leak).
