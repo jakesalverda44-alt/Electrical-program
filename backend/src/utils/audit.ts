@@ -100,5 +100,12 @@ export async function purgeExpired(retentionMonths: number): Promise<Record<stri
   // unread ones, since an unread one is still a task someone hasn't seen yet.
   await runFixed('notifications_read', `DELETE FROM notifications WHERE read AND created_at < now() - interval '60 days'`);
   await runFixed('notifications_unread', `DELETE FROM notifications WHERE NOT read AND created_at < now() - interval '180 days'`);
+  // Intake inbox retention (audit data #14). intake_items has no deleted_at —
+  // once an item leaves 'pending' it's a terminal record (intake_items_status_check
+  // allows only pending/accepted/declined; there is no dismissed/imported/ignored
+  // status in this schema). A resolved item older than 180 days is safe to drop;
+  // 'pending' items are never purged here regardless of age — an unresolved
+  // invitation sitting for 180+ days is exactly what the inbox should keep showing.
+  await runFixed('intake_items', `DELETE FROM intake_items WHERE status IN ('accepted','declined') AND created_at < now() - interval '180 days'`);
   return counts;
 }

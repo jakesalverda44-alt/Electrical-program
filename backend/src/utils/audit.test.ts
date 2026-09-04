@@ -61,21 +61,35 @@ describe('purgeExpired', () => {
       .mockResolvedValueOnce({ rowCount: 0 }) // documents
       .mockResolvedValueOnce({ rowCount: 0 }) // won_jobs
       .mockResolvedValueOnce({ rowCount: 0 }) // notifications_read
-      .mockResolvedValueOnce({ rowCount: 5 }); // notifications_unread
+      .mockResolvedValueOnce({ rowCount: 5 }) // notifications_unread
+      .mockResolvedValueOnce({ rowCount: 1 }); // intake_items
     const counts = await purgeExpired(12);
-    expect(counts).toEqual({ audit_log: 3, generator_proposals: 2, notifications_unread: 5 });
+    expect(counts).toEqual({ audit_log: 3, generator_proposals: 2, notifications_unread: 5, intake_items: 1 });
   });
 
-  // Audit data #2/#17 — the two notification-retention deletes reuse the same
-  // `run()` helper as the tables above, so they're still exercised by the two
-  // "every call uses the interval" tests; this one checks their SQL/labels
-  // specifically, independent of the retentionMonths window (they're fixed at
-  // 60/180 days regardless of what's passed to purgeExpired).
+  // Audit data #2/#17 — the notification- and intake-retention deletes reuse
+  // the same `runFixed()` helper (no $1, unlike the retentionMonths-based
+  // deletes above), so they're not covered by the two "every call uses the
+  // interval" tests above; these pin their SQL/labels specifically.
   it('purges notifications on fixed 60-day (read) / 180-day (unread) windows, not the retentionMonths window', async () => {
     query.mockResolvedValue({ rowCount: 0 });
     await purgeExpired(6);
     const sqls = query.mock.calls.map(c => c[0] as string);
     expect(sqls.some(s => s.includes('notifications') && s.includes('read') && s.includes("60 days") && !s.includes('NOT read'))).toBe(true);
     expect(sqls.some(s => s.includes('NOT read') && s.includes("180 days"))).toBe(true);
+  });
+
+  // Audit data #14 — intake_items has no deleted_at; only resolved
+  // (accepted/declined) rows age out, on a fixed 180-day window, never
+  // 'pending' ones regardless of age.
+  it('purges resolved intake_items on a fixed 180-day window, and never touches pending status', async () => {
+    query.mockResolvedValue({ rowCount: 0 });
+    await purgeExpired(6);
+    const sqls = query.mock.calls.map(c => c[0] as string);
+    const intakeSql = sqls.find(s => s.includes('intake_items'));
+    expect(intakeSql).toBeDefined();
+    expect(intakeSql).toContain("IN ('accepted','declined')");
+    expect(intakeSql).toContain('180 days');
+    expect(intakeSql).not.toContain('pending');
   });
 });
