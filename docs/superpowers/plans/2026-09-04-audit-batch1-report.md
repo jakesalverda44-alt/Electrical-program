@@ -4,7 +4,8 @@
 **Branch:** `fix/audit-batch1` (worktree: `../Electrical-program-wt-audit1`)
 **Execution:** Sonnet 5
 **Commits:** 12 (one per task), plus this report commit, plus 3 post-review
-fix commits (below) and this section's own report-update commit.
+fix commits and a report-update commit (first review pass), plus 2 more
+fix commits from a re-review of the B3 fix (below) — 19 total.
 
 ## Summary
 
@@ -615,4 +616,224 @@ pre-fix code.
 - **Never ran a dev server, never touched Docker state.**
 - **No pushes.** All three post-review commits plus this report update are
   local to `fix/audit-batch1` in the `Electrical-program-wt-audit1` worktree.
+- **Clean tree** as of this report-update commit.
+
+---
+
+## Re-review fixes (2026-09-04, second pass)
+
+A re-review of commits `cb5175e..3a7e612` (the first post-review round) found
+B1, B2, and all four non-blockers correct, but a real regression in the B3
+fix (`65c4a85`): the projection dropped fields `calcGenTotals`/`calcEvTotals`
+need for their `totals_data`-missing fallback, and dropped the legacy field
+names `migrateGenForm` needs — both would have shown a wrong total/deposit or
+a missing scope line to a real customer on a signable link. Two more commits
+fix this.
+
+| # | Commit | Status |
+|---|---|---|
+| R1 + R2 + R3 (projection rebuild + tests) | `470486a` | done |
+| Separate: `/microsoft` gets its own rate limit | `f3d1b68` | done |
+
+Note on the two commits above: `470486a`'s message (written first) describes
+both the projection fix and the `/microsoft` rate-limit change, but the
+`auth.ts`/`authMicrosoftOAuth.test.ts` changes were not staged into that
+commit — caught immediately after committing, before any other work
+happened on top. Rather than amend (this session's ground rules disallow
+amending except when the changes are the executor's own immediately-prior,
+not-yet-built-upon mistake in the same breath — treated conservatively
+here as still "create a new commit instead"), the limiter change went into
+its own follow-up commit `f3d1b68` with an accurate, self-contained message.
+`470486a`'s message is accurate about *what changed and why*; it is only
+imprecise about which single commit contains the limiter lines specifically.
+
+### R1 — `totals_data`-missing fallback now computes the correct total
+
+`ProposalPublicPage.tsx:177-178` (`:166-168` for EV) falls back to
+`calcGenTotals(form)`/`calcEvTotals(form)` whenever a proposal has no
+`totals_data` snapshot. The first B3 fix's whitelist dropped inputs those
+functions need: `pad`, `battery`, `emPanel`, `gasLine`, `removal`,
+`removalFee`, `genPriceOverride`, `evChargerPriceOverride` (all read by
+`calcGenTotals`, confirmed by the literal
+`grep -oE "g\.[a-zA-Z]+" frontend/src/features/builder/genCalc.ts | sort -u`
+output — re-run against this fix, not taken from memory) and
+`tierPriceOverride` (`calcEvTotals`, same grep against `evCalc.ts`) — plus
+`labor`/`permit`/`startup`/`discount`/`discountType`/`taxRate`/`taxAmount`,
+which were gated on `includeBreakdown` and so were also missing whenever a
+rep left that toggle off. All of these are now in the unconditional key
+list — see R3 for why the `includeBreakdown` gate came off entirely.
+
+### R2 — legacy field aliases (`smm`/`surgePro`/`ats`/`lcATS`/`additionalATS`) restored
+
+`migrateGenForm` (`genCalc.ts:45-74`) translates these five pre-ATS-
+unification field names onto the current `GenForm` shape specifically "so
+those scope-of-work lines still render correctly if a customer revisits an
+old link." The first fix's whitelist dropped all five before migration ever
+ran. They're back in `GEN_FORM_KEYS`.
+
+### R3 — the `includeBreakdown` gate is removed; it never protected anything
+
+`generator_proposals.totals_data` — sent whole and ungated on the same
+route (`PUBLIC_PROPOSAL_COLUMNS` in `routes/gens.ts`) — already carries
+`laborAmt`, `permitAmt`, `startupAmt`, `discountAmt`, `subtotal`,
+`taxableBase`, `nonTaxableBase`, and `taxedAmount`. `ProposalPreview.tsx`
+reads `totals.laborAmt`/`totals.permitAmt`/`totals.startupAmt` **outside**
+the `{form.includeBreakdown && ...}` block (verified: all three appear
+before that block starts, in the scope-of-work table everyone sees).
+Gating the raw `form_data` inputs on `includeBreakdown` therefore protected
+nothing — the same dollar figures were already on the wire regardless — and
+broke the totals fallback for zero actual confidentiality benefit. The
+breakdown toggle is a display choice, not a security boundary, and the
+module comment and this commit message say so plainly.
+
+**The only fields `publicFormData.ts` still excludes** are genData.ts's own
+declared internal set, quoted verbatim in both the util's comment and here:
+> Internal site-detail fields — not shown on the customer proposal, used for
+> the award kickoff email to the ops team.
+> — `genData.ts`, directly above `feedFt`/`genSide`/`panelRel`/`panelFt` in
+> the `GenForm` interface
+
+No other field in `GenForm` or `EvForm` carries a similar "internal"/"not
+shown" comment — confirmed by reading both interfaces in full. `EvForm` in
+particular has no internal-marked field at all, so **nothing is excluded
+for EV-charger proposals**; `EV_FORM_KEYS` now lists all 19 of `EvForm`'s
+fields.
+
+### Key list derivation (three cited sources, per the fix's own requirement)
+
+Both `GEN_FORM_KEYS` and `EV_FORM_KEYS` are now built from, and comment-cite,
+three sources — see `utils/publicFormData.ts`'s own header comment for the
+authoritative version:
+
+1. Every `form.*` `ProposalPreview.tsx`/`EvProposalPreview.tsx` read
+   directly, plus fields needed only transitively because those components
+   call a `genCalc`/`evCalc` helper in their own render body
+   (`loadCenterFor(form)` needs `coolingType`;
+   `activeCustomItems(form)`/`customItemAmount(item)` need `customItems` and
+   each item's own `id`/`desc`/`amount`/`taxable`).
+2. The literal grep output against the calculators themselves:
+   - `grep -oE "g\.[a-zA-Z]+" frontend/src/features/builder/genCalc.ts | sort -u`
+     → `atsQty, atsSize, battery, brand, coolingType, customItems,
+     depositPct, discount, discountType, emPanel, evCharger,
+     evChargerPriceOverride, evChargerTier, extraWire, extWarranty,
+     gasLine, genStand, jobType, labor, liftType, pad, permit, removal,
+     removalFee, silverServicePromo, size, smmQty, startup, surgeProQty,
+     taxRate` (plus `form.brand`/`coolingType`/`genPriceOverride`/`jobType`/
+     `size` from the same file's other exported helpers).
+   - `grep -oE "e\.[a-zA-Z]+" frontend/src/features/builder/evCalc.ts | sort -u`
+     → `depositPct, discount, discountType, distanceTier, panelUpgrade,
+     taxAmount, tierPriceOverride`.
+3. `migrateGenForm`'s five legacy aliases (`genCalc.ts:40-44`): `smm`,
+   `surgePro`, `ats`, `lcATS`, `additionalATS`.
+
+**Final `GEN_FORM_KEYS`** — 49 keys total (counted directly from the source
+array, not by hand): `customer, attn, address, city, state, zip, phone,
+email, brand, size, atsQty, atsSize, jobType, validDays, depositPct,
+smmQty, surgeProQty, silverServicePromo, extWarranty,
+extWarrantyPromoStart, extWarrantyPromoEnd, genStand, evCharger,
+evChargerTier, notes, includeBreakdown, taxRate, liftType, extraWire,
+coolingType, customItems, battery, discount, discountType, emPanel,
+evChargerPriceOverride, gasLine, labor, pad, permit, removal, removalFee,
+startup, genPriceOverride, smm, surgePro, ats, lcATS, additionalATS`
+— 44 modern `GenForm` field names plus the 5 legacy aliases. `GenForm` has
+49 fields total; of the 45 non-internal ones, 44 are in this list and one,
+**`fuel`, is not** — verified by neither the preview components nor
+`calcGenTotals`/its helpers reading `.fuel` anywhere (`grep -rn
+"\.fuel\b" frontend/src/features/builder/` → zero hits outside the type
+definition and `blankGenForm`'s default). Excluding it is consistent with
+the three-source derivation rule (nothing needs it), not an oversight, but
+it means a future feature that displays fuel type on the public page would
+need to add it back.
+
+**Final `EV_FORM_KEYS`** (all 19 `EvForm` fields — nothing excluded):
+`customer, attn, address, city, state, zip, phone, email, depositPct,
+validDays, panelUpgrade, notes, includeBreakdown, distanceTier, customItems,
+discount, discountType, taxAmount, tierPriceOverride`.
+
+Custom-item sub-key sanitization is unchanged: each item is still projected
+to `id`/`desc`/`amount`/`taxable` only.
+
+### Tests
+
+Replaced the key-set-snapshot-only backend tests
+(`gensPublicFormDataProjection.test.ts`, 5 tests) with behavioral ones: the
+four internal site-detail keys are absent regardless of `includeBreakdown`;
+every `calcGenTotals`-input field (the `GEN_CALC_ONLY_KEYS` set above)
+survives even when `includeBreakdown` is `false`, with value spot-checks,
+not just key presence; the five legacy alias fields pass through when
+present in the raw `form_data`; custom-item sanitization is unchanged;
+EV-charger `form_data` keeps every `calcEvTotals` input (nothing gated).
+Confirmed 3 of 5 fail against the pre-fix (first B3 round) code.
+
+Backend cannot import the frontend's `genCalc.ts`/`evCalc.ts` to assert on
+the actual computed total — confirmed directly: a probe import broke
+`tsc --noEmit`'s `rootDir` check on both sides (`backend/tsconfig.json`'s
+`rootDir: "src"` rejects a file under `frontend/src`). So the actual
+"does the rendered total survive projection" assertion lives in two new
+**frontend** tests instead:
+
+- `frontend/src/pages/ProposalPublicPage.formDataProjection.test.tsx`
+  (2 tests) — builds a realistic full `GenForm`/`EvForm` fixture, computes
+  `calcGenTotals`/`calcEvTotals` on the **original** (unprojected) form,
+  hand-projects the form (dropping only the four internal site-detail keys —
+  mirroring exactly what the backend whitelist now does), mounts
+  `ProposalPublicPage` with that projected `form_data` and `totals_data:
+  null`, and asserts the page's computed total/deposit (captured via a
+  mock of `ProposalPreview`/`EvProposalPreview` that exposes the `totals`
+  prop, rather than rendering — and text-matching against — the full
+  nine-page document) equals the original's. Confirmed both fail against
+  the pre-fix whitelist (verified by re-deriving what that whitelist would
+  have dropped; not re-run against the literal old commit, since these
+  tests didn't exist yet at that commit).
+- `frontend/src/pages/ProposalPublicPage.legacyFields.test.tsx` (1 test) —
+  renders the **real**, unmocked `ProposalPreview` against a legacy-shaped
+  `form_data` (only `smm`/`surgePro`/`ats`/`lcATS`/`additionalATS`, no
+  modern field names at all — exactly an old stored row) and asserts the
+  rendered document contains "Smart Management Module", "Whole-Home Surge
+  Protector", and "200A ATS". (`lcATS`/`additionalATS` had to be included
+  in the fixture even as no-op values — `migrateGenForm` only derives
+  `atsQty` when one of those two is present, `genCalc.ts:53-57` — caught by
+  the test itself initially failing on the ATS assertion until added.)
+
+Both new frontend test files needed the same `react-signature-canvas` mock
+`ProposalPublicPage.test.tsx` already uses (happy-dom's `<canvas>` has no
+2D context, and the page renders the sign form unconditionally in the
+unsigned state) — missing it initially surfaced as an uncaught
+`SignaturePad`/`fillStyle` exception, not a normal assertion failure.
+
+### `/microsoft` rate limit (separate concern, `f3d1b68`)
+
+Non-blocking finding from the re-review: `GET /api/auth/microsoft` shared
+`authLimiter`'s 10-per-15-minutes bucket with `/login`, `/forgot-password`,
+and `/reset-password`. Behind Render's `trust proxy 1` plus an office NAT,
+10 failed password attempts from anyone in the office would also lock out
+Microsoft SSO for everyone for 15 minutes. New `msLoginLimiter` (30/15min,
+same shape) applies to `/microsoft` only — it has no password to guess, so
+a looser limit is appropriate; it still bounds how fast the `oauthStates`
+map can be grown. Test asserts the `ratelimit-limit` response header reads
+`'30'` on this route specifically.
+
+### Re-review: final test counts
+
+- **Backend** (`npm test`, `electrical_crm_test`): **768 passed, 4 failed,
+  3 skipped, out of 775** — same pre-existing flaky set as every prior run
+  in this report (`prebid.test.ts`, `bidStandardGeneration.test.ts`,
+  `integration.test.ts`'s "Kohler lead" case), none touched by either
+  re-review commit. Test count grew from 773 to 775 (net +2: the rewritten
+  `gensPublicFormDataProjection.test.ts` went 4→5, `authMicrosoftOAuth.test.ts`
+  went 6→7).
+- **Frontend** (`npm test`): **350 passed, 9 failed, out of 359** — the
+  same 9 pre-existing failures (`useInstallPrompt.test.ts`,
+  `CustomerHub.test.tsx`), +3 new passing tests (the two new
+  `ProposalPublicPage.*.test.tsx` files, 2 + 1 tests).
+- `npx tsc --noEmit` clean on both `backend/` and `frontend/` after each of
+  the two re-review commits.
+
+### Re-review: safety confirmation
+
+- **Tests only ever ran against `electrical_crm_test`.**
+- **Never ran a dev server, never touched Docker state, no `.crm/prod-db.env`
+  created or touched.**
+- **No pushes.** Both re-review commits plus this report update are local to
+  `fix/audit-batch1` in the `Electrical-program-wt-audit1` worktree.
 - **Clean tree** as of this report-update commit.
