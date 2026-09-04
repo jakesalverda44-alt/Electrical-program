@@ -1344,16 +1344,25 @@ router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
 });
 
 // ── Public: view proposal by token (no auth) ────────────────────────────────
+// Customer-safe column list: exactly what ProposalPublicPage.tsx (the ONLY
+// consumer of this route) reads. Explicitly excludes internal notes,
+// cost/margin fields, salesperson_id, Drive folder ids, org_id, *_by user
+// ids, and any JSONB fields not rendered here (checklist_data, survey_markup,
+// etc). Do not change this to SELECT * (audit: Security #3, High).
+const PUBLIC_PROPOSAL_COLUMNS = `
+  customer, product_type, proposal_no, form_data, totals_data,
+  signature_data, initials_data, signed_at, countersigned_at, countersignature_data
+`;
 router.get('/p/:token', async (req, res) => {
   // In-app previews pass ?preview=1 — fetch without recording a customer "view".
   const isPreview = !!req.query.preview;
   const sql = isPreview
-    ? `SELECT * FROM generator_proposals
+    ? `SELECT ${PUBLIC_PROPOSAL_COLUMNS} FROM generator_proposals
        WHERE proposal_token = $1 AND deleted_at IS NULL`
     : `UPDATE generator_proposals
        SET viewed_at = COALESCE(viewed_at, now())
        WHERE proposal_token = $1 AND deleted_at IS NULL
-       RETURNING *`;
+       RETURNING ${PUBLIC_PROPOSAL_COLUMNS}`;
   const { rows } = await pool.query(sql, [req.params.token]);
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
   res.json(rows[0]);
