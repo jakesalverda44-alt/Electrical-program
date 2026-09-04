@@ -392,6 +392,18 @@ describe('prebid-analyze', () => {
   // or mocking infrastructure (this backend has none).
   it('passes validation but 503s when the Anthropic key is not configured, without stamping running', async (ctx) => {
     if (!ok) return ctx.skip();
+    // This route reads the key via getSetting('ai_anthropic_key') || process.env
+    // .ANTHROPIC_API_KEY. Own both preconditions instead of inheriting them from
+    // whatever ran before this file in the same test DB/process — another file
+    // (settingsInternalKeys.test.ts) legitimately seeds a real-looking
+    // ai_anthropic_key row to test masking, and if it ran first in this process
+    // without cleaning up, this test would silently see a configured key.
+    await pool.query(`DELETE FROM app_settings WHERE key = 'ai_anthropic_key'`);
+    const savedKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    ctx.onTestFinished(() => {
+      if (savedKey !== undefined) process.env.ANTHROPIC_API_KEY = savedKey;
+    });
     const u = await makeUser('owner');
     const a = await request(app).post('/api/bids').set(auth(u.token))
       .send({ name: `AIc ${Date.now()}`, gc: 'G' }).expect(200);

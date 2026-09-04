@@ -218,8 +218,22 @@ export function verifyBidText(text: string, kind: VerifyKind): VerifyTextResult 
 // ── Optional PDF conversion (soffice) ────────────────────────────────────────
 const MAC_SOFFICE_PATH = '/Applications/LibreOffice.app/Contents/MacOS/soffice';
 
-/** Checks PATH, then the macOS app bundle path. Never throws. */
+/** Checks PATH, then the macOS app bundle path. Never throws.
+ *
+ * Test-harness note (audit batch 3, Task 1): skipped entirely under
+ * NODE_ENV=test. LibreOffice serializes concurrent conversions through a
+ * single user-profile lock, so when the backend suite's test files run in
+ * parallel workers, several simultaneous generate-docx/generate-prebid-package
+ * calls race for that lock — some conversions silently fail (`convertToPdf`'s
+ * own catch returns null, by design) and others simply take long enough to
+ * blow past vitest's 5s default test timeout. Either way the PDF is optional
+ * (`verifyBidDocx` never lets its absence affect pass/fail — see
+ * "never fails just because soffice is unavailable" below), so tests never
+ * needed real PDF conversion in the first place; skipping it here removes a
+ * source of nondeterministic timing and nondeterministic extra `documents`
+ * rows without touching any behavior a real single-process boot exercises. */
 export function findSoffice(): string | null {
+  if (process.env.NODE_ENV === 'test') return null;
   try {
     const out = execSync('command -v soffice', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
     if (out) return out;
