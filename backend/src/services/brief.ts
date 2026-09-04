@@ -1,3 +1,4 @@
+import type { QueryResult } from 'pg';
 import { pool } from '../db/pool';
 import { logger } from '../utils/logger';
 import { isGraphMailConfigured } from '../email/graphMailer';
@@ -128,6 +129,148 @@ async function loadGraphSnapshot(): Promise<GraphSnapshot> {
   finally { inflight = null; }
 }
 
+// ── SQL brief cache (per scope) ───────────────────────────────────────────────────────────
+// Task 8 (audit data #8) — the 13-query Promise.all below used to run fresh on
+// every /api/brief call; with three independent 60s pollers hitting it (audit
+// data #18) that's 13 always-fresh queries, including a 10-subquery CTE and an
+// unbounded union of every lead + customer email, every 20s across open tabs.
+// Same TTL + in-flight-collapse shape as loadGraphSnapshot above, just keyed
+// per scope (a rep's own scope id, or 'all' for an unscoped/privileged user)
+// since the queries are salesperson-filtered. A morning/midday/evening digest
+// does not need sub-second freshness.
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type PoolQueryResult = QueryResult<any>;
+type SqlBriefRows = [
+  PoolQueryResult, PoolQueryResult, PoolQueryResult, PoolQueryResult, PoolQueryResult,
+  PoolQueryResult, PoolQueryResult, PoolQueryResult, PoolQueryResult, PoolQueryResult,
+  PoolQueryResult, PoolQueryResult, PoolQueryResult,
+];
+
+const sqlBriefCache: Map<string, { at: number; data: SqlBriefRows }> = new Map();
+const sqlBriefInflight: Map<string, Promise<SqlBriefRows>> = new Map();
+
+// Invalidation plumbing (bumping a version counter on every write path that
+// changes what the brief shows — intake status, lead stage, task completion)
+// would touch routes/intake.ts, routes/leads.ts and routes/tasks.ts, all
+// outside this task's file scope (services/brief.ts only). Accepting 90s
+// staleness instead, same TTL as the Graph snapshot, per the plan's own
+// fallback for "if that plumbing is too wide."
+const SQL_BRIEF_TTL_MS = TTL_MS;
+
+async function loadSqlBrief(scope: string | null, useGraph: boolean, monthStart: string): Promise<SqlBriefRows> {
+  const key = `${scope ?? 'all'}:${useGraph}`;
+  const cached = sqlBriefCache.get(key);
+  if (cached && Date.now() - cached.at < SQL_BRIEF_TTL_MS) return cached.data;
+  const existing = sqlBriefInflight.get(key);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const scopeAnd = scope ? ' AND salesperson_id = $1' : '';
+    const sp: unknown[] = scope ? [scope] : [];
+    const rows = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS v FROM bids WHERE deleted_at IS NULL AND closed_at IS NULL AND stage IN ('due','submitted')${scopeAnd}`, sp),
+      pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS v FROM generator_proposals WHERE deleted_at IS NULL AND stage IN ('building','sent')${scopeAnd}`, sp),
+      pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(value),0)::float AS v FROM won_jobs WHERE deleted_at IS NULL AND date_won >= $${sp.length + 1}${scopeAnd}`, [...sp, monthStart]),
+      pool.query(
+        `SELECT id, name, phone, email, source, stage, notes, last_activity_at, first_contact_sent_at
+           FROM leads
+          WHERE deleted_at IS NULL AND stage NOT IN ('lost','converted')
+            AND (needs_call = true OR (contact_method='phone' AND first_contact_sent_at IS NULL AND stage='new'))${scopeAnd}
+          ORDER BY created_at ASC LIMIT 10`, sp),
+      pool.query(`SELECT id, name, gc, due, source_email_link FROM bids WHERE deleted_at IS NULL AND closed_at IS NULL AND stage IN ('due','submitted')${scopeAnd}`, sp),
+      pool.query(`SELECT COUNT(*)::int AS n,
+                         COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM lead_activity a WHERE a.lead_id=leads.id AND a.kind='email' AND a.direction='in'))::int AS replied
+                    FROM leads WHERE source='kohler' AND deleted_at IS NULL AND created_at >= $1`, [monthStart]),
+      // Intake inbox counts (shared inbox — not rep-scoped, same as the sidebar badge).
+      // "Today"/"yesterday" use Eastern-time day boundaries.
+      pool.query(
+        `SELECT COUNT(*) FILTER (WHERE read_at IS NULL)::int AS unread,
+                COUNT(*) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date)::int AS today,
+                COUNT(*) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date - 1)::int AS yesterday
+           FROM intake_items`),
+      // Follow-up tasks due today or overdue (the Follow-ups view, condensed). Reps see their own.
+      pool.query(
+        `SELECT id, title, linked_type, linked_id, linked_name,
+                ((now() AT TIME ZONE 'America/New_York')::date - due_date)::int AS overdue_days
+           FROM tasks
+          WHERE status='open' AND due_date IS NOT NULL
+            AND due_date <= (now() AT TIME ZONE 'America/New_York')::date
+            ${scope ? 'AND assigned_to = $1' : ''}
+          ORDER BY due_date ASC LIMIT 10`, sp),
+      // Ghosted leads: first contact went out 2+ days ago and they have never replied or
+      // picked up — no inbound activity at all since the lead was added.
+      pool.query(
+        `SELECT id, name, phone, email, source, stage, notes,
+                EXTRACT(DAY FROM now() - created_at)::int AS age_days
+           FROM leads
+          WHERE deleted_at IS NULL AND stage NOT IN ('won','lost')
+            AND needs_call = false
+            AND first_contact_sent_at IS NOT NULL
+            AND first_contact_sent_at < now() - interval '2 days'
+            AND NOT EXISTS (SELECT 1 FROM lead_activity a WHERE a.lead_id = leads.id AND a.direction = 'in')${scopeAnd}
+          ORDER BY first_contact_sent_at ASC LIMIT 10`, sp),
+      // Signed proposals waiting to be moved to Awarded.
+      pool.query(
+        `SELECT id, customer, mfr, kw, amount, signed_at
+           FROM generator_proposals
+          WHERE deleted_at IS NULL AND stage = 'signed'${scopeAnd}
+          ORDER BY signed_at ASC NULLS LAST LIMIT 10`, sp),
+      // Whole-business day activity for the narrative summary (today + yesterday, ET days).
+      pool.query(
+        `WITH days AS (
+           SELECT (now() AT TIME ZONE 'America/New_York')::date AS today,
+                  (now() AT TIME ZONE 'America/New_York')::date - 1 AS yest
+         )
+         SELECT
+           (SELECT COUNT(*)::int FROM intake_items, days WHERE (created_at AT TIME ZONE 'America/New_York')::date = days.today) AS bids_today,
+           (SELECT COUNT(*)::int FROM intake_items, days WHERE (created_at AT TIME ZONE 'America/New_York')::date = days.yest) AS bids_yest,
+           (SELECT COUNT(*)::int FROM leads, days WHERE deleted_at IS NULL AND (created_at AT TIME ZONE 'America/New_York')::date = days.today) AS leads_today,
+           (SELECT COUNT(*)::int FROM leads, days WHERE deleted_at IS NULL AND (created_at AT TIME ZONE 'America/New_York')::date = days.yest) AS leads_yest,
+           (SELECT COUNT(*)::int FROM generator_proposals, days WHERE deleted_at IS NULL AND signed_at IS NOT NULL AND (signed_at AT TIME ZONE 'America/New_York')::date = days.today) AS signed_today,
+           (SELECT COUNT(*)::int FROM generator_proposals, days WHERE deleted_at IS NULL AND signed_at IS NOT NULL AND (signed_at AT TIME ZONE 'America/New_York')::date = days.yest) AS signed_yest,
+           (SELECT COUNT(*)::int FROM won_jobs, days WHERE deleted_at IS NULL AND (date_won AT TIME ZONE 'America/New_York')::date = days.today) AS won_today,
+           (SELECT COALESCE(SUM(value),0)::float FROM won_jobs, days WHERE deleted_at IS NULL AND (date_won AT TIME ZONE 'America/New_York')::date = days.today) AS won_today_value,
+           (SELECT COUNT(*)::int FROM won_jobs, days WHERE deleted_at IS NULL AND (date_won AT TIME ZONE 'America/New_York')::date = days.yest) AS won_yest,
+           (SELECT COALESCE(SUM(value),0)::float FROM won_jobs, days WHERE deleted_at IS NULL AND (date_won AT TIME ZONE 'America/New_York')::date = days.yest) AS won_yest_value`),
+      // Known human contacts (for matching unread senders). Not rep-scoped: the mailbox is
+      // shared. Intake/plan-room senders (BuildingConnected, PlanHub, …) are intentionally
+      // not included — those are filtered into the Intake Inbox, not the respond queue.
+      useGraph
+        ? pool.query(
+            `SELECT lower(email) AS email, 'lead' AS kind, id::text AS ref, name AS label FROM leads WHERE email IS NOT NULL AND email <> '' AND deleted_at IS NULL
+             UNION ALL SELECT lower(email), 'customer', id::text, name FROM customers WHERE email IS NOT NULL AND email <> ''`)
+        : Promise.resolve({ rows: [] as Array<{ email: string; kind: string; ref: string; label: string }> }),
+      // Automated email sequence pulse: active Kohler email leads that are still quiet
+      // (no reply, no human outreach), broken out by which step they're on.
+      pool.query(
+        `SELECT COUNT(*) FILTER (WHERE nudge_sent_at IS NULL)::int AS awaiting,
+                COUNT(*) FILTER (WHERE nudge_sent_at IS NOT NULL AND cold_email_sent_at IS NULL)::int AS nudged,
+                COUNT(*) FILTER (WHERE cold_email_sent_at IS NOT NULL)::int AS cold
+           FROM leads l
+          WHERE l.deleted_at IS NULL AND l.source = 'kohler' AND l.stage IN ('new','contacted')
+            AND l.contact_method = 'email' AND l.first_contact_sent_at IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM lead_activity a
+               WHERE a.lead_id = l.id
+                 AND (a.direction = 'in' OR a.kind IN ('call','voicemail','text','email'))
+            )`),
+    ]) as unknown as SqlBriefRows;
+    sqlBriefCache.set(key, { at: Date.now(), data: rows });
+    return rows;
+  })();
+
+  sqlBriefInflight.set(key, promise);
+  try { return await promise; }
+  finally { sqlBriefInflight.delete(key); }
+}
+
+/** Test-only escape hatch — clears both the Graph and SQL brief caches between test cases. */
+export function __resetBriefCachesForTests(): void {
+  snap = null; inflight = null;
+  sqlBriefCache.clear(); sqlBriefInflight.clear();
+}
+
 // ── Reply auto-log: inbound emails from known leads → lead_activity (deduped) ────────────
 
 let autologRunning = false;
@@ -204,97 +347,10 @@ export async function buildBrief(user: { id: string; role: string }): Promise<Br
   // Weather rides along with the brief; it has its own 15-min cache and never throws.
   const weatherP = getWeather().catch(() => null);
 
-  // CRM SQL (always fresh; scoped per-rep). Run in parallel.
-  const scopeAnd = scope ? ' AND salesperson_id = $1' : '';
-  const sp: unknown[] = scope ? [scope] : [];
-  const [bidsKpi, gensKpi, wonKpi, needCallRows, dueSoonRows, kohlerAccepted, intakeCounts, dueTasks, staleLeads, signedGens, dayActivity, knownContacts, seqStats] = await Promise.all([
-    pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS v FROM bids WHERE deleted_at IS NULL AND closed_at IS NULL AND stage IN ('due','submitted')${scopeAnd}`, sp),
-    pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS v FROM generator_proposals WHERE deleted_at IS NULL AND stage IN ('building','sent')${scopeAnd}`, sp),
-    pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(value),0)::float AS v FROM won_jobs WHERE deleted_at IS NULL AND date_won >= $${sp.length + 1}${scopeAnd}`, [...sp, monthStart]),
-    pool.query(
-      `SELECT id, name, phone, email, source, stage, notes, last_activity_at, first_contact_sent_at
-         FROM leads
-        WHERE deleted_at IS NULL AND stage NOT IN ('lost','converted')
-          AND (needs_call = true OR (contact_method='phone' AND first_contact_sent_at IS NULL AND stage='new'))${scopeAnd}
-        ORDER BY created_at ASC LIMIT 10`, sp),
-    pool.query(`SELECT id, name, gc, due, source_email_link FROM bids WHERE deleted_at IS NULL AND closed_at IS NULL AND stage IN ('due','submitted')${scopeAnd}`, sp),
-    pool.query(`SELECT COUNT(*)::int AS n,
-                       COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM lead_activity a WHERE a.lead_id=leads.id AND a.kind='email' AND a.direction='in'))::int AS replied
-                  FROM leads WHERE source='kohler' AND deleted_at IS NULL AND created_at >= $1`, [monthStart]),
-    // Intake inbox counts (shared inbox — not rep-scoped, same as the sidebar badge).
-    // "Today"/"yesterday" use Eastern-time day boundaries.
-    pool.query(
-      `SELECT COUNT(*) FILTER (WHERE read_at IS NULL)::int AS unread,
-              COUNT(*) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date)::int AS today,
-              COUNT(*) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date - 1)::int AS yesterday
-         FROM intake_items`),
-    // Follow-up tasks due today or overdue (the Follow-ups view, condensed). Reps see their own.
-    pool.query(
-      `SELECT id, title, linked_type, linked_id, linked_name,
-              ((now() AT TIME ZONE 'America/New_York')::date - due_date)::int AS overdue_days
-         FROM tasks
-        WHERE status='open' AND due_date IS NOT NULL
-          AND due_date <= (now() AT TIME ZONE 'America/New_York')::date
-          ${scope ? 'AND assigned_to = $1' : ''}
-        ORDER BY due_date ASC LIMIT 10`, sp),
-    // Ghosted leads: first contact went out 2+ days ago and they have never replied or
-    // picked up — no inbound activity at all since the lead was added.
-    pool.query(
-      `SELECT id, name, phone, email, source, stage, notes,
-              EXTRACT(DAY FROM now() - created_at)::int AS age_days
-         FROM leads
-        WHERE deleted_at IS NULL AND stage NOT IN ('won','lost')
-          AND needs_call = false
-          AND first_contact_sent_at IS NOT NULL
-          AND first_contact_sent_at < now() - interval '2 days'
-          AND NOT EXISTS (SELECT 1 FROM lead_activity a WHERE a.lead_id = leads.id AND a.direction = 'in')${scopeAnd}
-        ORDER BY first_contact_sent_at ASC LIMIT 10`, sp),
-    // Signed proposals waiting to be moved to Awarded.
-    pool.query(
-      `SELECT id, customer, mfr, kw, amount, signed_at
-         FROM generator_proposals
-        WHERE deleted_at IS NULL AND stage = 'signed'${scopeAnd}
-        ORDER BY signed_at ASC NULLS LAST LIMIT 10`, sp),
-    // Whole-business day activity for the narrative summary (today + yesterday, ET days).
-    pool.query(
-      `WITH days AS (
-         SELECT (now() AT TIME ZONE 'America/New_York')::date AS today,
-                (now() AT TIME ZONE 'America/New_York')::date - 1 AS yest
-       )
-       SELECT
-         (SELECT COUNT(*)::int FROM intake_items, days WHERE (created_at AT TIME ZONE 'America/New_York')::date = days.today) AS bids_today,
-         (SELECT COUNT(*)::int FROM intake_items, days WHERE (created_at AT TIME ZONE 'America/New_York')::date = days.yest) AS bids_yest,
-         (SELECT COUNT(*)::int FROM leads, days WHERE deleted_at IS NULL AND (created_at AT TIME ZONE 'America/New_York')::date = days.today) AS leads_today,
-         (SELECT COUNT(*)::int FROM leads, days WHERE deleted_at IS NULL AND (created_at AT TIME ZONE 'America/New_York')::date = days.yest) AS leads_yest,
-         (SELECT COUNT(*)::int FROM generator_proposals, days WHERE deleted_at IS NULL AND signed_at IS NOT NULL AND (signed_at AT TIME ZONE 'America/New_York')::date = days.today) AS signed_today,
-         (SELECT COUNT(*)::int FROM generator_proposals, days WHERE deleted_at IS NULL AND signed_at IS NOT NULL AND (signed_at AT TIME ZONE 'America/New_York')::date = days.yest) AS signed_yest,
-         (SELECT COUNT(*)::int FROM won_jobs, days WHERE deleted_at IS NULL AND (date_won AT TIME ZONE 'America/New_York')::date = days.today) AS won_today,
-         (SELECT COALESCE(SUM(value),0)::float FROM won_jobs, days WHERE deleted_at IS NULL AND (date_won AT TIME ZONE 'America/New_York')::date = days.today) AS won_today_value,
-         (SELECT COUNT(*)::int FROM won_jobs, days WHERE deleted_at IS NULL AND (date_won AT TIME ZONE 'America/New_York')::date = days.yest) AS won_yest,
-         (SELECT COALESCE(SUM(value),0)::float FROM won_jobs, days WHERE deleted_at IS NULL AND (date_won AT TIME ZONE 'America/New_York')::date = days.yest) AS won_yest_value`),
-    // Known human contacts (for matching unread senders). Not rep-scoped: the mailbox is
-    // shared. Intake/plan-room senders (BuildingConnected, PlanHub, …) are intentionally
-    // not included — those are filtered into the Intake Inbox, not the respond queue.
-    useGraph
-      ? pool.query(
-          `SELECT lower(email) AS email, 'lead' AS kind, id::text AS ref, name AS label FROM leads WHERE email IS NOT NULL AND email <> '' AND deleted_at IS NULL
-           UNION ALL SELECT lower(email), 'customer', id::text, name FROM customers WHERE email IS NOT NULL AND email <> ''`)
-      : Promise.resolve({ rows: [] as Array<{ email: string; kind: string; ref: string; label: string }> }),
-    // Automated email sequence pulse: active Kohler email leads that are still quiet
-    // (no reply, no human outreach), broken out by which step they're on.
-    pool.query(
-      `SELECT COUNT(*) FILTER (WHERE nudge_sent_at IS NULL)::int AS awaiting,
-              COUNT(*) FILTER (WHERE nudge_sent_at IS NOT NULL AND cold_email_sent_at IS NULL)::int AS nudged,
-              COUNT(*) FILTER (WHERE cold_email_sent_at IS NOT NULL)::int AS cold
-         FROM leads l
-        WHERE l.deleted_at IS NULL AND l.source = 'kohler' AND l.stage IN ('new','contacted')
-          AND l.contact_method = 'email' AND l.first_contact_sent_at IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM lead_activity a
-             WHERE a.lead_id = l.id
-               AND (a.direction = 'in' OR a.kind IN ('call','voicemail','text','email'))
-          )`),
-  ]);
+  // CRM SQL — Task 8 (audit data #8): cached per scope, TTL 90s + in-flight
+  // collapse (loadSqlBrief above), same shape as the Graph snapshot cache.
+  const [bidsKpi, gensKpi, wonKpi, needCallRows, dueSoonRows, kohlerAccepted, intakeCounts, dueTasks, staleLeads, signedGens, dayActivity, knownContacts, seqStats] =
+    await loadSqlBrief(scope, useGraph, monthStart);
 
   // Graph snapshot (cached). Skipped entirely when not configured / not privileged.
   let unread: GraphMailMessage[] = [];

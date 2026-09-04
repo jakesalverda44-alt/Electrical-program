@@ -13,7 +13,7 @@ import { runReminderScan } from '../notifications/engine';
 import { purgeExpired } from '../utils/audit';
 
 let ok = false;
-beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
+beforeAll(async () => { ok = await dbAvailable(); }, 120_000);
 
 describe('notifications: dedup no longer keys on the calendar day (audit data #2)', () => {
   it('running the hourly scan twice on the same still-open task creates exactly one row', async (ctx) => {
@@ -42,7 +42,7 @@ describe('notifications: dedup no longer keys on the calendar day (audit data #2
     // thousands of synthetic owner/admin users (see the report) — a single
     // scan legitimately takes several seconds here, though it would not in
     // production's real ~2-user scale.
-  }, 30_000);
+  }, 120_000);
 
   it('a scan on a later calendar day still does not duplicate the row', async (ctx) => {
     if (!ok) return ctx.skip();
@@ -74,7 +74,7 @@ describe('notifications: dedup no longer keys on the calendar day (audit data #2
     );
     expect(after.rows).toHaveLength(1);
     expect(after.rows[0].id).toBe(before.rows[0].id); // same row, not a new one
-  }, 30_000);
+  }, 120_000);
 
   it('a multi-row batch insert creates one row per task and stays a no-op on rescans', async (ctx) => {
     if (!ok) return ctx.skip();
@@ -105,7 +105,7 @@ describe('notifications: dedup no longer keys on the calendar day (audit data #2
       [[t1, t2, t3]]
     );
     expect(again[0].n).toBe(3);
-  }, 30_000);
+  }, 120_000);
 });
 
 describe('notifications retention windows (audit data #2)', () => {
