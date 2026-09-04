@@ -1,8 +1,9 @@
 // Audit: Security #10 (High) / Task 6.2-6.3.
 // Prompt-injection hardening (sanitizeForPrompt) was applied to documentPrep.ts's
-// buildAgent1Content, which was dead code referenced only by its own test — the
-// live route (routes/preconstruction.ts) calls this module's buildBlocksForBatch
-// instead, which had no sanitizeForPrompt import at all. u.filename is the raw
+// content-block orchestrator, which was dead code referenced only by its own
+// test (since deleted) — the live route (routes/preconstruction.ts) calls this
+// module's buildBlocksForBatch instead, which had no sanitizeForPrompt import
+// at all. u.filename is the raw
 // uploaded filename; u.label is built from the vision classifier's echoed sheet
 // number/title. Both are attacker-controlled and land inside the exact
 // "--- Sheet: ... ---" delimiter grammar sanitizeForPrompt exists to protect.
