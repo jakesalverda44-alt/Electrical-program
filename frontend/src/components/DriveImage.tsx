@@ -7,6 +7,15 @@ interface Props {
   alt?: string;
   height?: number;
   isImage?: boolean;
+  /**
+   * Override the default `/documents/drive-file/:fileId` proxy with an
+   * owned-record route (e.g. `/gens/:id/photos/:fileId`,
+   * `/bids/:id/photos/:fileId`). Job-site photos are listed straight out of
+   * Drive and never get a `documents` row, so the generic proxy correctly
+   * fails closed on them (post-review fix for B2) — callers rendering those
+   * must pass the matching owned route here instead.
+   */
+  src?: string;
 }
 
 /**
@@ -14,7 +23,7 @@ interface Props {
  * backend (the browser has no Drive session, so a plain <img src> can't load it).
  * Fetches as a blob, shows a placeholder for non-images or while loading.
  */
-export default function DriveImage({ fileId, alt, height = 120, isImage = true }: Props) {
+export default function DriveImage({ fileId, alt, height = 120, isImage = true, src }: Props) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -22,7 +31,7 @@ export default function DriveImage({ fileId, alt, height = 120, isImage = true }
     if (!isImage) return;
     let revoked = false;
     let objectUrl: string | null = null;
-    api.get(`/documents/drive-file/${fileId}`, { responseType: 'blob' })
+    api.get(src || `/documents/drive-file/${fileId}`, { responseType: 'blob' })
       .then(res => {
         if (revoked) return;
         objectUrl = URL.createObjectURL(res.data);
@@ -33,7 +42,7 @@ export default function DriveImage({ fileId, alt, height = 120, isImage = true }
       revoked = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [fileId, isImage]);
+  }, [fileId, isImage, src]);
 
   const placeholder = (
     <div style={{ height, background: 'var(--surface3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

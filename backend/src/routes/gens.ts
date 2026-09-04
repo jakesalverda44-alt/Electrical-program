@@ -27,6 +27,8 @@ import {
   moveJobToStage,
   listFolderFiles,
   ensureSubfolder,
+  getFileMedia,
+  getFileParents,
   GENERATOR_PROPOSALS_FOLDER,
   ACTIVE_GENERATOR_JOBS_ROOT,
   COMPLETED_GENERATOR_JOBS_ROOT,
@@ -1385,6 +1387,27 @@ router.get('/:id/photos', requireAuth, async (req: AuthRequest, res) => {
   const files = await listFolderFiles(photosFolderId);
   res.json(files);
 });
+
+// Stream one photo's bytes from this gen's Drive Photos folder. Job-site photos
+// are listed straight out of Drive and never get a `documents` row, so the
+// generic /documents/drive-file/:fileId proxy correctly fails closed on them
+// (post-review fix for B2) — this owned-record route authorizes by folder
+// membership instead: the file's parent must be this gen's own Photos folder.
+router.get('/:id/photos/:fileId', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const gen = await loadOwnedGen(req, res);
+  if (!gen) return;
+  if (!gen.drive_photos_folder_id) return res.status(404).json({ error: 'File not available' });
+  const parents = await getFileParents(req.params.fileId);
+  if (!parents || !parents.includes(gen.drive_photos_folder_id)) {
+    return res.status(403).json({ error: 'You do not have access to this file' });
+  }
+  const media = await getFileMedia(req.params.fileId);
+  if (!media) return res.status(404).json({ error: 'File not available' });
+  res.setHeader('Content-Type', media.mimeType);
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  media.stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
+  media.stream.pipe(res);
+}));
 
 // ── Public: sign proposal by token (no auth) ────────────────────────────────
 router.post('/p/:token/sign', async (req, res) => {

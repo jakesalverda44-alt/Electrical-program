@@ -196,23 +196,28 @@ router.get('/:id/view', requireAuth, asyncHandler(async (req: AuthRequest, res) 
 }));
 
 // Proxy a Drive file's bytes through the backend (the service account is authenticated;
-// the browser is not). Used for in-app image previews. Restricted reps may only proxy
-// files belonging to a document they can access; if the file id isn't tracked as a
-// document we fall through (it isn't tied to a rep-owned record), managers see all.
+// the browser is not). Used for in-app image previews of tracked `documents` rows only
+// — every role requires a matching row; restricted reps additionally require ownership
+// of the linked record. Job-site photos (no `documents` row) use the owned-record
+// routes instead: GET /gens/:id/photos/:fileId, GET /bids/:id/photos/:fileId.
 router.get('/drive-file/:fileId', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { rows } = await pool.query(
+    `SELECT linked_id, uploaded_by FROM documents
+     WHERE deleted_at IS NULL AND storage_url LIKE $1 LIMIT 1`,
+    [`%${req.params.fileId}%`]
+  );
+  // Fail closed for every role: an untracked file id (the LIKE lookup found no
+  // row) must never be fetched — it isn't tied to any record we can check
+  // ownership against. Post-review fix (B1): this used to live inside
+  // `if (scope)`, so any non-restricted role (read_only, technician, ...)
+  // could still proxy an arbitrary Drive file id through the service account
+  // (audit: Security #5, High).
+  if (!rows.length) {
+    return res.status(403).json({ error: 'You do not have access to this file' });
+  }
   const scope = ownScopeId(req.user!);
-  if (scope) {
-    const { rows } = await pool.query(
-      `SELECT linked_id, uploaded_by FROM documents
-       WHERE deleted_at IS NULL AND storage_url LIKE $1 LIMIT 1`,
-      [`%${req.params.fileId}%`]
-    );
-    // Fail closed: an untracked file id (the LIKE lookup found no row) must never
-    // be fetched — it isn't tied to any record we can check ownership against
-    // (audit: Security #5, High).
-    if (!rows.length || (rows[0].uploaded_by !== req.user!.name && !(await ownsLinkedRecord(scope, rows[0].linked_id)))) {
-      return res.status(403).json({ error: 'You do not have access to this file' });
-    }
+  if (scope && rows[0].uploaded_by !== req.user!.name && !(await ownsLinkedRecord(scope, rows[0].linked_id))) {
+    return res.status(403).json({ error: 'You do not have access to this file' });
   }
   const media = await getFileMedia(req.params.fileId);
   if (!media) return res.status(404).json({ error: 'File not available' });
