@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { pool } from '../db/pool';
 import { requireAuth, AuthRequest, getJwtSecret, TOKEN_TTL } from '../middleware/auth';
@@ -54,10 +55,40 @@ function msRedirectUri() {
   return base.replace(/\/$/, '') + '/api/auth/microsoft/callback';
 }
 
+// CSRF state + one-time exchange code, both in-memory (audit: Security #8, High).
+// In-memory rather than a signed cookie: this app runs as a single Node instance
+// (render.yaml declares no numInstances/scaling), so there's no cross-process
+// sharing to worry about, and it avoids adding cookie-parsing middleware for a
+// value that's only ever read back within the same OAuth round trip. Each map
+// is pruned opportunistically on the next write of its kind — traffic through
+// this login is low enough that a background timer isn't warranted.
+const oauthStates = new Map<string, number>(); // state -> expiresAt (ms)
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+interface MsExchangeEntry {
+  appToken: string;
+  user: { id: string; name: string; email: string; role: string };
+  expiresAt: number;
+}
+const msExchangeCodes = new Map<string, MsExchangeEntry>();
+const MS_EXCHANGE_TTL_MS = 60 * 1000; // 60 seconds
+
+function pruneOauthStates() {
+  const now = Date.now();
+  for (const [state, expiresAt] of oauthStates) if (expiresAt < now) oauthStates.delete(state);
+}
+function pruneMsExchangeCodes() {
+  const now = Date.now();
+  for (const [code, entry] of msExchangeCodes) if (entry.expiresAt < now) msExchangeCodes.delete(code);
+}
+
 // Step 1 — redirect to Microsoft login
 router.get('/microsoft', (_req, res) => {
   const clientId = MS_CLIENT_ID();
   if (!clientId) return res.status(503).send('Microsoft login not configured. Add MICROSOFT_CLIENT_ID to environment.');
+  pruneOauthStates();
+  const state = crypto.randomBytes(32).toString('hex');
+  oauthStates.set(state, Date.now() + OAUTH_STATE_TTL_MS);
   const params = new URLSearchParams({
     client_id:     clientId,
     response_type: 'code',
@@ -65,13 +96,14 @@ router.get('/microsoft', (_req, res) => {
     response_mode: 'query',
     scope:         'openid email profile User.Read',
     prompt:        'select_account',
+    state,
   });
   res.redirect(`https://login.microsoftonline.com/${MS_TENANT_ID()}/oauth2/v2.0/authorize?${params}`);
 });
 
-// Step 2 — Microsoft redirects back with ?code=...
+// Step 2 — Microsoft redirects back with ?code=...&state=...
 router.get('/microsoft/callback', async (req, res) => {
-  const { code, error, error_description } = req.query as Record<string, string>;
+  const { code, error, error_description, state } = req.query as Record<string, string>;
   const frontendBase = process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://electrical-program.onrender.com';
 
   if (error) {
@@ -79,6 +111,15 @@ router.get('/microsoft/callback', async (req, res) => {
     return res.redirect(`${frontendBase}/login?error=${encodeURIComponent('Microsoft login failed: ' + (error_description || error))}`);
   }
   if (!code) return res.redirect(`${frontendBase}/login?error=missing_code`);
+
+  // CSRF: the state must match one we minted for a /microsoft redirect and not
+  // have expired, checked BEFORE any token exchange with Microsoft (audit:
+  // Security #8, High). One-time use — delete on read either way.
+  const stateExpiry = state ? oauthStates.get(state) : undefined;
+  if (state) oauthStates.delete(state);
+  if (!state || stateExpiry === undefined || stateExpiry < Date.now()) {
+    return res.status(400).json({ error: 'Invalid or expired login attempt. Please try signing in again.' });
+  }
 
   try {
     // Exchange code for tokens
@@ -126,12 +167,37 @@ router.get('/microsoft/callback', async (req, res) => {
       { expiresIn: TOKEN_TTL }
     );
 
-    // Redirect to frontend with token
-    res.redirect(`${frontendBase}/?mstoken=${appToken}`);
+    // A bearer token in the URL lands in browser history and in the Referer of
+    // any third-party asset the landing page loads. Hand back a one-time code
+    // instead; the frontend exchanges it once via POST .../microsoft/exchange
+    // (audit: Security #8, High).
+    pruneMsExchangeCodes();
+    const exchangeCode = crypto.randomBytes(32).toString('hex');
+    msExchangeCodes.set(exchangeCode, {
+      appToken,
+      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      expiresAt: Date.now() + MS_EXCHANGE_TTL_MS,
+    });
+
+    res.redirect(`${frontendBase}/?mscode=${exchangeCode}`);
   } catch (err) {
     console.error('[ms-oauth] callback error:', err);
     res.redirect(`${frontendBase}/login?error=${encodeURIComponent('Microsoft login failed. Please try again.')}`);
   }
+});
+
+// Step 3 — one-time exchange: trades the short-lived code from the callback
+// redirect for the real app token. Deletes the code immediately (whether found,
+// expired, or not) so it can never be replayed (audit: Security #8, High).
+router.post('/microsoft/exchange', (req, res) => {
+  const { code } = req.body as { code?: string };
+  if (!code) return res.status(400).json({ error: 'Code required' });
+  const entry = msExchangeCodes.get(code);
+  msExchangeCodes.delete(code);
+  if (!entry || entry.expiresAt < Date.now()) {
+    return res.status(404).json({ error: 'Code expired or already used. Please sign in again.' });
+  }
+  res.json({ token: entry.appToken, user: entry.user });
 });
 
 // Password reset — generates a short-lived token and emails a reset link
