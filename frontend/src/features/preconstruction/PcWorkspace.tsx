@@ -37,6 +37,63 @@ interface Props {
 
 const STEP_ORDER: PcStepKey[] = ['intake','takeoff','scope','estimate','review','proposal','submitted'];
 
+// Task 7 (audit data #16) — /preconstruction/costs and /estimates/unit-costs
+// are the same for every bid (company-wide historical comparables and the
+// admin-edited unit-cost library), but every PcWorkspace mount refetched
+// both fresh. Module-level cache, keyed by URL, shared across every
+// PcWorkspace instance in the tab regardless of which bid it's showing —
+// "loaded once per session" per the plan. True invalidate-on-save would mean
+// UnitCostSection.tsx (a Settings-section file, out of this task's file
+// scope: BidHubPage.tsx + PcWorkspace.tsx only) calling back into this
+// module; a TTL is the closest same-file approximation, so a unit-cost edit
+// in Settings shows up in an already-open estimating tab within
+// GLOBAL_PC_CACHE_TTL_MS rather than instantly.
+const GLOBAL_PC_CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface GlobalPcCacheEntry<T> {
+  promise: Promise<T> | null;
+  data: T | null;
+  fetchedAt: number;
+}
+const historicalCostsCache: GlobalPcCacheEntry<Array<Record<string, unknown>>> = { promise: null, data: null, fetchedAt: 0 };
+const unitCostLibCache: GlobalPcCacheEntry<{ global: Record<string, number>; by_project_type: Record<string, Record<string, number>> }> =
+  { promise: null, data: null, fetchedAt: 0 };
+
+/** Reads (and, once per TTL window across the whole session, refetches) one of
+ *  the module-level caches above. Every PcWorkspace instance mounted at the
+ *  same time shares the same in-flight request instead of each firing its own. */
+function useGlobalPcCache<T>(cache: GlobalPcCacheEntry<T>, url: string): T | null {
+  const [data, setData] = useState<T | null>(cache.data);
+  useEffect(() => {
+    let cancelled = false;
+    const isFresh = cache.data !== null && (Date.now() - cache.fetchedAt) < GLOBAL_PC_CACHE_TTL_MS;
+    if (isFresh) { setData(cache.data); return; }
+    if (!cache.promise) {
+      cache.promise = api.get<T>(url).then(res => {
+        cache.data = res.data;
+        cache.fetchedAt = Date.now();
+        cache.promise = null;
+        return res.data;
+      }).catch(err => {
+        cache.promise = null;
+        throw err;
+      });
+    }
+    cache.promise.then(d => { if (!cancelled) setData(d); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [cache, url]);
+  return data;
+}
+
+/** Test-only escape hatch: the module-level caches above intentionally persist
+ *  for the life of the module (a browser tab, or a test file's module
+ *  registry), which a test asserting "requested once" needs to reset between
+ *  cases. Not used by app code. */
+export function __resetGlobalPcCachesForTests(): void {
+  historicalCostsCache.data = null; historicalCostsCache.promise = null; historicalCostsCache.fetchedAt = 0;
+  unitCostLibCache.data = null; unitCostLibCache.promise = null; unitCostLibCache.fetchedAt = 0;
+}
+
 // Fence-tolerant JSON parse for an agent's raw output (```json ... ``` or
 // bare) — shared by the Agent 2/3 structured-view render below and Task
 // 5.2's "Import from AI analysis" RFI button, rather than each keeping its
@@ -370,13 +427,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const importTakeoffRef = useRef<HTMLInputElement>(null);
   const importBreakdownRef = useRef<HTMLInputElement>(null);
   const [savingImport, setSavingImport] = useState(false);
-  // Six independent reads, one hook each: each cancels on its own key change,
-  // so switching bids can no longer land bid A's takeoff on bid B's workspace.
-  const { data: historicalCostsData } = useApi<Array<Record<string, unknown>>>('/preconstruction/costs');
+  // Six independent reads. The two global ones (historical costs, unit-cost
+  // library) are identical for every bid, so they go through the
+  // session-cached useGlobalPcCache above instead of useApi — Task 7 (audit
+  // data #16). The four bid-scoped ones stay on useApi, one hook each: each
+  // cancels on its own key change, so switching bids can no longer land bid
+  // A's takeoff on bid B's workspace.
+  const historicalCostsData = useGlobalPcCache(historicalCostsCache, '/preconstruction/costs');
   const historicalCosts = historicalCostsData ?? [];
   const { data: takeoffOnFile, reload: reloadTakeoff } = useApi<TakeoffOnFile>(`/preconstruction/${bid.id}/takeoff`);
   const { data: bidIntel } = useApi<Record<string, unknown>>(`/preconstruction/intelligence/${bid.id}`);
-  const { data: unitCostLibData } = useApi<{ global: Record<string, number>; by_project_type: Record<string, Record<string, number>> }>('/estimates/unit-costs');
+  const unitCostLibData = useGlobalPcCache(unitCostLibCache, '/estimates/unit-costs');
   const unitCostLib = unitCostLibData ?? { global: {}, by_project_type: {} };
   const [openTakeoffCat, setOpenTakeoffCat] = useState<string | null>(null);
   const pollRef      = useRef<ReturnType<typeof setTimeout> | null>(null);

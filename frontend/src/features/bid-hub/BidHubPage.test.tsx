@@ -6,6 +6,7 @@ import BidHubPage from './BidHubPage';
 import api from '../../api/client';
 import { Bid } from '../../types';
 import { moneyShort } from '../../lib/money';
+import { __resetGlobalPcCachesForTests } from '../preconstruction/PcWorkspace';
 
 afterEach(cleanup);
 
@@ -102,5 +103,68 @@ describe('BidHubPage', () => {
   it('estimating tab mounts the workspace', () => {
     render(<MemoryRouter initialEntries={['/bid/b1?tab=estimating']}><BidHubPage {...baseProps}/></MemoryRouter>);
     expect(screen.getByTestId('hub-tab-estimating')).toBeTruthy();
+  });
+
+  // Task 7 (audit data #16) — PcWorkspaceView is now rendered once per bid and
+  // toggled with `hidden`, not mounted/unmounted per tab click.
+  describe('estimating workspace stays mounted across tab switches', () => {
+    it('switching tabs twice issues no new workspace requests', async () => {
+      const get = vi.mocked(api.get);
+      get.mockClear();
+      render(<MemoryRouter initialEntries={['/bid/b1?tab=estimating']}><BidHubPage {...baseProps}/></MemoryRouter>);
+
+      // Bid-scoped calls PcWorkspaceView's mount fires (a subset of its seven —
+      // enough to prove "did it refetch", without pinning every URL).
+      const workspaceCalls = () => get.mock.calls.filter(c =>
+        typeof c[0] === 'string' && (c[0].includes('/takeoff') || c[0].includes('/intelligence/'))
+      );
+      await new Promise(r => setTimeout(r, 0)); // let the mount-time effects fire
+      const afterMount = workspaceCalls().length;
+      expect(afterMount).toBeGreaterThan(0);
+
+      // getAllByRole(...)[0]: PcWorkspaceView is now always mounted, and its own
+      // internal tab bar (PC_TABS in constants.ts) has its own "Overview" button
+      // too — the Hub's own tab bar renders first in DOM order, so index 0 is it.
+      const hubOverviewBtn = () => screen.getAllByRole('button', { name: 'Overview' })[0];
+      const hubEstimatingBtn = () => screen.getByRole('button', { name: 'Estimating' });
+      fireEvent.click(hubOverviewBtn());
+      fireEvent.click(hubEstimatingBtn());
+      fireEvent.click(hubOverviewBtn());
+      fireEvent.click(hubEstimatingBtn());
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(workspaceCalls().length).toBe(afterMount);
+      // hidden, not unmounted — the tab's content is still in the DOM the whole time.
+      expect(screen.getByTestId('hub-tab-estimating')).toBeTruthy();
+    });
+  });
+
+  // Task 7 (audit data #16) — /preconstruction/costs and /estimates/unit-costs
+  // are hoisted into a module-level cache shared across every PcWorkspace
+  // instance, so opening a second bid's estimating tab must not refetch them.
+  describe('global preconstruction endpoints are session-cached across bids', () => {
+    it('/preconstruction/costs and /estimates/unit-costs are each requested once across two bids', async () => {
+      __resetGlobalPcCachesForTests(); // other tests in this file may have already warmed the cache
+      const get = vi.mocked(api.get);
+      get.mockClear();
+
+      const { unmount } = render(
+        <MemoryRouter initialEntries={['/bid/b1?tab=estimating']}><BidHubPage {...baseProps}/></MemoryRouter>
+      );
+      await new Promise(r => setTimeout(r, 0));
+      unmount();
+
+      render(
+        <MemoryRouter initialEntries={['/bid/b2?tab=estimating']}>
+          <BidHubPage {...baseProps} bids={[lostBid]} bidId="b2"/>
+        </MemoryRouter>
+      );
+      await new Promise(r => setTimeout(r, 0));
+
+      const costsCalls = get.mock.calls.filter(c => c[0] === '/preconstruction/costs');
+      const unitCostCalls = get.mock.calls.filter(c => c[0] === '/estimates/unit-costs');
+      expect(costsCalls.length).toBe(1);
+      expect(unitCostCalls.length).toBe(1);
+    });
   });
 });
