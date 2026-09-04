@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Toast, BidEstimate, EstimateLineItem } from '../../types';
 import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey, PROJECT_TYPES, ConfirmedService } from './constants';
@@ -210,6 +210,11 @@ function analysisErrorMessage(data: Record<string, unknown> | null | undefined) 
   return `${first.slice(0, 700)}...`;
 }
 
+// A stuck 'running' status used to poll every 3s for the rest of the session
+// (audit data #5). Ten minutes is well past the pipeline's real worst case.
+const POLL_DEADLINE_MS = 10 * 60 * 1000;
+const POLL_TIMEOUT_MESSAGE = 'Analysis timed out — check status in the Plan Review tab.';
+
 interface TakeoffOnFile {
   categories: { name: string; itemCount: number; totals: Record<string, number> }[];
   line_items: { category: string; description: string; unit: string; qty: number | null }[];
@@ -379,24 +384,71 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const wsRef = useRef(ws);
   wsRef.current = ws;
 
+  // ── Autosave ──────────────────────────────────────────────────────────
+  // This PUT is the only persistence for estimator notes, scope text and RFIs,
+  // and it used to end in `.catch(() => {})` — a dropped connection lost an
+  // afternoon of pre-construction work with zero indication (audit code #6).
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  // The effect below fires once on mount with the just-restored values, which
+  // was a no-op PUT on every open (audit data #16).
+  const didMountRef = useRef(false);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const backoffRef = useRef(0);
+  const aliveRef = useRef(true);
+  useEffect(() => () => {
+    aliveRef.current = false;
+    if (retryTimer.current) clearTimeout(retryTimer.current);
+  }, []);
+
+  const workspacePayload = useCallback(() => {
+    const w = wsRef.current;
+    return {
+      step: w.step,
+      active_tab: w.activeTab,
+      notes: w.notes,
+      scope: w.scope,
+      rfis: w.rfis,
+      files: w.files,
+      ai_done: w.aiDone,
+      proposal_generated: w.proposalGenerated,
+      confirmed_service: w.confirmedService ?? null,
+    };
+  }, []);
+
+  // Retries always send the CURRENT payload, not the one that failed, so an
+  // edit made while a retry was pending is not silently dropped.
+  const saveWorkspace = useCallback(async () => {
+    setSaveState('saving');
+    try {
+      await api.put(`/preconstruction/${bid.id}/workspace`, workspacePayload());
+      if (!aliveRef.current) return;
+      backoffRef.current = 0;
+      setSaveState('saved');
+    } catch {
+      if (!aliveRef.current) return;
+      setSaveState('error');
+      const next = Math.min(30_000, backoffRef.current === 0 ? 2_000 : backoffRef.current * 2);
+      backoffRef.current = next;
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+      retryTimer.current = setTimeout(() => { void saveWorkspace(); }, next);
+    }
+  }, [bid.id, workspacePayload]);
+
   // Auto-save workspace to DB 800ms after last change (skip ephemeral fields)
   useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      api.put(`/preconstruction/${bid.id}/workspace`, {
-        step: ws.step,
-        active_tab: ws.activeTab,
-        notes: ws.notes,
-        scope: ws.scope,
-        rfis: ws.rfis,
-        files: ws.files,
-        ai_done: ws.aiDone,
-        proposal_generated: ws.proposalGenerated,
-        confirmed_service: ws.confirmedService ?? null,
-      }).catch(() => {});
+      // A fresh edit supersedes any pending retry and resets the backoff.
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+      backoffRef.current = 0;
+      void saveWorkspace();
     }, 800);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated, ws.confirmedService]);
+  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated, ws.confirmedService, saveWorkspace]);
 
   function set(patchOrFn: Partial<PcWorkspace> | ((prev: PcWorkspace) => Partial<PcWorkspace>)) {
     const current = wsRef.current;
@@ -412,10 +464,27 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     if (idx < STEP_ORDER.length - 1) set({ step: STEP_ORDER[idx + 1] });
   };
 
+  // ── Polling ───────────────────────────────────────────────────────────
+  // Both loops are recursive setTimeouts whose continuation runs after an
+  // `await`. The effect cleanup only ever cleared the pending timeout, so
+  // unmounting mid-flight let the continuation schedule a NEW timeout that
+  // nothing owned — an un-cancellable request every 3s for the rest of the
+  // session (audit data #5). `pollCancelled` is checked after every await,
+  // and a hard deadline stops a stuck 'running' status polling forever.
+  const pollCancelled = useRef(false);
+  const [pollTimedOut, setPollTimedOut] = useState<null | 'analysis' | 'proposal'>(null);
+
   const pollForResults = (startMs = Date.now(), shownAgent2 = false, shownAgent3 = false, failStreak = 0) => {
     pollRef.current = setTimeout(async () => {
+      if (pollCancelled.current) return;
+      if (Date.now() - startMs > POLL_DEADLINE_MS) {
+        setPollTimedOut('analysis');
+        set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${POLL_TIMEOUT_MESSAGE}`] }));
+        return;
+      }
       try {
         const { data } = await api.get(`/preconstruction/${bid.id}/results`);
+        if (pollCancelled.current) return;
         const elapsed = Date.now() - startMs;
         let nextA2 = shownAgent2, nextA3 = shownAgent3;
         if (!shownAgent2 && (elapsed > 90_000 || data?.status === 'agent1_complete' || data?.status === 'agent2_running')) {
@@ -454,6 +523,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           pollForResults(startMs, nextA2, nextA3, 0);
         }
       } catch {
+        if (pollCancelled.current) return;
         // Retry up to 5 times before giving up — handles transient connection drops
         if (failStreak < 5) {
           pollForResults(startMs, shownAgent2, shownAgent3, failStreak + 1);
@@ -464,10 +534,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }, 3000);
   };
 
-  const pollAgent4 = (failStreak = 0) => {
+  const pollAgent4 = (startMs = Date.now(), failStreak = 0) => {
     agent4PollRef.current = setTimeout(async () => {
+      if (pollCancelled.current) return;
+      if (Date.now() - startMs > POLL_DEADLINE_MS) {
+        setPollTimedOut('proposal');
+        setAgent4Running(false);
+        return;
+      }
       try {
         const { data } = await api.get(`/preconstruction/${bid.id}/results`);
+        if (pollCancelled.current) return;
         const status = data?.agent4_status as string | undefined;
         if (status === 'complete') {
           setAiResults(data);
@@ -479,10 +556,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           const errMsg = (data?.agent4_error as string | undefined) ?? 'Failed to generate proposal';
           showToast({ variant: 'error', title: 'Agent 4 error', sub: errMsg });
         } else {
-          pollAgent4(0);
+          pollAgent4(startMs, 0);
         }
       } catch {
-        if (failStreak < 5) pollAgent4(failStreak + 1);
+        if (pollCancelled.current) return;
+        if (failStreak < 5) pollAgent4(startMs, failStreak + 1);
         else {
           setAgent4Running(false);
           showToast({ variant: 'error', title: 'Agent 4 error', sub: 'Could not reach server. The proposal may still be generating — check back in a moment.' });
@@ -492,9 +570,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   };
 
   useEffect(() => {
+    pollCancelled.current = false;
+    setPollTimedOut(null);
     const RUNNING_STATUSES = ['running', 'agent1_complete', 'agent2_running', 'agent2_complete', 'agent3_running'];
     api.get(`/preconstruction/${bid.id}/results`).then(r => {
-      if (!r.data) return;
+      if (pollCancelled.current || !r.data) return;
       setAiResults(r.data);
       // Reconnect polling if a pipeline was in progress when the page was refreshed
       if (RUNNING_STATUSES.includes(r.data?.status)) {
@@ -513,6 +593,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       // optional: failing leaves the tab looking idle, recoverable by reopening.
       .catch(() => {});
     return () => {
+      // Both the pending timeout AND the in-flight continuation: clearing the
+      // timeout alone is what let an orphaned loop survive an unmount.
+      pollCancelled.current = true;
       if (pollRef.current) clearTimeout(pollRef.current);
       if (agent4PollRef.current) clearTimeout(agent4PollRef.current);
     };
@@ -2801,7 +2884,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       </div>
 
       {/* Tab strip */}
-      <div className="pc-tabs" style={{ display: 'flex', gap: 2, padding: '0 24px', borderBottom: '1px solid var(--border)', background: 'var(--panel)', overflowX: 'auto' }}>
+      <div className="pc-tabs" style={{ display: 'flex', gap: 2, padding: '0 24px', borderBottom: '1px solid var(--border)', background: 'var(--panel)', overflowX: 'auto', alignItems: 'center' }}>
         {PC_TABS.map(t => (
           <button key={t.key} onClick={() => onUpdate({ ...ws, activeTab: t.key as PcTabKey })} style={{
             border: 'none', cursor: 'pointer', font: 'inherit', fontSize: 13, fontWeight: 700,
@@ -2813,7 +2896,29 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             {t.label}
           </button>
         ))}
+        {/* Autosave is invisible when it works and used to be invisible when it
+            didn't. This is the only signal the estimator gets. */}
+        <span data-testid="pc-save-state" style={{ marginLeft: 'auto', paddingLeft: 12, whiteSpace: 'nowrap',
+          fontSize: 11.5, fontWeight: 700,
+          color: saveState === 'error' ? 'var(--red)' : 'var(--text3)' }}>
+          {saveState === 'saving' ? 'Saving…'
+            : saveState === 'saved' ? 'Saved'
+            : saveState === 'error' ? 'Not saved — retrying'
+            : ''}
+        </span>
       </div>
+      {pollTimedOut && (
+        <div data-testid="pc-poll-timeout" style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 24px',
+          background: 'var(--amber-soft)', borderBottom: '1px solid rgba(224,165,59,.3)',
+          color: 'var(--amber)', fontSize: 12.5, fontWeight: 700,
+        }}>
+          <Icon name="alert" size={14} stroke={2}/>
+          {pollTimedOut === 'analysis'
+            ? POLL_TIMEOUT_MESSAGE
+            : 'Proposal generation timed out — check status in the Proposal tab.'}
+        </div>
+      )}
 
       {/* Tab content */}
       {renderTab()}
