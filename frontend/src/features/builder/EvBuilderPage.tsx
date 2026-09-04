@@ -6,6 +6,7 @@ import { blankEvForm, calcEvTotals, migrateEvForm, evProposalNo } from './evCalc
 import EvProposalPreview from './EvProposalPreview';
 import SendProposalModal from './SendProposalModal';
 import api from '../../api/client';
+import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import { Gen } from '../../types';
 import { useSettings, useShowToast } from '../../contexts/AppContext';
 import { parseAddress } from '../../lib/address';
@@ -98,6 +99,9 @@ export default function EvBuilderPage({ setGens, onSaved, editGen, productSwitch
   const showToast = useShowToast();
   const { settings: s } = useSettings();
   const [form, setForm] = useState<EvForm>(() => editGen ? genToEvForm(editGen) : blankEvForm(s));
+  // See BuilderPage: a snapshot comparison, not a keystroke flag.
+  const [savedForm, setSavedForm] = useState(() => JSON.stringify(editGen ? genToEvForm(editGen) : blankEvForm(s)));
+  useUnsavedGuard(JSON.stringify(form) !== savedForm);
   const [screen, setScreen] = useState<'builder' | 'preview'>('builder');
   const [proposalNo] = useState(() => editGen?.proposal_no || evProposalNo());
   const [saving, setSaving] = useState(false);
@@ -146,11 +150,13 @@ export default function EvBuilderPage({ setGens, onSaved, editGen, productSwitch
         setGens(prev => prev.some(g => g.id === editGen.id)
           ? prev.map(g => g.id === editGen.id ? updatedGen : g)
           : [updatedGen, ...prev]);
+        setSavedForm(JSON.stringify(form));
         return editGen.id;
       }
       const r = await api.post('/gens', { ...payload, stage: 'building' });
       setGens(prev => [r.data, ...prev]);
       setSavedGenId(r.data.id);
+      setSavedForm(JSON.stringify(form));
       return r.data.id as string;
     } catch {
       showToast({ variant: 'error', title: 'Save failed', sub: 'Please try again' });

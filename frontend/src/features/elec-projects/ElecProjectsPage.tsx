@@ -6,6 +6,7 @@ import { useShowToast } from '../../contexts/AppContext';
 import api from '../../api/client';
 import { useMutation } from '../../hooks/useMutation';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import { moneyFull, moneyShort as money } from '../../lib/money';
 
 // ── Phase → Status mapping ───────────────────────────────────────
@@ -398,10 +399,24 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
   useEffect(() => { setOvDraft(data.overview); }, [data.overview]);
   useEffect(() => { setSchDraft(data.schedule); }, [data.schedule]);
 
-  const saveSection = async (section: string, payload: unknown) => {
-    await api.put(`/projects/elec/${id}/section/${section}`, { data: payload });
-    showToast({ title: 'Saved' });
-  };
+  // Both drafts are typed into local state and only persisted by their Save
+  // button, so leaving the tab discarded them silently.
+  useUnsavedGuard(
+    JSON.stringify(ovDraft) !== JSON.stringify(data.overview)
+    || JSON.stringify(schDraft) !== JSON.stringify(data.schedule),
+  );
+
+  const { run: saveSection } = useMutation(
+    async (section: string, payload: unknown) => {
+      await api.put(`/projects/elec/${id}/section/${section}`, { data: payload });
+    },
+    {
+      // Was `await api.put(...)` then an unconditional toast, with no catch —
+      // a failed save produced an unhandled rejection and no "Saved" either.
+      successToast: { title: 'Saved' },
+      errorToast: (message) => ({ title: 'Save failed', sub: message }),
+    },
+  );
 
   // ── Closeout ─────────────────────────────────────────────────
   const CLOSEOUT_ITEMS = [

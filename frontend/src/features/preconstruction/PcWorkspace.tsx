@@ -4,6 +4,7 @@ import { Bid, Toast, BidEstimate, EstimateLineItem } from '../../types';
 import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey, PROJECT_TYPES, ConfirmedService } from './constants';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import { useMutation } from '../../hooks/useMutation';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
 import { moneyFull } from '../../lib/money';
@@ -463,6 +464,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     const idx = STEP_ORDER.indexOf(wsRef.current.step);
     if (idx < STEP_ORDER.length - 1) set({ step: STEP_ORDER[idx + 1] });
   };
+
+  // Pricing lives in `ws` (overhead %, profit %, per-line overrides) and is only
+  // persisted by the Pricing tab's explicit "Save Estimate", so leaving with
+  // unsaved pricing threw it away. An autosave stuck in `error` counts as
+  // unsaved too — that is the case task 7's retry chain cannot finish.
+  const pricingDirty = savedEstimate
+    ? (ws.overheadPct !== savedEstimate.overhead_pct
+      || ws.profitPct !== savedEstimate.profit_pct
+      || JSON.stringify(ws.estimateOverrides) !== JSON.stringify(overridesFromEstimate(savedEstimate.line_items)))
+    : (ws.overheadPct !== 10 || ws.profitPct !== 15 || Object.keys(ws.estimateOverrides).length > 0);
+  useUnsavedGuard(pricingDirty || saveState === 'error');
 
   // ── Polling ───────────────────────────────────────────────────────────
   // Both loops are recursive setTimeouts whose continuation runs after an

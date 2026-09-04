@@ -4,6 +4,7 @@ import { Bid } from '../../types';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
+import { useDirtyDismiss } from '../../hooks/useDirtyDismiss';
 import { useShowToast } from '../../contexts/AppContext';
 import { useIsMobile } from '../../hooks/useIsMobile';
 
@@ -79,6 +80,10 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   const [saving, setSaving] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [addForm, setAddForm] = useState<typeof BLANK>(BLANK);
+  // Cancel / back / navigating away from a half-typed intake row asks first.
+  const closeAddForm = () => { setAddOpen(false); setAddForm(BLANK); };
+  const { requestClose: requestCloseAdd, discardDialog: addDiscardDialog } =
+    useDirtyDismiss(addOpen && JSON.stringify(addForm) !== JSON.stringify(BLANK), closeAddForm);
   const [refreshing, setRefreshing] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
   // "Email new bid to the team" option (opt-in, off by default) + its editable recipients.
@@ -302,7 +307,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   // state (no parallel state) — the list shows when neither is set, otherwise the
   // detail/add pane takes over full-width with a Back control.
   const showMobileList = !selected && !addOpen;
-  const goBackMobile = () => { setSelected(null); setAddOpen(false); };
+  const goBackMobile = () => { setSelected(null); requestCloseAdd(); };
 
   // Right pane content — identical on desktop to the pre-mobile markup; on mobile
   // the overflow/max-width tweaks let the document (not this div) own scrolling
@@ -313,7 +318,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
       {FormFields(addForm, (k, v) => setAddForm(prev => ({ ...prev, [k]: v })))}
       <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
         <button className="btn" onClick={handleAdd} disabled={saving} style={{ background: 'var(--green)', borderColor: 'var(--green)' }}>{saving ? 'Adding…' : 'Add to Inbox'}</button>
-        <button className="btn ghost" onClick={() => { setAddOpen(false); setAddForm(BLANK); }}>Cancel</button>
+        <button className="btn ghost" onClick={requestCloseAdd}>Cancel</button>
       </div>
     </div>
   ) : !selected ? (
@@ -559,6 +564,8 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
           </div>
         ) : rightPane)}
       </div>
+
+      {addDiscardDialog}
     </div>
   );
 }

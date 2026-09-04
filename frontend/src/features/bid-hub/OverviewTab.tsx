@@ -6,6 +6,7 @@ import { PROJECT_TYPES, SCOPE_SECS } from '../preconstruction/constants';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
+import { useDirtyDismiss } from '../../hooks/useDirtyDismiss';
 import { moneyFull, moneyShort } from '../../lib/money';
 import { useStagePipeline } from '../../hooks/useStagePipeline';
 import { useShowToast } from '../../contexts/AppContext';
@@ -19,6 +20,27 @@ import SimilarBidsPanel from './SimilarBidsPanel';
 interface QualResult { score: number; reasons: string[]; gcWinRate: number | null; gcWon: number; gcLost: number; dueDays: number; }
 
 const LOSS_REASONS = ['Budget', 'Competitor', 'No Award', 'Scope Change', 'Timeline', 'Relationship', 'Other'];
+
+/** The edit form's pristine shape for a bid — the baseline for both the reset
+ *  and the "has the user actually changed anything" check. */
+function bidForm(bid: Bid) {
+  return {
+    name: bid.name,
+    gc: bid.gc,
+    loc: bid.loc,
+    amount: bid.amount != null ? String(bid.amount) : '',
+    due: bid.due,
+    sheets: bid.sheets ? String(bid.sheets) : '',
+    contact: bid.contact ?? '',
+    brand: bid.brand ?? '',
+    project_type: bid.project_type ?? '',
+    sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '',
+    // Phase 3 — auto-generates on first proposal/pre-bid-package generation
+    // (JS.MMDDYYYY) but editable here like every other bid field.
+    job_number: bid.job_number ?? '',
+    date_won: bid.date_won ? String(bid.date_won).slice(0, 10) : '',
+  };
+}
 
 interface OverviewProps {
   bid: Bid;
@@ -133,36 +155,12 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
     { onSuccess: (data) => setQualResult(data), errorTitle: 'Could not score this bid' },
   );
 
-  const [form, setForm] = useState({
-    name: bid.name,
-    gc: bid.gc,
-    loc: bid.loc,
-    amount: bid.amount != null ? String(bid.amount) : '',
-    due: bid.due,
-    sheets: bid.sheets ? String(bid.sheets) : '',
-    contact: bid.contact ?? '',
-    brand: bid.brand ?? '',
-    project_type: bid.project_type ?? '',
-    sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '',
-    // Phase 3 — auto-generates on first proposal/pre-bid-package generation
-    // (JS.MMDDYYYY) but editable here like every other bid field.
-    job_number: bid.job_number ?? '',
-    date_won: bid.date_won ? String(bid.date_won).slice(0, 10) : '',
-  });
+  const [form, setForm] = useState(() => bidForm(bid));
 
   const setField = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(prev => ({ ...prev, [k]: e.target.value }));
 
-  const resetForm = () => setForm({
-    name: bid.name, gc: bid.gc, loc: bid.loc,
-    amount: bid.amount != null ? String(bid.amount) : '',
-    due: bid.due, sheets: bid.sheets ? String(bid.sheets) : '',
-    contact: bid.contact ?? '', brand: bid.brand ?? '',
-    project_type: bid.project_type ?? '',
-    sq_ft: bid.sq_ft != null ? String(bid.sq_ft) : '',
-    job_number: bid.job_number ?? '',
-    date_won: bid.date_won ? String(bid.date_won).slice(0, 10) : '',
-  });
+  const resetForm = () => setForm(bidForm(bid));
 
   const { run: runSave, saving } = useMutation(
     async () => {
@@ -195,6 +193,11 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
   const handleSave = () => {
     if (form.name.trim() && form.gc.trim()) runSave();
   };
+
+  // Leaving edit mode discards the form, so ask when it differs from the bid.
+  const editDirty = editMode && JSON.stringify(form) !== JSON.stringify(bidForm(bid));
+  const { requestClose: requestLeaveEdit, discardDialog: editDiscardDialog } =
+    useDirtyDismiss(editDirty, () => { setEditMode(false); resetForm(); }, { escape: false });
 
   const { run: runCloseJob, saving: closingJob } = useMutation(
     async () => { await api.post(`/bids/${bid.id}/close`); },
@@ -255,7 +258,7 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
         ) : <span/>}
         {!isTerminal && (
           <button className="btn ghost" style={{ height: 30, fontSize: 12, padding: '0 10px' }}
-            onClick={() => { setEditMode(e => !e); resetForm(); }}>
+            onClick={() => { if (editMode) requestLeaveEdit(); else { setEditMode(true); resetForm(); } }}>
             <Icon name={editMode ? 'x' : 'gear'} size={13} stroke={2}/>{editMode ? 'Cancel' : 'Edit'}
           </button>
         )}
@@ -582,6 +585,8 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
           )}
         </>
       )}
+
+      {editDiscardDialog}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
+import { UnsavedGuardProvider } from './contexts/UnsavedGuardContext';
 import './styles.css';
 
 // Register the push/PWA service worker at boot so it's active (and offline-install-ready)
@@ -21,7 +22,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
       <BrowserRouter>
-        <App />
+        {/* Above App so App's own navigation primitive can consult it. */}
+        <UnsavedGuardProvider>
+          <App />
+        </UnsavedGuardProvider>
       </BrowserRouter>
     </ErrorBoundary>
   </React.StrictMode>

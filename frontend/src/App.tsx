@@ -28,6 +28,7 @@ import NotFound from './components/NotFound';
 import Icon from './components/Icon';
 import { usePageTitle } from './hooks/usePageTitle';
 import { AppProviders } from './contexts/AppContext';
+import { useConfirmLeave } from './contexts/UnsavedGuardContext';
 import { UNAUTHORIZED_EVENT, UnauthorizedDetail } from './api/session';
 import { useApi } from './hooks/useApi';
 import { Bid, Gen, WonJob, Activity } from './types';
@@ -79,9 +80,16 @@ export default function App() {
   // Old flat view URLs (bookmarks, backend-emitted links) redirect permanently to their
   // new hub path; resolves to null for anything that isn't a legacy key.
   const legacyTarget = resolveLegacyPath(location.pathname);
+  // Every in-app navigation goes through here — the sidebar and mobile nav
+  // (AppShell's `onNav`), the hub tab switches, global search, notification
+  // deep links — so guarding this one function covers all of them, and
+  // `useNavigate` is used nowhere else in the tree.
+  const confirmLeave = useConfirmLeave();
   const setView = useCallback(
-    (v: string, recordId?: string) => navigate('/' + v + (recordId ? '/' + encodeURIComponent(recordId) : '')),
-    [navigate],
+    (v: string, recordId?: string) => confirmLeave(
+      () => navigate('/' + v + (recordId ? '/' + encodeURIComponent(recordId) : '')),
+    ),
+    [navigate, confirmLeave],
   );
   // Strip a deep-link record id back out of the URL once the page has opened it.
   // Hub views must keep the tab segment and only drop the record id.
@@ -325,7 +333,9 @@ export default function App() {
             onClearParam={clearParam}
             bids={bids} setBids={setBids}
             wonJobs={wonJobs} setWonJobs={setWonJobs}
-            onOpenBid={(id, tab) => navigate('/bid/' + encodeURIComponent(id) + (tab ? '?tab=' + tab : ''))}
+            onOpenBid={(id, tab) => confirmLeave(
+              () => navigate('/bid/' + encodeURIComponent(id) + (tab ? '?tab=' + tab : '')),
+            )}
             flashId={flashId}
             openAddBid={openAddBid}
             onAddBidHandled={() => { setOpenAddBid(false); setAddBidGc(undefined); }}
@@ -418,7 +428,7 @@ export default function App() {
       <AppShell
         view={view}
         onNav={setView}
-        onLogout={logout}
+        onLogout={() => confirmLeave(logout)}
         genProposalCount={genProposalCount}
         elecProposalCount={elecProposalCount}
         genProjectCount={genProjectCount}

@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { useDirtyDismiss } from '../../hooks/useDirtyDismiss';
 import { useMutation } from '../../hooks/useMutation';
 import FilePreviewModal from '../../components/FilePreviewModal';
 import { previewKind } from '../../components/filePreview';
@@ -133,6 +134,12 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
 
   // Above the early return below: hooks cannot be conditional.
   usePageTitle(detail?.customer.name ?? null);
+
+  // Leaving edit mode discards the form, so ask when it differs from the record.
+  const editDirty = editing && !!detail
+    && EDIT_FIELDS.some(([k]) => String(form[k] ?? '') !== String(detail.customer[k] ?? ''));
+  const { requestClose: requestLeaveEdit, discardDialog: editDiscardDialog } =
+    useDirtyDismiss(editDirty, () => setEditing(false), { escape: false });
 
   if (!detail) return <div className="scroll"><div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div></div>;
 
@@ -360,7 +367,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
                   <Icon name="users" size={13} stroke={2}/>Merge
                 </button>
               )}
-              <button className="btn ghost" onClick={() => { setForm(c); setEditing(e => !e); }} style={{ fontSize: 12.5 }}>
+              <button className="btn ghost" onClick={() => { if (editing) requestLeaveEdit(); else { setForm(c); setEditing(true); } }} style={{ fontSize: 12.5 }}>
                 <Icon name={editing ? 'x' : 'gear'} size={13} stroke={2}/>{editing ? 'Cancel' : 'Edit'}
               </button>
             </div>
@@ -512,6 +519,8 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
           onDownload={() => downloadDoc(preview.docId, preview.title)}
         />
       )}
+
+      {editDiscardDialog}
     </div>
   );
 }

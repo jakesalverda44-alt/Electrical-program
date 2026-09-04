@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import Icon from '../../components/Icon';
 import { Gen } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
@@ -271,6 +272,11 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
   const setSelectedLabel = (label: string) => setMarkers(prev => prev.map(m => m.id === selectedId ? { ...m, label } : m));
   const deleteSelected = () => { setMarkers(prev => prev.filter(m => m.id !== selectedId)); setSelectedId(null); };
 
+  // Markers live in memory until an explicit Save, so leaving mid-markup used
+  // to throw the labelling away without a word.
+  const [savedMarkers, setSavedMarkers] = useState(() => JSON.stringify(parseMarkup(gen.survey_markup)?.markers ?? []));
+  useUnsavedGuard(JSON.stringify(markers) !== savedMarkers);
+
   const save = async (silent = false) => {
     if (!surveyDoc || typeof surveyDoc !== 'object' || !natural) return;
     setSaving(true);
@@ -278,6 +284,7 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
       const markup: SurveyMarkup = { baseDocId: surveyDoc.id, naturalWidth: natural.w, naturalHeight: natural.h, markers };
       const { data } = await api.patch(`/gens/${gen.id}`, { survey_markup: markup });
       onUpdated(data.gen ?? data);
+      setSavedMarkers(JSON.stringify(markers));
       if (!silent) showToast({ title: 'Markup saved' });
     } catch {
       showToast({ variant: 'error', title: 'Save failed', sub: 'Try again' });

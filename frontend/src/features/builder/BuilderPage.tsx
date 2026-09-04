@@ -8,6 +8,7 @@ import EvBuilderPage from './EvBuilderPage';
 import SendProposalModal from './SendProposalModal';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import { Gen, WonJob } from '../../types';
 import { useSettings, useShowToast } from '../../contexts/AppContext';
 import { parseAddress } from '../../lib/address';
@@ -157,6 +158,10 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
   const showToast = useShowToast();
   const { settings: s } = useSettings();
   const [form, setForm] = useState<GenForm>(() => editGen ? genToForm(editGen) : blankGenForm(s));
+  // Compared against the last saved snapshot, not a keystroke flag: undoing an
+  // edit has to make the screen clean again, or the dialog becomes noise.
+  const [savedForm, setSavedForm] = useState(() => JSON.stringify(editGen ? genToForm(editGen) : blankGenForm(s)));
+  useUnsavedGuard(JSON.stringify(form) !== savedForm);
   const [screen, setScreen] = useState<Screen>('builder');
   const [proposalNo] = useState(() => editGen?.proposal_no || genProposalNo(form.brand, form.coolingType));
   const [saving, setSaving] = useState(false);
@@ -243,11 +248,13 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
         if (r.data.wonJob && setWonJobs) {
           setWonJobs(prev => prev.map(w => w.proposal_id === editGen.id ? r.data.wonJob : w));
         }
+        setSavedForm(JSON.stringify(form));
         return editGen.id;
       }
       const r = await api.post('/gens', { ...payload, stage: 'building' });
       setGens(prev => [r.data, ...prev]);
       setSavedGenId(r.data.id);
+      setSavedForm(JSON.stringify(form));
       return r.data.id as string;
     } catch {
       showToast({ variant: 'error', title: 'Save failed', sub: 'Please try again' });
