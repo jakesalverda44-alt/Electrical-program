@@ -3,6 +3,17 @@ import path from 'path';
 import bcrypt from 'bcryptjs';
 import { pool } from './db/pool';
 
+// Strips SQL line (--) and block (/* */) comments before scanning for
+// destructive statements, so a comment mentioning TRUNCATE (like the
+// neutralized 025/056 migrations) does not itself trip the guard.
+function stripSqlComments(sql: string): string {
+  return sql
+    .replace(/--[^\n]*/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+const DESTRUCTIVE_PATTERN = /\b(TRUNCATE|DROP\s+TABLE)\b/i;
+
 export async function runMigrations(): Promise<void> {
   // Tracking table — safe to create on every startup
   await pool.query(`
@@ -29,6 +40,12 @@ export async function runMigrations(): Promise<void> {
     if (rows.length > 0) continue;
 
     const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+    if (DESTRUCTIVE_PATTERN.test(stripSqlComments(sql)) && process.env.ALLOW_DESTRUCTIVE_MIGRATIONS !== '1') {
+      throw new Error(
+        `[migrate] Refusing to run "${file}": it contains TRUNCATE or DROP TABLE. ` +
+        `Set ALLOW_DESTRUCTIVE_MIGRATIONS=1 to allow this on purpose.`
+      );
+    }
     const client = await pool.connect();
     try {
       await client.query('BEGIN');

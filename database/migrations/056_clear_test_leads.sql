@@ -1,4 +1,3 @@
--- One-time cleanup: remove the test leads added while exercising the lead
--- intake API. The leads table held only test data at this point, so this
--- clears it (and the cascading lead_activity timeline) outright.
-TRUNCATE TABLE leads CASCADE;
+-- Historical one-time cleanup (applied 2026-0x-xx). Neutralized 2026-09-04:
+-- the TRUNCATE was removed so this file can never wipe data on a database whose
+-- schema_migrations table is missing. See git history for the original.
