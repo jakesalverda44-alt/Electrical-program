@@ -7,6 +7,7 @@ import { proposalEmailHtml } from '../email/proposalEmail';
 import { graphSendMail, graphCreateDraft, isGraphMailConfigured, TEAM_NOTIFY_TO } from '../email/graphMailer';
 import { loadLinkedDocumentsAsAttachments } from '../email/bidAttachments';
 import { escapeHtml } from '../utils/escapeHtml';
+import { publicFormData } from '../utils/publicFormData';
 import { getSetting } from './settings';
 import { upsertCustomer } from './customers';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -1367,7 +1368,12 @@ router.get('/p/:token', async (req, res) => {
        RETURNING ${PUBLIC_PROPOSAL_COLUMNS}`;
   const { rows } = await pool.query(sql, [req.params.token]);
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
-  res.json(rows[0]);
+  const gen = rows[0];
+  // form_data still needs its own server-side projection even with the column
+  // list above: the JSONB blob carries internal site-detail fields and price
+  // decomposition the rep may have chosen to hide (post-review fix for B3).
+  gen.form_data = publicFormData(gen.form_data, gen.product_type);
+  res.json(gen);
 });
 
 // List photos from the gen job's Drive "Photos" subfolder. Lazily creates the folder
