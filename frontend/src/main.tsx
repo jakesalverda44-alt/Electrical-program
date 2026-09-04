@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
+import { reportError } from './lib/reportError';
 import { UnsavedGuardProvider } from './contexts/UnsavedGuardContext';
 import './styles.css';
 
@@ -15,7 +16,7 @@ if ('serviceWorker' in navigator) {
   // scope) only costs offline install and push, not the app itself.
   navigator.serviceWorker.register('/sw.js')
     // optional: nothing to recover — the app runs without a service worker.
-    .catch(() => {});
+    .catch(err => reportError(err, 'service worker registration'));
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

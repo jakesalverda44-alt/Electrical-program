@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { reportError } from '../../lib/reportError';
 import { Lead } from '../../types';
 import { Gen } from '../../types';
 import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_COLORS, INTEREST_LABELS } from './constants';
@@ -140,7 +141,8 @@ export default function LeadsPage({ onNav, openLeadId, onClearParam, onEditGen, 
       // the deep link rather than by render state, so it stays imperative.
       api.get<Lead>(`/leads/${openLeadId}`)
         .then(({ data }) => setDetail(data))
-        .catch(() => { /* optional: the drawer just does not open for a lead that no longer exists */ })
+        // optional: the drawer just does not open for a lead that no longer exists
+        .catch(err => reportError(err, 'LeadsPage deep link'))
         .finally(() => onClearParam?.());
     }
   }, [openLeadId, leads, loading, onClearParam]);

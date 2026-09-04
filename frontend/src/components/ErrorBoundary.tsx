@@ -1,4 +1,5 @@
 import React from 'react';
+import { reportError } from '../lib/reportError';
 
 interface Props {
   children: React.ReactNode;
@@ -34,6 +35,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
 
   componentDidCatch(err: unknown, info: unknown) {
     console.error('[ErrorBoundary]', err, info);
+    reportError(err, this.props.variant === 'page' ? 'ErrorBoundary (page)' : 'ErrorBoundary (root)');
   }
 
   render() {

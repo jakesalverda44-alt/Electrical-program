@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '../api/client';
 import { apiErrorMessage, isAbortError } from '../api/errors';
+import { reportError } from '../lib/reportError';
 
 /**
  * The one way this app reads from the API inside a component.
@@ -82,6 +83,7 @@ export function useApi<T>(url: string | null, options: UseApiOptions = {}): UseA
       .catch(err => {
         if (controller.signal.aborted || isAbortError(err)) return;
         setError(apiErrorMessage(err));
+        reportError(err, `useApi ${url}`);
       })
       .finally(() => {
         if (controller.signal.aborted) return;

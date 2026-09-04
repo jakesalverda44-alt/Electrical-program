@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { apiErrorMessage } from '../api/errors';
+import { reportError } from '../lib/reportError';
 import { useOptionalShowToast } from '../contexts/AppContext';
 import { Toast } from '../types';
 
@@ -112,6 +113,7 @@ export function useMutation<A extends unknown[], R>(
         rollback?.();
         const message = apiErrorMessage(err);
         setError(message);
+        reportError(err, 'useMutation');
         if (opts.errorToast !== false) {
           const t = typeof opts.errorToast === 'function'
             ? opts.errorToast(message, err, ...args)

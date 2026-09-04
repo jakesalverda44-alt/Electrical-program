@@ -4,6 +4,7 @@ import { Bid, Toast, BidEstimate, EstimateLineItem } from '../../types';
 import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey, PROJECT_TYPES, ConfirmedService } from './constants';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { reportError } from '../../lib/reportError';
 import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import { useMutation } from '../../hooks/useMutation';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
@@ -603,7 +604,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     })
       // Reconnects a pipeline that was already running when the page reloaded.
       // optional: failing leaves the tab looking idle, recoverable by reopening.
-      .catch(() => {});
+      .catch(err => reportError(err, 'PcWorkspace results reconnect'));
     return () => {
       // Both the pending timeout AND the in-flight continuation: clearing the
       // timeout alone is what let an orphaned loop survive an unmount.

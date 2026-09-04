@@ -2,6 +2,7 @@
 // Settings toggle can stay declarative. All functions are safe to call on browsers that
 // don't support push — isPushSupported() gates the UI.
 import api from './api/client';
+import { reportError } from './lib/reportError';
 
 export function isPushSupported(): boolean {
   return typeof navigator !== 'undefined'
@@ -85,8 +86,9 @@ export async function disablePush(): Promise<void> {
     // The local unsubscribe below already stops notifications on this device; a
     // failed server call only leaves a stale row the next push attempt prunes.
     // optional: nothing the user can act on, and the intent already succeeded.
-    await api.post('/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+    await api.post('/push/unsubscribe', { endpoint: sub.endpoint })
+      .catch(err => reportError(err, 'push unsubscribe (server)'));
     // optional: the browser refusing to unsubscribe is nothing we can act on.
-    await sub.unsubscribe().catch(() => {});
+    await sub.unsubscribe().catch(err => reportError(err, 'push unsubscribe (browser)'));
   }
 }
