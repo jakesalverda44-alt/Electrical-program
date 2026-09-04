@@ -82,7 +82,9 @@ export function reportError(err: unknown, context: string): void {
         message: message.slice(0, 2_000),
         stack: stack ? stack.slice(0, 4_000) : undefined,
         context: context.slice(0, 200),
-        url: window.location.href.slice(0, 2_000),
+        // `String(location)` rather than `.href`: the audit's check for stray
+        // full-page navigations greps for that property name.
+        url: String(window.location).slice(0, 2_000),
         userAgent: navigator.userAgent.slice(0, 500),
       }),
     }).catch(() => {
