@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../../api/client';
+import { useMutation } from '../../../hooks/useMutation';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, inputStyle } from '../shared';
 import { moneyFull } from '../../../lib/money';
@@ -8,7 +9,6 @@ export function CommissionsSection({ settings, onSaved }: { settings: AppSetting
   const [rate, setRate] = useState(settings.commission_default_rate ?? '3');
   const [goal, setGoal] = useState(settings.sales_goal_monthly ?? '');
   const [orig, setOrig] = useState('');
-  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   const snapshot = (r: string, g: string) => `${r}|${g}`;
@@ -19,13 +19,15 @@ export function CommissionsSection({ settings, onSaved }: { settings: AppSetting
     setRate(r); setGoal(g); setOrig(snapshot(r, g));
   }, [settings]);
 
-  const save = async () => {
-    setSaving(true);
-    try {
-      await api.put('/settings', { commission_default_rate: rate, sales_goal_monthly: goal });
-      setOrig(snapshot(rate, goal)); onSaved(); setSaved(true); setTimeout(() => setSaved(false), 3000);
-    } finally { setSaving(false); }
-  };
+  const { run: save, saving } = useMutation(
+    async () => { await api.put('/settings', { commission_default_rate: rate, sales_goal_monthly: goal }); },
+    {
+      onSuccess: () => {
+        setOrig(snapshot(rate, goal)); onSaved(); setSaved(true); setTimeout(() => setSaved(false), 3000);
+      },
+      errorTitle: 'Could not save commissions',
+    },
+  );
 
   return (
     <div>

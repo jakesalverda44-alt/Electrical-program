@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
-import api, { signalUnauthorized } from '../api/client';
+import api from '../api/client';
+import { signalUnauthorized } from '../api/session';
 import { User } from '../types';
 
 // Roles with administrative rights (mirror of the backend PRIVILEGED_ROLES).

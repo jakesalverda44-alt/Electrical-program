@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { Lead } from '../../types';
 
@@ -38,21 +39,17 @@ function fmtWhen(ev: CalendarEvent) {
 
 export default function SurveyFromCalendarModal({ onClose, onLeadReady }: Props) {
   const isMobile = useIsMobile();
-  const [events, setEvents] = useState<CalendarEvent[] | null>(null);
   const [pickingId, setPickingId] = useState<string | null>(null);
   const [blankLoading, setBlankLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const { data: loadedEvents, error: eventsError } = useApi<CalendarEvent[]>('/calendar/events');
+  // Graph being unreachable must never trap a rep at a blank screen — fall back to
+  // an empty list so the "no appointment" button underneath is still reachable.
+  const events = loadedEvents ?? (eventsError ? [] : null);
   useEffect(() => {
-    api.get<CalendarEvent[]>('/calendar/events')
-      .then(r => setEvents(r.data))
-      .catch(() => {
-        // Graph being unreachable must never trap a rep at a blank screen — fall back to
-        // an empty list so the "no appointment" button underneath is still reachable.
-        setEvents([]);
-        setError("Couldn't load the calendar. Start a blank survey instead.");
-      });
-  }, []);
+    if (eventsError) setError("Couldn't load the calendar. Start a blank survey instead.");
+  }, [eventsError]);
 
   const pick = async (ev: CalendarEvent) => {
     setPickingId(ev.id);

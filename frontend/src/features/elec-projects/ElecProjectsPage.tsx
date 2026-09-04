@@ -4,6 +4,7 @@ import DriveImage from '../../components/DriveImage';
 import { Bid, WonJob, Toast } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
 import api from '../../api/client';
+import { useMutation } from '../../hooks/useMutation';
 import { moneyFull, moneyShort as money } from '../../lib/money';
 
 // ── Phase → Status mapping ───────────────────────────────────────
@@ -119,8 +120,11 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
 
   const selectedBid = useMemo(() => awarded.find(b => b.id === selectedId) ?? null, [awarded, selectedId]);
 
-  const loadProject = useCallback(async (id: string) => {
-    if (projData[id]) return; // already loaded
+  // Eleven reads under one mutation: each section still degrades to its empty
+  // shape on its own, but a wholesale failure (offline, 500) now says so
+  // instead of rendering an empty project.
+  const { run: runLoadProject } = useMutation(
+    async (id: string) => {
     const [coRes, fnRes, rfiRes, ovRes, schRes, paRes, kmRes, clRes, docRes, commRes, photoRes] = await Promise.allSettled([
       api.get(`/projects/elec/${id}/change-orders`),
       api.get(`/projects/elec/${id}/field-notes`),
@@ -150,7 +154,14 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
         photos:   photoRes.status==='fulfilled' ? photoRes.value.data as DrivePhoto[] : [],
       },
     }));
-  }, [projData]);
+    },
+    { errorTitle: 'Could not open that project' },
+  );
+
+  const loadProject = useCallback((id: string) => {
+    if (projData[id]) return; // already loaded
+    runLoadProject(id);
+  }, [projData, runLoadProject]);
 
   const openWorkspace = (id: string) => {
     setSelectedId(id);
@@ -170,28 +181,43 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
     }
   }, [openId, awarded, onClearParam]);
 
-  const setPhase = (id: string, phase: ElecPhase) => {
-    setPhases(prev => ({ ...prev, [id]: phase }));
-    api.patch(`/bids/${id}/phase`, { phase }).catch(() => {});
-    showToast({ title: 'Status updated', sub: STATUS_META[phaseStatus(phase)].label });
-  };
+  // Audit code #5: this used to move the card, fire-and-forget the PATCH, and
+  // toast "Status updated" unconditionally — so a dropped request silently
+  // reverted on the next refresh.
+  const { run: setPhase } = useMutation(
+    async (id: string, phase: ElecPhase) => { await api.patch(`/bids/${id}/phase`, { phase }); },
+    {
+      optimistic: (id, phase) => {
+        const previous = phases[id];
+        setPhases(prev => ({ ...prev, [id]: phase }));
+        return () => setPhases(prev => ({ ...prev, [id]: previous }));
+      },
+      successToast: (_r, _id, phase) => ({ title: 'Status updated', sub: STATUS_META[phaseStatus(phase)].label }),
+      errorToast: (message) => ({ title: 'Status not saved', sub: message }),
+    },
+  );
 
-  const deleteProject = async (bid: Bid) => {
+  const { run: runDeleteProject } = useMutation(
+    async (bid: Bid) => { await api.delete(`/bids/${bid.id}`); return bid; },
+    {
+      onSuccess: (bid) => {
+        setBids(prev => prev.filter(b => b.id !== bid.id));
+        setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
+        setSelectedId(null);
+        setProjData(prev => {
+          const next = { ...prev };
+          delete next[bid.id];
+          return next;
+        });
+      },
+      successToast: (bid) => ({ title: 'Electrical project deleted', sub: bid.name }),
+      errorToast: (message) => ({ title: 'Delete failed', sub: message }),
+    },
+  );
+
+  const deleteProject = (bid: Bid) => {
     if (!window.confirm(`Delete electrical project "${bid.name}" and its linked files/testing data? This cannot be undone.`)) return;
-    try {
-      await api.delete(`/bids/${bid.id}`);
-      setBids(prev => prev.filter(b => b.id !== bid.id));
-      setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
-      setSelectedId(null);
-      setProjData(prev => {
-        const next = { ...prev };
-        delete next[bid.id];
-        return next;
-      });
-      showToast({ title: 'Electrical project deleted', sub: bid.name });
-    } catch {
-      showToast({ title: 'Delete failed', sub: 'Please try again' });
-    }
+    runDeleteProject(bid);
   };
 
   const updateProjData = (id: string, patch: Partial<ProjData>) =>
@@ -996,7 +1022,6 @@ function PhotosTab({ bid, photos, onPhotosChange, showToast }: {
   showToast: (t: Toast) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
   const [lightbox, setLightbox] = useState<DrivePhoto | null>(null);
 
   const isImage = (m: string) => m.startsWith('image/');
@@ -1007,10 +1032,8 @@ function PhotosTab({ bid, photos, onPhotosChange, showToast }: {
   };
   const fmtDate = (s?: string) => s ? new Date(s).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
 
-  const upload = async (files: File[]) => {
-    if (!files.length) return;
-    setUploading(true);
-    try {
+  const { run: runUpload, saving: uploading } = useMutation(
+    async (files: File[]) => {
       for (const f of files) {
         const form = new FormData();
         form.append('file', f);
@@ -1022,15 +1045,17 @@ function PhotosTab({ bid, photos, onPhotosChange, showToast }: {
       }
       // Refresh photos list from Drive
       const { data } = await api.get(`/bids/${bid.id}/photos`);
-      onPhotosChange(data);
-      showToast({ title: `${files.length} photo${files.length > 1 ? 's' : ''} uploaded` });
-    } catch {
-      showToast({ title: 'Upload failed', sub: 'Try again' });
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = '';
-    }
-  };
+      return data as DrivePhoto[];
+    },
+    {
+      onSuccess: (data) => onPhotosChange(data),
+      successToast: (_d, files) => ({ title: `${files.length} photo${files.length > 1 ? 's' : ''} uploaded` }),
+      errorToast: (message) => ({ title: 'Upload failed', sub: message }),
+      onSettled: () => { if (fileRef.current) fileRef.current.value = ''; },
+    },
+  );
+
+  const upload = (files: File[]) => { if (files.length) runUpload(files); };
 
   return (
     <div>
@@ -1102,12 +1127,9 @@ function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
   showToast: (t: Toast) => void; bid: Bid;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
 
-  const upload = async (files: File[]) => {
-    if (!files.length) return;
-    setUploading(true);
-    try {
+  const { run: runUpload, saving: uploading } = useMutation(
+    async (files: File[]) => {
       const newDocs: ProjDoc[] = [];
       for (const f of files) {
         const form = new FormData();
@@ -1119,47 +1141,56 @@ function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
         const res = await api.post('/documents', form, { headers: { 'Content-Type': 'multipart/form-data' } });
         newDocs.push(res.data);
       }
-      onDocsChange([...newDocs, ...docs]);
-      showToast({ title: `${newDocs.length} file${newDocs.length > 1 ? 's' : ''} uploaded` });
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = '';
-    }
-  };
+      return newDocs;
+    },
+    {
+      onSuccess: (newDocs) => onDocsChange([...newDocs, ...docs]),
+      successToast: (newDocs) => ({ title: `${newDocs.length} file${newDocs.length > 1 ? 's' : ''} uploaded` }),
+      errorToast: (message) => ({ title: 'Upload failed', sub: message }),
+      onSettled: () => { if (fileRef.current) fileRef.current.value = ''; },
+    },
+  );
+
+  const upload = (files: File[]) => { if (files.length) runUpload(files); };
 
   // Open inline in a new tab. Opens the tab synchronously (user gesture) before the
   // async fetch so popup blockers don't kill it.
-  const view = async (doc: ProjDoc) => {
-    const w = window.open('', '_blank');
-    try {
+  const { run: runView } = useMutation(
+    async (doc: ProjDoc, w: Window | null) => {
       const res = await api.get(`/documents/${doc.id}/view`, { responseType: 'blob' });
       const url = URL.createObjectURL(res.data);
       if (w) w.location.href = url; else window.open(url, '_blank');
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch {
-      if (w) w.close();
-      showToast({ title: 'Preview failed', sub: 'Try downloading instead' });
-    }
-  };
+    },
+    {
+      onError: (_e, _doc, w) => { if (w) w.close(); },
+      errorToast: () => ({ title: 'Preview failed', sub: 'Try downloading instead' }),
+    },
+  );
+  const view = (doc: ProjDoc) => runView(doc, window.open('', '_blank'));
 
-  const download = async (doc: ProjDoc) => {
-    try {
+  const { run: download } = useMutation(
+    async (doc: ProjDoc) => {
       const res = await api.get(`/documents/${doc.id}/download`, { responseType: 'blob' });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url; a.download = doc.display_name || doc.name;
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
-    } catch {
-      showToast({ title: 'Download failed' });
-    }
-  };
+    },
+    { errorToast: (message) => ({ title: 'Download failed', sub: message }) },
+  );
 
-  const remove = async (docId: string) => {
-    await api.delete(`/documents/${docId}`).catch(() => {});
-    onDocsChange(docs.filter(d => d.id !== docId));
-    showToast({ title: 'Document removed' });
-  };
+  // Audit ux #2: the row used to disappear and "Document removed" fire even
+  // when the DELETE failed, leaving the file on the server.
+  const { run: remove } = useMutation(
+    async (docId: string) => { await api.delete(`/documents/${docId}`); return docId; },
+    {
+      onSuccess: (docId) => onDocsChange(docs.filter(d => d.id !== docId)),
+      successToast: { title: 'Document removed' },
+      errorToast: (message) => ({ title: 'Delete failed', sub: message }),
+    },
+  );
 
   const fmtSize = (b: number) => b >= 1048576 ? (b/1048576).toFixed(1)+' MB' : Math.round(b/1024)+' KB';
   const extOf = (name: string) => (name.split('.').pop() ?? 'FILE').toUpperCase();
@@ -1208,7 +1239,6 @@ function CommsTab({ id, comms, onCommsChange, showToast, bid }: {
   showToast: (t: Toast) => void; bid: Bid;
 }) {
   const [form, setForm] = useState({ kind: 'note', subject: '', body: '' });
-  const [saving, setSaving] = useState(false);
 
   const KIND_OPTS = [
     { key: 'note',  label: 'Note'  },
@@ -1218,21 +1248,25 @@ function CommsTab({ id, comms, onCommsChange, showToast, bid }: {
   ];
   const KIND_COLOR: Record<string,string> = { note:'var(--blue)', email:'var(--amber)', call:'var(--green)', meeting:'#9B6DFF' };
 
-  const submit = async () => {
-    if (!form.subject.trim()) return;
-    setSaving(true);
-    try {
+  const { run: runSubmit, saving } = useMutation(
+    async () => {
       const { data } = await api.post('/comms', {
         kind: form.kind, subject: form.subject, body: form.body,
         linked_id: id, linked_name: bid.name, div: 'elec',
       });
-      onCommsChange([data, ...comms]);
-      setForm({ kind: 'note', subject: '', body: '' });
-      showToast({ title: 'Communication logged' });
-    } finally {
-      setSaving(false);
-    }
-  };
+      return data;
+    },
+    {
+      onSuccess: (data) => {
+        onCommsChange([data, ...comms]);
+        setForm({ kind: 'note', subject: '', body: '' });
+      },
+      successToast: { title: 'Communication logged' },
+      errorTitle: 'Could not log that communication',
+    },
+  );
+
+  const submit = () => { if (form.subject.trim()) runSubmit(); };
 
   return (
     <div>

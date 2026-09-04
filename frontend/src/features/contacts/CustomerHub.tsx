@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import FilePreviewModal from '../../components/FilePreviewModal';
 import { previewKind } from '../../components/filePreview';
 import { Customer, CustomerDetail, Toast } from '../../types';
@@ -58,20 +59,20 @@ function MergeModal({ targetId, targetName, onClose, onMerged }: { targetId: str
   const all = allData ?? [];
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [merging, setMerging] = useState(false);
 
   const options = all.filter(c => c.id !== targetId &&
     (!query || c.name.toLowerCase().includes(query.toLowerCase()) || (c.company || '').toLowerCase().includes(query.toLowerCase())));
   const toggle = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  const merge = async () => {
-    if (!selected.size) return;
-    setMerging(true);
-    try {
+  const { run: runMerge, saving: merging } = useMutation(
+    async () => {
       const { data } = await api.post(`/customers/${targetId}/merge`, { sourceIds: [...selected] });
-      onMerged(data.merged);
-    } finally { setMerging(false); }
-  };
+      return data as { merged: number };
+    },
+    { onSuccess: (data) => onMerged(data.merged), errorTitle: 'Merge failed' },
+  );
+
+  const merge = () => { if (selected.size) runMerge(); };
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}

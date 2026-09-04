@@ -49,6 +49,7 @@ const plainEmailItem = {
 
 vi.mock('../../contexts/AppContext', () => ({
   useShowToast: () => vi.fn(),
+  useOptionalShowToast: () => vi.fn(),
 }));
 
 vi.mock('../../api/client', () => ({

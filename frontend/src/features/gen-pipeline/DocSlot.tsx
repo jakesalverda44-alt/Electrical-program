@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import { useShowToast } from '../../contexts/AppContext';
 
 interface DocRow { id: string; display_name: string; category: string; storage_url: string | null; }
@@ -38,12 +39,11 @@ export default function DocSlot({ genId, category, label, accept = 'application/
     }
   };
 
-  const remove = async () => {
-    if (!doc) return;
-    setBusy(true);
-    try { await api.delete(`/documents/${doc.id}`); load(); onChanged?.(); }
-    finally { setBusy(false); }
-  };
+  const { run: runRemove, saving: removing } = useMutation(
+    async (id: string) => { await api.delete(`/documents/${id}`); },
+    { onSuccess: () => { load(); onChanged?.(); }, errorTitle: 'Could not remove that file' },
+  );
+  const remove = () => { if (doc) runRemove(doc.id); };
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '10px 12px', border: '1px solid var(--border2)', borderRadius: 9 }}>
@@ -63,7 +63,7 @@ export default function DocSlot({ genId, category, label, accept = 'application/
           {busy ? '…' : doc ? 'Replace' : 'Upload'}
         </button>
         {doc && (
-          <button className="btn ghost" onClick={remove} disabled={busy} style={{ fontSize: 11, height: 28, padding: '0 10px', color: 'var(--red)' }}>Remove</button>
+          <button className="btn ghost" onClick={remove} disabled={busy || removing} style={{ fontSize: 11, height: 28, padding: '0 10px', color: 'var(--red)' }}>Remove</button>
         )}
       </div>
     </div>

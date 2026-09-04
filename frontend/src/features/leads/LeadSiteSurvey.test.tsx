@@ -2,7 +2,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import LeadSiteSurvey from './LeadSiteSurvey';
-import { Lead } from '../../types';
+import { AppProviders } from '../../contexts/AppContext';
+import { DEFAULT_APP_SETTINGS } from '../../hooks/useAppSettings';
+import { Lead, User } from '../../types';
 
 afterEach(() => {
   cleanup();
@@ -29,6 +31,8 @@ const baseLead: Lead = {
   stage: 'site-scheduled',
 };
 
+const testUser: User = { id: 'u1', name: 'Test User', email: 't@example.com', role: 'owner' };
+
 function setup(lead: Lead = baseLead) {
   get.mockResolvedValue({ data: [] }); // RecordFiles' /documents fetch on the Photos step
   patch.mockImplementation((_url: string, body: unknown) =>
@@ -37,8 +41,12 @@ function setup(lead: Lead = baseLead) {
   const onUpdated = vi.fn();
   const onBuildProposal = vi.fn();
   const onClose = vi.fn();
+  // The survey embeds RecordFiles, which (via useMutation) reads the toast
+  // notifier from context the same way it does in the app.
   render(
-    <LeadSiteSurvey lead={lead} onUpdated={onUpdated} onBuildProposal={onBuildProposal} onClose={onClose} />,
+    <AppProviders user={testUser} showToast={() => {}} settings={DEFAULT_APP_SETTINGS} reloadSettings={() => {}}>
+      <LeadSiteSurvey lead={lead} onUpdated={onUpdated} onBuildProposal={onBuildProposal} onClose={onClose} />
+    </AppProviders>,
   );
   return { onUpdated, onBuildProposal, onClose };
 }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../../../api/client';
+import { useMutation } from '../../../hooks/useMutation';
 import { useApi } from '../../../hooks/useApi';
 import Icon from '../../../components/Icon';
 import { User } from '../../../types';
@@ -42,7 +43,6 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
   const [origEnabled, setOrigEnabled] = useState(settings.ai_enabled !== 'false');
   const [origAnalysis, setOrigAnalysis] = useState(settings.ai_analysis_enabled !== 'false');
   const [origLimit, setOrigLimit] = useState(settings.ai_daily_limit_per_user || '10');
-  const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
   const [users,  setUsers]  = useState<User[]>([]);
   const [overrides, setOverrides] = useState<Record<string, Record<string, boolean> | null>>({});
@@ -79,31 +79,44 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
   const hasChanges = JSON.stringify(matrix) !== origMatrix ||
     aiEnabled !== origEnabled || analysisEnabled !== origAnalysis || dailyLimit !== origLimit;
 
-  const save = async () => {
-    setSaving(true);
-    try {
+  const { run: save, saving } = useMutation(
+    async () => {
       await api.put('/settings', {
         ai_enabled: aiEnabled ? 'true' : 'false',
         ai_analysis_enabled: analysisEnabled ? 'true' : 'false',
         ai_daily_limit_per_user: dailyLimit,
         ai_role_permissions: JSON.stringify(matrix),
       });
-      setOrigMatrix(JSON.stringify(matrix));
-      setOrigEnabled(aiEnabled); setOrigAnalysis(analysisEnabled); setOrigLimit(dailyLimit);
-      onSaved(); setSaved(true); setTimeout(() => setSaved(false), 3000);
-    } finally { setSaving(false); }
-  };
+    },
+    {
+      onSuccess: () => {
+        setOrigMatrix(JSON.stringify(matrix));
+        setOrigEnabled(aiEnabled); setOrigAnalysis(analysisEnabled); setOrigLimit(dailyLimit);
+        onSaved(); setSaved(true); setTimeout(() => setSaved(false), 3000);
+      },
+      errorTitle: 'Could not save AI permissions',
+    },
+  );
 
-  const setUserOverride = async (userId: string, key: string, value: boolean | null) => {
+  const { run: runUserOverride } = useMutation(
+    async (userId: string, _key: string, payload: Record<string, boolean> | null) => {
+      await api.put(`/users/${userId}/ai-override`, payload);
+      return payload;
+    },
+    {
+      onSuccess: (payload, userId) => setOverrides(prev => ({ ...prev, [userId]: payload })),
+      onSettled: () => setOverrideSaving(null),
+      errorTitle: 'Could not save that override',
+    },
+  );
+
+  const setUserOverride = (userId: string, key: string, value: boolean | null) => {
     const current = overrides[userId] ?? {};
     const next = value === null ? { ...current } : { ...current, [key]: value };
     if (value === null) delete next[key];
     const payload = Object.keys(next).length === 0 ? null : next;
     setOverrideSaving(userId + key);
-    try {
-      await api.put(`/users/${userId}/ai-override`, payload);
-      setOverrides(prev => ({ ...prev, [userId]: payload }));
-    } finally { setOverrideSaving(null); }
+    runUserOverride(userId, key, payload);
   };
 
   const today = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });

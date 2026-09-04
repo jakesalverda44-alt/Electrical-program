@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import Icon from '../../components/Icon';
 import { useUser, useShowToast } from '../../contexts/AppContext';
 import { Bid, Gen, WonJob, BriefPayload, BriefAttentionItem, TodayEvent, Lead } from '../../types';
@@ -128,7 +129,6 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
   const showToast = useShowToast();
   const [now, setNow] = useState(new Date());
   const [drawerItem, setDrawerItem] = useState<BriefAttentionItem | null>(null);
-  const [marking, setMarking] = useState(false);
   const [done, setDone] = useState<Set<string>>(loadDone);
   const [showSurveyPicker, setShowSurveyPicker] = useState(false);
   const [surveyLead, setSurveyLead] = useState<Lead | null>(null);
@@ -170,17 +170,17 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
     }
   };
 
-  const markContacted = async (leadId: string) => {
-    setMarking(true);
-    try {
-      await api.post(`/leads/${leadId}/log-activity`, { kind: 'call', direction: 'out' });
-      if (drawerItem) toggleDone(drawerItem.id);
-      setDrawerItem(null);
-      load();
-    } finally {
-      setMarking(false);
-    }
-  };
+  const { run: markContacted, saving: marking } = useMutation(
+    async (leadId: string) => { await api.post(`/leads/${leadId}/log-activity`, { kind: 'call', direction: 'out' }); },
+    {
+      onSuccess: () => {
+        if (drawerItem) toggleDone(drawerItem.id);
+        setDrawerItem(null);
+        load();
+      },
+      errorTitle: 'Could not log that call',
+    },
+  );
 
   // The picker hands back whichever lead the appointment (or the blank-survey fallback)
   // resolved to; mount the survey directly on it, same as LeadDetailDrawer does when a

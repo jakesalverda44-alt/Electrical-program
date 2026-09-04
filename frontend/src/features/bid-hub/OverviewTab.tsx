@@ -5,6 +5,7 @@ import { ELEC_STAGES, ElecStageKey } from '../pipeline/constants';
 import { PROJECT_TYPES, SCOPE_SECS } from '../preconstruction/constants';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import { moneyFull, moneyShort } from '../../lib/money';
 import { useStagePipeline } from '../../hooks/useStagePipeline';
 import { useShowToast } from '../../contexts/AppContext';
@@ -67,16 +68,11 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
   const [competitor, setCompetitor] = useState('');
 
   const [editMode, setEditMode] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [qualifying, setQualifying] = useState(false);
   const [qualResult, setQualResult] = useState<QualResult | null>(null);
   const { data: qualify } = useApi<QualResult>(`/bids/${bid.id}/qualify`);
-  const [closingJob, setClosingJob] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   // "Email bid to team" (send the new-bid notification after the fact).
   const [notifyOpen, setNotifyOpen] = useState(false);
   const [notifyEmails, setNotifyEmails] = useState('');
-  const [sendingNotify, setSendingNotify] = useState(false);
   const [attachFiles, setAttachFiles] = useState(true);
   const [draftLink, setDraftLink] = useState<string | null>(null);
   const { data: notifyDefaults } = useApi<{ emails?: string[]; mailConfigured?: boolean }>('/intake/notify-defaults');
@@ -100,16 +96,20 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
     setNotifyOpen(true);
   };
 
-  const handleNotifyTeam = async () => {
-    const emails = notifyEmails.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
-    if (!emails.length) return;
-    setSendingNotify(true);
-    try {
+  const { run: runNotifyTeam, saving: sendingNotify } = useMutation(
+    async (emails: string[]) => {
       const { data } = await api.post(`/bids/${bid.id}/notify-team`, { emails, attachFiles });
-      setDraftLink(data.draftWebLink || '');
-    } finally {
-      setSendingNotify(false);
-    }
+      return data as { draftWebLink?: string };
+    },
+    {
+      onSuccess: (data) => setDraftLink(data.draftWebLink || ''),
+      errorTitle: 'Could not email the team',
+    },
+  );
+
+  const handleNotifyTeam = () => {
+    const emails = notifyEmails.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+    if (emails.length) runNotifyTeam(emails);
   };
 
   // Derived, not stored: a late response for a bid the user already navigated
@@ -123,15 +123,15 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
     return { pct, label };
   }, [qualify, bid.gc]);
 
-  const runQualify = async () => {
-    setQualifying(true);
-    try {
-      const { data } = await api.get(`/bids/${bid.id}/qualify`);
-      setQualResult(data);
-    } finally {
-      setQualifying(false);
-    }
-  };
+  // A user-triggered read, so it goes through useMutation rather than useApi:
+  // useApi is for state that follows a key, this follows a click.
+  const { run: runQualify, saving: qualifying } = useMutation(
+    async () => {
+      const { data } = await api.get<QualResult>(`/bids/${bid.id}/qualify`);
+      return data;
+    },
+    { onSuccess: (data) => setQualResult(data), errorTitle: 'Could not score this bid' },
+  );
 
   const [form, setForm] = useState({
     name: bid.name,
@@ -164,10 +164,8 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
     date_won: bid.date_won ? String(bid.date_won).slice(0, 10) : '',
   });
 
-  const handleSave = async () => {
-    if (!form.name.trim() || !form.gc.trim()) return;
-    setSaving(true);
-    try {
+  const { run: runSave, saving } = useMutation(
+    async () => {
       const { data } = await api.patch(`/bids/${bid.id}`, {
         name: form.name,
         gc: form.gc,
@@ -182,40 +180,55 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
         job_number: form.job_number,
         ...(bid.stage === 'awarded' && form.date_won ? { date_won: form.date_won } : {}),
       });
-      onBidUpdated(data.bid ?? data);
-      if (data.wonJob) setWonJobs(prev => prev.map(w => w.proposal_id === bid.id ? data.wonJob : w));
-      setEditMode(false);
-    } finally {
-      setSaving(false);
-    }
+      return data;
+    },
+    {
+      onSuccess: (data) => {
+        onBidUpdated(data.bid ?? data);
+        if (data.wonJob) setWonJobs(prev => prev.map(w => w.proposal_id === bid.id ? data.wonJob : w));
+        setEditMode(false);
+      },
+      errorTitle: 'Save failed',
+    },
+  );
+
+  const handleSave = () => {
+    if (form.name.trim() && form.gc.trim()) runSave();
   };
 
-  const handleCloseJob = async () => {
+  const { run: runCloseJob, saving: closingJob } = useMutation(
+    async () => { await api.post(`/bids/${bid.id}/close`); },
+    {
+      onSuccess: () => {
+        setBids(prev => prev.filter(b => b.id !== bid.id));
+        onNav('electrical/bids');
+      },
+      successToast: { title: 'Job closed', sub: `${bid.name} moved to Completed Projects` },
+      errorTitle: 'Could not close this job',
+    },
+  );
+
+  const handleCloseJob = () => {
     if (!window.confirm(`Mark "${bid.name}" as closed/complete? This will move the Drive folder to Completed Projects and remove it from the active pipeline.`)) return;
-    setClosingJob(true);
-    try {
-      await api.post(`/bids/${bid.id}/close`);
-      setBids(prev => prev.filter(b => b.id !== bid.id));
-      showToast({ title: 'Job closed', sub: `${bid.name} moved to Completed Projects` });
-      onNav('electrical/bids');
-    } finally {
-      setClosingJob(false);
-    }
+    runCloseJob();
   };
 
-  const handleDelete = async () => {
+  const { run: runDelete, saving: deleting } = useMutation(
+    async () => { await api.delete(`/bids/${bid.id}`); },
+    {
+      onSuccess: () => {
+        setBids(prev => prev.filter(b => b.id !== bid.id));
+        setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
+        onNav('electrical/bids');
+      },
+      successToast: { title: 'Bid deleted', sub: bid.name },
+      errorToast: (message) => ({ title: 'Delete failed', sub: message }),
+    },
+  );
+
+  const handleDelete = () => {
     if (!window.confirm(`Delete "${bid.name}" and its linked project/files/testing data? This cannot be undone.`)) return;
-    setDeleting(true);
-    try {
-      await api.delete(`/bids/${bid.id}`);
-      setBids(prev => prev.filter(b => b.id !== bid.id));
-      setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
-      showToast({ title: 'Bid deleted', sub: bid.name });
-      onNav('electrical/bids');
-    } catch {
-      showToast({ title: 'Delete failed', sub: 'Please try again' });
-      setDeleting(false);
-    }
+    runDelete();
   };
 
   const dueBadge = () => {

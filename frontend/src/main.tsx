@@ -10,7 +10,11 @@ import './styles.css';
 // push.ts's lazy getRegistration() — registering the same scriptURL twice just resolves
 // to the existing registration.
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
+  // Registration failing (private mode, an unsupported browser, a blocked
+  // scope) only costs offline install and push, not the app itself.
+  navigator.serviceWorker.register('/sw.js')
+    // optional: nothing to recover — the app runs without a service worker.
+    .catch(() => {});
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

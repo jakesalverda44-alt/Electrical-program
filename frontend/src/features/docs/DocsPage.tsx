@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import { Bid, Gen } from '../../types';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import { useShowToast } from '../../contexts/AppContext';
 
 type DocCategory = 'plans' | 'contract' | 'proposal' | 'permit' | 'invoice' | 'other' | 'change_order' | 'submittal' | 'rfi' | 'photo';
@@ -60,7 +61,6 @@ export default function DocsPage({ bids, gens }: Props) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [dragging,     setDragging]     = useState(false);
   const [selected,     setSelected]     = useState<Doc | null>(null);
-  const [uploading,    setUploading]    = useState(false);
 
   const { data: loadedDocs, loading } = useApi<Doc[]>('/documents');
   useEffect(() => { if (loadedDocs) setDocs(loadedDocs); }, [loadedDocs]);
@@ -73,15 +73,13 @@ export default function DocsPage({ bids, gens }: Props) {
 
   const handleFiles = (files: File[]) => { if (files.length > 0) setPendingFiles(files); };
 
-  const commitUpload = async () => {
-    if (pendingFiles.length === 0) { showToast({ title: 'Select files first' }); return; }
-    setUploading(true);
-    try {
+  const { run: runUpload, saving: uploading } = useMutation(
+    async () => {
       const opt = linkOptions.find(o => o.id === uploadForm.linkedId);
       const newDocs: Doc[] = [];
       for (const f of pendingFiles) {
         if (f.size > 50 * 1024 * 1024) {
-          showToast({ title: `"${f.name}" exceeds 50 MB — skipped` });
+          showToast({ variant: 'error', title: `"${f.name}" exceeds 50 MB — skipped` });
           continue;
         }
         const form = new FormData();
@@ -94,17 +92,23 @@ export default function DocsPage({ bids, gens }: Props) {
         const res = await api.post('/documents', form, { timeout: 120_000 });
         newDocs.push(res.data);
       }
-      setDocs(prev => [...newDocs, ...prev]);
-      setPendingFiles([]);
-      setUploadForm(BLANK);
-      showToast({ title: `${newDocs.length} file${newDocs.length > 1 ? 's' : ''} uploaded` });
-      if (fileInput.current) fileInput.current.value = '';
-    } catch (err: unknown) {
-      const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      showToast({ title: message || 'Upload failed. Please try again.' });
-    } finally {
-      setUploading(false);
-    }
+      return newDocs;
+    },
+    {
+      onSuccess: (newDocs) => {
+        setDocs(prev => [...newDocs, ...prev]);
+        setPendingFiles([]);
+        setUploadForm(BLANK);
+        if (fileInput.current) fileInput.current.value = '';
+      },
+      successToast: (newDocs) => ({ title: `${newDocs.length} file${newDocs.length > 1 ? 's' : ''} uploaded` }),
+      errorToast: (message) => ({ title: 'Upload failed', sub: message }),
+    },
+  );
+
+  const commitUpload = () => {
+    if (pendingFiles.length === 0) { showToast({ variant: 'error', title: 'Select files first' }); return; }
+    runUpload();
   };
 
   const downloadDoc = (doc: Doc) => {
@@ -122,12 +126,19 @@ export default function DocsPage({ bids, gens }: Props) {
       .catch(() => showToast({ title: 'Download failed' }));
   };
 
-  const deleteDoc = async (id: string) => {
-    await api.delete(`/documents/${id}`).catch(() => {});
-    setDocs(prev => prev.filter(d => d.id !== id));
-    if (selected?.id === id) setSelected(null);
-    showToast({ title: 'Document removed' });
-  };
+  // Audit ux #2: the DELETE was fire-and-forget, so a failure still removed the
+  // row and still said "Document removed" while the file stayed on the server.
+  const { run: deleteDoc } = useMutation(
+    async (id: string) => { await api.delete(`/documents/${id}`); return id; },
+    {
+      onSuccess: (id) => {
+        setDocs(prev => prev.filter(d => d.id !== id));
+        if (selected?.id === id) setSelected(null);
+      },
+      successToast: { title: 'Document removed' },
+      errorToast: (message) => ({ title: 'Delete failed', sub: message }),
+    },
+  );
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();

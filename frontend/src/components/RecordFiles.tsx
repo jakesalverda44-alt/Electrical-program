@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from './Icon';
 import api from '../api/client';
 import { useApi } from '../hooks/useApi';
+import { useMutation } from '../hooks/useMutation';
 import FilePreviewModal from './FilePreviewModal';
 import { useDocPreview } from './useDocPreview';
 
@@ -99,18 +100,21 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
   // Always goes through the backend (authenticated blob fetch), never anchors
   // doc.storage_url directly: the raw Cloudinary URL is unauthenticated and skips
   // access checks.
-  const download = async (doc: Doc) => {
-    try {
+  const { run: download } = useMutation(
+    async (doc: Doc) => {
       const res = await api.get(`/documents/${doc.id}/download`, { responseType: 'blob' });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url; a.download = doc.display_name || doc.name;
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
-    } catch {
-      setError('Download failed — please re-upload this file.');
-    }
-  };
+    },
+    {
+      // This panel shows its failures inline rather than as a toast.
+      errorToast: false,
+      onError: () => setError('Download failed — please re-upload this file.'),
+    },
+  );
 
   // pdf/image: open inline in a new tab. xlsx/xls/csv/docx: fetch the bytes and
   // render them in-app via FilePreviewModal. Anything else: no in-app preview,
@@ -118,10 +122,19 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
   // Files" panel via useDocPreview so the two stay in sync.
   const { preview, view, closePreview } = useDocPreview<Doc>(download, setError);
 
-  const remove = async (doc: Doc) => {
-    setDocs(prev => prev.filter(d => d.id !== doc.id));
-    await api.delete(`/documents/${doc.id}`).catch(() => load());
-  };
+  const { run: remove } = useMutation(
+    async (doc: Doc) => { await api.delete(`/documents/${doc.id}`); },
+    {
+      optimistic: (doc) => {
+        const previous = docs;
+        setDocs(prev => prev.filter(d => d.id !== doc.id));
+        // Reloading is the safer undo here: another tab may have changed the
+        // list while this delete was in flight.
+        return () => { setDocs(previous); load(); };
+      },
+      errorToast: (message) => ({ title: 'Delete failed', sub: message }),
+    },
+  );
 
   return (
     <>

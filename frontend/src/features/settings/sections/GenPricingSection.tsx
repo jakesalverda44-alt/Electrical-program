@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../../../api/client';
+import { useMutation } from '../../../hooks/useMutation';
 import Icon from '../../../components/Icon';
 import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
@@ -27,7 +28,6 @@ export function GenPricingSection({ settings, onSaved }: { settings: AppSettings
     catch { return DEFAULT_PRICING; }
   });
   const [orig, setOrig] = useState(JSON.stringify(table));
-  const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
 
   useEffect(() => {
@@ -46,14 +46,16 @@ export function GenPricingSection({ settings, onSaved }: { settings: AppSettings
     }));
   };
 
-  const save = async () => {
-    setSaving(true);
-    try {
-      await api.put('/settings', { gen_pricing_table: JSON.stringify(table) });
-      setOrig(JSON.stringify(table)); onSaved();
-      setSaved(true); setTimeout(() => setSaved(false), 3000);
-    } finally { setSaving(false); }
-  };
+  const { run: save, saving } = useMutation(
+    async () => { await api.put('/settings', { gen_pricing_table: JSON.stringify(table) }); },
+    {
+      onSuccess: () => {
+        setOrig(JSON.stringify(table)); onSaved();
+        setSaved(true); setTimeout(() => setSaved(false), 3000);
+      },
+      errorTitle: 'Could not save generator pricing',
+    },
+  );
 
   return (
     <div>

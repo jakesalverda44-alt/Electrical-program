@@ -4,6 +4,7 @@ import { Bid, Toast, BidEstimate, EstimateLineItem } from '../../types';
 import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey, PROJECT_TYPES, ConfirmedService } from './constants';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
 import { moneyFull } from '../../lib/money';
 import FilePreviewModal from '../../components/FilePreviewModal';
@@ -316,7 +317,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [expandedCostRow, setExpandedCostRow] = useState<number | null>(null);
   const [costTypeFilter, setCostTypeFilter] = useState<string>('all');
   const [savedEstimate, setSavedEstimate] = useState<BidEstimate | null>(null);
-  const [savingEstimate, setSavingEstimate] = useState(false);
   const [estimateSaved, setEstimateSaved] = useState(false);
   const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
   // Populated by the pre-bid package fetch (Task 7). Empty until then, so the
@@ -348,8 +348,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [verifyFailures, setVerifyFailures] = useState<VerifyFailure[] | null>(null);
   // FIX-12 — downloadDocx had no busy-state, unlike its xlsx/prebid
   // siblings, so a double-click could double-file the same generation.
-  const [docxBusy, setDocxBusy] = useState(false);
-  const [xlsxBusy, setXlsxBusy] = useState(false);
   const [prebidBusy, setPrebidBusy] = useState(false);
   const [prebidResult, setPrebidResult] = useState<{ scopeDocumentId: string | null; takeoffDocumentId: string | null } | null>(null);
   const [importBusy, setImportBusy] = useState(false);
@@ -510,7 +508,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         setAgent4Running(true);
         pollAgent4();
       }
-    }).catch(() => {});
+    })
+      // Reconnects a pipeline that was already running when the page reloaded.
+      // optional: failing leaves the tab looking idle, recoverable by reopening.
+      .catch(() => {});
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
       if (agent4PollRef.current) clearTimeout(agent4PollRef.current);
@@ -759,24 +760,34 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     // Task 5.3 — surface VERIFY-confidence items in the same save toast, so a
     // rep who saves without ever opening the confidence chips still sees them.
     const verifyCount = items.filter(li => confidenceToPlaybook(li.confidence) === 'VERIFY').length;
-    setSavingEstimate(true);
-    try {
-      const { data } = await api.put(`/estimates/${bid.id}`, {
+    await runSaveEstimate(items, zeroCostCount, verifyCount);
+  };
+
+  const { run: runSaveEstimate, saving: savingEstimate } = useMutation(
+    async (items: EstimateLineItem[], _zeroCostCount: number, _verifyCount: number) => {
+      const { data } = await api.put<BidEstimate>(`/estimates/${bid.id}`, {
         line_items: items,
         overhead_pct: ws.overheadPct,
         profit_pct: ws.profitPct,
       });
-      setSavedEstimate(data);
-      setEstimateSaved(true);
-      setTimeout(() => setEstimateSaved(false), 3000);
-      const parts = [`Grand total: ${moneyFull(data.grand_total)}`];
-      if (zeroCostCount > 0) parts.push(`${zeroCostCount} line item${zeroCostCount === 1 ? '' : 's'} priced at $0 (no unit cost)`);
-      if (verifyCount > 0) parts.push(`${verifyCount} item${verifyCount === 1 ? '' : 's'} need${verifyCount === 1 ? 's' : ''} verification`);
-      showToast({ title: 'Estimate saved', sub: parts.join(' · ') });
-    } finally {
-      setSavingEstimate(false);
-    }
-  };
+      return data;
+    },
+    {
+      showToast,
+      onSuccess: (data) => {
+        setSavedEstimate(data);
+        setEstimateSaved(true);
+        setTimeout(() => setEstimateSaved(false), 3000);
+      },
+      successToast: (data, _items, zeroCostCount, verifyCount) => {
+        const parts = [`Grand total: ${moneyFull(data.grand_total)}`];
+        if (zeroCostCount > 0) parts.push(`${zeroCostCount} line item${zeroCostCount === 1 ? '' : 's'} priced at $0 (no unit cost)`);
+        if (verifyCount > 0) parts.push(`${verifyCount} item${verifyCount === 1 ? '' : 's'} need${verifyCount === 1 ? 's' : ''} verification`);
+        return { title: 'Estimate saved', sub: parts.join(' · ') };
+      },
+      errorTitle: 'Estimate not saved',
+    },
+  );
 
   const generateProposal = () => {
     set({ proposalGenerated: true });
@@ -839,39 +850,48 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     URL.revokeObjectURL(url);
   }
 
-  const downloadDocx = async () => {
-    setVerifyFailures(null);
-    setDocxBusy(true);
-    try {
+  // These read the API but they are actions, not state that follows a key, so
+  // they run through useMutation (busy flag + failure toast) rather than useApi.
+  // Both keep their own error handling: the failure body arrives as a Blob and
+  // has to be read before it can be shown.
+  const { run: runDownloadDocx, saving: docxBusy } = useMutation(
+    async () => {
       const response = await api.get(`/preconstruction/${bid.id}/generate-docx`, { responseType: 'blob' });
       triggerDownload(
         new Blob([response.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
         `Proposal — ${bid.name}.docx`
       );
-    } catch (err: unknown) {
-      const { sub, failures } = await readBlobError(err, 'Could not generate the proposal document');
-      if (failures?.length) setVerifyFailures(failures);
-      showToast({ title: 'Download failed', sub });
-    } finally {
-      setDocxBusy(false);
-    }
-  };
+    },
+    {
+      showToast,
+      errorToast: false,
+      onError: async (err) => {
+        const { sub, failures } = await readBlobError(err, 'Could not generate the proposal document');
+        if (failures?.length) setVerifyFailures(failures);
+        showToast({ variant: 'error', title: 'Download failed', sub });
+      },
+    },
+  );
 
-  const downloadTakeoffXlsx = async () => {
-    setXlsxBusy(true);
-    try {
+  const downloadDocx = () => { setVerifyFailures(null); runDownloadDocx(); };
+
+  const { run: downloadTakeoffXlsx, saving: xlsxBusy } = useMutation(
+    async () => {
       const response = await api.get(`/preconstruction/${bid.id}/generate-takeoff-xlsx`, { responseType: 'blob' });
       triggerDownload(
         new Blob([response.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
         `Takeoff — ${bid.name}.xlsx`
       );
-    } catch (err: unknown) {
-      const { sub } = await readBlobError(err, 'Could not generate the takeoff spreadsheet');
-      showToast({ title: 'Download failed', sub });
-    } finally {
-      setXlsxBusy(false);
-    }
-  };
+    },
+    {
+      showToast,
+      errorToast: false,
+      onError: async (err) => {
+        const { sub } = await readBlobError(err, 'Could not generate the takeoff spreadsheet');
+        showToast({ variant: 'error', title: 'Download failed', sub });
+      },
+    },
+  );
 
   // Task 6.3's endpoint — internal pre-bid package (scope docx + confidence-
   // coded takeoff xlsx) for Chris. Links both filed documents on success via
@@ -914,14 +934,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }
   };
 
-  const downloadFiledDocument = async (docId: string, filename: string) => {
-    try {
+  const { run: downloadFiledDocument } = useMutation(
+    async (docId: string, filename: string) => {
       const response = await api.get(`/documents/${docId}/download`, { responseType: 'blob' });
       triggerDownload(response.data as Blob, filename);
-    } catch {
-      showToast({ title: 'Download failed', sub: 'Please try again from the Files tab.' });
-    }
-  };
+    },
+    { showToast, errorToast: () => ({ title: 'Download failed', sub: 'Please try again from the Files tab.' }) },
+  );
 
   const handleConvert = () => {
     setConvertOpen(false);
@@ -941,35 +960,45 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     set({ files: [...ws.files, ...newFiles] });
 
     // Persist to Documents so files survive page refresh
-    Promise.all(files.map(f => {
-      const fd = new FormData();
-      fd.append('file', f);
-      fd.append('linked_id', bid.id);
-      fd.append('linked_name', bid.name);
-      fd.append('div', 'elec');
-      fd.append('category', 'plans');
-      fd.append('display_name', f.name);
-      return api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-    })).then(() => {
-      reloadProjectDocs();
-    }).catch(() => {});
+    runPersistFiles(files);
   };
+
+  const { run: runPersistFiles } = useMutation(
+    async (files: File[]) => {
+      await Promise.all(files.map(f => {
+        const fd = new FormData();
+        fd.append('file', f);
+        fd.append('linked_id', bid.id);
+        fd.append('linked_name', bid.name);
+        fd.append('div', 'elec');
+        fd.append('category', 'plans');
+        fd.append('display_name', f.name);
+        return api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      }));
+    },
+    {
+      showToast,
+      onSuccess: () => reloadProjectDocs(),
+      // These files are already listed in the workspace; the toast says they
+      // will not survive a refresh, which is the part the estimator loses.
+      errorToast: (message) => ({ title: 'Files not saved to the project', sub: message }),
+    },
+  );
 
   // Always goes through the backend (authenticated blob fetch), never anchors
   // doc.storage_url directly: the raw Cloudinary URL is unauthenticated and skips
   // access checks. Mirrors RecordFiles' download().
-  const downloadProjectDoc = async (doc: ProjectDoc) => {
-    try {
+  const { run: downloadProjectDoc } = useMutation(
+    async (doc: ProjectDoc) => {
       const res = await api.get(`/documents/${doc.id}/download`, { responseType: 'blob' });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url; a.download = doc.display_name || doc.name;
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
-    } catch {
-      showToast({ title: 'Download failed', sub: 'Please re-upload this file.' });
-    }
-  };
+    },
+    { showToast, errorToast: () => ({ title: 'Download failed', sub: 'Please re-upload this file.' }) },
+  );
 
   // Same view/preview routing as RecordFiles' "Documents" list, shared via
   // useDocPreview: pdf/image open inline in a new tab, xlsx/xls/csv/docx render

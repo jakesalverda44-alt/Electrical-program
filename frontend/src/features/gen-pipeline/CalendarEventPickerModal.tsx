@@ -5,6 +5,7 @@
 import React, { useEffect, useState } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { Gen } from '../../types';
 
 interface CalendarEvent {
@@ -33,15 +34,11 @@ function fmtWhen(ev: CalendarEvent) {
 }
 
 export default function CalendarEventPickerModal({ onClose, onCreated }: Props) {
-  const [events, setEvents] = useState<CalendarEvent[] | null>(null);
   const [creatingId, setCreatingId] = useState<string | null>(null);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    api.get<CalendarEvent[]>('/gens/calendar-events')
-      .then(r => setEvents(r.data))
-      .catch(() => setEvents([]));
-  }, []);
+  const { data: loadedEvents, error: eventsError } = useApi<CalendarEvent[]>('/gens/calendar-events');
+  const events = loadedEvents ?? (eventsError ? [] : null);
 
   const pick = async (ev: CalendarEvent) => {
     setCreatingId(ev.id);

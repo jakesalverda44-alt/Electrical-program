@@ -5,6 +5,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import { PROJECT_TYPES } from './constants';
 import { moneyFull } from '../../lib/money';
 import { per1kSf, median, deltaVsMedian, isOutlier } from '../bid-hub/compareMath';
@@ -145,11 +146,12 @@ export default function BidCompare({ bidId, brand, projectType }: {
     return next;
   });
 
-  const openDrill = async (category: string) => {
-    if (openCategory === category) { setOpenCategory(null); return; }
-    setOpenCategory(category);
-    const missing = jobs.filter(j => !lines[j.id]);
-    if (missing.length) {
+  // A per-row lazy cache fill: one request per job the drill-down does not have
+  // yet. useApi cannot express "N requests keyed by a growing set", so this runs
+  // through useMutation instead — each row still degrades to an empty list, and
+  // the 403 case keeps its own inline message.
+  const { run: runOpenDrill } = useMutation(
+    async (missing: CompareJob[]) => {
       const fetched = await Promise.all(missing.map(j =>
         api.get(`/preconstruction/${j.id}/takeoff`)
           .then(r => [j.id, (r.data?.line_items ?? []) as TakeoffLine[]] as const)
@@ -161,8 +163,19 @@ export default function BidCompare({ bidId, brand, projectType }: {
             return [j.id, [] as TakeoffLine[]] as const;
           })
       ));
-      setLines(prev => ({ ...prev, ...Object.fromEntries(fetched) }));
-    }
+      return fetched;
+    },
+    {
+      onSuccess: (fetched) => setLines(prev => ({ ...prev, ...Object.fromEntries(fetched) })),
+      errorTitle: 'Could not load the line items',
+    },
+  );
+
+  const openDrill = (category: string) => {
+    if (openCategory === category) { setOpenCategory(null); return; }
+    setOpenCategory(category);
+    const missing = jobs.filter(j => !lines[j.id]);
+    if (missing.length) runOpenDrill(missing);
   };
 
   // Per-SF figures are the only fair way to line up buildings of different sizes.

@@ -18,6 +18,7 @@ vi.mock('../../api/client', () => ({
 
 vi.mock('../../contexts/AppContext', () => ({
   useShowToast: () => vi.fn(),
+  useOptionalShowToast: () => vi.fn(),
 }));
 
 const bid: Bid = {

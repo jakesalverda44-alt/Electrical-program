@@ -5,6 +5,7 @@ import RecordFiles from '../../components/RecordFiles';
 import { Gen, WonJob, Toast } from '../../types';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import { moneyFull, moneyShort as money } from '../../lib/money';
 import { useShowToast } from '../../contexts/AppContext';
 
@@ -131,32 +132,36 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onC
     }
   }, [openId, awarded, onClearParam]);
   const [editDraft, setEditDraft] = useState({ customer: '', loc: '', mfr: '', model: '', kw: '', amount: '', addons: '', date_won: '' });
-  const [editSaving, setEditSaving] = useState(false);
 
   const startDetailEdit = (g: Gen) => {
     setEditDraft({ customer: g.customer||'', loc: g.loc||'', mfr: g.mfr||'Kohler', model: g.model||'', kw: String(g.kw??''), amount: String(g.amount??''), addons: String(g.addons??''), date_won: g.date_won ? String(g.date_won).slice(0,10) : '' });
     setEditingDetail(true);
   };
 
-  const saveDetailEdit = async (g: Gen) => {
-    setEditSaving(true);
-    try {
+  const { run: saveDetailEdit, saving: editSaving } = useMutation(
+    async (g: Gen) => {
       const { data } = await api.patch(`/gens/${g.id}`, {
         customer: editDraft.customer.trim(), loc: editDraft.loc.trim(), mfr: editDraft.mfr,
         model: editDraft.model.trim(), kw: Number(editDraft.kw)||0,
         amount: Number(editDraft.amount)||0, addons: Number(editDraft.addons)||0,
         ...(editDraft.date_won ? { date_won: editDraft.date_won } : {}),
       });
-      const updated = data.gen ?? data;
-      setGens(prev => prev.map(x => x.id === updated.id ? updated : x));
-      setDetail(updated);
-      if (data.wonJob) setWonJobs(prev => prev.map(w => w.proposal_id === updated.id ? data.wonJob : w));
-      setEditingDetail(false);
-      showToast({ title: 'Details updated', sub: updated.customer });
-    } finally {
-      setEditSaving(false);
-    }
-  };
+      return data;
+    },
+    {
+      onSuccess: (data) => {
+        const updated = data.gen ?? data;
+        setGens(prev => prev.map(x => x.id === updated.id ? updated : x));
+        setDetail(updated);
+        if (data.wonJob) setWonJobs(prev => prev.map(w => w.proposal_id === updated.id ? data.wonJob : w));
+        setEditingDetail(false);
+      },
+      // The toast is the only confirmation this drawer gives, so it must come
+      // from the resolved response rather than from the click.
+      successToast: (data) => ({ title: 'Details updated', sub: (data.gen ?? data).customer }),
+      errorTitle: 'Could not save those details',
+    },
+  );
 
   const movePhase = async (id: string, phase: PhaseKey) => {
     const prevPhase = phases[id] ?? 'deposit';

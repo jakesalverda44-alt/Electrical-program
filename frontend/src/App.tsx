@@ -23,7 +23,7 @@ import { resolveLegacyPath } from './lib/legacyRoutes';
 import { PcWorkspace, PC_TABS, ConfirmedService } from './features/preconstruction/constants';
 import Toast from './components/Toast';
 import { AppProviders } from './contexts/AppContext';
-import { UNAUTHORIZED_EVENT, UnauthorizedDetail } from './api/client';
+import { UNAUTHORIZED_EVENT, UnauthorizedDetail } from './api/session';
 import { useApi } from './hooks/useApi';
 import { Bid, Gen, WonJob, Activity } from './types';
 

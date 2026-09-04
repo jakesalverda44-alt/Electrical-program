@@ -6,23 +6,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import SignatureCanvas from 'react-signature-canvas';
 import api from '../../../api/client';
+import { useApi } from '../../../hooks/useApi';
 import { SectionTitle } from '../shared';
 
 export function SignatureSection() {
   const [saved, setSaved] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [drawing, setDrawing] = useState(false);
   const [hasInk, setHasInk] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const ref = useRef<SignatureCanvas>(null);
 
-  useEffect(() => {
-    api.get<{ signature_data?: string | null }>('/users/me')
-      .then(r => setSaved(r.data.signature_data ?? null))
-      .catch(() => setSaved(null))
-      .finally(() => setLoading(false));
-  }, []);
+  const { data: me, loading } = useApi<{ signature_data?: string | null }>('/users/me');
+  useEffect(() => { if (me) setSaved(me.signature_data ?? null); }, [me]);
 
   const save = async () => {
     if (!ref.current || ref.current.isEmpty()) return;

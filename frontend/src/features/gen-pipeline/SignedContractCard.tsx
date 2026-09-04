@@ -11,6 +11,8 @@
 // the same rasterizer so a rebuilt archive is not a second, drifting rendering.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import Icon from '../../components/Icon';
 import { useShowToast } from '../../contexts/AppContext';
 import ProposalPreview from '../builder/ProposalPreview';
@@ -76,12 +78,14 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
   const signedAt = g.signed_at;
   const countersignedAt = g.countersigned_at;
 
+  const { data: loadedDocs, error: docsError } = useApi<DocRow[]>('/documents', {
+    params: { linked_id: gen.id },
+    enabled: !!signedAt,
+  });
   useEffect(() => {
-    if (!signedAt) return;
-    api.get<DocRow[]>('/documents', { params: { linked_id: gen.id } })
-      .then(r => setDocs(r.data))
-      .catch(() => setDocs([]));
-  }, [gen.id, signedAt]);
+    if (loadedDocs) setDocs(loadedDocs);
+    else if (docsError) setDocs([]);
+  }, [loadedDocs, docsError]);
 
   // The drawer's action bar asks for the confirmation rather than executing anything
   // itself, so the warning that lists superseded siblings is never bypassed.
@@ -119,17 +123,17 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
   const atRisk = siblings.filter(s =>
     s.id !== gen.id && s.stage !== 'awarded' && s.stage !== 'superseded');
 
-  const open = async () => {
-    if (!current) return;
-    try {
-      const res = await api.get(`/documents/${current.id}/download`, { responseType: 'blob' });
+  const { run: runOpen } = useMutation(
+    async (docId: string) => {
+      const res = await api.get(`/documents/${docId}/download`, { responseType: 'blob' });
       const url = URL.createObjectURL(res.data as Blob);
       window.open(url, '_blank');
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch {
-      showToast({ title: "Couldn't open the contract", sub: 'Try again in a moment.' });
-    }
-  };
+    },
+    { errorToast: () => ({ title: "Couldn't open the contract", sub: 'Try again in a moment.' }) },
+  );
+
+  const open = () => { if (current) runOpen(current.id); };
 
   // Renders the document offscreen from stored data and files the resulting PDF.
   // `executed` picks which name it is filed under, which is also how the card tells the

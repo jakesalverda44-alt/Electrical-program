@@ -8,6 +8,21 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import BidCompare from './BidCompare';
+import { AppProviders } from '../../contexts/AppContext';
+import { DEFAULT_APP_SETTINGS } from '../../hooks/useAppSettings';
+import { User } from '../../types';
+
+const testUser: User = { id: 'u1', name: 'Test User', email: 't@example.com', role: 'owner' };
+
+/** BidCompare's drill-down runs through useMutation, which reads the toast
+ *  notifier from context exactly as it does in the app. */
+function withProviders(node: React.ReactNode) {
+  return (
+    <AppProviders user={testUser} showToast={() => {}} settings={DEFAULT_APP_SETTINGS} reloadSettings={() => {}}>
+      {node}
+    </AppProviders>
+  );
+}
 
 afterEach(cleanup);
 
@@ -51,7 +66,7 @@ function mockApi() {
 describe('BidCompare — Takeoff by Category drill-down', () => {
   it('renders an unresolved (null) quantity as an em-dash, never "null" or "0", while a resolved qty still renders its number', async () => {
     mockApi();
-    const { container } = render(<BidCompare bidId="subj"/>);
+    const { container } = render(withProviders(<BidCompare bidId="subj"/>));
 
     await waitFor(() => expect(screen.getByText('LIGHTING')).toBeTruthy());
     fireEvent.click(screen.getByText('LIGHTING'));

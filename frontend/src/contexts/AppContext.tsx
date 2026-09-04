@@ -33,6 +33,16 @@ export function useShowToast(): ShowToast {
   return fn;
 }
 
+/**
+ * For shared hooks (useMutation) that must also work inside a component which
+ * takes `showToast` as a prop instead of reading it from context — PcWorkspace
+ * does, and its tests render it without the providers. Returns null rather
+ * than throwing; the caller decides what missing means.
+ */
+export function useOptionalShowToast(): ShowToast | null {
+  return useContext(ToastContext);
+}
+
 // --- Settings -------------------------------------------------------------
 interface SettingsCtx {
   settings: AppSettings;

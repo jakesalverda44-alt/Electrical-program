@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import api from '../../api/client';
+import { useMutation } from '../../hooks/useMutation';
 import { Gen } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
 import { buildChecklistPdf } from './checklistPdf';
@@ -85,6 +86,9 @@ const MUTED = '#6b7683';
 const LINE = '#dce3ec';
 const HEAD = '#164a86';
 
+/** Thrown when finalize's own pre-save failed, so it can stay quiet. */
+class ChecklistSaveFailed extends Error {}
+
 const inputStyle: React.CSSProperties = {
   width: '100%', font: 'inherit', fontSize: 13, fontWeight: 600, color: INK,
   background: '#fff', border: `1px solid ${LINE}`, borderRadius: 8,
@@ -118,8 +122,6 @@ function ToggleGroup<T extends string>({ options, value, onChange }: { options: 
 export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpdated: (gen: Gen) => void }) {
   const showToast = useShowToast();
   const [data, setData] = useState<ChecklistData>(() => parseChecklist(gen.checklist_data));
-  const [saving, setSaving] = useState(false);
-  const [exporting, setExporting] = useState(false);
 
   const form = useMemo(() => parseGenForm(gen.form_data), [gen.form_data]);
   const address = [form.address, form.city, form.state, form.zip].filter(Boolean).join(', ') || gen.loc;
@@ -144,23 +146,24 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
   const removeCustom = (i: number) =>
     setData(d => ({ ...d, customLoads: d.customLoads.filter((_, j) => j !== i) }));
 
-  const save = async (silent = false) => {
-    setSaving(true);
-    try {
+  const { run: save, saving } = useMutation(
+    async (silent: boolean) => {
       const { data: res } = await api.patch(`/gens/${gen.id}`, { checklist_data: data });
-      onUpdated(res.gen ?? res);
-      if (!silent) showToast({ title: 'Checklist saved' });
-    } catch {
-      showToast({ title: 'Save failed', sub: 'Try again' });
-    } finally {
-      setSaving(false);
-    }
-  };
+      return { res, silent };
+    },
+    {
+      onSuccess: ({ res }) => onUpdated(res.gen ?? res),
+      successToast: ({ silent }) => (silent ? null : { title: 'Checklist saved' }),
+      errorToast: () => ({ title: 'Save failed', sub: 'Try again' }),
+    },
+  );
 
-  const finalize = async () => {
-    setExporting(true);
-    try {
-      await save(true);
+  const { run: finalize, saving: exporting } = useMutation(
+    async () => {
+      // `save` swallows its own failure (having toasted it), so the sentinel is
+      // what stops finalize from filing a PDF for data that never persisted —
+      // and from stacking a second toast on top of the first.
+      if (!(await save(true))) throw new ChecklistSaveFailed();
       const pdf = await buildChecklistPdf(pdfHeader(), data, 'filled');
       // Capture prior finalized checklist ids before uploading, so we only ever delete
       // pre-existing docs (never the fresh one) and never leave the gen with no checklist
@@ -184,13 +187,15 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
       try {
         for (const id of priorIds) await api.delete(`/documents/${id}`);
       } catch { /* non-fatal — worst case a duplicate remains */ }
-      showToast({ title: 'Checklist finalized', sub: 'Clean PDF attached to this job' });
-    } catch {
-      showToast({ title: 'Export failed', sub: 'Try again' });
-    } finally {
-      setExporting(false);
-    }
-  };
+    },
+    {
+      successToast: { title: 'Checklist finalized', sub: 'Clean PDF attached to this job' },
+      // The failed save already toasted; do not stack a second message on it.
+      errorToast: (_m, err) => (err instanceof ChecklistSaveFailed
+        ? null
+        : { title: 'Export failed', sub: 'Try again' }),
+    },
+  );
 
   const printBlank = async () => {
     try {
@@ -309,7 +314,7 @@ export default function SiteVisitChecklist({ gen, onUpdated }: { gen: Gen; onUpd
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-        <button className="btn ghost" style={{ flex: 1, justifyContent: 'center' }} disabled={saving} onClick={() => save()}>
+        <button className="btn ghost" style={{ flex: 1, justifyContent: 'center' }} disabled={saving} onClick={() => save(false)}>
           {saving ? 'Saving…' : 'Save'}
         </button>
         <button className="btn ghost" style={{ flex: 1, justifyContent: 'center' }} onClick={printBlank}>

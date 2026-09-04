@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import { Bid } from '../../types';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { useMutation } from '../../hooks/useMutation';
 import { useShowToast } from '../../contexts/AppContext';
 import { useIsMobile } from '../../hooks/useIsMobile';
 
@@ -113,14 +114,40 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
     setNotifyTeam(false);
     setNotifyEmails(teamDefaults.emails.join(', '));
     // Opening an unread item marks it read (persisted), and updates the count locally.
-    if (!item.read_at) {
-      const stamp = new Date().toISOString();
-      setItems(prev => prev.map(i => i.id === item.id ? { ...i, read_at: stamp } : i));
-      api.post(`/intake/${item.id}/read`).catch(() => {
-        setItems(prev => prev.map(i => i.id === item.id ? { ...i, read_at: null } : i)); // revert on failure
-      });
-    }
+    if (!item.read_at) markRead(item.id);
   };
+
+  const { run: markRead } = useMutation(
+    async (itemId: string) => { await api.post(`/intake/${itemId}/read`); },
+    {
+      optimistic: (itemId) => {
+        const stamp = new Date().toISOString();
+        setItems(prev => prev.map(i => i.id === itemId ? { ...i, read_at: stamp } : i));
+        return () => setItems(prev => prev.map(i => i.id === itemId ? { ...i, read_at: null } : i));
+      },
+      // optional: marking-as-read is a side effect of opening the item, not
+      // something the user asked for, so a failure only reverts the blue dot.
+      errorToast: false,
+    },
+  );
+
+  const { run: markUnread } = useMutation(
+    async (itemId: string) => { await api.post(`/intake/${itemId}/unread`); },
+    {
+      optimistic: (itemId) => {
+        // Blue dot comes back immediately; the rollback restores the timestamp.
+        const stamp = new Date().toISOString();
+        setItems(prev => prev.map(i => i.id === itemId ? { ...i, read_at: null } : i));
+        setSelected(prev => prev && prev.id === itemId ? { ...prev, read_at: null } : prev);
+        return () => {
+          setItems(prev => prev.map(i => i.id === itemId ? { ...i, read_at: stamp } : i));
+          setSelected(prev => prev && prev.id === itemId ? { ...prev, read_at: stamp } : prev);
+        };
+      },
+      successToast: { title: 'Marked unread', sub: 'It will show as new until you open it again' },
+      errorToast: () => ({ title: 'Could not mark unread' }),
+    },
+  );
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -344,18 +371,7 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
               {selected.status === 'pending' && selected.read_at && (
                 <button
                   onClick={() => {
-                    const id = selected.id;
-                    // Optimistic: blue dot comes back immediately; revert on failure.
-                    setItems(prev => prev.map(i => i.id === id ? { ...i, read_at: null } : i));
-                    setSelected(prev => prev && prev.id === id ? { ...prev, read_at: null } : prev);
-                    api.post(`/intake/${id}/unread`)
-                      .then(() => showToast({ title: 'Marked unread', sub: 'It will show as new until you open it again' }))
-                      .catch(() => {
-                        const stamp = new Date().toISOString();
-                        setItems(prev => prev.map(i => i.id === id ? { ...i, read_at: stamp } : i));
-                        setSelected(prev => prev && prev.id === id ? { ...prev, read_at: stamp } : prev);
-                        showToast({ title: 'Could not mark unread' });
-                      });
+                    markUnread(selected.id);
                   }}
                   style={{ ...outlookLinkStyle, background: 'none', border: 'none', cursor: 'pointer', font: 'inherit' }}>
                   <Icon name="clock" size={13} stroke={2}/> Mark unread

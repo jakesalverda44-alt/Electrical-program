@@ -3,7 +3,7 @@
 // callers". Every failure message the app shows now comes from this one
 // function, so its branches are worth pinning.
 import { describe, it, expect } from 'vitest';
-import { apiErrorMessage, normalizeApiError, isAbortError } from './client';
+import { apiErrorMessage, normalizeApiError, isAbortError } from './errors';
 
 function axiosErr(extra: Record<string, unknown>) {
   return Object.assign(new Error('request failed'), { isAxiosError: true }, extra);

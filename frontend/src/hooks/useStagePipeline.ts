@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import api from '../api/client';
+import { apiErrorMessage } from '../api/errors';
 import { WonJob, Toast } from '../types';
 
 // Shared kanban stage-change logic for the electrical (bids) and generator
@@ -85,10 +86,12 @@ export function useStagePipeline<T extends StageItem, K extends string>(cfg: Use
 
       if (prev) onMoved?.({ ...(data[responseKey] as T), stage }, stage, prev.stage);
       onSynced?.(data);
-    } catch {
-      // Roll back on failure.
+    } catch (err) {
+      // Roll back on failure. This hook already owned its rollback (it was the
+      // template useMutation's `optimistic` was modelled on); what it lacked
+      // was saying *why* and looking like a failure.
       if (prev) setItems(list => list.map(i => i.id === id ? prev : i));
-      showToast({ title: 'Failed to update stage', sub: 'Changes reverted' });
+      showToast({ variant: 'error', title: 'Failed to update stage', sub: `${apiErrorMessage(err)} — changes reverted` });
     }
   }, [items, setItems, setWonJobs, showToast, endpoint, responseKey, confirmStage, buildPatch, wonToast, onMoved, onSynced, pendingConfirm]);
 
