@@ -3,7 +3,8 @@
 **Plan:** `docs/superpowers/plans/2026-09-04-audit-batch2-frontend-reliability.md` (Local Version, read-only reference)
 **Branch:** `fix/audit-batch2` (worktree: `../Electrical-program-wt-audit2`)
 **Execution:** Opus 5
-**Commits:** 9 (one per task), plus this report commit — 10 total.
+**Commits:** 9 (one per task), plus the report, plus 5 post-review fix commits
+and this report update — 16 total. See **Post-review fixes** at the end.
 **Base:** `bca2495` (local main, batch 1 merged)
 
 ## Summary
@@ -540,13 +541,13 @@ Frontend 359 → 428 tests (+69, plus the 6 backend). The arithmetic gap is Task
 
 Noted rather than acted on, per the plan's "note it and move on":
 
-1. **`DocsPage.downloadDoc` authenticates with the wrong storage key.**
-   `frontend/src/features/docs/DocsPage.tsx:115` reads
+1. ~~**`DocsPage.downloadDoc` authenticates with the wrong storage key.**~~
+   **Fixed post-review** (non-blocker f). `DocsPage.tsx` read
    `localStorage.getItem('token')`; the app stores the JWT under `crm_token`
-   everywhere else. It sends `Authorization: Bearer null`, so this download has
-   presumably been 401ing for as long as it has existed. It is a raw `fetch`,
-   not an `api` call, so nothing in this batch touched it. One-word fix, but out
-   of scope — worth its own small change with a test.
+   everywhere else, so it was sending `Authorization: Bearer null` and 401ing
+   for as long as it existed — and once task 2 made a 401 eject the user, the
+   button had started logging people out. That escalation is why the reviewer
+   asked for it here rather than in a follow-up.
 2. **The workspace autosave payload cannot carry pricing** without a
    `bid_workspaces` migration. See Task 8 above; this is the struck product
    decision and needs Jake's call.
@@ -570,3 +571,195 @@ worktree. No dev server was started, no Docker state touched, no `DATABASE_URL`
 set, no `.env` printed, no push. Backend tests ran only through
 `npm test`, which pins `DB_NAME=electrical_crm_test`; the harness's `_test`
 suffix allowlist was in force.
+
+---
+
+## Post-review fixes
+
+An independent Opus review returned **DO NOT MERGE**: architecture sound, four
+contained defects reaching the user. All four are fixed, plus the seven
+non-blockers it listed. Six commits (`69c6db6`, `016018e`, `c6b1e1f`,
+`493df01`, `9e727ec`, and this report update) — 16 on the branch.
+
+Every fix was checked against its own pre-fix code, not just asserted.
+
+### B1 — Four hooks below `if (!user)`: login and the 401 eject both crashed
+Commit `69c6db6`. `frontend/src/App.tsx`
+
+Task 5 added `useState` (warningDismissed), a `useEffect`, `useCallback`
+(retryBootstrap) and `usePageTitle` **below** App's early return. On main every
+hook was above it. The hook count therefore changed whenever `user` flipped in
+place — which is exactly what signing in and being ejected both do:
+
+- null → user: `Rendered more hooks than during the previous render`
+- user → null: `Rendered fewer hooks than expected`
+
+So signing in threw instead of rendering the dashboard, and the
+`crm:unauthorized` listener (which calls `logout()` before it navigates) took
+the app to the root ErrorBoundary. **The 401 story task 2 exists to deliver was
+crashing on arrival.**
+
+All four hook calls moved above the return, with the derived values they read.
+`usePageTitle` gained a `user &&` guard so it stays a no-op while logged out.
+A comment on the block states the rule.
+
+**Why it slipped:** both existing App test files mock a *constant* signed-in
+user, so neither ever changed the hook count. The new test owns the transition:
+it mounts App **once** and flips the user underneath it in both directions,
+plus dispatches a real `crm:unauthorized` event, asserting each time that React
+logged no "Rendered more/fewer hooks". Verified: on the pre-fix ordering all
+three fail with the reviewer's exact two messages.
+
+*Test:* `src/App.authTransition.test.tsx` (3, later 5).
+
+### B2 — `aliveRef` never re-armed: task 7 was inert under StrictMode
+Commit `016018e`. `frontend/src/features/preconstruction/PcWorkspace.tsx`
+
+`aliveRef` started true and was set false by the effect's cleanup, but never
+set back. `main.tsx` renders inside `<React.StrictMode>`, which in dev mounts,
+unmounts and remounts every component — and the plan's Environment facts say
+the live app runs under Vite dev. The cleanup fired once and every
+`if (!aliveRef.current) return` in `saveWorkspace` fired forever after.
+
+Reproduced exactly as the reviewer measured it:
+
+| Behaviour | As tested | Under StrictMode (pre-fix) |
+|---|---|---|
+| no-op PUT on open | 0 PUTs | **1 PUT** |
+| chip after a successful save | `Saved` | **stuck on `Saving…`** |
+| chip after a failed save | `Not saved — retrying` | **stuck on `Saving…`** |
+| retry 2 s after a failure | 2nd PUT | **none** |
+
+The stuck chip also meant `saveState` never reached `'error'`, so
+`useUnsavedGuard(pricingDirty || saveState === 'error')` never armed — the exact
+fallback the struck pricing decision leans on.
+
+Two fixes:
+- `aliveRef.current = true` in the effect **body**, cleanup unchanged.
+- The mount guard is now the **payload we last acted on**, not a boolean. A
+  boolean is consumed by the first mount and lets the remount write the very
+  no-op PUT it exists to prevent; a snapshot comparison is idempotent. It also
+  drops the redundant PUT when the effect re-runs because `saveWorkspace`'s
+  identity changed but nothing the user typed did. A separate effect declared
+  above it resets the baseline on `bid.id` (effects fire in declaration order).
+
+*Test:* `PcWorkspaceAutosave.test.tsx` grows a StrictMode block (4; 7 → 11),
+re-running the same assertions inside `<React.StrictMode>` plus one on the
+guard-arming state. All four fail on the pre-fix code, row for row.
+
+### B3 — A failed `saveSection` marked the draft saved and disarmed the guard
+Commit `c6b1e1f`. `frontend/src/features/elec-projects/ElecProjectsPage.tsx`
+
+On main `saveSection` had no catch, so a failed PUT **rejected** and the `await`
+in each of its five handlers aborted the rest — `onDataChange` never ran. The
+task 3 migration made `run()` swallow (after toasting) and resolve `undefined`,
+but the call sites were left byte-identical, so `onDataChange(...)` now ran
+unconditionally.
+
+The harm was worse than a missing message: a 500 wrote the unsaved draft into
+`data.overview`, so the section read as persisted **and** the dirty check added
+in the same batch went false. The task 8 guard — added in this very batch — was
+silently satisfied, and the user could walk away from work that never reached
+the server.
+
+The mutation `fn` returns `true`; all five sites (`:462`, `:475`, `:496`,
+`:915`, `:956` — Overview ×2, Schedule ×2, Closeout) gate `onDataChange` on it.
+
+*Test:* `ElecProjectsSaveSection.test.tsx` (3). Asserted **through the guard**
+rather than by spying on `onDataChange`, because the guard going quiet is the
+actual harm: PUT 500 → "Save failed" and a navigation attempt still raises
+"You have unsaved changes"; PUT 200 → "Saved" and navigation proceeds; an
+untouched Overview never arms it. The first case fails on the ungated sites.
+
+### B4 — Six failure toasts still rendered green (task 4 was incomplete)
+Commit `493df01`.
+
+Task 4's sweep converted what it could grep and missed toasts that were
+`showToast?.(` (an optional call the regex did not match) or sat inside a
+*status branch* of a catch rather than the catch itself — two of them right
+beside a sibling that **was** converted. The six named in the review:
+
+| Site | Toast |
+|---|---|
+| `CustomerHub.tsx:166` | `'Save failed'` — PATCH threw, edits lost |
+| `CustomerHub.tsx:259`, `:273` | `'Preview failed'` |
+| `GenPipelinePage.tsx:162` | `'Admin only'` — 403, nothing deleted |
+| `SignedContractCard.tsx:143` | `"Can't rebuild this one"` |
+| `SignedContractCard.tsx:209` | `'No signature on file'` — 400, not countersigned |
+
+Re-grepping with a corrected pattern turned up **15 more of the same class** —
+validation refusals, where the action did not happen either:
+
+- `variant: 'error'` (11): CommsPage `'Subject required'`; ElecProjectsPage
+  `'Description/Period/Question/Material name/Note required'`; IntakeInboxPage
+  `'Name and GC are required'` and `'Name is required'`; PcWorkspace
+  `'Price required'`; BuilderPage and EvBuilderPage `'Customer name required'`.
+- `variant: 'info'` (4): PcWorkspace `'No AI analysis available'`,
+  `'Nothing new to import'`, `'Nothing to import'` ×2 — nothing went wrong,
+  there was simply nothing to do, so red would overstate it.
+
+Toast variants: **41 → 58** `'error'`, **3 → 7** `'info'`.
+
+*Test:* `components/toastVariants.test.ts` (3). A one-off grep is what let this
+through twice, so **this test is the grep**: it scans the source for toasts
+whose copy says the action did not happen, or that are raised from an error
+branch, and fails naming any that carry no variant. Two further cases guard the
+guard — that the matchers still recognise a known failure and still ignore a
+plain success, and that the file walk is finding the tree at all, so the scan
+cannot pass vacuously. Reverting any one of the six fails it with that file and
+line in the message. (`CustomerHub.test.tsx`'s exact-toast assertion was updated
+to expect the variant.)
+
+### Non-blockers folded in
+Commit `9e727ec`.
+
+| # | Fix |
+|---|---|
+| a | `useMutation` gains `key?: (...args) => string`, keying the in-flight map per target. Without it, one hook behind many rows dropped the second click **entirely and silently** — the guard returned before `optimistic`, `fn`, the toasts and `onError`. Applied at all seven named sites. `saving` now clears only when the last concurrent target settles, and a `settled` flag stops a synchronously throwing `fn` leaving a settled promise in the map. Default behaviour unchanged. |
+| b | `?next=` survives a burst of parallel 401s: the listener reads the **router's** location through a ref (stable deps, and testable under MemoryRouter — `window.location` never moves there), and a latch makes the first event the only one that ejects, re-armed when a session exists again so a later expiry still works. |
+| c | `openNewBid` armed the Add Bid modal even when the guard was declined, leaving it queued for the next visit. Both halves now sit inside `confirmLeave`. |
+| d | `setPhase`'s rollback could restore `undefined` — `phases` is seeded once from `awarded` and never re-synced, so a bid awarded after mount rendered `'signed'` instead of its real phase. Falls back to the bid's own `elec_project_phase`. |
+| e | DocsPage's per-file "exceeds 50 MB — skipped" toast was overwritten by the success toast (one toast slot); with every file oversized the user got a green "0 files uploaded". Skips are counted and reported as `"N uploaded, M skipped"`, variant `'info'`. |
+| f | DocsPage's download read `localStorage.getItem('token')`; the JWT lives under `crm_token`, so it had been sending `Bearer null` and 401ing forever — and since task 2 made a 401 eject the user, the button had started **logging people out**. This was reported as out-of-scope in the batch report; the reviewer asked for it, so it is fixed here with a test. |
+| g | PcWorkspace's proposal preview lost its `.catch(() => setProposalPreview(null))` in the migration, so a failed fetch left the **previous** bid's proposal — with a customer name on it — on screen. Error branch restored. |
+
+*Tests (+12):* `useMutation.test.tsx` +6 (two targets concurrent, same target
+still collapses, `saving` spans the last one, per-target optimistic/rollback, a
+target runnable again after settling, no-key behaviour unchanged);
+`App.authTransition.test.tsx` +2 (a three-401 burst dispatched in **separate
+commits** keeps `?next=`, and a later expiry still ejects); new
+`DocsPage.upload.test.tsx` (4) for the bearer token and all three skipped-file
+outcomes. Each verified against the unfixed code: the burst test fails without
+the latch, the bearer test fails with `'token'`, the keyed tests fail with the
+per-hook guard.
+
+### Not acted on
+
+- **"Storage is not cleared exactly once"** — `clearSession()` per 401 plus
+  `logout()` in the listener. Both are idempotent `removeItem` calls, the
+  reviewer called it cosmetic, and the listener's `logout()` is what clears
+  React state as well. Left as is.
+- **`useMutation` throws before its own `useState`** when no notifier is
+  present. A latent hook-count hazard nothing hits today (every call site is
+  under `AppProviders` or passes `showToast`), and moving it after the hooks
+  would trade a loud wiring error for a silent one. Left, noted.
+- **`runLoadProject`'s `errorTitle` is unreachable** behind
+  `Promise.allSettled`, making the comment above it wrong. Cosmetic; the
+  mutation still exists to catch a wholesale throw. Left, noted.
+- **`/preconstruction/costs` and `/estimates/unit-costs` now fetch per mount
+  rather than per `bid.id`** — they are global constants, so this is the same
+  or fewer requests; hoisting them to app scope is the Batch 3 item the audit
+  already files under data #16.
+
+### Final results after the post-review fixes
+
+| Suite | Result |
+|---|---|
+| `frontend/ npm run typecheck` | exit 0, clean |
+| `frontend/ npm test` | **59 files / 453 tests, 0 failing** |
+| `backend/ npm run typecheck` | exit 0, clean |
+| `backend/ npm test` | 86 files / 781 tests; failing set is the plan's known flakes only (`prebid`, `integration`, `bidStandardGeneration`, `jobNumberCollision` — varies per run), and this branch still touches exactly 3 backend files |
+
+Frontend tests: 359 on main (9 failing) → 428 at first review → **453**.
+Toast variants: **58** `'error'`, **7** `'info'`. Hooks below App's early
+return: **0** (asserted by a brace-depth scan, not by eye).
