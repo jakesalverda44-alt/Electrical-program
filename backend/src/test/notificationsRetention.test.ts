@@ -13,11 +13,36 @@ import { runReminderScan } from '../notifications/engine';
 import { purgeExpired } from '../utils/audit';
 
 let ok = false;
-beforeAll(async () => { ok = await dbAvailable(); }, 120_000);
+beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
+
+// These tests are about followup_due's dedup mechanics specifically, not the
+// scan's other three reminder types. runReminderScan() always runs all four
+// in one call, and lead_overdue's targets = every owner/admin user
+// (notifications/engine.ts's targetsFor(null)) — on a long-lived test DB
+// where thousands of makeUser('owner') calls have accumulated across this
+// project's test history (a harness data-hygiene gap, not a product bug;
+// see the report), that fan-out turns a normal scan into a multi-second-to-
+// multi-minute one, for behavior these tests don't even assert on. Disabling
+// the other three reminder types for the scan keeps these tests scoped to
+// what they're actually testing and fast regardless of that unrelated table's
+// size — a real settings.notifications_json write, not a mock.
+async function scopeToFollowupDueOnly(): Promise<void> {
+  await pool.query(
+    `INSERT INTO app_settings (key, value) VALUES ('notifications_json', $1)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [JSON.stringify({ reminders: { types: {
+      followup_due: { app: true, email: false },
+      proposal_viewed_unsigned: { app: false, email: false },
+      bid_due_soon: { app: false, email: false },
+      lead_overdue: { app: false, email: false },
+    } } })]
+  );
+}
 
 describe('notifications: dedup no longer keys on the calendar day (audit data #2)', () => {
   it('running the hourly scan twice on the same still-open task creates exactly one row', async (ctx) => {
     if (!ok) return ctx.skip();
+    await scopeToFollowupDueOnly();
     const owner = await makeUser('owner');
     const { rows: taskRows } = await pool.query(
       `INSERT INTO tasks (title, due_date, status, assigned_to)
@@ -37,15 +62,11 @@ describe('notifications: dedup no longer keys on the calendar day (audit data #2
     // actual mechanism that makes a later calendar day a no-op too (see next
     // test): there's nothing in the key for a day rollover to change.
     expect(rows[0].dedup_key).toBe(`followup:${taskId}:${owner.id}`);
-    // Generous timeout: runReminderScan() scans every open task/lead/bid/proposal
-    // in the whole test DB, which this project's test history has left with
-    // thousands of synthetic owner/admin users (see the report) — a single
-    // scan legitimately takes several seconds here, though it would not in
-    // production's real ~2-user scale.
-  }, 120_000);
+  });
 
   it('a scan on a later calendar day still does not duplicate the row', async (ctx) => {
     if (!ok) return ctx.skip();
+    await scopeToFollowupDueOnly();
     const owner = await makeUser('owner');
     const { rows: taskRows } = await pool.query(
       `INSERT INTO tasks (title, due_date, status, assigned_to)
@@ -74,10 +95,11 @@ describe('notifications: dedup no longer keys on the calendar day (audit data #2
     );
     expect(after.rows).toHaveLength(1);
     expect(after.rows[0].id).toBe(before.rows[0].id); // same row, not a new one
-  }, 120_000);
+  });
 
   it('a multi-row batch insert creates one row per task and stays a no-op on rescans', async (ctx) => {
     if (!ok) return ctx.skip();
+    await scopeToFollowupDueOnly();
     // Exercises createNotificationsBulk's single UNNEST insert covering several
     // records at once — the case the old N sequential createNotification calls
     // (one per record × target-user) handled as N round trips instead of one.
@@ -105,7 +127,7 @@ describe('notifications: dedup no longer keys on the calendar day (audit data #2
       [[t1, t2, t3]]
     );
     expect(again[0].n).toBe(3);
-  }, 120_000);
+  });
 });
 
 describe('notifications retention windows (audit data #2)', () => {

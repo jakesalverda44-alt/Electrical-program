@@ -88,6 +88,44 @@ router.get('/notify-defaults', requireAuth, async (_req, res) => {
   res.json({ emails, mailConfigured: isGraphMailConfigured() });
 });
 
+// Task 9 (audit data #15) — the O(pending × all-bids) similarity match used to
+// recompute from scratch on every GET (this endpoint is polled for the sidebar
+// badge). Cached, keyed on max(updated_at) of both intake_items and bids —
+// either changing (a new/edited item, a bid renamed or re-staged, a
+// soft-delete) invalidates it; nothing else does. A cold cache or a signature
+// miss recomputes the whole map in one pass, same as before.
+let similarCache: { key: string; map: Map<string, SimilarCandidate[]> } | null = null;
+
+async function computeSimilarMap(pending: Array<{ id: string; name: string }>): Promise<Map<string, SimilarCandidate[]>> {
+  // ::text, not the parsed Date object — pg parses timestamptz into a JS
+  // Date, and interpolating a Date into a template literal calls its
+  // second-precision toString(), which silently collapses two inserts that
+  // land in the same second (routine in a fast test, or just a busy moment)
+  // into an identical cache key. Casting to text in SQL keeps Postgres's own
+  // microsecond precision.
+  const { rows: sig } = await pool.query(
+    `SELECT (SELECT max(updated_at) FROM intake_items)::text AS intake_max,
+            (SELECT max(updated_at) FROM bids)::text AS bids_max`
+  );
+  const key = `${sig[0].intake_max ?? ''}:${sig[0].bids_max ?? ''}`;
+  if (similarCache && similarCache.key === key) return similarCache.map;
+
+  const { rows: bidRows } = await pool.query(`SELECT id, name, stage FROM bids WHERE deleted_at IS NULL`);
+  const bidCandidates: SimilarCandidate[] = bidRows.map(b => ({ kind: 'bid', id: b.id, name: b.name, stage: b.stage }));
+  const map = new Map<string, SimilarCandidate[]>();
+  for (const item of pending) {
+    const intakeCandidates: SimilarCandidate[] = pending
+      .filter(o => o.id !== item.id)
+      .map(o => ({ kind: 'intake', id: o.id, name: o.name }));
+    map.set(item.id, findSimilar(item.name, [...intakeCandidates, ...bidCandidates]));
+  }
+  similarCache = { key, map };
+  return map;
+}
+
+/** Test-only escape hatch — used by intakeSimilarCache.test.ts to assert a cold cache. */
+export function __resetIntakeSimilarCacheForTests(): void { similarCache = null; }
+
 // Shared inbox of incoming bid invitations. Pending items plus anything
 // processed in the last 7 days (so accept/decline stay visible briefly).
 router.get('/', requireAuth, async (_req, res) => {
@@ -103,16 +141,10 @@ router.get('/', requireAuth, async (_req, res) => {
   const pending = rows.filter(r => r.status === 'pending');
   let withSimilar = rows;
   if (pending.length) {
-    const { rows: bidRows } = await pool.query(`SELECT id, name, stage FROM bids WHERE deleted_at IS NULL`);
-    const bidCandidates: SimilarCandidate[] = bidRows.map(b => ({ kind: 'bid', id: b.id, name: b.name, stage: b.stage }));
-    withSimilar = rows.map(item => {
-      if (item.status !== 'pending') return item;
-      const intakeCandidates: SimilarCandidate[] = pending
-        .filter(o => o.id !== item.id)
-        .map(o => ({ kind: 'intake', id: o.id, name: o.name }));
-      const similar = findSimilar(item.name, [...intakeCandidates, ...bidCandidates]);
-      return { ...item, similar };
-    });
+    const map = await computeSimilarMap(pending);
+    withSimilar = rows.map(item => (
+      item.status !== 'pending' ? item : { ...item, similar: map.get(item.id) ?? [] }
+    ));
   }
   res.json(withSimilar);
 });

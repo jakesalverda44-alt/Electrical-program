@@ -92,43 +92,71 @@ export async function loadLinkedDocumentsAsAttachments(
     params.push(opts.categories);
     categoryClause = ` AND category = ANY($${params.length})`;
   }
-  const { rows } = await pool.query<DocRow>(
-    `SELECT id, name, display_name, category, file_type, file_size, file_data, storage_url
+
+  // Task 9 (audit data #10) — two passes. Pass 1 selects metadata only (no
+  // file_data — the largest single column on this table, up to a few MB of
+  // base64 per row); the size budget is decided from that alone, exactly the
+  // same running-total arithmetic the single-pass version used, just against
+  // `file_size` instead of the fetched buffer's actual length (storeDocument
+  // always records file_size at upload time, so the two agree in the normal
+  // case — a legacy row with no recorded file_size is still included rather
+  // than blocked, same as the old pre-fetch check's `doc.file_size &&` guard,
+  // and simply doesn't count against the running total until fetched). Only
+  // once the survivor list is final does pass 2 fetch file_data, and only for
+  // those ids.
+  const { rows: meta } = await pool.query<Omit<DocRow, 'file_data'>>(
+    `SELECT id, name, display_name, category, file_type, file_size, storage_url
        FROM documents
       WHERE linked_id = $1 AND deleted_at IS NULL${categoryClause}
       ORDER BY created_at ASC`,
     params
   );
 
+  const survivors: Array<Omit<DocRow, 'file_data'> & { attachName: string }> = [];
+  const skipped: string[] = [];
+  let total = 0;
+  for (const doc of meta) {
+    const name = attachmentFileName(doc.display_name, doc.name, doc.file_type);
+    if (doc.file_size && doc.file_size > maxTotalBytes) { skipped.push(name); continue; }
+    if (doc.file_size && total + doc.file_size > maxTotalBytes) { skipped.push(name); continue; }
+    total += doc.file_size ?? 0;
+    survivors.push({ ...doc, attachName: name });
+  }
+
+  const fileDataById = new Map<string, string | null>();
+  if (survivors.length) {
+    const { rows: dataRows } = await pool.query<{ id: string; file_data: string | null }>(
+      `SELECT id, file_data FROM documents WHERE id = ANY($1::uuid[])`,
+      [survivors.map(s => s.id)]
+    );
+    for (const r of dataRows) fileDataById.set(r.id, r.file_data);
+  }
+
   const attachments: GraphAttachment[] = [];
   const attachedNames: string[] = [];
   const attached: LinkedDocRef[] = [];
-  const skipped: string[] = [];
-  let total = 0;
 
-  for (const doc of rows) {
-    const name = attachmentFileName(doc.display_name, doc.name, doc.file_type);
-    // Skip clearly-oversized files up front when the size is recorded.
-    if (doc.file_size && doc.file_size > maxTotalBytes) { skipped.push(name); continue; }
-
+  for (const doc of survivors) {
     let buf: Buffer | null = null;
-    try { buf = await fetchDocBytes(doc); }
+    try { buf = await fetchDocBytes({ ...doc, file_data: fileDataById.get(doc.id) ?? null }); }
     catch (err) { logger.warn({ err, docId: doc.id }, '[bid-attach] could not fetch document'); }
-    if (!buf) { skipped.push(name); continue; }
+    if (!buf) { skipped.push(doc.attachName); continue; }
 
-    if (total + buf.length > maxTotalBytes) { skipped.push(name); continue; }
-    total += buf.length;
+    // A doc with no recorded file_size (didn't count against `total` above)
+    // still gets the actual-bytes budget check here, same as before.
+    if (!doc.file_size && total + buf.length > maxTotalBytes) { skipped.push(doc.attachName); continue; }
+    if (!doc.file_size) total += buf.length;
 
     attachments.push({
       '@odata.type': '#microsoft.graph.fileAttachment',
-      name,
+      name: doc.attachName,
       contentType: doc.file_type || 'application/octet-stream',
       contentBytes: buf.toString('base64'),
       isInline: false,
       contentId: `bidfile-${doc.id}`,
     });
-    attachedNames.push(name);
-    attached.push({ name, category: doc.category });
+    attachedNames.push(doc.attachName);
+    attached.push({ name: doc.attachName, category: doc.category });
   }
 
   return { attachments, attachedNames, attached, skipped };
