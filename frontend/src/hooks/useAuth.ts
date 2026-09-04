@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import api from '../api/client';
+import api, { signalUnauthorized } from '../api/client';
 import { User } from '../types';
 
 // Roles with administrative rights (mirror of the backend PRIVILEGED_ROLES).
@@ -46,7 +46,9 @@ export function useAuth() {
         setUser(data.user as User);
       } catch {
         window.history.replaceState({}, '', window.location.pathname);
-        window.location.href = '/login?error=' + encodeURIComponent('Microsoft sign-in failed. Please try again.');
+        // Route rather than reload: App.tsx's crm:unauthorized listener puts us
+        // on /login with this message.
+        signalUnauthorized({ next: '/dashboard', error: 'Microsoft sign-in failed. Please try again.' });
       }
     })();
   }, [pendingMsCode]);

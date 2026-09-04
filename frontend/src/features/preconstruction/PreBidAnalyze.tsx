@@ -4,6 +4,7 @@
 // be surfaced immediately rather than spun on — the backend gates this synchronously.
 import { useEffect, useRef, useState } from 'react';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 
 interface AiComparison {
   majorDifferences?: string[];
@@ -39,26 +40,29 @@ export default function PreBidAnalyze({ bidId, compId, compName, initialAgainst,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compId]);
 
-  // Stop polling on unmount (or when the comp/status changes) so a navigated-away tab
-  // never leaks a timer.
+  // The request itself (and its cancellation) belongs to useApi; the interval
+  // only decides when to ask again. A transient poll failure is still ignored —
+  // useApi parks it in `error` and we do not read it here.
+  const { data: polled, reload: repoll } = useApi<{
+    scope?: {
+      ai_comparison_against?: string | null; ai_status?: string | null;
+      ai_comparison?: AiComparison | null; ai_error?: string | null;
+    } | null;
+  }>(`/preconstruction/${bidId}/prebid`, { enabled: status === 'running' });
+
   useEffect(() => {
     if (status !== 'running') return undefined;
-    timerRef.current = setInterval(async () => {
-      try {
-        const { data } = await api.get(`/preconstruction/${bidId}/prebid`);
-        const sc = data?.scope;
-        if (!sc || sc.ai_comparison_against !== compId) return;
-        setStatus(sc.ai_status ?? null);
-        setComparison(sc.ai_comparison ?? null);
-        setErrMsg(sc.ai_error ?? null);
-      } catch {
-        // transient poll failure — try again next tick rather than surfacing an error
-      }
-    }, POLL_MS);
+    timerRef.current = setInterval(repoll, POLL_MS);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [status, bidId, compId]);
+  }, [status, repoll]);
 
-  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
+  useEffect(() => {
+    const sc = polled?.scope;
+    if (!sc || sc.ai_comparison_against !== compId) return;
+    setStatus(sc.ai_status ?? null);
+    setComparison(sc.ai_comparison ?? null);
+    setErrMsg(sc.ai_error ?? null);
+  }, [polled, compId]);
 
   const start = async () => {
     setStarting(true);

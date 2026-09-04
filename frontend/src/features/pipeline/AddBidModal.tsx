@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { Bid } from '../../types';
 import { PROJECT_TYPES } from '../preconstruction/constants';
 import { moneyShort } from '../../lib/money';
@@ -24,48 +25,37 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
   const [notifyTeam, setNotifyTeam] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [brands, setBrands] = useState<string[]>([]);
-  const [gcNames, setGcNames] = useState<string[]>([]);
-  const [preview, setPreview] = useState<ComparablesPreview | null>(null);
+  const { data: brandData } = useApi<string[]>('/bids/meta/brands');
+  const brands = brandData ?? [];
+  const { data: gcNameData } = useApi<string[]>('/customers/meta/gc-names');
+  const gcNames = gcNameData ?? [];
 
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
     setF(prev => ({ ...prev, [k]: e.target.value }));
 
   const ok = f.name.trim() && f.gc.trim();
 
+  // The comparables preview stays debounced: only the settled classification
+  // values reach useApi, which then owns the request and its cancellation.
+  const [previewKey, setPreviewKey] = useState({ brand: '', project_type: '', sq_ft: '' });
   useEffect(() => {
-    let cancelled = false;
-    api.get('/bids/meta/brands')
-      .then(({ data }) => { if (!cancelled) setBrands(data); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    api.get('/customers/meta/gc-names')
-      .then(({ data }) => { if (!cancelled) setGcNames(data); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!f.brand.trim() && !f.project_type.trim()) {
-      setPreview(null);
-      return;
-    }
-    const timer = setTimeout(() => {
-      const params = new URLSearchParams();
-      if (f.brand.trim()) params.set('brand', f.brand.trim());
-      if (f.project_type.trim()) params.set('project_type', f.project_type.trim());
-      if (f.sq_ft.trim()) params.set('sq_ft', f.sq_ft.trim());
-      api.get(`/preconstruction/comparables-preview?${params.toString()}`)
-        .then(({ data }) => { if (!cancelled) setPreview(data); })
-        .catch(() => {});
-    }, 400);
-    return () => { cancelled = true; clearTimeout(timer); };
+    const timer = setTimeout(
+      () => setPreviewKey({ brand: f.brand.trim(), project_type: f.project_type.trim(), sq_ft: f.sq_ft.trim() }),
+      400,
+    );
+    return () => clearTimeout(timer);
   }, [f.brand, f.project_type, f.sq_ft]);
+
+  const previewEnabled = !!(previewKey.brand || previewKey.project_type);
+  const { data: previewData } = useApi<ComparablesPreview>('/preconstruction/comparables-preview', {
+    params: {
+      brand: previewKey.brand || undefined,
+      project_type: previewKey.project_type || undefined,
+      sq_ft: previewKey.sq_ft || undefined,
+    },
+    enabled: previewEnabled,
+  });
+  const preview = previewEnabled ? previewData : null;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

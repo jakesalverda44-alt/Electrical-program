@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { PrebidSection } from './prebidScope';
 import PreBidUpload from './PreBidUpload';
 import PreBidQuantityCompare from './PreBidQuantityCompare';
@@ -22,33 +22,34 @@ interface Comparable {
 interface AiComparison {
   majorDifferences?: string[]; costDrivers?: string[]; missingScope?: string[]; notes?: string;
 }
+interface PrebidPackage {
+  takeoff: null | {
+    item_count: number; categories: Category[]; line_items: LineItem[]; key_findings: string[];
+  };
+  scope: null | {
+    furnish_model: string | null; furnish_note: string | null;
+    meta: Record<string, string>; sections: PrebidSection[];
+    ai_comparison: AiComparison | null; ai_comparison_against: string | null;
+    ai_status: string | null; ai_error: string | null;
+  };
+}
 
 export default function PreBidTab({ bidId, onSectionsLoaded }: {
   bidId: string;
   onSectionsLoaded: (s: PrebidSection[]) => void;
 }) {
-  const [pkg, setPkg] = useState<{ takeoff: null | {
-    item_count: number; categories: Category[]; line_items: LineItem[]; key_findings: string[];
-  }; scope: null | {
-    furnish_model: string | null; furnish_note: string | null;
-    meta: Record<string, string>; sections: PrebidSection[];
-    ai_comparison: AiComparison | null; ai_comparison_against: string | null;
-    ai_status: string | null; ai_error: string | null;
-  } } | null>(null);
-  const [comps, setComps] = useState<Comparable[]>([]);
+  const { data: pkg, reload: reloadPkg } = useApi<PrebidPackage>(`/preconstruction/${bidId}/prebid`);
+  const { data: compsData, reload: reloadComps } = useApi<{ comparables?: Comparable[] }>(
+    `/preconstruction/${bidId}/prebid-comparables`,
+  );
+  const comps = compsData?.comparables ?? [];
   const [selected, setSelected] = useState<Comparable | null>(null);
 
-  const refetch = useCallback(() => {
-    api.get(`/preconstruction/${bidId}/prebid`).then(r => {
-      setPkg(r.data);
-      if (r.data?.scope?.sections) onSectionsLoaded(r.data.scope.sections);
-    });
-    api.get(`/preconstruction/${bidId}/prebid-comparables`)
-      .then(r => setComps(r.data?.comparables ?? []))
-      .catch(() => setComps([]));
-  }, [bidId, onSectionsLoaded]);
+  const refetch = useCallback(() => { reloadPkg(); reloadComps(); }, [reloadPkg, reloadComps]);
 
-  useEffect(() => { refetch(); }, [refetch]);
+  useEffect(() => {
+    if (pkg?.scope?.sections) onSectionsLoaded(pkg.scope.sections);
+  }, [pkg, onSectionsLoaded]);
 
   if (!pkg) return <div style={{ padding: '20px 24px' }}>Loading…</div>;
 

@@ -63,7 +63,7 @@ function baseMocks() {
     if (url === `/preconstruction/intelligence/${bid.id}`) return Promise.resolve({ data: null });
     if (url === '/estimates/unit-costs') return Promise.resolve({ data: { global: {}, by_project_type: {} } });
     if (url === `/estimates/${bid.id}`) return Promise.resolve({ data: null });
-    if (url.startsWith('/documents?linked_id=')) return Promise.resolve({ data: [] });
+    if (url === '/documents') return Promise.resolve({ data: [] });
     return Promise.resolve({ data: null });
   });
   post.mockResolvedValue({ data: {} });
@@ -137,7 +137,7 @@ describe('PcWorkspace Proposal tab — verify-gate 422 panel (Task 7.2)', () => 
       if (url === `/preconstruction/intelligence/${bid.id}`) return Promise.resolve({ data: null });
       if (url === '/estimates/unit-costs') return Promise.resolve({ data: { global: {}, by_project_type: {} } });
       if (url === `/estimates/${bid.id}`) return Promise.resolve({ data: null });
-      if (url.startsWith('/documents?linked_id=')) return Promise.resolve({ data: [] });
+      if (url === '/documents') return Promise.resolve({ data: [] });
       return Promise.resolve({ data: null });
     });
 

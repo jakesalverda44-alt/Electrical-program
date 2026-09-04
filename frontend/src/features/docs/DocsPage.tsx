@@ -2,6 +2,7 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Gen } from '../../types';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { useShowToast } from '../../contexts/AppContext';
 
 type DocCategory = 'plans' | 'contract' | 'proposal' | 'permit' | 'invoice' | 'other' | 'change_order' | 'submittal' | 'rfi' | 'photo';
@@ -52,7 +53,6 @@ export default function DocsPage({ bids, gens }: Props) {
   const showToast = useShowToast();
   const fileInput = useRef<HTMLInputElement>(null);
   const [docs,         setDocs]         = useState<Doc[]>([]);
-  const [loading,      setLoading]      = useState(true);
   const [filterCat,    setFilterCat]    = useState<DocCategory | 'all'>('all');
   const [filterDiv,    setFilterDiv]    = useState<'all' | 'elec' | 'gen' | 'general'>('all');
   const [search,       setSearch]       = useState('');
@@ -62,9 +62,8 @@ export default function DocsPage({ bids, gens }: Props) {
   const [selected,     setSelected]     = useState<Doc | null>(null);
   const [uploading,    setUploading]    = useState(false);
 
-  useEffect(() => {
-    api.get('/documents').then(r => setDocs(r.data)).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  const { data: loadedDocs, loading } = useApi<Doc[]>('/documents');
+  useEffect(() => { if (loadedDocs) setDocs(loadedDocs); }, [loadedDocs]);
 
   const linkOptions = useMemo(() => [
     { id: '', name: '— No link —', div: 'general' as const },

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { Gen } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
 import DocSlot from './DocSlot';
@@ -18,16 +19,10 @@ interface DocRow { id: string; category: string }
 /** Shared fetch of a gen's kickoff-kit documents (also used by the drawer's
  *  Overview chips). One row per category matters; extra fields ignored. */
 export function useKickoffDocs(genId: string) {
-  const [docs, setDocs] = useState<DocRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const refresh = useCallback(() => {
-    api.get('/documents', { params: { linked_id: genId } })
-      .then(({ data }) => setDocs(data as DocRow[]))
-      .catch(() => setDocs([]))
-      .finally(() => setLoading(false));
-  }, [genId]);
-  useEffect(refresh, [refresh]);
-  return { docs, refresh, loading };
+  const { data, loading, reload: refresh } = useApi<DocRow[]>('/documents', {
+    params: { linked_id: genId },
+  });
+  return { docs: data ?? [], refresh, loading };
 }
 
 /** 'done' = finalized doc uploaded; 'progress' = tab has saved-but-unfinalized

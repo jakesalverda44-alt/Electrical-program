@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import Icon from '../../components/Icon';
 import { useUser, useShowToast } from '../../contexts/AppContext';
 import { Bid, Gen, WonJob, BriefPayload, BriefAttentionItem, TodayEvent, Lead } from '../../types';
@@ -125,8 +126,6 @@ interface Props {
 export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav, onEditGen, onConverted }: Props) {
   const user = useUser();
   const showToast = useShowToast();
-  const [brief, setBrief] = useState<BriefPayload | null>(null);
-  const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(new Date());
   const [drawerItem, setDrawerItem] = useState<BriefAttentionItem | null>(null);
   const [marking, setMarking] = useState(false);
@@ -138,14 +137,11 @@ export default function CommandCenterPage({ bids, gens, wonJobs, repNames, onNav
     return isNaN(n) ? 0 : n;
   });
 
-  const load = useCallback(() => {
-    api.get<BriefPayload>('/brief')
-      .then(r => setBrief(r.data))
-      .catch(() => setBrief(null))
-      .finally(() => setLoading(false));
-  }, []);
+  // The interval still decides when to ask; the request, its cancellation and
+  // its failure state belong to useApi.
+  const { data: brief, loading, reload: load } = useApi<BriefPayload>('/brief');
 
-  useEffect(() => { load(); const t = setInterval(load, 60_000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { const t = setInterval(load, 60_000); return () => clearInterval(t); }, [load]);
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 30_000); return () => clearInterval(t); }, []);
 
   const toggleDone = (id: string) => setDone(prev => {

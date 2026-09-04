@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import { Bid } from '../../types';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { useShowToast } from '../../contexts/AppContext';
 import { useIsMobile } from '../../hooks/useIsMobile';
 
@@ -70,7 +71,6 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   const showToast = useShowToast();
   const isMobile = useIsMobile();
   const [items, setItems] = useState<IntakeItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<IntakeItem | null>(null);
   const [edit, setEdit] = useState<typeof BLANK>(BLANK);
   const [declineOpen, setDeclineOpen] = useState(false);
@@ -83,13 +83,11 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   // "Email new bid to the team" option (opt-in, off by default) + its editable recipients.
   const [notifyTeam, setNotifyTeam] = useState(false);
   const [notifyEmails, setNotifyEmails] = useState('');
-  const [teamDefaults, setTeamDefaults] = useState<{ emails: string[]; mailConfigured: boolean }>({ emails: [], mailConfigured: false });
-
-  useEffect(() => {
-    api.get('/intake/notify-defaults')
-      .then(r => setTeamDefaults({ emails: r.data?.emails ?? [], mailConfigured: !!r.data?.mailConfigured }))
-      .catch(() => setTeamDefaults({ emails: [], mailConfigured: false }));
-  }, []);
+  const { data: notifyDefaults } = useApi<{ emails?: string[]; mailConfigured?: boolean }>('/intake/notify-defaults');
+  const teamDefaults = useMemo(
+    () => ({ emails: notifyDefaults?.emails ?? [], mailConfigured: !!notifyDefaults?.mailConfigured }),
+    [notifyDefaults],
+  );
 
   const report = useCallback((list: IntakeItem[]) => {
     onUnreadChange?.(list.filter(i => !i.read_at).length);
@@ -99,15 +97,8 @@ export default function IntakeInboxPage({ onBidAccepted, onUnreadChange }: Props
   // all change the unread set, so report on every items change (not just on load).
   useEffect(() => { report(items); }, [items, report]);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    api.get('/intake')
-      .then(r => { setItems(r.data); report(r.data); })
-      .catch(() => { setItems([]); report([]); })
-      .finally(() => setLoading(false));
-  }, [report]);
-
-  useEffect(() => { load(); }, [load]);
+  const { data: loadedItems, loading, reload: load } = useApi<IntakeItem[]>('/intake');
+  useEffect(() => { if (loadedItems) setItems(loadedItems); }, [loadedItems]);
 
   const openItem = (item: IntakeItem) => {
     setSelected(item);

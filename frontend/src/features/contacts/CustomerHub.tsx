@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import FilePreviewModal from '../../components/FilePreviewModal';
 import { previewKind } from '../../components/filePreview';
 import { Customer, CustomerDetail, Toast } from '../../types';
@@ -53,12 +54,11 @@ const MANAGER_ROLES = ['owner', 'administrator', 'sales_manager'];
 
 // Pick duplicate customer records and merge them into the current one.
 function MergeModal({ targetId, targetName, onClose, onMerged }: { targetId: string; targetName: string; onClose: () => void; onMerged: (n: number) => void }) {
-  const [all, setAll] = useState<Customer[]>([]);
+  const { data: allData } = useApi<Customer[]>('/customers');
+  const all = allData ?? [];
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [merging, setMerging] = useState(false);
-
-  useEffect(() => { api.get('/customers').then(({ data }) => setAll(data)); }, []);
 
   const options = all.filter(c => c.id !== targetId &&
     (!query || c.name.toLowerCase().includes(query.toLowerCase()) || (c.company || '').toLowerCase().includes(query.toLowerCase())));
@@ -122,10 +122,12 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
   const [docCategory, setDocCategory] = useState('plans');
   const [preview, setPreview] = useState<{ title: string; kind: 'sheet' | 'doc'; buf: ArrayBuffer; docId: string } | null>(null);
 
-  const load = useCallback(() => {
-    api.get(`/customers/${id}`).then(({ data }) => { setDetail(data); setForm(data.customer); });
-  }, [id]);
-  useEffect(() => { load(); }, [load]);
+  const { data: loadedDetail, reload: load } = useApi<CustomerDetail>(`/customers/${id}`);
+  useEffect(() => {
+    if (!loadedDetail) return;
+    setDetail(loadedDetail);
+    setForm(loadedDetail.customer);
+  }, [loadedDetail]);
 
   if (!detail) return <div className="scroll"><div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div></div>;
 

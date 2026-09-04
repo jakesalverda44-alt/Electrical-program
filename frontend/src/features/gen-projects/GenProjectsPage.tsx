@@ -4,6 +4,7 @@ import DriveImage from '../../components/DriveImage';
 import RecordFiles from '../../components/RecordFiles';
 import { Gen, WonJob, Toast } from '../../types';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { moneyFull, moneyShort as money } from '../../lib/money';
 import { useShowToast } from '../../contexts/AppContext';
 
@@ -11,21 +12,12 @@ interface DrivePhoto { id: string; name: string; mimeType: string; webViewLink?:
 
 // Job-site photos for a generator project, pulled from the Drive "Photos" subfolder.
 function GenPhotos({ gen, showToast }: { gen: Gen; showToast: (t: Toast) => void }) {
-  const [photos, setPhotos] = useState<DrivePhoto[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: photoData, loading, reload: load } = useApi<DrivePhoto[]>(`/gens/${gen.id}/photos`);
+  const photos = photoData ?? [];
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const isImage = (m: string) => m.startsWith('image/');
-
-  const load = () => {
-    setLoading(true);
-    api.get(`/gens/${gen.id}/photos`)
-      .then(({ data }) => setPhotos(data))
-      .catch(() => setPhotos([]))
-      .finally(() => setLoading(false));
-  };
-  useEffect(load, [gen.id]);
 
   const upload = async (files: File[]) => {
     if (!files.length) return;

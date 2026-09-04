@@ -1,20 +1,16 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import api from '../../../api/client';
+import { useApi } from '../../../hooks/useApi';
 import Icon from '../../../components/Icon';
 import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, Toggle, RolePill, inputStyle, initials, timeAgo, ROLE_OPTIONS, ROLE_LABELS, ROLE_COLORS } from '../shared';
 
 export function UsersSection() {
-  const [users,    setUsers]    = useState<User[]>([]);
+  const { data: usersData, loading, reload: load } = useApi<User[]>('/users');
+  const users = usersData ?? [];
   const [selected, setSelected] = useState<User | null>(null);
   const [adding,   setAdding]   = useState(false);
-  const [loading,  setLoading]  = useState(true);
-
-  const load = () => {
-    api.get('/users').then(r => { setUsers(r.data); setLoading(false); }).catch(() => setLoading(false));
-  };
-  useEffect(load, []);
 
   const active   = users.filter(u => u.status !== 'inactive');
   const inactive = users.filter(u => u.status === 'inactive');

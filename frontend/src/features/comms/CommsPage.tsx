@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import { Bid, Gen, Activity } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 
 type CommKind = 'note' | 'call' | 'email' | 'meeting' | 'bid' | 'award' | 'system';
 
@@ -66,22 +67,21 @@ export default function CommsPage({ bids, gens, activity }: Props) {
   const systemEntries = useMemo(() => activity.map((a, i) => activityToEntry(a, i)), [activity]);
   const [persisted, setPersisted] = useState<CommEntry[]>([]);
 
+  const { data: commRows } = useApi<Record<string, string>[]>('/comms');
   useEffect(() => {
-    api.get('/comms').then(r => {
-      const rows: CommEntry[] = r.data.map((row: Record<string, string>) => ({
-        id: row.id,
-        kind: row.kind as CommKind,
-        div: row.div as CommEntry['div'],
-        subject: row.subject,
-        body: row.body ?? '',
-        linkedId: row.linked_id ?? '',
-        linkedName: row.linked_name ?? '',
-        author: row.author,
-        ts: row.created_at,
-      }));
-      setPersisted(rows);
-    }).catch(() => {});
-  }, []);
+    if (!commRows) return;
+    setPersisted(commRows.map(row => ({
+      id: row.id,
+      kind: row.kind as CommKind,
+      div: row.div as CommEntry['div'],
+      subject: row.subject,
+      body: row.body ?? '',
+      linkedId: row.linked_id ?? '',
+      linkedName: row.linked_name ?? '',
+      author: row.author,
+      ts: row.created_at,
+    })));
+  }, [commRows]);
 
   const entries = useMemo(() => {
     const ids = new Set(persisted.map(e => e.id));

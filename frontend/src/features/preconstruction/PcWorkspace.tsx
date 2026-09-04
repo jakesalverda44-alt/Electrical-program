@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import { Bid, Toast, BidEstimate, EstimateLineItem } from '../../types';
 import { PC_STEPS, PC_TABS, SCOPE_SECS, PcWorkspace, PcTabKey, PcStepKey, PROJECT_TYPES, ConfirmedService } from './constants';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
 import { moneyFull } from '../../lib/money';
 import FilePreviewModal from '../../components/FilePreviewModal';
@@ -208,6 +209,13 @@ function analysisErrorMessage(data: Record<string, unknown> | null | undefined) 
   return `${first.slice(0, 700)}...`;
 }
 
+interface TakeoffOnFile {
+  categories: { name: string; itemCount: number; totals: Record<string, number> }[];
+  line_items: { category: string; description: string; unit: string; qty: number | null }[];
+  item_count: number;
+  source_file: string | null;
+}
+
 interface ProjectDoc { id: string; name: string; display_name: string; category: string; file_type: string; }
 
 // The AI vision pipeline can only read PDFs and images — this gates which project
@@ -305,14 +313,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [analysisTab, setAnalysisTab] = useState<'agent1'|'agent2'|'agent3'|'raw'>('agent1');
   const [copied, setCopied] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [historicalCosts, setHistoricalCosts] = useState<Array<Record<string,unknown>>>([]);
   const [expandedCostRow, setExpandedCostRow] = useState<number | null>(null);
   const [costTypeFilter, setCostTypeFilter] = useState<string>('all');
   const [savedEstimate, setSavedEstimate] = useState<BidEstimate | null>(null);
-  const [unitCostLib, setUnitCostLib] = useState<{ global: Record<string,number>; by_project_type: Record<string,Record<string,number>> }>({ global: {}, by_project_type: {} });
   const [savingEstimate, setSavingEstimate] = useState(false);
   const [estimateSaved, setEstimateSaved] = useState(false);
-  const [bidIntel, setBidIntel] = useState<Record<string,unknown> | null>(null);
   const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
   // Populated by the pre-bid package fetch (Task 7). Empty until then, so the
   // "Import from Pre-Bid" button simply stays hidden.
@@ -360,12 +365,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const importTakeoffRef = useRef<HTMLInputElement>(null);
   const importBreakdownRef = useRef<HTMLInputElement>(null);
   const [savingImport, setSavingImport] = useState(false);
-  const [takeoffOnFile, setTakeoffOnFile] = useState<{
-    categories: { name: string; itemCount: number; totals: Record<string, number> }[];
-    line_items: { category: string; description: string; unit: string; qty: number | null }[];
-    item_count: number;
-    source_file: string | null;
-  } | null>(null);
+  // Six independent reads, one hook each: each cancels on its own key change,
+  // so switching bids can no longer land bid A's takeoff on bid B's workspace.
+  const { data: historicalCostsData } = useApi<Array<Record<string, unknown>>>('/preconstruction/costs');
+  const historicalCosts = historicalCostsData ?? [];
+  const { data: takeoffOnFile, reload: reloadTakeoff } = useApi<TakeoffOnFile>(`/preconstruction/${bid.id}/takeoff`);
+  const { data: bidIntel } = useApi<Record<string, unknown>>(`/preconstruction/intelligence/${bid.id}`);
+  const { data: unitCostLibData } = useApi<{ global: Record<string, number>; by_project_type: Record<string, Record<string, number>> }>('/estimates/unit-costs');
+  const unitCostLib = unitCostLibData ?? { global: {}, by_project_type: {} };
   const [openTakeoffCat, setOpenTakeoffCat] = useState<string | null>(null);
   const pollRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
   const agent4PollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -510,19 +517,16 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     };
   }, [bid.id]);
 
-  useEffect(() => {
-    api.get('/preconstruction/costs').then(r => setHistoricalCosts(r.data || [])).catch(() => {});
-    api.get(`/preconstruction/${bid.id}/takeoff`).then(r => setTakeoffOnFile(r.data)).catch(() => {});
-    api.get(`/preconstruction/intelligence/${bid.id}`).then(r => setBidIntel(r.data)).catch(() => {});
-    api.get('/estimates/unit-costs').then(r => setUnitCostLib(r.data || { global: {}, by_project_type: {} })).catch(() => {});
-    api.get(`/estimates/${bid.id}`).then(r => { if (r.data) setSavedEstimate(r.data); }).catch(() => {});
-    // Unfiltered — the "From Project Files" panel shows every project document;
-    // eligibility for AI analysis (PDF/image only) is enforced per-row via
-    // isPdfOrImage() at render time, not by hiding files here.
-    api.get(`/documents?linked_id=${bid.id}`).then(r => {
-      setProjectDocs((r.data || []) as ProjectDoc[]);
-    }).catch(() => {});
-  }, [bid.id]);
+  const { data: savedEstimateData } = useApi<BidEstimate>(`/estimates/${bid.id}`);
+  useEffect(() => { if (savedEstimateData) setSavedEstimate(savedEstimateData); }, [savedEstimateData]);
+
+  // Unfiltered — the "From Project Files" panel shows every project document;
+  // eligibility for AI analysis (PDF/image only) is enforced per-row via
+  // isPdfOrImage() at render time, not by hiding files here.
+  const { data: projectDocsData, reload: reloadProjectDocs } = useApi<ProjectDoc[]>('/documents', {
+    params: { linked_id: bid.id },
+  });
+  useEffect(() => { if (projectDocsData) setProjectDocs(projectDocsData); }, [projectDocsData]);
 
   // Hydrate overhead/profit/overrides from the saved bid_estimates row once it
   // loads. Without this, App.tsx's restore-on-refresh hardcodes
@@ -561,12 +565,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // Task 7 — load the composed BidData preview whenever a completed proposal
   // is on file (covers both a fresh Agent 4 run finishing via pollAgent4's
   // setAiResults, and reconnecting to an already-complete proposal on mount).
+  const proposalReady = aiResults?.agent4_status === 'complete';
+  const { data: proposalPreviewData } = useApi<BidDataPreview>(
+    `/preconstruction/${bid.id}/proposal-preview`,
+    { enabled: proposalReady },
+  );
   useEffect(() => {
-    if (aiResults?.agent4_status !== 'complete') { setProposalPreview(null); return; }
-    api.get(`/preconstruction/${bid.id}/proposal-preview`)
-      .then(r => setProposalPreview(r.data))
-      .catch(() => setProposalPreview(null));
-  }, [bid.id, aiResults?.agent4_status]);
+    setProposalPreview(proposalReady ? (proposalPreviewData ?? null) : null);
+  }, [proposalReady, proposalPreviewData]);
 
   // Pre-fill proposal price from saved estimate grand total
   useEffect(() => {
@@ -945,9 +951,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       fd.append('display_name', f.name);
       return api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
     })).then(() => {
-      api.get(`/documents?linked_id=${bid.id}`).then(r => {
-        setProjectDocs((r.data || []) as ProjectDoc[]);
-      }).catch(() => {});
+      reloadProjectDocs();
     }).catch(() => {});
   };
 
@@ -1027,7 +1031,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       if (importTakeoffFile && !data.sqFt) showToast({ title: 'No sq ft found', sub: 'Couldn\'t find building area in the takeoff — enter it manually below.' });
       if (data.takeoff) {
         showToast({ title: 'Takeoff saved', sub: `${data.takeoff.itemCount} items across ${data.takeoff.categories.length} categories.` });
-        api.get(`/preconstruction/${bid.id}/takeoff`).then(r => setTakeoffOnFile(r.data)).catch(() => {});
+        reloadTakeoff();
       }
       if (data.breakdown?.laborHours) showToast({ title: 'Cost breakdown saved', sub: `${Number(data.breakdown.laborHours).toLocaleString()} labor hours on file.` });
     } catch (err: unknown) {

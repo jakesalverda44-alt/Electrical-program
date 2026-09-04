@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import api from '../../../api/client';
+import React, { useState } from 'react';
+import { useApi } from '../../../hooks/useApi';
 import { SectionTitle, timeAgo, inputStyle } from '../shared';
 
 interface AuditRow {
@@ -24,20 +24,11 @@ const ACTION_COLORS: Record<string, { bg: string; color: string }> = {
 };
 
 export function AuditSection() {
-  const [rows, setRows] = useState<AuditRow[]>([]);
-  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
-
-  const load = useCallback(() => {
-    setLoading(true);
-    const q = filter ? `?entity_type=${encodeURIComponent(filter)}` : '';
-    api.get(`/admin/audit${q}`)
-      .then(r => setRows(r.data))
-      .catch(() => setRows([]))
-      .finally(() => setLoading(false));
-  }, [filter]);
-
-  useEffect(() => { load(); }, [load]);
+  const { data, loading } = useApi<AuditRow[]>('/admin/audit', {
+    params: filter ? { entity_type: filter } : undefined,
+  });
+  const rows = data ?? [];
 
   return (
     <div style={{ maxWidth: 860 }}>

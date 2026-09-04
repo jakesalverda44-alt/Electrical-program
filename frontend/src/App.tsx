@@ -23,8 +23,16 @@ import { resolveLegacyPath } from './lib/legacyRoutes';
 import { PcWorkspace, PC_TABS, ConfirmedService } from './features/preconstruction/constants';
 import Toast from './components/Toast';
 import { AppProviders } from './contexts/AppContext';
-import api from './api/client';
+import { UNAUTHORIZED_EVENT, UnauthorizedDetail } from './api/client';
+import { useApi } from './hooks/useApi';
 import { Bid, Gen, WonJob, Activity } from './types';
+
+interface DashboardPayload {
+  bids: Bid[];
+  gens: Gen[];
+  wonJobs: WonJob[];
+  activity: Activity[];
+}
 
 function StubPage({ title }: { title: string }) {
   return (
@@ -71,7 +79,6 @@ export default function App() {
   const [wonJobs, setWonJobs] = useState<WonJob[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
   const [repNames, setRepNames] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
   const [flashId, setFlashId] = useState<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
@@ -88,17 +95,31 @@ export default function App() {
     flashTimer.current = setTimeout(() => setFlashId(null), 1800);
   }, []);
 
+  // Three independent reads rather than one Promise.all: a failing /users or
+  // /preconstruction/workspaces used to reject the whole chain and leave the app
+  // rendering a legitimate-looking "no records" state for the entire pipeline.
+  const dashApi = useApi<DashboardPayload>('/dashboard', { enabled: !!user });
+  const usersApi = useApi<Array<{ name: string }>>('/users', { enabled: !!user });
+  const workspacesApi = useApi<Array<Record<string, unknown>>>('/preconstruction/workspaces', { enabled: !!user });
+
   useEffect(() => {
-    if (!user) return;
-    setLoading(true);
-    Promise.all([api.get('/dashboard'), api.get('/users'), api.get('/preconstruction/workspaces')])
-      .then(([dash, users, workspaces]) => {
-        const bidsData: Bid[] = dash.data.bids;
-        setBids(bidsData);
-        setGens(dash.data.gens);
-        setWonJobs(dash.data.wonJobs);
-        setActivity(dash.data.activity);
-        setRepNames(users.data.map((u: { name: string }) => u.name));
+    if (!dashApi.data) return;
+    setBids(dashApi.data.bids);
+    setGens(dashApi.data.gens);
+    setWonJobs(dashApi.data.wonJobs);
+    setActivity(dashApi.data.activity);
+  }, [dashApi.data]);
+
+  useEffect(() => {
+    if (!usersApi.data) return;
+    setRepNames(usersApi.data.map(u => u.name));
+  }, [usersApi.data]);
+
+  useEffect(() => {
+    const bidsData = dashApi.data?.bids;
+    const workspaceRows = workspacesApi.data;
+    if (!bidsData || !workspaceRows) return;
+    {
         // Restore persisted workspace state
         const restored: Record<string, PcWorkspace> = {};
         // 'compare' tab was retired from the workspace tab bar (Task 12) — Compare now
@@ -106,7 +127,7 @@ export default function App() {
         // active_tab='compare'; coerce anything not in the current tab list back to
         // 'overview' so restoring an old workspace never lands on a dead tab.
         const validTabs = new Set(PC_TABS.map(t => t.key as string));
-        for (const row of (workspaces.data as Array<Record<string, unknown>>)) {
+        for (const row of workspaceRows) {
           const bid = bidsData.find(b => b.id === row.bid_id);
           if (!bid) continue;
           const persistedTab = row.active_tab as string | undefined;
@@ -141,26 +162,49 @@ export default function App() {
           };
         }
         setPcData(restored);
-      })
-      .finally(() => setLoading(false));
-  }, [user]);
+    }
+  }, [dashApi.data, workspacesApi.data]);
 
   // Keep the Intake Inbox sidebar badge live (unread bids) regardless of the open page:
   // fetch on login and poll every 60s. Local actions (opening/importing) also update it
   // immediately via the page's onUnreadChange callback.
-  const loadIntakeUnread = useCallback(() => {
-    api.get('/intake/unread-count').then(r => setIntakeCount(r.data.unread ?? 0)).catch(() => {});
-  }, []);
+  // optional: a failed badge poll is not worth interrupting the user for — the
+  // count simply keeps its previous value until the next tick succeeds.
+  const intakeApi = useApi<{ unread?: number }>('/intake/unread-count', { enabled: !!user });
+  useEffect(() => {
+    if (intakeApi.data) setIntakeCount(intakeApi.data.unread ?? 0);
+  }, [intakeApi.data]);
+  const reloadIntakeUnread = intakeApi.reload;
   useEffect(() => {
     if (!user) return;
-    loadIntakeUnread();
-    const t = setInterval(loadIntakeUnread, 60_000);
+    const t = setInterval(reloadIntakeUnread, 60_000);
     return () => clearInterval(t);
-  }, [user, loadIntakeUnread]);
+  }, [user, reloadIntakeUnread]);
+
+  // The api client fires crm:unauthorized instead of hard-navigating, so an
+  // expired session becomes a client-side route change that remembers where the
+  // user was. Registered once, above the !user early return.
+  useEffect(() => {
+    const onUnauthorized = (e: Event) => {
+      const detail = (e as CustomEvent<UnauthorizedDetail>).detail ?? {};
+      const here = window.location.pathname + window.location.search;
+      const next = detail.next ?? here;
+      const params = new URLSearchParams();
+      if (next && next !== '/' && !next.startsWith('/login')) params.set('next', next);
+      if (detail.error) params.set('error', detail.error);
+      logout();
+      navigate('/login' + (params.toString() ? '?' + params.toString() : ''), { replace: true });
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, [logout, navigate]);
 
   const handleLogin = async (email: string, password: string) => {
     await login(email, password);
-    navigate('/dashboard');
+    // Honour ?next= so an expired session returns the user to the page that
+    // bounced them, not to the dashboard.
+    const next = new URLSearchParams(window.location.search).get('next');
+    navigate(next && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/login') ? next : '/dashboard');
   };
 
   const handleNewBid = useCallback((bid: Bid) => {
@@ -201,6 +245,10 @@ export default function App() {
       </>
     );
   }
+
+  // The dashboard payload is what every board and stat reads from, so it alone
+  // gates first paint; /users and /preconstruction/workspaces enrich the shell.
+  const loading = dashApi.loading;
 
   const renderView = () => {
     // Old flat view URLs redirect permanently to their new hub path — checked

@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import CustomerHub from './CustomerHub';
 import { Customer } from '../../types';
 import { moneyFull } from '../../lib/money';
@@ -98,14 +99,9 @@ export default function ContactsPage({ onNewBid, onNav }: Props) {
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [loading, setLoading] = useState(true);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    api.get('/customers').then(({ data }) => setCustomers(data)).finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
+  const { data: loadedCustomers, loading, reload: load } = useApi<Customer[]>('/customers');
+  useEffect(() => { if (loadedCustomers) setCustomers(loadedCustomers); }, [loadedCustomers]);
 
   const filtered = customers.filter(c => {
     if (filterType !== 'all' && c.type !== filterType) return false;

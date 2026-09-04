@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, WonJob } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from '../pipeline/constants';
 import { PROJECT_TYPES, SCOPE_SECS } from '../preconstruction/constants';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { moneyFull, moneyShort } from '../../lib/money';
 import { useStagePipeline } from '../../hooks/useStagePipeline';
 import { useShowToast } from '../../contexts/AppContext';
@@ -69,7 +70,7 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
   const [saving, setSaving] = useState(false);
   const [qualifying, setQualifying] = useState(false);
   const [qualResult, setQualResult] = useState<QualResult | null>(null);
-  const [winProb, setWinProb] = useState<{ pct: number; label: string } | null>(null);
+  const { data: qualify } = useApi<QualResult>(`/bids/${bid.id}/qualify`);
   const [closingJob, setClosingJob] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // "Email bid to team" (send the new-bid notification after the fact).
@@ -77,24 +78,26 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
   const [notifyEmails, setNotifyEmails] = useState('');
   const [sendingNotify, setSendingNotify] = useState(false);
   const [attachFiles, setAttachFiles] = useState(true);
-  const [fileCount, setFileCount] = useState<number | null>(null);
   const [draftLink, setDraftLink] = useState<string | null>(null);
-  const [teamDefaults, setTeamDefaults] = useState<{ emails: string[]; mailConfigured: boolean }>({ emails: [], mailConfigured: false });
+  const { data: notifyDefaults } = useApi<{ emails?: string[]; mailConfigured?: boolean }>('/intake/notify-defaults');
+  const teamDefaults = useMemo(
+    () => ({ emails: notifyDefaults?.emails ?? [], mailConfigured: !!notifyDefaults?.mailConfigured }),
+    [notifyDefaults],
+  );
 
-  useEffect(() => {
-    api.get('/intake/notify-defaults')
-      .then(({ data }) => setTeamDefaults({ emails: data?.emails ?? [], mailConfigured: !!data?.mailConfigured }))
-      .catch(() => {});
-  }, []);
+  // The attachable-file count is only meaningful while the notify dialog is
+  // open, so the request is scoped to that rather than fired from the click.
+  const { data: notifyDocs } = useApi<unknown[]>('/documents', {
+    params: { linked_id: bid.id },
+    enabled: notifyOpen,
+  });
+  const fileCount = Array.isArray(notifyDocs) ? notifyDocs.length : null;
 
   const openNotify = () => {
     setNotifyEmails(notifyEmails.trim() || teamDefaults.emails.join(', '));
     setAttachFiles(true);
     setDraftLink(null);
     setNotifyOpen(true);
-    api.get(`/documents?linked_id=${encodeURIComponent(bid.id)}`)
-      .then(({ data }) => setFileCount(Array.isArray(data) ? data.length : 0))
-      .catch(() => setFileCount(0));
   };
 
   const handleNotifyTeam = async () => {
@@ -109,15 +112,16 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
     }
   };
 
-  useEffect(() => {
-    api.get(`/bids/${bid.id}/qualify`).then(({ data }) => {
-      const pct = data.gcWinRate !== null ? data.gcWinRate : Math.round((data.score / 10) * 100);
-      const label = data.gcWinRate !== null
-        ? `${pct}% with ${bid.gc} (${data.gcWon}W / ${data.gcLost}L)`
-        : `${pct}% est. — no prior history with ${bid.gc}`;
-      setWinProb({ pct, label });
-    }).catch(() => {});
-  }, [bid.id]);
+  // Derived, not stored: a late response for a bid the user already navigated
+  // away from can no longer paint the previous GC's name onto this card.
+  const winProb = useMemo(() => {
+    if (!qualify) return null;
+    const pct = qualify.gcWinRate !== null ? qualify.gcWinRate : Math.round((qualify.score / 10) * 100);
+    const label = qualify.gcWinRate !== null
+      ? `${pct}% with ${bid.gc} (${qualify.gcWon}W / ${qualify.gcLost}L)`
+      : `${pct}% est. — no prior history with ${bid.gc}`;
+    return { pct, label };
+  }, [qualify, bid.gc]);
 
   const runQualify = async () => {
     setQualifying(true);

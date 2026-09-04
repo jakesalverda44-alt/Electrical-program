@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import api from '../../../api/client';
+import { useApi } from '../../../hooks/useApi';
 import { SectionTitle, timeAgo } from '../shared';
 import { moneyFull } from '../../../lib/money';
 
@@ -11,19 +12,9 @@ interface TrashData { bids: TrashBid[]; gens: TrashGen[]; documents: TrashDoc[] 
 const money = (n: number | null | undefined) => n != null ? moneyFull(Number(n)) : '—';
 
 export function TrashSection() {
-  const [data, setData] = useState<TrashData>({ bids: [], gens: [], documents: [] });
-  const [loading, setLoading] = useState(true);
+  const { data: trash, loading, reload: load } = useApi<TrashData>('/admin/trash');
+  const data: TrashData = trash ?? { bids: [], gens: [], documents: [] };
   const [busy, setBusy] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    api.get('/admin/trash')
-      .then(r => setData(r.data))
-      .catch(() => setData({ bids: [], gens: [], documents: [] }))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
 
   const act = async (verb: 'restore' | 'purge', base: string, id: string, label: string) => {
     if (verb === 'purge' && !window.confirm(`Permanently delete ${label}? This cannot be undone.`)) return;

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../../api/client';
+import { useApi } from '../../../hooks/useApi';
 import { Field, SectionTitle, SaveBar, inputStyle } from '../shared';
 import { PROJECT_TYPES } from '../../preconstruction/constants';
 
@@ -28,13 +29,12 @@ export function UnitCostSection() {
   const [saved, setSaved]   = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
+  const { data: loaded } = useApi<CostLib>('/estimates/unit-costs');
   useEffect(() => {
-    api.get('/estimates/unit-costs').then(r => {
-      const data = r.data as CostLib;
-      setLib(data);
-      setOrig(JSON.parse(JSON.stringify(data)));
-    }).catch(() => {});
-  }, []);
+    if (!loaded) return;
+    setLib(loaded);
+    setOrig(JSON.parse(JSON.stringify(loaded)));
+  }, [loaded]);
 
   const setGlobal = (cat: string, val: string) => {
     const n = val === '' ? 0 : Number(val);

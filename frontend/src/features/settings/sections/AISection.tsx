@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../../api/client';
+import { useApi } from '../../../hooks/useApi';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, inputStyle } from '../shared';
 
@@ -56,24 +57,19 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
   }, [settings]);
 
   // Fetch hardcoded defaults once; pre-populate empty prompt fields without dirtying the form
+  const { data: promptDefaults } = useApi<PromptDefaults>('/preconstruction/prompt-defaults');
   useEffect(() => {
-    api.get('/preconstruction/prompt-defaults')
-      .then(r => {
-        const map = r.data as PromptDefaults;
-        setDefaults(map);
-        setVals(prev => {
-          const next = { ...prev };
-          PROMPT_KEYS.forEach((pk, i) => { if (!next[pk]) next[pk] = map[AGT[i]]; });
-          return next;
-        });
-        setOrig(prev => {
-          const next = { ...prev };
-          PROMPT_KEYS.forEach((pk, i) => { if (!next[pk]) next[pk] = map[AGT[i]]; });
-          return next;
-        });
-      })
-      .catch(() => {});
-  }, []);
+    if (!promptDefaults) return;
+    const map = promptDefaults;
+    setDefaults(map);
+    const fill = (prev: Record<string, string>) => {
+      const next = { ...prev };
+      PROMPT_KEYS.forEach((pk, i) => { if (!next[pk]) next[pk] = map[AGT[i]]; });
+      return next;
+    };
+    setVals(fill);
+    setOrig(fill);
+  }, [promptDefaults]);
 
   const isCustomized = (pk: string, agentIdx: number): boolean => {
     if (!defaults) return vals[pk].trim().length > 0;

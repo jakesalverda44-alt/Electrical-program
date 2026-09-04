@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../../../api/client';
+import { useApi } from '../../../hooks/useApi';
 import Icon from '../../../components/Icon';
 import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
@@ -44,7 +45,6 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
   const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
   const [users,  setUsers]  = useState<User[]>([]);
-  const [usage,  setUsage]  = useState<AIUsageRow[]>([]);
   const [overrides, setOverrides] = useState<Record<string, Record<string, boolean> | null>>({});
   const [overrideSaving, setOverrideSaving] = useState<string | null>(null);
 
@@ -59,16 +59,18 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
     setDailyLimit(lim); setOrigLimit(lim);
   }, [settings]);
 
+  const { data: allUsers } = useApi<User[]>('/users');
   useEffect(() => {
-    api.get('/users').then(r => {
-      const active = (r.data as User[]).filter(u => u.status !== 'inactive');
-      setUsers(active);
-      const ov: Record<string, Record<string, boolean> | null> = {};
-      active.forEach(u => { ov[u.id] = (u as any).ai_override ?? null; });
-      setOverrides(ov);
-    }).catch(() => {});
-    api.get('/ai/usage/today').then(r => setUsage(r.data)).catch(() => {});
-  }, []);
+    if (!allUsers) return;
+    const active = allUsers.filter(u => u.status !== 'inactive');
+    setUsers(active);
+    const ov: Record<string, Record<string, boolean> | null> = {};
+    active.forEach(u => { ov[u.id] = (u as any).ai_override ?? null; });
+    setOverrides(ov);
+  }, [allUsers]);
+
+  const { data: usageData } = useApi<AIUsageRow[]>('/ai/usage/today');
+  const usage = usageData ?? [];
 
   const toggleMatrix = (role: string, perm: string) => {
     setMatrix(prev => ({ ...prev, [role]: { ...prev[role], [perm]: !prev[role]?.[perm] } }));

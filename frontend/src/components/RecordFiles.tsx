@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from './Icon';
 import api from '../api/client';
+import { useApi } from '../hooks/useApi';
 import FilePreviewModal from './FilePreviewModal';
 import { useDocPreview } from './useDocPreview';
 
@@ -50,21 +51,16 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
   cameraFirst?: boolean; title?: string;
 }) {
   const [docs, setDocs] = useState<Doc[]>([]);
-  const [loading, setLoading] = useState(true);
   const [category, setCategory] = useState(div === 'elec' ? 'plans' : div === 'lead' ? 'photo' : 'other');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
   const cameraInput = useRef<HTMLInputElement>(null);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    api.get('/documents', { params: { linked_id: linkedId } })
-      .then(({ data }) => setDocs(data))
-      .finally(() => setLoading(false));
-  }, [linkedId]);
-
-  useEffect(() => { load(); }, [load]);
+  const { data: loadedDocs, loading, reload: load } = useApi<Doc[]>('/documents', {
+    params: { linked_id: linkedId },
+  });
+  useEffect(() => { if (loadedDocs) setDocs(loadedDocs); }, [loadedDocs]);
 
   const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

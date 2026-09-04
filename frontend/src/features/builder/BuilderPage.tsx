@@ -7,6 +7,7 @@ import ProposalPreview from './ProposalPreview';
 import EvBuilderPage from './EvBuilderPage';
 import SendProposalModal from './SendProposalModal';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { Gen, WonJob } from '../../types';
 import { useSettings, useShowToast } from '../../contexts/AppContext';
 import { parseAddress } from '../../lib/address';
@@ -161,11 +162,8 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
   const [saving, setSaving] = useState(false);
   const [showSend, setShowSend] = useState(false);
   const [savedGenId, setSavedGenId] = useState<string | null>(editGen?.id ?? null);
-  const [benchmarks, setBenchmarks] = useState<Array<{ kw: number; avgAmount: number; avgPerKw: number; count: number }>>([]);
-
-  useEffect(() => {
-    api.get('/gens/benchmark').then(r => setBenchmarks(r.data)).catch(() => {});
-  }, []);
+  const { data: benchmarkData } = useApi<Array<{ kw: number; avgAmount: number; avgPerKw: number; count: number }>>('/gens/benchmark');
+  const benchmarks = benchmarkData ?? [];
 
   const set = (key: keyof GenForm, val: unknown) => setForm(prev => {
     const next = { ...prev, [key]: val };

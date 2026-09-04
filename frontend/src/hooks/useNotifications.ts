@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/client';
+import { useApi } from './useApi';
 
 export interface Notification {
   id: string;
@@ -18,13 +19,19 @@ export function useNotifications(authenticated: boolean) {
   const [unread, setUnread] = useState(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const reload = useCallback(async () => {
-    try {
-      const { data } = await api.get('/notifications');
-      setNotifications(data.notifications);
-      setUnread(data.unread);
-    } catch { /* ignore transient errors */ }
-  }, []);
+  // optional: a failed notification poll is not worth telling the user about —
+  // useApi parks the message in `error` and the next tick tries again. The
+  // request and its cancellation are still the hook's job, not ours.
+  const { data, reload } = useApi<{ notifications: Notification[]; unread: number }>(
+    '/notifications',
+    { enabled: authenticated },
+  );
+
+  useEffect(() => {
+    if (!data) return;
+    setNotifications(data.notifications);
+    setUnread(data.unread);
+  }, [data]);
 
   const markRead = useCallback(async (id: string) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
@@ -40,7 +47,6 @@ export function useNotifications(authenticated: boolean) {
 
   useEffect(() => {
     if (!authenticated) return;
-    reload();
     timer.current = setInterval(reload, 60_000);
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [authenticated, reload]);

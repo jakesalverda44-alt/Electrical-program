@@ -34,7 +34,9 @@ const PROJECT_DOCS = [
 
 function mockApi() {
   get.mockImplementation((url: string) => {
-    if (url.startsWith('/documents?linked_id=')) return Promise.resolve({ data: PROJECT_DOCS });
+    // useApi sends the linked_id as an axios `params` object rather than an
+    // inline query string, so match on the path.
+    if (url === '/documents') return Promise.resolve({ data: PROJECT_DOCS });
     if (/\/documents\/.+\/view/.test(url)) return Promise.resolve({ data: new ArrayBuffer(8) });
     return Promise.resolve({ data: null });
   });

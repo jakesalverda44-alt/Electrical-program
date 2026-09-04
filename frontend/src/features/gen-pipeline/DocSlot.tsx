@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { useShowToast } from '../../contexts/AppContext';
 
 interface DocRow { id: string; display_name: string; category: string; storage_url: string | null; }
@@ -9,19 +10,12 @@ interface DocRow { id: string; display_name: string; category: string; storage_u
  *  aren't part of the proposal itself. */
 export default function DocSlot({ genId, category, label, accept = 'application/pdf', onUploaded, onChanged }: { genId: string; category: string; label: string; accept?: string; onUploaded?: (file: File) => void; onChanged?: () => void }) {
   const showToast = useShowToast();
-  const [doc, setDoc] = useState<DocRow | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data: docRows, loading, reload: load } = useApi<DocRow[]>('/documents', {
+    params: { linked_id: genId },
+  });
+  const doc = docRows?.find(d => d.category === category) ?? null;
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-
-  const load = () => {
-    setLoading(true);
-    api.get('/documents', { params: { linked_id: genId } })
-      .then(({ data }) => setDoc((data as DocRow[]).find(d => d.category === category) || null))
-      .catch(() => setDoc(null))
-      .finally(() => setLoading(false));
-  };
-  useEffect(load, [genId, category]);
 
   const upload = async (file: File) => {
     setBusy(true);
@@ -47,7 +41,7 @@ export default function DocSlot({ genId, category, label, accept = 'application/
   const remove = async () => {
     if (!doc) return;
     setBusy(true);
-    try { await api.delete(`/documents/${doc.id}`); setDoc(null); onChanged?.(); }
+    try { await api.delete(`/documents/${doc.id}`); load(); onChanged?.(); }
     finally { setBusy(false); }
   };
 

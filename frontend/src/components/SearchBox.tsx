@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Icon from './Icon';
-import api from '../api/client';
+import { useApi } from '../hooks/useApi';
 import { Bid, Gen, Lead } from '../types';
 
 interface Result {
@@ -21,7 +21,6 @@ interface Props {
 export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
-  const [leads, setLeads] = useState<Lead[] | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -29,12 +28,12 @@ export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
 
   // Leads aren't loaded app-wide like bids/gens, so fetch them lazily the first
   // time the search opens (includes converted ones so history is findable).
-  useEffect(() => {
-    if (!open || leads !== null) return;
-    api.get('/leads?include_converted=1')
-      .then(r => setLeads(r.data as Lead[]))
-      .catch(() => setLeads([]));
-  }, [open, leads]);
+  const [everOpened, setEverOpened] = useState(false);
+  useEffect(() => { if (open) setEverOpened(true); }, [open]);
+  const { data: leads } = useApi<Lead[]>('/leads', {
+    params: { include_converted: 1 },
+    enabled: everOpened,
+  });
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {

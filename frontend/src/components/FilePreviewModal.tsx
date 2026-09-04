@@ -19,8 +19,11 @@ export default function FilePreviewModal({ title, kind, buf, onClose, onDownload
   const [activeSheet, setActiveSheet] = useState(0);
   const [html, setHtml] = useState('');
 
+  // Parsing is local (no request), but it is still async and can outlive the
+  // modal, so it uses the same AbortController idiom as useApi rather than a
+  // one-off boolean flag.
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError('');
     (async () => {
@@ -28,22 +31,22 @@ export default function FilePreviewModal({ title, kind, buf, onClose, onDownload
         if (kind === 'sheet') {
           const wb = XLSX.read(buf, { type: 'array' });
           const rows = await sheetToRows(buf);
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
           setSheetNames(wb.SheetNames);
           setSheets(rows);
           setActiveSheet(0);
         } else {
           const rawHtml = await docxToHtml(buf);
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
           setHtml(sanitizeDocHtml(rawHtml));
         }
       } catch {
-        if (!cancelled) setError('Could not render a preview of this file.');
+        if (!controller.signal.aborted) setError('Could not render a preview of this file.');
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => controller.abort();
   }, [buf, kind]);
 
   return (

@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
+import { useApi } from '../../hooks/useApi';
 import { useShowToast } from '../../contexts/AppContext';
 
 interface Task {
@@ -61,18 +62,13 @@ function dueMeta(due?: string | null): { label: string; color: string } {
 export default function FollowupsPage({ onCountChange }: Props) {
   const showToast = useShowToast();
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
   const [linkedName, setLinkedName] = useState('');
   const [filter, setFilter] = useState<'open' | 'done' | 'all'>('open');
 
-  const load = useCallback(() => {
-    setLoading(true);
-    api.get('/tasks').then(({ data }) => setTasks(data)).finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
+  const { data: loadedTasks, loading } = useApi<Task[]>('/tasks');
+  useEffect(() => { if (loadedTasks) setTasks(loadedTasks); }, [loadedTasks]);
   useEffect(() => { onCountChange?.(tasks.filter(t => t.status === 'open').length); }, [tasks, onCountChange]);
 
   const add = async () => {
