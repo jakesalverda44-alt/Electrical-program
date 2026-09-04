@@ -64,6 +64,9 @@ function msRedirectUri() {
 // this login is low enough that a background timer isn't warranted.
 const oauthStates = new Map<string, number>(); // state -> expiresAt (ms)
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+// GET /microsoft is unauthenticated and mints one entry per call; without a
+// cap an attacker could grow this map freely (non-blocker T7, post-review).
+const OAUTH_STATE_MAX = 1000;
 
 interface MsExchangeEntry {
   appToken: string;
@@ -76,6 +79,13 @@ const MS_EXCHANGE_TTL_MS = 60 * 1000; // 60 seconds
 function pruneOauthStates() {
   const now = Date.now();
   for (const [state, expiresAt] of oauthStates) if (expiresAt < now) oauthStates.delete(state);
+  // Still over the cap after pruning expired entries — evict the oldest ones.
+  // Map iteration order is insertion order, so the first key is the oldest.
+  while (oauthStates.size >= OAUTH_STATE_MAX) {
+    const oldest = oauthStates.keys().next().value;
+    if (oldest === undefined) break;
+    oauthStates.delete(oldest);
+  }
 }
 function pruneMsExchangeCodes() {
   const now = Date.now();
@@ -83,7 +93,7 @@ function pruneMsExchangeCodes() {
 }
 
 // Step 1 — redirect to Microsoft login
-router.get('/microsoft', (_req, res) => {
+router.get('/microsoft', authLimiter, (_req, res) => {
   const clientId = MS_CLIENT_ID();
   if (!clientId) return res.status(503).send('Microsoft login not configured. Add MICROSOFT_CLIENT_ID to environment.');
   pruneOauthStates();
@@ -118,7 +128,11 @@ router.get('/microsoft/callback', async (req, res) => {
   const stateExpiry = state ? oauthStates.get(state) : undefined;
   if (state) oauthStates.delete(state);
   if (!state || stateExpiry === undefined || stateExpiry < Date.now()) {
-    return res.status(400).json({ error: 'Invalid or expired login attempt. Please try signing in again.' });
+    // This fires on a browser navigation (Microsoft redirecting the user's
+    // address bar), not an API call — a raw JSON 400 left the user staring at
+    // it verbatim, e.g. after a backend restart mid-login drops the in-memory
+    // state (non-blocker T7, post-review). Redirect to the login page instead.
+    return res.redirect(`${frontendBase}/login?error=oauth_state`);
   }
 
   try {

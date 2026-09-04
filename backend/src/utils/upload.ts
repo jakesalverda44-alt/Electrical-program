@@ -55,8 +55,13 @@ export const EXT_TO_MIME: Record<string, string> = {
   '.ppt': 'application/vnd.ms-powerpoint',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.zip': 'application/zip',
-  '.dwg': 'image/vnd.dwg',
-  '.dxf': 'image/vnd.dxf',
+  // CAD drafting formats — no browser can render these as an image, so they
+  // must never carry an "image/*" type: documents.ts's inline check is a bare
+  // `type.startsWith('image/')`, and `.dwg`/`.dxf`'s previous (unofficial)
+  // "image/vnd.*" types tripped it, contrary to the allowlist's intent even
+  // though nothing could actually exploit it (post-review, non-blocker T5).
+  '.dwg': 'application/acad',
+  '.dxf': 'application/dxf',
   '.dwf': 'model/vnd.dwf',
   '.dwfx': 'model/vnd.dwfx+xps',
   '.rvt': 'application/octet-stream',

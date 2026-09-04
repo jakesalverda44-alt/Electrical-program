@@ -42,17 +42,19 @@ function mockMicrosoftTokenExchange(email: string, name: string) {
 }
 
 describe('GET /api/auth/microsoft/callback — CSRF state (Task 7.1, 7.2)', () => {
-  it('400s with no state at all', async (ctx) => {
+  it('redirects to the login page with ?error=oauth_state when no state is present', async (ctx) => {
     if (!ok) return ctx.skip();
     const res = await request(app).get('/api/auth/microsoft/callback').query({ code: 'anything' });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toContain('/login?error=oauth_state');
   });
 
-  it('400s with a state that was never minted by GET /microsoft', async (ctx) => {
+  it('redirects to the login page with ?error=oauth_state for a state never minted by GET /microsoft', async (ctx) => {
     if (!ok) return ctx.skip();
     const res = await request(app).get('/api/auth/microsoft/callback')
       .query({ code: 'anything', state: 'not-a-real-state' });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toContain('/login?error=oauth_state');
   });
 
   it('accepts a state minted by GET /microsoft exactly once, then rejects a replay', async (ctx) => {
@@ -78,7 +80,8 @@ describe('GET /api/auth/microsoft/callback — CSRF state (Task 7.1, 7.2)', () =
     // one-time use.
     const replay = await request(app).get('/api/auth/microsoft/callback')
       .query({ code: 'ms-auth-code', state: state! });
-    expect(replay.status).toBe(400);
+    expect(replay.status).toBe(302);
+    expect(replay.headers.location).toContain('/login?error=oauth_state');
   });
 });
 

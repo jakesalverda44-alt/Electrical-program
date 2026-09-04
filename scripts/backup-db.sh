@@ -95,7 +95,12 @@ mkdir -p "$DEST2" 2>/dev/null && cp "$FINAL" "$DEST2/" 2>/dev/null \
   || log "WARN" "$FINAL" "iCloud mirror failed"
 
 # ── Retention: delete backups older than 30 days ────────────────────────────
-find "$DEST" -name 'electrical_crm-*.sql.gz' -mtime +30 -delete
+# `electrical_crm-[0-9]*` (the stamp starts with a digit, e.g. -2026-09-01-1013)
+# deliberately excludes `electrical_crm-prod-*.sql.gz` in the same $DEST — same
+# 30-day window today, so harmless either way, but this prune must never touch
+# the prod dumps even if the two retention policies diverge later (non-blocker
+# T11, post-review).
+find "$DEST" -name 'electrical_crm-[0-9]*.sql.gz' -mtime +30 -delete
 # `|| true` — a transient iCloud-folder hiccup here must not exit the script
 # non-zero after SUCCESS has already been logged above.
-find "$DEST2" -name 'electrical_crm-*.sql.gz' -mtime +30 -delete 2>/dev/null || true
+find "$DEST2" -name 'electrical_crm-[0-9]*.sql.gz' -mtime +30 -delete 2>/dev/null || true

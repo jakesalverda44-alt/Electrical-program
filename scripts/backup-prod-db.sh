@@ -67,7 +67,11 @@ STAMP="$(date +%Y-%m-%d-%H%M)"
 FINAL="$DEST/electrical_crm-prod-$STAMP.sql.gz"
 TMP="$FINAL.tmp"
 
-if ! docker run --rm postgres:16-alpine pg_dump "$PROD_DATABASE_URL" | gzip > "$TMP"; then
+## `docker run ... pg_dump "$PROD_DATABASE_URL"` (an argv value) would put the
+## connection string in this Mac's own process table (`ps aux`), even though
+## nothing logs or echoes it. Passing it as a container env var instead keeps
+## it out of any host-visible argv (non-blocker T11, post-review).
+if ! docker run --rm -e PGURL="$PROD_DATABASE_URL" postgres:16-alpine sh -c 'pg_dump "$PGURL"' | gzip > "$TMP"; then
   rm -f "$TMP"
   fail "pg_dump/gzip failed"
 fi

@@ -697,13 +697,24 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
 
       genId = await convertLeadToProposal(client, updated, req.user);
       await client.query('COMMIT');
+      client.release();
     } catch (err) {
-      await client.query('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+        client.release();
+      } catch (rollbackErr) {
+        // The rollback itself failed — the connection may be unusable.
+        // Release with the error so pg destroys it instead of returning a
+        // possibly-corrupted connection to the pool (non-blocker T8,
+        // post-review). A single client.release() call either way: a plain
+        // `finally { client.release(); }` here would double-release once
+        // this branch already released with an error.
+        logger.error({ err: rollbackErr }, '[leads] handoff ROLLBACK failed');
+        client.release(rollbackErr as Error);
+      }
       const msg = inputErrorMessage(err);
       if (msg) { res.status(400).json({ error: msg }); return; }
       throw err;
-    } finally {
-      client.release();
     }
 
     // Post-commit side effects — Drive/Outlook and the follow-up close-out never
@@ -713,7 +724,12 @@ router.patch('/:id', leadWriteLimiter, requireAuth, validateBody(leadPatchSchema
       email: updated.email, notes: updated.notes, site_visit_at: updated.site_visit_at,
       salesperson_name: updated.salesperson_name,
     }).catch(() => {});
-    await closeLeadFollowups(lead.id);
+    // A throw here must not 500 a handoff that already committed successfully
+    // (non-blocker T8, post-review) — mirrors pushSiteVisitToCalendar's own
+    // best-effort handling just above.
+    await closeLeadFollowups(lead.id).catch(err => {
+      logger.error({ err, leadId: lead.id }, '[leads] post-handoff closeLeadFollowups failed');
+    });
 
     const { rows: converted } = await pool.query('SELECT * FROM leads WHERE id=$1', [lead.id]);
     // Return the new proposal too so the client can drop the new card into the Pipeline
