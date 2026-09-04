@@ -14,6 +14,26 @@ import { storeDocument } from '../utils/storeDocument';
 const router = Router();
 const upload = documentUpload;
 
+// The Content-Type served for a document must come from our own stored (safe,
+// extension-derived — see utils/upload.ts's EXT_TO_MIME) file_type column, never
+// from a re-fetched storage provider's own reported type, which could reflect
+// whatever was declared at upload time on old rows. nosniff stops a browser from
+// second-guessing that; only PDF/image are ever safe to render inline — anything
+// else forces a download (audit: Security #6, High).
+function serveDocument(
+  res: import('express').Response,
+  contentType: string | null | undefined,
+  name: string,
+  mode: 'inline' | 'attachment'
+) {
+  const type = contentType || 'application/octet-stream';
+  const inlineable = type === 'application/pdf' || type.startsWith('image/');
+  const effectiveMode = mode === 'inline' && !inlineable ? 'attachment' : mode;
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Type', type);
+  res.setHeader('Content-Disposition', `${effectiveMode}; filename="${encodeURIComponent(name)}"`);
+}
+
 /**
  * Load a document the user is allowed to read. Restricted reps may only reach a
  * document they uploaded or one linked to a bid/proposal they own; managers/admins
@@ -65,6 +85,15 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'file required' });
 
+  // Every read path checks ownsLinkedRecord; this write path took linked_id
+  // straight from the body, letting a restricted rep attach anything to another
+  // rep's bid/proposal. Check BEFORE storeDocument runs so nothing lands in
+  // Drive (audit: Security #4, High).
+  const scope = ownScopeId(req.user!);
+  if (scope && linked_id && !(await ownsLinkedRecord(scope, linked_id))) {
+    return res.status(403).json({ error: 'You do not have access to this record' });
+  }
+
   try {
     const doc = await storeDocument({
       file,
@@ -98,8 +127,7 @@ router.get('/:id/download', requireAuth, asyncHandler(async (req: AuthRequest, r
     if (m) {
       const media = await getFileMedia(m[1]);
       if (!media) return res.status(502).json({ error: 'File is stored in Google Drive but could not be fetched. Try again later.' });
-      res.setHeader('Content-Type', media.mimeType);
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(name as string)}"`);
+      serveDocument(res, file_type as string, name as string, 'attachment');
       media.stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
       return media.stream.pipe(res);
     }
@@ -109,12 +137,7 @@ router.get('/:id/download', requireAuth, asyncHandler(async (req: AuthRequest, r
         logger.error({ docId: req.params.id, status: upstream.status }, '[documents] download: storage fetch failed');
         return res.status(502).json({ error: 'Could not fetch the file from storage.' });
       }
-      const upstreamType = upstream.headers.get('content-type');
-      const contentType = (!upstreamType || upstreamType === 'application/octet-stream')
-        ? ((file_type as string) || 'application/octet-stream')
-        : upstreamType;
-      res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(name as string)}"`);
+      serveDocument(res, file_type as string, name as string, 'attachment');
       const stream = Readable.fromWeb(upstream.body as import('stream/web').ReadableStream);
       stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
       return stream.pipe(res);
@@ -125,8 +148,7 @@ router.get('/:id/download', requireAuth, asyncHandler(async (req: AuthRequest, r
   }
   if (!file_data) return res.status(404).json({ error: 'no file data' });
   const buf = Buffer.from(file_data as string, 'base64');
-  res.setHeader('Content-Type', (file_type as string) || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(name as string)}"`);
+  serveDocument(res, file_type as string, name as string, 'attachment');
   res.send(buf);
 }));
 
@@ -146,8 +168,7 @@ router.get('/:id/view', requireAuth, asyncHandler(async (req: AuthRequest, res) 
     if (m) {
       const media = await getFileMedia(m[1]);
       if (!media) return res.status(502).json({ error: 'File is stored in Google Drive but could not be fetched. Try the download button.' });
-      res.setHeader('Content-Type', media.mimeType);
-      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(name as string)}"`);
+      serveDocument(res, file_type as string, name as string, 'inline');
       media.stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
       return media.stream.pipe(res);
     }
@@ -157,14 +178,7 @@ router.get('/:id/view', requireAuth, asyncHandler(async (req: AuthRequest, res) 
         logger.error({ docId: req.params.id, status: upstream.status }, '[documents] view: storage fetch failed');
         return res.status(502).json({ error: 'Could not fetch the file from storage. Try the download button.' });
       }
-      // Cloudinary serves raw uploads as octet-stream; prefer the recorded type
-      // so PDFs/images actually render inline instead of downloading.
-      const upstreamType = upstream.headers.get('content-type');
-      const contentType = (!upstreamType || upstreamType === 'application/octet-stream')
-        ? ((file_type as string) || 'application/octet-stream')
-        : upstreamType;
-      res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(name as string)}"`);
+      serveDocument(res, file_type as string, name as string, 'inline');
       const stream = Readable.fromWeb(upstream.body as import('stream/web').ReadableStream);
       stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
       return stream.pipe(res);
@@ -175,8 +189,7 @@ router.get('/:id/view', requireAuth, asyncHandler(async (req: AuthRequest, res) 
   }
   if (file_data) {
     const buf = Buffer.from(file_data as string, 'base64');
-    res.setHeader('Content-Type', (file_type as string) || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(name as string)}"`);
+    serveDocument(res, file_type as string, name as string, 'inline');
     return res.send(buf);
   }
   res.status(404).json({ error: 'no file data' });
@@ -194,7 +207,10 @@ router.get('/drive-file/:fileId', requireAuth, asyncHandler(async (req: AuthRequ
        WHERE deleted_at IS NULL AND storage_url LIKE $1 LIMIT 1`,
       [`%${req.params.fileId}%`]
     );
-    if (rows.length && rows[0].uploaded_by !== req.user!.name && !(await ownsLinkedRecord(scope, rows[0].linked_id))) {
+    // Fail closed: an untracked file id (the LIKE lookup found no row) must never
+    // be fetched — it isn't tied to any record we can check ownership against
+    // (audit: Security #5, High).
+    if (!rows.length || (rows[0].uploaded_by !== req.user!.name && !(await ownsLinkedRecord(scope, rows[0].linked_id)))) {
       return res.status(403).json({ error: 'You do not have access to this file' });
     }
   }
