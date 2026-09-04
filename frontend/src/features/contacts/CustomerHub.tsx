@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import { useMutation } from '../../hooks/useMutation';
 import FilePreviewModal from '../../components/FilePreviewModal';
 import { previewKind } from '../../components/filePreview';
@@ -129,6 +130,9 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
     setDetail(loadedDetail);
     setForm(loadedDetail.customer);
   }, [loadedDetail]);
+
+  // Above the early return below: hooks cannot be conditional.
+  usePageTitle(detail?.customer.name ?? null);
 
   if (!detail) return <div className="scroll"><div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div></div>;
 

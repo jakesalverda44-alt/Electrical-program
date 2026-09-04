@@ -22,6 +22,11 @@ import { coerceGenTab, coerceElecTab } from './features/hubs/constants';
 import { resolveLegacyPath } from './lib/legacyRoutes';
 import { PcWorkspace, PC_TABS, ConfirmedService } from './features/preconstruction/constants';
 import Toast from './components/Toast';
+import ErrorBoundary from './components/ErrorBoundary';
+import BootError from './components/BootError';
+import NotFound from './components/NotFound';
+import Icon from './components/Icon';
+import { usePageTitle } from './hooks/usePageTitle';
 import { AppProviders } from './contexts/AppContext';
 import { UNAUTHORIZED_EVENT, UnauthorizedDetail } from './api/session';
 import { useApi } from './hooks/useApi';
@@ -34,15 +39,24 @@ interface DashboardPayload {
   activity: Activity[];
 }
 
-function StubPage({ title }: { title: string }) {
-  return (
-    <div className="scroll view-enter">
-      <div style={{ padding: 32, color: 'var(--text2)', fontSize: 15 }}>
-        <b>{title}</b> — coming soon
-      </div>
-    </div>
-  );
-}
+// StubPage is gone: every view in the switch below is shipped, so there was no
+// genuinely-planned view left for it to represent — and its "coming soon" copy
+// was what made a typo'd URL look like a feature (audit code #17 / ux #17).
+
+/** Tab title per view; the record-level pages set their own from the record. */
+const VIEW_TITLES: Record<string, string> = {
+  dashboard: 'Dashboard',
+  generators: 'Generators',
+  electrical: 'Electrical',
+  'sales-by-rep': 'Sales by Rep',
+  builder: 'Proposal Builder',
+  contacts: 'Contacts',
+  calendar: 'Calendar',
+  followups: 'Follow-ups',
+  comms: 'Communications',
+  docs: 'Documents',
+  admin: 'Settings',
+};
 
 export default function App() {
   const { user, login, logout } = useAuth();
@@ -250,6 +264,25 @@ export default function App() {
   // gates first paint; /users and /preconstruction/workspaces enrich the shell.
   const loading = dashApi.loading;
 
+  // A failed /users or /preconstruction/workspaces degrades one feature each
+  // (the rep filter, restored estimator workspaces) and must not blank the app,
+  // but the user still has to be told the page is not showing everything.
+  const partialFailures = [
+    usersApi.error ? 'the salesperson list' : null,
+    workspacesApi.error ? 'saved estimating workspaces' : null,
+  ].filter(Boolean) as string[];
+  const [warningDismissed, setWarningDismissed] = useState(false);
+  useEffect(() => { if (partialFailures.length === 0) setWarningDismissed(false); }, [partialFailures.length]);
+
+  const retryBootstrap = useCallback(() => {
+    dashApi.reload();
+    usersApi.reload();
+    workspacesApi.reload();
+  }, [dashApi.reload, usersApi.reload, workspacesApi.reload]);
+
+  // Record-level pages set their own title; everything else comes from the view.
+  usePageTitle(view === 'bid' ? null : (VIEW_TITLES[view] ?? null));
+
   const renderView = () => {
     // Old flat view URLs redirect permanently to their new hub path — checked
     // first, before the loading gate, so a stale bookmark never flashes the
@@ -313,7 +346,7 @@ export default function App() {
           />
         );
       case 'bid':
-        if (!viewParam) return <StubPage title="Bid"/>;
+        if (!viewParam) return <NotFound path={view} onHome={() => setView('dashboard')}/>;
         return (
           <BidHubPage
             bidId={viewParam}
@@ -344,9 +377,41 @@ export default function App() {
         }
         return <SettingsPage/>;
       default:
-        return <StubPage title={view.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}/>;
+        return <NotFound path={view} onHome={() => setView('dashboard')}/>;
     }
   };
+
+  // The dashboard is the app's data; without it there is nothing honest to
+  // render, so it replaces the shell rather than emptying it.
+  if (dashApi.error) {
+    return (
+      <>
+        <BootError message={dashApi.error + '.'} onRetry={retryBootstrap} retrying={dashApi.loading}/>
+        {toast && <Toast toast={toast}/>}
+      </>
+    );
+  }
+
+  const warningBar = partialFailures.length > 0 && !warningDismissed && (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px',
+      background: 'var(--amber-soft)', borderBottom: '1px solid rgba(224,165,59,.3)',
+      color: 'var(--amber)', fontSize: 12.5, fontWeight: 600,
+    }}>
+      <Icon name="alert" size={15} stroke={2}/>
+      <span style={{ flex: 1 }}>
+        Some of this page didn't load: {partialFailures.join(' and ')}. Everything else is up to date.
+      </span>
+      <button onClick={retryBootstrap}
+        style={{ background: 'none', border: 'none', color: 'inherit', font: 'inherit', textDecoration: 'underline', cursor: 'pointer' }}>
+        Retry
+      </button>
+      <button onClick={() => setWarningDismissed(true)} aria-label="Dismiss"
+        style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', display: 'flex', padding: 2 }}>
+        <Icon name="x" size={14} stroke={2}/>
+      </button>
+    </div>
+  );
 
   const shell = (
     <AppProviders user={user} showToast={showToast} settings={settings} reloadSettings={reloadSettings}>
@@ -365,7 +430,13 @@ export default function App() {
         bids={bids} gens={gens}
         showToast={showToast}
       >
-        {renderView()}
+        {warningBar}
+        {/* A second boundary, inside the shell: a render crash in one page keeps
+            the nav and the rest of the app usable (audit code #19). The root
+            boundary in main.tsx still catches anything above this. */}
+        <ErrorBoundary variant="page" resetKey={location.pathname}>
+          {renderView()}
+        </ErrorBoundary>
       </AppShell>
       {toast && <Toast toast={toast}/>}
     </AppProviders>

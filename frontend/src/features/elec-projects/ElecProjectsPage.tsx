@@ -5,6 +5,7 @@ import { Bid, WonJob, Toast } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
 import api from '../../api/client';
 import { useMutation } from '../../hooks/useMutation';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import { moneyFull, moneyShort as money } from '../../lib/money';
 
 // ── Phase → Status mapping ───────────────────────────────────────
@@ -119,6 +120,7 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
   const [projData, setProjData] = useState<Record<string, ProjData>>({});
 
   const selectedBid = useMemo(() => awarded.find(b => b.id === selectedId) ?? null, [awarded, selectedId]);
+  usePageTitle(selectedBid ? selectedBid.name : null);
 
   // Eleven reads under one mutation: each section still degrades to its empty
   // shape on its own, but a wholesale failure (offline, 500) now says so
