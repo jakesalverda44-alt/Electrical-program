@@ -406,13 +406,19 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
     || JSON.stringify(schDraft) !== JSON.stringify(data.schedule),
   );
 
+  // Returns true only when the PUT actually landed. `run` swallows the failure
+  // after toasting it and resolves `undefined`, so on main's rejecting `await`
+  // the rest of each handler was skipped, and after the migration it was not:
+  // a failed save was writing the unsaved draft into the parent, which made the
+  // section read as persisted AND satisfied the dirty check above, disarming the
+  // task 8 guard added in the same batch (review finding B3). Every call site
+  // gates `onDataChange` on this.
   const { run: saveSection } = useMutation(
     async (section: string, payload: unknown) => {
       await api.put(`/projects/elec/${id}/section/${section}`, { data: payload });
+      return true as const;
     },
     {
-      // Was `await api.put(...)` then an unconditional toast, with no catch —
-      // a failed save produced an unhandled rejection and no "Saved" either.
       successToast: { title: 'Saved' },
       errorToast: (message) => ({ title: 'Save failed', sub: message }),
     },
@@ -453,7 +459,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
               ]} onChange={(k,v) => setOvDraft(d=>({...d,[k]:v}))}/>
               <div style={{ marginTop:12, display:'flex', justifyContent:'flex-end' }}>
                 <button className="btn ghost" style={{ fontSize:12, height:34 }}
-                  onClick={async () => { await saveSection('overview', ovDraft); onDataChange({ overview: ovDraft }); }}>
+                  onClick={async () => { if (await saveSection('overview', ovDraft)) onDataChange({ overview: ovDraft }); }}>
                   <Icon name="check" size={13} stroke={2}/> Save
                 </button>
               </div>
@@ -466,7 +472,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                 style={{ ...INPUT, height:100, resize:'vertical' }}/>
               <div style={{ marginTop:10, display:'flex', justifyContent:'flex-end' }}>
                 <button className="btn ghost" style={{ fontSize:12, height:34 }}
-                  onClick={async () => { await saveSection('overview', ovDraft); onDataChange({ overview: ovDraft }); }}>
+                  onClick={async () => { if (await saveSection('overview', ovDraft)) onDataChange({ overview: ovDraft }); }}>
                   <Icon name="check" size={13} stroke={2}/> Save
                 </button>
               </div>
@@ -487,7 +493,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
               ]} onChange={(k,v) => setSchDraft(d=>({...d,[k]:v}))}/>
               <div style={{ marginTop:12, display:'flex', justifyContent:'flex-end' }}>
                 <button className="btn ghost" style={{ fontSize:12, height:34 }}
-                  onClick={async () => { await saveSection('schedule', schDraft); onDataChange({ schedule: schDraft }); }}>
+                  onClick={async () => { if (await saveSection('schedule', schDraft)) onDataChange({ schedule: schDraft }); }}>
                   <Icon name="check" size={13} stroke={2}/> Save
                 </button>
               </div>
@@ -906,7 +912,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
             ))}
           </div>
           <button className="btn" style={{ fontSize:13 }}
-            onClick={async()=>{ await saveSection('schedule',schDraft); onDataChange({schedule:schDraft}); }}>
+            onClick={async()=>{ if (await saveSection('schedule',schDraft)) onDataChange({schedule:schDraft}); }}>
             <Icon name="check" size={14} stroke={2}/> Save Schedule
           </button>
         </div>
@@ -947,8 +953,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
             <button className="btn" style={{ fontSize:13 }}
               onClick={async()=>{
                 const payload = {...clDraft, notes:clNotes};
-                await saveSection('closeout',payload);
-                onDataChange({closeout:payload});
+                if (await saveSection('closeout',payload)) onDataChange({closeout:payload});
               }}>
               <Icon name="check" size={14} stroke={2}/> Save Closeout
             </button>
