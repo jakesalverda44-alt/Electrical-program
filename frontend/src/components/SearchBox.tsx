@@ -26,13 +26,19 @@ export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
 
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
 
-  // Leads aren't loaded app-wide like bids/gens, so fetch them lazily the first
-  // time the search opens (includes converted ones so history is findable).
+  // Leads aren't loaded app-wide like bids/gens. Audit data #6: this used to
+  // fetch the entire lead table (including converted ones) the first time the
+  // search opened, then filter it client-side for at most 4 rows shown. The
+  // route now takes q/limit directly, so only once the query is long enough
+  // to actually show lead results (matching the `q.trim().length < 2` gate on
+  // `results` below) does a request go out at all, and it comes back
+  // pre-filtered to 8 rows.
   const [everOpened, setEverOpened] = useState(false);
   useEffect(() => { if (open) setEverOpened(true); }, [open]);
+  const qTrimmed = q.trim();
   const { data: leads } = useApi<Lead[]>('/leads', {
-    params: { include_converted: 1 },
-    enabled: everOpened,
+    params: { include_converted: 1, q: qTrimmed, limit: 8 },
+    enabled: everOpened && qTrimmed.length >= 2,
   });
   useEffect(() => {
     if (!open) return;
@@ -58,15 +64,15 @@ export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
         out.push({ id: 'g-' + g.id, targetId: g.id, label: g.customer, sub: `${g.mfr} ${g.model} · ${g.kw}kW · ${g.stage}`, section: g.stage === 'awarded' ? 'generators/jobs' : 'generators/pipeline', icon: 'bolt' });
       }
     }
+    // The leads list is already server-filtered by q and capped to 8 (see the
+    // useApi call above) — no client-side re-filtering needed here.
     for (const l of leads ?? []) {
       if (out.length >= 16) break;
-      if ([l.name, l.phone, l.email, l.address].some(v => v?.toLowerCase().includes(lq))) {
-        out.push({
-          id: 'l-' + l.id, targetId: l.id, label: l.name,
-          sub: `Lead · ${l.stage}${l.phone ? ` · ${l.phone}` : l.email ? ` · ${l.email}` : ''}`,
-          section: 'generators/leads', icon: 'users',
-        });
-      }
+      out.push({
+        id: 'l-' + l.id, targetId: l.id, label: l.name,
+        sub: `Lead · ${l.stage}${l.phone ? ` · ${l.phone}` : l.email ? ` · ${l.email}` : ''}`,
+        section: 'generators/leads', icon: 'users',
+      });
     }
     return out;
   })();

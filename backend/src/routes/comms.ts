@@ -9,19 +9,26 @@ const router = Router();
 // every communication in the system to any authenticated user (data leak).
 router.get('/', requireAuth, async (req: AuthRequest, res) => {
   const scope = ownScopeId(req.user!);
+  // Task 5 (audit data #6) — ElecProjectsPage used to fetch every comm in the
+  // system and filter to one project client-side. Optional linked_id filter,
+  // same convention as /documents.
+  const { linked_id } = req.query as { linked_id?: string };
   const { rows } = scope
     ? await pool.query(
         `SELECT * FROM communications c
-         WHERE c.author = $2
+         WHERE (c.author = $2
             OR c.linked_id IN (
                  SELECT id::text FROM bids WHERE salesperson_id = $1 AND deleted_at IS NULL
                  UNION
                  SELECT id::text FROM generator_proposals WHERE salesperson_id = $1 AND deleted_at IS NULL
-               )
+               ))
+           ${linked_id ? 'AND c.linked_id = $3' : ''}
          ORDER BY c.created_at DESC LIMIT 200`,
-        [scope, req.user!.name]
+        linked_id ? [scope, req.user!.name, linked_id] : [scope, req.user!.name]
       )
-    : await pool.query('SELECT * FROM communications ORDER BY created_at DESC LIMIT 200');
+    : linked_id
+      ? await pool.query('SELECT * FROM communications WHERE linked_id = $1 ORDER BY created_at DESC LIMIT 200', [linked_id])
+      : await pool.query('SELECT * FROM communications ORDER BY created_at DESC LIMIT 200');
   res.json(rows);
 });
 
