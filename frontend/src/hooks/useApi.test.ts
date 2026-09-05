@@ -251,5 +251,35 @@ describe('useApi', () => {
       await waitFor(() => expect(b.result.current.data).toBe('g2'));
       expect(get).toHaveBeenCalledTimes(2);
     });
+
+    // Review round 1 S1: reload() used to only decrement the shared entry's
+    // refCount on cleanup (never abort it, since another subscriber might
+    // still need it) — but when another subscriber DOES still share the key,
+    // that entry survives in `sharedRequests`, and the freshly re-run effect
+    // would just rejoin the SAME in-flight/settled promise instead of firing
+    // a new request, making reload() silently a no-op for a shared key.
+    it("reload() issues a fresh request when another subscriber shares the key, without disturbing that subscriber's own promise", async () => {
+      const first = deferred<{ data: string }>();
+      get.mockImplementationOnce(() => first.promise);
+
+      const a = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      const b = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      expect(get).toHaveBeenCalledTimes(1);
+
+      const second = deferred<{ data: string }>();
+      get.mockImplementationOnce(() => second.promise);
+
+      await act(async () => { a.result.current.reload(); });
+      // A genuinely new request went out for a's reload — not a silent no-op.
+      expect(get).toHaveBeenCalledTimes(2);
+
+      // b's original (still in-flight) request is untouched and still resolves.
+      await act(async () => { first.resolve({ data: 'original' }); });
+      await waitFor(() => expect(b.result.current.data).toBe('original'));
+
+      // a's fresh request resolves independently, on the new promise.
+      await act(async () => { second.resolve({ data: 'reloaded' }); });
+      await waitFor(() => expect(a.result.current.data).toBe('reloaded'));
+    });
   });
 });

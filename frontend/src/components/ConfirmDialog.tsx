@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import Modal from './Modal';
 
 /**
@@ -50,8 +50,24 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
 
   const confirm = useCallback<ConfirmFn>((opts) => {
     return new Promise<boolean>(resolve => {
-      setPending({ ...opts, resolve });
+      // Review round 1 S12: a second confirm() call while one is already
+      // pending used to just overwrite `pending` — the FIRST call's promise
+      // then never settles (its `resolve` is dropped on the floor), which
+      // leaves any `await confirm({...})` caller hanging forever. Settle the
+      // outgoing one with `false` (same as Cancel/dismiss) before replacing it.
+      setPending(prev => {
+        prev?.resolve(false);
+        return { ...opts, resolve };
+      });
     });
+  }, []);
+
+  // Review round 1 S12: a pending confirm() whose provider unmounts (the app
+  // navigating away, or a test tearing down) would otherwise also never
+  // settle — same "await hangs forever" bug, just via unmount instead of a
+  // second call.
+  useEffect(() => {
+    return () => { pendingRef.current?.resolve(false); };
   }, []);
 
   const settle = (value: boolean) => {

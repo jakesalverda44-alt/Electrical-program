@@ -5,7 +5,7 @@
 // "Delete failed" arrived with the same green checkmark as "Document removed".
 import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, act } from '@testing-library/react';
+import { render, screen, cleanup, act, fireEvent } from '@testing-library/react';
 import { renderHook } from '@testing-library/react';
 import Toast from './Toast';
 import { useToast } from '../hooks/useToast';
@@ -52,6 +52,23 @@ describe('Toast variants', () => {
 
     expect(document.querySelector('.toast')!.classList.contains('t-info')).toBe(true);
     expect(iconMarkup()).not.toContain(CHECK);
+  });
+
+  // Review round 1 S4: a double-click on "Undo" used to fire the restore POST
+  // twice — the second call 404s on the already-restored row and surfaces a
+  // false "Could not undo" error toast.
+  describe('action button double-click guard (review round 1 S4)', () => {
+    it('is a type="button" and calls the action only once no matter how many times it is clicked', () => {
+      const onClick = vi.fn();
+      render(<Toast toast={{ title: 'Generator project deleted', action: { label: 'Undo', onClick } }}/>);
+      const btn = screen.getByText('Undo') as HTMLButtonElement;
+      expect(btn.type).toBe('button');
+      fireEvent.click(btn);
+      fireEvent.click(btn);
+      fireEvent.click(btn);
+      expect(onClick).toHaveBeenCalledTimes(1);
+      expect(btn.disabled).toBe(true);
+    });
   });
 });
 

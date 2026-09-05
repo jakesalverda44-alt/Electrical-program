@@ -121,6 +121,23 @@ describe('countersign confirmation', () => {
     });
   });
 
+  // Small nit (review round 1): the countersign handler itself now guards
+  // against a second call while one is already in flight, not just the
+  // button's `disabled` attribute.
+  it('does not double-post when the confirm button fires twice before the disabled state re-renders', async () => {
+    let resolvePost: (v: unknown) => void = () => {};
+    post.mockImplementation(() => new Promise(res => { resolvePost = res; }));
+    render(<SignedContractCard gen={signed}/>);
+    await waitFor(() => screen.getByRole('button', { name: 'Countersign' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Countersign' }));
+    const confirmBtn = screen.getByRole('button', { name: 'Countersign & award' });
+    fireEvent.click(confirmBtn);
+    fireEvent.click(confirmBtn);
+    fireEvent.click(confirmBtn);
+    resolvePost({ data: { gen: { ...signed, countersigned_at: '2026-08-05T12:00:00.000Z' } } });
+    await waitFor(() => expect(post.mock.calls.filter(c => String(c[0]).includes('/countersign')).length).toBe(1));
+  });
+
   it('sends the user to Settings when they have no signature saved', async () => {
     // Only the countersign call fails — a blanket rejection would also break the
     // archive that follows a success, and its toast would mask this one.

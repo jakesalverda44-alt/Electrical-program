@@ -53,4 +53,43 @@ describe('useConfirm / ConfirmDialog', () => {
     fireEvent.click(screen.getByText('Delete'));
     await waitFor(() => expect(onResult).toHaveBeenCalledWith(false));
   });
+
+  // Review round 1 S12: overlapping confirm() calls used to orphan the
+  // earlier one's promise (its `resolve` overwritten, never called) — any
+  // `await confirm({...})` caller for the first call would hang forever.
+  describe('overlapping confirms and provider unmount (review round 1 S12)', () => {
+    function TwoAskHarness({ onFirst, onSecond }: { onFirst: (v: boolean) => void; onSecond: (v: boolean) => void }) {
+      const confirm = useConfirm();
+      return (
+        <div>
+          <button onClick={async () => onFirst(await confirm({ title: 'First question?' }))}>Ask first</button>
+          <button onClick={async () => onSecond(await confirm({ title: 'Second question?' }))}>Ask second</button>
+        </div>
+      );
+    }
+
+    it('settles the outgoing confirm with false when a second one replaces it before being answered', async () => {
+      const onFirst = vi.fn();
+      const onSecond = vi.fn();
+      render(<ConfirmProvider><TwoAskHarness onFirst={onFirst} onSecond={onSecond}/></ConfirmProvider>);
+
+      fireEvent.click(screen.getByText('Ask first'));
+      await waitFor(() => expect(screen.getByText('First question?')).toBeTruthy());
+
+      // The first dialog is still open (never answered) when a second call comes in.
+      fireEvent.click(screen.getByText('Ask second'));
+      await waitFor(() => expect(onFirst).toHaveBeenCalledWith(false));
+      await waitFor(() => expect(screen.getByText('Second question?')).toBeTruthy());
+      expect(onSecond).not.toHaveBeenCalled();
+    });
+
+    it('settles a pending confirm with false when the provider unmounts', async () => {
+      const onResult = vi.fn();
+      const { unmount } = render(<ConfirmProvider><Harness onResult={onResult}/></ConfirmProvider>);
+      fireEvent.click(screen.getByText('Delete'));
+      await waitFor(() => expect(screen.getByRole('alertdialog')).toBeTruthy());
+      unmount();
+      await waitFor(() => expect(onResult).toHaveBeenCalledWith(false));
+    });
+  });
 });

@@ -193,6 +193,12 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
   };
 
   const countersign = async () => {
+    // Small nit (review round 1): don't rely solely on the button's
+    // `disabled` attribute — a handler-level guard covers a second call that
+    // slips through before React re-renders with the disabled state (e.g.
+    // two fast clicks, or an Enter-key repeat) and any future call site that
+    // doesn't wire the confirm button through this exact disabled prop.
+    if (countersigning) return;
     setConfirming(false);
     setCountersigning(true);
     try {
