@@ -576,3 +576,55 @@ could otherwise PUT an empty workspace over real data during the load race.
   needs a product decision, not just a code change.
 - The pre-existing test-DB bloat and two cache staleness windows noted in
   "Left for Jake" above are unchanged by this pass.
+
+## Re-review
+
+Second Opus review verified B1-B4, the harness rethrow, and all of the
+hardening set fixed with zero silent skips across three runs. One blocking
+item and two non-blockers remained.
+
+### R1 (blocking) — `3a0928b` — soffice PDF conversion no longer contends for a shared profile lock
+The new real-soffice test (added in B3) failed 2 of 3 runs — the original
+Task 1 flake re-imported as a hard failure, because `convertToPdf` let every
+concurrent conversion fight over LibreOffice's single default user-profile
+lock. Fixed at the root in `verifyBid.ts`: each call now passes
+`-env:UserInstallation=file://<per-call tmpdir>/profile` in the `soffice`
+argv, giving every conversion its own lock; the profile lives under the
+already-cleaned-up per-call tmpDir. Assertion left unweakened. Backend suite,
+three consecutive runs immediately after this fix: 830/830 passed, 0 failed,
+0 skipped, all three.
+
+### Non-blockers — `8dbd1bf` — one commit
+- **(a)** `PcWorkspace.tsx`'s pricing hydration ("estimate first, workspace
+  wins only if strictly newer") only actually held when both
+  `/estimates/:id` and `/preconstruction/:id/workspace` had settled before
+  the first hydration ran; whichever resolved first (if non-default) could
+  hydrate alone and permanently flip `isPristine` false before the other
+  source got a chance, regardless of which the priority rule says should
+  win. Fixed by gating the effect on both fetches' `loading` being false.
+  Writing the two new arrival-order tests in
+  `PcWorkspacePricingDirtyGuard.test.tsx` (workspace-resolves-first-but-
+  older, and estimate-resolves-first-but-older) caught a second, subtler
+  bug in the first version of this fix: the effect read the `savedEstimate`
+  *state* variable, which is only populated by a separate effect one render
+  after the underlying fetch's `loading` flips false (and is independently
+  reused for post-save updates) — so on the exact render where
+  `savedEstimateLoading` turned false, `savedEstimate` could still be stale,
+  letting the workspace value win regardless. Fixed by reading the raw
+  `savedEstimateData` (the direct `useApi` value) inside the hydration
+  effect instead. Both new tests assert on the actually-rendered Overhead %
+  input value, not just the unsaved-changes prompt (which cannot tell a
+  correctly-newer workspace apart from an incorrectly stale one — both
+  legitimately differ from the saved estimate).
+- **(b)** `BidHubPage.tsx`'s `pcDataLoaded` is now a required prop with no
+  default, so a future caller that forgets to wire it up gets a type error
+  instead of silently inheriting the pre-B4 unsafe behavior.
+- **(c)** `dashboardCoTotals.test.ts`'s malformed-`proposal_id` test (5e)
+  now deletes its `won_jobs` row in `afterAll` — nothing else would have.
+
+### Final verification (after `8dbd1bf`)
+- `npm run typecheck`: clean in both packages.
+- Backend suite, three consecutive runs: **830/830 passed, 0 failed, 0
+  skipped, all three.**
+- Frontend suite: **468/468 tests, 63/63 files, 0 failing** (two new tests
+  from non-blocker (a) over the prior 466).
