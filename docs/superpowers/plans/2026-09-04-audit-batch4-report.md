@@ -1,8 +1,9 @@
 # Audit Batch 4 — Frontend Polish — Execution Report
 
-**Executing:** Sonnet 5, Tasks 1–4 (Tasks 5–9 are separate follow-on work by other
-engineers per the plan). One commit per task, worktree
-`Electrical-program-wt-audit4`, branch `fix/audit-batch4`.
+**Executing:** Sonnet 5, Tasks 1–4 (one session) and Tasks 5–8 (a second
+session; Task 9 is separate follow-on work by another engineer per the
+plan). One commit per task, worktree `Electrical-program-wt-audit4`, branch
+`fix/audit-batch4`.
 
 ## Summary (Tasks 1–4)
 
@@ -32,6 +33,36 @@ engineers per the plan). One commit per task, worktree
   through today's UI, since `DELETE` on bids/gens/documents stays
   admin-only, unchanged, per the ground rule limiting backend changes to the
   restore routes only.
+
+## Summary (Tasks 5–8)
+
+- Commits: `3a49eda` (Task 5), `5f9087c` (Task 6), `d2833ad` (Task 7),
+  `210b169` (Task 8) on `fix/audit-batch4`, continuing directly from `60951d2`.
+- **Frontend:** `npm run typecheck` — 0 errors throughout. `npm test` — grew
+  from 71 files / 520 tests (before Task 5) to 76 files / 541 tests (after
+  Task 8), all passing at every commit.
+- **`!important` in `styles.css`:** 59 → 57 (Task 5; see that section for the
+  exact two lines removed and why the count only drops by 2, not 3).
+- **Chunk sizes (Task 7):** main JS bundle 1,402.49 kB gzip 407.59 kB →
+  1,054.29 kB gzip 326.13 kB, plus 7 new page chunks. Full before/after table
+  in Task 7's section.
+- **Backend diff scope unchanged**: `git diff --stat main..HEAD -- backend/`
+  still touches exactly the same 5 files as after Task 4 (`middleware/auth.ts`,
+  the three restore routes, and their test file) — Tasks 5–8 touched nothing
+  under `backend/` or `database/`, as required.
+- `features/preconstruction/PcWorkspace.tsx` was not touched in Tasks 5–8
+  beyond what was already done in Task 3 (Tasks 1–4); Task 7's lazy-loading
+  change is a one-line import swap in `App.tsx`/`BuilderPage.tsx`/
+  `ElectricalHubPage.tsx`, never inside `PcWorkspace.tsx` itself, per the
+  ground rule reserving that file for Task 9.
+- The most load-bearing deviations from the literal plan text: Task 5 leaves
+  the shared `.stats` grid class's `!important` alone (it's reused by 8 other
+  pages not named in the task, so removing it would require touching files
+  outside scope); Task 6 finds only 2 of the plan's named "modal forms" (of
+  Task 1's nine) actually have a `required` input, and only 1 of the 3 modals
+  the audit names for missing `autoFocus` (`GenDetailDrawer`) actually has a
+  stable single form field to focus — the other two are pickers with no text
+  input at all. Full reasoning in each task's section.
 
 ---
 
@@ -505,3 +536,407 @@ and `PcWorkspace.tsx`'s money sites; and (deviation — see below)
    shared `fmtDate` too — it wasn't a named `fmtDate` function so it didn't
    violate the grep check, but leaving a hand-rolled date format one line
    away from the fix would have defeated the point.
+
+---
+
+## Task 5 — Grey tokens and the mobile `!important` trap
+
+**Files:** `frontend/src/styles.css`, `frontend/src/features/builder/BuilderPage.tsx`,
+`frontend/src/features/builder/EvBuilderPage.tsx` (deviation — see below),
+`frontend/src/features/elec-projects/ElecProjectsPage.tsx`.
+
+### What changed
+
+- **Token alias:** `--muted` and `--slate` now read `var(--text3)` in `:root`
+  (previously their own close-but-different hex values, `#6E7C95` and
+  `#7C8AA3`). A header comment in `styles.css` names `--text2`/`--text3` as
+  the two canonical grey tokens and says to prefer `--text3` in new code. The
+  ~30 existing call sites using `var(--muted)`/`var(--slate)` are unchanged
+  text and keep working, now resolving to the same color as `--text3` — a
+  small, deliberate, plan-mandated visual convergence (audit ux #10), not a
+  redesign.
+- **Grid literals moved out of inline styles into CSS classes**, so the
+  existing 768px mobile override can win the cascade by source order instead
+  of `!important` beating an inline style:
+  - `.builder-layout` (`1fr 300px`), `.builder-field-grid` (`1fr 1fr`),
+    `.builder-statezip-grid` (`80px 1fr`) — new base rules in `styles.css`;
+    the matching `gridTemplateColumns` keys were deleted from the inline
+    `style={{...}}` objects in `BuilderPage.tsx` (3 sites) wherever those
+    classes are used.
+  - `ElecProjectsPage.tsx`'s `.ws-form-grid` is reused across 9 differently-shaped
+    rows (New CO / Pay App / RFI / Key Material / Field Note, financials,
+    etc.), each with its own column template, so a single base rule can't
+    carry all of them. Seven new modifier classes (`.ws-grid-2`, `.ws-grid-3`,
+    `.ws-grid-4`, `.ws-grid-a` through `.ws-grid-d`) each carry one distinct
+    desktop template; the matching `gridTemplateColumns` inline key was
+    removed at each of the 9 sites and the modifier class added to
+    `className` alongside `ws-form-grid` (kept as a marker class, now
+    carrying no layout of its own — `display`/`gap`/etc. stay inline per
+    site, unchanged).
+  - The mobile 768px block's `.builder-field-grid, .builder-statezip-grid`
+    and `.ws-form-grid` rules had their `!important` removed (now plain
+    single-class rules, same specificity as the new base rules, winning on
+    source order — the same pattern `.field-row` already used elsewhere in
+    the file). `.builder-layout`'s mobile rule keeps `padding: 12px
+    !important` (that property is still set inline and wasn't part of this
+    task) but its `grid-template-columns` declaration lost `!important`.
+- **Not moved**: the Job Type toggle in `BuilderPage.tsx` (`gridTemplateColumns:
+  '1fr 1fr'`, no `className`, not covered by any mobile override — out of
+  scope) and `ElecProjectsPage.tsx`'s `.stats` grid (see deviation below).
+
+### Tests
+
+None added beyond the existing suite, per the plan (Task 5.3: "none required
+beyond the suite"). All 71 pre-existing test files/520 tests continued to
+pass unmodified; `npm run typecheck` stayed at 0 errors.
+
+### Verification (before → after)
+
+- `grep -c "!important" frontend/src/styles.css` → **59 → 57**. Only 2, not
+  3, because `.builder-layout`'s mobile rule keeps one `!important` on
+  `padding` (untouched, different property, its inline `padding` was not
+  moved into a class since only `gridTemplateColumns` was in scope).
+- `grep -n "gridTemplateColumns" frontend/src/features/builder/BuilderPage.tsx
+  frontend/src/features/elec-projects/ElecProjectsPage.tsx` → only the two
+  out-of-scope sites remain (Job Type toggle, `.stats`).
+
+### Deviations from the plan (Task 5)
+
+1. **`EvBuilderPage.tsx`, not named in the plan's file list, was also
+   updated.** It reuses the exact same `.builder-layout`/`.builder-field-grid`
+   classes with the identical literal values (`1fr 300px` / `1fr 1fr`) as
+   `BuilderPage.tsx`. Removing `!important` from those classes' mobile rules
+   without also removing `EvBuilderPage.tsx`'s matching inline
+   `gridTemplateColumns` would have silently broken its own mobile layout
+   (its inline style would again beat the now-non-`!important` mobile rule).
+   Since the values are identical, this is a same-behavior fix, not a
+   judgment call about new layout.
+2. **`ElecProjectsPage.tsx`'s `.stats` grid (line 274) was deliberately left
+   alone**, including its `!important` in the mobile block. Unlike
+   `.ws-form-grid`, the `.stats` class is shared by 8 other pages
+   (`OverviewTab`, `SalesByRepPage`, `FollowupsPage`, `ContactsPage`,
+   `CustomerHub`, `CommsPage`, `DocsPage`, `PcWorkspace`), each setting its
+   own inline `gridTemplateColumns` (`repeat(3,1fr)` through `repeat(5,1fr)`).
+   The mobile `.stats` rules apply to all of them, not just
+   `ElecProjectsPage.tsx`; converting only `ElecProjectsPage.tsx`'s site to a
+   class and removing `!important` from the shared mobile rule would break
+   mobile layout on the other 8 pages, none of which the plan named for this
+   task. Left as-is rather than expanding scope to 8 more files.
+3. `.ws-form-grid`'s 7 distinct column templates could not become one base
+   rule (unlike `.builder-layout`/`.builder-field-grid`/`.builder-statezip-grid`,
+   which each have exactly one literal value app-wide) — the plan's "into
+   classes" (plural) is read as license for this, and two of the seven
+   (`ws-grid-2`, `ws-grid-3`) are reused where two different original
+   literals were visually equivalent (`'1fr 1fr'` / `'repeat(2,1fr)'` and
+   `'1fr 1fr 1fr'` / `'repeat(3,1fr)'`).
+
+---
+
+## Task 6 — Small navigation and form fixes
+
+**Files:** `frontend/src/features/layout/AppShell.tsx` (+ new
+`AppShell.test.tsx`), new `frontend/src/components/RequiredMark.tsx` (+ test),
+`frontend/src/features/pipeline/AddBidModal.tsx`,
+`frontend/src/features/gen-pipeline/LogGenJobModal.tsx`,
+`frontend/src/features/gen-pipeline/GenDetailDrawer.tsx` (+ new test),
+`frontend/src/features/gen-pipeline/SignedContractCard.tsx`,
+`frontend/src/features/elec-projects/ElecProjectsPage.tsx` (+ new
+`ElecProjectsQuickAdd.test.tsx`).
+
+### What changed
+
+1. **Settings topbar title (ux #16):** `AppShell.tsx`'s `TB['admin'].title`
+   changed from `'Admin'` to `'Settings'` — only the topbar heading; the
+   sidebar nav button (already labeled "Settings") and `App.tsx`'s
+   `VIEW_TITLES['admin']` (already `'Settings'`, driving `document.title`)
+   were untouched.
+2. **`RequiredMark` (ux #15):** new component — a visible `aria-hidden`
+   asterisk plus a visually-hidden "required" span. Wired into the two
+   `required` inputs that actually exist among Task 1's nine Modal-based
+   forms: `AddBidModal.tsx` ("Project name", "General contractor") and
+   `LogGenJobModal.tsx` ("Customer"). The other seven of the nine either have
+   no `required` attribute at all, or (`AwardKickoffModal.tsx`) only the
+   plain word "required" in prose copy, not a form field.
+3. **`autoFocus` (ux #22):** `GenDetailDrawer.tsx`'s inline "Edit Details"
+   form now focuses its first field (Customer) when it opens (via an
+   `autoFocus={i === 0}` on the mapped input list). `AddBidModal`/
+   `LogGenJobModal` already had `autoFocus` on their first field before this
+   batch (from a prior change, not this task). The other six of the nine —
+   `LeadDetailDrawer`, `SignedContractCard`, `CalendarEventPickerModal`,
+   `SurveyFromCalendarModal`, `LeadSiteSurvey` — have no single stable text
+   field to focus on open; see the deviation below.
+4. **Double-submit (ux #21):** `SignedContractCard.tsx`'s "Countersign &
+   award" confirm button (previously ungated) now disables (and its label
+   changes to "Signing…") for the duration of the request. `ElecProjectsPage.tsx`'s
+   5 quick-add rows — Change Order, Pay App, RFI, Key Material, Field Note —
+   had inline `onClick={async () => {...}}` handlers with no busy flag at
+   all; all 5 are migrated to `useMutation`, whose `saving` flag now disables
+   the Add/Submit button and swaps its label for the duration of the request.
+
+### Tests
+
+- `frontend/src/features/layout/AppShell.test.tsx` (2 tests, new): the
+  `admin` view's topbar title reads "Settings"; the sidebar nav button is
+  still labeled "Settings" (proving this task changed the title, not the
+  label).
+- `frontend/src/components/RequiredMark.test.tsx` (3 tests, new): the
+  asterisk is `aria-hidden`; a visually-hidden "required" string is present
+  for assistive tech; it renders correctly next to a `required` input's
+  label.
+- `frontend/src/features/gen-pipeline/GenDetailDrawer.test.tsx` (1 test,
+  new — no prior test file existed for this component): opening "Edit
+  Details" focuses the Customer input (asserted via `document.activeElement`).
+- `frontend/src/features/elec-projects/ElecProjectsQuickAdd.test.tsx` (1
+  test, new): the RFI quick-add row's "Submit RFI" button, clicked three
+  times fast while the POST is still in flight (a deferred promise held
+  open), issues exactly one POST; the button reads "Submitting…" and is
+  disabled throughout; resolving the request re-enables it.
+- `frontend/src/features/gen-pipeline/SignedContractCard.test.tsx` (12
+  pre-existing tests) continued to pass unmodified after adding `disabled`
+  to the Countersign & award button.
+- Full suite after this task: 75 files / 527 tests, all passing;
+  `npm run typecheck` — 0 errors.
+
+### Deviations from the plan (Task 6)
+
+1. **RequiredMark scope**: the plan's Task 6.2 file list says "the modal
+   forms named in the audit," and audit finding #15 also names
+   `LoginPage.tsx`, `OverviewTab.tsx`, `AddLeadModal.tsx`, and
+   `ContactsPage.tsx` as sites with a `required` attribute — none of those
+   are one of Task 1's nine Modal-based dialogs (LoginPage and ContactsPage
+   are full pages; OverviewTab is an inline tab-embedded edit form;
+   AddLeadModal has no `required` attribute at all, only a post-submit toast).
+   Scope was kept to the two real `required`-input sites inside the nine
+   Modal forms, matching the narrower "modal forms" phrase in the task text
+   rather than the audit finding's broader illustrative list.
+2. **`autoFocus` reached only 3 of the 9 (2 pre-existing + 1 new)**, not all
+   nine, because six of them genuinely have no single stable form field on
+   open: `AwardKickoffModal` and `CalendarEventPickerModal` are upload-slot/
+   picker modals with zero text `<input>`s (confirmed by a targeted grep);
+   `SignedContractCard`'s confirm and `SurveyFromCalendarModal` are
+   confirmation/picker dialogs, same reason; `LeadSiteSurvey` is a
+   multi-step wizard whose "first field" changes shape every step (buttons,
+   numbers, or a textarea depending which of ~8 steps is showing) — there is
+   no one field to autoFocus without restructuring the wizard's step
+   rendering, which the "no visual redesign" rule and this task's scope
+   don't call for. `LeadDetailDrawer` is a read-first detail view, not a
+   form-on-open, and already had a correctly-scoped `autoFocus` on its
+   inline "Add note" textarea (pre-existing, appears only when that field is
+   toggled on).
+3. **`SignedContractCard`'s "Countersign & award" button** was not named by
+   the plan's literal Task 6.4 file list (which calls out only the
+   ElecProjectsPage quick-add rows), but it was a genuinely ungated mutation
+   button discovered while auditing all nine Task 1 modals for double-submit
+   protection per audit finding #21's broader statement ("double-submit
+   isn't protected uniformly"). Fixed as a small, same-shaped, same-file
+   addition rather than filed separately.
+4. **All 5 of ElecProjectsPage's quick-add rows were migrated, not only the
+   3 the task text names** (CO / Pay App / RFI). Key Materials and Field
+   Notes have the exact identical bug pattern in the same file (an inline
+   `async onClick` with no busy flag) — fixing 3 of 5 and leaving 2
+   identical, adjacent bugs unfixed would have been inconsistent for no
+   reason within the same task's blast radius.
+
+---
+
+## Task 7 — Code splitting
+
+**Files:** `frontend/src/App.tsx`, `frontend/src/features/builder/BuilderPage.tsx`,
+`frontend/src/features/hubs/ElectricalHubPage.tsx` (deviation on the last
+two — see below), new `frontend/src/App.codeSplitting.test.tsx`.
+`vite.config.ts` needed no change (no `manualChunks` configuration exists;
+Vite already code-splits any `import()` into its own chunk automatically).
+
+### What changed
+
+- `React.lazy()` for the four pages `App.tsx` imports directly —
+  `SettingsPage`, `BidHubPage`, `BuilderPage`, `DocsPage` — plus two more
+  that the plan names but that App.tsx never imports directly, since they're
+  nested inside other pages: `EvBuilderPage` (imported inside
+  `BuilderPage.tsx`, rendered when a rep picks "EV Charger") and
+  `ElecProjectsPage` (imported inside `ElectricalHubPage.tsx`, rendered on
+  its "Projects" tab).
+- **One `<Suspense>`**, wrapping `renderView()` inside App.tsx's existing
+  page-level `<ErrorBoundary>` (which stays the outer wrapper, so a chunk
+  *load failure* — `import()` rejecting, not just being slow — still throws
+  during render and is caught by the boundary rather than crashing the
+  app). Suspense catches a lazy component suspending anywhere in its
+  subtree, not just its direct children, so this single boundary also
+  covers `EvBuilderPage` and `ElecProjectsPage` even though each is a second,
+  nested lazy import two components below where `renderView()` itself
+  switches on `view`.
+- A small shared `PageLoadingFallback` component (`App.tsx`) is the one
+  Suspense `fallback` — styled identically to the existing bootstrap
+  "Loading…" state (`padding: 32, color: 'var(--text3)'` in a
+  `.scroll.view-enter` wrapper) so a slow chunk fetch reads as the same kind
+  of pause as the initial data load, not a visually different one.
+
+### Tests
+
+- `frontend/src/App.codeSplitting.test.tsx` (8 tests, new): each of the six
+  lazy pages actually renders its own real, distinguishing content (not just
+  "didn't crash") after its chunk resolves — `DocsPage`'s empty state,
+  `BuilderPage`'s "Customer & Site"/"Cooling Type" fields, `SettingsPage`'s
+  "Company Profile" section, `BidHubPage`'s bid name, `EvBuilderPage`'s
+  "Installation" section (reached by clicking the EV Charger toggle inside
+  `BuilderPage`, proving the *nested* lazy import is covered by the same
+  outer Suspense), and `ElecProjectsPage`'s empty state (reached by
+  navigating to `/electrical/projects`). Two more: `NotFound` still renders
+  for an unknown route with the Suspense boundary in place, and
+  `usePageTitle` still sets `document.title` for a lazy page.
+- All pre-existing tests (76 files before this task's new file) continued to
+  pass unmodified — no existing test needed to be wrapped in `Suspense` or
+  switched to `findBy`, since the ones that render these pages (directly, or
+  through `App.tsx`) already used `findBy`/`waitFor`-style async queries
+  throughout, which tolerate the extra microtask a lazy import adds.
+- Full suite after this task: 76 files / 535 tests, all passing;
+  `npm run typecheck` — 0 errors.
+
+### Chunk sizes (`npm run build`, before → after)
+
+Before (Tasks 1–6, pre-Task-7):
+
+| File | Size | Gzip |
+|---|---|---|
+| `index-D_QsPSg5.js` (main bundle) | 1,402.49 kB | 407.59 kB |
+| `index-DaG4cyX3.js` (vendor) | 495.37 kB | 130.06 kB |
+| `pdf-BnPRJEQ6.js` | 365.12 kB | 107.40 kB |
+| `jspdf.es.min-BkmqVaXi.js` | 357.39 kB | 116.59 kB |
+| `html2canvas.esm-CBrSDip1.js` | 201.42 kB | 47.70 kB |
+| `index.es-B6rWNYCB.js` | 150.69 kB | 51.39 kB |
+| `purify.es-BwoZCkIS.js` | 22.03 kB | 8.72 kB |
+| `pdf.worker.min-yatZIOMy.mjs` | 1,375.84 kB | (worker, not gzip-measured) |
+
+After (Task 7):
+
+| File | Size | Gzip |
+|---|---|---|
+| `index-nzvcQE1P.js` (main bundle) | **1,054.29 kB** | **326.13 kB** |
+| `index-CyMVFe27.js` (vendor, unchanged) | 495.38 kB | 130.06 kB |
+| `pdf-BnPRJEQ6.js` (unchanged) | 365.12 kB | 107.40 kB |
+| `jspdf.es.min-DgAUGTZU.js` (unchanged) | 357.39 kB | 116.59 kB |
+| `html2canvas.esm-CBrSDip1.js` (unchanged) | 201.42 kB | 47.70 kB |
+| `index.es-ukL8TGzM.js` (unchanged) | 150.69 kB | 51.39 kB |
+| `PcWorkspace-BOLvf1RP.js` (new — see deviation) | 116.39 kB | 29.24 kB |
+| `SettingsPage-BGyAl76s.js` (new) | 84.98 kB | 21.05 kB |
+| `ElecProjectsPage-JL3BkAyG.js` (new) | 48.62 kB | 11.11 kB |
+| `BidHubPage-CSC540Sl.js` (new) | 41.74 kB | 11.33 kB |
+| `BuilderPage-BYfYt5HU.js` (new) | 31.06 kB | 9.27 kB |
+| `DocsPage-DkUt5hJ8.js` (new) | 14.03 kB | 4.33 kB |
+| `EvBuilderPage-D4af-XKu.js` (new) | 12.18 kB | 3.86 kB |
+| `purify.es-BwoZCkIS.js` (unchanged) | 22.03 kB | 8.72 kB |
+| `pdf.worker.min-yatZIOMy.mjs` (unchanged) | 1,375.84 kB | (worker) |
+
+**Main bundle: −348.2 kB raw (−24.8%), −81.46 kB gzip (−20.0%).** `dist/`
+was deleted after each build (already gitignored); no build artifacts were
+committed.
+
+### Deviations from the plan (Task 7)
+
+1. **`EvBuilderPage` and `ElecProjectsPage` are lazy-loaded from
+   `BuilderPage.tsx` and `ElectricalHubPage.tsx` respectively, not from
+   `App.tsx`**, because `App.tsx` never imports either directly — both are
+   two levels deep (App.tsx → BuilderPage/ElectricalHubPage → the lazy
+   component). The plan's file list only says "App.tsx, vite.config.ts if
+   needed," but achieving a genuinely separate chunk for these two (as the
+   plan's Task 7.1 explicitly names them, distinct from BuilderPage/
+   ElectricalHubPage) requires touching the file that actually imports them.
+   This is exactly what "one `<Suspense>`" was written to allow: React's
+   Suspense boundary catches any lazy component suspending anywhere beneath
+   it, at any depth, so the single boundary in `App.tsx` still covers both
+   without a second `<Suspense>` anywhere else.
+2. **`PcWorkspace` got its own chunk as a side effect**, not something this
+   task explicitly asked for. It was previously bundled into the main chunk
+   because it's imported by `BidHubPage.tsx`, which itself was imported
+   eagerly by `App.tsx`; once `BidHubPage` became a lazy boundary, Vite's
+   bundler naturally split `PcWorkspace` (only reachable through
+   `BidHubPage`) into its own chunk too. Left as-is — it's a strict
+   improvement for the exact page (audit ux #19 / code #10 both single it
+   out as the largest component in the app) that Task 9 is about to split
+   further; no code in `PcWorkspace.tsx` itself was touched.
+
+---
+
+## Task 8 — Request dedup for identical in-flight reads
+
+**Files:** `frontend/src/hooks/useApi.ts`, `frontend/src/hooks/useApi.test.ts`.
+
+### What changed
+
+- A module-level `Map<string, SharedRequest>` (`sharedRequests`), keyed on
+  `` `${url}|${paramsKey}|${responseType ?? ''}` `` (deviation from the
+  plan's literal "keyed on url + paramsKey" — see below). Concurrent
+  `useApi` calls for the same key join the same in-flight axios promise
+  instead of each firing their own GET.
+- **Reference counting**: each `SharedRequest` tracks `refCount`, incremented
+  when a subscriber joins and decremented in that subscriber's effect
+  cleanup (unmount, dependency change, or `reload()`). The underlying
+  `AbortController` is only aborted — and the map entry only deleted early —
+  when the *last* subscriber leaves; while any other subscriber is still
+  waiting on the same key, the shared request keeps running.
+- **No TTL cache**: the entry is deleted the moment its request settles
+  (success or failure) via `promise.finally(...)`, whether or not anyone is
+  still subscribed. A later call for the same key — a millisecond or an hour
+  later — always finds no entry and issues a brand new request.
+- **Per-subscriber cancellation is decoupled from the shared
+  `AbortController`**: each subscriber's own effect closure has a private
+  `cancelled` flag, set in its cleanup. A subscriber that unmounts (without
+  being the last one) stops applying the eventual response to its own
+  state, without needing — or being able — to touch the shared controller
+  that other subscribers still depend on.
+- `reload()` no longer manually aborts a per-hook controller; bumping
+  `nonce` reruns the effect, whose own cleanup (run first, synchronously, by
+  React, before the new effect body) already unsubscribes cleanly through
+  the same reference-counting path.
+- **Bug found and fixed during implementation**: the internal
+  `promise.finally(() => sharedRequests.delete(key))` bookkeeping chain is a
+  *second* consumer of the shared promise (distinct from each subscriber's
+  own `.then().catch()` chain) and has no `.catch()` of its own — a shared
+  request that rejects would otherwise surface as an "Unhandled Rejection"
+  in that internal chain even though every real subscriber already handles
+  the same rejection correctly. Fixed with a trailing `.catch(() => {})` on
+  that one internal chain. Caught by running the full suite, not by a
+  dedicated test (see Tests below) — it manifested as unhandled-rejection
+  noise across several unrelated test files whose mocked API calls reject,
+  not as a failing assertion.
+
+### Tests
+
+`frontend/src/hooks/useApi.test.ts` gained a `describe('request dedup', ...)`
+block (7 tests):
+- Four simultaneous subscribers to the same `/documents?linked_id=` read
+  issue exactly one GET; all four receive the resolved data.
+- Unmounting one of two subscribers to the same key leaves the shared
+  request's `AbortController` un-aborted and the request still fulfills the
+  remaining subscriber.
+- A lone subscriber unmounting **does** abort the shared request (the
+  reference-counting boundary case).
+- A failed shared request rejects every subscriber (both see the same
+  normalized error message) and clears the entry, so a subsequent call for
+  the same key issues a fresh request rather than reusing the failed one.
+- A subsequent call after a *successful* settle also issues a new request
+  (no TTL cache).
+- Two calls with different `params` for the same `url` are never
+  accidentally shared.
+- All 6 pre-existing `useApi.test.ts` tests (cancellation on url change,
+  abort-on-unmount, error normalization ×2, `reload()`, disabled→enabled,
+  equal-by-value params not refetching) continued to pass unmodified.
+
+Full suite after this task: 76 files / 541 tests, all passing (541 vs. 535
+after Task 7 — the 6 new dedup tests); `npm run typecheck` — 0 errors; no
+unhandled-rejection noise in the run (the fix above).
+
+### Deviations from the plan (Task 8)
+
+1. **The dedup key includes `responseType`** in addition to `url +
+   paramsKey`, which the plan states literally as the key. Without it, a
+   JSON read and a binary `blob`/`arraybuffer` download of the exact same
+   URL and params — a genuinely different request shape, since the parsed
+   response type differs — could be incorrectly shared, silently handing one
+   caller the wrong data type. No call site in the app currently does this
+   (checked: no two `useApi` calls share a URL+params with different
+   `responseType`), so this is a forward-looking correctness guard, not a
+   fix for an observed bug, and it doesn't weaken the plan's actual target
+   scenario (the gen drawer's four identical `/documents?linked_id=` reads,
+   which share the same `responseType` — undefined — and dedup exactly as
+   specified).
