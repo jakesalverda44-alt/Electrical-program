@@ -49,4 +49,31 @@ describe('GET /api/leads — q/limit filters (Task 5)', () => {
       .query({ q: emailMarker }).expect(200);
     expect(res.body.some((l: { email: string }) => l.email === emailMarker)).toBe(true);
   });
+
+  // Hardening 5b — an explicit limit above the cap is clamped, not honored.
+  it('clamps an oversized limit to 200', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const res = await request(app).get('/api/leads').set(auth(u.token))
+      .query({ limit: 999999 }).expect(200);
+    expect(res.body.length).toBeLessThanOrEqual(200);
+  });
+
+  // Hardening 5b — a literal `%`/`_` in the search text must match that
+  // literal character, not act as an ILIKE wildcard.
+  it('treats a literal % in q as a literal character, not an ILIKE wildcard', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const stamp = Date.now();
+    await request(app).post('/api/leads').set(auth(u.token))
+      .send({ name: `50% Off Job ${stamp}`, phone: '555-0400' }).expect(201);
+    await request(app).post('/api/leads').set(auth(u.token))
+      .send({ name: `50X Off Job ${stamp}`, phone: '555-0401' }).expect(201);
+
+    const res = await request(app).get('/api/leads').set(auth(u.token))
+      .query({ q: `50% Off Job ${stamp}` }).expect(200);
+    const names = res.body.map((l: { name: string }) => l.name);
+    expect(names).toContain(`50% Off Job ${stamp}`);
+    expect(names).not.toContain(`50X Off Job ${stamp}`);
+  });
 });

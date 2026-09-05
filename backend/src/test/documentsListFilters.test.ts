@@ -87,4 +87,29 @@ describe('GET /api/documents — q/category/linked_id filters (Task 5)', () => {
       .query({ q: marker, limit: 2 }).expect(200);
     expect(res.body.length).toBe(2);
   });
+
+  // Hardening 5b — an explicit limit above the cap is clamped, not honored.
+  it('clamps an oversized limit to 200', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const res = await request(app).get('/api/documents').set(auth(u.token))
+      .query({ limit: 999999 }).expect(200);
+    expect(res.body.length).toBeLessThanOrEqual(200);
+  });
+
+  // Hardening 5b — a literal `%`/`_` in the search text must match that
+  // literal character, not act as an ILIKE wildcard.
+  it('treats a literal % in q as a literal character, not an ILIKE wildcard', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const stamp = Date.now();
+    await upload(u.token, { display_name: `50% Off Electric ${stamp}.pdf`, category: 'other' });
+    await upload(u.token, { display_name: `50X Off Electric ${stamp}.pdf`, category: 'other' });
+
+    const res = await request(app).get('/api/documents').set(auth(u.token))
+      .query({ q: `50% Off Electric ${stamp}` }).expect(200);
+    const names = res.body.map((d: { display_name: string }) => d.display_name);
+    expect(names).toContain(`50% Off Electric ${stamp}.pdf`);
+    expect(names).not.toContain(`50X Off Electric ${stamp}.pdf`);
+  });
 });

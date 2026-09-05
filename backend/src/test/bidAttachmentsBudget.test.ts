@@ -26,6 +26,17 @@ async function makeDoc(bidId: string, opts: { name: string; fileSize: number; by
   );
 }
 
+// Neither file_data nor storage_url — fetchDocBytes returns null for this
+// row with no exception, simulating a "failed fetch" (a missing/corrupted
+// file) without needing to mock an HTTP/Drive call.
+async function makeUnfetchableDoc(bidId: string, opts: { name: string; fileSize: number }) {
+  await pool.query(
+    `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_type, file_size, uploaded_by)
+     VALUES ($1, 'x', 'elec', $2, $2, 'plans', 'application/pdf', $3, 'test')`,
+    [bidId, opts.name, opts.fileSize]
+  );
+}
+
 describe('loadLinkedDocumentsAsAttachments — two-pass budget (Task 9)', () => {
   it('never selects file_data for a document already over budget by its recorded file_size', async (ctx) => {
     if (!ok) return ctx.skip();
@@ -67,5 +78,42 @@ describe('loadLinkedDocumentsAsAttachments — two-pass budget (Task 9)', () => 
     const result = await loadLinkedDocumentsAsAttachments(bidId, { maxTotalBytes: 1000 });
     expect(result.attachedNames).toEqual(['a.pdf', 'b.pdf']);
     expect(result.skipped).toEqual(['c.pdf']);
+  });
+
+  // Post-review hardening (5d) — a document that survives the metadata
+  // pre-filter but then fails to actually fetch must not have "used up" any
+  // of the byte budget: a later document that DOES fetch successfully must
+  // still get its fair shot at fitting.
+  it('a document that fails to fetch does not evict a later attachment that would otherwise fit', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const bidId = await makeBid(`Attach failed-fetch ${Date.now()}`);
+    // Recorded file_size of 60 is well within the 100-byte budget, so this
+    // survives the metadata pre-filter — but it has neither file_data nor a
+    // storage_url, so fetchDocBytes returns null for it.
+    await makeUnfetchableDoc(bidId, { name: 'broken.pdf', fileSize: 60 });
+    // Only 60 real bytes — fits the 100-byte budget on its own, but would
+    // NOT fit if broken.pdf's 60-byte estimate had already (wrongly) been
+    // charged against the total.
+    await makeDoc(bidId, { name: 'real.pdf', fileSize: 60, bytes: 'x'.repeat(60) });
+
+    const result = await loadLinkedDocumentsAsAttachments(bidId, { maxTotalBytes: 100 });
+    expect(result.skipped).toEqual(['broken.pdf']);
+    expect(result.attachedNames).toEqual(['real.pdf']);
+  });
+
+  // Post-review hardening (5d) — skipped[] is built by walking the documents
+  // in their original created_at order once (matching the pre-Task-9
+  // single-pass behavior), not "every metadata-stage skip, then every
+  // fetch-stage skip" grouped separately.
+  it('skipped[] preserves original document order across both a metadata-stage skip and a fetch-stage skip', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const bidId = await makeBid(`Attach skip order ${Date.now()}`);
+    await makeDoc(bidId, { name: 'a-fits.pdf', fileSize: 50, bytes: 'a'.repeat(50) });
+    await makeUnfetchableDoc(bidId, { name: 'b-fetch-fails.pdf', fileSize: 50 }); // fetch-stage skip
+    await makeDoc(bidId, { name: 'c-over-budget.pdf', fileSize: 999_999, bytes: 'c'.repeat(50) }); // metadata-stage skip
+
+    const result = await loadLinkedDocumentsAsAttachments(bidId, { maxTotalBytes: 100 });
+    expect(result.attachedNames).toEqual(['a-fits.pdf']);
+    expect(result.skipped).toEqual(['b-fetch-fails.pdf', 'c-over-budget.pdf']);
   });
 });

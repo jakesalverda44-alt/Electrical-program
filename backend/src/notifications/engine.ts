@@ -95,6 +95,19 @@ async function scanAndNotify<T>(
  * Scan for follow-up tasks due, proposals viewed-but-unsigned, and bids due soon.
  * Creates in-app notifications (deduped) and sends an email digest per type when enabled.
  * Safe to run repeatedly — dedup_key prevents duplicate notifications.
+ *
+ * Post-review hardening (5g), follow-up not implemented here: dedup_key has
+ * no day component (see the followup_due comment below), so once a task/lead
+ * has notified once, its row is the permanent record of that — reopening the
+ * item (closing then reopening a task, a lead going quiet again after being
+ * worked) does NOT produce a new notification, because ON CONFLICT sees the
+ * same dedup_key already exists. It will notify again only once retention
+ * (audit batch 3 Task 2) ages that old row out of the notifications table.
+ * Filed as a follow-up — not implemented in this batch — because fixing it
+ * needs a real decision about what "reopened" means per notification type
+ * (e.g. does a task's status changing open→closed→open count, and should the
+ * dedup key incorporate a version/generation counter instead of just the
+ * item id) rather than a mechanical change.
  */
 export async function runReminderScan(): Promise<void> {
   const prefs = await getReminderPrefs();

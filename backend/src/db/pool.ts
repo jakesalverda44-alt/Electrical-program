@@ -17,11 +17,16 @@ dotenv.config();
 // every table here is tiny (audit data: the largest is a few thousand rows
 // at real production scale) and every migration statement is a plain
 // CREATE INDEX / small DELETE, nowhere near 15s.
+// Exported so migrate.ts can restore the exact same value after temporarily
+// disabling it for a migration's own transaction (hardening 5a) — a literal
+// duplicated in two files is a value that silently drifts.
+export const STATEMENT_TIMEOUT_MS = 15_000;
+
 const POOL_TUNING = {
   max: 20,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
-  statement_timeout: 15_000,
+  statement_timeout: STATEMENT_TIMEOUT_MS,
 };
 
 export const pool = new Pool(

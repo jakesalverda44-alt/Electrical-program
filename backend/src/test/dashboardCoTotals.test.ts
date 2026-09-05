@@ -96,4 +96,26 @@ describe('GET /api/dashboard — bids co_approved_total (Task 4)', () => {
     expect(Number(row!.co_approved_total)).toBe(0);
     expect(row!.date_won).toBeNull();
   });
+
+  // Post-review hardening (5e) — proposal_id has no format constraint at the
+  // schema level, so a malformed value must not throw a cast error and 500
+  // the whole dashboard. It should just not match, same as any non-uuid
+  // string does today.
+  it('a won_jobs row with a malformed (non-uuid) proposal_id does not 500 the dashboard', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token))
+      .send({ name: `Dash Malformed ${Date.now()}`, gc: 'G' }).expect(200);
+    await pool.query(
+      `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, date_won)
+       VALUES ('IT Rep', 'Test Co', $1, 'Electrical', 50000, '2026-02-01')`,
+      [`not-a-uuid-${Date.now()}`] // proposal_id is unique — must vary per run
+    );
+
+    const res = await request(app).get('/api/dashboard').set(auth(u.token)).expect(200);
+    const row = (res.body.bids as Array<{ id: string; date_won: string | null }>)
+      .find(b => b.id === bid.body.id);
+    expect(row).toBeTruthy();
+    expect(row!.date_won).toBeNull(); // no match, not a crash
+  });
 });

@@ -10,6 +10,7 @@ import { documentUpload } from '../utils/upload';
 import { getFileMedia } from '../services/googleDrive';
 import { deleteFromCloud } from '../utils/cloudStorage';
 import { storeDocument } from '../utils/storeDocument';
+import { escapeLikePattern, clampLimit } from '../utils/sqlLike';
 
 const router = Router();
 const upload = documentUpload;
@@ -70,7 +71,10 @@ router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   // that only matched by linked_name never reached the browser for the
   // client filter to recover. linked_name joins the same OR.
   if (q) {
-    params.push(`%${q}%`);
+    // escapeLikePattern (hardening 5b) — a literal % or _ typed into the
+    // search box would otherwise act as an ILIKE wildcard instead of
+    // matching that literal character.
+    params.push(`%${escapeLikePattern(q)}%`);
     conds.push(`(name ILIKE $${params.length} OR display_name ILIKE $${params.length} OR linked_name ILIKE $${params.length})`);
   }
   // Restricted reps only see documents they uploaded or linked to a bid/proposal
@@ -89,8 +93,8 @@ router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
     );
   }
   let sql = `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at FROM documents WHERE ${conds.join(' AND ')} ORDER BY created_at DESC`;
-  const limitNum = limit ? parseInt(limit, 10) : NaN;
-  if (Number.isFinite(limitNum) && limitNum > 0) {
+  const limitNum = clampLimit(limit); // hardening 5b — upper-bounded at 200
+  if (limitNum !== undefined) {
     params.push(limitNum);
     sql += ` LIMIT $${params.length}`;
   }

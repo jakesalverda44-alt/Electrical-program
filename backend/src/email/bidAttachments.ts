@@ -93,17 +93,15 @@ export async function loadLinkedDocumentsAsAttachments(
     categoryClause = ` AND category = ANY($${params.length})`;
   }
 
-  // Task 9 (audit data #10) — two passes. Pass 1 selects metadata only (no
-  // file_data — the largest single column on this table, up to a few MB of
-  // base64 per row); the size budget is decided from that alone, exactly the
-  // same running-total arithmetic the single-pass version used, just against
-  // `file_size` instead of the fetched buffer's actual length (storeDocument
-  // always records file_size at upload time, so the two agree in the normal
-  // case — a legacy row with no recorded file_size is still included rather
-  // than blocked, same as the old pre-fetch check's `doc.file_size &&` guard,
-  // and simply doesn't count against the running total until fetched). Only
-  // once the survivor list is final does pass 2 fetch file_data, and only for
-  // those ids.
+  // Task 9 (audit data #10), refined by post-review hardening 5d — this
+  // selects metadata only (no file_data — the largest single column on this
+  // table, up to a few MB of base64 per row), so most oversized documents
+  // never even have their bytes fetched. The metadata-only file_size budget
+  // below is a coarse pre-filter deciding what's worth fetching; the
+  // authoritative budget decision happens afterward against confirmed,
+  // actually-fetched byte counts, so a failed fetch or a size estimate that
+  // turns out wrong can never consume budget a later attachment could have
+  // used.
   const { rows: meta } = await pool.query<Omit<DocRow, 'file_data'>>(
     `SELECT id, name, display_name, category, file_type, file_size, storage_url
        FROM documents
@@ -112,51 +110,73 @@ export async function loadLinkedDocumentsAsAttachments(
     params
   );
 
-  const survivors: Array<Omit<DocRow, 'file_data'> & { attachName: string }> = [];
-  const skipped: string[] = [];
-  let total = 0;
+  // Pass 1 (from metadata alone): a per-document pre-filter deciding which
+  // documents are even worth fetching bytes for — skip only a document
+  // whose OWN recorded file_size already busts the budget on its own.
+  // Post-review hardening 5d: this is deliberately NOT a cumulative running
+  // total the way the old single-pass version's was — charging one
+  // document's estimated size against a shared total here, before any byte
+  // has actually been fetched, could wrongly exclude a later, smaller
+  // document from ever being attempted over an estimate that might not even
+  // pan out (exactly the class of bug this hardening pass fixes one stage
+  // later, at the fetch itself). The real, cumulative budget decision is
+  // entirely pass 2's job, against confirmed, actually-fetched byte counts.
+  const provisional: Array<Omit<DocRow, 'file_data'> & { attachName: string }> = [];
+  const preSkippedIds = new Set<string>();
   for (const doc of meta) {
     const name = attachmentFileName(doc.display_name, doc.name, doc.file_type);
-    if (doc.file_size && doc.file_size > maxTotalBytes) { skipped.push(name); continue; }
-    if (doc.file_size && total + doc.file_size > maxTotalBytes) { skipped.push(name); continue; }
-    total += doc.file_size ?? 0;
-    survivors.push({ ...doc, attachName: name });
+    if (doc.file_size && doc.file_size > maxTotalBytes) { preSkippedIds.add(doc.id); continue; }
+    provisional.push({ ...doc, attachName: name });
   }
 
   const fileDataById = new Map<string, string | null>();
-  if (survivors.length) {
+  if (provisional.length) {
     const { rows: dataRows } = await pool.query<{ id: string; file_data: string | null }>(
       `SELECT id, file_data FROM documents WHERE id = ANY($1::uuid[])`,
-      [survivors.map(s => s.id)]
+      [provisional.map(s => s.id)]
     );
     for (const r of dataRows) fileDataById.set(r.id, r.file_data);
   }
 
-  const attachments: GraphAttachment[] = [];
-  const attachedNames: string[] = [];
-  const attached: LinkedDocRef[] = [];
-
-  for (const doc of survivors) {
+  // Pass 2 (confirmed): fetch each provisional survivor's bytes and decide
+  // its real fate against a running total that only ever grows on a
+  // successful fetch that actually fit — a failed fetch (or one that turns
+  // out to overshoot once its real size is known) must never have already
+  // consumed budget a later, successfully-fetched attachment could have used.
+  const fetchedById = new Map<string, Buffer>();
+  let confirmedTotal = 0;
+  for (const doc of provisional) {
     let buf: Buffer | null = null;
     try { buf = await fetchDocBytes({ ...doc, file_data: fileDataById.get(doc.id) ?? null }); }
     catch (err) { logger.warn({ err, docId: doc.id }, '[bid-attach] could not fetch document'); }
-    if (!buf) { skipped.push(doc.attachName); continue; }
+    if (!buf) continue; // failed fetch — no charge, not attached
+    if (confirmedTotal + buf.length > maxTotalBytes) continue; // doesn't actually fit — no charge
+    confirmedTotal += buf.length;
+    fetchedById.set(doc.id, buf);
+  }
 
-    // A doc with no recorded file_size (didn't count against `total` above)
-    // still gets the actual-bytes budget check here, same as before.
-    if (!doc.file_size && total + buf.length > maxTotalBytes) { skipped.push(doc.attachName); continue; }
-    if (!doc.file_size) total += buf.length;
-
+  // Assemble the result by walking the documents in their original
+  // created_at order once, exactly like the pre-Task-9 single-pass version
+  // did — restores the original skipped[] ordering (post-review hardening
+  // 5d), rather than "every pre-skip, then every fetch-time skip".
+  const attachments: GraphAttachment[] = [];
+  const attachedNames: string[] = [];
+  const attached: LinkedDocRef[] = [];
+  const skipped: string[] = [];
+  for (const doc of meta) {
+    const name = attachmentFileName(doc.display_name, doc.name, doc.file_type);
+    const buf = fetchedById.get(doc.id);
+    if (preSkippedIds.has(doc.id) || !buf) { skipped.push(name); continue; }
     attachments.push({
       '@odata.type': '#microsoft.graph.fileAttachment',
-      name: doc.attachName,
+      name,
       contentType: doc.file_type || 'application/octet-stream',
       contentBytes: buf.toString('base64'),
       isInline: false,
       contentId: `bidfile-${doc.id}`,
     });
-    attachedNames.push(doc.attachName);
-    attached.push({ name: doc.attachName, category: doc.category });
+    attachedNames.push(name);
+    attached.push({ name, category: doc.category });
   }
 
   return { attachments, attachedNames, attached, skipped };

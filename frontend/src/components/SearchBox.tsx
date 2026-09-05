@@ -35,10 +35,23 @@ export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
   // pre-filtered to 8 rows.
   const [everOpened, setEverOpened] = useState(false);
   useEffect(() => { if (open) setEverOpened(true); }, [open]);
+
+  // Hardening 5c — debounced like DocsPage's search box, so fast typing
+  // doesn't fire one /leads request per keystroke. useApi itself aborts the
+  // previous request (and drops its response if it lands late) on every
+  // params change, so this is purely about request *volume*, not
+  // correctness — but at 8 lookups a second while typing a name, volume
+  // matters too.
   const qTrimmed = q.trim();
+  const [debouncedQ, setDebouncedQ] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(qTrimmed), 300);
+    return () => clearTimeout(t);
+  }, [qTrimmed]);
+
   const { data: leads } = useApi<Lead[]>('/leads', {
-    params: { include_converted: 1, q: qTrimmed, limit: 8 },
-    enabled: everOpened && qTrimmed.length >= 2,
+    params: { include_converted: 1, q: debouncedQ, limit: 8 },
+    enabled: everOpened && debouncedQ.length >= 2,
   });
   useEffect(() => {
     if (!open) return;

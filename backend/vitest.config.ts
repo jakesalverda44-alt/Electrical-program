@@ -9,10 +9,15 @@ import { defineConfig } from 'vitest/config';
 // than a single normal run — several previously-reliable tests started
 // missing vitest's 5000ms default under that load, unrelated to any
 // product-code regression (re-running the same test alone always passes).
-// 20s gives real work under real load reasonable headroom without masking a
-// truly hung request.
+// 30s gives real work under real load reasonable headroom without masking a
+// truly hung request. Post-review hardening (5f): a handful of tests that
+// deliberately run longer than that (the pool/migration statement_timeout
+// tests, the real soffice PDF conversion test) each set their own explicit
+// per-test timeout as a third `it(...)` argument rather than relying on this
+// global — see poolStatementTimeout.test.ts, migrateDestructiveGuard.test.ts,
+// and bidstd/verifyBid.test.ts.
 export default defineConfig({
   test: {
-    testTimeout: 45_000,
+    testTimeout: 30_000,
   },
 });

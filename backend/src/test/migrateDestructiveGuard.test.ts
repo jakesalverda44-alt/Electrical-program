@@ -113,4 +113,23 @@ describe('runMigrations — destructive-statement guard (Task 1)', () => {
     const { rows } = await pool.query('SELECT 1 FROM schema_migrations WHERE filename = $1', [file]);
     expect(rows.length).toBe(1);
   });
+
+  // Post-review hardening (5a) — db/pool.ts's statement_timeout: 15_000
+  // (Task 10) is a connection-startup parameter, so it's already active on
+  // the client runMigrations() checks out. A migration slower than that
+  // (nothing today, but nothing guarantees a future one over a larger table)
+  // must not be killed mid-transaction by a limit meant for a runaway
+  // application query — migrate.ts now disables it for the duration of each
+  // migration's own BEGIN/COMMIT.
+  it('a migration slower than the pool statement_timeout still completes', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const file = uniqueName();
+    cleanupFiles.push(file);
+    fs.writeFileSync(path.join(migrationsDir, file), `SELECT pg_sleep(16);\n`);
+
+    await expect(runMigrations(migrationsDir)).resolves.not.toThrow();
+
+    const { rows } = await pool.query('SELECT 1 FROM schema_migrations WHERE filename = $1', [file]);
+    expect(rows.length).toBe(1);
+  }, 25_000);
 });

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
-import { pool } from './db/pool';
+import { pool, STATEMENT_TIMEOUT_MS } from './db/pool';
 
 // Strips SQL line (--) and block (/* */) comments before scanning for
 // destructive statements, so a comment mentioning TRUNCATE (like the
@@ -76,6 +76,20 @@ export async function runMigrations(migrationsDirOverride?: string): Promise<voi
     }
     const client = await pool.connect();
     try {
+      // Post-review hardening (5a) — db/pool.ts sets statement_timeout: 15_000
+      // as a connection-startup parameter (Task 10), so every checked-out
+      // client — this one included — already has it active. A legitimate
+      // migration over real data (096's notification dedup collapse, at
+      // production's current scale a few thousand rows, comfortably under
+      // 15s — but there is no guarantee a future migration over a larger
+      // table stays under it) must never be killed mid-migration by a limit
+      // that exists to catch a runaway *application* query, not a one-time
+      // schema/data migration running inside its own transaction. Disabled
+      // only for the duration of this migration's BEGIN/COMMIT, and always
+      // reset before the connection is released back to the pool — otherwise
+      // a later, unrelated query reusing this same pooled connection would
+      // silently run with no timeout at all.
+      await client.query('SET statement_timeout = 0');
       await client.query('BEGIN');
       await client.query(sql);
       await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [file]);
@@ -86,6 +100,7 @@ export async function runMigrations(migrationsDirOverride?: string): Promise<voi
       console.error(`[migrate] Failed on ${file}:`, err);
       throw err;
     } finally {
+      await client.query(`SET statement_timeout = ${STATEMENT_TIMEOUT_MS}`).catch(() => {});
       client.release();
     }
   }

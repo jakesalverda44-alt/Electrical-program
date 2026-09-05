@@ -8,6 +8,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { validateBody, inputErrorMessage } from '../utils/validate';
 import { logger } from '../utils/logger';
 import { sendLeadFirstContactEmail, sendNeedsCallNotification, isPlaceholderLeadEmail } from '../email/leadFirstContact';
+import { escapeLikePattern, clampLimit } from '../utils/sqlLike';
 import { createStageFollowup, closeLeadFollowups } from '../utils/leadFollowups';
 import { getStageConfig } from '../utils/leadStageConfig';
 import { pushSiteVisitToCalendar, fetchEventDetail } from '../integrations/outlookCalendar';
@@ -468,14 +469,16 @@ router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   // email, address), and `limit` is opt-in like /documents' and /bids'.
   const { q, limit } = req.query as { q?: string; limit?: string };
   if (typeof q === 'string' && q.trim()) {
-    params.push(`%${q.trim()}%`);
+    // escapeLikePattern (hardening 5b) — a literal % or _ in a name/phone/
+    // email/address would otherwise act as an ILIKE wildcard.
+    params.push(`%${escapeLikePattern(q.trim())}%`);
     const p = params.length;
     where.push(`(name ILIKE $${p} OR phone ILIKE $${p} OR email ILIKE $${p} OR address ILIKE $${p})`);
   }
 
   let sql = `SELECT * FROM leads WHERE ${where.join(' AND ')} ORDER BY created_at DESC`;
-  const limitNum = limit ? parseInt(limit, 10) : NaN;
-  if (Number.isFinite(limitNum) && limitNum > 0) {
+  const limitNum = clampLimit(limit); // hardening 5b — upper-bounded at 200
+  if (limitNum !== undefined) {
     params.push(limitNum);
     sql += ` LIMIT $${params.length}`;
   }
