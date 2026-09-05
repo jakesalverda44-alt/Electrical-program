@@ -31,9 +31,18 @@ interface Props {
   onPcUpdate: (bidId: string, ws: PcWorkspace) => void;
   onBidUpdated: (bid: Bid) => void;
   onNav: (v: string, recordId?: string) => void;
+  /** Post-review B4 — true once App.tsx's /preconstruction/workspaces fetch
+   *  has settled at least once. Without this, "no entry in pcData yet"
+   *  couldn't be told apart from "the list is still loading" — a bid that
+   *  genuinely does have a saved workspace row could have PcWorkspaceView
+   *  mount on a synthetic blankWorkspace() before the real one arrived, and
+   *  its autosave would then PUT empty notes/scope/rfis/files over that real
+   *  row (a full-row upsert). Defaults to true so every existing caller
+   *  (there are currently none that omit it) keeps today's behavior. */
+  pcDataLoaded?: boolean;
 }
 
-export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, onPcUpdate, onBidUpdated, onNav }: Props) {
+export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, onPcUpdate, onBidUpdated, onNav, pcDataLoaded = true }: Props) {
   const user = useUser();
   const showToast = useShowToast();
   const { settings } = useSettings();
@@ -45,11 +54,14 @@ export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, o
   usePageTitle(bid ? bid.name : 'Bid');
 
   React.useEffect(() => {
-    if (!pcData[bidId] && bid) {
+    // Only seed a blank workspace once we know for certain there isn't a
+    // real one to restore — i.e. the workspaces list has actually settled
+    // and simply didn't contain this bid (a genuinely new one).
+    if (pcDataLoaded && !pcData[bidId] && bid) {
       onPcUpdate(bidId, blankWorkspace(bidId, bid.name, bid.amount ?? 0));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bidId, bid, pcData[bidId]]);
+  }, [bidId, bid, pcData[bidId], pcDataLoaded]);
 
   if (!bid) {
     return (
@@ -117,23 +129,34 @@ export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, o
             unmounts and remounts cleanly when the open bid changes) and toggled
             with `hidden` instead of unmounting on every tab click. Before this,
             PcWorkspaceView's seven GETs and its autosave baseline refired every
-            single time the Estimating tab was clicked, not just once per bid. */}
-        <div data-testid="hub-tab-estimating" hidden={tab !== 'estimating'}>
-          <PcWorkspaceView
-            key={bid.id}
-            ws={pcData[bid.id] ?? blankWorkspace(bid.id, bid.name, bid.amount ?? 0)}
-            bid={bid}
-            embedded
-            onUpdate={u => onPcUpdate(bid.id, u)}
-            onBack={() => setTab('overview')}
-            onConverted={b => { onBidUpdated(b); setTab('overview'); }}
-            onBidUpdated={onBidUpdated}
-            showToast={showToast}
-            userRole={user.role}
-            settings={settings}
-            onGoFiles={() => setTab('files')}
-          />
-        </div>
+            single time the Estimating tab was clicked, not just once per bid.
+            Post-review B4 — only mounted once pcData[bid.id] is actually
+            populated (never a blankWorkspace() fallback here): mounting on a
+            synthetic blank object before a slow /preconstruction/workspaces
+            fetch resolves let the autosave PUT empty notes/scope/rfis/files
+            over a real row once it caught up. */}
+        {pcData[bid.id] ? (
+          <div data-testid="hub-tab-estimating" hidden={tab !== 'estimating'}>
+            <PcWorkspaceView
+              key={bid.id}
+              ws={pcData[bid.id]}
+              bid={bid}
+              embedded
+              onUpdate={u => onPcUpdate(bid.id, u)}
+              onBack={() => setTab('overview')}
+              onConverted={b => { onBidUpdated(b); setTab('overview'); }}
+              onBidUpdated={onBidUpdated}
+              showToast={showToast}
+              userRole={user.role}
+              settings={settings}
+              onGoFiles={() => setTab('files')}
+            />
+          </div>
+        ) : tab === 'estimating' && (
+          <div data-testid="hub-tab-estimating-loading" style={{ padding: 64, textAlign: 'center', color: 'var(--text2)' }}>
+            Loading workspace…
+          </div>
+        )}
         {tab === 'compare' && (
           <div data-testid="hub-tab-compare">
             <BidCompare bidId={bid.id} sqFt={bid.sq_ft} brand={bid.brand} projectType={bid.project_type}/>

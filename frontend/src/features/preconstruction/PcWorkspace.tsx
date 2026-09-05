@@ -609,9 +609,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // persisted by the Pricing tab's explicit "Save Estimate", so leaving with
   // unsaved pricing threw it away. An autosave stuck in `error` counts as
   // unsaved too — that is the case task 7's retry chain cannot finish.
+  // Post-review B4 — Number() both sides: bid_estimates.overhead_pct/
+  // profit_pct are Postgres `numeric` columns, which pg serializes as
+  // strings (e.g. "22.00"); ws.overheadPct/profitPct are always real numbers
+  // (the hydration effect above now also normalizes with Number()). Without
+  // this, `22 !== "22.00"` is always true and this was permanently dirty
+  // whenever a saved estimate/workspace row had ever hydrated — a false
+  // "unsaved changes" prompt on every hub tab of every bid with autosaved
+  // pricing.
   const pricingDirty = savedEstimate
-    ? (ws.overheadPct !== savedEstimate.overhead_pct
-      || ws.profitPct !== savedEstimate.profit_pct
+    ? (Number(ws.overheadPct) !== Number(savedEstimate.overhead_pct)
+      || Number(ws.profitPct) !== Number(savedEstimate.profit_pct)
       || JSON.stringify(ws.estimateOverrides) !== JSON.stringify(overridesFromEstimate(savedEstimate.line_items)))
     : (ws.overheadPct !== 10 || ws.profitPct !== 15 || Object.keys(ws.estimateOverrides).length > 0);
   useUnsavedGuard(pricingDirty || saveState === 'error');
@@ -764,57 +772,76 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   });
   useEffect(() => { if (projectDocsData) setProjectDocs(projectDocsData); }, [projectDocsData]);
 
-  // Hydrate overhead/profit/overrides from the saved bid_estimates row once it
-  // loads. Without this, App.tsx's restore-on-refresh hardcodes
-  // estimateOverrides={}, overheadPct=10, profitPct=15 even when bid_estimates
-  // holds the estimator's real values — a refresh silently resets pricing.
-  // Only apply while the workspace's local pricing state is still pristine
-  // (untouched since restore): a saved estimate that resolves after the estimator
-  // has already started editing this session must never clobber their edits.
-  useEffect(() => {
-    if (!savedEstimate) return;
-    const current = wsRef.current;
-    const isPristine = current.overheadPct === 10 && current.profitPct === 15
-      && Object.keys(current.estimateOverrides).length === 0;
-    if (!isPristine) return;
-    const overrides = overridesFromEstimate(savedEstimate.line_items);
-    const hasRealValues = savedEstimate.overhead_pct !== 10 || savedEstimate.profit_pct !== 15
-      || Object.keys(overrides).length > 0;
-    if (!hasRealValues) return;
-    set({
-      overheadPct: savedEstimate.overhead_pct,
-      profitPct: savedEstimate.profit_pct,
-      estimateOverrides: overrides,
-    });
-  }, [savedEstimate]);
-
-  // Task 11 — struck from Batch 2: bid_workspaces now also carries these
-  // three fields (via the continuous autosave, not just the "Save Estimate"
-  // action above). Same pristine gate as the bid_estimates hydration —
-  // whichever of the two sources resolves first while the workspace is
-  // still untouched wins; once either has hydrated, isPristine is false and
-  // the other becomes a no-op. In steady state both agree, since a Save
-  // Estimate also feeds the very next autosave.
+  // Task 11 — struck from Batch 2: bid_workspaces also carries overhead_pct/
+  // profit_pct/estimate_overrides now (via the continuous autosave), not
+  // only bid_estimates (written only by the deliberate "Save Estimate"
+  // action). GET /preconstruction/:bidId/workspace, added in Task 11.
   const { data: workspaceRow } = useApi<{
-    overhead_pct: number | null; profit_pct: number | null; estimate_overrides: Record<string, number> | null;
+    overhead_pct: number | string | null;
+    profit_pct: number | string | null;
+    estimate_overrides: Record<string, number> | null;
+    updated_at: string | null;
   } | null>(`/preconstruction/${bid.id}/workspace`);
+
+  // Post-review B4 — hydrate overhead/profit/overrides from whichever
+  // pricing source is authoritative, deterministically rather than
+  // "whichever of the two async fetches resolves first wins" (the previous
+  // shape: two independent effects gated on the same pristine check). Rule:
+  // the bid_estimates values apply first; the bid_workspaces row overrides
+  // them only when it is strictly newer (compare updated_at) — the autosave
+  // is only worth trusting over a completed Save when it captured an edit
+  // made *after* that save. Both sides of every comparison go through
+  // Number(): bid_estimates.overhead_pct/profit_pct and
+  // bid_workspaces.overhead_pct/profit_pct are Postgres `numeric` columns,
+  // which pg serializes as strings (e.g. "22.00") — comparing one of those
+  // against a real number with !== is always true, which is exactly what
+  // made pricingDirty (below) permanently true whenever the workspace GET
+  // won the old race. Only ever applied while the workspace's local pricing
+  // state is still pristine (untouched since restore): either source
+  // resolving after the estimator has already started editing this session
+  // must never clobber their edits.
   useEffect(() => {
-    if (!workspaceRow) return;
     const current = wsRef.current;
     const isPristine = current.overheadPct === 10 && current.profitPct === 15
       && Object.keys(current.estimateOverrides).length === 0;
     if (!isPristine) return;
-    const overrides = workspaceRow.estimate_overrides || {};
-    const hasRealValues = (workspaceRow.overhead_pct != null && Number(workspaceRow.overhead_pct) !== 10)
-      || (workspaceRow.profit_pct != null && Number(workspaceRow.profit_pct) !== 15)
-      || Object.keys(overrides).length > 0;
-    if (!hasRealValues) return;
-    set({
-      overheadPct: workspaceRow.overhead_pct != null ? Number(workspaceRow.overhead_pct) : 10,
-      profitPct: workspaceRow.profit_pct != null ? Number(workspaceRow.profit_pct) : 15,
-      estimateOverrides: overrides,
-    });
-  }, [workspaceRow]);
+
+    type Candidate = { overheadPct: number; profitPct: number; estimateOverrides: Record<string, number>; at: number };
+    let candidate: Candidate | null = null;
+
+    if (savedEstimate) {
+      const overrides = overridesFromEstimate(savedEstimate.line_items);
+      const overheadPct = Number(savedEstimate.overhead_pct);
+      const profitPct = Number(savedEstimate.profit_pct);
+      const hasRealValues = overheadPct !== 10 || profitPct !== 15 || Object.keys(overrides).length > 0;
+      if (hasRealValues) {
+        const at = savedEstimate.updated_at ? new Date(savedEstimate.updated_at).getTime() : 0;
+        candidate = { overheadPct, profitPct, estimateOverrides: overrides, at };
+      }
+    }
+
+    if (workspaceRow) {
+      const overrides = workspaceRow.estimate_overrides || {};
+      const overheadPct = workspaceRow.overhead_pct != null ? Number(workspaceRow.overhead_pct) : 10;
+      const profitPct = workspaceRow.profit_pct != null ? Number(workspaceRow.profit_pct) : 15;
+      const hasRealValues = (workspaceRow.overhead_pct != null && overheadPct !== 10)
+        || (workspaceRow.profit_pct != null && profitPct !== 15)
+        || Object.keys(overrides).length > 0;
+      if (hasRealValues) {
+        const at = workspaceRow.updated_at ? new Date(workspaceRow.updated_at).getTime() : 0;
+        // Strictly newer only — a tie (e.g. neither row has a real
+        // timestamp) keeps the estimate's value, the historically
+        // authoritative source.
+        if (!candidate || at > candidate.at) {
+          candidate = { overheadPct, profitPct, estimateOverrides: overrides, at };
+        }
+      }
+    }
+
+    if (candidate) {
+      set({ overheadPct: candidate.overheadPct, profitPct: candidate.profitPct, estimateOverrides: candidate.estimateOverrides });
+    }
+  }, [savedEstimate, workspaceRow]);
 
   // Pre-fill service fields from Agent 1 output when it becomes available (skips already-filled fields)
   useEffect(() => {

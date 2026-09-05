@@ -388,6 +388,12 @@ export default function App() {
             bidId={viewParam}
             bids={bids} setBids={setBids} setWonJobs={setWonJobs}
             pcData={pcData} onPcUpdate={handlePcUpdate} onBidUpdated={handleBidUpdated}
+            // Post-review B4 — true once /preconstruction/workspaces has
+            // settled at least once (same signal the restore effect above
+            // gates on), so BidHubPage can tell "no workspace row exists
+            // yet" apart from "the list hasn't loaded yet" instead of
+            // treating both as "seed a blank one now."
+            pcDataLoaded={workspacesApi.data !== null}
             onNav={setView}
           />
         );

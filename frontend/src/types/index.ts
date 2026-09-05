@@ -85,6 +85,9 @@ export interface EstimateLineItem {
 
 export interface BidEstimate {
   bid_id: string;
+  // numeric Postgres columns — pg serializes these as strings (e.g. "22.00"),
+  // not numbers; always Number() them before comparing or arithmetic
+  // (post-review B4, audit batch 3).
   overhead_pct: number;
   profit_pct: number;
   line_items: EstimateLineItem[];
@@ -95,6 +98,7 @@ export interface BidEstimate {
   grand_total: number;
   comp_count: number;
   confidence: 'LOW' | 'MEDIUM' | 'HIGH';
+  updated_at?: string;
 }
 
 export interface Gen {
