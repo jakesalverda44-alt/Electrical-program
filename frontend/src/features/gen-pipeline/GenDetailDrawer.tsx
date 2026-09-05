@@ -21,6 +21,7 @@ import { ChecklistData, BLANK } from './SiteVisitChecklist';
 import { isPrivileged } from '../../hooks/useAuth';
 import { useUser } from '../../contexts/AppContext';
 import { useShowToast } from '../../contexts/AppContext';
+import { useConfirm } from '../../components/ConfirmDialog';
 
 function fmtTs(ts?: string | null) {
   if (!ts) return null;
@@ -61,6 +62,7 @@ const GEN_DRAWER_TITLE_ID = 'gen-detail-drawer-title';
 export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated, autoKickoff, onAutoKickoffHandled, autoCountersign, onAutoCountersignHandled, linkCandidates, onLink, groupSiblings }: Props) {
   const canDelete = isPrivileged(useUser());
   const showToast = useShowToast();
+  const confirm = useConfirm();
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed' || gen.stage === 'superseded';
   const [showBuildNotes, setShowBuildNotes] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -173,8 +175,11 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
     { onSuccess: (data) => onClosed(data), errorTitle: 'Could not close this job' },
   );
 
-  const handleCloseJob = () => {
-    if (!window.confirm(`Mark "${gen.customer}" as closed/complete? This will move the Drive folder to Completed Generator Jobs and remove it from the active pipeline.`)) return;
+  const handleCloseJob = async () => {
+    if (!(await confirm({
+      title: `Mark "${gen.customer}" as closed/complete? This will move the Drive folder to Completed Generator Jobs and remove it from the active pipeline.`,
+      confirmLabel: 'Close job',
+    }))) return;
     runCloseJob();
   };
 

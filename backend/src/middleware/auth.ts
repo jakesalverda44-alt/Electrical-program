@@ -120,6 +120,23 @@ export function requireRole(...roles: string[]) {
 // Convenience guard for the standard owner/administrator/manager privilege set.
 export const requireAdmin = requireRole(...PRIVILEGED_ROLES);
 
+// Audit batch 4, Task 2 (audit ux #5) — Undo on deletes. The three soft-delete
+// restore routes (bids, generator_proposals, documents) used to be
+// requireAdmin-only; a toast "Undo" would otherwise be pointless for anyone
+// who isn't an owner/administrator/manager. This lets the user who performed
+// the delete restore it themselves, but only for a short window — after that,
+// restoring is an admin-only action again, same as before this batch.
+export const RESTORE_WINDOW_MS = 10 * 60 * 1000;
+
+export function canRestore(
+  user: { id: string; role?: string },
+  row: { deleted_by: string | null; deleted_at: string | Date | null },
+): boolean {
+  if (isPrivileged(user)) return true;
+  if (!row.deleted_by || row.deleted_by !== user.id || !row.deleted_at) return false;
+  return Date.now() - new Date(row.deleted_at).getTime() <= RESTORE_WINDOW_MS;
+}
+
 type AIPermission = 'run_analysis' | 'view_results' | 'manage_settings';
 
 const DEFAULT_ROLE_PERMISSIONS: Record<string, Record<AIPermission, boolean>> = {

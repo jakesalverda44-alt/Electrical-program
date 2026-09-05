@@ -121,3 +121,129 @@ etc.) pass unmodified.
    migrating all 9 to real Escape/focus-trap semantics surfaces a real bug
    when one of them opens a second one on top of itself — untested before
    because none of them had Escape handling at all.
+
+---
+
+## Task 2 — Confirm dialog and Undo on deletes
+
+**Files:** new `frontend/src/components/ConfirmDialog.tsx` (+
+`ConfirmDialog.test.tsx`), the 11 `window.confirm` sites, `backend/src/routes/{bids,gens,documents}.ts`
+restore routes, `backend/src/middleware/auth.ts` (new `canRestore` helper),
+new migration `database/migrations/100_deleted_by.sql`, new
+`backend/src/test/restorePermission.test.ts`.
+
+### What changed
+
+- `ConfirmDialog` is built on Task 1's `Modal` (`role="alertdialog"`,
+  `isDirty` always `false` — a confirmation is never itself "dirty content").
+  `useConfirm()` + `<ConfirmProvider>` (mounted once in `main.tsx`, alongside
+  `UnsavedGuardProvider`) give every component a promise-based
+  `confirm({ title, body?, confirmLabel?, destructive? }) => Promise<boolean>`,
+  the same shape `window.confirm` had. Outside a provider (an isolated
+  component test that never touches this) `useConfirm()` resolves to `false`
+  instead of throwing — the same "nothing happens" result `window.confirm`
+  gives in a test environment by default — so no unrelated existing test
+  needed a provider added just because the component under test now imports
+  `useConfirm`.
+- All 11 `window.confirm(...)` sites replaced 1:1, copy unchanged per the
+  plan (`GenProjectsPage`, `TrashSection`, `NotificationsSection`,
+  `OverviewTab` ×2, `LeadDetailDrawer` ×2, `GenPipelinePage`, `GenDetailDrawer`,
+  `ElecProjectsPage`, `PcWorkspace`).
+- **Undo**, wired at the 4 sites that delete a bid or gen (the plan's
+  soft-deleted/restorable entities) directly from a list/detail view —
+  `GenProjectsPage.deleteProject`, `OverviewTab.handleDelete` (bid),
+  `GenPipelinePage.handleDelete` (gen), `ElecProjectsPage.deleteProject`
+  (bid). Each success toast now carries `action: { label: 'Undo', onClick }`
+  that POSTs the restore route and re-inserts the returned row into the
+  page's own list state. The other 7 confirm sites don't get Undo because
+  they aren't a bid/gen/document soft-delete: `TrashSection`'s confirm is a
+  **purge** (already-in-Trash, permanent — nothing to undo), `LeadDetailDrawer`'s
+  lead delete has no restore route (leads are hard-deleted), `NotificationsSection`
+  sends an email, the two `handleCloseJob`s move a stage, and `PcWorkspace.rerunAI`
+  resets in-memory state rather than deleting a record.
+- **Backend — Task 2.3 decision:** implemented the plan's preferred option.
+  Migration 100 adds `deleted_by UUID REFERENCES users(id)` to `bids`,
+  `generator_proposals`, and `documents` (none of the three already tracked
+  a deleter on the row itself). The three `DELETE .../:id` routes now also
+  set `deleted_by = req.user.id` alongside `deleted_at = now()`. The three
+  `POST .../:id/restore` routes dropped `requireAdmin` for a new
+  `middleware/auth.ts` helper, `canRestore(user, row)`: true if the user is
+  privileged (owner/administrator/manager, unchanged), OR if
+  `row.deleted_by === user.id` and the delete happened within the last 10
+  minutes (`RESTORE_WINDOW_MS`). Restoring also clears `deleted_by` back to
+  `NULL`.
+  - **Caveat found while implementing:** all three `DELETE .../:id` routes
+    were *already* `requireAdmin`-only before this batch, and that did not
+    change (per the ground rule, backend changes are limited to the restore
+    routes + migration). So today, the "deleter" of a bid/gen/document is
+    always an admin already, who could already restore it anytime — the
+    non-admin branch of `canRestore` is not reachable through the app's
+    current UI. It's still implemented (not "too wide": it only ever grants
+    restore of a row to the specific person who deleted it, for 10 minutes,
+    which is safe even if delete permissions are loosened later) and is
+    exercised directly in `restorePermission.test.ts` by writing
+    `deleted_at`/`deleted_by` the same way the DELETE route does, rather than
+    by making a non-admin `DELETE` call (which 403s, as before). Flagging
+    this explicitly since it means the "non-admin self-Undo" half of the
+    feature is currently latent/forward-compatible rather than live for any
+    real user today — the admin-Undo half (an admin deletes something, gets
+    Undo in the toast, restore succeeds via the `isPrivileged` branch) is
+    fully live and tested.
+
+### Tests
+
+- `frontend/src/components/ConfirmDialog.test.tsx` (4 tests): Cancel resolves
+  `false` and closes without side effects, the destructive confirm button
+  resolves `true`, Escape cancels, and `useConfirm()` outside a provider
+  resolves `false` instead of throwing.
+- `frontend/src/features/bid-hub/BidHubPage.test.tsx` gained a "Delete Bid —
+  confirm dialog and Undo" describe block (2 tests): Cancel on the
+  `ConfirmDialog` leaves the bid in place and calls no API; confirming
+  deletes it (asserted against the mocked `api.delete` call) and clicking
+  the toast's "Undo" calls the restore route and the bid's name reappears in
+  the DOM. (This required promoting the file's `useShowToast`/
+  `useOptionalShowToast` mocks from plain no-op arrow functions to `vi.fn()`s
+  so this one describe block could override them with a real, state-backed
+  toast notifier — every other test in the file is unaffected since the
+  default mock implementation is unchanged.)
+- `backend/src/test/restorePermission.test.ts` (9 tests, run against the real
+  `electrical_crm_test` DB): for bids — the deleter can restore within the
+  window (non-admin), a different non-admin is refused (403), the same user
+  is refused once past the 10-minute window, and an admin can always restore
+  regardless of who deleted it or how long ago; for gens and documents — the
+  deleter can restore within the window, and a different non-admin is
+  refused; plus documents' restore 404s on a row that isn't in the Trash.
+
+### Verification / grep checks (before → after)
+
+- `grep -rn "window.confirm" frontend/src` → **0** real call sites (11 → 0;
+  the only remaining hits are 3 lines of doc-comment prose in
+  `ConfirmDialog.tsx` explaining what it replaces).
+- `grep -rn "confirm(" frontend/src --include='*.tsx'` → every real call is
+  `confirm({ ... })` via `useConfirm()`, or the `ConfirmDialog`/`ConfirmProvider`
+  definitions themselves.
+- `git diff --stat main..HEAD -- backend/` (through Task 2) touches only
+  `middleware/auth.ts` and the three restore routes; `database/` gained only
+  migration 100.
+
+### Deviations from the plan (Task 2)
+
+1. Undo is wired at the 4 sites that are genuinely a bid/gen soft-delete from
+   a list/detail screen, not all 11 — see "What changed" above for why the
+   other 7 don't apply. This matches the plan's own scoping ("Undo: for
+   deletes of bids, gens, and documents") rather than expanding it to
+   close-job/mark-lost/send-email/purge/rerun actions.
+2. No document-delete call site among the 11 `window.confirm` sites is a
+   simple list-row delete with local state to re-insert into (documents are
+   deleted from `DocsPage`/`RecordFiles`, neither of which uses
+   `window.confirm` — they already use `.catch(() => {})` swallowing, audit
+   ux #2, out of scope here), so there is no frontend Undo wiring for
+   documents in this batch. The **backend** restore-permission relaxation and
+   its tests do cover documents (`restorePermission.test.ts`), so a document
+   row soft-deleted by any path can still be undone by hitting the restore
+   route directly (e.g. from Settings → Trash, which already has its own
+   Restore button, unaffected by this task).
+3. See the Task 2.3 caveat above: the non-admin-deleter-can-self-restore path
+   is implemented and tested but not reachable through today's UI, since
+   `DELETE` on all three entities remains admin-only (unchanged, out of this
+   task's scope).

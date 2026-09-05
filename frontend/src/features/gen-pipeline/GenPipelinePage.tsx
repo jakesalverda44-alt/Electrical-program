@@ -10,6 +10,7 @@ import api from '../../api/client';
 import { moneyShort as money } from '../../lib/money';
 import PipelineBoard from '../../components/PipelineBoard';
 import { useShowToast, useUser } from '../../contexts/AppContext';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { cardAttentionFor } from './cardAttention';
 
 function fmtVisit(ts?: string | null) {
@@ -65,6 +66,7 @@ interface Props {
 
 export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuilder, flashId, onEditGen, openId, onClearParam, onNav }: Props) {
   const showToast = useShowToast();
+  const confirm = useConfirm();
   const me = useUser();
   const [detail, setDetail] = useState<Gen | null>(null);
   const [logOpen, setLogOpen] = useState(false);
@@ -149,13 +151,31 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
   };
 
   const handleDelete = async (gen: Gen) => {
-    if (!window.confirm(`Delete "${gen.customer}" and its linked project/files/testing data? This cannot be undone.`)) return;
+    if (!(await confirm({
+      title: `Delete "${gen.customer}" and its linked project/files/testing data? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    }))) return;
     try {
       await api.delete(`/gens/${gen.id}`);
       setGens(prev => prev.filter(g => g.id !== gen.id));
       setWonJobs(prev => prev.filter(w => w.proposal_id !== gen.id));
       setDetail(null);
-      showToast({ title: 'Generator proposal deleted', sub: gen.customer });
+      showToast({
+        title: 'Generator proposal deleted', sub: gen.customer,
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            try {
+              const { data: restored } = await api.post<Gen>(`/gens/${gen.id}/restore`);
+              setGens(prev => [restored, ...prev]);
+              showToast({ title: 'Generator proposal restored', sub: restored.customer });
+            } catch {
+              showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore it from Settings → Trash instead.' });
+            }
+          },
+        },
+      });
     } catch (err) {
       const status = (err as { response?: { status?: number } }).response?.status;
       if (status === 403) {

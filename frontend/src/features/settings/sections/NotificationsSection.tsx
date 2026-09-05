@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../../../api/client';
 import { useMutation } from '../../../hooks/useMutation';
+import { useConfirm } from '../../../components/ConfirmDialog';
 import Icon from '../../../components/Icon';
 import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
@@ -61,11 +62,14 @@ function DevicePushCard() {
 function LeadNudgeCard() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const confirm = useConfirm();
 
   const send = async () => {
-    if (!window.confirm(
-      'Send the 2nd (day-2) follow-up email now?\n\nThis goes only to email leads that have NOT replied, have NOT been contacted, and have NOT already been nudged. It never sends twice to the same lead.'
-    )) return;
+    if (!(await confirm({
+      title: 'Send the 2nd (day-2) follow-up email now?',
+      body: 'This goes only to email leads that have NOT replied, have NOT been contacted, and have NOT already been nudged. It never sends twice to the same lead.',
+      confirmLabel: 'Send',
+    }))) return;
     setBusy(true); setMsg('');
     try {
       const { data } = await api.post('/leads/send-nudges');

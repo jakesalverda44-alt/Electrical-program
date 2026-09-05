@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import DriveImage from '../../components/DriveImage';
 import { Bid, WonJob, Toast } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
+import { useConfirm } from '../../components/ConfirmDialog';
 import api from '../../api/client';
 import { useMutation } from '../../hooks/useMutation';
 import { usePageTitle } from '../../hooks/usePageTitle';
@@ -106,6 +107,7 @@ interface Props {
 
 export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, onClearParam }: Props) {
   const showToast = useShowToast();
+  const confirm = useConfirm();
   const awarded = useMemo(() => bids.filter(b => b.stage === 'awarded'), [bids]);
 
   // Phase state (persisted via API)
@@ -209,6 +211,16 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
     },
   );
 
+  const undoDeleteProject = async (id: string) => {
+    try {
+      const { data: restored } = await api.post<Bid>(`/bids/${id}/restore`);
+      setBids(prev => [restored, ...prev]);
+      showToast({ title: 'Electrical project restored', sub: restored.name });
+    } catch {
+      showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore it from Settings → Trash instead.' });
+    }
+  };
+
   const { run: runDeleteProject } = useMutation(
     async (bid: Bid) => { await api.delete(`/bids/${bid.id}`); return bid; },
     {
@@ -222,13 +234,17 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
           return next;
         });
       },
-      successToast: (bid) => ({ title: 'Electrical project deleted', sub: bid.name }),
+      successToast: (bid) => ({ title: 'Electrical project deleted', sub: bid.name, action: { label: 'Undo', onClick: () => undoDeleteProject(bid.id) } }),
       errorToast: (message) => ({ title: 'Delete failed', sub: message }),
     },
   );
 
-  const deleteProject = (bid: Bid) => {
-    if (!window.confirm(`Delete electrical project "${bid.name}" and its linked files/testing data? This cannot be undone.`)) return;
+  const deleteProject = async (bid: Bid) => {
+    if (!(await confirm({
+      title: `Delete electrical project "${bid.name}" and its linked files/testing data? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    }))) return;
     runDeleteProject(bid);
   };
 

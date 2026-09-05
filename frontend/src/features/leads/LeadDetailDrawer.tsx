@@ -4,6 +4,7 @@ import Modal from '../../components/Modal';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { Lead, LeadActivity } from '../../types';
 import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_LABELS } from './constants';
 import SiteVisitModal from './SiteVisitModal';
@@ -57,6 +58,7 @@ function isLeadOverdue(lead: Lead): boolean {
 }
 
 export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated, onDeleted, onNav, onEditGen, onConverted }: Props) {
+  const confirm = useConfirm();
   const [lead, setLead] = useState<Lead>(initialLead);
   const [activity, setActivity] = useState<LeadActivity[]>([]);
   const [dirty, setDirty] = useState<Partial<Lead>>({});
@@ -258,8 +260,12 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
     { onSuccess: () => onDeleted(lead), errorToast: (m) => ({ title: 'Delete failed', sub: m }) },
   );
 
-  const deleteLead = () => {
-    if (!window.confirm(`Delete lead "${lead.name}"? This cannot be undone.`)) return;
+  const deleteLead = async () => {
+    if (!(await confirm({
+      title: `Delete lead "${lead.name}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    }))) return;
     runDeleteLead();
   };
 
@@ -500,7 +506,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
                   <ActionItem icon="bolt" label="Create Generator Record" onClick={createGen}/>
                 )}
                 <ActionItem icon="x" label="Mark Lost" onClick={async () => {
-                  if (!window.confirm('Mark this lead as lost?')) return;
+                  if (!(await confirm({ title: 'Mark this lead as lost?', confirmLabel: 'Mark Lost' }))) return;
                   await setStage('lost');
                 }} color="#E06A6A"/>
                 <ActionItem icon="x" label="Delete Lead" onClick={deleteLead} color="#E06A6A"/>

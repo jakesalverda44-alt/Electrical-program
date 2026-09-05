@@ -6,6 +6,7 @@ import { Gen, WonJob, Toast } from '../../types';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { moneyFull, moneyShort as money } from '../../lib/money';
 import { useShowToast } from '../../contexts/AppContext';
 
@@ -99,6 +100,7 @@ interface Props {
 
 export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onClearParam }: Props) {
   const showToast = useShowToast();
+  const confirm = useConfirm();
   const awarded = useMemo(() => gens.filter(g => g.stage === 'awarded'), [gens]);
 
   // Normalise phase: map old values forward, default to 'deposit'
@@ -185,7 +187,11 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onC
   };
 
   const deleteProject = async (gen: Gen) => {
-    if (!window.confirm(`Delete generator project "${gen.customer}" and its linked files/testing data? This cannot be undone.`)) return;
+    if (!(await confirm({
+      title: `Delete generator project "${gen.customer}" and its linked files/testing data? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    }))) return;
     try {
       await api.delete(`/gens/${gen.id}`);
       setGens(prev => prev.filter(g => g.id !== gen.id));
@@ -196,7 +202,21 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onC
         return next;
       });
       setDetail(null);
-      showToast({ title: 'Generator project deleted', sub: gen.customer });
+      showToast({
+        title: 'Generator project deleted', sub: gen.customer,
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            try {
+              const { data: restored } = await api.post<Gen>(`/gens/${gen.id}/restore`);
+              setGens(prev => [restored, ...prev]);
+              showToast({ title: 'Generator project restored', sub: restored.customer });
+            } catch {
+              showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore it from Settings → Trash instead.' });
+            }
+          },
+        },
+      });
     } catch {
       showToast({ variant: 'error', title: 'Delete failed', sub: 'Please try again' });
     }

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { Readable } from 'stream';
 import { pool } from '../db/pool';
-import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
+import { requireAuth, requireAdmin, canRestore, AuthRequest, ownScopeId } from '../middleware/auth';
 import { ownsLinkedRecord } from '../utils/ownership';
 import { logger } from '../utils/logger';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -251,17 +251,25 @@ router.get('/drive-file/:fileId', requireAuth, asyncHandler(async (req: AuthRequ
 
 router.delete('/:id', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res) => {
   const { rows } = await pool.query(
-    'UPDATE documents SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id, name, linked_name, storage_url',
-    [req.params.id]
+    'UPDATE documents SET deleted_at=now(), deleted_by=$2 WHERE id=$1 AND deleted_at IS NULL RETURNING id, name, linked_name, storage_url',
+    [req.params.id, req.user!.id]
   );
   if (!rows.length) return res.status(404).json({ error: 'not found' });
   await writeAudit(req, { action: 'delete', entityType: 'document', entityId: req.params.id, summary: `Moved document "${rows[0].name}" to Trash` });
   res.json({ ok: true });
 }));
 
-router.post('/:id/restore', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res) => {
+// Task 2 (audit ux #5) — admin, or the user who deleted it, within RESTORE_WINDOW_MS.
+router.post('/:id/restore', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { rows: existing } = await pool.query(
+    'SELECT deleted_by, deleted_at FROM documents WHERE id=$1 AND deleted_at IS NOT NULL', [req.params.id]
+  );
+  if (!existing.length) return res.status(404).json({ error: 'Not found in Trash' });
+  if (!canRestore(req.user!, existing[0])) {
+    return res.status(403).json({ error: 'You do not have permission to perform this action.' });
+  }
   const { rows } = await pool.query(
-    'UPDATE documents SET deleted_at=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at',
+    'UPDATE documents SET deleted_at=NULL, deleted_by=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at',
     [req.params.id]
   );
   if (!rows.length) return res.status(404).json({ error: 'Not found in Trash' });

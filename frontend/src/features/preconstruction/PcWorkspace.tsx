@@ -7,6 +7,7 @@ import { useApi } from '../../hooks/useApi';
 import { reportError } from '../../lib/reportError';
 import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import { useMutation } from '../../hooks/useMutation';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { AppSettings, checkAIPermission } from '../../hooks/useAppSettings';
 import { moneyFull } from '../../lib/money';
 import FilePreviewModal from '../../components/FilePreviewModal';
@@ -419,6 +420,7 @@ function parseAgent1Service(output: string): { voltage: string; ampacity: string
 }
 
 export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings, embedded, onGoFiles }: Props) {
+  const confirm = useConfirm();
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
   const [rfiSubmitting, setRfiSubmitting] = useState(false);
@@ -954,8 +956,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     setNewRfi('');
   };
 
-  const rerunAI = () => {
-    if (!window.confirm('Re-run the AI analysis? This will permanently delete the previous takeoff results and clear the Scope of Work.')) return;
+  const rerunAI = async () => {
+    if (!(await confirm({
+      title: 'Re-run the AI analysis? This will permanently delete the previous takeoff results and clear the Scope of Work.',
+      confirmLabel: 'Re-run',
+      destructive: true,
+    }))) return;
     setAiResults(null);
     set({ aiDone: false, aiRunning: false, aiLog: [], scope: {}, confirmedService: undefined });
     setSvcVoltage(''); setSvcAmpacity(''); setSvcPanel('');
