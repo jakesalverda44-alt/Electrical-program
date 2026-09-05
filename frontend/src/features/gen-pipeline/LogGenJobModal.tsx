@@ -3,6 +3,7 @@
 // pipeline side effects (Drive folders, "moved to…" activity) fire for finished work.
 import React, { useState } from 'react';
 import Modal from '../../components/Modal';
+import RequiredMark from '../../components/RequiredMark';
 import api from '../../api/client';
 import { Gen, WonJob } from '../../types';
 
@@ -79,7 +80,7 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
               document is generated.
             </p>
             <div className="field">
-              <label>Customer</label>
+              <label>Customer<RequiredMark/></label>
               <input value={f.customer} onChange={set('customer')} placeholder="e.g. Debra Gierach" autoFocus required/>
             </div>
             <div className="field-row">

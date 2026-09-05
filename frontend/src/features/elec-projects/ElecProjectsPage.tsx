@@ -446,6 +446,107 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
     },
   );
 
+  // ── Quick-add rows (CO / Pay App / RFI / Key Material / Field Note) ──────
+  // These used to be inline `onClick={async () => {...}}` handlers with no
+  // busy flag, so a fast double-click could fire the POST/PUT twice (audit
+  // ux #21). `useMutation`'s `saving` now backs each one, matching every
+  // other submit button already migrated in this file.
+  const { run: runAddCo, saving: savingCo } = useMutation(
+    async () => {
+      const res = await api.post(`/projects/elec/${id}/change-orders`, {
+        description: coForm.description, amount: Number(coForm.amount) || 0,
+        status: coForm.status, submitted_date: coForm.submitted_date || null,
+      });
+      return res.data;
+    },
+    {
+      onSuccess: (co) => {
+        onDataChange({ cos: [...data.cos, co] });
+        setCoForm({ description: '', amount: '', status: 'pending', submitted_date: '' });
+      },
+      successToast: { title: 'Change order added' },
+      errorTitle: 'Could not add that change order',
+    },
+  );
+
+  const { run: runAddPa, saving: savingPa } = useMutation(
+    async () => {
+      const newPa: PayApp = {
+        id: Date.now().toString(),
+        number: data.payApps.length + 1,
+        period: paForm.period,
+        scheduled_value: Number(paForm.scheduled_value) || 0,
+        pct_complete: Number(paForm.pct_complete) || 0,
+        amount_billed: Number(paForm.amount_billed) || 0,
+        status: paForm.status as any,
+      };
+      const updated = [...data.payApps, newPa];
+      await api.put(`/projects/elec/${id}/section/pay-apps`, { data: { items: updated } });
+      return updated;
+    },
+    {
+      onSuccess: (updated) => {
+        onDataChange({ payApps: updated });
+        setPaForm({ period: '', scheduled_value: '', pct_complete: '', amount_billed: '', status: 'draft' });
+      },
+      successToast: { title: 'Pay app added' },
+      errorTitle: 'Could not add that pay application',
+    },
+  );
+
+  const { run: runAddRfi, saving: savingRfi } = useMutation(
+    async () => {
+      const res = await api.post(`/projects/elec/${id}/rfis`, {
+        question: rfiForm.question, submitted_to: rfiForm.submitted_to,
+        submitted_date: rfiForm.submitted_date || null, due_date: rfiForm.due_date || null,
+      });
+      return res.data;
+    },
+    {
+      onSuccess: (rfi) => {
+        onDataChange({ rfis: [rfi, ...data.rfis] });
+        setRfiForm({ question: '', submitted_to: '', submitted_date: '', due_date: '' });
+      },
+      successToast: { title: 'RFI submitted' },
+      errorTitle: 'Could not submit that RFI',
+    },
+  );
+
+  const { run: runAddKm, saving: savingKm } = useMutation(
+    async () => {
+      const newKm: KeyMaterial = { id: Date.now().toString(), ...kmForm as any };
+      const updated = [...data.keyMats, newKm];
+      await api.put(`/projects/elec/${id}/section/key-materials`, { data: { items: updated } });
+      return updated;
+    },
+    {
+      onSuccess: (updated) => {
+        onDataChange({ keyMats: updated });
+        setKmForm({ name: '', supplier: '', po_number: '', order_date: '', eta: '', status: 'pending' });
+      },
+      successToast: { title: 'Material added' },
+      errorTitle: 'Could not add that material',
+    },
+  );
+
+  const { run: runAddFn, saving: savingFn } = useMutation(
+    async () => {
+      const res = await api.post(`/projects/elec/${id}/field-notes`, {
+        note: fnForm.note, note_date: fnForm.note_date || null,
+        weather: fnForm.weather, crew_size: Number(fnForm.crew_size) || 0,
+      });
+      return res.data;
+    },
+    {
+      onSuccess: (fn) => {
+        onDataChange({ fns: [fn, ...data.fns] });
+        setFnForm({ note: '', note_date: '', weather: '', crew_size: '' });
+      },
+      successToast: { title: 'Field note added' },
+      errorTitle: 'Could not add that field note',
+    },
+  );
+
   // ── Closeout ─────────────────────────────────────────────────
   const CLOSEOUT_ITEMS = [
     { key:'as_builts',     label:'As-Built Drawings'     },
@@ -592,18 +693,12 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                 </select>
               </div>
               <div><FL>Submitted</FL><input type="date" value={coForm.submitted_date} onChange={e=>setCoForm(f=>({...f,submitted_date:e.target.value}))} style={INPUT}/></div>
-              <button className="btn" style={{ fontSize:13 }}
-                onClick={async () => {
+              <button className="btn" style={{ fontSize:13 }} disabled={savingCo}
+                onClick={() => {
                   if (!coForm.description.trim()) { showToast({variant:'error',title:'Description required'}); return; }
-                  const res = await api.post(`/projects/elec/${id}/change-orders`, {
-                    description:coForm.description, amount:Number(coForm.amount)||0,
-                    status:coForm.status, submitted_date:coForm.submitted_date||null,
-                  });
-                  onDataChange({ cos:[...data.cos, res.data] });
-                  setCoForm({description:'',amount:'',status:'pending',submitted_date:''});
-                  showToast({title:'Change order added'});
+                  runAddCo();
                 }}>
-                <Icon name="plus" size={14} stroke={2.2}/> Add
+                <Icon name="plus" size={14} stroke={2.2}/> {savingCo ? 'Adding…' : 'Add'}
               </button>
             </div>
           </div>
@@ -672,25 +767,12 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                   <option value="paid">Paid</option>
                 </select>
               </div>
-              <button className="btn" style={{ fontSize:13 }}
-                onClick={async () => {
+              <button className="btn" style={{ fontSize:13 }} disabled={savingPa}
+                onClick={() => {
                   if (!paForm.period.trim()) { showToast({variant:'error',title:'Period required'}); return; }
-                  const newPa: PayApp = {
-                    id: Date.now().toString(),
-                    number: data.payApps.length + 1,
-                    period: paForm.period,
-                    scheduled_value: Number(paForm.scheduled_value)||0,
-                    pct_complete: Number(paForm.pct_complete)||0,
-                    amount_billed: Number(paForm.amount_billed)||0,
-                    status: paForm.status as any,
-                  };
-                  const updated = [...data.payApps, newPa];
-                  await api.put(`/projects/elec/${id}/section/pay-apps`, { data:{items:updated} });
-                  onDataChange({payApps:updated});
-                  setPaForm({period:'',scheduled_value:'',pct_complete:'',amount_billed:'',status:'draft'});
-                  showToast({title:'Pay app added'});
+                  runAddPa();
                 }}>
-                <Icon name="plus" size={14} stroke={2.2}/> Add
+                <Icon name="plus" size={14} stroke={2.2}/> {savingPa ? 'Adding…' : 'Add'}
               </button>
             </div>
           </div>
@@ -739,18 +821,12 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
               <div><FL>Submitted</FL><input type="date" value={rfiForm.submitted_date} onChange={e=>setRfiForm(f=>({...f,submitted_date:e.target.value}))} style={INPUT}/></div>
               <div><FL>Due Date</FL><input type="date" value={rfiForm.due_date} onChange={e=>setRfiForm(f=>({...f,due_date:e.target.value}))} style={INPUT}/></div>
             </div>
-            <button className="btn" style={{ fontSize:13 }}
-              onClick={async()=>{
+            <button className="btn" style={{ fontSize:13 }} disabled={savingRfi}
+              onClick={()=>{
                 if (!rfiForm.question.trim()) { showToast({variant:'error',title:'Question required'}); return; }
-                const res = await api.post(`/projects/elec/${id}/rfis`,{
-                  question:rfiForm.question, submitted_to:rfiForm.submitted_to,
-                  submitted_date:rfiForm.submitted_date||null, due_date:rfiForm.due_date||null,
-                });
-                onDataChange({rfis:[res.data,...data.rfis]});
-                setRfiForm({question:'',submitted_to:'',submitted_date:'',due_date:''});
-                showToast({title:'RFI submitted'});
+                runAddRfi();
               }}>
-              <Icon name="plus" size={14} stroke={2.2}/> Submit RFI
+              <Icon name="plus" size={14} stroke={2.2}/> {savingRfi ? 'Submitting…' : 'Submit RFI'}
             </button>
           </div>
           {data.rfis.length === 0 ? <Empty text="No RFIs yet"/> : (
@@ -807,17 +883,12 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                   <option value="delivered">Delivered</option>
                 </select>
               </div>
-              <button className="btn" style={{ fontSize:13 }}
-                onClick={async()=>{
+              <button className="btn" style={{ fontSize:13 }} disabled={savingKm}
+                onClick={()=>{
                   if (!kmForm.name.trim()) { showToast({variant:'error',title:'Material name required'}); return; }
-                  const newKm: KeyMaterial = { id:Date.now().toString(), ...kmForm as any };
-                  const updated = [...data.keyMats, newKm];
-                  await api.put(`/projects/elec/${id}/section/key-materials`,{data:{items:updated}});
-                  onDataChange({keyMats:updated});
-                  setKmForm({name:'',supplier:'',po_number:'',order_date:'',eta:'',status:'pending'});
-                  showToast({title:'Material added'});
+                  runAddKm();
                 }}>
-                <Icon name="plus" size={14} stroke={2.2}/> Add
+                <Icon name="plus" size={14} stroke={2.2}/> {savingKm ? 'Adding…' : 'Add'}
               </button>
             </div>
           </div>
@@ -872,18 +943,12 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                   placeholder="Daily progress, site conditions, work completed…"
                   style={{ ...INPUT, height:72, resize:'vertical' }}/>
               </div>
-              <button className="btn" style={{ fontSize:13, whiteSpace:'nowrap' }}
-                onClick={async()=>{
+              <button className="btn" style={{ fontSize:13, whiteSpace:'nowrap' }} disabled={savingFn}
+                onClick={()=>{
                   if (!fnForm.note.trim()) { showToast({variant:'error',title:'Note required'}); return; }
-                  const res = await api.post(`/projects/elec/${id}/field-notes`,{
-                    note:fnForm.note, note_date:fnForm.note_date||null,
-                    weather:fnForm.weather, crew_size:Number(fnForm.crew_size)||0,
-                  });
-                  onDataChange({fns:[res.data,...data.fns]});
-                  setFnForm({note:'',note_date:'',weather:'',crew_size:''});
-                  showToast({title:'Field note added'});
+                  runAddFn();
                 }}>
-                <Icon name="plus" size={14} stroke={2.2}/> Add Note
+                <Icon name="plus" size={14} stroke={2.2}/> {savingFn ? 'Adding…' : 'Add Note'}
               </button>
             </div>
           </div>

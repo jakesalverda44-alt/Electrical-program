@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Modal from '../../components/Modal';
+import RequiredMark from '../../components/RequiredMark';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { Bid } from '../../types';
@@ -78,12 +79,12 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
         <form onSubmit={submit}>
           <div className="modal-body">
             <div className="field">
-              <label>Project name</label>
+              <label>Project name<RequiredMark/></label>
               <input value={f.name} onChange={set('name')} placeholder="e.g. Riverview Medical Office" autoFocus required/>
             </div>
             <div className="field-row">
               <div className="field">
-                <label htmlFor="bid-gc">General contractor</label>
+                <label htmlFor="bid-gc">General contractor<RequiredMark/></label>
                 <input id="bid-gc" list="gc-options" value={f.gc} onChange={set('gc')} placeholder="e.g. Brasfield & Gorrie" required autoComplete="off"/>
                 <datalist id="gc-options">
                   {Array.from(new Set(gcNames)).map(g => <option key={g} value={g}/>)}

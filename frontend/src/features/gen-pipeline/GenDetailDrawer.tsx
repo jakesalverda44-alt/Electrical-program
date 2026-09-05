@@ -336,13 +336,14 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
                 { label: 'kW Output', key: 'kw', type: 'number' },
                 { label: 'Amount ($)', key: 'amount', type: 'number' },
                 { label: 'Add-ons ($)', key: 'addons', type: 'number' },
-              ] as { label: string; key: keyof Draft; type: string }[]).map(f => (
+              ] as { label: string; key: keyof Draft; type: string }[]).map((f, i) => (
                 <div key={f.key} style={{ marginBottom: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>{f.label}</div>
                   <input
                     type={f.type}
                     value={draft[f.key]}
                     onChange={set(f.key)}
+                    autoFocus={i === 0}
                     style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 7,
                       padding: '7px 10px', fontSize: 13, color: 'var(--text)', fontFamily: f.type === 'number' ? 'var(--mono)' : 'inherit',
                       outline: 'none', boxSizing: 'border-box' }}

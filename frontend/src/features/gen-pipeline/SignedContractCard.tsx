@@ -285,8 +285,10 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
               <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>This can’t be undone from here.</div>
             </div>
             <div className="modal-foot">
-              <button className="btn ghost" onClick={requestClose}>Cancel</button>
-              <button className="btn" onClick={countersign}>Countersign &amp; award</button>
+              <button className="btn ghost" onClick={requestClose} disabled={countersigning}>Cancel</button>
+              <button className="btn" onClick={countersign} disabled={countersigning}>
+                {countersigning ? 'Signing…' : 'Countersign & award'}
+              </button>
             </div>
           </>
         )}
