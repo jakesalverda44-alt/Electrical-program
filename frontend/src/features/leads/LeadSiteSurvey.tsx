@@ -7,7 +7,7 @@
 // docs/superpowers/specs/2026-08-03-mobile-field-pack-design.md §2 for the full spec.
 import React, { useEffect, useRef, useState } from 'react';
 import Icon from '../../components/Icon';
-import Modal from '../../components/Modal';
+import Modal, { Z_ABOVE_DRAWER } from '../../components/Modal';
 import RecordFiles from '../../components/RecordFiles';
 import api from '../../api/client';
 import { Lead } from '../../types';
@@ -359,7 +359,9 @@ export default function LeadSiteSurvey({ lead, onUpdated, onBuildProposal, onClo
       // top because it happens to be the later DOM sibling — fragile (would
       // silently break if that render order ever changed). Same z-index bump
       // as the kickoff modal makes it robust to that.
-      overlayStyle={{ zIndex: 170 }}
+      // Review round 2 N1: round 1's fixed 170 cleared the desktop drawer
+      // but not the mobile bump to 240 — use the shared constant instead.
+      overlayStyle={{ zIndex: Z_ABOVE_DRAWER }}
     >
       {({ requestClose }) => (
       <>

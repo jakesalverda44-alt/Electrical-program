@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import Modal from './Modal';
+import Modal, { Z_ABOVE_DRAWER } from './Modal';
 
 /**
  * The app's own confirm dialog, replacing `window.confirm(...)` at the 11
@@ -107,7 +107,18 @@ export function ConfirmDialog({
   open, title, body, confirmLabel = 'Confirm', cancelLabel = 'Cancel', destructive, onConfirm, onCancel,
 }: ConfirmDialogProps) {
   return (
-    <Modal open={open} onClose={onCancel} role="alertdialog" title={title}>
+    // Review round 2 N2: `ConfirmProvider` wraps `<App/>` in main.tsx, so
+    // without this its `.overlay` sat at the plain default z-index (150) —
+    // below every `.drawer-overlay` (160). `useConfirm()` is called from
+    // inside drawer Modals (LeadDetailDrawer's delete/mark-lost,
+    // GenDetailDrawer's close job), so the confirm box painted BEHIND the
+    // drawer's own backdrop and a click on its destructive button actually
+    // landed on the drawer overlay's mousedown, closing the drawer instead
+    // of confirming. This is the one dialog in the app that is always
+    // rendered at the root, above whatever else is open, by construction —
+    // so it always gets the same above-everything z-index Modal exposes for
+    // that purpose, not a per-caller guess.
+    <Modal open={open} onClose={onCancel} role="alertdialog" title={title} overlayStyle={{ zIndex: Z_ABOVE_DRAWER }}>
       <>
         {body != null && (
           <div className="modal-body" style={{ fontSize: 13.5, color: 'var(--text2)', lineHeight: 1.6 }}>

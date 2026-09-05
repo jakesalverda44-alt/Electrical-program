@@ -71,8 +71,14 @@ describe('GenDetailDrawer — Edit Details autoFocus (audit ux #22)', () => {
 // AFTER the drawer's own <Modal> (not nested inside it), so its default
 // `.overlay` z-index (150) used to sit UNDER the drawer's `.drawer-overlay`
 // (160) and the drawer's backdrop ate every click on it.
-describe('GenDetailDrawer — AwardKickoffModal stacking (review round 1 B3)', () => {
-  it("the kickoff modal's overlay has a higher z-index than the drawer overlay", async () => {
+//
+// Review round 2 N1: round 1's fix picked a fixed 170, which clears the
+// desktop drawer (160) but loses to the mobile `@media (max-width: 768px)`
+// bump that raises BOTH `.overlay` and `.drawer-overlay` to 240 — on phones
+// the kickoff modal rendered UNDER the drawer backdrop again. It must clear
+// 240, not just 160.
+describe('GenDetailDrawer — AwardKickoffModal stacking (review round 1 B3, round 2 N1)', () => {
+  it("the kickoff modal's overlay has a z-index above both the desktop and mobile drawer overlay", async () => {
     render(
       <AppProviders user={owner} showToast={() => {}} settings={DEFAULT_APP_SETTINGS} reloadSettings={() => {}}>
         <ConfirmProvider>
@@ -98,6 +104,8 @@ describe('GenDetailDrawer — AwardKickoffModal stacking (review round 1 B3)', (
     const kickoffOverlay = document.querySelector('.overlay') as HTMLElement;
     expect(drawerOverlay).toBeTruthy();
     expect(kickoffOverlay).toBeTruthy();
-    expect(Number(kickoffOverlay.style.zIndex)).toBeGreaterThan(160); // .drawer-overlay's CSS z-index
+    // Must clear the MOBILE `.drawer-overlay` z-index (240), not just the
+    // desktop one (160) — round 1's fixed 170 only cleared the latter.
+    expect(Number(kickoffOverlay.style.zIndex)).toBeGreaterThan(240);
   });
 });

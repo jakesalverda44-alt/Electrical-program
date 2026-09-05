@@ -79,6 +79,22 @@ function isVisible(el: HTMLElement): boolean {
   return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
 }
 
+/**
+ * Review round 2 N1: a Modal nested inside a drawer (AwardKickoffModal inside
+ * GenDetailDrawer, LeadSiteSurvey inside LeadDetailDrawer) needs an overlay
+ * z-index above BOTH the desktop `.overlay`/`.drawer-overlay` (150/160) and
+ * the mobile `@media (max-width: 768px)` bump that raises both of those to
+ * 240 — round 1's B3 fix picked 170, which clears the desktop drawer but
+ * loses to the mobile one, so on phones the "stacked" dialog rendered UNDER
+ * the drawer backdrop. 250 clears both and stays under `.toast-wrap` (350).
+ * Pass this as `overlayStyle={{ zIndex: Z_ABOVE_DRAWER }}` at any call site
+ * that opens a Modal from inside a drawer/modal, instead of guessing a
+ * number — `ConfirmDialog` uses the same constant for the same reason (round
+ * 2 N2): it's an app-root-level dialog that must always paint above whatever
+ * drawer/modal is open beneath it.
+ */
+export const Z_ABOVE_DRAWER = 250;
+
 // A handful of these components open a second Modal on top of themselves —
 // LeadDetailDrawer's site survey, GenDetailDrawer's kickoff modal, the
 // signed-contract card's countersign confirmation. Every open Modal attaches
@@ -195,15 +211,22 @@ export default function Modal({
       // Only the topmost open Modal reacts — a nested one (e.g. a confirm
       // dialog opened from within this one) takes over until it closes.
       if (!isTopmostModal(stackIdRef.current!)) return;
-      // Review round 1 B4: an inner handler (SurveyMarkupEditor's
-      // exit-fullscreen, LeadDetailDrawer's cancel-note) that wants to
-      // consume this Escape itself calls `e.preventDefault()` — checking
-      // that here (instead of this handler unconditionally calling
-      // `e.stopPropagation()`, which used to run in the capture phase and
-      // killed the event before it ever reached those handlers) lets the
-      // inner handler win without Modal *also* closing.
-      if (e.defaultPrevented) return;
       if (e.key === 'Escape') {
+        // Review round 1 B4: an inner handler (SurveyMarkupEditor's
+        // exit-fullscreen, LeadDetailDrawer's cancel-note) that wants to
+        // consume this Escape itself calls `e.preventDefault()` — checking
+        // that here (instead of this handler unconditionally calling
+        // `e.stopPropagation()`, which used to run in the capture phase and
+        // killed the event before it ever reached those handlers) lets the
+        // inner handler win without Modal *also* closing.
+        //
+        // Review round 2 N7: this check used to run BEFORE the `e.key`
+        // branch, so it also gated the Tab focus-trap below — a future inner
+        // handler that calls `preventDefault()` on a Tab keydown (for its
+        // own reason, unrelated to Escape) would have silently disabled the
+        // focus trap. Scoped to the Escape branch, it only ever suppresses
+        // Modal's own Escape handling.
+        if (e.defaultPrevented) return;
         if (asking) { setAsking(false); return; }
         requestClose();
         return;

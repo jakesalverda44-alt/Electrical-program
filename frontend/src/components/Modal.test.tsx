@@ -187,6 +187,37 @@ describe('Modal', () => {
     });
   });
 
+  // Review round 2 N7: the `e.defaultPrevented` check (added for the Escape
+  // case directly above) used to run BEFORE the `e.key === 'Escape'` branch,
+  // so it also gated the Tab focus trap below it — an inner handler that
+  // calls `preventDefault()` on a Tab keydown for its own unrelated reason
+  // would have silently disabled the trap entirely. The check must only
+  // suppress Modal's own Escape handling.
+  it("an inner handler's preventDefault() on Tab does not disable the focus trap (review round 2 N7)", () => {
+    function TabConsumingHarness({ onClose }: { onClose: () => void }) {
+      return (
+        <Modal open onClose={onClose} title="Tab test">
+          <div className="modal-body">
+            <input aria-label="first" />
+            <input
+              aria-label="second"
+              // Some unrelated inner behavior (not Modal's) consumes Tab.
+              onKeyDown={e => { if (e.key === 'Tab') e.preventDefault(); }}
+            />
+          </div>
+        </Modal>
+      );
+    }
+    render(<TabConsumingHarness onClose={vi.fn()}/>);
+    const second = screen.getByLabelText('second');
+    const closeBtn = screen.getByRole('button', { name: 'Close' });
+    second.focus();
+    fireEvent.keyDown(second, { key: 'Tab' });
+    // The trap must still wrap focus from the last element back to the
+    // first, exactly as it would with no inner handler at all.
+    expect(document.activeElement).toBe(closeBtn);
+  });
+
   // Review round 1 S2: the ConfirmLeaveDialog shown while `isDirty` and the
   // user tries to close is rendered outside `containerRef`, so the Tab trap
   // must not keep cycling focus inside the (now-hidden-behind-the-guard)

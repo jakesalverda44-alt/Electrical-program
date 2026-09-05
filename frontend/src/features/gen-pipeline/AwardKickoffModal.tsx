@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Icon from '../../components/Icon';
-import Modal from '../../components/Modal';
+import Modal, { Z_ABOVE_DRAWER } from '../../components/Modal';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { Gen } from '../../types';
@@ -81,7 +81,10 @@ export default function AwardKickoffModal({ gen, onClose, onOpenTab, onUpdated, 
       // JSX/DOM sibling AFTER the drawer's own <Modal> (not nested inside
       // it) — so this modal's default `.overlay` z-index (150) sat under the
       // drawer's `.drawer-overlay` (160) and its backdrop ate every click.
-      overlayStyle={{ zIndex: 170 }}
+      // Review round 2 N1: round 1's fixed 170 cleared the desktop drawer
+      // but not the mobile `.drawer-overlay`/`.overlay` bump to 240 — use
+      // the shared above-drawer constant instead of a hand-picked number.
+      overlayStyle={{ zIndex: Z_ABOVE_DRAWER }}
     >
         <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '62vh', overflowY: 'auto' }}>
           <div style={{ fontSize: 13, color: 'var(--text2)' }}>

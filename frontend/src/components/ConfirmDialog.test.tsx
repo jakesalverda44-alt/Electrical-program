@@ -47,6 +47,24 @@ describe('useConfirm / ConfirmDialog', () => {
     await waitFor(() => expect(onResult).toHaveBeenCalledWith(false));
   });
 
+  // Review round 2 N2: `ConfirmProvider` wraps `<App/>` in main.tsx, so this
+  // dialog's overlay used to sit at the plain `.overlay` default (150) —
+  // below every `.drawer-overlay` (160), and below the mobile bump to 240.
+  // `useConfirm()` is called from inside drawer Modals (LeadDetailDrawer's
+  // delete/mark-lost, GenDetailDrawer's close job), so the confirm box
+  // painted behind the drawer's backdrop and a click on it actually landed
+  // on the drawer overlay, closing the drawer instead of confirming. This is
+  // the one dialog that must always be topmost by construction.
+  it("the confirm dialog's overlay z-index clears every drawer overlay (240 on mobile, 160 on desktop)", async () => {
+    const onResult = vi.fn();
+    render(<ConfirmProvider><Harness onResult={onResult} /></ConfirmProvider>);
+    fireEvent.click(screen.getByText('Delete'));
+    await waitFor(() => expect(screen.getByRole('alertdialog')).toBeTruthy());
+    const overlay = document.querySelector('.overlay') as HTMLElement;
+    expect(overlay).toBeTruthy();
+    expect(Number(overlay.style.zIndex)).toBeGreaterThan(240);
+  });
+
   it('resolves false with no provider mounted, instead of throwing', async () => {
     const onResult = vi.fn();
     render(<Harness onResult={onResult} />);
