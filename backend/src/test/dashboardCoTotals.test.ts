@@ -5,7 +5,7 @@
 // for a bid with two approved change orders (and a third, pending one that
 // must NOT count), by running the exact pre-fix SQL text as a snapshot to
 // compare the live route's response against.
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { pool } from '../db/pool';
 import { app } from '../index';
@@ -13,6 +13,16 @@ import { dbAvailable, makeUser, auth } from './harness';
 
 let ok = false;
 beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
+
+// Re-review non-blocker (c) — the malformed-proposal_id test below inserts a
+// won_jobs row that no award/API flow would ever produce; nothing else in
+// this file (or the app) would ever delete it, so it would otherwise sit in
+// the test DB permanently across every future run.
+const malformedProposalIds: string[] = [];
+afterAll(async () => {
+  if (!ok || !malformedProposalIds.length) return;
+  await pool.query(`DELETE FROM won_jobs WHERE proposal_id = ANY($1)`, [malformedProposalIds]);
+});
 
 // pg parses `date`/`timestamptz` columns into JS Date objects; the HTTP
 // response has already gone through JSON.stringify, which turns them into
@@ -106,10 +116,12 @@ describe('GET /api/dashboard — bids co_approved_total (Task 4)', () => {
     const u = await makeUser('owner');
     const bid = await request(app).post('/api/bids').set(auth(u.token))
       .send({ name: `Dash Malformed ${Date.now()}`, gc: 'G' }).expect(200);
+    const malformedProposalId = `not-a-uuid-${Date.now()}`; // proposal_id is unique — must vary per run
+    malformedProposalIds.push(malformedProposalId);
     await pool.query(
       `INSERT INTO won_jobs (salesperson_name, customer, proposal_id, proposal_type, value, date_won)
        VALUES ('IT Rep', 'Test Co', $1, 'Electrical', 50000, '2026-02-01')`,
-      [`not-a-uuid-${Date.now()}`] // proposal_id is unique — must vary per run
+      [malformedProposalId]
     );
 
     const res = await request(app).get('/api/dashboard').set(auth(u.token)).expect(200);

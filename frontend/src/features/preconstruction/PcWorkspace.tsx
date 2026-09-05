@@ -761,7 +761,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     };
   }, [bid.id]);
 
-  const { data: savedEstimateData } = useApi<BidEstimate>(`/estimates/${bid.id}`);
+  const { data: savedEstimateData, loading: savedEstimateLoading } = useApi<BidEstimate>(`/estimates/${bid.id}`);
   useEffect(() => { if (savedEstimateData) setSavedEstimate(savedEstimateData); }, [savedEstimateData]);
 
   // Unfiltered — the "From Project Files" panel shows every project document;
@@ -776,7 +776,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // profit_pct/estimate_overrides now (via the continuous autosave), not
   // only bid_estimates (written only by the deliberate "Save Estimate"
   // action). GET /preconstruction/:bidId/workspace, added in Task 11.
-  const { data: workspaceRow } = useApi<{
+  const { data: workspaceRow, loading: workspaceRowLoading } = useApi<{
     overhead_pct: number | string | null;
     profit_pct: number | string | null;
     estimate_overrides: Record<string, number> | null;
@@ -800,7 +800,28 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // state is still pristine (untouched since restore): either source
   // resolving after the estimator has already started editing this session
   // must never clobber their edits.
+  //
+  // Re-review non-blocker (b) — the rule above ("estimate first, workspace
+  // only if strictly newer") only actually holds when both requests have
+  // landed before hydration ever runs: if workspaceRow resolved first (this
+  // effect also re-runs on every `savedEstimateData`/`workspaceRow` change)
+  // it would hydrate from workspaceRow alone, which flips `isPristine`
+  // false — so when the estimate arrived a moment later, the effect would
+  // already be permanently gated off, even though the estimate should have
+  // won. Gating on both fetches' `loading` being false makes this
+  // deterministic regardless of which one's network response happens to
+  // arrive first — reading `savedEstimateData` (the raw useApi value)
+  // rather than the `savedEstimate` state variable matters here too:
+  // `savedEstimate` is only populated by a separate effect one render after
+  // `savedEstimateData` (and independently updated after a Save Estimate,
+  // its other purpose — see below), so the instant `savedEstimateLoading`
+  // flips false, `savedEstimateData` already holds the fetched value in
+  // this same render while `savedEstimate` would still be stale for one
+  // more tick, which was enough for this effect to hydrate from workspaceRow
+  // alone all over again and flip `isPristine` before the estimate ever got
+  // a chance.
   useEffect(() => {
+    if (savedEstimateLoading || workspaceRowLoading) return;
     const current = wsRef.current;
     const isPristine = current.overheadPct === 10 && current.profitPct === 15
       && Object.keys(current.estimateOverrides).length === 0;
@@ -809,13 +830,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     type Candidate = { overheadPct: number; profitPct: number; estimateOverrides: Record<string, number>; at: number };
     let candidate: Candidate | null = null;
 
-    if (savedEstimate) {
-      const overrides = overridesFromEstimate(savedEstimate.line_items);
-      const overheadPct = Number(savedEstimate.overhead_pct);
-      const profitPct = Number(savedEstimate.profit_pct);
+    if (savedEstimateData) {
+      const overrides = overridesFromEstimate(savedEstimateData.line_items);
+      const overheadPct = Number(savedEstimateData.overhead_pct);
+      const profitPct = Number(savedEstimateData.profit_pct);
       const hasRealValues = overheadPct !== 10 || profitPct !== 15 || Object.keys(overrides).length > 0;
       if (hasRealValues) {
-        const at = savedEstimate.updated_at ? new Date(savedEstimate.updated_at).getTime() : 0;
+        const at = savedEstimateData.updated_at ? new Date(savedEstimateData.updated_at).getTime() : 0;
         candidate = { overheadPct, profitPct, estimateOverrides: overrides, at };
       }
     }
@@ -841,7 +862,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     if (candidate) {
       set({ overheadPct: candidate.overheadPct, profitPct: candidate.profitPct, estimateOverrides: candidate.estimateOverrides });
     }
-  }, [savedEstimate, workspaceRow]);
+  }, [savedEstimateData, workspaceRow, savedEstimateLoading, workspaceRowLoading]);
 
   // Pre-fill service fields from Agent 1 output when it becomes available (skips already-filled fields)
   useEffect(() => {

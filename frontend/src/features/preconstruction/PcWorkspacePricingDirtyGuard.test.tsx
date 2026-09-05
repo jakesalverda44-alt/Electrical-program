@@ -120,3 +120,109 @@ describe('PcWorkspace pricing dirty-check string/number normalization (post-revi
     expect(navigated).toBe(true);
   });
 });
+
+// Re-review non-blocker (a) — the "estimate first, workspace only if
+// strictly newer" priority rule is only actually deterministic once both
+// /estimates/:id and /preconstruction/:id/workspace have resolved. Before
+// this fix the hydration effect re-ran on every change to either value, so
+// whichever one resolved *first* (if it carried real, non-default values)
+// would hydrate immediately and flip `isPristine` false — permanently
+// locking out the other source once it arrived, regardless of which one the
+// priority rule actually says should win. These two tests pin both arrival
+// orders against a single savedEstimate/workspaceRow pair with different
+// `updated_at`s, and assert on the actually-rendered Overhead % input (not
+// just the dirty-guard prompt, which cannot distinguish "correctly newer
+// workspace" from "incorrectly locked-in stale workspace" — both look dirty
+// against savedEstimate).
+function renderWorkspacePricingTab() {
+  navigated = false;
+  function PricingHarness() {
+    const [ws, setWs] = useState<PcWorkspace>({ ...blankWorkspace('b1', 'Dirty Guard Job', 0), activeTab: 'pricing' });
+    return (
+      <PcWorkspaceView
+        ws={ws}
+        bid={bid}
+        onUpdate={setWs}
+        onBack={() => {}}
+        onConverted={() => {}}
+        onBidUpdated={() => {}}
+        showToast={() => {}}
+        embedded
+      />
+    );
+  }
+  return render(
+    <AppProviders user={user} showToast={(_t: Toast) => {}} settings={DEFAULT_APP_SETTINGS} reloadSettings={() => {}}>
+      <UnsavedGuardProvider>
+        <Nav/>
+        <PricingHarness/>
+      </UnsavedGuardProvider>
+    </AppProviders>,
+  );
+}
+
+function overheadInputValue(): string {
+  const label = screen.getByText('Overhead %');
+  const input = label.parentElement!.querySelector('input') as HTMLInputElement;
+  return input.value;
+}
+
+const SAVED_LINE_ITEMS = [
+  { category: 'Devices', item: 'Duplex Receptacle', qty: 10, unit: 'ea', unit_cost: 25, total: 250, overridden: false },
+];
+
+function mockApiWithTiming(opts: {
+  estimateDelayMs: number; estimateOverheadPct: string; estimateUpdatedAt: string;
+  workspaceDelayMs: number; workspaceOverheadPct: string; workspaceUpdatedAt: string;
+}) {
+  get.mockImplementation((url: string) => {
+    if (url === `/estimates/${bid.id}`) return new Promise(resolve => setTimeout(() => resolve({
+      data: {
+        bid_id: bid.id, overhead_pct: opts.estimateOverheadPct, profit_pct: '15.00',
+        line_items: SAVED_LINE_ITEMS, subtotals: {}, total_direct: 0, total_overhead: 0, total_profit: 0, grand_total: 0,
+        comp_count: 0, confidence: 'LOW', updated_at: opts.estimateUpdatedAt,
+      },
+    }), opts.estimateDelayMs));
+    if (url === `/preconstruction/${bid.id}/workspace`) return new Promise(resolve => setTimeout(() => resolve({
+      data: {
+        overhead_pct: opts.workspaceOverheadPct, profit_pct: '20.00', estimate_overrides: {},
+        updated_at: opts.workspaceUpdatedAt,
+      },
+    }), opts.workspaceDelayMs));
+    if (url === '/preconstruction/costs') return Promise.resolve({ data: [] });
+    if (url.includes('/takeoff')) return Promise.resolve({ data: null });
+    if (url.includes('/intelligence/')) return Promise.resolve({ data: {} });
+    if (url === '/estimates/unit-costs') return Promise.resolve({ data: { global: {}, by_project_type: {} } });
+    if (url === '/documents') return Promise.resolve({ data: [] });
+    return Promise.resolve({ data: null });
+  });
+  post.mockResolvedValue({ data: {} });
+  put.mockResolvedValue({ data: {} });
+  del.mockResolvedValue({ data: {} });
+}
+
+describe('PcWorkspace pricing hydration — arrival order cannot defeat the priority rule (re-review non-blocker a)', () => {
+  it('workspace resolves first but is OLDER than the estimate — the estimate still wins once both have settled', async () => {
+    mockApiWithTiming({
+      workspaceDelayMs: 0, workspaceOverheadPct: '30.00', workspaceUpdatedAt: '2026-08-01T00:00:00Z',
+      estimateDelayMs: 40, estimateOverheadPct: '22.00', estimateUpdatedAt: '2026-09-01T00:00:00Z',
+    });
+    renderWorkspacePricingTab();
+
+    await waitFor(() => expect(get.mock.calls.some(c => c[0] === `/preconstruction/${bid.id}/workspace`)).toBe(true));
+    await waitFor(() => expect(get.mock.calls.some(c => c[0] === `/estimates/${bid.id}`)).toBe(true));
+    await waitFor(() => expect(overheadInputValue()).toBe('22'));
+  });
+
+  it('workspace resolves last but is NEWER than the estimate — the workspace still wins once both have settled', async () => {
+    mockApiWithTiming({
+      estimateDelayMs: 0, estimateOverheadPct: '22.00', estimateUpdatedAt: '2026-08-01T00:00:00Z',
+      workspaceDelayMs: 40, workspaceOverheadPct: '30.00', workspaceUpdatedAt: '2026-09-01T00:00:00Z',
+    });
+    renderWorkspacePricingTab();
+
+    await waitFor(() => expect(get.mock.calls.some(c => c[0] === `/estimates/${bid.id}`)).toBe(true));
+    await waitFor(() => expect(get.mock.calls.some(c => c[0] === `/preconstruction/${bid.id}/workspace`)).toBe(true));
+    await waitFor(() => expect(overheadInputValue()).toBe('30'));
+  });
+});

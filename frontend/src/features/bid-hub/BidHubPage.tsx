@@ -37,12 +37,14 @@ interface Props {
    *  genuinely does have a saved workspace row could have PcWorkspaceView
    *  mount on a synthetic blankWorkspace() before the real one arrived, and
    *  its autosave would then PUT empty notes/scope/rfis/files over that real
-   *  row (a full-row upsert). Defaults to true so every existing caller
-   *  (there are currently none that omit it) keeps today's behavior. */
-  pcDataLoaded?: boolean;
+   *  row (a full-row upsert). Re-review non-blocker (b): required, no
+   *  default — a future caller that forgets to wire this up should get a
+   *  type error, not silently inherit the unsafe "always loaded" behavior
+   *  a default would have papered over. */
+  pcDataLoaded: boolean;
 }
 
-export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, onPcUpdate, onBidUpdated, onNav, pcDataLoaded = true }: Props) {
+export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, onPcUpdate, onBidUpdated, onNav, pcDataLoaded }: Props) {
   const user = useUser();
   const showToast = useShowToast();
   const { settings } = useSettings();
