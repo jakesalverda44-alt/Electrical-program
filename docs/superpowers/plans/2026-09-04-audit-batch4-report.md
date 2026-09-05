@@ -940,3 +940,147 @@ unhandled-rejection noise in the run (the fix above).
    scenario (the gen drawer's four identical `/documents?linked_id=` reads,
    which share the same `responseType` — undefined — and dedup exactly as
    specified).
+
+## Task 9 — Split the preconstruction workspace (audit code #10; ux #19)
+
+**Files:** `frontend/src/features/preconstruction/PcWorkspace.tsx` (3,175
+lines, one component) → `frontend/src/features/preconstruction/PcWorkspace/`
+(21 modules), plus one new test,
+`frontend/src/features/preconstruction/PcWorkspaceProfiler.test.tsx`.
+
+### File map (new folder, line counts)
+
+| File | Lines | What it holds |
+| --- | ---: | --- |
+| `PcWorkspaceView.tsx` | 1,229 | The parent: workspace state, the autosave, the seven data reads and their hydration effects, every handler, the tab switch and the page shell. |
+| `TakeoffTab.tsx` | 468 | Plan Review — Agent 1/2/3 output, run-cost summary, "Confirm Key Project Data". |
+| `ProposalTab.tsx` | 406 | Agent 4, the docx/xlsx downloads, the pre-bid package for Chris, verify-gate failures, the proposal preview, the convert-to-awarded modal. |
+| `PricingTab.tsx` | 220 | The line-item estimate table, the zero-cost banner and the overhead/profit summary. |
+| `parsing.ts` | 217 | `parseAgentJson`, `parseScopeSections`, `cleanMarkdown`, `scopeSectionsFrom`, `buildScopeFromAgent2`, `isElecSheet`, `analysisErrorMessage`, `isPdfOrImage`, `lookupUnitCost`, `buildLineItemsFromTakeoff`, `parseAgent1Service`. |
+| `FilesTab.tsx` | 172 | Upload drop-zone, uploaded-plan table, "From Project Files" picker. |
+| `useAiPoller.ts` | 168 | Both recursive poll loops, the shared cancel flag, the 10-minute deadline and the mount-time reconnect. |
+| `ImportPanel.tsx` | 117 | "Import Finished Bid" (the Overview panel), now driven by the reducer. |
+| `globalCache.ts` | 116 | The two session-level caches, `useGlobalPcCache`, `resetGlobalPcCaches`. |
+| `CostsTab.tsx` | 112 | Historical cost comps + the project-type filter chips. |
+| `ui.tsx` | 90 | `StepTracker` (memo), `TabStrip` (memo, includes the autosave chip), `pill`. |
+| `OverviewTab.tsx` | 90 | Stats, workspace notes, takeoff-on-file, advance-step; renders `ImportPanel`. |
+| `BidTab.tsx` | 89 | The AI Takeoff Engine run/resume/re-run panel and its log. |
+| `importReducer.ts` | 78 | `ImportState`/`ImportAction`/`importReducer` — the six `import*` states. |
+| `ScopeTab.tsx` | 76 | The seven scope sections + the two import buttons. |
+| `RfisTab.tsx` | 75 | RFI add/import/submit and the RFI table. |
+| `PricingRow.tsx` | 65 | One estimate line (memo, primitive props). |
+| `IntelTab.tsx` | 62 | Win-rate insights. |
+| `shared.ts` | 25 | `STEP_ORDER`, `SetWorkspace`, `AiResults`, `SaveState`, `TakeoffOnFile`, `ProjectDoc`. |
+| `useStableFn.ts` | 18 | Ref-backed stable callback identity (a `useCallback` that always calls the latest closure). |
+| `index.tsx` | 7 | Barrel — keeps the `features/preconstruction/PcWorkspace` module path working. |
+
+`PcWorkspace.tsx` was moved with `git mv` into the folder, so the diff reads as
+a rename plus edits rather than a delete/add.
+
+### State ownership
+
+All workspace state stayed in `PcWorkspaceView` — deliberately. Only one tab is
+mounted at a time, so moving a tab's state into the tab would silently change
+behaviour: the cost-table filter, the open takeoff category, the Plan Review
+sub-tab, an in-progress bid import and the typed proposal price would all reset
+on a tab switch, which they do not today. The children are presentational and
+receive slices:
+
+| Owner | State | Consumers |
+| --- | --- | --- |
+| `PcWorkspaceView` | `ws` (via props/`onUpdate`), autosave (`saveState`, timers, backoff, `lastScheduledRef`), `aiResults`, `savedEstimate`, `projectDocs`, `selectedDocIds`, `prebidSections`, `svc*`, `prop*`, `agent4*`, `prebid*`, `chrisDraft*`, `verifyFailures`, `proposalPreview`, `convertOpen`, `sendProposalOpen`, `newRfi`, `analysisTab`, `copied`, `dragOver`, `openTakeoffCat`, `costTypeFilter`, `expandedCostRow`, `importState` | handed down as props |
+| `useAiPoller` | `pollTimedOut`, `pollCancelled`, both timeout refs | shell banner; `pollForResults`/`pollAgent4` called by `runAI`/`resumeAI`/`runAgent4Proposal` |
+| `globalCache` | the two module-level caches | `useGlobalPcCache` |
+| `importReducer` | the six `import*` states, one reducer | `ImportPanel` |
+| `ImportPanel` | the three file-input DOM refs | itself |
+
+Hook counts in the component itself (the old file's 39 `useState` and 13
+`useEffect` include `useGlobalPcCache`'s): 37 → 30 `useState` — the six
+`import*` became one `useReducer` and `pollTimedOut` moved into the poller —
+and 10 → 9 `useEffect` (the poll reconnect moved), plus 3 new `useMemo`
+(`historicalCosts`, `unitCostLib`, `pricingLineItems`).
+
+Three things had to become identity-stable for the `React.memo` boundaries to
+pay off, since `ws` lives in `App.tsx` and this component re-renders on every
+keystroke: `set` (a `useCallback` over a ref to `onUpdate`), the two "empty"
+fallbacks (`?? []` / `?? {}` handed fresh objects to memo dependency lists every
+render) and the ~30 handlers passed to tabs (`useStableFn`). Behaviour is
+unchanged in every case — `set` still reads the current workspace off `wsRef`,
+and `useStableFn` always invokes the latest closure.
+
+### Profiler measurement (one keystroke in a takeoff line's unit-cost input)
+
+Fixture: the Pricing tab with a 12-line saved estimate across 3 categories;
+`fireEvent.change` on one unit-cost input; measured with React's `<Profiler>`
+plus a count of the React elements the commit constructed (the JSX runtime is
+wrapped in the test). The unit-cost box is the only editable number on a
+takeoff-derived table, so it is the "takeoff quantity" of the plan's wording.
+
+| Metric | Before (3,175-line single component) | After |
+| --- | ---: | ---: |
+| Component boundaries that re-rendered | 1 of 1 — the whole workspace; there were no child boundaries to skip, so the step tracker, the tab strip and all 12 estimate rows re-rendered with it | 3 of the 16 instrumented boundaries mounted on that tab (root, step tracker, tab strip, `PricingTab`, 12 rows): `PricingRow:BRANCH POWER‖Item 5`, `PricingTab`, the workspace root |
+| Estimate rows re-rendered | 12 of 12 | 1 of 12 |
+| React elements re-created in the commit | 234 | 90 (−62%) |
+| Boundaries re-rendered when the autosave chip flips (idle → saving → saved, 800 ms after the same keystroke) | the whole active tab, twice | `TabStrip` only; `PricingTab` and every row bail out |
+
+The row-level ratio is the number that scales: the rebuilt-element count is
+dominated by the estimate table, so a real 60-line takeoff improves further than
+this 12-line fixture does.
+
+Both numbers are asserted as upper bounds in
+`PcWorkspaceProfiler.test.tsx` (≤ 4 boundaries, ≤ 140 elements, exactly one
+`PricingRow`, never `TabStrip`/`StepTracker`), so the split cannot quietly
+regress. The test instruments the real components by mocking each child module
+to wrap its export in a `<Profiler>` behind the same shallow-props `memo` — no
+profiling code ships in the app.
+
+### Tests
+
+- The nine existing `PcWorkspace*.test.tsx` files are **byte-identical to
+  `main`** — not even an import path changed. `PcWorkspace/index.tsx` keeps the
+  `./PcWorkspace` specifier resolving, so `App.tsx`, `BidHubPage`,
+  `UnitCostSection` (`resetGlobalPcCaches`) and `BidHubPage.test.tsx`
+  (`__resetGlobalPcCachesForTests`) are untouched too.
+  `git diff main..HEAD --stat -- 'frontend/src/features/preconstruction/PcWorkspace*.test.tsx'`
+  lists only the new Profiler test.
+- New: `PcWorkspaceProfiler.test.tsx` (2 tests) — the keystroke measurement
+  above, and the autosave-chip bail-out.
+- Full suite: **77 files / 543 tests passing** (76/541 before, plus the two new
+  ones). `npm run typecheck` — 0 errors. Nothing in `backend/` changed.
+- A line-by-line audit of the move (every non-trivial line of the old file
+  looked up in the new folder) shows the only lines that did not survive
+  verbatim are the intended edits: the import block, the six `import*` states,
+  `computePricingItems` → `useMemo`, `function set` → `useCallback`, the
+  `ws.overheadPct`/`ws.profitPct`/`ws.estimateOverrides` writes that became
+  `onOverheadChange`/`onProfitChange`/`onUnitCostChange`, the inline tab strip
+  that became `<TabStrip>`, and the estimate row that became `<PricingRow>`.
+  Every other line of JSX was moved unchanged (only re-indented).
+
+### Deviations from the plan (Task 9)
+
+1. **More was extracted than the four tabs named.** The plan named
+   `TakeoffTab`, `PricingTab`, `ProposalTab`, `ImportPanel` and the poller;
+   `OverviewTab`, `FilesTab`, `BidTab`, `ScopeTab`, `RfisTab`, `CostsTab`,
+   `IntelTab`, `PricingRow`, `StepTracker`/`TabStrip` and the pure parsers came
+   out too. Leaving the other seven tabs inline would have left a ~2,300-line
+   parent that still owned most of the rendering, which does not answer audit
+   code #10; each was a mechanical move of one `case` body.
+2. **`PricingRow` is a component the plan did not ask for.** Without it, "typing
+   a takeoff quantity re-renders the takeoff table only" is as far as it goes —
+   the table still rebuilds all 12 rows. The row boundary is what turns that
+   into one row, and it is where most of the 234 → 90 drop comes from.
+3. **The parent is still 1,229 lines.** That is the plan's own division of
+   labour ("the parent keeps workspace state and autosave"): 30 `useState`, the
+   autosave with its retry/backoff, seven reads with their hydration effects,
+   and ~30 handlers. Two further extractions are available and were left alone
+   as out of scope for a no-behaviour-change task: a `useWorkspaceAutosave` hook
+   (~100 lines) and a `usePricingHydration` hook (~90).
+4. **State stayed in the parent rather than moving into the tabs**, including
+   the states only one tab reads — see "State ownership" above; moving them
+   would reset them on tab switches.
+5. **The "components re-rendered" before-count is 1 by construction.** A
+   `<Profiler>` only reports subtrees that exist, and before the split there was
+   one component, so the honest before/after comparison needs the second metric
+   (elements re-created, 234 → 90) to say how much of the tree that single
+   commit rebuilt. Both are in the table above; the element count is measured
+   the same way on both sides.
