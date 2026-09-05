@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy } from 'react';
 import Icon from '../../components/Icon';
 import { GenForm, CustomItem, GEN_SIZE_LABELS } from './genData';
 import { EV_TIERS, EV_PRICES, evTierPrice, evTierLabel } from './evData';
 import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo, loadCenterFor, migrateGenForm, getGenPrice } from './genCalc';
 import ProposalPreview from './ProposalPreview';
-import EvBuilderPage from './EvBuilderPage';
 import SendProposalModal from './SendProposalModal';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
@@ -14,6 +13,11 @@ import { useSettings, useShowToast } from '../../contexts/AppContext';
 import { parseAddress } from '../../lib/address';
 import { flTaxRate } from '../../lib/flSalesTax';
 import { moneyPrecise as fmt } from '../../lib/money';
+
+// Code splitting (audit code #8): its own chunk, loaded only when a rep picks
+// "EV Charger" — the one `<Suspense>` in App.tsx (wrapping renderView()) covers
+// this even though it suspends several components below BuilderPage itself.
+const EvBuilderPage = lazy(() => import('./EvBuilderPage'));
 
 interface Props {
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;

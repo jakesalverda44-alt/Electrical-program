@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, isPrivileged } from './hooks/useAuth';
 import { useToast } from './hooks/useToast';
@@ -7,17 +7,28 @@ import LoginPage from './features/auth/LoginPage';
 import AppShell from './features/layout/AppShell';
 import CommandCenterPage from './features/command-center/CommandCenterPage';
 import SalesByRepPage from './features/sales-by-rep/SalesByRepPage';
-import BuilderPage from './features/builder/BuilderPage';
-import BidHubPage from './features/bid-hub/BidHubPage';
 import ContactsPage from './features/contacts/ContactsPage';
 import CommsPage from './features/comms/CommsPage';
-import DocsPage from './features/docs/DocsPage';
 import FollowupsPage from './features/followups/FollowupsPage';
 import CalendarPage from './features/calendar/CalendarPage';
 import ProposalPublicPage from './pages/ProposalPublicPage';
-import SettingsPage from './features/settings/SettingsPage';
 import GeneratorsHubPage from './features/hubs/GeneratorsHubPage';
 import ElectricalHubPage from './features/hubs/ElectricalHubPage';
+// Code splitting (audit code #8): these six are among the biggest pages in the
+// app (BuilderPage/EvBuilderPage's proposal builder + PDF preview,
+// PcWorkspaceView's 2,800-line estimator behind BidHubPage, ElecProjectsPage's
+// many CO/pay-app/RFI tables, SettingsPage, DocsPage) and are each visited by
+// only a subset of sessions, so loading them eagerly in the main bundle taxes
+// every session for pages most of them never open. `React.lazy` defers each
+// to its own chunk, fetched the first time its view is reached; the one
+// <Suspense> around `renderView()` below covers all of them, including
+// EvBuilderPage (lazy-loaded inside BuilderPage.tsx) and ElecProjectsPage
+// (lazy-loaded inside ElectricalHubPage.tsx) — Suspense catches a lazy
+// component suspending anywhere in its subtree, not just direct children.
+const BuilderPage = lazy(() => import('./features/builder/BuilderPage'));
+const BidHubPage = lazy(() => import('./features/bid-hub/BidHubPage'));
+const DocsPage = lazy(() => import('./features/docs/DocsPage'));
+const SettingsPage = lazy(() => import('./features/settings/SettingsPage'));
 import { coerceGenTab, coerceElecTab } from './features/hubs/constants';
 import { resolveLegacyPath } from './lib/legacyRoutes';
 import { PcWorkspace, PC_TABS, ConfirmedService } from './features/preconstruction/constants';
@@ -43,6 +54,17 @@ interface DashboardPayload {
 // StubPage is gone: every view in the switch below is shipped, so there was no
 // genuinely-planned view left for it to represent — and its "coming soon" copy
 // was what made a typo'd URL look like a feature (audit code #17 / ux #17).
+
+/** Small page-level spinner shown while a lazy page's chunk is still loading —
+ *  styled like the existing bootstrap "Loading…" state so a chunk fetch on a
+ *  slow connection reads as the same kind of pause, not a different one. */
+function PageLoadingFallback() {
+  return (
+    <div className="scroll view-enter">
+      <div style={{ padding: 32, color: 'var(--text3)' }}>Loading…</div>
+    </div>
+  );
+}
 
 /** Tab title per view; the record-level pages set their own from the record. */
 const VIEW_TITLES: Record<string, string> = {
@@ -475,9 +497,14 @@ export default function App() {
         {warningBar}
         {/* A second boundary, inside the shell: a render crash in one page keeps
             the nav and the rest of the app usable (audit code #19). The root
-            boundary in main.tsx still catches anything above this. */}
+            boundary in main.tsx still catches anything above this. ErrorBoundary
+            wraps Suspense (not the other way around) so a chunk-load failure —
+            React.lazy's import() rejecting, not just a slow fetch — throws
+            during render and is caught here rather than crashing the whole app. */}
         <ErrorBoundary variant="page" resetKey={location.pathname}>
-          {renderView()}
+          <Suspense fallback={<PageLoadingFallback/>}>
+            {renderView()}
+          </Suspense>
         </ErrorBoundary>
       </AppShell>
       {toast && <Toast toast={toast}/>}

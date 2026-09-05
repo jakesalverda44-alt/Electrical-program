@@ -1,11 +1,15 @@
-import React from 'react';
+import React, { lazy } from 'react';
 import { Bid, WonJob } from '../../types';
 import HubTabs from './HubTabs';
 import { ELEC_HUB_TABS, ElecHubTab } from './constants';
 import ElecOverviewTab from './ElecOverviewTab';
 import IntakeInboxPage from '../intake/IntakeInboxPage';
 import ElecPipelinePage from '../pipeline/ElecPipelinePage';
-import ElecProjectsPage from '../elec-projects/ElecProjectsPage';
+
+// Code splitting (audit code #8): its own chunk, loaded only when the Projects
+// tab is opened — the one `<Suspense>` in App.tsx (wrapping renderView())
+// covers this even though it suspends a component below ElectricalHubPage.
+const ElecProjectsPage = lazy(() => import('../elec-projects/ElecProjectsPage'));
 
 interface Props {
   tab: ElecHubTab;
