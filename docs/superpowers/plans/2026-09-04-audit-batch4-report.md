@@ -281,7 +281,17 @@ new migration `database/migrations/100_deleted_by.sql`, new
   `ConfirmDialog.tsx` explaining what it replaces).
 - `grep -rn "confirm(" frontend/src --include='*.tsx'` → every real call is
   `confirm({ ... })` via `useConfirm()`, or the `ConfirmDialog`/`ConfirmProvider`
-  definitions themselves.
+  definitions themselves. **Review round 1 correction: this was false.**
+  `features/settings/sections/IntegrationsSection.tsx` had four bare
+  `confirm('...')` calls (lines 33, 48, 63, 78, on the Google Drive card's
+  backfill/reorganize actions) that call the native global `confirm(...)`
+  directly, not `window.confirm(...)` — the literal-string grep above it
+  (which only searches for `"window.confirm"`) never had a chance of
+  catching them, and the `confirm(` grep here should have but its result
+  was reported without actually being re-run/verified against these four
+  hits. Fixed in this review round (S8) — see "Review round 1 fixes" below.
+  The two greps as run today: `window.confirm` → 0, and `confirm(` outside
+  `ConfirmDialog`/`useConfirm`/`ConfirmProvider` definitions → 0.
 - `git diff --stat main..HEAD -- backend/` (through Task 2) touches only
   `middleware/auth.ts` and the three restore routes; `database/` gained only
   migration 100.
@@ -551,10 +561,22 @@ and `PcWorkspace.tsx`'s money sites; and (deviation — see below)
   (previously their own close-but-different hex values, `#6E7C95` and
   `#7C8AA3`). A header comment in `styles.css` names `--text2`/`--text3` as
   the two canonical grey tokens and says to prefer `--text3` in new code. The
-  ~30 existing call sites using `var(--muted)`/`var(--slate)` are unchanged
-  text and keep working, now resolving to the same color as `--text3` — a
-  small, deliberate, plan-mandated visual convergence (audit ux #10), not a
-  redesign.
+  ~30 existing call sites using `var(--muted)`/`var(--slate)` keep working,
+  now resolving to the same color as `--text3` — a small, deliberate,
+  plan-mandated visual convergence (audit ux #10), not a redesign.
+  **Review round 1 correction:** the line above originally read "are
+  unchanged text and keep working," which understates the change. Most
+  `--slate`/`--muted` call sites are text colors (a genuinely small shift,
+  `#7C8AA3`/`#6E7C95` → `#6A7892`), but three are BUTTON BACKGROUNDS, not
+  text: the "Mark Lost"-style secondary-destructive confirm buttons in
+  `GenPipelinePage.tsx` (~395, `background: 'var(--slate)'`),
+  `GenDetailDrawer.tsx` (~325, the "Confirm" button on the declined-lead
+  flow), and `IntakeInboxPage.tsx` (~466, "Confirm Reject"). `--slate`
+  (`#7C8AA3`) → `--text3` (`#6A7892`) is a ~26% drop in relative (WCAG)
+  luminance — a visibly darker button fill on all three, not a subtle text
+  tweak. This is still within the plan's "deliberate, plan-mandated visual
+  convergence," not a bug, but the report should have said so plainly
+  instead of describing it as text-only.
 - **Grid literals moved out of inline styles into CSS classes**, so the
   existing 768px mobile override can win the cascade by source order instead
   of `!important` beating an inline style:
@@ -597,8 +619,21 @@ pass unmodified; `npm run typecheck` stayed at 0 errors.
   `padding` (untouched, different property, its inline `padding` was not
   moved into a class since only `gridTemplateColumns` was in scope).
 - `grep -n "gridTemplateColumns" frontend/src/features/builder/BuilderPage.tsx
-  frontend/src/features/elec-projects/ElecProjectsPage.tsx` → only the two
-  out-of-scope sites remain (Job Type toggle, `.stats`).
+  frontend/src/features/elec-projects/ElecProjectsPage.tsx` — **review round
+  1 correction: five inline sites remain in these two files, not two.**
+  The original report undercounted this grep's own result. `BuilderPage.tsx`
+  has the one already-disclosed out-of-scope site (the Job Type toggle).
+  `ElecProjectsPage.tsx` has **four**, not one: the already-disclosed
+  `.stats` grid, plus three genuinely different, out-of-scope patterns this
+  task never touched — a responsive photo grid
+  (`repeat(auto-fill, minmax(160px, 1fr))`, ~1230, already responsive via
+  `auto-fill`, no mobile override needed), the CO/RFI-type-select label+field
+  pair (`120px 1fr`, ~1411), and the reusable key–value field-row helper
+  (`140px 1fr`, ~1502) — neither of the latter two is part of the
+  `.ws-form-grid` set this task actually converted. All three are
+  legitimately out of scope (different shape than the 9 `.ws-form-grid`
+  sites converted above), but the report should have counted and named them
+  rather than implying only two sites existed at all.
 
 ### Deviations from the plan (Task 5)
 
@@ -817,7 +852,7 @@ After (Task 7):
 | `jspdf.es.min-DgAUGTZU.js` (unchanged) | 357.39 kB | 116.59 kB |
 | `html2canvas.esm-CBrSDip1.js` (unchanged) | 201.42 kB | 47.70 kB |
 | `index.es-ukL8TGzM.js` (unchanged) | 150.69 kB | 51.39 kB |
-| `PcWorkspace-BOLvf1RP.js` (new — see deviation) | 116.39 kB | 29.24 kB |
+| `PcWorkspace-BOLvf1RP.js` (new — see deviation) [**STALE, see below**] | 116.39 kB | 29.24 kB |
 | `SettingsPage-BGyAl76s.js` (new) | 84.98 kB | 21.05 kB |
 | `ElecProjectsPage-JL3BkAyG.js` (new) | 48.62 kB | 11.11 kB |
 | `BidHubPage-CSC540Sl.js` (new) | 41.74 kB | 11.33 kB |
@@ -830,6 +865,41 @@ After (Task 7):
 **Main bundle: −348.2 kB raw (−24.8%), −81.46 kB gzip (−20.0%).** `dist/`
 was deleted after each build (already gitignored); no build artifacts were
 committed.
+
+**Review round 1 correction:** the `PcWorkspace-BOLvf1RP.js` row above is
+stale — it reflected the chunk graph as of Task 7, before Task 9 (the very
+next task) split `PcWorkspace.tsx` into the `PcWorkspace/` folder of ~20
+modules. Rollup's automatic chunk naming picks one representative module
+per chunk, and which module that is shifted once the single big file became
+many small ones; there is no single "PcWorkspace chunk" anymore. A fresh
+`npm run build` on top of all of Batch 4 (Tasks 1–9) plus this review
+round's fixes shows the same lazy-loaded pages, renamed by Vite's content
+hash and, for the former PcWorkspace chunk, split/regrouped differently:
+
+| File | Size | Gzip |
+|---|---|---|
+| `index-BBWHZNMw.js` (main bundle) | 1,056.03 kB | 326.93 kB |
+| `index-BYSKZowT.js` (vendor) | 495.38 kB | 130.06 kB |
+| `pdf-BnPRJEQ6.js` | 365.12 kB | 107.40 kB |
+| `jspdf.es.min-D14Tbaq_.js` | 357.39 kB | 116.59 kB |
+| `html2canvas.esm-CBrSDip1.js` | 201.42 kB | 47.70 kB |
+| `index.es-BdyPY3Z7.js` | 150.69 kB | 51.39 kB |
+| `IntelTab-D-d0jAyy.js` (was the "PcWorkspace" chunk; Rollup now names it after one of the PcWorkspace/ tab modules it groups) | 85.33 kB | 20.82 kB |
+| `SettingsPage-U44eej8H.js` | 85.02 kB | 21.08 kB |
+| `BidHubPage-C7fR38fI.js` (bigger than Task 7's 41.74 kB — some of the former PcWorkspace chunk's content now groups with BidHubPage instead) | 79.37 kB | 22.56 kB |
+| `ElecProjectsPage-AWUaljEQ.js` | 48.97 kB | 11.23 kB |
+| `BuilderPage-Bp59tvat.js` | 31.06 kB | 9.27 kB |
+| `DocsPage-wyoJ7RdG.js` | 14.03 kB | 4.33 kB |
+| `EvBuilderPage-DSbHEpzQ.js` | 12.18 kB | 3.86 kB |
+| `purify.es-BwoZCkIS.js` | 22.03 kB | 8.72 kB |
+| `pdf.worker.min-yatZIOMy.mjs` (worker) | 1,375.84 kB | — |
+
+`IntelTab-D-d0jAyy.js` (85.33 kB) + the size increase in `BidHubPage`
+(79.37 vs. Task 7's 41.74 kB, a +37.63 kB difference) together account for
+essentially all of the old `PcWorkspace` chunk's 116.39 kB — the content
+didn't grow, Rollup just drew the chunk boundaries differently once
+PcWorkspace stopped being one file. `frontend/dist` was deleted after this
+build (gitignored, untracked either way).
 
 ### Deviations from the plan (Task 7)
 
@@ -1084,3 +1154,50 @@ profiling code ships in the app.
    (elements re-created, 234 → 90) to say how much of the tree that single
    commit rebuilt. Both are in the table above; the element count is measured
    the same way on both sides.
+
+---
+
+## Review round 1 fixes
+
+An independent Opus review of Tasks 1–9 returned **MERGE AFTER FIXES**: 4
+blockers (B1–B4), 12 should-fix items (S1–S12, no S9 in the numbering), and
+3 one-liner nits, plus 3 inaccurate claims in this report (corrected inline
+above, in Task 2's, Task 5's, and Task 7's sections). All 19 findings were
+fixed in this round, each with a regression test. Four commits, continuing
+directly from `860c253` (Task 9):
+
+| Item | What | Commit | Test |
+|---|---|---|---|
+| B1 | `dayOf`/`fmtDate`/`fmtDateTime` off-by-one on Postgres DATE columns arriving as UTC-midnight timestamps | `5973ed3` | `frontend/src/lib/date.test.ts` |
+| B2 | `PcWorkspace/ui.tsx` `pill()` background lost with token colors (`color + '22'` → invalid CSS) | `5973ed3` | `frontend/src/features/preconstruction/PcWorkspace/ui.test.tsx` |
+| B3 | `AwardKickoffModal`/`LeadSiteSurvey` rendered as post-drawer siblings, under/tied with the drawer's z-index | `165869c` | `frontend/src/features/gen-pipeline/GenDetailDrawer.test.tsx`, `frontend/src/features/leads/LeadDetailDrawer.test.tsx` |
+| B4 | Modal's capture-phase `stopPropagation()` on Escape made inner handlers (SurveyMarkupEditor, LeadDetailDrawer note-cancel) unreachable | `165869c` | `frontend/src/components/Modal.test.tsx`, `frontend/src/features/gen-pipeline/SurveyMarkupEditor.test.tsx`, `frontend/src/features/leads/LeadDetailDrawer.test.tsx` |
+| S1 | `useApi` `reload()` no-op when another subscriber shares the key | `194d924` | `frontend/src/hooks/useApi.test.ts` |
+| S2 | Modal's Tab trap stayed armed while the dirty-discard guard (outside `containerRef`) was open | `165869c` | `frontend/src/components/Modal.test.tsx` |
+| S3 | Modal focus-restore to an unmounted opener left focus on `<body>` | `165869c` | `frontend/src/components/Modal.test.tsx` |
+| S4 | Toast action button (Undo) had no double-click guard | `194d924` | `frontend/src/components/Toast.test.tsx` |
+| S5 | Undo re-inserted only the bid/gen, dropping the won-job row (and, on the two Kanban pages, the phase) | `fa1b6a3` | `frontend/src/features/gen-projects/GenProjectsPage.test.tsx`, `frontend/src/features/bid-hub/BidHubPage.test.tsx` |
+| S6 | Restored row prepended instead of re-sorted to its original index | `fa1b6a3` | same as S5 (`gen-order` assertion) |
+| S7 | Modal stack was registration-ordered, not DOM-order/containment-based | `165869c` | `frontend/src/components/Modal.test.tsx` |
+| S8 | 4 native `confirm(...)` calls remained in `IntegrationsSection.tsx` | `5973ed3` | `frontend/src/features/settings/sections/IntegrationsSection.test.tsx` |
+| S10 | `RequiredMark`'s sr-only "required" not associated with the input (missing `htmlFor`/`id`) | `5973ed3` | `frontend/src/features/pipeline/AddBidModal.test.tsx`, `frontend/src/features/gen-pipeline/LogGenJobModal.test.tsx` |
+| S11 | `LogGenJobModal`'s discard-changes copy silently changed from the pre-batch4 wording | `5973ed3` | `frontend/src/features/gen-pipeline/LogGenJobModal.test.tsx` |
+| S12 | `ConfirmDialog` overlapping confirms / provider-unmount orphaned promises | `194d924` | `frontend/src/components/ConfirmDialog.test.tsx` |
+| Nit | `useApi` `requestKey` missing `timeout` | `194d924` | `frontend/src/hooks/useApi.test.ts` (dedup-key coverage; no dedicated test, low-risk one-liner) |
+| Nit | `SignedContractCard` countersign handler needed a code-level `saving` guard, not just `disabled` | `194d924` | `frontend/src/features/gen-pipeline/SignedContractCard.test.tsx` |
+| Nit | Modal `aria-labelledby` emitted even with no title/labelledBy element to point at | `165869c` | `frontend/src/components/Modal.test.tsx` |
+
+**Frontend after this round:** `npm test` — 83 test files, 572 tests, all
+passing. `npm run typecheck` — 0 errors. **Backend:** untouched this round
+(`git diff --stat main..HEAD -- backend/` is unchanged from Task 8's
+report — still exactly `middleware/auth.ts`, the three restore routes, and
+their test file).
+
+**Not fixed / disagreements:** none. Every blocker and should-fix item was
+implemented as specified; where the plan offered a choice (B3's "bump
+z-index or restore nesting", S5's "snapshot or reload") the report's
+`What changed` sections above state which was picked and why (z-index bump
+for B3, since the sibling-after-drawer structure itself was left in place
+rather than restructured into nesting; snapshot-and-reinstate for S5/S6,
+since none of the three affected pages have a `reload()`-capable list —
+`gens`/`bids`/`wonJobs` are lifted state, not `useApi`-backed).
