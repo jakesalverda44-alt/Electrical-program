@@ -46,6 +46,19 @@ describe('AddBidModal comps preview', () => {
   });
 });
 
+describe('AddBidModal required-field labelling (review round 1 S10)', () => {
+  it('the Project name input is reachable by its label text, including "required"', async () => {
+    get.mockResolvedValue({ data: [] });
+    render(<AddBidModal onClose={() => {}} onAdded={() => {}}/>);
+    // RequiredMark's visually-hidden "required" text is part of the label's
+    // accessible name, so it only reaches assistive tech if the <label> is
+    // actually associated with the <input> via htmlFor/id.
+    const input = screen.getByLabelText(/project name.*required/i);
+    expect(input).toBeTruthy();
+    expect(input.tagName).toBe('INPUT');
+  });
+});
+
 describe('AddBidModal GC autocomplete', () => {
   it('populates the GC datalist from the customers gc-names endpoint', async () => {
     get.mockImplementation((url: string) => {

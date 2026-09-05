@@ -7,19 +7,31 @@
 
 export type YearMode = 'auto' | 'always' | 'never';
 
+// A Postgres DATE column (won_jobs.date_won, leads.follow_up_date, etc.)
+// serializes over the API as UTC midnight for that calendar day, e.g.
+// "2026-06-11T00:00:00.000Z" — not as a bare "2026-06-11". Parsed as a real
+// instant, that is June 11 00:00 UTC, which is June 10 20:00 in New York:
+// a genuine calendar-day value renders one day early in any negative-UTC
+// timezone (all of the US). A real TIMESTAMPTZ with a non-midnight time (or
+// a non-Z offset) is a real instant and must NOT be re-anchored this way.
+const DATE_COLUMN_MIDNIGHT_UTC = /^\d{4}-\d{2}-\d{2}T00:00(:00)?(\.\d+)?Z$/;
+
 /**
  * Parses an ISO date/timestamp as a real calendar day.
  *
- * A bare `'YYYY-MM-DD'` (or anything 10 characters or shorter) is parsed as
- * *local* midnight — `new Date('2026-09-10')` alone is UTC midnight, which
- * renders as the previous day in any negative-UTC-offset timezone (all of
- * the US). A full timestamp (with a time and/or zone) is left as-is and
- * parsed normally, so it still converts to the correct local calendar day
- * instead of being truncated to whatever date the raw UTC digits show.
+ * A bare `'YYYY-MM-DD'` (or anything 10 characters or shorter), or a
+ * timestamp that is exactly UTC midnight for that day (the shape a DATE
+ * column round-trips as), is parsed as *local* midnight — `new
+ * Date('2026-09-10')` alone is UTC midnight, which renders as the previous
+ * day in any negative-UTC-offset timezone (all of the US). Any other full
+ * timestamp (a real time, or a non-Z offset) is left as-is and parsed
+ * normally, so it still converts to the correct local calendar day instead
+ * of being truncated to whatever date the raw UTC digits show.
  */
 export function dayOf(iso: string): Date {
   const s = String(iso);
-  return new Date(s.length <= 10 ? `${s}T00:00:00` : s);
+  const isDateOnly = s.length <= 10 || DATE_COLUMN_MIDNIGHT_UTC.test(s);
+  return new Date(isDateOnly ? `${s.slice(0, 10)}T00:00:00` : s);
 }
 
 export interface FmtDateOptions {
@@ -47,5 +59,9 @@ export function fmtDate(iso: string | null | undefined, opts: FmtDateOptions = {
  *  a missing/empty value. */
 export function fmtDateTime(iso: string | null | undefined): string {
   if (!iso) return '';
-  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  // `dayOf` (not `new Date`) so a DATE-column value passed here by mistake
+  // still renders its real calendar day instead of the previous day at a
+  // meaningless local time — a no-op for genuine timestamps, which `dayOf`
+  // already leaves untouched.
+  return dayOf(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }

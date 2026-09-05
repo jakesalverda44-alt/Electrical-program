@@ -8,10 +8,22 @@ import { STEP_ORDER, SaveState } from './shared';
 // Small colored pill — lifted to module scope (Task 5) so the Pricing tab's
 // FIRM/APPROX/VERIFY confidence chips reuse the exact styling the Agent 2
 // structured view already uses for its own confidence badges.
+//
+// Review round 1 B2: after Task 3 replaced the hardcoded hex colors here with
+// theme tokens (`var(--green)` etc.), `color + '22'` produced the literal
+// string `"var(--green)22"` — not valid CSS, so every caller's tinted
+// background silently disappeared. `color-mix` gives a token-based color the
+// same "color at low opacity over the panel" look a hex + alpha suffix gives
+// a literal hex color; hex callers (if any remain, or come back) keep the
+// original suffix behavior unchanged.
+function tintedBackground(color: string): string {
+  return color.startsWith('var(') ? `color-mix(in srgb, ${color} 13%, transparent)` : color + '22';
+}
+
 export function pill(label: string, color: string) {
   return (
     <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 99, fontSize: 11,
-      fontWeight: 700, background: color + '22', color }}>
+      fontWeight: 700, background: tintedBackground(color), color }}>
       {label}
     </span>
   );

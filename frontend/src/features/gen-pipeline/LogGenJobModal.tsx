@@ -70,7 +70,18 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
   };
 
   return (
-    <Modal open onClose={onClose} title="Log Existing Generator Job" isDirty={isDirty}>
+    <Modal
+      open onClose={onClose} title="Log Existing Generator Job" isDirty={isDirty}
+      // Review round 1 S11 — this form had its own `useDirtyDismiss` guard
+      // before the Task 1 migration to Modal, with this exact copy ("Discard
+      // your changes?" / "...discard them." / "Discard"). Passing it through
+      // explicitly keeps that copy; without it, Modal's generic "You have
+      // unsaved changes" / "Leave without saving" default is a silent
+      // wording change no task asked for.
+      discardTitle="Discard your changes?"
+      discardBody="You have unsaved changes in this form. Closing it will discard them."
+      discardLabel="Discard"
+    >
       {({ requestClose }) => (
         <form onSubmit={submit}>
           <div className="modal-body">
@@ -80,8 +91,8 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
               document is generated.
             </p>
             <div className="field">
-              <label>Customer<RequiredMark/></label>
-              <input value={f.customer} onChange={set('customer')} placeholder="e.g. Debra Gierach" autoFocus required/>
+              <label htmlFor="gen-customer">Customer<RequiredMark/></label>
+              <input id="gen-customer" value={f.customer} onChange={set('customer')} placeholder="e.g. Debra Gierach" autoFocus required/>
             </div>
             <div className="field-row">
               <div className="field">

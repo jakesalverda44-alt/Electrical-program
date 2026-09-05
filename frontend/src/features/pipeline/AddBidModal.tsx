@@ -79,8 +79,8 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
         <form onSubmit={submit}>
           <div className="modal-body">
             <div className="field">
-              <label>Project name<RequiredMark/></label>
-              <input value={f.name} onChange={set('name')} placeholder="e.g. Riverview Medical Office" autoFocus required/>
+              <label htmlFor="bid-name">Project name<RequiredMark/></label>
+              <input id="bid-name" value={f.name} onChange={set('name')} placeholder="e.g. Riverview Medical Office" autoFocus required/>
             </div>
             <div className="field-row">
               <div className="field">
