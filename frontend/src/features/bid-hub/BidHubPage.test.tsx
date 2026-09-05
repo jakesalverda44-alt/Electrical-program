@@ -5,7 +5,7 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-li
 import { MemoryRouter } from 'react-router-dom';
 import BidHubPage from './BidHubPage';
 import api from '../../api/client';
-import { Bid, Toast as ToastType } from '../../types';
+import { Bid, WonJob, Toast as ToastType } from '../../types';
 import { PcWorkspace } from '../preconstruction/constants';
 import { moneyShort } from '../../lib/money';
 import { __resetGlobalPcCachesForTests } from '../preconstruction/PcWorkspace';
@@ -52,7 +52,7 @@ const lostBid: Bid = {
 
 const noop = () => {};
 const baseProps = {
-  bidId: 'b1', bids: [bid], setBids: noop as never, setWonJobs: noop as never,
+  bidId: 'b1', bids: [bid], setBids: noop as never, wonJobs: [], setWonJobs: noop as never,
   onBidUpdated: noop, onNav: noop,
 };
 
@@ -257,8 +257,9 @@ describe('BidHubPage', () => {
   // now goes through the app's own ConfirmDialog instead of window.confirm,
   // and a successful delete's toast offers an "Undo" that restores the row.
   describe('Delete Bid — confirm dialog and Undo', () => {
-    function DeleteHarness({ initialBids }: { initialBids: Bid[] }) {
+    function DeleteHarness({ initialBids, initialWonJobs = [] }: { initialBids: Bid[]; initialWonJobs?: WonJob[] }) {
       const [bids, setBids] = useState<Bid[]>(initialBids);
+      const [wonJobs, setWonJobs] = useState<WonJob[]>(initialWonJobs);
       const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
       const [toast, setToast] = useState<ToastType | null>(null);
       // Override the module-mocked useShowToast for this describe block with a
@@ -269,21 +270,25 @@ describe('BidHubPage', () => {
       return (
         <>
           <BidHubPage
-            bidId="b1" bids={bids} setBids={setBids} setWonJobs={noop as never}
+            bidId="b1" bids={bids} setBids={setBids} wonJobs={wonJobs} setWonJobs={setWonJobs}
             onBidUpdated={noop} onNav={noop}
             pcData={pcData} onPcUpdate={(id, ws) => setPcData(prev => ({ ...prev, [id]: ws }))}
             pcDataLoaded
           />
           {toast && <ToastBar toast={toast} />}
+          {/* Review round 1 S5 test hook — OverviewTab doesn't render wonJobs
+              itself, so surface the count here to prove Undo restored the row
+              this delete removed, not just the bid. */}
+          <div data-testid="won-jobs-count">{wonJobs.length}</div>
         </>
       );
     }
 
-    function renderDeleteHarness() {
+    function renderDeleteHarness(initialWonJobs: WonJob[] = []) {
       return render(
         <MemoryRouter>
           <ConfirmProvider>
-            <DeleteHarness initialBids={[bid]} />
+            <DeleteHarness initialBids={[bid]} initialWonJobs={initialWonJobs} />
           </ConfirmProvider>
         </MemoryRouter>,
       );
@@ -325,6 +330,28 @@ describe('BidHubPage', () => {
       // The restored bid reappears — its name is back on the page (rendered by
       // OverviewTab's header once BidHubPage's `bids` state includes it again).
       await waitFor(() => expect(screen.getAllByText(bid.name).length).toBeGreaterThan(0));
+    });
+
+    // Review round 1 S5: OverviewTab's delete used to clear `wonJobs` on
+    // success but restore only the bid on Undo, dropping the won-job row —
+    // e.g. a restored project's commission tracking would vanish.
+    it('Undo also restores the won-job row the delete removed, not just the bid', async () => {
+      const wonJob: WonJob = {
+        id: 'w1', salesperson_name: 'Jane Owner', customer: bid.name, proposal_id: bid.id,
+        proposal_type: 'Electrical', value: 100000, date_won: '2026-08-01',
+      };
+      renderDeleteHarness([wonJob]);
+      expect(screen.getByTestId('won-jobs-count').textContent).toBe('1');
+
+      fireEvent.click(screen.getByText('Delete Bid'));
+      await waitFor(() => expect(screen.getByRole('alertdialog')).toBeTruthy());
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByText('Delete'));
+      await waitFor(() => expect(api.delete).toHaveBeenCalledWith(`/bids/${bid.id}`));
+      await waitFor(() => expect(screen.getByTestId('won-jobs-count').textContent).toBe('0'));
+
+      fireEvent.click(screen.getByText('Undo'));
+      await waitFor(() => expect(api.post).toHaveBeenCalledWith(`/bids/${bid.id}/restore`));
+      await waitFor(() => expect(screen.getByTestId('won-jobs-count').textContent).toBe('1'));
     });
   });
 });

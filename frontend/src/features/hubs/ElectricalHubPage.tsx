@@ -68,7 +68,7 @@ export default function ElectricalHubPage({
         )}
         {tab === 'projects' && (
           <ElecProjectsPage
-            bids={bids} setBids={setBids} setWonJobs={setWonJobs}
+            bids={bids} setBids={setBids} wonJobs={wonJobs} setWonJobs={setWonJobs}
             openId={recordId}
             onClearParam={onClearParam}
           />

@@ -52,7 +52,7 @@ function renderWorkspace() {
   render(
     <AppProviders user={user} showToast={t => { shown.push(t); }} settings={DEFAULT_APP_SETTINGS} reloadSettings={() => {}}>
       <UnsavedGuardProvider>
-        <ElecProjectsPage bids={[bid]} setBids={() => {}} setWonJobs={() => {}} openId={bid.id}/>
+        <ElecProjectsPage bids={[bid]} setBids={() => {}} wonJobs={[]} setWonJobs={() => {}} openId={bid.id}/>
       </UnsavedGuardProvider>
     </AppProviders>,
   );

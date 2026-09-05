@@ -95,13 +95,16 @@ const emptyData = (): ProjData => ({
 interface Props {
   bids: Bid[];
   setBids: (fn: (prev: Bid[]) => Bid[]) => void;
+  // Review round 1 S5 — readable, not just the setter, so a delete's Undo can
+  // restore the exact won-job row it removed instead of only the bid itself.
+  wonJobs: WonJob[];
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
   // Deep-link record id (from global search): opens that project's workspace.
   openId?: string | null;
   onClearParam?: () => void;
 }
 
-export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, onClearParam }: Props) {
+export default function ElecProjectsPage({ bids, setBids, wonJobs, setWonJobs, openId, onClearParam }: Props) {
   const showToast = useShowToast();
   const confirm = useConfirm();
   const awarded = useMemo(() => bids.filter(b => b.stage === 'awarded'), [bids]);
@@ -207,10 +210,23 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
     },
   );
 
-  const undoDeleteProject = async (id: string) => {
+  // Review round 1 S5/S6 — restores everything the delete removed locally
+  // (the bid at its original index, its won-job row, and its Kanban phase),
+  // not just the bid prepended to the front. `snapshot` is captured BEFORE
+  // the delete so it reflects state as it was at that moment.
+  const undoDeleteProject = async (
+    id: string,
+    snapshot: { originalIndex: number; removedWonJob?: WonJob; removedPhase?: ElecPhase },
+  ) => {
     try {
       const { data: restored } = await api.post<Bid>(`/bids/${id}/restore`);
-      setBids(prev => [restored, ...prev]);
+      setBids(prev => {
+        const next = [...prev];
+        next.splice(Math.min(snapshot.originalIndex, next.length), 0, restored);
+        return next;
+      });
+      if (snapshot.removedWonJob) setWonJobs(prev => [...prev, snapshot.removedWonJob!]);
+      if (snapshot.removedPhase) setPhases(prev => ({ ...prev, [restored.id]: snapshot.removedPhase! }));
       showToast({ title: 'Electrical project restored', sub: restored.name });
     } catch {
       showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore it from Settings → Trash instead.' });
@@ -223,6 +239,11 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
       onSuccess: (bid) => {
         setBids(prev => prev.filter(b => b.id !== bid.id));
         setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
+        setPhases(prev => {
+          const next = { ...prev };
+          delete next[bid.id];
+          return next;
+        });
         setSelectedId(null);
         setProjData(prev => {
           const next = { ...prev };
@@ -230,7 +251,14 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
           return next;
         });
       },
-      successToast: (bid) => ({ title: 'Electrical project deleted', sub: bid.name, action: { label: 'Undo', onClick: () => undoDeleteProject(bid.id) } }),
+      successToast: (bid) => {
+        const snapshot = {
+          originalIndex: bids.findIndex(b => b.id === bid.id),
+          removedWonJob: wonJobs.find(w => w.proposal_id === bid.id),
+          removedPhase: phases[bid.id],
+        };
+        return { title: 'Electrical project deleted', sub: bid.name, action: { label: 'Undo', onClick: () => undoDeleteProject(bid.id, snapshot) } };
+      },
       errorToast: (message) => ({ title: 'Delete failed', sub: message }),
     },
   );

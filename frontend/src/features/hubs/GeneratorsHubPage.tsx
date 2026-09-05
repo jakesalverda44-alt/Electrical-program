@@ -62,7 +62,7 @@ export default function GeneratorsHubPage({
         )}
         {tab === 'jobs' && (
           <GenProjectsPage
-            gens={gens} setGens={setGens} setWonJobs={setWonJobs}
+            gens={gens} setGens={setGens} wonJobs={wonJobs} setWonJobs={setWonJobs}
             openId={recordId}
             onClearParam={onClearParam}
           />

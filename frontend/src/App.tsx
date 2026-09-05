@@ -408,7 +408,7 @@ export default function App() {
         return (
           <BidHubPage
             bidId={viewParam}
-            bids={bids} setBids={setBids} setWonJobs={setWonJobs}
+            bids={bids} setBids={setBids} wonJobs={wonJobs} setWonJobs={setWonJobs}
             pcData={pcData} onPcUpdate={handlePcUpdate} onBidUpdated={handleBidUpdated}
             // Post-review B4 — true once /preconstruction/workspaces has
             // settled at least once (same signal the restore effect above

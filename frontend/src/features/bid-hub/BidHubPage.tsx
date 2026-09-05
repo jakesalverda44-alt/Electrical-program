@@ -26,6 +26,10 @@ interface Props {
   bidId: string;
   bids: Bid[];
   setBids: React.Dispatch<React.SetStateAction<Bid[]>>;
+  // Review round 1 S5/S6 — readable, not just the setter, so OverviewTab's
+  // delete Undo can restore the exact won-job row it removed and re-insert
+  // the bid at its original index.
+  wonJobs: WonJob[];
   setWonJobs: React.Dispatch<React.SetStateAction<WonJob[]>>;
   pcData: Record<string, PcWorkspace>;
   onPcUpdate: (bidId: string, ws: PcWorkspace) => void;
@@ -44,7 +48,7 @@ interface Props {
   pcDataLoaded: boolean;
 }
 
-export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, onPcUpdate, onBidUpdated, onNav, pcDataLoaded }: Props) {
+export default function BidHubPage({ bidId, bids, setBids, wonJobs, setWonJobs, pcData, onPcUpdate, onBidUpdated, onNav, pcDataLoaded }: Props) {
   const user = useUser();
   const showToast = useShowToast();
   const { settings } = useSettings();
@@ -119,7 +123,9 @@ export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, o
             <OverviewTab
               bid={bid}
               onBidUpdated={onBidUpdated}
+              bids={bids}
               setBids={setBids}
+              wonJobs={wonJobs}
               setWonJobs={setWonJobs}
               onNav={onNav}
               scope={pcData[bidId]?.scope ?? {}}

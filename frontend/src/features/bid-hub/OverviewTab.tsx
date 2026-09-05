@@ -46,7 +46,12 @@ function bidForm(bid: Bid) {
 interface OverviewProps {
   bid: Bid;
   onBidUpdated: (bid: Bid) => void;
+  // Review round 1 S5/S6 — readable, not just the setter, so a delete's Undo
+  // can restore the bid at its original (created_at DESC) index instead of
+  // prepending it, and restore the exact won-job row the delete removed.
+  bids: Bid[];
   setBids: React.Dispatch<React.SetStateAction<Bid[]>>;
+  wonJobs: WonJob[];
   setWonJobs: React.Dispatch<React.SetStateAction<WonJob[]>>;
   onNav: (v: string, recordId?: string) => void;
   scope: Record<string, string>;
@@ -64,7 +69,7 @@ function daysSince(ts?: string) {
   return ts ? Math.floor((Date.now() - new Date(ts).getTime()) / 86400000) : 0;
 }
 
-export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, onNav, scope, onGoTab }: OverviewProps) {
+export default function OverviewTab({ bid, onBidUpdated, bids, setBids, wonJobs, setWonJobs, onNav, scope, onGoTab }: OverviewProps) {
   const isTerminal = bid.stage === 'lost';
   const showToast = useShowToast();
   const confirm = useConfirm();
@@ -221,10 +226,19 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
     runCloseJob();
   };
 
-  const undoDeleteBid = async () => {
+  // Review round 1 S5/S6 — `snapshot` (captured before the delete) is what
+  // lets Undo restore the bid at its original index (not prepended) and
+  // restore the exact won-job row the delete removed, instead of just the
+  // bid on its own.
+  const undoDeleteBid = async (snapshot: { originalIndex: number; removedWonJob?: WonJob }) => {
     try {
       const { data: restored } = await api.post<Bid>(`/bids/${bid.id}/restore`);
-      setBids(prev => [restored, ...prev]);
+      setBids(prev => {
+        const next = [...prev];
+        next.splice(Math.min(snapshot.originalIndex, next.length), 0, restored);
+        return next;
+      });
+      if (snapshot.removedWonJob) setWonJobs(prev => [...prev, snapshot.removedWonJob!]);
       showToast({ title: 'Bid restored', sub: restored.name });
     } catch {
       showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore it from Settings → Trash instead.' });
@@ -239,7 +253,13 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
         setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
         onNav('electrical/bids');
       },
-      successToast: { title: 'Bid deleted', sub: bid.name, action: { label: 'Undo', onClick: undoDeleteBid } },
+      successToast: () => {
+        const snapshot = {
+          originalIndex: bids.findIndex(b => b.id === bid.id),
+          removedWonJob: wonJobs.find(w => w.proposal_id === bid.id),
+        };
+        return { title: 'Bid deleted', sub: bid.name, action: { label: 'Undo', onClick: () => undoDeleteBid(snapshot) } };
+      },
       errorToast: (message) => ({ title: 'Delete failed', sub: message }),
     },
   );
