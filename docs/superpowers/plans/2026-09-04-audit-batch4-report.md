@@ -342,3 +342,137 @@ new migration `database/migrations/100_deleted_by.sql`, new
    carry. Converting them would either strip their interactivity or turn
    `Badge` into something it isn't. The 3 genuine status/label pills in that
    file were converted; these 2 controls were not.
+
+---
+
+## Task 4 — One date formatter, one size formatter, money everywhere
+
+**Files:** new `frontend/src/lib/date.ts` (+ `date.test.ts`), new
+`frontend/src/lib/format.ts` (+ `format.test.ts`), `frontend/src/lib/money.ts`
+(+ new `money.test.ts`), and every file that defined a local `fmtDate` (8),
+`dayOf` (4), or `fmtSize` (5): `LeadsPage.tsx`, `CustomerHub.tsx`,
+`DocsPage.tsx`, `ElecProjectsPage.tsx` (2 definitions), `GenOverviewTab.tsx`,
+`ElecOverviewTab.tsx`, `HomeKpis.tsx`, `RecordFiles.tsx`; the 3 identical
+builder `fmt` definitions (`proposalChrome.tsx`, `BuilderPage.tsx`,
+`EvBuilderPage.tsx`, plus `proposalChrome.tsx`'s `fmtDec`); `BidCompare.tsx`
+and `PcWorkspace.tsx`'s money sites; and (deviation — see below)
+`ProposalPreview.tsx` (one rename).
+
+### What changed
+
+- **`lib/date.ts`**: `dayOf(iso)` parses a bare `'YYYY-MM-DD'` (≤10 chars) as
+  local midnight (avoiding the classic `new Date('2026-09-10')`-is-UTC
+  off-by-one-day bug) and a full timestamp as the real instant — this exact
+  dual behavior already existed, spelled differently, across the 8 old
+  `fmtDate`/`dayOf` pairs (some sliced unconditionally to 10 chars — safe
+  only because they only ever received plain `DATE` columns; others parsed
+  the full string directly — required for real `TIMESTAMPTZ` columns).
+  Unifying behind a single length check preserves both. `fmtDate(iso, { year
+  })` supports `'auto'` (new — year shown only when it differs from the
+  current year), `'always'`, and `'never'`. `fmtDateTime(iso)` covers the one
+  "+ time" case (`RecordFiles`/`CustomerHub`-style timelines don't use it,
+  but it's available for anything that does going forward).
+- **`lib/format.ts`**: `fmtSize(bytes)`, the same B/KB/MB thresholds all 5
+  duplicates already agreed on.
+- **`lib/money.ts`**: added `moneyPrecise` (cents only when present — the
+  builders' `fmt`) and `moneyDec` (always 2 decimals — the printed
+  proposal's `fmtDec`), both via `Intl.NumberFormat` so they inherit the
+  currency-setting awareness the rest of `money.ts` already has, and get
+  "-$200.00" (not "$-200.00") sign placement for free.
+- **Every local definition replaced by an import**, each call site given the
+  `year` mode matching its *existing* rendered output (no visual change):
+  `'never'` for `LeadsPage`/`GenOverviewTab`/`ElecOverviewTab` (which never
+  showed a year); `'always'` for `CustomerHub`/`DocsPage`/`ElecProjectsPage`/`RecordFiles`
+  (which always did). `ElecProjectsPage.tsx`'s two local `fmtSize`s (a
+  Drive-photo one prefixing `' · '`, a documents-table one) both now call the
+  shared `fmtSize`, with the `' · '` prefix logic kept as a 2-line wrapper
+  (`driveSizeLabel`) so it isn't itself named `fmtSize`/`fmtDate` (which
+  would re-trip the "no local redefinition" check).
+- **`proposalChrome.tsx`**'s `fmt`/`fmtDec` are now `export const fmt =
+  moneyPrecise` / `export const fmtDec = moneyDec` — re-exported under their
+  original names rather than changing them, since `ProposalPreview.tsx` and
+  `EvProposalPreview.tsx` import `fmt`/`fmtDec` from this module several
+  dozen times each between them. `BuilderPage.tsx`/`EvBuilderPage.tsx`'s
+  local `fmt` became `import { moneyPrecise as fmt } from '../../lib/money'`.
+- **`BidCompare.tsx`**: the genuine dollar values that were hand-formatted
+  (`Avg labor rate` $/hr, three `$/SF` median tiles, one `$/SF` per-job
+  column, one Cost-Drivers `$/SF` inline figure) now go through `moneyDec`.
+  Left alone, per the plan ("percentages keep `toFixed`"): labor/journeyman/apprentice
+  hours, crew size, labor risk ratio, item counts, and every `/1k SF`
+  normalized metric — none of those are dollar values.
+- **`PcWorkspace.tsx`**: one remaining hand-formatted `$/sf` metric (project
+  history table) now uses `moneyFull`. Everything else that looked like a
+  money site on inspection was not one of the plan's two named categories:
+  a hardcoded-hex hand-format precedent list turned out to already use
+  `moneyFull` (12 call sites, untouched); an inline file-size formatter
+  (`f.size > 1024*1024 ? ... : ...`) is a size, not money, and out of Task
+  4.3's explicit "money sites" scope for this file. See the deviation below
+  for the two sites left alone on purpose.
+
+### Tests
+
+- `frontend/src/lib/date.test.ts` (9 tests): `dayOf` parses a bare date as
+  local midnight and a full timestamp as the real instant (not just its date
+  digits); `fmtDate` returns `''` for a missing value and correctly applies
+  `'never'`/`'always'`/`'auto'` (both branches of `'auto'`, using
+  `vi.useFakeTimers()` to pin "today"); `fmtDateTime` returns `''` for a
+  missing value and includes both a date and a time.
+- `frontend/src/lib/format.test.ts` (4 tests): falsy → `''`, and the B/KB/MB
+  thresholds.
+- `frontend/src/lib/money.test.ts` (8 tests): `moneyPrecise` omits/keeps
+  cents correctly, puts the sign outside the symbol, and respects a changed
+  currency; `moneyDec` always shows 2 decimals and the correct sign
+  placement; a smoke check that `moneyFull`/`moneyShort` are unaffected.
+- `frontend/src/features/dateFormatterDuplication.test.ts` (3 tests) — the
+  plan's grep check as a real, permanent test (same pattern as
+  `statusColorTokens.test.ts`): scans every `.ts`/`.tsx` under `features/`
+  for a local `function`/`const` definition of `fmtDate`, `fmtSize`, or
+  `dayOf` and fails with a file:line report if any remain, a self-check of
+  the scanner (including that it does *not* flag `fmtCalendarDateLong` or a
+  plain import/call), and a sanity floor on files scanned.
+- Existing suites exercising the changed files (`BidCompare.test.tsx`,
+  `builder/genCalc.test.ts`/`evCalc.test.ts`, `AddBidModal.test.tsx`, every
+  `PcWorkspace*.test.tsx`) all pass unmodified — output format is unchanged
+  for every value asserted in those tests.
+
+### Verification / grep checks (before → after)
+
+- `grep -rnE "function (fmtDate|fmtSize|dayOf)|const (fmtDate|fmtSize|dayOf) =" frontend/src/features`
+  → **17 → 0** (8 `fmtDate` + 4 `dayOf` + 5 `fmtSize` = 17 local definitions
+  found and removed; the plan's own count was "16," undercounting by one —
+  `CustomerHub.tsx`'s `fmtDate`/`fmtSize` pair wasn't in the audit's
+  originally-named file list but matched the same pattern and is fixed too).
+- Same grep, run against all of `frontend/src` (not just `features/`) → 0.
+
+### Deviations from the plan (Task 4)
+
+1. **Renamed `proposalChrome.tsx`'s `fmtDateLocal` → `fmtCalendarDateLong`**
+   (and its one call site in `ProposalPreview.tsx`). It is a genuinely
+   different formatter (long month name, for a printed contract's promo-date
+   range) that the plan didn't ask to consolidate — but its old name matched
+   the checklist's grep pattern as a *substring* (`function fmtDate` is a
+   prefix of `function fmtDateLocal`), so it would have shown up as a false
+   positive in the "0 remaining" check. Renaming was simpler and safer than
+   trying to make the grep pattern smarter.
+2. **Two AI-cost-per-request table cells in `PcWorkspace.tsx` (an AI
+   Settings/usage panel) were deliberately left as raw `` `$${x.toFixed(4)}` ``**,
+   not moved to `moneyDec`/`moneyPrecise`. Those values are fractions of a
+   cent (e.g. $0.0023 for one Claude API call) and both shared helpers cap at
+   2 decimal places — routing them through either would round every row to
+   "$0.00", destroying the one thing that table exists to show. This is
+   internal AI-spend accounting, not a customer-facing or currency-setting-sensitive
+   dollar amount, so leaving it as a raw 4-decimal format is the correct call,
+   not an oversight.
+3. **`ElecProjectsPage.tsx`'s second `fmtSize` (bytes-based, documents table)
+   changes an edge-case output**: the old inline version
+   (`b >= 1048576 ? MB : Math.round(b/1024)+' KB'`) had no "show bytes" case
+   at all — a file under 1KB rendered "0 KB". The shared `fmtSize` correctly
+   shows "512 B" instead. Effectively unobservable in practice (document
+   uploads are never sub-1KB), but flagging the exact behavior change for
+   completeness.
+4. Also fixed one adjacent raw date-format call in the same
+   `ElecProjectsPage.tsx` documents table (`new Date(doc.created_at).toLocaleDateString(...)`,
+   sitting directly next to the `fmtSize` call being replaced) to use the
+   shared `fmtDate` too — it wasn't a named `fmtDate` function so it didn't
+   violate the grep check, but leaving a hand-rolled date format one line
+   away from the fix would have defeated the point.

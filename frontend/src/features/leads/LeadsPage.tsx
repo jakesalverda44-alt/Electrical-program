@@ -10,6 +10,7 @@ import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_COL
 import AddLeadModal from './AddLeadModal';
 import LeadDetailDrawer from './LeadDetailDrawer';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { dayOf, fmtDate } from '../../lib/date';
 
 interface Props {
   onNav: (view: string) => void;
@@ -21,15 +22,6 @@ interface Props {
   onConverted?: (gen: Gen) => void;
 }
 
-// Postgres DATE columns arrive serialized as ISO ("2026-06-11T00:00:00.000Z"); take the
-// calendar-day portion so date math doesn't produce Invalid Date / NaN.
-function dayOf(d: string) { return new Date(d.slice(0, 10) + 'T00:00:00'); }
-
-function fmtDate(d?: string | null) {
-  if (!d) return null;
-  return dayOf(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
 function followUpMeta(d?: string | null): { label: string; color: string } | null {
   if (!d) return null;
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -38,7 +30,7 @@ function followUpMeta(d?: string | null): { label: string; color: string } | nul
   if (days < 0) return { label: `Overdue ${-days}d`, color: 'var(--red)' };
   if (days === 0) return { label: 'Today', color: 'var(--amber)' };
   if (days === 1) return { label: 'Tomorrow', color: 'var(--amber)' };
-  return { label: fmtDate(d)!, color: 'var(--text3)' };
+  return { label: fmtDate(d, { year: 'never' }), color: 'var(--text3)' };
 }
 
 // There's no dedicated "stage entered" timestamp — last_activity_at (falling back to

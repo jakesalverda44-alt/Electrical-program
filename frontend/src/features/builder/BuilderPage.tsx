@@ -13,19 +13,7 @@ import { Gen, WonJob } from '../../types';
 import { useSettings, useShowToast } from '../../contexts/AppContext';
 import { parseAddress } from '../../lib/address';
 import { flTaxRate } from '../../lib/flSalesTax';
-
-// Sign outside the currency symbol, matching the proposal document: "-$200", not "$-200".
-// Shows cents only when an amount has them, so a $15,430 job stays readable while a
-// $675.50 one is stated exactly. The proposal document itself always prints two decimals
-// (fmtDec) — this is the in-app summary chrome.
-function fmt(n: number) {
-  const abs = Math.abs(n);
-  const hasCents = Math.round(abs * 100) % 100 !== 0;
-  return (n < 0 ? '-$' : '$') + abs.toLocaleString('en-US', {
-    minimumFractionDigits: hasCents ? 2 : 0,
-    maximumFractionDigits: 2,
-  });
-}
+import { moneyPrecise as fmt } from '../../lib/money';
 
 interface Props {
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;

@@ -2,6 +2,7 @@ import React from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Gen, WonJob } from '../../types';
 import { moneyFull, moneyShort as money } from '../../lib/money';
+import { dayOf } from '../../lib/date';
 import { useUser, useSettings } from '../../contexts/AppContext';
 import '../dashboard/sales-dashboard.css';
 
@@ -9,10 +10,6 @@ import '../dashboard/sales-dashboard.css';
 const MANAGER_ROLES = ['owner', 'administrator', 'sales_manager'];
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-// date_won is a Postgres DATE serialized as ISO; take the calendar day so the
-// browser timezone can't shift it into the wrong month.
-function dayOf(d: string) { return new Date(String(d).slice(0, 10) + 'T00:00:00'); }
 
 /** "▲ 12% vs May" style delta chip; hidden when there's nothing to compare. */
 function Delta({ cur, prev, vs }: { cur: number; prev: number; vs: string }) {

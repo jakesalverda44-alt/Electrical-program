@@ -9,6 +9,8 @@ import { useMutation } from '../../hooks/useMutation';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import { moneyFull, moneyShort as money } from '../../lib/money';
+import { fmtDate } from '../../lib/date';
+import { fmtSize } from '../../lib/format';
 
 // ── Phase → Status mapping ───────────────────────────────────────
 const FIELD_PHASES = new Set(['rough','inspection','trim','final']);
@@ -58,12 +60,6 @@ interface KeyMaterial  { id: string; name: string; supplier: string; po_number: 
 interface ProjDoc   { id: string; name: string; display_name: string; category: string; file_size: number; file_type: string; uploaded_by: string; created_at: string; }
 interface ProjComm  { id: string; kind: string; subject: string; body: string; author: string; created_at: string; }
 interface DrivePhoto { id: string; name: string; mimeType: string; webViewLink?: string; thumbnailLink?: string; size?: string; createdTime?: string; }
-
-// ── Helpers ──────────────────────────────────────────────────────
-function fmtDate(s: string|null) {
-  if (!s) return '—';
-  return new Date(s.split('T')[0]+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-}
 
 const INPUT: React.CSSProperties = {
   font:'inherit', fontSize:13, fontWeight:600, color:'var(--text)',
@@ -568,7 +564,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                         {co.amount>=0?'+':''}{moneyFull(co.amount)}
                       </td>
                       <td><StatusPill status={co.status}/></td>
-                      <td className="sub">{fmtDate(co.submitted_date)}</td>
+                      <td className="sub">{fmtDate(co.submitted_date, { year: 'always' }) || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -638,7 +634,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                           <option value="rejected">Rejected</option>
                         </select>
                       </td>
-                      <td className="sub">{fmtDate(co.submitted_date)}</td>
+                      <td className="sub">{fmtDate(co.submitted_date, { year: 'always' }) || '—'}</td>
                       <td>
                         <button onClick={async()=>{
                           await api.delete(`/projects/elec/${id}/change-orders/${co.id}`);
@@ -768,8 +764,8 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                       <td className="sub" style={{fontWeight:800}}>{rfi.rfi_number}</td>
                       <td><span className="nm">{rfi.question}</span></td>
                       <td className="sub">{rfi.submitted_to||'—'}</td>
-                      <td className="sub">{fmtDate(rfi.submitted_date)}</td>
-                      <td className="sub">{fmtDate(rfi.due_date)}</td>
+                      <td className="sub">{fmtDate(rfi.submitted_date, { year: 'always' }) || '—'}</td>
+                      <td className="sub">{fmtDate(rfi.due_date, { year: 'always' }) || '—'}</td>
                       <td>
                         <select value={rfi.status}
                           onChange={async e=>{
@@ -836,8 +832,8 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                       <td><span className="nm">{km.name}</span></td>
                       <td className="sub">{km.supplier||'—'}</td>
                       <td className="sub">{km.po_number||'—'}</td>
-                      <td className="sub">{fmtDate(km.order_date)}</td>
-                      <td className="sub">{fmtDate(km.eta)}</td>
+                      <td className="sub">{fmtDate(km.order_date, { year: 'always' }) || '—'}</td>
+                      <td className="sub">{fmtDate(km.eta, { year: 'always' }) || '—'}</td>
                       <td><StatusPill status={km.status}/></td>
                       <td>
                         <button onClick={async()=>{
@@ -897,7 +893,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                 <div key={fn.id} className="panel" style={{ padding:'14px 18px' }}>
                   <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
                     <div style={{ display:'flex', gap:16, alignItems:'center' }}>
-                      <span style={{ fontSize:13, fontWeight:800, color:'var(--text)' }}>{fmtDate(fn.note_date)}</span>
+                      <span style={{ fontSize:13, fontWeight:800, color:'var(--text)' }}>{fmtDate(fn.note_date, { year: 'always' }) || '—'}</span>
                       {fn.weather && <span style={{ fontSize:12, color:'var(--text3)', fontWeight:600 }}>{fn.weather}</span>}
                       {fn.crew_size > 0 && <span style={{ fontSize:12, color:'var(--text3)', fontWeight:600 }}><Icon name="users" size={11} stroke={1.8}/> {fn.crew_size} crew</span>}
                       <span style={{ fontSize:12, color:'var(--text3)', fontWeight:600 }}>by {fn.author}</span>
@@ -1073,12 +1069,12 @@ function PhotosTab({ bid, photos, onPhotosChange, showToast }: {
   const [lightbox, setLightbox] = useState<DrivePhoto | null>(null);
 
   const isImage = (m: string) => m.startsWith('image/');
-  const fmtSize = (s?: string) => {
-    if (!s) return '';
-    const n = parseInt(s);
-    return isNaN(n) ? '' : n >= 1048576 ? ` · ${(n/1048576).toFixed(1)} MB` : ` · ${Math.round(n/1024)} KB`;
+  // Drive returns size as a string; ' · 48 KB' (with the leading separator)
+  // reads inline after the date, or nothing when there's no size to show.
+  const driveSizeLabel = (s?: string) => {
+    const label = fmtSize(s ? parseInt(s) : undefined);
+    return label ? ` · ${label}` : '';
   };
-  const fmtDate = (s?: string) => s ? new Date(s).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
 
   const { run: runUpload, saving: uploading } = useMutation(
     async (files: File[]) => {
@@ -1160,7 +1156,7 @@ function PhotosTab({ bid, photos, onPhotosChange, showToast }: {
               {/* Info */}
               <div style={{ padding:'10px 11px 11px' }}>
                 <div style={{ fontSize:12, fontWeight:700, color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', marginBottom:3 }} title={p.name}>{p.name}</div>
-                <div style={{ fontSize:11, color:'var(--text3)', fontWeight:600 }}>{fmtDate(p.createdTime)}{fmtSize(p.size)}</div>
+                <div style={{ fontSize:11, color:'var(--text3)', fontWeight:600 }}>{fmtDate(p.createdTime, { year: 'always' })}{driveSizeLabel(p.size)}</div>
               </div>
             </div>
           ))}
@@ -1241,7 +1237,6 @@ function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
     },
   );
 
-  const fmtSize = (b: number) => b >= 1048576 ? (b/1048576).toFixed(1)+' MB' : Math.round(b/1024)+' KB';
   const extOf = (name: string) => (name.split('.').pop() ?? 'FILE').toUpperCase();
 
   return (
@@ -1266,7 +1261,7 @@ function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
                   <td className="nm"><Icon name="file" size={13} stroke={1.8}/> {doc.display_name || doc.name}</td>
                   <td><span style={{ fontSize:10, fontWeight:800, padding:'2px 7px', borderRadius:5, background:'var(--blue-soft)', color:'var(--blue)', textTransform:'uppercase' }}>{extOf(doc.name)}</span></td>
                   <td className="sub">{fmtSize(doc.file_size)}</td>
-                  <td className="sub">{new Date(doc.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</td>
+                  <td className="sub">{fmtDate(doc.created_at, { year: 'always' })}</td>
                   <td style={{ display:'flex', gap:6 }}>
                     <button onClick={() => view(doc)} style={{ border:'none', background:'none', cursor:'pointer', color:'var(--blue)', padding:4, borderRadius:6 }} title="View"><Icon name="eye" size={14} stroke={1.9}/></button>
                     <button onClick={() => download(doc)} style={{ border:'none', background:'none', cursor:'pointer', color:'var(--text2)', padding:4, borderRadius:6 }} title="Download"><Icon name="cloud" size={13} stroke={1.8}/></button>

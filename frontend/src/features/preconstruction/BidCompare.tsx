@@ -7,7 +7,7 @@ import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
 import { PROJECT_TYPES } from './constants';
-import { moneyFull } from '../../lib/money';
+import { moneyFull, moneyDec } from '../../lib/money';
 import { per1kSf, median, deltaVsMedian, isOutlier } from '../bid-hub/compareMath';
 
 interface Comparable {
@@ -85,7 +85,7 @@ const COST_ROWS: CostRowSpec[] = [
   { label: 'Labor hours',       raw: j => num(j.labor_hours),      mode: 'hoursPer1k', fmt: v => v.toLocaleString() },
   { label: 'Journeyman hours',  raw: j => num(j.journeyman_hours), mode: 'hoursPer1k', fmt: v => v.toLocaleString() },
   { label: 'Apprentice hours',  raw: j => num(j.apprentice_hours), mode: 'hoursPer1k', fmt: v => v.toLocaleString() },
-  { label: 'Avg labor rate',    raw: j => num(j.avg_labor_rate),   mode: 'raw', fmt: v => `$${v.toFixed(2)}/hr` },
+  { label: 'Avg labor rate',    raw: j => num(j.avg_labor_rate),   mode: 'raw', fmt: v => `${moneyDec(v)}/hr` },
   { label: 'Avg crew size',     raw: j => num(j.avg_crew_size),    mode: 'raw', fmt: v => v.toFixed(1) },
   { label: 'Labor risk ratio',  raw: j => num(j.labor_risk_ratio), mode: 'raw', fmt: v => v.toFixed(2) },
 ];
@@ -284,7 +284,7 @@ export default function BidCompare({ bidId, brand, projectType }: {
               <div style={{ fontSize: 20, fontWeight: 800, marginTop: 2 }}>
                 {(() => {
                   const m = median(comps.map(j => perSf(j.amount, j.sq_ft)).filter((v): v is number => v !== null));
-                  return m !== null ? `$${m.toFixed(2)}` : '—';
+                  return m !== null ? moneyDec(m) : '—';
                 })()}
               </div>
             </div>
@@ -305,7 +305,7 @@ export default function BidCompare({ bidId, brand, projectType }: {
               return (
                 <div key={spec.label}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: .3 }}>{spec.label} median $/SF</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, marginTop: 2 }}>{m !== null ? `$${m.toFixed(2)}` : '—'}</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, marginTop: 2 }}>{m !== null ? moneyDec(m) : '—'}</div>
                 </div>
               );
             })}
@@ -357,7 +357,7 @@ export default function BidCompare({ bidId, brand, projectType }: {
                 {([
                   ['Square feet',   (j: CompareJob) => j.sq_ft ? j.sq_ft.toLocaleString() : '—'],
                   ['Contract',      (j: CompareJob) => j.amount ? moneyFull(Number(j.amount)) : '—'],
-                  ['$ / SF',        (j: CompareJob) => { const v = perSf(j.amount, j.sq_ft); return v ? `$${v.toFixed(2)}` : '—'; }],
+                  ['$ / SF',        (j: CompareJob) => { const v = perSf(j.amount, j.sq_ft); return v ? moneyDec(v) : '—'; }],
                   ['Takeoff items', (j: CompareJob) => (j.categories ?? []).reduce((s, c) => s + c.itemCount, 0) || '—'],
                 ] as [string, (j: CompareJob) => React.ReactNode][]).map(([label, fn]) => (
                   <tr key={label}>
@@ -398,7 +398,7 @@ export default function BidCompare({ bidId, brand, projectType }: {
                                   {spec.fmt(raw)}
                                   {spec.mode === 'dollarPerSf' && (
                                     norm !== null
-                                      ? <span style={{ color: 'var(--text3)' }}> · ${norm.toFixed(2)}/SF</span>
+                                      ? <span style={{ color: 'var(--text3)' }}> · {moneyDec(norm)}/SF</span>
                                       : null
                                   )}
                                   {spec.mode === 'hoursPer1k' && (

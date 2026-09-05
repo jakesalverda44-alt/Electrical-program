@@ -5,6 +5,8 @@ import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
 import { useShowToast } from '../../contexts/AppContext';
+import { fmtDate } from '../../lib/date';
+import { fmtSize } from '../../lib/format';
 
 type DocCategory = 'plans' | 'contract' | 'proposal' | 'permit' | 'invoice' | 'other' | 'change_order' | 'submittal' | 'rfi' | 'photo';
 
@@ -35,14 +37,6 @@ const CAT_META: Record<DocCategory, { label: string; color: string; bg: string }
   other:        { label: 'Other',             color: 'var(--text3)',   bg: 'var(--surface2)'           },
 };
 
-function fmtSize(bytes: number) {
-  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  if (bytes >= 1024) return Math.round(bytes / 1024) + ' KB';
-  return bytes + ' B';
-}
-function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
 function extOf(name: string) { return (name.split('.').pop() ?? 'FILE').toUpperCase(); }
 const EXT_ICON: Record<string, string> = { PDF:'doc', DWG:'building', DOCX:'doc', XLSX:'dollar', PNG:'file', JPG:'file' };
 
@@ -370,7 +364,7 @@ export default function DocsPage({ bids, gens }: Props) {
                                 </span>
                               : '—'}
                           </td>
-                          <td className="sub">{fmtDate(doc.created_at)}</td>
+                          <td className="sub">{fmtDate(doc.created_at, { year: 'always' })}</td>
                           <td className="sub">{fmtSize(doc.file_size)}</td>
                           <td>
                             <button onClick={e => { e.stopPropagation(); deleteDoc(doc.id); }}
@@ -413,7 +407,7 @@ export default function DocsPage({ bids, gens }: Props) {
                   ['Category',  CAT_META[selected.category].label],
                   ['Linked To', selected.linked_name || '—'],
                   ['Division',  selected.div === 'elec' ? 'Electrical' : selected.div === 'gen' ? 'Generator' : 'General'],
-                  ['Uploaded',  fmtDate(selected.created_at)],
+                  ['Uploaded',  fmtDate(selected.created_at, { year: 'always' })],
                   ['By',        selected.uploaded_by],
                 ].map(([k, v]) => (
                   <div key={k} style={{ marginBottom: 12 }}>

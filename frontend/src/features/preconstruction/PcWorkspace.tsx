@@ -3016,7 +3016,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                             <td className="sub">{String(row.year ?? '—')}</td>
                             <td className="num" style={{ textAlign: 'right' }}>{sqFt ? sqFt.toLocaleString() : '—'}</td>
                             <td className="num" style={{ textAlign: 'right', fontWeight: 800 }}>{moneyFull(amount)}</td>
-                            <td className="num" style={{ textAlign: 'right', color: 'var(--text3)' }}>{perSF ? `$${perSF.toFixed(0)}/sf` : '—'}</td>
+                            <td className="num" style={{ textAlign: 'right', color: 'var(--text3)' }}>{perSF ? `${moneyFull(perSF)}/sf` : '—'}</td>
                           </tr>
                           {isExpanded && subtotals && (
                             <tr>

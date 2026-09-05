@@ -1,4 +1,5 @@
 import React from 'react';
+import { moneyPrecise, moneyDec } from '../../lib/money';
 
 // Chrome shared by every proposal document, whatever it sells: the branded page header,
 // section headings, the signature block, the clause helpers and the money formatters.
@@ -20,23 +21,19 @@ export const GRAY_L = '#F3F4F6';
 export const BLUE_L = '#EFF6FF';
 export const BLUE_M = '#DBEAFE';
 
-// The sign sits outside the currency symbol — a credit line reads "-$200.00", not
-// "$-200.00". Only a negative custom line item can reach these as a negative today.
-export function fmt(n: number) {
-  const abs = Math.abs(n);
-  const hasCents = Math.round(abs * 100) % 100 !== 0;
-  return (n < 0 ? '-$' : '$') + abs.toLocaleString('en-US', {
-    minimumFractionDigits: hasCents ? 2 : 0,
-    maximumFractionDigits: 2,
-  });
-}
-export function fmtDec(n: number) {
-  return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
+// Task 4 (audit ux #9) — these moved into lib/money.ts (as moneyPrecise/
+// moneyDec) so the printed proposal document respects the currency setting
+// like the rest of the app; re-exported under their original names here
+// since ProposalPreview/EvProposalPreview import `fmt`/`fmtDec` from this
+// module dozens of times each. The sign sits outside the currency symbol —
+// a credit line reads "-$200.00", not "$-200.00" — which Intl.NumberFormat
+// gets right without the manual sign-handling this used to need.
+export const fmt = moneyPrecise;
+export const fmtDec = moneyDec;
 
 // Parses a bare "YYYY-MM-DD" as a local calendar date (not UTC midnight) so the
 // displayed promo date can't shift a day off in negative-UTC timezones.
-export function fmtDateLocal(iso: string): string {
+export function fmtCalendarDateLong(iso: string): string {
   if (!iso) return '';
   const [y, m, d] = iso.split('-').map(Number);
   if (!y || !m || !d) return iso;
