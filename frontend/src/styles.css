@@ -150,6 +150,10 @@ button{font-family:inherit}
 .badge.normal{background:var(--blue-soft);color:#8FB4F5}
 .badge.won{background:var(--green-soft);color:#5BD6A0}
 .badge.lost{background:rgba(124,138,163,.16);color:#9DABC4}
+/* Task 3 (audit ux #7) — the `Badge` component's compact size, for chip/pill
+   contexts (a stage dot, an email chip) that used a tighter inline pill than
+   the board-card `.badge` default above. */
+.badge.sm{font-size:10.5px;padding:2px 8px;border-radius:20px;font-weight:700}
 
 /* ── Dashboard ─────────────────────────────────────────── */
 .dash{padding:22px 28px 32px;display:flex;flex-direction:column;gap:18px}

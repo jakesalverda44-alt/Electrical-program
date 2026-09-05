@@ -1810,7 +1810,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       View Results <Icon name="arrow" size={13} stroke={2}/>
                     </button>
                     <button className="btn ghost" onClick={rerunAI}
-                      style={{ fontSize: 13, color: 'var(--red, #EF4444)', borderColor: 'rgba(239,68,68,.35)' }}
+                      style={{ fontSize: 13, color: 'var(--red)', borderColor: 'rgba(224,106,106,.35)' }}
                       title="Delete previous results and run a fresh AI analysis">
                       Re-run Analysis
                     </button>
@@ -2061,7 +2061,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   const parsed = parseAgentJson(t.output);
 
                   const riskColor = (r: string) =>
-                    r === 'HIGH' ? '#EF4444' : r === 'MEDIUM' ? '#F59E0B' : 'var(--green)';
+                    r === 'HIGH' ? 'var(--red)' : r === 'MEDIUM' ? 'var(--amber)' : 'var(--green)';
 
                   // ── Agent 2 structured view ──────────────────────────────
                   if (t.key === 'agent2' && parsed) {
@@ -2082,7 +2082,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     return (
                       <div key={t.key} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                          {confidence !== undefined && pill(`Confidence: ${Math.round(confidence * 100)}%`, confidence >= 0.75 ? '#10B981' : confidence >= 0.5 ? '#F59E0B' : '#EF4444')}
+                          {confidence !== undefined && pill(`Confidence: ${Math.round(confidence * 100)}%`, confidence >= 0.75 ? 'var(--green)' : confidence >= 0.5 ? 'var(--amber)' : 'var(--red)')}
                           <button onClick={() => copyToClipboard(t.output!, t.key)}
                             style={{ marginLeft: 'auto', border: '1px solid var(--border2)', borderRadius: 7,
                               background: 'var(--surface)', color: copied === t.key ? 'var(--green)' : 'var(--text3)',
@@ -2124,7 +2124,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                                     <td style={{ padding: '5px 8px', fontSize: 11 }}>{String(row.spec ?? '')}</td>
                                     <td style={{ padding: '5px 8px', fontWeight: 700 }}>{String(row.qty ?? '')}</td>
                                     <td style={{ padding: '5px 8px' }}>{String(row.unit ?? '')}</td>
-                                    <td style={{ padding: '5px 8px' }}>{pill(String(row.confidence ?? ''), row.confidence === 'VERIFIED' ? '#10B981' : '#F59E0B')}</td>
+                                    <td style={{ padding: '5px 8px' }}>{pill(String(row.confidence ?? ''), row.confidence === 'VERIFIED' ? 'var(--green)' : 'var(--amber)')}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -2149,8 +2149,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                           </div>
                         )}
                         {manual && manual.length > 0 && (
-                          <div style={{ background: '#FEF3C722', border: '1px solid #F59E0B44', borderRadius: 10, padding: '12px 16px' }}>
-                            <div style={{ fontSize: 12, fontWeight: 800, color: '#F59E0B', marginBottom: 8 }}>Manual Count Required</div>
+                          <div style={{ background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.4)', borderRadius: 10, padding: '12px 16px' }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--amber)', marginBottom: 8 }}>Manual Count Required</div>
                             {manual.map((m, i) => <div key={i} style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 2 }}>• {m}</div>)}
                           </div>
                         )}
@@ -2174,8 +2174,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       <div key={t.key} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                           {overallRisk && pill(`Overall Risk: ${overallRisk}`, riskColor(overallRisk))}
-                          {confidence !== undefined && pill(`Confidence: ${Math.round(confidence * 100)}%`, confidence >= 0.75 ? '#10B981' : confidence >= 0.5 ? '#F59E0B' : '#EF4444')}
-                          {readyToSubmit !== undefined && pill(readyToSubmit ? 'Ready to Submit' : 'Not Ready', readyToSubmit ? '#10B981' : '#EF4444')}
+                          {confidence !== undefined && pill(`Confidence: ${Math.round(confidence * 100)}%`, confidence >= 0.75 ? 'var(--green)' : confidence >= 0.5 ? 'var(--amber)' : 'var(--red)')}
+                          {readyToSubmit !== undefined && pill(readyToSubmit ? 'Ready to Submit' : 'Not Ready', readyToSubmit ? 'var(--green)' : 'var(--red)')}
                           <button onClick={() => copyToClipboard(t.output!, t.key)}
                             style={{ marginLeft: 'auto', border: '1px solid var(--border2)', borderRadius: 7,
                               background: 'var(--surface)', color: copied === t.key ? 'var(--green)' : 'var(--text3)',
@@ -2191,8 +2191,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                           </div>
                         )}
                         {stopItems && stopItems.length > 0 && (
-                          <div style={{ background: '#FEE2E222', border: '1px solid #EF444444', borderRadius: 10, padding: '12px 16px' }}>
-                            <div style={{ fontSize: 12, fontWeight: 800, color: '#EF4444', marginBottom: 8 }}>Stop Items — Resolve Before Submitting</div>
+                          <div style={{ background: 'var(--red-soft)', border: '1px solid rgba(224,106,106,.4)', borderRadius: 10, padding: '12px 16px' }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--red)', marginBottom: 8 }}>Stop Items — Resolve Before Submitting</div>
                             {stopItems.map((s, i) => <div key={i} style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4 }}>• {s}</div>)}
                           </div>
                         )}
@@ -2210,13 +2210,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                         )}
                         {conflicts && conflicts.length > 0 && (
                           <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 16px' }}>
-                            <div style={{ fontSize: 12, fontWeight: 800, color: '#F59E0B', marginBottom: 8 }}>Conflicts</div>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--amber)', marginBottom: 8 }}>Conflicts</div>
                             {conflicts.map((c, i) => <div key={i} style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4 }}>• {c}</div>)}
                           </div>
                         )}
                         {missing && missing.length > 0 && (
                           <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 16px' }}>
-                            <div style={{ fontSize: 12, fontWeight: 800, color: '#F59E0B', marginBottom: 8 }}>Missing from Scope</div>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--amber)', marginBottom: 8 }}>Missing from Scope</div>
                             {missing.map((m, i) => <div key={i} style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4 }}>• {m}</div>)}
                           </div>
                         )}

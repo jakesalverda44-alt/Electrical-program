@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Icon from '../../components/Icon';
 import Modal from '../../components/Modal';
+import Badge from '../../components/Badge';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
@@ -295,9 +296,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
             <div id={LEAD_DRAWER_TITLE_ID} className="drawer-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {lead.name}
               {isLeadOverdue(lead) && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: '#d97706', background: 'rgba(217,119,6,.12)', border: '1px solid rgba(217,119,6,.3)', borderRadius: 20, padding: '2px 8px', verticalAlign: 'middle' }}>
-                  OVERDUE
-                </span>
+                <Badge tone="warn" size="sm" style={{ verticalAlign: 'middle' }}>OVERDUE</Badge>
               )}
             </div>
           </div>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../components/Icon';
+import Badge from '../../components/Badge';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { reportError } from '../../lib/reportError';
@@ -360,14 +361,7 @@ export default function LeadsPage({ onNav, openLeadId, onClearParam, onEditGen, 
                   <div style={{ fontSize: 13, color: 'var(--text2)', alignSelf: 'center' }}>{lead.phone || '—'}</div>
                   <div style={{ fontSize: 12.5, color: 'var(--text2)', alignSelf: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{lead.email || '—'}</div>
                   <div style={{ alignSelf: 'center' }}>
-                    <span style={{
-                      display: 'inline-block', padding: '2px 10px', borderRadius: 20,
-                      fontSize: 11.5, fontWeight: 700,
-                      background: si ? si.color + '22' : 'transparent',
-                      color: si?.color ?? 'var(--text3)',
-                    }}>
-                      {si?.label ?? lead.stage}
-                    </span>
+                    <Badge size="sm" color={si?.color}>{si?.label ?? lead.stage}</Badge>
                   </div>
                   <div style={{ fontSize: 12.5, color: 'var(--text2)', alignSelf: 'center' }}>{SOURCE_LABELS[lead.source] ?? lead.source}</div>
                   <div style={{ fontSize: 12.5, fontWeight: 600, alignSelf: 'center', color: INTEREST_COLORS[lead.interest_level] ?? 'var(--text3)' }}>
@@ -433,23 +427,11 @@ function LeadCard({ lead, stageInfo: si, onClick }: {
           <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--text)' }}>{lead.name}</div>
           {lead.address && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{lead.address}</div>}
         </div>
-        <span style={{
-          flex: 'none', fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 20,
-          background: 'var(--surface-2, rgba(0,0,0,.05))', color: 'var(--text3)',
-        }}>
-          {SOURCE_LABELS[lead.source] ?? lead.source}
-        </span>
+        <Badge size="sm" tone="neutral" style={{ flex: 'none' }}>{SOURCE_LABELS[lead.source] ?? lead.source}</Badge>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{
-          display: 'inline-block', padding: '2px 10px', borderRadius: 20,
-          fontSize: 11.5, fontWeight: 700,
-          background: si ? si.color + '22' : 'transparent',
-          color: si?.color ?? 'var(--text3)',
-        }}>
-          {si?.label ?? lead.stage}
-        </span>
+        <Badge size="sm" color={si?.color}>{si?.label ?? lead.stage}</Badge>
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>{daysInStageLabel(lead)} in stage</span>
       </div>
 

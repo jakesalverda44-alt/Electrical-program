@@ -247,3 +247,98 @@ new migration `database/migrations/100_deleted_by.sql`, new
    is implemented and tested but not reachable through today's UI, since
    `DELETE` on all three entities remains admin-only (unchanged, out of this
    task's scope).
+
+---
+
+## Task 3 — Badge component and status tokens
+
+**Files:** new `frontend/src/components/Badge.tsx` (+ `Badge.test.tsx`),
+`frontend/src/styles.css`, `PcWorkspace.tsx`, `LeadsPage.tsx`,
+`LeadDetailDrawer.tsx`, `EmailSection.tsx`, `NotificationsSection.tsx`, and
+(deviation — see below) `AIPermissionsSection.tsx`, `AddLeadModal.tsx`,
+`SiteVisitModal.tsx`, `ProposalActionBar.tsx`.
+
+### What changed
+
+- `Badge({ tone, size?, color?, children })` renders the app's existing
+  `.badge` class plus a tone modifier that maps onto the classes already
+  defined in `styles.css` (`won`/`lost`/`urgent`/`normal`/`critical`), so no
+  parallel color system was introduced: `neutral→lost`, `info→normal`,
+  `good→won`, `warn→urgent`, `bad→critical`. `size="sm"` is a new, smaller
+  modifier class (`.badge.sm`) for inline-pill contexts (a stage dot, an
+  email chip) that were previously tighter than the board-card default. A
+  `color` prop lets a per-item accent (a lead stage's own hex, distinct from
+  any of the 5 fixed tones) still go through the same shape/size/font as
+  everything else, deriving its background/border by adding alpha to the
+  given color rather than picking a tone.
+- Replaced the inline pill implementations: `LeadsPage.tsx`'s stage pill (2
+  identical copies — desktop table row and mobile card) now uses
+  `<Badge color={si?.color}>`; its source-label pill uses
+  `<Badge tone="neutral">`. `LeadDetailDrawer.tsx`'s `OVERDUE` marker is
+  `<Badge tone="warn">`. The three identical "removable email chip"
+  implementations (`EmailSection.tsx` ×2, `NotificationsSection.tsx` ×1) are
+  `<Badge tone="info">` wrapping the email text and its own × button.
+- **`PcWorkspace.tsx`** (Task 3.3): all 19 hardcoded `#EF4444`/`#F59E0B`/`#10B981`
+  replaced with `var(--red)`/`var(--amber)`/`var(--green)` (and the `-soft`
+  variant for the 2 sites using the color as a background fill). No other
+  change to that file, per the plan.
+
+### Tests
+
+- `frontend/src/components/Badge.test.tsx` (7 tests): default tone renders
+  `.badge.lost`; each of `info`/`good`/`warn`/`bad` renders its mapped class;
+  `size="sm"` adds the compact modifier; a `color` override renders inline
+  styles instead of any tone class.
+- `frontend/src/features/statusColorTokens.test.ts` (3 tests) — the plan's
+  grep check as a real, permanent test (mirroring the existing pattern in
+  `components/toastVariants.test.ts`): scans every `.ts`/`.tsx` under
+  `features/` for `#EF4444`/`#F59E0B`/`#10B981` (case-insensitively) and
+  fails with a file:line report if any remain, plus a self-check that the
+  scanner itself still matches a known-bad line, and a sanity floor on how
+  many files it walked (so a broken path can't make the check pass
+  vacuously).
+
+### Verification / grep checks (before → after)
+
+- `grep -rnE "#EF4444|#F59E0B|#10B981" frontend/src/features` → **19 → 0**
+  (matches the plan's count exactly for the case-sensitive form).
+- Running the same grep **case-insensitively**, before this task, actually
+  found **20**, not 19 — one more in `gen-pipeline/ProposalActionBar.tsx`
+  (`var(--red, #ef4444)`, lowercase, on the "Delete proposal" menu item),
+  missed by a case-sensitive scan. Fixed it too, and the new
+  `statusColorTokens.test.ts` scans case-insensitively so this class of miss
+  can't recur silently.
+
+### Deviations from the plan (Task 3)
+
+1. **Fixed 3 additional files' hardcoded hex beyond `PcWorkspace.tsx`**:
+   `AIPermissionsSection.tsx` (3 sites: a toggle's off-state red, a suspend
+   toggle's on-state red, an AI-usage progress bar's red/amber thresholds),
+   `AddLeadModal.tsx` and `SiteVisitModal.tsx` (one `var(--amber, #F59E0B)`
+   dead-code fallback each — `--amber` is always defined, so the literal hex
+   never actually rendered, but it still matched the grep). The plan's
+   Task 3.3 bullet names only `PcWorkspace.tsx`, but its own verification
+   checklist greps all of `frontend/src/features`, which these four files
+   are also under — fixing only `PcWorkspace.tsx` would have left the
+   checklist's own grep failing. Each of the other three got the minimal
+   swap only (hex → the equivalent `var(--token)`); no other changes.
+2. **`SendBidProposalModal.tsx`, named in the plan's Task 3 file list, has no
+   badge/pill/chip markup to replace** — it's a plain send-draft modal (form
+   fields, two checkboxes, an error banner, Cancel/Create-draft buttons).
+   Nothing in it matches the "inline pill implementation" pattern the audit
+   describes, and no reasonable reading of the file turns any of its
+   elements into a `Badge`. Left untouched; noting this in case the planner
+   intended a different file (`bid-hub/SimilarBidsPanel.tsx` and
+   `preconstruction/BidCompare.tsx` both already use a shared
+   `` `badge ${cls}` `` helper and could be later candidates for `Badge` if a
+   future batch wants to fully consolidate the tone-class helpers each of
+   them hand-rolls internally — out of scope here since neither was named).
+3. **`LeadsPage.tsx` lines 276 and 487 (from the audit's original 5-site
+   list) were intentionally left as-is.** Both are interactive filter/toggle
+   *buttons* (contact-method filter, stage filter with a count chip) that
+   happen to share the same `borderRadius: 20` pill shape as the three true
+   status pills at (then-)lines 369/442/451 — but they have hover/active
+   click semantics a `<Badge>` (a plain, non-interactive `<span>`) shouldn't
+   carry. Converting them would either strip their interactivity or turn
+   `Badge` into something it isn't. The 3 genuine status/label pills in that
+   file were converted; these 2 controls were not.

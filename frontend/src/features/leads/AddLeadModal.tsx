@@ -21,7 +21,7 @@ const MODAL: React.CSSProperties = {
   overflow: 'hidden',
 };
 const HDR: React.CSSProperties = {
-  background: 'var(--amber, #F59E0B)', color: '#11192a',
+  background: 'var(--amber)', color: '#11192a',
   padding: '16px 20px', display: 'flex', alignItems: 'center',
   justifyContent: 'space-between',
 };
