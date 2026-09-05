@@ -78,11 +78,23 @@ export default function SurveyMarkupEditor({ gen, onUpdated }: { gen: Gen; onUpd
 
   // Escape leaves full screen. Bound on the document because the overlay is a plain div
   // — a keydown handler on it would only fire once something inside had focus.
+  //
+  // Review round 1 B4: this editor is opened from inside GenDetailDrawer's
+  // Modal, whose own Escape handler is also a document-level listener. Modal
+  // now runs in the bubble phase and checks `e.defaultPrevented` before
+  // treating an Escape as "close the drawer" — so this handler both calls
+  // `preventDefault()` (the signal Modal checks) AND registers itself on the
+  // CAPTURE phase, which always runs before ANY bubble-phase listener
+  // regardless of which was registered first (this one is registered late,
+  // only once `fullscreen` is true, well after Modal's own listener already
+  // mounted). Without the capture phase here, Modal's bubble handler could
+  // still run first and close the drawer before this ever got a chance to
+  // call preventDefault().
   useEffect(() => {
     if (!fullscreen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); setFullscreen(false); } };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
   }, [fullscreen]);
   const [uploading, setUploading] = useState(false);
 

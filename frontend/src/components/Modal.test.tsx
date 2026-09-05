@@ -148,4 +148,133 @@ describe('Modal', () => {
     render(<Modal open={false} onClose={vi.fn()} title="Hidden"><div>content</div></Modal>);
     expect(screen.queryByRole('dialog')).toBeNull();
   });
+
+  // Review round 1 B4: Modal used to call `e.stopPropagation()` on Escape
+  // inside a document CAPTURE listener, which killed the event before it
+  // ever reached an inner element's own bubble-phase Escape handler
+  // (SurveyMarkupEditor's exit-fullscreen, LeadDetailDrawer's cancel-note) —
+  // so Escape always closed the whole Modal instead of letting the inner
+  // handler consume it first.
+  describe('an inner handler consuming Escape (review round 1 B4)', () => {
+    function ConsumingHarness({ onClose, onInnerEscape }: { onClose: () => void; onInnerEscape: () => void }) {
+      return (
+        <Modal open onClose={onClose} title="Consuming test">
+          <div className="modal-body">
+            <input
+              aria-label="inner"
+              onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); onInnerEscape(); } }}
+            />
+          </div>
+        </Modal>
+      );
+    }
+
+    it('does not close the Modal when an inner handler calls preventDefault()', () => {
+      const onClose = vi.fn();
+      const onInnerEscape = vi.fn();
+      render(<ConsumingHarness onClose={onClose} onInnerEscape={onInnerEscape}/>);
+      screen.getByLabelText('inner').focus();
+      fireEvent.keyDown(screen.getByLabelText('inner'), { key: 'Escape' });
+      expect(onInnerEscape).toHaveBeenCalledTimes(1);
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('still closes the Modal for an Escape nothing else consumes', () => {
+      const onClose = vi.fn();
+      render(<Harness onClose={onClose}/>);
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Review round 1 S2: the ConfirmLeaveDialog shown while `isDirty` and the
+  // user tries to close is rendered outside `containerRef`, so the Tab trap
+  // must not keep cycling focus inside the (now-hidden-behind-the-guard)
+  // dialog box — that would make "Leave without saving" keyboard-unreachable.
+  it('does not trap Tab while the discard-changes guard is open (review round 1 S2)', () => {
+    render(<Harness isDirty onClose={vi.fn()}/>);
+    fireEvent.keyDown(document, { key: 'Escape' }); // opens the guard
+    expect(screen.getByText('You have unsaved changes')).toBeTruthy();
+    const stayBtn = screen.getByText('Keep editing');
+    stayBtn.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    // The Tab trap must not have forced focus back into the (still-mounted,
+    // now-inert-behind-the-guard) dialog box's own focusable elements.
+    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Close' }));
+  });
+
+  // Review round 1 S3: focus restore used to call `opener.focus()`
+  // unconditionally, a silent no-op on a detached node that leaves focus on
+  // `<body>` when the opener unmounted while the dialog was open.
+  it('falls back to a stable landmark when the opener has unmounted (review round 1 S3)', async () => {
+    function UnmountingOpenerHarness() {
+      const [showOpener, setShowOpener] = useState(true);
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          {showOpener && <button onClick={() => setOpen(true)}>Opener</button>}
+          <Modal
+            open={open}
+            onClose={() => { setShowOpener(false); setOpen(false); }}
+            title="Unmounting opener test"
+          >
+            <div className="modal-body">content</div>
+          </Modal>
+        </div>
+      );
+    }
+    render(<UnmountingOpenerHarness/>);
+    const opener = screen.getByText('Opener');
+    fireEvent.click(opener);
+    await new Promise(r => setTimeout(r, 0));
+    // Close via Escape — onClose also unmounts the opener button.
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByText('Opener')).toBeNull();
+    const root = document.getElementById('root');
+    expect(document.activeElement).toBe(root ?? document.body);
+  });
+
+  // Review round 1 S7: the stack used to be push-order, so an outer Modal and
+  // a Modal nested INSIDE its own children mounting in the same commit would
+  // have the outer one (whose join-effect runs after its child's) wrongly
+  // end up "topmost". Topmost is now computed from the live DOM tree.
+  it('Escape closes only the inner Modal when it is nested inside the outer one\'s children, even mounted in the same commit (review round 1 S7)', () => {
+    const outerClose = vi.fn();
+    const innerClose = vi.fn();
+    render(
+      <Modal open onClose={outerClose} title="Outer with nested child">
+        <div className="modal-body">
+          outer content
+          <Modal open onClose={innerClose} title="Inner (nested in children)">
+            <div className="modal-body">inner content</div>
+          </Modal>
+        </div>
+      </Modal>,
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(innerClose).toHaveBeenCalledTimes(1);
+    expect(outerClose).not.toHaveBeenCalled();
+  });
+
+  // The "nits" list: aria-labelledby should only be emitted when there is
+  // actually a title/labelledBy element to point at.
+  describe('aria-labelledby / aria-label fallback', () => {
+    it('omits aria-labelledby and uses aria-label when there is no title or labelledBy', () => {
+      render(
+        <Modal open onClose={vi.fn()} ariaLabel="Untitled dialog">
+          <div className="modal-body">content</div>
+        </Modal>,
+      );
+      const dialog = screen.getByRole('dialog');
+      expect(dialog.hasAttribute('aria-labelledby')).toBe(false);
+      expect(dialog.getAttribute('aria-label')).toBe('Untitled dialog');
+    });
+
+    it('still uses aria-labelledby (not aria-label) when a title is given', () => {
+      render(<Harness onClose={vi.fn()}/>);
+      const dialog = screen.getByRole('dialog');
+      expect(dialog.hasAttribute('aria-labelledby')).toBe(true);
+      expect(dialog.hasAttribute('aria-label')).toBe(false);
+    });
+  });
 });

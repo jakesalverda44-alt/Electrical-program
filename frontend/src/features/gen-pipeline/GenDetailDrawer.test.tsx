@@ -66,3 +66,38 @@ describe('GenDetailDrawer — Edit Details autoFocus (audit ux #22)', () => {
     });
   });
 });
+
+// Review round 1 B3: AwardKickoffModal is rendered as a JSX/DOM sibling
+// AFTER the drawer's own <Modal> (not nested inside it), so its default
+// `.overlay` z-index (150) used to sit UNDER the drawer's `.drawer-overlay`
+// (160) and the drawer's backdrop ate every click on it.
+describe('GenDetailDrawer — AwardKickoffModal stacking (review round 1 B3)', () => {
+  it("the kickoff modal's overlay has a higher z-index than the drawer overlay", async () => {
+    render(
+      <AppProviders user={owner} showToast={() => {}} settings={DEFAULT_APP_SETTINGS} reloadSettings={() => {}}>
+        <ConfirmProvider>
+          <GenDetailDrawer
+            gen={gen}
+            pendingDeclined={false}
+            onStage={() => {}}
+            onCancelDeclined={() => {}}
+            onClose={() => {}}
+            onEditGen={() => {}}
+            onDuplicate={() => {}}
+            onDelete={() => {}}
+            onClosed={() => {}}
+            onUpdated={() => {}}
+            autoKickoff
+          />
+        </ConfirmProvider>
+      </AppProviders>,
+    );
+    const drawerOverlay = await screen.findByText('🎉 Job Awarded — Kickoff').then(() =>
+      document.querySelector('.drawer-overlay') as HTMLElement,
+    );
+    const kickoffOverlay = document.querySelector('.overlay') as HTMLElement;
+    expect(drawerOverlay).toBeTruthy();
+    expect(kickoffOverlay).toBeTruthy();
+    expect(Number(kickoffOverlay.style.zIndex)).toBeGreaterThan(160); // .drawer-overlay's CSS z-index
+  });
+});

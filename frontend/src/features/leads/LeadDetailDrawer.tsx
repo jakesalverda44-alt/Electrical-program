@@ -474,7 +474,14 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
                 onChange={e => setNoteText(e.target.value)}
                 placeholder="Add a note…"
                 autoFocus
-                onKeyDown={e => { if (e.key === 'Escape') { setShowNoteInput(false); setNoteText(''); }}}
+                // Review round 1 B4: preventDefault() marks this Escape as
+                // consumed so Modal's own (now bubble-phase) Escape handler
+                // checks `e.defaultPrevented` and doesn't ALSO close the
+                // whole drawer — no capture phase needed here since this is
+                // a React onKeyDown on the actual target element, which
+                // always runs before the event bubbles up to Modal's
+                // document-level listener.
+                onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setShowNoteInput(false); setNoteText(''); }}}
               />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <button className="btn" style={{ fontSize: 12, padding: '0 14px' }} onClick={logNote} disabled={noteLogging || !noteText.trim()}>

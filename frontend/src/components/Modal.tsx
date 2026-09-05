@@ -59,6 +59,9 @@ export interface ModalProps {
   /** Extra class/style for the dialog box element. */
   className?: string;
   style?: React.CSSProperties;
+  /** Accessible name to use when there is no `title` and no `labelledBy` (no
+   *  header element exists for `aria-labelledby` to point at). */
+  ariaLabel?: string;
   /** Copy for the built-in "discard unsaved changes" prompt shown when
    *  `isDirty` and the user tries to close. */
   discardTitle?: string;
@@ -79,18 +82,63 @@ function isVisible(el: HTMLElement): boolean {
 // A handful of these components open a second Modal on top of themselves —
 // LeadDetailDrawer's site survey, GenDetailDrawer's kickoff modal, the
 // signed-contract card's countersign confirmation. Every open Modal attaches
-// its own document-level keydown listener, so without this, Escape over a
-// nested dialog would fire both instances' handlers (registration order, not
-// DOM depth). This tracks which open Modal is topmost so only that one acts.
-let modalStack: symbol[] = [];
+// its own document-level keydown listener, so without something like this,
+// Escape over a nested dialog would fire both instances' handlers.
+//
+// Review round 1 S7: this used to be a push-order stack (only the
+// most-recently-pushed id was "topmost"). That breaks when an outer Modal and
+// a Modal nested in its children both open in the same React commit (e.g. via
+// an `autoKickoff`/`autoCountersign`-style prop): React runs child effects
+// before parent effects, so the INNER Modal's "join the stack" effect would
+// run first and get pushed first, and the OUTER Modal's effect — running
+// second, being the parent — would land on top of the stack and be (wrongly)
+// treated as topmost. Refs are already attached to real DOM nodes by the time
+// any effect from this commit runs (React attaches refs during the commit
+// phase, before effects), so topmost is now computed from the live DOM tree
+// at keydown time instead of registration order: a Modal nested *inside*
+// another's DOM (SignedContractCard's confirm, rendered within
+// GenDetailDrawer's own children) is topmost regardless of mount order; two
+// Modals that are DOM siblings (GenDetailDrawer + the kickoff modal rendered
+// after it, sibling-after-drawer per B3) resolve by document order — whichever
+// one is later in the DOM is topmost, matching how the app actually renders
+// "the dialog opened most recently" as the later JSX/DOM sibling.
+interface OpenModalEntry { id: symbol; getEl: () => HTMLElement | null }
+let openModals: OpenModalEntry[] = [];
+
+function isTopmostModal(id: symbol): boolean {
+  const self = openModals.find(m => m.id === id)?.getEl();
+  if (!self) return false;
+  for (const other of openModals) {
+    if (other.id === id) continue;
+    const otherEl = other.getEl();
+    if (!otherEl || otherEl === self) continue;
+    if (self.contains(otherEl)) return false; // other is nested inside self -> other is deeper, self is not topmost
+    if (otherEl.contains(self)) continue; // self is nested inside other -> self can still be topmost overall
+    // Siblings (no containment either way): whichever is later in document order wins.
+    if (self.compareDocumentPosition(otherEl) & Node.DOCUMENT_POSITION_FOLLOWING) return false;
+  }
+  return true;
+}
+
+// Review round 1 S3: focus restore falls back here when the element that
+// opened the dialog has since unmounted (e.g. it lived inside a list row that
+// was removed while the dialog was open) — `opener.focus()` on a detached
+// node is a silent no-op, leaving focus on `<body>` with nothing announced.
+function focusStableLandmark() {
+  const el = (document.getElementById('root') ?? document.body) as HTMLElement | null;
+  if (!el) return;
+  if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+  el.focus();
+}
 
 export default function Modal({
   open, onClose, title, labelledBy, isDirty = false, variant = 'modal', role = 'dialog',
-  closeLabel = 'Close', hideClose = false, overlayClassName, overlayStyle, className, style,
+  closeLabel = 'Close', hideClose = false, overlayClassName, overlayStyle, className, style, ariaLabel,
   discardTitle, discardBody, discardLabel, children,
 }: ModalProps) {
   const autoId = useId();
   const titleId = labelledBy ?? autoId;
+  const hasLabelElement = title !== undefined || labelledBy !== undefined;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const openerRef = useRef<Element | null>(null);
   const wasOpenRef = useRef(false);
@@ -98,13 +146,14 @@ export default function Modal({
   if (!stackIdRef.current) stackIdRef.current = Symbol('modal');
   const [asking, setAsking] = useState(false);
 
-  // Join/leave the stack of currently-open Modals so the keydown handler
-  // below can tell whether it is the topmost (only that one should react).
+  // Join/leave the registry of currently-open Modals so the keydown handler
+  // below can tell whether this instance is the topmost (only that one should
+  // react) — see `isTopmostModal` above for how "topmost" is determined.
   useEffect(() => {
     if (!open) return;
-    const id = stackIdRef.current!;
-    modalStack.push(id);
-    return () => { modalStack = modalStack.filter(x => x !== id); };
+    const entry: OpenModalEntry = { id: stackIdRef.current!, getEl: () => containerRef.current };
+    openModals.push(entry);
+    return () => { openModals = openModals.filter(e => e !== entry); };
   }, [open]);
 
   const requestClose = useCallback(() => {
@@ -129,8 +178,13 @@ export default function Modal({
       container.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)?.focus();
     }
     return () => {
+      // Review round 1 S3: an opener that has since unmounted (e.g. it lived
+      // in a list row removed while the dialog was open) can't take focus —
+      // `.focus()` on a detached node is a silent no-op that leaves focus on
+      // `<body>`. Fall back to a stable landmark instead.
       const opener = openerRef.current;
-      if (opener instanceof HTMLElement) opener.focus();
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+      else focusStableLandmark();
     };
   }, [open]);
 
@@ -140,14 +194,25 @@ export default function Modal({
     const onKeyDown = (e: KeyboardEvent) => {
       // Only the topmost open Modal reacts — a nested one (e.g. a confirm
       // dialog opened from within this one) takes over until it closes.
-      if (modalStack[modalStack.length - 1] !== stackIdRef.current) return;
+      if (!isTopmostModal(stackIdRef.current!)) return;
+      // Review round 1 B4: an inner handler (SurveyMarkupEditor's
+      // exit-fullscreen, LeadDetailDrawer's cancel-note) that wants to
+      // consume this Escape itself calls `e.preventDefault()` — checking
+      // that here (instead of this handler unconditionally calling
+      // `e.stopPropagation()`, which used to run in the capture phase and
+      // killed the event before it ever reached those handlers) lets the
+      // inner handler win without Modal *also* closing.
+      if (e.defaultPrevented) return;
       if (e.key === 'Escape') {
-        e.stopPropagation();
         if (asking) { setAsking(false); return; }
         requestClose();
         return;
       }
       if (e.key !== 'Tab') return;
+      // Review round 1 S2: the dirty-discard ConfirmLeaveDialog renders
+      // outside `containerRef` while `asking` is true, so trapping Tab here
+      // would make its "Leave without saving" button keyboard-unreachable.
+      if (asking) return;
       const container = containerRef.current;
       if (!container) return;
       const nodes = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(isVisible);
@@ -161,10 +226,16 @@ export default function Modal({
         if (!activeInside || document.activeElement === last) { e.preventDefault(); first.focus(); }
       }
     };
-    // Capture phase so this wins over content-level handlers (e.g. a textarea's
-    // own Escape) and so nested modals only see this from their own listener.
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => document.removeEventListener('keydown', onKeyDown, true);
+    // Review round 1 B4: bubble phase, not capture. A capture-phase listener
+    // on `document` fires before the event ever reaches an inner element's
+    // own handler, so this used to always "win" no matter what — the
+    // `e.stopPropagation()` this handler called on Escape was actually
+    // redundant with the topmost check above (which already prevents
+    // double-handling between stacked Modals) and its only real effect was
+    // to make inner Escape handlers unreachable. Bubble phase lets an inner
+    // handler run and call `preventDefault()` first.
+    document.addEventListener('keydown', onKeyDown, false);
+    return () => document.removeEventListener('keydown', onKeyDown, false);
   }, [open, asking, requestClose]);
 
   useEffect(() => { if (!open) setAsking(false); }, [open]);
@@ -182,7 +253,12 @@ export default function Modal({
         style={overlayStyle}
         onMouseDown={e => { if (e.target === e.currentTarget) requestClose(); }}
       >
-        <div className={boxClass} style={style} role={role} aria-modal="true" aria-labelledby={titleId} ref={containerRef}>
+        <div
+          className={boxClass} style={style} role={role} aria-modal="true"
+          aria-labelledby={hasLabelElement ? titleId : undefined}
+          aria-label={hasLabelElement ? undefined : ariaLabel}
+          ref={containerRef}
+        >
           {title !== undefined && (
             <div className={hdrClass}>
               <h3 id={titleId}>{title}</h3>

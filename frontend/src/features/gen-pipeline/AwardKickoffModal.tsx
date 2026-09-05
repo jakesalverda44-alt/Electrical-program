@@ -75,7 +75,14 @@ export default function AwardKickoffModal({ gen, onClose, onOpenTab, onUpdated, 
   };
 
   return (
-    <Modal open onClose={onClose} title="🎉 Job Awarded — Kickoff" style={{ width: 520 }}>
+    <Modal
+      open onClose={onClose} title="🎉 Job Awarded — Kickoff" style={{ width: 520 }}
+      // Review round 1 B3: always opened from GenDetailDrawer, rendered as a
+      // JSX/DOM sibling AFTER the drawer's own <Modal> (not nested inside
+      // it) — so this modal's default `.overlay` z-index (150) sat under the
+      // drawer's `.drawer-overlay` (160) and its backdrop ate every click.
+      overlayStyle={{ zIndex: 170 }}
+    >
         <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '62vh', overflowY: 'auto' }}>
           <div style={{ fontSize: 13, color: 'var(--text2)' }}>
             Get the kickoff kit together for <b>{gen.customer}</b>, then draft the team email. The signed proposal is required; everything else can follow.

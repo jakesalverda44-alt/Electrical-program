@@ -351,7 +351,16 @@ export default function LeadSiteSurvey({ lead, onUpdated, onBuildProposal, onClo
   const answered = Object.entries(survey).filter(([, v]) => v !== undefined && v !== null && v !== '');
 
   return (
-    <Modal open onClose={handleClose} variant="drawer" labelledBy={LEAD_SURVEY_TITLE_ID} style={{ width: 480 }}>
+    <Modal
+      open onClose={handleClose} variant="drawer" labelledBy={LEAD_SURVEY_TITLE_ID} style={{ width: 480 }}
+      // Review round 1 B3: always opened from LeadDetailDrawer, rendered as a
+      // JSX/DOM sibling AFTER the drawer's own <Modal>. Both are the same
+      // `.drawer-overlay` z-index (160), so this previously only stacked on
+      // top because it happens to be the later DOM sibling — fragile (would
+      // silently break if that render order ever changed). Same z-index bump
+      // as the kickoff modal makes it robust to that.
+      overlayStyle={{ zIndex: 170 }}
+    >
       {({ requestClose }) => (
       <>
         <div className="drawer-hdr">
