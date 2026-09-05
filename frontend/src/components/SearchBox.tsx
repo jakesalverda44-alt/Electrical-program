@@ -26,13 +26,32 @@ export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
 
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
 
-  // Leads aren't loaded app-wide like bids/gens, so fetch them lazily the first
-  // time the search opens (includes converted ones so history is findable).
+  // Leads aren't loaded app-wide like bids/gens. Audit data #6: this used to
+  // fetch the entire lead table (including converted ones) the first time the
+  // search opened, then filter it client-side for at most 4 rows shown. The
+  // route now takes q/limit directly, so only once the query is long enough
+  // to actually show lead results (matching the `q.trim().length < 2` gate on
+  // `results` below) does a request go out at all, and it comes back
+  // pre-filtered to 8 rows.
   const [everOpened, setEverOpened] = useState(false);
   useEffect(() => { if (open) setEverOpened(true); }, [open]);
+
+  // Hardening 5c — debounced like DocsPage's search box, so fast typing
+  // doesn't fire one /leads request per keystroke. useApi itself aborts the
+  // previous request (and drops its response if it lands late) on every
+  // params change, so this is purely about request *volume*, not
+  // correctness — but at 8 lookups a second while typing a name, volume
+  // matters too.
+  const qTrimmed = q.trim();
+  const [debouncedQ, setDebouncedQ] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(qTrimmed), 300);
+    return () => clearTimeout(t);
+  }, [qTrimmed]);
+
   const { data: leads } = useApi<Lead[]>('/leads', {
-    params: { include_converted: 1 },
-    enabled: everOpened,
+    params: { include_converted: 1, q: debouncedQ, limit: 8 },
+    enabled: everOpened && debouncedQ.length >= 2,
   });
   useEffect(() => {
     if (!open) return;
@@ -58,15 +77,15 @@ export default function SearchBox({ bids = [], gens = [], onNav }: Props) {
         out.push({ id: 'g-' + g.id, targetId: g.id, label: g.customer, sub: `${g.mfr} ${g.model} · ${g.kw}kW · ${g.stage}`, section: g.stage === 'awarded' ? 'generators/jobs' : 'generators/pipeline', icon: 'bolt' });
       }
     }
+    // The leads list is already server-filtered by q and capped to 8 (see the
+    // useApi call above) — no client-side re-filtering needed here.
     for (const l of leads ?? []) {
       if (out.length >= 16) break;
-      if ([l.name, l.phone, l.email, l.address].some(v => v?.toLowerCase().includes(lq))) {
-        out.push({
-          id: 'l-' + l.id, targetId: l.id, label: l.name,
-          sub: `Lead · ${l.stage}${l.phone ? ` · ${l.phone}` : l.email ? ` · ${l.email}` : ''}`,
-          section: 'generators/leads', icon: 'users',
-        });
-      }
+      out.push({
+        id: 'l-' + l.id, targetId: l.id, label: l.name,
+        sub: `Lead · ${l.stage}${l.phone ? ` · ${l.phone}` : l.email ? ` · ${l.email}` : ''}`,
+        section: 'generators/leads', icon: 'users',
+      });
     }
     return out;
   })();

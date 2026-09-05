@@ -8,6 +8,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { validateBody, inputErrorMessage } from '../utils/validate';
 import { logger } from '../utils/logger';
 import { sendLeadFirstContactEmail, sendNeedsCallNotification, isPlaceholderLeadEmail } from '../email/leadFirstContact';
+import { escapeLikePattern, clampLimit } from '../utils/sqlLike';
 import { createStageFollowup, closeLeadFollowups } from '../utils/leadFollowups';
 import { getStageConfig } from '../utils/leadStageConfig';
 import { pushSiteVisitToCalendar, fetchEventDetail } from '../integrations/outlookCalendar';
@@ -462,7 +463,25 @@ router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
     where.push(`stage <> 'converted'`);
   }
 
-  const sql = `SELECT * FROM leads WHERE ${where.join(' AND ')} ORDER BY created_at DESC`;
+  // Task 5 (audit data #6) — SearchBox used to load the entire lead table
+  // (including converted ones) to show at most a handful of results; `q`
+  // matches the same fields SearchBox filtered on client-side (name, phone,
+  // email, address), and `limit` is opt-in like /documents' and /bids'.
+  const { q, limit } = req.query as { q?: string; limit?: string };
+  if (typeof q === 'string' && q.trim()) {
+    // escapeLikePattern (hardening 5b) — a literal % or _ in a name/phone/
+    // email/address would otherwise act as an ILIKE wildcard.
+    params.push(`%${escapeLikePattern(q.trim())}%`);
+    const p = params.length;
+    where.push(`(name ILIKE $${p} OR phone ILIKE $${p} OR email ILIKE $${p} OR address ILIKE $${p})`);
+  }
+
+  let sql = `SELECT * FROM leads WHERE ${where.join(' AND ')} ORDER BY created_at DESC`;
+  const limitNum = clampLimit(limit); // hardening 5b — upper-bounded at 200
+  if (limitNum !== undefined) {
+    params.push(limitNum);
+    sql += ` LIMIT $${params.length}`;
+  }
   const { rows } = await pool.query(sql, params);
   res.json(rows);
 }));

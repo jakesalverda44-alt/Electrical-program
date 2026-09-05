@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
-import { pool } from './db/pool';
+import { pool, STATEMENT_TIMEOUT_MS } from './db/pool';
 
 // Strips SQL line (--) and block (/* */) comments before scanning for
 // destructive statements, so a comment mentioning TRUNCATE (like the
@@ -14,7 +14,18 @@ function stripSqlComments(sql: string): string {
 
 const DESTRUCTIVE_PATTERN = /\b(TRUNCATE|DROP\s+TABLE)\b/i;
 
-export async function runMigrations(): Promise<void> {
+// Post-review B3: migrateDestructiveGuard.test.ts (Batch 1) used to write its
+// temp *.sql fixtures directly into the real, shared migrations directory
+// every other test file's dbAvailable() -> runMigrations() call also scans.
+// With dbAvailable() now rethrowing instead of silently skipping on any
+// non-connection error (the whole point of B3), that made an unrelated test
+// file's own migration check intermittently throw the destructive-guard
+// error (or ENOENT, if it raced the other way) for a file it never wrote and
+// has nothing to do with. The optional override lets a caller point
+// runMigrations() at an isolated directory instead — used only by that test
+// file; every real caller (server boot, every other test's dbAvailable())
+// omits it and gets the real, shared directory exactly as before.
+export async function runMigrations(migrationsDirOverride?: string): Promise<void> {
   // Tracking table — safe to create on every startup
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -23,7 +34,7 @@ export async function runMigrations(): Promise<void> {
     )
   `);
 
-  const migrationsDir = path.join(__dirname, '../../database/migrations');
+  const migrationsDir = migrationsDirOverride ?? path.join(__dirname, '../../database/migrations');
   if (!fs.existsSync(migrationsDir)) {
     console.log('[migrate] No migrations directory found, skipping');
     return;
@@ -39,7 +50,24 @@ export async function runMigrations(): Promise<void> {
     );
     if (rows.length > 0) continue;
 
-    const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+    // Post-review B3: a file present in the readdir() snapshot above can still
+    // vanish before this read — in production that can't happen (nothing
+    // deletes migration files while the app is running), but under the
+    // backend test suite's parallel workers, migrateDestructiveGuard.test.ts
+    // writes and cleans up its own temp *.sql files directly in this real,
+    // shared directory, and a concurrent file's runMigrations() call can
+    // catch one mid-flight. Skip it rather than crashing every other test
+    // file's dbAvailable() check with an unrelated ENOENT.
+    let sql: string;
+    try {
+      sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        console.warn(`[migrate] ${file} listed but vanished before it could be read — skipping (expected only under concurrent test workers)`);
+        continue;
+      }
+      throw err;
+    }
     if (DESTRUCTIVE_PATTERN.test(stripSqlComments(sql)) && process.env.ALLOW_DESTRUCTIVE_MIGRATIONS !== '1') {
       throw new Error(
         `[migrate] Refusing to run "${file}": it contains TRUNCATE or DROP TABLE. ` +
@@ -48,6 +76,20 @@ export async function runMigrations(): Promise<void> {
     }
     const client = await pool.connect();
     try {
+      // Post-review hardening (5a) — db/pool.ts sets statement_timeout: 15_000
+      // as a connection-startup parameter (Task 10), so every checked-out
+      // client — this one included — already has it active. A legitimate
+      // migration over real data (096's notification dedup collapse, at
+      // production's current scale a few thousand rows, comfortably under
+      // 15s — but there is no guarantee a future migration over a larger
+      // table stays under it) must never be killed mid-migration by a limit
+      // that exists to catch a runaway *application* query, not a one-time
+      // schema/data migration running inside its own transaction. Disabled
+      // only for the duration of this migration's BEGIN/COMMIT, and always
+      // reset before the connection is released back to the pool — otherwise
+      // a later, unrelated query reusing this same pooled connection would
+      // silently run with no timeout at all.
+      await client.query('SET statement_timeout = 0');
       await client.query('BEGIN');
       await client.query(sql);
       await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [file]);
@@ -58,6 +100,7 @@ export async function runMigrations(): Promise<void> {
       console.error(`[migrate] Failed on ${file}:`, err);
       throw err;
     } finally {
+      await client.query(`SET statement_timeout = ${STATEMENT_TIMEOUT_MS}`).catch(() => {});
       client.release();
     }
   }

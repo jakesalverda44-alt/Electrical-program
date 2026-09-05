@@ -79,6 +79,13 @@ export async function purgeExpired(retentionMonths: number): Promise<Record<stri
     const { rowCount } = await pool.query(sql, [cutoff]);
     if (rowCount) counts[label] = rowCount;
   };
+  // Same bookkeeping as `run`, for statements with a fixed window baked into
+  // the SQL text (no $1) — Postgres rejects a bind with params the query
+  // never references, so these can't just reuse `run` with an ignored cutoff.
+  const runFixed = async (label: string, sql: string) => {
+    const { rowCount } = await pool.query(sql);
+    if (rowCount) counts[label] = rowCount;
+  };
   // Old audit rows.
   await run('audit_log', `DELETE FROM audit_log WHERE created_at < now() - $1::interval`);
   // Trashed records past the window are permanently removed.
@@ -86,5 +93,19 @@ export async function purgeExpired(retentionMonths: number): Promise<Record<stri
   await run('generator_proposals', `DELETE FROM generator_proposals WHERE deleted_at IS NOT NULL AND deleted_at < now() - $1::interval`);
   await run('documents', `DELETE FROM documents WHERE deleted_at IS NOT NULL AND deleted_at < now() - $1::interval`);
   await run('won_jobs', `DELETE FROM won_jobs WHERE deleted_at IS NOT NULL AND deleted_at < now() - $1::interval`);
+  // Notifications retention (audit data #2, #17): the daily-regeneration bug is fixed at
+  // the source (notifications/engine.ts dedup keys no longer include the day), but rows
+  // still accumulate forever otherwise. These two windows are fixed (60/180 days), not
+  // the caller-supplied retentionMonths above — read notifications age out faster than
+  // unread ones, since an unread one is still a task someone hasn't seen yet.
+  await runFixed('notifications_read', `DELETE FROM notifications WHERE read AND created_at < now() - interval '60 days'`);
+  await runFixed('notifications_unread', `DELETE FROM notifications WHERE NOT read AND created_at < now() - interval '180 days'`);
+  // Intake inbox retention (audit data #14). intake_items has no deleted_at —
+  // once an item leaves 'pending' it's a terminal record (intake_items_status_check
+  // allows only pending/accepted/declined; there is no dismissed/imported/ignored
+  // status in this schema). A resolved item older than 180 days is safe to drop;
+  // 'pending' items are never purged here regardless of age — an unresolved
+  // invitation sitting for 180+ days is exactly what the inbox should keep showing.
+  await runFixed('intake_items', `DELETE FROM intake_items WHERE status IN ('accepted','declined') AND created_at < now() - interval '180 days'`);
   return counts;
 }

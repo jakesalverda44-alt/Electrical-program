@@ -218,7 +218,19 @@ export function verifyBidText(text: string, kind: VerifyKind): VerifyTextResult 
 // ── Optional PDF conversion (soffice) ────────────────────────────────────────
 const MAC_SOFFICE_PATH = '/Applications/LibreOffice.app/Contents/MacOS/soffice';
 
-/** Checks PATH, then the macOS app bundle path. Never throws. */
+/** Checks PATH, then the macOS app bundle path. Never throws.
+ *
+ * Post-review B3 (audit batch 3, Task 1 revisited): this used to return
+ * `null` unconditionally under NODE_ENV=test, which meant no test ever
+ * exercised real PDF conversion at all. Reverted to real detection.
+ * LibreOffice still serializes concurrent conversions through a single
+ * user-profile lock, so parallel test workers hitting generate-docx at the
+ * same time can still race for it — the tests that don't care about the PDF
+ * (prebid.test.ts, bidStandardGeneration.test.ts) now filter their
+ * `documents` row counts by file_type so an optional PDF row racing in or
+ * out no longer changes their outcome, and verifyBid.test.ts's own
+ * soffice-dependent case skips visibly with a reason when soffice truly
+ * isn't found, instead of silently asserting nothing either way. */
 export function findSoffice(): string | null {
   try {
     const out = execSync('command -v soffice', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
@@ -232,10 +244,24 @@ export function findSoffice(): string | null {
 
 async function convertToPdf(sofficePath: string, docxBuffer: Buffer): Promise<Buffer | null> {
   const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bidverify-'));
+  // Re-review R1 — LibreOffice serializes concurrent conversions through a
+  // single shared user-profile lock (~/.config/libreoffice by default), so
+  // parallel test workers (or a running app instance racing a test run)
+  // calling this at the same time contended for it: one call would win the
+  // lock and the other would either silently produce no PDF or blow past its
+  // own timeout, exactly the original Task 1 flake. `-env:UserInstallation`
+  // points soffice at a profile directory of our choosing instead of the
+  // shared default, so every call gets its own lock and they can run fully
+  // in parallel. The profile lives under the same per-call tmpDir already
+  // being removed in `finally`, so no extra cleanup is needed.
+  const profileDir = path.join(tmpDir, 'profile');
   try {
     const docxPath = path.join(tmpDir, 'input.docx');
     await fsp.writeFile(docxPath, docxBuffer);
-    await execFileAsync(sofficePath, ['--headless', '--convert-to', 'pdf', '--outdir', tmpDir, docxPath], { timeout: 30_000 });
+    await execFileAsync(sofficePath, [
+      `-env:UserInstallation=file://${profileDir}`,
+      '--headless', '--convert-to', 'pdf', '--outdir', tmpDir, docxPath,
+    ], { timeout: 30_000 });
     const pdfPath = path.join(tmpDir, 'input.pdf');
     if (fs.existsSync(pdfPath)) return await fsp.readFile(pdfPath);
     return null;

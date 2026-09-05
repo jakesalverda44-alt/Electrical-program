@@ -392,6 +392,18 @@ describe('prebid-analyze', () => {
   // or mocking infrastructure (this backend has none).
   it('passes validation but 503s when the Anthropic key is not configured, without stamping running', async (ctx) => {
     if (!ok) return ctx.skip();
+    // This route reads the key via getSetting('ai_anthropic_key') || process.env
+    // .ANTHROPIC_API_KEY. Own both preconditions instead of inheriting them from
+    // whatever ran before this file in the same test DB/process — another file
+    // (settingsInternalKeys.test.ts) legitimately seeds a real-looking
+    // ai_anthropic_key row to test masking, and if it ran first in this process
+    // without cleaning up, this test would silently see a configured key.
+    await pool.query(`DELETE FROM app_settings WHERE key = 'ai_anthropic_key'`);
+    const savedKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    ctx.onTestFinished(() => {
+      if (savedKey !== undefined) process.env.ANTHROPIC_API_KEY = savedKey;
+    });
     const u = await makeUser('owner');
     const a = await request(app).post('/api/bids').set(auth(u.token))
       .send({ name: `AIc ${Date.now()}`, gc: 'G' }).expect(200);
@@ -495,9 +507,14 @@ describe('generate-docx files every generated proposal', () => {
     // No CLOUDINARY_*/Drive folder configured in the test environment, so
     // storeDocument falls back to storing the bytes as base64 on the row itself —
     // still enough to prove the filing happened, independent of external storage.
+    // file_type scoped to the docx mimetype (post-review B3): when soffice is
+    // present, verifyBidDocx also produces a PDF, which generate-docx files as
+    // a second category='proposal' row — this test is about the docx filing,
+    // not whether that optional PDF happened to convert in time.
     const { rows } = await pool.query(
       `SELECT category, linked_id, file_data IS NOT NULL AS has_data
-       FROM documents WHERE linked_id=$1 AND category='proposal'`,
+       FROM documents WHERE linked_id=$1 AND category='proposal'
+         AND file_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'`,
       [bidId]
     );
     expect(rows.length).toBe(1);
@@ -520,8 +537,11 @@ describe('generate-docx files every generated proposal', () => {
     await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token)).expect(200);
     await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token)).expect(200);
 
+    // file_type scoped to the docx mimetype (post-review B3) — see the comment
+    // in the previous test.
     const { rows } = await pool.query(
-      `SELECT count(*)::int AS n FROM documents WHERE linked_id=$1 AND category='proposal'`,
+      `SELECT count(*)::int AS n FROM documents WHERE linked_id=$1 AND category='proposal'
+         AND file_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'`,
       [bidId]
     );
     expect(rows[0].n).toBe(2);

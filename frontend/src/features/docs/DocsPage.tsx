@@ -62,7 +62,28 @@ export default function DocsPage({ bids, gens }: Props) {
   const [dragging,     setDragging]     = useState(false);
   const [selected,     setSelected]     = useState<Doc | null>(null);
 
-  const { data: loadedDocs, loading } = useApi<Doc[]>('/documents');
+  // Task 5 (audit data #6) — this used to always fetch every document in the
+  // system and filter to the visible page client-side. The server now
+  // supports a `q` (name/display_name) filter; `search` is debounced 300ms
+  // before it becomes a request param so fast typing doesn't fire one
+  // request per keystroke. category and division stay client-side-only
+  // filters (not sent to the server) on purpose: the stat cards and category
+  // chips above the table both count across `docs` and need the full
+  // (optionally search-narrowed) set to show correct totals per category —
+  // if category were also sent server-side, `docs` would already be
+  // pre-filtered to one category and every other chip's count would read 0.
+  // The `filtered` memo below still re-applies q, category and div
+  // client-side as the fallback the plan calls for (q against linked_name
+  // too, which the server doesn't check).
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const { data: loadedDocs, loading } = useApi<Doc[]>('/documents', {
+    params: debouncedSearch ? { q: debouncedSearch } : undefined,
+  });
   useEffect(() => { if (loadedDocs) setDocs(loadedDocs); }, [loadedDocs]);
 
   const linkOptions = useMemo(() => [

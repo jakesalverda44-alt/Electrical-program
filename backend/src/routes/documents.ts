@@ -10,6 +10,7 @@ import { documentUpload } from '../utils/upload';
 import { getFileMedia } from '../services/googleDrive';
 import { deleteFromCloud } from '../utils/cloudStorage';
 import { storeDocument } from '../utils/storeDocument';
+import { escapeLikePattern, clampLimit } from '../utils/sqlLike';
 
 const router = Router();
 const upload = documentUpload;
@@ -54,10 +55,28 @@ async function loadAccessibleDocument(req: AuthRequest, res: import('express').R
 }
 
 router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
-  const { linked_id } = req.query as { linked_id?: string };
+  const { linked_id, q, category, limit } = req.query as { linked_id?: string; q?: string; category?: string; limit?: string };
   const conds = ['deleted_at IS NULL'];
   const params: unknown[] = [];
   if (linked_id) { params.push(linked_id); conds.push(`linked_id = $${params.length}`); }
+  // Task 5 (audit data #6) — name/display_name search and a category filter,
+  // so callers like DocsPage's search box don't have to fetch every document
+  // and filter client-side. Not a default limit (Task 6 keeps list endpoints
+  // unpaginated by default) — `limit` here is opt-in, same convention as
+  // bids/gens' existing ?limit=N.
+  if (category) { params.push(category); conds.push(`category = $${params.length}`); }
+  // Post-review B1 — DocsPage's client-side fallback filter also matches
+  // linked_name (the project/GC the doc is attached to); the server-side q
+  // filter didn't, so once DocsPage started sending q to the server, rows
+  // that only matched by linked_name never reached the browser for the
+  // client filter to recover. linked_name joins the same OR.
+  if (q) {
+    // escapeLikePattern (hardening 5b) — a literal % or _ typed into the
+    // search box would otherwise act as an ILIKE wildcard instead of
+    // matching that literal character.
+    params.push(`%${escapeLikePattern(q)}%`);
+    conds.push(`(name ILIKE $${params.length} OR display_name ILIKE $${params.length} OR linked_name ILIKE $${params.length})`);
+  }
   // Restricted reps only see documents they uploaded or linked to a bid/proposal
   // they own; managers/admins see all. Previously any logged-in user could list
   // every document by id (data leak).
@@ -73,10 +92,13 @@ router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
         ))`
     );
   }
-  const { rows } = await pool.query(
-    `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at FROM documents WHERE ${conds.join(' AND ')} ORDER BY created_at DESC`,
-    params
-  );
+  let sql = `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at FROM documents WHERE ${conds.join(' AND ')} ORDER BY created_at DESC`;
+  const limitNum = clampLimit(limit); // hardening 5b — upper-bounded at 200
+  if (limitNum !== undefined) {
+    params.push(limitNum);
+    sql += ` LIMIT $${params.length}`;
+  }
+  const { rows } = await pool.query(sql, params);
   res.json(rows);
 }));
 

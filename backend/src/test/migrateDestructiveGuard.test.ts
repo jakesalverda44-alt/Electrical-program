@@ -5,8 +5,9 @@
 // the very database a bad migration could TRUNCATE. Runs against
 // electrical_crm_test only (see harness.ts's incident guard).
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { dbAvailable } from './harness';
 import { runMigrations } from '../migrate';
 import { pool } from '../db/pool';
@@ -14,10 +15,20 @@ import { pool } from '../db/pool';
 let ok = false;
 beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
 
-const migrationsDir = path.join(__dirname, '../../../database/migrations');
+// Post-review B3 — this used to write its temp *.sql fixtures into the real,
+// shared migrations directory (`../../../database/migrations`), which every
+// other test file's own dbAvailable() -> runMigrations(migrationsDir) call also scans.
+// Under the full suite's parallel workers, a concurrent file could catch one
+// of these fixtures mid-flight — either as a genuine destructive-migration
+// rejection in a process that never opted into ALLOW_DESTRUCTIVE_MIGRATIONS,
+// or as an ENOENT if this file's own cleanup deleted it first. runMigrations(migrationsDir)
+// now takes an optional directory override; this suite uses its own isolated
+// temp directory so nothing it writes is ever visible to another test file.
+const migrationsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-guard-test-'));
+afterAll(() => { fs.rmSync(migrationsDir, { recursive: true, force: true }); });
 
 // Track every temp file/table/schema_migrations row this suite creates so it
-// can clean up even on failure — this directory is the real one the app reads.
+// can clean up even on failure.
 const cleanupFiles: string[] = [];
 
 afterEach(async () => {
@@ -48,7 +59,7 @@ describe('runMigrations — destructive-statement guard (Task 1)', () => {
     );
 
     delete process.env.ALLOW_DESTRUCTIVE_MIGRATIONS;
-    await expect(runMigrations()).rejects.toThrow(/Refusing to run/);
+    await expect(runMigrations(migrationsDir)).rejects.toThrow(/Refusing to run/);
 
     const { rows } = await pool.query('SELECT 1 FROM schema_migrations WHERE filename = $1', [file]);
     expect(rows.length).toBe(0);
@@ -64,7 +75,7 @@ describe('runMigrations — destructive-statement guard (Task 1)', () => {
     );
 
     delete process.env.ALLOW_DESTRUCTIVE_MIGRATIONS;
-    await expect(runMigrations()).rejects.toThrow(/Refusing to run/);
+    await expect(runMigrations(migrationsDir)).rejects.toThrow(/Refusing to run/);
   });
 
   it('does not trip on a comment merely mentioning TRUNCATE (the neutralized 025/056 files)', async (ctx) => {
@@ -77,7 +88,7 @@ describe('runMigrations — destructive-statement guard (Task 1)', () => {
     );
 
     delete process.env.ALLOW_DESTRUCTIVE_MIGRATIONS;
-    await expect(runMigrations()).resolves.not.toThrow();
+    await expect(runMigrations(migrationsDir)).resolves.not.toThrow();
 
     const { rows } = await pool.query('SELECT 1 FROM schema_migrations WHERE filename = $1', [file]);
     expect(rows.length).toBe(1);
@@ -94,7 +105,7 @@ describe('runMigrations — destructive-statement guard (Task 1)', () => {
 
     process.env.ALLOW_DESTRUCTIVE_MIGRATIONS = '1';
     try {
-      await expect(runMigrations()).resolves.not.toThrow();
+      await expect(runMigrations(migrationsDir)).resolves.not.toThrow();
     } finally {
       delete process.env.ALLOW_DESTRUCTIVE_MIGRATIONS;
     }
@@ -102,4 +113,23 @@ describe('runMigrations — destructive-statement guard (Task 1)', () => {
     const { rows } = await pool.query('SELECT 1 FROM schema_migrations WHERE filename = $1', [file]);
     expect(rows.length).toBe(1);
   });
+
+  // Post-review hardening (5a) — db/pool.ts's statement_timeout: 15_000
+  // (Task 10) is a connection-startup parameter, so it's already active on
+  // the client runMigrations() checks out. A migration slower than that
+  // (nothing today, but nothing guarantees a future one over a larger table)
+  // must not be killed mid-transaction by a limit meant for a runaway
+  // application query — migrate.ts now disables it for the duration of each
+  // migration's own BEGIN/COMMIT.
+  it('a migration slower than the pool statement_timeout still completes', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const file = uniqueName();
+    cleanupFiles.push(file);
+    fs.writeFileSync(path.join(migrationsDir, file), `SELECT pg_sleep(16);\n`);
+
+    await expect(runMigrations(migrationsDir)).resolves.not.toThrow();
+
+    const { rows } = await pool.query('SELECT 1 FROM schema_migrations WHERE filename = $1', [file]);
+    expect(rows.length).toBe(1);
+  }, 25_000);
 });

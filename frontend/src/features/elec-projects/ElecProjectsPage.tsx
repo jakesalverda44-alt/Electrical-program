@@ -137,8 +137,11 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
       api.get(`/projects/elec/${id}/section/pay-apps`),
       api.get(`/projects/elec/${id}/section/key-materials`),
       api.get(`/projects/elec/${id}/section/closeout`),
-      api.get('/documents'),
-      api.get('/comms'),
+      // Task 5 (audit data #6) — every project open used to transfer the
+      // whole document + comms corpus and discard nearly all of it
+      // client-side. The backend already supports linked_id on both routes.
+      api.get('/documents', { params: { linked_id: id } }),
+      api.get('/comms', { params: { linked_id: id } }),
       api.get(`/bids/${id}/photos`),
     ]);
     setProjData(prev => ({
@@ -152,8 +155,8 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
         payApps:  (paRes.status==='fulfilled' && paRes.value.data?.items) ? paRes.value.data.items : [],
         keyMats:  (kmRes.status==='fulfilled' && kmRes.value.data?.items) ? kmRes.value.data.items : [],
         closeout: clRes.status==='fulfilled'  ? clRes.value.data  : {},
-        docs:     docRes.status==='fulfilled'  ? (docRes.value.data as ProjDoc[]).filter(d => (d as any).linked_id === id) : [],
-        comms:    commRes.status==='fulfilled' ? (commRes.value.data as ProjComm[]).filter(c => (c as any).linked_id === id) : [],
+        docs:     docRes.status==='fulfilled'  ? (docRes.value.data as ProjDoc[])  : [],
+        comms:    commRes.status==='fulfilled' ? (commRes.value.data as ProjComm[]) : [],
         photos:   photoRes.status==='fulfilled' ? photoRes.value.data as DrivePhoto[] : [],
       },
     }));

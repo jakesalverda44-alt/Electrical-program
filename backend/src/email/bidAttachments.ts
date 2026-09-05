@@ -92,33 +92,81 @@ export async function loadLinkedDocumentsAsAttachments(
     params.push(opts.categories);
     categoryClause = ` AND category = ANY($${params.length})`;
   }
-  const { rows } = await pool.query<DocRow>(
-    `SELECT id, name, display_name, category, file_type, file_size, file_data, storage_url
+
+  // Task 9 (audit data #10), refined by post-review hardening 5d — this
+  // selects metadata only (no file_data — the largest single column on this
+  // table, up to a few MB of base64 per row), so most oversized documents
+  // never even have their bytes fetched. The metadata-only file_size budget
+  // below is a coarse pre-filter deciding what's worth fetching; the
+  // authoritative budget decision happens afterward against confirmed,
+  // actually-fetched byte counts, so a failed fetch or a size estimate that
+  // turns out wrong can never consume budget a later attachment could have
+  // used.
+  const { rows: meta } = await pool.query<Omit<DocRow, 'file_data'>>(
+    `SELECT id, name, display_name, category, file_type, file_size, storage_url
        FROM documents
       WHERE linked_id = $1 AND deleted_at IS NULL${categoryClause}
       ORDER BY created_at ASC`,
     params
   );
 
+  // Pass 1 (from metadata alone): a per-document pre-filter deciding which
+  // documents are even worth fetching bytes for — skip only a document
+  // whose OWN recorded file_size already busts the budget on its own.
+  // Post-review hardening 5d: this is deliberately NOT a cumulative running
+  // total the way the old single-pass version's was — charging one
+  // document's estimated size against a shared total here, before any byte
+  // has actually been fetched, could wrongly exclude a later, smaller
+  // document from ever being attempted over an estimate that might not even
+  // pan out (exactly the class of bug this hardening pass fixes one stage
+  // later, at the fetch itself). The real, cumulative budget decision is
+  // entirely pass 2's job, against confirmed, actually-fetched byte counts.
+  const provisional: Array<Omit<DocRow, 'file_data'> & { attachName: string }> = [];
+  const preSkippedIds = new Set<string>();
+  for (const doc of meta) {
+    const name = attachmentFileName(doc.display_name, doc.name, doc.file_type);
+    if (doc.file_size && doc.file_size > maxTotalBytes) { preSkippedIds.add(doc.id); continue; }
+    provisional.push({ ...doc, attachName: name });
+  }
+
+  const fileDataById = new Map<string, string | null>();
+  if (provisional.length) {
+    const { rows: dataRows } = await pool.query<{ id: string; file_data: string | null }>(
+      `SELECT id, file_data FROM documents WHERE id = ANY($1::uuid[])`,
+      [provisional.map(s => s.id)]
+    );
+    for (const r of dataRows) fileDataById.set(r.id, r.file_data);
+  }
+
+  // Pass 2 (confirmed): fetch each provisional survivor's bytes and decide
+  // its real fate against a running total that only ever grows on a
+  // successful fetch that actually fit — a failed fetch (or one that turns
+  // out to overshoot once its real size is known) must never have already
+  // consumed budget a later, successfully-fetched attachment could have used.
+  const fetchedById = new Map<string, Buffer>();
+  let confirmedTotal = 0;
+  for (const doc of provisional) {
+    let buf: Buffer | null = null;
+    try { buf = await fetchDocBytes({ ...doc, file_data: fileDataById.get(doc.id) ?? null }); }
+    catch (err) { logger.warn({ err, docId: doc.id }, '[bid-attach] could not fetch document'); }
+    if (!buf) continue; // failed fetch — no charge, not attached
+    if (confirmedTotal + buf.length > maxTotalBytes) continue; // doesn't actually fit — no charge
+    confirmedTotal += buf.length;
+    fetchedById.set(doc.id, buf);
+  }
+
+  // Assemble the result by walking the documents in their original
+  // created_at order once, exactly like the pre-Task-9 single-pass version
+  // did — restores the original skipped[] ordering (post-review hardening
+  // 5d), rather than "every pre-skip, then every fetch-time skip".
   const attachments: GraphAttachment[] = [];
   const attachedNames: string[] = [];
   const attached: LinkedDocRef[] = [];
   const skipped: string[] = [];
-  let total = 0;
-
-  for (const doc of rows) {
+  for (const doc of meta) {
     const name = attachmentFileName(doc.display_name, doc.name, doc.file_type);
-    // Skip clearly-oversized files up front when the size is recorded.
-    if (doc.file_size && doc.file_size > maxTotalBytes) { skipped.push(name); continue; }
-
-    let buf: Buffer | null = null;
-    try { buf = await fetchDocBytes(doc); }
-    catch (err) { logger.warn({ err, docId: doc.id }, '[bid-attach] could not fetch document'); }
-    if (!buf) { skipped.push(name); continue; }
-
-    if (total + buf.length > maxTotalBytes) { skipped.push(name); continue; }
-    total += buf.length;
-
+    const buf = fetchedById.get(doc.id);
+    if (preSkippedIds.has(doc.id) || !buf) { skipped.push(name); continue; }
     attachments.push({
       '@odata.type': '#microsoft.graph.fileAttachment',
       name,

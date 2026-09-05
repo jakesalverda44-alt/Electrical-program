@@ -37,6 +37,113 @@ interface Props {
 
 const STEP_ORDER: PcStepKey[] = ['intake','takeoff','scope','estimate','review','proposal','submitted'];
 
+// Task 7 (audit data #16) — /preconstruction/costs and /estimates/unit-costs
+// are the same for every bid (company-wide historical comparables and the
+// admin-edited unit-cost library), but every PcWorkspace mount refetched
+// both fresh. Module-level cache, keyed by URL, shared across every
+// PcWorkspace instance in the tab regardless of which bid it's showing —
+// "loaded once per session" per the plan.
+//
+// Post-review B2: the TTL alone was only ever consulted at mount, and since
+// Task 7 keeps PcWorkspaceView mounted for as long as a bid stays open, an
+// already-open workspace never re-checked it — a unit-cost edit in Settings
+// never reached it, and "Save Estimate" would then persist prices computed
+// from the stale library. resetGlobalPcCaches() is now called from
+// UnitCostSection's save (the only Settings save that changes either of
+// these two endpoints today), and every mounted useGlobalPcCache instance
+// also re-checks freshness on window focus, so switching back to an
+// already-open tab after editing costs in another tab/window catches it too.
+const GLOBAL_PC_CACHE_TTL_MS = 5 * 60 * 1000;
+// A failed refetch retries on this cadence rather than leaving a mounted
+// workspace stuck on a stale (or never-loaded) library indefinitely.
+const GLOBAL_PC_CACHE_RETRY_MS = 5_000;
+
+interface GlobalPcCacheEntry<T> {
+  promise: Promise<T> | null;
+  data: T | null;
+  fetchedAt: number;
+}
+const historicalCostsCache: GlobalPcCacheEntry<Array<Record<string, unknown>>> = { promise: null, data: null, fetchedAt: 0 };
+const unitCostLibCache: GlobalPcCacheEntry<{ global: Record<string, number>; by_project_type: Record<string, Record<string, number>> }> =
+  { promise: null, data: null, fetchedAt: 0 };
+
+// Every mounted useGlobalPcCache instance registers an invalidate callback
+// here; resetGlobalPcCaches() (and the window-focus check below) calls all
+// of them so a cache clear takes effect immediately for anything already on
+// screen, not just the next fresh mount.
+type GlobalPcCacheInvalidator = () => void;
+const globalPcCacheInvalidators = new Set<GlobalPcCacheInvalidator>();
+
+/** Clears both module-level caches and forces every currently-mounted
+ *  PcWorkspace instance to refetch immediately. Call this from any Settings
+ *  save that changes the data behind /preconstruction/costs or
+ *  /estimates/unit-costs — currently only UnitCostSection's save. */
+export function resetGlobalPcCaches(): void {
+  historicalCostsCache.data = null; historicalCostsCache.promise = null; historicalCostsCache.fetchedAt = 0;
+  unitCostLibCache.data = null; unitCostLibCache.promise = null; unitCostLibCache.fetchedAt = 0;
+  globalPcCacheInvalidators.forEach(fn => fn());
+}
+
+/** Test-only alias, kept so existing tests importing this name still work. */
+export const __resetGlobalPcCachesForTests = resetGlobalPcCaches;
+
+/** Reads (and, once per TTL window across the whole session, refetches) one of
+ *  the module-level caches above. Every PcWorkspace instance mounted at the
+ *  same time shares the same in-flight request instead of each firing its own.
+ *  A failed fetch reports via reportError and retries — it never silently
+ *  leaves (or resets) `data` to an empty/null library, since the caller (the
+ *  Pricing tab) treats a missing unit-cost entry as "no cost data", which
+ *  prices every line at $0 with no visible signal. */
+function useGlobalPcCache<T>(cache: GlobalPcCacheEntry<T>, url: string): T | null {
+  const [data, setData] = useState<T | null>(cache.data);
+  // Bumped by an external invalidation (Settings save, window focus) to force
+  // the fetch effect below to re-run without needing `cache`/`url` to change.
+  const [gen, setGen] = useState(0);
+
+  useEffect(() => {
+    const invalidate = () => setGen(g => g + 1);
+    globalPcCacheInvalidators.add(invalidate);
+    return () => { globalPcCacheInvalidators.delete(invalidate); };
+  }, []);
+
+  useEffect(() => {
+    const onFocus = () => {
+      const isFresh = cache.data !== null && (Date.now() - cache.fetchedAt) < GLOBAL_PC_CACHE_TTL_MS;
+      if (!isFresh) setGen(g => g + 1);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [cache]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const isFresh = cache.data !== null && (Date.now() - cache.fetchedAt) < GLOBAL_PC_CACHE_TTL_MS;
+    if (isFresh) { setData(cache.data); return; }
+    if (!cache.promise) {
+      cache.promise = api.get<T>(url).then(res => {
+        cache.data = res.data;
+        cache.fetchedAt = Date.now();
+        cache.promise = null;
+        return res.data;
+      }).catch(err => {
+        cache.promise = null;
+        throw err;
+      });
+    }
+    cache.promise.then(d => { if (!cancelled) setData(d); }).catch(err => {
+      if (cancelled) return;
+      reportError(err, `useGlobalPcCache ${url}`);
+      // Do NOT clear `data` here — a stale-but-real library beats a $0 one.
+      // Retry automatically rather than waiting for the next unrelated
+      // invalidation.
+      retryTimer = setTimeout(() => setGen(g => g + 1), GLOBAL_PC_CACHE_RETRY_MS);
+    });
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
+  }, [cache, url, gen]);
+  return data;
+}
+
 // Fence-tolerant JSON parse for an agent's raw output (```json ... ``` or
 // bare) — shared by the Agent 2/3 structured-view render below and Task
 // 5.2's "Import from AI analysis" RFI button, rather than each keeping its
@@ -370,13 +477,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const importTakeoffRef = useRef<HTMLInputElement>(null);
   const importBreakdownRef = useRef<HTMLInputElement>(null);
   const [savingImport, setSavingImport] = useState(false);
-  // Six independent reads, one hook each: each cancels on its own key change,
-  // so switching bids can no longer land bid A's takeoff on bid B's workspace.
-  const { data: historicalCostsData } = useApi<Array<Record<string, unknown>>>('/preconstruction/costs');
+  // Six independent reads. The two global ones (historical costs, unit-cost
+  // library) are identical for every bid, so they go through the
+  // session-cached useGlobalPcCache above instead of useApi — Task 7 (audit
+  // data #16). The four bid-scoped ones stay on useApi, one hook each: each
+  // cancels on its own key change, so switching bids can no longer land bid
+  // A's takeoff on bid B's workspace.
+  const historicalCostsData = useGlobalPcCache(historicalCostsCache, '/preconstruction/costs');
   const historicalCosts = historicalCostsData ?? [];
   const { data: takeoffOnFile, reload: reloadTakeoff } = useApi<TakeoffOnFile>(`/preconstruction/${bid.id}/takeoff`);
   const { data: bidIntel } = useApi<Record<string, unknown>>(`/preconstruction/intelligence/${bid.id}`);
-  const { data: unitCostLibData } = useApi<{ global: Record<string, number>; by_project_type: Record<string, Record<string, number>> }>('/estimates/unit-costs');
+  const unitCostLibData = useGlobalPcCache(unitCostLibCache, '/estimates/unit-costs');
   const unitCostLib = unitCostLibData ?? { global: {}, by_project_type: {} };
   const [openTakeoffCat, setOpenTakeoffCat] = useState<string | null>(null);
   const pollRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -420,6 +531,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       ai_done: w.aiDone,
       proposal_generated: w.proposalGenerated,
       confirmed_service: w.confirmedService ?? null,
+      // Task 11 — struck from Batch 2: the continuous autosave now carries
+      // these too, not only the deliberate "Save Estimate" action.
+      overhead_pct: w.overheadPct,
+      profit_pct: w.profitPct,
+      estimate_overrides: w.estimateOverrides,
     };
   }, []);
 
@@ -472,7 +588,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       void saveWorkspace();
     }, 800);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated, ws.confirmedService, saveWorkspace, workspacePayload]);
+  }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated, ws.confirmedService,
+      ws.overheadPct, ws.profitPct, ws.estimateOverrides, saveWorkspace, workspacePayload]);
 
   function set(patchOrFn: Partial<PcWorkspace> | ((prev: PcWorkspace) => Partial<PcWorkspace>)) {
     const current = wsRef.current;
@@ -492,9 +609,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // persisted by the Pricing tab's explicit "Save Estimate", so leaving with
   // unsaved pricing threw it away. An autosave stuck in `error` counts as
   // unsaved too — that is the case task 7's retry chain cannot finish.
+  // Post-review B4 — Number() both sides: bid_estimates.overhead_pct/
+  // profit_pct are Postgres `numeric` columns, which pg serializes as
+  // strings (e.g. "22.00"); ws.overheadPct/profitPct are always real numbers
+  // (the hydration effect above now also normalizes with Number()). Without
+  // this, `22 !== "22.00"` is always true and this was permanently dirty
+  // whenever a saved estimate/workspace row had ever hydrated — a false
+  // "unsaved changes" prompt on every hub tab of every bid with autosaved
+  // pricing.
   const pricingDirty = savedEstimate
-    ? (ws.overheadPct !== savedEstimate.overhead_pct
-      || ws.profitPct !== savedEstimate.profit_pct
+    ? (Number(ws.overheadPct) !== Number(savedEstimate.overhead_pct)
+      || Number(ws.profitPct) !== Number(savedEstimate.profit_pct)
       || JSON.stringify(ws.estimateOverrides) !== JSON.stringify(overridesFromEstimate(savedEstimate.line_items)))
     : (ws.overheadPct !== 10 || ws.profitPct !== 15 || Object.keys(ws.estimateOverrides).length > 0);
   useUnsavedGuard(pricingDirty || saveState === 'error');
@@ -636,7 +761,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     };
   }, [bid.id]);
 
-  const { data: savedEstimateData } = useApi<BidEstimate>(`/estimates/${bid.id}`);
+  const { data: savedEstimateData, loading: savedEstimateLoading } = useApi<BidEstimate>(`/estimates/${bid.id}`);
   useEffect(() => { if (savedEstimateData) setSavedEstimate(savedEstimateData); }, [savedEstimateData]);
 
   // Unfiltered — the "From Project Files" panel shows every project document;
@@ -647,29 +772,97 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   });
   useEffect(() => { if (projectDocsData) setProjectDocs(projectDocsData); }, [projectDocsData]);
 
-  // Hydrate overhead/profit/overrides from the saved bid_estimates row once it
-  // loads. Without this, App.tsx's restore-on-refresh hardcodes
-  // estimateOverrides={}, overheadPct=10, profitPct=15 even when bid_estimates
-  // holds the estimator's real values — a refresh silently resets pricing.
-  // Only apply while the workspace's local pricing state is still pristine
-  // (untouched since restore): a saved estimate that resolves after the estimator
-  // has already started editing this session must never clobber their edits.
+  // Task 11 — struck from Batch 2: bid_workspaces also carries overhead_pct/
+  // profit_pct/estimate_overrides now (via the continuous autosave), not
+  // only bid_estimates (written only by the deliberate "Save Estimate"
+  // action). GET /preconstruction/:bidId/workspace, added in Task 11.
+  const { data: workspaceRow, loading: workspaceRowLoading } = useApi<{
+    overhead_pct: number | string | null;
+    profit_pct: number | string | null;
+    estimate_overrides: Record<string, number> | null;
+    updated_at: string | null;
+  } | null>(`/preconstruction/${bid.id}/workspace`);
+
+  // Post-review B4 — hydrate overhead/profit/overrides from whichever
+  // pricing source is authoritative, deterministically rather than
+  // "whichever of the two async fetches resolves first wins" (the previous
+  // shape: two independent effects gated on the same pristine check). Rule:
+  // the bid_estimates values apply first; the bid_workspaces row overrides
+  // them only when it is strictly newer (compare updated_at) — the autosave
+  // is only worth trusting over a completed Save when it captured an edit
+  // made *after* that save. Both sides of every comparison go through
+  // Number(): bid_estimates.overhead_pct/profit_pct and
+  // bid_workspaces.overhead_pct/profit_pct are Postgres `numeric` columns,
+  // which pg serializes as strings (e.g. "22.00") — comparing one of those
+  // against a real number with !== is always true, which is exactly what
+  // made pricingDirty (below) permanently true whenever the workspace GET
+  // won the old race. Only ever applied while the workspace's local pricing
+  // state is still pristine (untouched since restore): either source
+  // resolving after the estimator has already started editing this session
+  // must never clobber their edits.
+  //
+  // Re-review non-blocker (b) — the rule above ("estimate first, workspace
+  // only if strictly newer") only actually holds when both requests have
+  // landed before hydration ever runs: if workspaceRow resolved first (this
+  // effect also re-runs on every `savedEstimateData`/`workspaceRow` change)
+  // it would hydrate from workspaceRow alone, which flips `isPristine`
+  // false — so when the estimate arrived a moment later, the effect would
+  // already be permanently gated off, even though the estimate should have
+  // won. Gating on both fetches' `loading` being false makes this
+  // deterministic regardless of which one's network response happens to
+  // arrive first — reading `savedEstimateData` (the raw useApi value)
+  // rather than the `savedEstimate` state variable matters here too:
+  // `savedEstimate` is only populated by a separate effect one render after
+  // `savedEstimateData` (and independently updated after a Save Estimate,
+  // its other purpose — see below), so the instant `savedEstimateLoading`
+  // flips false, `savedEstimateData` already holds the fetched value in
+  // this same render while `savedEstimate` would still be stale for one
+  // more tick, which was enough for this effect to hydrate from workspaceRow
+  // alone all over again and flip `isPristine` before the estimate ever got
+  // a chance.
   useEffect(() => {
-    if (!savedEstimate) return;
+    if (savedEstimateLoading || workspaceRowLoading) return;
     const current = wsRef.current;
     const isPristine = current.overheadPct === 10 && current.profitPct === 15
       && Object.keys(current.estimateOverrides).length === 0;
     if (!isPristine) return;
-    const overrides = overridesFromEstimate(savedEstimate.line_items);
-    const hasRealValues = savedEstimate.overhead_pct !== 10 || savedEstimate.profit_pct !== 15
-      || Object.keys(overrides).length > 0;
-    if (!hasRealValues) return;
-    set({
-      overheadPct: savedEstimate.overhead_pct,
-      profitPct: savedEstimate.profit_pct,
-      estimateOverrides: overrides,
-    });
-  }, [savedEstimate]);
+
+    type Candidate = { overheadPct: number; profitPct: number; estimateOverrides: Record<string, number>; at: number };
+    let candidate: Candidate | null = null;
+
+    if (savedEstimateData) {
+      const overrides = overridesFromEstimate(savedEstimateData.line_items);
+      const overheadPct = Number(savedEstimateData.overhead_pct);
+      const profitPct = Number(savedEstimateData.profit_pct);
+      const hasRealValues = overheadPct !== 10 || profitPct !== 15 || Object.keys(overrides).length > 0;
+      if (hasRealValues) {
+        const at = savedEstimateData.updated_at ? new Date(savedEstimateData.updated_at).getTime() : 0;
+        candidate = { overheadPct, profitPct, estimateOverrides: overrides, at };
+      }
+    }
+
+    if (workspaceRow) {
+      const overrides = workspaceRow.estimate_overrides || {};
+      const overheadPct = workspaceRow.overhead_pct != null ? Number(workspaceRow.overhead_pct) : 10;
+      const profitPct = workspaceRow.profit_pct != null ? Number(workspaceRow.profit_pct) : 15;
+      const hasRealValues = (workspaceRow.overhead_pct != null && overheadPct !== 10)
+        || (workspaceRow.profit_pct != null && profitPct !== 15)
+        || Object.keys(overrides).length > 0;
+      if (hasRealValues) {
+        const at = workspaceRow.updated_at ? new Date(workspaceRow.updated_at).getTime() : 0;
+        // Strictly newer only — a tie (e.g. neither row has a real
+        // timestamp) keeps the estimate's value, the historically
+        // authoritative source.
+        if (!candidate || at > candidate.at) {
+          candidate = { overheadPct, profitPct, estimateOverrides: overrides, at };
+        }
+      }
+    }
+
+    if (candidate) {
+      set({ overheadPct: candidate.overheadPct, profitPct: candidate.profitPct, estimateOverrides: candidate.estimateOverrides });
+    }
+  }, [savedEstimateData, workspaceRow, savedEstimateLoading, workspaceRowLoading]);
 
   // Pre-fill service fields from Agent 1 output when it becomes available (skips already-filled fields)
   useEffect(() => {

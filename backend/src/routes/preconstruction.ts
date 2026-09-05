@@ -1336,22 +1336,44 @@ router.get('/workspaces', requireAuth, async (req: AuthRequest, res) => {
   res.json(rows);
 });
 
+// GET workspace — Task 11 ("pricing fields join the workspace autosave").
+// The per-bid counterpart to PUT below; PcWorkspace reads overhead_pct/
+// profit_pct/estimate_overrides from this to seed a reload, same trigger
+// (pristine-only) as the existing bid_estimates hydration.
+router.get('/:bidId/workspace', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const { rows } = await pool.query(`SELECT * FROM bid_workspaces WHERE bid_id=$1`, [bidId]);
+  res.json(rows[0] || null);
+});
+
 // PUT workspace (upsert)
 router.put('/:bidId/workspace', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const { step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated, confirmed_service } = req.body;
+  const {
+    step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated, confirmed_service,
+    // Task 11 — struck from Batch 2: these three already exist on bid_estimates
+    // (written only by the deliberate "Save Estimate" action); the continuous
+    // workspace autosave now carries them too, so a draft survives even before
+    // that action. Does not change what /estimates stores or the estimate math.
+    overhead_pct, profit_pct, estimate_overrides,
+  } = req.body;
   const { rows } = await pool.query(
-    `INSERT INTO bid_workspaces (bid_id, step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated, confirmed_service, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
+    `INSERT INTO bid_workspaces (bid_id, step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated, confirmed_service, overhead_pct, profit_pct, estimate_overrides, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now())
      ON CONFLICT (bid_id) DO UPDATE SET
        step=$2, active_tab=$3, notes=$4, scope=$5, rfis=$6, files=$7,
-       ai_done=$8, proposal_generated=$9, confirmed_service=$10, updated_at=now()
+       ai_done=$8, proposal_generated=$9, confirmed_service=$10,
+       overhead_pct=$11, profit_pct=$12, estimate_overrides=$13, updated_at=now()
      RETURNING *`,
     [bidId, step||'intake', active_tab||'overview', notes||'',
      JSON.stringify(scope||{}), JSON.stringify(rfis||[]), JSON.stringify(files||[]),
      !!ai_done, !!proposal_generated,
-     confirmed_service ? JSON.stringify(confirmed_service) : null]
+     confirmed_service ? JSON.stringify(confirmed_service) : null,
+     overhead_pct === undefined || overhead_pct === null || overhead_pct === '' ? null : Number(overhead_pct),
+     profit_pct === undefined || profit_pct === null || profit_pct === '' ? null : Number(profit_pct),
+     JSON.stringify(estimate_overrides || {})]
   );
   res.json(rows[0]);
 });

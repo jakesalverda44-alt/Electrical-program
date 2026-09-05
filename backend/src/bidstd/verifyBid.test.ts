@@ -270,6 +270,26 @@ describe('verifyBidDocx — end to end with the renderer', () => {
     expect(result.pass).toBe(true);
     if (result.pdf) expect(result.pdf.length).toBeGreaterThan(0);
   });
+
+  // Post-review B3 — a visible, explicit skip (with a printed reason) rather
+  // than the silent "if (result.pdf)" tolerance above, so the PDF path is
+  // provably exercised whenever soffice is actually present on the machine
+  // running the suite, and it's obvious from the test output when it wasn't.
+  it('actually produces a non-empty PDF when soffice is present on this machine', async (ctx) => {
+    const soffice = findSoffice();
+    if (!soffice) {
+      // eslint-disable-next-line no-console
+      console.log('[skip] verifyBidDocx PDF conversion: soffice not found on PATH or at the macOS app bundle path');
+      return ctx.skip();
+    }
+    const buf = await renderBidDocx(fixture);
+    const result = await verifyBidDocx(buf, { kind: 'gc' });
+    expect(result.pass).toBe(true);
+    expect(result.pdf).toBeTruthy();
+    expect(result.pdf!.length).toBeGreaterThan(0);
+    // A real PDF starts with the standard file-signature bytes.
+    expect(result.pdf!.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+  }, 35_000);
 });
 
 describe('findSoffice', () => {

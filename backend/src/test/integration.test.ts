@@ -3,6 +3,7 @@ import request from 'supertest';
 import { app } from '../index';
 import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth } from './harness';
+import { __resetBriefCachesForTests } from '../services/brief';
 
 // These hit a real Postgres via supertest. They run in CI (postgres service)
 // and skip automatically when no database is reachable locally.
@@ -425,12 +426,28 @@ describe('command center brief (integration)', () => {
   it('surfaces a needs-call Kohler lead as a lead-call item with a tel: CTA', async (ctx) => {
     if (!ok) return ctx.skip();
     const owner = await makeUser('owner');
-    // Isolate: clear any other open needs-call leads so ours is within the 10-item window.
-    await pool.query(`UPDATE leads SET needs_call = false WHERE needs_call = true`);
+    // Isolate: brief.ts's needCallRows query is `ORDER BY created_at ASC LIMIT 10`
+    // over `needs_call = true OR (contact_method='phone' AND first_contact_sent_at
+    // IS NULL AND stage='new')` — clearing only needs_call=true left the second arm
+    // live, so leads accumulated by earlier tests in this run (any 'new' phone lead
+    // with no first_contact_sent_at) could fill the 10-row window ahead of the lead
+    // this test is about to create (oldest-first), pushing it out. Neutralize both
+    // arms of that WHERE clause, not just one, so this test is isolated regardless
+    // of what other tests left behind.
+    await pool.query(
+      `UPDATE leads SET needs_call = false, first_contact_sent_at = COALESCE(first_contact_sent_at, now())
+         WHERE deleted_at IS NULL AND stage NOT IN ('lost','converted')
+           AND (needs_call = true OR (contact_method='phone' AND first_contact_sent_at IS NULL AND stage='new'))`
+    );
     const { rows } = await pool.query(
       `INSERT INTO leads (name, phone, source, contact_method, stage, needs_call, salesperson_id)
        VALUES ($1,'352-555-0100','kohler','phone','new',true,$2) RETURNING id`,
       [`CallMe ${Date.now()}`, owner.id]);
+    // Task 8 gave /api/brief's SQL half a 90s per-scope cache — an owner-role
+    // caller is unscoped, so an earlier test's /api/brief call in this same run
+    // could still be within the TTL and serve stale rows that predate the lead
+    // just inserted above. Force a fresh read for this assertion.
+    __resetBriefCachesForTests();
     const res = await request(app).get('/api/brief').set(auth(owner.token)).expect(200);
     const item = res.body.attention.find((a: { cta?: { leadId?: string } }) => a.cta?.leadId === rows[0].id);
     expect(item?.type).toBe('lead-call');

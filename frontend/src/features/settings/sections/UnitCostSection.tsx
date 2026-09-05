@@ -4,6 +4,7 @@ import { useApi } from '../../../hooks/useApi';
 import { useMutation } from '../../../hooks/useMutation';
 import { Field, SectionTitle, SaveBar, inputStyle } from '../shared';
 import { PROJECT_TYPES } from '../../preconstruction/constants';
+import { resetGlobalPcCaches } from '../../preconstruction/PcWorkspace';
 
 const CATEGORIES = [
   'Service & Distribution',
@@ -69,6 +70,11 @@ export function UnitCostSection() {
         setOrig(JSON.parse(JSON.stringify(lib)));
         setSaved(true);
         setTimeout(() => setSaved(false), 3000);
+        // Post-review B2 — an already-open PcWorkspace estimating tab kept its
+        // module-level unit-cost cache for up to 5 minutes with no way to
+        // learn a save happened; without this, "Save Estimate" there could
+        // persist prices computed from the library just replaced.
+        resetGlobalPcCaches();
       },
       errorTitle: 'Could not save unit costs',
     },

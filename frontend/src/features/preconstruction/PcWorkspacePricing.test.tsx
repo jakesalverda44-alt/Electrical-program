@@ -347,3 +347,71 @@ describe('PcWorkspace Pricing tab — confidence backfill on a saved estimate (F
     expect(screen.queryByText('VERIFY')).toBeNull();
   });
 });
+
+// Audit batch 3, Task 11 ("Pricing fields join the workspace autosave" —
+// struck from Batch 2). bid_workspaces now also carries overhead_pct/
+// profit_pct/estimate_overrides via the continuous PUT /:bidId/workspace
+// autosave, not only the "Save Estimate" action tested above (which still
+// writes to bid_estimates, unchanged). A local mock (not the shared
+// `mockApi` above) so nothing about the existing tests' request wiring
+// changes; `estimate.overhead_pct`/`profit_pct` stay at the 10/15 defaults
+// here so the existing bid_estimates hydration effect never counts them as
+// "real values" — these tests isolate the new workspace-sourced hydration.
+const TASK11_ESTIMATE: BidEstimate = {
+  bid_id: 'b1', overhead_pct: 10, profit_pct: 15,
+  line_items: [{ category: 'ELEC', item: 'Panel', qty: 1, unit: 'EA', unit_cost: 100, total: 100, overridden: false }],
+  subtotals: {}, total_direct: 100, total_overhead: 0, total_profit: 0, grand_total: 100,
+  comp_count: 0, confidence: 'LOW',
+};
+
+function mockApiTask11(workspaceRow: unknown) {
+  get.mockImplementation((url: string) => {
+    if (url === `/preconstruction/${bid.id}/workspace`) return Promise.resolve({ data: workspaceRow });
+    if (url === `/estimates/${bid.id}`) return Promise.resolve({ data: TASK11_ESTIMATE });
+    if (url === '/estimates/unit-costs') return Promise.resolve({ data: { global: {}, by_project_type: {} } });
+    if (url === '/documents') return Promise.resolve({ data: [] });
+    return Promise.resolve({ data: null });
+  });
+  post.mockResolvedValue({ data: {} });
+  put.mockResolvedValue({ data: {} });
+  del.mockResolvedValue({ data: {} });
+}
+
+function renderTask11PricingTab(wsOverrides: Partial<PcWorkspace> = {}) {
+  const ws = { ...blankWorkspace('b1', 'Test Job', 0), activeTab: 'pricing' as const, ...wsOverrides };
+  return render(<StatefulWrapper initialWs={ws}/>);
+}
+
+describe('PcWorkspace Pricing tab — workspace autosave (Task 11)', () => {
+  it('the autosave PUT payload includes overhead_pct/profit_pct/estimate_overrides after an overhead change', async () => {
+    mockApiTask11(null);
+    renderTask11PricingTab();
+
+    const overheadInput = await screen.findByDisplayValue('10') as HTMLInputElement;
+    fireEvent.change(overheadInput, { target: { value: '17' } });
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith(
+      `/preconstruction/${bid.id}/workspace`,
+      expect.objectContaining({ overhead_pct: 17, profit_pct: 15, estimate_overrides: {} }),
+    ), { timeout: 2000 });
+  });
+
+  it('reload seeds overheadPct/profitPct/estimateOverrides from the per-bid workspace GET', async () => {
+    mockApiTask11({ overhead_pct: 22, profit_pct: 30, estimate_overrides: { 'ELEC-1': 500 } });
+    renderTask11PricingTab();
+
+    await waitFor(() => expect(screen.getByDisplayValue('22')).toBeTruthy());
+    expect(screen.getByDisplayValue('30')).toBeTruthy();
+  });
+
+  it('does not clobber a workspace already mid-edit (not pristine) with the GET response', async () => {
+    mockApiTask11({ overhead_pct: 22, profit_pct: 30, estimate_overrides: {} });
+    // Not pristine: overheadPct already differs from the 10/15/{} default.
+    renderTask11PricingTab({ overheadPct: 12 });
+
+    // Give the GET a moment to resolve and the hydration effect a chance to run.
+    await new Promise(r => setTimeout(r, 50));
+    expect(screen.getByDisplayValue('12')).toBeTruthy();
+    expect(screen.queryByDisplayValue('22')).toBeNull();
+  });
+});

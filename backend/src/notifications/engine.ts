@@ -33,46 +33,110 @@ export async function createNotification(userId: string, n: NewNotif & { dedupKe
   return rows.length > 0;
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
+/**
+ * Insert many notifications in one round trip, deduped via dedup_key — used
+ * by runReminderScan's per-type scans instead of one createNotification call
+ * per (record × target-user) pair (audit data #17: ~194 sequential inserts/hour
+ * today, 6,000+ at 1,000 tasks × 6 users). Returns the dedup_keys that were
+ * actually newly inserted (already-present ones are silently skipped by the
+ * same partial unique index createNotification relies on).
+ */
+async function createNotificationsBulk(
+  rows: Array<NewNotif & { userId: string; dedupKey: string }>
+): Promise<Set<string>> {
+  if (!rows.length) return new Set();
+  const { rows: inserted } = await pool.query(
+    `INSERT INTO notifications (user_id, type, title, body, link_view, link_id, dedup_key)
+     SELECT * FROM UNNEST(
+       $1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[], $6::uuid[], $7::text[]
+     ) AS t(user_id, type, title, body, link_view, link_id, dedup_key)
+     ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING
+     RETURNING dedup_key`,
+    [
+      rows.map(r => r.userId),
+      rows.map(r => r.type),
+      rows.map(r => r.title),
+      rows.map(r => r.body),
+      rows.map(r => r.linkView),
+      rows.map(r => r.linkId),
+      rows.map(r => r.dedupKey),
+    ]
+  );
+  return new Set(inserted.map(r => r.dedup_key as string));
+}
+
+/**
+ * Build and bulk-insert the notifications for one reminder type in a single
+ * INSERT, then push one digest line per source record that produced at
+ * least one newly-created row (mirrors the old per-record "created" flag,
+ * just computed from the batch result instead of from N round trips).
+ */
+async function scanAndNotify<T>(
+  type: ReminderType,
+  items: T[],
+  build: (item: T) => { targets: string[]; notif: NewNotif; dedupBase: string; digestLine: string },
+  fresh: Record<ReminderType, string[]>,
+): Promise<void> {
+  const batch: Array<NewNotif & { userId: string; dedupKey: string }> = [];
+  const perRecord: Array<{ keys: string[]; line: string }> = [];
+  for (const item of items) {
+    const { targets, notif, dedupBase, digestLine } = build(item);
+    const keys = targets.map(uid => `${dedupBase}:${uid}`);
+    perRecord.push({ keys, line: digestLine });
+    for (const uid of targets) batch.push({ ...notif, userId: uid, dedupKey: `${dedupBase}:${uid}` });
+  }
+  const created = await createNotificationsBulk(batch);
+  for (const { keys, line } of perRecord) {
+    if (keys.some(k => created.has(k))) fresh[type].push(line);
+  }
+}
 
 /**
  * Scan for follow-up tasks due, proposals viewed-but-unsigned, and bids due soon.
  * Creates in-app notifications (deduped) and sends an email digest per type when enabled.
  * Safe to run repeatedly — dedup_key prevents duplicate notifications.
+ *
+ * Post-review hardening (5g), follow-up not implemented here: dedup_key has
+ * no day component (see the followup_due comment below), so once a task/lead
+ * has notified once, its row is the permanent record of that — reopening the
+ * item (closing then reopening a task, a lead going quiet again after being
+ * worked) does NOT produce a new notification, because ON CONFLICT sees the
+ * same dedup_key already exists. It will notify again only once retention
+ * (audit batch 3 Task 2) ages that old row out of the notifications table.
+ * Filed as a follow-up — not implemented in this batch — because fixing it
+ * needs a real decision about what "reopened" means per notification type
+ * (e.g. does a task's status changing open→closed→open count, and should the
+ * dedup key incorporate a version/generation counter instead of just the
+ * item id) rather than a mechanical change.
  */
 export async function runReminderScan(): Promise<void> {
   const prefs = await getReminderPrefs();
   const owners = await ownerAdminIds();
-  const day = today();
   // Collect newly created notifications per type for the email digest.
   const fresh: Record<ReminderType, string[]> = { followup_due: [], proposal_viewed_unsigned: [], bid_due_soon: [], lead_overdue: [] };
 
   const targetsFor = (salespersonId: string | null) => (salespersonId ? [salespersonId] : owners);
 
-  const emit = async (type: ReminderType, targets: string[], n: NewNotif, dedupBase: string, digestLine: string) => {
-    let created = false;
-    for (const uid of targets) {
-      if (await createNotification(uid, { ...n, dedupKey: `${dedupBase}:${uid}` })) created = true;
-    }
-    if (created) fresh[type].push(digestLine);
-  };
-
-  // 1. Follow-up tasks due today or overdue.
+  // 1. Follow-up tasks due today or overdue. Dedup key has no day component
+  // (audit data #2) — a still-open task produces one row, not one per day it
+  // stays open; ON CONFLICT makes re-running the scan a no-op for it.
   if (prefs.types.followup_due.app || prefs.types.followup_due.email) {
     const { rows } = await pool.query(
       `SELECT id, title, due_date, assigned_to, linked_name FROM tasks
        WHERE status = 'open' AND due_date IS NOT NULL AND due_date <= CURRENT_DATE`
     );
-    for (const t of rows) {
-      if (!prefs.types.followup_due.app) break;
-      await emit('followup_due', targetsFor(t.assigned_to),
-        { type: 'followup_due', title: 'Follow-up due', body: t.title + (t.linked_name ? ` · ${t.linked_name}` : ''), linkView: 'followups', linkId: t.id },
-        `followup:${t.id}:${day}`,
-        `${t.title}${t.linked_name ? ` (${t.linked_name})` : ''} — due ${t.due_date}`);
+    if (prefs.types.followup_due.app) {
+      await scanAndNotify('followup_due', rows, t => ({
+        targets: targetsFor(t.assigned_to),
+        notif: { type: 'followup_due', title: 'Follow-up due', body: t.title + (t.linked_name ? ` · ${t.linked_name}` : ''), linkView: 'followups', linkId: t.id },
+        dedupBase: `followup:${t.id}`,
+        digestLine: `${t.title}${t.linked_name ? ` (${t.linked_name})` : ''} — due ${t.due_date}`,
+      }), fresh);
     }
   }
 
-  // 2. Generator proposals viewed but not signed for > N days.
+  // 2. Generator proposals viewed but not signed for > N days. (Already had
+  // no day in its dedup key — unchanged.)
   {
     const cfg = prefs.types.proposal_viewed_unsigned;
     if (cfg.app || cfg.email) {
@@ -84,17 +148,18 @@ export async function runReminderScan(): Promise<void> {
            AND viewed_at < now() - ($1 || ' days')::interval`,
         [String(days)]
       );
-      for (const g of rows) {
-        if (!cfg.app) break;
-        await emit('proposal_viewed_unsigned', targetsFor(g.salesperson_id),
-          { type: 'proposal_viewed_unsigned', title: 'Proposal viewed, not signed', body: `${g.customer} opened their proposal but hasn't signed`, linkView: 'generators/pipeline', linkId: g.id },
-          `propunsigned:${g.id}`,
-          `${g.customer} — viewed ${new Date(g.viewed_at).toLocaleDateString()}, not signed`);
+      if (cfg.app) {
+        await scanAndNotify('proposal_viewed_unsigned', rows, g => ({
+          targets: targetsFor(g.salesperson_id),
+          notif: { type: 'proposal_viewed_unsigned', title: 'Proposal viewed, not signed', body: `${g.customer} opened their proposal but hasn't signed`, linkView: 'generators/pipeline', linkId: g.id },
+          dedupBase: `propunsigned:${g.id}`,
+          digestLine: `${g.customer} — viewed ${new Date(g.viewed_at).toLocaleDateString()}, not signed`,
+        }), fresh);
       }
     }
   }
 
-  // 3. Bids due within N days.
+  // 3. Bids due within N days. Dedup key has no day component (audit data #2).
   {
     const cfg = prefs.types.bid_due_soon;
     if (cfg.app || cfg.email) {
@@ -102,18 +167,22 @@ export async function runReminderScan(): Promise<void> {
       const { rows } = await pool.query(
         `SELECT id, name, due, salesperson_id FROM bids WHERE stage IN ('due','submitted') AND deleted_at IS NULL`
       );
-      for (const b of rows) {
-        const dd = parseDueDays(String(b.due || ''));
-        if (dd < 0 || dd > within || !cfg.app) continue;
-        await emit('bid_due_soon', targetsFor(b.salesperson_id),
-          { type: 'bid_due_soon', title: 'Bid due soon', body: `${b.name} is due in ${dd} day${dd === 1 ? '' : 's'}`, linkView: 'electrical/bids', linkId: b.id },
-          `biddue:${b.id}:${day}`,
-          `${b.name} — due in ${dd} day${dd === 1 ? '' : 's'}`);
+      const dueSoon = rows
+        .map(b => ({ ...b, dd: parseDueDays(String(b.due || '')) }))
+        .filter(b => b.dd >= 0 && b.dd <= within);
+      if (cfg.app) {
+        await scanAndNotify('bid_due_soon', dueSoon, b => ({
+          targets: targetsFor(b.salesperson_id),
+          notif: { type: 'bid_due_soon', title: 'Bid due soon', body: `${b.name} is due in ${b.dd} day${b.dd === 1 ? '' : 's'}`, linkView: 'electrical/bids', linkId: b.id },
+          dedupBase: `biddue:${b.id}`,
+          digestLine: `${b.name} — due in ${b.dd} day${b.dd === 1 ? '' : 's'}`,
+        }), fresh);
       }
     }
   }
 
   // 4. Overdue leads — last_activity_at older than the per-stage threshold.
+  // Dedup key has no day component (audit data #2).
   if (prefs.types.lead_overdue.app || prefs.types.lead_overdue.email) {
     const stageConfig = await getStageConfig();
     for (const [stage, cfg] of Object.entries(stageConfig)) {
@@ -127,23 +196,31 @@ export async function runReminderScan(): Promise<void> {
            )`,
         [stage, String(cfg.overdue_after_hours)]
       );
-      for (const l of overdueLeads) {
-        if (!prefs.types.lead_overdue.app) break;
-        const lastLabel = l.last_activity_at
-          ? `last activity ${new Date(l.last_activity_at).toLocaleDateString()}`
-          : 'no activity yet';
-        await emit('lead_overdue', targetsFor(l.salesperson_id),
-          { type: 'lead_overdue', title: 'Lead overdue — no recent activity',
-            body: `${l.name} (${l.stage}) — ${lastLabel}`,
-            linkView: 'generators/leads', linkId: l.id },
-          `lead_overdue:${l.id}:${day}`,
-          `${l.name} — stage: ${l.stage}, ${lastLabel}`);
+      if (prefs.types.lead_overdue.app) {
+        await scanAndNotify('lead_overdue', overdueLeads, l => {
+          const lastLabel = l.last_activity_at
+            ? `last activity ${new Date(l.last_activity_at).toLocaleDateString()}`
+            : 'no activity yet';
+          return {
+            targets: targetsFor(l.salesperson_id),
+            notif: { type: 'lead_overdue', title: 'Lead overdue — no recent activity',
+              body: `${l.name} (${l.stage}) — ${lastLabel}`,
+              linkView: 'generators/leads', linkId: l.id },
+            dedupBase: `lead_overdue:${l.id}`,
+            digestLine: `${l.name} — stage: ${l.stage}, ${lastLabel}`,
+          };
+        }, fresh);
       }
     }
   }
 
   await sendDigests(prefs, fresh);
 }
+
+// Still used by maybeSendDailyLeadDigest's once-per-calendar-day dedup below
+// (a genuine once-per-day digest by design, per the plan's environment note —
+// not one of the three reminder dedup keys that had `:${day}` removed above).
+const today = () => new Date().toISOString().slice(0, 10);
 
 const TYPE_LABELS: Record<ReminderType, string> = {
   followup_due: 'Follow-ups Due',
