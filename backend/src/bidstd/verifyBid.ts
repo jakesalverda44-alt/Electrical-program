@@ -220,20 +220,18 @@ const MAC_SOFFICE_PATH = '/Applications/LibreOffice.app/Contents/MacOS/soffice';
 
 /** Checks PATH, then the macOS app bundle path. Never throws.
  *
- * Test-harness note (audit batch 3, Task 1): skipped entirely under
- * NODE_ENV=test. LibreOffice serializes concurrent conversions through a
- * single user-profile lock, so when the backend suite's test files run in
- * parallel workers, several simultaneous generate-docx/generate-prebid-package
- * calls race for that lock — some conversions silently fail (`convertToPdf`'s
- * own catch returns null, by design) and others simply take long enough to
- * blow past vitest's 5s default test timeout. Either way the PDF is optional
- * (`verifyBidDocx` never lets its absence affect pass/fail — see
- * "never fails just because soffice is unavailable" below), so tests never
- * needed real PDF conversion in the first place; skipping it here removes a
- * source of nondeterministic timing and nondeterministic extra `documents`
- * rows without touching any behavior a real single-process boot exercises. */
+ * Post-review B3 (audit batch 3, Task 1 revisited): this used to return
+ * `null` unconditionally under NODE_ENV=test, which meant no test ever
+ * exercised real PDF conversion at all. Reverted to real detection.
+ * LibreOffice still serializes concurrent conversions through a single
+ * user-profile lock, so parallel test workers hitting generate-docx at the
+ * same time can still race for it — the tests that don't care about the PDF
+ * (prebid.test.ts, bidStandardGeneration.test.ts) now filter their
+ * `documents` row counts by file_type so an optional PDF row racing in or
+ * out no longer changes their outcome, and verifyBid.test.ts's own
+ * soffice-dependent case skips visibly with a reason when soffice truly
+ * isn't found, instead of silently asserting nothing either way. */
 export function findSoffice(): string | null {
-  if (process.env.NODE_ENV === 'test') return null;
   try {
     const out = execSync('command -v soffice', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
     if (out) return out;

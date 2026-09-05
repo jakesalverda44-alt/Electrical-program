@@ -157,8 +157,13 @@ describe('generate-docx — verify gate (Task 6)', () => {
       .expect(200);
     expect(res.headers['content-type']).toMatch(/wordprocessingml/);
 
+    // Excludes the optional PDF row (post-review B3): when soffice is
+    // present, verifyBidDocx also produces a PDF, which generate-docx files
+    // as a second category='proposal' row alongside the docx — this test is
+    // about the docx + bid_data.json filing, not whether that PDF happened
+    // to convert in time.
     const { rows } = await pool.query(
-      `SELECT category FROM documents WHERE linked_id=$1 ORDER BY category`, [bidId]
+      `SELECT category FROM documents WHERE linked_id=$1 AND file_type <> 'application/pdf' ORDER BY category`, [bidId]
     );
     expect(rows.map(r => r.category)).toEqual(['bid_data', 'proposal']);
   });

@@ -31,7 +31,12 @@ describe('GET /api/intake — similarity cache (Task 9)', () => {
     // half doesn't need this, since it's a red flag if that ever silently
     // stays cached.
     let sawCleanHit = false;
-    for (let attempt = 0; attempt < 5 && !sawCleanHit; attempt++) {
+    // Post-review B3: under this session's observed full-suite contention
+    // (many files concurrently creating bids/intake_items against the same
+    // global cache key), 5 attempts occasionally never landed a clean
+    // back-to-back window. Each attempt is cheap; 20 gives this a real
+    // margin without slowing the file noticeably when it succeeds early.
+    for (let attempt = 0; attempt < 20 && !sawCleanHit; attempt++) {
       __resetIntakeSimilarCacheForTests();
       const uniq = `${Date.now()}${Math.floor(Math.random() * 1000)}_${attempt}`;
       await request(app).post('/api/intake').set(auth(u.token))

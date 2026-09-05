@@ -507,9 +507,14 @@ describe('generate-docx files every generated proposal', () => {
     // No CLOUDINARY_*/Drive folder configured in the test environment, so
     // storeDocument falls back to storing the bytes as base64 on the row itself —
     // still enough to prove the filing happened, independent of external storage.
+    // file_type scoped to the docx mimetype (post-review B3): when soffice is
+    // present, verifyBidDocx also produces a PDF, which generate-docx files as
+    // a second category='proposal' row — this test is about the docx filing,
+    // not whether that optional PDF happened to convert in time.
     const { rows } = await pool.query(
       `SELECT category, linked_id, file_data IS NOT NULL AS has_data
-       FROM documents WHERE linked_id=$1 AND category='proposal'`,
+       FROM documents WHERE linked_id=$1 AND category='proposal'
+         AND file_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'`,
       [bidId]
     );
     expect(rows.length).toBe(1);
@@ -532,8 +537,11 @@ describe('generate-docx files every generated proposal', () => {
     await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token)).expect(200);
     await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(u.token)).expect(200);
 
+    // file_type scoped to the docx mimetype (post-review B3) — see the comment
+    // in the previous test.
     const { rows } = await pool.query(
-      `SELECT count(*)::int AS n FROM documents WHERE linked_id=$1 AND category='proposal'`,
+      `SELECT count(*)::int AS n FROM documents WHERE linked_id=$1 AND category='proposal'
+         AND file_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'`,
       [bidId]
     );
     expect(rows[0].n).toBe(2);

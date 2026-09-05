@@ -5,11 +5,29 @@ import { getJwtSecret } from '../middleware/auth';
 
 let ready: boolean | null = null;
 
+// Post-review B3 — dbAvailable() used to swallow ANY error other than the
+// "wrong database" refusal and report the whole file as skipped, still
+// exiting 0. That hid real problems (a migration failure, a query timeout)
+// behind "database not available", which is only true for one specific
+// class of error: Postgres genuinely isn't reachable at all. Everything
+// else must fail loudly. `code` covers the Node-level connection errors;
+// the message check covers pg-pool's own connection-timeout wrapper (it
+// throws a plain Error with no `.code`, not a network error).
+const UNREACHABLE_DB_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ECONNRESET']);
+function isDbUnreachable(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  if (code && UNREACHABLE_DB_CODES.has(code)) return true;
+  const message = err instanceof Error ? err.message : '';
+  return message.includes('Connection terminated due to connection timeout');
+}
+
 /**
  * True when a Postgres is reachable and migrations have been applied. Cached.
  * Integration tests use this to skip gracefully when no database is available
  * (e.g. a local `npm test` without a DB) — in CI the postgres service is up so
- * they run for real.
+ * they run for real. Anything other than "no database at all" (a migration
+ * failure, a query timeout, an auth failure, ...) rethrows instead of
+ * silently skipping the file — see UNREACHABLE_DB_CODES above.
  */
 export async function dbAvailable(): Promise<boolean> {
   if (ready !== null) return ready;
@@ -44,6 +62,7 @@ export async function dbAvailable(): Promise<boolean> {
     if (err instanceof Error && err.message.startsWith('Refusing to run tests against database')) {
       throw err;
     }
+    if (!isDbUnreachable(err)) throw err;
     ready = false;
   }
   return ready;
