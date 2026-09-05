@@ -5,7 +5,7 @@
 // a Graph outage — always offers a "no appointment" escape hatch regardless of whether
 // the calendar loaded, came back empty, or failed.
 import React, { useEffect, useState } from 'react';
-import Icon from '../../components/Icon';
+import Modal from '../../components/Modal';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useIsMobile } from '../../hooks/useIsMobile';
@@ -79,22 +79,15 @@ export default function SurveyFromCalendarModal({ onClose, onLeadReady }: Props)
   const busy = pickingId !== null || blankLoading;
 
   return (
-    <div
-      className="overlay"
-      onMouseDown={e => e.target === e.currentTarget && onClose()}
-      style={isMobile ? { padding: 0, alignItems: 'stretch', justifyContent: 'stretch' } : undefined}
+    <Modal
+      open
+      onClose={onClose}
+      title="Start Site Survey"
+      overlayStyle={isMobile ? { padding: 0, alignItems: 'stretch', justifyContent: 'stretch' } : undefined}
+      style={isMobile
+        ? { width: '100%', maxWidth: '100%', height: '100%', borderRadius: 0, display: 'flex', flexDirection: 'column' }
+        : undefined}
     >
-      <div
-        className="modal"
-        style={isMobile
-          ? { width: '100%', maxWidth: '100%', height: '100%', borderRadius: 0, display: 'flex', flexDirection: 'column' }
-          : undefined}
-      >
-        <div className="modal-hdr">
-          <h3>Start Site Survey</h3>
-          <button className="close-x" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
-        </div>
-
         <div className="modal-body" style={isMobile ? { flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' } : undefined}>
           <p style={{ fontSize: 12.5, color: 'var(--text3)', margin: '0 0 12px', lineHeight: 1.5 }}>
             Pick an upcoming appointment to pull its name, address, and contact into a new
@@ -173,7 +166,6 @@ export default function SurveyFromCalendarModal({ onClose, onLeadReady }: Props)
             {blankLoading ? 'Starting…' : 'No appointment — blank survey'}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

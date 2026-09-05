@@ -109,7 +109,7 @@ export function ConfirmLeaveDialog({ onStay, onLeave, title, body, leaveLabel }:
   leaveLabel?: string;
 }) {
   return (
-    <div className="overlay" role="dialog" aria-modal="true" aria-label={title ?? UNSAVED_TITLE}
+    <div className="overlay" role="alertdialog" aria-modal="true" aria-label={title ?? UNSAVED_TITLE}
       onMouseDown={e => e.target === e.currentTarget && onStay()}>
       <div className="modal" style={{ width: '100%', maxWidth: 420 }}>
         <div className="modal-hdr"><h3>{title ?? UNSAVED_TITLE}</h3></div>

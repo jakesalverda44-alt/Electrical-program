@@ -83,7 +83,7 @@ export default function ProfileModal({ user, onClose, onSaved, showToast }: Prop
               <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginTop: 1, textTransform: 'capitalize' }}>{user.role.replace(/_/g, ' ')}</div>
             </div>
           </div>
-          <button className="close-x" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
+          <button className="close-x" aria-label="Close" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
         </div>
 
         {/* Tab strip */}

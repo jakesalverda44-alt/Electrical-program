@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
+import Modal from '../../components/Modal';
 import { Gen, WonJob } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
 import RecordFiles from '../../components/RecordFiles';
@@ -54,6 +55,8 @@ interface Props {
 }
 
 interface Draft { customer: string; loc: string; mfr: string; model: string; kw: string; amount: string; addons: string; date_won: string; }
+
+const GEN_DRAWER_TITLE_ID = 'gen-detail-drawer-title';
 
 export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated, autoKickoff, onAutoKickoffHandled, autoCountersign, onAutoCountersignHandled, linkCandidates, onLink, groupSiblings }: Props) {
   const canDelete = isPrivileged(useUser());
@@ -176,14 +179,16 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
   };
 
   return (
-    <div className="drawer-overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="drawer">
+    <>
+    <Modal open onClose={onClose} variant="drawer" labelledBy={GEN_DRAWER_TITLE_ID}>
+      {({ requestClose }) => (
+      <>
         <div className="drawer-hdr">
           <div>
             <div className="drawer-eyebrow">Generator Proposal</div>
-            <div className="drawer-title">{gen.customer}</div>
+            <div id={GEN_DRAWER_TITLE_ID} className="drawer-title">{gen.customer}</div>
           </div>
-          <button className="close-x" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
+          <button className="close-x" aria-label="Close" onClick={requestClose}><Icon name="x" size={16} stroke={2}/></button>
         </div>
 
         <div className="drawer-body">
@@ -513,7 +518,9 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           )}
 
         </div>
-      </div>
+      </>
+      )}
+    </Modal>
 
       {/* Sending used to live only in the builder, reachable after a save, so there was
           no way to resend from the record a rep is actually looking at. */}
@@ -560,6 +567,6 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           }}
         />
       )}
-    </div>
+    </>
   );
 }

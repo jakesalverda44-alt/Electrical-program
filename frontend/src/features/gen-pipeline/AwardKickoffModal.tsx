@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Icon from '../../components/Icon';
+import Modal from '../../components/Modal';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { Gen } from '../../types';
@@ -74,12 +75,7 @@ export default function AwardKickoffModal({ gen, onClose, onOpenTab, onUpdated, 
   };
 
   return (
-    <div className="overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ width: 520 }}>
-        <div className="modal-hdr">
-          <h3>🎉 Job Awarded — Kickoff</h3>
-          <button className="close-x" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
-        </div>
+    <Modal open onClose={onClose} title="🎉 Job Awarded — Kickoff" style={{ width: 520 }}>
         <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '62vh', overflowY: 'auto' }}>
           <div style={{ fontSize: 13, color: 'var(--text2)' }}>
             Get the kickoff kit together for <b>{gen.customer}</b>, then draft the team email. The signed proposal is required; everything else can follow.
@@ -122,7 +118,6 @@ export default function AwardKickoffModal({ gen, onClose, onOpenTab, onUpdated, 
             {drafting ? 'Drafting…' : redraft ? 'Re-draft kickoff email' : 'Draft kickoff email'}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

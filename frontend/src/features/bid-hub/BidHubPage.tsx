@@ -83,7 +83,7 @@ export default function BidHubPage({ bidId, bids, setBids, setWonJobs, pcData, o
     <div className="scroll view-enter">
       <div style={{ padding: 24 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-          <button className="close-x" onClick={() => onNav('electrical/bids')}>
+          <button className="close-x" aria-label="Back to Bids" onClick={() => onNav('electrical/bids')}>
             <Icon name="arrow" size={16} stroke={2} style={{ transform: 'rotate(180deg)' }}/>
           </button>
           <div style={{ flex: 1 }}>

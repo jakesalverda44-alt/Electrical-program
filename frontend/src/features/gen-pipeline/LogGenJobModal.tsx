@@ -2,8 +2,7 @@
 // completed before the CRM existed. Records the job at its final stage directly, so no
 // pipeline side effects (Drive folders, "moved to…" activity) fire for finished work.
 import React, { useState } from 'react';
-import { useDirtyDismiss } from '../../hooks/useDirtyDismiss';
-import Icon from '../../components/Icon';
+import Modal from '../../components/Modal';
 import api from '../../api/client';
 import { Gen, WonJob } from '../../types';
 
@@ -32,7 +31,6 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
   const [commissionPaid, setCommissionPaid] = useState(true);
   // Backdrop click and Escape ask first, but only when something was typed.
   const isDirty = JSON.stringify(f) !== JSON.stringify(BLANK) || !commissionPaid;
-  const { requestClose, discardDialog } = useDirtyDismiss(isDirty, onClose);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -71,13 +69,8 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
   };
 
   return (
-    <>
-    <div className="overlay" onMouseDown={e => e.target === e.currentTarget && requestClose()}>
-      <div className="modal">
-        <div className="modal-hdr">
-          <h3>Log Existing Generator Job</h3>
-          <button className="close-x" aria-label="Close" onClick={requestClose}><Icon name="x" size={16} stroke={2}/></button>
-        </div>
+    <Modal open onClose={onClose} title="Log Existing Generator Job" isDirty={isDirty}>
+      {({ requestClose }) => (
         <form onSubmit={submit}>
           <div className="modal-body">
             <p style={{ fontSize: 12.5, color: 'var(--text3)', margin: '0 0 12px', lineHeight: 1.5 }}>
@@ -157,9 +150,7 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
             </button>
           </div>
         </form>
-      </div>
-    </div>
-    {discardDialog}
-    </>
+      )}
+    </Modal>
   );
 }

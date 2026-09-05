@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Icon from '../../components/Icon';
+import Modal from '../../components/Modal';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
@@ -8,6 +9,8 @@ import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_LAB
 import SiteVisitModal from './SiteVisitModal';
 import LeadSiteSurvey from './LeadSiteSurvey';
 import { Gen } from '../../types';
+
+const LEAD_DRAWER_TITLE_ID = 'lead-detail-drawer-title';
 
 interface Props {
   lead: Lead;
@@ -276,12 +279,14 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
   };
 
   return (
-    <div className="drawer-overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="drawer">
+    <>
+    <Modal open onClose={onClose} variant="drawer" labelledBy={LEAD_DRAWER_TITLE_ID} isDirty={hasChanges}>
+      {({ requestClose }) => (
+      <>
         <div className="drawer-hdr">
           <div>
             <div className="drawer-eyebrow">Generator Lead</div>
-            <div className="drawer-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div id={LEAD_DRAWER_TITLE_ID} className="drawer-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {lead.name}
               {isLeadOverdue(lead) && (
                 <span style={{ fontSize: 11, fontWeight: 700, color: '#d97706', background: 'rgba(217,119,6,.12)', border: '1px solid rgba(217,119,6,.3)', borderRadius: 20, padding: '2px 8px', verticalAlign: 'middle' }}>
@@ -290,7 +295,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
               )}
             </div>
           </div>
-          <button className="close-x" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
+          <button className="close-x" aria-label="Close" onClick={requestClose}><Icon name="x" size={16} stroke={2}/></button>
         </div>
 
         <div className="drawer-body">
@@ -569,26 +574,27 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
             )}
           </div>
         </div>
-      </div>
-
-      {showSiteVisit && (
-        <SiteVisitModal
-          leadName={lead.name}
-          saving={handingOff}
-          onConfirm={doHandoff}
-          onClose={() => setShowSiteVisit(false)}
-        />
+      </>
       )}
+    </Modal>
+    {showSiteVisit && (
+      <SiteVisitModal
+        leadName={lead.name}
+        saving={handingOff}
+        onConfirm={doHandoff}
+        onClose={() => setShowSiteVisit(false)}
+      />
+    )}
 
-      {showSurvey && (
-        <LeadSiteSurvey
-          lead={lead}
-          onUpdated={updated => { setLead(updated); onUpdated(updated); }}
-          onBuildProposal={() => { setShowSurvey(false); createGen(); }}
-          onClose={() => setShowSurvey(false)}
-        />
-      )}
-    </div>
+    {showSurvey && (
+      <LeadSiteSurvey
+        lead={lead}
+        onUpdated={updated => { setLead(updated); onUpdated(updated); }}
+        onBuildProposal={() => { setShowSurvey(false); createGen(); }}
+        onClose={() => setShowSurvey(false)}
+      />
+    )}
+    </>
   );
 }
 

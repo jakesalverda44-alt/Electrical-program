@@ -7,11 +7,14 @@
 // docs/superpowers/specs/2026-08-03-mobile-field-pack-design.md §2 for the full spec.
 import React, { useEffect, useRef, useState } from 'react';
 import Icon from '../../components/Icon';
+import Modal from '../../components/Modal';
 import RecordFiles from '../../components/RecordFiles';
 import api from '../../api/client';
 import { Lead } from '../../types';
 import { LeadSurvey } from './surveyMap';
 import { getGenSizes } from '../builder/genCalc';
+
+const LEAD_SURVEY_TITLE_ID = 'lead-survey-drawer-title';
 
 interface Props {
   lead: Lead;
@@ -348,14 +351,15 @@ export default function LeadSiteSurvey({ lead, onUpdated, onBuildProposal, onClo
   const answered = Object.entries(survey).filter(([, v]) => v !== undefined && v !== null && v !== '');
 
   return (
-    <div className="drawer-overlay" onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}>
-      <div className="drawer" style={{ width: 480 }}>
+    <Modal open onClose={handleClose} variant="drawer" labelledBy={LEAD_SURVEY_TITLE_ID} style={{ width: 480 }}>
+      {({ requestClose }) => (
+      <>
         <div className="drawer-hdr">
           <div>
             <div className="drawer-eyebrow">Site Survey — {lead.name}</div>
-            <div className="drawer-title">{showFinish ? 'Review & Finish' : currentStep?.title}</div>
+            <div id={LEAD_SURVEY_TITLE_ID} className="drawer-title">{showFinish ? 'Review & Finish' : currentStep?.title}</div>
           </div>
-          <button className="close-x" onClick={handleClose}><Icon name="x" size={16} stroke={2} /></button>
+          <button className="close-x" aria-label="Close" onClick={requestClose}><Icon name="x" size={16} stroke={2} /></button>
         </div>
 
         <div className="drawer-body">
@@ -415,7 +419,8 @@ export default function LeadSiteSurvey({ lead, onUpdated, onBuildProposal, onClo
             <button className="btn amber" onClick={goNext}>Next</button>
           </div>
         )}
-      </div>
-    </div>
+      </>
+      )}
+    </Modal>
   );
 }
