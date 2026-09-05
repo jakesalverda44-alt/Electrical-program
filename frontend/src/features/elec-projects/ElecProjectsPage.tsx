@@ -222,7 +222,11 @@ export default function ElecProjectsPage({ bids, setBids, wonJobs, setWonJobs, o
       const { data: restored } = await api.post<Bid>(`/bids/${id}/restore`);
       setBids(prev => {
         const next = [...prev];
-        next.splice(Math.min(snapshot.originalIndex, next.length), 0, restored);
+        // Review round 2 N5: a negative `originalIndex` (row not found) must
+        // append, not feed -1 straight to `splice` — `Math.min(-1, len)` is
+        // -1, and `splice(-1, 0, x)` inserts before the LAST element.
+        const i = snapshot.originalIndex < 0 ? next.length : Math.min(snapshot.originalIndex, next.length);
+        next.splice(i, 0, restored);
         return next;
       });
       if (snapshot.removedWonJob) setWonJobs(prev => [...prev, snapshot.removedWonJob!]);

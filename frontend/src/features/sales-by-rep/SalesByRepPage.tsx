@@ -6,6 +6,7 @@ import api from '../../api/client';
 import { useMutation } from '../../hooks/useMutation';
 import WonReports from './WonReports';
 import { moneyFull } from '../../lib/money';
+import { dayOf, fmtDate } from '../../lib/date';
 
 const sumVal = (arr: WonJob[]) => arr.reduce((s, j) => s + Number(j.value), 0);
 const sumComm = (arr: WonJob[]) => arr.reduce((s, j) => s + Number(j.commission_amount || 0), 0);
@@ -55,20 +56,19 @@ export default function SalesByRepPage({ wonJobs, userRole }: Props) {
 
   // Then filter by type for the table
   const records = [...(fType !== 'all' ? scoped.filter(j => j.proposal_type === fType) : scoped)]
-    .sort((a, b) => new Date(b.date_won).getTime() - new Date(a.date_won).getTime());
+    // Review round 2 N4: `date_won` is a Postgres DATE column, which
+    // serializes as UTC midnight for that calendar day — a raw `new Date()`
+    // renders/sorts it a day early in any negative-UTC timezone (all of the
+    // US). `dayOf` re-anchors it to local midnight instead.
+    .sort((a, b) => dayOf(b.date_won).getTime() - dayOf(a.date_won).getTime());
 
   const now = new Date();
   const thisMonth = scoped.filter(j => {
-    const d = new Date(j.date_won);
+    const d = dayOf(j.date_won);
     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
   });
   const total = sumVal(scoped);
   const avg   = scoped.length ? Math.round(total / scoped.length) : 0;
-
-  const formatDate = (iso: string) => {
-    const d = new Date(iso);
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  };
 
   return (
     <div className="scroll view-enter">
@@ -192,7 +192,7 @@ export default function SalesByRepPage({ wonJobs, userRole }: Props) {
                             : <span style={style}>{paid ? 'Paid' : 'Earned'}</span>;
                         })()}
                       </td>
-                      <td className="sub">{formatDate(j.date_won)}</td>
+                      <td className="sub">{fmtDate(j.date_won, { year: 'always' })}</td>
                     </tr>
                   ))}
                 </tbody>

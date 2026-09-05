@@ -223,7 +223,14 @@ export default function GenProjectsPage({ gens, setGens, wonJobs, setWonJobs, op
               const { data: restored } = await api.post<Gen>(`/gens/${gen.id}/restore`);
               setGens(prev => {
                 const next = [...prev];
-                next.splice(Math.min(originalIndex, next.length), 0, restored);
+                // Review round 2 N5: `originalIndex` is -1 when the deleted
+                // row wasn't found (shouldn't happen, but Undo must not
+                // corrupt the list if it does) — `Math.min(-1, next.length)`
+                // is -1, and `splice(-1, 0, x)` inserts before the LAST
+                // element rather than at the end. Treat a negative index as
+                // "append" instead of feeding it to `splice` raw.
+                const i = originalIndex < 0 ? next.length : Math.min(originalIndex, next.length);
+                next.splice(i, 0, restored);
                 return next;
               });
               if (removedWonJob) setWonJobs(prev => [...prev, removedWonJob]);

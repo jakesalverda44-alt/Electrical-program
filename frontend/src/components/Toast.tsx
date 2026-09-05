@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Icon from './Icon';
 import { Toast as ToastType } from '../types';
 
@@ -23,6 +23,13 @@ export default function Toast({ toast }: { toast: ToastType }) {
   // the one place the action mechanism itself lives) covers every call site,
   // not just the ones that happen to debounce their own onClick.
   const [used, setUsed] = useState(false);
+  // Review round 2 N3: `App.tsx` renders `{toast && <Toast toast={toast}/>}`
+  // with no `key`, and `useToast`'s `showToast` replaces the toast object in
+  // place — so this component instance survives from one toast to the next
+  // and `used` (round 1 S4) stayed `true` forever after the first Undo
+  // click, leaving every SUBSEQUENT toast's action button permanently
+  // disabled. Reset the guard whenever the toast identity changes.
+  useEffect(() => { setUsed(false); }, [toast]);
   return (
     <div className="toast-wrap">
       <div
