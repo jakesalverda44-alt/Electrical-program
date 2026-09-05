@@ -110,10 +110,13 @@ the fix holds across a day boundary, not just within one process run); a
 deletes a 61-day-old read row and a 181-day-old unread row while keeping
 59/179-day-old ones.
 
-**Row counts:** live local DB (read-only `SELECT`) — 148 duplicate
+**Row counts:** live local DB (read-only `SELECT`) — 169 duplicate
 `(type, record, user)` groups among 5,052 notification rows; ~4,866 rows will
 be deleted the next time the app boots with this migration. Retention windows
-today: 0 read rows past 60 days, 518 unread rows past 180 days.
+today: 518 read rows past 60 days, 0 unread rows past 180 days.
+(Corrected in post-review — see "Post-review fixes" below; the counts above
+were transposed/wrong in the original report: it's 518 *read* rows past 60
+days and 0 *unread* rows past 180 days, and 169 duplicate groups, not 148.)
 
 ### Task 3 — Lead → proposal and other retention decisions — **done**
 Commit `4501935`.
@@ -465,3 +468,111 @@ restructuring that upload flow, a bigger change for a future batch.
   `ElecProjectsLinkedIdParams.test.tsx` (Task 5); `BidHubPage.tsx` +
   `BidHubPage.test.tsx`, `PcWorkspace.tsx` (Task 7); `PcWorkspace.tsx`,
   `PcWorkspacePricing.test.tsx` (Task 11). Eight files, nothing else.
+
+## Post-review fixes
+
+Opus review of the batch verdict was MERGE AFTER FIXES: migrations 096–099
+were confirmed correct and idempotent with live-DB impact measured (096
+deletes 4,866 duplicate notifications, 099 touches 0 rows), plus four
+blocking items and a hardening set.
+
+**Corrected retention counts** (the original Task 2 write-up above had these
+transposed/wrong): the live DB has **518 read notifications older than 60
+days** and **0 unread notifications older than 180 days** — not "0 read /
+518 unread" as first reported. Duplicate `(type, record, user)` groups are
+**169**, not 148. Both figures are read-only `SELECT` counts against
+`electrical_crm` (never written to), same as the original Task 2 counts.
+
+### B1 — `7cde06a` — fix DocsPage search-by-project-name regression
+Task 5's documents list query dropped `linked_name` from the search OR
+clause. Restored it so a document search by the linked project/bid name
+works again, with a regression test.
+
+### B2 — `a2e70fc` — unit-cost cache invalidation for an already-open workspace
+Task 7's global preconstruction-cost cache (TTL-based) didn't invalidate for
+a workspace tab already open in memory when unit costs were edited elsewhere
+(Settings). Added a subscriber-invalidation path (`resetGlobalPcCaches`) that
+`UnitCostSection` now calls on a successful save, plus a test proving an
+already-open workspace picks up the new rate without a reload.
+
+### B3 — `52f4dee` — `dbAvailable()` rethrows real errors; soffice PDF path un-gated
+`harness.ts`'s `dbAvailable()` was silently treating *any* connection error as
+"DB unavailable, skip the whole suite" — masking real bugs as skips. It now
+distinguishes genuine unreachability (ECONNREFUSED/ENOTFOUND/etc.) from every
+other error, which it rethrows. `verifyBid.ts`'s soffice detection, previously
+gated off under `NODE_ENV=test`, runs for real again with an explicit
+visible-skip test when soffice isn't present on the machine. Fixing the
+resulting fallout uncovered and fixed a real race:
+`migrateDestructiveGuard.test.ts` was writing temp `.sql` files into the
+shared `database/migrations/` directory, which other concurrently-running
+test files' own `dbAvailable()` → `runMigrations()` calls could pick up
+mid-write (ENOENT) or reject (destructive-guard false positive). Fixed with
+an isolated `fs.mkdtempSync()` directory and a new optional
+`migrationsDirOverride` parameter on `runMigrations()` (only this test uses
+it; every real caller is unaffected).
+
+### B4 — `9d78080` — permanent false "unsaved changes" prompt
+Root cause: Postgres serializes `numeric` columns as strings, not JS numbers.
+Task 11's second pricing-hydration path compared `workspaceRow` fields
+against `savedEstimate` fields without normalizing both to `Number()` first,
+so `"12.5" !== 12.5` permanently tripped the dirty-check. Also hardened
+`BidHubPage` against seeding a blank workspace before preconstruction data
+has actually loaded (`pcDataLoaded` prop, threaded from `App.tsx`), which
+could otherwise PUT an empty workspace over real data during the load race.
+
+### 5 — `1e987ad`/`c621968` (amended) — Post-review hardening, one commit
+- **5a** `migrate.ts`: `SET statement_timeout = 0` on the migration's own
+  connection for the duration of its transaction, restored to
+  `pool.ts`'s `STATEMENT_TIMEOUT_MS` afterward — a legitimately slow
+  migration is no longer subject to the pool's 15s statement timeout. Test:
+  a migration containing `pg_sleep(16)` completes and is recorded.
+- **5b** `documents.ts`/`leads.ts`: `?limit` clamped to 200; literal `%`/`_`
+  in `?q` escaped before the ILIKE pattern is built (new
+  `backend/src/utils/sqlLike.ts`, shared by both routes).
+- **5c** `SearchBox`: 300ms debounce on the `/leads` lookup, matching
+  `DocsPage`'s existing pattern; `useApi` already cancels/drops
+  out-of-order responses.
+- **5d** `bidAttachments.ts`: the byte budget is now only charged after a
+  successful pass-2 fetch, so a failed fetch can no longer evict a later
+  attachment that would otherwise have fit; `skipped[]` again reflects
+  original document creation order across both a metadata-stage and a
+  fetch-stage skip.
+- **5e** `dashboard.ts`: replaced the `wj.proposal_id ~ '<regex>' AND
+  wj.proposal_id::uuid = b.id` two-conjunct reliance (which assumed the
+  planner evaluates the regex guard before the cast — not guaranteed) with
+  `CASE WHEN wj.proposal_id ~ '<regex>' THEN wj.proposal_id::uuid END`
+  inside the join condition, which cannot throw regardless of clause
+  evaluation order. New test: a malformed `proposal_id` no longer risks a
+  500, just a non-match.
+- **5f** `vitest.config.ts`: comment corrected to match the actual value;
+  `testTimeout` lowered 45s → 30s (the few genuinely slower tests —
+  `poolStatementTimeout.test.ts`, `migrateDestructiveGuard.test.ts`'s
+  `pg_sleep` test, `verifyBid.test.ts`'s real-soffice test — already set
+  their own longer per-test timeout).
+- **5g** `engine.ts`: documented (code comment) that a reopened item
+  (a task closed then reopened, a lead worked then gone quiet again) does
+  not re-notify until retention ages the old `dedup_key` row out. **Not
+  implemented** — filed as a follow-up. Fixing it needs a real product
+  decision (what "reopened" means per notification type, and likely a
+  version/generation component in the dedup key) rather than a mechanical
+  change.
+
+### Verification after the hardening commit
+- `npm run typecheck`: clean in both packages.
+- Backend suite, three consecutive full runs via `npm test`: **830/830
+  tests, 99/99 files, all three runs** — fully green and stable (the
+  `verifyBid.test.ts` real-soffice test's earlier flakiness, from
+  concurrent `soffice` invocations under parallel workers/prior runs, did
+  not recur across any of the three runs).
+- Frontend suite: **466/466 tests, 63/63 files, 0 failing.**
+- One test bug found and fixed during this verification pass (folded into
+  the same hardening commit before it was reported anywhere): the new 5e
+  test inserted a `won_jobs` row with a fixed literal
+  `proposal_id = 'not-a-uuid'`, which collided with the column's unique
+  constraint on a second run. Changed to a `Date.now()`-suffixed value.
+
+### Decisions left open
+- **5g** (reopened items not re-notifying) is explicitly not implemented —
+  needs a product decision, not just a code change.
+- The pre-existing test-DB bloat and two cache staleness windows noted in
+  "Left for Jake" above are unchanged by this pass.
