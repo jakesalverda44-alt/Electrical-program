@@ -4,6 +4,35 @@
 engineers per the plan). One commit per task, worktree
 `Electrical-program-wt-audit4`, branch `fix/audit-batch4`.
 
+## Summary (Tasks 1–4)
+
+- Commits: `71fb411` (Task 1), `0959f38` (Task 2), `25eff1e` (Task 3),
+  `4381a3f` (Task 4) on `fix/audit-batch4`.
+- **Frontend:** `npm run typecheck` — 0 errors. `npm test` — 71 test files,
+  520 tests, all passing.
+- **Backend:** `npm run typecheck` — 0 errors. `npm test` — 100 test files,
+  839 tests, all passing (run against the real `electrical_crm_test` DB;
+  migration 100 applies cleanly).
+- **Backend diff scope** (`git diff --stat main..HEAD -- backend/`): exactly
+  `middleware/auth.ts`, the three restore routes
+  (`bids.ts`/`gens.ts`/`documents.ts`), and their test file. **Database diff
+  scope**: exactly `database/migrations/100_deleted_by.sql`. Nothing else
+  under `backend/` or `database/` changed.
+- Task 2.3 decision: implemented the plan's preferred option (migration +
+  `canRestore` relaxation), with one caveat found during implementation —
+  see Task 2's section.
+- Every deviation from the literal plan text is called out inline in its
+  task's section below, with the reasoning. The two most load-bearing ones:
+  Modal.tsx centralizes `role="dialog"`/`aria-label="Close"` behind
+  props/defaults rather than duplicating literal strings 9+ times, so two of
+  the plan's literal-text grep counts read low even though the underlying
+  accessibility behavior is fully in place and verified by
+  `Modal.test.tsx`'s `getByRole` assertions (Task 1); the non-admin
+  self-restore path (Task 2) is implemented and tested but not reachable
+  through today's UI, since `DELETE` on bids/gens/documents stays
+  admin-only, unchanged, per the ground rule limiting backend changes to the
+  restore routes only.
+
 ---
 
 ## Task 1 — One Modal component with real dialog behavior
