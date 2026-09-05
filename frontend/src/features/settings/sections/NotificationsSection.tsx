@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../../../api/client';
 import { useMutation } from '../../../hooks/useMutation';
+import { useConfirm } from '../../../components/ConfirmDialog';
 import Icon from '../../../components/Icon';
+import Badge from '../../../components/Badge';
 import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, Toggle, RolePill, inputStyle, initials, timeAgo, ROLE_OPTIONS, ROLE_LABELS, ROLE_COLORS } from '../shared';
@@ -61,11 +63,14 @@ function DevicePushCard() {
 function LeadNudgeCard() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const confirm = useConfirm();
 
   const send = async () => {
-    if (!window.confirm(
-      'Send the 2nd (day-2) follow-up email now?\n\nThis goes only to email leads that have NOT replied, have NOT been contacted, and have NOT already been nudged. It never sends twice to the same lead.'
-    )) return;
+    if (!(await confirm({
+      title: 'Send the 2nd (day-2) follow-up email now?',
+      body: 'This goes only to email leads that have NOT replied, have NOT been contacted, and have NOT already been nudged. It never sends twice to the same lead.',
+      confirmLabel: 'Send',
+    }))) return;
     setBusy(true); setMsg('');
     try {
       const { data } = await api.post('/leads/send-nudges');
@@ -268,11 +273,11 @@ export function NotificationsSection({ settings, onSaved }: { settings: AppSetti
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {reminders.recipients.map(em => (
-            <span key={em} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, background: 'var(--blue-soft)', color: 'var(--blue)', border: '1px solid rgba(77,141,247,.25)', borderRadius: 20, padding: '4px 10px 4px 12px' }}>
+            <Badge key={em} tone="info" style={{ gap: 6, padding: '4px 10px 4px 12px' }}>
               {em}
               <button onClick={() => setReminders(r => ({ ...r, recipients: r.recipients.filter(x => x !== em) }))}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--blue)', fontSize: 15, lineHeight: 1, padding: 0, display: 'flex' }}>×</button>
-            </span>
+            </Badge>
           ))}
           {reminders.recipients.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Owners &amp; administrators (default).</span>}
         </div>

@@ -7,16 +7,12 @@ import React from 'react';
 import { Bid, WonJob } from '../../types';
 import { elecDivisionStats } from '../../lib/divisionStats';
 import { moneyFull, moneyShort as money } from '../../lib/money';
+import { dayOf, fmtDate } from '../../lib/date';
 import { ELEC_STAGES } from '../pipeline/constants';
 import { ElecHubTab } from './constants';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const STAGE_COLOR: Record<string, string> = Object.fromEntries(ELEC_STAGES.map(s => [s.key, s.color]));
-
-// date_won is a Postgres DATE serialized as ISO; take the calendar day so the
-// browser timezone can't shift it into the wrong month.
-function dayOf(d: string) { return new Date(String(d).slice(0, 10) + 'T00:00:00'); }
-function fmtDate(d: string) { return dayOf(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
 
 interface Props {
   bids: Bid[];
@@ -114,7 +110,7 @@ export default function ElecOverviewTab({ bids, wonJobs, onSelectTab }: Props) {
               borderBottom: i < recentWins.length - 1 ? '1px solid var(--border)' : 'none',
             }}>
               <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{j.customer}</span>
-              <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{fmtDate(j.date_won)}</span>
+              <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{fmtDate(j.date_won, { year: 'never' })}</span>
               <span className="num" style={{ fontSize: 13, fontWeight: 800, minWidth: 74, textAlign: 'right' }}>{moneyFull(Number(j.value))}</span>
             </div>
           ))}

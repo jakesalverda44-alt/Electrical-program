@@ -54,7 +54,7 @@ export default function FilePreviewModal({ title, kind, buf, onClose, onDownload
       <div className="modal" style={{ width: '100%', maxWidth: 900 }}>
         <div className="modal-hdr">
           <h3 style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</h3>
-          <button className="close-x" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
+          <button className="close-x" aria-label="Close" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
         </div>
 
         <div className="modal-body" style={{ maxHeight: '70vh', overflow: 'auto' }}>

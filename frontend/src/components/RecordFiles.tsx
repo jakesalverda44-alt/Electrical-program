@@ -5,6 +5,8 @@ import { useApi } from '../hooks/useApi';
 import { useMutation } from '../hooks/useMutation';
 import FilePreviewModal from './FilePreviewModal';
 import { useDocPreview } from './useDocPreview';
+import { fmtDate } from '../lib/date';
+import { fmtSize } from '../lib/format';
 
 interface Doc {
   id: string;
@@ -35,16 +37,6 @@ const CATEGORIES: { value: string; label: string }[] = [
   { value: 'other',         label: 'Other' },
 ];
 const CAT_LABEL: Record<string, string> = Object.fromEntries(CATEGORIES.map(c => [c.value, c.label]));
-
-function fmtSize(n: number) {
-  if (!n) return '';
-  if (n < 1024) return n + ' B';
-  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
-  return (n / 1024 / 1024).toFixed(1) + ' MB';
-}
-function fmtDate(ts: string) {
-  return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
 
 /** File attachments tied to a single record (generator, electrical bid, or lead). */
 export default function RecordFiles({ linkedId, linkedName, div, emptyHint, cameraFirst, title }: {
@@ -180,7 +172,7 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.display_name}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>
-                  {CAT_LABEL[d.category] || d.category}{d.file_size ? ` · ${fmtSize(d.file_size)}` : ''} · {fmtDate(d.created_at)}
+                  {CAT_LABEL[d.category] || d.category}{d.file_size ? ` · ${fmtSize(d.file_size)}` : ''} · {fmtDate(d.created_at, { year: 'always' })}
                 </div>
               </div>
               <button title="View" onClick={() => view(d)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--blue)', padding: 4, flexShrink: 0 }}>

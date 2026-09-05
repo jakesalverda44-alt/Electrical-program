@@ -3,11 +3,14 @@ import Icon from '../../components/Icon';
 import DriveImage from '../../components/DriveImage';
 import { Bid, WonJob, Toast } from '../../types';
 import { useShowToast } from '../../contexts/AppContext';
+import { useConfirm } from '../../components/ConfirmDialog';
 import api from '../../api/client';
 import { useMutation } from '../../hooks/useMutation';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import { moneyFull, moneyShort as money } from '../../lib/money';
+import { fmtDate } from '../../lib/date';
+import { fmtSize } from '../../lib/format';
 
 // ── Phase → Status mapping ───────────────────────────────────────
 const FIELD_PHASES = new Set(['rough','inspection','trim','final']);
@@ -58,12 +61,6 @@ interface ProjDoc   { id: string; name: string; display_name: string; category: 
 interface ProjComm  { id: string; kind: string; subject: string; body: string; author: string; created_at: string; }
 interface DrivePhoto { id: string; name: string; mimeType: string; webViewLink?: string; thumbnailLink?: string; size?: string; createdTime?: string; }
 
-// ── Helpers ──────────────────────────────────────────────────────
-function fmtDate(s: string|null) {
-  if (!s) return '—';
-  return new Date(s.split('T')[0]+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-}
-
 const INPUT: React.CSSProperties = {
   font:'inherit', fontSize:13, fontWeight:600, color:'var(--text)',
   background:'var(--surface)', border:'1px solid var(--border2)',
@@ -98,14 +95,18 @@ const emptyData = (): ProjData => ({
 interface Props {
   bids: Bid[];
   setBids: (fn: (prev: Bid[]) => Bid[]) => void;
+  // Review round 1 S5 — readable, not just the setter, so a delete's Undo can
+  // restore the exact won-job row it removed instead of only the bid itself.
+  wonJobs: WonJob[];
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
   // Deep-link record id (from global search): opens that project's workspace.
   openId?: string | null;
   onClearParam?: () => void;
 }
 
-export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, onClearParam }: Props) {
+export default function ElecProjectsPage({ bids, setBids, wonJobs, setWonJobs, openId, onClearParam }: Props) {
   const showToast = useShowToast();
+  const confirm = useConfirm();
   const awarded = useMemo(() => bids.filter(b => b.stage === 'awarded'), [bids]);
 
   // Phase state (persisted via API)
@@ -209,12 +210,44 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
     },
   );
 
+  // Review round 1 S5/S6 — restores everything the delete removed locally
+  // (the bid at its original index, its won-job row, and its Kanban phase),
+  // not just the bid prepended to the front. `snapshot` is captured BEFORE
+  // the delete so it reflects state as it was at that moment.
+  const undoDeleteProject = async (
+    id: string,
+    snapshot: { originalIndex: number; removedWonJob?: WonJob; removedPhase?: ElecPhase },
+  ) => {
+    try {
+      const { data: restored } = await api.post<Bid>(`/bids/${id}/restore`);
+      setBids(prev => {
+        const next = [...prev];
+        // Review round 2 N5: a negative `originalIndex` (row not found) must
+        // append, not feed -1 straight to `splice` — `Math.min(-1, len)` is
+        // -1, and `splice(-1, 0, x)` inserts before the LAST element.
+        const i = snapshot.originalIndex < 0 ? next.length : Math.min(snapshot.originalIndex, next.length);
+        next.splice(i, 0, restored);
+        return next;
+      });
+      if (snapshot.removedWonJob) setWonJobs(prev => [...prev, snapshot.removedWonJob!]);
+      if (snapshot.removedPhase) setPhases(prev => ({ ...prev, [restored.id]: snapshot.removedPhase! }));
+      showToast({ title: 'Electrical project restored', sub: restored.name });
+    } catch {
+      showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore it from Settings → Trash instead.' });
+    }
+  };
+
   const { run: runDeleteProject } = useMutation(
     async (bid: Bid) => { await api.delete(`/bids/${bid.id}`); return bid; },
     {
       onSuccess: (bid) => {
         setBids(prev => prev.filter(b => b.id !== bid.id));
         setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
+        setPhases(prev => {
+          const next = { ...prev };
+          delete next[bid.id];
+          return next;
+        });
         setSelectedId(null);
         setProjData(prev => {
           const next = { ...prev };
@@ -222,13 +255,24 @@ export default function ElecProjectsPage({ bids, setBids, setWonJobs, openId, on
           return next;
         });
       },
-      successToast: (bid) => ({ title: 'Electrical project deleted', sub: bid.name }),
+      successToast: (bid) => {
+        const snapshot = {
+          originalIndex: bids.findIndex(b => b.id === bid.id),
+          removedWonJob: wonJobs.find(w => w.proposal_id === bid.id),
+          removedPhase: phases[bid.id],
+        };
+        return { title: 'Electrical project deleted', sub: bid.name, action: { label: 'Undo', onClick: () => undoDeleteProject(bid.id, snapshot) } };
+      },
       errorToast: (message) => ({ title: 'Delete failed', sub: message }),
     },
   );
 
-  const deleteProject = (bid: Bid) => {
-    if (!window.confirm(`Delete electrical project "${bid.name}" and its linked files/testing data? This cannot be undone.`)) return;
+  const deleteProject = async (bid: Bid) => {
+    if (!(await confirm({
+      title: `Delete electrical project "${bid.name}" and its linked files/testing data? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    }))) return;
     runDeleteProject(bid);
   };
 
@@ -434,6 +478,107 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
     },
   );
 
+  // ── Quick-add rows (CO / Pay App / RFI / Key Material / Field Note) ──────
+  // These used to be inline `onClick={async () => {...}}` handlers with no
+  // busy flag, so a fast double-click could fire the POST/PUT twice (audit
+  // ux #21). `useMutation`'s `saving` now backs each one, matching every
+  // other submit button already migrated in this file.
+  const { run: runAddCo, saving: savingCo } = useMutation(
+    async () => {
+      const res = await api.post(`/projects/elec/${id}/change-orders`, {
+        description: coForm.description, amount: Number(coForm.amount) || 0,
+        status: coForm.status, submitted_date: coForm.submitted_date || null,
+      });
+      return res.data;
+    },
+    {
+      onSuccess: (co) => {
+        onDataChange({ cos: [...data.cos, co] });
+        setCoForm({ description: '', amount: '', status: 'pending', submitted_date: '' });
+      },
+      successToast: { title: 'Change order added' },
+      errorTitle: 'Could not add that change order',
+    },
+  );
+
+  const { run: runAddPa, saving: savingPa } = useMutation(
+    async () => {
+      const newPa: PayApp = {
+        id: Date.now().toString(),
+        number: data.payApps.length + 1,
+        period: paForm.period,
+        scheduled_value: Number(paForm.scheduled_value) || 0,
+        pct_complete: Number(paForm.pct_complete) || 0,
+        amount_billed: Number(paForm.amount_billed) || 0,
+        status: paForm.status as any,
+      };
+      const updated = [...data.payApps, newPa];
+      await api.put(`/projects/elec/${id}/section/pay-apps`, { data: { items: updated } });
+      return updated;
+    },
+    {
+      onSuccess: (updated) => {
+        onDataChange({ payApps: updated });
+        setPaForm({ period: '', scheduled_value: '', pct_complete: '', amount_billed: '', status: 'draft' });
+      },
+      successToast: { title: 'Pay app added' },
+      errorTitle: 'Could not add that pay application',
+    },
+  );
+
+  const { run: runAddRfi, saving: savingRfi } = useMutation(
+    async () => {
+      const res = await api.post(`/projects/elec/${id}/rfis`, {
+        question: rfiForm.question, submitted_to: rfiForm.submitted_to,
+        submitted_date: rfiForm.submitted_date || null, due_date: rfiForm.due_date || null,
+      });
+      return res.data;
+    },
+    {
+      onSuccess: (rfi) => {
+        onDataChange({ rfis: [rfi, ...data.rfis] });
+        setRfiForm({ question: '', submitted_to: '', submitted_date: '', due_date: '' });
+      },
+      successToast: { title: 'RFI submitted' },
+      errorTitle: 'Could not submit that RFI',
+    },
+  );
+
+  const { run: runAddKm, saving: savingKm } = useMutation(
+    async () => {
+      const newKm: KeyMaterial = { id: Date.now().toString(), ...kmForm as any };
+      const updated = [...data.keyMats, newKm];
+      await api.put(`/projects/elec/${id}/section/key-materials`, { data: { items: updated } });
+      return updated;
+    },
+    {
+      onSuccess: (updated) => {
+        onDataChange({ keyMats: updated });
+        setKmForm({ name: '', supplier: '', po_number: '', order_date: '', eta: '', status: 'pending' });
+      },
+      successToast: { title: 'Material added' },
+      errorTitle: 'Could not add that material',
+    },
+  );
+
+  const { run: runAddFn, saving: savingFn } = useMutation(
+    async () => {
+      const res = await api.post(`/projects/elec/${id}/field-notes`, {
+        note: fnForm.note, note_date: fnForm.note_date || null,
+        weather: fnForm.weather, crew_size: Number(fnForm.crew_size) || 0,
+      });
+      return res.data;
+    },
+    {
+      onSuccess: (fn) => {
+        onDataChange({ fns: [fn, ...data.fns] });
+        setFnForm({ note: '', note_date: '', weather: '', crew_size: '' });
+      },
+      successToast: { title: 'Field note added' },
+      errorTitle: 'Could not add that field note',
+    },
+  );
+
   // ── Closeout ─────────────────────────────────────────────────
   const CLOSEOUT_ITEMS = [
     { key:'as_builts',     label:'As-Built Drawings'     },
@@ -455,7 +600,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
 
       // ── Overview ─────────────────────────────────────────────
       case 'overview': return (
-        <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:18 }}>
+        <div className="ws-form-grid ws-grid-2" style={{ display:'grid', gap:18 }}>
           {/* Left col */}
           <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
             <SCard title="Contract Overview" icon="doc">
@@ -525,7 +670,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
       // ── Financials ───────────────────────────────────────────
       case 'financials': return (
         <div>
-          <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:24 }}>
+          <div className="ws-form-grid ws-grid-4" style={{ display:'grid', gap:14, marginBottom:24 }}>
             {[
               { label:'Original Contract', val:moneyFull(contractVal),           color:'var(--blue)'  },
               { label:'Approved COs',      val:moneyFull(coApproved),            color:'var(--green)' },
@@ -552,7 +697,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                         {co.amount>=0?'+':''}{moneyFull(co.amount)}
                       </td>
                       <td><StatusPill status={co.status}/></td>
-                      <td className="sub">{fmtDate(co.submitted_date)}</td>
+                      <td className="sub">{fmtDate(co.submitted_date, { year: 'always' }) || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -569,7 +714,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
         <div>
           <div className="panel" style={{ marginBottom:16, padding:'18px 20px' }}>
             <SL>New Change Order</SL>
-            <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr auto', gap:10, alignItems:'end' }}>
+            <div className="ws-form-grid ws-grid-a" style={{ display:'grid', gap:10, alignItems:'end' }}>
               <div><FL>Description</FL><input value={coForm.description} onChange={e=>setCoForm(f=>({...f,description:e.target.value}))} placeholder="CO description…" style={INPUT}/></div>
               <div><FL>Amount ($)</FL><input type="number" value={coForm.amount} onChange={e=>setCoForm(f=>({...f,amount:e.target.value}))} placeholder="0" style={INPUT}/></div>
               <div><FL>Status</FL>
@@ -580,18 +725,12 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                 </select>
               </div>
               <div><FL>Submitted</FL><input type="date" value={coForm.submitted_date} onChange={e=>setCoForm(f=>({...f,submitted_date:e.target.value}))} style={INPUT}/></div>
-              <button className="btn" style={{ fontSize:13 }}
-                onClick={async () => {
+              <button className="btn" style={{ fontSize:13 }} disabled={savingCo}
+                onClick={() => {
                   if (!coForm.description.trim()) { showToast({variant:'error',title:'Description required'}); return; }
-                  const res = await api.post(`/projects/elec/${id}/change-orders`, {
-                    description:coForm.description, amount:Number(coForm.amount)||0,
-                    status:coForm.status, submitted_date:coForm.submitted_date||null,
-                  });
-                  onDataChange({ cos:[...data.cos, res.data] });
-                  setCoForm({description:'',amount:'',status:'pending',submitted_date:''});
-                  showToast({title:'Change order added'});
+                  runAddCo();
                 }}>
-                <Icon name="plus" size={14} stroke={2.2}/> Add
+                <Icon name="plus" size={14} stroke={2.2}/> {savingCo ? 'Adding…' : 'Add'}
               </button>
             </div>
           </div>
@@ -622,7 +761,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                           <option value="rejected">Rejected</option>
                         </select>
                       </td>
-                      <td className="sub">{fmtDate(co.submitted_date)}</td>
+                      <td className="sub">{fmtDate(co.submitted_date, { year: 'always' }) || '—'}</td>
                       <td>
                         <button onClick={async()=>{
                           await api.delete(`/projects/elec/${id}/change-orders/${co.id}`);
@@ -647,7 +786,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
         <div>
           <div className="panel" style={{ marginBottom:16, padding:'18px 20px' }}>
             <SL>New Pay Application</SL>
-            <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr auto', gap:10, alignItems:'end' }}>
+            <div className="ws-form-grid ws-grid-b" style={{ display:'grid', gap:10, alignItems:'end' }}>
               <div><FL>Period</FL><input value={paForm.period} onChange={e=>setPaForm(f=>({...f,period:e.target.value}))} placeholder="e.g. June 2026" style={INPUT}/></div>
               <div><FL>Scheduled Value ($)</FL><input type="number" value={paForm.scheduled_value} onChange={e=>setPaForm(f=>({...f,scheduled_value:e.target.value}))} placeholder="0" style={INPUT}/></div>
               <div><FL>% Complete</FL><input type="number" value={paForm.pct_complete} onChange={e=>setPaForm(f=>({...f,pct_complete:e.target.value}))} placeholder="0" style={INPUT}/></div>
@@ -660,25 +799,12 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                   <option value="paid">Paid</option>
                 </select>
               </div>
-              <button className="btn" style={{ fontSize:13 }}
-                onClick={async () => {
+              <button className="btn" style={{ fontSize:13 }} disabled={savingPa}
+                onClick={() => {
                   if (!paForm.period.trim()) { showToast({variant:'error',title:'Period required'}); return; }
-                  const newPa: PayApp = {
-                    id: Date.now().toString(),
-                    number: data.payApps.length + 1,
-                    period: paForm.period,
-                    scheduled_value: Number(paForm.scheduled_value)||0,
-                    pct_complete: Number(paForm.pct_complete)||0,
-                    amount_billed: Number(paForm.amount_billed)||0,
-                    status: paForm.status as any,
-                  };
-                  const updated = [...data.payApps, newPa];
-                  await api.put(`/projects/elec/${id}/section/pay-apps`, { data:{items:updated} });
-                  onDataChange({payApps:updated});
-                  setPaForm({period:'',scheduled_value:'',pct_complete:'',amount_billed:'',status:'draft'});
-                  showToast({title:'Pay app added'});
+                  runAddPa();
                 }}>
-                <Icon name="plus" size={14} stroke={2.2}/> Add
+                <Icon name="plus" size={14} stroke={2.2}/> {savingPa ? 'Adding…' : 'Add'}
               </button>
             </div>
           </div>
@@ -721,24 +847,18 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
         <div>
           <div className="panel" style={{ marginBottom:16, padding:'18px 20px' }}>
             <SL>Submit RFI</SL>
-            <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr', gap:10, marginBottom:10 }}>
+            <div className="ws-form-grid ws-grid-c" style={{ display:'grid', gap:10, marginBottom:10 }}>
               <div><FL>Question</FL><input value={rfiForm.question} onChange={e=>setRfiForm(f=>({...f,question:e.target.value}))} placeholder="Describe the information request…" style={INPUT}/></div>
               <div><FL>Submitted To</FL><input value={rfiForm.submitted_to} onChange={e=>setRfiForm(f=>({...f,submitted_to:e.target.value}))} placeholder="GC / Architect" style={INPUT}/></div>
               <div><FL>Submitted</FL><input type="date" value={rfiForm.submitted_date} onChange={e=>setRfiForm(f=>({...f,submitted_date:e.target.value}))} style={INPUT}/></div>
               <div><FL>Due Date</FL><input type="date" value={rfiForm.due_date} onChange={e=>setRfiForm(f=>({...f,due_date:e.target.value}))} style={INPUT}/></div>
             </div>
-            <button className="btn" style={{ fontSize:13 }}
-              onClick={async()=>{
+            <button className="btn" style={{ fontSize:13 }} disabled={savingRfi}
+              onClick={()=>{
                 if (!rfiForm.question.trim()) { showToast({variant:'error',title:'Question required'}); return; }
-                const res = await api.post(`/projects/elec/${id}/rfis`,{
-                  question:rfiForm.question, submitted_to:rfiForm.submitted_to,
-                  submitted_date:rfiForm.submitted_date||null, due_date:rfiForm.due_date||null,
-                });
-                onDataChange({rfis:[res.data,...data.rfis]});
-                setRfiForm({question:'',submitted_to:'',submitted_date:'',due_date:''});
-                showToast({title:'RFI submitted'});
+                runAddRfi();
               }}>
-              <Icon name="plus" size={14} stroke={2.2}/> Submit RFI
+              <Icon name="plus" size={14} stroke={2.2}/> {savingRfi ? 'Submitting…' : 'Submit RFI'}
             </button>
           </div>
           {data.rfis.length === 0 ? <Empty text="No RFIs yet"/> : (
@@ -752,8 +872,8 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                       <td className="sub" style={{fontWeight:800}}>{rfi.rfi_number}</td>
                       <td><span className="nm">{rfi.question}</span></td>
                       <td className="sub">{rfi.submitted_to||'—'}</td>
-                      <td className="sub">{fmtDate(rfi.submitted_date)}</td>
-                      <td className="sub">{fmtDate(rfi.due_date)}</td>
+                      <td className="sub">{fmtDate(rfi.submitted_date, { year: 'always' }) || '—'}</td>
+                      <td className="sub">{fmtDate(rfi.due_date, { year: 'always' }) || '—'}</td>
                       <td>
                         <select value={rfi.status}
                           onChange={async e=>{
@@ -782,7 +902,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
         <div>
           <div className="panel" style={{ marginBottom:16, padding:'18px 20px' }}>
             <SL>Add Material</SL>
-            <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr 1fr 1fr auto', gap:10, alignItems:'end' }}>
+            <div className="ws-form-grid ws-grid-d" style={{ display:'grid', gap:10, alignItems:'end' }}>
               <div><FL>Material</FL><input value={kmForm.name} onChange={e=>setKmForm(f=>({...f,name:e.target.value}))} placeholder="e.g. 4000A Switchgear" style={INPUT}/></div>
               <div><FL>Supplier</FL><input value={kmForm.supplier} onChange={e=>setKmForm(f=>({...f,supplier:e.target.value}))} placeholder="Supplier name" style={INPUT}/></div>
               <div><FL>PO Number</FL><input value={kmForm.po_number} onChange={e=>setKmForm(f=>({...f,po_number:e.target.value}))} placeholder="PO-001" style={INPUT}/></div>
@@ -795,17 +915,12 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                   <option value="delivered">Delivered</option>
                 </select>
               </div>
-              <button className="btn" style={{ fontSize:13 }}
-                onClick={async()=>{
+              <button className="btn" style={{ fontSize:13 }} disabled={savingKm}
+                onClick={()=>{
                   if (!kmForm.name.trim()) { showToast({variant:'error',title:'Material name required'}); return; }
-                  const newKm: KeyMaterial = { id:Date.now().toString(), ...kmForm as any };
-                  const updated = [...data.keyMats, newKm];
-                  await api.put(`/projects/elec/${id}/section/key-materials`,{data:{items:updated}});
-                  onDataChange({keyMats:updated});
-                  setKmForm({name:'',supplier:'',po_number:'',order_date:'',eta:'',status:'pending'});
-                  showToast({title:'Material added'});
+                  runAddKm();
                 }}>
-                <Icon name="plus" size={14} stroke={2.2}/> Add
+                <Icon name="plus" size={14} stroke={2.2}/> {savingKm ? 'Adding…' : 'Add'}
               </button>
             </div>
           </div>
@@ -820,8 +935,8 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                       <td><span className="nm">{km.name}</span></td>
                       <td className="sub">{km.supplier||'—'}</td>
                       <td className="sub">{km.po_number||'—'}</td>
-                      <td className="sub">{fmtDate(km.order_date)}</td>
-                      <td className="sub">{fmtDate(km.eta)}</td>
+                      <td className="sub">{fmtDate(km.order_date, { year: 'always' }) || '—'}</td>
+                      <td className="sub">{fmtDate(km.eta, { year: 'always' }) || '—'}</td>
                       <td><StatusPill status={km.status}/></td>
                       <td>
                         <button onClick={async()=>{
@@ -848,7 +963,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
         <div>
           <div className="panel" style={{ marginBottom:16, padding:'18px 20px' }}>
             <SL>Add Field Note</SL>
-            <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:10 }}>
+            <div className="ws-form-grid ws-grid-3" style={{ display:'grid', gap:10, marginBottom:10 }}>
               <div><FL>Date</FL><input type="date" value={fnForm.note_date} onChange={e=>setFnForm(f=>({...f,note_date:e.target.value}))} style={INPUT}/></div>
               <div><FL>Weather</FL><input value={fnForm.weather} onChange={e=>setFnForm(f=>({...f,weather:e.target.value}))} placeholder="e.g. Sunny 82°F" style={INPUT}/></div>
               <div><FL>Crew Size</FL><input type="number" value={fnForm.crew_size} onChange={e=>setFnForm(f=>({...f,crew_size:e.target.value}))} placeholder="0" style={INPUT}/></div>
@@ -860,18 +975,12 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                   placeholder="Daily progress, site conditions, work completed…"
                   style={{ ...INPUT, height:72, resize:'vertical' }}/>
               </div>
-              <button className="btn" style={{ fontSize:13, whiteSpace:'nowrap' }}
-                onClick={async()=>{
+              <button className="btn" style={{ fontSize:13, whiteSpace:'nowrap' }} disabled={savingFn}
+                onClick={()=>{
                   if (!fnForm.note.trim()) { showToast({variant:'error',title:'Note required'}); return; }
-                  const res = await api.post(`/projects/elec/${id}/field-notes`,{
-                    note:fnForm.note, note_date:fnForm.note_date||null,
-                    weather:fnForm.weather, crew_size:Number(fnForm.crew_size)||0,
-                  });
-                  onDataChange({fns:[res.data,...data.fns]});
-                  setFnForm({note:'',note_date:'',weather:'',crew_size:''});
-                  showToast({title:'Field note added'});
+                  runAddFn();
                 }}>
-                <Icon name="plus" size={14} stroke={2.2}/> Add Note
+                <Icon name="plus" size={14} stroke={2.2}/> {savingFn ? 'Adding…' : 'Add Note'}
               </button>
             </div>
           </div>
@@ -881,7 +990,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                 <div key={fn.id} className="panel" style={{ padding:'14px 18px' }}>
                   <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
                     <div style={{ display:'flex', gap:16, alignItems:'center' }}>
-                      <span style={{ fontSize:13, fontWeight:800, color:'var(--text)' }}>{fmtDate(fn.note_date)}</span>
+                      <span style={{ fontSize:13, fontWeight:800, color:'var(--text)' }}>{fmtDate(fn.note_date, { year: 'always' }) || '—'}</span>
                       {fn.weather && <span style={{ fontSize:12, color:'var(--text3)', fontWeight:600 }}>{fn.weather}</span>}
                       {fn.crew_size > 0 && <span style={{ fontSize:12, color:'var(--text3)', fontWeight:600 }}><Icon name="users" size={11} stroke={1.8}/> {fn.crew_size} crew</span>}
                       <span style={{ fontSize:12, color:'var(--text3)', fontWeight:600 }}>by {fn.author}</span>
@@ -905,7 +1014,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
       // ── Schedule ──────────────────────────────────────────────
       case 'schedule': return (
         <div>
-          <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14, marginBottom:16 }}>
+          <div className="ws-form-grid ws-grid-3" style={{ display:'grid', gap:14, marginBottom:16 }}>
             {[
               { label:'Mobilization Date',    key:'mobilize'   },
               { label:'Rough-In Complete',    key:'rough_done' },
@@ -940,7 +1049,7 @@ function Workspace({ bid, phase, data, activeTab, onBack, onTabChange, onPhaseCh
                 <div style={{ height:'100%', width:`${(clDone/CLOSEOUT_ITEMS.length)*100}%`,
                   background:clDone===CLOSEOUT_ITEMS.length?'var(--green)':'var(--blue)', borderRadius:4, transition:'width .3s' }}/>
               </div>
-              <div className="ws-form-grid" style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:10 }}>
+              <div className="ws-form-grid ws-grid-2" style={{ display:'grid', gap:10 }}>
                 {CLOSEOUT_ITEMS.map(item => (
                   <label key={item.key} style={{ display:'flex', alignItems:'center', gap:10, cursor:'pointer',
                     background:clDraft[item.key]?'var(--green-soft)':'var(--surface2)', borderRadius:8,
@@ -1057,12 +1166,12 @@ function PhotosTab({ bid, photos, onPhotosChange, showToast }: {
   const [lightbox, setLightbox] = useState<DrivePhoto | null>(null);
 
   const isImage = (m: string) => m.startsWith('image/');
-  const fmtSize = (s?: string) => {
-    if (!s) return '';
-    const n = parseInt(s);
-    return isNaN(n) ? '' : n >= 1048576 ? ` · ${(n/1048576).toFixed(1)} MB` : ` · ${Math.round(n/1024)} KB`;
+  // Drive returns size as a string; ' · 48 KB' (with the leading separator)
+  // reads inline after the date, or nothing when there's no size to show.
+  const driveSizeLabel = (s?: string) => {
+    const label = fmtSize(s ? parseInt(s) : undefined);
+    return label ? ` · ${label}` : '';
   };
-  const fmtDate = (s?: string) => s ? new Date(s).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
 
   const { run: runUpload, saving: uploading } = useMutation(
     async (files: File[]) => {
@@ -1144,7 +1253,7 @@ function PhotosTab({ bid, photos, onPhotosChange, showToast }: {
               {/* Info */}
               <div style={{ padding:'10px 11px 11px' }}>
                 <div style={{ fontSize:12, fontWeight:700, color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', marginBottom:3 }} title={p.name}>{p.name}</div>
-                <div style={{ fontSize:11, color:'var(--text3)', fontWeight:600 }}>{fmtDate(p.createdTime)}{fmtSize(p.size)}</div>
+                <div style={{ fontSize:11, color:'var(--text3)', fontWeight:600 }}>{fmtDate(p.createdTime, { year: 'always' })}{driveSizeLabel(p.size)}</div>
               </div>
             </div>
           ))}
@@ -1225,7 +1334,6 @@ function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
     },
   );
 
-  const fmtSize = (b: number) => b >= 1048576 ? (b/1048576).toFixed(1)+' MB' : Math.round(b/1024)+' KB';
   const extOf = (name: string) => (name.split('.').pop() ?? 'FILE').toUpperCase();
 
   return (
@@ -1250,7 +1358,7 @@ function DocsTab({ id, docs, onDocsChange, showToast, bid }: {
                   <td className="nm"><Icon name="file" size={13} stroke={1.8}/> {doc.display_name || doc.name}</td>
                   <td><span style={{ fontSize:10, fontWeight:800, padding:'2px 7px', borderRadius:5, background:'var(--blue-soft)', color:'var(--blue)', textTransform:'uppercase' }}>{extOf(doc.name)}</span></td>
                   <td className="sub">{fmtSize(doc.file_size)}</td>
-                  <td className="sub">{new Date(doc.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</td>
+                  <td className="sub">{fmtDate(doc.created_at, { year: 'always' })}</td>
                   <td style={{ display:'flex', gap:6 }}>
                     <button onClick={() => view(doc)} style={{ border:'none', background:'none', cursor:'pointer', color:'var(--blue)', padding:4, borderRadius:6 }} title="View"><Icon name="eye" size={14} stroke={1.9}/></button>
                     <button onClick={() => download(doc)} style={{ border:'none', background:'none', cursor:'pointer', color:'var(--text2)', padding:4, borderRadius:6 }} title="Download"><Icon name="cloud" size={13} stroke={1.8}/></button>

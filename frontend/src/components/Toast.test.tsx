@@ -5,7 +5,7 @@
 // "Delete failed" arrived with the same green checkmark as "Document removed".
 import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, act } from '@testing-library/react';
+import { render, screen, cleanup, act, fireEvent } from '@testing-library/react';
 import { renderHook } from '@testing-library/react';
 import Toast from './Toast';
 import { useToast } from '../hooks/useToast';
@@ -52,6 +52,52 @@ describe('Toast variants', () => {
 
     expect(document.querySelector('.toast')!.classList.contains('t-info')).toBe(true);
     expect(iconMarkup()).not.toContain(CHECK);
+  });
+
+  // Review round 1 S4: a double-click on "Undo" used to fire the restore POST
+  // twice — the second call 404s on the already-restored row and surfaces a
+  // false "Could not undo" error toast.
+  describe('action button double-click guard (review round 1 S4)', () => {
+    it('is a type="button" and calls the action only once no matter how many times it is clicked', () => {
+      const onClick = vi.fn();
+      render(<Toast toast={{ title: 'Generator project deleted', action: { label: 'Undo', onClick } }}/>);
+      const btn = screen.getByText('Undo') as HTMLButtonElement;
+      expect(btn.type).toBe('button');
+      fireEvent.click(btn);
+      fireEvent.click(btn);
+      fireEvent.click(btn);
+      expect(onClick).toHaveBeenCalledTimes(1);
+      expect(btn.disabled).toBe(true);
+    });
+  });
+
+  // Review round 2 N3: `App.tsx` renders `{toast && <Toast toast={toast}/>}`
+  // with no `key`, so `useToast`'s `showToast` replacing the toast object in
+  // place re-renders the SAME Toast component instance rather than
+  // remounting it. Round 1's S4 fix held `used` in component state with no
+  // reset, so after clicking Undo on one toast, the guard stayed `true` and
+  // the next toast's action button arrived permanently disabled/dead — even
+  // though it is a different toast with its own action.
+  describe('the used guard resets for the next toast (review round 2 N3)', () => {
+    it('re-enables the action button, with a working onClick, when the same instance gets a new toast prop', () => {
+      const onClickA = vi.fn();
+      const onClickB = vi.fn();
+      const { rerender } = render(
+        <Toast toast={{ title: 'Generator project deleted', action: { label: 'Undo', onClick: onClickA } }}/>,
+      );
+      fireEvent.click(screen.getByText('Undo'));
+      expect(onClickA).toHaveBeenCalledTimes(1);
+      expect((screen.getByText('Undo') as HTMLButtonElement).disabled).toBe(true);
+
+      // Same component instance (no key), new toast — the App.tsx pattern.
+      rerender(
+        <Toast toast={{ title: 'Electrical project deleted', action: { label: 'Undo', onClick: onClickB } }}/>,
+      );
+      const btnB = screen.getByText('Undo') as HTMLButtonElement;
+      expect(btnB.disabled).toBe(false);
+      fireEvent.click(btnB);
+      expect(onClickB).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

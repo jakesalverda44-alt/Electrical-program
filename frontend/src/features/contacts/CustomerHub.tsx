@@ -9,10 +9,10 @@ import FilePreviewModal from '../../components/FilePreviewModal';
 import { previewKind } from '../../components/filePreview';
 import { Customer, CustomerDetail, Toast } from '../../types';
 import { moneyFull as money, moneyShort } from '../../lib/money';
+import { fmtDate } from '../../lib/date';
+import { fmtSize } from '../../lib/format';
 
 const initials = (name: string) => name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-const fmtDate = (ts?: string | null) => ts ? new Date(ts.length <= 10 ? ts + 'T00:00:00' : ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
-const fmtSize = (n: number) => !n ? '' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
 
 const TYPE_LABEL: Record<string, string> = { gc: 'General Contractor', customer: 'Customer', other: 'Other' };
 const inputStyle: React.CSSProperties = {
@@ -424,7 +424,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
                   </button>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, textDecoration: t.status === 'done' ? 'line-through' : 'none', opacity: t.status === 'done' ? .6 : 1 }}>{t.title}</div>
-                    {t.due_date && <div style={{ fontSize: 11, color: 'var(--text3)' }}>Due {fmtDate(t.due_date)}</div>}
+                    {t.due_date && <div style={{ fontSize: 11, color: 'var(--text3)' }}>Due {fmtDate(t.due_date, { year: 'always' })}</div>}
                   </div>
                 </div>
               ))}
@@ -462,7 +462,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
                       <div key={m.id} style={{ padding: '9px 16px 9px 30px', borderTop: '1px solid var(--border)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                           <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{m.subject}</span>
-                          <span style={{ fontSize: 11, color: 'var(--text3)', flexShrink: 0 }}>{fmtDate(m.created_at)}</span>
+                          <span style={{ fontSize: 11, color: 'var(--text3)', flexShrink: 0 }}>{fmtDate(m.created_at, { year: 'always' })}</span>
                         </div>
                         {m.body && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 3, lineHeight: 1.5 }}>{m.body}</div>}
                         <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3, textTransform: 'capitalize' }}>{m.kind}{m.author ? ` · ${m.author}` : ''}</div>
@@ -490,7 +490,7 @@ export default function CustomerHub({ id, onBack, showToast, onNewBid, userRole,
                   <Icon name="clip" size={15} stroke={1.8} style={{ color: 'var(--text3)', flexShrink: 0 }}/>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 12.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.display_name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'capitalize' }}>{d.category}{d.file_size ? ` · ${fmtSize(d.file_size)}` : ''} · {fmtDate(d.created_at)}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'capitalize' }}>{d.category}{d.file_size ? ` · ${fmtSize(d.file_size)}` : ''} · {fmtDate(d.created_at, { year: 'always' })}</div>
                   </div>
                   <button onClick={() => viewDoc(d)} title="View" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--blue)', padding: 4, flexShrink: 0 }}>
                     <Icon name="eye" size={15} stroke={1.9}/>

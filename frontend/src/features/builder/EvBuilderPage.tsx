@@ -10,19 +10,7 @@ import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import { Gen } from '../../types';
 import { useSettings, useShowToast } from '../../contexts/AppContext';
 import { parseAddress } from '../../lib/address';
-
-// Sign outside the currency symbol, matching the proposal document: "-$200", not "$-200".
-// Shows cents only when an amount has them, so a $15,430 job stays readable while a
-// $675.50 one is stated exactly. The proposal document itself always prints two decimals
-// (fmtDec) — this is the in-app summary chrome.
-function fmt(n: number) {
-  const abs = Math.abs(n);
-  const hasCents = Math.round(abs * 100) % 100 !== 0;
-  return (n < 0 ? '-$' : '$') + abs.toLocaleString('en-US', {
-    minimumFractionDigits: hasCents ? 2 : 0,
-    maximumFractionDigits: 2,
-  });
-}
+import { moneyPrecise as fmt } from '../../lib/money';
 
 const INPUT_STYLE: React.CSSProperties = {
   width: '100%', font: 'inherit', fontSize: 13, fontWeight: 600,
@@ -51,7 +39,7 @@ function Section({ title, icon, children }: { title: string; icon: string; child
           {title}
         </span>
       </div>
-      <div className="builder-field-grid" style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      <div className="builder-field-grid" style={{ padding: '16px 20px', display: 'grid', gap: 14 }}>
         {children}
       </div>
     </div>
@@ -184,7 +172,7 @@ export default function EvBuilderPage({ setGens, onSaved, editGen, productSwitch
 
   return (
     <div className="scroll view-enter">
-      <div className="builder-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, padding: '20px 28px 40px', alignItems: 'start' }}>
+      <div className="builder-layout" style={{ display: 'grid', gap: 16, padding: '20px 28px 40px', alignItems: 'start' }}>
         <div>
           {productSwitch}
 

@@ -14,6 +14,7 @@ import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
 import Icon from '../../components/Icon';
+import Modal from '../../components/Modal';
 import { useShowToast } from '../../contexts/AppContext';
 import ProposalPreview from '../builder/ProposalPreview';
 import { GenForm } from '../builder/genData';
@@ -192,6 +193,12 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
   };
 
   const countersign = async () => {
+    // Small nit (review round 1): don't rely solely on the button's
+    // `disabled` attribute — a handler-level guard covers a second call that
+    // slips through before React re-renders with the disabled state (e.g.
+    // two fast clicks, or an Enter-key repeat) and any future call site that
+    // doesn't wire the confirm button through this exact disabled prop.
+    if (countersigning) return;
     setConfirming(false);
     setCountersigning(true);
     try {
@@ -257,10 +264,9 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
       {/* Countersigning executes the contract AND awards the deal, which books a won job,
           earns commission, creates a project, and supersedes the other options. None of
           that should happen behind a one-word button, so spell it out first. */}
-      {confirming && (
-        <div className="overlay" onClick={() => setConfirming(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-hdr"><h3>Countersign &amp; award</h3></div>
+      <Modal open={confirming} onClose={() => setConfirming(false)} title="Countersign & award">
+        {({ requestClose }) => (
+          <>
             <div className="modal-body" style={{ fontSize: 13.5, color: 'var(--text2)', lineHeight: 1.65 }}>
               <div style={{ marginBottom: 10 }}>
                 Signing <strong>{g.customer}</strong> executes the contract and awards the deal. That will:
@@ -285,12 +291,14 @@ export default function SignedContractCard({ gen, siblings = [], onUpdated, requ
               <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>This can’t be undone from here.</div>
             </div>
             <div className="modal-foot">
-              <button className="btn ghost" onClick={() => setConfirming(false)}>Cancel</button>
-              <button className="btn" onClick={countersign}>Countersign &amp; award</button>
+              <button className="btn ghost" onClick={requestClose} disabled={countersigning}>Cancel</button>
+              <button className="btn" onClick={countersign} disabled={countersigning}>
+                {countersigning ? 'Signing…' : 'Countersign & award'}
+              </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
 
       {/* Offscreen render target — mounted only while archiving. Kept on-screen-sized and
           merely shifted out of view rather than display:none, because html2canvas cannot

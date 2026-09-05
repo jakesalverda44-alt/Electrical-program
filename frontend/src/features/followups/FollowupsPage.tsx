@@ -3,6 +3,7 @@ import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useShowToast } from '../../contexts/AppContext';
+import { dayOf } from '../../lib/date';
 
 interface Task {
   id: string;
@@ -42,9 +43,15 @@ const inputStyle: React.CSSProperties = {
 // Accepts either a 'YYYY-MM-DD' date or a full ISO timestamp (Postgres DATE columns
 // come back from the API serialized as ISO, e.g. "2026-06-11T00:00:00.000Z"). Returns
 // the calendar day at local midnight, or null if unparseable.
+//
+// Review round 2 N4: this used to hand-roll the same DATE-column re-anchoring
+// `lib/date.ts`'s `dayOf` already does — one more place that could drift out
+// of sync with it. `dayOf` handles both shapes identically (bare
+// 'YYYY-MM-DD' and UTC-midnight timestamps are both re-anchored to local
+// midnight; a real timestamp with a real time is left alone).
 function parseDueDate(due?: string | null): Date | null {
   if (!due) return null;
-  const d = new Date(due.slice(0, 10) + 'T00:00:00');
+  const d = dayOf(due);
   return isNaN(d.getTime()) ? null : d;
 }
 

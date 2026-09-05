@@ -5,6 +5,7 @@ import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
 import { reportError } from './lib/reportError';
 import { UnsavedGuardProvider } from './contexts/UnsavedGuardContext';
+import { ConfirmProvider } from './components/ConfirmDialog';
 import './styles.css';
 
 // Register the push/PWA service worker at boot so it's active (and offline-install-ready)
@@ -25,7 +26,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <BrowserRouter>
         {/* Above App so App's own navigation primitive can consult it. */}
         <UnsavedGuardProvider>
-          <App />
+          <ConfirmProvider>
+            <App />
+          </ConfirmProvider>
         </UnsavedGuardProvider>
       </BrowserRouter>
     </ErrorBoundary>

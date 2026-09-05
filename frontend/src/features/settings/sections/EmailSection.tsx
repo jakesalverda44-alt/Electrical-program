@@ -3,6 +3,7 @@ import api from '../../../api/client';
 import { useMutation } from '../../../hooks/useMutation';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, Toggle, inputStyle } from '../shared';
+import Badge from '../../../components/Badge';
 
 export function EmailSection({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
   // Text settings still edited here. Mail is sent through Microsoft Graph (the shared
@@ -124,13 +125,11 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {emails.map(em => (
-            <span key={em} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600,
-              background: 'var(--blue-soft)', color: 'var(--blue)', border: '1px solid rgba(77,141,247,.25)',
-              borderRadius: 20, padding: '4px 10px 4px 12px' }}>
+            <Badge key={em} tone="info" style={{ gap: 6, padding: '4px 10px 4px 12px' }}>
               {em}
               <button onClick={() => setEmails(prev => prev.filter(x => x !== em))}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--blue)', fontSize: 15, lineHeight: 1, padding: 0, display: 'flex' }}>×</button>
-            </span>
+            </Badge>
           ))}
           {emails.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>No recipients added yet.</span>}
         </div>
@@ -158,13 +157,11 @@ export function EmailSection({ settings, onSaved }: { settings: AppSettings; onS
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {awardEmails.map(em => (
-            <span key={em} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600,
-              background: 'var(--blue-soft)', color: 'var(--blue)', border: '1px solid rgba(77,141,247,.25)',
-              borderRadius: 20, padding: '4px 10px 4px 12px' }}>
+            <Badge key={em} tone="info" style={{ gap: 6, padding: '4px 10px 4px 12px' }}>
               {em}
               <button onClick={() => setAwardEmails(prev => prev.filter(x => x !== em))}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--blue)', fontSize: 15, lineHeight: 1, padding: 0, display: 'flex' }}>×</button>
-            </span>
+            </Badge>
           ))}
           {awardEmails.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Using the built-in default team list until you customize it here.</span>}
         </div>

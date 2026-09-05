@@ -2,6 +2,7 @@ import React from 'react';
 import Icon from '../../components/Icon';
 import { WonJob } from '../../types';
 import { moneyFull } from '../../lib/money';
+import { dayOf } from '../../lib/date';
 
 const sumVal = (arr: WonJob[]) => arr.reduce((s, j) => s + Number(j.value), 0);
 
@@ -20,7 +21,10 @@ export default function WonReports({ records, salespeople }: Props) {
   const months = MONTH_LABELS.slice(0, currentMonth + 1).map((label, i) => ({
     label,
     total: sumVal(records.filter(j => {
-      const d = new Date(j.date_won);
+      // Review round 2 N4: `date_won` is a Postgres DATE column — a raw
+      // `new Date()` here counts a job won on the 1st in the PREVIOUS
+      // month's bucket in any negative-UTC timezone.
+      const d = dayOf(j.date_won);
       return d.getFullYear() === currentYear && d.getMonth() === i;
     })),
   }));

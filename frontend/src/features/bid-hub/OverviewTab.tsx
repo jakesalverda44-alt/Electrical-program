@@ -7,6 +7,7 @@ import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
 import { useDirtyDismiss } from '../../hooks/useDirtyDismiss';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { moneyFull, moneyShort } from '../../lib/money';
 import { useStagePipeline } from '../../hooks/useStagePipeline';
 import { useShowToast } from '../../contexts/AppContext';
@@ -45,7 +46,12 @@ function bidForm(bid: Bid) {
 interface OverviewProps {
   bid: Bid;
   onBidUpdated: (bid: Bid) => void;
+  // Review round 1 S5/S6 — readable, not just the setter, so a delete's Undo
+  // can restore the bid at its original (created_at DESC) index instead of
+  // prepending it, and restore the exact won-job row the delete removed.
+  bids: Bid[];
   setBids: React.Dispatch<React.SetStateAction<Bid[]>>;
+  wonJobs: WonJob[];
   setWonJobs: React.Dispatch<React.SetStateAction<WonJob[]>>;
   onNav: (v: string, recordId?: string) => void;
   scope: Record<string, string>;
@@ -63,9 +69,10 @@ function daysSince(ts?: string) {
   return ts ? Math.floor((Date.now() - new Date(ts).getTime()) / 86400000) : 0;
 }
 
-export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, onNav, scope, onGoTab }: OverviewProps) {
+export default function OverviewTab({ bid, onBidUpdated, bids, setBids, wonJobs, setWonJobs, onNav, scope, onGoTab }: OverviewProps) {
   const isTerminal = bid.stage === 'lost';
   const showToast = useShowToast();
+  const confirm = useConfirm();
 
   const { moveToStage, pendingConfirm, cancelConfirm } = useStagePipeline<Bid, ElecStageKey>({
     items: [bid],
@@ -211,9 +218,35 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
     },
   );
 
-  const handleCloseJob = () => {
-    if (!window.confirm(`Mark "${bid.name}" as closed/complete? This will move the Drive folder to Completed Projects and remove it from the active pipeline.`)) return;
+  const handleCloseJob = async () => {
+    if (!(await confirm({
+      title: `Mark "${bid.name}" as closed/complete? This will move the Drive folder to Completed Projects and remove it from the active pipeline.`,
+      confirmLabel: 'Close job',
+    }))) return;
     runCloseJob();
+  };
+
+  // Review round 1 S5/S6 — `snapshot` (captured before the delete) is what
+  // lets Undo restore the bid at its original index (not prepended) and
+  // restore the exact won-job row the delete removed, instead of just the
+  // bid on its own.
+  const undoDeleteBid = async (snapshot: { originalIndex: number; removedWonJob?: WonJob }) => {
+    try {
+      const { data: restored } = await api.post<Bid>(`/bids/${bid.id}/restore`);
+      setBids(prev => {
+        const next = [...prev];
+        // Review round 2 N5: a negative `originalIndex` (row not found) must
+        // append, not feed -1 straight to `splice` — `Math.min(-1, len)` is
+        // -1, and `splice(-1, 0, x)` inserts before the LAST element.
+        const i = snapshot.originalIndex < 0 ? next.length : Math.min(snapshot.originalIndex, next.length);
+        next.splice(i, 0, restored);
+        return next;
+      });
+      if (snapshot.removedWonJob) setWonJobs(prev => [...prev, snapshot.removedWonJob!]);
+      showToast({ title: 'Bid restored', sub: restored.name });
+    } catch {
+      showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore it from Settings → Trash instead.' });
+    }
   };
 
   const { run: runDelete, saving: deleting } = useMutation(
@@ -224,13 +257,23 @@ export default function OverviewTab({ bid, onBidUpdated, setBids, setWonJobs, on
         setWonJobs(prev => prev.filter(w => w.proposal_id !== bid.id));
         onNav('electrical/bids');
       },
-      successToast: { title: 'Bid deleted', sub: bid.name },
+      successToast: () => {
+        const snapshot = {
+          originalIndex: bids.findIndex(b => b.id === bid.id),
+          removedWonJob: wonJobs.find(w => w.proposal_id === bid.id),
+        };
+        return { title: 'Bid deleted', sub: bid.name, action: { label: 'Undo', onClick: () => undoDeleteBid(snapshot) } };
+      },
       errorToast: (message) => ({ title: 'Delete failed', sub: message }),
     },
   );
 
-  const handleDelete = () => {
-    if (!window.confirm(`Delete "${bid.name}" and its linked project/files/testing data? This cannot be undone.`)) return;
+  const handleDelete = async () => {
+    if (!(await confirm({
+      title: `Delete "${bid.name}" and its linked project/files/testing data? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    }))) return;
     runDelete();
   };
 

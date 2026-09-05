@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AxiosResponse } from 'axios';
 import api from '../api/client';
 import { apiErrorMessage, isAbortError } from '../api/errors';
 import { reportError } from '../lib/reportError';
@@ -11,9 +12,22 @@ import { reportError } from '../lib/reportError';
  * last, so B's page showed A's data. Six files had a hand-rolled cancellation
  * flag; thirty-five had nothing at all.
  *
- * Deliberately small: no cache, no dedup, no retry. One request per key, an
- * AbortController per request, and a response is only applied if its own
- * controller is still live.
+ * One request per key, an AbortController per request, and a response is
+ * only applied if its own subscriber hasn't since unmounted/re-keyed.
+ *
+ * Request dedup (audit data #9): several components on the same screen can
+ * ask for the exact same `url` + `params` at the same time — e.g. the gen
+ * drawer's Overview/Checklist/Survey/Documents tabs each independently read
+ * `/documents?linked_id=...`. Without dedup that's N identical GETs landing
+ * on the server at once. `sharedRequests` below is a module-level map of
+ * in-flight GETs keyed on `url + paramsKey (+ responseType)`; concurrent
+ * `useApi` calls for the same key share one underlying axios call and a
+ * reference count, so unmounting/aborting one subscriber never cancels the
+ * request for the others still waiting on it — only the last one out actually
+ * aborts it. There is deliberately no TTL cache: an entry lives only for the
+ * duration of its one in-flight request and is deleted the moment it settles
+ * (success or failure), so the very next call — shared or not — always hits
+ * the network fresh.
  */
 
 export interface UseApiOptions {
@@ -37,6 +51,33 @@ export interface UseApiResult<T> {
   reload: () => void;
 }
 
+/** One real in-flight GET, shared by every `useApi` subscriber asking for the
+ *  same key at the same time. `refCount` is how many subscribers are
+ *  currently waiting on it; the underlying request is only aborted when the
+ *  last one leaves. */
+interface SharedRequest<T = unknown> {
+  controller: AbortController;
+  promise: Promise<AxiosResponse<T>>;
+  refCount: number;
+}
+
+// Module-level — shared across every component using this hook, not per-hook
+// state, which is the whole point: two different components' `useApi` calls
+// need to see the same entry.
+const sharedRequests = new Map<string, SharedRequest>();
+
+function requestKey(url: string, paramsKey: string, responseType?: string, timeout?: number): string {
+  // responseType and timeout are part of the key (not just url + paramsKey)
+  // so a JSON read and a blob download of the same URL/params — a genuinely
+  // different request shape — are never accidentally shared, and a caller
+  // that needs a longer timeout for a slow endpoint never joins a shorter-
+  // timeout request already in flight for the same URL/params (which would
+  // silently give it the shorter timeout). Two calls with the same url,
+  // params, responseType, AND timeout are the identical-request case this
+  // exists to dedup.
+  return `${url}|${paramsKey}|${responseType ?? ''}|${timeout ?? ''}`;
+}
+
 /**
  * @param url  request path, or null to make the call conditional
  */
@@ -53,49 +94,97 @@ export function useApi<T>(url: string | null, options: UseApiOptions = {}): UseA
   const paramsKey = JSON.stringify(params ?? null);
   const depsKey = JSON.stringify(deps ?? null);
 
-  // `reload` needs to abort the request that is running right now, which the
-  // effect closure cannot reach from outside.
-  const controllerRef = useRef<AbortController | null>(null);
+  // Review round 1 S1 — `reload` needs to know the key this render's effect
+  // is about to use (or just used), so it can evict it from `sharedRequests`
+  // before bumping `nonce`. Updated every render rather than only inside the
+  // effect, so it is always current even before the effect has run once.
+  const currentKeyRef = useRef<string | null>(active ? requestKey(url as string, paramsKey, responseType, timeout) : null);
+  currentKeyRef.current = active ? requestKey(url as string, paramsKey, responseType, timeout) : null;
 
   useEffect(() => {
     if (!active) {
       setLoading(false);
       return;
     }
-    const controller = new AbortController();
-    controllerRef.current = controller;
+    // Per-subscriber flag — distinct from the shared request's own
+    // AbortController, so this subscriber unmounting/re-keying stops it from
+    // applying a (possibly still in-flight, shared) response to state
+    // without cancelling that request for any other subscriber.
+    let cancelled = false;
     setLoading(true);
     setError(null);
 
-    api
-      .get<T>(url as string, {
+    const key = requestKey(url as string, paramsKey, responseType, timeout);
+    let entry = sharedRequests.get(key) as SharedRequest<T> | undefined;
+    if (!entry) {
+      const controller = new AbortController();
+      const promise = api.get<T>(url as string, {
         params,
         signal: controller.signal,
         ...(timeout ? { timeout } : {}),
         ...(responseType ? { responseType } : {}),
-      })
+      });
+      entry = { controller, promise, refCount: 0 };
+      sharedRequests.set(key, entry);
+      // Cleared on settle (either outcome): the entry only ever represents
+      // ONE in-flight request, never a cached result, so the next call for
+      // this key — even a millisecond later — issues a fresh request.
+      // `.finally()` returns a new promise that re-rejects when `promise`
+      // does; every subscriber below already attaches its own `.catch()` to
+      // `promise` itself, but this internal bookkeeping chain has no
+      // subscriber of its own, so it needs its own no-op `.catch()` or a
+      // failed shared request would surface as an unhandled rejection here.
+      promise
+        .finally(() => {
+          if (sharedRequests.get(key) === entry) sharedRequests.delete(key);
+        })
+        .catch(() => {});
+    }
+    entry.refCount += 1;
+    const mine = entry;
+
+    mine.promise
       .then(res => {
-        // A late response from a superseded request is dropped, not applied.
-        if (controller.signal.aborted) return;
+        if (cancelled) return;
         setData(res.data);
         setError(null);
       })
       .catch(err => {
-        if (controller.signal.aborted || isAbortError(err)) return;
+        if (cancelled || isAbortError(err)) return;
         setError(apiErrorMessage(err));
         reportError(err, `useApi ${url}`);
       })
       .finally(() => {
-        if (controller.signal.aborted) return;
+        if (cancelled) return;
         setLoading(false);
       });
 
-    return () => controller.abort();
+    return () => {
+      cancelled = true;
+      mine.refCount -= 1;
+      // Only the last subscriber leaving actually aborts the shared request;
+      // while any other subscriber is still waiting on it, it keeps running.
+      if (mine.refCount <= 0) {
+        mine.controller.abort();
+        if (sharedRequests.get(key) === mine) sharedRequests.delete(key);
+      }
+    };
     // paramsKey/depsKey stand in for the objects they serialize.
   }, [url, active, paramsKey, depsKey, nonce, timeout, responseType]);
 
   const reload = useCallback(() => {
-    controllerRef.current?.abort();
+    // Review round 1 S1: bumping `nonce` alone reruns the effect above, whose
+    // own cleanup (run first, synchronously, by React) decrements the shared
+    // entry's refCount — but if another subscriber is ALSO still waiting on
+    // the same key, that entry survives in `sharedRequests` (refCount > 0),
+    // and the freshly re-run effect would just rejoin that SAME in-flight
+    // (or already-settled) request instead of firing a new one — making
+    // `reload()` silently do nothing whenever the key is shared. Evicting
+    // the entry here — not aborting it; the other subscribers' own
+    // `.then()`/`.catch()` chains stay attached to that promise and still
+    // resolve normally — guarantees the next effect run always starts a
+    // fresh request for this subscriber, shared or not.
+    if (currentKeyRef.current) sharedRequests.delete(currentKeyRef.current);
     setNonce(n => n + 1);
   }, []);
 

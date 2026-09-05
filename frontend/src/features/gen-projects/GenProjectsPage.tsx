@@ -6,6 +6,7 @@ import { Gen, WonJob, Toast } from '../../types';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { moneyFull, moneyShort as money } from '../../lib/money';
 import { useShowToast } from '../../contexts/AppContext';
 
@@ -91,14 +92,18 @@ type PhaseKey = typeof PHASES[number]['key'];
 interface Props {
   gens: Gen[];
   setGens: (fn: (prev: Gen[]) => Gen[]) => void;
+  // Review round 1 S5 — readable, not just the setter, so a delete's Undo can
+  // restore the exact won-job row it removed instead of only the gen itself.
+  wonJobs: WonJob[];
   setWonJobs: (fn: (prev: WonJob[]) => WonJob[]) => void;
   // Deep-link record id (from global search): opens that project's detail panel.
   openId?: string | null;
   onClearParam?: () => void;
 }
 
-export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onClearParam }: Props) {
+export default function GenProjectsPage({ gens, setGens, wonJobs, setWonJobs, openId, onClearParam }: Props) {
   const showToast = useShowToast();
+  const confirm = useConfirm();
   const awarded = useMemo(() => gens.filter(g => g.stage === 'awarded'), [gens]);
 
   // Normalise phase: map old values forward, default to 'deposit'
@@ -185,7 +190,20 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onC
   };
 
   const deleteProject = async (gen: Gen) => {
-    if (!window.confirm(`Delete generator project "${gen.customer}" and its linked files/testing data? This cannot be undone.`)) return;
+    if (!(await confirm({
+      title: `Delete generator project "${gen.customer}" and its linked files/testing data? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    }))) return;
+    // Review round 1 S5/S6 — a snapshot of everything this delete removes
+    // locally, taken BEFORE the delete, so Undo can put it all back exactly
+    // where it was: the gen's own index in the (created_at DESC-ordered)
+    // list, its won-job row, and its Kanban phase. Undo used to restore only
+    // the gen (prepended, not re-sorted) and drop the other two — a restored
+    // project reappeared in the wrong Kanban column, and out of order.
+    const originalIndex = gens.findIndex(g => g.id === gen.id);
+    const removedWonJob = wonJobs.find(w => w.proposal_id === gen.id);
+    const removedPhase = phases[gen.id];
     try {
       await api.delete(`/gens/${gen.id}`);
       setGens(prev => prev.filter(g => g.id !== gen.id));
@@ -196,7 +214,34 @@ export default function GenProjectsPage({ gens, setGens, setWonJobs, openId, onC
         return next;
       });
       setDetail(null);
-      showToast({ title: 'Generator project deleted', sub: gen.customer });
+      showToast({
+        title: 'Generator project deleted', sub: gen.customer,
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            try {
+              const { data: restored } = await api.post<Gen>(`/gens/${gen.id}/restore`);
+              setGens(prev => {
+                const next = [...prev];
+                // Review round 2 N5: `originalIndex` is -1 when the deleted
+                // row wasn't found (shouldn't happen, but Undo must not
+                // corrupt the list if it does) — `Math.min(-1, next.length)`
+                // is -1, and `splice(-1, 0, x)` inserts before the LAST
+                // element rather than at the end. Treat a negative index as
+                // "append" instead of feeding it to `splice` raw.
+                const i = originalIndex < 0 ? next.length : Math.min(originalIndex, next.length);
+                next.splice(i, 0, restored);
+                return next;
+              });
+              if (removedWonJob) setWonJobs(prev => [...prev, removedWonJob]);
+              if (removedPhase) setPhases(prev => ({ ...prev, [restored.id]: removedPhase }));
+              showToast({ title: 'Generator project restored', sub: restored.customer });
+            } catch {
+              showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore it from Settings → Trash instead.' });
+            }
+          },
+        },
+      });
     } catch {
       showToast({ variant: 'error', title: 'Delete failed', sub: 'Please try again' });
     }

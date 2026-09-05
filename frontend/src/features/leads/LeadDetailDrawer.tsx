@@ -1,13 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Icon from '../../components/Icon';
+import Modal from '../../components/Modal';
+import Badge from '../../components/Badge';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { Lead, LeadActivity } from '../../types';
 import { LEAD_STAGES, ALL_LEAD_STAGES, LeadStageKey, SOURCE_LABELS, INTEREST_LABELS } from './constants';
 import SiteVisitModal from './SiteVisitModal';
 import LeadSiteSurvey from './LeadSiteSurvey';
 import { Gen } from '../../types';
+
+const LEAD_DRAWER_TITLE_ID = 'lead-detail-drawer-title';
 
 interface Props {
   lead: Lead;
@@ -54,6 +59,7 @@ function isLeadOverdue(lead: Lead): boolean {
 }
 
 export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated, onDeleted, onNav, onEditGen, onConverted }: Props) {
+  const confirm = useConfirm();
   const [lead, setLead] = useState<Lead>(initialLead);
   const [activity, setActivity] = useState<LeadActivity[]>([]);
   const [dirty, setDirty] = useState<Partial<Lead>>({});
@@ -255,8 +261,12 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
     { onSuccess: () => onDeleted(lead), errorToast: (m) => ({ title: 'Delete failed', sub: m }) },
   );
 
-  const deleteLead = () => {
-    if (!window.confirm(`Delete lead "${lead.name}"? This cannot be undone.`)) return;
+  const deleteLead = async () => {
+    if (!(await confirm({
+      title: `Delete lead "${lead.name}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    }))) return;
     runDeleteLead();
   };
 
@@ -276,21 +286,21 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
   };
 
   return (
-    <div className="drawer-overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="drawer">
+    <>
+    <Modal open onClose={onClose} variant="drawer" labelledBy={LEAD_DRAWER_TITLE_ID} isDirty={hasChanges}>
+      {({ requestClose }) => (
+      <>
         <div className="drawer-hdr">
           <div>
             <div className="drawer-eyebrow">Generator Lead</div>
-            <div className="drawer-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div id={LEAD_DRAWER_TITLE_ID} className="drawer-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {lead.name}
               {isLeadOverdue(lead) && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: '#d97706', background: 'rgba(217,119,6,.12)', border: '1px solid rgba(217,119,6,.3)', borderRadius: 20, padding: '2px 8px', verticalAlign: 'middle' }}>
-                  OVERDUE
-                </span>
+                <Badge tone="warn" size="sm" style={{ verticalAlign: 'middle' }}>OVERDUE</Badge>
               )}
             </div>
           </div>
-          <button className="close-x" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
+          <button className="close-x" aria-label="Close" onClick={requestClose}><Icon name="x" size={16} stroke={2}/></button>
         </div>
 
         <div className="drawer-body">
@@ -464,7 +474,14 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
                 onChange={e => setNoteText(e.target.value)}
                 placeholder="Add a note…"
                 autoFocus
-                onKeyDown={e => { if (e.key === 'Escape') { setShowNoteInput(false); setNoteText(''); }}}
+                // Review round 1 B4: preventDefault() marks this Escape as
+                // consumed so Modal's own (now bubble-phase) Escape handler
+                // checks `e.defaultPrevented` and doesn't ALSO close the
+                // whole drawer — no capture phase needed here since this is
+                // a React onKeyDown on the actual target element, which
+                // always runs before the event bubbles up to Modal's
+                // document-level listener.
+                onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setShowNoteInput(false); setNoteText(''); }}}
               />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <button className="btn" style={{ fontSize: 12, padding: '0 14px' }} onClick={logNote} disabled={noteLogging || !noteText.trim()}>
@@ -495,7 +512,7 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
                   <ActionItem icon="bolt" label="Create Generator Record" onClick={createGen}/>
                 )}
                 <ActionItem icon="x" label="Mark Lost" onClick={async () => {
-                  if (!window.confirm('Mark this lead as lost?')) return;
+                  if (!(await confirm({ title: 'Mark this lead as lost?', confirmLabel: 'Mark Lost' }))) return;
                   await setStage('lost');
                 }} color="#E06A6A"/>
                 <ActionItem icon="x" label="Delete Lead" onClick={deleteLead} color="#E06A6A"/>
@@ -569,26 +586,27 @@ export default function LeadDetailDrawer({ lead: initialLead, onClose, onUpdated
             )}
           </div>
         </div>
-      </div>
-
-      {showSiteVisit && (
-        <SiteVisitModal
-          leadName={lead.name}
-          saving={handingOff}
-          onConfirm={doHandoff}
-          onClose={() => setShowSiteVisit(false)}
-        />
+      </>
       )}
+    </Modal>
+    {showSiteVisit && (
+      <SiteVisitModal
+        leadName={lead.name}
+        saving={handingOff}
+        onConfirm={doHandoff}
+        onClose={() => setShowSiteVisit(false)}
+      />
+    )}
 
-      {showSurvey && (
-        <LeadSiteSurvey
-          lead={lead}
-          onUpdated={updated => { setLead(updated); onUpdated(updated); }}
-          onBuildProposal={() => { setShowSurvey(false); createGen(); }}
-          onClose={() => setShowSurvey(false)}
-        />
-      )}
-    </div>
+    {showSurvey && (
+      <LeadSiteSurvey
+        lead={lead}
+        onUpdated={updated => { setLead(updated); onUpdated(updated); }}
+        onBuildProposal={() => { setShowSurvey(false); createGen(); }}
+        onClose={() => setShowSurvey(false)}
+      />
+    )}
+    </>
   );
 }
 

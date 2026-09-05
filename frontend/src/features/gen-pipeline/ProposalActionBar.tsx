@@ -201,7 +201,7 @@ export default function ProposalActionBar(props: ActionBarProps) {
                     style={{
                       display: 'block', width: '100%', textAlign: 'left', padding: '10px 14px',
                       background: 'none', border: 'none', borderTop: '1px solid var(--border2)',
-                      cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--red, #ef4444)',
+                      cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--red)',
                     }}>
                     Delete proposal
                   </button>

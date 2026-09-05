@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Icon from '../../components/Icon';
+import Modal from '../../components/Modal';
 import { Gen, WonJob } from '../../types';
 import { GEN_STAGES, GenStageKey } from './constants';
 import RecordFiles from '../../components/RecordFiles';
@@ -20,6 +21,7 @@ import { ChecklistData, BLANK } from './SiteVisitChecklist';
 import { isPrivileged } from '../../hooks/useAuth';
 import { useUser } from '../../contexts/AppContext';
 import { useShowToast } from '../../contexts/AppContext';
+import { useConfirm } from '../../components/ConfirmDialog';
 
 function fmtTs(ts?: string | null) {
   if (!ts) return null;
@@ -55,9 +57,12 @@ interface Props {
 
 interface Draft { customer: string; loc: string; mfr: string; model: string; kw: string; amount: string; addons: string; date_won: string; }
 
+const GEN_DRAWER_TITLE_ID = 'gen-detail-drawer-title';
+
 export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCancelDeclined, onClose, onEditGen, onDuplicate, onDelete, onClosed, onUpdated, autoKickoff, onAutoKickoffHandled, autoCountersign, onAutoCountersignHandled, linkCandidates, onLink, groupSiblings }: Props) {
   const canDelete = isPrivileged(useUser());
   const showToast = useShowToast();
+  const confirm = useConfirm();
   const isTerminal = gen.stage === 'awarded' || gen.stage === 'declined' || gen.stage === 'signed' || gen.stage === 'superseded';
   const [showBuildNotes, setShowBuildNotes] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -170,20 +175,25 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
     { onSuccess: (data) => onClosed(data), errorTitle: 'Could not close this job' },
   );
 
-  const handleCloseJob = () => {
-    if (!window.confirm(`Mark "${gen.customer}" as closed/complete? This will move the Drive folder to Completed Generator Jobs and remove it from the active pipeline.`)) return;
+  const handleCloseJob = async () => {
+    if (!(await confirm({
+      title: `Mark "${gen.customer}" as closed/complete? This will move the Drive folder to Completed Generator Jobs and remove it from the active pipeline.`,
+      confirmLabel: 'Close job',
+    }))) return;
     runCloseJob();
   };
 
   return (
-    <div className="drawer-overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="drawer">
+    <>
+    <Modal open onClose={onClose} variant="drawer" labelledBy={GEN_DRAWER_TITLE_ID}>
+      {({ requestClose }) => (
+      <>
         <div className="drawer-hdr">
           <div>
             <div className="drawer-eyebrow">Generator Proposal</div>
-            <div className="drawer-title">{gen.customer}</div>
+            <div id={GEN_DRAWER_TITLE_ID} className="drawer-title">{gen.customer}</div>
           </div>
-          <button className="close-x" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
+          <button className="close-x" aria-label="Close" onClick={requestClose}><Icon name="x" size={16} stroke={2}/></button>
         </div>
 
         <div className="drawer-body">
@@ -326,13 +336,14 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
                 { label: 'kW Output', key: 'kw', type: 'number' },
                 { label: 'Amount ($)', key: 'amount', type: 'number' },
                 { label: 'Add-ons ($)', key: 'addons', type: 'number' },
-              ] as { label: string; key: keyof Draft; type: string }[]).map(f => (
+              ] as { label: string; key: keyof Draft; type: string }[]).map((f, i) => (
                 <div key={f.key} style={{ marginBottom: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>{f.label}</div>
                   <input
                     type={f.type}
                     value={draft[f.key]}
                     onChange={set(f.key)}
+                    autoFocus={i === 0}
                     style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 7,
                       padding: '7px 10px', fontSize: 13, color: 'var(--text)', fontFamily: f.type === 'number' ? 'var(--mono)' : 'inherit',
                       outline: 'none', boxSizing: 'border-box' }}
@@ -513,7 +524,9 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           )}
 
         </div>
-      </div>
+      </>
+      )}
+    </Modal>
 
       {/* Sending used to live only in the builder, reachable after a save, so there was
           no way to resend from the record a rep is actually looking at. */}
@@ -560,6 +573,6 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           }}
         />
       )}
-    </div>
+    </>
   );
 }

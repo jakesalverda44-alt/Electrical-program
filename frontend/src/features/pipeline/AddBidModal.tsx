@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import Icon from '../../components/Icon';
+import Modal from '../../components/Modal';
+import RequiredMark from '../../components/RequiredMark';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { Bid } from '../../types';
@@ -73,21 +74,17 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
   };
 
   return (
-    <div className="overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
-        <div className="modal-hdr">
-          <h3>New Electrical Bid</h3>
-          <button className="close-x" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
-        </div>
+    <Modal open onClose={onClose} title="New Electrical Bid">
+      {({ requestClose }) => (
         <form onSubmit={submit}>
           <div className="modal-body">
             <div className="field">
-              <label>Project name</label>
-              <input value={f.name} onChange={set('name')} placeholder="e.g. Riverview Medical Office" autoFocus required/>
+              <label htmlFor="bid-name">Project name<RequiredMark/></label>
+              <input id="bid-name" value={f.name} onChange={set('name')} placeholder="e.g. Riverview Medical Office" autoFocus required/>
             </div>
             <div className="field-row">
               <div className="field">
-                <label htmlFor="bid-gc">General contractor</label>
+                <label htmlFor="bid-gc">General contractor<RequiredMark/></label>
                 <input id="bid-gc" list="gc-options" value={f.gc} onChange={set('gc')} placeholder="e.g. Brasfield & Gorrie" required autoComplete="off"/>
                 <datalist id="gc-options">
                   {Array.from(new Set(gcNames)).map(g => <option key={g} value={g}/>)}
@@ -166,13 +163,13 @@ export default function AddBidModal({ onClose, onAdded, initialGc }: Props) {
             {error && <div className="login-error">{error}</div>}
           </div>
           <div className="modal-foot">
-            <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn ghost" onClick={requestClose}>Cancel</button>
             <button type="submit" className="btn" disabled={!ok || saving}>
               {saving ? 'Adding…' : 'Add to Pipeline'}
             </button>
           </div>
         </form>
-      </div>
-    </div>
+      )}
+    </Modal>
   );
 }

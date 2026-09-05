@@ -2,8 +2,8 @@
 // completed before the CRM existed. Records the job at its final stage directly, so no
 // pipeline side effects (Drive folders, "moved to…" activity) fire for finished work.
 import React, { useState } from 'react';
-import { useDirtyDismiss } from '../../hooks/useDirtyDismiss';
-import Icon from '../../components/Icon';
+import Modal from '../../components/Modal';
+import RequiredMark from '../../components/RequiredMark';
 import api from '../../api/client';
 import { Gen, WonJob } from '../../types';
 
@@ -32,7 +32,6 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
   const [commissionPaid, setCommissionPaid] = useState(true);
   // Backdrop click and Escape ask first, but only when something was typed.
   const isDirty = JSON.stringify(f) !== JSON.stringify(BLANK) || !commissionPaid;
-  const { requestClose, discardDialog } = useDirtyDismiss(isDirty, onClose);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -71,13 +70,19 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
   };
 
   return (
-    <>
-    <div className="overlay" onMouseDown={e => e.target === e.currentTarget && requestClose()}>
-      <div className="modal">
-        <div className="modal-hdr">
-          <h3>Log Existing Generator Job</h3>
-          <button className="close-x" aria-label="Close" onClick={requestClose}><Icon name="x" size={16} stroke={2}/></button>
-        </div>
+    <Modal
+      open onClose={onClose} title="Log Existing Generator Job" isDirty={isDirty}
+      // Review round 1 S11 — this form had its own `useDirtyDismiss` guard
+      // before the Task 1 migration to Modal, with this exact copy ("Discard
+      // your changes?" / "...discard them." / "Discard"). Passing it through
+      // explicitly keeps that copy; without it, Modal's generic "You have
+      // unsaved changes" / "Leave without saving" default is a silent
+      // wording change no task asked for.
+      discardTitle="Discard your changes?"
+      discardBody="You have unsaved changes in this form. Closing it will discard them."
+      discardLabel="Discard"
+    >
+      {({ requestClose }) => (
         <form onSubmit={submit}>
           <div className="modal-body">
             <p style={{ fontSize: 12.5, color: 'var(--text3)', margin: '0 0 12px', lineHeight: 1.5 }}>
@@ -86,8 +91,8 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
               document is generated.
             </p>
             <div className="field">
-              <label>Customer</label>
-              <input value={f.customer} onChange={set('customer')} placeholder="e.g. Debra Gierach" autoFocus required/>
+              <label htmlFor="gen-customer">Customer<RequiredMark/></label>
+              <input id="gen-customer" value={f.customer} onChange={set('customer')} placeholder="e.g. Debra Gierach" autoFocus required/>
             </div>
             <div className="field-row">
               <div className="field">
@@ -157,9 +162,7 @@ export default function LogGenJobModal({ onClose, onAdded }: Props) {
             </button>
           </div>
         </form>
-      </div>
-    </div>
-    {discardDialog}
-    </>
+      )}
+    </Modal>
   );
 }

@@ -3,7 +3,7 @@
 // its subject/location/attendees/body gets run through the same AI extraction as
 // Build from Notes, and a pre-filled proposal is created for review.
 import React, { useEffect, useState } from 'react';
-import Icon from '../../components/Icon';
+import Modal from '../../components/Modal';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { Gen } from '../../types';
@@ -54,12 +54,7 @@ export default function CalendarEventPickerModal({ onClose, onCreated }: Props) 
   };
 
   return (
-    <div className="overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
-        <div className="modal-hdr">
-          <h3>Create Proposal from Calendar</h3>
-          <button className="close-x" onClick={onClose}><Icon name="x" size={16} stroke={2}/></button>
-        </div>
+    <Modal open onClose={onClose} title="Create Proposal from Calendar">
         <div className="modal-body">
           <p style={{ fontSize: 12.5, color: 'var(--text3)', margin: '0 0 12px', lineHeight: 1.5 }}>
             Pick an upcoming appointment — the customer's name, address, phone, and any generator
@@ -117,7 +112,6 @@ export default function CalendarEventPickerModal({ onClose, onCreated }: Props) 
             ))}
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

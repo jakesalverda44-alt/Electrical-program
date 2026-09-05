@@ -56,7 +56,7 @@ const TB: Record<string, { title: string; sub: string | null }> = {
   docs:            { title: 'Documents',             sub: 'Plan sets, contracts & attachments' },
   calendar:        { title: 'Calendar',              sub: 'Bid due dates · Won jobs · Project milestones' },
   contacts:        { title: 'Contacts',              sub: 'General contractors & manufacturer reps' },
-  admin:           { title: 'Admin',                 sub: 'Users, roles & system configuration' },
+  admin:           { title: 'Settings',              sub: 'Users, roles & system configuration' },
 };
 
 export default function AppShell({

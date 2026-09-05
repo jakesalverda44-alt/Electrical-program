@@ -1,15 +1,20 @@
 /* styles.css — Accurate Power CRM · dark + airy design system
-   Electrical = blue (#4D8DF7) · Generators = amber (#E0A53B) */
+   Electrical = blue (#4D8DF7) · Generators = amber (#E0A53B)
+
+   Grey tokens: --text2 and --text3 are canonical (secondary text / tertiary
+   text-and-borders). --muted and --slate are kept only so existing call
+   sites don't need renaming — both alias to --text3 below. Prefer --text3
+   in new code. */
 :root{
   --bg:#0B111C; --panel:#121B2C; --surface:#19263E; --surface2:#212F49; --surface3:#2A3B59;
   --border:#2B3B57; --border2:#3B4D6B;
-  --text:#EAEFF8; --text2:#9FADC6; --text3:#6A7892; --muted:#6E7C95;
+  --text:#EAEFF8; --text2:#9FADC6; --text3:#6A7892; --muted:var(--text3);
   --blue:#4D8DF7; --blue-d:#3B7BEA; --blue-soft:rgba(77,141,247,.14);
   --accent:#4D8DF7; --accent-soft:rgba(77,141,247,.14);
   --amber:#E0A53B; --amber-d:#CE9326; --amber-soft:rgba(224,165,59,.15);
   --green:#34C588; --green-soft:rgba(52,197,136,.14);
   --orange:#F2854F; --orange-soft:rgba(242,133,79,.15);
-  --red:#E06A6A; --red-soft:rgba(224,106,106,.14); --slate:#7C8AA3;
+  --red:#E06A6A; --red-soft:rgba(224,106,106,.14); --slate:var(--text3);
   --r:14px; --rs:10px; --rxs:8px;
   --shadow:0 10px 30px rgba(0,0,0,.35),0 2px 8px rgba(0,0,0,.25);
   --font:'Plus Jakarta Sans',system-ui,-apple-system,sans-serif;
@@ -150,6 +155,10 @@ button{font-family:inherit}
 .badge.normal{background:var(--blue-soft);color:#8FB4F5}
 .badge.won{background:var(--green-soft);color:#5BD6A0}
 .badge.lost{background:rgba(124,138,163,.16);color:#9DABC4}
+/* Task 3 (audit ux #7) — the `Badge` component's compact size, for chip/pill
+   contexts (a stage dot, an email chip) that used a tighter inline pill than
+   the board-card `.badge` default above. */
+.badge.sm{font-size:10.5px;padding:2px 8px;border-radius:20px;font-weight:700}
 
 /* ── Dashboard ─────────────────────────────────────────── */
 .dash{padding:22px 28px 32px;display:flex;flex-direction:column;gap:18px}
@@ -203,6 +212,30 @@ button{font-family:inherit}
 .field input,.field select{width:100%;height:42px;padding:0 13px;border:1px solid var(--border2);border-radius:var(--rs);font:inherit;font-size:13.5px;color:var(--text);background:var(--surface);outline:none;transition:border-color .12s}
 .field input:focus,.field select:focus{border-color:var(--blue)}
 .field-row{display:grid;grid-template-columns:1fr 1fr;gap:13px}
+
+/* ── Builder desktop grid literals ──────────────────────────────────────
+   These classes carry the desktop `gridTemplateColumns` value that used to
+   be set only as an inline style in BuilderPage.tsx / EvBuilderPage.tsx.
+   Putting the literal here means the 768px mobile override below can win
+   on source order (same specificity: one class) instead of forcing
+   priority to beat an inline style. */
+.builder-layout{grid-template-columns:1fr 300px}
+.builder-field-grid{grid-template-columns:1fr 1fr}
+.builder-statezip-grid{grid-template-columns:80px 1fr}
+
+/* ── Elec Projects workspace desktop grid literals ──────────────────────
+   Same pattern as the builder grids above, but `.ws-form-grid` is reused
+   across many differently-shaped rows (New CO / Pay App / RFI / Material /
+   Field Note, overview, financials, etc.), so each distinct column layout
+   gets its own modifier class alongside the shared `.ws-form-grid` (which
+   carries no layout of its own — display/gap/etc. stay inline per site). */
+.ws-grid-2{grid-template-columns:1fr 1fr}
+.ws-grid-3{grid-template-columns:1fr 1fr 1fr}
+.ws-grid-4{grid-template-columns:repeat(4,1fr)}
+.ws-grid-a{grid-template-columns:2fr 1fr 1fr 1fr auto}
+.ws-grid-b{grid-template-columns:1fr 1fr 1fr 1fr 1fr auto}
+.ws-grid-c{grid-template-columns:2fr 1fr 1fr 1fr}
+.ws-grid-d{grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr auto}
 .mfr-tabs{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .mfr-tab{border:1.5px solid var(--border2);border-radius:12px;padding:16px;cursor:pointer;background:var(--surface);display:flex;align-items:center;gap:13px;transition:border-color .12s,background .12s}
 .mfr-tab:hover{border-color:var(--border2);background:var(--surface2)}
@@ -536,20 +569,21 @@ button{font-family:inherit}
   .overlay { z-index: 240; }
 
   /* Builder */
-  .builder-layout { grid-template-columns: 1fr !important; padding: 12px !important; }
-  /* Section's inner 2-col field grid and the State/Zip subgrid: desktop keeps the
-     original '1fr 1fr' / '80px 1fr' literals (set inline in BuilderPage.tsx) —
-     collapse to a single column only below the mobile breakpoint, same pattern
-     as .builder-layout above. */
-  .builder-field-grid, .builder-statezip-grid { grid-template-columns: 1fr !important; }
+  .builder-layout { grid-template-columns: 1fr; padding: 12px !important; }
+  /* Section's inner 2-col field grid and the State/Zip subgrid: desktop value
+     now lives in the `.builder-field-grid` / `.builder-statezip-grid` base
+     rules above (no longer an inline style), so this same-specificity
+     single-class override wins on source order — no forced priority needed. */
+  .builder-field-grid, .builder-statezip-grid { grid-template-columns: 1fr; }
 
   /* Elec Projects workspace — form/field grids (New CO/Pay App/RFI/Material/
      Field Note rows, overview 2-col layout, financials/schedule/closeout
-     tiles) desktop keeps the original inline gridTemplateColumns literal;
-     collapse to a single column below the mobile breakpoint. Row/list data
+     tiles). Desktop values now live in the `.ws-grid-*` modifier classes
+     above (no longer an inline style), so this collapses to a single column
+     below the mobile breakpoint with no forced priority needed. Row/list data
      stays in <table className="ctable"> wrapped by .table-scroll (untouched
      here — that pattern already scrolls horizontally). */
-  .ws-form-grid { grid-template-columns: 1fr !important; }
+  .ws-grid-2, .ws-grid-3, .ws-grid-4, .ws-grid-a, .ws-grid-b, .ws-grid-c, .ws-grid-d { grid-template-columns: 1fr; }
 
   /* Docs / Followups / Contacts pages — shared generic mobile treatment (not
      page-scoped since all three need the identical two rules). .page-pad

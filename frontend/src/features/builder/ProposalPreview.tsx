@@ -12,7 +12,7 @@ import api from '../../api/client';
 // Disclosures pages below stay here: they read as generator sales terms throughout.
 import {
   NAVY, ACCENT, GOLD, GRAY_D, GRAY_M, GRAY_L, BLUE_L, BLUE_M,
-  fmt, fmtDec, fmtDateLocal,
+  fmt, fmtDec, fmtCalendarDateLong,
   embedFontSize, embedDocStyle, embedPageStyle,
   identityFs, PageHeader, SectionHeading, SigBlock, Clause, SubClause, CustInitFooter,
 } from './proposalChrome';
@@ -135,7 +135,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
   const nonTaxable   = totals.laborAmt + totals.permitAmt + totals.startupAmt + totals.extraWireAmt + totals.liftAmt + totals.removalFee;
   const customItems  = activeCustomItems(form);
   // Promo date range for the extended-warranty scope line / breakdown row, if set.
-  const warrantyPromoRange = [fmtDateLocal(form.extWarrantyPromoStart), fmtDateLocal(form.extWarrantyPromoEnd)].filter(Boolean).join(' – ');
+  const warrantyPromoRange = [fmtCalendarDateLong(form.extWarrantyPromoStart), fmtCalendarDateLong(form.extWarrantyPromoEnd)].filter(Boolean).join(' – ');
 
   const docStyle: React.CSSProperties = embedDocStyle(!!embed, isMobile);
   const pageStyle: React.CSSProperties = embedPageStyle(!!embed, isMobile);

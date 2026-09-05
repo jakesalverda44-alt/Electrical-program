@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { PoolClient } from 'pg';
 import Anthropic from '@anthropic-ai/sdk';
 import { pool } from '../db/pool';
-import { requireAuth, requireAdmin, AuthRequest, ownScopeId } from '../middleware/auth';
+import { requireAuth, requireAdmin, canRestore, AuthRequest, ownScopeId } from '../middleware/auth';
 import { proposalEmailHtml } from '../email/proposalEmail';
 import { graphSendMail, graphCreateDraft, isGraphMailConfigured, TEAM_NOTIFY_TO } from '../email/graphMailer';
 import { loadLinkedDocumentsAsAttachments } from '../email/bidAttachments';
@@ -669,7 +669,7 @@ router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) =
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('UPDATE generator_proposals SET deleted_at=now() WHERE id=$1', [req.params.id]);
+    await client.query('UPDATE generator_proposals SET deleted_at=now(), deleted_by=$2 WHERE id=$1', [req.params.id, req.user!.id]);
     await client.query('UPDATE won_jobs SET deleted_at=now() WHERE proposal_id=$1', [req.params.id]);
     await setProjectDeleted(client, req.params.id, true);
     await client.query('COMMIT');
@@ -687,9 +687,17 @@ router.delete('/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) =
   }
 });
 
-// Restore a trashed proposal (and its won-job record).
-router.post('/:id/restore', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
-  const { rows } = await pool.query('UPDATE generator_proposals SET deleted_at=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING *', [req.params.id]);
+// Restore a trashed proposal (and its won-job record). Task 2 (audit ux #5) —
+// admin, or the user who deleted it, within RESTORE_WINDOW_MS.
+router.post('/:id/restore', requireAuth, async (req: AuthRequest, res) => {
+  const { rows: existing } = await pool.query(
+    'SELECT deleted_by, deleted_at FROM generator_proposals WHERE id=$1 AND deleted_at IS NOT NULL', [req.params.id]
+  );
+  if (!existing.length) return res.status(404).json({ error: 'Not found in Trash' });
+  if (!canRestore(req.user!, existing[0])) {
+    return res.status(403).json({ error: 'You do not have permission to perform this action.' });
+  }
+  const { rows } = await pool.query('UPDATE generator_proposals SET deleted_at=NULL, deleted_by=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING *', [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: 'Not found in Trash' });
   await pool.query('UPDATE won_jobs SET deleted_at=NULL WHERE proposal_id=$1', [req.params.id]);
   await setProjectDeleted(pool, req.params.id, false);

@@ -151,4 +151,135 @@ describe('useApi', () => {
     rerender({ id: 'b2' });
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
   });
+
+  // Task 8 (audit data #9): request dedup for identical in-flight reads.
+  describe('request dedup', () => {
+    it("the gen drawer's four identical /documents?linked_id= reads issue one request", async () => {
+      const pending = deferred<{ data: unknown[] }>();
+      get.mockImplementation(() => pending.promise);
+
+      // Four independent "subscribers" (Overview/Checklist/Survey/Documents
+      // tabs, in the real drawer) asking for the exact same url + params at
+      // once — mounted together, exactly like four hooks in one render tree.
+      const hooks = [0, 1, 2, 3].map(() =>
+        renderHook(() => useApi<unknown[]>('/documents', { params: { linked_id: 'g1' } })));
+
+      expect(get).toHaveBeenCalledTimes(1);
+
+      await act(async () => { pending.resolve({ data: [{ id: 'd1' }] }); });
+
+      for (const { result } of hooks) {
+        await waitFor(() => expect(result.current.data).toEqual([{ id: 'd1' }]));
+      }
+      expect(get).toHaveBeenCalledTimes(1);
+    });
+
+    it('aborting one subscriber leaves the shared request running and the others fulfilled', async () => {
+      const pending = deferred<{ data: string }>();
+      get.mockImplementation(() => pending.promise);
+
+      const a = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      const b = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      const signal = get.mock.calls[0][1].signal as AbortSignal;
+
+      // Unmounting one of the two subscribers must not abort the shared
+      // request while the other is still waiting on it.
+      a.unmount();
+      expect(signal.aborted).toBe(false);
+      expect(get).toHaveBeenCalledTimes(1);
+
+      await act(async () => { pending.resolve({ data: 'shared' }); });
+      await waitFor(() => expect(b.result.current.data).toBe('shared'));
+    });
+
+    it('a lone subscriber leaving DOES abort the shared request', async () => {
+      const pending = deferred<{ data: string }>();
+      get.mockImplementation(() => pending.promise);
+
+      const { unmount } = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      const signal = get.mock.calls[0][1].signal as AbortSignal;
+
+      unmount();
+      expect(signal.aborted).toBe(true);
+    });
+
+    it('a failed shared request rejects every subscriber and clears the entry so the next call retries', async () => {
+      const pending = deferred<{ data: string }>();
+      get.mockImplementationOnce(() => pending.promise);
+
+      const a = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      const b = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      expect(get).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        pending.reject(Object.assign(new Error('boom'), {
+          isAxiosError: true, response: { status: 500, data: {} },
+        }));
+      });
+
+      await waitFor(() => expect(a.result.current.error).toBe('Server error'));
+      await waitFor(() => expect(b.result.current.error).toBe('Server error'));
+
+      // Cleared on settle — a subsequent call for the same key is a fresh request,
+      // not the same (now-rejected) shared entry.
+      get.mockResolvedValueOnce({ data: 'recovered' });
+      const c = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      expect(get).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(c.result.current.data).toBe('recovered'));
+    });
+
+    it('a subsequent call after the shared request settles issues a new request', async () => {
+      get.mockResolvedValueOnce({ data: 'first' });
+      const a = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      await waitFor(() => expect(a.result.current.data).toBe('first'));
+      expect(get).toHaveBeenCalledTimes(1);
+
+      get.mockResolvedValueOnce({ data: 'second' });
+      const b = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      expect(get).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(b.result.current.data).toBe('second'));
+    });
+
+    it('does not share requests with different params for the same url', async () => {
+      get.mockImplementation((url: string, config: { params?: { linked_id?: string } }) =>
+        Promise.resolve({ data: config.params?.linked_id }));
+
+      const a = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      const b = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g2' } }));
+
+      await waitFor(() => expect(a.result.current.data).toBe('g1'));
+      await waitFor(() => expect(b.result.current.data).toBe('g2'));
+      expect(get).toHaveBeenCalledTimes(2);
+    });
+
+    // Review round 1 S1: reload() used to only decrement the shared entry's
+    // refCount on cleanup (never abort it, since another subscriber might
+    // still need it) — but when another subscriber DOES still share the key,
+    // that entry survives in `sharedRequests`, and the freshly re-run effect
+    // would just rejoin the SAME in-flight/settled promise instead of firing
+    // a new request, making reload() silently a no-op for a shared key.
+    it("reload() issues a fresh request when another subscriber shares the key, without disturbing that subscriber's own promise", async () => {
+      const first = deferred<{ data: string }>();
+      get.mockImplementationOnce(() => first.promise);
+
+      const a = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      const b = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      expect(get).toHaveBeenCalledTimes(1);
+
+      const second = deferred<{ data: string }>();
+      get.mockImplementationOnce(() => second.promise);
+
+      await act(async () => { a.result.current.reload(); });
+      // A genuinely new request went out for a's reload — not a silent no-op.
+      expect(get).toHaveBeenCalledTimes(2);
+
+      // b's original (still in-flight) request is untouched and still resolves.
+      await act(async () => { first.resolve({ data: 'original' }); });
+      await waitFor(() => expect(b.result.current.data).toBe('original'));
+
+      // a's fresh request resolves independently, on the new promise.
+      await act(async () => { second.resolve({ data: 'reloaded' }); });
+      await waitFor(() => expect(a.result.current.data).toBe('reloaded'));
+    });
+  });
 });

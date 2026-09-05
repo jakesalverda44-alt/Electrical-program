@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, Gen, WonJob } from '../../types';
 import { moneyShort as money } from '../../lib/money';
+import { dayOf } from '../../lib/date';
 
 interface Props {
   bids: Bid[];
@@ -69,7 +70,10 @@ export default function CalendarPage({ bids, gens, wonJobs }: Props) {
     // Won jobs
     for (const j of wonJobs) {
       if (!j.date_won) continue;
-      const d = new Date(j.date_won);
+      // Review round 2 N4: `date_won` is a Postgres DATE column — a raw
+      // `new Date()` puts a job won on the 1st on the WRONG calendar square
+      // (dropped from the month entirely) in any negative-UTC timezone.
+      const d = dayOf(j.date_won);
       if (d.getMonth() !== month || d.getFullYear() !== year) continue;
       add(d.getDate(), {
         id: 'wj-' + j.id, day: d.getDate(),

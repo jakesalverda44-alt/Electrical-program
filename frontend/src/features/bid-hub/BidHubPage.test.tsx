@@ -1,14 +1,17 @@
 // @vitest-environment happy-dom
 import React, { useState } from 'react';
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import BidHubPage from './BidHubPage';
 import api from '../../api/client';
-import { Bid } from '../../types';
+import { Bid, WonJob, Toast as ToastType } from '../../types';
 import { PcWorkspace } from '../preconstruction/constants';
 import { moneyShort } from '../../lib/money';
 import { __resetGlobalPcCachesForTests } from '../preconstruction/PcWorkspace';
+import { ConfirmProvider } from '../../components/ConfirmDialog';
+import { useShowToast, useOptionalShowToast } from '../../contexts/AppContext';
+import ToastBar from '../../components/Toast';
 
 afterEach(cleanup);
 
@@ -23,8 +26,11 @@ vi.mock('../../api/client', () => ({
 }));
 
 vi.mock('../../contexts/AppContext', () => ({
-  useShowToast: () => vi.fn(),
-  useOptionalShowToast: () => vi.fn(),
+  // vi.fn()s (not plain arrow functions) so the Delete/Undo tests below can
+  // override their return value with a real, state-backed toast notifier —
+  // useMutation reads the notifier via useOptionalShowToast, not useShowToast.
+  useShowToast: vi.fn(() => vi.fn()),
+  useOptionalShowToast: vi.fn(() => vi.fn()),
   useUser: () => ({ id: 'u1', name: 'Test User', email: 't@example.com', role: 'estimator' }),
   useSettings: () => ({ settings: {}, reloadSettings: vi.fn() }),
 }));
@@ -46,7 +52,7 @@ const lostBid: Bid = {
 
 const noop = () => {};
 const baseProps = {
-  bidId: 'b1', bids: [bid], setBids: noop as never, setWonJobs: noop as never,
+  bidId: 'b1', bids: [bid], setBids: noop as never, wonJobs: [], setWonJobs: noop as never,
   onBidUpdated: noop, onNav: noop,
 };
 
@@ -244,6 +250,108 @@ describe('BidHubPage', () => {
       const unitCostCalls = get.mock.calls.filter(c => c[0] === '/estimates/unit-costs');
       expect(costsCalls.length).toBe(1);
       expect(unitCostCalls.length).toBe(1);
+    });
+  });
+
+  // Task 2 (audit ux #4, #5) — the "Delete Bid" button on the Overview tab
+  // now goes through the app's own ConfirmDialog instead of window.confirm,
+  // and a successful delete's toast offers an "Undo" that restores the row.
+  describe('Delete Bid — confirm dialog and Undo', () => {
+    function DeleteHarness({ initialBids, initialWonJobs = [] }: { initialBids: Bid[]; initialWonJobs?: WonJob[] }) {
+      const [bids, setBids] = useState<Bid[]>(initialBids);
+      const [wonJobs, setWonJobs] = useState<WonJob[]>(initialWonJobs);
+      const [pcData, setPcData] = useState<Record<string, PcWorkspace>>({});
+      const [toast, setToast] = useState<ToastType | null>(null);
+      // Override the module-mocked useShowToast for this describe block with a
+      // real, state-backed notifier so the Undo action is actually reachable
+      // in the DOM (the file-wide mock otherwise discards every toast).
+      vi.mocked(useShowToast).mockReturnValue(setToast);
+      vi.mocked(useOptionalShowToast).mockReturnValue(setToast);
+      return (
+        <>
+          <BidHubPage
+            bidId="b1" bids={bids} setBids={setBids} wonJobs={wonJobs} setWonJobs={setWonJobs}
+            onBidUpdated={noop} onNav={noop}
+            pcData={pcData} onPcUpdate={(id, ws) => setPcData(prev => ({ ...prev, [id]: ws }))}
+            pcDataLoaded
+          />
+          {toast && <ToastBar toast={toast} />}
+          {/* Review round 1 S5 test hook — OverviewTab doesn't render wonJobs
+              itself, so surface the count here to prove Undo restored the row
+              this delete removed, not just the bid. */}
+          <div data-testid="won-jobs-count">{wonJobs.length}</div>
+        </>
+      );
+    }
+
+    function renderDeleteHarness(initialWonJobs: WonJob[] = []) {
+      return render(
+        <MemoryRouter>
+          <ConfirmProvider>
+            <DeleteHarness initialBids={[bid]} initialWonJobs={initialWonJobs} />
+          </ConfirmProvider>
+        </MemoryRouter>,
+      );
+    }
+
+    beforeEach(() => {
+      vi.mocked(api.delete).mockClear();
+      vi.mocked(api.delete).mockResolvedValue({ data: { ok: true } });
+      vi.mocked(api.post).mockReset();
+      vi.mocked(api.post).mockImplementation((url: string) => {
+        if (url === `/bids/${bid.id}/restore`) return Promise.resolve({ data: bid });
+        return Promise.resolve({ data: {} });
+      });
+    });
+
+    it('Cancel on the confirm dialog leaves the bid in place and calls no API', async () => {
+      renderDeleteHarness();
+      fireEvent.click(screen.getByText('Delete Bid'));
+      await waitFor(() => expect(screen.getByRole('alertdialog')).toBeTruthy());
+      fireEvent.click(screen.getByText('Cancel'));
+      expect(api.delete).not.toHaveBeenCalled();
+      expect(screen.getByText(bid.name)).toBeTruthy();
+    });
+
+    it('confirming deletes the bid, and Undo on the toast restores it', async () => {
+      renderDeleteHarness();
+      fireEvent.click(screen.getByText('Delete Bid'));
+      await waitFor(() => expect(screen.getByRole('alertdialog')).toBeTruthy());
+
+      const dialog = screen.getByRole('alertdialog');
+      fireEvent.click(within(dialog).getByText('Delete'));
+      await waitFor(() => expect(api.delete).toHaveBeenCalledWith(`/bids/${bid.id}`));
+
+      // The bid is gone from the board and the toast offers Undo.
+      await waitFor(() => expect(screen.getByText('Undo')).toBeTruthy());
+
+      fireEvent.click(screen.getByText('Undo'));
+      await waitFor(() => expect(api.post).toHaveBeenCalledWith(`/bids/${bid.id}/restore`));
+      // The restored bid reappears — its name is back on the page (rendered by
+      // OverviewTab's header once BidHubPage's `bids` state includes it again).
+      await waitFor(() => expect(screen.getAllByText(bid.name).length).toBeGreaterThan(0));
+    });
+
+    // Review round 1 S5: OverviewTab's delete used to clear `wonJobs` on
+    // success but restore only the bid on Undo, dropping the won-job row —
+    // e.g. a restored project's commission tracking would vanish.
+    it('Undo also restores the won-job row the delete removed, not just the bid', async () => {
+      const wonJob: WonJob = {
+        id: 'w1', salesperson_name: 'Jane Owner', customer: bid.name, proposal_id: bid.id,
+        proposal_type: 'Electrical', value: 100000, date_won: '2026-08-01',
+      };
+      renderDeleteHarness([wonJob]);
+      expect(screen.getByTestId('won-jobs-count').textContent).toBe('1');
+
+      fireEvent.click(screen.getByText('Delete Bid'));
+      await waitFor(() => expect(screen.getByRole('alertdialog')).toBeTruthy());
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByText('Delete'));
+      await waitFor(() => expect(api.delete).toHaveBeenCalledWith(`/bids/${bid.id}`));
+      await waitFor(() => expect(screen.getByTestId('won-jobs-count').textContent).toBe('0'));
+
+      fireEvent.click(screen.getByText('Undo'));
+      await waitFor(() => expect(api.post).toHaveBeenCalledWith(`/bids/${bid.id}/restore`));
+      await waitFor(() => expect(screen.getByTestId('won-jobs-count').textContent).toBe('1'));
     });
   });
 });

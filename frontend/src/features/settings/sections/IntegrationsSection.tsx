@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import api from '../../../api/client';
 import { SectionTitle } from '../shared';
+import { useConfirm } from '../../../components/ConfirmDialog';
 
 const INTEGRATIONS = [
   { name: 'Google Calendar',    icon: '📅', desc: 'Sync appointments and job schedules.'    },
@@ -13,6 +14,7 @@ const INTEGRATIONS = [
 ];
 
 function GoogleDriveCard() {
+  const confirm = useConfirm();
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<{ processed: number; skipped: number; errors: string[] } | null>(null);
   const [err, setErr] = useState('');
@@ -30,7 +32,7 @@ function GoogleDriveCard() {
   const [genFixErr, setGenFixErr] = useState('');
 
   const run = async () => {
-    if (!confirm('This will create Google Drive folders for every bid that does not have one yet. Continue?')) return;
+    if (!(await confirm({ title: 'This will create Google Drive folders for every bid that does not have one yet. Continue?' }))) return;
     setRunning(true);
     setErr('');
     setResult(null);
@@ -45,7 +47,7 @@ function GoogleDriveCard() {
   };
 
   const runGen = async () => {
-    if (!confirm('This will create Google Drive folders for every awarded generator job that does not have one yet. Continue?')) return;
+    if (!(await confirm({ title: 'This will create Google Drive folders for every awarded generator job that does not have one yet. Continue?' }))) return;
     setGenRunning(true);
     setGenErr('');
     setGenResult(null);
@@ -60,7 +62,7 @@ function GoogleDriveCard() {
   };
 
   const fixGen = async () => {
-    if (!confirm('This will move all existing generator job folders into the correct root folder (Active or Completed Generator Jobs). Continue?')) return;
+    if (!(await confirm({ title: 'This will move all existing generator job folders into the correct root folder (Active or Completed Generator Jobs). Continue?' }))) return;
     setGenFixing(true);
     setGenFixErr('');
     setGenFixResult(null);
@@ -75,7 +77,7 @@ function GoogleDriveCard() {
   };
 
   const fixAwarded = async () => {
-    if (!confirm('This will move all existing job folders into the correct stage folder (Active Bids, Submitted Bids, Active Projects, or Completed Projects) with GC name hierarchy. Continue?')) return;
+    if (!(await confirm({ title: 'This will move all existing job folders into the correct stage folder (Active Bids, Submitted Bids, Active Projects, or Completed Projects) with GC name hierarchy. Continue?' }))) return;
     setFixing(true);
     setFixErr('');
     setFixResult(null);

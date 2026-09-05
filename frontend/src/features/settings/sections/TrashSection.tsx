@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import api from '../../../api/client';
 import { useApi } from '../../../hooks/useApi';
+import { useConfirm } from '../../../components/ConfirmDialog';
 import { SectionTitle, timeAgo } from '../shared';
 import { moneyFull } from '../../../lib/money';
 
@@ -15,9 +16,15 @@ export function TrashSection() {
   const { data: trash, loading, reload: load } = useApi<TrashData>('/admin/trash');
   const data: TrashData = trash ?? { bids: [], gens: [], documents: [] };
   const [busy, setBusy] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const act = async (verb: 'restore' | 'purge', base: string, id: string, label: string) => {
-    if (verb === 'purge' && !window.confirm(`Permanently delete ${label}? This cannot be undone.`)) return;
+    if (verb === 'purge' && !(await confirm({
+      title: `Permanently delete ${label}?`,
+      body: 'This cannot be undone.',
+      confirmLabel: 'Delete forever',
+      destructive: true,
+    }))) return;
     setBusy(id);
     try {
       if (verb === 'restore') await api.post(`${base}/${id}/restore`);

@@ -155,7 +155,7 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
                 </span>
                 <button onClick={() => item.set(!item.value)}
                   style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', transition: 'background .2s',
-                    background: item.value ? 'var(--accent)' : '#EF4444', position: 'relative', flexShrink: 0 }}>
+                    background: item.value ? 'var(--accent)' : 'var(--red)', position: 'relative', flexShrink: 0 }}>
                   <span style={{ position: 'absolute', top: 3, left: item.value ? 22 : 3, width: 18, height: 18,
                     borderRadius: '50%', background: '#fff', transition: 'left .2s', display: 'block' }}/>
                 </button>
@@ -283,7 +283,7 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
                       <td style={{ textAlign: 'center', padding: '12px 14px' }}>
                         <button onClick={() => setUserOverride(u.id, 'suspended', isSuspended ? null : true)}
                           style={{ width: 36, height: 20, borderRadius: 10, border: 'none', cursor: 'pointer', transition: 'background .2s',
-                            background: isSuspended ? '#EF4444' : 'var(--border2)', position: 'relative' }}>
+                            background: isSuspended ? 'var(--red)' : 'var(--border2)', position: 'relative' }}>
                           <span style={{ position: 'absolute', top: 2, left: isSuspended ? 18 : 2, width: 16, height: 16,
                             borderRadius: '50%', background: '#fff', transition: 'left .2s', display: 'block' }}/>
                         </button>
@@ -329,7 +329,7 @@ export function AIPermissionsSection({ settings, onSaved }: { settings: AppSetti
                         <td style={{ padding: '12px 16px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             <div style={{ flex: 1, height: 6, background: 'var(--border2)', borderRadius: 3, overflow: 'hidden', minWidth: 80 }}>
-                              <div style={{ height: '100%', width: `${pct}%`, background: pct >= 100 ? '#EF4444' : pct >= 80 ? '#F59E0B' : 'var(--accent)', borderRadius: 3, transition: 'width .3s' }}/>
+                              <div style={{ height: '100%', width: `${pct}%`, background: pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--accent)', borderRadius: 3, transition: 'width .3s' }}/>
                             </div>
                             <span style={{ fontSize: 11, color: 'var(--text3)', whiteSpace: 'nowrap' }}>{row.count} / {dailyLimit}</span>
                           </div>
