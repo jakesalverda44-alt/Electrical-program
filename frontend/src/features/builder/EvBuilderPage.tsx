@@ -39,7 +39,7 @@ function Section({ title, icon, children }: { title: string; icon: string; child
           {title}
         </span>
       </div>
-      <div className="builder-field-grid" style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      <div className="builder-field-grid" style={{ padding: '16px 20px', display: 'grid', gap: 14 }}>
         {children}
       </div>
     </div>
@@ -172,7 +172,7 @@ export default function EvBuilderPage({ setGens, onSaved, editGen, productSwitch
 
   return (
     <div className="scroll view-enter">
-      <div className="builder-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, padding: '20px 28px 40px', alignItems: 'start' }}>
+      <div className="builder-layout" style={{ display: 'grid', gap: 16, padding: '20px 28px 40px', alignItems: 'start' }}>
         <div>
           {productSwitch}
 

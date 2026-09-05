@@ -52,10 +52,10 @@ function Section({ title, icon, children }: { title: string; icon: string; child
           {title}
         </span>
       </div>
-      {/* Desktop grid is the original literal '1fr 1fr' — the mobile collapse to a
-          single column happens in styles.css (.builder-field-grid, 768px block),
-          same '!important' pattern .builder-layout itself already uses. */}
-      <div className="builder-field-grid" style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      {/* Desktop grid ('1fr 1fr') and the mobile collapse to a single column
+          both live in styles.css (.builder-field-grid, base rule + 768px
+          block). */}
+      <div className="builder-field-grid" style={{ padding: '16px 20px', display: 'grid', gap: 14 }}>
         {children}
       </div>
     </div>
@@ -271,7 +271,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
 
   return (
     <div className="scroll view-enter">
-      <div className="builder-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, padding: '20px 28px 40px', alignItems: 'start' }}>
+      <div className="builder-layout" style={{ display: 'grid', gap: 16, padding: '20px 28px 40px', alignItems: 'start' }}>
         <div>
           {productSwitch}
           {/* Section 1: Customer & Site */}
@@ -289,7 +289,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
               <input style={INPUT_STYLE} value={form.city} onChange={e => set('city', e.target.value)} placeholder="City"/>
             </Field>
             <Field label="State / Zip">
-              <div className="builder-statezip-grid" style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: 8 }}>
+              <div className="builder-statezip-grid" style={{ display: 'grid', gap: 8 }}>
                 <input style={INPUT_STYLE} value={form.state} onChange={e => set('state', e.target.value)}/>
                 <input style={INPUT_STYLE} value={form.zip}   onChange={e => set('zip',   e.target.value)} placeholder="ZIP"/>
               </div>
