@@ -151,4 +151,105 @@ describe('useApi', () => {
     rerender({ id: 'b2' });
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
   });
+
+  // Task 8 (audit data #9): request dedup for identical in-flight reads.
+  describe('request dedup', () => {
+    it("the gen drawer's four identical /documents?linked_id= reads issue one request", async () => {
+      const pending = deferred<{ data: unknown[] }>();
+      get.mockImplementation(() => pending.promise);
+
+      // Four independent "subscribers" (Overview/Checklist/Survey/Documents
+      // tabs, in the real drawer) asking for the exact same url + params at
+      // once — mounted together, exactly like four hooks in one render tree.
+      const hooks = [0, 1, 2, 3].map(() =>
+        renderHook(() => useApi<unknown[]>('/documents', { params: { linked_id: 'g1' } })));
+
+      expect(get).toHaveBeenCalledTimes(1);
+
+      await act(async () => { pending.resolve({ data: [{ id: 'd1' }] }); });
+
+      for (const { result } of hooks) {
+        await waitFor(() => expect(result.current.data).toEqual([{ id: 'd1' }]));
+      }
+      expect(get).toHaveBeenCalledTimes(1);
+    });
+
+    it('aborting one subscriber leaves the shared request running and the others fulfilled', async () => {
+      const pending = deferred<{ data: string }>();
+      get.mockImplementation(() => pending.promise);
+
+      const a = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      const b = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      const signal = get.mock.calls[0][1].signal as AbortSignal;
+
+      // Unmounting one of the two subscribers must not abort the shared
+      // request while the other is still waiting on it.
+      a.unmount();
+      expect(signal.aborted).toBe(false);
+      expect(get).toHaveBeenCalledTimes(1);
+
+      await act(async () => { pending.resolve({ data: 'shared' }); });
+      await waitFor(() => expect(b.result.current.data).toBe('shared'));
+    });
+
+    it('a lone subscriber leaving DOES abort the shared request', async () => {
+      const pending = deferred<{ data: string }>();
+      get.mockImplementation(() => pending.promise);
+
+      const { unmount } = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      const signal = get.mock.calls[0][1].signal as AbortSignal;
+
+      unmount();
+      expect(signal.aborted).toBe(true);
+    });
+
+    it('a failed shared request rejects every subscriber and clears the entry so the next call retries', async () => {
+      const pending = deferred<{ data: string }>();
+      get.mockImplementationOnce(() => pending.promise);
+
+      const a = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      const b = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      expect(get).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        pending.reject(Object.assign(new Error('boom'), {
+          isAxiosError: true, response: { status: 500, data: {} },
+        }));
+      });
+
+      await waitFor(() => expect(a.result.current.error).toBe('Server error'));
+      await waitFor(() => expect(b.result.current.error).toBe('Server error'));
+
+      // Cleared on settle — a subsequent call for the same key is a fresh request,
+      // not the same (now-rejected) shared entry.
+      get.mockResolvedValueOnce({ data: 'recovered' });
+      const c = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      expect(get).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(c.result.current.data).toBe('recovered'));
+    });
+
+    it('a subsequent call after the shared request settles issues a new request', async () => {
+      get.mockResolvedValueOnce({ data: 'first' });
+      const a = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      await waitFor(() => expect(a.result.current.data).toBe('first'));
+      expect(get).toHaveBeenCalledTimes(1);
+
+      get.mockResolvedValueOnce({ data: 'second' });
+      const b = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      expect(get).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(b.result.current.data).toBe('second'));
+    });
+
+    it('does not share requests with different params for the same url', async () => {
+      get.mockImplementation((url: string, config: { params?: { linked_id?: string } }) =>
+        Promise.resolve({ data: config.params?.linked_id }));
+
+      const a = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g1' } }));
+      const b = renderHook(() => useApi<string>('/documents', { params: { linked_id: 'g2' } }));
+
+      await waitFor(() => expect(a.result.current.data).toBe('g1'));
+      await waitFor(() => expect(b.result.current.data).toBe('g2'));
+      expect(get).toHaveBeenCalledTimes(2);
+    });
+  });
 });
