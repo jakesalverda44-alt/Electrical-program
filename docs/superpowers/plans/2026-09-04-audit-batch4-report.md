@@ -289,9 +289,10 @@ new migration `database/migrations/100_deleted_by.sql`, new
   (which only searches for `"window.confirm"`) never had a chance of
   catching them, and the `confirm(` grep here should have but its result
   was reported without actually being re-run/verified against these four
-  hits. Fixed in this review round (S8) — see "Review round 1 fixes" below.
-  The two greps as run today: `window.confirm` → 0, and `confirm(` outside
-  `ConfirmDialog`/`useConfirm`/`ConfirmProvider` definitions → 0.
+  hits. This is fixed in this review round (S8) — see "Review round 1 fixes"
+  below. Re-run today, the two greps come back clean: `window.confirm` → 0,
+  and `confirm(` outside `ConfirmDialog`/`useConfirm`/`ConfirmProvider`
+  definitions → 0.
 - `git diff --stat main..HEAD -- backend/` (through Task 2) touches only
   `middleware/auth.ts` and the three restore routes; `database/` gained only
   migration 100.
@@ -1201,3 +1202,49 @@ for B3, since the sibling-after-drawer structure itself was left in place
 rather than restructured into nesting; snapshot-and-reinstate for S5/S6,
 since none of the three affected pages have a `reload()`-capable list —
 `gens`/`bids`/`wonJobs` are lifted state, not `useApi`-backed).
+
+## Review round 2 fixes
+
+A second, independent Opus review looked specifically for regressions
+introduced by round 1's own fixes and found three (N1, N2, N3 — all
+consequences of round 1's B3 and S4 fixes), plus a DATE off-by-one
+(round 1's B1 fix) that hadn't reached every call site, a latent Undo
+index bug, and two small Modal/doc items. Three commits, continuing
+directly from `b5d77ed` (round 1's report correction commit):
+
+| Item | What | Commit | Test |
+|---|---|---|---|
+| N1 | Round 1's B3 fix hard-coded `overlayStyle={{ zIndex: 170 }}` on `AwardKickoffModal`/`LeadSiteSurvey`, which clears the desktop `.drawer-overlay` (160) but loses to the mobile `@media (max-width: 768px)` bump that raises both `.overlay` and `.drawer-overlay` to 240 — on phones the "stacked" dialog rendered UNDER the drawer backdrop | `904c24c` | `frontend/src/features/gen-pipeline/GenDetailDrawer.test.tsx`, `frontend/src/features/leads/LeadDetailDrawer.test.tsx` (both B3 tests tightened to assert `> 240`, not just `> 160`/`>= 170`) |
+| N2 | `ConfirmDialog` (mounted root-level by `ConfirmProvider` in `main.tsx`) had no z-index override, so its `.overlay` sat at the plain default (150) — below every `.drawer-overlay` (160/240). `useConfirm()` is called from inside drawer Modals (`LeadDetailDrawer`'s delete/mark-lost, `GenDetailDrawer`'s close job), so a click on the confirm's destructive button would land on the drawer's backdrop instead, closing the drawer rather than confirming | `904c24c` | `frontend/src/components/ConfirmDialog.test.tsx` (new z-index assertion, `> 240`); `frontend/src/features/leads/LeadDetailDrawer.test.tsx` (new end-to-end test: opening the delete confirm from inside the drawer and clicking its destructive button runs the delete, not the drawer close) |
+| N3 | Round 1's S4 double-click guard held `used` in `Toast` component state with no reset. `App.tsx` renders `{toast && <Toast toast={toast}/>}` with no `key`, and `useToast`'s `showToast` replaces the toast object in place, so the same component instance (and its `used=true`) survived into the NEXT toast — every toast after the first one whose action was clicked arrived with a permanently disabled/dead action button | `5206675` | `frontend/src/components/Toast.test.tsx` (renders toast A, clicks its action, rerenders the same instance with toast B, asserts B's action is enabled and its `onClick` fires) |
+| N4 | Round 1's B1 `dayOf` fix didn't reach every DATE-column call site: `SalesByRepPage.tsx` (sort, this-month filter, and a local `formatDate` duplicating `lib/date.ts`'s `fmtDate`), `CalendarPage.tsx` (won-job calendar placement — a job won on the 1st vanished from the month entirely in a negative-UTC timezone), `WonReports.tsx` (monthly totals — a job won on the 1st was counted in the previous month), and `FollowupsPage.tsx`'s hand-rolled `parseDueDate` (same re-anchoring logic as `dayOf`, kept in sync by importing it instead) all still used a raw `new Date(...)` or their own copy of the fix | `5206675` | `frontend/src/features/calendar/CalendarPage.test.tsx` (new — won-job placed on the correct day/month), `frontend/src/features/sales-by-rep/WonReports.test.tsx` (new — job won on the 1st bucketed into the correct month, not the previous one); `frontend/src/features/dateFormatterDuplication.test.ts` still passes (removing `SalesByRepPage`'s differently-named local `formatDate` doesn't change what that scanner flags) |
+| N5 | Undo's re-insert (`GenProjectsPage.tsx`, `ElecProjectsPage.tsx`, `bid-hub/OverviewTab.tsx`) fed a `-1` `originalIndex` (row not found) straight into `Math.min(originalIndex, next.length)`, which stays `-1` — and `next.splice(-1, 0, x)` inserts BEFORE the last element (a negative splice index counts from the end), not at the true end of the list | `5206675` | `frontend/src/features/gen-projects/GenProjectsPage.undoIndex.test.tsx` (new — simulates the row having already been removed from local state before the delete is confirmed, so `originalIndex` comes back `-1`; asserts the restored row is appended after the last element, not inserted before it) |
+| N7 | `Modal.tsx`'s `if (e.defaultPrevented) return;` (added for round 1's B4 Escape fix) ran before the `e.key === 'Escape'` branch, so it also gated the Tab focus-trap below it — a future inner handler calling `preventDefault()` on a Tab keydown for its own reason would have silently disabled the trap | `904c24c` | `frontend/src/components/Modal.test.tsx` (new — an inner input's Tab `preventDefault()` still leaves the focus trap wrapping correctly) |
+| N8 | Doc-only: an awkward run-on sentence in this report's S8 correction (~line 290) | this commit | doc-only, no test |
+
+Deliberately deferred (both cosmetic, both agreed with the lead reviewer's
+own framing):
+
+- **N6** — the restored `wonJobs` row is appended to the end of the array
+  rather than re-inserted at its original index (unlike the gen/bid rows
+  themselves, which the N5 fix above does re-insert positionally). Left as
+  is because every consumer of `wonJobs` (`SalesByRepPage`, `WonReports`,
+  `CalendarPage`) re-sorts or re-buckets by `date_won` rather than relying
+  on array order, so this has no visible effect.
+- **N9** — `Modal.tsx`'s `focusStableLandmark()` (round 1 S3) permanently
+  stamps `tabindex="-1"` on `#root` the first time a dialog's opener has
+  unmounted. Harmless: `tabindex="-1"` only affects programmatic `.focus()`
+  targeting, not Tab-key navigation, and `#root` was never a natural stop in
+  the tab order to begin with.
+
+**Frontend after this round:** `npm test` — 86 test files, 579 tests, all
+passing (83→86 files: three new test files, one per new regression test
+file for N4/N5; N1/N2/N3/N7 extended existing test files instead).
+`npm run typecheck` — 0 errors. **Backend/database:** untouched this round —
+`git diff --stat main..HEAD -- backend/ database/` is unchanged from round
+1 (still exactly `middleware/auth.ts`, the three restore routes, their test
+file, and migration 100 — six files total).
+
+**Not fixed / disagreements:** none among the required items. N6 and N9
+above are the two items the lead reviewer flagged as cosmetic/harmless and
+this round leaves as is, per that framing.
