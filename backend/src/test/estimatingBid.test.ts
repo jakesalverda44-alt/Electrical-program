@@ -93,6 +93,59 @@ describe('PUT /api/estimating/:bidId — save', () => {
     expect(getRes.body.recap.totals.grandTotal).toBeCloseTo(grandTotal, 2);
   });
 
+  it('carries takeoff_item_id through into bid_estimates.line_items.item, and a manual line falls back to its description', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [
+        { category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.3, takeoff_item_id: '5.1', confidence: 'FIRM', source: 'takeoff' },
+        { category: 'Grounding', description: 'Hand-typed manual line', qty: 1, unit: 'EA', material_unit_override: 20, labor_hours_override: 1, source: 'manual' },
+      ],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },
+    }).expect(200);
+
+    const { rows: beRows } = await pool.query('SELECT line_items FROM bid_estimates WHERE bid_id=$1', [bidId]);
+    const items = beRows[0].line_items as { category: string; item: string }[];
+    expect(items.find(i => i.category === 'Branch Power')!.item).toBe('5.1');
+    expect(items.find(i => i.category === 'Grounding')!.item).toBe('Hand-typed manual line');
+
+    const { rows: lineRows } = await pool.query(
+      `SELECT takeoff_item_id FROM est_bid_lines WHERE bid_id=$1 AND category='Branch Power'`, [bidId]
+    );
+    expect(lineRows[0].takeoff_item_id).toBe('5.1');
+  });
+
+  it('does not misattribute overridden/item to the wrong line when an earlier line is excluded (index-alignment regression)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    // Line 1 is excluded; line 2 (which follows it) has an override and a
+    // takeoff_item_id. Building line_items by re-indexing the ORIGINAL input
+    // against the recap AFTER filtering out excluded lines shifts every
+    // line after the first excluded one by one position — this proves
+    // line 2's own item id/overridden flag land on line 2, not line 1's.
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [
+        { category: 'Grounding', description: 'Excluded line', qty: 1, unit: 'EA', material_unit_override: 999, labor_hours_override: 999, takeoff_item_id: '8.1', excluded: true, source: 'takeoff' },
+        { category: 'Branch Power', description: 'Kept line', qty: 1, unit: 'EA', material_unit_override: 7, labor_hours_override: 0.5, takeoff_item_id: '5.1', source: 'takeoff' },
+      ],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },
+    }).expect(200);
+
+    const { rows: beRows } = await pool.query('SELECT line_items FROM bid_estimates WHERE bid_id=$1', [bidId]);
+    const items = beRows[0].line_items as { category: string; item: string; overridden: boolean; total: number }[];
+    expect(items.length).toBe(1); // the excluded line never appears
+    expect(items[0].category).toBe('Branch Power');
+    expect(items[0].item).toBe('5.1'); // NOT '8.1' — the excluded line's id
+    expect(items[0].overridden).toBe(true);
+    expect(items[0].total).toBeCloseTo(7 + 0.5 * 40, 2); // NOT the excluded line's 999s
+  });
+
   it('rejects a negative qty with 400', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');

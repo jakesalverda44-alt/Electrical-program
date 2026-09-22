@@ -6,20 +6,31 @@
 // lines that come back `none` is a follow-up, not this task.
 //
 // Accepts two real input shapes so the caller doesn't have to pre-normalize:
-//   - the bidstd TakeoffItem/TakeoffCategory shape (backend/src/bidstd/bidData.ts)
+//   - the bidstd TakeoffItem/TakeoffCategory shape (backend/src/bidstd/bidData.ts):
+//     `item` is Agent 4's short takeoff item id ("5.1"), `description` is the text.
 //   - the legacy Agent 2/4 line shape used by the frontend's
 //     buildLineItemsFromTakeoff (PcWorkspace/parsing.ts) — { category, item,
-//     qty, unit, spec?, confidence?, notes? }
+//     qty, unit, spec?, confidence?, notes? }. Corrected understanding (Part 1
+//     follow-up): `item` here is ALSO the short takeoff item id, matching Agent
+//     4's convention (Agent 4 QCs and restructures Agent 2's output, preserving
+//     its numbering) — `spec` carries the descriptive text. An earlier version
+//     of this file treated `item` as the description, which meant est_bid_lines
+//     never recorded the short id and composeBidData's per-line confidence
+//     lookup (keyed on that id) couldn't match a new-engine-saved bid. See
+//     NormalizedTakeoffLine.takeoffItemId / MappedLine.takeoffItemId below.
 
 export type MapConfidence = 'exact' | 'alias' | 'fuzzy' | 'none';
 export type SourceConfidence = 'FIRM' | 'APPROX' | 'VERIFY';
 
 export interface NormalizedTakeoffLine {
   category: string;
-  /** The text matched against the library — a takeoff item's `description` (falling
-   *  back to `item` when description is blank), or the legacy shape's `item` field
-   *  (which IS the descriptive text in that shape, e.g. "LED Troffer 2x4"). */
+  /** The text matched against the library — a takeoff item's `description`
+   *  (falling back to `item`/`spec` when blank, shape-dependent). */
   description: string;
+  /** Agent 4's short takeoff item id (e.g. "5.1"), when the source shape has
+   *  one — carried through untouched so callers can key on it (composeBidData's
+   *  SavedConfidenceItem, est_bid_lines.takeoff_item_id) without re-deriving it. */
+  takeoffItemId?: string | null;
   /** Raw qty as the takeoff carries it. A string (e.g. "VERIFY", "TBD") is never
    *  coerced to a number — see MappedLine.qty / isVerifyQty. */
   qty: number | string;
@@ -43,6 +54,8 @@ export interface LibraryCandidate {
 export interface MappedLine {
   category: string;
   description: string;
+  /** Passed through from NormalizedTakeoffLine.takeoffItemId — never derived here. */
+  takeoffItemId: string | null;
   /** Resolved qty — 0 when the source qty was a non-numeric string (VERIFY-style). */
   qty: number;
   unit: string;
@@ -219,6 +232,7 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
   return {
     category: line.category,
     description: line.description,
+    takeoffItemId: line.takeoffItemId ?? null,
     qty,
     unit: line.unit,
     isVerifyQty,
@@ -257,7 +271,9 @@ export interface TakeoffCategoryLike {
   items: TakeoffItemLike[];
 }
 
-/** bidstd TakeoffCategory[]/TakeoffItem shape (backend/src/bidstd/bidData.ts). */
+/** bidstd TakeoffCategory[]/TakeoffItem shape (backend/src/bidstd/bidData.ts).
+ *  `it.item` is Agent 4's short takeoff item id ("5.1") — carried through as
+ *  takeoffItemId, never used as the match text unless description is blank. */
 export function fromTakeoffCategories(categories: TakeoffCategoryLike[]): NormalizedTakeoffLine[] {
   const out: NormalizedTakeoffLine[] = [];
   for (const cat of categories) {
@@ -265,6 +281,7 @@ export function fromTakeoffCategories(categories: TakeoffCategoryLike[]): Normal
       out.push({
         category: cat.name,
         description: (it.description && it.description.trim()) || it.item,
+        takeoffItemId: it.item ?? null,
         qty: it.qty,
         unit: it.unit,
         sourceConfidence: normalizeSourceConfidence(it.conf),
@@ -276,7 +293,15 @@ export function fromTakeoffCategories(categories: TakeoffCategoryLike[]): Normal
 
 export interface LegacyTakeoffRow {
   category: string;
+  /** Agent 4's short takeoff item id ("5.1") — matches Agent 4's own
+   *  `it.item` convention (Agent 4 QCs and restructures Agent 2's output,
+   *  preserving its numbering), NOT the descriptive text. */
   item: string;
+  /** The descriptive text to match against the library. Optional because an
+   *  older/hand-built fixture may only have `item` (some existing tests
+   *  predate this field and pass a description directly as `item`) — falls
+   *  back to `item` when absent so those callers keep working. */
+  spec?: string | null;
   qty: number | string;
   unit: string;
   confidence?: string | null;
@@ -286,7 +311,8 @@ export interface LegacyTakeoffRow {
 export function fromLegacyTakeoff(rows: LegacyTakeoffRow[]): NormalizedTakeoffLine[] {
   return rows.map(r => ({
     category: r.category,
-    description: r.item,
+    description: (r.spec && r.spec.trim()) || r.item,
+    takeoffItemId: r.item ?? null,
     qty: r.qty,
     unit: r.unit,
     sourceConfidence: normalizeSourceConfidence(r.confidence),

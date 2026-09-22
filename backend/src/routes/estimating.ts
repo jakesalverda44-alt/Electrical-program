@@ -96,6 +96,7 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
       assembly_id: (raw.assembly_id as string | null) ?? null,
       item_id: (raw.item_id as string | null) ?? null,
       takeoff_key: (raw.takeoff_key as string | null) ?? null,
+      takeoff_item_id: (raw.takeoff_item_id as string | null) ?? null,
       material_unit_override: raw.material_unit_override != null ? Number(raw.material_unit_override) : null,
       labor_hours_override: raw.labor_hours_override != null ? Number(raw.labor_hours_override) : null,
       confidence: (raw.confidence as LineConfidence | null) ?? null,

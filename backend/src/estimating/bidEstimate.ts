@@ -28,6 +28,11 @@ export interface ClientLineInput {
   assembly_id?: string | null;
   item_id?: string | null;
   takeoff_key?: string | null;
+  /** Agent 4's short takeoff item id (e.g. "5.1") for a takeoff-sourced line —
+   *  null for a manual line (it has no takeoff item to key on; its
+   *  description is what composeBidData's line_items.item carries instead —
+   *  see saveBidEstimate()'s legacyLineItems construction). */
+  takeoff_item_id?: string | null;
   material_unit_override?: number | null;
   labor_hours_override?: number | null;
   confidence?: LineConfidence | null;
@@ -77,6 +82,7 @@ function rowToBidLine(r: Record<string, unknown>): BidLineRow {
     assembly_id: (r.assembly_id as string | null) ?? null,
     item_id: (r.item_id as string | null) ?? null,
     takeoff_key: (r.takeoff_key as string | null) ?? null,
+    takeoff_item_id: (r.takeoff_item_id as string | null) ?? null,
     material_unit_override: r.material_unit_override != null ? Number(r.material_unit_override) : null,
     labor_hours_override: r.labor_hours_override != null ? Number(r.labor_hours_override) : null,
     confidence: (r.confidence as LineConfidence | null) ?? null,
@@ -245,7 +251,12 @@ export async function priceUnsaved(
 
 export interface RawTakeoffRow {
   category: string;
+  /** Agent 4's short takeoff item id ("5.1") — see mapper.ts's LegacyTakeoffRow
+   *  for the corrected understanding of this field (Part 1 follow-up). */
   item: string;
+  /** The descriptive text to match against the library; falls back to `item`
+   *  when absent. */
+  spec?: string;
   qty: number | string;
   unit: string;
   confidence?: string;
@@ -305,6 +316,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     assembly_id: m.matchedKind === 'assembly' ? m.matchedId : null,
     item_id: m.matchedKind === 'item' ? m.matchedId : null,
     takeoff_key: takeoffKey(rawRows[idx]),
+    takeoff_item_id: rawRows[idx].item ?? null,
     material_unit_override: null,
     labor_hours_override: null,
     confidence: m.sourceConfidence,
@@ -359,20 +371,21 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
       const existingLine = existingByKey.get(key);
 
       if (existingLine) {
-        // Keep the existing match/overrides/exclusion; refresh the takeoff-owned facts.
+        // Keep the existing match/overrides/exclusion; refresh the takeoff-owned facts
+        // (takeoff_item_id included — it's a takeoff fact, not an estimator edit).
         await client.query(
-          `UPDATE est_bid_lines SET qty=$1, unit=$2, description=$3, confidence=$4, updated_at=now() WHERE id=$5`,
-          [m.qty, m.unit, m.description, m.sourceConfidence ?? null, existingLine.id]
+          `UPDATE est_bid_lines SET qty=$1, unit=$2, description=$3, confidence=$4, takeoff_item_id=$5, updated_at=now() WHERE id=$6`,
+          [m.qty, m.unit, m.description, m.sourceConfidence ?? null, row.item ?? null, existingLine.id]
         );
         updated++;
       } else {
         await client.query(
-          `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, confidence, source, excluded)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'takeoff',false)`,
+          `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id, confidence, source, excluded)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',false)`,
           [bidId, i, row.category, m.description, m.qty, m.unit,
            m.matchedKind === 'assembly' ? m.matchedId : null,
            m.matchedKind === 'item' ? m.matchedId : null,
-           key, m.sourceConfidence ?? null]
+           key, row.item ?? null, m.sourceConfidence ?? null]
         );
         added++;
       }
@@ -441,14 +454,21 @@ export async function saveBidEstimate(
   const subtotals: Record<string, number> = {};
   for (const cat of recap.categories) subtotals[cat.category] = round2(cat.material + cat.labor);
 
+  // Pair each recap line with its ORIGINAL input by index BEFORE filtering out
+  // excluded lines — filtering first and then indexing `lines[idx]` against the
+  // filtered array misaligns every line after the first excluded one.
   const legacyLineItems: LegacyLineItem[] = recap.lines
-    .filter(l => !l.excluded)
-    .map((l, idx) => {
-      const original = lines[idx];
+    .map((l, idx) => ({ l, original: lines[idx] }))
+    .filter(({ l }) => !l.excluded)
+    .map(({ l, original }) => {
       const total = round2(l.materialExt + l.laborExt);
       return {
         category: l.category,
-        item: l.description,
+        // Agent 4's short takeoff item id when this line has one (so
+        // composeBidData's SavedConfidenceItem lookup, keyed on that id, hits
+        // for a new-engine-saved bid) — a manual line has none, so its
+        // description is what's carried here instead.
+        item: original?.takeoff_item_id ?? l.description,
         qty: l.qty,
         unit: l.unit,
         unit_cost: l.qty !== 0 ? round2(total / l.qty) : 0,
@@ -467,11 +487,11 @@ export async function saveBidEstimate(
       const l = rows[i];
       await client.query(
         `INSERT INTO est_bid_lines
-           (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key,
+           (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id,
             material_unit_override, labor_hours_override, confidence, excluded, source)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
         [bidId, l.sort, l.category, l.description, l.qty, l.unit,
-         l.assembly_id ?? null, l.item_id ?? null, l.takeoff_key ?? null,
+         l.assembly_id ?? null, l.item_id ?? null, l.takeoff_key ?? null, l.takeoff_item_id ?? null,
          l.material_unit_override ?? null, l.labor_hours_override ?? null,
          l.confidence ?? null, !!l.excluded, l.source]
       );

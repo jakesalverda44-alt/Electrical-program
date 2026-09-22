@@ -127,27 +127,42 @@ describe('mapTakeoffLine — VERIFY quantities are never coerced', () => {
 });
 
 describe('adapters', () => {
-  it('fromTakeoffCategories reads the bidstd TakeoffCategory/TakeoffItem shape', () => {
+  it('fromTakeoffCategories reads the bidstd TakeoffCategory/TakeoffItem shape, carrying the short item id through', () => {
     const lines = fromTakeoffCategories([
       { name: 'Branch Power', items: [{ item: '5.1', description: 'Duplex receptacle', unit: 'EA', qty: 10, conf: 'FIRM' }] },
     ]);
-    expect(lines).toEqual([{ category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', sourceConfidence: 'FIRM' }]);
+    expect(lines).toEqual([{
+      category: 'Branch Power', description: 'Duplex receptacle', takeoffItemId: '5.1',
+      qty: 10, unit: 'EA', sourceConfidence: 'FIRM',
+    }]);
   });
 
-  it('falls back to the item id when description is blank', () => {
+  it('falls back to the item id as the match text when description is blank (but still reports it as takeoffItemId too)', () => {
     const lines = fromTakeoffCategories([
       { name: 'Branch Power', items: [{ item: 'Duplex receptacle', description: '', unit: 'EA', qty: 10 }] },
     ]);
     expect(lines[0].description).toBe('Duplex receptacle');
+    expect(lines[0].takeoffItemId).toBe('Duplex receptacle');
   });
 
-  it('fromLegacyTakeoff reads the Agent 2/4 { category, item, qty, unit, confidence } shape', () => {
+  it('fromLegacyTakeoff reads the Agent 2/4 { category, item, spec, qty, unit, confidence } shape — item is the short id, spec is the match text', () => {
     const lines = fromLegacyTakeoff([
-      { category: 'LIGHTING', item: 'LED Troffer 2x4', qty: 48, unit: 'EA', confidence: 'VERIFIED' },
+      { category: 'LIGHTING', item: '2.1', spec: 'LED Troffer 2x4', qty: 48, unit: 'EA', confidence: 'VERIFIED' },
     ]);
     // "VERIFIED" isn't one of FIRM/APPROX/VERIFY — normalizeSourceConfidence drops
     // anything it doesn't recognize rather than guessing.
-    expect(lines).toEqual([{ category: 'LIGHTING', description: 'LED Troffer 2x4', qty: 48, unit: 'EA', sourceConfidence: null }]);
+    expect(lines).toEqual([{
+      category: 'LIGHTING', description: 'LED Troffer 2x4', takeoffItemId: '2.1',
+      qty: 48, unit: 'EA', sourceConfidence: null,
+    }]);
+  });
+
+  it('fromLegacyTakeoff falls back to `item` as the match text when spec is absent (older callers/fixtures)', () => {
+    const lines = fromLegacyTakeoff([
+      { category: 'LIGHTING', item: 'LED Troffer 2x4', qty: 48, unit: 'EA' },
+    ]);
+    expect(lines[0].description).toBe('LED Troffer 2x4');
+    expect(lines[0].takeoffItemId).toBe('LED Troffer 2x4');
   });
 });
 
