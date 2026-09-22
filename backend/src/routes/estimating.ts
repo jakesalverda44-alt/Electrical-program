@@ -13,6 +13,7 @@ import {
   priceUnsaved, syncTakeoff, saveBidEstimate, ClientLineInput, ClientSettingsInput,
 } from '../estimating/bidEstimate';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
+import { computeCalibrationReport } from '../estimating/calibration';
 
 const router = Router();
 
@@ -283,6 +284,13 @@ router.put('/library/factors/:id', requireAuth, requireAdmin, async (req, res) =
   const updated = await updateFactor(req.params.id, patch);
   if (!updated) return res.status(404).json({ error: 'Factor not found' });
   res.json(updated);
+});
+
+// ── Calibration (Task 6) ─────────────────────────────────────────────────────
+// Declared before /:bidId so "calibration" is never captured as a bid id.
+
+router.get('/calibration', requireAuth, requireAdmin, async (_req, res) => {
+  res.json(await computeCalibrationReport());
 });
 
 // ── Per-bid ──────────────────────────────────────────────────────────────────
