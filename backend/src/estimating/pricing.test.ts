@@ -93,6 +93,53 @@ describe('priceBid — unit conversion', () => {
   });
 });
 
+describe('priceBid — B1: libraryUnit conversion (display unit != matched item\'s pricing unit)', () => {
+  it('1,200 LF matched to a per-C (per-100-ft) item prices at $720, not $72,000', () => {
+    // The exact regression from the review: a takeoff line's display unit
+    // (LF, from Agent 2) differs from the matched item's own pricing unit
+    // (C = per 100 ft). Before this fix, `unit: 'LF'` alone was fed to the
+    // divisor lookup (divisor 1), pricing 1200 raw feet as 1200 EACH of a
+    // $60/C item = $72,000 — 100x too high.
+    const recap = priceBid(
+      [line({ unit: 'LF', libraryUnit: 'C', qty: 1200, materialUnitCost: 60, laborHoursUnit: 4 })],
+      { ...baseSettings, supervisionPct: 0 },
+      []
+    );
+    expect(recap.lines[0].materialExt).toBe(720);  // 1200/100 * 60
+    expect(recap.lines[0].hoursExt).toBe(48);       // 1200/100 * 4
+    expect(recap.lines[0].unit).toBe('LF');          // display unit is untouched
+  });
+
+  it('3,600 LF matched to a per-M (per-1000-ft) item prices at $342, not $342,000', () => {
+    const recap = priceBid(
+      [line({ unit: 'LF', libraryUnit: 'M', qty: 3600, materialUnitCost: 95, laborHoursUnit: 3.5 })],
+      { ...baseSettings, supervisionPct: 0 },
+      []
+    );
+    expect(recap.lines[0].materialExt).toBe(342);   // 3600/1000 * 95
+    expect(recap.lines[0].hoursExt).toBe(12.6);      // 3600/1000 * 3.5
+  });
+
+  it('a manual/unmatched line with no libraryUnit falls back to its own display unit (unchanged behavior)', () => {
+    const recap = priceBid(
+      [line({ unit: 'C', qty: 250, materialUnitCost: 60, laborHoursUnit: 4 })], // libraryUnit omitted
+      { ...baseSettings, supervisionPct: 0 },
+      []
+    );
+    expect(recap.lines[0].materialExt).toBe(150); // same as the pre-fix "C unit" test above
+  });
+
+  it('an unknown/missing divisor never produces NaN (B2 defensive fallback)', () => {
+    const recap = priceBid(
+      [line({ unit: 'LF', libraryUnit: 'BOGUS' as unknown as 'C', qty: 100, materialUnitCost: 5, laborHoursUnit: 1 })],
+      { ...baseSettings, supervisionPct: 0 },
+      []
+    );
+    expect(Number.isFinite(recap.lines[0].materialExt)).toBe(true);
+    expect(Number.isFinite(recap.totals.grandTotal)).toBe(true);
+  });
+});
+
 describe('priceBid — overrides', () => {
   it('material and hours overrides win over the resolved library value', () => {
     const recap = priceBid(
@@ -140,8 +187,11 @@ describe('priceBid — excluded lines', () => {
     expect(recap.totals.materialSubtotal).toBe(100); // excluded line's 500 is not counted
     expect(recap.warnings.excludedCount).toBe(1);
     expect(recap.categories).toEqual([
-      { category: 'Branch Power', material: 100, hours: 1, labor: 40 },
+      { category: 'Branch Power', material: 100, hours: 1, labor: 40, subtotal: 150.34 },
     ]);
+    // The excluded line's directShare is 0 — it never gets a slice of the pools.
+    expect(recap.lines.find(l => l.id === 'b')!.directShare).toBe(0);
+    expect(recap.lines.find(l => l.id === 'a')!.directShare).toBe(recap.totals.directCost);
   });
 });
 
@@ -251,13 +301,46 @@ describe('priceBid — golden recap for a realistic C-store bid', () => {
     });
 
     expect(recap.categories).toEqual([
-      { category: 'Branch Power', material: 480, hours: 30.1, labor: 1204 },
-      { category: 'Exterior / Site Lighting', material: 580, hours: 4, labor: 160 },
-      { category: 'Interior Lighting', material: 1900, hours: 15, labor: 600 },
-      { category: 'Low Voltage Infrastructure (Conduit & Boxes Only)', material: 0, hours: 0, labor: 0 },
-      { category: 'Service & Distribution', material: 1200, hours: 10, labor: 400 },
-      { category: 'Site / Underground / Allowances', material: 300, hours: 10, labor: 400 },
+      { category: 'Branch Power', material: 480, hours: 30.1, labor: 1204, subtotal: 1888 },
+      { category: 'Exterior / Site Lighting', material: 580, hours: 4, labor: 160, subtotal: 814.29 },
+      { category: 'Interior Lighting', material: 1900, hours: 15, labor: 600, subtotal: 2753.46 },
+      { category: 'Low Voltage Infrastructure (Conduit & Boxes Only)', material: 0, hours: 0, labor: 0, subtotal: 0 },
+      { category: 'Service & Distribution', material: 1200, hours: 10, labor: 400, subtotal: 1762.88 },
+      { category: 'Site / Underground / Allowances', material: 300, hours: 10, labor: 400, subtotal: 780.62 },
     ]);
+
+    // Fix round 1 / S10 — category subtotals and per-line directShares both
+    // reconcile EXACTLY to directCost (not "material + labor" alone, which in
+    // this fixture only sums to $4,410.60 against a $7,999.25 direct cost).
+    const categorySum = recap.categories.reduce((s, c) => s + c.subtotal, 0);
+    expect(categorySum).toBeCloseTo(recap.totals.directCost, 10);
+    const lineSum = recap.lines.reduce((s, l) => s + l.directShare, 0);
+    expect(lineSum).toBeCloseTo(recap.totals.directCost, 10);
+  });
+});
+
+describe('priceBid — S10: subtotals/directShare always reconcile to directCost', () => {
+  it('reconciles for an arbitrary mix of categories, overrides and an excluded line', () => {
+    const recap = priceBid(
+      [
+        line({ id: 'a', category: 'Branch Power', materialUnitCost: 37, laborHoursUnit: 0.6 }),
+        line({ id: 'b', category: 'Interior Lighting', qty: 3, materialUnitCost: 95, laborHoursUnit: 0.75 }),
+        line({ id: 'c', category: 'Grounding', materialUnitOverride: 12.5, laborHoursOverride: 0.2 }),
+        line({ id: 'd', category: 'Branch Power', materialUnitCost: 0, laborHoursUnit: 0, excluded: true }),
+      ],
+      baseSettings,
+      []
+    );
+    const categorySum = recap.categories.reduce((s, c) => s + c.subtotal, 0);
+    expect(categorySum).toBeCloseTo(recap.totals.directCost, 10);
+    const lineSum = recap.lines.reduce((s, l) => s + l.directShare, 0);
+    expect(lineSum).toBeCloseTo(recap.totals.directCost, 10);
+  });
+
+  it('reconciles even with zero lines (all pools zero)', () => {
+    const recap = priceBid([], baseSettings, []);
+    expect(recap.categories).toEqual([]);
+    expect(recap.totals.directCost).toBe(0);
   });
 });
 
