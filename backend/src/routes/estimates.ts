@@ -3,6 +3,7 @@ import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
 import { loadAccessibleBid } from '../utils/ownership';
+import { computeBidComps } from '../utils/bidComps';
 
 const router = Router();
 
@@ -90,23 +91,9 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
 
   // Count comps: awarded bids of same project_type with a known amount — either a saved
   // estimate or an imported past bid (see preconstruction.ts import-bid), whichever set it.
-  const { rows: bidRows } = await pool.query(
-    'SELECT project_type FROM bids WHERE id = $1 AND deleted_at IS NULL',
-    [bidId]
-  );
-  let comp_count = 0;
-  if (bidRows.length && bidRows[0].project_type) {
-    const { rows: comps } = await pool.query(
-      `SELECT COUNT(*)::int AS cnt
-       FROM bids b
-       WHERE b.stage = 'awarded' AND b.project_type = $1 AND b.amount IS NOT NULL
-         AND b.id != $2 AND b.deleted_at IS NULL`,
-      [bidRows[0].project_type, bidId]
-    );
-    comp_count = comps[0]?.cnt ?? 0;
-  }
-
-  const confidence = comp_count >= 3 ? 'HIGH' : comp_count >= 1 ? 'MEDIUM' : 'LOW';
+  // Task 5 (estimating labor engine): extracted into utils/bidComps.ts so the new
+  // estimating/bidEstimate.ts doesn't duplicate this query — behavior unchanged.
+  const { compCount: comp_count, confidence } = await computeBidComps(bidId);
 
   const { rows } = await pool.query(
     `INSERT INTO bid_estimates (bid_id, overhead_pct, profit_pct, line_items, subtotals,
