@@ -83,6 +83,30 @@ export const TAKEOFF_CATEGORIES = [
   'Grounding',
 ] as const;
 
+// N4/B4: Agent 2's own categorization prompt (src/ai/prompts.ts) asks the
+// model for a SHORTER, slash-free spelling of some of these same categories
+// ("Exterior Site Lighting", "Site Underground Allowances", "Low Voltage")
+// than the canonical PROJECT_INSTRUCTIONS names above. That's intentional on
+// the AI-prompt side (shorter labels are less for the model to reproduce
+// exactly) but it means a raw takeoff line's `category` field and the seed
+// library's/calibration report's canonical category never string-match
+// without normalizing one to the other first.
+const CATEGORY_ALIASES: Record<string, string> = {
+  'exterior site lighting': 'Exterior / Site Lighting',
+  'site underground allowances': 'Site / Underground / Allowances',
+  'low voltage': 'Low Voltage Infrastructure (Conduit & Boxes Only)',
+};
+
+/** Map any known spelling of a takeoff category (the canonical
+ *  TAKEOFF_CATEGORIES form, or Agent 2's shorter prompt-facing alias) to the
+ *  canonical TAKEOFF_CATEGORIES string. Unrecognized input passes through
+ *  unchanged rather than being coerced to something wrong. */
+export function canonicalizeTakeoffCategory(raw: string | null | undefined): string {
+  const trimmed = (raw ?? '').trim();
+  if ((TAKEOFF_CATEGORIES as readonly string[]).includes(trimmed)) return trimmed;
+  return CATEGORY_ALIASES[trimmed.toLowerCase()] ?? trimmed;
+}
+
 /** Zero-pad to `n` digits. */
 function pad(n: number, width: number): string {
   return String(n).padStart(width, '0');

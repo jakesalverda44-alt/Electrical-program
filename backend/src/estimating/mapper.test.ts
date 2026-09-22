@@ -55,9 +55,13 @@ describe('mapTakeoffLine — confidence tiers', () => {
   });
 
   it('fuzzy: shares enough core tokens without an exact/alias hit', () => {
-    const m = mapTakeoffLine(line({ description: '.75 in EMT conduit run' }), SMALL_LIB);
+    // unit: 'LF' — a real conduit takeoff line is measured in feet, not each;
+    // EMT-075's own unit is 'C' (same LINEAR family as LF/M, just a different
+    // pricing denomination), so this is unit-compatible (B1).
+    const m = mapTakeoffLine(line({ description: '.75 in EMT conduit run', unit: 'LF' }), SMALL_LIB);
     expect(m.matchConfidence).toBe('fuzzy');
     expect(m.matchedCode).toBe('EMT-075');
+    expect(m.matchedUnit).toBe('C');
   });
 
   it('none: unrelated description matches nothing', () => {
@@ -153,8 +157,16 @@ describe('adapters', () => {
     // anything it doesn't recognize rather than guessing.
     expect(lines).toEqual([{
       category: 'LIGHTING', description: 'LED Troffer 2x4', takeoffItemId: '2.1',
-      qty: 48, unit: 'EA', sourceConfidence: null,
+      qty: 48, unit: 'EA', sourceConfidence: null, altText: null,
     }]);
+  });
+
+  it('fromLegacyTakeoff surfaces `item` as altText when it carries real text the spec field does not (B3)', () => {
+    const lines = fromLegacyTakeoff([
+      { category: 'Branch Power', item: 'Duplex receptacle', spec: '20A,125V,NEMA 5-20R,spec grade', qty: 1, unit: 'EA' },
+    ]);
+    expect(lines[0].description).toBe('20A,125V,NEMA 5-20R,spec grade');
+    expect(lines[0].altText).toBe('Duplex receptacle');
   });
 
   it('fromLegacyTakeoff falls back to `item` as the match text when spec is absent (older callers/fixtures)', () => {
@@ -186,5 +198,88 @@ describe('mapper on real fixture phrasing (SEED_ITEMS/SEED_ASSEMBLIES vs bid_dat
     }
 
     expect(rate).toBeGreaterThanOrEqual(0.85);
+  });
+});
+
+describe('mapTakeoffLine — B3: mismatch regressions against the real seed library', () => {
+  const library = libraryFromSeed();
+
+  it('4" EMT never alias-matches 3/4" EMT (token-boundary, not substring)', () => {
+    const m = mapTakeoffLine(line({ description: '4" EMT', unit: 'LF' }), library);
+    expect(m.matchedCode).not.toBe('EMT-075');
+    expect(m.matchedCode).toBe('EMT-400');
+  });
+
+  it('2" EMT never alias-matches 1/2" EMT', () => {
+    const m = mapTakeoffLine(line({ description: '2" EMT', unit: 'LF' }), library);
+    expect(m.matchedCode).not.toBe('EMT-050');
+    expect(m.matchedCode).toBe('EMT-200');
+  });
+
+  it('4" PVC never alias-matches 3/4" PVC', () => {
+    const m = mapTakeoffLine(line({ description: '4" PVC', unit: 'LF' }), library);
+    expect(m.matchedCode).not.toBe('PVC-075');
+    expect(m.matchedCode).toBe('PVC-400');
+  });
+
+  it('2" PVC never alias-matches 1/2" PVC', () => {
+    const m = mapTakeoffLine(line({ description: '2" PVC', unit: 'LF' }), library);
+    expect(m.matchedCode).not.toBe('PVC-050');
+    expect(m.matchedCode).toBe('PVC-200');
+  });
+
+  it('fractional trade sizes in all three written forms resolve to the same item, not a rigid-steel/material mismatch', () => {
+    const hyphen = mapTakeoffLine(line({ description: '1-1/4" EMT', unit: 'LF' }), library);
+    const spaced = mapTakeoffLine(line({ description: '1 1/4" EMT', unit: 'LF' }), library);
+    const decimal = mapTakeoffLine(line({ description: '1.25" EMT', unit: 'LF' }), library);
+    for (const m of [hyphen, spaced, decimal]) {
+      expect(m.matchedCode).toBe('EMT-125'); // NOT RGD-125 (rigid steel) — material-type conflict guard
+      expect(m.matchConfidence).not.toBe('none');
+    }
+  });
+
+  it('a bare number next to EMT is read as a conduit size, not a wire gauge', () => {
+    const m = mapTakeoffLine(line({ description: '2 EMT', unit: 'LF' }), library);
+    expect(m.matchedCode).toBe('EMT-200');
+    expect(m.matchedCode).not.toMatch(/^THHN/);
+  });
+
+  it('material-type conflict guard: description naming EMT never matches a THHN wire item even on strong token overlap', () => {
+    const m = mapTakeoffLine(line({ description: '#2 EMT conduit run', unit: 'LF' }), library);
+    expect(m.matchedCode).not.toMatch(/^THHN/);
+  });
+
+  it('item "Duplex receptacle" / spec "20A,125V,NEMA 5-20R,spec grade" matches a duplex device, not a switch (item-vs-spec field-choice fix)', () => {
+    const [normalized] = fromLegacyTakeoff([
+      { category: 'Branch Power', item: 'Duplex receptacle', spec: '20A,125V,NEMA 5-20R,spec grade', qty: 1, unit: 'EA' },
+    ]);
+    const m = mapTakeoffLine(normalized, library);
+    expect(m.matchedCode).not.toBe('SW-1P');
+    expect(['DEV-DUP', 'ASM-DUPLEX']).toContain(m.matchedCode);
+  });
+
+  it('item "GFCI receptacle" / spec "20A 125V" matches a GFCI device, not the plain duplex circuit', () => {
+    const [normalized] = fromLegacyTakeoff([
+      { category: 'Branch Power', item: 'GFCI receptacle', spec: '20A 125V', qty: 1, unit: 'EA' },
+    ]);
+    const m = mapTakeoffLine(normalized, library);
+    expect(m.matchedCode).not.toBe('ASM-DUPLEX');
+    expect(['DEV-GFCI', 'ASM-GFCI']).toContain(m.matchedCode);
+  });
+
+  it('EA takeoff lines never match a linear (LF/C/M) library item, and vice versa (B1 unit-family gate)', () => {
+    // Real EMT items are unit 'C' — an EA-unit takeoff line describing an EMT
+    // fitting count must not resolve to the per-100-ft raceway item.
+    const m = mapTakeoffLine(line({ description: '3/4" EMT (incl. couplings/straps)', unit: 'EA' }), library);
+    expect(m.matchedCode).not.toBe('EMT-075');
+    expect(m.matchConfidence).toBe('none');
+  });
+
+  it('ASM-SVCENT-800 (800A service) is built on an 800A-rated disconnect, priced higher than the 400A assembly', () => {
+    const disc800 = library.find(c => c.code === 'DISC-800');
+    expect(disc800).toBeTruthy();
+    // The assembly composition itself lives in bidEstimate's resolver, not
+    // the mapper — this just proves the 800A component now exists in the
+    // seed for that resolver to consume instead of DISC-400.
   });
 });

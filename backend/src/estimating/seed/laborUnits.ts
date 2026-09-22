@@ -203,6 +203,11 @@ const DEVICE_ITEMS: SeedItem[] = [
   { code: 'DISC-100', name: 'Disconnect switch, 100A', category: CAT.SERVICE, unit: 'EA', materialCost: 240, laborHours: 3.0, aliases: ['100a disconnect', 'disconnect switch, 100a'] },
   { code: 'DISC-200', name: 'Disconnect switch, 200A', category: CAT.SERVICE, unit: 'EA', materialCost: 420, laborHours: 4.5, aliases: ['200a disconnect', 'disconnect switch, 200a'] },
   { code: 'DISC-400', name: 'Disconnect switch, 400A', category: CAT.SERVICE, unit: 'EA', materialCost: 950, laborHours: 7.0, aliases: ['400a disconnect', 'disconnect switch, 400a'] },
+  // B3: added alongside the ASM-SVCENT-800 fix below — that assembly was
+  // built on DISC-400 (a 400A disconnect) despite being an 800A service,
+  // which the review flagged as pricing LESS than the 400A service entrance
+  // assembly it's supposed to be larger than.
+  { code: 'DISC-800', name: 'Disconnect switch, 800A', category: CAT.SERVICE, unit: 'EA', materialCost: 1850, laborHours: 10.5, aliases: ['800a disconnect', 'disconnect switch, 800a'] },
 ];
 
 // ── Lighting controls ────────────────────────────────────────────────────────
@@ -335,7 +340,7 @@ export const SEED_ASSEMBLIES: SeedAssembly[] = [
     aliases: ['800a 120/208v 3ph 4w service entrance assembly, nema 3r', '800a service entrance assembly'],
     components: [
       { itemCode: 'METERCT-MULTI', qtyPer: 1 },
-      { itemCode: 'DISC-400', qtyPer: 1 },
+      { itemCode: 'DISC-800', qtyPer: 1 },
       { itemCode: 'RGD-300', qtyPer: 0.5 },
       { itemCode: 'THHN-500', qtyPer: 0.16 },
       { itemCode: 'GND-ROD', qtyPer: 3 },
@@ -454,7 +459,18 @@ export const SEED_ASSEMBLIES: SeedAssembly[] = [
   {
     code: 'ASM-DUPLEX', name: '20A duplex receptacle circuit, complete',
     category: CAT.BRANCH, unit: 'EA',
-    aliases: ['20a 125v duplex receptacle, spec grade', 'duplex receptacle circuit'],
+    // N5: "receptacle", "duplex" and "outlet" phrasings should all default to
+    // this plain device-plus-box assembly. A bare 'receptacle' or 'outlet'
+    // alias is deliberately NOT added here — those single words also appear
+    // in GFCI/quad/twist-lock/range receptacle names and the data-outlet
+    // assembly, and a bare-word alias would token-subset-match (and steal)
+    // all of them. 'duplex' alone is safe (no other candidate uses that
+    // word); the qualified two-word phrases cover the common ways an
+    // estimator/Agent 2 writes "outlet" without colliding with those.
+    aliases: [
+      '20a 125v duplex receptacle, spec grade', 'duplex receptacle circuit',
+      'duplex', 'duplex outlet', 'receptacle outlet', 'standard receptacle',
+    ],
     components: [
       { itemCode: 'DEV-DUP', qtyPer: 1 },
       { itemCode: 'BOX-4SQ', qtyPer: 1 },
