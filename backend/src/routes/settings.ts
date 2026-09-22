@@ -57,6 +57,12 @@ const ALLOWED_KEYS = [
   // (POST /bids/:id/email-prebid-chris) reads it and defaults to the
   // previously-hardcoded address when unset.
   'prebid_chris_email',
+  // Estimating labor engine (Part 2, Task 11 — Settings > Labor Library >
+  // Defaults) — the same est_default_* keys migration 101 seeds
+  // insert-if-absent; editable here through the generic settings PUT rather
+  // than a dedicated route, same as every other global default on this page.
+  'est_default_labor_rate', 'est_default_material_tax_pct', 'est_default_small_tools_pct',
+  'est_default_supervision_pct', 'est_default_consumables_pct',
 ];
 
 // Credentials that must never leave the server via GET /api/settings, even to an

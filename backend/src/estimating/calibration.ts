@@ -3,9 +3,9 @@
 // accubidParse.ts via bid_cost_breakdown) and a takeoff the engine can price
 // (saved est_bid_lines, or a proposable mapping from the current takeoff),
 // compares the engine's computed hours to Accubid's actual hours. Suggests a
-// global and per-category adjustment; APPLYING it (writing source=
-// 'calibrated' library rows) is a Settings button — Task 12, out of scope
-// here.
+// global and per-category adjustment. applyCalibrationAdjustment() below (a
+// Part 2, Task 11 addition — the plan's "Apply suggested adjustment" Settings
+// button needs somewhere to POST to) actually writes it.
 import { pool } from '../db/pool';
 import { PricingRecap } from './pricing';
 import { getBidSettings, getBidLines, getProposedLinesFromTakeoff, priceUnsaved, computeRecapForBid } from './bidEstimate';
@@ -112,4 +112,45 @@ export async function computeCalibrationReport(): Promise<CalibrationReport> {
     suggestedGlobalAdjustmentPct: (overallRatio - 1) * 100,
     categoryGaps,
   };
+}
+
+export interface ApplyCalibrationInput {
+  scope: 'global' | 'category';
+  category?: string;
+  /** e.g. 12 means +12% to every affected item's labor_hours. */
+  adjustmentPct: number;
+}
+
+export interface ApplyCalibrationResult {
+  updatedCount: number;
+}
+
+/**
+ * Multiplies labor_hours on every active est_items row (optionally scoped to
+ * one category) by (1 + adjustmentPct/100) and marks it source='calibrated'.
+ * An estimator applying this is making a deliberate correction — it's the
+ * one write path allowed to touch a 'seed' row's hours in bulk; every other
+ * edit (library.ts's updateItem) already sets source='manual' on any single
+ * field change, this is the calibration-specific bulk equivalent.
+ */
+export async function applyCalibrationAdjustment(input: ApplyCalibrationInput): Promise<ApplyCalibrationResult> {
+  const multiplier = 1 + input.adjustmentPct / 100;
+  if (!Number.isFinite(multiplier) || multiplier < 0) {
+    throw new Error('adjustmentPct must be a finite number no less than -100');
+  }
+  if (input.scope === 'category') {
+    if (!input.category) throw new Error('category is required when scope is "category"');
+    const { rows } = await pool.query(
+      `UPDATE est_items SET labor_hours = ROUND((labor_hours * $1)::numeric, 4), source = 'calibrated', updated_at = now()
+       WHERE active = true AND category = $2 RETURNING id`,
+      [multiplier, input.category]
+    );
+    return { updatedCount: rows.length };
+  }
+  const { rows } = await pool.query(
+    `UPDATE est_items SET labor_hours = ROUND((labor_hours * $1)::numeric, 4), source = 'calibrated', updated_at = now()
+     WHERE active = true RETURNING id`,
+    [multiplier]
+  );
+  return { updatedCount: rows.length };
 }

@@ -16,7 +16,7 @@ import { SignatureSection } from './sections/SignatureSection';
 import { TrashSection } from './sections/TrashSection';
 import { AuditSection } from './sections/AuditSection';
 import { CommissionsSection } from './sections/CommissionsSection';
-import { UnitCostSection } from './sections/UnitCostSection';
+import { LaborLibrarySection } from './sections/LaborLibrarySection';
 
 
 type SectionId = 'company' | 'proposal-defaults' | 'gen-pricing' | 'users' | 'email' | 'ai' | 'ai-permissions' | 'integrations' | 'notifications' | 'security' | 'signature' | 'trash' | 'audit' | 'commissions' | 'unit-costs';
@@ -36,7 +36,7 @@ const NAV: { group: string; items: { id: SectionId; label: string; icon: string 
     { id: 'integrations',     label: 'Integrations',    icon: 'link'     },
   ]},
   { group: 'Estimating', items: [
-    { id: 'unit-costs',       label: 'Unit Cost Library', icon: 'dollar' },
+    { id: 'unit-costs',       label: 'Labor Library',   icon: 'dollar'   },
   ]},
   { group: 'AI', items: [
     { id: 'ai',               label: 'AI Configuration', icon: 'cpu'     },
@@ -111,7 +111,7 @@ export default function SettingsPage() {
           {active === 'notifications'     && <NotificationsSection settings={settings} onSaved={onSettingsSaved}/>}
           {active === 'signature'         && <SignatureSection/>}
           {active === 'security'          && <SecuritySection    settings={settings} onSaved={onSettingsSaved}/>}
-          {active === 'unit-costs'         && <UnitCostSection/>}
+          {active === 'unit-costs'         && <LaborLibrarySection settings={settings} onSaved={onSettingsSaved}/>}
           {active === 'audit'             && <AuditSection/>}
           {active === 'trash'             && <TrashSection/>}
         </div>

@@ -91,8 +91,15 @@ export interface AppSettings {
   // tier — elec_followup_viewed_days is gone (the "viewed" tracking it
   // depended on went away with the public proposal page).
   elec_followup_quiet_days: string;
-  // Estimating
+  // Estimating (legacy flat unit-cost library — read-only fallback no longer
+  // used by pricing; kept for any remaining reader)
   unit_cost_library: string;
+  // Estimating labor engine (Part 2, Task 11 — Settings > Labor Library > Defaults)
+  est_default_labor_rate: string;
+  est_default_material_tax_pct: string;
+  est_default_small_tools_pct: string;
+  est_default_supervision_pct: string;
+  est_default_consumables_pct: string;
   // Other
   notifications_json: string;
   security_session_timeout: string;
@@ -128,6 +135,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   award_recipients: '[]',
   elec_followup_quiet_days: '5',
   unit_cost_library: '',
+  est_default_labor_rate: '38', est_default_material_tax_pct: '7', est_default_small_tools_pct: '3',
+  est_default_supervision_pct: '0', est_default_consumables_pct: '2',
   notifications_json: '{}', security_session_timeout: '480',
 };
 

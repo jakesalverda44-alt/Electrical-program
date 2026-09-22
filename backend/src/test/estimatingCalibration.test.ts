@@ -1,6 +1,7 @@
 // Task 6 — calibration report: engine hours vs Accubid hours per bid, an
-// overall ratio, and per-category gaps. Read-only; applying the suggestion
-// (writing source='calibrated') is Task 12 (Settings UI), out of scope here.
+// overall ratio, and per-category gaps (read-only). Part 2, Task 11 adds
+// POST /calibration/apply, which actually writes the adjustment
+// (source='calibrated') — its tests are below the report tests in this file.
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import { pool } from '../db/pool';
@@ -124,5 +125,69 @@ describe('GET /api/estimating/calibration', () => {
     await request(app).get('/api/estimating/calibration').set(auth(estimator.token)).expect(403);
     const owner = await makeUser('owner');
     await request(app).get('/api/estimating/calibration').set(auth(owner.token)).expect(200);
+  });
+});
+
+describe('POST /api/estimating/calibration/apply', () => {
+  // Scoped to a test-only category so this never touches the real seed
+  // library's labor_hours — applying "global" for real here would multiply
+  // every one of the ~139 seeded items' hours and corrupt every other test
+  // (and every future run) that depends on their known values.
+  const TEST_CATEGORY = `__CalibrationApplyTest__${Date.now()}`;
+
+  it('is admin-only', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const estimator = await makeUser('estimator');
+    await request(app).post('/api/estimating/calibration/apply').set(auth(estimator.token))
+      .send({ scope: 'global', adjustmentPct: 10 }).expect(403);
+  });
+
+  it('rejects a bad scope, a non-numeric adjustmentPct, or a missing category with 400', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const owner = await makeUser('owner');
+    await request(app).post('/api/estimating/calibration/apply').set(auth(owner.token))
+      .send({ scope: 'bogus', adjustmentPct: 10 }).expect(400);
+    await request(app).post('/api/estimating/calibration/apply').set(auth(owner.token))
+      .send({ scope: 'global', adjustmentPct: 'not-a-number' }).expect(400);
+    await request(app).post('/api/estimating/calibration/apply').set(auth(owner.token))
+      .send({ scope: 'category', adjustmentPct: 10 }).expect(400);
+  });
+
+  it('multiplies labor_hours by (1 + pct/100) and marks source=calibrated, scoped to one category only', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const owner = await makeUser('owner');
+    // A second, untouched category — proves the update is scoped, without
+    // depending on the rest of the (shared, never-reset) library's state,
+    // which can carry source='calibrated' rows from earlier test runs.
+    const OTHER_CATEGORY = `${TEST_CATEGORY}-other`;
+    const created = await request(app).post('/api/estimating/library/items').set(auth(owner.token))
+      .send({ code: `CALTEST-${Date.now()}`, name: 'Calibration test item', category: TEST_CATEGORY, unit: 'EA', material_cost: 1, labor_hours: 10 })
+      .expect(200);
+    const untouched = await request(app).post('/api/estimating/library/items').set(auth(owner.token))
+      .send({ code: `CALTEST-OTHER-${Date.now()}`, name: 'Untouched item', category: OTHER_CATEGORY, unit: 'EA', material_cost: 1, labor_hours: 5 })
+      .expect(200);
+
+    try {
+      const res = await request(app).post('/api/estimating/calibration/apply').set(auth(owner.token))
+        .send({ scope: 'category', category: TEST_CATEGORY, adjustmentPct: 20 }).expect(200);
+      expect(res.body.updatedCount).toBe(1);
+
+      const lib = await request(app).get('/api/estimating/library').set(auth(owner.token)).expect(200);
+      const updated = lib.body.items.find((i: { id: string }) => i.id === created.body.id);
+      expect(updated.labor_hours).toBeCloseTo(12, 4); // 10 * 1.20
+      expect(updated.source).toBe('calibrated');
+
+      const other = lib.body.items.find((i: { id: string }) => i.id === untouched.body.id);
+      expect(other.labor_hours).toBe(5);
+      expect(other.source).toBe('manual');
+    } finally {
+      // Deactivate the test rows so a "global" apply in some future run never
+      // touches them (applyCalibrationAdjustment only ever affects active rows).
+      await request(app).put(`/api/estimating/library/items/${created.body.id}`).set(auth(owner.token)).send({ active: false });
+      await request(app).put(`/api/estimating/library/items/${untouched.body.id}`).set(auth(owner.token)).send({ active: false });
+    }
   });
 });

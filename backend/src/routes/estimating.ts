@@ -13,7 +13,7 @@ import {
   priceUnsaved, syncTakeoff, saveBidEstimate, ClientLineInput, ClientSettingsInput,
 } from '../estimating/bidEstimate';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
-import { computeCalibrationReport } from '../estimating/calibration';
+import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
 
 const router = Router();
 
@@ -292,6 +292,25 @@ router.put('/library/factors/:id', requireAuth, requireAdmin, async (req, res) =
 
 router.get('/calibration', requireAuth, requireAdmin, async (_req, res) => {
   res.json(await computeCalibrationReport());
+});
+
+// Part 2, Task 11 — Settings > Labor Library > Calibration > "Apply suggested
+// adjustment". Declared before /:bidId for the same reason as GET /calibration.
+router.post('/calibration/apply', requireAuth, requireAdmin, async (req, res) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (body.scope !== 'global' && body.scope !== 'category') {
+    return res.status(400).json({ error: 'scope must be "global" or "category"' });
+  }
+  const adjustmentPct = Number(body.adjustmentPct);
+  if (!Number.isFinite(adjustmentPct)) return res.status(400).json({ error: 'adjustmentPct must be a number' });
+  const category = body.scope === 'category' ? String(body.category ?? '') : undefined;
+  if (body.scope === 'category' && !category) return res.status(400).json({ error: 'category is required when scope is "category"' });
+  try {
+    const result = await applyCalibrationAdjustment({ scope: body.scope, category, adjustmentPct });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Could not apply adjustment' });
+  }
 });
 
 // ── Per-bid ──────────────────────────────────────────────────────────────────
