@@ -345,4 +345,396 @@ proposed mapping; the route is admin-only.
    creates — a real, documented, but not-yet-fixed compatibility gap.
 4. **`migrate.ts`'s first-application race** noted under Task 1 — not a bug
    in this work, but will surface once, harmlessly, on the first real `npm
+   test` run against a database that hasn't seen 101/102 before.
+
+**Update, Part 1 follow-up (see below):** item 3 above (the composeBidData
+confidence-lookup gap) is fixed — migration 103 adds
+`est_bid_lines.takeoff_item_id`, populated end to end. See "Part 1 follow-up"
+immediately below, before the Part 2 section.
+
+---
+
+# Part 1 follow-up — takeoff_item_id (composeBidData confidence gap)
+
+**Commit:** `cb19d21`
+
+Closes the gap flagged above. Migration 103 (101 was already applied on the
+test DB, so this is a new migration, not an edit) adds a nullable
+`est_bid_lines.takeoff_item_id text`.
+
+While wiring this through, corrected a wrong assumption from the original
+Task 4 work: in the legacy Agent 2/4 takeoff shape, `item` is Agent 4's short
+takeoff item id (e.g. `"5.1"`), matching `Agent4TakeoffItem`'s own field —
+**not** the descriptive text. The original assumption (based on a
+hand-crafted confidence-test fixture, not the real shape) had this backwards.
+`spec` (previously unmodeled) carries the descriptive text; `fromLegacyTakeoff`
+now falls back to `item` for matching when `spec` is absent, so every existing
+caller/test that only ever set `item` keeps working unchanged.
+`mapper.ts`'s `NormalizedTakeoffLine`/`MappedLine` and `bidEstimate.ts`'s
+`RawTakeoffRow`/`ClientLineInput`/`BidLineRow` all carry
+`takeoffItemId`/`takeoff_item_id` through; `getProposedLinesFromTakeoff`,
+`syncTakeoff` (on both insert and update — it's a takeoff-owned fact,
+refreshed on every sync, not an estimator override) and `saveBidEstimate` all
+populate it. `saveBidEstimate` emits it as `bid_estimates.line_items[].item`
+when present; a manual line has none, so its description is used instead.
+
+**A second, unrelated bug found and fixed while wiring this in:**
+`saveBidEstimate`'s `legacyLineItems` builder zipped the recap's lines
+(filtered to drop excluded ones) against the **original, unfiltered** `lines`
+array by index — every line after the first excluded one was paired with the
+wrong original, corrupting its `item`/`overridden` value. Fixed by pairing
+every recap line with its original by index **before** filtering.
+
+**5 new tests:** `takeoff_item_id` round-trips into `line_items.item` and
+`est_bid_lines`; a dedicated regression for the index-misalignment bug (an
+excluded line followed by a kept, overridden line); and the requested proof
+that `composeBidData` resolves per-line confidence for a bid saved through the
+new engine — reads `bid_estimates.line_items` exactly as
+`preconstruction.ts`'s `composeCurrentBidData` does and confirms the saved
+`VERIFY` beats Agent 4's own echoed confidence.
+
+**Test counts after this fix:** backend 912 → 915 passed (3 known-flake
+failures unchanged), 915 total. Zero frontend changes.
+
+---
+
+# Part 2 — Frontend Workspace Redesign Report
+
+**Commit range:** `1f51405..be340f6` (6 commits: Tasks 7, 9, 10, 11, 8+12)
+**Scope:** Tasks 7–12 of the plan (EstimateShell, Labor & Pricing step, Bid
+Summary panel, Settings Labor Library, re-homing existing step content into
+the shell, lazy-loading the new chunk). Two small, contained backend
+additions were needed for Task 11 (documented in that task's section) — no
+other backend files changed in Part 2.
+
+## Baseline (immediately before Part 2, i.e. right after the Part 1 follow-up commit)
+
+- Backend: 915 passed / 3 failed / 918 total (unchanged from the Part 1
+  follow-up's own final count — Part 2 added 3 more backend tests for Task
+  11's small calibration-apply endpoint, bringing it to 918 passed / 3 failed
+  / 921 total by the end of Part 2 — see Task 11 below).
+- Frontend: 579 passed / 0 failed / 579 total, 86 files (the one baseline
+  flake, `SurveyMarkupEditor.test.tsx`, didn't reproduce on the Part 1
+  report's final run).
+
+## Task 7 — Estimating shell: step rail + work area + summary
+
+**Commit:** `1f51405`
+**Files:** `frontend/src/features/estimating/{types,steps,EstimateShell,
+useEstimateStepParam}.ts(x)` + their `.test` files, `estimating.css`.
+
+`EstimateShell.tsx`: left step rail + center work area + right Bid Summary
+panel, exactly as the plan's ASCII layout shows. Five steps in working order
+(Documents, Takeoff, Labor & Pricing, Scope & RFIs, Review & Proposal), every
+step always clickable (no hard lock), a "needs X first" hint under a
+not-done step whose immediate predecessor also isn't done, the save-state
+indicator moved into the rail header (`est-save-state`, replacing the old
+TabStrip's `pc-save-state`), and three responsive layouts via a small
+`useEstimateBreakpoint()` hook (same addEventListener-with-Safari-fallback
+shape as the app's existing `useIsMobile()`): ≥1280px three columns,
+900–1279px a collapsible slim summary bar above the work area, <900px a
+horizontal chip-row rail plus a sticky bottom summary bar.
+
+`steps.ts` (pure, no React): the five step definitions;
+`mapLegacyTabToStep()` implementing the plan's exact table
+(overview/prebid/files→documents; bid/takeoff→takeoff; pricing→pricing;
+scope/rfis→scope; proposal→review; costs/intel/compare→pricing); the reverse
+`stepToLegacyTab()` for persisting a representative legacy value back into
+`ws.activeTab`; `deriveStepStatus()` (done status computed from data every
+render, never stored); `stepHint()`.
+
+`useEstimateStepParam.ts`: `?step=<key>`, merged onto whatever else is in the
+URL (in particular BidHubPage's own `?tab=`) — satisfies the plan's
+`?tab=estimating&step=<key>` contract. **Made Router-optional after Task 8
+surfaced the reason why** — see Task 8's section; this file's own tests
+(added at that point) cover both the routed and local-state paths.
+
+`types.ts`: the frontend's mirror of `backend/src/estimating`'s wire shapes.
+
+**Tests:** 27 (13 `steps.ts`, 10 `EstimateShell`, 4 `useEstimateStepParam` —
+later 5 once Task 8 added the Router-optional case). Rail renders all five
+steps in order; done/active styling; every step clickable regardless of
+status; hint logic; save-state text; work-area header/children/Next action;
+responsive breakpoint switch via a `matchMedia` mock returning different
+`matches` per query string (simulating 1400px/1000px/700px viewports).
+
+## Task 9 — Labor & Pricing screen
+
+**Commit:** `d64356b`
+**Files:** `useEstimatingBid.{ts,test.ts}`, `LaborPricingStep.{tsx,test.tsx}`.
+
+`useEstimatingBid(bidId)`: owns a bid's estimating state (lines, settings,
+recap, proposed) so the Labor & Pricing step and Bid Summary always read the
+same numbers. The plan calls this "shared via context"; a hook owned by the
+caller (PcWorkspaceView, alongside everything else it already owns — `ws`,
+`aiResults`, `savedEstimate`) achieves the same sharing with one fewer moving
+part and matches how the rest of that component is built — a deliberate,
+documented deviation from a literal React Context, not an oversight. Debounces
+edits into one `POST /price` 400ms after the last change (two rapid edits
+collapse into a single request — tested), `PUT`s the full set on save
+(clearing `proposed` and dirty), `POST`s `sync-takeoff`.
+
+`LaborPricingStep.tsx`: labor rate/crew size/tax/consumables/small tools/
+supervision/overhead/profit inputs; factor chips grouped by `group_key`,
+mutually exclusive within a group; an unmatched-lines banner opening a
+resolver (search the library, pick an item/assembly, or keep as a manual
+line, via the shared `Modal` component — default z-index tier, since nothing
+here opens from inside a drawer); a table grouped by category with
+inline-editable qty/material-override/hours-override (a "reset" link on an
+edited cell); exclude toggle; "add manual line"; "sync from takeoff"; Save.
+Enter moves focus to the same column in the next row (a small `onKeyDown` on
+the table — Tab already does this natively via DOM order).
+
+**Tests:** 19 (7 `useEstimatingBid`, 12 `LaborPricingStep`, later 13 once the
+malformed-response regression was added in Task 8). Hydration exactly once;
+the debounced recalc; dirty detection; save's payload/proposed-clearing/error
+handling; sync-takeoff's line replacement; rendering from a recap fixture; an
+override edit calling `setLines`; reset-to-library; exclude; the resolver's
+pick and keep-as-manual paths; save-payload shape; factor mutual exclusivity;
+Enter-moves-down-a-column.
+
+## Task 10 — Bid Summary panel
+
+**Commit:** `aee02ce`
+**Files:** `BidSummary.{tsx,test.tsx}`.
+
+Reads the same recap `LaborPricingStep` prices from (both are handed the same
+`useEstimatingBid` slices by their common caller). Material (incl. tax/
+consumables), labor hours + $, small tools, overhead, profit, the total (an
+"Unsaved" tag while `proposed`), $/SF, crew-weeks, a $/SF-vs-comparables bar
+(marker placed proportionally between the comps' min/max $/SF), a warnings
+list (unmatched/VERIFY are click-to-jump — wired to `onSelectStep('pricing'
+| 'takeoff')` in Task 8's integration; $0-material/unverified-share/excluded
+are informational), and a collapsible Insights section taking today's
+Historical Costs/Win-Rate content as a slot rather than reimplementing it.
+
+**Tests:** 12. Every value from a fixture; unsaved tag presence; em-dash for
+unknown $/SF; no warnings section when clean; warning clicks; informational
+warnings render without being buttons; comps-bar marker math; no bar with no
+comparables; Insights collapsed/expand/absent.
+
+## Task 11 — Settings: Labor Library
+
+**Commit:** `eda552e`
+**Files:** `LaborLibrarySection.{tsx,test.tsx}` (replaces `UnitCostSection`
+in the same nav slot, relabeled "Labor Library"), `categories.ts`,
+`SettingsPage.tsx`, `useAppSettings.ts` (5 new `est_default_*` fields) — plus
+two small backend additions: `routes/settings.ts` (the 5 keys added to
+`ALLOWED_KEYS` — the generic settings PUT already existed) and
+`estimating/calibration.ts` + `routes/estimating.ts`
+(`applyCalibrationAdjustment()` / `POST /calibration/apply`, admin). The
+original Part 1 plan text assigned the apply-button endpoint to "Task 12"
+under the plan's original single 12-task numbering — that's Task 11 in the
+delivered frontend split, so it's built here rather than left for later.
+
+Items (searchable, category filter, unverified-price-only filter, inline
+edit material $/labor hours/price date, source badge, deactivate with an
+Undo banner), Assemblies (component `qty_per` editor), Labor Factors (label/
+pct/active), Defaults (the 5 `est_default_*` keys — overhead %/profit %/crew
+size are per-bid-only defaults with no global settings key in this phase, per
+Task 1's original schema, and the Defaults panel says so rather than
+pretending to control them), Calibration (Task 6's report, "Apply suggested
+adjustment" per-category or global behind a confirm dialog).
+
+**A real test-hygiene lesson repeated from Part 1, applied proactively this
+time:** the calibration-apply backend test never runs `scope: 'global'`
+against the real shared library — doing so would permanently multiply every
+one of the ~139 seeded items' `labor_hours` for every future test run on this
+database. It's scoped to a test-only category and proven against a second,
+untouched test-only category instead.
+
+**Tests:** 16 (9 frontend, 7 backend). Edit-and-blur PUTs the right payload
+and no-ops when unchanged; deactivate requires confirmation and shows a
+working Undo; calibration apply posts the correct scope/category/pct payload
+for both global and per-category; Defaults enables Save only once edited;
+backend admin-only + 400s + the multiply-by-`(1+pct/100)`/`source=calibrated`
+behavior.
+
+## Tasks 8 + 12 (partial) — re-homing, integration, lazy chunk
+
+**Commit:** `be340f6`
+
+### Task 8 — re-home existing step content
+
+`PcWorkspaceView.tsx`'s render replaced: `StepTracker`+`TabStrip`+`renderTab()`
+→ `EstimateShell` (via the new lazy `EstimatingWorkspace` wrapper, see Task
+12 below) + `renderStepContent(step)`, which stacks the plan's exact
+groupings per step:
+- **Documents:** `FilesTab` + `PreBidTab`.
+- **Takeoff:** `BidTab` + `TakeoffTab` (same confirm-key-data soft gate,
+  unchanged).
+- **Labor & Pricing:** `LaborPricingStep`, sourced from `useEstimatingBid`.
+- **Scope & RFIs:** `ScopeTab` + `RfisTab`.
+- **Review & Proposal:** a new pre-send checklist (reads the new engine's
+  `unmatchedCount`/`verifyCount`/`unverifiedMaterialShare` warnings,
+  informational only) + the unchanged `ProposalTab` (its own `verifyBid` gate
+  remains the real gate, per the plan).
+- **Insights** (Historical Costs + Win-Rate) moved into `BidSummary`'s
+  collapsible slot instead of being separate tabs.
+- **Overview** is dropped entirely, per the plan's explicit instruction to
+  remove the duplicate Overview/Files tabs — its content (stats row, notes
+  textarea, `ImportPanel`, the takeoff-on-file list, "Advance to Next Step")
+  had no un-duplicated equivalent to re-home into the new 5-step shape.
+
+Step status is derived from real data (`ws.files.length`, `aiResults.
+agent1_output` + `ws.confirmedService?.confirmed`, `!estimatingBid.proposed
+&& estimatingBid.lines.length>0 && !unmatchedCount`, any non-empty
+`ws.scope` value, `ws.proposalGenerated`). Current step is a URL param
+(`useEstimateStepParam`, seeded from `mapLegacyTabToStep(ws.activeTab)`);
+selecting a step also writes `stepToLegacyTab(step)` back into `ws.activeTab`
+so the persisted DB column stays populated with something a stale
+reload/old build still understands. `useUnsavedGuard` gets a **second**
+registration (`estimatingBid.dirty`) alongside the pre-existing
+`pricingDirty` one — both real, independently registered, no conflict.
+
+**Two real bugs found by mounting this against the ~15 existing
+PcWorkspaceView tests**, both fixed at the shared-module level:
+
+1. **`useEstimateStepParam` threw outside a Router.** Nearly every existing
+   PcWorkspaceView test renders it standalone with no `<MemoryRouter>` (it
+   had no router dependency before this task). `useSearchParams()` throwing
+   mid-render corrupted React's hook order for the rest of that render,
+   cascading into unrelated-looking `Cannot read properties of undefined`
+   crashes elsewhere in the same test file. Fixed by branching on
+   `useInRouterContext()` (which never throws): outside a Router, the step
+   is local `useState` instead of a URL param. `inRouter` is invariant for a
+   given mounted instance (whether a Router wraps you is a static fact about
+   where you're rendered), so the conditional-hook-call shape is safe despite
+   looking like a Rules-of-Hooks violation — documented inline. Added a test
+   for the outside-Router path.
+2. **`useEstimatingBid` crashed on a malformed GET response.**
+   `BidHubPage.test.tsx`'s blanket `get` mock returns `{ data: [] }` for
+   *every* URL (not estimating-specific); the hydration effect assumed
+   `data.lines`/`data.settings`/`data.recap` were always present and crashed
+   on `undefined.length`. Now falls back to safe empty defaults. Added a
+   regression test.
+
+**Test fallout from retiring `PricingTab`/`OverviewTab`**, resolved per file
+rather than left broken (per the plan, only the *re-homed* components'
+existing tests are protected — `PricingTab` is explicitly replaced by Task 9,
+`OverviewTab` explicitly dropped):
+- **Deleted:** `PcWorkspacePricing.test.tsx` (13 tests — `PricingTab`'s own
+  hydration/confidence-chip/save-toast behavior; superseded by
+  `LaborPricingStep.test.tsx`), `PcWorkspaceGlobalCache.test.tsx` (1 test —
+  the retired flat `unit_cost_library` reprice-on-Settings-save path),
+  `PcWorkspaceProfiler.test.tsx` (2 tests — a render-boundary/element-count
+  guard specifically for `PricingTab`'s per-row `PricingRow` memoization,
+  which doesn't exist in the same shape in the new table architecture; an
+  equivalent guard for `LaborPricingStep` would be a reasonable follow-up,
+  not attempted here), `PcWorkspaceTakeoff.test.tsx` (1 test, and the file's
+  *entire* remaining content — the Overview tab's "Quantity Takeoff on File"
+  null-quantity rendering, now nowhere in the UI).
+- **Rewritten:** `PcWorkspacePricingDirtyGuard.test.tsx` — the
+  `bid_estimates`/`bid_workspaces` hydration-race mechanism it guarded is
+  retired with `PricingTab` (the new engine has one data source, no race to
+  guard); rewritten to prove the plan's actual ask instead — unsaved Labor &
+  Pricing edits arm `useConfirmLeave`, Save clears it — using the *same*
+  `useConfirmLeave`/`UnsavedGuardProvider` harness as before. (One of its
+  three new tests initially failed non-deterministically because
+  `findByDisplayValue('10')` matched either the qty input or the Overhead %
+  settings input — both default to `10` in the fixture; fixed by targeting
+  the qty cell's `data-field` attribute instead.)
+- **Edited:** `PcWorkspaceAutosave.test.tsx` — its trigger (the Overview
+  tab's Notes textarea) is gone; every edit now goes through the Scope &
+  RFIs step's Section A textarea instead (the autosave debounce/retry/
+  backoff/StrictMode mechanism under test doesn't care which watched `ws`
+  field changes). The save-state assertions moved from `pc-save-state` to
+  `est-save-state`. Also needed a `beforeAll` pre-warm of the Task 12 lazy
+  chunk's dynamic import — see below.
+
+### Task 12 (partial) — lazy chunk only
+
+`EstimatingWorkspace.tsx` is the one module `PcWorkspaceView`
+`React.lazy()`-imports: `EstimateShell` + `BidSummary` + `LaborPricingStep`
+(and their CSS) ship as their own chunk instead of growing the main bundle,
+inside a `<Suspense fallback={...}>` boundary matching the app's existing
+`App.tsx` pattern. The re-homed old tabs (computed by `renderStepContent`,
+still eagerly bundled — correct, since they were already part of the main
+bundle before this plan) are passed in as an already-rendered
+`otherStepContent` child, not re-imported inside the lazy chunk.
+
+This broke `PcWorkspaceAutosave.test.tsx`'s fake-timer-based flushing: the
+first-ever resolution of a real dynamic `import()` under fake timers didn't
+reliably settle within a couple of bare `act()` flushes, leaving the
+Suspense fallback on screen when the test tried to find the Scope textarea.
+Fixed with a `beforeAll` that awaits the same dynamic import once, with real
+timers, before any test in the file runs — every render after that hits
+React.lazy's already-resolved internal promise and paints synchronously,
+same as it will in production once a user's browser has fetched the chunk
+once.
+
+**The rest of Task 12 is deferred**, not attempted this pass given the time
+already spent on Tasks 7–11 and the Task 8 integration/test-fallout work:
+- A consistent heading style across the five steps' work-area headers.
+- Further inline-style-to-class extraction — `EstimateShell.tsx`/
+  `BidSummary.tsx` already use `estimating.css` classes throughout;
+  `LaborPricingStep.tsx`'s settings-row/factor-chip/table structure does too,
+  but its resolver `Modal`'s inner layout and the Review step's pre-send
+  checklist banner (in `PcWorkspaceView.tsx`) still use inline styles.
+- An explicit, single-action empty state per step (e.g. "Upload plans" on an
+  empty Documents step) — Documents/Takeoff currently show whatever the
+  re-homed old tab's own empty state already was (still reasonable, just not
+  audited against the plan's "single clear action" wording).
+- Explicit light/dark-theme verification — moot: there is no light theme
+  anywhere in this codebase (confirmed during research), so nothing to
+  verify.
+
+## Final test counts
+
+- **Backend:** 918 passed, 3 failed, 921 total (up from Part 1's 915/918 —
+  net +3 from Task 11's `calibration/apply` backend tests; Part 2 touched no
+  other backend logic). 108 test files, 1 failing (`notificationsRetention.
+  test.ts`, the same pre-existing flake noted throughout — on the final full
+  run it manifested as a native worker crash rather than 3 graceful
+  assertion failures, an intensified but still pre-existing, still
+  code-unrelated symptom; re-running it in isolation reproduces the same
+  crash independent of anything in this branch).
+- **Frontend:** 631 passed, 0 failed, 631 total, 89 files — up from the
+  579-test baseline. Every estimating-related test is green; the one
+  baseline flake (`SurveyMarkupEditor.test.tsx`) did not reproduce on the
+  final full run (confirmed independently flaky by re-running it in
+  isolation, where it also passes).
+
+## What's deferred (Part 2), and why
+
+- **The rest of Task 12** — see its section above.
+- **`PricingTab.tsx`/`PricingRow.tsx`/`UnitCostSection.tsx` are not
+  deleted**, even though nothing renders them anymore. Deleting them cleanly
+  would mean also removing their now-dead upstream state in
+  `PcWorkspaceView.tsx` (`savedEstimate`, `pricingLineItems`, `onSaveEstimate`,
+  `onUnitCostChange`/`onOverheadChange`/`onProfitChange`, the `/estimates/
+  :bidId` and `/estimates/unit-costs` fetches) and verifying nothing else
+  imports them — real, contained work, but additional risk on top of an
+  already large diff under time pressure. They're genuinely dead code
+  (confirmed via `grep`, no remaining imports of the CRM-facing components),
+  not still-reachable-by-accident.
+- **A `LaborPricingStep`-specific render-boundary profiler test**, replacing
+  the deleted `PcWorkspaceProfiler.test.tsx` — the old one measured
+  `PricingTab`/`PricingRow`'s specific per-row memoization boundary, which
+  doesn't exist in the same shape in the new table (no separate memoized
+  row component). Writing an equivalent guard for the new architecture is
+  reasonable future work.
+- **Auto-opening BidSummary's Insights section** when a legacy `active_tab`
+  of `costs`/`intel` is the mapping source — the plan calls for this
+  ("costs/intel/compare → pricing (+ open the Insights section)");
+  `legacyTabWantsInsights()` exists in `steps.ts` (tested) but isn't wired to
+  anything, since `BidSummary`'s Insights toggle is self-contained local
+  state with no prop to force it open from outside. A small, low-risk
+  follow-up (add an `initialOpen` prop).
+
+## Everything a reviewer should look at first (Part 2)
+
+1. **`useEstimateStepParam.ts`'s Router-optional branch** and
+   **`useEstimatingBid.ts`'s defensive hydration fallback** — both are
+   real-bug fixes discovered by the existing test suite, not speculative
+   hardening; worth confirming the reasoning holds (`useInRouterContext()`
+   never throws, `inRouter` is genuinely invariant per mounted instance).
+2. **`PcWorkspacePricingDirtyGuard.test.tsx`'s rewrite** — confirm the new
+   dirty-guard tests actually exercise the same user-facing contract the
+   deleted arrival-order tests used to protect a different mechanism for.
+3. **`PcWorkspaceView.tsx`'s `renderStepContent`/`EstimatingWorkspace`
+   wiring** — the biggest, highest-risk diff in Part 2; confirm every
+   re-homed tab still receives the exact same props it did before.
+4. **The deferred items above**, especially the undeleted `PricingTab`/
+   `UnitCostSection` dead code and the un-wired `legacyTabWantsInsights()`.
    test` run against a DB that hasn't seen migration 102 before.
