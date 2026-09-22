@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo, useReducer } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo, useReducer, Suspense } from 'react';
 import { Bid, Toast, BidEstimate, EstimateLineItem } from '../../../types';
 import { PcWorkspace, PcTabKey, ConfirmedService } from '../constants';
 import api from '../../../api/client';
@@ -27,18 +27,29 @@ import { buildLineItemsFromTakeoff, isElecSheet, parseAgent1Service, parseAgentJ
 import { POLL_TIMEOUT_MESSAGE, useAiPoller } from './useAiPoller';
 import { useStableFn } from './useStableFn';
 import { importReducer, initialImportState } from './importReducer';
-import { StepTracker, TabStrip } from './ui';
-import OverviewTab from './OverviewTab';
 import FilesTab from './FilesTab';
 import BidTab from './BidTab';
 import TakeoffTab from './TakeoffTab';
 import ScopeTab from './ScopeTab';
 import RfisTab from './RfisTab';
 import ProposalTab from './ProposalTab';
-import PricingTab from './PricingTab';
 import CostsTab from './CostsTab';
 import IntelTab from './IntelTab';
 import { ImportPanelProps } from './ImportPanel';
+// Task 7/8/9 (estimating redesign) — the new shell replaces StepTracker+
+// TabStrip's chrome; LaborPricingStep+useEstimatingBid replace PricingTab
+// (still present, unrendered — see the estimating report for why it wasn't
+// deleted outright); BidSummary takes CostsTab/IntelTab as its Insights slot.
+import { useEstimateStepParam } from '../../estimating/useEstimateStepParam';
+import { useEstimatingBid } from '../../estimating/useEstimatingBid';
+// Task 12 — EstimateShell/BidSummary/LaborPricingStep (the presentational,
+// bundle-heavy part) load as their own chunk; useEstimateStepParam/
+// useEstimatingBid above are hooks and must stay a static import.
+const EstimatingWorkspace = React.lazy(() => import('../../estimating/EstimatingWorkspace'));
+import { EstimateStepKey, mapLegacyTabToStep, stepToLegacyTab, deriveStepStatus, ESTIMATE_STEPS } from '../../estimating/steps';
+
+const ESTIMATE_STEP_ORDER = ESTIMATE_STEPS.map(s => s.key);
+const ESTIMATE_STEP_LABELS = Object.fromEntries(ESTIMATE_STEPS.map(s => [s.key, s.label])) as Record<EstimateStepKey, string>;
 
 // Stable empty values, so `?? []` does not hand a fresh object to a useMemo
 // dependency list on every render.
@@ -125,6 +136,18 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const { data: takeoffOnFile, reload: reloadTakeoff } = useApi<TakeoffOnFile>(`/preconstruction/${bid.id}/takeoff`);
   const { data: bidIntel } = useApi<Record<string, unknown>>(`/preconstruction/intelligence/${bid.id}`);
   const unitCostLibData = useGlobalPcCache(unitCostLibCache, '/estimates/unit-costs');
+  // Task 10 — Bid Summary's $/SF-vs-comparables bar reuses the same
+  // /comparables data the Compare tab and Overview's SimilarBidsPanel read.
+  const { data: comparablesData } = useApi<{ comparables?: { amount: string | null; sq_ft: number | null }[] }>(
+    `/preconstruction/${bid.id}/comparables`
+  );
+  const comparablesForSummary = useMemo(
+    () => (comparablesData?.comparables ?? []).map(c => ({
+      amount: c.amount != null ? Number(c.amount) : null,
+      sqFt: c.sq_ft != null ? Number(c.sq_ft) : null,
+    })),
+    [comparablesData]
+  );
   const unitCostLib = useMemo(() => unitCostLibData ?? EMPTY_UNIT_COST_LIB, [unitCostLibData]);
   const [openTakeoffCat, setOpenTakeoffCat] = useState<string | null>(null);
   const saveTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -961,8 +984,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     });
   };
 
-  const tab = ws.activeTab;
-
   // ── Handlers handed to the memoized tabs ──────────────────────────────
   // useStableFn keeps each identity fixed for the life of the workspace while
   // still calling the latest closure, so a tab only re-renders when the data it
@@ -991,7 +1012,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const onSaveEstimate = useStableFn(() => { void saveEstimate(); });
   const onReadImportFiles = useStableFn(() => { void readImportFiles(); });
   const onSaveImportedBid = useStableFn(() => { void saveImportedBid(); });
-  const onSelectTab = useStableFn((key: PcTabKey) => { set({ activeTab: key }); });
   const onGoTakeoff = useStableFn(() => { set({ activeTab: 'takeoff' }); });
   const onUnitCostChange = useStableFn((key: string, value: number) => {
     set(prev => ({ estimateOverrides: { ...prev.estimateOverrides, [key]: value } }));
@@ -1006,178 +1026,183 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     saveImportedBid: onSaveImportedBid,
   }), [importState, onReadImportFiles, onSaveImportedBid]);
 
-  const renderTab = () => {
-    switch (tab) {
-      case 'prebid':
-        return <PreBidTab bidId={bid.id} onSectionsLoaded={setPrebidSections}/>;
+  // Task 7's five-step shell: `currentStep` is its own URL-backed piece of
+  // state (?step=<key>), initialized from the legacy persisted ws.activeTab
+  // the first time this bid's URL has no step param. Selecting a step also
+  // writes a representative legacy tab key back into ws.activeTab so
+  // bid_workspaces.active_tab (still a real, autosaved DB column) stays
+  // populated with something a stale reload/old build still understands.
+  const [currentStep, setCurrentStepParam] = useEstimateStepParam(mapLegacyTabToStep(ws.activeTab));
+  const onSelectStep = useStableFn((step: EstimateStepKey) => {
+    setCurrentStepParam(step);
+    set({ activeTab: stepToLegacyTab(step) });
+  });
 
-      case 'overview':
-        return (
-          <OverviewTab
-            ws={ws}
-            set={set}
-            advanceStep={onAdvanceStep}
-            takeoffOnFile={takeoffOnFile}
-            openTakeoffCat={openTakeoffCat}
-            setOpenTakeoffCat={setOpenTakeoffCat}
-            importPanel={importPanel}
-          />
-        );
+  const estimatingBid = useEstimatingBid(bid.id);
+  // Task 9 — the new engine's own dirty check, independent of the legacy
+  // pricingDirty registration above (both are real, harmless to register
+  // twice — see useUnsavedGuard's per-call `id`).
+  useUnsavedGuard(estimatingBid.dirty);
 
-      case 'files':
-        return (
-          <FilesTab
-            ws={ws}
-            fileInputRef={fileInputRef}
-            fileObjectsRef={fileObjectsRef}
-            dragOver={dragOver}
-            setDragOver={setDragOver}
-            projectDocs={projectDocs}
-            selectedDocIds={selectedDocIds}
-            setSelectedDocIds={setSelectedDocIds}
-            removeFile={onRemoveFile}
-            clearFiles={onClearFiles}
-            handleFileUpload={onFileUpload}
-            handleDrop={onDrop}
-            viewProjectDoc={onViewProjectDoc}
-            onGoFiles={onGoFiles}
-          />
-        );
+  const doneByStep = deriveStepStatus({
+    hasFiles: ws.files.length > 0,
+    hasTakeoffOutput: !!aiResults?.agent1_output,
+    takeoffConfirmed: !!ws.confirmedService?.confirmed,
+    hasSavedPricingLines: !estimatingBid.proposed && estimatingBid.lines.length > 0,
+    hasUnmatchedNonExcluded: estimatingBid.recap.warnings.unmatchedCount > 0,
+    hasScopeText: Object.values(ws.scope).some(v => (v ?? '').trim().length > 0),
+    proposalFiled: ws.proposalGenerated,
+  });
 
-      case 'bid':
+  // Task 8 — re-homed step content: each step stacks the same existing tab
+  // components on one screen rather than switching between them, with no
+  // change to any of those components' own props/behavior.
+  const renderStepContent = (step: EstimateStepKey) => {
+    switch (step) {
+      case 'documents':
         return (
-          <BidTab
-            ws={ws}
-            set={set}
-            aiResults={aiResults}
-            runAI={onRunAI}
-            resumeAI={onResumeAI}
-            rerunAI={onRerunAI}
-            settings={settings}
-            userRole={userRole}
-          />
+          <>
+            <FilesTab
+              ws={ws}
+              fileInputRef={fileInputRef}
+              fileObjectsRef={fileObjectsRef}
+              dragOver={dragOver}
+              setDragOver={setDragOver}
+              projectDocs={projectDocs}
+              selectedDocIds={selectedDocIds}
+              setSelectedDocIds={setSelectedDocIds}
+              removeFile={onRemoveFile}
+              clearFiles={onClearFiles}
+              handleFileUpload={onFileUpload}
+              handleDrop={onDrop}
+              viewProjectDoc={onViewProjectDoc}
+              onGoFiles={onGoFiles}
+            />
+            <PreBidTab bidId={bid.id} onSectionsLoaded={setPrebidSections}/>
+          </>
         );
 
       case 'takeoff':
         return (
-          <TakeoffTab
-            ws={ws}
-            bid={bid}
-            aiResults={aiResults}
-            analysisTab={analysisTab}
-            setAnalysisTab={setAnalysisTab}
-            copied={copied}
-            copyToClipboard={onCopyToClipboard}
-            svcVoltage={svcVoltage}
-            setSvcVoltage={setSvcVoltage}
-            svcAmpacity={svcAmpacity}
-            setSvcAmpacity={setSvcAmpacity}
-            svcPanel={svcPanel}
-            setSvcPanel={setSvcPanel}
-            handleConfirmService={onConfirmService}
-            settings={settings}
-            userRole={userRole}
-          />
-        );
-
-      case 'scope':
-        return (
-          <ScopeTab
-            ws={ws}
-            set={set}
-            aiResults={aiResults}
-            prebidSections={prebidSections}
-            showToast={showToastStable}
-          />
-        );
-
-      case 'rfis':
-        return (
-          <RfisTab
-            ws={ws}
-            aiResults={aiResults}
-            newRfi={newRfi}
-            setNewRfi={setNewRfi}
-            rfiSubmitting={rfiSubmitting}
-            addRfi={onAddRfi}
-            importRfisFromAnalysis={onImportRfis}
-            submitOpenRfis={onSubmitOpenRfis}
-          />
-        );
-
-      case 'proposal':
-        return (
-          <ProposalTab
-            bid={bid}
-            aiResults={aiResults}
-            propPrice={propPrice}
-            setPropPrice={setPropPrice}
-            propNotes={propNotes}
-            setPropNotes={setPropNotes}
-            agent4StartError={agent4StartError}
-            setAgent4StartError={setAgent4StartError}
-            agent4Running={agent4Running}
-            runAgent4Proposal={onRunAgent4}
-            downloadDocx={onDownloadDocx}
-            docxBusy={docxBusy}
-            downloadTakeoffXlsx={onDownloadTakeoffXlsx}
-            xlsxBusy={xlsxBusy}
-            sendProposalOpen={sendProposalOpen}
-            setSendProposalOpen={setSendProposalOpen}
-            onBidUpdated={onBidUpdatedStable}
-            showToast={showToastStable}
-            generatePrebidPackage={onGeneratePrebidPackage}
-            prebidBusy={prebidBusy}
-            prebidResult={prebidResult}
-            downloadFiledDocument={onDownloadFiledDocument}
-            emailPrebidToChris={onEmailPrebidToChris}
-            chrisDraftBusy={chrisDraftBusy}
-            chrisDraftLink={chrisDraftLink}
-            verifyFailures={verifyFailures}
-            proposalPreview={proposalPreview}
-            convertOpen={convertOpen}
-            setConvertOpen={setConvertOpen}
-            handleConvert={onConvert}
-          />
+          <>
+            <BidTab
+              ws={ws}
+              set={set}
+              aiResults={aiResults}
+              runAI={onRunAI}
+              resumeAI={onResumeAI}
+              rerunAI={onRerunAI}
+              settings={settings}
+              userRole={userRole}
+            />
+            <TakeoffTab
+              ws={ws}
+              bid={bid}
+              aiResults={aiResults}
+              analysisTab={analysisTab}
+              setAnalysisTab={setAnalysisTab}
+              copied={copied}
+              copyToClipboard={onCopyToClipboard}
+              svcVoltage={svcVoltage}
+              setSvcVoltage={setSvcVoltage}
+              svcAmpacity={svcAmpacity}
+              setSvcAmpacity={setSvcAmpacity}
+              svcPanel={svcPanel}
+              setSvcPanel={setSvcPanel}
+              handleConfirmService={onConfirmService}
+              settings={settings}
+              userRole={userRole}
+            />
+          </>
         );
 
       case 'pricing':
+        // Rendered by EstimatingWorkspace itself (the lazy chunk) — see the
+        // Suspense boundary below. otherStepContent is never used for this step.
+        return null;
+
+      case 'scope':
         return (
-          <PricingTab
-            pricingLineItems={pricingLineItems}
-            overheadPct={ws.overheadPct}
-            profitPct={ws.profitPct}
-            confirmedService={ws.confirmedService}
-            hasAgent1Output={!!aiResults?.agent1_output}
-            savedEstimate={savedEstimate}
-            estimateSaved={estimateSaved}
-            savingEstimate={savingEstimate}
-            saveEstimate={onSaveEstimate}
-            onUnitCostChange={onUnitCostChange}
-            onOverheadChange={onOverheadChange}
-            onProfitChange={onProfitChange}
-            onGoTakeoff={onGoTakeoff}
-          />
+          <>
+            <ScopeTab
+              ws={ws}
+              set={set}
+              aiResults={aiResults}
+              prebidSections={prebidSections}
+              showToast={showToastStable}
+            />
+            <RfisTab
+              ws={ws}
+              aiResults={aiResults}
+              newRfi={newRfi}
+              setNewRfi={setNewRfi}
+              rfiSubmitting={rfiSubmitting}
+              addRfi={onAddRfi}
+              importRfisFromAnalysis={onImportRfis}
+              submitOpenRfis={onSubmitOpenRfis}
+            />
+          </>
         );
 
-      case 'costs':
+      case 'review': {
+        const w = estimatingBid.recap.warnings;
+        const hasPreSendFlags = w.unmatchedCount > 0 || w.verifyCount > 0 || w.unverifiedMaterialShare > 0;
         return (
-          <CostsTab
-            historicalCosts={historicalCosts}
-            costTypeFilter={costTypeFilter}
-            setCostTypeFilter={setCostTypeFilter}
-            expandedCostRow={expandedCostRow}
-            setExpandedCostRow={setExpandedCostRow}
-          />
+          <>
+            {hasPreSendFlags && (
+              <div style={{
+                display: 'flex', flexDirection: 'column', gap: 4, padding: '10px 14px',
+                background: 'var(--amber-soft)', borderRadius: 10, color: 'var(--amber)', fontSize: 12.5, fontWeight: 600,
+              }} data-testid="review-presend-checklist">
+                <strong>Before sending — check the estimate:</strong>
+                {w.unmatchedCount > 0 && <span>{w.unmatchedCount} unmatched line{w.unmatchedCount === 1 ? '' : 's'} in Labor &amp; Pricing</span>}
+                {w.verifyCount > 0 && <span>{w.verifyCount} VERIFY quantit{w.verifyCount === 1 ? 'y' : 'ies'} to confirm</span>}
+                {w.unverifiedMaterialShare > 0 && <span>{Math.round(w.unverifiedMaterialShare * 100)}% of material pricing is unverified</span>}
+              </div>
+            )}
+            <ProposalTab
+              bid={bid}
+              aiResults={aiResults}
+              propPrice={propPrice}
+              setPropPrice={setPropPrice}
+              propNotes={propNotes}
+              setPropNotes={setPropNotes}
+              agent4StartError={agent4StartError}
+              setAgent4StartError={setAgent4StartError}
+              agent4Running={agent4Running}
+              runAgent4Proposal={onRunAgent4}
+              downloadDocx={onDownloadDocx}
+              docxBusy={docxBusy}
+              downloadTakeoffXlsx={onDownloadTakeoffXlsx}
+              xlsxBusy={xlsxBusy}
+              sendProposalOpen={sendProposalOpen}
+              setSendProposalOpen={setSendProposalOpen}
+              onBidUpdated={onBidUpdatedStable}
+              showToast={showToastStable}
+              generatePrebidPackage={onGeneratePrebidPackage}
+              prebidBusy={prebidBusy}
+              prebidResult={prebidResult}
+              downloadFiledDocument={onDownloadFiledDocument}
+              emailPrebidToChris={onEmailPrebidToChris}
+              chrisDraftBusy={chrisDraftBusy}
+              chrisDraftLink={chrisDraftLink}
+              verifyFailures={verifyFailures}
+              proposalPreview={proposalPreview}
+              convertOpen={convertOpen}
+              setConvertOpen={setConvertOpen}
+              handleConvert={onConvert}
+            />
+          </>
         );
-
-      case 'intel':
-        return <IntelTab bidIntel={bidIntel}/>;
+      }
 
       default:
         return null;
     }
   };
+
+  const nextStepIdx = ESTIMATE_STEP_ORDER.indexOf(currentStep) + 1;
+  const nextStep = ESTIMATE_STEP_ORDER[nextStepIdx];
 
   return (
     <>
@@ -1193,12 +1218,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         </div>
       )}
 
-      {/* Step tracker */}
-      <div style={{ padding: '16px 24px 12px', borderBottom: '1px solid var(--border)' }}>
-        <StepTracker current={ws.step}/>
-      </div>
-
-      <TabStrip activeTab={ws.activeTab} onSelect={onSelectTab} saveState={saveState}/>
       {pollTimedOut && (
         <div data-testid="pc-poll-timeout" style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '8px 24px',
@@ -1212,8 +1231,41 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         </div>
       )}
 
-      {/* Tab content */}
-      {renderTab()}
+      <Suspense fallback={<div style={{ padding: 32, color: 'var(--text3)' }}>Loading…</div>}>
+        <EstimatingWorkspace
+          currentStep={currentStep}
+          onSelectStep={onSelectStep}
+          doneByStep={doneByStep}
+          saveState={saveState}
+          nextAction={nextStep ? { label: ESTIMATE_STEP_LABELS[nextStep], onClick: () => onSelectStep(nextStep) } : null}
+          lines={estimatingBid.lines}
+          settings={estimatingBid.settings}
+          recap={estimatingBid.recap}
+          proposed={estimatingBid.proposed}
+          saving={estimatingBid.saving}
+          syncing={estimatingBid.syncing}
+          saveError={estimatingBid.saveError}
+          setLines={estimatingBid.setLines}
+          setSettings={estimatingBid.setSettings}
+          save={estimatingBid.save}
+          syncTakeoff={estimatingBid.syncTakeoff}
+          showToast={showToastStable}
+          comparables={comparablesForSummary}
+          insights={
+            <>
+              <CostsTab
+                historicalCosts={historicalCosts}
+                costTypeFilter={costTypeFilter}
+                setCostTypeFilter={setCostTypeFilter}
+                expandedCostRow={expandedCostRow}
+                setExpandedCostRow={setExpandedCostRow}
+              />
+              <IntelTab bidIntel={bidIntel}/>
+            </>
+          }
+          otherStepContent={renderStepContent(currentStep)}
+        />
+      </Suspense>
     </div>
     {docPreview && (
       <FilePreviewModal

@@ -54,3 +54,12 @@ describe('useEstimateStepParam', () => {
     expect(screen.getByTestId('tab-param').textContent).toBe('estimating'); // untouched
   });
 });
+
+describe('useEstimateStepParam — outside a Router', () => {
+  it('degrades to local component state instead of throwing (most PcWorkspaceView tests render with no Router)', () => {
+    const { result } = renderHook(() => useEstimateStepParam('documents'));
+    expect(result.current[0]).toBe('documents');
+    act(() => { result.current[1]('review'); });
+    expect(result.current[0]).toBe('review');
+  });
+});

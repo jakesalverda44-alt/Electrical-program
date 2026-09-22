@@ -56,15 +56,20 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
   const aliveRef = useRef(true);
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
 
-  // Hydrate once per bid from the initial GET.
+  // Hydrate once per bid from the initial GET. Defensive against a malformed/
+  // generic response (e.g. a test's blanket `get` mock returning `{ data: [] }`
+  // for every URL, not just this one) — falls back to safe empty defaults
+  // rather than letting `undefined.length` crash the render.
   useEffect(() => {
     if (!data || hydratedRef.current) return;
     hydratedRef.current = true;
-    setLinesState(data.lines);
-    setSettingsState(data.settings);
-    setRecap(data.recap);
-    setProposed(data.proposed);
-    persistedRef.current = { lines: data.lines, settings: data.settings };
+    const lines = Array.isArray(data.lines) ? data.lines : [];
+    const nextSettings = data.settings ?? DEFAULT_SETTINGS;
+    setLinesState(lines);
+    setSettingsState(nextSettings);
+    setRecap(data.recap ?? EMPTY_RECAP);
+    setProposed(!!data.proposed);
+    persistedRef.current = { lines, settings: nextSettings };
   }, [data]);
 
   // Bid changed (e.g. navigated to a different bid within the same mounted tree) — re-hydrate.

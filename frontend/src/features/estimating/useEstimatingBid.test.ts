@@ -48,6 +48,17 @@ describe('useEstimatingBid — hydration', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.dirty).toBe(true);
   });
+
+  it('falls back to safe empty defaults for a malformed/generic response instead of crashing (regression: a blanket test mock returning { data: [] } for every GET)', async () => {
+    get.mockResolvedValue({ data: [] });
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.lines).toEqual([]);
+    expect(result.current.settings).toEqual(DEFAULT_SETTINGS);
+    expect(result.current.recap).toEqual(EMPTY_RECAP);
+    expect(result.current.proposed).toBe(false);
+    expect(result.current.dirty).toBe(false);
+  });
 });
 
 describe('useEstimatingBid — live recalc', () => {
