@@ -1,0 +1,150 @@
+// Task 10 — Bid Summary panel. Reads the latest recap (shared via the same
+// data the Labor & Pricing step prices from, so both always show the same
+// numbers) and renders it as the shell's right-hand (or collapsible/bottom,
+// on smaller breakpoints) summary.
+import React, { useState } from 'react';
+import { moneyFull, moneyDec } from '../../lib/money';
+import { PricingRecap } from './types';
+
+export interface ComparableForSummary {
+  amount: number | null;
+  sqFt: number | null;
+}
+
+export interface BidSummaryProps {
+  recap: PricingRecap;
+  proposed: boolean;
+  comparables?: ComparableForSummary[];
+  onJumpToUnmatched?: () => void;
+  onJumpToVerify?: () => void;
+  insights?: React.ReactNode;
+}
+
+function pctLabel(share: number): string {
+  return `${Math.round(share * 100)}%`;
+}
+
+export function BidSummary({ recap, proposed, comparables, onJumpToUnmatched, onJumpToVerify, insights }: BidSummaryProps) {
+  const [insightsOpen, setInsightsOpen] = useState(false);
+  const { totals, warnings } = recap;
+  const materialAllIn = totals.materialSubtotal + totals.consumables + totals.materialTax;
+
+  const compsPerSf = (comparables ?? [])
+    .filter((c): c is { amount: number; sqFt: number } => c.amount != null && c.sqFt != null && c.sqFt > 0)
+    .map(c => c.amount / c.sqFt);
+  const compsMin = compsPerSf.length ? Math.min(...compsPerSf) : null;
+  const compsMax = compsPerSf.length ? Math.max(...compsPerSf) : null;
+
+  return (
+    <div data-testid="bid-summary">
+      <div className="bs-section">
+        <div className="bs-row">
+          <span>Material (incl. tax/consumables)</span>
+          <span className="bs-row-value" data-testid="bs-material">{moneyFull(materialAllIn)}</span>
+        </div>
+        <div className="bs-row">
+          <span>Labor ({totals.laborHours.toFixed(1)} hrs)</span>
+          <span className="bs-row-value" data-testid="bs-labor">{moneyFull(totals.laborCost)}</span>
+        </div>
+        <div className="bs-row">
+          <span>Small tools</span>
+          <span className="bs-row-value" data-testid="bs-small-tools">{moneyFull(totals.smallTools)}</span>
+        </div>
+        <div className="bs-row">
+          <span>Overhead</span>
+          <span className="bs-row-value" data-testid="bs-overhead">{moneyFull(totals.overhead)}</span>
+        </div>
+        <div className="bs-row">
+          <span>Profit</span>
+          <span className="bs-row-value" data-testid="bs-profit">{moneyFull(totals.profit)}</span>
+        </div>
+      </div>
+
+      <div className="bs-total">
+        <span className="bs-total-label">
+          Total
+          {proposed && <span className="bs-unsaved-tag" data-testid="bs-unsaved-tag">Unsaved</span>}
+        </span>
+        <span className="bs-total-value" data-testid="bs-grand-total">{moneyFull(totals.grandTotal)}</span>
+      </div>
+
+      <div className="bs-section">
+        <div className="bs-row">
+          <span>$/SF</span>
+          <span className="bs-row-value" data-testid="bs-sell-per-sf">
+            {totals.sellPerSf != null ? moneyDec(totals.sellPerSf) : '—'}
+          </span>
+        </div>
+        <div className="bs-row">
+          <span>Crew-weeks</span>
+          <span className="bs-row-value" data-testid="bs-crew-weeks">{totals.crewWeeks.toFixed(1)}</span>
+        </div>
+
+        {totals.sellPerSf != null && compsMin != null && compsMax != null && (
+          <div data-testid="bs-comps-bar-wrap">
+            <div className="bs-row"><span>$/SF vs comparables</span></div>
+            <div className="bs-comps-bar" data-testid="bs-comps-bar">
+              {compsMax > compsMin && (
+                <div
+                  className="bs-comps-bar-marker"
+                  data-testid="bs-comps-bar-marker"
+                  style={{ left: `${Math.max(0, Math.min(100, ((totals.sellPerSf - compsMin) / (compsMax - compsMin)) * 100))}%` }}
+                />
+              )}
+            </div>
+            <div className="bs-row" style={{ fontSize: 11 }}>
+              <span>{moneyDec(compsMin)}</span>
+              <span>{moneyDec(compsMax)}</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {(warnings.unmatchedCount > 0 || warnings.verifyCount > 0 || warnings.zeroMaterialMatchedCount > 0
+        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0) && (
+        <div className="bs-section" data-testid="bs-warnings">
+          {warnings.unmatchedCount > 0 && (
+            <button type="button" className="bs-warning" data-testid="bs-warning-unmatched" onClick={onJumpToUnmatched}>
+              {warnings.unmatchedCount} unmatched line{warnings.unmatchedCount === 1 ? '' : 's'}
+            </button>
+          )}
+          {warnings.verifyCount > 0 && (
+            <button type="button" className="bs-warning" data-testid="bs-warning-verify" onClick={onJumpToVerify}>
+              {warnings.verifyCount} VERIFY quantit{warnings.verifyCount === 1 ? 'y' : 'ies'}
+            </button>
+          )}
+          {warnings.zeroMaterialMatchedCount > 0 && (
+            <div className="bs-warning" data-testid="bs-warning-zero-material" style={{ cursor: 'default' }}>
+              $0 material on {warnings.zeroMaterialMatchedCount} matched line{warnings.zeroMaterialMatchedCount === 1 ? '' : 's'}
+            </div>
+          )}
+          {warnings.unverifiedMaterialShare > 0 && (
+            <div className="bs-warning" data-testid="bs-warning-unverified" style={{ cursor: 'default' }}>
+              {pctLabel(warnings.unverifiedMaterialShare)} of material is unverified pricing
+            </div>
+          )}
+          {warnings.excludedCount > 0 && (
+            <div className="bs-warning" data-testid="bs-warning-excluded" style={{ cursor: 'default', color: 'var(--text3)' }}>
+              {warnings.excludedCount} line{warnings.excludedCount === 1 ? '' : 's'} excluded
+            </div>
+          )}
+        </div>
+      )}
+
+      {insights && (
+        <div>
+          <button
+            type="button"
+            className="bs-insights-toggle"
+            data-testid="bs-insights-toggle"
+            aria-expanded={insightsOpen}
+            onClick={() => setInsightsOpen(v => !v)}
+          >
+            {insightsOpen ? '▾' : '▸'} Insights
+          </button>
+          {insightsOpen && <div data-testid="bs-insights-body">{insights}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
