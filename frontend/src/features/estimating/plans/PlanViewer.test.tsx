@@ -188,6 +188,69 @@ describe('PlanViewer — cleanup', () => {
   });
 });
 
+// Fix round 1 / N7 — "The viewer's file GET has no AbortController.
+// Switching documents keeps downloading the old 150MB in the background."
+// Verified explicitly here (it was fixed as part of this round's B9 work,
+// but had no dedicated test of its own).
+describe('PlanViewer — the file GET has a real AbortController, and no fixed timeout (N7)', () => {
+  it('sends timeout: 0 (no ceiling on the transfer) and an AbortSignal', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+
+    render(<PlanViewer {...baseProps()} />);
+
+    await waitFor(() => expect(get).toHaveBeenCalledWith(
+      '/estimating/bid1/sheets/doc-1/file',
+      expect.objectContaining({ timeout: 0, signal: expect.any(AbortSignal) })
+    ));
+  });
+
+  it('aborts the in-flight request\'s signal on unmount, before the fetch ever resolves', async () => {
+    let resolveGet!: (v: { data: ArrayBuffer }) => void;
+    get.mockReturnValueOnce(new Promise(res => { resolveGet = res; }));
+
+    const { unmount } = render(<PlanViewer {...baseProps()} />);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+    const signal = (get.mock.calls[0][1] as { signal: AbortSignal }).signal;
+    expect(signal.aborted).toBe(false);
+
+    unmount();
+    expect(signal.aborted).toBe(true);
+
+    // The fetch resolving AFTER unmount must not crash or try to open a
+    // document for an unmounted component (the existing `cancelled` guard
+    // covers this; asserted here as a sanity check specific to this path).
+    resolveGet({ data: new ArrayBuffer(8) });
+    await Promise.resolve();
+    expect(openPdfDocument).not.toHaveBeenCalled();
+  });
+
+  it('aborts the OLD document\'s in-flight request when documentId changes mid-fetch — never the new one', async () => {
+    let resolveFirst!: (v: { data: ArrayBuffer }) => void;
+    get.mockReturnValueOnce(new Promise(res => { resolveFirst = res; }));
+
+    const { rerender } = render(<PlanViewer {...baseProps({ documentId: 'doc-1' })} />);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+    const firstSignal = (get.mock.calls[0][1] as { signal: AbortSignal }).signal;
+
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    get.mockResolvedValueOnce({ data: new ArrayBuffer(8) }); // the SECOND (doc-2) request
+
+    act(() => { rerender(<PlanViewer {...baseProps({ documentId: 'doc-2', sheet: sheet({ document_id: 'doc-2' }) })} />); });
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    const secondSignal = (get.mock.calls[1][1] as { signal: AbortSignal }).signal;
+
+    expect(firstSignal.aborted).toBe(true); // the abandoned doc-1 fetch
+    expect(secondSignal.aborted).toBe(false); // the live doc-2 fetch, untouched
+
+    resolveFirst({ data: new ArrayBuffer(8) }); // resolving the stale one must not crash
+    await waitFor(() => expect(openPdfDocument).toHaveBeenCalledTimes(1)); // only doc-2's
+  });
+});
+
 // Task 9 (deferral closed) — visible-region tiling past the canvas-area
 // cap. Real timers (not faked): the 200ms debounce is short enough to
 // just wait out in these few tests rather than fake-timer-juggling the
