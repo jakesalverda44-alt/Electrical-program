@@ -44,6 +44,8 @@ import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
 import { runCountingStage } from '../ai/countingStage';
 import { writeAiCountMarkers } from '../estimating/aiMarkers';
+import { buildReviewItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, type ReviewItem } from '../ai/reviewItems';
+import { takeoffGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
 import { composeBidData, ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
 import { resolveUniqueJobNumber } from '../bidstd/boilerplate';
 import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
@@ -749,9 +751,18 @@ export async function runPipeline(
       logger.warn({ err, bidId }, '[takeoff] writing AI count markers failed');
       (stage.countResult as unknown as Record<string, unknown>).markers = { error: 'suggested markers could not be written' };
     }
+    // Task 7 — the Needs-review list. A re-run keeps the estimator's earlier
+    // resolutions for the same items (their work is never discarded).
+    const { rows: prevRows } = await pool.query('SELECT review_items FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    const reviewItems = carryOverResolutions(
+      buildReviewItems(stage.countResult, []),
+      (prevRows[0]?.review_items as ReviewItem[] | null) ?? null,
+    );
     await pool.query(
-      `UPDATE takeoff_results SET agent1_output=$1, count_result=$2, usage_counter=$3, model_counter=$4 WHERE bid_id=$5`,
-      [agent1Output, JSON.stringify(stage.countResult), JSON.stringify(stage.usage), config.modelCounter, bidId]
+      `UPDATE takeoff_results SET agent1_output=$1, count_result=$2, usage_counter=$3, model_counter=$4,
+         review_items=$5, review_status=$6 WHERE bid_id=$7`,
+      [agent1Output, JSON.stringify(stage.countResult), JSON.stringify(stage.usage), config.modelCounter,
+       JSON.stringify(reviewItems), reviewStatus(reviewItems), bidId]
     );
   } catch (err) {
     const message = isAgentTruncatedError(err) ? (err as Error).message : `Counting stage failed: ${describeAIError(err)}`;
@@ -1510,6 +1521,40 @@ router.post('/:bidId/rfi-draft', requireAuth, asyncHandler(async (req: AuthReque
   res.json({ draftWebLink: draft.webLink, submittedCount: open.length, submittedIds: openIds, rfis: updatedRfis });
 }));
 
+// ── Takeoff accuracy Task 7: the Needs-review list ─────────────────────────
+router.get('/:bidId/review', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
+  res.json(await getTakeoffReview(req.params.bidId));
+}));
+
+// Resolve one or more items the same way: {itemIds, action:'count'|'markers'|
+// 'not_on_job'|'answer', qty?, reason?, answer?}. Every item is validated;
+// nothing is saved unless all of them pass.
+router.post('/:bidId/review/resolve', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const body = req.body as { itemIds?: unknown; action?: unknown; qty?: unknown; reason?: unknown; answer?: unknown };
+  const itemIds = Array.isArray(body.itemIds) ? body.itemIds.filter((x): x is string => typeof x === 'string') : [];
+  const action = body.action;
+  if (!itemIds.length) return res.status(400).json({ error: 'itemIds required' });
+  if (action !== 'count' && action !== 'markers' && action !== 'not_on_job' && action !== 'answer') {
+    return res.status(400).json({ error: 'action must be count, markers, not_on_job or answer' });
+  }
+  const out = await resolveReviewItems(bidId, itemIds, { action, qty: body.qty, reason: body.reason, answer: body.answer }, req.user!.name);
+  if (!out.ok) return res.status(out.status).json({ error: out.error });
+  res.json(out.review);
+}));
+
+router.post('/:bidId/review/reopen', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const itemId = typeof req.body?.itemId === 'string' ? req.body.itemId : '';
+  if (!itemId) return res.status(400).json({ error: 'itemId required' });
+  const out = await reopenReviewItem(bidId, itemId);
+  if (!out.ok) return res.status(out.status).json({ error: out.error });
+  res.json(out.review);
+}));
+
 // GET results for a bid
 router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), async (req: AuthRequest, res) => {
   if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
@@ -1735,8 +1780,13 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   }
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
 
+  // Takeoff accuracy Task 7 — zero/unreadable counts and unanswered scope
+  // questions block the proposal until the estimator resolves them.
+  const gate = await takeoffGate(bidId);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+
   const { rows: trRows } = await pool.query(
-    'SELECT agent1_output, agent2_output FROM takeoff_results WHERE bid_id=$1',
+    'SELECT agent1_output, agent2_output, review_items FROM takeoff_results WHERE bid_id=$1',
     [bidId]
   );
   if (!trRows.length || !trRows[0].agent2_output) {
@@ -1778,6 +1828,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
     agent2Output,
     workspaceScope,
     savedEstimate,
+    reviewResolutions: reviewResolutionsForAgent4(trRows[0].review_items as ReviewItem[] | null),
   });
 
   (async () => {
@@ -1793,10 +1844,17 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
       const rawText = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');
       const parsed = parseAIJSON(rawText);
       if (!parsed) {
-        logger.warn({ bidId, preview: rawText.slice(0, 300) }, '[agent4] Could not parse JSON from response');
+        // Takeoff accuracy Task 1 follow-up (a live AutoZone failure that only
+        // logged a 300-char preview): log AND report why — stop_reason, output
+        // tokens and the TAIL of the raw text (a cut-off reply is visible at
+        // the end, never at the start). A max_tokens stop never gets here:
+        // assertNotTruncated above already failed it with "raise Max Tokens".
+        const outTokens = resp.usage?.output_tokens ?? null;
+        const tail = rawText.slice(-300);
+        logger.warn({ bidId, stop_reason: resp.stop_reason, output_tokens: outTokens, max_tokens: config.maxTokensA4, text_length: rawText.length, preview: rawText.slice(0, 200), tail }, '[agent4] Could not parse JSON from response');
         await pool.query(
           `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2`,
-          ['AI response could not be parsed as valid JSON — the output may have been cut off. Try re-running Agent 4.', bidId]
+          [`AI response could not be parsed as valid JSON (stop_reason: ${resp.stop_reason ?? 'unknown'}, ${outTokens ?? '?'} of ${config.maxTokensA4} output tokens, ${rawText.length} characters). Try re-running Agent 4. End of the response: …${tail.replace(/\s+/g, ' ').slice(-200)}`, bidId]
         );
         return;
       }
@@ -2049,6 +2107,8 @@ router.get('/:bidId/proposal-preview', requireAuth, requireAIPermission('view_re
 router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const gate = await takeoffGate(bidId);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
 
   const loaded = await composeCurrentBidData(bidId);
   if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error, ...(loaded.failures ? { failures: loaded.failures } : {}) });
@@ -2176,6 +2236,8 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
 router.get('/:bidId/generate-takeoff-xlsx', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const gate = await takeoffGate(bidId);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
 
   const loaded = await composeCurrentBidData(bidId);
   if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error, ...(loaded.failures ? { failures: loaded.failures } : {}) });

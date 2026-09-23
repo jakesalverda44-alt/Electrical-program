@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { takeoffGate } from '../estimating/takeoffReview';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, canRestore, AuthRequest, ownScopeId } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
@@ -337,6 +338,11 @@ async function loadMostRecentBidDoc(bidId: string, category: string, mimetype: s
 router.post('/:id/draft-proposal', requireAuth, async (req: AuthRequest, res) => {
   const bid = await loadOwnedBid(req, res);
   if (!bid) return;
+
+  // Takeoff accuracy Task 7 — a takeoff with open review items (zero or
+  // unreadable counts, unanswered scope questions) can't be sent.
+  const gate = await takeoffGate(bid.id);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
 
   const to = Array.isArray(req.body?.to)
     ? (req.body.to as unknown[]).map(e => String(e).trim()).filter(Boolean)

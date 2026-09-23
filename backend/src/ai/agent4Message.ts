@@ -40,6 +40,9 @@ export interface Agent4MessageInput {
   agent2Output: string;
   workspaceScope?: Record<string, string> | null;
   savedEstimate?: SavedEstimateContext | null;
+  /** Takeoff accuracy Task 7 — the estimator's resolutions of the Needs-review
+   *  list (reviewResolutionsForAgent4), authoritative over Agents 1/2. */
+  reviewResolutions?: string | null;
 }
 
 function money(n: number | string | null | undefined): string {
@@ -93,6 +96,10 @@ export function buildAgent4UserMessage(input: Agent4MessageInput): string {
         lines.push(`  ${category}: ${money(amount)}`);
       }
     }
+  }
+
+  if (input.reviewResolutions) {
+    lines.push('', input.reviewResolutions);
   }
 
   lines.push(
