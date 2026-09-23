@@ -359,7 +359,17 @@ export function LaborPricingStep({
                       <td>
                         <label style={{ fontSize: 11 }}>
                           <input type="checkbox" checked={!!line.excluded} data-testid={`lp-exclude-${idx}`}
-                            onChange={e => updateLine(idx, { excluded: e.target.checked })} /> excl.
+                            onChange={e => updateLine(idx, {
+                              excluded: e.target.checked,
+                              // Fix round 2 / B2 — an explicit toggle (either
+                              // direction) is a USER decision from this
+                              // point on, not sync-takeoff's; clear the
+                              // sync-driven flag so a later sync-takeoff
+                              // never treats it as "reversible on
+                              // reappearance" for a choice the estimator
+                              // just made themselves.
+                              sync_excluded: false,
+                            })} /> excl.
                         </label>
                         {line.source === 'manual' && (
                           <button type="button" className="lp-reset-btn" style={{ marginLeft: 6 }}

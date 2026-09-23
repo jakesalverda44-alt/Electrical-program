@@ -63,6 +63,19 @@ export interface ClientLineInput {
    *  sets this the moment the estimator edits a takeoff-sourced line's qty
    *  field; it is never inferred server-side from a value diff. */
   qty_overridden?: boolean;
+  /** Fix round 2 / B2 — true when this line's CURRENT excluded=true was set
+   *  BY sync-takeoff because the line vanished from the takeoff, as opposed
+   *  to the estimator deliberately excluding it. A line that reappears in a
+   *  later takeoff un-excludes only when this is true; a user-excluded line
+   *  (this false) stays excluded through a sync. The CLIENT round-trips this
+   *  (received on the last GET/sync-takeoff response, sent back unchanged on
+   *  save for any line it didn't touch) — a plain save is no longer the one
+   *  place that always resets it to false, which used to defeat sync-
+   *  takeoff's own un-exclude-on-reappearance logic on the very next sync.
+   *  The frontend clears it the moment the estimator toggles the exclusion
+   *  checkbox in either direction; saveBidEstimate() also enforces the
+   *  invariant server-side (can never be true while excluded is false). */
+  sync_excluded?: boolean;
   source: 'takeoff' | 'manual';
   sort?: number;
 }
@@ -70,13 +83,6 @@ export interface ClientLineInput {
 export interface BidLineRow extends ClientLineInput {
   id: string;
   sort: number;
-  /** Fix round 1 / B5 — true when this line's CURRENT excluded=true was set
-   *  BY sync-takeoff because the line vanished from the takeoff, as opposed
-   *  to the estimator deliberately excluding it. A line that reappears in a
-   *  later takeoff un-excludes only when this is true; a user-excluded line
-   *  (this false) stays excluded through a sync. Read-only from the client's
-   *  perspective — sync-takeoff is the only writer. */
-  sync_excluded?: boolean;
 }
 
 export interface ClientSettingsInput {
@@ -684,11 +690,18 @@ export async function saveBidEstimate(
          l.assembly_id ?? null, l.item_id ?? null, l.takeoff_key ?? null, l.takeoff_item_id ?? null,
          l.material_unit_override ?? null, l.labor_hours_override ?? null,
          l.confidence ?? null, !!l.excluded, l.source, !!l.qty_overridden,
-         // A plain save always reflects exactly what the caller sent — a line
-         // the client still marks excluded:true here is a USER exclusion
-         // (sync-takeoff is the only writer of sync_excluded:true; a normal
-         // save never sets it).
-         false]
+         // Fix round 2 / B2 — a save round-trips whatever sync_excluded the
+         // client sent (it received it on the last GET/sync-takeoff and
+         // carries it forward on every line it didn't touch), instead of
+         // always writing false. The one invariant enforced here rather than
+         // trusted from the client: sync_excluded can never be true on a
+         // line that isn't excluded at all — the frontend already clears it
+         // the moment the estimator toggles the exclusion checkbox (either
+         // direction), but this guarantees it even if a client build
+         // forgets to. Round 1's bug was hardcoding this to false
+         // unconditionally, which defeated sync-takeoff's own un-exclude-on-
+         // reappearance logic on the very next sync.
+         !!l.excluded && !!l.sync_excluded]
       );
     }
 

@@ -132,6 +132,10 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
       confidence: (raw.confidence as LineConfidence | null) ?? null,
       excluded: !!raw.excluded,
       qty_overridden: !!raw.qty_overridden,
+      // Fix round 2 / B2 — the client round-trips sync_excluded (received on
+      // the last GET/sync-takeoff, carried forward on save); saveBidEstimate
+      // still enforces the excluded-implies-sync_excluded-possible invariant.
+      sync_excluded: !!raw.sync_excluded,
       source: raw.source as 'takeoff' | 'manual',
       sort: typeof raw.sort === 'number' ? raw.sort : undefined,
     });

@@ -313,6 +313,97 @@ describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regression
     expect(ground.excluded).toBe(false); // sync-exclusion reverses itself on reappearance
   });
 
+  it('R2-B2: vanish -> save (any unrelated edit) -> reappear -> the sync-excluded line comes back, note cleared', async (ctx) => {
+    if (!ok) return ctx.skip();
+    // The reviewer's exact sequence: round 1's saveBidEstimate() hardcoded
+    // sync_excluded=false on every save, which meant a save happening
+    // ANYWHERE between the vanish-sync and the reappear-sync silently
+    // converted the sync exclusion into a permanent one — the line never
+    // came back even though sync-takeoff's own un-exclude-on-reappearance
+    // logic was (and still is) correct in isolation.
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    await seedTakeoff(bidId, [
+      { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' },
+      { category: 'Grounding', item: '5/8" x 10\' copper-clad ground rod w/ exothermic connection', qty: 2, unit: 'EA' },
+    ]);
+    await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+
+    // Vanish: Grounding drops out of the takeoff.
+    await seedTakeoff(bidId, [
+      { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' },
+    ]);
+    const vanishSync = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const linesAfterVanish = new Map(vanishSync.body.lines.map((l: { category: string }) => [l.category, l]));
+    const groundVanished = linesAfterVanish.get('Grounding') as { excluded: boolean; sync_excluded: boolean; description: string };
+    expect(groundVanished.excluded).toBe(true);
+    expect(groundVanished.sync_excluded).toBe(true);
+    expect(groundVanished.description).toContain('[No longer in takeoff]');
+
+    // Save any unrelated edit (bump the duplex line's qty) — the client
+    // round-trips whatever it received for the Grounding line, including
+    // sync_excluded, unchanged.
+    const duplexLine = linesAfterVanish.get('Branch Power') as Record<string, unknown>;
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ ...duplexLine, qty: 15 }, groundVanished],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3 },
+    }).expect(200);
+    const afterSave = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    const groundAfterSave = afterSave.body.lines.find((l: { category: string }) => l.category === 'Grounding');
+    expect(groundAfterSave.excluded).toBe(true);
+    expect(groundAfterSave.sync_excluded).toBe(true); // round-tripped through the save, not reset to false
+
+    // Reappear: Grounding is back in the takeoff.
+    await seedTakeoff(bidId, [
+      { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' },
+      { category: 'Grounding', item: '5/8" x 10\' copper-clad ground rod w/ exothermic connection', qty: 2, unit: 'EA' },
+    ]);
+    const reappearSync = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const groundReappeared = reappearSync.body.lines.find((l: { category: string }) => l.category === 'Grounding');
+    expect(groundReappeared.excluded).toBe(false); // line is back
+    expect(groundReappeared.sync_excluded).toBe(false);
+    expect(groundReappeared.description).not.toContain('[No longer in takeoff]'); // note cleared
+  });
+
+  it('R2-B2: toggling exclusion by hand in a save always clears sync_excluded, whichever direction', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await seedTakeoff(bidId, [
+      { category: 'Grounding', item: '5/8" x 10\' copper-clad ground rod w/ exothermic connection', qty: 2, unit: 'EA' },
+    ]);
+    const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const groundLine = syncRes.body.lines[0];
+
+    // A user EXCLUDES a line that was never sync-excluded — even if a buggy
+    // client sent sync_excluded:true alongside it, the server invariant
+    // must not let a non-excluded... in this case an excluded:true,
+    // sync_excluded:true combination from an ordinary user action stand;
+    // the server can't tell intent apart from the payload alone here, so
+    // this proves the OTHER direction of the invariant instead: excluding
+    // via save with sync_excluded left at its prior (false) value stays false.
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ ...groundLine, excluded: true, sync_excluded: false }],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3 },
+    }).expect(200);
+    const afterExclude = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    expect(afterExclude.body.lines[0].excluded).toBe(true);
+    expect(afterExclude.body.lines[0].sync_excluded).toBe(false);
+
+    // The server-side invariant: sync_excluded can never be true while
+    // excluded is false, even if the client mistakenly sends that combination.
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ ...groundLine, excluded: false, sync_excluded: true }],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3 },
+    }).expect(200);
+    const afterUnexclude = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    expect(afterUnexclude.body.lines[0].excluded).toBe(false);
+    expect(afterUnexclude.body.lines[0].sync_excluded).toBe(false); // invariant enforced server-side
+  });
+
   it('never drops a line when the takeoff has duplicate category+item keys', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
