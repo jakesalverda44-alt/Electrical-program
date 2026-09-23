@@ -397,3 +397,139 @@ failure is a known flake or load timeout, with evidence:
   can no longer attach the .docx fallback for a bid analysed with run ids.
 - Earlier limits above (job-wide load check, weak panel-circuit fallback,
   1568 px tiles, HTML preview) are unchanged.
+
+---
+
+# Fix round 2 (review "Round 2", c477b83, verdict MERGE AFTER FIXES)
+
+Commits **fc7388f..(this report commit)** on `feat/takeoff-accuracy` (not pushed).
+Same rules: worktree only, no Agent tool, no real Anthropic / Drive / email,
+the eval not run. Every reproduced repro is a committed test. Migration
+**120** (`bid_scope_items.flag_code`, `documents.compose_inputs_hash`, the
+bare "711" alias removed). The next plan starts at **121**.
+
+| Commit | Findings |
+|---|---|
+| fc7388f | R2-B2, R2-B3, S-R2-2 to S-R2-8, N-R2-3, N-R2-4, N-R2-5 |
+| 5addee3 | R2-B1, S-R2-1, N-R2-1, N-R2-2 (via the R2-B1 hash), N-R2-6, N-R2-7, the override UI, regenerated renders |
+| (last) | this section |
+
+## Blockers
+
+- **R2-B2 (the regression).** Count enforcement identifies a line **only by
+  structured identity**: its `count_type`, or its item field *being* the type
+  ("A", "Type A", "RTU-1 — …", the legend description) in a category where
+  the type lives. It never matches on a free-text mention of a tag.
+  - A line naming a different item (feeder, disconnect, base, junction box,
+    panel, conduit…) is never the counted line, even with the tag in it.
+  - A line not counted in EA is never the counted line either.
+  - When several lines carry a type's identity, the `count_type` line wins,
+    then the estimator's pick. Otherwise **nothing is changed** and the GC
+    documents are blocked (`count_line_ambiguous`) until the estimator clicks
+    "This is the counted line", an exact-line override. Nothing is ever
+    deleted as an "extra".
+  - The reviewer's four repros are tests, and every line is left untouched:
+    - RTU-1 connection, with its disconnect and 80 LF feeder;
+    - Panel P1 vs. pump P1, with a 60 LF feeder;
+    - the S1 pole base;
+    - the second junction-box line.
+- **R2-B1.** Every filed GC document and pre-bid package file carries a
+  compose-inputs hash. The hash covers:
+  - the run and the Agent 4 output or draft;
+  - the price and the count result;
+  - every resolution and answer;
+  - the account-rule snapshot;
+  - the scope list and overrides;
+  - the printed bid fields.
+
+  "Draft email to GC" (and the takeoff it attaches) and email-prebid-chris
+  return 409 "Regenerate — inputs changed since this file was made" on any
+  difference. Tested cases: 73→37, the price change, a scope-list change,
+  the pre-bid package, and an unchanged control.
+- **R2-B3.** The bare "711" alias is removed (migration 120). A brand-field
+  match outranks a name or drawings match, and a match found only in the
+  name or drawings, or two matching rules, raises a warning. "AutoZone Store
+  #711", "711 Main St" and "Suite 711" are never 7-Eleven (pure and DB tests).
+
+## Should-fix and nits
+
+- **S-R2-1 / N-R2-1:** every pipeline write, and every Agent 4 and draft
+  write, is bound to its run id. A superseded run stops at the next stage and
+  can't change status, outputs or the review. Tested with an overlapping run.
+- **S-R2-2:** a verb is never treated as a list element. "Furnish and install
+  power poles and receptacles per E-2." becomes "Furnish and install
+  receptacles per E-2." plus the GC exclusion.
+- **S-R2-3 / N-R2-4:** after the answers are applied, every bullet and
+  exclusion that states who furnishes or installs an answered term is checked
+  against the answer:
+  - a bullet solely about the item is rewritten;
+  - a mixed bullet is split, and the item gets its own correct bullet ("Install
+    the power poles furnished by the GC.");
+  - a contradicting exclusion is removed;
+  - anything else is flagged.
+
+  The Kissimmee "Provide all receptacles, retail power poles, and baseflex"
+  is now split this way (see after-2.png).
+- **S-R2-4:** these hard-block again when there is no electrical context
+  (override with a reason): drywall, storm/sanitary pipe, plumbing piping and
+  fixtures, roofing, HVAC ductwork and equipment supply, sprinkler piping,
+  paving/asphalt, and painting. Concrete, flooring, doors, framing and
+  fencing only flag.
+- **S-R2-5:** overrides bind to the exact line (category plus every word and
+  number) and to their flag code. The fire-alarm conduit vs. devices case and
+  the 100 SF vs. 900 SF case are tests.
+- **S-R2-6:** a sentence naming a state, territory or country other than the
+  project's blocks, with an exact-line override. Puerto Rico on Kissimmee
+  blocks. A named store type is only a warning.
+- **S-R2-7:** an estimator-counted unscheduled line never overwrites a counted
+  type. It is raised as a blocking `count_conflict` (the Wall pack / D repro).
+- **S-R2-8:** a carve-out covers only conduit, boxes and pull strings.
+  Cabling, devices, wiring, terminations or programming fail.
+- **N-R2-3:** Section C is fitted to exactly 3 bullets after enforcement, so
+  there is no 422 loop.
+- **N-R2-5:** PHASE is not an area. PHASE 1/2 sheets get the blocking
+  same-area-or-additive question.
+- **N-R2-6:** the legacy note also shows in Review & Proposal.
+- **N-R2-7:** pre-bid drafts count toward the daily AI limit.
+
+## Test suites (fix round 2)
+
+`tsc --noEmit` is clean in both packages. Both suites ran twice, one after
+the other:
+
+| Run | Backend (144 files, 1469 tests) | Frontend (123 files, 1226 tests) |
+|---|---|---|
+| 1 | 1463 passed, 2 failed, 4 not run | 1225 passed, 1 failed |
+| 2 | 1462 passed, 3 failed, 4 not run | 1226 / 1226 |
+
+Before this round: backend 1425 of 1432, frontend 1223. The failures are the
+same known flakes as rounds 1 and 2:
+
+- **`notificationsRetention`:** the only file missing from both backend logs,
+  lost to "Worker exited unexpectedly". These are the 4 tests not run.
+- **`intakeSimilarCache`:** 1 failure in run 1, 2 in run 2. It is
+  load-sensitive and this branch doesn't touch intake code.
+- **`integration.test` "backfills a follow-up…":** a 30 s load timeout in
+  both runs.
+- **Frontend `SurveyMarkupEditor`:** failed in run 1 only; it fails on `main`
+  too.
+
+All the round-2 test files pass in both runs: `fixRound2`, `enforceCounts`,
+`composeProposal`, `accountRules`, `scopeList`, `outputHygiene`,
+`countMerge`, `KeepLineControl` and `PcWorkspaceProposal`.
+
+## Not fixed / limits
+
+- The partials the round-2 review accepted are unchanged:
+  - B2: entered types are counted on the next run.
+  - S2: counts aren't exact at 3% position error.
+  - B5: sending needs LibreOffice.
+- R2-B2's structured identity depends on Agent 4 carrying `count_type`, or
+  writing the type in the item field. A line where Agent 4 does neither is
+  left alone, and the counted line is added beside it. That can double a
+  fixture if Agent 4 wrote the type only in free text. There is no dedicated
+  warning for this: the near-duplicate warning catches it only when the
+  wording overlaps. This is the price of never deleting on a text match. A
+  "possible stacking" warning for untagged EA lines in fixture categories is
+  a small follow-up I didn't build.
+- The Kissimmee eval has still not been run against the real API.
