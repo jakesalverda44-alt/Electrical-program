@@ -3,7 +3,6 @@ import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
 import { loadAccessibleBid } from '../utils/ownership';
-import { computeBidComps } from '../utils/bidComps';
 
 const router = Router();
 
@@ -38,83 +37,27 @@ router.get('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   res.json(rows[0] || null);
 });
 
-// PUT /api/estimates/:bidId — upsert estimate, recompute totals, sync bids.amount
+// Fix round 1 / S2+S9 — the flat-rate estimate engine this route wrote
+// (line_items priced straight off the unit-cost library, no labor hours/
+// factors/library items) is retired. The new engine
+// (estimating/bidEstimate.ts's saveBidEstimate(), PUT /api/estimating/:bidId)
+// is the one real save path now — same bid_estimates/bids.amount columns,
+// computed by pricing.ts instead of this route's own ad hoc qty*unit_cost
+// math. Grepped every caller before removing the handler body: the frontend
+// had exactly one (PcWorkspaceView.tsx's saveEstimate(), deleted in the same
+// fix-round commit as this route change) and one backend test
+// (estimates.confidence.test.ts, rewritten to assert 410 instead of the
+// round-trip it used to exercise — that same confidence-round-trip coverage
+// now exists for the new engine in estimatingComposeBidDataFix.test.ts).
+// GET /:bidId (above) is UNCHANGED — PcWorkspaceView.tsx's overhead_pct/
+// profit_pct/estimate_overrides hydration effect still reads it as one of
+// two candidate sources (the other being bid_workspaces), so it stays live.
 router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const { line_items, overhead_pct, profit_pct } = req.body as {
-    // Task 5 (phase 2 takeoff fidelity): confidence is additive, type-only here
-    // — no migration needed, line_items is already JSONB and this route already
-    // round-trips whatever fields the frontend sends via JSON.stringify below.
-    line_items: { category: string; item: string; qty: number; unit: string; unit_cost: number; total: number; overridden: boolean; confidence?: string }[];
-    overhead_pct: number;
-    profit_pct: number;
-  };
-
-  // Reject malformed input before it reaches NUMERIC columns — a NaN or a
-  // non-array here used to propagate straight into the DB write below.
-  if (!Array.isArray(line_items)) {
-    return res.status(400).json({ error: 'line_items must be an array' });
-  }
-  for (const li of line_items) {
-    const qty = Number(li.qty);
-    const unitCost = Number(li.unit_cost);
-    if (!Number.isFinite(qty) || !Number.isFinite(unitCost)) {
-      return res.status(400).json({
-        error: `Invalid qty or unit_cost for line item "${li.item ?? li.category ?? '?'}" — both must be numbers`,
-      });
-    }
-    li.qty = qty;
-    li.unit_cost = unitCost;
-  }
-  const overheadPct = Number(overhead_pct);
-  const profitPct = Number(profit_pct);
-  if (!Number.isFinite(overheadPct) || overheadPct < 0 || overheadPct > 100) {
-    return res.status(400).json({ error: 'overhead_pct must be a number between 0 and 100' });
-  }
-  if (!Number.isFinite(profitPct) || profitPct < 0 || profitPct > 100) {
-    return res.status(400).json({ error: 'profit_pct must be a number between 0 and 100' });
-  }
-
-  // Compute subtotals per category
-  const subtotals: Record<string, number> = {};
-  let total_direct = 0;
-  for (const li of line_items) {
-    li.total = li.qty * li.unit_cost;
-    subtotals[li.category] = (subtotals[li.category] ?? 0) + li.total;
-    total_direct += li.total;
-  }
-
-  const total_overhead = total_direct * (overheadPct / 100);
-  const total_profit   = (total_direct + total_overhead) * (profitPct / 100);
-  const grand_total    = total_direct + total_overhead + total_profit;
-
-  // Count comps: awarded bids of same project_type with a known amount — either a saved
-  // estimate or an imported past bid (see preconstruction.ts import-bid), whichever set it.
-  // Task 5 (estimating labor engine): extracted into utils/bidComps.ts so the new
-  // estimating/bidEstimate.ts doesn't duplicate this query — behavior unchanged.
-  const { compCount: comp_count, confidence } = await computeBidComps(bidId);
-
-  const { rows } = await pool.query(
-    `INSERT INTO bid_estimates (bid_id, overhead_pct, profit_pct, line_items, subtotals,
-       total_direct, total_overhead, total_profit, grand_total, comp_count, confidence, updated_at)
-     VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,now())
-     ON CONFLICT (bid_id) DO UPDATE SET
-       overhead_pct=$2, profit_pct=$3, line_items=$4::jsonb, subtotals=$5::jsonb,
-       total_direct=$6, total_overhead=$7, total_profit=$8, grand_total=$9,
-       comp_count=$10, confidence=$11, updated_at=now()
-     RETURNING *`,
-    [bidId, overheadPct, profitPct, JSON.stringify(line_items), JSON.stringify(subtotals),
-     total_direct, total_overhead, total_profit, grand_total, comp_count, confidence]
-  );
-
-  // Sync bids.amount with grand_total
-  await pool.query(
-    'UPDATE bids SET amount = $1 WHERE id = $2 AND deleted_at IS NULL',
-    [grand_total, bidId]
-  );
-
-  res.json(rows[0]);
+  res.status(410).json({
+    error: 'This endpoint is retired. Use PUT /api/estimating/:bidId (the labor/material estimating engine) instead.',
+  });
 });
 
 export default router;

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, useReducer, Suspense } from 'react';
-import { Bid, Toast, BidEstimate, EstimateLineItem } from '../../../types';
+import { Bid, Toast, BidEstimate } from '../../../types';
 import { PcWorkspace, PcTabKey, ConfirmedService } from '../constants';
 import api from '../../../api/client';
 import { useApi } from '../../../hooks/useApi';
@@ -7,12 +7,10 @@ import { useUnsavedGuard } from '../../../hooks/useUnsavedGuard';
 import { useMutation } from '../../../hooks/useMutation';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { AppSettings } from '../../../hooks/useAppSettings';
-import { moneyFull } from '../../../lib/money';
 import FilePreviewModal from '../../../components/FilePreviewModal';
 import { useDocPreview } from '../../../components/useDocPreview';
 import { PrebidSection } from '../prebidScope';
 import { overridesFromEstimate } from '../estimateHydrate';
-import { confidenceToPlaybook } from '../confidence';
 import PreBidTab from '../PreBidTab';
 import { BidDataPreview, VerifyFailure } from '../bidDataPreview';
 import Icon from '../../../components/Icon';
@@ -23,7 +21,7 @@ import Icon from '../../../components/Icon';
 // renders. Nothing about what is rendered changed.
 import { ProjectDoc, SetWorkspace, STEP_ORDER, TakeoffOnFile } from './shared';
 import { historicalCostsCache, unitCostLibCache, useGlobalPcCache } from './globalCache';
-import { buildLineItemsFromTakeoff, isElecSheet, parseAgent1Service, parseAgentJson, scopeSectionsFrom } from './parsing';
+import { isElecSheet, parseAgent1Service, parseAgentJson, scopeSectionsFrom } from './parsing';
 import { POLL_TIMEOUT_MESSAGE, useAiPoller } from './useAiPoller';
 import { useStableFn } from './useStableFn';
 import { importReducer, initialImportState } from './importReducer';
@@ -35,7 +33,7 @@ import RfisTab from './RfisTab';
 import ProposalTab from './ProposalTab';
 import CostsTab from './CostsTab';
 import IntelTab from './IntelTab';
-import { ImportPanelProps } from './ImportPanel';
+import ImportPanel, { ImportPanelProps } from './ImportPanel';
 // Task 7/8/9 (estimating redesign) — the new shell replaces StepTracker+
 // TabStrip's chrome; LaborPricingStep+useEstimatingBid replace PricingTab
 // (still present, unrendered — see the estimating report for why it wasn't
@@ -87,7 +85,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [expandedCostRow, setExpandedCostRow] = useState<number | null>(null);
   const [costTypeFilter, setCostTypeFilter] = useState<string>('all');
   const [savedEstimate, setSavedEstimate] = useState<BidEstimate | null>(null);
-  const [estimateSaved, setEstimateSaved] = useState(false);
   const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
   // Populated by the pre-bid package fetch (Task 7). Empty until then, so the
   // "Import from Pre-Bid" button simply stays hidden.
@@ -97,6 +94,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [svcAmpacity, setSvcAmpacity] = useState(() => ws.confirmedService?.ampacity ?? '');
   const [svcPanel,    setSvcPanel]    = useState(() => ws.confirmedService?.panel    ?? '');
   const [propPrice,  setPropPrice]  = useState('');
+  // Fix round 1 / S3 — true once the estimator has typed into the proposal
+  // price field themselves; blocks the auto-sync effect (below) from
+  // clobbering a deliberate manual override, the same way qty_overridden
+  // protects an estimator's hand-typed qty from a sync-takeoff refresh.
+  const [propPriceEdited, setPropPriceEdited] = useState(false);
   const [propNotes,  setPropNotes]  = useState('');
   // A 400 from run-agent4 (e.g. an unparseable price) happens synchronously, before
   // agent4_status is ever touched — the polling-driven "Agent 4 Did Not Complete"
@@ -432,13 +434,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     setProposalPreview(proposalReady ? (proposalPreviewData ?? null) : null);
   }, [proposalReady, proposalPreviewData, proposalPreviewError]);
 
-  // Pre-fill proposal price from saved estimate grand total
-  useEffect(() => {
-    if (savedEstimate?.grand_total && !propPrice) {
-      setPropPrice(String(Math.round(savedEstimate.grand_total)));
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedEstimate?.grand_total]);
+  // Fix round 1 / S3 — moved below (after `estimatingBid` exists): the
+  // proposal price now syncs from the NEW engine's latest SAVED total, not
+  // the legacy savedEstimate.grand_total, and keeps syncing (not just a
+  // one-time pre-fill) until the estimator edits it by hand. See the effect
+  // near `estimatingBid`'s declaration.
 
   const runAI = async (force = false) => {
     if (wsRef.current.aiRunning || (!force && wsRef.current.aiDone)) return;
@@ -580,79 +580,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   };
 
 
-  // The derived pricing rows: one useMemo, shared by the Pricing tab and by
-  // Save Estimate, in place of a function both of them called on every render
-  // (audit code #10 — "useMemo for the derived pricing rows").
-  const pricingLineItems = useMemo<EstimateLineItem[]>(() => {
-    if (savedEstimate?.line_items?.length) {
-      // FIX-3 (post-review) — a saved estimate's rows may predate confidence
-      // tracking (or otherwise lack it), which left the chips/counts/toast
-      // permanently dead on any bid with a saved estimate — re-running the
-      // takeoff never helped, since this branch never looked at the fresh
-      // takeoff again. Build the fresh takeoff alongside the saved rows and
-      // backfill each saved row's MISSING confidence by key, never
-      // overwriting a confidence value the saved row already has.
-      const freshItems = buildLineItemsFromTakeoff(
-        aiResults?.agent2_output as string | undefined,
-        unitCostLib,
-        bid.project_type,
-        ws.estimateOverrides
-      );
-      const freshConfidenceByKey = new Map(freshItems.map(li => [`${li.category}||${li.item}`, li.confidence]));
-      return savedEstimate.line_items.map(li => {
-        const key = `${li.category}||${li.item}`;
-        const ov = ws.estimateOverrides[key];
-        const unit_cost = ov !== undefined ? ov : li.unit_cost;
-        const confidence = li.confidence !== undefined ? li.confidence : freshConfidenceByKey.get(key);
-        return { ...li, unit_cost, total: li.qty * unit_cost, overridden: ov !== undefined || li.overridden, confidence };
-      });
-    }
-    return buildLineItemsFromTakeoff(
-      aiResults?.agent2_output as string | undefined,
-      unitCostLib,
-      bid.project_type,
-      ws.estimateOverrides
-    );
-  }, [savedEstimate, aiResults, unitCostLib, bid.project_type, ws.estimateOverrides]);
-
-  const saveEstimate = async () => {
-    const items = pricingLineItems;
-    if (!items.length) return;
-    // A category missing from the unit-cost library silently prices at $0 — flag
-    // it here too (mirrors the Pricing tab banner) so a rep saving without ever
-    // opening that tab still sees the grand total is understated.
-    const zeroCostCount = items.filter(li => li.unit_cost === 0 && !li.overridden).length;
-    // Task 5.3 — surface VERIFY-confidence items in the same save toast, so a
-    // rep who saves without ever opening the confidence chips still sees them.
-    const verifyCount = items.filter(li => confidenceToPlaybook(li.confidence) === 'VERIFY').length;
-    await runSaveEstimate(items, zeroCostCount, verifyCount);
-  };
-
-  const { run: runSaveEstimate, saving: savingEstimate } = useMutation(
-    async (items: EstimateLineItem[], _zeroCostCount: number, _verifyCount: number) => {
-      const { data } = await api.put<BidEstimate>(`/estimates/${bid.id}`, {
-        line_items: items,
-        overhead_pct: ws.overheadPct,
-        profit_pct: ws.profitPct,
-      });
-      return data;
-    },
-    {
-      showToast,
-      onSuccess: (data) => {
-        setSavedEstimate(data);
-        setEstimateSaved(true);
-        setTimeout(() => setEstimateSaved(false), 3000);
-      },
-      successToast: (data, _items, zeroCostCount, verifyCount) => {
-        const parts = [`Grand total: ${moneyFull(data.grand_total)}`];
-        if (zeroCostCount > 0) parts.push(`${zeroCostCount} line item${zeroCostCount === 1 ? '' : 's'} priced at $0 (no unit cost)`);
-        if (verifyCount > 0) parts.push(`${verifyCount} item${verifyCount === 1 ? '' : 's'} need${verifyCount === 1 ? 's' : ''} verification`);
-        return { title: 'Estimate saved', sub: parts.join(' · ') };
-      },
-      errorTitle: 'Estimate not saved',
-    },
-  );
+  // Fix round 1 / S2+S9 — the legacy "Save Estimate" flow (pricingLineItems,
+  // saveEstimate, runSaveEstimate/savingEstimate, PUT /api/estimates/:bidId)
+  // was deleted here. It only ever fed PricingTab.tsx (deleted — unrendered
+  // since the estimating redesign) and an `onSaveEstimate` callback that was
+  // built but never passed to anything. The new engine
+  // (useEstimatingBid/LaborPricingStep, saveBidEstimate() ->
+  // PUT /api/estimating/:bidId) is the one real save path now; the legacy
+  // route returns 410 Gone (routes/estimates.ts).
 
 
   const generateProposal = () => {
@@ -1009,7 +944,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const onEmailPrebidToChris = useStableFn(() => { void emailPrebidToChris(); });
   const onDownloadFiledDocument = useStableFn((docId: string, filename: string) => { void downloadFiledDocument(docId, filename); });
   const onConvert = useStableFn(handleConvert);
-  const onSaveEstimate = useStableFn(() => { void saveEstimate(); });
   const onReadImportFiles = useStableFn(() => { void readImportFiles(); });
   const onSaveImportedBid = useStableFn(() => { void saveImportedBid(); });
   const onGoTakeoff = useStableFn(() => { set({ activeTab: 'takeoff' }); });
@@ -1043,6 +977,22 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // pricingDirty registration above (both are real, harmless to register
   // twice — see useUnsavedGuard's per-call `id`).
   useUnsavedGuard(estimatingBid.dirty);
+
+  // Fix round 1 / S3 — the Review step and Agent 4 (runAgent4Proposal, below)
+  // must read the engine's LATEST SAVED total, not a stale one-time pre-fill.
+  // Syncs propPrice from estimatingBid.recap whenever it reflects a saved
+  // state (not dirty, not an unsaved proposal) — i.e. right after hydrating
+  // an already-saved bid, and again every time a save/sync completes — and
+  // never overwrites a value the estimator has since typed by hand
+  // (propPriceEdited, set by setPropPriceManual below).
+  useEffect(() => {
+    if (propPriceEdited) return;
+    if (estimatingBid.dirty || estimatingBid.proposed) return;
+    const total = estimatingBid.recap.totals.grandTotal;
+    if (total > 0) setPropPrice(String(Math.round(total)));
+  }, [estimatingBid.dirty, estimatingBid.proposed, estimatingBid.recap.totals.grandTotal, propPriceEdited]);
+
+  const setPropPriceManual = useStableFn((v: string) => { setPropPrice(v); setPropPriceEdited(true); });
 
   const doneByStep = deriveStepStatus({
     hasFiles: ws.files.length > 0,
@@ -1079,6 +1029,23 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               onGoFiles={onGoFiles}
             />
             <PreBidTab bidId={bid.id} onSectionsLoaded={setPrebidSections}/>
+            {/* Fix round 1 / S4 — Workspace Notes and Import Finished Bid
+                (the Accubid breakdown upload calibration.ts depends on) lived
+                on the old shell's Overview tab, which never got a home in
+                the new step system during the redesign — importPanel (below)
+                was being built every render and never rendered anywhere. */}
+            <div className="panel" style={{ marginTop: 12 }}>
+              <div className="panel-hdr"><span className="panel-title">Workspace Notes</span></div>
+              <div style={{ padding: 16 }}>
+                <textarea
+                  style={{ width: '100%', font: 'inherit', fontSize: 13, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 9, padding: '10px 12px', height: 140, resize: 'vertical', outline: 'none', boxSizing: 'border-box' }}
+                  value={ws.notes} onChange={e => set({ notes: e.target.value })}
+                  placeholder="Add notes, reminders, or key info about this bid…"
+                  data-testid="documents-workspace-notes"
+                />
+              </div>
+            </div>
+            <ImportPanel {...importPanel}/>
           </>
         );
 
@@ -1164,7 +1131,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               bid={bid}
               aiResults={aiResults}
               propPrice={propPrice}
-              setPropPrice={setPropPrice}
+              setPropPrice={setPropPriceManual}
               propNotes={propNotes}
               setPropNotes={setPropNotes}
               agent4StartError={agent4StartError}
