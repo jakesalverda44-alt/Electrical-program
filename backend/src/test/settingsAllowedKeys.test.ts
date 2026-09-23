@@ -59,6 +59,32 @@ describe('PUT/GET /api/settings — elec_followup_quiet_days round-trip (FIX-4)'
   });
 });
 
+// Fix round 1 / B8 — est_default_drop_ft/est_default_slack_pct (Decision
+// 7's linear-run rollup defaults) were seeded by migration 108 but never
+// added to ALLOWED_KEYS, so Settings > Labor Library > Defaults could
+// read them (GET is unfiltered) but never actually save an edit.
+describe('PUT/GET /api/settings — est_default_drop_ft / est_default_slack_pct round-trip (B8)', () => {
+  it('persists both keys', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const admin = await makeUser('owner');
+
+    await request(app).put('/api/settings').set(auth(admin.token))
+      .send({ est_default_drop_ft: '15', est_default_slack_pct: '12' })
+      .expect(200);
+
+    const res = await request(app).get('/api/settings').set(auth(admin.token)).expect(200);
+    const byKey = Object.fromEntries((res.body as { key: string; value: string }[]).map(r => [r.key, r.value]));
+    expect(byKey.est_default_drop_ft).toBe('15');
+    expect(byKey.est_default_slack_pct).toBe('12');
+
+    // Reset to the migration's own seeded defaults so no other suite
+    // (a real markup rollup test) picks up a custom value.
+    await request(app).put('/api/settings').set(auth(admin.token))
+      .send({ est_default_drop_ft: '10', est_default_slack_pct: '10' })
+      .expect(200);
+  });
+});
+
 // FIX-11 (post-review) — prebid_chris_email moved out of the frontend's
 // hardcoded recipient into this setting; POST /bids/:id/email-prebid-chris
 // reads it (see bidSendProposal.test.ts for that behavior).

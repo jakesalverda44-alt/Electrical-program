@@ -44,7 +44,14 @@ import { useEstimatingBid } from '../../estimating/useEstimatingBid';
 // bundle-heavy part) load as their own chunk; useEstimateStepParam/
 // useEstimatingBid above are hooks and must stay a static import.
 const EstimatingWorkspace = React.lazy(() => import('../../estimating/EstimatingWorkspace'));
+// Phase B, Task 9 — its own lazy chunk, separate from EstimatingWorkspace's
+// (which never covers the Takeoff step's own content — see renderStepContent's
+// 'takeoff' case below). Neither the viewer's code nor pdf.js (dynamically
+// imported inside it) loads into the main bundle unless Plans view opens.
+const PlansWorkspace = React.lazy(() => import('../../estimating/plans/PlansWorkspace'));
 import { EstimateStepKey, mapLegacyTabToStep, stepToLegacyTab, deriveStepStatus, legacyTabWantsInsights, ESTIMATE_STEPS } from '../../estimating/steps';
+import { EstimateLine } from '../../estimating/types';
+import { usePlanViewParams } from '../../estimating/plans/usePlanViewParams';
 
 const ESTIMATE_STEP_ORDER = ESTIMATE_STEPS.map(s => s.key);
 const ESTIMATE_STEP_LABELS = Object.fromEntries(ESTIMATE_STEPS.map(s => [s.key, s.label])) as Record<EstimateStepKey, string>;
@@ -974,10 +981,98 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // bid_workspaces.active_tab (still a real, autosaved DB column) stays
   // populated with something a stale reload/old build still understands.
   const [currentStep, setCurrentStepParam] = useEstimateStepParam(mapLegacyTabToStep(ws.activeTab));
-  const onSelectStep = useStableFn((step: EstimateStepKey) => {
-    setCurrentStepParam(step);
-    set({ activeTab: stepToLegacyTab(step) });
+  // Phase B, Task 8 — the Takeoff step's List|Plans toggle
+  // (?view=plans&sheet=<doc>:<page>&line=<key>), independent of `currentStep`
+  // itself (a switch away from Takeoff and back keeps whichever view was open).
+  const planView = usePlanViewParams();
+  // Fix round 1 / B3(c) — switching steps used to unmount PlansWorkspace
+  // (and whatever else the previous step held) unconditionally, with no
+  // chance for its own useUnsavedGuard registration (useMarkupAutosave.ts,
+  // registered the whole time a batch is pending/saving/error) to ever be
+  // consulted — App.tsx's OWN navigation already routes through this same
+  // confirmLeave; PcWorkspaceView's internal step rail simply never did.
+  //
+  // Fix round 2 / R2-S2 — that fix over-corrected: confirmLeave checks
+  // the WHOLE global guard registry, which ALSO includes
+  // useUnsavedGuard(estimatingBid.dirty) below (Labor & Pricing) and
+  // saveState==='error'. A step change or the List/Plans toggle never
+  // actually loses either of those — they live in this component's own
+  // shared `estimatingBid` state, untouched by which step is showing —
+  // so the dialog's "the changes you have made on this screen will be
+  // lost" was simply false for that case, and trained estimators to
+  // click through it. Step/toggle navigation now checks ONLY the markup
+  // autosave guard (markupUnsavedRef, kept in sync by PlansWorkspace's
+  // own onMarkupUnsavedChange callback below — the exact
+  // pending/saving/error condition useMarkupAutosave.ts's own
+  // useUnsavedGuard call already uses), with its own markup-specific
+  // wording, via the ad-hoc `confirm()` dialog (not the global
+  // ConfirmLeaveDialog). Leaving the BID entirely still goes through
+  // App.tsx's own navigation -> its own useConfirmLeave() -> the full
+  // registry (pricing AND markup), unchanged — nothing here removes
+  // either useUnsavedGuard registration; this component just no longer
+  // calls the global confirmLeave itself for step/toggle navigation.
+  const markupUnsavedRef = useRef(false);
+  const onMarkupUnsavedChange = useStableFn((hasUnsaved: boolean) => { markupUnsavedRef.current = hasUnsaved; });
+  const confirmMarkupLeave = useStableFn((proceed: () => void) => {
+    if (!markupUnsavedRef.current) { proceed(); return; }
+    void confirm({
+      title: 'Unsaved plan markup',
+      body: 'This sheet has plan markup that hasn\'t finished saving yet. Leave anyway?',
+      confirmLabel: 'Leave anyway',
+    }).then(ok => { if (ok) proceed(); });
   });
+  const onSelectStep = useStableFn((step: EstimateStepKey) => {
+    confirmMarkupLeave(() => {
+      setCurrentStepParam(step);
+      set({ activeTab: stepToLegacyTab(step) });
+    });
+  });
+  // "review on plans" / "jump to plans" both switch step AND view in one
+  // click — nested inside ONE confirmMarkupLeave so `planView.setView
+  // ('plans')` only actually runs if the user chose to proceed (calling
+  // onSelectStep then unconditionally calling planView.setView right
+  // after it would flip the view immediately regardless of what the
+  // confirm dialog is about to ask, since onSelectStep's own
+  // confirmMarkupLeave only defers ITS half of the action).
+  const jumpToTakeoffPlans = useStableFn(() => {
+    confirmMarkupLeave(() => {
+      setCurrentStepParam('takeoff');
+      set({ activeTab: stepToLegacyTab('takeoff') });
+      planView.setView('plans');
+    });
+  });
+
+  // Fix round 1 / B1 — "New line from markup" (PlansWorkspace.tsx) adds a
+  // line through the SAME live lines state Labor & Pricing edits, instead
+  // of PUTting its own snapshot. `nextLines` is computed synchronously and
+  // passed straight to save() (not read back from estimatingBid.lines,
+  // which wouldn't reflect the just-called setLines until the next
+  // render) — see useEstimatingBid.ts's save(linesOverride) comment for
+  // why that distinction matters.
+  const onCreateLineFromMarkup = useStableFn(async (newLine: EstimateLine): Promise<boolean> => {
+    const nextLines = [...estimatingBid.lines, newLine];
+    estimatingBid.setLines(nextLines);
+    try {
+      await estimatingBid.save(nextLines);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  // Fix round 1 / B8 — Settings > Labor Library > Defaults, parsed once
+  // per settings change. Number('') is 0 (falsy check needed, not just
+  // Number.isFinite) and an unset/never-saved settings object omits the
+  // key entirely (undefined), so both fall back to 10 — matching
+  // DEFAULT_APP_SETTINGS in useAppSettings.ts.
+  const defaultDropFt = useMemo(() => {
+    const raw = Number(settings?.est_default_drop_ft);
+    return Number.isFinite(raw) && raw > 0 ? raw : 10;
+  }, [settings?.est_default_drop_ft]);
+  const defaultSlackPct = useMemo(() => {
+    const raw = Number(settings?.est_default_slack_pct);
+    return Number.isFinite(raw) && raw >= 0 ? raw : 10;
+  }, [settings?.est_default_slack_pct]);
 
   const estimatingBid = useEstimatingBid(bid.id);
   // Task 9 — the new engine's own dirty check, independent of the legacy
@@ -1029,6 +1124,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     proposalFiled: ws.proposalGenerated,
   });
 
+  // Task 8 (deferral closed) — a takeoff-sourced line whose qty has never
+  // actually been confirmed against the plans (qty_source !== 'markup') —
+  // shared by BidSummary's own warning banner and the Review step's
+  // pre-send checklist below, so both always report the identical count.
+  const linesNotVerifiedOnPlansCount = estimatingBid.lines.filter(l => l.source === 'takeoff' && l.qty_source !== 'markup').length;
+
   // Task 8 — re-homed step content: each step stacks the same existing tab
   // components on one screen rather than switching between them, with no
   // change to any of those components' own props/behavior.
@@ -1074,8 +1175,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           </>
         );
 
-      case 'takeoff':
-        return (
+      case 'takeoff': {
+        // Phase B, Decision 1/Task 8 — List|Plans toggle. List is the
+        // existing, unchanged BidTab+TakeoffTab content (the default, and
+        // the only option below the 900px view-only breakpoint per Decision
+        // 2 — that responsive gate lives inside PlansWorkspace itself, this
+        // toggle only decides which of the two to mount here).
+        const listContent = (
           <>
             <BidTab
               ws={ws}
@@ -1107,6 +1213,68 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             />
           </>
         );
+        return (
+          <>
+            <div className="est-view-toggle" role="tablist" aria-label="Takeoff view">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={planView.view === 'list'}
+                className={`est-view-toggle-btn${planView.view === 'list' ? ' active' : ''}`}
+                onClick={() => confirmMarkupLeave(() => planView.setView('list'))}
+              >
+                List
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={planView.view === 'plans'}
+                className={`est-view-toggle-btn${planView.view === 'plans' ? ' active' : ''}`}
+                onClick={() => confirmMarkupLeave(() => planView.setView('plans'))}
+              >
+                Plans
+              </button>
+            </div>
+            {planView.view === 'plans' ? (
+              <Suspense fallback={<div style={{ padding: 32, color: 'var(--text3)' }}>Loading plan viewer…</div>}>
+                <PlansWorkspace
+                  bidId={bid.id}
+                  lines={estimatingBid.lines}
+                  settings={estimatingBid.settings}
+                  initialSheetKey={planView.sheetKey}
+                  initialLineKey={planView.lineKey}
+                  onSheetKeyChange={planView.setSheetKey}
+                  onLineKeyChange={planView.setLineKey}
+                  // Fix round 1 / B1 — estimatingBid.reload() (a bare
+                  // useApi refetch) never actually re-hydrated past its
+                  // own first-load guard, so Apply's own applied quantity
+                  // silently reverted on the estimator's very next Labor &
+                  // Pricing save. installSaved installs apply-markups' own
+                  // {lines, recap} response directly — no refetch needed.
+                  onApplied={estimatingBid.installSaved}
+                  dirty={estimatingBid.dirty}
+                  onSaveDirtyLinesFirst={estimatingBid.save}
+                  onCreateLine={onCreateLineFromMarkup}
+                  proposed={estimatingBid.proposed}
+                  // Fix round 2 / R2-S2 — feeds markupUnsavedRef, which
+                  // confirmMarkupLeave (above) checks for step/toggle
+                  // navigation instead of the global (pricing-inclusive)
+                  // confirmLeave.
+                  onMarkupUnsavedChange={onMarkupUnsavedChange}
+                  // Fix round 1 / B8 — Settings > Labor Library > Defaults
+                  // (app-wide, this component's own `settings` prop —
+                  // NOT estimatingBid.settings above, which is this
+                  // BID's own settings). Falls back to 10/10 (matching
+                  // DEFAULT_APP_SETTINGS) when unset or unparsable.
+                  defaultDropFt={defaultDropFt}
+                  defaultSlackPct={defaultSlackPct}
+                  showToast={showToastStable}
+                />
+              </Suspense>
+            ) : listContent}
+          </>
+        );
+      }
 
       case 'pricing':
         // Rendered by EstimatingWorkspace itself (the lazy chunk) — see the
@@ -1138,7 +1306,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
       case 'review': {
         const w = estimatingBid.recap.warnings;
-        const hasPreSendFlags = w.unmatchedCount > 0 || w.verifyCount > 0 || w.unverifiedMaterialShare > 0;
+        const ambiguousQtyKeys = proposalPreview?.ambiguousQtyKeys ?? [];
+        const hasPreSendFlags = w.unmatchedCount > 0 || w.verifyCount > 0 || w.unverifiedMaterialShare > 0
+          || linesNotVerifiedOnPlansCount > 0 || ambiguousQtyKeys.length > 0;
         return (
           <>
             {hasPreSendFlags && (
@@ -1150,6 +1320,31 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 {w.unmatchedCount > 0 && <span>{w.unmatchedCount} unmatched line{w.unmatchedCount === 1 ? '' : 's'} in Labor &amp; Pricing</span>}
                 {w.verifyCount > 0 && <span>{w.verifyCount} VERIFY quantit{w.verifyCount === 1 ? 'y' : 'ies'} to confirm</span>}
                 {w.unverifiedMaterialShare > 0 && <span>{Math.round(w.unverifiedMaterialShare * 100)}% of material pricing is unverified</span>}
+                {/* Task 8 (deferral closed) — same count/wording as
+                    BidSummary's own warning; clicking it jumps straight to
+                    the Plans view instead of just naming the problem. */}
+                {linesNotVerifiedOnPlansCount > 0 && (
+                  <span>
+                    {linesNotVerifiedOnPlansCount} line{linesNotVerifiedOnPlansCount === 1 ? '' : 's'} not verified on plans{' '}
+                    <button
+                      type="button"
+                      className="lp-reset-btn"
+                      style={{ display: 'inline', color: 'var(--amber)', textDecoration: 'underline', fontWeight: 700 }}
+                      onClick={jumpToTakeoffPlans}
+                    >
+                      review on plans
+                    </button>
+                  </span>
+                )}
+                {/* Fix round 2 / R2-S4(a) — same source (proposalPreview.
+                    ambiguousQtyKeys) and same count as BidSummary's own
+                    warning; composeBidData.ts's own comment explains why
+                    there's nowhere to jump for this one. */}
+                {ambiguousQtyKeys.length > 0 && (
+                  <span title={ambiguousQtyKeys.join(', ')}>
+                    {ambiguousQtyKeys.length} item{ambiguousQtyKeys.length === 1 ? '' : 's'} where the GC takeoff qty may not match the saved estimate
+                  </span>
+                )}
               </div>
             )}
             <ProposalTab
@@ -1233,6 +1428,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           doneByStep={doneByStep}
           saveState={saveState}
           nextAction={nextStep ? { label: ESTIMATE_STEP_LABELS[nextStep], onClick: () => onSelectStep(nextStep) } : null}
+          forceSlimSummary={currentStep === 'takeoff' && planView.view === 'plans'}
+          linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
+          onJumpToPlans={jumpToTakeoffPlans}
+          // Fix round 2 / R2-S4(a) — only meaningful once a proposal has
+          // actually been composed (proposalPreview is null until
+          // proposalReady, same gate composeBidData's own ambiguity check
+          // needs Agent 4's takeoff array for).
+          ambiguousQtyKeys={proposalPreview?.ambiguousQtyKeys}
           lines={estimatingBid.lines}
           settings={estimatingBid.settings}
           recap={estimatingBid.recap}

@@ -47,6 +47,16 @@ export interface EstimateLine {
   /** Fix round 2 / SF4 — the raw takeoff description this line was last
    *  synced against (server-managed). */
   synced_description?: string | null;
+  /** Phase B, Task 1 — stable across every save/sync (est_bid_lines rows
+   *  are replaced wholesale on every save; `id` is not stable, this is).
+   *  Markups (est_markups.line_key) point at this. Always present on a
+   *  line returned from the server; absent only on a client-constructed
+   *  line that hasn't been saved yet. */
+  line_key?: string;
+  /** Phase B, Task 1 — why this line's current qty is what it is:
+   *  'takeoff' (default), 'manual' (an estimator hand-typed it), or
+   *  'markup' (a confirmed Plan Viewer rollup, set only by apply-markups). */
+  qty_source?: 'takeoff' | 'manual' | 'markup';
   source: 'takeoff' | 'manual';
   sort?: number;
 }
@@ -119,6 +129,14 @@ export interface SyncTakeoffResponse {
   added: number; updated: number; vanished: number; lines: EstimateLine[]; recap: PricingRecap;
 }
 
+/** Phase B, Task 1 — PUT /estimating/:bidId's response now also returns the
+ *  freshly-saved lines (with each one's real, server-confirmed line_key). */
+export interface SaveBidResponse {
+  recap: PricingRecap;
+  bidEstimate: Record<string, unknown>;
+  lines: EstimateLine[];
+}
+
 export const DEFAULT_SETTINGS: EstimateSettings = {
   labor_rate: 38, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3,
   supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3,
@@ -133,3 +151,134 @@ export const EMPTY_RECAP: PricingRecap = {
   },
   warnings: { unmatchedCount: 0, verifyCount: 0, zeroMaterialMatchedCount: 0, excludedCount: 0, unverifiedMaterialShare: 0, unitUnknownCount: 0, fuzzyMatchCount: 0 },
 };
+
+// ── Phase B, Tasks 2-3 — sheets + markups wire shapes (mirrors
+// backend/src/estimating/sheets.ts's SheetRow and markups.ts's
+// MarkupRow/RollupEntry). ────────────────────────────────────────────────
+
+export type SheetDiscipline = 'E' | 'A' | 'M' | 'P' | 'other';
+export type SheetKind = 'plan' | 'schedule' | 'detail' | 'riser' | 'cover' | 'other';
+export type ScaleSource = 'calibrated' | 'titleblock' | null;
+
+export interface SheetRow {
+  bid_id: string;
+  document_id: string;
+  /** 0-based — matches pdf.js's own page indexing (page number = page_index+1). */
+  page_index: number;
+  sheet_no: string;
+  title: string;
+  discipline: SheetDiscipline;
+  kind: SheetKind;
+  width_pt: number;
+  height_pt: number;
+  rotation: number;
+  /** Fix round 1 / S1 — this page's own MediaBox/CropBox origin, almost
+   *  always (0, 0). Feeds overlay.ts's PageGeometry.originXPt/originYPt
+   *  directly. */
+  origin_x_pt: number;
+  origin_y_pt: number;
+  ft_per_pt: number | null;
+  scale_source: ScaleSource;
+  scale_label: string | null;
+  has_text_layer: boolean;
+  /** Fix round 1 / B7 — the title-block-parsed scale, a SUGGESTION only
+   *  (never auto-applied to ft_per_pt). null when nothing was found, or
+   *  when scale_ambiguous is true. */
+  suggested_ft_per_pt: number | null;
+  suggested_label: string | null;
+  /** Fix round 1 / B7 — true when the page's text has more than one
+   *  DISTINCT scale value; no suggestion is offered for it at all. */
+  scale_ambiguous: boolean;
+  /** Fix round 1 / B7 — shared by every sheet of the same document_id. */
+  half_size: boolean;
+}
+
+/** Fix round 1 / B9 — indexing (a Drive download + a whole-file buffer +
+ *  a pdfjs parse of every page) runs as a background job per document_id
+ *  now, instead of synchronously inside the GET request (which used to
+ *  blow well past the frontend's own 30s axios timeout on a real
+ *  100-150MB plan set). 'failed' is STICKY — a plain (unrefreshed) GET
+ *  never silently re-attempts it; only an explicit "Refresh sheets" does. */
+export type IndexStatus = 'pending' | 'indexing' | 'done' | 'failed';
+
+export interface SheetsResponse {
+  sheets: SheetRow[];
+  /** Keyed by document_id. */
+  statuses: Record<string, IndexStatus>;
+  /** Fix round 2 / R2-B3 — keyed by document_id, only for a document
+   *  CURRENTLY 'failed'. */
+  indexErrors: Record<string, string>;
+  /** Fix round 2 / R2-B3 — every plan PDF document's own name, keyed by
+   *  document_id — lets the failed-documents list say "plans.pdf failed:
+   *  ..." instead of a bare document_id. */
+  documentNames: Record<string, string>;
+}
+
+export type MarkupKind = 'count' | 'linear';
+export type MarkupStatus = 'confirmed' | 'suggested';
+
+export interface MarkupPoint {
+  x: number;
+  y: number;
+}
+
+export interface MarkupWire {
+  id: string;
+  bidId: string;
+  documentId: string;
+  pageIndex: number;
+  lineKey: string | null;
+  kind: MarkupKind;
+  points: MarkupPoint[];
+  drops: number;
+  dropFt: number | null;
+  slackPct: number | null;
+  status: MarkupStatus;
+  label: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export interface MarkupsResponse {
+  markups: MarkupWire[];
+}
+
+export interface MarkupBatchResult {
+  created: MarkupWire[];
+  updated: MarkupWire[];
+  deleted: string[];
+  skipped: { id: string; reason: string }[];
+}
+
+export interface SheetContribution {
+  documentId: string;
+  pageIndex: number;
+  markerCount: number;
+}
+
+export interface RollupEntry {
+  lineKey: string;
+  markedQty: number | null;
+  markerCount: number;
+  sheets: SheetContribution[];
+  incompatibleCount: number;
+  missingScaleCount: number;
+  category: string;
+  description: string;
+  unit: EstUnit;
+  currentQty: number;
+  qtySource: string;
+  aiQty: number | string | null;
+}
+
+export interface RollupResponse {
+  rollup: RollupEntry[];
+}
+
+export interface ApplyMarkupsResponse {
+  applied: string[];
+  skipped: { lineKey: string; reason: string }[];
+  save: SaveBidResponse;
+}

@@ -176,4 +176,20 @@ describe('LaborLibrarySection — Defaults', () => {
     fireEvent.change(input, { target: { value: '45' } });
     expect(saveBtn.disabled).toBe(false);
   });
+
+  // Fix round 1 / B8 — Decision 7's drops/slack defaults were seeded in
+  // the DB (migration 108) but never reachable from this screen at all.
+  it('renders and saves the drops/slack defaults (Fix round 1 / B8)', async () => {
+    setup();
+    fireEvent.click(screen.getByTestId('ll-subtab-defaults'));
+    const dropInput = await screen.findByTestId('ll-default-est_default_drop_ft') as HTMLInputElement;
+    const slackInput = screen.getByTestId('ll-default-est_default_slack_pct') as HTMLInputElement;
+    expect(dropInput.value).toBe(DEFAULT_APP_SETTINGS.est_default_drop_ft);
+    expect(slackInput.value).toBe(DEFAULT_APP_SETTINGS.est_default_slack_pct);
+
+    fireEvent.change(dropInput, { target: { value: '15' } });
+    fireEvent.click(screen.getByText('Save Changes'));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/settings', expect.objectContaining({ est_default_drop_ft: '15' })));
+  });
 });

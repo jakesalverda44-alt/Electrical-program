@@ -22,8 +22,15 @@ describe('migration 101 — estimating labor schema', () => {
 
   it('seeds the est_default_* app settings (insert-if-absent) without duplicates', async (ctx) => {
     if (!ok) return ctx.skip();
+    // Scoped to migration 101's own five keys (not a bare LIKE 'est_default_%',
+    // which migration 108 — Phase B, Task 1 — also matches with
+    // est_default_drop_ft/est_default_slack_pct; each migration's seed test
+    // owns only the keys it itself is responsible for).
     const { rows } = await pool.query(
-      `SELECT key, value FROM app_settings WHERE key LIKE 'est_default_%' ORDER BY key`
+      `SELECT key, value FROM app_settings WHERE key IN (
+         'est_default_consumables_pct', 'est_default_labor_rate', 'est_default_material_tax_pct',
+         'est_default_small_tools_pct', 'est_default_supervision_pct'
+       ) ORDER BY key`
     );
     expect(rows.map(r => r.key)).toEqual([
       'est_default_consumables_pct',

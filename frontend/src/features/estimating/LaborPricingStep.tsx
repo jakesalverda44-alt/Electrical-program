@@ -49,7 +49,10 @@ export interface LaborPricingStepProps {
   dirty?: boolean;
   setLines: (updater: EstimateLine[] | ((prev: EstimateLine[]) => EstimateLine[])) => void;
   setSettings: (updater: EstimateSettings | ((prev: EstimateSettings) => EstimateSettings)) => void;
-  save: () => Promise<void>;
+  // Fix round 2 / R2-S1 — widened from Promise<void>; see
+  // EstimatingWorkspace.tsx's own save prop comment. This component's own
+  // Save button already discards the result explicitly (`void save()`).
+  save: () => Promise<unknown>;
   syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number } | null>;
   showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
 }
@@ -415,6 +418,15 @@ export function LaborPricingStep({
                             // estimator-set so a future sync-takeoff never
                             // overwrites it, even for a takeoff-sourced line.
                             qty_overridden: true,
+                            // Fix round 1 / S7 — a hand-typed qty is no
+                            // longer plan-confirmed, even if the line was
+                            // previously Applied from a markup rollup:
+                            // composeBidData.ts's "Applied" chip and the
+                            // items panel's "not verified on plans" count
+                            // both key off qty_source==='markup', and
+                            // leaving it as 'markup' here would present a
+                            // hand-typed number as plan-confirmed.
+                            qty_source: 'manual',
                           })} />
                       </td>
                       <td>{line.unit}</td>

@@ -82,6 +82,55 @@ describe('BidSummary — warnings', () => {
     expect(screen.queryByTestId('bs-warnings')).toBeNull();
   });
 
+  // Phase B, Task 8 — "N lines not verified on plans".
+  it('shows the not-verified-on-plans warning when linesNotVerifiedOnPlansCount is set, and calls onJumpToPlans', () => {
+    const onJumpToPlans = vi.fn();
+    render(<BidSummary recap={recap()} proposed={false} linesNotVerifiedOnPlansCount={5} onJumpToPlans={onJumpToPlans} />);
+    const btn = screen.getByTestId('bs-warning-not-verified-on-plans');
+    expect(btn.textContent).toBe('5 lines not verified on plans');
+    fireEvent.click(btn);
+    expect(onJumpToPlans).toHaveBeenCalled();
+  });
+
+  it('uses singular phrasing for exactly 1 line', () => {
+    render(<BidSummary recap={recap()} proposed={false} linesNotVerifiedOnPlansCount={1} />);
+    expect(screen.getByTestId('bs-warning-not-verified-on-plans').textContent).toBe('1 line not verified on plans');
+  });
+
+  it('renders no not-verified-on-plans warning when the count is 0 or omitted', () => {
+    render(<BidSummary recap={recap()} proposed={false} linesNotVerifiedOnPlansCount={0} />);
+    expect(screen.queryByTestId('bs-warning-not-verified-on-plans')).toBeNull();
+    expect(screen.queryByTestId('bs-warnings')).toBeNull(); // and it alone doesn't open the section
+  });
+
+  // Fix round 2 / R2-S4(a) — composeBidData.ts's own ambiguousQtyKeys,
+  // surfaced here for the first time (it used to only ever reach server
+  // logs). No jump target — see the component's own comment on why.
+  describe('ambiguousQtyKeys (Fix round 2 / R2-S4(a))', () => {
+    it('shows the ambiguous-qty warning, naming the count, when ambiguousQtyKeys is non-empty', () => {
+      render(<BidSummary recap={recap()} proposed={false} ambiguousQtyKeys={['Branch Power::3.1']} />);
+      const w = screen.getByTestId('bs-warning-ambiguous-qty');
+      expect(w.textContent).toBe('1 item where the GC takeoff qty may not match the saved estimate');
+    });
+
+    it('uses plural phrasing for more than one key, and opens the warnings section', () => {
+      render(<BidSummary recap={recap()} proposed={false} ambiguousQtyKeys={['Branch Power::3.1', 'Underground Feeders::5.1']} />);
+      expect(screen.getByTestId('bs-warning-ambiguous-qty').textContent)
+        .toBe('2 items where the GC takeoff qty may not match the saved estimate');
+      expect(screen.getByTestId('bs-warnings')).toBeTruthy();
+    });
+
+    it('renders no ambiguous-qty warning when the array is empty or omitted', () => {
+      render(<BidSummary recap={recap()} proposed={false} ambiguousQtyKeys={[]} />);
+      expect(screen.queryByTestId('bs-warning-ambiguous-qty')).toBeNull();
+      expect(screen.queryByTestId('bs-warnings')).toBeNull();
+
+      cleanup();
+      render(<BidSummary recap={recap()} proposed={false} />);
+      expect(screen.queryByTestId('bs-warning-ambiguous-qty')).toBeNull();
+    });
+  });
+
   it('clicking the unmatched-lines warning calls onJumpToUnmatched', () => {
     const onJumpToUnmatched = vi.fn();
     render(<BidSummary recap={recap({}, { unmatchedCount: 2 })} proposed={false} onJumpToUnmatched={onJumpToUnmatched} />);

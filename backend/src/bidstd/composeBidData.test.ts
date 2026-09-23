@@ -133,6 +133,182 @@ describe('composeBidData', () => {
     expect(svc.items[0].conf).toBe('VERIFY'); // overrides Agent 4's 'VERIFIED' -> would've been FIRM
   });
 
+  // Phase B, Task 3 — a Plan-Viewer-confirmed quantity (qty_source='markup')
+  // must reach the takeoff outputs (this data feeds the GC takeoff xlsx,
+  // the pre-bid package xlsx, and the proposal's own embedded takeoff
+  // table — all read data.takeoff, composed here).
+  it('prefers a markup-confirmed qty/unit over Agent 4\'s own echoed qty', () => {
+    const { data } = composeBidData(bidRow, agent4Base, '$1', {
+      savedLineItems: [{ category: 'Service & Distribution', item: '1.1', qty: 2, unit: 'EA', qty_source: 'markup' }],
+    });
+    const svc = data.takeoff.find(c => c.name === 'Service & Distribution')!;
+    expect(svc.items[0].qty).toBe(2); // NOT Agent 4's echoed qty of 1
+    expect(svc.items[0].unit).toBe('EA');
+  });
+
+  it('does NOT override qty for a takeoff- or manual-sourced saved line — only "markup" is authoritative enough', () => {
+    const takeoffSourced = composeBidData(bidRow, agent4Base, '$1', {
+      savedLineItems: [{ category: 'Service & Distribution', item: '1.1', qty: 999, unit: 'EA', qty_source: 'takeoff' }],
+    });
+    const manualSourced = composeBidData(bidRow, agent4Base, '$1', {
+      savedLineItems: [{ category: 'Service & Distribution', item: '1.1', qty: 999, unit: 'EA', qty_source: 'manual' }],
+    });
+    expect(takeoffSourced.data.takeoff.find(c => c.name === 'Service & Distribution')!.items[0].qty).toBe(1); // Agent 4's own qty
+    expect(manualSourced.data.takeoff.find(c => c.name === 'Service & Distribution')!.items[0].qty).toBe(1);
+  });
+
+  it('a markup-confirmed qty and a saved confidence combine independently (both override, from the same saved line)', () => {
+    const { data } = composeBidData(bidRow, agent4Base, '$1', {
+      savedLineItems: [{ category: 'Service & Distribution', item: '1.1', qty: 3, unit: 'EA', qty_source: 'markup', confidence: 'FIRM' }],
+    });
+    const item = data.takeoff.find(c => c.name === 'Service & Distribution')!.items[0];
+    expect(item.qty).toBe(3);
+    expect(item.conf).toBe('FIRM');
+  });
+
+  // Fix round 1 / B5 — the reviewer's exact R5 repro: two "Branch Power ::
+  // Duplex receptacle" rows sharing category+item (floor 1 and floor 2).
+  // Floor 1 was marked and applied (42); floor 2 is still takeoff-sourced
+  // (30, Agent 4's own echo). The composed takeoff must show [42, 30], not
+  // [42, 42] (the old bug: the last saved row sharing the key overwrote
+  // EVERY Agent 4 row sharing it) or [30, 30] (never overriding at all).
+  describe('Fix round 1 / B5 — duplicate category+item rows match by occurrence, not by the last one wins', () => {
+    const agent4TwoFloors: Agent4Output = {
+      ...agent4Base,
+      takeoff: [
+        {
+          name: 'Branch Power',
+          items: [
+            { item: '3.1', description: 'Duplex receptacle', unit: 'EA', qty: 40, source: 'E1.1 Floor 1', conf: 'VERIFIED' },
+            { item: '3.1', description: 'Duplex receptacle', unit: 'EA', qty: 30, source: 'E1.2 Floor 2', conf: 'VERIFIED' },
+          ],
+        },
+      ],
+    };
+
+    it('applies the marked qty ONLY to its own occurrence (floor 1), leaving floor 2 at Agent 4\'s echoed qty', () => {
+      const { data, ambiguousQtyKeys } = composeBidData(bidRow, agent4TwoFloors, '$1', {
+        savedLineItems: [
+          // Floor 1: applied (markup-confirmed), first occurrence — the
+          // unsuffixed takeoff_key.
+          { category: 'Branch Power', item: '3.1', qty: 42, unit: 'EA', qty_source: 'markup', takeoff_key: 'Branch Power||3.1' },
+          // Floor 2: still takeoff-sourced, second occurrence.
+          { category: 'Branch Power', item: '3.1', qty: 30, unit: 'EA', qty_source: 'takeoff', takeoff_key: 'Branch Power||3.1::1' },
+        ],
+      });
+      const items = data.takeoff.find(c => c.name === 'Branch Power')!.items;
+      expect(items.map(i => i.qty)).toEqual([42, 30]); // NOT [42, 42]
+      expect(ambiguousQtyKeys).toEqual([]); // occurrence counts matched (2 Agent 4 rows, 2 saved rows) — not ambiguous
+    });
+
+    it('is order-independent: the SAME result whether the applied floor is first or second in savedLineItems', () => {
+      const { data } = composeBidData(bidRow, agent4TwoFloors, '$1', {
+        savedLineItems: [
+          { category: 'Branch Power', item: '3.1', qty: 30, unit: 'EA', qty_source: 'takeoff', takeoff_key: 'Branch Power||3.1::1' },
+          { category: 'Branch Power', item: '3.1', qty: 42, unit: 'EA', qty_source: 'markup', takeoff_key: 'Branch Power||3.1' },
+        ],
+      });
+      const items = data.takeoff.find(c => c.name === 'Branch Power')!.items;
+      expect(items.map(i => i.qty)).toEqual([42, 30]);
+    });
+
+    it('both floors applied: each occurrence gets its OWN marked qty, not the last one\'s', () => {
+      const { data } = composeBidData(bidRow, agent4TwoFloors, '$1', {
+        savedLineItems: [
+          { category: 'Branch Power', item: '3.1', qty: 44, unit: 'EA', qty_source: 'markup', takeoff_key: 'Branch Power||3.1' },
+          { category: 'Branch Power', item: '3.1', qty: 28, unit: 'EA', qty_source: 'markup', takeoff_key: 'Branch Power||3.1::1' },
+        ],
+      });
+      const items = data.takeoff.find(c => c.name === 'Branch Power')!.items;
+      expect(items.map(i => i.qty)).toEqual([44, 28]);
+    });
+
+    it('flags the key as ambiguous (and overrides NEITHER occurrence) when the saved-line count for a key doesn\'t match Agent 4\'s own row count for it', () => {
+      // Only ONE saved line for a key Agent 4 emits TWICE — positional
+      // matching can't safely say which Agent 4 row the marked qty
+      // belongs to.
+      const { data, ambiguousQtyKeys } = composeBidData(bidRow, agent4TwoFloors, '$1', {
+        savedLineItems: [
+          { category: 'Branch Power', item: '3.1', qty: 999, unit: 'EA', qty_source: 'markup', takeoff_key: 'Branch Power||3.1' },
+        ],
+      });
+      const items = data.takeoff.find(c => c.name === 'Branch Power')!.items;
+      expect(items.map(i => i.qty)).toEqual([40, 30]); // both left at Agent 4's own echo — never guessed
+      expect(ambiguousQtyKeys).toEqual(['Branch Power::3.1']);
+    });
+
+    it('a single (non-duplicated) category+item key still overrides correctly — the common case is unaffected by the occurrence logic', () => {
+      const { data } = composeBidData(bidRow, agent4Base, '$1', {
+        savedLineItems: [{ category: 'Service & Distribution', item: '1.1', qty: 2, unit: 'EA', qty_source: 'markup', takeoff_key: 'Service & Distribution||1.1' }],
+      });
+      expect(data.takeoff.find(c => c.name === 'Service & Distribution')!.items[0].qty).toBe(2);
+    });
+
+    it('a single-occurrence key with NO takeoff_key at all (legacy data / a manual line) still overrides correctly — defaults to ordinal 0', () => {
+      const { data } = composeBidData(bidRow, agent4Base, '$1', {
+        savedLineItems: [{ category: 'Service & Distribution', item: '1.1', qty: 2, unit: 'EA', qty_source: 'markup' }],
+      });
+      expect(data.takeoff.find(c => c.name === 'Service & Distribution')!.items[0].qty).toBe(2);
+    });
+  });
+
+  // Fix round 2 / R2-S4(b) — R5's exact repro: a markup-applied line whose
+  // unit is C or M used to write {qty: <raw feet>, unit: 'C'} straight into
+  // the composed takeoff. That reads as 1,234 raw feet to pricing.ts and to
+  // the estimator's own saved line, but a GC reading the takeoff sees
+  // "1234 C" and (C = per-hundred) reads it as 123,400 feet. Since B4,
+  // est_bid_lines.qty on ANY linear-family line (LF/C/M) is always raw
+  // feet — the unit is purely an internal pricing denomination — so the
+  // takeoff must always label a linear override 'LF', regardless of which
+  // pricing unit the saved line itself uses.
+  describe('Fix round 2 / R2-S4(b) — a markup-confirmed C/M-priced line is emitted as LF in the takeoff, never the internal pricing unit', () => {
+    const agent4WithUnderground: Agent4Output = {
+      ...agent4Base,
+      takeoff: [
+        ...(agent4Base.takeoff ?? []),
+        { name: 'Underground Feeders', items: [
+          { item: '5.1', description: '4" PVC conduit run', unit: 'LF', qty: 999, source: 'E1.0 Site Plan' },
+        ] },
+      ],
+    };
+
+    it('a C-priced markup-confirmed line reads {qty: raw feet, unit: "LF"}, never {unit: "C"} (R5: 1234 C would read as 123,400 ft to a GC)', () => {
+      const { data } = composeBidData(bidRow, agent4WithUnderground, '$1', {
+        savedLineItems: [{ category: 'Underground Feeders', item: '5.1', qty: 1234, unit: 'C', qty_source: 'markup' }],
+      });
+      const item = data.takeoff.find(c => c.name === 'Underground Feeders')!.items[0];
+      expect(item.qty).toBe(1234); // raw feet, per B4 — NOT divided by 100
+      expect(item.unit).toBe('LF');
+    });
+
+    it('same for an M-priced markup-confirmed line', () => {
+      const { data } = composeBidData(bidRow, agent4WithUnderground, '$1', {
+        savedLineItems: [{ category: 'Underground Feeders', item: '5.1', qty: 4321, unit: 'M', qty_source: 'markup' }],
+      });
+      const item = data.takeoff.find(c => c.name === 'Underground Feeders')!.items[0];
+      expect(item.qty).toBe(4321); // raw feet — NOT divided by 1000
+      expect(item.unit).toBe('LF');
+    });
+
+    it('an LF-priced markup-confirmed line is unaffected (already LF)', () => {
+      const { data } = composeBidData(bidRow, agent4WithUnderground, '$1', {
+        savedLineItems: [{ category: 'Underground Feeders', item: '5.1', qty: 555, unit: 'LF', qty_source: 'markup' }],
+      });
+      const item = data.takeoff.find(c => c.name === 'Underground Feeders')!.items[0];
+      expect(item.qty).toBe(555);
+      expect(item.unit).toBe('LF');
+    });
+
+    it('an EA-priced markup-confirmed line is still unaffected — only the LINEAR family is normalized', () => {
+      const { data } = composeBidData(bidRow, agent4Base, '$1', {
+        savedLineItems: [{ category: 'Service & Distribution', item: '1.1', qty: 2, unit: 'EA', qty_source: 'markup' }],
+      });
+      const item = data.takeoff.find(c => c.name === 'Service & Distribution')!.items[0];
+      expect(item.qty).toBe(2);
+      expect(item.unit).toBe('EA');
+    });
+  });
+
   it('carries furnish_by through onto the composed takeoff item', () => {
     const { data } = composeBidData(bidRow, agent4Base, '$1');
     const svc = data.takeoff.find(c => c.name === 'Service & Distribution')!;

@@ -11,7 +11,7 @@ vi.mock('../../api/client', async () => {
 });
 
 import { useEstimatingBid } from './useEstimatingBid';
-import { EMPTY_RECAP, DEFAULT_SETTINGS, EstimatingBidResponse } from './types';
+import { EMPTY_RECAP, DEFAULT_SETTINGS, EstimatingBidResponse, EstimateLine } from './types';
 
 beforeEach(() => {
   get.mockReset();
@@ -156,6 +156,54 @@ describe('useEstimatingBid — save', () => {
     expect(result.current.dirty).toBe(false);
   });
 
+  // Phase B, Task 1 — a brand-new line gets its real, server-minted
+  // line_key only once the save response is adopted; markups created
+  // right after saving need this to point at without a second round trip.
+  it('adopts the server\'s returned lines (with their real line_key) when present', async () => {
+    get.mockResolvedValue({ data: initialResponse });
+    const savedLines = [{ ...initialResponse.lines[0], line_key: 'server-minted-uuid', qty: 12 }];
+    put.mockResolvedValue({ data: { recap: { ...EMPTY_RECAP, totals: { ...EMPTY_RECAP.totals, grandTotal: 500 } }, lines: savedLines } });
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => { result.current.setLines(prev => prev.map(l => ({ ...l, qty: 12 }))); });
+
+    await act(async () => { await result.current.save(); });
+
+    expect(result.current.lines).toEqual(savedLines);
+    expect(result.current.lines[0].line_key).toBe('server-minted-uuid');
+    expect(result.current.dirty).toBe(false); // the adopted server lines match what was just persisted
+  });
+
+  // Fix round 2 / R2-S1 — save() resolves to remappedLineKeys, so a
+  // caller (PlansWorkspace.tsx's onSaveProposedMapping) can remap the
+  // active line and any pending/quarantined markers away from a
+  // "proposed-N" placeholder the instant it stops existing.
+  it('resolves to the server\'s remappedLineKeys', async () => {
+    get.mockResolvedValue({ data: initialResponse });
+    put.mockResolvedValue({
+      data: { recap: EMPTY_RECAP, remappedLineKeys: { 'proposed-0': 'real-uuid-1' } },
+    });
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let remap: Record<string, string> = {};
+    await act(async () => { remap = await result.current.save(); });
+
+    expect(remap).toEqual({ 'proposed-0': 'real-uuid-1' });
+  });
+
+  it('resolves to an empty object when the response has no remappedLineKeys at all (an older/mocked response)', async () => {
+    get.mockResolvedValue({ data: initialResponse });
+    put.mockResolvedValue({ data: { recap: EMPTY_RECAP } }); // no remappedLineKeys field
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let remap: Record<string, string> = { unexpected: 'value' };
+    await act(async () => { remap = await result.current.save(); });
+
+    expect(remap).toEqual({});
+  });
+
   it('sets saveError and stays dirty when the save fails', async () => {
     get.mockResolvedValue({ data: initialResponse });
     put.mockRejectedValue(new Error('boom'));
@@ -166,6 +214,104 @@ describe('useEstimatingBid — save', () => {
     await act(async () => { await result.current.save().catch(() => {}); });
     expect(result.current.saveError).toBe('boom');
     expect(result.current.dirty).toBe(true);
+  });
+
+  // Fix round 1 / B1 — save(linesOverride) PUTs the GIVEN array, not
+  // whatever `lines` this hook's own closure captured on its last render.
+  // This is what lets a caller do setLines(next) immediately followed by
+  // save(next) in the SAME synchronous function (PcWorkspaceView.tsx's
+  // onCreateLine) without a stale-closure race — React never re-renders
+  // between those two calls, so save()'s own `lines` argument would
+  // otherwise still be the PRE-setLines value.
+  it('save(linesOverride) PUTs the override, not the hook\'s own (possibly stale) lines state', async () => {
+    get.mockResolvedValue({ data: initialResponse });
+    put.mockResolvedValue({ data: { recap: EMPTY_RECAP, lines: [{ ...initialResponse.lines[0], line_key: 'k-new', qty: 999 }] } });
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const overrideLines = [...initialResponse.lines, { id: 'l2', category: 'Branch Power', description: 'New manual line', qty: 1, unit: 'EA' as const, source: 'manual' as const }];
+    await act(async () => { await result.current.save(overrideLines); });
+
+    expect(put).toHaveBeenCalledWith('/estimating/bid1', { lines: overrideLines, settings: initialResponse.settings });
+  });
+
+  it('save(linesOverride) still adopts the server\'s returned lines when present, falling back to the override otherwise', async () => {
+    get.mockResolvedValue({ data: initialResponse });
+    put.mockResolvedValue({ data: { recap: EMPTY_RECAP } }); // no `lines` in the response this time
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const overrideLines = [{ id: 'l2', category: 'Branch Power', description: 'New manual line', qty: 1, unit: 'EA' as const, source: 'manual' as const }];
+    await act(async () => { await result.current.save(overrideLines); });
+
+    expect(result.current.lines).toEqual(overrideLines); // fell back to the override, not the hook's OWN stale `lines`
+  });
+});
+
+describe('useEstimatingBid — installSaved (Fix round 1 / B1)', () => {
+  it('installs lines/recap/savedGrandTotal directly, with no PUT/GET at all', async () => {
+    get.mockResolvedValue({ data: initialResponse });
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const applied = [{ ...initialResponse.lines[0], qty: 24, qty_source: 'markup' as const }];
+    const recap = { ...EMPTY_RECAP, totals: { ...EMPTY_RECAP.totals, grandTotal: 777 } };
+    act(() => { result.current.installSaved({ lines: applied, recap }); });
+
+    expect(result.current.lines).toEqual(applied);
+    expect(result.current.recap.totals.grandTotal).toBe(777);
+    expect(result.current.savedGrandTotal).toBe(777);
+    expect(put).not.toHaveBeenCalled();
+    expect(get).toHaveBeenCalledTimes(1); // only the ORIGINAL hydration GET — no re-fetch
+  });
+
+  it('clears dirty and sets the installed lines as the new persisted baseline', async () => {
+    get.mockResolvedValue({ data: initialResponse });
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.dirty).toBe(false);
+
+    const applied = [{ ...initialResponse.lines[0], qty: 24, qty_source: 'markup' as const }];
+    act(() => { result.current.installSaved({ lines: applied, recap: EMPTY_RECAP }); });
+    expect(result.current.dirty).toBe(false); // installed lines ARE the new baseline, not a divergence from it
+
+    // Editing FROM the newly-installed baseline correctly marks dirty —
+    // installSaved didn't just freeze dirty at false forever.
+    act(() => { result.current.setLines(prev => prev.map(l => ({ ...l, qty: 1 }))); });
+    expect(result.current.dirty).toBe(true);
+  });
+
+  // This is THE reviewer's own repro (R6), now fixed: apply, then edit an
+  // UNRELATED line, then save — the applied qty must survive the save,
+  // not silently revert to its pre-apply value.
+  it("R6 fixed: apply (installSaved), then edit an unrelated field, then save() — the applied qty survives", async () => {
+    get.mockResolvedValue({ data: { ...initialResponse, lines: [
+      { id: 'l1', line_key: 'k1', category: 'Branch Power', description: 'Duplex', qty: 10, unit: 'EA', source: 'takeoff', qty_source: 'takeoff' },
+      { id: 'l2', line_key: 'k2', category: 'Interior Lighting', description: 'Troffer', qty: 5, unit: 'EA', source: 'takeoff', qty_source: 'takeoff' },
+    ] } });
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // "Apply" happened elsewhere (PlansWorkspace's own POST /apply-markups)
+    // and its response is installed directly.
+    const appliedLines: EstimateLine[] = [
+      { id: 'l1', line_key: 'k1', category: 'Branch Power', description: 'Duplex', qty: 24, unit: 'EA', source: 'takeoff', qty_source: 'markup' },
+      { id: 'l2', line_key: 'k2', category: 'Interior Lighting', description: 'Troffer', qty: 5, unit: 'EA', source: 'takeoff', qty_source: 'takeoff' },
+    ];
+    act(() => { result.current.installSaved({ lines: appliedLines, recap: EMPTY_RECAP }); });
+    expect(result.current.lines[0].qty).toBe(24);
+
+    // Now the estimator edits the OTHER (unrelated) line in Labor & Pricing.
+    act(() => { result.current.setLines(prev => prev.map(l => (l.line_key === 'k2' ? { ...l, qty: 7, qty_overridden: true } : l))); });
+    expect(result.current.dirty).toBe(true);
+
+    put.mockResolvedValue({ data: { recap: EMPTY_RECAP } }); // echoes no `lines` — save() must fall back to ITS OWN live lines, not the pre-apply GET snapshot
+    await act(async () => { await result.current.save(); });
+
+    // The PUT body itself must carry the applied 24, not the pre-apply 10.
+    const putBody = put.mock.calls[0][1] as { lines: { line_key: string; qty: number }[] };
+    expect(putBody.lines.find(l => l.line_key === 'k1')!.qty).toBe(24);
+    expect(putBody.lines.find(l => l.line_key === 'k2')!.qty).toBe(7);
   });
 });
 

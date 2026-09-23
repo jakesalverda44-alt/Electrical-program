@@ -100,6 +100,12 @@ export interface AppSettings {
   est_default_small_tools_pct: string;
   est_default_supervision_pct: string;
   est_default_consumables_pct: string;
+  // Fix round 1 / B8 — Decision 7's own drops/slack defaults (migration
+  // 108 already seeded these two keys; nothing read or wrote them until
+  // now — see LaborLibrarySection.tsx's DefaultsPanel and PlansWorkspace.
+  // tsx's DropsSlackPopover).
+  est_default_drop_ft: string;
+  est_default_slack_pct: string;
   // Other
   notifications_json: string;
   security_session_timeout: string;
@@ -137,6 +143,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   unit_cost_library: '',
   est_default_labor_rate: '38', est_default_material_tax_pct: '7', est_default_small_tools_pct: '3',
   est_default_supervision_pct: '0', est_default_consumables_pct: '2',
+  est_default_drop_ft: '10', est_default_slack_pct: '10',
   notifications_json: '{}', security_session_timeout: '480',
 };
 

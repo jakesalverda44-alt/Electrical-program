@@ -281,6 +281,43 @@ describe('LaborPricingStep — R2-N2: locked-qty hint', () => {
   });
 });
 
+// Fix round 1 / S7 — before this fix, hand-editing a markup-applied line's
+// qty set qty_overridden but left qty_source alone at 'markup', so
+// composeBidData.ts's "Applied" chip and the items panel's "not verified
+// on plans" count both kept treating the hand-typed number as
+// plan-confirmed.
+describe('LaborPricingStep — S7: hand-editing qty sets qty_source to "manual"', () => {
+  it('editing a plan-applied line\'s qty stamps qty_source: "manual" (no longer presented as plan-confirmed)', async () => {
+    const lines: EstimateLine[] = [
+      { id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'takeoff', qty_source: 'markup' },
+    ];
+    const { setLines } = renderStep({ lines });
+    const qty0 = screen.getByTestId('lp-row-0').querySelector('input[data-field="qty"]') as HTMLInputElement;
+
+    fireEvent.change(qty0, { target: { value: '15' } });
+
+    expect(setLines).toHaveBeenCalledTimes(1);
+    const updater = setLines.mock.calls[0][0] as (prev: EstimateLine[]) => EstimateLine[];
+    const result = updater(lines);
+    expect(result[0].qty).toBe(15);
+    expect(result[0].qty_overridden).toBe(true);
+    expect(result[0].qty_source).toBe('manual');
+  });
+
+  it('editing a plain takeoff-sourced line (no prior qty_source) also stamps "manual"', async () => {
+    const lines: EstimateLine[] = [
+      { id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'takeoff' },
+    ];
+    const { setLines } = renderStep({ lines });
+    const qty0 = screen.getByTestId('lp-row-0').querySelector('input[data-field="qty"]') as HTMLInputElement;
+
+    fireEvent.change(qty0, { target: { value: '7' } });
+
+    const updater = setLines.mock.calls[0][0] as (prev: EstimateLine[]) => EstimateLine[];
+    expect(updater(lines)[0].qty_source).toBe('manual');
+  });
+});
+
 describe('LaborPricingStep — save', () => {
   it('clicking Save calls the save() callback', async () => {
     const { save } = renderStep();

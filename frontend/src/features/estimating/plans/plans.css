@@ -1,0 +1,599 @@
+/* Estimating Phase B — Plan Viewer (Tasks 4-9). Its own stylesheet, loaded
+   only when the Plans view's lazy chunk loads (Task 9) — never part of the
+   main bundle's CSS. Dark-only design system, matching estimating.css and
+   the rest of the app (confirmed: no light theme exists anywhere in this
+   codebase) — the one deliberate exception is the plan sheet's own canvas,
+   which stays white regardless of theme (a PDF page is white paper; the
+   surrounding CHROME follows the app's dark tokens). */
+
+.plan-view {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  gap: 0;
+}
+
+/* ── Sheet navigator (left column) ───────────────────────────────────────── */
+
+.plan-sheet-nav {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  outline: none;
+}
+
+.plan-sheet-nav-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.plan-sheet-nav-chip {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text2);
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 999px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+
+.plan-sheet-nav-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.plan-sheet-nav-list {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.plan-sheet-nav-empty {
+  padding: 16px 12px;
+  font-size: 12px;
+  color: var(--text3);
+}
+
+.plan-sheet-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.plan-sheet-nav-item:hover {
+  background: var(--surface);
+}
+
+.plan-sheet-nav-item.current {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.plan-sheet-nav-no {
+  font-weight: 800;
+  font-family: var(--mono);
+  flex-shrink: 0;
+  min-width: 44px;
+}
+
+.plan-sheet-nav-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text2);
+}
+
+.plan-sheet-nav-count {
+  font-size: 10.5px;
+  font-weight: 800;
+  background: var(--surface3);
+  color: var(--text2);
+  border-radius: 999px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+
+.plan-sheet-nav-scanned {
+  font-size: 10px;
+  color: var(--amber);
+  flex-shrink: 0;
+}
+
+/* Task 9 (deferral closed) — the 900-1279px dropdown variant. */
+.plan-sheet-nav-dropdown {
+  width: 260px;
+  padding: 10px;
+  gap: 8px;
+}
+
+.plan-sheet-nav-select {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 6px 8px;
+  width: 100%;
+}
+
+/* ── Center: toolbar + canvas/overlay ────────────────────────────────────── */
+
+.plan-viewer {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.plan-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex-wrap: wrap;
+}
+
+.plan-toolbar-btn {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text2);
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.plan-toolbar-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.plan-toolbar-btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.plan-toolbar-scale {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plan-toolbar-scale-warn {
+  color: var(--amber);
+  font-weight: 700;
+}
+
+.plan-canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  background: #1a1a1a; /* neutral surround, not the app's blue-toned dark bg — reads as "outside the paper" */
+}
+
+.plan-canvas-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  /* Fix round 2 / R2-N1 — without this, a real two-finger pinch on iOS
+     pinch-zoomed the WHOLE PAGE (Safari's own native gesture) at the same
+     time PlanViewer.tsx's own onTouchMove was computing and applying its
+     own zoomBy() — the app and the OS fighting over the same gesture.
+     The review/decision text says "touch-action: none", but PlanViewer.tsx
+     has NO single-finger touch handler at all (onTouchMove bails unless
+     e.touches.length === 2) — single-finger panning on a touch device
+     works today purely through this element's native `overflow: auto`
+     touch-scroll. A literal `none` disables EVERY native touch gesture,
+     including that one-finger scroll, with no JS fallback to replace it —
+     trading the pinch-jitter bug for a worse one (no touch panning at
+     all). `pan-x pan-y` keeps native single-finger panning working while
+     still opting OUT of the browser's own pinch-zoom/double-tap-zoom
+     (pinch-zoom isn't in the allowed list), which is the actual conflict
+     this fix is for. Mouse-wheel scrolling is unaffected either way —
+     touch-action only governs touch input. */
+  touch-action: pan-x pan-y;
+}
+
+.plan-canvas-page {
+  position: relative;
+  /* The page itself is always white — a PDF is printed on white paper
+     regardless of the app's own dark theme (Task 9's explicit rule). */
+  background: #fff;
+  box-shadow: 0 4px 24px rgba(0,0,0,.5);
+}
+
+.plan-canvas-page canvas {
+  display: block;
+}
+
+/* Task 9 (deferral closed) — the sharp visible-region tile, drawn over the
+   (possibly CSS-stretched, softer) base canvas. pointer-events:none so
+   every click/drag still lands on the base canvas beneath it — the tile is
+   purely a rendering layer, never its own separate hit-test target. */
+.plan-tile-canvas {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* Task 7 (deferral closed) — "Suggest markers"/"Find tag on sheets…" bar,
+   sat between the toolbar and the canvas. */
+/* Fix round 1 / B2 — the proposed-mapping banner: Count/Linear are
+   disabled (Toolbar.tsx's own countLinearDisabledReason) until the
+   estimate is saved, so this offers the fix in one click. */
+.plan-proposed-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 12.5px;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(224,165,59,.3);
+}
+
+/* Fix round 1 / B7 — the title-block suggestion / "multiple scales"
+   banner, same shape as .plan-proposed-banner above. */
+.plan-scale-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--surface);
+  color: var(--text2);
+  font-size: 12.5px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.plan-scale-banner-warn {
+  background: var(--amber-soft);
+  color: var(--amber);
+  border-bottom-color: rgba(224,165,59,.3);
+}
+
+.plan-half-size-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text2);
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+/* Fix round 1 / N3 — this rule was entirely missing, so the popover
+   rendered unpositioned, in normal flow below the viewer, instead of as a
+   floating panel. `fixed` (not `absolute`) since this component is
+   rendered as a sibling of PlanViewer, outside any of its own positioned
+   containers — fixed always centers over the viewport regardless of
+   where it sits in the DOM, with no dependency on an ancestor's own
+   `position` staying `relative` forever. */
+.plan-scale-popover {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 280px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.45);
+}
+
+.plan-scale-popover-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.plan-scale-popover-row input {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.plan-scale-popover-error {
+  font-size: 11px;
+  color: var(--red);
+  font-weight: 600;
+}
+
+.plan-scale-popover-warn {
+  font-size: 11px;
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.plan-scale-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.plan-suggest-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 11.5px;
+  position: relative;
+}
+
+.plan-suggest-bar-notice {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.plan-suggest-bar-pending {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text2);
+  font-weight: 700;
+}
+
+.plan-suggest-bar-find {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plan-suggest-bar-find input {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 4px 8px;
+  width: 140px;
+}
+
+.plan-suggest-bar-find-empty {
+  color: var(--text3);
+}
+
+.plan-suggest-bar-find-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.plan-overlay-svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.plan-overlay-svg .plan-marker {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.plan-viewer-loading,
+.plan-viewer-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text2);
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--bg);
+}
+
+.plan-viewer-error {
+  color: var(--red);
+}
+
+/* Fix round 1 / B9 — a real progress bar for the plan-file download
+   (previously just a percentage number), visible for the longer transfers
+   a large plan set can now take with the 30s timeout ceiling removed. */
+.plan-viewer-progress {
+  width: 220px;
+  height: 8px;
+  accent-color: var(--accent);
+}
+
+.plan-viewer-mobile-notice {
+  padding: 10px 14px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* ── Items panel (right column) ──────────────────────────────────────────── */
+
+.plan-items-panel {
+  width: 300px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.plan-items-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 1;
+}
+
+.plan-items-panel-toggle {
+  font-size: 11.5px;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.plan-items-panel-group-header {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--text3);
+  padding: 10px 10px 4px;
+}
+
+.plan-items-panel-row {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plan-items-panel-row:hover {
+  background: var(--surface);
+}
+
+.plan-items-panel-row.active {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.plan-items-panel-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.plan-items-panel-row-qty {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text3);
+}
+
+.plan-items-panel-sheets {
+  font-size: 10.5px;
+  color: var(--text3);
+}
+
+.plan-items-panel-row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* ── Keyboard shortcuts help (Task 9) ────────────────────────────────────── */
+
+.plan-shortcuts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.plan-shortcuts-table td {
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text2);
+}
+
+.plan-shortcuts-keys {
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  width: 1%;
+}
+
+/* ── Responsive (Task 9) ──────────────────────────────────────────────────── */
+
+/* <900px: view-only — the toolbar/items panel are hidden by the component,
+   this just tightens layout for whatever remains. */
+@media (max-width: 899px) {
+  .plan-view {
+    flex-direction: column;
+  }
+  .plan-sheet-nav,
+  .plan-items-panel {
+    width: 100%;
+    border: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+/* 900-1279: the sheet navigator swaps to its own dropdown markup at this
+   same breakpoint (SheetNavigator.tsx's useIsMidViewport, Task 9 deferral
+   closed) — .plan-sheet-nav-dropdown (above) sizes that variant; this
+   block only still needs to narrow the items panel. */
+@media (min-width: 900px) and (max-width: 1279px) {
+  .plan-items-panel {
+    width: 260px;
+  }
+}

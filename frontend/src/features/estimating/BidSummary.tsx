@@ -26,6 +26,21 @@ export interface BidSummaryProps {
   comparables?: ComparableForSummary[];
   onJumpToUnmatched?: () => void;
   onJumpToVerify?: () => void;
+  /** Phase B, Task 8 — count of takeoff-sourced lines whose qty has not
+   *  been confirmed on the plans (qty_source !== 'markup'). A cheap,
+   *  lines-only proxy for "not yet verified on plans" — computed by the
+   *  caller from estimatingBid.lines, no extra network round trip to the
+   *  markups rollup. */
+  linesNotVerifiedOnPlansCount?: number;
+  onJumpToPlans?: () => void;
+  /** Fix round 2 / R2-S4(a) — composeBidData's own `category::item` keys
+   *  where the GC takeoff and the saved estimate disagree on how many rows
+   *  share that key, so no markup-confirmed qty was safely overridable for
+   *  ANY of them (the takeoff silently kept Agent 4's own echoed qty while
+   *  the price used the marked one — the same disagreement B5 fixed for
+   *  the unambiguous case). Undefined/empty when the proposal preview
+   *  hasn't loaded yet or there's nothing to flag. */
+  ambiguousQtyKeys?: string[];
   insights?: React.ReactNode;
   /** Fix round 1 / N7 — start the Insights panel pre-opened when the
    *  estimator arrived here from a legacy tab that conceptually IS insights
@@ -40,7 +55,10 @@ function pctLabel(share: number): string {
   return `${Math.round(share * 100)}%`;
 }
 
-export function BidSummary({ recap, proposed, dirty, savedGrandTotal, comparables, onJumpToUnmatched, onJumpToVerify, insights, initialInsightsOpen }: BidSummaryProps) {
+export function BidSummary({
+  recap, proposed, dirty, savedGrandTotal, comparables, onJumpToUnmatched, onJumpToVerify,
+  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, insights, initialInsightsOpen,
+}: BidSummaryProps) {
   const [insightsOpen, setInsightsOpen] = useState(!!initialInsightsOpen);
   const { totals, warnings } = recap;
   const materialAllIn = totals.materialSubtotal + totals.consumables + totals.materialTax;
@@ -140,8 +158,14 @@ export function BidSummary({ recap, proposed, dirty, savedGrandTotal, comparable
       </div>
 
       {(warnings.unmatchedCount > 0 || warnings.verifyCount > 0 || warnings.zeroMaterialMatchedCount > 0
-        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0) && (
+        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0
+        || !!linesNotVerifiedOnPlansCount || !!ambiguousQtyKeys?.length) && (
         <div className="bs-section" data-testid="bs-warnings">
+          {!!linesNotVerifiedOnPlansCount && (
+            <button type="button" className="bs-warning" data-testid="bs-warning-not-verified-on-plans" onClick={onJumpToPlans}>
+              {linesNotVerifiedOnPlansCount} line{linesNotVerifiedOnPlansCount === 1 ? '' : 's'} not verified on plans
+            </button>
+          )}
           {warnings.unmatchedCount > 0 && (
             <button type="button" className="bs-warning" data-testid="bs-warning-unmatched" onClick={onJumpToUnmatched}>
               {warnings.unmatchedCount} unmatched line{warnings.unmatchedCount === 1 ? '' : 's'}
@@ -173,6 +197,14 @@ export function BidSummary({ recap, proposed, dirty, savedGrandTotal, comparable
           {warnings.excludedCount > 0 && (
             <div className="bs-warning" data-testid="bs-warning-excluded" style={{ cursor: 'default', color: 'var(--text3)' }}>
               {warnings.excludedCount} line{warnings.excludedCount === 1 ? '' : 's'} excluded
+            </div>
+          )}
+          {/* Fix round 2 / R2-S4(a) — no jump target: reconciling this means
+              reviewing which of the duplicate category+item rows the marked
+              qty belongs to, not a single screen to navigate to. */}
+          {!!ambiguousQtyKeys?.length && (
+            <div className="bs-warning" data-testid="bs-warning-ambiguous-qty" style={{ cursor: 'default' }} title={ambiguousQtyKeys.join(', ')}>
+              {ambiguousQtyKeys.length} item{ambiguousQtyKeys.length === 1 ? '' : 's'} where the GC takeoff qty may not match the saved estimate
             </div>
           )}
         </div>

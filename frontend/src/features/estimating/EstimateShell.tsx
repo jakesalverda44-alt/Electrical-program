@@ -60,6 +60,14 @@ export interface EstimateShellProps {
   summary: React.ReactNode;
   children: React.ReactNode;
   nextAction?: { label: string; onClick: () => void } | null;
+  /** Phase B, Decision 1 — the Plans view needs the drawing's full width, so
+   *  the Takeoff step forces the Bid Summary into its collapsed slim-bar
+   *  form even at the desktop breakpoint (which otherwise always shows the
+   *  full `<aside>`). Reuses the SAME slim-toggle chrome the tablet layout
+   *  already has — the tablet layout is unaffected either way (it's already
+   *  as collapsed as this makes desktop). Default false: every existing
+   *  caller/step keeps today's desktop layout unchanged. */
+  forceSlimSummary?: boolean;
 }
 
 function saveStateText(saveState: SaveState): string {
@@ -72,7 +80,7 @@ function saveStateText(saveState: SaveState): string {
 }
 
 export function EstimateShell({
-  currentStep, onSelectStep, doneByStep, saveState, summary, children, nextAction,
+  currentStep, onSelectStep, doneByStep, saveState, summary, children, nextAction, forceSlimSummary,
 }: EstimateShellProps) {
   const breakpoint = useEstimateBreakpoint();
   const [summaryExpanded, setSummaryExpanded] = useState(false);
@@ -168,22 +176,40 @@ export function EstimateShell({
     );
   }
 
+  const slimSummary = (
+    <>
+      <button
+        type="button"
+        className="est-summary-slim"
+        data-testid="est-summary-slim-toggle"
+        onClick={() => setSummaryExpanded(v => !v)}
+        aria-expanded={summaryExpanded}
+      >
+        <span>Bid Summary</span>
+        <Icon name="chevron-down" size={14} stroke={2} style={summaryExpanded ? { transform: 'rotate(180deg)' } : undefined} />
+      </button>
+      {summaryExpanded && <div className="est-summary-slim-body" data-testid="est-summary-slim-body">{summary}</div>}
+    </>
+  );
+
   if (breakpoint === 'tablet') {
     return (
       <div className="est-shell est-shell-tablet" data-testid="est-shell" data-breakpoint={breakpoint}>
         {rail}
         <div className="est-tablet-main">
-          <button
-            type="button"
-            className="est-summary-slim"
-            data-testid="est-summary-slim-toggle"
-            onClick={() => setSummaryExpanded(v => !v)}
-            aria-expanded={summaryExpanded}
-          >
-            <span>Bid Summary</span>
-            <Icon name="chevron-down" size={14} stroke={2} style={summaryExpanded ? { transform: 'rotate(180deg)' } : undefined} />
-          </button>
-          {summaryExpanded && <div className="est-summary-slim-body" data-testid="est-summary-slim-body">{summary}</div>}
+          {slimSummary}
+          {work}
+        </div>
+      </div>
+    );
+  }
+
+  if (forceSlimSummary) {
+    return (
+      <div className="est-shell est-shell-desktop est-shell-slim" data-testid="est-shell" data-breakpoint={breakpoint}>
+        {rail}
+        <div className="est-tablet-main">
+          {slimSummary}
           {work}
         </div>
       </div>

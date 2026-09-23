@@ -137,3 +137,36 @@ describe('EstimateShell — responsive layout', () => {
     expect(screen.getByTestId('est-save-state-mobile')).toBeTruthy();
   });
 });
+
+// Phase B, Decision 1 — the Plans view forces the Bid Summary into its
+// slim-bar form even at the desktop breakpoint.
+describe('EstimateShell — forceSlimSummary (Phase B, Decision 1)', () => {
+  it('at desktop width, WITHOUT forceSlimSummary, shows the full aside as before', () => {
+    mockMatchMedia(1400);
+    renderShell();
+    expect(screen.getByTestId('est-summary')).toBeTruthy();
+    expect(screen.queryByTestId('est-summary-slim-toggle')).toBeNull();
+  });
+
+  it('at desktop width, WITH forceSlimSummary, shows the slim toggle instead of the full aside', () => {
+    mockMatchMedia(1400);
+    renderShell({ forceSlimSummary: true });
+    expect(screen.queryByTestId('est-summary')).toBeNull();
+    expect(screen.getByTestId('est-summary-slim-toggle')).toBeTruthy();
+  });
+
+  it('the slim summary still expands to show its content on click, same as tablet', () => {
+    mockMatchMedia(1400);
+    renderShell({ forceSlimSummary: true });
+    expect(screen.queryByTestId('summary-content')).toBeNull();
+    fireEvent.click(screen.getByTestId('est-summary-slim-toggle'));
+    expect(screen.getByTestId('summary-content')).toBeTruthy();
+  });
+
+  it('forceSlimSummary has no effect at the tablet/mobile breakpoints (already collapsed/bottom)', () => {
+    mockMatchMedia(1000);
+    renderShell({ forceSlimSummary: true });
+    expect(screen.getByTestId('est-shell').getAttribute('data-breakpoint')).toBe('tablet');
+    expect(screen.getByTestId('est-summary-slim-toggle')).toBeTruthy(); // same as the non-forced tablet case
+  });
+});

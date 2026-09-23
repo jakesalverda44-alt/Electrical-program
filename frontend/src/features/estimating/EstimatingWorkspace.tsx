@@ -31,11 +31,22 @@ export interface EstimatingWorkspaceProps {
   saveError: string | null;
   setLines: (updater: EstimateLine[] | ((prev: EstimateLine[]) => EstimateLine[])) => void;
   setSettings: (updater: EstimateSettings | ((prev: EstimateSettings) => EstimateSettings)) => void;
-  save: () => Promise<void>;
+  // Fix round 2 / R2-S1 — widened from Promise<void>: useEstimatingBid's
+  // save() now resolves to remappedLineKeys (PlansWorkspace.tsx's own
+  // proposed-mapping remap). This chain (down through LaborPricingStep's
+  // own Save button) never reads the resolved value at all — `unknown`
+  // says so honestly, and never needs updating again regardless of what
+  // save() returns in the future.
+  save: () => Promise<unknown>;
   syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number } | null>;
   showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
 
   comparables: ComparableForSummary[];
+  /** Phase B, Task 8 — see BidSummaryProps.linesNotVerifiedOnPlansCount. */
+  linesNotVerifiedOnPlansCount?: number;
+  onJumpToPlans?: () => void;
+  /** Fix round 2 / R2-S4(a) — see BidSummaryProps.ambiguousQtyKeys. */
+  ambiguousQtyKeys?: string[];
   insights: React.ReactNode;
   /** Fix round 1 / N7 — see BidSummaryProps.initialInsightsOpen. */
   initialInsightsOpen?: boolean;
@@ -43,12 +54,18 @@ export interface EstimatingWorkspaceProps {
   /** The other four steps' (already re-homed, unchanged) content — Labor &
    *  Pricing is the only step this module itself renders. */
   otherStepContent: React.ReactNode;
+
+  /** Phase B, Decision 1 — forwarded to EstimateShell; true while the
+   *  Takeoff step's Plans view is open (the caller, PcWorkspaceView, is the
+   *  one that knows the List|Plans toggle state). */
+  forceSlimSummary?: boolean;
 }
 
 export default function EstimatingWorkspace({
   currentStep, onSelectStep, doneByStep, saveState, nextAction,
   lines, settings, recap, proposed, dirty, savedGrandTotal, saving, syncing, saveError, setLines, setSettings, save, syncTakeoff, showToast,
-  comparables, insights, otherStepContent, initialInsightsOpen,
+  comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary,
+  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys,
 }: EstimatingWorkspaceProps) {
   return (
     <EstimateShell
@@ -57,6 +74,7 @@ export default function EstimatingWorkspace({
       doneByStep={doneByStep}
       saveState={saveState}
       nextAction={nextAction}
+      forceSlimSummary={forceSlimSummary}
       summary={
         <BidSummary
           recap={recap}
@@ -66,6 +84,9 @@ export default function EstimatingWorkspace({
           comparables={comparables}
           onJumpToUnmatched={() => onSelectStep('pricing')}
           onJumpToVerify={() => onSelectStep('takeoff')}
+          linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
+          onJumpToPlans={onJumpToPlans}
+          ambiguousQtyKeys={ambiguousQtyKeys}
           insights={insights}
           initialInsightsOpen={initialInsightsOpen}
         />

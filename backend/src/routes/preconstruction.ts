@@ -1769,7 +1769,12 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
 // composes it — no response writing here, so each route decides its own
 // status codes for a given failure.
 export type ComposeCurrentBidDataResult =
-  | { ok: true; bidData: BidData; bidName: string; asciiName: string }
+  // Fix round 2 / R2-S4(a) — ambiguousQtyKeys (composeBidData.ts's own
+  // "left un-overridden, counts didn't line up" signal) threaded all the
+  // way out here so a caller (the proposal-preview route) can surface it
+  // to the estimator instead of it only ever reaching server logs. Always
+  // present, empty for a legacy-shape row (composeBidData never runs).
+  | { ok: true; bidData: BidData; bidName: string; asciiName: string; ambiguousQtyKeys: string[] }
   | { ok: false; status: number; error: string; failures?: { check: string; detail: string }[] };
 
 export interface ComposeCurrentBidDataOptions {
@@ -1841,6 +1846,9 @@ export async function composeCurrentBidData(
   const savedLineItems = (estRows[0]?.line_items ?? []) as SavedConfidenceItem[];
 
   let bidData: BidData;
+  // Fix round 2 / R2-S4(a) — [] for the legacy-shape branch below
+  // (composeBidData never runs there, so there's nothing to flag).
+  let ambiguousQtyKeys: string[] = [];
   if (isAgent4Shape(parsed)) {
     if (!formattedPrice) {
       return { ok: false, status: 422, error: 'No validated price on file for this proposal. Re-run Agent 4.' };
@@ -1849,7 +1857,8 @@ export async function composeCurrentBidData(
       name: bid?.name, loc: bid?.loc, gc: bid?.gc, contact: bid?.contact,
       sq_ft: bid?.sq_ft ?? null, job_number: bid?.job_number ?? null,
     };
-    const { data, jobNumberGenerated } = composeBidData(bidRow, parsed as Agent4Output, formattedPrice, { savedLineItems });
+    const { data, jobNumberGenerated, ambiguousQtyKeys: keys } = composeBidData(bidRow, parsed as Agent4Output, formattedPrice, { savedLineItems });
+    ambiguousQtyKeys = keys;
     if (jobNumberGenerated && persist) {
       // Task 6.2 — two bids generated the same day compute the identical
       // JS.MMDDYYYY (jobNumber() is a pure function of today's date only),
@@ -1914,7 +1923,7 @@ export async function composeCurrentBidData(
     bidData = legacyData;
   }
 
-  return { ok: true, bidData, bidName, asciiName };
+  return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys };
 }
 
 /** Flatten every takeoff item's text fields — the pre-bid scope docx never
@@ -1947,7 +1956,11 @@ router.get('/:bidId/proposal-preview', requireAuth, requireAIPermission('view_re
 
   const loaded = await composeCurrentBidData(bidId, { persist: false, validate: false });
   if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error });
-  res.json(loaded.bidData);
+  // Fix round 2 / R2-S4(a) — ambiguousQtyKeys riding alongside the BidData
+  // fields (rather than a separate round trip) is what lets the frontend
+  // show it as a real pre-send warning instead of it only ever reaching
+  // server logs (see composeBidData.ts's own comment on this).
+  res.json({ ...loaded.bidData, ambiguousQtyKeys: loaded.ambiguousQtyKeys });
 }));
 
 // GET generate-docx — build and return the .docx proposal file
