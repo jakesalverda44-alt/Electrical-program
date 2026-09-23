@@ -5,6 +5,7 @@ import { Readable } from 'stream';
 import { pool } from '../db/pool';
 import { getFileMedia } from '../services/googleDrive';
 import { logger } from '../utils/logger';
+import { runWithConcurrencyLimit } from '../utils/concurrencyLimit';
 import { titleBlockCropRect } from '../ai/pageClassifier';
 import { findScaleLabel, findAllScaleLabels } from './scaleParse';
 import { openPdfDocument, PdfJsDocument, PdfJsTextItem } from './pdfjsLoader';
@@ -489,6 +490,16 @@ async function resetIndexStatusForRefresh(bidId: string, documentIds: string[]):
 // document this app indexes should ever take.
 const STALE_INDEXING_LEASE_MINUTES = 10;
 
+// Fix round 2 / R2-S6 — runClaimedIndexingInBackground used to fire every
+// claimed document's indexing job at once (one `void (async () => ...)()`
+// per doc, no limit). Sheet indexing parses a whole PDF's worth of pages
+// through pdf.js (extractPageInfo, per page) — a bid with several large
+// plan sets uploaded together could spike memory/CPU with no ceiling at
+// all. Runs claimed documents through a small worker pool instead, at most
+// this many in flight at once; no dependency added (p-limit et al.) for
+// something this small — see runClaimedIndexingInBackground below.
+const INDEXING_CONCURRENCY = 2;
+
 /** Atomically claims every eligible document among the given ids for
  *  indexing — the UPDATE's own WHERE clause is the compare-and-set: only
  *  a row that's still eligible gets flipped to 'indexing' (with a fresh
@@ -540,35 +551,46 @@ async function markIndexFailed(bidId: string, documentId: string, error: string)
   );
 }
 
+/** Indexes and records the outcome for exactly one document — the same
+ *  try/catch/nested-catch body runClaimedIndexingInBackground has always
+ *  used, factored out so the worker-pool loop below can call it per item
+ *  without duplicating it. */
+async function indexOneClaimedDocument(bidId: string, doc: PlanDocument): Promise<void> {
+  try {
+    const pageCount = await indexDocument(bidId, doc);
+    await markIndexDone(bidId, doc.id, pageCount);
+  } catch (err) {
+    logger.error({ err, documentId: doc.id }, '[estimating/sheets] background indexing failed');
+    // Fix round 2 / R2-B3 — markIndexFailed itself can fail (a DB
+    // blip while writing the failure status). Before this, that
+    // exception propagated out of this whole async IIFE with nothing
+    // ever awaiting it — an unhandled rejection, logged only by
+    // index.ts's global handler, that left the row stuck in
+    // 'indexing' with no readable error at all (worse than the
+    // ORIGINAL failure this catch block was trying to record). Never
+    // strands the row silently now: worst case it logs twice and the
+    // STALE_INDEXING_LEASE_MINUTES reclaim above still recovers it.
+    try {
+      await markIndexFailed(bidId, doc.id, err instanceof Error ? err.message : String(err));
+    } catch (markErr) {
+      logger.error({ err: markErr, documentId: doc.id }, '[estimating/sheets] could not even record the indexing failure — this document may be stuck until the stale-lease reclaim or a server restart');
+    }
+  }
+}
+
 /** Fire-and-forget — GET /sheets must respond immediately with whatever's
  *  already there; it never awaits this. Each document indexes and updates
  *  its own status independently, so one slow/corrupt document never delays
- *  another's 'done' from landing. */
+ *  another's 'done' from landing.
+ *
+ *  Fix round 2 / R2-S6 — runs the claimed documents through
+ *  runWithConcurrencyLimit (utils/concurrencyLimit.ts) instead of firing
+ *  all of them at once: at most INDEXING_CONCURRENCY documents ever index
+ *  in parallel. indexOneClaimedDocument never throws past its own
+ *  try/catch, so one document's failure never stops the pool from moving
+ *  on to the next. */
 function runClaimedIndexingInBackground(bidId: string, docs: PlanDocument[]): void {
-  for (const doc of docs) {
-    void (async () => {
-      try {
-        const pageCount = await indexDocument(bidId, doc);
-        await markIndexDone(bidId, doc.id, pageCount);
-      } catch (err) {
-        logger.error({ err, documentId: doc.id }, '[estimating/sheets] background indexing failed');
-        // Fix round 2 / R2-B3 — markIndexFailed itself can fail (a DB
-        // blip while writing the failure status). Before this, that
-        // exception propagated out of this whole async IIFE with nothing
-        // ever awaiting it — an unhandled rejection, logged only by
-        // index.ts's global handler, that left the row stuck in
-        // 'indexing' with no readable error at all (worse than the
-        // ORIGINAL failure this catch block was trying to record). Never
-        // strands the row silently now: worst case it logs twice and the
-        // STALE_INDEXING_LEASE_MINUTES reclaim above still recovers it.
-        try {
-          await markIndexFailed(bidId, doc.id, err instanceof Error ? err.message : String(err));
-        } catch (markErr) {
-          logger.error({ err: markErr, documentId: doc.id }, '[estimating/sheets] could not even record the indexing failure — this document may be stuck until the stale-lease reclaim or a server restart');
-        }
-      }
-    })();
-  }
+  void runWithConcurrencyLimit(docs, INDEXING_CONCURRENCY, doc => indexOneClaimedDocument(bidId, doc));
 }
 
 export async function getIndexStatuses(bidId: string): Promise<Record<string, IndexStatus>> {

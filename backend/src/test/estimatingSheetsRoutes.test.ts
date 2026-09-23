@@ -378,6 +378,42 @@ describe('GET /api/estimating/:bidId/sheets — background indexing status (B9)'
     const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
     expect(after.body.statuses[docId]).toBe('done'); // unchanged
   });
+
+  // Fix round 2 / R2-S6 — runClaimedIndexingInBackground used to fire every
+  // claimed document's indexDocument() at once, no ceiling. Drives 5
+  // real Drive-backed documents through the ACTUAL background-indexing
+  // path (not the pure runWithConcurrencyLimit unit tests in utils/
+  // concurrencyLimit.test.ts, which cover the pooling mechanism itself in
+  // isolation) and observes how many concurrent getFileMedia calls
+  // (indexDocument's own first async step, via fetchDocumentBuffer) are
+  // ever in flight at once.
+  it('indexing 5 documents never has more than 2 running at the same time', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    for (let i = 0; i < 5; i++) await makePlanDocDriveStored(bidId, `drive-concurrency-${Date.now()}-${i}`);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    getFileMedia.mockImplementation(async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      // A real (short) delay, not a synchronous resolve — without this,
+      // every call could settle within the same microtask turn regardless
+      // of the pool's actual concurrency limit, and this test would prove
+      // nothing.
+      await new Promise(r => setTimeout(r, 40));
+      inFlight--;
+      return { stream: Readable.from(buildSampleSheetPdf()), mimeType: 'application/pdf', name: 'plans.pdf' };
+    });
+
+    const done = await pollSheetsUntilIndexed(app, bidId, u.token);
+    expect(Object.values(done.body.statuses)).toEqual(Array(5).fill('done'));
+    expect(getFileMedia).toHaveBeenCalledTimes(5); // every document really was indexed
+    expect(maxInFlight).toBeLessThanOrEqual(2);
+    expect(maxInFlight).toBe(2); // and it actually reached the limit — not silently serialized to 1
+  });
 });
 
 describe('PUT /api/estimating/:bidId/sheets/:documentId/:pageIndex/scale', () => {
