@@ -47,3 +47,31 @@ export function screenPosition(
     case 270: return { x: heightPt - relY, y: widthPt - relX };
   }
 }
+
+/** Takeoff accuracy, Task 4 — the exact inverse of screenPosition: a point on
+ *  the DISPLAYED (rotated, origin-corrected) page at scale 1 (i.e. in
+ *  displayed points from the top-left corner) back to absolute PDF user-space
+ *  points — the coordinate space est_markups.points use (Phase B Decision 5).
+ *  The AI counter reports symbol positions on raster tiles of the displayed
+ *  page (pdftoppm -cropbox renders the CropBox with /Rotate applied, the same
+ *  page pdf.js's viewport shows), so every counted location goes through here
+ *  before it is stored as a suggested marker. Round-trip tested against
+ *  screenPosition at all four rotations with a non-zero origin, and end to
+ *  end against real pdftoppm output (ai/countRender.test.ts). */
+export function displayedToPdf(
+  dx: number, dy: number,
+  originX: number, originY: number,
+  widthPt: number, heightPt: number,
+  rotation: number
+): { x: number; y: number } {
+  switch (normalizeRotation(rotation)) {
+    // screenPosition case 0:   (relX, H - relY)
+    case 0: return { x: originX + dx, y: originY + (heightPt - dy) };
+    // case 90:  (relY, relX)
+    case 90: return { x: originX + dy, y: originY + dx };
+    // case 180: (W - relX, relY)
+    case 180: return { x: originX + (widthPt - dx), y: originY + dy };
+    // case 270: (H - relY, W - relX)
+    case 270: return { x: originX + (widthPt - dy), y: originY + (heightPt - dx) };
+  }
+}

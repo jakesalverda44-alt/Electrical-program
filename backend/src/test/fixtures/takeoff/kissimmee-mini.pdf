@@ -1,0 +1,111 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R] /Count 4 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1728 1296] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
+endobj
+5 0 obj
+<< /Length 535 >>
+stream
+0 g
+BT /F1 14 Tf 72.00 1200.00 Td (LUMINAIRE SCHEDULE) Tj ET
+BT /F1 10 Tf 72.00 1170.00 Td (A  4 FT LED LINEAR WRAPAROUND  32W) Tj ET
+BT /F1 10 Tf 72.00 1150.00 Td (B  8 FT LED LINEAR WRAPAROUND  64W) Tj ET
+BT /F1 10 Tf 72.00 1130.00 Td (D  LED WALL PACK  40W) Tj ET
+BT /F1 10 Tf 72.00 1110.00 Td (S1  LED AREA LIGHT SINGLE HEAD 25 FT POLE  150W) Tj ET
+BT /F1 10 Tf 72.00 1090.00 Td (S2  LED AREA LIGHT TWIN HEAD 25 FT POLE  300W) Tj ET
+BT /F1 16 Tf 1589.76 120.00 Td (E-0.1) Tj ET
+BT /F1 8 Tf 1589.76 90.00 Td (FIXTURE SCHEDULE) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [100 200 1396 1928] /CropBox [136 236 1360 1892] /Rotate 90 /Resources << /Font << /F1 3 0 R >> >> /Contents 7 0 R >>
+endobj
+7 0 obj
+<< /Length 744 >>
+stream
+0 g
+293.00 393.00 14 14 re f
+413.00 393.00 14 14 re f
+533.00 393.00 14 14 re f
+293.00 693.00 14 14 re f
+413.00 693.00 14 14 re f
+693.00 893.00 14 14 re f
+893.00 893.00 14 14 re f
+173.00 293.00 14 14 re f
+1243.00 1293.00 14 14 re f
+173.00 1393.00 14 14 re f
+BT /F1 9 Tf 328.00 428.00 Td (A) Tj ET
+BT /F1 9 Tf 448.00 428.00 Td (A) Tj ET
+BT /F1 9 Tf 568.00 428.00 Td (A) Tj ET
+BT /F1 9 Tf 328.00 728.00 Td (A) Tj ET
+BT /F1 9 Tf 448.00 728.00 Td (A) Tj ET
+BT /F1 9 Tf 728.00 928.00 Td (B) Tj ET
+BT /F1 9 Tf 928.00 928.00 Td (B) Tj ET
+BT /F1 9 Tf 208.00 328.00 Td (D) Tj ET
+BT /F1 9 Tf 1278.00 1328.00 Td (D) Tj ET
+BT /F1 9 Tf 208.00 1428.00 Td (D) Tj ET
+BT /F1 16 Tf 300.00 1800.00 Td (E-3) Tj ET
+BT /F1 8 Tf 300.00 1780.00 Td (LIGHTING PLAN) Tj ET
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1728 1296] /Resources << /Font << /F1 3 0 R >> >> /Contents 9 0 R >>
+endobj
+9 0 obj
+<< /Length 303 >>
+stream
+0 g
+243.00 243.00 14 14 re f
+893.00 1093.00 14 14 re f
+1293.00 293.00 14 14 re f
+BT /F1 9 Tf 278.00 278.00 Td (S1) Tj ET
+BT /F1 9 Tf 928.00 1128.00 Td (S1) Tj ET
+BT /F1 9 Tf 1328.00 328.00 Td (S2) Tj ET
+BT /F1 16 Tf 1589.76 120.00 Td (E-1) Tj ET
+BT /F1 8 Tf 1589.76 90.00 Td (ELECTRICAL SITE PLAN) Tj ET
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1728 1296] /Resources << /Font << /F1 3 0 R >> >> /Contents 11 0 R >>
+endobj
+11 0 obj
+<< /Length 306 >>
+stream
+0 g
+243.00 243.00 14 14 re f
+893.00 1093.00 14 14 re f
+1293.00 293.00 14 14 re f
+BT /F1 9 Tf 278.00 278.00 Td (S1) Tj ET
+BT /F1 9 Tf 928.00 1128.00 Td (S1) Tj ET
+BT /F1 9 Tf 1328.00 328.00 Td (S2) Tj ET
+BT /F1 16 Tf 1589.76 120.00 Td (PH0.1) Tj ET
+BT /F1 8 Tf 1589.76 90.00 Td (PHOTOMETRIC SITE PLAN) Tj ET
+endstream
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000134 00000 n 
+0000000231 00000 n 
+0000000359 00000 n 
+0000000945 00000 n 
+0000001117 00000 n 
+0000001912 00000 n 
+0000002040 00000 n 
+0000002394 00000 n 
+0000002524 00000 n 
+trailer
+<< /Size 12 /Root 1 0 R >>
+startxref
+2882
+%%EOF
