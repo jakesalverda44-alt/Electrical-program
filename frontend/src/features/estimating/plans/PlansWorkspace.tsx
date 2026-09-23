@@ -320,11 +320,15 @@ export default function PlansWorkspace({
     tags: string[], targetSheet: SheetRow, lineKeyForTag: (tag: string) => string | null
   ) => {
     if (!targetSheet.has_text_layer) {
-      showToast?.({ title: 'No text on this sheet', sub: 'Nothing to search for tags here.' });
+      // Nothing actually FAILED here — this sheet just has no text layer
+      // to search. 'info', not 'error' (toastVariants.test.ts's own
+      // guardrail: "Nothing ..." copy defaults to reading as a failure
+      // unless the variant says otherwise).
+      showToast?.({ variant: 'info', title: 'No text on this sheet', sub: 'Nothing to search for tags here.' });
       return;
     }
     if (tags.length === 0) {
-      showToast?.({ title: 'No tag-like text found', sub: 'Nothing to search for on this sheet.' });
+      showToast?.({ variant: 'info', title: 'No tag-like text found', sub: 'Nothing to search for on this sheet.' });
       return;
     }
     setSuggestBusy(true);
@@ -337,7 +341,7 @@ export default function PlansWorkspace({
         history.present, () => crypto.randomUUID()
       );
       if (drafts.length === 0) {
-        showToast?.({ title: 'No new suggestions', sub: 'Nothing new matched on this sheet.' });
+        showToast?.({ variant: 'info', title: 'No new suggestions', sub: 'Nothing new matched on this sheet.' });
         return;
       }
       mutate([...history.present, ...drafts]);

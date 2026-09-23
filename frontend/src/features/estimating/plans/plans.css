@@ -120,6 +120,24 @@
   flex-shrink: 0;
 }
 
+/* Task 9 (deferral closed) — the 900-1279px dropdown variant. */
+.plan-sheet-nav-dropdown {
+  width: 260px;
+  padding: 10px;
+  gap: 8px;
+}
+
+.plan-sheet-nav-select {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 6px 8px;
+  width: 100%;
+}
+
 /* ── Center: toolbar + canvas/overlay ────────────────────────────────────── */
 
 .plan-viewer {
@@ -436,12 +454,11 @@
   }
 }
 
-/* 900-1279: sheet navigator collapses to a dropdown-style bar instead of a
-   full column (the component swaps markup; this narrows what's left). */
+/* 900-1279: the sheet navigator swaps to its own dropdown markup at this
+   same breakpoint (SheetNavigator.tsx's useIsMidViewport, Task 9 deferral
+   closed) — .plan-sheet-nav-dropdown (above) sizes that variant; this
+   block only still needs to narrow the items panel. */
 @media (min-width: 900px) and (max-width: 1279px) {
-  .plan-sheet-nav {
-    width: 180px;
-  }
   .plan-items-panel {
     width: 260px;
   }

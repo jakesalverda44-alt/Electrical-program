@@ -18,10 +18,17 @@ afterEach(cleanup);
 // est-step-review has exactly one match.
 function mockDesktopMatchMedia() {
   window.matchMedia = vi.fn().mockImplementation((query: string) => {
-    const m = /min-width:\s*(\d+)px/.exec(query);
-    const threshold = m ? Number(m[1]) : 0;
+    // Task 9 (deferral closed): SheetNavigator's own 900-1279px dropdown
+    // query has a max-width component too — a min-width-only check would
+    // wrongly report "matches" for it at 1400px (min-width:900 alone is
+    // satisfied), tripping the dropdown branch instead of the full list.
+    const minM = /min-width:\s*(\d+)px/.exec(query);
+    const maxM = /max-width:\s*(\d+)px/.exec(query);
+    const min = minM ? Number(minM[1]) : null;
+    const max = maxM ? Number(maxM[1]) : null;
+    const matches = (min == null || 1400 >= min) && (max == null || 1400 <= max);
     return {
-      matches: 1400 >= threshold,
+      matches,
       media: query, onchange: null,
       addEventListener: vi.fn(), removeEventListener: vi.fn(),
       addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),

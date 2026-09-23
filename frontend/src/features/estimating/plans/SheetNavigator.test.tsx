@@ -1,11 +1,38 @@
 // @vitest-environment happy-dom
-// Estimating Phase B, Task 4 — SheetNavigator.tsx.
+// Estimating Phase B, Task 4 — SheetNavigator.tsx. Task 9 (deferral
+// closed) added a SECOND rendering mode (a real `<select>` dropdown at
+// 900-1279px) gated on window.matchMedia — happy-dom's own DEFAULT
+// matchMedia resolution falls inside that range (roughly a 1024px
+// viewport), so every test in this file that exercises the ORIGINAL full
+// list needs an explicit desktop-width mock or it would silently start
+// hitting the dropdown branch instead. mockWidthMatchMedia is applied in
+// beforeEach for the whole file; the dedicated "900-1279px dropdown"
+// describe block below overrides it per test.
 import React from 'react';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import SheetNavigator, { sheetKey } from './SheetNavigator';
 import { SheetRow } from '../types';
 
+function mockWidthMatchMedia(widthPx: number) {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => {
+    // Parses BOTH "(min-width: Npx)" and, when present, "(max-width: Mpx)"
+    // out of the query and evaluates the actual compound condition —
+    // SheetNavigator's own useIsMidViewport query has both.
+    const minM = /min-width:\s*(\d+)px/.exec(query);
+    const maxM = /max-width:\s*(\d+)px/.exec(query);
+    const min = minM ? Number(minM[1]) : null;
+    const max = maxM ? Number(maxM[1]) : null;
+    const matches = (min == null || widthPx >= min) && (max == null || widthPx <= max);
+    return {
+      matches, media: query, onchange: null,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(),
+      addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
+    };
+  });
+}
+
+beforeEach(() => mockWidthMatchMedia(1400)); // desktop by default — the full list
 afterEach(cleanup);
 
 function sheet(over: Partial<SheetRow>): SheetRow {
@@ -159,5 +186,87 @@ describe('SheetNavigator — keyboard navigation', () => {
     const { onSelect } = setup({ currentKey: sheetKey('doc-1', 3) }); // M1.1, last in sorted order
     fireEvent.keyDown(screen.getByRole('listbox'), { key: 'ArrowDown' });
     expect(onSelect).toHaveBeenCalledWith('doc-1', 3);
+  });
+});
+
+describe('SheetNavigator — 900-1279px real dropdown (Task 9, deferral closed)', () => {
+  it('renders a <select> instead of the listbox/full-list markup at a mid-range width', () => {
+    mockWidthMatchMedia(1024);
+    setup();
+    expect(screen.getByTestId('sheet-nav-select')).toBeTruthy();
+    expect(screen.queryByRole('listbox')).toBeNull();
+    // The full-list branch renders each sheet as its OWN <button
+    // data-testid="sheet-...">; the dropdown branch never does.
+    expect(screen.queryByTestId(`sheet-${sheetKey('doc-1', 0)}`)).toBeNull();
+  });
+
+  it('renders the full list (not the dropdown) just above the range, at 1280px', () => {
+    mockWidthMatchMedia(1280);
+    setup();
+    expect(screen.queryByTestId('sheet-nav-select')).toBeNull();
+    expect(screen.getByRole('listbox')).toBeTruthy();
+  });
+
+  it('renders the full list (not the dropdown) just below the range, at 899px', () => {
+    mockWidthMatchMedia(899);
+    setup();
+    expect(screen.queryByTestId('sheet-nav-select')).toBeNull();
+    expect(screen.getByRole('listbox')).toBeTruthy();
+  });
+
+  it('every sheet appears as an <option>, sorted E-first same as the full list, with the marker count and scanned status folded into its label', () => {
+    mockWidthMatchMedia(1024);
+    // An explicit currentKey avoids the "Select a sheet…" placeholder
+    // option (only shown when nothing is selected yet) from showing up in
+    // this list of expected labels — covered on its own further below.
+    setup({ currentKey: sheetKey('doc-1', 0), markerCounts: { [sheetKey('doc-1', 0)]: 5 } });
+    const select = screen.getByTestId('sheet-nav-select') as HTMLSelectElement;
+    const labels = Array.from(select.options).map(o => o.textContent);
+    expect(labels).toEqual([
+      'E1.1 — Lighting Plan (5 marked)',
+      'E2.1 — Power Plan',
+      'A1.1 — Floor Plan',
+      'M1.1 — Mechanical (scanned)',
+    ]);
+  });
+
+  it('shows a disabled "Select a sheet…" placeholder option when nothing is selected yet', () => {
+    mockWidthMatchMedia(1024);
+    setup({ currentKey: null });
+    const select = screen.getByTestId('sheet-nav-select') as HTMLSelectElement;
+    expect(select.options[0].textContent).toBe('Select a sheet…');
+    expect(select.options[0].disabled).toBe(true);
+  });
+
+  it('the select\'s value reflects the current sheet', () => {
+    mockWidthMatchMedia(1024);
+    setup({ currentKey: sheetKey('doc-1', 2) }); // E2.1, index 1 in sorted order
+    const select = screen.getByTestId('sheet-nav-select') as HTMLSelectElement;
+    expect(select.value).toBe('1');
+  });
+
+  it('choosing a different option calls onSelect with that sheet\'s document_id/page_index', () => {
+    mockWidthMatchMedia(1024);
+    const { onSelect } = setup();
+    const select = screen.getByTestId('sheet-nav-select') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: '2' } }); // A1.1 in sorted order
+    expect(onSelect).toHaveBeenCalledWith('doc-1', 1);
+  });
+
+  it('the discipline filter chips still work and narrow the dropdown\'s own options', () => {
+    mockWidthMatchMedia(1024);
+    setup({ currentKey: sheetKey('doc-1', 0), disciplineFilter: 'E' });
+    const select = screen.getByTestId('sheet-nav-select') as HTMLSelectElement;
+    const labels = Array.from(select.options).map(o => o.textContent);
+    expect(labels).toEqual(['E1.1 — Lighting Plan', 'E2.1 — Power Plan']);
+  });
+
+  it('an empty filter result shows the same message as the full list, not an empty/broken select', () => {
+    mockWidthMatchMedia(1024);
+    render(
+      <SheetNavigator sheets={[]} currentKey={null} onSelect={vi.fn()} disciplineFilter="all" onDisciplineFilterChange={vi.fn()} />
+    );
+    expect(screen.getByText('No sheets match this filter.')).toBeTruthy();
+    expect(screen.queryByTestId('sheet-nav-select')).toBeNull();
   });
 });

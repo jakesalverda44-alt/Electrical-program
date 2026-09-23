@@ -48,12 +48,19 @@ vi.mock('./sheetTextCache', () => ({
   getSheetTextItems: (...a: unknown[]) => getSheetTextItems(...a),
 }));
 
+// Task 9 (deferral closed): SheetNavigator's own 900-1279px dropdown query
+// has a max-width component too — this now parses BOTH bounds (previously
+// only min-width, which happened to be enough before SheetNavigator had a
+// SECOND width-gated rendering mode to accidentally trip).
 function mockMatchMediaWidth(widthPx: number) {
   window.matchMedia = vi.fn().mockImplementation((query: string) => {
-    const m = /min-width:\s*(\d+)px/.exec(query);
-    const threshold = m ? Number(m[1]) : 0;
+    const minM = /min-width:\s*(\d+)px/.exec(query);
+    const maxM = /max-width:\s*(\d+)px/.exec(query);
+    const min = minM ? Number(minM[1]) : null;
+    const max = maxM ? Number(maxM[1]) : null;
+    const matches = (min == null || widthPx >= min) && (max == null || widthPx <= max);
     return {
-      matches: widthPx >= threshold, media: query, onchange: null,
+      matches, media: query, onchange: null,
       addEventListener: vi.fn(), removeEventListener: vi.fn(),
       addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
     };
@@ -98,6 +105,11 @@ beforeEach(() => {
     if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
     return Promise.resolve({ data: {} });
   });
+  // Desktop by default — SheetNavigator's own 900-1279px dropdown mode
+  // (Task 9, deferral closed) would otherwise trip on happy-dom's DEFAULT
+  // matchMedia resolution, which falls inside that range. The "responsive
+  // view-only" describe block below overrides this per test as needed.
+  mockMatchMediaWidth(1400);
   vi.useFakeTimers({ shouldAdvanceTime: true });
 });
 afterEach(() => { vi.useRealTimers(); cleanup(); });
