@@ -934,6 +934,95 @@ describe('PlansWorkspace — "New line from markup" and reassign selected marker
   });
 });
 
+function markupWire(over: Partial<import('../types').MarkupWire> = {}): import('../types').MarkupWire {
+  return {
+    id: 'm1', bidId: 'bid1', documentId: 'doc-1', pageIndex: 0, lineKey: null, kind: 'count',
+    points: [{ x: 10, y: 10 }], drops: 0, dropFt: null, slackPct: null, status: 'confirmed', label: null,
+    createdBy: null, createdAt: '', updatedAt: '', deletedAt: null,
+    ...over,
+  };
+}
+
+// Fix round 1 / S6 — a marker's lineKey can go "dead" (the line it pointed
+// at was excluded, or no longer exists at all) without the marker ever
+// being reassigned. Before this fix such a marker was invisible: not in
+// the unassigned bucket (it still HAS a lineKey), and not represented
+// anywhere live. It's now treated as unassigned exactly like a marker with
+// no lineKey at all.
+describe('PlansWorkspace — dead lineKey markers are treated as unassigned (Fix round 1 / S6)', () => {
+  it('a marker assigned to an EXCLUDED line shows in the unassigned bucket', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet()] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [markupWire({ lineKey: 'k1' })] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup({ lines: [line({ line_key: 'k1', excluded: true })] });
+    await waitFor(() => expect(screen.getByTestId('unassigned-markers-bucket')).toBeTruthy());
+    expect(screen.getByText('Unassigned markers (1)')).toBeTruthy();
+  });
+
+  it('a marker assigned to a line_key that no longer exists in `lines` at all also shows as unassigned', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet()] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [markupWire({ lineKey: 'ghost-key' })] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup({ lines: [line({ line_key: 'k1' })] }); // only k1 is real — ghost-key belongs to nothing
+    await waitFor(() => expect(screen.getByTestId('unassigned-markers-bucket')).toBeTruthy());
+  });
+
+  it('a marker assigned to a LIVE, non-excluded line is NOT shown as unassigned', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet()] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [markupWire({ lineKey: 'k1' })] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup({ lines: [line({ line_key: 'k1' })] });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect(screen.queryByTestId('unassigned-markers-bucket')).toBeNull();
+  });
+});
+
+// Fix round 1 / S12 — ItemsPanel's own "Jump to source sheet" button was
+// already fully built but PlansWorkspace never actually passed
+// onJumpToSource, so it silently never rendered.
+describe('PlansWorkspace — "Jump to source sheet" (Fix round 1 / S12)', () => {
+  it('clicking it switches to the sheet of that line\'s marker', async () => {
+    const sheetB = sheet({ document_id: 'doc-2', page_index: 0, sheet_no: 'E1.2', title: 'Power Plan' });
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet(), sheetB] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [markupWire({ lineKey: 'k1', documentId: 'doc-2', pageIndex: 0 })] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    const onSheetKeyChange = vi.fn();
+    setup({ lines: [line({ line_key: 'k1' })], onSheetKeyChange });
+    await waitFor(() => expect(screen.getByText('Jump to source sheet')).toBeTruthy());
+    onSheetKeyChange.mockClear(); // clear the initial "default to first sheet" call
+
+    fireEvent.click(screen.getByText('Jump to source sheet'));
+
+    await waitFor(() => expect(onSheetKeyChange).toHaveBeenCalledWith(expect.stringContaining('doc-2')));
+  });
+
+  it('shows an error toast for a line with no markup on the plans at all', async () => {
+    const showToast = vi.fn();
+    setup({ lines: [line({ line_key: 'k1' })], showToast });
+    await waitFor(() => expect(screen.getByText('Jump to source sheet')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Jump to source sheet'));
+
+    expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error', title: 'No markup found for this line' }));
+  });
+});
+
 // Task 9 — keyboard shortcut help.
 describe('PlansWorkspace — keyboard shortcut help ("?")', () => {
   it('opens via the "?" toolbar button', async () => {

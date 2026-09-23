@@ -750,17 +750,35 @@ export default function PlansWorkspace({
     setReassignOpen(false);
   }, [mutate, history.present, toolState.selectedIds]);
 
+  // Fix round 1 / S6 — a marker's lineKey can go "dead" without ever being
+  // cleared: the line it pointed at gets excluded in Labor & Pricing, a
+  // sync-takeoff re-keys or drops the takeoff line entirely, or (B1's own
+  // now-closed gap) a "New line from markup" line silently failed to
+  // persist. Before this fix such a marker was invisible forever — not in
+  // the unassigned bucket (it still HAS a lineKey), and not counted
+  // anywhere live (the line it points at is gone or excluded from the
+  // rollup) — drawn on the sheet, contributing to nothing, with no hint
+  // anything was wrong. `liveLineKeys` is every NON-excluded line's own
+  // line_key — a marker whose lineKey isn't in this set is, functionally,
+  // exactly as lost as one with no lineKey at all.
+  const liveLineKeys = useMemo(
+    () => new Set(lines.filter(l => !l.excluded && l.line_key).map(l => l.line_key as string)),
+    [lines]
+  );
+
   // The unassigned-markers bucket (Task 6, deferral closed) — CONFIRMED
-  // markers with no line_key, grouped by sheet, across the whole bid (not
-  // just the current sheet — a marker on another sheet is just as "lost"
-  // and needs the same visibility). Suggested-but-unconfirmed markers are
-  // already visible via SuggestMarkersBar's own "N suggested" indicator on
-  // whatever sheet they're on; this bucket is specifically for CONFIRMED
-  // markers that rolled up into nothing because nobody assigned them yet.
+  // markers with no line_key (or, per S6 above, a DEAD line_key), grouped
+  // by sheet, across the whole bid (not just the current sheet — a marker
+  // on another sheet is just as "lost" and needs the same visibility).
+  // Suggested-but-unconfirmed markers are already visible via
+  // SuggestMarkersBar's own "N suggested" indicator on whatever sheet
+  // they're on; this bucket is specifically for CONFIRMED markers that
+  // rolled up into nothing because nobody (live) claims them.
   const unassignedMarkers = useMemo(() => {
     const bySheet = new Map<string, { sheetKey: string; documentId: string; pageIndex: number; count: number }>();
     for (const m of history.present) {
-      if (m.status !== 'confirmed' || m.lineKey) continue;
+      if (m.status !== 'confirmed') continue;
+      if (m.lineKey && liveLineKeys.has(m.lineKey)) continue; // assigned to a real, live line
       const key = sheetKey(m.documentId, m.pageIndex);
       const existing = bySheet.get(key);
       if (existing) existing.count += 1;
@@ -770,7 +788,25 @@ export default function PlansWorkspace({
       const s = sheets.find(x => x.document_id === entry.documentId && x.page_index === entry.pageIndex);
       return { sheetKey: entry.sheetKey, label: s ? `${s.sheet_no} ${s.title}`.trim() : entry.sheetKey, count: entry.count };
     });
-  }, [history.present, sheets]);
+  }, [history.present, sheets, liveLineKeys]);
+
+  // Fix round 1 / S12 — ItemsPanel's own "jump to source sheet" button
+  // (onJumpToSource) was already fully built there but never actually
+  // wired up from this side, so it silently never rendered. Jumps to the
+  // sheet of the line's FIRST confirmed marker (a line can have runs on
+  // more than one sheet; "jump to source" is inherently a single
+  // destination, same as onJumpToUnassigned's own one-sheet-at-a-time
+  // convention just below).
+  const onJumpToSource = useCallback((line: EstimateLine) => {
+    if (!line.line_key) return;
+    const m = history.present.find(x => x.status === 'confirmed' && x.lineKey === line.line_key);
+    if (!m) {
+      showToast?.({ variant: 'error', title: 'No markup found for this line', sub: 'Nothing has been marked on the plans for it yet.' });
+      return;
+    }
+    setCurrentKey(sheetKey(m.documentId, m.pageIndex));
+    setActiveLineKey(line.line_key);
+  }, [history.present, showToast]);
 
   const markerCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -993,6 +1029,7 @@ export default function PlansWorkspace({
         activeLineKey={activeLineKey}
         onSelectLine={setActiveLineKey}
         onApplyLines={applyLines}
+        onJumpToSource={onJumpToSource}
         showOnlyActiveLine={showOnlyActiveLine}
         onToggleShowOnlyActiveLine={() => setShowOnlyActiveLine(v => !v)}
         previewPriceImpact={previewPriceImpact}
