@@ -31,6 +31,15 @@ export interface SheetPdfOptions {
    *  lets a test declare a blank/scanned page explicitly rather than relying
    *  on "no items happened to be given for this page". */
   blankPages?: number[];
+  /** Fix round 1 / S1 — a non-zero MediaBox origin, e.g. [100 200 712 992]
+   *  (originX=100, originY=200, width=612, height=792). Real CAD-exported
+   *  PDFs routinely have one; every fixture defaults to (0, 0), the origin
+   *  every OTHER test in this file already implicitly assumes. `items`'
+   *  x/y are still given in the same absolute PDF user-space coordinates a
+   *  real /Tm content-stream operator uses — unaffected by MediaBox, same
+   *  as a real PDF. */
+  originX?: number;
+  originY?: number;
 }
 
 function escapePdfString(s: string): string {
@@ -40,6 +49,8 @@ function escapePdfString(s: string): string {
 export function buildSheetPdf(items: SheetPdfTextItem[], opts: SheetPdfOptions = {}): Buffer {
   const width = opts.width ?? 792;
   const height = opts.height ?? 612;
+  const originX = opts.originX ?? 0;
+  const originY = opts.originY ?? 0;
   const pageNums = Array.from(new Set([...items.map(i => i.page), ...(opts.blankPages ?? [])])).sort((a, b) => a - b);
   if (pageNums.length === 0) throw new Error('buildSheetPdf requires at least one page (items or blankPages)');
   // Pages must be contiguous 1..N for this builder's simple object numbering.
@@ -59,7 +70,7 @@ export function buildSheetPdf(items: SheetPdfTextItem[], opts: SheetPdfOptions =
     const isBlank = pageItems.length === 0;
     const contentRef = isBlank ? '' : ` /Contents ${contentObjNums[p - 1]} 0 R`;
     objects[pageObjNums[p - 1]] =
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Rotate ${rotate}${contentRef} ` +
+      `<< /Type /Page /Parent 2 0 R /MediaBox [${originX} ${originY} ${originX + width} ${originY + height}] /Rotate ${rotate}${contentRef} ` +
       `/Resources << /Font << /F1 ${fontObjNum} 0 R >> >> >>`;
     if (!isBlank) {
       let body = 'BT /F1 10 Tf\n';

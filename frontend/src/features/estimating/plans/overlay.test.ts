@@ -87,6 +87,55 @@ describe('pdfToScreen — rotation 270 (verified against real pdfjs-dist)', () =
   });
 });
 
+// Fix round 1 / S1 — the review's own hand-verified example: MediaBox
+// [100 200 712 992] (width 612, height 792, origin (100, 200)), text at
+// PDF-space (150, 250), at renderScale 2, for all four rotations. These
+// numbers are quoted DIRECTLY from the review (docs/superpowers/plans/
+// 2026-09-23-phase-b-review.md's S1 table) — not re-derived, so a
+// regression here is a regression against the reviewer's own math, not
+// just this session's.
+describe('pdfToScreen — non-zero origin (S1, the review\'s own worked numbers)', () => {
+  const geom0: PageGeometry = { widthPt: 612, heightPt: 792, rotation: 0, originXPt: 100, originYPt: 200 };
+  const geom90: PageGeometry = { widthPt: 612, heightPt: 792, rotation: 90, originXPt: 100, originYPt: 200 };
+  const geom180: PageGeometry = { widthPt: 612, heightPt: 792, rotation: 180, originXPt: 100, originYPt: 200 };
+  const geom270: PageGeometry = { widthPt: 612, heightPt: 792, rotation: 270, originXPt: 100, originYPt: 200 };
+  const p = { x: 150, y: 250 };
+
+  it('rotation 0 -> (100, 1484)', () => {
+    expect(pdfToScreen(geom0, 2, p)).toEqual({ x: 100, y: 1484 });
+  });
+  it('rotation 90 -> (100, 100)', () => {
+    expect(pdfToScreen(geom90, 2, p)).toEqual({ x: 100, y: 100 });
+  });
+  it('rotation 180 -> (1124, 100)', () => {
+    expect(pdfToScreen(geom180, 2, p)).toEqual({ x: 1124, y: 100 });
+  });
+  it('rotation 270 -> (1484, 1124)', () => {
+    expect(pdfToScreen(geom270, 2, p)).toEqual({ x: 1484, y: 1124 });
+  });
+
+  it('omitting originXPt/originYPt is exactly equivalent to (0, 0) — every pre-migration est_sheets row', () => {
+    const withZero: PageGeometry = { widthPt: 612, heightPt: 792, rotation: 90, originXPt: 0, originYPt: 0 };
+    const omitted: PageGeometry = { widthPt: 612, heightPt: 792, rotation: 90 };
+    expect(pdfToScreen(omitted, 2, p)).toEqual(pdfToScreen(withZero, 2, p));
+  });
+
+  it('screenToPdf round-trips through a non-zero origin at every rotation', () => {
+    for (const geom of [geom0, geom90, geom180, geom270]) {
+      const screen = pdfToScreen(geom, 1.7, p);
+      const back = screenToPdf(geom, 1.7, screen);
+      expect(back.x).toBeCloseTo(p.x, 9);
+      expect(back.y).toBeCloseTo(p.y, 9);
+    }
+  });
+
+  it('pdfToScreenMany applies the same origin correction to every point', () => {
+    const many = pdfToScreenMany(geom0, 2, [p, { x: 200, y: 300 }]);
+    expect(many[0]).toEqual({ x: 100, y: 1484 });
+    expect(many[1]).toEqual(pdfToScreen(geom0, 2, { x: 200, y: 300 }));
+  });
+});
+
 describe('screenToPdf — exact inverse of pdfToScreen at every rotation', () => {
   const cases: Array<[string, PageGeometry]> = [
     ['0', { widthPt: W, heightPt: H, rotation: 0 }],

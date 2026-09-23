@@ -591,7 +591,14 @@ export default function PlansWorkspace({
     setSuggestBusy(true);
     try {
       const items = await getSheetTextItems(bidId, targetSheet.document_id, targetSheet.page_index);
-      const geom: PageGeometry = { widthPt: targetSheet.width_pt, heightPt: targetSheet.height_pt, rotation: targetSheet.rotation as never };
+      // Fix round 1 / S1 — origin-aware, same as PlanViewer.tsx's own geom:
+      // without it, suggestTagMarkers' title-block strip exclusion
+      // (isInTitleBlockStrip, tagSuggest.ts) misjudges every tag on a
+      // non-zero-origin page.
+      const geom: PageGeometry = {
+        widthPt: targetSheet.width_pt, heightPt: targetSheet.height_pt, rotation: targetSheet.rotation as never,
+        originXPt: targetSheet.origin_x_pt, originYPt: targetSheet.origin_y_pt,
+      };
       const candidates = suggestTagMarkers(items, tags, { geom, sheetKind: targetSheet.kind });
       // Fix round 1 / B3(b) — dedup against the FRESHEST snapshot available
       // right now (post-await), not the `history.present` this callback's
@@ -652,7 +659,10 @@ export default function PlansWorkspace({
       for (const s of searchable) {
         try {
           const items = await getSheetTextItems(bidId, s.document_id, s.page_index);
-          const geom: PageGeometry = { widthPt: s.width_pt, heightPt: s.height_pt, rotation: s.rotation as never };
+          const geom: PageGeometry = {
+            widthPt: s.width_pt, heightPt: s.height_pt, rotation: s.rotation as never,
+            originXPt: s.origin_x_pt, originYPt: s.origin_y_pt,
+          };
           const candidates = suggestTagMarkers(items, [tag], { geom, sheetKind: s.kind });
           if (candidates.length > 0) {
             results.push({ sheetKey: sheetKey(s.document_id, s.page_index), label: `${s.sheet_no} ${s.title}`.trim(), count: candidates.length });

@@ -109,8 +109,14 @@ export default function PlanViewer({
   const tileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const geom: PageGeometry = useMemo(
-    () => ({ widthPt: sheet.width_pt, heightPt: sheet.height_pt, rotation: sheet.rotation as never }),
-    [sheet.width_pt, sheet.height_pt, sheet.rotation]
+    // Fix round 1 / S1 — originXPt/originYPt (a non-zero MediaBox origin,
+    // almost always 0/0) so every marker point and every rendered
+    // position lines up with what pdf.js itself renders.
+    () => ({
+      widthPt: sheet.width_pt, heightPt: sheet.height_pt, rotation: sheet.rotation as never,
+      originXPt: sheet.origin_x_pt, originYPt: sheet.origin_y_pt,
+    }),
+    [sheet.width_pt, sheet.height_pt, sheet.rotation, sheet.origin_x_pt, sheet.origin_y_pt]
   );
 
   // Fit-to-width once we know the container size and the sheet's geometry —

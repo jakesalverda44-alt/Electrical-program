@@ -172,6 +172,11 @@ export interface SheetRow {
   width_pt: number;
   height_pt: number;
   rotation: number;
+  /** Fix round 1 / S1 — this page's own MediaBox/CropBox origin, almost
+   *  always (0, 0). Feeds overlay.ts's PageGeometry.originXPt/originYPt
+   *  directly. */
+  origin_x_pt: number;
+  origin_y_pt: number;
   ft_per_pt: number | null;
   scale_source: ScaleSource;
   scale_label: string | null;

@@ -34,6 +34,21 @@ export interface PageGeometry {
   /** The page's UNROTATED height, in PDF points (est_sheets.height_pt). */
   heightPt: number;
   rotation: Rotation;
+  /** Fix round 1 / S1 — the page's own MediaBox/CropBox origin
+   *  (est_sheets.origin_x_pt/origin_y_pt), almost always (0, 0) — pdf.js
+   *  normalizes the overwhelming majority of real-world PDFs to start
+   *  there — but a CAD-exported PDF can use any origin. Every PDF-space
+   *  point pdfjs itself hands back (page.view, a text item's transform)
+   *  is in this SAME absolute coordinate space, so this needs to be
+   *  subtracted before applying pdfToRenderMatrix below (never baked into
+   *  the matrix itself — origin-then-rotate, in that order, matches
+   *  pdf.js's own PageViewport construction, verified against the
+   *  review's own hand-checked per-rotation numbers in overlay.test.ts).
+   *  Optional and defaults to 0 so every existing caller (every est_sheets
+   *  row that predates the origin_x_pt/origin_y_pt columns) is exactly
+   *  equivalent to what this module already assumed. */
+  originXPt?: number;
+  originYPt?: number;
 }
 
 export interface Point {
@@ -101,22 +116,33 @@ function applyMatrix([a, b, c, d, e, f]: AffineMatrix, p: Point): Point {
   return { x: a * p.x + c * p.y + e, y: b * p.x + d * p.y + f };
 }
 
-/** PDF user-space point -> render-space pixel, at `renderScale`, rotation-aware. */
+/** PDF user-space point -> render-space pixel, at `renderScale`,
+ *  rotation- and origin-aware (Fix round 1 / S1: the page's own
+ *  originXPt/originYPt is subtracted BEFORE the rotation+scale matrix —
+ *  pdfToRenderMatrix itself is unchanged and still assumes a zero-origin
+ *  page, since width/height are already origin-independent extents). */
 export function pdfToScreen(geom: PageGeometry, renderScale: number, p: Point): Point {
-  return applyMatrix(pdfToRenderMatrix(geom, renderScale), p);
+  const rel: Point = { x: p.x - (geom.originXPt ?? 0), y: p.y - (geom.originYPt ?? 0) };
+  return applyMatrix(pdfToRenderMatrix(geom, renderScale), rel);
 }
 
 /** Render-space pixel -> PDF user-space point — the inverse of pdfToScreen.
  *  Used when the estimator clicks/drags on the overlay and the resulting
  *  point needs to be stored (Decision 5: markups are always stored in PDF
- *  points, never screen pixels). */
+ *  points, never screen pixels). Adds the origin back so a stored marker
+ *  point is a real, absolute PDF-space coordinate — exactly what a
+ *  re-load of the SAME page (or a future export) expects, not one
+ *  silently relative to this page's own MediaBox. */
 export function screenToPdf(geom: PageGeometry, renderScale: number, p: Point): Point {
-  return applyMatrix(invertMatrix(pdfToRenderMatrix(geom, renderScale)), p);
+  const rel = applyMatrix(invertMatrix(pdfToRenderMatrix(geom, renderScale)), p);
+  return { x: rel.x + (geom.originXPt ?? 0), y: rel.y + (geom.originYPt ?? 0) };
 }
 
 export function pdfToScreenMany(geom: PageGeometry, renderScale: number, points: Point[]): Point[] {
   const m = pdfToRenderMatrix(geom, renderScale);
-  return points.map(p => applyMatrix(m, p));
+  const ox = geom.originXPt ?? 0;
+  const oy = geom.originYPt ?? 0;
+  return points.map(p => applyMatrix(m, { x: p.x - ox, y: p.y - oy }));
 }
 
 // ── Fit-to-container scale ──────────────────────────────────────────────

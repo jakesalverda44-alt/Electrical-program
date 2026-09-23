@@ -114,6 +114,52 @@ describe('suggestTagMarkers — title-block strip exclusion (rotation-aware)', (
     expect(smallY).toEqual([]);
     expect(largeY.length).toBe(1);
   });
+
+  // Fix round 1 / S1 — a non-zero page origin (overlay.ts's originXPt/
+  // originYPt) needs to be subtracted before the strip boundary check,
+  // same as the geometry fix itself; this only started working once
+  // overlay.ts's pdfToScreen/renderedSize gained origin support (this
+  // function was already rotation-aware via those same two calls, so
+  // origin support here comes for free from that one shared fix).
+  it('a non-zero origin shifts the strip boundary, not just the raw comparison', () => {
+    // width 800, origin x0=200 -> the page spans absolute x in [200,1000].
+    // Right-25% boundary in absolute x = 200 + 0.75*800 = 800.
+    const geom: PageGeometry = { widthPt: 800, heightPt: 600, rotation: 0, originXPt: 200, originYPt: 0 };
+    // Absolute x=850 -> relX=650 -> in strip (650 >= 600).
+    const inStrip = suggestTagMarkers([item('A', 850, 300)], ['A'], { geom });
+    // Absolute x=750 -> relX=550 -> NOT in strip, even though a
+    // zero-origin (buggy) check (raw 750 >= 0.75*800=600) would have
+    // wrongly included it.
+    const outsideStrip = suggestTagMarkers([item('A', 750, 300)], ['A'], { geom });
+    expect(inStrip).toEqual([]);
+    expect(outsideStrip.length).toBe(1);
+  });
+});
+
+// Fix round 1 / N9 — a suggested marker's center used to always add
+// width/2 to x, regardless of the text run's OWN rotation (its
+// transform's [a,b,c,d], not the page's /Rotate) — a run printed
+// vertically got its center offset sideways, beside the tag instead of
+// on it.
+describe('suggestTagMarkers — marker centering respects the text item\'s own rotation (N9)', () => {
+  const geom: PageGeometry = { widthPt: 800, heightPt: 600, rotation: 0 };
+
+  it('a vertically-printed run (transform [0,10,-10,0,x,y]) centers along Y, not X', () => {
+    const verticalItem: TextItem = { str: 'A1', transform: [0, 10, -10, 0, 100, 100], width: 20, height: 10 };
+    const out = suggestTagMarkers([verticalItem], ['A1'], { geom });
+    // Old (buggy) behavior would have been (100+20/2, 100+10/2) =
+    // (110, 105) — sideways of the actual vertical run. The run's local
+    // +x is (0,1) (from [a,b]=[0,10] normalized) and local +y is (-1,0)
+    // (from [c,d]=[-10,0] normalized): center = (100 + 20/2*0 + 10/2*-1,
+    // 100 + 20/2*1 + 10/2*0) = (95, 110).
+    expect(out[0].point).toEqual({ x: 95, y: 110 });
+  });
+
+  it('ordinary horizontal text (transform [10,0,0,10,x,y]) is unaffected — same as before N9', () => {
+    const horizontalItem: TextItem = { str: 'A1', transform: [10, 0, 0, 10, 100, 100], width: 20, height: 10 };
+    const out = suggestTagMarkers([horizontalItem], ['A1'], { geom });
+    expect(out[0].point).toEqual({ x: 110, y: 105 });
+  });
 });
 
 describe('suggestTagMarkers — table-region heuristic', () => {

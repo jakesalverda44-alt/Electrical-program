@@ -190,6 +190,80 @@ describe('extractPageInfo — rotation', () => {
   });
 });
 
+// Fix round 1 / S1 — the title-block strip used to compare a text item's
+// RAW, unrotated, origin-absolute x-coordinate against a boundary computed
+// as if the page started at (0,0) and was never rotated. Neither the
+// origin nor the rotation tests above actually exercised this: the
+// rotation test's own item sat at a raw x that happened to still read as
+// "in the strip" under the OLD buggy math too, so it never caught the
+// bug. These do — each picks coordinates where the OLD math and the
+// correct, origin-and-rotation-aware math actively DISAGREE.
+describe('extractPageInfo — origin- and rotation-aware title-block strip (S1)', () => {
+  it('reports the page\'s own MediaBox origin', async () => {
+    const buf = buildSheetPdf(
+      [{ page: 1, x: 650, y: 550, text: 'E1.1' }],
+      { width: 612, height: 792, originX: 100, originY: 200 }
+    );
+    const doc = await openPdfDocument(buf);
+    try {
+      const info = await extractPageInfo(doc, 0);
+      expect(info.origin_x_pt).toBe(100);
+      expect(info.origin_y_pt).toBe(200);
+    } finally {
+      await doc.destroy();
+    }
+  });
+
+  it('a non-zero origin (S1\'s own worked example): a decoy the OLD raw-x check would have wrongly matched is correctly excluded, and the real title block is found', async () => {
+    // MediaBox [100 200 712 992] — width 612, height 792, origin (100, 200).
+    // Old (buggy) check: raw x >= 0.75*612=459. Decoy at absolute x=500
+    // passes THAT (500 >= 459) even though it's really left of the strip
+    // boundary once the origin is accounted for: the page's own right-25%
+    // boundary sits at absolute x = 100 + 0.75*612 = 559, and 500 < 559.
+    const buf = buildSheetPdf([
+      { page: 1, x: 500, y: 300, text: 'A9.9' }, // decoy — old check wrongly included it
+      { page: 1, x: 650, y: 550, text: 'E1.1' }, // genuinely in the strip either way
+      { page: 1, x: 650, y: 500, text: 'REAL TITLE' },
+    ], { width: 612, height: 792, originX: 100, originY: 200 });
+    const doc = await openPdfDocument(buf);
+    try {
+      const info = await extractPageInfo(doc, 0);
+      expect(info.sheet_no).toBe('E1.1'); // NOT the decoy 'A9.9'
+      expect(info.title).toBe('REAL TITLE');
+    } finally {
+      await doc.destroy();
+    }
+  });
+
+  it('a 90-degree rotation (S1\'s own worked example, zero origin): the strip is the right side of the DISPLAYED page, not the raw content-stream x-axis', async () => {
+    // width 792, height 612, rotated 90. Displayed (swapped) width = 612,
+    // so the right-25% boundary in DISPLAYED x is 0.75*612=459, which
+    // (rotation-90's own transform) corresponds to raw y >= 459 — raw x
+    // is irrelevant to the rotated strip position at all.
+    const buf = buildSheetPdf([
+      // Old (buggy) check: raw x >= 0.75*792=594, ignoring rotation
+      // entirely. Decoy at raw x=650 passes THAT (wrongly, since rotation
+      // moves it out of the real displayed strip: rotated screenX = raw
+      // y = 50, well under the displayed boundary of 459) — the fixed
+      // check correctly excludes it.
+      { page: 1, x: 650, y: 50, text: 'A9.9' },
+      // The REAL sheet number — old check wrongly EXCLUDED this (raw
+      // x=100 < 594); correctly INCLUDED once rotation is applied
+      // (rotated screenX = raw y = 550 >= 459).
+      { page: 1, x: 100, y: 550, text: 'E3.2' },
+      { page: 1, x: 100, y: 500, text: 'REAL TITLE 90' },
+    ], { width: 792, height: 612, rotations: { 1: 90 } });
+    const doc = await openPdfDocument(buf);
+    try {
+      const info = await extractPageInfo(doc, 0);
+      expect(info.sheet_no).toBe('E3.2');
+      expect(info.title).toBe('REAL TITLE 90');
+    } finally {
+      await doc.destroy();
+    }
+  });
+});
+
 describe('extractPageInfo — kind heuristics', () => {
   const cases: Array<[string, string]> = [
     ['PANEL SCHEDULE', 'schedule'],

@@ -8,6 +8,7 @@ import { logger } from '../utils/logger';
 import { titleBlockCropRect } from '../ai/pageClassifier';
 import { findScaleLabel, findAllScaleLabels } from './scaleParse';
 import { openPdfDocument, PdfJsDocument, PdfJsTextItem } from './pdfjsLoader';
+import { screenPosition, displayedSize } from './pageGeometry';
 
 export type SheetDiscipline = 'E' | 'A' | 'M' | 'P' | 'other';
 export type SheetKind = 'plan' | 'schedule' | 'detail' | 'riser' | 'cover' | 'other';
@@ -26,6 +27,10 @@ export interface SheetRow {
   width_pt: number;
   height_pt: number;
   rotation: number;
+  /** Fix round 1 / S1 — this page's own MediaBox/CropBox origin, almost
+   *  always (0, 0). See ExtractedPageInfo's own comment. */
+  origin_x_pt: number;
+  origin_y_pt: number;
   ft_per_pt: number | null;
   scale_source: ScaleSource;
   scale_label: string | null;
@@ -172,6 +177,14 @@ export interface ExtractedPageInfo {
   width_pt: number;
   height_pt: number;
   rotation: number;
+  /** Fix round 1 / S1 — the page's own MediaBox/CropBox origin (page.view's
+   *  x0/y0). Almost always (0, 0) — pdf.js normalizes the overwhelming
+   *  majority of real-world PDFs to start there — but a CAD-exported PDF
+   *  can use any origin, and every stored/clicked marker point needs it to
+   *  line up with what pdf.js itself renders (see overlay.ts's matching
+   *  frontend-side fix). */
+  origin_x_pt: number;
+  origin_y_pt: number;
   has_text_layer: boolean;
   sheet_no: string;
   title: string;
@@ -205,8 +218,28 @@ export async function extractPageInfo(doc: PdfJsDocument, pageIndex: number): Pr
   // applying it directly to PDF point-space geometry is the same reuse the
   // plan asks for ("reuse ... its right-strip heuristic"), just on text
   // item x-coordinates instead of image pixels.
-  const stripRect = titleBlockCropRect(width_pt, height_pt);
-  const stripItems = items.filter(i => (i.transform[4] ?? 0) >= stripRect.left);
+  //
+  // Fix round 1 / S1 — this used to compare the item's RAW, unrotated,
+  // origin-absolute x-coordinate straight against a strip boundary
+  // computed purely from width_pt (0..width_pt). Two separate bugs: (1) a
+  // non-zero origin (x0 != 0) means raw item x-coordinates live in
+  // [x0, x0+width_pt], not [0, width_pt] — the strip boundary and the
+  // coordinates being tested were in different coordinate systems
+  // entirely; (2) "the right side of the title block, as printed" is a
+  // property of the DISPLAYED (rotated) page, not the raw content-stream
+  // x-axis — a page rotated 90 degrees has its title block's raw PDF
+  // x-coordinate wherever the UNROTATED content happens to put it, which
+  // has nothing to do with "the right 25% of the sheet as someone reads
+  // it". pageGeometry.ts's screenPosition (the backend's own
+  // reimplementation of overlay.ts's already-verified transform) fixes
+  // both at once: compute each item's DISPLAYED position first, then
+  // compare against a strip boundary computed from the DISPLAYED size.
+  const displayed = displayedSize(width_pt, height_pt, rotation);
+  const stripRect = titleBlockCropRect(displayed.width, displayed.height);
+  const stripItems = items.filter(i => {
+    const pos = screenPosition(i.transform[4] ?? 0, i.transform[5] ?? 0, x0, y0, width_pt, height_pt, rotation);
+    return pos.x >= stripRect.left;
+  });
 
   let sheet_no = '';
   let sheetNoItem: PdfJsTextItem | undefined;
@@ -253,7 +286,7 @@ export async function extractPageInfo(doc: PdfJsDocument, pageIndex: number): Pr
   const kind = kindFromTitle(title, has_text_layer);
 
   return {
-    width_pt, height_pt, rotation, has_text_layer,
+    width_pt, height_pt, rotation, origin_x_pt: x0, origin_y_pt: y0, has_text_layer,
     sheet_no, title, discipline, kind,
     suggested_label: scale?.normalized ?? null,
     suggested_ft_per_pt: scale?.ftPerPt ?? null,
@@ -276,8 +309,8 @@ async function upsertSheetPage(bidId: string, documentId: string, pageIndex: num
   await pool.query(
     `INSERT INTO est_sheets
        (bid_id, document_id, page_index, sheet_no, title, discipline, kind,
-        width_pt, height_pt, rotation, has_text_layer, suggested_ft_per_pt, suggested_label, scale_ambiguous, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now())
+        width_pt, height_pt, rotation, origin_x_pt, origin_y_pt, has_text_layer, suggested_ft_per_pt, suggested_label, scale_ambiguous, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now())
      ON CONFLICT (document_id, page_index) DO UPDATE SET
        sheet_no = EXCLUDED.sheet_no,
        title = EXCLUDED.title,
@@ -286,13 +319,15 @@ async function upsertSheetPage(bidId: string, documentId: string, pageIndex: num
        width_pt = EXCLUDED.width_pt,
        height_pt = EXCLUDED.height_pt,
        rotation = EXCLUDED.rotation,
+       origin_x_pt = EXCLUDED.origin_x_pt,
+       origin_y_pt = EXCLUDED.origin_y_pt,
        has_text_layer = EXCLUDED.has_text_layer,
        suggested_ft_per_pt = EXCLUDED.suggested_ft_per_pt,
        suggested_label = EXCLUDED.suggested_label,
        scale_ambiguous = EXCLUDED.scale_ambiguous,
        updated_at = now()`,
     [bidId, documentId, pageIndex, info.sheet_no, info.title, info.discipline, info.kind,
-     info.width_pt, info.height_pt, info.rotation, info.has_text_layer,
+     info.width_pt, info.height_pt, info.rotation, info.origin_x_pt, info.origin_y_pt, info.has_text_layer,
      info.suggested_ft_per_pt, info.suggested_label, info.scale_ambiguous]
   );
 }
@@ -465,7 +500,7 @@ export async function getIndexStatuses(bidId: string): Promise<Record<string, In
 export async function getSheetRows(bidId: string): Promise<SheetRow[]> {
   const { rows } = await pool.query(
     `SELECT bid_id, document_id, page_index, sheet_no, title, discipline, kind,
-            width_pt, height_pt, rotation, ft_per_pt, scale_source, scale_label, has_text_layer,
+            width_pt, height_pt, rotation, origin_x_pt, origin_y_pt, ft_per_pt, scale_source, scale_label, has_text_layer,
             suggested_ft_per_pt, suggested_label, scale_ambiguous, half_size
      FROM est_sheets WHERE bid_id = $1
      ORDER BY document_id, page_index`,
@@ -482,6 +517,8 @@ export async function getSheetRows(bidId: string): Promise<SheetRow[]> {
     width_pt: Number(r.width_pt),
     height_pt: Number(r.height_pt),
     rotation: Number(r.rotation),
+    origin_x_pt: r.origin_x_pt != null ? Number(r.origin_x_pt) : 0,
+    origin_y_pt: r.origin_y_pt != null ? Number(r.origin_y_pt) : 0,
     ft_per_pt: r.ft_per_pt != null ? Number(r.ft_per_pt) : null,
     scale_source: r.scale_source,
     scale_label: r.scale_label,

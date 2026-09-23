@@ -29,6 +29,32 @@ export interface TagCandidate {
 
 const SCHEDULE_LIKE_KINDS: ReadonlySet<SheetKindForSuggest> = new Set(['schedule', 'cover', 'riser']);
 
+/** Fix round 1 / N9 — the matched run's PDF-space center point, for the
+ *  suggested marker. The OLD code always added `width/2` to x and
+ *  `height/2` to y, regardless of the TEXT ITEM's own rotation (its
+ *  transform's [a, b, c, d] linear part — the individual glyph run's own
+ *  orientation within the page's content stream, a separate thing from
+ *  the PAGE's /Rotate that overlay.ts/screenPosition handle): a run
+ *  printed vertically (a common CAD convention for a dimension/tag
+ *  alongside a vertical duct or conduit run) has a transform whose local
+ *  +x axis ([a, b] normalized) points along the page's own y — its
+ *  "width" extends in that direction, not the page's +x — so adding
+ *  width/2 to x landed the marker beside the tag instead of centered on
+ *  it. Projects width along [a, b]'s own direction and height along
+ *  [c, d]'s (its perpendicular local axis); for ordinary horizontal text
+ *  ([a,b]=[fontSize,0], [c,d]=[0,fontSize]) this reduces to exactly the
+ *  old `(x + width/2, y + height/2)` behavior. */
+function textItemCenter(item: TextItem): { x: number; y: number } {
+  const [a = 1, b = 0, c = 0, d = 1, e = 0, f = 0] = item.transform;
+  const magX = Math.hypot(a, b);
+  const [ux, uy] = magX > 0 ? [a / magX, b / magX] : [1, 0];
+  const magY = Math.hypot(c, d);
+  const [vx, vy] = magY > 0 ? [c / magY, d / magY] : [0, 1];
+  const halfW = (item.width ?? 0) / 2;
+  const halfH = (item.height ?? 0) / 2;
+  return { x: e + ux * halfW + vx * halfH, y: f + uy * halfW + vy * halfH };
+}
+
 /** Case-insensitive whole-alphanumeric-token split — "Type A" -> ["TYPE","A"],
  *  "A1" -> ["A1"], "A-1" -> ["A","1"]. Never splits a run of letters+digits
  *  with no separator (so tag "A" cannot match inside "A1" or "AMP" — the
@@ -233,9 +259,7 @@ export function suggestTagMarkers(items: TextItem[], tags: string[], opts: Sugge
     for (const token of tokens) {
       if (upperTags.has(token) && !matched.has(token)) {
         matched.add(token);
-        const x = (item.transform[4] ?? 0) + (item.width ?? 0) / 2;
-        const y = (item.transform[5] ?? 0) + (item.height ?? 0) / 2;
-        out.push({ tag: token, point: { x, y }, text: item.str });
+        out.push({ tag: token, point: textItemCenter(item), text: item.str });
       }
     }
   });
