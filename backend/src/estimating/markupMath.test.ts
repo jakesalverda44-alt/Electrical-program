@@ -174,7 +174,12 @@ describe('rollupLines — linear markups (LF/C/M-family lines)', () => {
     expect(result[0].markerCount).toBe(2);
   });
 
-  it('converts feet into the line\'s own display unit — C (per-100) and M (per-1000)', () => {
+  it('Fix round 1 / B4 — markedQty is RAW FEET for every linear unit (LF, C, M) — the divisor is pricing.ts\'s job, not the rollup\'s', () => {
+    // Before the fix, this rollup pre-divided by 100/1000, and pricing.ts
+    // divided AGAIN (qtyFactor = qty / UNIT_DIVISOR[libraryUnit]) — a
+    // double-divide that priced a C/M line 100x/1000x low. See
+    // priceBid.test.ts's "Fix round 1 / B4" test for the end-to-end proof
+    // (1,234 ft on a $60/C line = $740.40, not $7.40).
     const runFt = 1200; // pick a round number: 1200pt at 1 ft/pt = 1200ft
     const points = [{ x: 0, y: 0 }, { x: runFt, y: 0 }];
     const cLine: RollupLineInput = { lineKey: 'line-c', unit: 'C' };
@@ -183,9 +188,9 @@ describe('rollupLines — linear markups (LF/C/M-family lines)', () => {
     const markups = [linearMarkup({ lineKey: 'line-c', points }), linearMarkup({ id: 'm2', lineKey: 'line-m', points }), linearMarkup({ id: 'm3', lineKey: 'line-lf', points })];
     const result = rollupLines([cLine, mLine, lfLine], markups, scaleOf(1));
     const byKey = new Map(result.map(r => [r.lineKey, r]));
-    expect(byKey.get('line-lf')!.markedQty).toBeCloseTo(1200, 6); // raw feet
-    expect(byKey.get('line-c')!.markedQty).toBeCloseTo(12, 6);   // 1200 / 100
-    expect(byKey.get('line-m')!.markedQty).toBeCloseTo(1.2, 6);  // 1200 / 1000
+    expect(byKey.get('line-lf')!.markedQty).toBeCloseTo(1200, 6);
+    expect(byKey.get('line-c')!.markedQty).toBeCloseTo(1200, 6); // NOT 12 — raw feet, same as LF
+    expect(byKey.get('line-m')!.markedQty).toBeCloseTo(1200, 6); // NOT 1.2 — raw feet, same as LF
   });
 
   it('a count markup assigned to a linear line is excluded and counted as incompatible', () => {

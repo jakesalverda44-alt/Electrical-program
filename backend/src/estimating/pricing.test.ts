@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { priceBid, effectiveFactorPct, PricingLineInput, PricingSettings, PricingFactorInput } from './pricing';
+import { rollupLines, RollupLineInput, RollupMarkupInput } from './markupMath';
 
 const baseSettings: PricingSettings = {
   laborRate: 40,
@@ -531,5 +532,62 @@ describe('priceBid — crew weeks', () => {
       []
     );
     expect(recap.totals.crewWeeks).toBe(0);
+  });
+});
+
+// Fix round 1 / B4 — end-to-end proof (reviewer's exact scenario): rollupLines
+// -> the qty applyMarkups would write onto est_bid_lines.qty -> priceBid,
+// for a 1,234 ft run of 3/4" EMT priced at $60/C material, 4 h/C labor,
+// across every linear display unit (LF, C, M) PLUS a sanity check that EA
+// is entirely unaffected (it never goes through UNIT_DIVISOR at all).
+describe('priceBid — Fix round 1 / B4: a rolled-up linear run prices correctly for every unit (LF, C, M)', () => {
+  const runFt = 1234; // pdf points == feet at ftPerPt=1, matching markupMath.test.ts's own convention
+  const points = [{ x: 0, y: 0 }, { x: runFt, y: 0 }];
+
+  function markedQtyFor(unit: 'LF' | 'C' | 'M'): number {
+    const rollupLine: RollupLineInput = { lineKey: 'l1', unit };
+    const markup: RollupMarkupInput = {
+      id: 'm1', documentId: 'doc-1', pageIndex: 0, lineKey: 'l1', kind: 'linear', status: 'confirmed',
+      points, drops: 0, dropFt: 0, slackPct: 0,
+    };
+    const [result] = rollupLines([rollupLine], [markup], () => 1); // 1 ft/pt
+    expect(result.markedQty).not.toBeNull();
+    return result.markedQty as number;
+  }
+
+  it('LF: 1,234 ft rolls up to 1,234, prices at $740.40 material / 49.36 hours (the $60/C, 4 h/C rate expressed per-LF: $0.60/ft, 0.04 h/ft)', () => {
+    const qty = markedQtyFor('LF');
+    expect(qty).toBeCloseTo(1234, 6);
+    const recap = priceBid([line({ qty, unit: 'LF', libraryUnit: 'LF', materialUnitCost: 0.6, laborHoursUnit: 0.04 })], baseSettings, []);
+    expect(recap.lines[0].materialExt).toBeCloseTo(740.4, 2);
+    expect(recap.lines[0].hoursExt).toBeCloseTo(49.36, 2);
+  });
+
+  it('C: the SAME 1,234 ft run, rolled up onto a $60/C line, prices identically — $740.40 material / 49.36 hours (not $7.40 / 0.49, the pre-fix double-divide)', () => {
+    const qty = markedQtyFor('C');
+    expect(qty).toBeCloseTo(1234, 6); // raw feet, not 12.34 (the bug B4 fixed)
+    const recap = priceBid([line({ qty, unit: 'C', libraryUnit: 'C', materialUnitCost: 60, laborHoursUnit: 4 })], baseSettings, []);
+    expect(recap.lines[0].materialExt).toBeCloseTo(740.4, 2);
+    expect(recap.lines[0].hoursExt).toBeCloseTo(49.36, 2);
+  });
+
+  it('M: the SAME 1,234 ft run, rolled up onto a $600/M line (== $60/C), prices identically — $740.40 material / 49.36 hours', () => {
+    const qty = markedQtyFor('M');
+    expect(qty).toBeCloseTo(1234, 6); // raw feet, not 1.234
+    const recap = priceBid([line({ qty, unit: 'M', libraryUnit: 'M', materialUnitCost: 600, laborHoursUnit: 40 })], baseSettings, []);
+    expect(recap.lines[0].materialExt).toBeCloseTo(740.4, 2);
+    expect(recap.lines[0].hoursExt).toBeCloseTo(49.36, 2);
+  });
+
+  it('EA: unaffected by the linear-unit fix — a count rollup is untouched (markerCount, never feetSum/divisor)', () => {
+    const rollupLine: RollupLineInput = { lineKey: 'l1', unit: 'EA' };
+    const markup: RollupMarkupInput = {
+      id: 'm1', documentId: 'doc-1', pageIndex: 0, lineKey: 'l1', kind: 'count', status: 'confirmed',
+      points: [{ x: 0, y: 0 }], drops: 0, dropFt: 0, slackPct: 0,
+    };
+    const [result] = rollupLines([rollupLine], [markup], () => 1);
+    expect(result.markedQty).toBe(1);
+    const recap = priceBid([line({ qty: result.markedQty as number, unit: 'EA', materialUnitCost: 25, laborHoursUnit: 0.5 })], baseSettings, []);
+    expect(recap.lines[0].materialExt).toBeCloseTo(25, 2);
   });
 });

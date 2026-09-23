@@ -5,7 +5,7 @@
 // rotation when building a VIEWPORT for rendering/hit-testing, never to a
 // page's own text/content coordinate space — a markup's stored points never
 // need a rotation correction applied to them.
-import { EstUnit, UNIT_DIVISOR } from './pricing';
+import { EstUnit } from './pricing';
 import { unitFamily } from './mapper';
 
 export type MarkupKind = 'count' | 'linear';
@@ -181,15 +181,17 @@ export function rollupLines(lines: RollupLineInput[], markups: RollupMarkupInput
         addSheetHit(m.documentId, m.pageIndex);
       }
       if (anyCounted) {
-        // Convert LF -> the line's own display unit, using the same
-        // per-100/per-1000 divisor pricing.ts prices with (UNIT_DIVISOR).
-        // See markupMath.test.ts for the worked C/M examples and a note on
-        // how this interacts with Phase A's own R2-N5 nit (a display unit
-        // of C/M on an UNMATCHED/manual line is priced as raw feet there,
-        // a pre-existing, already-flagged gap this module doesn't attempt
-        // to silently paper over — it converts correctly; how pricing.ts
-        // later interprets an unmatched C/M line's qty is out of scope).
-        markedQty = feetSum / UNIT_DIVISOR[line.unit];
+        // Fix round 1 / B4 — `qty` on ANY linear line (LF, C, or M) is
+        // always a RAW FEET count; the unit only ever picks a PRICING
+        // divisor, applied later by pricing.ts (`qtyFactor = qty /
+        // UNIT_DIVISOR[libraryUnit]`) and by mapper.ts's own comment ("the
+        // same raw qty (feet) just gets divided by 1, 100 or 1000"). The
+        // previous `feetSum / UNIT_DIVISOR[line.unit]` here pre-divided a
+        // C/M line's rolled-up qty by 100 or 1000 BEFORE pricing divided
+        // it again — a 1,234 ft run on a $60/C line priced as if it were
+        // 12.34 ft ($7.40 instead of $740.40). See markupMath.test.ts for
+        // the worked end-to-end priceBid proof (EA/LF/C/M).
+        markedQty = feetSum;
       }
     } else {
       // OTHER (unrecognized) unit — never a valid rollup target; every
