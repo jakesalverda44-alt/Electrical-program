@@ -1,0 +1,52 @@
+{
+  "project": "AutoZone #10077 — Kissimmee FL (Summit GC)",
+  "pdf_note": "The plan set PDF is NOT committed (33 MB client document). Pass its local path to scripts/evalTakeoff.ts --pdf, e.g. \"~/Library/CloudStorage/OneDrive-AccuratePowerandTechnology/Bids/Summit GC/Autozone Kissimmee, FL/Plans/1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf\".",
+  "bid": {
+    "name": "EVAL AutoZone #10077 Kissimmee",
+    "gc": "Summit General Contractors",
+    "loc": "2860 N Old Lake Wilson Rd, Kissimmee, FL 34747",
+    "brand": "AutoZone",
+    "project_type": "retail"
+  },
+  "notes": [
+    "Primary expected values: the Cowork proposal (APT_Bid_AutoZone_10077_Kissimmee.pdf), which matches the estimator's Accubid BOM.",
+    "disputed = the audit (plan 2026-09-23 'Why') and the estimator/Cowork disagree — reported, not pass/fail.",
+    "not_counted = not a symbol count (feeder footage stays with the Phase B measuring tool) — reported for completeness.",
+    "Type tags A/B/M/C/G/D/L/E/F/J/K/S1/S2 are the luminaire schedule's; device/equipment rows match by description because legend identities vary by set."
+  ],
+  "items": [
+    { "id": "type_A", "label": "Type A linear LED", "types": ["A"], "expected": 73 },
+    { "id": "type_B", "label": "Type B linear LED", "types": ["B"], "expected": 52 },
+    { "id": "type_M", "label": "Type M linear LED", "types": ["M"], "expected": 6 },
+    { "id": "type_C", "label": "Type C linear LED", "types": ["C"], "expected": 2 },
+    { "id": "linear_led_total", "label": "Linear LED total (A+B+M+C)", "types": ["A", "B", "M", "C"], "expected": 133 },
+    { "id": "downlights", "label": "Recessed downlights (G)", "types": ["G"], "expected": 11 },
+    { "id": "exit_emergency", "label": "Exit / emergency (E, F, J, K)", "types": ["E", "F", "J", "K"], "expected": 22, "disputed": true, "note": "estimator/Cowork 22; audit counted 24" },
+    { "id": "wall_packs", "label": "Wall packs (D + L)", "types": ["D", "L"], "expected": 9, "disputed": true, "note": "estimator/Cowork 9 (3 + 6); audit counted 5 type D plus type L" },
+    { "id": "site_poles", "label": "Site poles", "category": "site_lighting", "measure": "poles", "expected": 3 },
+    { "id": "site_heads", "label": "Site pole-top heads", "category": "site_lighting", "measure": "heads", "expected": 4 },
+    { "id": "retail_power_poles", "label": "Retail power poles", "match": "power\\s*pole", "expected": 8, "disputed": true, "note": "estimator/Cowork 8; audit counted 6" },
+    { "id": "receptacles_total", "label": "Receptacles (all)", "match": "receptacle|GFCI|GFI|duplex|quad|decorator", "category": "device", "expected": 38 },
+    { "id": "gfci", "label": "GFCI receptacles", "match": "GFCI|GFI", "expected": 16 },
+    { "id": "rtu_connections", "label": "RTU connections", "match": "\\bRTU\\b|rooftop", "expected": 2 },
+    { "id": "battery_chargers", "label": "Battery charger connections", "match": "battery\\s*charger", "expected": 5 },
+    { "id": "baseflex", "label": "Display baseflex floor connections", "match": "baseflex|floor\\s*(box|connection|outlet)", "expected": 8 },
+    { "id": "feeder_3_0", "label": "#3/0 Cu feeder", "unit": "LF", "expected": 872, "not_counted": true, "note": "feeder footage is measured in the Plans view (Phase B), not counted" }
+  ],
+  "reference_estimate": {
+    "informational": true,
+    "source": "Estimator's Accubid BOM for Kissimmee",
+    "total_labor_hours": 798.9,
+    "selling_price": 79112.23,
+    "database_material": 25842.56,
+    "field_labor": { "amount": 26956.52, "crew": "1 journeyman + 2 apprentices", "avg_rate_per_hr": 33.74 },
+    "labor_overhead_pct": 18,
+    "material_markup_pct": 22,
+    "labor_markup_pct": 22,
+    "adjustment_pct": 1,
+    "equipment": 4350,
+    "general_expenses": 3770,
+    "estimator_fixture_quantities": { "linear_wraparound": 133, "recessed_downlight": 11, "wall_mounts": [3, 6], "pole_top_heads": 4, "poles": 3, "exit": 22 },
+    "estimator_devices": { "gfci": 16, "duplex": 11, "single_receptacle": 8, "decorator": 3 }
+  }
+}
