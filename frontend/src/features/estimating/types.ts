@@ -236,6 +236,9 @@ export interface MarkupWire {
   status: MarkupStatus;
   label: string | null;
   createdBy: string | null;
+  /** Takeoff accuracy Task 6 — 'ai_count' for a marker the AI counting stage
+   *  suggested (shown with an "AI" badge); null otherwise. Server-set only. */
+  source?: 'ai_count' | null;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;

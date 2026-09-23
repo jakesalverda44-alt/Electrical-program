@@ -492,6 +492,20 @@ describe('PlanViewer — click to confirm a suggested marker (Task 7)', () => {
     expect(el?.getAttribute('data-status')).toBe('suggested');
   });
 
+  it('an AI-counted marker carries an upright "AI" badge; a plain suggested marker does not (takeoff accuracy Task 6)', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { container, rerender } = render(<PlanViewer {...baseProps({ markups: [markup({ status: 'suggested', source: 'ai_count', label: 'A' })] })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalled());
+    const badge = container.querySelector('[data-testid="plan-ai-badge"]');
+    expect(badge?.textContent).toBe('AI');
+    expect(badge?.getAttribute('transform')).toMatch(/^matrix\(/);
+    expect(container.querySelector('[data-marker] title')?.textContent).toBe('AI-counted — Click to confirm: A');
+    rerender(<PlanViewer {...baseProps({ markups: [markup({ status: 'suggested' })] })} />);
+    expect(container.querySelector('[data-testid="plan-ai-badge"]')).toBeNull();
+  });
+
   it('a mousedown on a SUGGESTED marker calls onConfirmMarker, not onSelectMarker/onMoveMarker', async () => {
     const page = makePage();
     getPage.mockResolvedValue(page);

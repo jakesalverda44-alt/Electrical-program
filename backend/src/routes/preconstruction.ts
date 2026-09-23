@@ -43,6 +43,7 @@ import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
 import { runCountingStage } from '../ai/countingStage';
+import { writeAiCountMarkers } from '../estimating/aiMarkers';
 import { composeBidData, ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
 import { resolveUniqueJobNumber } from '../bidstd/boilerplate';
 import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
@@ -524,6 +525,10 @@ function compactOutput(text: string, max = 500): string {
   return `${oneLine.slice(0, max)}...`;
 }
 
+/** A pipeline input file; `documentId` is set when it was loaded from a bid
+ *  document (document_ids), so counted locations can be placed on it. */
+type PipelineFile = Express.Multer.File & { documentId?: string };
+
 // ── Background pipeline ───────────────────────────────────────────────────────
 // Exported (takeoff accuracy) so integration tests can drive the real pipeline
 // with an injected fake Anthropic client — never a real API call from tests.
@@ -734,6 +739,16 @@ export async function runPipeline(
       agent1: parseAIJSON(agent1Output) ?? {}, inventory: countingInventory, pdfs,
     });
     agent1Output = JSON.stringify(stage.agent1, null, 2);
+    // Task 6 — counted locations become suggested markers in the Plans view.
+    // Non-fatal: a failure here loses the markers, never the counts.
+    try {
+      const markers = await writeAiCountMarkers(bidId, stage.countResult,
+        files.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })));
+      (stage.countResult as unknown as Record<string, unknown>).markers = markers;
+    } catch (err) {
+      logger.warn({ err, bidId }, '[takeoff] writing AI count markers failed');
+      (stage.countResult as unknown as Record<string, unknown>).markers = { error: 'suggested markers could not be written' };
+    }
     await pool.query(
       `UPDATE takeoff_results SET agent1_output=$1, count_result=$2, usage_counter=$3, model_counter=$4 WHERE bid_id=$5`,
       [agent1Output, JSON.stringify(stage.countResult), JSON.stringify(stage.usage), config.modelCounter, bidId]
@@ -1639,6 +1654,7 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
 
       if (!buf) continue;
       files.push({
+        documentId: docId,
         fieldname: 'files',
         originalname: fname,
         encoding: '7bit',

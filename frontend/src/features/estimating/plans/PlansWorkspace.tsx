@@ -76,6 +76,7 @@ function wireToDraft(m: MarkupWire): MarkupDraft {
   return {
     id: m.id, documentId: m.documentId, pageIndex: m.pageIndex, lineKey: m.lineKey, kind: m.kind,
     points: m.points, drops: m.drops, dropFt: m.dropFt, slackPct: m.slackPct, status: m.status, label: m.label,
+    ...(m.source ? { source: m.source } : {}),
   };
 }
 
@@ -826,6 +827,25 @@ export default function PlansWorkspace({
   }, [sheets, suggestTagsOnSheet]);
 
   const suggestedCountOnSheet = useMemo(() => currentPageMarkups.filter(m => m.status === 'suggested').length, [currentPageMarkups]);
+  // Takeoff accuracy Task 6 — AI-counted suggestions (source 'ai_count').
+  const aiSuggestedCountOnSheet = useMemo(() => currentPageMarkups.filter(m => m.status === 'suggested' && m.source === 'ai_count').length, [currentPageMarkups]);
+  const unassignedAiCount = useMemo(() => history.present.filter(m => m.source === 'ai_count' && m.status === 'suggested' && !m.lineKey).length, [history.present]);
+  const [assignAiBusy, setAssignAiBusy] = useState(false);
+  const onAssignAi = useCallback(async () => {
+    setAssignAiBusy(true);
+    try {
+      const { data } = await api.post<{ assigned: number; stillUnassigned: number; updates: Array<{ id: string; lineKey: string }> }>(`/estimating/${bidId}/markups/assign-ai`);
+      const byId = new Map(data.updates.map(u => [u.id, u.lineKey]));
+      // Only markers still unassigned locally take the server's assignment —
+      // anything the estimator assigned meanwhile is left alone.
+      if (byId.size) mutate(current => current.map(m => (byId.has(m.id) && !m.lineKey ? { ...m, lineKey: byId.get(m.id)! } : m)));
+      showToast?.({ title: `${data.assigned} AI marker${data.assigned === 1 ? '' : 's'} assigned`, sub: data.stillUnassigned ? `${data.stillUnassigned} still need a line (no single matching line)` : undefined });
+    } catch (err) {
+      showToast?.({ variant: 'error', title: 'Could not assign AI markers', sub: err instanceof Error ? err.message : undefined });
+    } finally {
+      setAssignAiBusy(false);
+    }
+  }, [bidId, mutate, showToast]);
 
   // ── "New line from markup" + reassign selected markers (Task 6, deferral
   // closed) ─────────────────────────────────────────────────────────────
@@ -1136,6 +1156,10 @@ export default function PlansWorkspace({
             findTagResults={findTagResults}
             findTagBusy={findTagBusy}
             onJumpToFindTagResult={onJumpToFindTagResult}
+            aiSuggestedCountOnSheet={aiSuggestedCountOnSheet}
+            unassignedAiCount={unassignedAiCount}
+            onAssignAi={proposed ? undefined : () => void onAssignAi()}
+            assignAiBusy={assignAiBusy}
           />
         )}
         <div style={{ fontSize: 11, color: 'var(--text3)', padding: '2px 10px' }}>
