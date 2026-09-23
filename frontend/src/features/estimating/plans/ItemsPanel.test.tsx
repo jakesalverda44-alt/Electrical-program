@@ -167,3 +167,31 @@ describe('ItemsPanel — apply flow', () => {
     await waitFor(() => expect(screen.getByText(/\$1,234\.50 to the estimate/)).toBeTruthy());
   });
 });
+
+describe('ItemsPanel — "Suggest markers" per line (Task 7, deferral closed)', () => {
+  it('is hidden entirely when onSuggestMarkersForLine is not provided', () => {
+    setup();
+    expect(screen.queryByText('Suggest markers')).toBeNull();
+  });
+
+  it('shows a "Suggest markers" button per line with a line_key, and calls back with that line', () => {
+    const onSuggestMarkersForLine = vi.fn();
+    setup({ onSuggestMarkersForLine });
+    fireEvent.click(screen.getByText('Suggest markers'));
+    expect(onSuggestMarkersForLine).toHaveBeenCalledWith(line());
+  });
+
+  it('is hidden for a line with no line_key (nothing to attach a suggestion to yet)', () => {
+    const onSuggestMarkersForLine = vi.fn();
+    setup({ lines: [line({ line_key: undefined })], onSuggestMarkersForLine });
+    expect(screen.queryByText('Suggest markers')).toBeNull();
+  });
+
+  it('clicking it does not also select the line (stopPropagation, same as the other row actions)', () => {
+    const onSuggestMarkersForLine = vi.fn();
+    const onSelectLine = vi.fn();
+    setup({ onSuggestMarkersForLine, onSelectLine });
+    fireEvent.click(screen.getByText('Suggest markers'));
+    expect(onSelectLine).not.toHaveBeenCalled();
+  });
+});

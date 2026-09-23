@@ -14,16 +14,21 @@ import Toolbar from './Toolbar';
 import ItemsPanel from './ItemsPanel';
 import ScaleCalibrationPopover from './ScaleCalibrationPopover';
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
+import SuggestMarkersBar, { FindTagResult } from './SuggestMarkersBar';
 import { reduceTool, initToolState, ToolEvent, PdfPoint } from './toolMachine';
 import {
   initHistory, commit, undo, redo, canUndo, canRedo,
-  createMarkup, deleteMarkups, moveMarkup, MarkupDraft,
+  createMarkup, updateMarkup, deleteMarkups, moveMarkup, MarkupDraft,
   // reassignMarkups (multi-select "reassign to another line") and
   // replacePresent are exported and tested (markupHistory.test.ts) but not
   // yet wired to a UI affordance here — see the Phase B report's
   // deferrals for Task 5's "reassign selected markers to another line".
 } from './markupHistory';
 import { useMarkupAutosave } from './useMarkupAutosave';
+import { PageGeometry } from './overlay';
+import { suggestTagMarkers, candidateTagsFromDescription, buildLineTagIndex } from './tagSuggest';
+import { draftsFromTagCandidates } from './suggestedMarkerFlow';
+import { getSheetTextItems } from './sheetTextCache';
 import './plans.css';
 
 const LINE_COLORS = ['#4D8DF7', '#E0A53B', '#34C588', '#F2854F', '#E06A6A', '#9B7EDE', '#3BB6C9', '#D96BA0'];
@@ -271,6 +276,129 @@ export default function PlansWorkspace({
     [history.present, currentSheet]
   );
 
+  // ── Suggested markers (Task 7, deferral closed) ─────────────────────────
+  // Trace: Agent 1's raw analysis JSON has equipment[].tag, but nothing in
+  // the mapper/composeBidData pipeline carries it onto EstimateLine — see
+  // tagSuggest.ts's header comment for the full trace. candidateTagsFrom
+  // Description (the best available real signal: the line's own
+  // Agent-1/2-authored description text) is what "wires the tags" here.
+  const lineTagIndex = useMemo(() => buildLineTagIndex(lines), [lines]);
+
+  const onConfirmMarker = useCallback((id: string) => {
+    mutate(updateMarkup(history.present, id, { status: 'confirmed' }));
+  }, [mutate, history.present]);
+
+  const onConfirmAllOnSheet = useCallback(() => {
+    if (!currentSheet) return;
+    mutate(history.present.map(m => (
+      m.documentId === currentSheet.document_id && m.pageIndex === currentSheet.page_index && m.status === 'suggested'
+        ? { ...m, status: 'confirmed' as const }
+        : m
+    )));
+  }, [currentSheet, mutate, history.present]);
+
+  const onRejectAllOnSheet = useCallback(() => {
+    if (!currentSheet) return;
+    mutate(history.present.filter(m => !(
+      m.documentId === currentSheet.document_id && m.pageIndex === currentSheet.page_index && m.status === 'suggested'
+    )));
+  }, [currentSheet, mutate, history.present]);
+
+  const [suggestBusy, setSuggestBusy] = useState(false);
+
+  /** Shared by "Suggest markers for this sheet", "Suggest markers" (per
+   *  line, from ItemsPanel), and jumping to a "Find tag on sheets…"
+   *  result — only `tags` and `lineKeyForTag` (the assignment policy)
+   *  differ between callers. */
+  const suggestTagsOnSheet = useCallback(async (
+    tags: string[], targetSheet: SheetRow, lineKeyForTag: (tag: string) => string | null
+  ) => {
+    if (!targetSheet.has_text_layer) {
+      showToast?.({ title: 'No text on this sheet', sub: 'Nothing to search for tags here.' });
+      return;
+    }
+    if (tags.length === 0) {
+      showToast?.({ title: 'No tag-like text found', sub: 'Nothing to search for on this sheet.' });
+      return;
+    }
+    setSuggestBusy(true);
+    try {
+      const items = await getSheetTextItems(bidId, targetSheet.document_id, targetSheet.page_index);
+      const geom: PageGeometry = { widthPt: targetSheet.width_pt, heightPt: targetSheet.height_pt, rotation: targetSheet.rotation as never };
+      const candidates = suggestTagMarkers(items, tags, { geom, sheetKind: targetSheet.kind });
+      const drafts = draftsFromTagCandidates(
+        candidates, targetSheet.document_id, targetSheet.page_index, lineKeyForTag,
+        history.present, () => crypto.randomUUID()
+      );
+      if (drafts.length === 0) {
+        showToast?.({ title: 'No new suggestions', sub: 'Nothing new matched on this sheet.' });
+        return;
+      }
+      mutate([...history.present, ...drafts]);
+      showToast?.({ title: `${drafts.length} suggested marker${drafts.length === 1 ? '' : 's'} added` });
+    } catch {
+      showToast?.({ variant: 'error', title: 'Could not search this sheet', sub: 'Try again' });
+    } finally {
+      setSuggestBusy(false);
+    }
+  }, [bidId, history.present, mutate, showToast]);
+
+  const onSuggestForSheet = useCallback(() => {
+    if (!currentSheet) return;
+    const idx = lineTagIndex;
+    void suggestTagsOnSheet(Array.from(idx.keys()), currentSheet, tag => {
+      const keys = idx.get(tag);
+      return keys && keys.length === 1 ? keys[0] : null; // ambiguous/unknown -> unassigned, left for the Task 6 reassign UI
+    });
+  }, [currentSheet, lineTagIndex, suggestTagsOnSheet]);
+
+  const onSuggestForLine = useCallback((line: EstimateLine) => {
+    if (!currentSheet || !line.line_key) return;
+    const fixedKey = line.line_key;
+    const tags = candidateTagsFromDescription(line.description);
+    if (tags.length === 0) {
+      showToast?.({ title: 'No tag-like text', sub: "This line's description has nothing that looks like a plan tag." });
+      return;
+    }
+    void suggestTagsOnSheet(tags, currentSheet, () => fixedKey); // explicit — this line, not the ambiguity index
+  }, [currentSheet, suggestTagsOnSheet, showToast]);
+
+  const [findTagResults, setFindTagResults] = useState<FindTagResult[] | null>(null);
+  const [findTagBusy, setFindTagBusy] = useState(false);
+  const lastFindTagRef = useRef<string | null>(null);
+
+  const onFindTag = useCallback(async (tag: string) => {
+    lastFindTagRef.current = tag;
+    setFindTagBusy(true);
+    setFindTagResults(null);
+    try {
+      const searchable = sheets.filter(s => s.has_text_layer);
+      const results: FindTagResult[] = [];
+      for (const s of searchable) {
+        try {
+          const items = await getSheetTextItems(bidId, s.document_id, s.page_index);
+          const geom: PageGeometry = { widthPt: s.width_pt, heightPt: s.height_pt, rotation: s.rotation as never };
+          const candidates = suggestTagMarkers(items, [tag], { geom, sheetKind: s.kind });
+          if (candidates.length > 0) {
+            results.push({ sheetKey: sheetKey(s.document_id, s.page_index), label: `${s.sheet_no} ${s.title}`.trim(), count: candidates.length });
+          }
+        } catch { /* one sheet failing to load must never abort the rest of the search */ }
+      }
+      setFindTagResults(results);
+    } finally {
+      setFindTagBusy(false);
+    }
+  }, [bidId, sheets]);
+
+  const onJumpToFindTagResult = useCallback((key: string) => {
+    setCurrentKey(key);
+    const targetSheet = sheets.find(s => sheetKey(s.document_id, s.page_index) === key);
+    const tag = lastFindTagRef.current;
+    if (targetSheet && tag) void suggestTagsOnSheet([tag], targetSheet, () => null); // unassigned — the estimator picks the line
+  }, [sheets, suggestTagsOnSheet]);
+
+  const suggestedCountOnSheet = useMemo(() => currentPageMarkups.filter(m => m.status === 'suggested').length, [currentPageMarkups]);
+
   const markerCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const m of history.present) {
@@ -332,6 +460,20 @@ export default function PlansWorkspace({
           </button>
         </div>
         <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+        {currentSheet && (
+          <SuggestMarkersBar
+            hasTextLayer={currentSheet.has_text_layer}
+            busy={suggestBusy}
+            suggestedCountOnSheet={suggestedCountOnSheet}
+            onSuggestForSheet={onSuggestForSheet}
+            onConfirmAllOnSheet={onConfirmAllOnSheet}
+            onRejectAllOnSheet={onRejectAllOnSheet}
+            onFindTag={onFindTag}
+            findTagResults={findTagResults}
+            findTagBusy={findTagBusy}
+            onJumpToFindTagResult={onJumpToFindTagResult}
+          />
+        )}
         <div style={{ fontSize: 11, color: 'var(--text3)', padding: '2px 10px' }}>
           {autosave.status === 'saving' && 'Saving…'}
           {autosave.status === 'pending' && 'Unsaved changes'}
@@ -356,6 +498,7 @@ export default function PlansWorkspace({
             colorForLine={colorForLineKey}
             onSelectMarker={onSelectMarker}
             onMoveMarker={onMoveMarker}
+            onConfirmMarker={onConfirmMarker}
           />
         ) : (
           <div className="plan-viewer-loading">No plan sheets found for this bid yet.</div>
@@ -378,6 +521,7 @@ export default function PlansWorkspace({
         showOnlyActiveLine={showOnlyActiveLine}
         onToggleShowOnlyActiveLine={() => setShowOnlyActiveLine(v => !v)}
         previewPriceImpact={previewPriceImpact}
+        onSuggestMarkersForLine={onSuggestForLine}
       />
     </div>
   );

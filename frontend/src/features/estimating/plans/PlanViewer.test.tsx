@@ -24,6 +24,16 @@ vi.mock('./pdfjsClient', () => ({
 import PlanViewer from './PlanViewer';
 import { SheetRow } from '../types';
 import { initToolState } from './toolMachine';
+import { MarkupDraft } from './markupHistory';
+
+function markup(over: Partial<MarkupDraft> = {}): MarkupDraft {
+  return {
+    id: 'm1', documentId: 'doc-1', pageIndex: 0, lineKey: 'l1', kind: 'count',
+    points: [{ x: 100, y: 100 }], drops: 0, dropFt: null, slackPct: null,
+    status: 'confirmed', label: null,
+    ...over,
+  };
+}
 
 function makeRenderTask() {
   let resolveFn!: () => void;
@@ -255,5 +265,64 @@ describe('PlanViewer — visible-region tiling past the canvas-area cap (Task 9)
     for (let i = 0; i < 3; i++) fireEvent.click(getByLabelText('Zoom in'));
     await new Promise(r => setTimeout(r, 250));
     expect(queryByTestId('plan-tile-canvas')).toBeNull();
+  });
+});
+
+// Task 7 (deferral closed) — "click to confirm" a suggested (dashed) marker.
+describe('PlanViewer — click to confirm a suggested marker (Task 7)', () => {
+  it('renders a suggested marker with data-status="suggested" (dashed)', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { container } = render(<PlanViewer {...baseProps({ markups: [markup({ status: 'suggested' })] })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalled());
+    const el = container.querySelector('[data-marker]');
+    expect(el?.getAttribute('data-status')).toBe('suggested');
+  });
+
+  it('a mousedown on a SUGGESTED marker calls onConfirmMarker, not onSelectMarker/onMoveMarker', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const onSelectMarker = vi.fn();
+    const onConfirmMarker = vi.fn();
+    const { container } = render(<PlanViewer {...baseProps({
+      markups: [markup({ status: 'suggested' })], onSelectMarker, onConfirmMarker,
+    })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalled());
+    const el = container.querySelector('[data-marker]')!;
+    fireEvent.mouseDown(el);
+    expect(onConfirmMarker).toHaveBeenCalledWith('m1');
+    expect(onSelectMarker).not.toHaveBeenCalled();
+  });
+
+  it('a mousedown on a CONFIRMED marker still selects/drags as before — onConfirmMarker is never called', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const onSelectMarker = vi.fn();
+    const onConfirmMarker = vi.fn();
+    const { container } = render(<PlanViewer {...baseProps({
+      markups: [markup({ status: 'confirmed' })], onSelectMarker, onConfirmMarker,
+    })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalled());
+    const el = container.querySelector('[data-marker]')!;
+    fireEvent.mouseDown(el);
+    expect(onSelectMarker).toHaveBeenCalledWith('m1', false);
+    expect(onConfirmMarker).not.toHaveBeenCalled();
+  });
+
+  it('with no onConfirmMarker prop at all, a suggested marker falls back to the normal select flow (never silently swallows the click)', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const onSelectMarker = vi.fn();
+    const { container } = render(<PlanViewer {...baseProps({
+      markups: [markup({ status: 'suggested' })], onSelectMarker,
+    })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalled());
+    const el = container.querySelector('[data-marker]')!;
+    fireEvent.mouseDown(el);
+    expect(onSelectMarker).toHaveBeenCalledWith('m1', false);
   });
 });

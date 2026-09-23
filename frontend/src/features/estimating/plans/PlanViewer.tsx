@@ -41,6 +41,12 @@ export interface PlanViewerProps {
   colorForLine: (lineKey: string | null) => string;
   onSelectMarker: (id: string, additive: boolean) => void;
   onMoveMarker: (id: string, points: { x: number; y: number }[]) => void;
+  /** Task 7 (deferral closed) — "click to confirm" for a suggested
+   *  (dashed) marker: a mousedown on a marker whose status is 'suggested'
+   *  calls this INSTEAD OF the normal select/drag flow (never both — a
+   *  suggested marker is not draggable/selectable until confirmed).
+   *  Omitted in view-only mode. */
+  onConfirmMarker?: (id: string) => void;
   /** view-only mode (<900px, Decision 2) — tools hidden, no editing, pan/zoom still works. */
   viewOnly?: boolean;
 }
@@ -74,7 +80,7 @@ const MAX_TARGET_SCALE = 16;
 
 export default function PlanViewer({
   bidId, documentId, pageIndex, sheet, toolState, dispatchTool, markups, colorForLine,
-  onSelectMarker, onMoveMarker, viewOnly,
+  onSelectMarker, onMoveMarker, onConfirmMarker, viewOnly,
 }: PlanViewerProps) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -502,6 +508,7 @@ export default function PlanViewer({
                         radius={6 / renderScale}
                         onSelect={additive => onSelectMarker(m.id, additive)}
                         onStartDrag={e => onStartMarkerDrag(m.id, m.points, e)}
+                        onConfirm={onConfirmMarker ? () => onConfirmMarker(m.id) : undefined}
                       />
                     ))}
                     {toolState.tool === 'linear' && toolState.drawPoints.length > 0 && (
@@ -549,11 +556,21 @@ interface MarkerShapeProps {
    *  (already wired for panning) resolves the actual PDF-point math, so
    *  every geometry conversion has one owner. */
   onStartDrag: (e: React.MouseEvent) => void;
+  /** Task 7 (deferral closed) — present only when this marker is
+   *  status==='suggested' AND the parent gave PlanViewer an
+   *  onConfirmMarker. A mousedown then confirms it INSTEAD OF selecting or
+   *  starting a drag — a suggested marker isn't draggable/selectable until
+   *  it's confirmed. */
+  onConfirm?: () => void;
 }
 
-function MarkerShape({ markup, color, selected, strokeWidth, radius, onSelect, onStartDrag }: MarkerShapeProps) {
+function MarkerShape({ markup, color, selected, strokeWidth, radius, onSelect, onStartDrag, onConfirm }: MarkerShapeProps) {
   const onPointerDown = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (markup.status === 'suggested' && onConfirm) {
+      onConfirm();
+      return;
+    }
     onSelect(e.shiftKey);
     onStartDrag(e);
   };
@@ -566,18 +583,22 @@ function MarkerShape({ markup, color, selected, strokeWidth, radius, onSelect, o
     return (
       <circle
         data-marker
+        data-status={markup.status}
         className="plan-marker"
         cx={p.x} cy={p.y} r={radius}
         fill={color} fillOpacity={markup.status === 'suggested' ? 0.35 : 0.85}
         stroke={selected ? '#fff' : color} strokeWidth={selected ? strokeWidth * 1.5 : strokeWidth}
         strokeDasharray={dashArray}
         onMouseDown={onPointerDown}
-      />
+      >
+        {markup.status === 'suggested' && <title>Click to confirm{markup.label ? `: ${markup.label}` : ''}</title>}
+      </circle>
     );
   }
   return (
     <polyline
       data-marker
+      data-status={markup.status}
       className="plan-marker"
       points={markup.points.map(p => `${p.x},${p.y}`).join(' ')}
       fill="none"

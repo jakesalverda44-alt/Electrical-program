@@ -32,9 +32,73 @@ const SCHEDULE_LIKE_KINDS: ReadonlySet<SheetKindForSuggest> = new Set(['schedule
 /** Case-insensitive whole-alphanumeric-token split — "Type A" -> ["TYPE","A"],
  *  "A1" -> ["A1"], "A-1" -> ["A","1"]. Never splits a run of letters+digits
  *  with no separator (so tag "A" cannot match inside "A1" or "AMP" — the
- *  plan's own examples). */
-function tokenize(s: string): string[] {
+ *  plan's own examples). Exported so candidateTagsFromDescription (below)
+ *  and any UI-side "find this text" affordance use the EXACT same
+ *  splitting rule suggestTagMarkers uses on sheet text — a candidate
+ *  extracted from a description is therefore guaranteed to be matchable
+ *  against sheet text by the same function, not a lookalike splitter that
+ *  could silently drift out of sync. */
+export function tokenize(s: string): string[] {
   return s.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+}
+
+// ── Deriving candidate tags from a takeoff line's own description ──────────
+// Estimating Phase B, Task 7 (deferral closed) — "wire the tags from Agent
+// 1/2 output where they exist." Traced: Agent 1's raw analysis JSON
+// (backend/src/ai/prompts.ts, AGENT1_SYSTEM) has an `equipment[].tag` field
+// (e.g. "ATS-1", "T-1") for discrete equipment, but that field is NEVER
+// carried into est_bid_lines / EstimateLine — composeBidData.ts and
+// mapper.ts fold Agent 1/2 output into `description`/`qty`/`category` only
+// (confirmed by grep: no `.tag` reference anywhere in the mapper/composer
+// pipeline). `quantities[].item`/`spec` (the actual source of most takeoff
+// lines) have no structured tag field at all in the Agent 1/2 schema.
+//
+// So today there is no structured device-tag field anywhere on
+// EstimateLine to "wire" directly. The best real signal available is the
+// line's own `description` text itself — which IS Agent 1/2 output (an
+// estimator/agent-written string that, for a device/fixture line, very
+// often already contains its plan tag, e.g. "Type A1 - 2x4 LED troffer" or
+// "ATS-1 automatic transfer switch"). candidateTagsFromDescription
+// tokenizes that description with the SAME splitter suggestTagMarkers uses
+// on sheet text, and keeps only tokens that look like a plan tag rather
+// than an ordinary word: short (2-6 chars) and containing at least one
+// digit — "A1", "L2", "ATS1", "T3" qualify; "PANEL", "LED", "TROFFER" do
+// not. This is deliberately permissive-with-confirmation, not a filter
+// that needs to be exact: every candidate only ever produces a DASHED,
+// unconfirmed "suggested" marker (Decision 3 / markupMath.ts: suggested
+// markers never roll up), so a false-positive tag costs the estimator one
+// glance and a "Reject all", never a wrong quantity. */
+export function candidateTagsFromDescription(description: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of tokenize(description)) {
+    if (t.length < 2 || t.length > 6) continue;
+    if (!/[0-9]/.test(t)) continue;
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
+/** Maps every candidate tag (from candidateTagsFromDescription) found in
+ *  ANY line's description back to the line_key(s) that produced it — used
+ *  by "Suggest markers for this sheet" to auto-assign a found tag to its
+ *  line when exactly one line claims it, and leave it unassigned (for the
+ *  Task 6 reassign UI / unassigned bucket) when the tag is ambiguous
+ *  (claimed by more than one line) or claimed by none. Lines with no
+ *  line_key (not yet saved) are skipped — nothing to assign a marker to. */
+export function buildLineTagIndex(lines: { line_key?: string | null; description: string }[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const l of lines) {
+    if (!l.line_key) continue;
+    for (const tag of candidateTagsFromDescription(l.description)) {
+      const list = map.get(tag) ?? [];
+      if (!list.includes(l.line_key)) list.push(l.line_key);
+      map.set(tag, list);
+    }
+  }
+  return map;
 }
 
 // ── Title-block strip (rotation-aware) ──────────────────────────────────

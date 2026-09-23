@@ -2,7 +2,7 @@
 // token matching, title-block exclusion (rotation-aware, all four
 // rotations), the table-region heuristic, and schedule-sheet exclusion.
 import { describe, it, expect } from 'vitest';
-import { suggestTagMarkers, TextItem } from './tagSuggest';
+import { suggestTagMarkers, TextItem, candidateTagsFromDescription, buildLineTagIndex, tokenize } from './tagSuggest';
 import { PageGeometry } from './overlay';
 
 function item(str: string, x: number, y: number, extra: Partial<TextItem> = {}): TextItem {
@@ -171,5 +171,71 @@ describe('suggestTagMarkers — schedule-like sheet kinds never produce suggesti
 
   it('no sheetKind at all processes normally (opts.sheetKind is optional)', () => {
     expect(suggestTagMarkers(items, ['A'], { geom }).length).toBe(1);
+  });
+});
+
+describe('candidateTagsFromDescription — Task 7 (deferral closed)', () => {
+  it('extracts every plan-tag-like token (letters+digits together, 2-6 chars, has a digit)', () => {
+    // "2x4" tokenizes to "2X4" (x is alphanumeric, no separator) — it looks
+    // exactly as tag-like as "A1" by this heuristic, and is intentionally
+    // included; both are low-cost false-positive candidates (see the
+    // module-level comment: every candidate only ever produces a DASHED,
+    // unconfirmed marker, never an auto-applied one).
+    expect(candidateTagsFromDescription('Type A1 - 2x4 LED troffer')).toEqual(['A1', '2X4']);
+  });
+
+  it('extracts multiple distinct candidates in description order, deduped', () => {
+    expect(candidateTagsFromDescription('ATS1 feeding panel A1, also A1 again')).toEqual(['ATS1', 'A1']);
+  });
+
+  it('rejects ordinary words with no digit, even if short', () => {
+    expect(candidateTagsFromDescription('LED troffer fixture')).toEqual([]);
+  });
+
+  it('rejects a bare single-character token (too short) and an over-long one', () => {
+    expect(candidateTagsFromDescription('A 1 PANELBOARD1234')).toEqual([]);
+  });
+
+  it('a hyphenated equipment tag like "ATS-1" does NOT qualify — the hyphen splits letters from digits into two tokens, neither of which alone is both short-and-digit-bearing (a known, documented limitation)', () => {
+    expect(candidateTagsFromDescription('ATS-1 automatic transfer switch (APT ECFECI)')).toEqual([]);
+  });
+
+  it('a hyphen-free equipment tag qualifies directly', () => {
+    expect(candidateTagsFromDescription('ATS1 automatic transfer switch')).toEqual(['ATS1']);
+  });
+
+  it('an empty description yields no candidates', () => {
+    expect(candidateTagsFromDescription('')).toEqual([]);
+  });
+});
+
+describe('buildLineTagIndex — Task 7 (deferral closed)', () => {
+  it('maps a candidate tag to the one line that produced it', () => {
+    const idx = buildLineTagIndex([{ line_key: 'l1', description: 'Type A1 fixture' }]);
+    expect(idx.get('A1')).toEqual(['l1']);
+  });
+
+  it('maps a tag claimed by two different lines to both line_keys', () => {
+    const idx = buildLineTagIndex([
+      { line_key: 'l1', description: 'Type A1 fixture, 2x4' },
+      { line_key: 'l2', description: 'Type A1 emergency variant' },
+    ]);
+    expect(idx.get('A1')).toEqual(['l1', 'l2']);
+  });
+
+  it('skips a line with no line_key (not yet saved — nothing to assign a marker to)', () => {
+    const idx = buildLineTagIndex([{ description: 'Type A1 fixture' }]);
+    expect(idx.has('A1')).toBe(false);
+  });
+
+  it('a line with no candidate tags contributes nothing', () => {
+    const idx = buildLineTagIndex([{ line_key: 'l1', description: 'Generic conduit run' }]);
+    expect(idx.size).toBe(0);
+  });
+});
+
+describe('tokenize — exported for reuse by candidate-tag extraction', () => {
+  it('splits on any non-alphanumeric run and uppercases', () => {
+    expect(tokenize('Type A-1, panel 2')).toEqual(['TYPE', 'A', '1', 'PANEL', '2']);
   });
 });

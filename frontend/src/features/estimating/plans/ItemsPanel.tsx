@@ -47,11 +47,17 @@ export interface ItemsPanelProps {
    *  dialog shows the change list without a $ figure when omitted (e.g. a
    *  test harness with no pricing endpoint wired up). */
   previewPriceImpact?: (lineKeys: string[]) => Promise<number>;
+  /** Task 7 (deferral closed) — "Suggest markers" for ONE line, on the
+   *  sheet currently open in the viewer (candidate tags are derived from
+   *  this line's own description — see tagSuggest.ts's
+   *  candidateTagsFromDescription). Omitted entirely hides the button
+   *  (e.g. a read-only context). */
+  onSuggestMarkersForLine?: (line: EstimateLine) => void;
 }
 
 export default function ItemsPanel({
   lines, rollup, activeLineKey, onSelectLine, onApplyLines, onJumpToSource,
-  showOnlyActiveLine, onToggleShowOnlyActiveLine, previewPriceImpact,
+  showOnlyActiveLine, onToggleShowOnlyActiveLine, previewPriceImpact, onSuggestMarkersForLine,
 }: ItemsPanelProps) {
   const confirm = useConfirm();
   const [applyingKeys, setApplyingKeys] = useState<Set<string>>(new Set());
@@ -160,6 +166,11 @@ export default function ItemsPanel({
                   {onJumpToSource && (
                     <button className="btn ghost sm" onClick={e => { e.stopPropagation(); onJumpToSource(l); }}>
                       Jump to source sheet
+                    </button>
+                  )}
+                  {key && onSuggestMarkersForLine && (
+                    <button className="btn ghost sm" onClick={e => { e.stopPropagation(); onSuggestMarkersForLine(l); }}>
+                      Suggest markers
                     </button>
                   )}
                   {key && (status === 'differs' || status === 'not_marked') && r?.markedQty != null && (

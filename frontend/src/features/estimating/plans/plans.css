@@ -215,6 +215,64 @@
   pointer-events: none;
 }
 
+/* Task 7 (deferral closed) — "Suggest markers"/"Find tag on sheets…" bar,
+   sat between the toolbar and the canvas. */
+.plan-suggest-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 11.5px;
+  position: relative;
+}
+
+.plan-suggest-bar-notice {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.plan-suggest-bar-pending {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text2);
+  font-weight: 700;
+}
+
+.plan-suggest-bar-find {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plan-suggest-bar-find input {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 4px 8px;
+  width: 140px;
+}
+
+.plan-suggest-bar-find-empty {
+  color: var(--text3);
+}
+
+.plan-suggest-bar-find-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .plan-overlay-svg {
   position: absolute;
   inset: 0;

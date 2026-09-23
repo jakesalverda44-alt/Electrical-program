@@ -27,6 +27,15 @@ vi.mock('./PlanViewer', () => ({
   ),
 }));
 
+// Task 7 (deferral closed) — sheetTextCache.ts's own pdf.js-loading is
+// covered by sheetTextCache.test.ts; here it's mocked so these tests stay
+// data-wiring tests (tag matching -> suggested markers -> confirm/reject),
+// not a re-test of pdf.js text extraction.
+const getSheetTextItems = vi.fn();
+vi.mock('./sheetTextCache', () => ({
+  getSheetTextItems: (...a: unknown[]) => getSheetTextItems(...a),
+}));
+
 function mockMatchMediaWidth(widthPx: number) {
   window.matchMedia = vi.fn().mockImplementation((query: string) => {
     const m = /min-width:\s*(\d+)px/.exec(query);
@@ -63,6 +72,8 @@ beforeEach(() => {
   get.mockReset();
   post.mockReset();
   put.mockReset();
+  getSheetTextItems.mockReset();
+  getSheetTextItems.mockResolvedValue([]);
   get.mockImplementation((url: string) => {
     if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet()] } });
     if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
@@ -175,6 +186,126 @@ describe('PlansWorkspace — responsive view-only (Decision 2)', () => {
     mockMatchMediaWidth(1400);
     setup({ viewOnly: true });
     await waitFor(() => expect(screen.getByTestId('plan-viewer-mock').dataset.viewOnly).toBe('true'));
+  });
+});
+
+// Task 7 (deferral closed) — "Suggest markers"/"Find tag on sheets…"/
+// confirm-reject wiring. PlanViewer itself is mocked in this file (see the
+// header comment), so "a suggested marker is on the sheet" is asserted via
+// the SuggestMarkersBar's own "N suggested" indicator, not by inspecting
+// SVG markers PlanViewer would normally render.
+describe('PlansWorkspace — suggested markers (Task 7, deferral closed)', () => {
+  it('"Suggest markers for this sheet" fetches this sheet\'s text, matches a line\'s description-derived tag, and adds ONE suggested marker per match', async () => {
+    getSheetTextItems.mockResolvedValue([{ str: 'A1', transform: [1, 0, 0, 1, 50, 50] }]);
+    setup({ lines: [line({ description: 'Type A1 duplex receptacle', line_key: 'k1' })] });
+    await waitFor(() => expect(screen.getByText('Suggest markers for this sheet')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Suggest markers for this sheet'));
+
+    await waitFor(() => expect(getSheetTextItems).toHaveBeenCalledWith('bid1', 'doc-1', 0));
+    await waitFor(() => expect(screen.getByText(/1 suggested/)).toBeTruthy());
+  });
+
+  it('a tag not found in ANY line description produces no suggestion (the text item does not match any candidate tag)', async () => {
+    getSheetTextItems.mockResolvedValue([{ str: 'ZZZ9', transform: [1, 0, 0, 1, 50, 50] }]);
+    setup({ lines: [line({ description: 'Type A1 duplex receptacle', line_key: 'k1' })] });
+    await waitFor(() => expect(screen.getByText('Suggest markers for this sheet')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Suggest markers for this sheet'));
+
+    await waitFor(() => expect(getSheetTextItems).toHaveBeenCalled());
+    expect(screen.queryByText(/suggested$/)).toBeNull();
+  });
+
+  it('shows "No text on this sheet" instead of the suggest button, and never fetches text, when the current sheet has no text layer', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet({ has_text_layer: false })] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup();
+    await waitFor(() => expect(screen.getByText('No text on this sheet — nothing to search for tags here.')).toBeTruthy());
+    expect(screen.queryByText('Suggest markers for this sheet')).toBeNull();
+    expect(getSheetTextItems).not.toHaveBeenCalled();
+  });
+
+  it('"Confirm all on this sheet" flips every suggested marker on the CURRENT sheet to confirmed, then autosaves it', async () => {
+    getSheetTextItems.mockResolvedValue([{ str: 'A1', transform: [1, 0, 0, 1, 50, 50] }]);
+    post.mockResolvedValue({ data: { created: [{ id: 'm1' }], updated: [], deleted: [], skipped: [] } });
+    setup({ lines: [line({ description: 'Type A1 duplex receptacle', line_key: 'k1' })] });
+    await waitFor(() => expect(screen.getByText('Suggest markers for this sheet')).toBeTruthy());
+    fireEvent.click(screen.getByText('Suggest markers for this sheet'));
+    await waitFor(() => expect(screen.getByText(/1 suggested/)).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Confirm all on this sheet'));
+    expect(screen.queryByText(/1 suggested/)).toBeNull(); // no longer suggested — the bar's pending indicator clears
+
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(post).toHaveBeenCalledWith(
+      '/estimating/bid1/markups/batch',
+      expect.objectContaining({ creates: [expect.objectContaining({ status: 'confirmed' })] })
+    ));
+  });
+
+  it('"Reject all" removes every suggested marker on the sheet — nothing is ever autosaved as confirmed', async () => {
+    getSheetTextItems.mockResolvedValue([{ str: 'A1', transform: [1, 0, 0, 1, 50, 50] }]);
+    setup({ lines: [line({ description: 'Type A1 duplex receptacle', line_key: 'k1' })] });
+    await waitFor(() => expect(screen.getByText('Suggest markers for this sheet')).toBeTruthy());
+    fireEvent.click(screen.getByText('Suggest markers for this sheet'));
+    await waitFor(() => expect(screen.getByText(/1 suggested/)).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Reject all'));
+    expect(screen.queryByText(/suggested/)).toBeNull();
+
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    expect(post).not.toHaveBeenCalledWith('/estimating/bid1/markups/batch', expect.anything());
+  });
+
+  it('per-line "Suggest markers" (from ItemsPanel) assigns the found marker to THAT line explicitly, even if another line\'s description could also claim the tag', async () => {
+    getSheetTextItems.mockResolvedValue([{ str: 'A1', transform: [1, 0, 0, 1, 50, 50] }]);
+    post.mockResolvedValue({ data: { created: [{ id: 'm1' }], updated: [], deleted: [], skipped: [] } });
+    // Two lines both mention "A1" in their description — the ambiguity
+    // index (used by "Suggest markers for this sheet") would leave this
+    // unassigned, but clicking the per-LINE button must assign it to the
+    // exact line clicked, not fall back to that ambiguity policy.
+    setup({ lines: [
+      line({ line_key: 'k1', description: 'Type A1 duplex receptacle' }),
+      line({ line_key: 'k2', description: 'Type A1 emergency variant' }),
+    ] });
+    await waitFor(() => expect(screen.getAllByText('Suggest markers').length).toBe(2));
+
+    fireEvent.click(screen.getAllByText('Suggest markers')[1]); // the k2 row
+
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(post).toHaveBeenCalledWith(
+      '/estimating/bid1/markups/batch',
+      expect.objectContaining({ creates: [expect.objectContaining({ line_key: 'k2', status: 'suggested' })] })
+    ));
+  });
+
+  it('"Find tag on sheets…" searches every text-layer sheet and lists matches; jumping to a result suggests that tag there, unassigned', async () => {
+    const sheetB = sheet({ document_id: 'doc-2', page_index: 0, sheet_no: 'E1.2', title: 'Power Plan' });
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet(), sheetB] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    getSheetTextItems.mockImplementation((_bid: string, documentId: string) =>
+      Promise.resolve(documentId === 'doc-2' ? [{ str: 'Z9', transform: [1, 0, 0, 1, 20, 20] }] : []));
+    setup();
+    await waitFor(() => expect(screen.getByText('Find tag on sheets…')).toBeTruthy());
+    fireEvent.click(screen.getByText('Find tag on sheets…'));
+    fireEvent.change(screen.getByLabelText('Tag to find'), { target: { value: 'Z9' } });
+    fireEvent.click(screen.getByText('Search'));
+
+    await waitFor(() => expect(screen.getByText(/E1.2 Power Plan \(1\)/)).toBeTruthy());
+    fireEvent.click(screen.getByText(/E1.2 Power Plan \(1\)/));
+
+    // Jumping navigates to doc-2's sheet AND places an (unassigned)
+    // suggested marker there for the searched tag.
+    await waitFor(() => expect(screen.getByText(/1 suggested/)).toBeTruthy());
   });
 });
 
