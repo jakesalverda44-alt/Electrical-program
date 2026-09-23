@@ -660,6 +660,50 @@ describe('PlansWorkspace — background sheet indexing status (Fix round 1 / B9)
     expect(screen.queryByTestId('plan-sheets-indexing-banner')).toBeNull();
   });
 
+  // Fix round 2 / R2-B3 — "shows failed documents with the error and a
+  // Retry": the old banner said only "one or more plan documents failed",
+  // with no document name, no reason, and no dedicated action of its own.
+  it('the failed banner names each failed document and shows its own error message, with a Retry button', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: {
+          sheets: [],
+          statuses: { 'doc-1': 'failed' },
+          indexErrors: { 'doc-1': 'Could not fetch this document\'s file (Drive access error, a revoked share, or no storage location on record)' },
+          documentNames: { 'doc-1': 'east-wing-plans.pdf' },
+        },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-sheets-failed-banner')).toBeTruthy());
+    const doc1 = screen.getByTestId('plan-sheets-failed-doc-doc-1');
+    expect(doc1.textContent).toContain('east-wing-plans.pdf');
+    expect(doc1.textContent).toContain('Could not fetch this document\'s file');
+    expect(screen.getByText('Retry')).toBeTruthy();
+  });
+
+  it('clicking Retry in the failed banner sends an explicit refresh=1 request', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [], statuses: { 'doc-1': 'failed' }, indexErrors: { 'doc-1': 'simulated failure' }, documentNames: { 'doc-1': 'plans.pdf' } },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup();
+    await waitFor(() => expect(screen.getByText('Retry')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Retry'));
+
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/estimating/bid1/sheets', { params: { refresh: 1 } }));
+  });
+
   it('no banners at all once every document is already "done" on the first response', async () => {
     setup(); // default beforeEach mock has no `statuses` field at all
     await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());

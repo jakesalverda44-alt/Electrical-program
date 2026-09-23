@@ -9,11 +9,24 @@
 -- Fix: indexing becomes a background job per document_id, tracked here.
 -- GET /sheets now returns whatever est_sheets rows already exist PLUS
 -- this status map, and kicks off (fire-and-forget) indexing for any
--- document that isn't already 'indexing' or 'done' — the client polls
--- until every document reaches a terminal status. 'failed' is always
--- retried on the NEXT GET /sheets (never a permanent dead end), and the
--- "Refresh sheets" button resets every document back to 'pending'
--- on demand.
+-- document that's still 'pending' — the client polls until every
+-- document reaches a terminal status.
+--
+-- Fix round 2 / R2-N3 — corrected from an earlier, inaccurate version of
+-- this comment ("'failed' is always retried on the NEXT GET /sheets"),
+-- which never matched what the code actually does: 'failed' is STICKY —
+-- a plain (unrefreshed) GET /sheets never silently re-claims it (see
+-- backend/src/estimating/sheets.ts's own claimDocumentsForIndexing doc
+-- comment for why: re-claiming it automatically would flip it back to
+-- 'indexing' before the estimator ever got to SEE the failure, and would
+-- hammer a persistently-down Drive link on every single poll tick). Only
+-- an explicit `?refresh=1` (the "Refresh sheets" button) resets a
+-- 'failed' document back to 'pending' so it becomes eligible again —
+-- never a permanent dead end, but never a silent one either. Separately
+-- (Fix round 2 / R2-B3), a document stuck 'indexing' past a 10-minute
+-- stale lease, or left over from a process that died mid-index, is
+-- reclaimed automatically (a plain poll, or on the next server boot) —
+-- see claimDocumentsForIndexing and resetStuckIndexingOnBoot.
 CREATE TABLE IF NOT EXISTS est_document_index_status (
   bid_id UUID NOT NULL REFERENCES bids(id) ON DELETE CASCADE,
   document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,

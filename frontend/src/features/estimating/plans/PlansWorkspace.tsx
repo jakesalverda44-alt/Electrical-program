@@ -207,6 +207,15 @@ export default function PlansWorkspace({
   // (e.g. a plan file uploaded from another tab) with a non-terminal
   // status the next time sheetsData refreshes.
   const indexStatuses = useMemo(() => sheetsData?.statuses ?? {}, [sheetsData]);
+  // Fix round 2 / R2-B3 — "shows failed documents with the error and a
+  // Retry": the old banner just said "one or more plan documents failed
+  // to index", with no way to tell which one or why.
+  const indexErrors = useMemo(() => sheetsData?.indexErrors ?? {}, [sheetsData]);
+  const documentNames = useMemo(() => sheetsData?.documentNames ?? {}, [sheetsData]);
+  const failedDocumentIds = useMemo(
+    () => Object.entries(indexStatuses).filter(([, s]) => s === 'failed').map(([id]) => id),
+    [indexStatuses]
+  );
   const sheetsIndexing = useMemo(
     () => Object.values(indexStatuses).some(s => s === 'pending' || s === 'indexing'),
     [indexStatuses]
@@ -982,9 +991,19 @@ export default function PlansWorkspace({
             Indexing plan sheets… newly-indexed sheets will appear here as they finish.
           </div>
         )}
-        {Object.values(indexStatuses).some(s => s === 'failed') && (
+        {failedDocumentIds.length > 0 && (
           <div className="plan-scale-banner plan-scale-banner-warn" data-testid="plan-sheets-failed-banner">
-            One or more plan documents failed to index. Click &quot;Refresh sheets&quot; to retry.
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {failedDocumentIds.map(id => (
+                <li key={id} data-testid={`plan-sheets-failed-doc-${id}`}>
+                  <strong>{documentNames[id] ?? 'A plan document'}</strong> failed to index
+                  {indexErrors[id] ? `: ${indexErrors[id]}` : '.'}
+                </li>
+              ))}
+            </ul>
+            <button type="button" className="btn primary sm" disabled={refreshingSheets} onClick={() => void onRefreshSheets()}>
+              {refreshingSheets ? 'Retrying…' : 'Retry'}
+            </button>
           </div>
         )}
         {proposed && (

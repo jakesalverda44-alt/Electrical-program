@@ -13,6 +13,7 @@ import { startReminderScheduler } from './notifications/engine';
 import { startIntakeInboxPoller } from './integrations/intakePoller';
 import { startLeadNudgeScheduler } from './integrations/leadNudge';
 import { startProposalQuietSweep } from './services/proposalQuietSweep';
+import { resetStuckIndexingOnBoot } from './estimating/sheets';
 import { requireAuth, AuthRequest, initJwtSecret } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
@@ -191,6 +192,15 @@ if (require.main === module) {
   runMigrations()
     .then(async () => {
       await initJwtSecret();
+      // Fix round 2 / R2-B3 — before accepting any requests: every
+      // est_document_index_status row still 'indexing' at this point
+      // belongs to a job that died with whatever PREVIOUS process
+      // instance claimed it (a redeploy, a restart, an OOM, ts-node-dev's
+      // own --respawn) — reset it to 'pending' so the very first GET
+      // /sheets after boot picks it back up, instead of the client
+      // polling a stuck 'indexing' status for up to the stale-lease
+      // timeout before it self-heals.
+      await resetStuckIndexingOnBoot();
       const server = app.listen(port, () => logger.info(`Backend running on :${port}`));
       startReminderScheduler();
       startIntakeInboxPoller();

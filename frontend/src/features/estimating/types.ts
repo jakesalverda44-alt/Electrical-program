@@ -205,6 +205,13 @@ export interface SheetsResponse {
   sheets: SheetRow[];
   /** Keyed by document_id. */
   statuses: Record<string, IndexStatus>;
+  /** Fix round 2 / R2-B3 — keyed by document_id, only for a document
+   *  CURRENTLY 'failed'. */
+  indexErrors: Record<string, string>;
+  /** Fix round 2 / R2-B3 — every plan PDF document's own name, keyed by
+   *  document_id — lets the failed-documents list say "plans.pdf failed:
+   *  ..." instead of a bare document_id. */
+  documentNames: Record<string, string>;
 }
 
 export type MarkupKind = 'count' | 'linear';

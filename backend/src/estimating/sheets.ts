@@ -346,24 +346,41 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise(resolve => setImmediate(resolve));
 }
 
-/** Indexes every page of one plan PDF document into est_sheets. Never
- *  throws for a single bad/unreadable document (a corrupt PDF, a Drive
- *  fetch failure) — logs and returns 0 so one bad file in a 68-document
- *  plan set doesn't take down the whole bid's sheet list. */
+/** Indexes every page of one plan PDF document into est_sheets.
+ *
+ *  Fix round 2 / R2-B3 — this used to log-and-return-0 for a bad/
+ *  unreadable document instead of throwing, on the theory that "one bad
+ *  file in a 68-document plan set shouldn't take down the whole bid's
+ *  sheet list." That reasoning doesn't hold once indexing runs as a
+ *  background job per document (B9): a caller that gets `0` back has no
+ *  way to tell "a real 0-page/unreadable file" apart from "everything
+ *  worked and this file happens to have no sheets", so runClaimedIndexing
+ *  InBackground's own try/catch never ran — the document was marked
+ *  'done' with page_count 0 no matter WHY nothing came back. A Drive
+ *  outage or a revoked share, which getFileMedia reports as `null` (it
+ *  never throws — see services/googleDrive.ts), or a genuinely corrupt
+ *  PDF, both silently reported success. The UI showed "No plan sheets
+ *  found", with no failed banner and no reason to click Refresh. Now
+ *  throws in all three failure cases (null bytes, a parse failure, and a
+ *  well-formed-but-empty 0-page PDF, which is just as useless to an
+ *  estimator as a fetch failure) — the caller (runClaimedIndexingInBackground)
+ *  already has the try/catch that turns a throw into a 'failed' status
+ *  with a readable error message. */
 async function indexDocument(bidId: string, doc: PlanDocument): Promise<number> {
   const buf = await fetchDocumentBuffer(doc);
   if (!buf) {
-    logger.warn({ documentId: doc.id }, '[estimating/sheets] could not fetch document bytes — skipping');
-    return 0;
+    throw new Error('Could not fetch this document\'s file (Drive access error, a revoked share, or no storage location on record)');
   }
   let pdfDoc;
   try {
     pdfDoc = await openPdfDocument(buf);
   } catch (err) {
-    logger.warn({ err, documentId: doc.id }, '[estimating/sheets] could not parse document as a PDF — skipping');
-    return 0;
+    throw new Error(`Could not parse this file as a PDF: ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
+    if (pdfDoc.numPages === 0) {
+      throw new Error('This PDF has 0 pages');
+    }
     for (let pageIndex = 0; pageIndex < pdfDoc.numPages; pageIndex++) {
       const info = await extractPageInfo(pdfDoc, pageIndex);
       await upsertSheetPage(bidId, doc.id, pageIndex, info);
@@ -388,15 +405,45 @@ async function indexDocument(bidId: string, doc: PlanDocument): Promise<number> 
 // Now: every plan PDF document gets a row in est_document_index_status
 // (pending -> indexing -> done, or -> failed). GET /sheets NEVER awaits
 // indexing itself — it (1) registers any newly-seen document as 'pending',
-// (2) atomically claims every 'pending'/'failed' document (flips it to
-// 'indexing' in the same statement, so two concurrent requests can't both
-// kick off the same job), (3) fires the claimed jobs without awaiting them,
-// and (4) immediately returns whatever est_sheets rows already exist plus
-// the current status of every document. The client (PlansWorkspace.tsx)
-// polls while anything is pending/indexing. A 'failed' document is always
-// eligible to be re-claimed on the very next GET /sheets — never a
-// permanent dead end.
+// (2) atomically claims every ELIGIBLE document (still 'pending', or
+// 'indexing' past its stale-lease timeout — see
+// STALE_INDEXING_LEASE_MINUTES below; flips it to 'indexing' in the same
+// statement, so two concurrent requests can't both kick off the same
+// job), (3) fires the claimed jobs without awaiting them, and (4)
+// immediately returns whatever est_sheets rows already exist plus the
+// current status of every document. The client (PlansWorkspace.tsx)
+// polls while anything is pending/indexing.
+//
+// Fix round 2 / R2-N3 — 'failed' is STICKY, corrected here from an
+// earlier, inaccurate version of this same comment ("a failed document is
+// always eligible to be re-claimed on the very next GET /sheets") that
+// never matched what claimDocumentsForIndexing actually does (see its own
+// header comment for why: a plain poll re-claiming 'failed' would flip it
+// back to 'indexing' before the estimator ever got to SEE the failure).
+// Only an explicit `?refresh=1` ("Refresh sheets") resets a 'failed'
+// document back to 'pending' so it becomes eligible again — same fix
+// applies to migration 110's own header comment.
 export type IndexStatus = 'pending' | 'indexing' | 'done' | 'failed';
+
+/** Fix round 2 / R2-B3 — called once, at server startup (index.ts), before
+ *  accepting requests. Every row still 'indexing' at this point MUST be
+ *  stale: a background indexing job lives entirely as an in-memory async
+ *  function in the process that claimed it (runClaimedIndexingInBackground)
+ *  — if THIS process is just starting, no job from a PREVIOUS process
+ *  instance can possibly still be running; it died WITH that process,
+ *  whether from a Render deploy, a restart, an OOM on a 150MB parse, or
+ *  ts-node-dev's own --respawn on any file save in local dev. Without
+ *  this, such a document sat 'indexing' until STALE_INDEXING_LEASE_MINUTES
+ *  elapsed (claimDocumentsForIndexing's own fallback) — this closes the
+ *  gap immediately instead of making every restart wait out that lease. */
+export async function resetStuckIndexingOnBoot(): Promise<void> {
+  const { rowCount } = await pool.query(
+    `UPDATE est_document_index_status SET status = 'pending', updated_at = now() WHERE status = 'indexing'`
+  );
+  if (rowCount && rowCount > 0) {
+    logger.warn({ count: rowCount }, '[estimating/sheets] reset stuck "indexing" rows to "pending" on boot');
+  }
+}
 
 /** Registers a status row (defaulting to 'pending') for every plan PDF
  *  document that doesn't have one yet — covers a document uploaded after
@@ -426,27 +473,51 @@ async function resetIndexStatusForRefresh(bidId: string, documentIds: string[]):
   );
 }
 
-/** Atomically claims every 'pending' document among the given ids for
- *  indexing — the UPDATE's own WHERE clause is the compare-and-set: only a
- *  row still 'pending' gets flipped to 'indexing' and returned, so two
- *  overlapping GET /sheets calls can never both start a job for the same
- *  document.
+// Fix round 2 / R2-B3 — a document's indexing "lease": if a row has sat in
+// 'indexing' for longer than this with no update (upsertSheetPage bumps
+// est_sheets, but the STATUS row's own updated_at only moves at claim/
+// done/failed — a stuck job never touches it again), the process that
+// claimed it is presumed dead (a Render deploy or restart, an OOM on a
+// 150MB parse, ts-node-dev --respawn on any file save in local dev) and
+// the row is reclaimable by a FRESH claim, exactly like a 'pending' one.
+// resetStuckIndexingOnBoot (below) already handles the common case
+// immediately on the next server start; this lease is the fallback for
+// "the estimator is still looking at the SAME long-running process that
+// hasn't restarted, but the job itself silently died without an error"
+// (an uncaught synchronous throw outside any try/catch this module
+// controls, for instance) — 10 minutes is far longer than any real
+// document this app indexes should ever take.
+const STALE_INDEXING_LEASE_MINUTES = 10;
+
+/** Atomically claims every eligible document among the given ids for
+ *  indexing — the UPDATE's own WHERE clause is the compare-and-set: only
+ *  a row that's still eligible gets flipped to 'indexing' (with a fresh
+ *  updated_at) and returned, so two overlapping GET /sheets calls can
+ *  never both start a job for the same document. Eligible means: still
+ *  'pending', OR already 'indexing' but stuck past
+ *  STALE_INDEXING_LEASE_MINUTES (R2-B3 — a restart mid-index used to
+ *  leave a document stuck in 'indexing' forever, and Refresh sheets
+ *  couldn't recover it either, since this same function used to only
+ *  ever claim 'pending'). Runs on EVERY GET /sheets, refreshed or not —
+ *  a stale lease self-heals on the very next plain poll, no explicit
+ *  Refresh required.
  *
- *  Deliberately does NOT reclaim 'failed' documents here — only
- *  resetIndexStatusForRefresh (an explicit `?refresh=1`, the "Refresh
- *  sheets" button) puts a failed document back to 'pending' so it becomes
- *  eligible again. If a plain (unrefreshed) GET silently re-claimed
- *  'failed' too, the very next poll after a failure would immediately flip
- *  it back to 'indexing' before any caller ever got to SEE 'failed' —
- *  the estimator would have no visible "this one didn't work" state and no
- *  reason to notice or click Refresh, and a persistently-down Drive link
- *  would be hammered on every single poll tick instead of once per
- *  explicit retry. */
+ *  Deliberately does NOT reclaim a 'failed' (non-stale) document here —
+ *  only resetIndexStatusForRefresh (an explicit `?refresh=1`, the
+ *  "Refresh sheets" button) puts a failed document back to 'pending' so
+ *  it becomes eligible again. If a plain (unrefreshed) GET silently
+ *  re-claimed 'failed' too, the very next poll after a failure would
+ *  immediately flip it back to 'indexing' before any caller ever got to
+ *  SEE 'failed' — the estimator would have no visible "this one didn't
+ *  work" state and no reason to notice or click Refresh, and a
+ *  persistently-down Drive link would be hammered on every single poll
+ *  tick instead of once per explicit retry. */
 async function claimDocumentsForIndexing(bidId: string, documentIds: string[]): Promise<string[]> {
   if (documentIds.length === 0) return [];
   const { rows } = await pool.query(
     `UPDATE est_document_index_status SET status = 'indexing', updated_at = now()
-     WHERE bid_id = $1 AND document_id = ANY($2::uuid[]) AND status = 'pending'
+     WHERE bid_id = $1 AND document_id = ANY($2::uuid[])
+       AND (status = 'pending' OR (status = 'indexing' AND updated_at < now() - interval '${STALE_INDEXING_LEASE_MINUTES} minutes'))
      RETURNING document_id`,
     [bidId, documentIds]
   );
@@ -481,7 +552,20 @@ function runClaimedIndexingInBackground(bidId: string, docs: PlanDocument[]): vo
         await markIndexDone(bidId, doc.id, pageCount);
       } catch (err) {
         logger.error({ err, documentId: doc.id }, '[estimating/sheets] background indexing failed');
-        await markIndexFailed(bidId, doc.id, err instanceof Error ? err.message : String(err));
+        // Fix round 2 / R2-B3 — markIndexFailed itself can fail (a DB
+        // blip while writing the failure status). Before this, that
+        // exception propagated out of this whole async IIFE with nothing
+        // ever awaiting it — an unhandled rejection, logged only by
+        // index.ts's global handler, that left the row stuck in
+        // 'indexing' with no readable error at all (worse than the
+        // ORIGINAL failure this catch block was trying to record). Never
+        // strands the row silently now: worst case it logs twice and the
+        // STALE_INDEXING_LEASE_MINUTES reclaim above still recovers it.
+        try {
+          await markIndexFailed(bidId, doc.id, err instanceof Error ? err.message : String(err));
+        } catch (markErr) {
+          logger.error({ err: markErr, documentId: doc.id }, '[estimating/sheets] could not even record the indexing failure — this document may be stuck until the stale-lease reclaim or a server restart');
+        }
       }
     })();
   }
@@ -494,6 +578,22 @@ export async function getIndexStatuses(bidId: string): Promise<Record<string, In
   );
   const out: Record<string, IndexStatus> = {};
   for (const r of rows) out[r.document_id as string] = r.status as IndexStatus;
+  return out;
+}
+
+/** Fix round 2 / R2-B3 — "shows failed documents with the error and a
+ *  Retry": the client's own failed-documents banner used to say only
+ *  "One or more plan documents failed to index" with no indication of
+ *  WHICH document or WHY. Only ever populated for a document whose
+ *  status is currently 'failed' (markIndexFailed's own error text,
+ *  capped at 2000 chars there already). */
+export async function getIndexErrors(bidId: string): Promise<Record<string, string>> {
+  const { rows } = await pool.query(
+    `SELECT document_id, error FROM est_document_index_status WHERE bid_id = $1 AND status = 'failed' AND error IS NOT NULL`,
+    [bidId]
+  );
+  const out: Record<string, string> = {};
+  for (const r of rows) out[r.document_id as string] = r.error as string;
   return out;
 }
 
@@ -535,6 +635,14 @@ export interface ListSheetsResult {
   /** Fix round 1 / B9 — per plan PDF document_id. The client polls (see
    *  PlansWorkspace.tsx) while any value here is 'pending'/'indexing'. */
   statuses: Record<string, IndexStatus>;
+  /** Fix round 2 / R2-B3 — per document_id, only for a document CURRENTLY
+   *  'failed'. Lets the client show "which document, and why" instead of
+   *  a generic "something failed" banner. */
+  indexErrors: Record<string, string>;
+  /** Fix round 2 / R2-B3 — every plan PDF document's own name, so the
+   *  client's failed-documents list can say "plans.pdf failed: ..."
+   *  instead of a bare, meaningless document_id. */
+  documentNames: Record<string, string>;
 }
 
 /** GET .../sheets — NEVER blocks on indexing (Fix round 1 / B9). Registers
@@ -557,8 +665,10 @@ export async function listSheets(bidId: string, opts: { refresh?: boolean } = {}
     runClaimedIndexingInBackground(bidId, docs.filter(d => claimedSet.has(d.id)));
   }
 
-  const [sheets, statuses] = await Promise.all([getSheetRows(bidId), getIndexStatuses(bidId)]);
-  return { sheets, statuses };
+  const [sheets, statuses, indexErrors] = await Promise.all([getSheetRows(bidId), getIndexStatuses(bidId), getIndexErrors(bidId)]);
+  const documentNames: Record<string, string> = {};
+  for (const d of docs) documentNames[d.id] = d.name;
+  return { sheets, statuses, indexErrors, documentNames };
 }
 
 export interface SetScaleInput {

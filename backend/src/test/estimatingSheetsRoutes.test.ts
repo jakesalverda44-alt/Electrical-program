@@ -51,6 +51,20 @@ async function makePlanDocDriveStored(bidId: string, driveFileId: string): Promi
   return rows[0].id as string;
 }
 
+/** Fix round 2 / R2-B3 — a document whose bytes are NOT a valid PDF at
+ *  all (garbage, not even a corrupted-but-recognizable PDF header) —
+ *  pdf.js's own openPdfDocument must reject on this, exercising
+ *  indexDocument's parse-failure throw. */
+async function makePlanDocCorruptStored(bidId: string): Promise<string> {
+  const garbage = Buffer.from('this is not a pdf file, just plain text pretending to be one');
+  const { rows } = await pool.query(
+    `INSERT INTO documents (linked_id, name, category, file_type, file_data, uploaded_by)
+     VALUES ($1, 'plans.pdf', 'plans', 'application/pdf', $2, 'test') RETURNING id`,
+    [bidId, garbage.toString('base64')]
+  );
+  return rows[0].id as string;
+}
+
 /** Fix round 1 / B9 — GET /sheets no longer indexes synchronously; it
  *  kicks off (fire-and-forget) background jobs and returns immediately
  *  with whatever's already done. Tests that need the FULLY-indexed result
@@ -181,17 +195,30 @@ describe('GET /api/estimating/:bidId/sheets — background indexing status (B9)'
     expect(finished.body.sheets.length).toBe(2);
   });
 
-  it('a document that fails to index (e.g. a Drive error) is marked "failed" and never crashes the request — the status is STICKY (a plain poll never silently retries it) until an explicit Refresh, which retries it successfully', async (ctx) => {
+  // Fix round 2 / R2-B3 — the ORIGINAL version of this test mocked
+  // getFileMedia to REJECT, which the real function never does (it
+  // catches everything internally and returns null — see
+  // services/googleDrive.ts's own getFileMedia). That mock shape masked
+  // the actual bug: indexDocument used to log-and-return-0 for a null
+  // buffer instead of throwing, so a REAL Drive outage (null, not a
+  // rejection) was marked 'done' with 0 sheets, never 'failed' at all.
+  // Mocking the real (null) contract here is what actually exercises
+  // that fix.
+  it('a document that fails to index (e.g. a Drive error, which returns null — never a rejection) is marked "failed" and never crashes the request — the status is STICKY (a plain poll never silently retries it) until an explicit Refresh, which retries it successfully', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
     const bidId = await makeBid(app, u);
     const docId = await makePlanDocDriveStored(bidId, `drive-fail-${Date.now()}`);
-    getFileMedia.mockRejectedValueOnce(new Error('simulated Drive outage'));
+    getFileMedia.mockResolvedValueOnce(null);
 
     const failed = await pollSheetsUntilIndexed(app, bidId, u.token);
     expect(failed.body.statuses[docId]).toBe('failed');
     expect(failed.body.sheets.length).toBe(0);
+    // Fix round 2 / R2-B3 — "shows failed documents with the error and a
+    // Retry": the response now names WHICH document and WHY.
+    expect(failed.body.indexErrors[docId]).toMatch(/Could not fetch this document's file/);
+    expect(failed.body.documentNames[docId]).toBe('plans.pdf');
 
     // A plain poll (no refresh) leaves it 'failed' — never silently
     // re-attempted on its own; there is nothing left mocked to reject
@@ -208,6 +235,24 @@ describe('GET /api/estimating/:bidId/sheets — background indexing status (B9)'
     const retried = await pollSheetsUntilIndexed(app, bidId, u.token, { refresh: true });
     expect(retried.body.statuses[docId]).toBe('done');
     expect(retried.body.sheets.length).toBe(2);
+    // Once retried successfully, it's no longer in the failed-errors map.
+    expect(retried.body.indexErrors[docId]).toBeUndefined();
+  });
+
+  // Fix round 2 / R2-B3 — B9-b: a corrupt PDF used to log-and-return-0
+  // (indexDocument's old "never throw" contract), landing as 'done' with
+  // 0 sheets and no failed banner or reason to Refresh. Now throws on a
+  // real pdf.js parse failure, same as the Drive-null case above.
+  it('a corrupt (not actually a PDF) file is marked "failed" with a readable error, never "done" with 0 sheets', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocCorruptStored(bidId);
+
+    const res = await pollSheetsUntilIndexed(app, bidId, u.token);
+    expect(res.body.statuses[docId]).toBe('failed');
+    expect(res.body.sheets.filter((s: { document_id: string }) => s.document_id === docId).length).toBe(0);
   });
 
   it('two independent documents index independently — one succeeding does not wait on, or get blocked by, a slower/failed one', async (ctx) => {
@@ -217,7 +262,7 @@ describe('GET /api/estimating/:bidId/sheets — background indexing status (B9)'
     const bidId = await makeBid(app, u);
     const okDocId = await makePlanDocDbStored(bidId);
     const failDocId = await makePlanDocDriveStored(bidId, `drive-fail2-${Date.now()}`);
-    getFileMedia.mockRejectedValueOnce(new Error('simulated Drive outage'));
+    getFileMedia.mockResolvedValueOnce(null); // the real function's own failure contract — never a rejection
 
     const res = await pollSheetsUntilIndexed(app, bidId, u.token);
     expect(res.body.statuses[okDocId]).toBe('done');
@@ -239,6 +284,99 @@ describe('GET /api/estimating/:bidId/sheets — background indexing status (B9)'
     const after = await pollSheetsUntilIndexed(app, bidId, u.token);
     expect(after.body.statuses[secondDocId]).toBe('done');
     expect(after.body.sheets.length).toBe(4); // 2 pages x 2 documents
+  });
+
+  // Fix round 2 / R2-B3 — B9-c: a row left 'indexing' (the process that
+  // claimed it died mid-index — a deploy, a restart, an OOM) used to stay
+  // that way forever; resetIndexStatusForRefresh deliberately skipped
+  // 'indexing' rows, so even Refresh sheets couldn't recover it, and the
+  // client polled every 2s forever.
+  it('a row stuck "indexing" past the stale-lease timeout is reclaimed and re-indexed on a PLAIN poll (no refresh needed)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    await pollSheetsUntilIndexed(app, bidId, u.token); // real index run, now 'done'
+
+    // Simulate the process dying mid-index: flip it back to 'indexing'
+    // with an updated_at well past the stale lease.
+    await pool.query(
+      `UPDATE est_document_index_status SET status = 'indexing', updated_at = now() - interval '15 minutes'
+       WHERE bid_id = $1 AND document_id = $2`,
+      [bidId, docId]
+    );
+    const stuck = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    expect(stuck.body.statuses[docId]).toBe('indexing'); // claimed again immediately by THIS same GET
+
+    const recovered = await pollSheetsUntilIndexed(app, bidId, u.token);
+    expect(recovered.body.statuses[docId]).toBe('done');
+    expect(recovered.body.sheets.filter((s: { document_id: string }) => s.document_id === docId).length).toBe(2);
+  });
+
+  it('a row stuck "indexing" within the lease window is left alone — not reclaimed while a job could still legitimately be running', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    await pollSheetsUntilIndexed(app, bidId, u.token);
+
+    await pool.query(
+      `UPDATE est_document_index_status SET status = 'indexing', updated_at = now() - interval '2 minutes'
+       WHERE bid_id = $1 AND document_id = $2`,
+      [bidId, docId]
+    );
+    const res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    expect(res.body.statuses[docId]).toBe('indexing'); // untouched — still within the 10-minute lease
+  });
+
+  // Fix round 2 / R2-B3 — resetStuckIndexingOnBoot, called once at server
+  // startup (index.ts): every row still 'indexing' at that point belongs
+  // to a job that died with a PREVIOUS process instance, so it's reset
+  // immediately rather than making the estimator wait out the stale-lease
+  // timeout after every restart.
+  it('resetStuckIndexingOnBoot resets every "indexing" row to "pending", regardless of how recently it was touched', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const { resetStuckIndexingOnBoot } = await import('../estimating/sheets');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    await pollSheetsUntilIndexed(app, bidId, u.token); // creates the status row and indexes it once, normally
+
+    // A row 'indexing' as of RIGHT NOW — nowhere near the stale-lease
+    // timeout, but a fresh boot must reset it anyway (no in-process job
+    // in a brand-new process could possibly own it).
+    await pool.query(
+      `UPDATE est_document_index_status SET status = 'indexing', updated_at = now()
+       WHERE bid_id = $1 AND document_id = $2`,
+      [bidId, docId]
+    );
+
+    await resetStuckIndexingOnBoot();
+
+    const { rows } = await pool.query(
+      `SELECT status FROM est_document_index_status WHERE bid_id = $1 AND document_id = $2`,
+      [bidId, docId]
+    );
+    expect(rows[0].status).toBe('pending');
+  });
+
+  it('resetStuckIndexingOnBoot never touches a "done" or "failed" row', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const { resetStuckIndexingOnBoot } = await import('../estimating/sheets');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await makePlanDocDbStored(bidId);
+    const before = await pollSheetsUntilIndexed(app, bidId, u.token);
+    const docId = Object.keys(before.body.statuses)[0];
+
+    await resetStuckIndexingOnBoot();
+
+    const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    expect(after.body.statuses[docId]).toBe('done'); // unchanged
   });
 });
 
