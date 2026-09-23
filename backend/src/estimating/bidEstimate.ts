@@ -149,6 +149,16 @@ function numberOr(v: unknown, fallback: number): number {
  *  10/15: the bid's own bid_workspaces row (the estimator may have set these
  *  in the legacy pricing flow already) takes priority, then bid_estimates
  *  (a prior legacy-engine save), then the 10/15 default. */
+// Fix round 2 / SF7 (previously S6) — bid_estimates now wins over
+// bid_workspaces regardless of recency, not the other way around.
+// bid_estimates is written only by a deliberate Save (the legacy "Save
+// Estimate" flow while it existed, and now the new engine's own save/sync);
+// bid_workspaces.overhead_pct/profit_pct are just a continuous autosave
+// mirror of whatever ws.overheadPct/ws.profitPct last held in a session,
+// which — since the fix round 2 / B3 cleanup removed the only UI that ever
+// edited those ws fields — is now nothing but stale hydration echoing an
+// old bid_estimates value back at itself. Falling back to it (then to the
+// hardcoded 10/15) only matters for a bid that predates the new engine.
 async function inheritedOverheadProfit(bidId: string): Promise<{ overhead_pct: number; profit_pct: number }> {
   const [{ rows: wsRows }, { rows: beRows }] = await Promise.all([
     pool.query('SELECT overhead_pct, profit_pct FROM bid_workspaces WHERE bid_id = $1', [bidId]),
@@ -156,11 +166,11 @@ async function inheritedOverheadProfit(bidId: string): Promise<{ overhead_pct: n
   ]);
   const ws = wsRows[0];
   const be = beRows[0];
-  const overhead_pct = ws?.overhead_pct != null ? numberOr(ws.overhead_pct, 10)
-    : be?.overhead_pct != null ? numberOr(be.overhead_pct, 10)
+  const overhead_pct = be?.overhead_pct != null ? numberOr(be.overhead_pct, 10)
+    : ws?.overhead_pct != null ? numberOr(ws.overhead_pct, 10)
     : 10;
-  const profit_pct = ws?.profit_pct != null ? numberOr(ws.profit_pct, 15)
-    : be?.profit_pct != null ? numberOr(be.profit_pct, 15)
+  const profit_pct = be?.profit_pct != null ? numberOr(be.profit_pct, 15)
+    : ws?.profit_pct != null ? numberOr(ws.profit_pct, 15)
     : 15;
   return { overhead_pct, profit_pct };
 }

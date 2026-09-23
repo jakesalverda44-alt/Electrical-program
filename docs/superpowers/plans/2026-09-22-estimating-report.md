@@ -797,20 +797,22 @@ seed magnitudes.
 ### Not fixed / deferred, and why
 
 - **S2's literal scope** ("the pricingDirty/savedEstimate/pricingLineItems
-  state and its hydration") was only partially done. `pricingLineItems` and
-  everything that only fed the deleted `PricingTab`/`onSaveEstimate` dead
-  code IS removed. `savedEstimate`/`savedEstimateData`, `pricingDirty`, and
-  the ~80-line overhead/profit/estimate_overrides hydration effect (three
-  code-review passes deep per its own comments) were deliberately KEPT —
-  they still hydrate `ws.overheadPct`/`profitPct`/`estimateOverrides` from
-  whichever of `bid_estimates`/`bid_workspaces` is newer, a real cross-check
-  I could not fully trace every downstream consumer of within this fix
-  round's budget (composeBidData's fallback path for bids that never adopt
-  the new engine is one; there may be others). Removing it outright without
-  that mapping felt like a bigger, less-reversible risk than leaving one
-  extra (harmless — it registers its own `useUnsavedGuard`, independent of
-  the new engine's) legacy hydration path in place. Flagging this explicitly
-  rather than silently under-scoping it.
+  state and its hydration") was only partially done in round 1.
+  `pricingLineItems` and everything that only fed the deleted `PricingTab`/
+  `onSaveEstimate` dead code was removed. `savedEstimate`/`savedEstimateData`,
+  `pricingDirty`, and the overhead/profit/estimate_overrides hydration
+  effect were deliberately KEPT, with the rationale written here that
+  removing them risked breaking "composeBidData's fallback path for bids
+  that never adopt the new engine."
+  **Correction (fix round 2 / R2-B3): that claim was wrong.** The round 2
+  review traced every consumer: `composeBidData` reads only
+  `bid_estimates.line_items` for its per-line confidence lookup, and Agent 4
+  reads `bid_estimates` (grand_total/overhead_pct/profit_pct/subtotals)
+  directly — neither reads `bid_workspaces` pricing columns or any `ws.*`
+  pricing state at all. There is no such fallback. The ONE real consumer of
+  the hydration was `inheritedOverheadProfit()` (S6), which read
+  `bid_workspaces` first. See the "Fix round 2" section below for what
+  actually got removed and what changed once that was established.
 - **S3/S4 have no NEW dedicated test** — S3's fix is covered indirectly by
   the existing `PcWorkspaceProposal.test.tsx` suite staying green (it
   exercises `runAgent4Proposal`/`propPrice` already) and S4's by

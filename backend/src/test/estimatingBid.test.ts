@@ -596,6 +596,28 @@ describe('S6 — a bid\'s first-ever settings inherit overhead/profit from bid_w
     expect(res.body.settings.overhead_pct).toBe(22);
     expect(res.body.settings.profit_pct).toBe(18);
   });
+
+  it('R2-SF7: bid_estimates wins over bid_workspaces when both exist, regardless of which is newer', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    // bid_workspaces written AFTER bid_estimates (newer updated_at) — under
+    // the old "newer wins" rule this would have taken precedence; the fixed
+    // rule always prefers the deliberate bid_estimates save.
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 14, profit_pct: 20, crew_size: 3 },
+    }).expect(200);
+    await pool.query('INSERT INTO bid_workspaces (bid_id, overhead_pct, profit_pct) VALUES ($1,22,18) ON CONFLICT (bid_id) DO UPDATE SET overhead_pct=22, profit_pct=18, updated_at=now()', [bidId]);
+    // Delete the est_bid_settings row the save above wrote, so GET falls
+    // back to inheritedOverheadProfit() again (the code path under test).
+    await pool.query('DELETE FROM est_bid_settings WHERE bid_id = $1', [bidId]);
+
+    const res = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    expect(res.body.settings.overhead_pct).toBe(14); // from bid_estimates, not bid_workspaces' 22
+    expect(res.body.settings.profit_pct).toBe(20);
+  });
 });
 
 describe('S5 — an explicit 0 settings value is honored, not silently replaced by a fallback', () => {

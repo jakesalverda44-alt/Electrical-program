@@ -45,6 +45,7 @@ const ESTIMATING_LINE = {
 const ESTIMATING_SETTINGS = {
   labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3,
   supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3,
+  floors_above_2: 0,
 };
 const EMPTY_TOTALS = {
   materialSubtotal: 0, consumables: 0, materialTax: 0, laborHours: 0, laborCost: 0,
@@ -158,6 +159,51 @@ describe('Labor & Pricing dirty-guard (Task 9)', () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith(`/estimating/${bid.id}`, expect.objectContaining({
       lines: expect.arrayContaining([expect.objectContaining({ qty: 20 })]),
     })));
+
+    fireEvent.click(screen.getByText('Leave'));
+    expect(screen.queryByText('You have unsaved changes')).toBeNull();
+    expect(navigated).toBe(true);
+  });
+
+  it('R2-B3: a bid whose bid_workspaces pricing diverges from bid_estimates does NOT arm the leave prompt', async () => {
+    // The deleted `pricingDirty` guard compared ws.overheadPct/profitPct
+    // (hydrated from whichever of bid_estimates/bid_workspaces was newer)
+    // against bid_estimates directly — any divergence between the two rows
+    // (a real, ordinary situation once bid_workspaces stopped being the
+    // thing that gets edited) used to arm an un-clearable leave prompt with
+    // no unsaved Labor & Pricing edit in sight. bid_estimates OH 14 /
+    // bid_workspaces OH 12 (newer) is exactly the round-2 review's
+    // reproduction.
+    get.mockImplementation((url: string) => {
+      if (url === `/estimating/${bid.id}`) return Promise.resolve({
+        data: {
+          lines: [ESTIMATING_LINE], settings: ESTIMATING_SETTINGS,
+          recap: { lines: [], categories: [], totals: EMPTY_TOTALS, warnings: EMPTY_WARNINGS },
+          proposed: false,
+        },
+      });
+      if (url === `/estimates/${bid.id}`) return Promise.resolve({
+        data: { overhead_pct: 14, profit_pct: 20, line_items: [], grand_total: 1000, updated_at: '2026-01-01T00:00:00Z' },
+      });
+      if (url === `/preconstruction/${bid.id}/workspace`) return Promise.resolve({
+        data: { overhead_pct: 12, profit_pct: 18, estimate_overrides: {}, updated_at: '2026-06-01T00:00:00Z' },
+      });
+      if (url === '/preconstruction/costs') return Promise.resolve({ data: [] });
+      if (url.includes('/takeoff')) return Promise.resolve({ data: null });
+      if (url.includes('/intelligence/')) return Promise.resolve({ data: {} });
+      if (url === '/estimates/unit-costs') return Promise.resolve({ data: { global: {}, by_project_type: {} } });
+      if (url === '/estimating/library') return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      if (url.includes('/comparables')) return Promise.resolve({ data: { comparables: [] } });
+      if (url === '/documents') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: null });
+    });
+    post.mockResolvedValue({ data: {} });
+    put.mockResolvedValue({ data: {} });
+    del.mockResolvedValue({ data: {} });
+
+    renderWorkspace();
+    await waitFor(() => expect(get.mock.calls.some(c => c[0] === `/estimating/${bid.id}`)).toBe(true));
+    await new Promise(r => setTimeout(r, 50));
 
     fireEvent.click(screen.getByText('Leave'));
     expect(screen.queryByText('You have unsaved changes')).toBeNull();

@@ -84,7 +84,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [dragOver, setDragOver] = useState(false);
   const [expandedCostRow, setExpandedCostRow] = useState<number | null>(null);
   const [costTypeFilter, setCostTypeFilter] = useState<string>('all');
-  const [savedEstimate, setSavedEstimate] = useState<BidEstimate | null>(null);
   const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
   // Populated by the pre-bid package fetch (Task 7). Empty until then, so the
   // "Import from Pre-Bid" button simply stays hidden.
@@ -274,24 +273,29 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     if (idx < STEP_ORDER.length - 1) set({ step: STEP_ORDER[idx + 1] });
   };
 
-  // Pricing lives in `ws` (overhead %, profit %, per-line overrides) and is only
-  // persisted by the Pricing tab's explicit "Save Estimate", so leaving with
-  // unsaved pricing threw it away. An autosave stuck in `error` counts as
-  // unsaved too — that is the case task 7's retry chain cannot finish.
-  // Post-review B4 — Number() both sides: bid_estimates.overhead_pct/
-  // profit_pct are Postgres `numeric` columns, which pg serializes as
-  // strings (e.g. "22.00"); ws.overheadPct/profitPct are always real numbers
-  // (the hydration effect above now also normalizes with Number()). Without
-  // this, `22 !== "22.00"` is always true and this was permanently dirty
-  // whenever a saved estimate/workspace row had ever hydrated — a false
-  // "unsaved changes" prompt on every hub tab of every bid with autosaved
-  // pricing.
-  const pricingDirty = savedEstimate
-    ? (Number(ws.overheadPct) !== Number(savedEstimate.overhead_pct)
-      || Number(ws.profitPct) !== Number(savedEstimate.profit_pct)
-      || JSON.stringify(ws.estimateOverrides) !== JSON.stringify(overridesFromEstimate(savedEstimate.line_items)))
-    : (ws.overheadPct !== 10 || ws.profitPct !== 15 || Object.keys(ws.estimateOverrides).length > 0);
-  useUnsavedGuard(pricingDirty || saveState === 'error');
+  // Fix round 2 / B3 — `pricingDirty` (compared ws.overheadPct/profitPct/
+  // estimateOverrides, hydrated once at mount, against savedEstimate fetched
+  // once at mount) is deleted. It went permanently, un-clearably true in
+  // ordinary multi-session use: the workspace autosave keeps writing the
+  // hydrated ws values back into bid_workspaces with a fresh updated_at on
+  // every autosave (including just changing steps), and the hydration rule
+  // is "workspace wins when strictly newer" — so a LATER session could
+  // re-hydrate stale ws values that then permanently disagreed with a real
+  // engine save, with no UI left to edit ws.overheadPct/estimateOverrides at
+  // all (onOverheadChange/onProfitChange/onUnitCostChange are wired to
+  // nothing) to ever clear it. Nothing server-side reads this frontend
+  // state: composeBidData and Agent 4 read bid_estimates directly, never
+  // bid_workspaces pricing or ws state (round 1's report claimed a
+  // composeBidData fallback depended on this hydration — that was wrong;
+  // there is no such fallback). The one real consumer, inheritedOverheadProfit
+  // (bidEstimate.ts, S6), now prefers bid_estimates itself (fix round 2 /
+  // SF7), so keeping this hydration effect running is still worthwhile
+  // (its savedEstimateData/workspaceRow feed nothing but that inheritance
+  // now — see the effect below), but arming a leave-prompt off it never was.
+  // The new engine's own dirty source is registered separately, right after
+  // `estimatingBid` exists (below) — `useUnsavedGuard` supports more than
+  // one registration in the same tree.
+  useUnsavedGuard(saveState === 'error');
 
 
   // ── Polling ───────────────────────────────────────────────────────────
@@ -305,8 +309,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     showToast: showToastStable,
   });
 
+  // Fix round 2 / B3 — savedEstimate/setSavedEstimate (the STATE mirror of
+  // this fetch) is deleted: its only reader was the deleted pricingDirty.
+  // savedEstimateData (the raw fetch, below) still feeds the overhead/
+  // profit/estimate_overrides hydration effect (S6/SF7).
   const { data: savedEstimateData, loading: savedEstimateLoading } = useApi<BidEstimate>(`/estimates/${bid.id}`);
-  useEffect(() => { if (savedEstimateData) setSavedEstimate(savedEstimateData); }, [savedEstimateData]);
 
   // Unfiltered — the "From Project Files" panel shows every project document;
   // eligibility for AI analysis (PDF/image only) is enforced per-row via
