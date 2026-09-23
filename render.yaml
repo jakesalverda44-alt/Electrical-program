@@ -7,13 +7,21 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      # Fix round 1 / N10 — pdfjs-dist@5 (backend/src/estimating/
-      # pdfjsLoader.ts, used for sheet indexing) needs Node >= 20.16. Pins
-      # the runtime Render actually deploys, so a future Render default
-      # bump/rollback can't silently drop below that floor. Kept in sync
-      # with backend/package.json's own `engines.node`.
+      # Fix round 1 / N10, corrected by Fix round 2 / R2-S5 — pdfjs-dist@5
+      # (backend/src/estimating/pdfjsLoader.ts, used for sheet indexing)
+      # needs Node >=20.16.0 <21 || >=22.3.0. N10's own fix pinned an EXACT
+      # patch (20.16.0) so production would never silently run on an
+      # unpinned Render default — but Node 20 reached end of life in April
+      # 2026, so that exact pin left production stuck on an unsupported
+      # runtime indefinitely, with no way for a routine Render bump to ever
+      # move it forward. R2-S5: pin a supported LTS MAJOR instead of an
+      # exact patch — "22" tracks whatever the current Node 22.x patch is
+      # (Render resolves the latest release in that major), so this never
+      # goes stale the same way again, while still never silently dropping
+      # onto an unpinned/rolled-back default. Kept in sync with
+      # backend/package.json's own `engines.node` (">=22 <23").
       - key: NODE_VERSION
-        value: 20.16.0
+        value: 22
       - key: JWT_SECRET
         generateValue: true
       # Long-lived key for automation / browser-extension lead creation, sent as
