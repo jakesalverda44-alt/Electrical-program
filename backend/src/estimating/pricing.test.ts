@@ -141,6 +141,76 @@ describe('priceBid — B1: libraryUnit conversion (display unit != matched item\
   });
 });
 
+describe('priceBid — R2-B1: overrides are entered/displayed in the DISPLAY unit, not the library unit', () => {
+  it('a $0.62/LF override on 1,200 LF matched to a C-priced item (EMT-075-like) prices at $744, not $7.44', () => {
+    // The exact round-2 regression: an estimator types a supplier quote of
+    // $0.62/LF on a line matched to a per-C library item. Round-1's bug
+    // applied the override as if it were already library-basis ($0.62/C),
+    // pricing $7.44 instead of $744 — 100x too low.
+    const recap = priceBid(
+      [line({
+        unit: 'LF', libraryUnit: 'C', qty: 1200,
+        materialUnitCost: 60, laborHoursUnit: 4,
+        materialUnitOverride: 0.62,
+      })],
+      { ...baseSettings, supervisionPct: 0 },
+      []
+    );
+    expect(recap.lines[0].materialExt).toBe(744);
+    expect(recap.lines[0].materialUnit).toBe(0.62); // shown back exactly as typed, display-basis
+  });
+
+  it('the identical $0.62/LF override on a MANUAL (unmatched, no libraryUnit) 1,200 LF line prices identically at $744', () => {
+    // Manual and matched lines must behave identically (same typed number,
+    // same result) — the whole point of R2-B1.
+    const recap = priceBid(
+      [line({
+        unit: 'LF', qty: 1200, // no libraryUnit — manual/unmatched
+        materialUnitCost: 0, laborHoursUnit: 0,
+        materialUnitOverride: 0.62,
+      })],
+      { ...baseSettings, supervisionPct: 0 },
+      []
+    );
+    expect(recap.lines[0].materialExt).toBe(744);
+    expect(recap.lines[0].materialUnit).toBe(0.62);
+  });
+
+  it('an hours override behaves the same way: hrs/LF on a C-priced line', () => {
+    const recap = priceBid(
+      [line({ unit: 'LF', libraryUnit: 'C', qty: 1200, materialUnitCost: 60, laborHoursUnit: 4, laborHoursOverride: 0.05 })],
+      { ...baseSettings, supervisionPct: 0 },
+      []
+    );
+    expect(recap.lines[0].hoursExt).toBe(60); // 0.05 hr/LF * 1200 LF
+    expect(recap.lines[0].hoursUnit).toBe(0.05);
+  });
+
+  it('the un-overridden materialUnit/hoursUnit shown to the UI are converted to the display unit (e.g. $60/C -> $0.60/LF)', () => {
+    const recap = priceBid(
+      [line({ unit: 'LF', libraryUnit: 'C', qty: 1200, materialUnitCost: 60, laborHoursUnit: 4 })],
+      { ...baseSettings, supervisionPct: 0 },
+      []
+    );
+    expect(recap.lines[0].materialUnit).toBeCloseTo(0.6, 10);
+    expect(recap.lines[0].hoursUnit).toBeCloseTo(0.04, 10);
+  });
+
+  it('R2-N5: a display unit of C or M (matched to the same library unit) converts correctly — not raw feet', () => {
+    // A takeoff line whose OWN display unit is already C (per-100), matched
+    // to a C-priced item: unitRatio is 1 (same unit both sides), so the
+    // override is used as-is, and qty is a raw C-scale count already
+    // divided by libDivisor exactly once.
+    const recap = priceBid(
+      [line({ unit: 'C', libraryUnit: 'C', qty: 1200, materialUnitCost: 60, laborHoursUnit: 4 })],
+      { ...baseSettings, supervisionPct: 0 },
+      []
+    );
+    expect(recap.lines[0].materialExt).toBe(720); // 1200/100 * 60, same math as the LF/C case's extension
+    expect(recap.lines[0].materialUnit).toBe(60); // shown per-C, same as library, since display IS C
+  });
+});
+
 describe('priceBid — overrides', () => {
   it('material and hours overrides win over the resolved library value', () => {
     const recap = priceBid(

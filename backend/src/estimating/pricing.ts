@@ -47,11 +47,18 @@ export interface PricingLineInput {
    *  it trusts the resolved input the way every other field on this
    *  interface is trusted. */
   libraryUnit?: EstUnit | null;
-  /** Resolved per-unit material $ from the matched item/assembly components. 0 for an unmatched or manual line. */
+  /** Resolved per-LIBRARY-unit material $ from the matched item/assembly components (e.g. $/C). 0 for an unmatched or manual line. */
   materialUnitCost: number;
-  /** Resolved per-unit labor hours from the matched item/assembly components. 0 for an unmatched or manual line. */
+  /** Resolved per-LIBRARY-unit labor hours from the matched item/assembly components. 0 for an unmatched or manual line. */
   laborHoursUnit: number;
+  /** Fix round 2 / B1 — in the line's DISPLAY unit (`unit`), not the library
+   *  unit — a $0.62 override on an LF line means $0.62/LF, even when the
+   *  matched item is priced per-C. priceBid converts it to the library
+   *  basis internally before extending. A manual/unmatched line has no
+   *  separate library unit, so display and library basis are the same
+   *  number there — manual and matched lines behave identically. */
   materialUnitOverride?: number | null;
+  /** Fix round 2 / B1 — same DISPLAY-unit convention as materialUnitOverride. */
   laborHoursOverride?: number | null;
   confidence?: LineConfidence | null;
   excluded?: boolean;
@@ -101,8 +108,14 @@ export interface PricedLine {
   description: string;
   qty: number;
   unit: EstUnit;
+  /** Fix round 2 / B1 — always in this line's DISPLAY unit (`unit`, above),
+   *  never the matched library item's own unit — e.g. $0.60/LF for an
+   *  EMT-075 (C-priced, $60/C) match on an LF-display line. An active
+   *  override is exactly what the estimator typed (already display-basis);
+   *  otherwise it's the library cost converted library -> display. */
   materialUnit: number;
   materialExt: number;
+  /** Fix round 2 / B1 — same DISPLAY-unit convention as materialUnit. */
   hoursUnit: number;
   /** Extended hours AFTER factors, before the project-level supervision add-on (which is applied once, on the total — see PricingRecap.totals.laborHours). */
   hoursExt: number;
@@ -266,11 +279,28 @@ export function priceBid(
     // missing divisor (a unit that slipped past upstream normalization)
     // falls back to 1 (treated as a straight per-unit count) instead of
     // propagating NaN through the whole recap.
-    const divisor = UNIT_DIVISOR[line.libraryUnit ?? line.unit] ?? 1;
-    const qtyFactor = line.qty / divisor;
+    const libDivisor = UNIT_DIVISOR[line.libraryUnit ?? line.unit] ?? 1;
+    const displayDivisor = UNIT_DIVISOR[line.unit] ?? 1;
+    const qtyFactor = line.qty / libDivisor;
 
-    const materialUnit = line.materialUnitOverride ?? line.materialUnitCost;
-    const hoursUnitEffective = line.laborHoursOverride ?? line.laborHoursUnit;
+    // Fix round 2 / B1 — an override is entered AND displayed in the line's
+    // own DISPLAY unit (a $/LF override on an LF line reads as $/LF, even
+    // when the matched library item is priced per-C or per-M). `unitRatio`
+    // converts a display-basis $/unit into the library-basis $/unit the
+    // qtyFactor math below expects (qtyFactor already divides by the
+    // LIBRARY divisor) — 1 for a manual/unmatched line (no libraryUnit) or
+    // any line whose display unit already equals its library unit, so
+    // manual and matched lines behave identically. Round-1's bug: an
+    // override was applied as if it were already library-basis, so a
+    // $0.62/LF override on an EMT-075 (C-priced) line extended as if it
+    // were $0.62/C — 100x too low.
+    const unitRatio = libDivisor / displayDivisor;
+    const materialUnitLibraryBasis = line.materialUnitOverride != null
+      ? line.materialUnitOverride * unitRatio
+      : line.materialUnitCost;
+    const hoursUnitLibraryBasis = line.laborHoursOverride != null
+      ? line.laborHoursOverride * unitRatio
+      : line.laborHoursUnit;
 
     // Fix round 1 / B2 — a NaN/Infinity anywhere upstream (a corrupt override,
     // a qty that slipped through as non-numeric) must never propagate into
@@ -278,12 +308,26 @@ export function priceBid(
     // total downstream. The route-level guard (routes/estimating.ts) still
     // refuses to WRITE a recap whose grand total isn't finite — this is the
     // pure-function-level "never produce NaN" backstop underneath that.
-    const materialExtRaw = materialUnit * qtyFactor;
+    const materialExtRaw = materialUnitLibraryBasis * qtyFactor;
     const materialExt = Number.isFinite(materialExtRaw) ? roundMoney(materialExtRaw) : 0;
-    const hoursExtRaw = hoursUnitEffective * qtyFactor * factorMultiplier;
+    const hoursExtRaw = hoursUnitLibraryBasis * qtyFactor * factorMultiplier;
     const hoursExt = Number.isFinite(hoursExtRaw) ? roundHours(hoursExtRaw) : 0;
     const laborExtRaw = hoursExt * settings.laborRate;
     const laborExt = Number.isFinite(laborExtRaw) ? roundMoney(laborExtRaw) : 0;
+
+    // Fix round 2 / B1 — materialUnit/hoursUnit (below, in PricedLine) report
+    // in the DISPLAY unit for the UI: an active override is already what the
+    // estimator typed (display-basis, no conversion needed); the un-
+    // overridden library cost/hours get converted library -> display (the
+    // inverse of the override conversion above).
+    const materialUnitDisplayRaw = line.materialUnitOverride != null
+      ? line.materialUnitOverride
+      : line.materialUnitCost / unitRatio;
+    const materialUnitDisplay = Number.isFinite(materialUnitDisplayRaw) ? materialUnitDisplayRaw : 0;
+    const hoursUnitDisplayRaw = line.laborHoursOverride != null
+      ? line.laborHoursOverride
+      : line.laborHoursUnit / unitRatio;
+    const hoursUnitDisplay = Number.isFinite(hoursUnitDisplayRaw) ? hoursUnitDisplayRaw : 0;
 
     const excluded = !!line.excluded;
     if (excluded) excludedCount++;
@@ -300,9 +344,9 @@ export function priceBid(
       description: line.description,
       qty: line.qty,
       unit: line.unit,
-      materialUnit: roundMoney(materialUnit),
+      materialUnit: roundMoney(materialUnitDisplay),
       materialExt,
-      hoursUnit: roundHours(hoursUnitEffective),
+      hoursUnit: roundHours(hoursUnitDisplay),
       hoursExt,
       laborExt,
       confidence: line.confidence ?? null,
