@@ -26,6 +26,13 @@ export interface BidSummaryProps {
   comparables?: ComparableForSummary[];
   onJumpToUnmatched?: () => void;
   onJumpToVerify?: () => void;
+  /** Phase B, Task 8 — count of takeoff-sourced lines whose qty has not
+   *  been confirmed on the plans (qty_source !== 'markup'). A cheap,
+   *  lines-only proxy for "not yet verified on plans" — computed by the
+   *  caller from estimatingBid.lines, no extra network round trip to the
+   *  markups rollup. */
+  linesNotVerifiedOnPlansCount?: number;
+  onJumpToPlans?: () => void;
   insights?: React.ReactNode;
   /** Fix round 1 / N7 — start the Insights panel pre-opened when the
    *  estimator arrived here from a legacy tab that conceptually IS insights
@@ -40,7 +47,10 @@ function pctLabel(share: number): string {
   return `${Math.round(share * 100)}%`;
 }
 
-export function BidSummary({ recap, proposed, dirty, savedGrandTotal, comparables, onJumpToUnmatched, onJumpToVerify, insights, initialInsightsOpen }: BidSummaryProps) {
+export function BidSummary({
+  recap, proposed, dirty, savedGrandTotal, comparables, onJumpToUnmatched, onJumpToVerify,
+  linesNotVerifiedOnPlansCount, onJumpToPlans, insights, initialInsightsOpen,
+}: BidSummaryProps) {
   const [insightsOpen, setInsightsOpen] = useState(!!initialInsightsOpen);
   const { totals, warnings } = recap;
   const materialAllIn = totals.materialSubtotal + totals.consumables + totals.materialTax;
@@ -140,8 +150,14 @@ export function BidSummary({ recap, proposed, dirty, savedGrandTotal, comparable
       </div>
 
       {(warnings.unmatchedCount > 0 || warnings.verifyCount > 0 || warnings.zeroMaterialMatchedCount > 0
-        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0) && (
+        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0
+        || !!linesNotVerifiedOnPlansCount) && (
         <div className="bs-section" data-testid="bs-warnings">
+          {!!linesNotVerifiedOnPlansCount && (
+            <button type="button" className="bs-warning" data-testid="bs-warning-not-verified-on-plans" onClick={onJumpToPlans}>
+              {linesNotVerifiedOnPlansCount} line{linesNotVerifiedOnPlansCount === 1 ? '' : 's'} not verified on plans
+            </button>
+          )}
           {warnings.unmatchedCount > 0 && (
             <button type="button" className="bs-warning" data-testid="bs-warning-unmatched" onClick={onJumpToUnmatched}>
               {warnings.unmatchedCount} unmatched line{warnings.unmatchedCount === 1 ? '' : 's'}

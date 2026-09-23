@@ -36,6 +36,9 @@ export interface EstimatingWorkspaceProps {
   showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
 
   comparables: ComparableForSummary[];
+  /** Phase B, Task 8 — see BidSummaryProps.linesNotVerifiedOnPlansCount. */
+  linesNotVerifiedOnPlansCount?: number;
+  onJumpToPlans?: () => void;
   insights: React.ReactNode;
   /** Fix round 1 / N7 — see BidSummaryProps.initialInsightsOpen. */
   initialInsightsOpen?: boolean;
@@ -54,6 +57,7 @@ export default function EstimatingWorkspace({
   currentStep, onSelectStep, doneByStep, saveState, nextAction,
   lines, settings, recap, proposed, dirty, savedGrandTotal, saving, syncing, saveError, setLines, setSettings, save, syncTakeoff, showToast,
   comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary,
+  linesNotVerifiedOnPlansCount, onJumpToPlans,
 }: EstimatingWorkspaceProps) {
   return (
     <EstimateShell
@@ -72,6 +76,8 @@ export default function EstimatingWorkspace({
           comparables={comparables}
           onJumpToUnmatched={() => onSelectStep('pricing')}
           onJumpToVerify={() => onSelectStep('takeoff')}
+          linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
+          onJumpToPlans={onJumpToPlans}
           insights={insights}
           initialInsightsOpen={initialInsightsOpen}
         />

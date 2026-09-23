@@ -82,6 +82,27 @@ describe('BidSummary — warnings', () => {
     expect(screen.queryByTestId('bs-warnings')).toBeNull();
   });
 
+  // Phase B, Task 8 — "N lines not verified on plans".
+  it('shows the not-verified-on-plans warning when linesNotVerifiedOnPlansCount is set, and calls onJumpToPlans', () => {
+    const onJumpToPlans = vi.fn();
+    render(<BidSummary recap={recap()} proposed={false} linesNotVerifiedOnPlansCount={5} onJumpToPlans={onJumpToPlans} />);
+    const btn = screen.getByTestId('bs-warning-not-verified-on-plans');
+    expect(btn.textContent).toBe('5 lines not verified on plans');
+    fireEvent.click(btn);
+    expect(onJumpToPlans).toHaveBeenCalled();
+  });
+
+  it('uses singular phrasing for exactly 1 line', () => {
+    render(<BidSummary recap={recap()} proposed={false} linesNotVerifiedOnPlansCount={1} />);
+    expect(screen.getByTestId('bs-warning-not-verified-on-plans').textContent).toBe('1 line not verified on plans');
+  });
+
+  it('renders no not-verified-on-plans warning when the count is 0 or omitted', () => {
+    render(<BidSummary recap={recap()} proposed={false} linesNotVerifiedOnPlansCount={0} />);
+    expect(screen.queryByTestId('bs-warning-not-verified-on-plans')).toBeNull();
+    expect(screen.queryByTestId('bs-warnings')).toBeNull(); // and it alone doesn't open the section
+  });
+
   it('clicking the unmatched-lines warning calls onJumpToUnmatched', () => {
     const onJumpToUnmatched = vi.fn();
     render(<BidSummary recap={recap({}, { unmatchedCount: 2 })} proposed={false} onJumpToUnmatched={onJumpToUnmatched} />);

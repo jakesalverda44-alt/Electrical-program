@@ -1289,6 +1289,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           saveState={saveState}
           nextAction={nextStep ? { label: ESTIMATE_STEP_LABELS[nextStep], onClick: () => onSelectStep(nextStep) } : null}
           forceSlimSummary={currentStep === 'takeoff' && planView.view === 'plans'}
+          linesNotVerifiedOnPlansCount={estimatingBid.lines.filter(l => l.source === 'takeoff' && l.qty_source !== 'markup').length}
+          onJumpToPlans={() => { onSelectStep('takeoff'); planView.setView('plans'); }}
           lines={estimatingBid.lines}
           settings={estimatingBid.settings}
           recap={estimatingBid.recap}
