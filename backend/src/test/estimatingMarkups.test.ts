@@ -476,6 +476,36 @@ describe('POST /api/estimating/:bidId/markups/batch — create/update/delete', (
   });
 });
 
+// Fix round 1 / N5 — a non-UUID document_id used to reach
+// `WHERE document_id = $2` against a `uuid` column as-is, and Postgres's
+// "invalid input syntax for type uuid" surfaced as an unhandled 500.
+describe('GET /api/estimating/:bidId/markups', () => {
+  it('400s a non-UUID document_id filter, instead of a 500', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    const res = await request(app).get(`/api/estimating/${bidId}/markups?document_id=not-a-uuid`).set(auth(u.token));
+    expect(res.status).toBe(400);
+  });
+
+  it('a well-formed document_id filter still works normally', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id: randomUUID(), document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }] }],
+      updates: [], deletes: [],
+    }).expect(200);
+
+    const res = await request(app).get(`/api/estimating/${bidId}/markups?document_id=${docId}`).set(auth(u.token)).expect(200);
+    expect(res.body.markups.length).toBe(1);
+  });
+});
+
 describe('GET /api/estimating/:bidId/markups/rollup', () => {
   it('rolls up confirmed count markups into an EA line\'s markedQty, ignoring suggested ones', async (ctx) => {
     if (!ok) return ctx.skip();

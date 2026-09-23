@@ -751,9 +751,17 @@ router.put('/:bidId/sheets/:documentId/half-size', requireAuth, async (req: Auth
 router.get('/:bidId/markups', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const documentId = typeof req.query.document_id === 'string' ? req.query.document_id : undefined;
+  const rawDocumentId = typeof req.query.document_id === 'string' ? req.query.document_id : undefined;
+  // Fix round 1 / N5 — a non-UUID document_id used to reach
+  // `WHERE document_id = $2` against a `uuid` column as-is: Postgres
+  // rejects that with "invalid input syntax for type uuid", an unhandled
+  // 500. A malformed filter is a client bug, not "no matches" — 400,
+  // same as every other malformed-id case in this router (S5).
+  if (rawDocumentId !== undefined && !UUID_RE.test(rawDocumentId)) {
+    return res.status(400).json({ error: 'document_id must be a well-formed UUID' });
+  }
   const pageIndex = req.query.page_index != null ? Number(req.query.page_index) : undefined;
-  const markups = await getMarkups(bidId, { documentId, pageIndex: Number.isFinite(pageIndex as number) ? pageIndex : undefined });
+  const markups = await getMarkups(bidId, { documentId: rawDocumentId, pageIndex: Number.isFinite(pageIndex as number) ? pageIndex : undefined });
   res.json({ markups });
 });
 
