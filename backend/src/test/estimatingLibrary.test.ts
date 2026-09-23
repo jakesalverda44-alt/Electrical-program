@@ -3,6 +3,7 @@
 // deactivate is a soft flag (never a hard delete), and bad input is a 400.
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
+import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth } from './harness';
 
 let ok = false;
@@ -150,6 +151,33 @@ describe('POST/PUT /api/estimating/library/assemblies', () => {
     await request(app).post('/api/estimating/library/assemblies').set(auth(owner.token))
       .send({ code: `ASM-BAD-${Date.now()}`, name: 'No components', category: 'Branch Power', unit: 'EA', components: [] })
       .expect(400);
+  });
+
+  it('R2-SF5: ASM-SVCENT-800 (the 800A service entrance assembly) is editable in Settings — no leftover zero-qty component blocks the save', async (ctx) => {
+    if (!ok) return ctx.skip();
+    // Migration 105 zeroed out (rather than deleted) its DISC-400 component
+    // to keep migration 102's own re-run idempotent; a leftover qty_per=0
+    // row would make every PUT here 400 (the route rejects any qty_per<=0),
+    // since the Labor Library UI sends every component back on any edit.
+    // Migration 107 deletes that row outright.
+    const { app } = await import('../index');
+    const owner = await makeUser('owner');
+    const lib = await request(app).get('/api/estimating/library').set(auth(owner.token)).expect(200);
+    const asm = lib.body.assemblies.find((a: { code: string }) => a.code === 'ASM-SVCENT-800');
+    expect(asm).toBeTruthy();
+    expect(asm.components.every((c: { qty_per: number }) => c.qty_per > 0)).toBe(true); // no zero-qty component left
+
+    try {
+      const updated = await request(app).put(`/api/estimating/library/assemblies/${asm.id}`).set(auth(owner.token))
+        .send({ components: asm.components.map((c: { item_id: string; qty_per: number }) => ({ item_id: c.item_id, qty_per: c.qty_per })) })
+        .expect(200);
+      expect(updated.body.components.length).toBe(asm.components.length);
+    } finally {
+      // The PUT marks source='manual' (any edit does) — restore 'seed' so
+      // this shared, never-reset test DB isn't left permanently perturbed
+      // for later tests/runs that assume the real seed's own source value.
+      await pool.query(`UPDATE est_assemblies SET source = 'seed' WHERE id = $1`, [asm.id]);
+    }
   });
 });
 
