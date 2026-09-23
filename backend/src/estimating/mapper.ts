@@ -151,6 +151,14 @@ export function normalize(s: string): string {
   let t = (s ?? '').toLowerCase();
   t = t.replace(/(\d*\.\d+)/g, (m) => DECIMAL_TO_FRACTION[m] ?? m);
   t = t.replace(/(\d+)\s+(\d+\/\d+)/g, '$1-$2');
+  // Fix round 2 / SF1 — "#" immediately before a number is a WIRE GAUGE
+  // marker ("#1 THHN" = 1 AWG), never a trade size — a BARE number next to
+  // EMT/PVC/etc ("1\" flex") is a trade size instead. The old code stripped
+  // every "#" outright, so "#1" and a bare "1" became the identical token
+  // "1" and a wire item could fuzzy-match a conduit/raceway description
+  // sharing nothing but that coincidental digit. Marking a gauge as "gaN"
+  // keeps the two permanently distinguishable at the token level.
+  t = t.replace(/#\s*(\d)/g, 'ga$1');
   t = t.replace(/\b(inch|inches|in)\b\.?/g, ' ');
   t = t.replace(/["']/g, '');
   t = t.replace(/[(),#]/g, ' ');
@@ -206,25 +214,46 @@ const FUZZY_THRESHOLD = 0.4;
 const CATEGORY_BONUS = 0.2;
 const UNIT_BONUS = 0.05;
 
-// B3: material-type families that must agree when a description names one —
-// "3/4 EMT" must never fuzzy/alias-match a THHN wire item, an RMC (rigid)
-// item, etc, even if they share generic trade words or a bare size number.
-// 'rigid' folds into the 'rmc' tag since RMC is commonly written "rigid".
+// B3/R2-SF1: raceway/wire-TYPE families that must agree when a description
+// names one — "3/4 EMT" must never fuzzy/alias-match a THHN wire item, an
+// RMC (rigid) item, an LFMC item, etc, even if they share generic trade
+// words or a bare size number. 'rigid' folds into 'rmc' (commonly written
+// "rigid"); 'flex'/'fmc' and 'liquidtight'/'lfmc' are each their own family,
+// distinct from one another and from EMT/PVC/RMC — a generic "3/4\" conduit"
+// (no type word at all) must never alias-match "liquidtight flexible metal
+// conduit" just because "conduit" is a substring of that name (see the
+// under-specified-description guard below, which uses this same tag set).
 const MATERIAL_TAGS: Record<string, string> = {
   emt: 'emt', pvc: 'pvc', rmc: 'rmc', rigid: 'rmc', mc: 'mc', thhn: 'thhn', thwn: 'thhn',
+  flex: 'fmc', fmc: 'fmc', liquidtight: 'lfmc', lfmc: 'lfmc',
 };
-function materialTagsOf(tokenSet: Set<string>): Set<string> {
+// R2-SF1 — conductor MATERIAL (aluminum vs copper) is a separate dimension
+// from raceway/wire type: a THHN wire item is implicitly copper (this seed
+// library has no aluminum conductor items at all), and XHHW is tagged
+// aluminum per the reviewer's own grouping — "#4/0 aluminum XHHW" must never
+// fuzzy-match a copper THHN item on shared generic wire words.
+const CONDUCTOR_TAGS: Record<string, string> = {
+  aluminum: 'aluminum', al: 'aluminum', xhhw: 'aluminum',
+  copper: 'copper', cu: 'copper', thhn: 'copper', thwn: 'copper',
+};
+function tagsOf(tokenSet: Set<string>, table: Record<string, string>): Set<string> {
   const out = new Set<string>();
   for (const t of tokenSet) {
     // A compound token like "thhn/thwn" (normalize() only strips the slash
     // when it's surrounded by whitespace, not inside a word) must still be
     // read as naming THHN — split on '/' before the exact-tag lookup.
     for (const part of t.split('/')) {
-      const tag = MATERIAL_TAGS[part];
+      const tag = table[part];
       if (tag) out.add(tag);
     }
   }
   return out;
+}
+function materialTagsOf(tokenSet: Set<string>): Set<string> {
+  return tagsOf(tokenSet, MATERIAL_TAGS);
+}
+function conductorTagsOf(tokenSet: Set<string>): Set<string> {
+  return tagsOf(tokenSet, CONDUCTOR_TAGS);
 }
 /** True when both sides name a material type and they disagree — e.g. desc
  *  says "emt" and the candidate is a "thhn" wire item. Neither side naming a
@@ -301,13 +330,25 @@ function scoreCandidate(
       break;
     }
   }
+  const descMaterialTags = materialTagsOf(mergedTokens);
+  const descConductorTags = conductorTagsOf(mergedTokens);
   if (confidence !== 'exact') {
     for (const n of names) {
       if (!n) continue;
       const nTokens = tokens(n);
       if (nTokens.size === 0) continue;
       if (hasConflictingSpec(nTokens, mergedTokens, scheduleDigits(n))) continue;
-      if (materialConflict(materialTagsOf(mergedTokens), materialTagsOf(nTokens))) continue;
+      const nMaterialTags = materialTagsOf(nTokens);
+      if (materialConflict(descMaterialTags, nMaterialTags)) continue;
+      if (materialConflict(descConductorTags, conductorTagsOf(nTokens))) continue;
+      // R2-SF1 — a candidate that NAMES a raceway/wire type (EMT/PVC/RMC/MC/
+      // FMC/LFMC/THHN) can't earn alias-tier confidence off a description
+      // that names NO type at all — "3/4\" conduit" sharing only the
+      // generic words "conduit"+size with "liquidtight flexible metal
+      // conduit" is exactly the false alias match the review flagged. A
+      // description that DOES name a type is unaffected (materialConflict
+      // above already guards disagreement; this guards under-specification).
+      if (nMaterialTags.size > 0 && descMaterialTags.size === 0) continue;
       // Token-boundary containment, not substring — a raw substring check lets
       // "4 emt" match inside "3/4 emt" (the "4" falls right after the "/"),
       // which is exactly the false alias match the review flagged.
@@ -323,7 +364,10 @@ function scoreCandidate(
       if (!n) continue;
       const nTokens = tokens(n);
       if (hasConflictingSpec(nTokens, mergedTokens, scheduleDigits(n))) continue;
-      if (materialConflict(materialTagsOf(mergedTokens), materialTagsOf(nTokens))) continue;
+      const nMaterialTags = materialTagsOf(nTokens);
+      if (materialConflict(descMaterialTags, nMaterialTags)) continue;
+      if (materialConflict(descConductorTags, conductorTagsOf(nTokens))) continue;
+      if (nMaterialTags.size > 0 && descMaterialTags.size === 0) continue; // R2-SF1, same rationale as the alias tier above
       best = Math.max(best, overlapScore(mergedTokens, nTokens, tokenWeight));
     }
     baseScore = best;

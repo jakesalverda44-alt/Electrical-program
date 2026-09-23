@@ -245,8 +245,31 @@ describe('mapTakeoffLine — B3: mismatch regressions against the real seed libr
   });
 
   it('material-type conflict guard: description naming EMT never matches a THHN wire item even on strong token overlap', () => {
-    const m = mapTakeoffLine(line({ description: '#2 EMT conduit run', unit: 'LF' }), library);
-    expect(m.matchedCode).not.toMatch(/^THHN/);
+    const m = mapTakeoffLine(line({ description: '2 EMT conduit run', unit: 'LF' }), library);
+    expect(m.matchedCode).toBe('EMT-200');
+  });
+
+  it('R2-SF1: "#" is a wire-gauge marker, not a trade size — "#2 THHN" never matches a 2" EMT conduit item', () => {
+    // Before this fix, normalize() stripped "#" unconditionally, so "#2
+    // THHN" and a bare "2" trade size became the identical token "2" and
+    // could fuzzy-match each other purely on that coincidence.
+    const m = mapTakeoffLine(line({ description: '#2 THHN', unit: 'LF' }), library);
+    expect(m.matchedCode).not.toBe('EMT-200');
+  });
+
+  it('R2-SF1: a description with NO raceway/wire type word ("3/4\\" conduit") never alias-matches liquidtight (LFMC) off generic words alone', () => {
+    const m = mapTakeoffLine(line({ description: '3/4" conduit', unit: 'LF' }), library);
+    expect(m.matchedCode).not.toBe('LFMC-075');
+  });
+
+  it('R2-SF1: an aluminum XHHW conductor never fuzzy-matches a copper THHN item on shared generic wire words', () => {
+    const m = mapTakeoffLine(line({ description: '#4/0 aluminum XHHW', unit: 'LF' }), library);
+    expect(m.matchedCode).not.toBe('THHN-4_0');
+  });
+
+  it('R2-SF1: "1\\" flex" never fuzzy-matches #1 THHN wire (the exact reviewer repro)', () => {
+    const m = mapTakeoffLine(line({ description: '1" flex', unit: 'LF' }), library);
+    expect(m.matchedCode).not.toBe('THHN-1');
   });
 
   it('item "Duplex receptacle" / spec "20A,125V,NEMA 5-20R,spec grade" matches a duplex device, not a switch (item-vs-spec field-choice fix)', () => {
