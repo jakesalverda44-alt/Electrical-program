@@ -23,6 +23,32 @@ import './plans.css';
 
 const LINE_COLORS = ['#4D8DF7', '#E0A53B', '#34C588', '#F2854F', '#E06A6A', '#9B7EDE', '#3BB6C9', '#D96BA0'];
 
+/** Decision 2 — below 900px the viewer is view-only (pan/zoom, see markers,
+ *  no editing). Same addEventListener-with-Safari-fallback shape as
+ *  EstimateShell.tsx's useEstimateBreakpoint() (the same 900px threshold as
+ *  its mobile/tablet split), kept local rather than imported so this module
+ *  doesn't need to pull in EstimateShell's own step-rail concerns. */
+function useIsNarrowViewport(): boolean {
+  const getIsNarrow = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? !window.matchMedia('(min-width: 900px)').matches
+    : false;
+  const [isNarrow, setIsNarrow] = useState(getIsNarrow);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mql = window.matchMedia('(min-width: 900px)');
+    const update = () => setIsNarrow(!mql.matches);
+    update();
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', update);
+      return () => mql.removeEventListener('change', update);
+    }
+    const legacy = mql as unknown as { addListener?: (h: () => void) => void; removeListener?: (h: () => void) => void };
+    legacy.addListener?.(update);
+    return () => legacy.removeListener?.(update);
+  }, []);
+  return isNarrow;
+}
+
 function colorForLineKey(lineKey: string | null): string {
   if (!lineKey) return '#6A7892';
   let hash = 0;
@@ -61,8 +87,14 @@ export interface PlansWorkspaceProps {
 }
 
 export default function PlansWorkspace({
-  bidId, lines, settings, initialSheetKey, initialLineKey, onSheetKeyChange, onLineKeyChange, onApplied, viewOnly, showToast,
+  bidId, lines, settings, initialSheetKey, initialLineKey, onSheetKeyChange, onLineKeyChange, onApplied, viewOnly: viewOnlyProp, showToast,
 }: PlansWorkspaceProps) {
+  // Decision 2 — below 900px, view-only regardless of the caller's own prop
+  // (a caller can still force it on above 900px, e.g. a read-only role —
+  // that's what the prop is for; the viewport check only ever ADDS the
+  // restriction, never removes one the caller asked for).
+  const isNarrow = useIsNarrowViewport();
+  const viewOnly = !!viewOnlyProp || isNarrow;
   const { data: sheetsData, loading: sheetsLoading, reload: reloadSheets } = useApi<{ sheets: SheetRow[] }>(`/estimating/${bidId}/sheets`);
   const sheets = useMemo(() => sheetsData?.sheets ?? [], [sheetsData]);
 

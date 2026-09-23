@@ -18,14 +18,26 @@ vi.mock('../../../api/client', async () => {
 });
 
 vi.mock('./PlanViewer', () => ({
-  default: (props: { dispatchTool: (e: unknown) => void }) => (
-    <div data-testid="plan-viewer-mock">
+  default: (props: { dispatchTool: (e: unknown) => void; viewOnly?: boolean }) => (
+    <div data-testid="plan-viewer-mock" data-view-only={String(!!props.viewOnly)}>
       <button onClick={() => props.dispatchTool({ type: 'POINTER_CLICK', point: { x: 10, y: 10 } })}>
         Simulate canvas click
       </button>
     </div>
   ),
 }));
+
+function mockMatchMediaWidth(widthPx: number) {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => {
+    const m = /min-width:\s*(\d+)px/.exec(query);
+    const threshold = m ? Number(m[1]) : 0;
+    return {
+      matches: widthPx >= threshold, media: query, onchange: null,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(),
+      addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
+    };
+  });
+}
 
 import PlansWorkspace from './PlansWorkspace';
 import { EstimateLine, EstimateSettings, SheetRow } from '../types';
@@ -129,5 +141,39 @@ describe('PlansWorkspace — apply flow', () => {
 
     await waitFor(() => expect(post).toHaveBeenCalledWith('/estimating/bid1/apply-markups', { line_keys: ['k1'] }));
     await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
+  });
+});
+
+// Decision 2 — below 900px the viewer is view-only regardless of the
+// caller's own viewOnly prop.
+describe('PlansWorkspace — responsive view-only (Decision 2)', () => {
+  afterEach(() => { window.matchMedia = undefined as never; });
+
+  it('is NOT view-only at a normal desktop width', async () => {
+    mockMatchMediaWidth(1400);
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock').dataset.viewOnly).toBe('false'));
+  });
+
+  it('forces view-only below the 900px breakpoint even without the prop', async () => {
+    mockMatchMediaWidth(700);
+    setup();
+    // PlanViewer is mocked in this file (its own mobile notice text is its
+    // concern, not this wiring test's) — the real signal here is that
+    // PlansWorkspace passed viewOnly=true down to it.
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock').dataset.viewOnly).toBe('true'));
+  });
+
+  it('the toolbar/items-panel/sheet-navigator chrome is hidden in view-only mode', async () => {
+    mockMatchMediaWidth(700);
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect(screen.queryByRole('group', { name: 'Markup tools' })).toBeNull();
+  });
+
+  it('an explicit viewOnly prop still applies at a wide viewport', async () => {
+    mockMatchMediaWidth(1400);
+    setup({ viewOnly: true });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock').dataset.viewOnly).toBe('true'));
   });
 });
