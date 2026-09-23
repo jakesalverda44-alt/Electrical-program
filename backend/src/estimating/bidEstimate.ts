@@ -48,6 +48,17 @@ export interface ClientLineInput {
    *  absent (a brand-new line) mints a fresh one server-side. Markups
    *  (est_markups.line_key) point at this, not at `id`. */
   line_key?: string;
+  /** Fix round 2 / R2-S1 — the RAW, unvalidated line_key exactly as the
+   *  client sent it (routes/estimating.ts's validateLines strips
+   *  `line_key` itself down to undefined for anything that isn't a
+   *  well-formed UUID — e.g. a "proposed-N" placeholder — since that's
+   *  the only value ever trusted for the actual INSERT). This field
+   *  keeps the ORIGINAL string around anyway, for ONE purpose only:
+   *  letting saveBidEstimate build remappedLineKeys (below) so the
+   *  client can find out what real UUID a "proposed-N" line actually
+   *  got. Never used for anything else — never trusted, never written
+   *  to the DB. */
+  line_key_as_sent?: string;
   category: string;
   description: string;
   qty: number;
@@ -712,6 +723,19 @@ export interface SaveResult {
    *  markup created against it right after saving has something stable to
    *  point at without a second round-trip. */
   lines: BidLineRow[];
+  /** Fix round 2 / R2-S1 — every line whose CLIENT-sent line_key was NOT
+   *  a real UUID (a "proposed-N" placeholder — see
+   *  getProposedLinesFromTakeoff's own line_key, or any other malformed
+   *  value resolveLineKey below would have minted a fresh UUID for)
+   *  mapped to the real UUID this save actually gave it. The one-click
+   *  "Save the estimate" flow (PlansWorkspace.tsx's own
+   *  onSaveProposedMapping) uses this to remap the active line and any
+   *  pending/quarantined markers still pointing at the placeholder —
+   *  without it, the first-use flow (pick a line -> Save -> mark it up)
+   *  silently sent a marker at a line_key ("proposed-0") the server
+   *  would reject per-item (S5), and nothing on screen remapped it to
+   *  the line's own new real key. */
+  remappedLineKeys: Record<string, string>;
 }
 
 interface LegacyLineItem {
@@ -827,6 +851,14 @@ export async function saveBidEstimate(
   assertFiniteRecap(recap); // fail fast, before opening a transaction
 
   let bidEstimate: Record<string, unknown>;
+  // Fix round 2 / R2-S1 — captured at the exact point each line's real
+  // line_key is minted (inside the loop below), rather than inferred
+  // later from array position (which a reorder, insert, or delete
+  // elsewhere in this same save could silently break). Only ever
+  // populated for a line whose CLIENT-sent key wasn't already a real
+  // UUID. Declared out here (not inside the try block) so it's still in
+  // scope for the return statement after the transaction commits.
+  const remappedLineKeys: Record<string, string> = {};
   const client: PoolClient = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -834,6 +866,8 @@ export async function saveBidEstimate(
     await client.query('DELETE FROM est_bid_lines WHERE bid_id = $1', [bidId]);
     for (let i = 0; i < rows.length; i++) {
       const l = rows[i];
+      const resolvedLineKey = resolveLineKey(l.line_key);
+      if (l.line_key_as_sent && l.line_key_as_sent !== resolvedLineKey) remappedLineKeys[l.line_key_as_sent] = resolvedLineKey;
       await client.query(
         `INSERT INTO est_bid_lines
            (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id,
@@ -864,7 +898,7 @@ export async function saveBidEstimate(
          // being explicitly re-supplied (see resolveLineKey's comment);
          // qty_source is the client's own value, or the same
          // qty_overridden-implies-'manual' backfill migration 108 applied.
-         resolveLineKey(l.line_key), resolveQtySource(l)]
+         resolvedLineKey, resolveQtySource(l)]
       );
     }
 
@@ -896,5 +930,5 @@ export async function saveBidEstimate(
   // syncTakeoff) so the caller gets each line's actual line_key, not just
   // what it sent (a brand-new line's was minted server-side).
   const savedLines = await getBidLines(bidId);
-  return { recap, bidEstimate, lines: savedLines };
+  return { recap, bidEstimate, lines: savedLines, remappedLineKeys };
 }

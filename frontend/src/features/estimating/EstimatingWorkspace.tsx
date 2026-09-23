@@ -31,7 +31,13 @@ export interface EstimatingWorkspaceProps {
   saveError: string | null;
   setLines: (updater: EstimateLine[] | ((prev: EstimateLine[]) => EstimateLine[])) => void;
   setSettings: (updater: EstimateSettings | ((prev: EstimateSettings) => EstimateSettings)) => void;
-  save: () => Promise<void>;
+  // Fix round 2 / R2-S1 — widened from Promise<void>: useEstimatingBid's
+  // save() now resolves to remappedLineKeys (PlansWorkspace.tsx's own
+  // proposed-mapping remap). This chain (down through LaborPricingStep's
+  // own Save button) never reads the resolved value at all — `unknown`
+  // says so honestly, and never needs updating again regardless of what
+  // save() returns in the future.
+  save: () => Promise<unknown>;
   syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number } | null>;
   showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
 

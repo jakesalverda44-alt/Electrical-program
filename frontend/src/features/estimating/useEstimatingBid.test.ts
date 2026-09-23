@@ -174,6 +174,36 @@ describe('useEstimatingBid — save', () => {
     expect(result.current.dirty).toBe(false); // the adopted server lines match what was just persisted
   });
 
+  // Fix round 2 / R2-S1 — save() resolves to remappedLineKeys, so a
+  // caller (PlansWorkspace.tsx's onSaveProposedMapping) can remap the
+  // active line and any pending/quarantined markers away from a
+  // "proposed-N" placeholder the instant it stops existing.
+  it('resolves to the server\'s remappedLineKeys', async () => {
+    get.mockResolvedValue({ data: initialResponse });
+    put.mockResolvedValue({
+      data: { recap: EMPTY_RECAP, remappedLineKeys: { 'proposed-0': 'real-uuid-1' } },
+    });
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let remap: Record<string, string> = {};
+    await act(async () => { remap = await result.current.save(); });
+
+    expect(remap).toEqual({ 'proposed-0': 'real-uuid-1' });
+  });
+
+  it('resolves to an empty object when the response has no remappedLineKeys at all (an older/mocked response)', async () => {
+    get.mockResolvedValue({ data: initialResponse });
+    put.mockResolvedValue({ data: { recap: EMPTY_RECAP } }); // no remappedLineKeys field
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let remap: Record<string, string> = { unexpected: 'value' };
+    await act(async () => { remap = await result.current.save(); });
+
+    expect(remap).toEqual({});
+  });
+
   it('sets saveError and stays dirty when the save fails', async () => {
     get.mockResolvedValue({ data: initialResponse });
     put.mockRejectedValue(new Error('boom'));

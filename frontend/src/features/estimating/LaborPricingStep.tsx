@@ -49,7 +49,10 @@ export interface LaborPricingStepProps {
   dirty?: boolean;
   setLines: (updater: EstimateLine[] | ((prev: EstimateLine[]) => EstimateLine[])) => void;
   setSettings: (updater: EstimateSettings | ((prev: EstimateSettings) => EstimateSettings)) => void;
-  save: () => Promise<void>;
+  // Fix round 2 / R2-S1 — widened from Promise<void>; see
+  // EstimatingWorkspace.tsx's own save prop comment. This component's own
+  // Save button already discards the result explicitly (`void save()`).
+  save: () => Promise<unknown>;
   syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number } | null>;
   showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
 }

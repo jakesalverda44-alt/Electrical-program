@@ -37,7 +37,14 @@ export interface UseEstimatingBidResult {
    *  `setLines` and then `save()` back-to-back in the same synchronous
    *  function never gets a re-render in between (see PcWorkspaceView.
    *  tsx's onCreateLine). */
-  save: (linesOverride?: EstimateLine[]) => Promise<void>;
+  /** Fix round 2 / R2-S1 — resolves to remappedLineKeys (proposed-N ->
+   *  real UUID, for any line whose line_key wasn't already a real one;
+   *  `{}` when nothing needed remapping, e.g. every line already had a
+   *  real UUID, or an older/mocked response that doesn't include the
+   *  field at all). PlansWorkspace.tsx's onSaveProposedMapping uses this
+   *  to remap the active line and any pending/quarantined markers away
+   *  from a placeholder the instant it stops existing. */
+  save: (linesOverride?: EstimateLine[]) => Promise<Record<string, string>>;
   syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number } | null>;
   reload: () => void;
   /** Fix round 1 / B1 — installs a server-confirmed {lines, recap} DIRECTLY
@@ -157,8 +164,8 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     setSaving(true);
     setSaveError(null);
     try {
-      const { data: res } = await api.put<{ recap: PricingRecap; lines?: EstimateLine[] }>(`/estimating/${bidId}`, { lines: linesToSave, settings });
-      if (!aliveRef.current) return;
+      const { data: res } = await api.put<{ recap: PricingRecap; lines?: EstimateLine[]; remappedLineKeys?: Record<string, string> }>(`/estimating/${bidId}`, { lines: linesToSave, settings });
+      if (!aliveRef.current) return res.remappedLineKeys ?? {};
       setRecap(res.recap);
       setProposed(false);
       // Phase B, Task 1 — the server may have minted a fresh line_key for
@@ -174,6 +181,8 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       // apart the instant this response lands.
       setSavedGrandTotal(res.recap.totals.grandTotal);
       persistedRef.current = { lines: savedLines, settings };
+      // Fix round 2 / R2-S1 — see UseEstimatingBidResult.save's own doc.
+      return res.remappedLineKeys ?? {};
     } catch (err) {
       if (aliveRef.current) setSaveError(err instanceof Error ? err.message : 'Save failed');
       throw err;

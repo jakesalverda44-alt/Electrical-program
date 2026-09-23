@@ -811,6 +811,51 @@ describe('PUT/sync-takeoff — line_key stability (Phase B, Task 1)', () => {
     expect(res.body.lines[0].line_key).not.toBe('proposed-0');
     expect(res.body.lines[0].line_key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   });
+
+  // Fix round 2 / R2-S1 — "The one-click proposed save returns a
+  // proposed-key -> real line_key map." The client needs this to remap
+  // the active line and any pending/quarantined markers away from a
+  // "proposed-N" placeholder the very moment it stops existing.
+  it('returns a proposed-key -> real line_key map for every line whose sent key was not a real UUID', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const settings = { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 };
+    const res = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [
+        { line_key: 'proposed-0', category: 'Branch Power', description: 'Line A', qty: 1, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, source: 'manual' },
+        { line_key: 'proposed-1', category: 'Grounding', description: 'Line B', qty: 2, unit: 'EA', material_unit_override: 3, labor_hours_override: 0.2, source: 'manual' },
+      ],
+      settings,
+    }).expect(200);
+
+    const lineA = res.body.lines.find((l: { category: string }) => l.category === 'Branch Power');
+    const lineB = res.body.lines.find((l: { category: string }) => l.category === 'Grounding');
+    expect(res.body.remappedLineKeys).toEqual({
+      'proposed-0': lineA.line_key,
+      'proposed-1': lineB.line_key,
+    });
+  });
+
+  it('the remap is empty when every line already has a real UUID line_key (nothing to remap)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const settings = { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 };
+    const first = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ line_key: 'proposed-0', category: 'Branch Power', description: 'Line A', qty: 1, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, source: 'manual' }],
+      settings,
+    }).expect(200);
+
+    // Second save, echoing back the now-real line_key from the first.
+    const second = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: first.body.lines,
+      settings,
+    }).expect(200);
+    expect(second.body.remappedLineKeys).toEqual({});
+  });
 });
 
 // Phase B, Task 1 — qty_source round-trips and defaults sensibly.

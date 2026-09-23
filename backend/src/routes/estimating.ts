@@ -145,6 +145,11 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
       // placeholder like "proposed-0") is dropped so bidEstimate.ts mints a
       // fresh one rather than trying to INSERT a non-UUID string.
       line_key: typeof raw.line_key === 'string' && UUID_RE.test(raw.line_key) ? raw.line_key : undefined,
+      // Fix round 2 / R2-S1 — the RAW string, kept around ONLY so
+      // saveBidEstimate can report back what a "proposed-N" placeholder's
+      // real UUID turned out to be (remappedLineKeys) — see
+      // ClientLineInput.line_key_as_sent's own comment.
+      line_key_as_sent: typeof raw.line_key === 'string' ? raw.line_key : undefined,
       category: String(raw.category ?? ''),
       description: String(raw.description ?? ''),
       qty,

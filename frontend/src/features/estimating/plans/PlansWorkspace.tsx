@@ -108,8 +108,12 @@ export interface PlansWorkspaceProps {
   dirty?: boolean;
   /** Fix round 1 / B1 — estimatingBid.save(), used by
    *  ensureLinesSavedFirst's "save first" prompt AND (Fix round 1 / B2)
-   *  the proposed-mapping banner's one-click save. */
-  onSaveDirtyLinesFirst?: () => Promise<void>;
+   *  the proposed-mapping banner's one-click save. Fix round 2 / R2-S1 —
+   *  resolves to remappedLineKeys (proposed-N -> real line_key, `{}` when
+   *  nothing needed remapping) so onSaveProposedMapping can remap the
+   *  active line and any pending/quarantined markers the instant a
+   *  placeholder stops existing. */
+  onSaveDirtyLinesFirst?: () => Promise<Record<string, string> | void>;
   /** Fix round 1 / B2 — true when the estimate has never been saved
    *  (useEstimatingBid.proposed): its lines carry "proposed-N" placeholder
    *  line_keys, not real UUIDs. A marker drawn against one can never
@@ -171,24 +175,13 @@ export default function PlansWorkspace({
     }
   }, [dirty, confirm, onSaveDirtyLinesFirst, showToast]);
 
-  // Fix round 1 / B2 — one-click "save the proposed mapping" for the
-  // Count/Linear-disabled banner (below). This is the SAME action as
-  // onSaveDirtyLinesFirst (estimatingBid.save()) — a proposed mapping's
-  // lines are exactly what gets PUT, minting real UUIDs for every
-  // "proposed-N" placeholder line_key in the same transaction.
+  // Fix round 1 / B2 — savingProposed state; onSaveProposedMapping ITSELF
+  // is declared further down (after activeLineKey/mutate/historyPresentRef
+  // all exist — Fix round 2 / R2-S1 needs them to remap the active line
+  // and pending markers, and referencing them here would be a genuine
+  // temporal-dead-zone error, not just a stale-closure risk: they're
+  // `const`s declared LATER in this same component body).
   const [savingProposed, setSavingProposed] = useState(false);
-  const onSaveProposedMapping = useCallback(async () => {
-    if (!onSaveDirtyLinesFirst) return;
-    setSavingProposed(true);
-    try {
-      await onSaveDirtyLinesFirst();
-      showToast?.({ title: 'Estimate saved', sub: 'You can now mark up the plans.' });
-    } catch {
-      showToast?.({ variant: 'error', title: 'Could not save the estimate', sub: 'Try again' });
-    } finally {
-      setSavingProposed(false);
-    }
-  }, [onSaveDirtyLinesFirst, showToast]);
 
   // Decision 2 — below 900px, view-only regardless of the caller's own prop
   // (a caller can still force it on above 900px, e.g. a read-only role —
@@ -388,6 +381,45 @@ export default function PlansWorkspace({
   // is a render behind by the time the commit itself runs.
   const historyPresentRef = useRef(history.present);
   historyPresentRef.current = history.present;
+
+  // Fix round 1 / B2, remap added by Fix round 2 / R2-S1 — one-click
+  // "save the proposed mapping" for the Count/Linear-disabled banner
+  // (below). This is the SAME action as onSaveDirtyLinesFirst
+  // (estimatingBid.save()) — a proposed mapping's lines are exactly what
+  // gets PUT, minting real UUIDs for every "proposed-N" placeholder
+  // line_key in the same transaction. R2-S1's own fix: the reviewer's
+  // exact first-use flow (pick a line -> Save -> start marking up ->
+  // place a marker) used to send that marker at the STILL-proposed
+  // "proposed-N" key — activeLineKey was never remapped after the save
+  // minted a real one, so the server rejected it per item (S5) and it
+  // sat quarantined with a "could not save" error, on the exact flow B2
+  // was supposed to fix. onSaveDirtyLinesFirst now resolves to the
+  // save's own remappedLineKeys map; both the active line AND any
+  // marker already drawn against a placeholder (placed in the brief
+  // window between the estimate loading proposed and this save landing)
+  // get remapped to their real line_key. A marker's own lineKey changing
+  // is exactly what useMarkupAutosave.ts's quarantine-by-exact-value
+  // design already un-quarantines on its own (a changed value no longer
+  // matches what was rejected) — no separate quarantine-clearing logic
+  // needed here.
+  const onSaveProposedMapping = useCallback(async () => {
+    if (!onSaveDirtyLinesFirst) return;
+    setSavingProposed(true);
+    try {
+      const remap = await onSaveDirtyLinesFirst();
+      if (remap && Object.keys(remap).length > 0) {
+        setActiveLineKey(prev => (prev != null && remap[prev]) ? remap[prev] : prev);
+        mutate(current => current.map(m => (
+          m.lineKey != null && remap[m.lineKey] ? { ...m, lineKey: remap[m.lineKey] } : m
+        )));
+      }
+      showToast?.({ title: 'Estimate saved', sub: 'You can now mark up the plans.' });
+    } catch {
+      showToast?.({ variant: 'error', title: 'Could not save the estimate', sub: 'Try again' });
+    } finally {
+      setSavingProposed(false);
+    }
+  }, [onSaveDirtyLinesFirst, showToast, mutate]);
 
   // Fix round 1 / B8 — the marker id the DropsSlackPopover is currently
   // open for: set the instant a linear run finishes (dispatch's

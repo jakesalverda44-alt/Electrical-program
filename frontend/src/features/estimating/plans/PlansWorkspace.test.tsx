@@ -363,6 +363,61 @@ describe('PlansWorkspace — proposed (never-saved) estimate (Fix round 1 / B2)'
     expect((screen.getByTitle('Select (V)') as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByTitle('Undo (⌘Z)') as HTMLButtonElement).disabled).toBe(true); // nothing to undo yet — unrelated to proposed gating
   });
+
+  // Fix round 2 / R2-S1 — the reviewer's exact first-use flow: pick a
+  // line, click "Save the estimate", then mark it up. Before this fix,
+  // activeLineKey never remapped after the save minted a real UUID for
+  // the "proposed-N" placeholder — a marker placed right after saving
+  // (or one placed in the brief window before the save landed) still
+  // pointed at a key that no longer existed, got rejected per item (S5),
+  // and sat quarantined with a "could not save" error.
+  it('after the one-click save, the active line AND a marker already pointing at the proposed-N placeholder are remapped to the real line_key', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet()] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [markupWire({ id: 'm1', lineKey: 'proposed-0' })] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    const onSaveDirtyLinesFirst = vi.fn().mockResolvedValue({ 'proposed-0': 'real-line-1' });
+    const onLineKeyChange = vi.fn();
+    post.mockResolvedValue({ data: { created: [], updated: [{ id: 'm1' }], deleted: [], skipped: [] } });
+    setup({
+      proposed: true,
+      lines: [line({ line_key: 'proposed-0' })],
+      initialLineKey: 'proposed-0',
+      onSaveDirtyLinesFirst,
+      onLineKeyChange,
+    });
+    await waitFor(() => expect(screen.getByTestId('plan-proposed-banner')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Save the estimate'));
+
+    // The active line itself is remapped.
+    await waitFor(() => expect(onLineKeyChange).toHaveBeenCalledWith('real-line-1'));
+
+    // The pre-existing marker's lineKey was remapped too — the next
+    // autosave batch sends the REAL key, never the now-dead "proposed-0".
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(post).toHaveBeenCalledWith(
+      '/estimating/bid1/markups/batch',
+      expect.objectContaining({ updates: [expect.objectContaining({ id: 'm1', line_key: 'real-line-1' })] })
+    ));
+  });
+
+  it('a save whose remap is empty (nothing needed remapping) leaves the active line untouched', async () => {
+    const onSaveDirtyLinesFirst = vi.fn().mockResolvedValue({});
+    const onLineKeyChange = vi.fn();
+    setup({ proposed: true, lines: [line({ line_key: 'k1' })], initialLineKey: 'k1', onSaveDirtyLinesFirst, onLineKeyChange });
+    await waitFor(() => expect(screen.getByTestId('plan-proposed-banner')).toBeTruthy());
+    await waitFor(() => expect(onLineKeyChange).toHaveBeenCalledTimes(1)); // the initial mount call, with 'k1'
+
+    fireEvent.click(screen.getByText('Save the estimate'));
+
+    await waitFor(() => expect(onSaveDirtyLinesFirst).toHaveBeenCalledTimes(1));
+    // activeLineKey never changed, so the onLineKeyChange effect never
+    // re-fires — still just the one call from mount.
+    expect(onLineKeyChange).toHaveBeenCalledTimes(1);
+  });
 });
 
 // Fix round 1 / B7 — the title-block scale is a suggestion needing one
