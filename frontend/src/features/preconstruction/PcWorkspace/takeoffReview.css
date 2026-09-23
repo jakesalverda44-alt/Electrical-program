@@ -23,6 +23,10 @@
 .tr-bulk input { padding: 5px 8px; border: 1px solid var(--border2); border-radius: 6px; background: var(--surface); color: var(--text); }
 .tr-resolved { margin-top: 10px; font-size: 12.5px; }
 .tr-resolved summary { cursor: pointer; color: var(--text2); font-weight: 700; }
+.tr-legacy { font-size: 13px; color: var(--text2); }
+.tr-warn { margin-top: 4px; color: var(--amber); font-weight: 700; }
+.tr-types { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.tr-types textarea { padding: 6px 8px; border: 1px solid var(--border2); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 12.5px; font-family: inherit; }
 .tr-details { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text2); }
 @media (max-width: 700px) {
   .tr-panel { margin: 10px 12px 4px; }

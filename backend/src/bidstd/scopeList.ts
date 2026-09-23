@@ -99,26 +99,38 @@ function carvedOut(text: string, ex: ScopeItem, includes: ScopeItem[]): boolean 
   });
 }
 
-export function excludedScopeProblems(data: Pick<BidData, 'takeoff' | 'sections'>, items: ScopeItem[], overrides: NonElectricalOverride[] = []): string[] {
+export interface ExcludedScopeFinding { category: string; line: string; detail: string }
+
+/** Structured form (fix round 1 / N7): the category (takeoff category or
+ *  section title) and line text an estimator override is keyed on. */
+export function excludedScopeFindings(data: Pick<BidData, 'takeoff' | 'sections'>, items: ScopeItem[], overrides: NonElectricalOverride[] = []): ExcludedScopeFinding[] {
   const excluded = items.filter(i => i.kind === 'exclude');
   const includes = items.filter(i => i.kind === 'include');
   const kept = (cat: string, text: string) => overrideFor(normalizeLineKey(cat, text), overrides) !== null;
-  const out: string[] = [];
+  const out: ExcludedScopeFinding[] = [];
   for (const ex of excluded) {
     for (const cat of data.takeoff ?? []) {
       for (const it of cat.items ?? []) {
-        const text = `${it.item ?? ''} ${it.description ?? ''}`;
-        if (mentionsExcludedItem(text, ex) && !carvedOut(text, ex, includes) && !kept(cat.name, text)) out.push(`Takeoff ${cat.name}: "${text.trim()}" is on the Not-included list ("${ex.text}")`);
+        const text = `${it.item ?? ''} ${it.description ?? ''}`.trim();
+        if (mentionsExcludedItem(text, ex) && !carvedOut(text, ex, includes) && !kept(cat.name, text)) {
+          out.push({ category: cat.name, line: text, detail: `Takeoff ${cat.name}: "${text}" is on the Not-included list ("${ex.text}")` });
+        }
       }
     }
     for (const s of data.sections ?? []) {
       for (const b of s.bullets ?? []) {
         const text = bulletText(b);
-        if (mentionsExcludedItem(text, ex) && !carvedOut(text, ex, includes) && !kept(s.title, text)) out.push(`${s.title}: "${text}" is on the Not-included list ("${ex.text}")`);
+        if (mentionsExcludedItem(text, ex) && !carvedOut(text, ex, includes) && !kept(s.title, text)) {
+          out.push({ category: s.title, line: text, detail: `${s.title}: "${text}" is on the Not-included list ("${ex.text}")` });
+        }
       }
     }
   }
   return out;
+}
+
+export function excludedScopeProblems(data: Pick<BidData, 'takeoff' | 'sections'>, items: ScopeItem[], overrides: NonElectricalOverride[] = []): string[] {
+  return excludedScopeFindings(data, items, overrides).map(f => f.detail);
 }
 
 /** One exclusion bullet per Not-included item not already covered. */

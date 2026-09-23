@@ -5,29 +5,33 @@
 //   # dry run (default): checks the inputs, prints what WOULD run, spends nothing
 //   npx tsx scripts/evalTakeoff.ts --pdf "<plan set.pdf>" --expected eval/autozone-10077-kissimmee.expected.json
 //
-//   # real run — PAID Anthropic calls; only with Jake's OK:
-//   DB_NAME=<db> npx tsx scripts/evalTakeoff.ts --pdf "<plan set.pdf>" \
-//     --expected eval/autozone-10077-kissimmee.expected.json --confirm-live-api [--keep] [--out report.json]
+//   # real run — PAID Anthropic calls; only with Jake's OK. Runs against the
+//   # TEST database (electrical_crm_test) unless --db names another one:
+//   npx tsx scripts/evalTakeoff.ts --pdf "<plan set.pdf>" \
+//     --expected eval/autozone-10077-kissimmee.expected.json --confirm-live-api [--keep] [--out report.json] [--db <name>]
+//
+// Fix round 1 / S16 — the database: default electrical_crm_test. The live
+// app's database (electrical_crm, still at an older migration before this
+// branch merges) is refused unless --db names it explicitly, because the run
+// applies this branch's migrations and inserts (then deletes) a bid there.
+// DB_NAME in the environment is ignored unless it matches --db.
 //
 // The real run creates a throwaway bid ("EVAL …", notifications never fire —
 // it is a direct insert, not POST /api/bids), runs the pipeline in-process,
-// prints the per-type diff and the token cost per stage, and deletes the bid
-// again (cascade: takeoff_results, est_markups) unless --keep. The Anthropic
-// key comes from app_settings (Settings → AI) or ANTHROPIC_API_KEY and is never
-// printed. Nothing is emailed, nothing touches Drive (the bid has no Drive
-// folder).
+// prints the per-type diff and the token cost per stage (classifier + Agent
+// 1, the counter, Agents 2-3 and the pre-bid draft Agent 4 composes right
+// after a clear review), and deletes the bid again (cascade: takeoff_results,
+// est_markups) unless --keep. The Anthropic key comes from app_settings
+// (Settings → AI) or ANTHROPIC_API_KEY and is never printed. Nothing is
+// emailed, nothing touches Drive (the bid has no Drive folder).
 //
 // Written for the takeoff-accuracy plan; the executor never ran it against the
 // real API (plan Decision 10).
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import Anthropic from '@anthropic-ai/sdk';
-import { pool } from '../src/db/pool';
-import { runMigrations } from '../src/migrate';
-import { getSetting } from '../src/db/getSetting';
-import { runPipeline, loadAIConfig } from '../src/routes/preconstruction';
-import { validateExpectedFile, diffAgainstExpected, formatDiffTable, usageCost, type UsageLike } from '../src/eval/takeoffEval';
+import type Anthropic from '@anthropic-ai/sdk';
+import { validateExpectedFile, diffAgainstExpected, formatDiffTable, usageCost, evalDatabase, EVAL_DEFAULT_DB, type UsageLike } from '../src/eval/takeoffEval';
 import type { CountResult } from '../src/ai/countingStage';
 
 function arg(name: string): string | undefined {
@@ -53,10 +57,23 @@ async function main(): Promise<number> {
   console.log(`PDF: ${path.basename(pdfPath)} — ${(pdf.length / 1e6).toFixed(1)} MB, ${pages} pages`);
   console.log(`Expected items: ${expected.items.length} (${expected.items.filter(i => i.disputed).length} disputed, ${expected.items.filter(i => i.not_counted).length} not counted)`);
 
+  const dbChoice = evalDatabase(process.argv);
+  if ('error' in dbChoice) { console.error(`Database: ${dbChoice.error}.`); return 2; }
+  console.log(`Database: ${dbChoice.db}${dbChoice.db === EVAL_DEFAULT_DB ? ' (the test database — pass --db to use another)' : ''}`);
+
   if (!has('--confirm-live-api')) {
-    console.log('\nDRY RUN — nothing was sent. Add --confirm-live-api to run the real pipeline (PAID Anthropic calls: page classifier, Agent 1, the Opus counter on every electrical plan sheet, Agents 2-3).');
+    console.log('\nDRY RUN — nothing was sent. Add --confirm-live-api to run the real pipeline (PAID Anthropic calls: page classifier, Agent 1, the Opus counter on every electrical plan sheet, Agents 2-3, and the pre-bid draft — an Agent 4 call — when the review comes back clear).');
     return 0;
   }
+
+  // The DB is chosen BEFORE the pool module loads (it reads DB_NAME once).
+  process.env.DB_NAME = dbChoice.db;
+  const { pool } = await import('../src/db/pool');
+  poolRef = pool;
+  const { runMigrations } = await import('../src/migrate');
+  const { getSetting } = await import('../src/db/getSetting');
+  const { runPipeline, loadAIConfig, startAnalysisRun } = await import('../src/routes/preconstruction');
+  const { default: AnthropicSdk } = await import('@anthropic-ai/sdk');
 
   await runMigrations();
   const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
@@ -70,11 +87,11 @@ async function main(): Promise<number> {
     [`${b.name} ${new Date().toISOString()}`, b.gc, b.loc, b.brand ?? null, b.project_type ?? null]
   );
   const bidId = rows[0].id as string;
-  await pool.query(`INSERT INTO takeoff_results (bid_id, status) VALUES ($1,'running')`, [bidId]);
+  await startAnalysisRun(bidId);
   const started = Date.now();
   try {
     const file = { originalname: path.basename(pdfPath), buffer: pdf, mimetype: 'application/pdf', size: pdf.length } as Express.Multer.File;
-    await runPipeline(bidId, [file], new Anthropic({ apiKey }), config);
+    await runPipeline(bidId, [file], new AnthropicSdk({ apiKey }) as Anthropic, config);
     const { rows: tr } = await pool.query('SELECT * FROM takeoff_results WHERE bid_id=$1', [bidId]);
     const r = tr[0];
     console.log(`\nStatus: ${r.status} after ${Math.round((Date.now() - started) / 1000)} s`);
@@ -100,6 +117,7 @@ async function main(): Promise<number> {
       ['Counter (Agent 1C)', r.usage_counter, r.model_counter],
       ['Agent 2', r.usage_agent2, r.model_agent2],
       ['Agent 3', r.usage_agent3, r.model_agent3],
+      ['Pre-bid draft (Agent 4)', r.usage_draft, r.draft_model],
     ];
     let total = 0;
     console.log('\nCOST (list prices; classifier tokens are billed at the classifier model but folded into Agent 1\'s usage, so that line is approximate)');
@@ -122,6 +140,11 @@ async function main(): Promise<number> {
   }
 }
 
-main()
-  .then(code => pool.end().then(() => process.exit(code)))
-  .catch(err => { console.error(err instanceof Error ? err.message : err); pool.end().finally(() => process.exit(1)); });
+let poolRef: { end: () => Promise<void> } | null = null;
+const endPool = () => (poolRef ? poolRef.end() : Promise.resolve());
+
+if (require.main === module) {
+  main()
+    .then(code => endPool().then(() => process.exit(code)))
+    .catch(err => { console.error(err instanceof Error ? err.message : err); endPool().finally(() => process.exit(1)); });
+}

@@ -99,5 +99,19 @@ describe('scripts/evalTakeoff.ts — DRY RUN only (no --confirm-live-api)', () =
     expect(out).toContain('Eval: AutoZone #10077 — Kissimmee FL (Summit GC)');
     expect(out).toContain('PDF: kissimmee-mini.pdf');
     expect(out).toContain('DRY RUN — nothing was sent.');
+    // S16 — the test database by default, and the draft call is named.
+    expect(out).toContain('Database: electrical_crm_test (the test database');
+    expect(out).toContain('the pre-bid draft — an Agent 4 call');
+  }, 60_000);
+
+  it('S16 — never the live database by default; only with --db electrical_crm', async () => {
+    const { evalDatabase } = await import('./takeoffEval');
+    expect(evalDatabase(['node', 'x'])).toEqual({ db: 'electrical_crm_test' });
+    expect(evalDatabase(['node', 'x', '--db', 'electrical_crm'])).toEqual({ db: 'electrical_crm' });
+    expect(evalDatabase(['node', 'x', '--db'])).toEqual({ error: '--db needs a database name' });
+    // DB_NAME in the environment does not select the live DB on its own.
+    const out = execFileSync('npx', ['tsx', 'scripts/evalTakeoff.ts', '--pdf', 'src/test/fixtures/takeoff/kissimmee-mini.pdf', '--expected', 'eval/autozone-10077-kissimmee.expected.json'],
+      { cwd: path.join(__dirname, '../..'), env: { ...process.env, DB_NAME: 'electrical_crm', ANTHROPIC_API_KEY: '' } }).toString();
+    expect(out).toContain('Database: electrical_crm_test');
   }, 60_000);
 });

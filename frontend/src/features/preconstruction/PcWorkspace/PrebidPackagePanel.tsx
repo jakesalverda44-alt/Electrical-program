@@ -29,9 +29,12 @@ export default function PrebidPackagePanel({
   emailPrebidToChris, chrisDraftBusy, chrisDraftLink, showToast,
 }: Props) {
   const draftStatus = aiResults?.draft_status as string | null | undefined;
-  const reviewBlocked = aiResults?.review_status === 'needs_review';
-  const legacy = !aiResults?.draft_output && !!aiResults?.agent4_output;
-  const ready = draftStatus === 'complete' || legacy;
+  const reviewBlocked = aiResults?.review_status === 'needs_review' || aiResults?.review_status === 'pending';
+  // A bid from before drafts (and before run ids) builds from its Agent 4 output.
+  const legacy = !aiResults?.draft_output && !!aiResults?.agent4_output && !aiResults?.run_id;
+  // Fix round 1 / S12 — a draft whose scope inputs changed is never used.
+  const stale = draftStatus === 'complete' && !!aiResults?.draft_stale;
+  const ready = (draftStatus === 'complete' && !stale) || legacy;
   const [starting, setStarting] = useState(false);
 
   // Poll while the draft composes (it runs in the background).
@@ -93,13 +96,18 @@ export default function PrebidPackagePanel({
             The pre-bid draft did not compose: {String(aiResults?.draft_error ?? 'unknown error')}
           </div>
         )}
+        {!reviewBlocked && stale && (
+          <div data-testid="prebid-draft-stale" style={{ fontSize: 12.5, color: 'var(--amber)', fontWeight: 700, marginBottom: 10 }}>
+            The pre-bid draft is out of date — the scope inputs changed after it was composed. Compose it again before building the package.
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <button className="btn ghost" onClick={generatePrebidPackage} disabled={prebidBusy || !ready} style={{ fontSize: 13 }}>
             <Icon name="doc" size={14} stroke={1.9}/> {prebidBusy ? 'Generating…' : 'Generate Pre-Bid Package for Chris'}
           </button>
-          {!reviewBlocked && !legacy && draftStatus !== 'running' && draftStatus !== 'complete' && (
+          {!reviewBlocked && !legacy && draftStatus !== 'running' && (draftStatus !== 'complete' || stale) && (
             <button className="btn ghost" onClick={() => void compose()} disabled={starting} style={{ fontSize: 13 }}>
-              {starting ? 'Starting…' : draftStatus === 'error' ? 'Compose the draft again' : 'Compose pre-bid draft'}
+              {starting ? 'Starting…' : draftStatus === 'error' || stale ? 'Compose the draft again' : 'Compose pre-bid draft'}
             </button>
           )}
         </div>

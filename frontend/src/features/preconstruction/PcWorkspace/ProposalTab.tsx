@@ -57,7 +57,9 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
   // generate-docx / generate-takeoff-xlsx / draft-proposal).
   const reviewItems = (aiResults?.review_items as Array<{ resolution?: unknown }> | null | undefined) ?? [];
   const openReviewCount = reviewItems.filter(i => !i.resolution).length;
-  const reviewBlocked = aiResults?.review_status === 'needs_review' && openReviewCount > 0;
+  // Fix round 1 / B5 — a run in progress (review 'pending') blocks too.
+  const analysisPending = aiResults?.review_status === 'pending';
+  const reviewBlocked = (aiResults?.review_status === 'needs_review' && openReviewCount > 0) || analysisPending;
   const agent4Raw    = aiResults?.agent4_output as string | undefined;
   const agent4Status = aiResults?.agent4_status as string | undefined;
   const agent4ErrMsg = aiResults?.agent4_error  as string | undefined;
@@ -144,8 +146,10 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
               background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.4)',
               color: 'var(--amber)', fontSize: 12.5, fontWeight: 700,
             }}>
-              The takeoff needs review first: {openReviewCount} item{openReviewCount === 1 ? '' : 's'} open in the Takeoff step
-              (counts that came back zero or unreadable, or scope questions). The proposal can’t be generated, downloaded or sent until they’re resolved.
+              {analysisPending
+                ? 'The takeoff analysis is running (or did not finish). The proposal can’t be generated, downloaded or sent until it completes.'
+                : <>The takeoff needs review first: {openReviewCount} item{openReviewCount === 1 ? '' : 's'} open in the Takeoff step
+                  (counts that came back zero or unreadable, or scope questions). The proposal can’t be generated, downloaded or sent until they’re resolved.</>}
             </div>
           )}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -248,7 +252,7 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
                   {f.check.replace(/_/g, ' ')}
                 </div>
                 <div style={{ marginBottom: (f.matches ?? []).length ? 4 : 0 }}>{f.detail}</div>
-                {f.check === 'non_electrical' && f.category && f.line && (
+                {(f.check === 'non_electrical' || f.check === 'excluded_scope') && f.category && f.line && (
                   <KeepLineControl bidId={bid.id} category={f.category} line={f.line} showToast={showToast} />
                 )}
                 {(f.matches ?? []).length > 0 && (

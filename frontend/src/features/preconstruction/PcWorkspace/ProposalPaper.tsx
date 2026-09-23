@@ -60,14 +60,11 @@ export default function ProposalPaper({ data, fallbackName, fallbackPrice }: { d
             </React.Fragment>
           ))}
 
-          {data.exclusions.length > 0 && (
-            <>
-              <Band>EXCLUSIONS &amp; CLARIFICATIONS</Band>
-              <ul className="pp-bullets">{data.exclusions.map((b, i) => <Bullet key={i} b={b} />)}</ul>
-            </>
-          )}
+          {/* N13 — every band the .docx prints, even when its list is empty. */}
+          <Band>EXCLUSIONS &amp; CLARIFICATIONS</Band>
+          <ul className="pp-bullets">{data.exclusions.map((b, i) => <Bullet key={i} b={b} />)}</ul>
 
-          {data.takeoff.length > 0 && (
+          {(
             <>
               <Band>ELECTRICAL QUANTITY TAKEOFF</Band>
               <table className="pp-table">
@@ -97,12 +94,8 @@ export default function ProposalPaper({ data, fallbackName, fallbackPrice }: { d
             </>
           )}
 
-          {data.terms.length > 0 && (
-            <>
-              <Band>TERMS, CONDITIONS &amp; SPECIAL REQUIREMENTS</Band>
-              <ul className="pp-bullets">{data.terms.map((b, i) => <Bullet key={i} b={b} />)}</ul>
-            </>
-          )}
+          <Band>TERMS, CONDITIONS &amp; SPECIAL REQUIREMENTS</Band>
+          <ul className="pp-bullets">{data.terms.map((b, i) => <Bullet key={i} b={b} />)}</ul>
 
           <p className="pp-price-h">Proposal Price Summary</p>
           <p className="pp-price" data-testid="pp-price">{paper?.priceLine ?? `Total Electrical Scope — ${data.total_price || fallbackPrice}`}</p>

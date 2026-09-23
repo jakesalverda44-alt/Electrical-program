@@ -19,7 +19,7 @@ export default function KeepLineControl({ bidId, category, line, showToast }: { 
         onChange={e => setReason(e.target.value)}
         style={{ flex: 1, minWidth: 200, padding: '4px 8px', fontSize: 12, borderRadius: 6, border: '1px solid var(--border2)', background: 'var(--surface)', color: 'var(--text)' }}
       />
-      <button type="button" className="btn ghost sm" disabled={busy || reason.trim().length < 3}
+      <button type="button" className="btn ghost sm" disabled={busy || reason.trim().length < 10}
         onClick={async () => {
           setBusy(true);
           try {

@@ -145,3 +145,20 @@ export function formatDiffTable(diff: EvalDiff): string {
   }
   return lines.join('\n');
 }
+
+// ── Database choice (fix round 1 / S16) ─────────────────────────────────────
+
+export const EVAL_DEFAULT_DB = 'electrical_crm_test';
+const LIVE_DB = 'electrical_crm';
+
+/** Which database the eval may use: --db wins; otherwise the TEST database.
+ *  The live app's database only when --db names it explicitly (DB_NAME in
+ *  the environment never selects it on its own). */
+export function evalDatabase(argv: string[]): { db: string } | { error: string } {
+  const i = argv.indexOf('--db');
+  const explicit = i >= 0 ? argv[i + 1] : undefined;
+  if (i >= 0 && (!explicit || explicit.startsWith('--'))) return { error: '--db needs a database name' };
+  const db = explicit ?? EVAL_DEFAULT_DB;
+  if (db === LIVE_DB && !explicit) return { error: 'refusing the live database without --db electrical_crm' };
+  return { db };
+}

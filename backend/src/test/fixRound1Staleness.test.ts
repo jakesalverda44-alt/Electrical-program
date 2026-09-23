@@ -188,3 +188,28 @@ describe('S13 — auto-drafting: run_analysis only, one in flight per bid', () =
     expect(byEst.body.draftStarted).toBe(true);
   });
 });
+
+describe('S5 — a bid analysed before the accuracy checks', () => {
+  it('is not blocked, but the Takeoff step says so and shows its AutoZone questions', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const user = await makeUser('owner');
+    const { rows } = await pool.query(
+      `INSERT INTO bids (name, gc, loc, brand, salesperson_id) VALUES ($1, 'Summit General Contractors', 'Kissimmee, FL 34747', 'AutoZone', $2) RETURNING id`,
+      [`Legacy ${Date.now()}`, user.id]
+    );
+    const bidId = rows[0].id as string;
+    // No run id, no review, no count_result: the pre-branch shape.
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, status, agent1_output, agent2_output, agent4_output, agent4_price, agent4_status)
+       VALUES ($1,'complete',$2,'{}',$3,81485.60,'complete')`,
+      [bidId, JSON.stringify({ project: { name: 'AutoZone #10077' }, quantities: [] }), JSON.stringify(AGENT4)]
+    );
+    const review = await request(app).get(`/api/preconstruction/${bidId}/review`).set(auth(user.token)).expect(200);
+    expect(review.body.status).toBeNull();
+    expect(review.body.legacy.message).toBe('Analyzed before accuracy checks — re-run analysis to enable counting and account rules.');
+    expect(review.body.legacy.accountRule).toMatch(/^AutoZone/);
+    expect(review.body.legacy.questions.map((q: { label: string }) => q.label)).toEqual(['Power poles — furnished by', 'Power poles — installed by']);
+    // Its existing flow is not blocked.
+    await request(app).get(`/api/preconstruction/${bidId}/proposal-preview`).set(auth(user.token)).expect(200);
+  });
+});

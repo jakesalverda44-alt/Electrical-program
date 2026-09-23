@@ -49,4 +49,10 @@ describe('PrebidPackagePanel', () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/compose-draft'));
     expect(setAiResults).toHaveBeenCalledWith(expect.objectContaining({ draft_status: 'running' }));
   });
+  it('S12 — an out-of-date draft is never used: the package waits, "Compose the draft again" is offered', () => {
+    setup({ status: "complete", review_status: "clear", draft_status: "complete", draft_output: "{}", draft_stale: true, run_id: "r1" });
+    expect(screen.getByTestId('prebid-draft-stale')).toBeTruthy();
+    expect((screen.getByRole('button', { name: /Generate Pre-Bid Package/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Compose the draft again' })).toBeTruthy();
+  });
 });

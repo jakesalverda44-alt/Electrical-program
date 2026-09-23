@@ -5,15 +5,17 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 
 const post = vi.fn();
+const get = vi.fn();
+const put = vi.fn();
 vi.mock('../../../api/client', async () => {
   const actual = await vi.importActual<typeof import('../../../api/client')>('../../../api/client');
-  return { ...actual, default: { post: (...a: unknown[]) => post(...a), get: vi.fn() } };
+  return { ...actual, default: { post: (...a: unknown[]) => post(...a), get: (...a: unknown[]) => get(...a), put: (...a: unknown[]) => put(...a) } };
 });
 
-import TakeoffReviewPanel, { type TakeoffReview } from './TakeoffReviewPanel';
+import TakeoffReviewPanel, { parseCountTypes, type TakeoffReview } from './TakeoffReviewPanel';
 
 afterEach(cleanup);
-beforeEach(() => post.mockReset());
+beforeEach(() => { post.mockReset(); get.mockReset(); put.mockReset(); });
 
 const REVIEW: TakeoffReview = {
   status: 'needs_review',
@@ -117,5 +119,71 @@ describe('TakeoffReviewPanel', () => {
     expect(d).toContain('E-1 "SITE PLAN" — the model declined to count this sheet');
     expect(d).toContain('counted fixtures 6,999 W vs lighting circuits 5,410 VA (-29%) — more than 20% apart');
     expect(d).toContain('Site lights × 4 (E-7) — fixture row that matches no scheduled type');
+  });
+});
+
+describe('TakeoffReviewPanel — fix round 1', () => {
+  it('B2: a "counts not verified" item is confirmed with a real reason, or the types are entered for the next run', async () => {
+    const review: TakeoffReview = { status: 'needs_review', items: [
+      { id: 'counting:not_run', kind: 'confirm', title: 'No fixture schedule/legend found — counts not verified', detail: 'Counting did not run: ...', actions: ['confirm'] },
+    ] };
+    post.mockResolvedValue({ data: { status: 'clear', items: [] } });
+    put.mockResolvedValue({ data: {} });
+    const { onReviewChange } = setup(review);
+    const btn = screen.getByRole('button', { name: 'Confirm' }) as HTMLButtonElement;
+    fireEvent.change(screen.getByLabelText(/Why you confirm/), { target: { value: 'short' } });
+    expect(btn.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText(/Why you confirm/), { target: { value: 'Checked E-3 by hand: 40 troffers' } });
+    fireEvent.click(btn);
+    await waitFor(() => expect(onReviewChange).toHaveBeenCalled());
+    expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['counting:not_run'], action: 'confirm', reason: 'Checked E-3 by hand: 40 troffers' });
+    fireEvent.change(screen.getByLabelText(/Or enter the fixture types/), { target: { value: 'A — 2x4 LED troffer\nS1: LED area light on pole' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save types' }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/preconstruction/b1/count-types', { types: [
+      { type: 'A', description: '2x4 LED troffer', location: 'interior' },
+      { type: 'S1', description: 'LED area light on pole', location: 'site' },
+    ] }));
+  });
+
+  it('B4: an area question shows both numbers as its options', async () => {
+    const review: TakeoffReview = { status: 'needs_review', items: [
+      { id: 'area:A', kind: 'area', title: 'Type A: same area or different areas?', detail: 'E-2.1 40 / E-2.2 35 — same area (keep 40) or different areas (sum 75)?', options: ['Same area — keep 40', 'Different areas — sum 75'], actions: ['answer', 'count'] },
+    ] };
+    post.mockResolvedValue({ data: { status: 'clear', items: [] } });
+    setup(review);
+    fireEvent.click(screen.getByLabelText('Different areas — sum 75'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['area:A'], action: 'answer', answer: 'Different areas — sum 75' }));
+    expect(screen.queryByRole('button', { name: 'Use confirmed markers' })).toBeNull();
+  });
+
+  it('N4: an earlier answer the drawings changed is shown for re-confirmation', () => {
+    setup({ status: 'needs_review', items: [
+      { id: 'count:G', kind: 'count', title: 'Type G', detail: 'Counted 0', previousResolution: { action: 'count', qty: 11, by: 'Jake', at: 't' } },
+    ] });
+    expect(screen.getByTestId('review-previous-count:G').textContent).toContain('11 EA — entered by Jake');
+  });
+
+  it('B5: a run in progress says the proposal is blocked', () => {
+    setup({ status: 'pending', items: [] });
+    expect(screen.getByTestId('takeoff-review-status').textContent).toBe('Analysis running — proposal blocked until it finishes');
+  });
+
+  it('S5 / S8: a legacy bid gets the non-blocking note with its questions; the matched rule and its warning show', async () => {
+    get.mockResolvedValueOnce({ data: { status: null, items: [], legacy: { message: 'Analyzed before accuracy checks — re-run analysis to enable counting and account rules.', accountRule: 'AutoZone ("AutoZone" in the brand)', questions: [{ label: 'Power poles — furnished by', question: 'Who FURNISHES the power poles?', notes: [] }] } } });
+    setup({ status: null, items: [] });
+    await waitFor(() => expect(screen.getByTestId('takeoff-review-legacy').textContent).toContain('Analyzed before accuracy checks'));
+    expect(screen.getByTestId('takeoff-review-legacy').textContent).toContain('Who FURNISHES the power poles?');
+    cleanup();
+    get.mockResolvedValueOnce({ data: { status: 'clear', items: [], accountRule: { name: 'Default', matchedBy: 'default (no account rule matched)', warning: 'The bid\'s brand "Wawa" matched no account rule' } } });
+    setup({ status: 'clear', items: [{ id: 'count:A', kind: 'count', title: 'A', detail: '', resolution: { action: 'count', qty: 3, by: 'J', at: 't' } }] });
+    await waitFor(() => expect(screen.getByTestId('takeoff-review-rule').textContent).toContain('matched no account rule'));
+  });
+
+  it('parseCountTypes', () => {
+    expect(parseCountTypes('D - LED wall pack\n\nM: 2x2 flat panel')).toEqual([
+      { type: 'D', description: 'LED wall pack', location: 'exterior_building' },
+      { type: 'M', description: '2x2 flat panel', location: 'interior' },
+    ]);
   });
 });

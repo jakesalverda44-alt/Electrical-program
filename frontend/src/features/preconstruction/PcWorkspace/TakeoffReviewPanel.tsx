@@ -11,16 +11,20 @@
 // Also shows what the counter did (sheets counted / not counted and why,
 // flags, the load cross-check, Agent 1 rows it removed) so nothing about the
 // numbers is hidden.
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import api from '../../../api/client';
 import './takeoffReview.css';
 import type { Toast } from '../../../types';
 
+export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
+
 export interface ReviewResolution {
-  action: 'count' | 'markers' | 'not_on_job' | 'answer';
+  action: ResolutionAction;
   qty?: number;
   reason?: string;
   answer?: string;
+  furnishBy?: string;
+  installBy?: string;
   by: string;
   at: string;
   carriedOver?: boolean;
@@ -28,7 +32,9 @@ export interface ReviewResolution {
 
 export interface ReviewItem {
   id: string;
-  kind: 'count' | 'scope_question';
+  /** Fix round 1: 'area' (same area or different areas?) and 'confirm'
+   *  (counts not verified / a page not counted — confirm with a reason). */
+  kind: 'count' | 'scope_question' | 'area' | 'confirm';
   title: string;
   detail: string;
   aiCount?: number;
@@ -36,12 +42,22 @@ export interface ReviewItem {
   question?: string;
   options?: string[];
   notes?: string[];
+  /** What the estimator may do on this item (from the server). */
+  actions?: ResolutionAction[];
+  /** An earlier run's answer, not carried because the drawings changed. */
+  previousResolution?: ReviewResolution;
   resolution?: ReviewResolution;
 }
 
 export interface TakeoffReview {
-  status: 'clear' | 'needs_review' | null;
+  status: 'clear' | 'needs_review' | 'pending' | null;
   items: ReviewItem[];
+}
+
+/** GET /review extras (fix round 1 / S5, S8). */
+interface ReviewExtras {
+  legacy?: { message: string; accountRule: string | null; questions: Array<{ label: string; question: string; notes: string[] }> };
+  accountRule?: { name: string; matchedBy: string; warning?: string };
 }
 
 interface CountResultLite {
@@ -67,10 +83,28 @@ function resolutionText(r: ReviewResolution): string {
   const who = `${r.by}${r.carriedOver ? ', from the previous run' : ''}`;
   switch (r.action) {
     case 'count': return `${r.qty} EA — entered by ${who}`;
-    case 'markers': return `${r.qty} EA — confirmed markers on the plans (${who})`;
+    case 'markers': return `${r.qty} EA — confirmed markers on the plans (${who})${r.reason ? `. ${r.reason}` : ''}`;
     case 'not_on_job': return `Not on this job — ${r.reason} (${who})`;
-    case 'answer': return `${r.answer} (${who})`;
+    case 'answer': return `${r.answer}${r.qty != null ? ` (${r.qty} EA)` : ''} (${who})`;
+    case 'confirm': return `Confirmed${r.qty != null ? ` — ${r.qty} EA` : ''}: ${r.reason} (${who})`;
   }
+}
+
+function actionsOf(item: ReviewItem): ResolutionAction[] {
+  if (item.actions?.length) return item.actions;
+  if (item.kind === 'scope_question') return ['answer'];
+  return item.id.endsWith(':heads') ? ['count', 'not_on_job'] : ['count', 'markers', 'not_on_job'];
+}
+
+/** "A — 2x4 LED troffer" / "S1: area light on pole, site" per line. */
+export function parseCountTypes(text: string): Array<{ type: string; description: string; location: string }> {
+  return text.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+    const m = /^([A-Za-z0-9-]{1,12})\s*[—–:-]\s*(.+)$/.exec(l);
+    const type = m ? m[1] : l.split(/\s+/)[0];
+    const description = (m ? m[2] : l.slice(type.length)).trim();
+    const location = /\b(site|pole)\b/i.test(description) ? 'site' : /\b(exterior|wall pack|canopy|soffit)\b/i.test(description) ? 'exterior_building' : 'interior';
+    return { type, description, location };
+  }).filter(t => t.type && t.description);
 }
 
 function errorOf(err: unknown, fallback: string): string {
@@ -88,7 +122,35 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
   const [busy, setBusy] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
 
-  const openCountIds = useMemo(() => open.filter(i => i.kind === 'count').map(i => i.id), [open]);
+  const [extras, setExtras] = useState<ReviewExtras>({});
+  const [typesText, setTypesText] = useState('');
+  const openCountIds = useMemo(() => open.filter(i => actionsOf(i).includes('not_on_job')).map(i => i.id), [open]);
+
+  // Fix round 1 / S5, S8 — the matched account rule, and for a bid analysed
+  // before the accuracy checks, a (non-blocking) note with its questions.
+  useEffect(() => {
+    let live = true;
+    Promise.resolve()
+      .then(() => api.get<ReviewExtras>(`/preconstruction/${bidId}/review`))
+      .then(res => { const data = res?.data; if (live && data) setExtras({ legacy: data.legacy, accountRule: data.accountRule }); })
+      .catch(() => { /* extras only */ });
+    return () => { live = false; };
+  }, [bidId, review.status]);
+
+  const saveTypes = async () => {
+    const types = parseCountTypes(typesText);
+    if (!types.length) return;
+    setBusy('types');
+    try {
+      await api.put(`/preconstruction/${bidId}/count-types`, { types });
+      showToast({ title: 'Fixture types saved', sub: 'Re-run the analysis — they are counted on the plan sheets like schedule rows.' });
+      setTypesText('');
+    } catch (err) {
+      showToast({ variant: 'error', title: 'Could not save the types', sub: errorOf(err, 'Nothing was saved') });
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const resolve = async (itemIds: string[], body: Record<string, unknown>, key: string) => {
     setBusy(key);
@@ -115,7 +177,20 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
     }
   };
 
-  if (!review.items.length && !countResult) return null;
+  if (!review.items.length && !countResult && !extras.legacy && review.status !== 'pending') return null;
+  if (extras.legacy && !review.items.length) {
+    return (
+      <section className="tr-panel" data-testid="takeoff-review" aria-label="Takeoff review">
+        <div className="tr-legacy" data-testid="takeoff-review-legacy">
+          <strong>{extras.legacy.message}</strong>
+          {extras.legacy.accountRule && <div className="tr-sub">Account rule: {extras.legacy.accountRule}</div>}
+          {extras.legacy.questions.length > 0 && (
+            <ul className="tr-notes">{extras.legacy.questions.map(q => <li key={q.label}>{q.question}</li>)}</ul>
+          )}
+        </div>
+      </section>
+    );
+  }
 
   const counted = (countResult?.sheets ?? []).filter(s => s.status === 'counted').map(s => s.label.split(' ')[0]);
   const failed = (countResult?.sheets ?? []).filter(s => s.status !== 'counted');
@@ -124,7 +199,9 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
   return (
     <section className="tr-panel" data-testid="takeoff-review" aria-label="Takeoff review">
       <header className="tr-head">
-        {review.status === 'needs_review' ? (
+        {review.status === 'pending' ? (
+          <span className="tr-chip tr-chip-warn" data-testid="takeoff-review-status">Analysis running — proposal blocked until it finishes</span>
+        ) : review.status === 'needs_review' ? (
           <span className="tr-chip tr-chip-warn" data-testid="takeoff-review-status">Needs review — {open.length} open</span>
         ) : (
           <span className="tr-chip tr-chip-ok" data-testid="takeoff-review-status">Takeoff review clear</span>
@@ -142,6 +219,12 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
         )}
       </header>
 
+      {extras.accountRule && (
+        <div className="tr-sub" data-testid="takeoff-review-rule">
+          Account rule: {extras.accountRule.name} ({extras.accountRule.matchedBy})
+          {extras.accountRule.warning && <div className="tr-warn">{extras.accountRule.warning}</div>}
+        </div>
+      )}
       {review.status === 'needs_review' && (
         <p className="tr-note">
           The proposal can’t be generated or sent until every item below is resolved. Nothing here is ever assumed.
@@ -153,7 +236,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
           {open.map(item => (
             <li key={item.id} className="tr-item" data-testid={`review-item-${item.id}`}>
               <div className="tr-item-head">
-                {item.kind === 'count' && (
+                {actionsOf(item).includes('not_on_job') && (
                   <input
                     type="checkbox"
                     aria-label={`Select ${item.title}`}
@@ -163,6 +246,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                 )}
                 <strong>{item.title}</strong>
                 {item.kind === 'scope_question' && <span className="tr-chip tr-chip-q">Scope question</span>}
+                {item.kind === 'area' && <span className="tr-chip tr-chip-q">Same area?</span>}
               </div>
               <div className="tr-detail">{item.detail}</div>
               {(item.sheets?.length ?? 0) > 0 && <div className="tr-sub">AI saw: {item.sheets!.join(' · ')}</div>}
@@ -170,49 +254,81 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                 <ul className="tr-notes">{item.notes!.map(n => <li key={n}>{n}</li>)}</ul>
               )}
 
-              {item.kind === 'count' ? (
-                <div className="tr-actions">
-                  <input
-                    type="number" min={1} step={1} inputMode="numeric"
-                    aria-label={`Count for ${item.title}`}
-                    placeholder="Count"
-                    value={qty[item.id] ?? ''}
-                    onChange={e => setQty(q => ({ ...q, [item.id]: e.target.value }))}
-                  />
-                  <button type="button" className="btn primary sm" disabled={!qty[item.id] || busy !== null}
-                    onClick={() => void resolve([item.id], { action: 'count', qty: Number(qty[item.id]) }, `count:${item.id}`)}>
-                    Save count
-                  </button>
-                  {!item.id.endsWith(':heads') && (
-                    <button type="button" className="btn ghost sm" disabled={busy !== null}
-                      onClick={() => void resolve([item.id], { action: 'markers' }, `markers:${item.id}`)}>
-                      Use confirmed markers
-                    </button>
-                  )}
-                  <input
-                    type="text"
-                    aria-label={`Why ${item.title} is not on this job`}
-                    placeholder="Why it’s not on this job"
-                    value={reason[item.id] ?? ''}
-                    onChange={e => setReason(r => ({ ...r, [item.id]: e.target.value }))}
-                  />
-                  <button type="button" className="btn ghost sm" disabled={!(reason[item.id] ?? '').trim() || busy !== null}
-                    onClick={() => void resolve([item.id], { action: 'not_on_job', reason: reason[item.id] }, `noj:${item.id}`)}>
-                    Not on this job
-                  </button>
+              {item.previousResolution && (
+                <div className="tr-sub" data-testid={`review-previous-${item.id}`}>
+                  Earlier answer (the drawings or counts changed — confirm again): {resolutionText(item.previousResolution)}
                 </div>
-              ) : (
-                <div className="tr-actions" role="radiogroup" aria-label={item.question}>
-                  {(item.options ?? []).map(o => (
-                    <label key={o} className="tr-radio">
-                      <input type="radio" name={`ans-${item.id}`} value={o} checked={answer[item.id] === o}
-                        onChange={() => setAnswer(a => ({ ...a, [item.id]: o }))} />
-                      {o}
-                    </label>
-                  ))}
-                  <button type="button" className="btn primary sm" disabled={!answer[item.id] || busy !== null}
-                    onClick={() => void resolve([item.id], { action: 'answer', answer: answer[item.id] }, `ans:${item.id}`)}>
-                    Save answer
+              )}
+              {(() => {
+                const acts = actionsOf(item);
+                return (
+                  <div className="tr-actions" {...(acts.includes('answer') ? { role: 'radiogroup', 'aria-label': item.question ?? item.title } : {})}>
+                    {acts.includes('answer') && (
+                      <>
+                        {(item.options ?? []).map(o => (
+                          <label key={o} className="tr-radio">
+                            <input type="radio" name={`ans-${item.id}`} value={o} checked={answer[item.id] === o}
+                              onChange={() => setAnswer(a => ({ ...a, [item.id]: o }))} />
+                            {o}
+                          </label>
+                        ))}
+                        <button type="button" className="btn primary sm" disabled={!answer[item.id] || busy !== null}
+                          onClick={() => void resolve([item.id], { action: 'answer', answer: answer[item.id] }, `ans:${item.id}`)}>
+                          Save answer
+                        </button>
+                      </>
+                    )}
+                    {acts.includes('count') && (
+                      <>
+                        <input
+                          type="number" min={1} step={1} inputMode="numeric"
+                          aria-label={`Count for ${item.title}`}
+                          placeholder="Count"
+                          value={qty[item.id] ?? ''}
+                          onChange={e => setQty(q => ({ ...q, [item.id]: e.target.value }))}
+                        />
+                        <button type="button" className="btn primary sm" disabled={!qty[item.id] || busy !== null}
+                          onClick={() => void resolve([item.id], { action: 'count', qty: Number(qty[item.id]) }, `count:${item.id}`)}>
+                          Save count
+                        </button>
+                      </>
+                    )}
+                    {acts.includes('markers') && (
+                      <button type="button" className="btn ghost sm" disabled={busy !== null}
+                        onClick={() => void resolve([item.id], { action: 'markers' }, `markers:${item.id}`)}>
+                        Use confirmed markers
+                      </button>
+                    )}
+                    {(acts.includes('not_on_job') || acts.includes('confirm')) && (
+                      <input
+                        type="text"
+                        aria-label={acts.includes('not_on_job') ? `Why ${item.title} is not on this job` : `Why you confirm ${item.title}`}
+                        placeholder={acts.includes('not_on_job') ? 'Reason (at least 10 characters)' : 'Why this is right (at least 10 characters)'}
+                        value={reason[item.id] ?? ''}
+                        onChange={e => setReason(r => ({ ...r, [item.id]: e.target.value }))}
+                      />
+                    )}
+                    {acts.includes('confirm') && (
+                      <button type="button" className="btn ghost sm" disabled={(reason[item.id] ?? '').trim().length < 10 || busy !== null}
+                        onClick={() => void resolve([item.id], { action: 'confirm', reason: reason[item.id] }, `confirm:${item.id}`)}>
+                        {item.kind === 'count' && item.aiCount != null ? `Confirm ${item.aiCount}` : 'Confirm'}
+                      </button>
+                    )}
+                    {acts.includes('not_on_job') && (
+                      <button type="button" className="btn ghost sm" disabled={(reason[item.id] ?? '').trim().length < 10 || busy !== null}
+                        onClick={() => void resolve([item.id], { action: 'not_on_job', reason: reason[item.id] }, `noj:${item.id}`)}>
+                        Not on this job
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
+              {item.id.startsWith('counting:') && (
+                <div className="tr-types" data-testid="count-types-entry">
+                  <label className="tr-sub" htmlFor={`types-${item.id}`}>Or enter the fixture types (one per line, e.g. “A — 2x4 LED troffer”), then re-run the analysis to count them:</label>
+                  <textarea id={`types-${item.id}`} rows={3} value={typesText} onChange={e => setTypesText(e.target.value)} />
+                  <button type="button" className="btn ghost sm" disabled={!parseCountTypes(typesText).length || busy !== null} onClick={() => void saveTypes()}>
+                    Save types
                   </button>
                 </div>
               )}
@@ -226,7 +342,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
           <span>{selected.length} selected:</span>
           <input type="text" aria-label="Why the selected types are not on this job" placeholder="Why they’re not on this job"
             value={bulkReason} onChange={e => setBulkReason(e.target.value)} />
-          <button type="button" className="btn ghost sm" disabled={!bulkReason.trim() || busy !== null}
+          <button type="button" className="btn ghost sm" disabled={bulkReason.trim().length < 10 || busy !== null}
             onClick={() => void resolve(selected.filter(id => openCountIds.includes(id)), { action: 'not_on_job', reason: bulkReason }, 'bulk')}>
             Mark selected not on this job
           </button>

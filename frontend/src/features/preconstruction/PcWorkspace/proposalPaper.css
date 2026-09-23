@@ -7,14 +7,14 @@
 .pp-hdr p { margin: 0 0 3px; }
 .pp-bold { font-weight: 700; }
 .pp-intro { font-weight: 700; margin: 14px 0 10px; }
-.pp-band { background: #1F3864; color: #ffffff; font-weight: 700; font-size: 12px; padding: 4px 8px; margin: 14px 0 6px; letter-spacing: .02em; }
+.pp-band { background: #1F3864; color: #ffffff; font-weight: 700; font-size: 12px; padding: 4px 8px; margin: 14px 0 6px; letter-spacing: .02em; text-align: center; }
 .pp-bullets { list-style: none; margin: 0; padding: 0; }
 .pp-bullets li { position: relative; padding-left: 14px; margin: 0 0 4px; }
 .pp-bullets li::before { content: '•'; position: absolute; left: 2px; top: 0; font-size: 10px; line-height: 16px; }
 .pp-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; margin-top: 4px; }
 .pp-table th { background: #1F3864; color: #ffffff; font-weight: 700; text-align: left; padding: 4px 6px; }
 .pp-table td { padding: 3px 6px; vertical-align: top; border: none; }
-.pp-table .pp-sec td { background: #DCE6F2; font-weight: 700; color: #1F3864; }
+.pp-table .pp-sec td { background: #DCE6F2; font-weight: 700; color: #000000; }
 .pp-table .pp-c { text-align: center; }
 .pp-price-h { font-weight: 700; margin: 20px 0 4px; }
 .pp-price { font-weight: 700; color: #1F3864; font-size: 13px; margin: 0 0 16px; }

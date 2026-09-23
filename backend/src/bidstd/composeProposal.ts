@@ -13,7 +13,7 @@ import { zeroQuantityProblems } from '../ai/outputHygiene';
 import { enforceAccountTerms, lightingTermsBullet, type AccountTermsSnapshot, type ResolvedTerm } from './accountRules';
 import { composeBidData, type ComposeBidRow, type SavedConfidenceItem } from './composeBidData';
 import { enforceCountsOnTakeoff, countMismatchProblems } from './enforceCounts';
-import { exclusionBulletsFor, excludedScopeProblems, nonElectricalFindings, type ScopeItem, type NonElectricalOverride } from './scopeList';
+import { exclusionBulletsFor, excludedScopeFindings, nonElectricalFindings, type ScopeItem, type NonElectricalOverride } from './scopeList';
 import { validateBidData, type BidData } from './bidData';
 
 export interface ComposeProposalInput {
@@ -75,7 +75,7 @@ export function composeProposal(input: ComposeProposalInput): ComposeProposalOut
   const lineFailures: ComposeFailure[] = [
     ...countMismatchProblems(data.takeoff, input.countResult, countSet).map(detail => ({ check: 'count_mismatch', detail })),
     ...zeroQuantityProblems(data).map(detail => ({ check: 'zero_quantity', detail })),
-    ...excludedScopeProblems(data, input.scopeItems).map(detail => ({ check: 'excluded_scope', detail })),
+    ...excludedScopeFindings(data, input.scopeItems, input.overrides).map(f => ({ check: 'excluded_scope', detail: f.detail, category: f.category, line: f.line })),
     ...nonElectricalFindings(data, input.overrides).filter(f => !f.overridden && f.block)
       .map(f => ({ check: 'non_electrical', detail: `${f.category}: "${f.line}" (${f.unit}) looks like ${f.reason}`, category: f.category, line: f.line })),
   ];

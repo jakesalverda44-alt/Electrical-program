@@ -1783,8 +1783,32 @@ router.post('/:bidId/rfi-draft', requireAuth, asyncHandler(async (req: AuthReque
 
 // ── Takeoff accuracy Task 7: the Needs-review list ─────────────────────────
 router.get('/:bidId/review', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
-  if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
-  res.json(await getTakeoffReview(req.params.bidId));
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const review = await getTakeoffReview(bidId);
+  // Fix round 1 / S5 — a bid analysed before the accuracy checks (no counting
+  // stage ever ran: review_status NULL) is NOT blocked — its existing flow
+  // keeps working — but the Takeoff step says so, and shows the questions its
+  // account rule would ask (built now from the stored analysis; nothing is
+  // written).
+  if (review.status === null) {
+    const { rows } = await pool.query('SELECT agent1_output, account_terms FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    if (rows[0]?.agent1_output) {
+      const snap = await accountTermsFor(bidId, rows[0].account_terms as AccountTermsSnapshot | null, rows[0].agent1_output as string).catch(() => null);
+      return res.json({
+        ...review,
+        legacy: {
+          message: 'Analyzed before accuracy checks — re-run analysis to enable counting and account rules.',
+          accountRule: snap ? `${snap.ruleName} (${snap.matchedBy})` : null,
+          questions: (snap?.questions ?? []).map(q => ({ label: q.label, question: q.question, notes: q.notes })),
+        },
+      });
+    }
+  }
+  // S8 — the matched account rule (and its warning) shown in the Takeoff step.
+  const { rows: tr } = await pool.query('SELECT account_terms FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const snap = (tr[0]?.account_terms as AccountTermsSnapshot | null) ?? null;
+  res.json({ ...review, ...(snap ? { accountRule: { name: snap.ruleName, matchedBy: snap.matchedBy, ...(snap.warning ? { warning: snap.warning } : {}) } } : {}) });
 }));
 
 // Resolve one or more items the same way: {itemIds, action:'count'|'markers'|
