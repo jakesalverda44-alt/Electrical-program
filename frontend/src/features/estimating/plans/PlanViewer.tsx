@@ -23,7 +23,7 @@ import api from '../../../api/client';
 import { openPdfDocument, PdfJsDocument, PdfJsRenderTask } from './pdfjsClient';
 import { PageGeometry, pdfToRenderMatrix, screenToPdf, fitScale, clampRenderScale, renderedSize } from './overlay';
 import { SheetRow } from '../types';
-import { ToolState, ToolEvent, ToolEffect } from './toolMachine';
+import { ToolState, ToolEvent } from './toolMachine';
 import { MarkupDraft } from './markupHistory';
 
 export interface PlanViewerProps {
@@ -32,7 +32,10 @@ export interface PlanViewerProps {
   pageIndex: number;
   sheet: SheetRow;
   toolState: ToolState;
-  dispatchTool: (event: ToolEvent) => ToolEffect;
+  /** The caller (PlansWorkspace) owns the state machine and interprets
+   *  its Effect internally (creating/committing a markup) — this is a
+   *  fire-and-forget dispatch, not a pure reducer call. */
+  dispatchTool: (event: ToolEvent) => void;
   markups: MarkupDraft[];
   colorForLine: (lineKey: string | null) => string;
   onSelectMarker: (id: string, additive: boolean) => void;
