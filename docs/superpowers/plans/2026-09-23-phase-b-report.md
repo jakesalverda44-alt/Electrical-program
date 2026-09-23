@@ -741,3 +741,206 @@ see below), `estimating.css` (edited).
   661 total**, 89/89 files → final **888 passed, 888 total**, 105/105
   files. Net **+227 tests, +16 files, zero failures**.
 - `npx tsc --noEmit` in `frontend/`: clean at every commit boundary.
+
+# Deferrals closed (post-review follow-up)
+
+Before review, the coordinator asked for five items to be closed rather
+than left as follow-ups. All five are done, each its own commit, on this
+worktree/branch. Solo throughout — no forks or subagents were dispatched
+for any of this (see the standing instruction after the fork-scope
+incident above).
+
+## 1. Task 9 — visible-region ("tile") rendering past the canvas-area cap
+
+Commit `e5661f7`. `PlanViewer.tsx`'s `renderScale` state is now always the
+TARGET (uncapped) scale — used everywhere for overlay/hit-testing math —
+while a separately clamped `baseScale` (`clampRenderScale(geom,
+renderScale)`) drives only the low-res placeholder `<canvas>`'s native
+pixel resolution, CSS-stretched up to the target size. A new pure module,
+`regionRender.ts` (`needsTiledRender`, `planTileRender`,
+`tilePlansRoughlyEqual`), plans a viewport-sized tile — the visible
+scroll rect plus a half-viewport settle margin, clamped to the page's own
+render-space bounds — and a second render effect paints it via pdf.js's
+`page.render({transform: [1,0,0,1,-left,-top]})` at the full target
+scale, on its own cancellation-safe render-task ref, debounced 200ms
+after scroll/pan/zoom settles (`scheduleTileUpdate`).
+
+Fixed a real bug this surfaced: `zoomBy` was still clamping the TARGET
+scale itself to the area cap (the pre-tiling behavior), which silently
+capped how far a user could ever zoom and defeated tiling entirely.
+Replaced with `MAX_TARGET_SCALE = 16` — a generous sanity ceiling
+unrelated to canvas area (the tile canvas is viewport-sized, not
+page-sized, so its own pixel budget never grows with scale).
+
+`regionRender.ts` is pure (no pdf.js/DOM) and exhaustively unit-tested,
+including rotated pages (90/180/270) against the coordinator's own
+36×48in D-size sheet example (2592×3456pt). 27 new tests across
+`regionRender.test.ts` (23) and 4 new `PlanViewer.test.tsx` cases
+(no-tile-at-normal-scale, tile-with-translate-transform-past-cap,
+stale-tile-cancellation, no-tiling-at-a-moderate-zoom-that-fits).
+
+## 2. Task 7 — suggested-markers UI
+
+Commit `b063471`. "Suggest markers for this sheet" and per-line "Suggest
+markers" (ItemsPanel) search the current sheet's PDF text layer
+(`sheetTextCache.ts`, a small independent pdf.js-text-content cache) for
+plan-tag-like tokens and drop dashed, unconfirmed markers
+(`status: 'suggested'`) at every match — never rolled up until confirmed
+(already enforced server-side by `markupMath.ts`'s rollup skip, Task 3;
+verified again here at the UI/wiring level). "Find tag on sheets…"
+searches every text-layer sheet for a user-typed tag and lists matches;
+jumping to one navigates there and suggests that tag, left unassigned.
+Clicking a suggested marker now confirms it directly ("click to
+confirm" — `PlanViewer.tsx`'s `MarkerShape`); "Confirm all on this
+sheet"/"Reject all" act on every suggested marker on the current sheet.
+A sheet with no text layer shows a persistent "No text on this sheet"
+notice in place of the suggest button, not just a silent no-op.
+
+**Tag-field trace, as asked**: Agent 1's raw analysis JSON
+(`backend/src/ai/prompts.ts`) has an `equipment[].tag` field (e.g.
+"ATS-1"), but nothing in the mapper/`composeBidData.ts` pipeline carries
+it onto `EstimateLine` — confirmed by grep, no `.tag` reference anywhere
+in that path. `quantities[].item`/`spec` (the actual source of most
+takeoff lines) have no structured tag field at all. So there is no
+structured device-tag field anywhere on a takeoff line today.
+`candidateTagsFromDescription` (`tagSuggest.ts`) instead tokenizes the
+line's own description text — itself Agent 1/2 output — and keeps short
+(2-6 char), digit-bearing tokens ("A1", "ATS1") as candidates. This is
+the best real signal the current schema has, and is deliberately
+permissive: every candidate only ever produces a confirmable suggestion,
+never an auto-applied quantity.
+
+107 new tests: `tagSuggest.ts` additions (+33 total in that file),
+`suggestedMarkerFlow.ts`'s `draftsFromTagCandidates` incl. point-based
+dedup (+8), `sheetTextCache.ts` (+5), `SuggestMarkersBar.tsx` (+11),
+`PlanViewer.tsx` click-to-confirm (+4), `ItemsPanel.tsx` per-line button
+(+4), `PlansWorkspace.tsx` end-to-end wiring incl. per-line-vs-ambiguity-
+index assignment and find-tag-then-jump (+7).
+
+## 3. Task 6 — "New line from markup" + reassign + unassigned bucket
+
+Commit `352ec03`. "New line from markup" (Toolbar, enabled with 1+
+markers selected) opens `NewLineFromMarkupModal.tsx`, which reuses
+`LaborPricingStep.tsx`'s own Phase A resolver pattern verbatim: search
+the library and pick an item/assembly (its name becomes the description
+if none was typed), or "Keep as manual line" with a material $/labor
+hours fallback. On create, `PlansWorkspace.tsx` mints a client-side UUID
+and uses it as BOTH the new line's `id` and `line_key` —
+`bidEstimate.ts`'s `resolveLineKey()` preserves a client-supplied UUID
+as-is (Task 1), so the key is known immediately, before the save even
+resolves. It PUTs the full `lines` array to persist the new line (the
+same self-contained direct-API-call shape `apply-markups` already uses,
+since `PlansWorkspace` doesn't own the shared `lines` state), then
+reassigns every selected marker to that key via the already-tested
+`reassignMarkups()`.
+
+"Reassign to line…" (same selection gating) opens
+`ReassignMarkersModal.tsx` — a search over EXISTING saved lines (only
+ones with a `line_key`), or an explicit "Unassign" option.
+
+`ItemsPanel.tsx` gains an "Unassigned markers" bucket: CONFIRMED markers
+with no `line_key`, grouped by sheet across the whole bid, each with a
+"Jump to sheet" action. Computed on the frontend from the live markup
+draft list, since the backend rollup endpoint is inherently per-line and
+never reports unassigned markups.
+
+32 new tests: `NewLineFromMarkupModal.tsx` (+9), `ReassignMarkersModal.
+tsx` (+7), `ItemsPanel.tsx` unassigned-bucket (+3), `PlansWorkspace.tsx`
+end-to-end (+5: selection gating, create-then-reassign verified via the
+next autosave batch, reassign-to-existing-line, reassign-to-unassign,
+the bucket itself appearing). Extended the mocked `PlanViewer` in
+`PlansWorkspace.test.tsx` to expose each current-sheet marker's own id
+so tests can select a real marker without guessing
+`crypto.randomUUID`'s call order.
+
+## 4. Task 8 — Review step's pre-send checklist count
+
+Commit `bce873a`. Hoisted the "N lines not verified on plans" count
+(takeoff-sourced lines whose `qty_source` isn't `'markup'`) into one
+computation in `PcWorkspaceView.tsx`, shared by `BidSummary`'s existing
+warning banner and a new line in the Review step's own pre-send
+checklist — identical count, identical wording, in both places. The
+checklist's entry is clickable ("review on plans") and jumps straight to
+the Takeoff step's Plans view, same as `BidSummary`'s own
+`onJumpToPlans`.
+
+5 new tests (`PcWorkspaceReviewChecklist.test.tsx`): count shown/plural
+vs. singular, a markup-confirmed line excluded, a manual line excluded
+regardless of `qty_source`, and the jump-to-plans click.
+
+## 5. Task 9 — real dropdown navigator at 900–1279px
+
+Commit `0fefba2`. `SheetNavigator.tsx` now has a second rendering mode
+at 900-1279px (`useIsMidViewport`, its own `matchMedia` hook) — a real
+`<select>`, not the previous CSS-only narrowing of the same full-list
+column (the documented gap: a narrow list is still a list). The
+discipline filter chips are shared between both modes; Up/Down
+navigation in the dropdown is native `<select>` behavior, so no separate
+key handler was needed there.
+
+This surfaced (and fixed) a real, pre-existing test-infrastructure gap:
+happy-dom's DEFAULT `matchMedia` resolution falls inside 900-1279px, and
+three existing `matchMedia` test mocks (`PlansWorkspace.test.tsx`,
+`PcWorkspaceTakeoffPlansToggle.test.tsx`,
+`PcWorkspaceReviewChecklist.test.tsx`) only ever parsed a query's
+`min-width`, ignoring `max-width` — so a "desktop, 1400px" mock was
+silently ALSO reporting a match for `SheetNavigator`'s new compound
+900-1279px query. All three fixed to parse both bounds; `PlansWorkspace.
+test.tsx` now defaults to a desktop `matchMedia` mock in `beforeEach` so
+every existing test keeps exercising the full list unless it explicitly
+asks for a narrower width.
+
+Also fixed a real regression, caught only because the FULL frontend
+suite was run before calling this done (not just `estimating/plans/`):
+`toastVariants.test.ts` — a source-scanning guardrail that fails on any
+toast whose "Nothing …"/"No … found" copy would render as a default
+green success without an explicit `variant`. It flagged three toasts
+deferral item 2 added (`PlansWorkspace.tsx`'s `suggestTagsOnSheet`: "No
+text on this sheet", "No tag-like text found", "No new suggestions") —
+none are failures, there was just nothing to find, so each now carries
+`variant: 'info'` explicitly, matching the codebase's own existing
+precedent for the identical situation (`PcWorkspaceView.tsx`'s "Nothing
+new to import").
+
+9 new tests (`SheetNavigator.test.tsx`): dropdown vs. full-list at the
+range's exact edges (899/900/1279/1280px), option labels/sort/marker-
+count/scanned-suffix, value-reflects-current-sheet, onChange wiring,
+discipline-filter narrowing, the empty state, and the "Select a sheet…"
+placeholder.
+
+## Final verification after all five deferrals
+
+- `npx tsc --noEmit` in `frontend/`: clean.
+- Full frontend suite (`npx vitest run`, no path filter): **1004
+  passed, 1004 total, 112/112 files** — every estimating/plans/
+  preconstruction/bid-hub test plus everything else in the app.
+- Full backend suite (`npm test`): **1074 passed, 1078 total, 114/115
+  files** — the 4 unaccounted-for tests belong to a file whose worker
+  process crashed (`tinypool`'s "Worker exited unexpectedly"), inside
+  `intakeSimilarCache.test.ts` (an existing, ~35s, resource-heavy test
+  unrelated to this work). Re-ran the file alone; it isn't touched by
+  anything in Tasks 4-9 or these deferrals, and **zero backend files
+  were modified this session** (`git status --short backend/` is empty)
+  — this is pre-existing infra flakiness, not a regression.
+- Commit range for the five deferrals: `e5661f7..0fefba2` (5 commits,
+  on top of `5050ebb`, the Tasks 4-9 report commit).
+
+## Still open (not required by the coordinator's deferral list)
+
+- Backend Task 2's HTTP Range support on the PDF stream route — see the
+  reasoning in "Deferrals summary (Tasks 4-9)" above; unchanged by this
+  round.
+- No real-file/real-browser performance measurement of the tiling
+  implementation (deferral 1) — the math and cancellation/debounce logic
+  are unit-tested exhaustively, but nobody has opened an actual 36×48in
+  PDF in a real browser and watched frame timing. Worth doing before
+  this ships to estimators, not blocking review.
+- The sheet-level "Suggest markers" ambiguity policy (deferral 2) — a
+  tag claimed by more than one line's description is left unassigned
+  rather than guessed at. This is a deliberate, documented choice
+  (`buildLineTagIndex`'s own comment), not a gap, but worth flagging as
+  a design decision a reviewer should explicitly bless.
+- `sheetTextCache.ts` (deferral 2) fetches a sheet's PDF bytes
+  independently of `PlanViewer.tsx`'s own fetch/cache — a documented,
+  accepted duplication (a second request for the same file when both are
+  active on the same sheet), not wired together in this round.
