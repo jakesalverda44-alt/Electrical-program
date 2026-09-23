@@ -415,6 +415,15 @@ export function LaborPricingStep({
                             // estimator-set so a future sync-takeoff never
                             // overwrites it, even for a takeoff-sourced line.
                             qty_overridden: true,
+                            // Fix round 1 / S7 — a hand-typed qty is no
+                            // longer plan-confirmed, even if the line was
+                            // previously Applied from a markup rollup:
+                            // composeBidData.ts's "Applied" chip and the
+                            // items panel's "not verified on plans" count
+                            // both key off qty_source==='markup', and
+                            // leaving it as 'markup' here would present a
+                            // hand-typed number as plan-confirmed.
+                            qty_source: 'manual',
                           })} />
                       </td>
                       <td>{line.unit}</td>
