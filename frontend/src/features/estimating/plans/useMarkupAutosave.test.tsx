@@ -264,6 +264,106 @@ describe('useMarkupAutosave — a 200 response with `skipped` items is treated a
   });
 });
 
+// Fix round 1 / S5 — a permanently-bad item (an out-of-range value the B8
+// popover can now actually produce) used to be RE-SENT on every single
+// debounce/retry forever — harmless to other items (they still save fine
+// alongside it) but it pinned `status` at 'error' permanently and hammered
+// the server with the same doomed request indefinitely. Quarantined by id
+// + exact rejected value, so a genuine edit or delete is still retried.
+describe('useMarkupAutosave — quarantining a repeatedly-skipped item (S5)', () => {
+  it('a skipped item is NOT resent on a later attempt triggered by an unrelated change', async () => {
+    post.mockResolvedValueOnce({ data: { created: [], updated: [], deleted: [], skipped: [{ id: 'bad', reason: 'slack_pct must be a non-negative number, 1000 or less' }] } });
+    post.mockResolvedValueOnce({ data: { created: [{ id: 'good' }], updated: [], deleted: [], skipped: [] } });
+    const onSynced = vi.fn();
+    let markups: MarkupDraft[] = [];
+    const { result, rerender } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, onSynced), { initialProps: { m: markups } });
+
+    markups = [draft('bad', { slackPct: 12000 })];
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(post).toHaveBeenCalledTimes(1);
+
+    // A second, unrelated change arms another debounce/attempt. The bad
+    // item is STILL in the diff (never synced) but must not be resent.
+    markups = [draft('bad', { slackPct: 12000 }), draft('good')];
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post).toHaveBeenLastCalledWith('/estimating/bid1/markups/batch', expect.objectContaining({
+      creates: [expect.objectContaining({ id: 'good' })], // 'bad' excluded
+    }));
+  });
+
+  it('editing the quarantined item to a DIFFERENT value retries it normally', async () => {
+    post.mockResolvedValueOnce({ data: { created: [], updated: [], deleted: [], skipped: [{ id: 'a', reason: 'slack_pct must be a non-negative number, 1000 or less' }] } });
+    post.mockResolvedValueOnce({ data: { created: [{ id: 'a' }], updated: [], deleted: [], skipped: [] } });
+    const onSynced = vi.fn();
+    let markups: MarkupDraft[] = [];
+    const { result, rerender } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, onSynced), { initialProps: { m: markups } });
+
+    markups = [draft('a', { slackPct: 12000 })];
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(post).toHaveBeenCalledTimes(1);
+
+    // The estimator fixes the value — a genuinely different payload for
+    // the SAME id must go through again, not stay quarantined.
+    markups = [draft('a', { slackPct: 50 })];
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.status).toBe('saved'));
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it('when EVERYTHING pending is quarantined, no request is sent and status stays error with a quarantine message', async () => {
+    post.mockResolvedValueOnce({ data: { created: [], updated: [], deleted: [], skipped: [{ id: 'a', reason: 'slack_pct must be a non-negative number, 1000 or less' }] } });
+    const onSynced = vi.fn();
+    let markups: MarkupDraft[] = [];
+    const { result, rerender } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, onSynced), { initialProps: { m: markups } });
+
+    markups = [draft('a', { slackPct: 12000 })];
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(post).toHaveBeenCalledTimes(1);
+
+    // retryNow() re-attempts, but the ONLY pending change is the exact
+    // same rejected value — nothing new to send.
+    await act(async () => { result.current.retryNow(); await Promise.resolve(); await Promise.resolve(); });
+    expect(post).toHaveBeenCalledTimes(1); // still 1 — no second request
+    expect(result.current.status).toBe('error');
+    expect(result.current.error).toMatch(/could not be saved and will not be retried automatically/);
+  });
+
+  it('reset() clears the quarantine, so the same value would be retried after a fresh hydration', async () => {
+    post.mockResolvedValueOnce({ data: { created: [], updated: [], deleted: [], skipped: [{ id: 'a', reason: 'slack_pct must be a non-negative number, 1000 or less' }] } });
+    post.mockResolvedValueOnce({ data: { created: [{ id: 'a' }], updated: [], deleted: [], skipped: [] } });
+    const onSynced = vi.fn();
+    let markups: MarkupDraft[] = [];
+    const { result, rerender } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, onSynced), { initialProps: { m: markups } });
+
+    markups = [draft('a', { slackPct: 12000 })];
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(post).toHaveBeenCalledTimes(1);
+
+    // A fresh hydration (e.g. re-opening Plans) installs a baseline that
+    // does NOT include the quarantined value as synced (it never was) —
+    // resetting to the SAME still-unsynced draft, then retrying, sends it
+    // again rather than staying silently stuck from a previous session.
+    // retryNow() (not another rerender — `markups` itself hasn't changed
+    // reference, so the debounce effect wouldn't re-fire) forces the
+    // attempt directly, same as the real "retry" affordance would.
+    act(() => { result.current.reset([]); });
+    await act(async () => { result.current.retryNow(); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.status).toBe('saved'));
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+});
+
 // Fix round 1 / B3(c) — F4's exact scenario: place a marker and switch
 // steps within the 800ms debounce window (never sent, 0 POSTs); or a save
 // already failed and the estimator navigates away without noticing.

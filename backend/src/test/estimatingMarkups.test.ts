@@ -196,24 +196,32 @@ describe('POST /api/estimating/:bidId/markups/batch — create/update/delete', (
     expect(listed.body.markups[0].points).toEqual([{ x: 20, y: 20 }]); // the retry's values won
   });
 
-  it('validates points (finite x/y, correct cardinality per kind) and rejects a malformed batch item with 400', async (ctx) => {
+  // Fix round 1 / S5 — a malformed item used to 400 the WHOLE batch; now
+  // it's a 200 with the bad item named in `skipped` and 0 rows written
+  // for it specifically (a separate, valid item in the same batch would
+  // still land — covered by the dedicated per-item tests below).
+  it('validates points (finite x/y, correct cardinality per kind) and skips a malformed batch item without erroring', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
     const bidId = await makeBid(app, u);
     const { docId } = await makePlanDocAndSheet(app, u, bidId);
 
-    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+    const res1 = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
       creates: [{ id: randomUUID(), document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }], // 2 points on a count markup
       updates: [], deletes: [],
-    }).expect(400);
+    }).expect(200);
+    expect(res1.body.created).toEqual([]);
+    expect(res1.body.skipped.length).toBe(1);
 
-    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+    const res2 = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
       // "abc" over the wire (NaN itself isn't valid JSON — JSON.stringify
       // would silently turn it into null, which is finite as a number).
       creates: [{ id: randomUUID(), document_id: docId, page_index: 0, kind: 'linear', points: [{ x: 'abc', y: 1 }, { x: 2, y: 2 }] }],
       updates: [], deletes: [],
-    }).expect(400);
+    }).expect(200);
+    expect(res2.body.created).toEqual([]);
+    expect(res2.body.skipped.length).toBe(1);
 
     // 0 confirmed rows written after either rejected batch.
     const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM est_markups WHERE bid_id=$1', [bidId]);
@@ -225,22 +233,37 @@ describe('POST /api/estimating/:bidId/markups/batch — create/update/delete', (
   // UUID. Before the fix this was silently coerced to null (unassigned) —
   // the client never learned, the marker just looked assigned forever
   // while the server quietly dropped it.
-  it('a present-but-malformed line_key (e.g. a "proposed-N" placeholder) is a 400, never silently coerced to null', async (ctx) => {
+  // Fix round 1 / S5 — a bad line_key on ONE item used to 400 the WHOLE
+  // batch, which meant one poisoned item (a stray "proposed-N" from a
+  // never-saved estimate still in a stale client diff) could block every
+  // OTHER, perfectly valid item in the same autosave forever. Now it's a
+  // 200 with the bad item named in `skipped`, and everything else still
+  // lands.
+  it('a present-but-malformed line_key (e.g. a "proposed-N" placeholder) is skipped (not silently coerced to null), without blocking the rest of the batch', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
     const bidId = await makeBid(app, u);
     const { docId } = await makePlanDocAndSheet(app, u, bidId);
-    const id = randomUUID();
+    const badId = randomUUID();
+    const goodId = randomUUID();
 
-    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
-      creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }], line_key: 'proposed-0' }],
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [
+        { id: badId, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }], line_key: 'proposed-0' },
+        { id: goodId, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 2, y: 2 }] },
+      ],
       updates: [], deletes: [],
-    }).expect(400);
+    }).expect(200);
+    expect(res.body.created.map((c: { id: string }) => c.id)).toEqual([goodId]);
+    expect(res.body.skipped.some((s: { id: string }) => s.id === badId)).toBe(true);
 
-    // Nothing was written — not even as unassigned.
-    const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM est_markups WHERE id=$1', [id]);
-    expect(rows[0].cnt).toBe(0);
+    // The bad one was never written — not even as unassigned. The good
+    // one, in the SAME batch, was.
+    const { rows: bad } = await pool.query('SELECT COUNT(*)::int AS cnt FROM est_markups WHERE id=$1', [badId]);
+    expect(bad[0].cnt).toBe(0);
+    const { rows: good } = await pool.query('SELECT COUNT(*)::int AS cnt FROM est_markups WHERE id=$1', [goodId]);
+    expect(good[0].cnt).toBe(1);
   });
 
   it('line_key absent or explicitly null is still valid (unassigned is a real, intentional state)', async (ctx) => {
@@ -266,7 +289,7 @@ describe('POST /api/estimating/:bidId/markups/batch — create/update/delete', (
   // Fix round 1 / B2 — a WELL-FORMED UUID that simply doesn't belong to
   // this bid's own est_bid_lines (a stale client cache, or literally
   // another bid's line_key) must also be rejected, not silently written.
-  it('a well-formed line_key UUID that does not belong to THIS bid\'s lines is a 400', async (ctx) => {
+  it('a well-formed line_key UUID that does not belong to THIS bid\'s lines is skipped, not written', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
@@ -275,10 +298,12 @@ describe('POST /api/estimating/:bidId/markups/batch — create/update/delete', (
     const id = randomUUID();
     const foreignLineKey = randomUUID(); // well-formed, but no est_bid_lines row anywhere has this key
 
-    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
       creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }], line_key: foreignLineKey }],
       updates: [], deletes: [],
-    }).expect(400);
+    }).expect(200);
+    expect(res.body.created).toEqual([]);
+    expect(res.body.skipped[0]).toMatchObject({ id, reason: expect.stringContaining(foreignLineKey) });
 
     const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM est_markups WHERE id=$1', [id]);
     expect(rows[0].cnt).toBe(0);
@@ -306,7 +331,7 @@ describe('POST /api/estimating/:bidId/markups/batch — create/update/delete', (
     expect(res.body.created[0].lineKey).toBe(lineKey);
   });
 
-  it('an UPDATE that reassigns to a malformed/foreign line_key is rejected the same way as a create', async (ctx) => {
+  it('an UPDATE that reassigns to a malformed/foreign line_key is skipped the same way as a create', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
@@ -318,13 +343,136 @@ describe('POST /api/estimating/:bidId/markups/batch — create/update/delete', (
       updates: [], deletes: [],
     }).expect(200);
 
-    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
       creates: [], updates: [{ id, line_key: 'proposed-0' }], deletes: [],
-    }).expect(400);
+    }).expect(200);
+    expect(res.body.updated).toEqual([]);
+    expect(res.body.skipped[0].id).toBe(id);
 
     // Still unassigned — the bad update never applied.
     const { rows } = await pool.query('SELECT line_key FROM est_markups WHERE id=$1', [id]);
     expect(rows[0].line_key).toBeNull();
+  });
+
+  // Fix round 1 / S5 — document_id is checked against this bid now, same
+  // as line_key: a count/linear markup used to be able to reference
+  // ANOTHER bid's document id and still roll up (getRollup never
+  // cross-checked it).
+  it('a create referencing a document_id that does not belong to this bid is skipped, not written', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const otherBidId = await makeBid(app, u);
+    const { docId: otherBidDocId } = await makePlanDocAndSheet(app, u, otherBidId);
+    const id = randomUUID();
+
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: otherBidDocId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }] }],
+      updates: [], deletes: [],
+    }).expect(200);
+    expect(res.body.created).toEqual([]);
+    expect(res.body.skipped[0]).toMatchObject({ id, reason: expect.stringContaining(otherBidDocId) });
+
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM est_markups WHERE id=$1', [id]);
+    expect(rows[0].cnt).toBe(0);
+  });
+
+  // Fix round 1 / S5 — an {x: null, y: null} point used to be stored as
+  // (0, 0) (Number(null) === 0, and 0 is finite); now it's rejected.
+  it('a point with null/non-numeric x or y is skipped, not stored as (0, 0)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    const id = randomUUID();
+
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: null, y: null }] }],
+      updates: [], deletes: [],
+    }).expect(200);
+    expect(res.body.created).toEqual([]);
+    expect(res.body.skipped[0].id).toBe(id);
+
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM est_markups WHERE id=$1', [id]);
+    expect(rows[0].cnt).toBe(0);
+  });
+
+  // Fix round 1 / S5 — drops is an INTEGER column; a fractional value
+  // used to pass validation (Number.isFinite(1.5) is true) and hit the
+  // DB as a type error (500 for the whole batch).
+  it('a fractional drops value is skipped, not a 500 for the whole batch', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    const badId = randomUUID();
+    const goodId = randomUUID();
+
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [
+        { id: badId, document_id: docId, page_index: 0, kind: 'linear', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], drops: 1.5 },
+        { id: goodId, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }] },
+      ],
+      updates: [], deletes: [],
+    }).expect(200);
+    expect(res.body.created.map((c: { id: string }) => c.id)).toEqual([goodId]);
+    expect(res.body.skipped[0].id).toBe(badId);
+  });
+
+  // Fix round 1 / S5 — slack_pct is NUMERIC(6,2); an out-of-range value
+  // used to overflow the column at write time (a Postgres error -> 500
+  // for the whole batch).
+  it('an out-of-range slack_pct is skipped, not a numeric overflow 500', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    const id = randomUUID();
+
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: docId, page_index: 0, kind: 'linear', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], slack_pct: 12000 }],
+      updates: [], deletes: [],
+    }).expect(200);
+    expect(res.body.created).toEqual([]);
+    expect(res.body.skipped[0].id).toBe(id);
+  });
+
+  // Fix round 1 / S5 — a non-UUID id in `deletes` used to reach the DB
+  // layer as a raw string against a `uuid` column (a Postgres type
+  // error -> 500 for the whole batch). It's filtered out silently now —
+  // deleting a nonsense id is inherently a no-op, nothing to report.
+  it('a non-UUID id in deletes is filtered out silently, without erroring the batch', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [], updates: [], deletes: ['not-a-uuid'],
+    }).expect(200);
+    expect(res.body.deleted).toEqual([]);
+    expect(res.body.skipped).toEqual([]);
+  });
+
+  // Fix round 1 / S5 — a non-UUID id in `updates` used to reach the DB
+  // layer the same way (a Postgres type error -> 500 for the whole
+  // batch). Unlike deletes, an update NAMES a real intended target, so
+  // it's reported back as skipped rather than silently dropped.
+  it('a non-UUID id in updates is skipped and reported, not a 500', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [], updates: [{ id: 'not-a-uuid', drops: 1 }], deletes: [],
+    }).expect(200);
+    expect(res.body.updated).toEqual([]);
+    expect(res.body.skipped[0].id).toBe('not-a-uuid');
   });
 });
 

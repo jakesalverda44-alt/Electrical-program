@@ -90,14 +90,59 @@ export function useMarkupAutosave(
   // was requested while already saving).
   const rerunRequestedRef = useRef(false);
 
+  // Fix round 1 / S5 — "when a 4xx names an item, drop or quarantine that
+  // item instead of retrying the whole diff" (generalized here to "a 200
+  // that names an item in `skipped`", since the batch route itself now
+  // reports per-item rejections in a 200 rather than 4xx-ing the whole
+  // request — see routes/estimating.ts's own S5 fix). Before this, a
+  // permanently-bad item (an out-of-range value the B8 popover can now
+  // actually produce) got RE-SENT on every single debounce/retry forever
+  // — harmless to other items (S5's backend fix means they still save
+  // fine alongside it), but it pinned `status` at 'error' permanently and
+  // hammered the server with the same doomed request indefinitely. Keyed
+  // by id -> the exact JSON of what was rejected (creates/updates) or the
+  // sentinel 'delete'; if the user later changes that SAME item (edits
+  // its value, or it's no longer in the diff at all — deleted, or
+  // resynced some other way), the entry no longer matches and it's
+  // retried normally. Only a byte-for-byte repeat of an already-rejected
+  // value is suppressed.
+  const quarantineRef = useRef<Map<string, string>>(new Map());
+
   const attempt = useCallback(async () => {
     if (inFlightRef.current) {
       rerunRequestedRef.current = true;
       return;
     }
-    const batch = diffMarkups(syncedRef.current, markupsRef.current);
+    const rawBatch = diffMarkups(syncedRef.current, markupsRef.current);
+
+    // Drop anything quarantined at the EXACT value that was rejected;
+    // anything else in the diff (including a quarantined id whose value
+    // has since changed) goes through normally. Also garbage-collects any
+    // quarantine entry for an id no longer in the diff at all — it's
+    // either synced now or gone, nothing left to suppress.
+    const liveIds = new Set([...rawBatch.creates, ...rawBatch.updates].map(m => m.id).concat(rawBatch.deletes));
+    for (const id of quarantineRef.current.keys()) {
+      if (!liveIds.has(id)) quarantineRef.current.delete(id);
+    }
+    const isQuarantined = (id: string, valueKey: string) => quarantineRef.current.get(id) === valueKey;
+    const batch = {
+      creates: rawBatch.creates.filter(m => !isQuarantined(m.id, JSON.stringify(m))),
+      updates: rawBatch.updates.filter(m => !isQuarantined(m.id, JSON.stringify(m))),
+      deletes: rawBatch.deletes.filter(id => !isQuarantined(id, 'delete')),
+    };
+
     if (isEmptyBatch(batch)) {
-      if (aliveRef.current) setStatus('saved');
+      if (aliveRef.current) {
+        if (quarantineRef.current.size > 0) {
+          // Nothing NEW to send, but something is still stuck — keep
+          // showing an error rather than a false "Saved" while a
+          // quarantined marker sits unresolved.
+          setStatus('error');
+          setError(`${quarantineRef.current.size} marker${quarantineRef.current.size === 1 ? '' : 's'} could not be saved and will not be retried automatically — edit or delete ${quarantineRef.current.size === 1 ? 'it' : 'them'} to try again.`);
+        } else {
+          setStatus('saved');
+        }
+      }
       return;
     }
 
@@ -109,6 +154,14 @@ export function useMarkupAutosave(
         updates: batch.updates.map(toWireMarkup),
         deletes: batch.deletes,
       });
+      // Quarantine every item the server just named in `skipped`, keyed
+      // to the exact value that was sent — see quarantineRef's own
+      // comment above.
+      for (const s of data.skipped) {
+        const createOrUpdate = [...batch.creates, ...batch.updates].find(m => m.id === s.id);
+        if (createOrUpdate) quarantineRef.current.set(s.id, JSON.stringify(createOrUpdate));
+        else if (batch.deletes.includes(s.id)) quarantineRef.current.set(s.id, 'delete');
+      }
       // Fix round 1 / B3(a) — a 200 response can still carry per-item
       // `skipped` entries the server did NOT apply (e.g. re-upserting an
       // id that turned out to collide with a different bid, or an
@@ -210,6 +263,7 @@ export function useMarkupAutosave(
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
     syncedRef.current = baseline;
     initializedRef.current = true;
+    quarantineRef.current.clear(); // Fix round 1 / S5 — a fresh baseline discards any stale quarantine.
     if (aliveRef.current) { setStatus('idle'); setError(null); }
   }, []);
 

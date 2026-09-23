@@ -16,7 +16,7 @@ import {
 import { normalizeUnit, MapConfidence } from '../estimating/mapper';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
 import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
-import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, setHalfSize } from '../estimating/sheets';
+import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, setHalfSize, getPlanPdfDocuments } from '../estimating/sheets';
 // Fix round 1 / S4 — reuse the exact same Content-Type/Content-Disposition/
 // nosniff lockdown routes/documents.ts already applies (audit Security #6),
 // instead of the plan-file route rolling its own (looser) header logic.
@@ -47,6 +47,18 @@ const ALLOWED_MATCH_CONFIDENCE: MapConfidence[] = ['exact', 'alias', 'fuzzy', 'n
 const ALLOWED_MATCH_SOURCE = ['auto', 'manual'] as const;
 const ALLOWED_QTY_SOURCE = ['takeoff', 'manual', 'markup'] as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Fix round 1 / S5 — est_markups.drops is INTEGER, drop_ft is
+// NUMERIC(10,2), slack_pct is NUMERIC(6,2) (migration 108). The DB's own
+// CHECK constraints only enforce >= 0; a value that overflows the
+// column's precision (slack_pct: 12000) throws a Postgres "numeric field
+// overflow" error that was reaching the client as an unhandled 500 for
+// the WHOLE batch. These caps are generous (well past anything a real
+// run would ever need) and just keep a bad value inside the column's own
+// range, turning a 500 into a clean per-item rejection.
+const MAX_DROPS = 1000;
+const MAX_DROP_FT = 10000;
+const MAX_SLACK_PCT = 1000;
 
 // ── Validation ───────────────────────────────────────────────────────────────
 
@@ -189,9 +201,17 @@ function validatePoints(raw: unknown, kind?: MarkupKind): ValidationResult<Marku
   if (!Array.isArray(raw) || raw.length === 0) return { ok: false, error: 'points must be a non-empty array' };
   const points: MarkupPoint[] = [];
   for (const p of raw as Record<string, unknown>[]) {
-    const x = Number(p?.x);
-    const y = Number(p?.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return { ok: false, error: 'every point needs finite x/y' };
+    // Fix round 1 / S5 — `Number(p?.x)` turned `{x: null, y: null}` into
+    // a "valid" (0, 0) point (Number(null) === 0, and 0 is finite): a
+    // NaN/null/missing coordinate from the client silently became a real
+    // point at the page origin instead of being rejected, adding a
+    // spurious segment (and hundreds of LF on a long run) to the rollup.
+    // typeof must be 'number' before Number.isFinite is even checked.
+    const x = p?.x;
+    const y = p?.y;
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
+      return { ok: false, error: 'every point needs finite numeric x/y' };
+    }
     points.push({ x, y });
   }
   if (kind === 'count' && points.length !== 1) return { ok: false, error: 'a count markup must have exactly one point' };
@@ -229,17 +249,29 @@ function validateMarkupCreate(raw: Record<string, unknown>): ValidationResult<Ma
   let drops = 0;
   if (raw.drops != null) {
     drops = Number(raw.drops);
-    if (!Number.isFinite(drops) || drops < 0) return { ok: false, error: 'drops must be a non-negative number' };
+    // Fix round 1 / S5 — est_markups.drops is INTEGER; drops: 1.5 used to
+    // pass Number.isFinite and reach the DB as a fractional value the
+    // column can't actually hold (a Postgres type error -> 500 for the
+    // whole batch).
+    if (!Number.isInteger(drops) || drops < 0 || drops > MAX_DROPS) {
+      return { ok: false, error: `drops must be a non-negative integer, ${MAX_DROPS} or less` };
+    }
   }
   let dropFt: number | null = null;
   if (raw.drop_ft != null) {
     dropFt = Number(raw.drop_ft);
-    if (!Number.isFinite(dropFt) || dropFt < 0) return { ok: false, error: 'drop_ft must be a non-negative number' };
+    if (!Number.isFinite(dropFt) || dropFt < 0 || dropFt > MAX_DROP_FT) {
+      return { ok: false, error: `drop_ft must be a non-negative number, ${MAX_DROP_FT} or less` };
+    }
   }
   let slackPct: number | null = null;
   if (raw.slack_pct != null) {
     slackPct = Number(raw.slack_pct);
-    if (!Number.isFinite(slackPct) || slackPct < 0) return { ok: false, error: 'slack_pct must be a non-negative number' };
+    // Fix round 1 / S5 — slack_pct is NUMERIC(6,2) (max 9999.99); an
+    // unbounded value (12000) overflowed the column at write time.
+    if (!Number.isFinite(slackPct) || slackPct < 0 || slackPct > MAX_SLACK_PCT) {
+      return { ok: false, error: `slack_pct must be a non-negative number, ${MAX_SLACK_PCT} or less` };
+    }
   }
   let status: MarkupStatus = 'confirmed';
   if (raw.status != null) {
@@ -254,8 +286,12 @@ function validateMarkupCreate(raw: Record<string, unknown>): ValidationResult<Ma
 }
 
 function validateMarkupUpdate(raw: Record<string, unknown>): ValidationResult<MarkupUpdateInput> {
-  const id = typeof raw.id === 'string' ? raw.id : '';
-  if (!id) return { ok: false, error: 'id is required' };
+  // Fix round 1 / S5 — a non-UUID id here used to reach the DB layer as a
+  // raw string parameter against a `uuid` column, which Postgres rejects
+  // with "invalid input syntax for type uuid" — an unhandled 500 for the
+  // whole batch, for what's really just one malformed item.
+  const id = typeof raw.id === 'string' && UUID_RE.test(raw.id) ? raw.id : '';
+  if (!id) return { ok: false, error: 'id must be a well-formed UUID' };
   const out: MarkupUpdateInput = { id };
 
   if (raw.line_key !== undefined) {
@@ -270,14 +306,18 @@ function validateMarkupUpdate(raw: Record<string, unknown>): ValidationResult<Ma
   }
   if (raw.drops !== undefined) {
     const v = Number(raw.drops);
-    if (!Number.isFinite(v) || v < 0) return { ok: false, error: 'drops must be a non-negative number' };
+    if (!Number.isInteger(v) || v < 0 || v > MAX_DROPS) {
+      return { ok: false, error: `drops must be a non-negative integer, ${MAX_DROPS} or less` };
+    }
     out.drops = v;
   }
   if (raw.drop_ft !== undefined) {
     if (raw.drop_ft === null) out.dropFt = null;
     else {
       const v = Number(raw.drop_ft);
-      if (!Number.isFinite(v) || v < 0) return { ok: false, error: 'drop_ft must be a non-negative number' };
+      if (!Number.isFinite(v) || v < 0 || v > MAX_DROP_FT) {
+        return { ok: false, error: `drop_ft must be a non-negative number, ${MAX_DROP_FT} or less` };
+      }
       out.dropFt = v;
     }
   }
@@ -285,7 +325,9 @@ function validateMarkupUpdate(raw: Record<string, unknown>): ValidationResult<Ma
     if (raw.slack_pct === null) out.slackPct = null;
     else {
       const v = Number(raw.slack_pct);
-      if (!Number.isFinite(v) || v < 0) return { ok: false, error: 'slack_pct must be a non-negative number' };
+      if (!Number.isFinite(v) || v < 0 || v > MAX_SLACK_PCT) {
+        return { ok: false, error: `slack_pct must be a non-negative number, ${MAX_SLACK_PCT} or less` };
+      }
       out.slackPct = v;
     }
   }
@@ -298,22 +340,39 @@ function validateMarkupUpdate(raw: Record<string, unknown>): ValidationResult<Ma
   return { ok: true, value: out };
 }
 
-function validateMarkupBatch(body: unknown): ValidationResult<{ creates: MarkupCreateInput[]; updates: MarkupUpdateInput[]; deletes: string[] }> {
+/** Fix round 1 / S5 — this used to be a `ValidationResult` that returned
+ *  the FIRST format error for the whole request: one malformed item (a
+ *  fractional `drops`, a stray non-UUID `id` in `updates`) 400'd or
+ *  500'd the ENTIRE batch, including every other, perfectly valid item
+ *  in it. Since autosave resends the whole outstanding diff until it
+ *  succeeds (useMarkupAutosave.ts), one poisoned item blocked every
+ *  later save forever. Now every item is validated independently: a bad
+ *  one is set aside in `rejected` (surfaced back to the client through
+ *  the SAME `skipped` shape batchMarkups already returns for a DB-level
+ *  skip, e.g. "already belongs to a different bid" — one uniform shape
+ *  for "this item didn't make it, and here's why"), and every other item
+ *  in the request still goes through. `deletes` doesn't get a `rejected`
+ *  entry for a non-UUID id — deleting a nonsense id is inherently a
+ *  no-op (nothing in the DB could ever match it), so it's just filtered
+ *  out silently rather than reported as a failure. */
+function validateMarkupBatch(body: unknown): { creates: MarkupCreateInput[]; updates: MarkupUpdateInput[]; deletes: string[]; rejected: { id: string | null; reason: string }[] } {
   const b = (body ?? {}) as Record<string, unknown>;
+  const rejected: { id: string | null; reason: string }[] = [];
+
   const creates: MarkupCreateInput[] = [];
   for (const raw of (Array.isArray(b.creates) ? b.creates : []) as Record<string, unknown>[]) {
     const v = validateMarkupCreate(raw);
-    if (!v.ok) return v;
+    if (!v.ok) { rejected.push({ id: typeof raw?.id === 'string' ? raw.id : null, reason: v.error }); continue; }
     creates.push(v.value);
   }
   const updates: MarkupUpdateInput[] = [];
   for (const raw of (Array.isArray(b.updates) ? b.updates : []) as Record<string, unknown>[]) {
     const v = validateMarkupUpdate(raw);
-    if (!v.ok) return v;
+    if (!v.ok) { rejected.push({ id: typeof raw?.id === 'string' ? raw.id : null, reason: v.error }); continue; }
     updates.push(v.value);
   }
-  const deletes = (Array.isArray(b.deletes) ? b.deletes : []).filter((x): x is string => typeof x === 'string');
-  return { ok: true, value: { creates, updates, deletes } };
+  const deletes = (Array.isArray(b.deletes) ? b.deletes : []).filter((x): x is string => typeof x === 'string' && UUID_RE.test(x));
+  return { creates, updates, deletes, rejected };
 }
 
 function validateItemInput(body: Record<string, unknown>): ValidationResult<ItemInput> {
@@ -702,32 +761,59 @@ router.post('/:bidId/markups/batch', requireAuth, async (req: AuthRequest, res) 
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const v = validateMarkupBatch(req.body);
-  if (!v.ok) return res.status(400).json({ error: v.error });
+  const rejected = [...v.rejected];
 
-  // Fix round 1 / B2 — a line_key that's well-formed but does not belong
-  // to THIS bid's own est_bid_lines is now a 400, not a silent write. The
-  // most common real-world source is a "proposed-N" placeholder that
-  // already failed the UUID format check above, but a well-formed UUID
-  // from a stale client cache (a line deleted, or from a different bid
-  // entirely) needs the same rejection — it would otherwise write a
-  // markup that never rolls up to anything and is invisible everywhere
-  // except the sheet itself (see S6's unassigned-orphan handling for the
-  // symptom once a line legitimately disappears AFTER a markup was
-  // already pointed at it).
-  const referencedKeys = [...v.value.creates, ...v.value.updates]
-    .map(item => item.lineKey)
-    .filter((k): k is string => k != null);
-  if (referencedKeys.length > 0) {
-    const bidLines = await getBidLines(bidId);
-    const validKeys = new Set(bidLines.map(l => l.line_key));
-    const unknown = [...new Set(referencedKeys)].filter(k => !validKeys.has(k));
-    if (unknown.length > 0) {
-      return res.status(400).json({ error: `line_key does not belong to this bid: ${unknown.join(', ')}` });
+  // Fix round 1 / B2 + S5 — a line_key that's well-formed but does not
+  // belong to THIS bid's own est_bid_lines is rejected, same as before,
+  // but now PER-ITEM (S5's fix) instead of 400ing the entire batch over
+  // one bad reference — a well-formed UUID from a stale client cache (a
+  // line deleted, or from a different bid entirely) no longer blocks
+  // every OTHER item in the same save.
+  const bidLines = await getBidLines(bidId);
+  const validLineKeys = new Set(bidLines.map(l => l.line_key));
+  const creates = v.creates.filter(c => {
+    if (c.lineKey != null && !validLineKeys.has(c.lineKey)) {
+      rejected.push({ id: c.id, reason: `line_key does not belong to this bid: ${c.lineKey}` });
+      return false;
     }
-  }
+    return true;
+  });
+  const updates = v.updates.filter(u => {
+    if (u.lineKey != null && !validLineKeys.has(u.lineKey)) {
+      rejected.push({ id: u.id, reason: `line_key does not belong to this bid: ${u.lineKey}` });
+      return false;
+    }
+    return true;
+  });
 
-  const result = await batchMarkups(bidId, req.user!.name ?? null, v.value);
-  res.json(result);
+  // Fix round 1 / S5 — document_id was never checked against this bid at
+  // all: a count/linear markup could reference ANOTHER bid's document id
+  // and still roll up on this one (getRollup joins on bid_id + line_key,
+  // never cross-checks document_id). Only `creates` carry a document_id —
+  // it's immutable after creation, so updates never send one. Checked
+  // against every plans-category PDF LINKED to this bid (not just the
+  // ones already indexed into est_sheets — B9's background indexing
+  // means a just-uploaded document can be a legitimate target before its
+  // own est_sheets rows exist yet).
+  const planDocs = await getPlanPdfDocuments(bidId);
+  const validDocumentIds = new Set(planDocs.map(d => d.id));
+  const scopedCreates = creates.filter(c => {
+    if (!validDocumentIds.has(c.documentId)) {
+      rejected.push({ id: c.id, reason: `document_id does not belong to this bid: ${c.documentId}` });
+      return false;
+    }
+    return true;
+  });
+
+  const result = await batchMarkups(bidId, req.user!.name ?? null, { creates: scopedCreates, updates, deletes: v.deletes });
+  // One uniform shape for "this item didn't make it, and here's why" —
+  // format/scope rejections (computed above, never reach the DB) and
+  // batchMarkups' own DB-level skips (an id already claimed by another
+  // bid, not found, etc.) both surface through the same `skipped` array
+  // the client already knows how to read (useMarkupAutosave.ts's B3(a)
+  // handling: any skipped item flips autosave to an explicit error
+  // state rather than a silent 'saved').
+  res.json({ ...result, skipped: [...rejected, ...result.skipped] });
 });
 
 router.get('/:bidId/markups/rollup', requireAuth, async (req: AuthRequest, res) => {
