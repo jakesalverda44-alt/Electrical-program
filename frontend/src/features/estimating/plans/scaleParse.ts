@@ -82,3 +82,21 @@ export function parseScaleLabel(raw: string | null | undefined): ParsedScale | n
 export function ftPerPtFromLabel(label: string): number | null {
   return parseScaleLabel(label)?.ftPerPt ?? null;
 }
+
+// Fix round 2 / R2-B2 — the ONE function every consumer of a title-block
+// SUGGESTION goes through: the ScaleCalibrationPopover's "Use <label>"
+// button, PlansWorkspace.tsx's standalone banner Confirm, and the
+// popover's own 2% disagreement check. est_sheets.suggested_ft_per_pt is
+// always stored RAW (the parser's own reading of the title-block text,
+// never pre-multiplied by half_size — see sheets.ts's own setHalfSize,
+// which no longer touches it at all) precisely so there's one place, not
+// three independently-drifting ones, that applies the ×2 for a half-size
+// print. A two-point CALIBRATION never goes through this at all — it
+// measures the actual sheet as printed, so whatever the estimator
+// measured IS the real answer regardless of half_size (see sheets.ts's
+// own setHalfSize, which only ever scales a scale_source='titleblock'
+// row's ft_per_pt, never a 'calibrated' one).
+export function effectiveTitleBlockFtPerPt(rawFtPerPt: number | null, halfSize: boolean): number | null {
+  if (rawFtPerPt == null) return null;
+  return halfSize ? rawFtPerPt * 2 : rawFtPerPt;
+}

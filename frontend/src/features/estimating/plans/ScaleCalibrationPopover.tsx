@@ -5,7 +5,7 @@
 // PUT .../sheets/:documentId/:pageIndex/scale call is the caller's job.
 import React, { useState } from 'react';
 import { parseFeetInches } from './ftInParse';
-import { ftPerPtFromLabel } from './scaleParse';
+import { effectiveTitleBlockFtPerPt } from './scaleParse';
 import { PdfPoint } from './toolMachine';
 
 function distancePt(a: PdfPoint, b: PdfPoint): number {
@@ -14,15 +14,33 @@ function distancePt(a: PdfPoint, b: PdfPoint): number {
 
 export interface ScaleCalibrationPopoverProps {
   points: [PdfPoint, PdfPoint];
-  /** Fix round 1 / B7 — the title-block-parsed SUGGESTION
+  /** Fix round 1 / B7 — the title-block-parsed SUGGESTION label
    *  (est_sheets.suggested_label), independent of whether the sheet has
    *  already been confirmed/calibrated — offered here as an alternate
    *  one-click "Use X" path whenever the estimator happens to be
    *  mid-calibration, on top of the standalone confirm banner
    *  PlansWorkspace.tsx renders without requiring any line-drawing at
    *  all. null when nothing was found, or the sheet has more than one
-   *  distinct scale value (scale_ambiguous). */
+   *  distinct scale value (scale_ambiguous). Display text only now —
+   *  see rawSuggestedFtPerPt below for the number this popover actually
+   *  computes with. */
   titleBlockLabel: string | null;
+  /** Fix round 2 / R2-B2 — est_sheets.suggested_ft_per_pt, the RAW
+   *  title-block parse (never pre-multiplied by half_size — see
+   *  sheets.ts's own setHalfSize). This popover used to independently
+   *  RE-PARSE `titleBlockLabel`'s own text via ftPerPtFromLabel, with no
+   *  half_size awareness at all — on a half-size document, that
+   *  committed HALF the correct scale while the standalone banner
+   *  (reading the same raw value a different way) committed the
+   *  correct one, "two buttons with the same label disagree." Passing
+   *  the raw NUMBER directly (the same one the banner reads from
+   *  currentSheet.suggested_ft_per_pt) and running it through the SAME
+   *  effectiveTitleBlockFtPerPt this popover, the banner, and setHalfSize
+   *  all now share closes that gap — one source of truth, not two. */
+  rawSuggestedFtPerPt: number | null;
+  /** Fix round 2 / R2-B2 — est_sheets.half_size, needed to compute the
+   *  effective (as-printed) scale from the raw parse above. */
+  halfSize: boolean;
   onCommit: (ftPerPt: number, label: string) => void;
   onCancel: () => void;
 }
@@ -56,7 +74,7 @@ const MIN_CALIBRATION_DISTANCE_PT = 50;
 const MIN_SANE_FT_PER_PT = 0.01;
 const MAX_SANE_FT_PER_PT = 5;
 
-export default function ScaleCalibrationPopover({ points, titleBlockLabel, onCommit, onCancel }: ScaleCalibrationPopoverProps) {
+export default function ScaleCalibrationPopover({ points, titleBlockLabel, rawSuggestedFtPerPt, halfSize, onCommit, onCancel }: ScaleCalibrationPopoverProps) {
   const [input, setInput] = useState('');
   const dPt = distancePt(points[0], points[1]);
   const parsedFeet = parseFeetInches(input);
@@ -64,7 +82,10 @@ export default function ScaleCalibrationPopover({ points, titleBlockLabel, onCom
   const canCommit = parsedFeet != null && dPt >= MIN_CALIBRATION_DISTANCE_PT;
 
   const typedFtPerPt = parsedFeet != null && dPt > 0 ? parsedFeet / dPt : null;
-  const suggestedFtPerPt = titleBlockLabel ? ftPerPtFromLabel(titleBlockLabel) : null;
+  // Fix round 2 / R2-B2 — the shared function, not a second, independent
+  // re-parse of the label text (see the props doc above for why that
+  // used to disagree with the banner on a half-size document).
+  const suggestedFtPerPt = effectiveTitleBlockFtPerPt(rawSuggestedFtPerPt, halfSize);
   const disagreementPct = typedFtPerPt != null && suggestedFtPerPt != null && suggestedFtPerPt > 0
     ? Math.abs(typedFtPerPt - suggestedFtPerPt) / suggestedFtPerPt * 100
     : null;
@@ -77,10 +98,8 @@ export default function ScaleCalibrationPopover({ points, titleBlockLabel, onCom
   };
 
   const commitTitleBlock = () => {
-    if (!titleBlockLabel) return;
-    const ftPerPt = ftPerPtFromLabel(titleBlockLabel);
-    if (ftPerPt == null) return;
-    onCommit(ftPerPt, titleBlockLabel);
+    if (!titleBlockLabel || suggestedFtPerPt == null) return;
+    onCommit(suggestedFtPerPt, titleBlockLabel);
   };
 
   return (

@@ -2,7 +2,7 @@
 // scaleParse.test.ts, proving the two sides parse the plan's exact example
 // list identically.
 import { describe, it, expect } from 'vitest';
-import { parseScaleLabel, ftPerPtFromLabel } from './scaleParse';
+import { parseScaleLabel, ftPerPtFromLabel, effectiveTitleBlockFtPerPt } from './scaleParse';
 
 const PT_PER_INCH = 72;
 
@@ -84,5 +84,25 @@ describe('ftPerPtFromLabel', () => {
   it('is null for an unparseable label', () => {
     expect(ftPerPtFromLabel('NTS')).toBeNull();
     expect(ftPerPtFromLabel('garbage')).toBeNull();
+  });
+});
+
+// Fix round 2 / R2-B2 — the ONE function the popover's "Use <label>", the
+// standalone banner Confirm, and the popover's own 2% disagreement check
+// all go through, so a half-size document's raw title-block parse
+// (est_sheets.suggested_ft_per_pt, never pre-multiplied — see sheets.ts's
+// own setHalfSize) reads the same effective scale everywhere.
+describe('effectiveTitleBlockFtPerPt', () => {
+  it('doubles the raw value when half_size is true', () => {
+    expect(effectiveTitleBlockFtPerPt(0.1111, true)).toBeCloseTo(0.2222, 10);
+  });
+
+  it('returns the raw value unchanged when half_size is false', () => {
+    expect(effectiveTitleBlockFtPerPt(0.1111, false)).toBeCloseTo(0.1111, 10);
+  });
+
+  it('is null when the raw value is null, regardless of half_size', () => {
+    expect(effectiveTitleBlockFtPerPt(null, true)).toBeNull();
+    expect(effectiveTitleBlockFtPerPt(null, false)).toBeNull();
   });
 });

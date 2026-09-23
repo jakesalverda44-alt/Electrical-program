@@ -578,13 +578,35 @@ export async function setSheetScale(bidId: string, documentId: string, pageIndex
   return (rowCount ?? 0) > 0;
 }
 
-/** Fix round 1 / B7 — the "Half-size set?" toggle, per DOCUMENT (every
- *  sheet of that document_id shares one value — the physical print size
- *  is a property of the whole plan set PDF, not one page of it). Doubles
- *  (turning on) or halves (turning off) BOTH ft_per_pt and
- *  suggested_ft_per_pt on every sheet of the document in one statement —
- *  idempotent against being called twice with the same value (a row
- *  already at that half_size is left untouched by the CASE branches
+/** Fix round 1 / B7, corrected by Fix round 2 / R2-B2 — the "Half-size
+ *  set?" toggle, per DOCUMENT (every sheet of that document_id shares one
+ *  value — the physical print size is a property of the whole plan set
+ *  PDF, not one page of it).
+ *
+ *  R2-B2's fix, in full:
+ *  - `suggested_ft_per_pt` is NEVER touched here anymore. It always
+ *    stores the RAW title-block parse (upsertSheetPage's own job,
+ *    refreshed on every re-index); the ×2-for-half-size multiply happens
+ *    exactly once, at USE time, in the frontend's shared
+ *    effectiveTitleBlockFtPerPt (scaleParse.ts) — the popover's "Use
+ *    <label>", the standalone banner Confirm, and the 2% disagreement
+ *    check all call that SAME function, so they can never independently
+ *    drift out of sync with each other or with what a Refresh sheets
+ *    just re-parsed.
+ *  - `ft_per_pt` (a CONFIRMED scale) is doubled/halved ONLY when
+ *    `scale_source = 'titleblock'`. A `scale_source = 'calibrated'` row
+ *    is a two-point measurement made directly on THIS sheet as printed —
+ *    it already reflects reality at whatever size the set was printed
+ *    at, and multiplying it by the toggle would double- (or un-) count
+ *    something the estimator already measured correctly. (A titleblock-
+ *    sourced confirmed scale, by contrast, was computed from the SAME
+ *    raw label text the suggestion itself comes from — see
+ *    PlansWorkspace.tsx's onConfirmSuggestedScale, which now sends the
+ *    shared function's own effective value — so it needs the identical
+ *    ×2 treatment kept in sync whenever the toggle changes later.)
+ *
+ *  Idempotent against being called twice with the same value (a row
+ *  already at that half_size is left untouched by the CASE branch
  *  below), and never touches a row with no scale set yet (NULL stays
  *  NULL either way). Returns false when the document has no est_sheets
  *  rows for this bid at all (404 for the route). */
@@ -593,15 +615,10 @@ export async function setHalfSize(bidId: string, documentId: string, halfSize: b
     `UPDATE est_sheets SET
        ft_per_pt = CASE
          WHEN ft_per_pt IS NULL THEN NULL
+         WHEN scale_source IS DISTINCT FROM 'titleblock' THEN ft_per_pt
          WHEN half_size = $3 THEN ft_per_pt
          WHEN $3 = true THEN ft_per_pt * 2
          ELSE ft_per_pt / 2
-       END,
-       suggested_ft_per_pt = CASE
-         WHEN suggested_ft_per_pt IS NULL THEN NULL
-         WHEN half_size = $3 THEN suggested_ft_per_pt
-         WHEN $3 = true THEN suggested_ft_per_pt * 2
-         ELSE suggested_ft_per_pt / 2
        END,
        half_size = $3,
        updated_at = now()

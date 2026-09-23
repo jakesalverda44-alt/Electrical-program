@@ -33,6 +33,7 @@ import { PageGeometry } from './overlay';
 import { suggestTagMarkers, candidateTagsFromDescription, buildLineTagIndex } from './tagSuggest';
 import { draftsFromTagCandidates, confirmAllOnSheet } from './suggestedMarkerFlow';
 import { getSheetTextItems } from './sheetTextCache';
+import { effectiveTitleBlockFtPerPt } from './scaleParse';
 import { TAKEOFF_CATEGORIES } from '../categories';
 import './plans.css';
 
@@ -501,7 +502,13 @@ export default function PlansWorkspace({
     if (!currentSheet || currentSheet.suggested_ft_per_pt == null || !currentSheet.suggested_label) return;
     setConfirmingScale(true);
     try {
-      await commitScale(currentSheet.suggested_ft_per_pt, currentSheet.suggested_label, 'titleblock');
+      // Fix round 2 / R2-B2 — the shared function, not the raw
+      // suggested_ft_per_pt directly: est_sheets always stores the RAW
+      // title-block parse now (never pre-multiplied by half_size), so
+      // every CONSUMER of it has to apply the ×2 itself, consistently.
+      const effective = effectiveTitleBlockFtPerPt(currentSheet.suggested_ft_per_pt, currentSheet.half_size);
+      if (effective == null) return;
+      await commitScale(effective, currentSheet.suggested_label, 'titleblock');
     } finally {
       setConfirmingScale(false);
     }
@@ -1060,6 +1067,8 @@ export default function PlansWorkspace({
             // the sheet has more than one distinct scale (nothing here
             // can safely say which one the estimator meant).
             titleBlockLabel={currentSheet && !currentSheet.scale_ambiguous ? currentSheet.suggested_label : null}
+            rawSuggestedFtPerPt={currentSheet && !currentSheet.scale_ambiguous ? currentSheet.suggested_ft_per_pt : null}
+            halfSize={!!currentSheet?.half_size}
             onCommit={commitScale}
             onCancel={() => setPendingScalePoints(null)}
           />

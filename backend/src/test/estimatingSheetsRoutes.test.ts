@@ -271,7 +271,7 @@ describe('PUT /api/estimating/:bidId/sheets/:documentId/:pageIndex/scale', () =>
 
 // Fix round 1 / B7 — the "Half-size set?" toggle, per document.
 describe('PUT /api/estimating/:bidId/sheets/:documentId/half-size', () => {
-  it('doubles both ft_per_pt and suggested_ft_per_pt for EVERY sheet of the document when turned on', async (ctx) => {
+  it('doubles ft_per_pt for a TITLEBLOCK-sourced confirmed scale, but NEVER touches suggested_ft_per_pt (R2-B2)', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
@@ -280,7 +280,7 @@ describe('PUT /api/estimating/:bidId/sheets/:documentId/half-size', () => {
     const before = await pollSheetsUntilIndexed(app, bidId, u.token);
     const page1Before = before.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
     expect(page1Before.suggested_ft_per_pt).toBeCloseTo(1 / (0.125 * 72), 6);
-    // Confirm the suggestion too, so both columns have a real value to double.
+    // Confirm the suggestion too, so ft_per_pt has a real titleblock-sourced value to double.
     await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/0/scale`).set(auth(u.token))
       .send({ ft_per_pt: page1Before.suggested_ft_per_pt, source: 'titleblock', label: page1Before.suggested_label }).expect(200);
 
@@ -291,7 +291,12 @@ describe('PUT /api/estimating/:bidId/sheets/:documentId/half-size', () => {
     const page1After = after.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
     expect(page1After.half_size).toBe(true);
     expect(page1After.ft_per_pt).toBeCloseTo(page1Before.suggested_ft_per_pt * 2, 6);
-    expect(page1After.suggested_ft_per_pt).toBeCloseTo(page1Before.suggested_ft_per_pt * 2, 6);
+    // Fix round 2 / R2-B2 — suggested_ft_per_pt is the RAW parse; the
+    // ×2-for-half-size multiply happens once, at USE time, in the
+    // frontend's shared effectiveTitleBlockFtPerPt — never stored
+    // pre-multiplied here anymore (that's what made a Refresh silently
+    // drop the doubling in the old design).
+    expect(page1After.suggested_ft_per_pt).toBeCloseTo(page1Before.suggested_ft_per_pt, 6);
     // The OTHER page (no scale of its own — a blank/scanned page) stays null, not NaN or 0.
     const page2After = after.body.sheets.find((s: { page_index: number }) => s.page_index === 1);
     expect(page2After.half_size).toBe(true);
@@ -299,14 +304,43 @@ describe('PUT /api/estimating/:bidId/sheets/:documentId/half-size', () => {
     expect(page2After.suggested_ft_per_pt).toBeNull();
   });
 
-  it('turning it back OFF halves the values again — round-trips to the original', async (ctx) => {
+  // Fix round 2 / R2-B2 — the reviewer's exact B7-half repro: calibrate
+  // at 0.2 ft/pt (a two-point measurement made directly on THIS sheet as
+  // printed), toggle half-size on, and ft_per_pt used to become 0.4 —
+  // doubling a measurement that already reflects reality at whatever
+  // size the set was printed at. Every run on every sheet of that
+  // document would then measure 2x long.
+  it('NEVER touches ft_per_pt for a CALIBRATED (two-point) scale — a measurement already reflects the real printed size', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    await pollSheetsUntilIndexed(app, bidId, u.token);
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/0/scale`).set(auth(u.token))
+      .send({ ft_per_pt: 0.2, source: 'calibrated', label: 'Calibrated: 20\'' }).expect(200);
+
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token))
+      .send({ half_size: true }).expect(200);
+
+    const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const page1 = after.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    expect(page1.half_size).toBe(true);
+    expect(page1.ft_per_pt).toBeCloseTo(0.2, 10); // NOT 0.4
+    expect(page1.scale_source).toBe('calibrated');
+  });
+
+  it('turning it back OFF halves a TITLEBLOCK-sourced ft_per_pt again — round-trips to the original; suggested_ft_per_pt is untouched throughout', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
     const bidId = await makeBid(app, u);
     const docId = await makePlanDocDbStored(bidId);
     const initial = await pollSheetsUntilIndexed(app, bidId, u.token);
-    const originalSuggested = initial.body.sheets.find((s: { page_index: number }) => s.page_index === 0).suggested_ft_per_pt as number;
+    const page1Initial = initial.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    const originalSuggested = page1Initial.suggested_ft_per_pt as number;
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/0/scale`).set(auth(u.token))
+      .send({ ft_per_pt: originalSuggested, source: 'titleblock', label: page1Initial.suggested_label }).expect(200);
 
     await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
     await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: false }).expect(200);
@@ -314,10 +348,35 @@ describe('PUT /api/estimating/:bidId/sheets/:documentId/half-size', () => {
     const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
     const page1 = after.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
     expect(page1.half_size).toBe(false);
-    expect(page1.suggested_ft_per_pt).toBeCloseTo(originalSuggested, 6);
+    expect(page1.ft_per_pt).toBeCloseTo(originalSuggested, 6); // round-tripped
+    expect(page1.suggested_ft_per_pt).toBeCloseTo(originalSuggested, 6); // never moved at all
   });
 
-  it('calling it twice with the SAME value is a no-op the second time (idempotent, never double-doubles)', async (ctx) => {
+  it('calling it twice with the SAME value is a no-op the second time (idempotent, never double-doubles a titleblock ft_per_pt)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    const initial = await pollSheetsUntilIndexed(app, bidId, u.token);
+    const page1Initial = initial.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    const originalSuggested = page1Initial.suggested_ft_per_pt as number;
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/0/scale`).set(auth(u.token))
+      .send({ ft_per_pt: originalSuggested, source: 'titleblock', label: page1Initial.suggested_label }).expect(200);
+
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
+
+    const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const page1 = after.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    expect(page1.ft_per_pt).toBeCloseTo(originalSuggested * 2, 6); // exactly 2x, not 4x
+  });
+
+  // Fix round 2 / R2-B2 — bug #3 from the review: "Refresh re-index drops
+  // the doubling." With suggested_ft_per_pt always raw now, a Refresh
+  // re-parsing the SAME title block produces the SAME raw value it
+  // always did — there's no doubling for it to drop anymore.
+  it('a re-index (?refresh=1) never resets half_size, and suggested_ft_per_pt still reads as the raw parse afterward (not silently doubled or halved)', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
@@ -325,28 +384,14 @@ describe('PUT /api/estimating/:bidId/sheets/:documentId/half-size', () => {
     const docId = await makePlanDocDbStored(bidId);
     const initial = await pollSheetsUntilIndexed(app, bidId, u.token);
     const originalSuggested = initial.body.sheets.find((s: { page_index: number }) => s.page_index === 0).suggested_ft_per_pt as number;
-
-    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
-    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
-
-    const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
-    const page1 = after.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
-    expect(page1.suggested_ft_per_pt).toBeCloseTo(originalSuggested * 2, 6); // exactly 2x, not 4x
-  });
-
-  it('a re-index (?refresh=1) never resets half_size — only setHalfSize itself ever writes it', async (ctx) => {
-    if (!ok) return ctx.skip();
-    const { app } = await import('../index');
-    const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
-    const docId = await makePlanDocDbStored(bidId);
-    await pollSheetsUntilIndexed(app, bidId, u.token);
     await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
 
     await pollSheetsUntilIndexed(app, bidId, u.token, { refresh: true });
 
     const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
-    expect(after.body.sheets.find((s: { page_index: number }) => s.page_index === 0).half_size).toBe(true);
+    const page1 = after.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    expect(page1.half_size).toBe(true);
+    expect(page1.suggested_ft_per_pt).toBeCloseTo(originalSuggested, 6);
   });
 
   it('rejects a non-boolean half_size with 400', async (ctx) => {

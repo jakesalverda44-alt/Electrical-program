@@ -391,6 +391,30 @@ describe('PlansWorkspace — scale suggestion, Linear gating, and half-size (Fix
     }));
   });
 
+  // Fix round 2 / R2-B2 — the reviewer's exact B7-half-popover repro,
+  // but for the STANDALONE BANNER: on a half-size document, the raw
+  // suggested_ft_per_pt (0.111111) must be sent DOUBLED (0.222222),
+  // through the same effectiveTitleBlockFtPerPt the popover now shares.
+  it('the suggestion banner\'s "Confirm" sends the EFFECTIVE (doubled) scale on a half-size document', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [sheet({ ft_per_pt: null, scale_source: null, scale_label: null, suggested_ft_per_pt: 0.111111, suggested_label: `1/8" = 1'-0"`, half_size: true })] },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    put.mockResolvedValue({ data: { ok: true } });
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-scale-suggestion-banner')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Confirm'));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/sheets/doc-1/0/scale', {
+      ft_per_pt: expect.closeTo(0.222222, 5), source: 'titleblock', label: `1/8" = 1'-0"`,
+    }));
+  });
+
   it('shows "Multiple scales on this sheet — calibrate" (and NO suggestion banner) when scale_ambiguous is true', async () => {
     get.mockImplementation((url: string) => {
       if (url.endsWith('/sheets')) return Promise.resolve({
