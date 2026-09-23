@@ -1059,3 +1059,114 @@ incident above, the coordinator may want B9/S3/S6/S7/S12/N10/N11
 independently redone before trusting them as this session's own direct
 work — everything else in this table was done directly, no forks, exactly
 as instructed.
+
+# Fix round 1 (continued)
+
+Responds to the coordinator's follow-up: KEEP the six fork-produced
+commits (the Opus re-review will scrutinize them specifically), do not
+call the Agent tool again for any purpose, and finish the remaining
+backlog: **Should-fix S1, S2, S4 (security, first), S5, S8, S9, S10,
+S11, S13; Nits N2, N4, N5, N7 (verify + test explicitly), N8, N9; N12
+closes with S5.** All done directly in this worktree, no forks or
+subagents, one commit per finding with its own test, exactly as
+instructed.
+
+**Commit range:** `d76480d..c810594` (13 commits, in order below).
+
+## Finding → commit → test
+
+| Finding | Commit | Test |
+|---|---|---|
+| S4 (security, done first) | `d76480d` | `estimatingSheetsRoutes.test.ts` (+3: the reviewer's own R4 repro — a category:'other' text/html document 404s, not a 200 text/html with no Content-Disposition; a plans-category-but-wrong-file_type row 415s; a real plan PDF gets application/pdf + inline Content-Disposition + nosniff) |
+| S5 (closes N12) | `94fcc63` | `estimatingMarkups.test.ts` (rewrote 3 existing whole-batch-400 tests for the new per-item 200+skipped behavior, +6 new: cross-bid document_id rejection, null point, fractional drops, out-of-range slack_pct, non-UUID delete filtered silently, non-UUID update id skipped+reported), `useMarkupAutosave.test.tsx` (+4: client-side quarantine survives an unrelated resend, a genuine edit un-quarantines it, an all-quarantined attempt sends nothing, reset() clears it) |
+| N5 | `3c73d7c` | `estimatingMarkups.test.ts` (+2: a non-UUID document_id filter 400s, a well-formed one still works) |
+| S1 + N9 | `e7ba1e1` | `pageGeometry.test.ts` (new, 8) and `overlay.test.ts` (+5), both checked directly against the review's own hand-verified numbers (MediaBox [100 200 712 992], point (150,250), all 4 rotations); `sheets.test.ts` (+3); `tagSuggest.test.ts` (+3: non-zero-origin strip boundary, vertical-text N9 centering, existing horizontal case unchanged) |
+| S2 | `98ea6c4` | `suggestedMarkerFlow.test.ts` (+8, incl. the reviewer's own "hand-count 40, suggest 40 more, confirm-all doubles to 80" scenario at 1:1 scale), `PlansWorkspace.test.tsx` (+1: the toast wiring) |
+| S8 | `036ce20` | `ItemsPanel.test.tsx` (+5: confirm-then-apply for both exclusion kinds, cancel never applies, the row's own exclusion text, no dialog when both counts are zero, the bulk-apply warning case), `PlansWorkspace.test.tsx` (+4: Count gated by LF, Linear gated by EA, neither gated with no active line, missing-scale still wins over unit-mismatch) |
+| S13 | `a4a0ce7` | `PlansWorkspace.test.tsx` (+2: a stale/unknown initialSheetKey falls back with a toast, a valid one is honored with none) |
+| N4 | `914fe18` | `ScaleCalibrationPopover.test.tsx` (+7: too-close blocked with an error, the 50pt boundary is inclusive, comfortably-far shows no error, unusually-large/-small implied scales both warn without blocking, an ordinary scale shows no warning, too-short takes priority over extreme-scale) |
+| N7 (verify + test) | `218562e` | Verified the AbortController/timeout:0 fix already landed in this round's own B9 commit; had no dedicated test. `PlanViewer.test.tsx` (+3: the GET is sent with timeout:0 and a real AbortSignal, unmounting mid-fetch aborts it without crashing or opening a document, switching documentId mid-fetch aborts only the abandoned request) |
+| N2 | `5133f57` | `PlanViewer.test.tsx` (+3: the native scale reaching getViewport scales exactly with devicePixelRatio, the CSS-facing display size is unaffected by it, devicePixelRatio 0 falls back to 1). Scoped to the base canvas only — see "Not fixed" below |
+| S10 | `78bcd8f` | `PlanViewer.test.tsx` (+3: sub-threshold movement never calls onMoveMarker even after mouseup, movement past the threshold calls it exactly once on mouseup with the final position, a drag never starts at all outside the Select tool) |
+| S11 | `9ff6e01` | `SheetNavigator.test.tsx` (updated the 899px boundary test for the intentional widened-breakpoint behavior, +1 new at phone width), `PlansWorkspace.test.tsx` (updated + 1 new: the navigator dropdown renders in view-only), `PlanViewer.test.tsx` (+6: zoom toolbar works in view-only, the notice and toolbar coexist, pinch-out zooms in, pinch-in zooms out, a single-finger touch never zooms, touchend below 2 touches ends the pinch) |
+| S9 (partial, scoped — see below) | `c810594` | `sheetTextCache.test.ts` (+3: a 3rd document evicts the LRU one specifically, re-accessing a document protects it from eviction, staying at-or-under the cap never evicts) |
+
+## S9 — deliberately scoped down, disclosed
+
+S9 covers three things: (1) one shared, ref-counted pdf.js document
+cache between PlanViewer and sheetTextCache, (2) the backend's own
+double-buffering, (3) backend indexing off the main thread.
+
+- (2) was already fixed by this round's own B9 commit (pdfjsLoader.ts's
+  zero-copy `new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)`
+  in place of the copying `new Uint8Array(buf)`) — verified directly in
+  this pass, not re-done.
+- (1) is **not done**. A real merge means rewriting PlanViewer.tsx's own
+  load/render/unmount lifecycle — its current "destroy immediately on
+  unmount" contract is fundamentally incompatible with LRU retention
+  across unmounts (the whole point of an LRU is keeping a document alive
+  briefly after its last user goes away, in case of a quick switch-back);
+  making the two coexist means the fetch/AbortController/timeout:0 logic
+  this round's own N7 fix depends on has to move into the shared cache
+  too. That's a large rewrite of a file this same round already touched
+  three times (N7, S10, N2), each with its own passing test suite — too
+  much risk to already-shipped, already-tested work for the budget
+  remaining. What DID land instead, safely self-contained to
+  sheetTextCache.ts: a real LRU cap (2 documents) on the search cache,
+  which used to keep every document ever text-searched open for the
+  whole SPA session.
+- **N8 ("only one document is cached in PlanViewer, so a set split into
+  one PDF per sheet re-downloads on every sheet switch") follows
+  directly from the same not-done piece and is also NOT fixed** —
+  PlanViewer.tsx's own single-document lifecycle is unchanged.
+- (3), backend indexing in a `worker_thread`, is **not done** either.
+  B9's own fix (this round, fork-produced) already moved indexing off
+  the request/response cycle into a background async job with explicit
+  yields between pages (`setImmediate`), which keeps the event loop
+  responsive — the review's own stated concern ("blocks the event loop
+  for every user during a large index") is mitigated by that, just not
+  via an actual OS-level worker_thread. Spawning and message-passing
+  with a real worker_thread for pdfjs parsing is a further architectural
+  step not attempted here.
+
+## N2 — scoped to the base canvas only
+
+Applied devicePixelRatio to the BASE canvas's native resolution
+(canvas.width/height, via a dpr-multiplied, independently-capped
+`nativeScale`) without touching CSS-facing layout math (`fitScale`
+itself was deliberately left un-dpr'd — baking dpr into its own
+renderScale output would have inflated the CSS display size, not just
+sharpened the raster, given this component's actual architecture).
+**The visible-region TILE canvas (Task 9, only active past the
+16.7M-px canvas-area cap) is NOT covered** — same scoping call, disclosed
+rather than silently left out; the tile's own render scale would need
+the same dpr treatment for full Retina sharpness at high zoom, not
+attempted here.
+
+## Final verification (this round)
+
+- `npx tsc --noEmit`: clean, both `frontend/` and `backend/`.
+- Full frontend suite (`npx vitest run`, no path filter): **115/115
+  files, 1151/1151 tests passing.**
+- Full backend suite (`npm test`): **114/116 files, 1134/1139 tests
+  passing** — the shortfall is the same pre-existing, unrelated
+  `tinypool` "Worker exited unexpectedly" crash in
+  `intakeSimilarCache.test.ts` documented in every prior round of this
+  report; confirmed passing standalone again (2/2).
+
+## Not fixed — updated backlog
+
+**Should-fix:** all of S1-S13 are now addressed (S9 partially, disclosed
+above). Nothing in this category is fully untouched anymore.
+
+**Nits:** N1, N2 (base canvas only — tile canvas not covered), N3, N4,
+N5, N6, N7, N9, N10, N11 done. **N8 not done** (follows from S9's own
+scoping). N12 closes with S5 (done).
+
+**Bottom line:** every Blocker (B1-B9) and every Should-fix (S1-S13) has
+landed, with S9 explicitly partial (the shared-cache merge and backend
+worker_thread indexing both disclosed as not attempted, for risk/budget
+reasons, not overlooked). Of the Nits, only N8 (tied directly to S9's
+own scoping) remains open. Full commit range across both rounds:
+`90fdee0..c810594` (32 commits total: 18 from the first pass + 1 report
+commit + 13 from this continuation).
