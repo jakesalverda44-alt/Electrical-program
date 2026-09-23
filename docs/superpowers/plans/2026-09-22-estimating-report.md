@@ -840,3 +840,62 @@ seed magnitudes.
   `backend/src/test/estimatingBid.test.ts`, describe block
   `"B1 — end to end: takeoff -> mapper -> priceBid -> saveBidEstimate, real
   seed magnitudes"`.
+
+## Fix round 2
+
+Independent Opus 5 adversarial review, "Round 2" section of
+`docs/superpowers/plans/2026-09-22-estimating-review.md` (commit `4876f85`).
+Verdict: MERGE AFTER FIXES. Same worktree/branch (`feat/estimating-labor`).
+
+### Blockers
+
+| ID | Fix | Commit(s) | Tests |
+|---|---|---|---|
+| R2-B1 | Overrides are entered and displayed in the line's own DISPLAY unit (e.g. $/LF on an LF line), converted to the library basis internally via `unitRatio = libDivisor/displayDivisor` (1 for manual/unmatched/same-unit lines). Un-overridden library cost/hours are converted library→display the same way, so `PricedLine.materialUnit`/`hoursUnit` always report in the line's own unit. Manual and matched lines share the exact same conversion path | `84530fc` | `pricing.test.ts` "R2-B1: overrides are entered/displayed in the DISPLAY unit, not the library unit" (5 cases) — includes the reviewer's exact $0.62/LF on 1,200 LF → $744 case, for both a matched and a manual line, plus the R2-N5 C-unit case |
+| R2-B2 | `sync_excluded` moved onto `ClientLineInput` so the client round-trips it; `saveBidEstimate`'s INSERT now enforces the invariant `sync_excluded = !!l.excluded && !!l.sync_excluded` server-side (never true while excluded is false) instead of hardcoding `false` on every save, which previously wiped it | `14847b4` | `estimatingBid.test.ts` — the reviewer's exact sequence (line vanishes from takeoff → save any OTHER edit → line reappears on next sync → back, sync_excluded cleared) plus the excluded-but-not-sync_excluded invariant case |
+| R2-B3 | Reviewer's minimal removal, done exactly as specified: deleted `pricingDirty` and `savedEstimate`/`setSavedEstimate` (confirmed zero other readers first); `useUnsavedGuard(pricingDirty \|\| saveState === 'error')` → `useUnsavedGuard(saveState === 'error')`, with the new engine's own dirty source already covered by the pre-existing separate `useUnsavedGuard(estimatingBid.dirty)` registration further down the same component. `inheritedOverheadProfit()` now prefers `bid_estimates` unconditionally over `bid_workspaces` (covers R2-SF7 too). The round-1 report's "composeBidData fallback" claim is corrected above, in the round-1 "Not fixed / deferred" section | `e52a6c0` | `estimatingBid.test.ts` "R2-SF7" case — a bid whose `bid_workspaces` pricing is NEWER than `bid_estimates` still inherits from `bid_estimates`, and does NOT arm the leave prompt |
+| S3 tests | Added the four required tests | `3a5eb55` | `PcWorkspaceProposal`-adjacent + `bidEstimate`/`BidSummary` suites: (1) after an engine save, Review step's proposal price and the value Agent 4 receives equal the new grand total; (2) a hand-typed proposal price that differs from the engine total shows a mismatch banner with a "Use engine total" action; (3) `BidSummary` "Estimate changed since last save" tag (`bs-stale-tag`) fires only when live total differs from `savedGrandTotal` and neither `dirty` nor `proposed` already explain it (4 cases covering all the mutual-exclusion states); (4) S4 cheap render test — already satisfied by round 1's `PcWorkspaceFiles.test.tsx` (Import Finished Bid + notes present in Documents); re-confirmed present, not re-done |
+| N4 (folded into S3 pass) | Proposal price no longer rounds to whole dollars — cents preserved end to end | `3a5eb55` | Covered by the S3 grand-total-equality tests above |
+
+### Should-fix
+
+| ID | Fix | Commit(s) | Tests |
+|---|---|---|---|
+| R2-SF1 | `mapper.ts` `normalize()`: `#N` → gauge marker `gaN`, converted BEFORE the generic `#` strip, so a wire gauge and a bare trade-size number are never conflated. New `CONDUCTOR_TAGS`/`conductorTagsOf()` (aluminum/AL/XHHW vs copper/CU/THHN/THWN) checked via `materialConflict()`. `MATERIAL_TAGS` extended with flex/FMC, liquidtight/LFMC. New guard: a candidate naming a raceway/wire type can't earn alias-tier confidence against a description naming NO type at all (fixes "3/4\" conduit" falsely alias-matching liquidtight). `PricedLine.matchConfidence`/`match_confidence` persisted (migration 107) and round-tripped like `sync_excluded`. UI: "check match" badge on fuzzy-confidence lines; `PricingWarnings.fuzzyMatchCount` counts them, `BidSummary` shows/counts them separately from "unmatched" | `2fc154f` (mapper guards), `bb1e56d` (match_confidence persistence), `7371ca2` (UI badge + warnings count) | `mapper.test.ts` — rewrote the self-contradictory `'#2 EMT conduit run'` fixture to realistic `'2 EMT conduit run'`, added dedicated gauge-vs-size tests and all three reviewer repro lines (aluminum XHHW, 1" flex, 3/4" conduit); `pricing.test.ts` fuzzyMatchCount case; `LaborPricingStep.test.tsx`/`BidSummary.test.tsx` fuzzy-badge/count cases |
+| R2-N6 (folded into SF1/SF5 pass) | New `PVCB-200` seed item (Branch Power, above-grade 2" PVC, distinct from the underground-only `PVC-200`) lets the existing `CATEGORY_BONUS` tie-break correctly prefer it for a Branch Power takeoff line | `b7ed821` | `mapper.test.ts` — updated the bare "2\" PVC" expectation to `PVCB-200`, added a companion test proving a Site/Underground-categorized line still resolves to `PVC-200` |
+| R2-SF2 | New server-derived `PricedLine.unresolved: boolean` (pricing.ts) — true when a line never actually resolved to a real library row, independent of whether `item_id`/`assembly_id` happen to be set (an id can be set on a line that's unit-incompatible and silently priced $0 by `resolveLines`). Frontend derives "needs resolving" from THIS everywhere (top banner, per-row indicator), not id presence. Resolver modal now filters candidates to unit-FAMILY-compatible ones only (EA is its own family; LF/C/M are one family); for an LS/unknown-unit line, shows a unit-select first and hides candidates until a unit is chosen | `bb1e56d` (server `unresolved`), `7371ca2` (frontend filter + unit-select-first) | `pricing.test.ts` "R2-SF2: PricedLine.unresolved is a real, server-derived signal" (2 cases); `LaborPricingStep.test.tsx` unit-filtered-resolver + unit-select-first-for-unknown-units cases |
+| R2-SF4 | Migration 107 adds `est_bid_lines.match_source` (`'auto'\|'manual'\|null`) and `synced_description`. `syncTakeoff()` re-runs the mapper on an existing line (updating `assembly_id`/`item_id`/`match_confidence`) ONLY when the line is `auto` (or legacy null) AND the takeoff description at that key changed since the last sync; a `'manual'` line's `synced_description` is deliberately not advanced, so it's never silently re-matched. Frontend's `pickResolution()` sets `match_source: 'manual'` on a manual pick | `bb1e56d` (backend), `7371ca2` (frontend) | `estimatingBid.test.ts` — auto line re-matches when its takeoff description changes; manual line is preserved (item_id/match_confidence unchanged) across the same sync |
+| R2-SF5 | Migration 107 DELETEs (not zeroes, per the reviewer's instruction) the zero-qty `DISC-400` component off `ASM-SVCENT-800`, guarded by `source='seed'` — fixes round 1's zero-out approach, which left the assembly uneditable in Settings (a `qty_per<=0` component blocks the whole assembly PUT). Migration 105's swap logic is guarded the same way; not edited itself since it's already applied on the test DB | `b7ed821` | `estimatingLibrary.test.ts` new test proving `ASM-SVCENT-800` is now PUT-editable (restores `source='seed'` in `finally`); `estimatingSeed.test.ts`'s 102-idempotency test updated to re-apply the same DELETE after re-running 102's raw SQL, with a comment documenting this as a permanent, deliberate exception (102 is immutable; a later migration correctly removing something it inserts will always need this) — committed separately as `ad81ffe` |
+| R2-SF6 | Sync-confirm dialog body corrected: it previously claimed manual lines/overrides are "never touched," but `syncTakeoff()` actually replaces the entire client lines array with the server's response, discarding every unsaved edit. New text: "Syncing discards any unsaved changes on this screen. Already-saved overrides and quantities you've edited are kept — save first if you want to keep unsaved work." | `7371ca2` | Covered by existing sync-confirm render tests in `LaborPricingStep.test.tsx` (text assertion updated) |
+
+### Nits
+
+| ID | Fix | Commit(s) |
+|---|---|---|
+| R2-N1 | Clearing Labor rate / Crew size / Floors above 2 / any pct field reverts to that field's own `DEFAULT_SETTINGS` value, not 0 — new `numberOrDefault()` reads `e.target.value` eagerly (same pattern as the round-1 `floors_above_2` fix; a lazy read inside the `setSettings` updater can see a DOM value React already reset) | `7371ca2` |
+| R2-N2 | A line whose qty was hand-edited (`qty_overridden`) shows a static "locked" hint next to its description. Simplified from the literal ask ("hint when the takeoff qty differs from the estimator-edited qty") — a live diff against the takeoff's current value would need a backend round-trip this screen doesn't have; the hint states the qty is locked rather than implying a live comparison that isn't happening. Disclosed below | `7371ca2` |
+| R2-N4 | Folded into the S3 pass above — proposal price uses cents, not whole-dollar rounding | `3a5eb55` |
+| R2-N5 | Lines whose own unit is C or M convert correctly through the same `unitRatio` path as R2-B1 | `84530fc` |
+| R2-N3 | Skipped per the coordinator's explicit instruction. **Follow-up:** not investigated or fixed this round — needs its own pass |
+
+### Not fixed / deferred, and why
+
+- **R2-N2** is a simplified, honest partial fix — see the nits table above.
+  A true live-diff hint (comparing against the takeoff's CURRENT qty, not
+  just flagging that the estimator's own qty is locked) needs a backend
+  round-trip this screen doesn't currently fetch; good follow-up.
+- **R2-N3** was explicitly marked skip/follow-up by the coordinator and was
+  not investigated this round.
+
+### Verification
+
+- Backend: `npx tsc --noEmit` clean. Full `npx vitest run`: **107/108 files,
+  974/978 tests passed** — same pre-existing `notificationsRetention.test.ts`
+  worker OOM noted in round 1, reproduced in isolation as unrelated to this
+  round's changes too.
+- Frontend: `npx tsc --noEmit` clean. Full `npx vitest run`: **89/89 files,
+  661/661 tests passed** on a clean run; one incidental run showed
+  `SurveyMarkupEditor.test.tsx` (unrelated `gen-pipeline` feature, not
+  touched by this work) fail under full-suite parallel load and pass
+  standalone in 73ms — a timing flake, not a regression.
+- Full Round 2 commit range: `84530fc..7371ca2` (9 commits).
