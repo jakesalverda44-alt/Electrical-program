@@ -184,3 +184,105 @@ describe('sheetTextCache — cleared on logout (SESSION_CLEARED_EVENT, N11)', ()
     await Promise.resolve();
   });
 });
+
+// Fix round 2 / R2-N2 — a 3rd+ distinct document (e.g. a concurrent
+// "Suggest markers" action reading a different sheet than an in-progress
+// "Find tag on sheets…" search) used to evict-and-destroy a document a
+// DIFFERENT caller was still mid getTextContent() on — pdf.js then throws
+// or returns garbage from the destroyed document, silently dropping that
+// sheet from find-tag's results. Separately, an entry whose fetch was
+// still in flight when evicted just ran to completion for nothing, wasting
+// a 100-150MB download nobody would ever use.
+describe('sheetTextCache — an eviction never destroys/aborts an entry someone is actively using (R2-N2)', () => {
+  /** A never-resolves-until-released promise, so the test controls exactly
+   *  when a "reader" finishes with a document — the only way to land a
+   *  3rd document's eviction pressure WHILE a page's getTextContent() is
+   *  still genuinely in flight. */
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>(r => { resolve = r; });
+    return { promise, resolve };
+  }
+
+  it('evicting a document another caller is mid-getTextContent() on does NOT destroy it until that read finishes', async () => {
+    const gate = deferred<{ items: unknown[] }>();
+    const docA = {
+      getPage: vi.fn(() => Promise.resolve({ getTextContent: () => gate.promise })),
+      destroy: vi.fn().mockResolvedValue(undefined),
+    };
+    const docB = { getPage: vi.fn(() => Promise.resolve({ getTextContent: () => Promise.resolve({ items: [] }) })), destroy: vi.fn().mockResolvedValue(undefined) };
+    const docC = { getPage: vi.fn(() => Promise.resolve({ getTextContent: () => Promise.resolve({ items: [] }) })), destroy: vi.fn().mockResolvedValue(undefined) };
+    openPdfDocument.mockResolvedValueOnce(docA).mockResolvedValueOnce(docB).mockResolvedValueOnce(docC);
+
+    // Start reading A, but don't let its getTextContent() resolve yet —
+    // this call is "in flight, mid-read" for the rest of the test.
+    const readA = getSheetTextItems('bid1', 'doc-A', 0);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); // let it reach getTextContent() and suspend there
+
+    // A DIFFERENT, concurrent caller reads B then C — 3 distinct documents
+    // now wanted at once, pushing A (least-recently-touched) past the cap.
+    await getSheetTextItems('bid1', 'doc-B', 0);
+    await getSheetTextItems('bid1', 'doc-C', 0);
+
+    // A was evicted from the cache, but its read is STILL in flight —
+    // must not have been destroyed yet.
+    expect(docA.destroy).not.toHaveBeenCalled();
+
+    // Now let A's read finish.
+    gate.resolve({ items: [{ str: 'A1', transform: [1, 0, 0, 1, 0, 0] }] });
+    const items = await readA;
+    expect(items.map(i => i.str)).toEqual(['A1']); // the read itself completed correctly, undamaged by the eviction
+
+    // Only NOW, once the last active reader released it, is A destroyed.
+    expect(docA.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-acquiring a just-evicted-but-still-in-use document starts a genuinely fresh fetch, never reuses the doomed entry', async () => {
+    const gate = deferred<{ items: unknown[] }>();
+    const docA1 = { getPage: vi.fn(() => Promise.resolve({ getTextContent: () => gate.promise })), destroy: vi.fn().mockResolvedValue(undefined) };
+    const docB = { getPage: vi.fn(() => Promise.resolve({ getTextContent: () => Promise.resolve({ items: [] }) })), destroy: vi.fn().mockResolvedValue(undefined) };
+    const docC = { getPage: vi.fn(() => Promise.resolve({ getTextContent: () => Promise.resolve({ items: [] }) })), destroy: vi.fn().mockResolvedValue(undefined) };
+    const docA2 = { getPage: vi.fn(() => Promise.resolve({ getTextContent: () => Promise.resolve({ items: [{ str: 'A-again', transform: [1, 0, 0, 1, 0, 0] }] }) })), destroy: vi.fn().mockResolvedValue(undefined) };
+    openPdfDocument.mockResolvedValueOnce(docA1).mockResolvedValueOnce(docB).mockResolvedValueOnce(docC).mockResolvedValueOnce(docA2);
+
+    const readA1 = getSheetTextItems('bid1', 'doc-A', 0);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    await getSheetTextItems('bid1', 'doc-B', 0);
+    await getSheetTextItems('bid1', 'doc-C', 0); // evicts A while readA1 is still in flight
+
+    // A fresh request for the SAME documentId while the old A entry is
+    // still doomed-but-alive gets its own new fetch/open — never the
+    // stale, about-to-be-destroyed entry.
+    const items2 = await getSheetTextItems('bid1', 'doc-A', 0);
+    expect(items2.map(i => i.str)).toEqual(['A-again']);
+    expect(get).toHaveBeenCalledTimes(4); // A(1st), B, C, A(2nd) — a genuinely new fetch, not a reuse
+
+    gate.resolve({ items: [] });
+    await readA1;
+  });
+});
+
+// Fix round 2 / R2-N2 — the SAME 3rd-document eviction pressure, but this
+// time the evicted document's FETCH itself (not yet a doc, still
+// downloading bytes) is still in flight — the underlying request must be
+// aborted, not left to run to completion for a document nobody will ever
+// read.
+describe('sheetTextCache — an eviction aborts an entry whose fetch is still in flight, never lets it finish uselessly (R2-N2)', () => {
+  it('aborts the underlying request for a document evicted before its fetch ever resolved', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    get.mockImplementationOnce((_url: string, opts: { signal?: AbortSignal }) => {
+      capturedSignal = opts.signal;
+      return new Promise(() => { /* never settles on its own — only via the signal aborting */ });
+    });
+    void getSheetTextItems('bid1', 'doc-pending', 0).catch(() => {}); // A's fetch never resolves; intentionally unawaited
+
+    expect(capturedSignal).toBeTruthy();
+    expect(capturedSignal!.aborted).toBe(false);
+
+    openPdfDocument.mockResolvedValueOnce(makeDoc({ 1: [] })).mockResolvedValueOnce(makeDoc({ 1: [] }));
+    await getSheetTextItems('bid1', 'doc-B', 0);
+    await getSheetTextItems('bid1', 'doc-C', 0); // 3rd distinct document — evicts doc-pending, still mid-fetch
+
+    expect(capturedSignal!.aborted).toBe(true);
+  });
+});

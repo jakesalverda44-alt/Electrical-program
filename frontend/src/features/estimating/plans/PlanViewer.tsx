@@ -278,8 +278,21 @@ export default function PlanViewer({
     tileTimerRef.current = setTimeout(() => {
       const el = scrollRef.current;
       if (!el || !aliveRef.current) return;
-      const baseScale = clampRenderScale(geom, renderScale);
-      if (!needsTiledRender(renderScale, baseScale)) {
+      // Fix round 2 / R2-N5 — this used to compare the UN-multiplied
+      // renderScale against clampRenderScale(geom, renderScale), but the
+      // base canvas's own render effect (above) actually paints its
+      // NATIVE pixel buffer at renderScale*dpr (clamped the same way — see
+      // that effect's own N2 comment). On a DPR>1 display, renderScale*dpr
+      // can exceed the area cap even when plain renderScale doesn't — the
+      // base canvas silently got soft-clamped (blurrier than the
+      // estimator's actual zoom level) while this check, still comparing
+      // the un-multiplied value, concluded nothing needed a tile at all.
+      // Cosmetic (nothing crashes or misbehaves beyond looking softer than
+      // it should), but comparing the SAME dpr-aware scale the base
+      // render effect itself uses is what makes this decision correct.
+      const nativeTargetScale = renderScale * dpr;
+      const nativeClampedScale = clampRenderScale(geom, nativeTargetScale);
+      if (!needsTiledRender(nativeTargetScale, nativeClampedScale)) {
         if (tilePlanRef.current) { tilePlanRef.current = null; setTilePlan(null); }
         return;
       }
@@ -290,7 +303,7 @@ export default function PlanViewer({
       tilePlanRef.current = plan;
       setTilePlan(plan);
     }, TILE_SETTLE_MS);
-  }, [geom, renderScale]);
+  }, [geom, renderScale, dpr]);
 
   useEffect(() => () => { if (tileTimerRef.current) clearTimeout(tileTimerRef.current); }, []);
 

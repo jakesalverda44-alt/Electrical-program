@@ -446,6 +446,38 @@ describe('PlanViewer — visible-region tiling past the canvas-area cap (Task 9)
     await new Promise(r => setTimeout(r, 250));
     expect(queryByTestId('plan-tile-canvas')).toBeNull();
   });
+
+  // Fix round 2 / R2-N5 — scheduleTileUpdate used to decide "needs a tile?"
+  // by comparing the UN-multiplied renderScale against clampRenderScale
+  // (geom, renderScale), but the base canvas's own render effect actually
+  // paints its native pixel buffer at renderScale*dpr (N2's own fix,
+  // clamped the same way). At a high enough devicePixelRatio,
+  // renderScale*dpr can exceed the area cap even when plain renderScale —
+  // the value this check was actually comparing — doesn't: the base
+  // canvas got silently soft-clamped (blurrier than it should be) while
+  // this decision concluded no tile was needed at all. Same moderate
+  // zoom level as the sibling "does not use tiling... under the cap" test
+  // above (which passes at the default ~1x test-environment dpr) — only
+  // the devicePixelRatio differs here.
+  it('schedules a tile when renderScale*dpr exceeds the cap even though renderScale alone does not (R2-N5)', async () => {
+    const originalDpr = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+    Object.defineProperty(window, 'devicePixelRatio', { value: 8, configurable: true });
+    try {
+      const page = makePage();
+      getPage.mockResolvedValue(page);
+      openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+      const { getByLabelText, findByTestId } = render(<PlanViewer {...baseProps()} />); // default 792x612 letter sheet
+      await waitFor(() => expect(page.render).toHaveBeenCalled());
+
+      for (let i = 0; i < 3; i++) fireEvent.click(getByLabelText('Zoom in'));
+
+      const tile = await findByTestId('plan-tile-canvas', {}, { timeout: 2000 });
+      expect(tile).toBeTruthy();
+    } finally {
+      if (originalDpr) Object.defineProperty(window, 'devicePixelRatio', originalDpr);
+      else Reflect.deleteProperty(window, 'devicePixelRatio');
+    }
+  });
 });
 
 // Task 7 (deferral closed) — "click to confirm" a suggested (dashed) marker.
