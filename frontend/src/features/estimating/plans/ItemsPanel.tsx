@@ -89,7 +89,28 @@ export default function ItemsPanel({
     [lines, rollupByKey]
   );
 
+  // Fix round 1 / S8 — incompatibleCount (a marker of the wrong kind for
+  // this line's unit — a count marker on an LF line, or vice versa) and
+  // missingScaleCount (a linear run on a sheet with no scale set) were
+  // already computed by the backend rollup but nothing on the frontend
+  // ever read them: applyMarkups applied whatever markedQty existed with
+  // no warning that some of what was drawn on the sheet never made it
+  // into that number.
+  function partialRollupWarning(r: RollupEntry | undefined): string | null {
+    if (!r) return null;
+    const parts: string[] = [];
+    if (r.incompatibleCount > 0) parts.push(`${r.incompatibleCount} marker${r.incompatibleCount === 1 ? '' : 's'} of the wrong type for this line's unit`);
+    if (r.missingScaleCount > 0) parts.push(`${r.missingScaleCount} marker${r.missingScaleCount === 1 ? '' : 's'} on a sheet with no scale set`);
+    if (parts.length === 0) return null;
+    return `${parts.join(' and ')} will NOT be included in this quantity.`;
+  }
+
   async function applyOne(lineKey: string) {
+    const warning = partialRollupWarning(rollupByKey.get(lineKey));
+    if (warning) {
+      const ok = await confirm({ title: 'Some markers were excluded from this rollup', body: warning, confirmLabel: 'Apply anyway' });
+      if (!ok) return;
+    }
     setApplyingKeys(prev => new Set(prev).add(lineKey));
     try {
       await onApplyLines([lineKey]);
@@ -106,6 +127,13 @@ export default function ItemsPanel({
       return { line: l, from: l.qty, to: r?.markedQty ?? l.qty };
     });
     const impact = previewPriceImpact ? await previewPriceImpact(differingKeys).catch(() => null) : null;
+    // Fix round 1 / S8 — same partial-rollup warning as the single-line
+    // Apply, folded into this SAME confirmation (a bulk apply already
+    // always confirms, so no second prompt is needed) rather than
+    // silently applying a partial rollup for any line in the batch.
+    const partialWarnings = changes
+      .map(c => ({ line: c.line, warning: partialRollupWarning(rollupByKey.get(c.line.line_key as string)) }))
+      .filter((w): w is { line: EstimateLine; warning: string } => w.warning != null);
     const body = (
       <div>
         <ul style={{ margin: '0 0 8px', paddingLeft: 18 }}>
@@ -118,6 +146,16 @@ export default function ItemsPanel({
         {impact != null && (
           <div style={{ fontWeight: 700 }}>
             {impact >= 0 ? '+' : ''}${Math.abs(impact).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} to the estimate
+          </div>
+        )}
+        {partialWarnings.length > 0 && (
+          <div style={{ marginTop: 8, color: 'var(--warn, #b45309)' }}>
+            <strong>Some markers were excluded:</strong>
+            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+              {partialWarnings.map(w => (
+                <li key={w.line.line_key}>{w.line.description}: {w.warning}</li>
+              ))}
+            </ul>
           </div>
         )}
       </div>
@@ -200,6 +238,16 @@ export default function ItemsPanel({
                 {r && r.sheets.length > 0 && (
                   <div className="plan-items-panel-sheets">
                     Marked on {r.sheets.length} sheet{r.sheets.length === 1 ? '' : 's'}
+                  </div>
+                )}
+                {/* Fix round 1 / S8 — surfaced on the row itself, not just
+                    behind an Apply confirmation, so an estimator scanning
+                    the panel sees it before ever clicking Apply. */}
+                {r && (r.incompatibleCount > 0 || r.missingScaleCount > 0) && (
+                  <div className="plan-items-panel-sheets" data-testid={key ? `partial-rollup-${key}` : undefined} style={{ color: 'var(--warn, #b45309)' }}>
+                    {r.incompatibleCount > 0 && `${r.incompatibleCount} wrong-type marker${r.incompatibleCount === 1 ? '' : 's'} excluded`}
+                    {r.incompatibleCount > 0 && r.missingScaleCount > 0 && ' · '}
+                    {r.missingScaleCount > 0 && `${r.missingScaleCount} unscaled marker${r.missingScaleCount === 1 ? '' : 's'} excluded`}
                   </div>
                 )}
                 <div className="plan-items-panel-row-actions">

@@ -243,6 +243,21 @@ export default function PlansWorkspace({
   const [activeLineKey, setActiveLineKey] = useState<string | null>(initialLineKey ?? null);
   const [showOnlyActiveLine, setShowOnlyActiveLine] = useState(false);
 
+  // Fix round 1 / S8 — the active line's unit family gates Count/Linear:
+  // a count marker on an LF/C/M line, or a linear run on an EA line, can
+  // never contribute to that line's rollup (rollupLines filters strictly
+  // by kind-vs-unit — see markupMath.ts) and used to be silently counted
+  // in `incompatibleCount` with nothing on screen saying why. Only gates
+  // when a real line is active — drawing "unassigned" is always allowed,
+  // same as every other disabled-reason on this toolbar.
+  const activeLine = useMemo(() => lines.find(l => l.line_key === activeLineKey) ?? null, [lines, activeLineKey]);
+  const countUnitDisabledReason = activeLine && activeLine.unit !== 'EA'
+    ? `The active line's unit is ${activeLine.unit} — use Linear, not Count`
+    : null;
+  const linearUnitDisabledReason = activeLine && activeLine.unit === 'EA'
+    ? `The active line's unit is EA — use Count, not Linear`
+    : null;
+
   // Default to the first sheet once the list loads, if nothing was in the URL.
   useEffect(() => {
     if (currentKey || sheets.length === 0) return;
@@ -872,7 +887,12 @@ export default function PlansWorkspace({
               hasSelection={toolState.selectedIds.length > 0}
               scaleDisabledReason={currentSheet ? null : 'Select a sheet first'}
               countLinearDisabledReason={proposed ? 'Save the estimate first to start marking up plans' : null}
-              linearDisabledReason={currentSheet && currentSheet.ft_per_pt == null ? 'This sheet has no confirmed scale yet — calibrate, or confirm the suggested scale below' : null}
+              linearDisabledReason={
+                currentSheet && currentSheet.ft_per_pt == null
+                  ? 'This sheet has no confirmed scale yet — calibrate, or confirm the suggested scale below'
+                  : linearUnitDisabledReason
+              }
+              countDisabledReason={countUnitDisabledReason}
               onNewLineFromMarkup={onNewLineFromMarkup}
               onReassignSelected={onReassignSelected}
               onEditDropsSlack={onEditDropsSlack}

@@ -141,6 +141,44 @@ describe('ItemsPanel — apply flow', () => {
     await waitFor(() => expect(onApplyLines).toHaveBeenCalledWith(['k1']));
   });
 
+  // Fix round 1 / S8 — incompatibleCount/missingScaleCount were already
+  // computed by the backend rollup but nothing on the frontend read them:
+  // Apply applied whatever markedQty existed with no warning that some of
+  // what was drawn on the sheet never made it into that number.
+  it('per-line Apply confirms first when the rollup has excluded markers (incompatibleCount)', async () => {
+    const { onApplyLines } = setup({ rollup: [rollup({ markedQty: 24, incompatibleCount: 3 })] });
+    fireEvent.click(screen.getByText('Apply marked qty'));
+    await waitFor(() => expect(screen.getByRole('alertdialog')).toBeTruthy());
+    expect(screen.getByText(/3 markers of the wrong type for this line's unit will NOT be included/)).toBeTruthy();
+    expect(onApplyLines).not.toHaveBeenCalled(); // not yet — waiting on confirm
+
+    fireEvent.click(screen.getByText('Apply anyway'));
+    await waitFor(() => expect(onApplyLines).toHaveBeenCalledWith(['k1']));
+  });
+
+  it('per-line Apply confirms first when the rollup has a missing-scale exclusion, and cancelling never applies', async () => {
+    const { onApplyLines } = setup({ rollup: [rollup({ markedQty: 24, missingScaleCount: 1 })] });
+    fireEvent.click(screen.getByText('Apply marked qty'));
+    await waitFor(() => expect(screen.getByText(/1 marker on a sheet with no scale set will NOT be included/)).toBeTruthy());
+    fireEvent.click(screen.getByText('Cancel'));
+    expect(onApplyLines).not.toHaveBeenCalled();
+  });
+
+  it('the row itself shows the excluded-marker counts, not just behind the Apply confirm', () => {
+    setup({ rollup: [rollup({ markedQty: 24, incompatibleCount: 2, missingScaleCount: 1 })] });
+    expect(screen.getByTestId('partial-rollup-k1').textContent).toMatch(/2 wrong-type markers excluded.*1 unscaled marker excluded/);
+  });
+
+  it('no partial-rollup row/confirm at all when both counts are zero', async () => {
+    setup({ rollup: [rollup({ markedQty: 24 })] });
+    expect(screen.queryByTestId('partial-rollup-k1')).toBeNull();
+    fireEvent.click(screen.getByText('Apply marked qty'));
+    // No confirm dialog — applies immediately (already covered by the
+    // very first test in this block, re-asserted here for the negative
+    // "no dialog" case specifically).
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
   it('"Apply all that differ" is disabled when nothing differs', () => {
     setup({ rollup: [rollup({ markedQty: 10 })] }); // matches, not differs
     const btn = screen.getByText('Apply all that differ') as HTMLButtonElement;
@@ -186,6 +224,19 @@ describe('ItemsPanel — apply flow', () => {
     setup({ rollup: [rollup({ markedQty: 24 })], previewPriceImpact });
     fireEvent.click(screen.getByText('Apply all that differ (1)'));
     await waitFor(() => expect(screen.getByText(/\$1,234\.50 to the estimate/)).toBeTruthy());
+  });
+
+  // Fix round 1 / S8 — the SAME partial-rollup warning as the single-line
+  // Apply, folded into "Apply all that differ"'s own (already-required)
+  // confirm dialog rather than a second prompt.
+  it('"Apply all that differ" also warns about excluded markers for any line in the batch', async () => {
+    setup({
+      lines: [line({ line_key: 'k1', description: 'Duplex receptacle', qty: 10 })],
+      rollup: [rollup({ lineKey: 'k1', markedQty: 24, incompatibleCount: 3, missingScaleCount: 2 })],
+    });
+    fireEvent.click(screen.getByText('Apply all that differ (1)'));
+    await waitFor(() => expect(screen.getByText('Some markers were excluded:')).toBeTruthy());
+    expect(screen.getByText(/Duplex receptacle:.*3 markers of the wrong type.*2 markers on a sheet with no scale set/)).toBeTruthy();
   });
 });
 

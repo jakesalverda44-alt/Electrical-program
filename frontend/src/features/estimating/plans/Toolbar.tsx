@@ -33,6 +33,14 @@ export interface ToolbarProps {
    *  overridden by) countLinearDisabledReason — whichever reason applies
    *  first wins for Linear's own button/shortcut. */
   linearDisabledReason?: string | null;
+  /** Fix round 1 / S8 — Count specifically is disabled when the ACTIVE
+   *  line's unit is LF/C/M — a count marker on a linear-quantity line can
+   *  never contribute to its rollup (rollupLines filters strictly by
+   *  kind-vs-unit-family, counting anything else as `incompatibleCount`,
+   *  which nothing on screen used to surface at all). Combines with
+   *  (never overridden by) countLinearDisabledReason. Never set at all
+   *  when no line is active — drawing "unassigned" is always allowed. */
+  countDisabledReason?: string | null;
   /** Task 6 (deferral closed) — both require 1+ selected markers, same
    *  gating as Delete. Omitted entirely hides the buttons (e.g. view-only
    *  contexts that never render a Toolbar at all already skip this, but
@@ -58,16 +66,16 @@ const SHORTCUT_TO_TOOL: Record<string, ToolId> = { v: 'select', c: 'count', l: '
 
 export default function Toolbar({
   toolState, dispatch, onUndo, onRedo, canUndo, canRedo, onDeleteSelected, hasSelection, scaleDisabledReason,
-  countLinearDisabledReason, linearDisabledReason, onNewLineFromMarkup, onReassignSelected,
+  countLinearDisabledReason, linearDisabledReason, countDisabledReason, onNewLineFromMarkup, onReassignSelected,
   onEditDropsSlack, editDropsSlackDisabled,
 }: ToolbarProps) {
-  // Fix round 1 / B2/B7 — one lookup covers both the click handler's
+  // Fix round 1 / B2/B7/S8 — one lookup covers both the click handler's
   // `disabled` and the keyboard shortcut gate below, so the two can never
   // drift apart (a tool disabled in the UI but still reachable via 'c'/'l'
   // would be its own bug).
   const disabledReasonFor = (id: ToolId): string | null => {
     if (id === 'scale') return scaleDisabledReason;
-    if (id === 'count') return countLinearDisabledReason ?? null;
+    if (id === 'count') return countLinearDisabledReason ?? countDisabledReason ?? null;
     if (id === 'linear') return countLinearDisabledReason ?? linearDisabledReason ?? null;
     return null;
   };
@@ -99,7 +107,7 @@ export default function Toolbar({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dispatch, onUndo, onRedo, onDeleteSelected, hasSelection, scaleDisabledReason, countLinearDisabledReason, linearDisabledReason]);
+  }, [dispatch, onUndo, onRedo, onDeleteSelected, hasSelection, scaleDisabledReason, countLinearDisabledReason, linearDisabledReason, countDisabledReason]);
 
   return (
     <div className="plan-tools" role="group" aria-label="Markup tools">

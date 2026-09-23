@@ -435,6 +435,51 @@ describe('PlansWorkspace — scale suggestion, Linear gating, and half-size (Fix
   });
 });
 
+// Fix round 1 / S8 — Count is disabled while an LF/C/M line is active
+// (never contributes to that line's rollup), and Linear is disabled
+// while an EA line is active — only when a REAL line is selected;
+// drawing "unassigned" is always allowed either way.
+describe('PlansWorkspace — Count/Linear gated by the active line\'s unit (Fix round 1 / S8)', () => {
+  it('Count is disabled with a reason when the active line is LF', async () => {
+    setup({ lines: [line({ line_key: 'k1', unit: 'LF' })], initialLineKey: 'k1' });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    const countBtn = screen.getByTitle("The active line's unit is LF — use Linear, not Count");
+    expect(countBtn.textContent).toBe('Count');
+    expect((countBtn as HTMLButtonElement).disabled).toBe(true);
+    // Linear stays enabled (default sheet() fixture has a confirmed scale).
+    expect((screen.getByTitle('Linear (L)') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('Linear is disabled with a reason when the active line is EA', async () => {
+    setup({ lines: [line({ line_key: 'k1', unit: 'EA' })], initialLineKey: 'k1' });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    const linearBtn = screen.getByTitle("The active line's unit is EA — use Count, not Linear");
+    expect(linearBtn.textContent).toBe('Linear');
+    expect((linearBtn as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTitle('Count (C)') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('neither tool is gated when no line is active (drawing unassigned is always allowed)', async () => {
+    setup({ lines: [line({ line_key: 'k1', unit: 'LF' })] }); // no initialLineKey
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect((screen.getByTitle('Count (C)') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTitle('Linear (L)') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('the missing-scale reason still takes priority over the unit-mismatch reason for Linear', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet({ ft_per_pt: null, scale_source: null, scale_label: null })] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup({ lines: [line({ line_key: 'k1', unit: 'EA' })], initialLineKey: 'k1' });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    const linearBtn = screen.getByTitle('This sheet has no confirmed scale yet — calibrate, or confirm the suggested scale below');
+    expect(linearBtn.textContent).toBe('Linear');
+  });
+});
+
 // Fix round 1 / B8 — the drops/slack popover: build it (it was never
 // built before this round despite Decision 7's own ask), stamp the
 // app-wide defaults onto every new run, open it the instant the run
