@@ -429,6 +429,15 @@
   color: var(--red);
 }
 
+/* Fix round 1 / B9 — a real progress bar for the plan-file download
+   (previously just a percentage number), visible for the longer transfers
+   a large plan set can now take with the 30s timeout ceiling removed. */
+.plan-viewer-progress {
+  width: 220px;
+  height: 8px;
+  accent-color: var(--accent);
+}
+
 .plan-viewer-mobile-notice {
   padding: 10px 14px;
   background: var(--amber-soft);

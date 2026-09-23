@@ -82,6 +82,15 @@ export async function openPdfDocument(buf: Buffer): Promise<PdfJsDocument> {
   // avoids pdfjs's optional eval-based fast path for embedded PostScript
   // functions — irrelevant to text/geometry extraction and one less thing
   // to sandbox.
-  const loadingTask = pdfjs.getDocument({ data: new Uint8Array(buf), useSystemFonts: true, isEvalSupported: false });
+  // Fix round 1 / B9 — `new Uint8Array(buf)` COPIES every byte into a new
+  // backing ArrayBuffer (Uint8Array's array-like-input constructor
+  // overload). For a 100-150MB plan set that's a second full-size
+  // allocation on top of the Buffer sheets.ts's fetchDocumentBuffer
+  // already built — exactly the "double-buffering" the review calls out.
+  // `new Uint8Array(buffer, byteOffset, length)` is the VIEW overload: it
+  // wraps the SAME underlying memory Buffer already owns (a Node Buffer
+  // IS backed by an ArrayBuffer), zero extra bytes copied.
+  const view = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  const loadingTask = pdfjs.getDocument({ data: view, useSystemFonts: true, isEvalSupported: false });
   return loadingTask.promise;
 }

@@ -523,6 +523,72 @@ describe('PlansWorkspace — drops/slack popover (Fix round 1 / B8)', () => {
   });
 });
 
+// Fix round 1 / B9 — indexing runs as a background job now; GET /sheets
+// returns whatever's already done plus each document's status, and the
+// client polls (never blocking the initial render on a full index).
+describe('PlansWorkspace — background sheet indexing status (Fix round 1 / B9)', () => {
+  function mockSheetsSequence(responses: { sheets: SheetRow[]; statuses: Record<string, string> }[]) {
+    let call = 0;
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) {
+        const data = responses[Math.min(call, responses.length - 1)];
+        call++;
+        return Promise.resolve({ data });
+      }
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      return Promise.resolve({ data: {} });
+    });
+  }
+
+  it('shows an "indexing" banner while a document is pending/indexing, and it clears once every document reaches "done" (via the poll loop)', async () => {
+    mockSheetsSequence([
+      { sheets: [], statuses: { 'doc-1': 'indexing' } },
+      { sheets: [sheet()], statuses: { 'doc-1': 'done' } },
+    ]);
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-sheets-indexing-banner')).toBeTruthy());
+    expect(screen.queryByTestId('plan-sheets-failed-banner')).toBeNull();
+
+    // The poll loop's own 2s interval — advance past it so the next GET
+    // (this test's second mocked response, status 'done') lands.
+    await act(async () => { vi.advanceTimersByTime(2000); await Promise.resolve(); await Promise.resolve(); });
+
+    await waitFor(() => expect(screen.queryByTestId('plan-sheets-indexing-banner')).toBeNull());
+    expect(screen.getByText('E1.1')).toBeTruthy();
+  });
+
+  it('shows a "failed" banner for a failed document, and never auto-polls to retry it on its own', async () => {
+    mockSheetsSequence([{ sheets: [], statuses: { 'doc-1': 'failed' } }]);
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-sheets-failed-banner')).toBeTruthy());
+    // 'failed' is terminal (not pending/indexing) — no polling banner, and
+    // no reason for the poll-interval effect to be running at all.
+    expect(screen.queryByTestId('plan-sheets-indexing-banner')).toBeNull();
+  });
+
+  it('no banners at all once every document is already "done" on the first response', async () => {
+    setup(); // default beforeEach mock has no `statuses` field at all
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect(screen.queryByTestId('plan-sheets-indexing-banner')).toBeNull();
+    expect(screen.queryByTestId('plan-sheets-failed-banner')).toBeNull();
+  });
+
+  it('"Refresh sheets" sends an explicit refresh=1 request', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    get.mockClear();
+
+    fireEvent.click(screen.getByText('Refresh sheets'));
+
+    await waitFor(() => expect(get).toHaveBeenCalledWith(
+      '/estimating/bid1/sheets',
+      expect.objectContaining({ params: { refresh: 1 } })
+    ));
+  });
+});
+
 // Decision 2 — below 900px the viewer is view-only regardless of the
 // caller's own viewOnly prop.
 describe('PlansWorkspace — responsive view-only (Decision 2)', () => {

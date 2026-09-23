@@ -7,7 +7,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api from '../../../api/client';
 import { useApi } from '../../../hooks/useApi';
 import { Toast } from '../../../types';
-import { EstimateLine, EstimateSettings, SheetRow, SheetDiscipline, MarkupWire, RollupEntry, ApplyMarkupsResponse, Library, SaveBidResponse } from '../types';
+import { EstimateLine, EstimateSettings, SheetRow, SheetDiscipline, MarkupWire, RollupEntry, ApplyMarkupsResponse, Library, SaveBidResponse, SheetsResponse, IndexStatus } from '../types';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import SheetNavigator, { sheetKey } from './SheetNavigator';
 import PlanViewer from './PlanViewer';
@@ -195,8 +195,45 @@ export default function PlansWorkspace({
   // restriction, never removes one the caller asked for).
   const isNarrow = useIsNarrowViewport();
   const viewOnly = !!viewOnlyProp || isNarrow;
-  const { data: sheetsData, loading: sheetsLoading, reload: reloadSheets } = useApi<{ sheets: SheetRow[] }>(`/estimating/${bidId}/sheets`);
+  const { data: sheetsData, loading: sheetsLoading, reload: reloadSheets } = useApi<SheetsResponse>(`/estimating/${bidId}/sheets`);
   const sheets = useMemo(() => sheetsData?.sheets ?? [], [sheetsData]);
+  // Fix round 1 / B9 — indexing runs as a background job now; this poll
+  // loop is what actually surfaces "done" once it finishes, the same way
+  // a real client is expected to (see sheets.ts's listSheets doc comment).
+  // Stops polling the instant every known document reaches a terminal
+  // status ('done' or 'failed') — never runs forever once there's nothing
+  // left to wait on, and restarts automatically if a NEW document shows up
+  // (e.g. a plan file uploaded from another tab) with a non-terminal
+  // status the next time sheetsData refreshes.
+  const indexStatuses = useMemo(() => sheetsData?.statuses ?? {}, [sheetsData]);
+  const sheetsIndexing = useMemo(
+    () => Object.values(indexStatuses).some(s => s === 'pending' || s === 'indexing'),
+    [indexStatuses]
+  );
+  useEffect(() => {
+    if (!sheetsIndexing) return;
+    const id = setInterval(() => reloadSheets(), 2000);
+    return () => clearInterval(id);
+  }, [sheetsIndexing, reloadSheets]);
+  // "Refresh sheets" (S12/B9 — never built before this round): a single
+  // explicit `?refresh=1` request (never sent on every poll tick — that
+  // would keep resetting an already-'done' document back to 'pending' the
+  // instant this loop next observed it, chasing a moving target forever),
+  // then handed off to the normal (unrefreshed) poll above to watch it
+  // through to 'done'/'failed'.
+  const [refreshingSheets, setRefreshingSheets] = useState(false);
+  const onRefreshSheets = useCallback(async () => {
+    setRefreshingSheets(true);
+    try {
+      await api.get(`/estimating/${bidId}/sheets`, { params: { refresh: 1 } });
+    } catch {
+      // best-effort kickoff — the poll loop above will keep reading
+      // whatever state actually landed either way.
+    } finally {
+      setRefreshingSheets(false);
+    }
+    reloadSheets();
+  }, [bidId, reloadSheets]);
   // Task 6 (deferral closed) — "New line from markup" reuses the Phase A
   // resolver's own library search (LaborPricingStep.tsx's pattern).
   const { data: library } = useApi<Library>('/estimating/library');
@@ -801,6 +838,23 @@ export default function PlansWorkspace({
               Half-size set?
             </label>
           )}
+          {/* Fix round 1 / B9 — S12 also flagged this as "never built".
+              Re-claims every document (including already-'done' ones,
+              e.g. a newer revision was uploaded to Drive under the same
+              document_id) and re-indexes it in the background; also the
+              only way to retry a 'failed' document (see sheets.ts's
+              claimDocumentsForIndexing — a plain poll never silently
+              retries one on its own). */}
+          <button
+            type="button"
+            className="plan-toolbar-btn"
+            style={{ marginRight: 10 }}
+            title="Re-index every plan document — also retries any that failed"
+            disabled={refreshingSheets}
+            onClick={() => void onRefreshSheets()}
+          >
+            {refreshingSheets ? 'Refreshing…' : 'Refresh sheets'}
+          </button>
           <button
             type="button"
             className="plan-toolbar-btn"
@@ -812,6 +866,16 @@ export default function PlansWorkspace({
             ?
           </button>
         </div>
+        {sheetsIndexing && (
+          <div className="plan-scale-banner" data-testid="plan-sheets-indexing-banner">
+            Indexing plan sheets… newly-indexed sheets will appear here as they finish.
+          </div>
+        )}
+        {Object.values(indexStatuses).some(s => s === 'failed') && (
+          <div className="plan-scale-banner plan-scale-banner-warn" data-testid="plan-sheets-failed-banner">
+            One or more plan documents failed to index. Click &quot;Refresh sheets&quot; to retry.
+          </div>
+        )}
         {proposed && (
           <div className="plan-proposed-banner" data-testid="plan-proposed-banner">
             <span>This estimate hasn&apos;t been saved yet — save it to start marking up plans.</span>

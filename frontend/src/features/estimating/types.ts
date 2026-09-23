@@ -188,8 +188,18 @@ export interface SheetRow {
   half_size: boolean;
 }
 
+/** Fix round 1 / B9 — indexing (a Drive download + a whole-file buffer +
+ *  a pdfjs parse of every page) runs as a background job per document_id
+ *  now, instead of synchronously inside the GET request (which used to
+ *  blow well past the frontend's own 30s axios timeout on a real
+ *  100-150MB plan set). 'failed' is STICKY — a plain (unrefreshed) GET
+ *  never silently re-attempts it; only an explicit "Refresh sheets" does. */
+export type IndexStatus = 'pending' | 'indexing' | 'done' | 'failed';
+
 export interface SheetsResponse {
   sheets: SheetRow[];
+  /** Keyed by document_id. */
+  statuses: Record<string, IndexStatus>;
 }
 
 export type MarkupKind = 'count' | 'linear';

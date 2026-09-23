@@ -285,6 +285,20 @@ async function upsertSheetPage(bidId: string, documentId: string, pageIndex: num
   );
 }
 
+/** Fix round 1 / B9 — hands control back to the event loop between pages.
+ *  A big plan set's getTextContent()/text-item scan is CPU-bound JS work
+ *  (not I/O), so the `await`s already in this loop (DB upserts) aren't
+ *  enough on their own to guarantee a yield if a future change ever moved
+ *  upsertSheetPage off the hot path — an explicit yield makes "index a
+ *  150-page set never blocks this process for more than one page's worth
+ *  of work at a time" true by construction, not by accident of today's
+ *  call shape. setImmediate (not setTimeout(0) or a microtask) — it runs
+ *  after I/O callbacks already queued, which is what actually keeps other
+ *  requests (a concurrent GET /markups, a health check) responsive. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve));
+}
+
 /** Indexes every page of one plan PDF document into est_sheets. Never
  *  throws for a single bad/unreadable document (a corrupt PDF, a Drive
  *  fetch failure) — logs and returns 0 so one bad file in a 68-document
@@ -306,6 +320,7 @@ async function indexDocument(bidId: string, doc: PlanDocument): Promise<number> 
     for (let pageIndex = 0; pageIndex < pdfDoc.numPages; pageIndex++) {
       const info = await extractPageInfo(pdfDoc, pageIndex);
       await upsertSheetPage(bidId, doc.id, pageIndex, info);
+      await yieldToEventLoop();
     }
     return pdfDoc.numPages;
   } finally {
@@ -313,14 +328,126 @@ async function indexDocument(bidId: string, doc: PlanDocument): Promise<number> 
   }
 }
 
-/** Builds (first call) or rebuilds (refresh=true) every plan document's
- *  est_sheets rows for a bid. A calibrated scale always survives a refresh
- *  (see upsertSheetPage). */
-export async function buildOrRefreshSheets(bidId: string): Promise<void> {
-  const docs = await getPlanPdfDocuments(bidId);
+// ── Fix round 1 / B9 — background indexing + per-document status ───────────
+//
+// GET /sheets used to index every plan PDF SYNCHRONOUSLY inside the request
+// (a Drive download, a whole-file buffer, a pdfjs parse of every page) — a
+// real 100-150MB set takes far longer than the frontend's 30s axios
+// timeout, the browser shows "timeout of 30000ms exceeded" while the
+// server keeps indexing in the background anyway, and a partial result (one
+// bad document skipped, or the process restarting mid-set) became
+// permanent since nothing ever re-tried it.
+//
+// Now: every plan PDF document gets a row in est_document_index_status
+// (pending -> indexing -> done, or -> failed). GET /sheets NEVER awaits
+// indexing itself — it (1) registers any newly-seen document as 'pending',
+// (2) atomically claims every 'pending'/'failed' document (flips it to
+// 'indexing' in the same statement, so two concurrent requests can't both
+// kick off the same job), (3) fires the claimed jobs without awaiting them,
+// and (4) immediately returns whatever est_sheets rows already exist plus
+// the current status of every document. The client (PlansWorkspace.tsx)
+// polls while anything is pending/indexing. A 'failed' document is always
+// eligible to be re-claimed on the very next GET /sheets — never a
+// permanent dead end.
+export type IndexStatus = 'pending' | 'indexing' | 'done' | 'failed';
+
+/** Registers a status row (defaulting to 'pending') for every plan PDF
+ *  document that doesn't have one yet — covers a document uploaded after
+ *  the bid's sheets were first opened. Never touches an EXISTING row (an
+ *  in-progress or already-finished job is left alone). */
+async function ensureIndexStatusRows(bidId: string, documentIds: string[]): Promise<void> {
+  if (documentIds.length === 0) return;
+  await pool.query(
+    `INSERT INTO est_document_index_status (bid_id, document_id, status, updated_at)
+     SELECT $1, d, 'pending', now() FROM unnest($2::uuid[]) AS d
+     ON CONFLICT (bid_id, document_id) DO NOTHING`,
+    [bidId, documentIds]
+  );
+}
+
+/** "Refresh sheets" — resets every document back to 'pending' so it's
+ *  re-claimed on this same call, even one that's already 'done'. A
+ *  document currently mid-'indexing' is left alone (its own in-flight job
+ *  will mark it 'done'/'failed' when it finishes; resetting it here would
+ *  let a second job claim it concurrently). */
+async function resetIndexStatusForRefresh(bidId: string, documentIds: string[]): Promise<void> {
+  if (documentIds.length === 0) return;
+  await pool.query(
+    `UPDATE est_document_index_status SET status = 'pending', error = NULL, updated_at = now()
+     WHERE bid_id = $1 AND document_id = ANY($2::uuid[]) AND status != 'indexing'`,
+    [bidId, documentIds]
+  );
+}
+
+/** Atomically claims every 'pending' document among the given ids for
+ *  indexing — the UPDATE's own WHERE clause is the compare-and-set: only a
+ *  row still 'pending' gets flipped to 'indexing' and returned, so two
+ *  overlapping GET /sheets calls can never both start a job for the same
+ *  document.
+ *
+ *  Deliberately does NOT reclaim 'failed' documents here — only
+ *  resetIndexStatusForRefresh (an explicit `?refresh=1`, the "Refresh
+ *  sheets" button) puts a failed document back to 'pending' so it becomes
+ *  eligible again. If a plain (unrefreshed) GET silently re-claimed
+ *  'failed' too, the very next poll after a failure would immediately flip
+ *  it back to 'indexing' before any caller ever got to SEE 'failed' —
+ *  the estimator would have no visible "this one didn't work" state and no
+ *  reason to notice or click Refresh, and a persistently-down Drive link
+ *  would be hammered on every single poll tick instead of once per
+ *  explicit retry. */
+async function claimDocumentsForIndexing(bidId: string, documentIds: string[]): Promise<string[]> {
+  if (documentIds.length === 0) return [];
+  const { rows } = await pool.query(
+    `UPDATE est_document_index_status SET status = 'indexing', updated_at = now()
+     WHERE bid_id = $1 AND document_id = ANY($2::uuid[]) AND status = 'pending'
+     RETURNING document_id`,
+    [bidId, documentIds]
+  );
+  return rows.map(r => r.document_id as string);
+}
+
+async function markIndexDone(bidId: string, documentId: string, pageCount: number): Promise<void> {
+  await pool.query(
+    `UPDATE est_document_index_status SET status = 'done', error = NULL, page_count = $3, updated_at = now()
+     WHERE bid_id = $1 AND document_id = $2`,
+    [bidId, documentId, pageCount]
+  );
+}
+
+async function markIndexFailed(bidId: string, documentId: string, error: string): Promise<void> {
+  await pool.query(
+    `UPDATE est_document_index_status SET status = 'failed', error = $3, updated_at = now()
+     WHERE bid_id = $1 AND document_id = $2`,
+    [bidId, documentId, error.slice(0, 2000)]
+  );
+}
+
+/** Fire-and-forget — GET /sheets must respond immediately with whatever's
+ *  already there; it never awaits this. Each document indexes and updates
+ *  its own status independently, so one slow/corrupt document never delays
+ *  another's 'done' from landing. */
+function runClaimedIndexingInBackground(bidId: string, docs: PlanDocument[]): void {
   for (const doc of docs) {
-    await indexDocument(bidId, doc);
+    void (async () => {
+      try {
+        const pageCount = await indexDocument(bidId, doc);
+        await markIndexDone(bidId, doc.id, pageCount);
+      } catch (err) {
+        logger.error({ err, documentId: doc.id }, '[estimating/sheets] background indexing failed');
+        await markIndexFailed(bidId, doc.id, err instanceof Error ? err.message : String(err));
+      }
+    })();
   }
+}
+
+export async function getIndexStatuses(bidId: string): Promise<Record<string, IndexStatus>> {
+  const { rows } = await pool.query(
+    `SELECT document_id, status FROM est_document_index_status WHERE bid_id = $1`,
+    [bidId]
+  );
+  const out: Record<string, IndexStatus> = {};
+  for (const r of rows) out[r.document_id as string] = r.status as IndexStatus;
+  return out;
 }
 
 export async function getSheetRows(bidId: string): Promise<SheetRow[]> {
@@ -354,16 +481,35 @@ export async function getSheetRows(bidId: string): Promise<SheetRow[]> {
   }));
 }
 
-/** GET .../sheets — the route's whole "build on first call, cache after"
- *  contract in one function: only touches Drive/pdfjs when there's nothing
- *  cached yet, or the caller explicitly asked to refresh. */
-export async function listSheets(bidId: string, opts: { refresh?: boolean } = {}): Promise<SheetRow[]> {
-  const existing = await getSheetRows(bidId);
-  if (existing.length === 0 || opts.refresh) {
-    await buildOrRefreshSheets(bidId);
-    return getSheetRows(bidId);
+export interface ListSheetsResult {
+  sheets: SheetRow[];
+  /** Fix round 1 / B9 — per plan PDF document_id. The client polls (see
+   *  PlansWorkspace.tsx) while any value here is 'pending'/'indexing'. */
+  statuses: Record<string, IndexStatus>;
+}
+
+/** GET .../sheets — NEVER blocks on indexing (Fix round 1 / B9). Registers
+ *  any newly-seen document as 'pending', claims + kicks off (fire-and-
+ *  forget) every 'pending' document, and returns immediately with
+ *  whatever est_sheets rows already exist plus every document's current
+ *  status. `refresh` (the "Refresh sheets" button — an explicit,
+ *  one-time action, never sent on every poll tick) resets EVERY document
+ *  (including 'done' and 'failed' ones) back to 'pending' first, so this
+ *  same claim step picks them all up again. */
+export async function listSheets(bidId: string, opts: { refresh?: boolean } = {}): Promise<ListSheetsResult> {
+  const docs = await getPlanPdfDocuments(bidId);
+  const documentIds = docs.map(d => d.id);
+  await ensureIndexStatusRows(bidId, documentIds);
+  if (opts.refresh) await resetIndexStatusForRefresh(bidId, documentIds);
+
+  const claimedIds = await claimDocumentsForIndexing(bidId, documentIds);
+  if (claimedIds.length > 0) {
+    const claimedSet = new Set(claimedIds);
+    runClaimedIndexingInBackground(bidId, docs.filter(d => claimedSet.has(d.id)));
   }
-  return existing;
+
+  const [sheets, statuses] = await Promise.all([getSheetRows(bidId), getIndexStatuses(bidId)]);
+  return { sheets, statuses };
 }
 
 export interface SetScaleInput {

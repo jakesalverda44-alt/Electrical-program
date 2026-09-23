@@ -51,6 +51,34 @@ async function makePlanDocDriveStored(bidId: string, driveFileId: string): Promi
   return rows[0].id as string;
 }
 
+/** Fix round 1 / B9 — GET /sheets no longer indexes synchronously; it
+ *  kicks off (fire-and-forget) background jobs and returns immediately
+ *  with whatever's already done. Tests that need the FULLY-indexed result
+ *  (the first GET for a bid, or a `?refresh=1` call) poll this same route
+ *  exactly like the real client (PlansWorkspace.tsx) will, until every
+ *  document's status is terminal ('done' or 'failed'). A later GET for a
+ *  bid whose documents are already 'done' returns on the very first
+ *  request (nothing left to claim), so callers can use this helper
+ *  everywhere without worrying about which call is "the first one". */
+async function pollSheetsUntilIndexed(
+  app: import('express').Express, bidId: string, token: string, opts: { refresh?: boolean } = {}
+) {
+  // `?refresh=1` (the "Refresh sheets" button) is a single explicit
+  // action, same as a real client would send it — only the FIRST request
+  // carries it. Every poll after that is a plain GET, exactly like
+  // PlansWorkspace.tsx's own polling loop. Sending refresh=1 on EVERY
+  // attempt would re-reset an already-'done' document back to 'pending'
+  // the instant this loop observes it, forever chasing a moving target.
+  let res = await request(app).get(`/api/estimating/${bidId}/sheets${opts.refresh ? '?refresh=1' : ''}`).set(auth(token)).expect(200);
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const statuses = Object.values(res.body.statuses ?? {});
+    if (statuses.every(s => s === 'done' || s === 'failed')) return res;
+    await new Promise(r => setTimeout(r, 20));
+    res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(token)).expect(200);
+  }
+  throw new Error('pollSheetsUntilIndexed: sheets never finished indexing within the test polling budget');
+}
+
 describe('GET /api/estimating/:bidId/sheets — build on first call, cache after', () => {
   it('builds est_sheets from a DB-stored plan PDF and returns both pages', async (ctx) => {
     if (!ok) return ctx.skip();
@@ -59,7 +87,7 @@ describe('GET /api/estimating/:bidId/sheets — build on first call, cache after
     const bidId = await makeBid(app, u);
     await makePlanDocDbStored(bidId);
 
-    const res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const res = await pollSheetsUntilIndexed(app, bidId, u.token);
     expect(res.body.sheets.length).toBe(2);
     const page1 = res.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
     expect(page1.sheet_no).toBe('E1.1');
@@ -92,7 +120,7 @@ describe('GET /api/estimating/:bidId/sheets — build on first call, cache after
       name: 'plans.pdf',
     });
 
-    await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    await pollSheetsUntilIndexed(app, bidId, u.token);
     expect(getFileMedia).toHaveBeenCalledTimes(1);
 
     const second = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
@@ -112,20 +140,105 @@ describe('GET /api/estimating/:bidId/sheets — build on first call, cache after
     const bidId = await makeBid(app, u);
     const docId = await makePlanDocDbStored(bidId);
 
-    await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    await pollSheetsUntilIndexed(app, bidId, u.token);
     // Estimator calibrates page 0 by hand — a deliberately different value
     // than the title-block guess, so we can tell the two apart.
     await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/0/scale`).set(auth(u.token)).send({
       ft_per_pt: 0.05, source: 'calibrated', label: 'Calibrated: 1" = 4\'',
     }).expect(200);
 
-    const refreshed = await request(app).get(`/api/estimating/${bidId}/sheets?refresh=1`).set(auth(u.token)).expect(200);
+    const refreshed = await pollSheetsUntilIndexed(app, bidId, u.token, { refresh: true });
     const page1 = refreshed.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
     expect(page1.scale_source).toBe('calibrated');
     expect(page1.ft_per_pt).toBeCloseTo(0.05, 10);
     expect(page1.scale_label).toBe('Calibrated: 1" = 4\'');
     // Everything else still refreshed normally.
     expect(page1.sheet_no).toBe('E1.1');
+  });
+});
+
+// Fix round 1 / B9 — indexing is now a background job with a per-document
+// status GET /sheets returns alongside whatever's already indexed, so the
+// client can poll instead of the request itself blocking on a Drive
+// download + full pdfjs parse (which used to blow well past the frontend's
+// 30s axios timeout on a real 100-150MB plan set).
+describe('GET /api/estimating/:bidId/sheets — background indexing status (B9)', () => {
+  it('an immediate (unpolled) call returns a status for the document even before indexing finishes, and it reaches "done"', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+
+    const first = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    // Whatever it is right now, it must be ONE of the real states — never
+    // absent (every plan PDF document gets a status row the moment it's
+    // seen) and never something outside the documented enum.
+    expect(['pending', 'indexing', 'done', 'failed']).toContain(first.body.statuses[docId]);
+
+    const finished = await pollSheetsUntilIndexed(app, bidId, u.token);
+    expect(finished.body.statuses[docId]).toBe('done');
+    expect(finished.body.sheets.length).toBe(2);
+  });
+
+  it('a document that fails to index (e.g. a Drive error) is marked "failed" and never crashes the request — the status is STICKY (a plain poll never silently retries it) until an explicit Refresh, which retries it successfully', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDriveStored(bidId, `drive-fail-${Date.now()}`);
+    getFileMedia.mockRejectedValueOnce(new Error('simulated Drive outage'));
+
+    const failed = await pollSheetsUntilIndexed(app, bidId, u.token);
+    expect(failed.body.statuses[docId]).toBe('failed');
+    expect(failed.body.sheets.length).toBe(0);
+
+    // A plain poll (no refresh) leaves it 'failed' — never silently
+    // re-attempted on its own; there is nothing left mocked to reject
+    // again, so if this silently retried it would show up as 'done' here.
+    const stillFailed = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    expect(stillFailed.body.statuses[docId]).toBe('failed');
+
+    // "Refresh sheets" is the retry action — never a permanent dead end.
+    getFileMedia.mockResolvedValueOnce({
+      stream: Readable.from(buildSampleSheetPdf()),
+      mimeType: 'application/pdf',
+      name: 'plans.pdf',
+    });
+    const retried = await pollSheetsUntilIndexed(app, bidId, u.token, { refresh: true });
+    expect(retried.body.statuses[docId]).toBe('done');
+    expect(retried.body.sheets.length).toBe(2);
+  });
+
+  it('two independent documents index independently — one succeeding does not wait on, or get blocked by, a slower/failed one', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const okDocId = await makePlanDocDbStored(bidId);
+    const failDocId = await makePlanDocDriveStored(bidId, `drive-fail2-${Date.now()}`);
+    getFileMedia.mockRejectedValueOnce(new Error('simulated Drive outage'));
+
+    const res = await pollSheetsUntilIndexed(app, bidId, u.token);
+    expect(res.body.statuses[okDocId]).toBe('done');
+    expect(res.body.statuses[failDocId]).toBe('failed');
+    // Only the successfully-indexed document contributed sheet rows.
+    expect(res.body.sheets.every((s: { document_id: string }) => s.document_id === okDocId)).toBe(true);
+    expect(res.body.sheets.length).toBe(2);
+  });
+
+  it('a plan document uploaded AFTER the first GET /sheets call is picked up (registered as pending) on the next call, not lost', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await makePlanDocDbStored(bidId);
+    await pollSheetsUntilIndexed(app, bidId, u.token);
+
+    const secondDocId = await makePlanDocDbStored(bidId);
+    const after = await pollSheetsUntilIndexed(app, bidId, u.token);
+    expect(after.body.statuses[secondDocId]).toBe('done');
+    expect(after.body.sheets.length).toBe(4); // 2 pages x 2 documents
   });
 });
 
@@ -164,7 +277,7 @@ describe('PUT /api/estimating/:bidId/sheets/:documentId/half-size', () => {
     const u = await makeUser('owner');
     const bidId = await makeBid(app, u);
     const docId = await makePlanDocDbStored(bidId);
-    const before = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const before = await pollSheetsUntilIndexed(app, bidId, u.token);
     const page1Before = before.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
     expect(page1Before.suggested_ft_per_pt).toBeCloseTo(1 / (0.125 * 72), 6);
     // Confirm the suggestion too, so both columns have a real value to double.
@@ -192,7 +305,7 @@ describe('PUT /api/estimating/:bidId/sheets/:documentId/half-size', () => {
     const u = await makeUser('owner');
     const bidId = await makeBid(app, u);
     const docId = await makePlanDocDbStored(bidId);
-    const initial = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const initial = await pollSheetsUntilIndexed(app, bidId, u.token);
     const originalSuggested = initial.body.sheets.find((s: { page_index: number }) => s.page_index === 0).suggested_ft_per_pt as number;
 
     await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
@@ -210,7 +323,7 @@ describe('PUT /api/estimating/:bidId/sheets/:documentId/half-size', () => {
     const u = await makeUser('owner');
     const bidId = await makeBid(app, u);
     const docId = await makePlanDocDbStored(bidId);
-    const initial = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const initial = await pollSheetsUntilIndexed(app, bidId, u.token);
     const originalSuggested = initial.body.sheets.find((s: { page_index: number }) => s.page_index === 0).suggested_ft_per_pt as number;
 
     await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
@@ -227,10 +340,10 @@ describe('PUT /api/estimating/:bidId/sheets/:documentId/half-size', () => {
     const u = await makeUser('owner');
     const bidId = await makeBid(app, u);
     const docId = await makePlanDocDbStored(bidId);
-    await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    await pollSheetsUntilIndexed(app, bidId, u.token);
     await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
 
-    await request(app).get(`/api/estimating/${bidId}/sheets?refresh=1`).set(auth(u.token)).expect(200);
+    await pollSheetsUntilIndexed(app, bidId, u.token, { refresh: true });
 
     const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
     expect(after.body.sheets.find((s: { page_index: number }) => s.page_index === 0).half_size).toBe(true);

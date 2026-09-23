@@ -20,6 +20,7 @@
 // point under the cursor stays under it.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import api from '../../../api/client';
+import { isAbortError } from '../../../api/errors';
 import { openPdfDocument, PdfJsDocument, PdfJsRenderTask } from './pdfjsClient';
 import { PageGeometry, pdfToRenderMatrix, screenToPdf, fitScale, clampRenderScale, renderedSize } from './overlay';
 import { needsTiledRender, planTileRender, tilePlansRoughlyEqual, TileRenderPlan, VisibleRect } from './regionRender';
@@ -146,10 +147,23 @@ export default function PlanViewer({
       loadedDocRef.current = null;
     }
 
+    // Fix round 1 / B9 — a real plan set can be 100-150MB; api/client.ts's
+    // global 30s axios timeout covers the WHOLE transfer, so a perfectly
+    // healthy download on a slow office link used to fail with "timeout of
+    // 30000ms exceeded" partway through. `timeout: 0` removes that
+    // ceiling for this one (large, user-visible-progress) request; the
+    // AbortController below is what actually stops a request that's no
+    // longer wanted — switching documents, or unmounting — instead of a
+    // time-based cutoff. Every earlier `cancelled` check stays (the
+    // AbortController stops the NETWORK transfer; `cancelled` still guards
+    // the async continuations after it, e.g. openPdfDocument()).
+    const controller = new AbortController();
     (async () => {
       try {
         const res = await api.get<ArrayBuffer>(`/estimating/${bidId}/sheets/${documentId}/file`, {
           responseType: 'arraybuffer',
+          timeout: 0,
+          signal: controller.signal,
           onDownloadProgress: evt => {
             if (!cancelled) setProgress({ loaded: evt.loaded, total: evt.total ?? null });
           },
@@ -160,13 +174,13 @@ export default function PlanViewer({
         loadedDocRef.current = { documentId, doc };
         setStatus('ready');
       } catch (err) {
-        if (cancelled) return;
+        if (cancelled || isAbortError(err)) return;
         setErrorMessage(err instanceof Error ? err.message : 'Could not load this plan sheet.');
         setStatus('error');
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, [bidId, documentId]);
 
   // Destroy the open document when the viewer itself unmounts (not just on
@@ -532,7 +546,20 @@ export default function PlanViewer({
         {status === 'loading' && (
           <div className="plan-viewer-loading">
             <div>Loading plan…</div>
-            {progress?.total ? <div>{Math.round((progress.loaded / progress.total) * 100)}%</div> : null}
+            {/* Fix round 1 / B9 — a real, visible progress bar (not just
+                a percentage number) for a transfer that can now run well
+                past the old 30s ceiling on a large plan set; `total` is
+                null whenever the server didn't send a Content-Length
+                (chunked/streamed — see sheets.ts's streamPlanDocument),
+                in which case only the loaded-bytes count is shown. */}
+            {progress?.total ? (
+              <>
+                <progress className="plan-viewer-progress" value={progress.loaded} max={progress.total} />
+                <div>{Math.round((progress.loaded / progress.total) * 100)}%</div>
+              </>
+            ) : progress?.loaded ? (
+              <div>{Math.round(progress.loaded / 1024 / 1024)} MB…</div>
+            ) : null}
           </div>
         )}
         {status === 'error' && (

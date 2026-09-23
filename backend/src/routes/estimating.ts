@@ -586,12 +586,18 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
 
 // ── Sheets (Phase B, Task 2) ─────────────────────────────────────────────────
 
+// Fix round 1 / B9 — never blocks on indexing (see sheets.ts's listSheets
+// doc comment): responds immediately with whatever's already indexed plus
+// each plan document's status, after firing off (not awaiting) any
+// indexing job it just became eligible to claim. `?refresh=1` (the
+// frontend's "Refresh sheets" button) also re-claims already-'done'
+// documents, not just pending/failed ones.
 router.get('/:bidId/sheets', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const refresh = req.query.refresh === '1';
-  const sheets = await listSheets(bidId, { refresh });
-  res.json({ sheets });
+  const { sheets, statuses } = await listSheets(bidId, { refresh });
+  res.json({ sheets, statuses });
 });
 
 // Authenticated PDF stream — never a public Drive link (env facts). Access is

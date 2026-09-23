@@ -24,7 +24,11 @@ function loadDoc(bidId: string, documentId: string): Promise<PdfJsDocument> {
   let pending = docCache.get(documentId);
   if (!pending) {
     pending = api
-      .get<ArrayBuffer>(`/estimating/${bidId}/sheets/${documentId}/file`, { responseType: 'arraybuffer' })
+      // Fix round 1 / B9 — same fix as PlanViewer.tsx's own file GET: the
+      // global 30s axios timeout (api/client.ts) covers this whole
+      // transfer too, and a 100-150MB plan set can legitimately take
+      // longer than that on a slow link.
+      .get<ArrayBuffer>(`/estimating/${bidId}/sheets/${documentId}/file`, { responseType: 'arraybuffer', timeout: 0 })
       .then(res => openPdfDocument(res.data));
     docCache.set(documentId, pending);
     // A failed fetch/parse must not poison the cache forever — the next
