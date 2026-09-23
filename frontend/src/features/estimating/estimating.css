@@ -523,6 +523,35 @@
   cursor: help;
 }
 
+/* ── Phase B, Task 8 — Takeoff step's List|Plans toggle ──────────────────── */
+
+.est-view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+
+.est-view-toggle-btn {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text2);
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+
+.est-view-toggle-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
 /* ── Responsive: 16px gutters, no horizontal page scroll ─────────────────── */
 
 @media (max-width: 899px) {

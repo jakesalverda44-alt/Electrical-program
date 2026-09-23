@@ -44,7 +44,13 @@ import { useEstimatingBid } from '../../estimating/useEstimatingBid';
 // bundle-heavy part) load as their own chunk; useEstimateStepParam/
 // useEstimatingBid above are hooks and must stay a static import.
 const EstimatingWorkspace = React.lazy(() => import('../../estimating/EstimatingWorkspace'));
+// Phase B, Task 9 — its own lazy chunk, separate from EstimatingWorkspace's
+// (which never covers the Takeoff step's own content — see renderStepContent's
+// 'takeoff' case below). Neither the viewer's code nor pdf.js (dynamically
+// imported inside it) loads into the main bundle unless Plans view opens.
+const PlansWorkspace = React.lazy(() => import('../../estimating/plans/PlansWorkspace'));
 import { EstimateStepKey, mapLegacyTabToStep, stepToLegacyTab, deriveStepStatus, legacyTabWantsInsights, ESTIMATE_STEPS } from '../../estimating/steps';
+import { usePlanViewParams } from '../../estimating/plans/usePlanViewParams';
 
 const ESTIMATE_STEP_ORDER = ESTIMATE_STEPS.map(s => s.key);
 const ESTIMATE_STEP_LABELS = Object.fromEntries(ESTIMATE_STEPS.map(s => [s.key, s.label])) as Record<EstimateStepKey, string>;
@@ -974,6 +980,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // bid_workspaces.active_tab (still a real, autosaved DB column) stays
   // populated with something a stale reload/old build still understands.
   const [currentStep, setCurrentStepParam] = useEstimateStepParam(mapLegacyTabToStep(ws.activeTab));
+  // Phase B, Task 8 — the Takeoff step's List|Plans toggle
+  // (?view=plans&sheet=<doc>:<page>&line=<key>), independent of `currentStep`
+  // itself (a switch away from Takeoff and back keeps whichever view was open).
+  const planView = usePlanViewParams();
   const onSelectStep = useStableFn((step: EstimateStepKey) => {
     setCurrentStepParam(step);
     set({ activeTab: stepToLegacyTab(step) });
@@ -1074,8 +1084,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           </>
         );
 
-      case 'takeoff':
-        return (
+      case 'takeoff': {
+        // Phase B, Decision 1/Task 8 — List|Plans toggle. List is the
+        // existing, unchanged BidTab+TakeoffTab content (the default, and
+        // the only option below the 900px view-only breakpoint per Decision
+        // 2 — that responsive gate lives inside PlansWorkspace itself, this
+        // toggle only decides which of the two to mount here).
+        const listContent = (
           <>
             <BidTab
               ws={ws}
@@ -1107,6 +1122,46 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             />
           </>
         );
+        return (
+          <>
+            <div className="est-view-toggle" role="tablist" aria-label="Takeoff view">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={planView.view === 'list'}
+                className={`est-view-toggle-btn${planView.view === 'list' ? ' active' : ''}`}
+                onClick={() => planView.setView('list')}
+              >
+                List
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={planView.view === 'plans'}
+                className={`est-view-toggle-btn${planView.view === 'plans' ? ' active' : ''}`}
+                onClick={() => planView.setView('plans')}
+              >
+                Plans
+              </button>
+            </div>
+            {planView.view === 'plans' ? (
+              <Suspense fallback={<div style={{ padding: 32, color: 'var(--text3)' }}>Loading plan viewer…</div>}>
+                <PlansWorkspace
+                  bidId={bid.id}
+                  lines={estimatingBid.lines}
+                  settings={estimatingBid.settings}
+                  initialSheetKey={planView.sheetKey}
+                  initialLineKey={planView.lineKey}
+                  onSheetKeyChange={planView.setSheetKey}
+                  onLineKeyChange={planView.setLineKey}
+                  onApplied={estimatingBid.reload}
+                  showToast={showToastStable}
+                />
+              </Suspense>
+            ) : listContent}
+          </>
+        );
+      }
 
       case 'pricing':
         // Rendered by EstimatingWorkspace itself (the lazy chunk) — see the
@@ -1233,6 +1288,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           doneByStep={doneByStep}
           saveState={saveState}
           nextAction={nextStep ? { label: ESTIMATE_STEP_LABELS[nextStep], onClick: () => onSelectStep(nextStep) } : null}
+          forceSlimSummary={currentStep === 'takeoff' && planView.view === 'plans'}
           lines={estimatingBid.lines}
           settings={estimatingBid.settings}
           recap={estimatingBid.recap}
