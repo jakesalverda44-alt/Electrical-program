@@ -1,6 +1,9 @@
 {
   "name": "electrical-crm-backend",
   "version": "1.0.0",
+  "engines": {
+    "node": ">=20.16.0"
+  },
   "scripts": {
     "dev": "ts-node-dev --respawn src/index.ts",
     "build": "tsc",

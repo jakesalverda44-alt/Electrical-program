@@ -7,6 +7,13 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Fix round 1 / N10 — pdfjs-dist@5 (backend/src/estimating/
+      # pdfjsLoader.ts, used for sheet indexing) needs Node >= 20.16. Pins
+      # the runtime Render actually deploys, so a future Render default
+      # bump/rollback can't silently drop below that floor. Kept in sync
+      # with backend/package.json's own `engines.node`.
+      - key: NODE_VERSION
+        value: 20.16.0
       - key: JWT_SECRET
         generateValue: true
       # Long-lived key for automation / browser-extension lead creation, sent as
