@@ -105,14 +105,32 @@ export interface MarkupBatchResult {
 }
 
 async function insertMarkup(client: PoolClient, bidId: string, userId: string | null, input: MarkupCreateInput): Promise<MarkupRow | null> {
+  // Fix round 1 / B3(a) — the WHERE clause used to also require
+  // `deleted_at IS NULL`, so re-upserting the id of a markup that was
+  // already SOFT-deleted (the normal outcome of a delete-then-undo, or a
+  // redo of an undone create) never matched, and ON CONFLICT DO UPDATE's
+  // failed-WHERE-clause behavior is to act like DO NOTHING — 0 rows
+  // returned, RETURNING empty, the caller treating it as "skipped: id
+  // already belongs to a different bid" even though it belongs to THIS
+  // bid and was simply deleted. Delete 30 markers, undo, and the client
+  // showed them reappearing (autosave said "Saved") while the server kept
+  // them deleted forever.
+  //
+  // Fix: the WHERE clause now checks only bid_id — an id that exists
+  // under THIS bid, deleted or not, is always revivable by re-upserting
+  // it with the new values (`deleted_at = NULL` is now in the SET list
+  // too). Only an id that belongs to a genuinely DIFFERENT bid is still
+  // skipped (the WHERE clause is exactly what keeps a create from ever
+  // overwriting another bid's row — see batchMarkups's own comment).
   const { rows } = await client.query(
     `INSERT INTO est_markups (id, bid_id, document_id, page_index, line_key, kind, points, drops, drop_ft, slack_pct, status, label, created_by, updated_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,now())
      ON CONFLICT (id) DO UPDATE SET
        document_id = EXCLUDED.document_id, page_index = EXCLUDED.page_index, line_key = EXCLUDED.line_key,
        kind = EXCLUDED.kind, points = EXCLUDED.points, drops = EXCLUDED.drops, drop_ft = EXCLUDED.drop_ft,
-       slack_pct = EXCLUDED.slack_pct, status = EXCLUDED.status, label = EXCLUDED.label, updated_at = now()
-     WHERE est_markups.bid_id = $2 AND est_markups.deleted_at IS NULL
+       slack_pct = EXCLUDED.slack_pct, status = EXCLUDED.status, label = EXCLUDED.label,
+       deleted_at = NULL, updated_at = now()
+     WHERE est_markups.bid_id = $2
      RETURNING *`,
     [input.id, bidId, input.documentId, input.pageIndex, input.lineKey ?? null, input.kind,
      JSON.stringify(input.points), input.drops ?? 0, input.dropFt ?? null, input.slackPct ?? null,

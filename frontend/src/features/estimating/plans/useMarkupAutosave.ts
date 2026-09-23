@@ -93,21 +93,50 @@ export function useMarkupAutosave(
     inFlightRef.current = true;
     if (aliveRef.current) { setStatus('saving'); setError(null); }
     try {
-      await api.post<BatchResponse>(`/estimating/${bidIdRef.current}/markups/batch`, {
+      const { data } = await api.post<BatchResponse>(`/estimating/${bidIdRef.current}/markups/batch`, {
         creates: batch.creates.map(toWireMarkup),
         updates: batch.updates.map(toWireMarkup),
         deletes: batch.deletes,
       });
-      // The batch just sent is now the confirmed-synced snapshot — advance
-      // by MERGING (not overwriting with markupsRef.current, which may
-      // have changed again since this request started): every markup this
-      // batch touched is now synced at the value it was sent with; a
-      // create/update inside `batch` came straight from markupsRef.current
-      // at request-start time, so this is exactly what the server has.
-      const nextSynced = applyBatchToSnapshot(syncedRef.current, batch);
+      // Fix round 1 / B3(a) — a 200 response can still carry per-item
+      // `skipped` entries the server did NOT apply (e.g. re-upserting an
+      // id that turned out to collide with a different bid, or an
+      // update/delete for an id the server no longer has). The response
+      // used to go completely unread here: the whole SENT batch was
+      // folded into syncedRef unconditionally and the indicator showed
+      // "Saved" for work the server had silently dropped — undo a delete
+      // (or redo an undone create), and the marker reappeared on screen
+      // with "Saved" showing, while the server still had it deleted.
+      const skippedIds = new Set(data.skipped.map(s => s.id));
+      // Only the part of the sent batch the server actually confirmed
+      // becomes the new synced baseline — every markup this batch touched
+      // is now synced at the value it was sent with; a create/update
+      // inside `batch` came straight from markupsRef.current at
+      // request-start time, so this is exactly what the server has for
+      // everything EXCEPT a skipped id, which must never be folded in as
+      // if it were synced (it isn't).
+      const confirmedBatch = skippedIds.size === 0 ? batch : {
+        creates: batch.creates.filter(m => !skippedIds.has(m.id)),
+        updates: batch.updates.filter(m => !skippedIds.has(m.id)),
+        deletes: batch.deletes.filter(id => !skippedIds.has(id)),
+      };
+      const nextSynced = applyBatchToSnapshot(syncedRef.current, confirmedBatch);
       syncedRef.current = nextSynced;
       onSyncedRef.current(nextSynced);
-      if (aliveRef.current) { setStatus('saved'); setError(null); }
+      if (aliveRef.current) {
+        if (data.skipped.length > 0) {
+          // An error state, not "saved" — the guard below stays armed,
+          // and a subsequent diff/retry will naturally re-include the
+          // skipped item(s) (they're absent from the new syncedRef too),
+          // so a transient cause (e.g. the exact B3(a) undo race) self-
+          // heals on the next attempt rather than being lost forever.
+          setStatus('error');
+          setError(`Could not save ${data.skipped.length} marker${data.skipped.length === 1 ? '' : 's'}: ${data.skipped.map(s => s.reason).join('; ')}`);
+        } else {
+          setStatus('saved');
+          setError(null);
+        }
+      }
     } catch (err) {
       if (aliveRef.current) {
         setStatus('error');

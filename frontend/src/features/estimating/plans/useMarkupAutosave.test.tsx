@@ -197,6 +197,73 @@ describe('useMarkupAutosave — the unsaved guard blocks navigation while pendin
   });
 });
 
+// Fix round 1 / B3(a) — the response used to be completely unread: ANY 200
+// (even one carrying per-item `skipped` entries the server did NOT apply)
+// folded the WHOLE sent batch into syncedRef and showed "Saved".
+describe('useMarkupAutosave — a 200 response with `skipped` items is treated as an error (B3(a))', () => {
+  it('shows status=error (not "saved") when the response carries a skipped item, with the reason in the message', async () => {
+    post.mockResolvedValueOnce({ data: { created: [], updated: [], deleted: [], skipped: [{ id: 'a', reason: 'id already belongs to a different bid' }] } });
+    const onSynced = vi.fn();
+    let markups: MarkupDraft[] = [];
+    const { result, rerender } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, onSynced), { initialProps: { m: markups } });
+
+    markups = [draft('a')];
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(result.current.error).toMatch(/id already belongs to a different bid/);
+  });
+
+  it('does NOT fold a skipped id into the synced snapshot — onSynced never reports it as confirmed', async () => {
+    post.mockResolvedValueOnce({ data: { created: [], updated: [], deleted: [], skipped: [{ id: 'a', reason: 'not found for this bid' }] } });
+    const onSynced = vi.fn();
+    let markups: MarkupDraft[] = [];
+    const { rerender } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, onSynced), { initialProps: { m: markups } });
+
+    markups = [draft('a')];
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(onSynced).toHaveBeenCalledTimes(1));
+    expect(onSynced).toHaveBeenCalledWith([]); // 'a' was skipped — never joins the synced snapshot
+  });
+
+  it('a MIXED batch confirms the non-skipped items and only reports the skipped one as failed', async () => {
+    post.mockResolvedValueOnce({ data: { created: [{ id: 'a' }], updated: [], deleted: [], skipped: [{ id: 'b', reason: 'id already belongs to a different bid' }] } });
+    const onSynced = vi.fn();
+    let markups: MarkupDraft[] = [];
+    const { result, rerender } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, onSynced), { initialProps: { m: markups } });
+
+    markups = [draft('a'), draft('b')];
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(onSynced).toHaveBeenCalledWith([draft('a')]); // a confirmed, b withheld
+  });
+
+  // The reviewer's exact B3(a) undo scenario, exercised at the hook level:
+  // delete a marker (server confirms), undo (re-create the same id) — if
+  // the server STILL skipped it (e.g. the fix hadn't landed), the client
+  // must show the failure, not "Saved" with the marker silently still gone.
+  it('undo-a-delete that the server skips is surfaced as an error, not silently shown as saved', async () => {
+    post.mockResolvedValueOnce({ data: { created: [], updated: [], deleted: ['a'], skipped: [] } }); // the delete
+    post.mockResolvedValueOnce({ data: { created: [], updated: [], deleted: [], skipped: [{ id: 'a', reason: 'not found for this bid (already deleted, or never created)' }] } }); // the undo, still skipped
+    const onSynced = vi.fn();
+    let markups: MarkupDraft[] = [draft('a')];
+    const { result, rerender } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, onSynced), { initialProps: { m: markups } });
+
+    markups = []; // delete
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.status).toBe('saved'));
+
+    markups = [draft('a')]; // undo
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(result.current.error).toMatch(/not found for this bid/);
+  });
+});
+
 describe('applyBatchToSnapshot', () => {
   it('upserts creates and updates, removes deletes, leaves everything else untouched', () => {
     const synced = [draft('a'), draft('b'), draft('c')];

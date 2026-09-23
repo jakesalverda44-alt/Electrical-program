@@ -98,6 +98,83 @@ describe('POST /api/estimating/:bidId/markups/batch — create/update/delete', (
     expect(rows[0].deleted_at).toBeTruthy();
   });
 
+  // Fix round 1 / B3(a) — the reviewer's exact scenario: delete a marker,
+  // then undo (== re-create with the SAME id, via the client's own
+  // create-idempotent-by-id batch shape). Before the fix, re-upserting a
+  // soft-deleted id never matched ON CONFLICT's WHERE clause, so the
+  // "revived" marker was silently skipped — it stayed deleted server-side
+  // even though the client showed it reappearing and autosave said "Saved".
+  it('re-upserting a SOFT-DELETED id (undo-a-delete) revives it — deleted_at clears and the new values apply', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    const id = randomUUID();
+
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 10, y: 10 }] }],
+      updates: [], deletes: [],
+    }).expect(200);
+
+    const delRes = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [], updates: [], deletes: [id],
+    }).expect(200);
+    expect(delRes.body.deleted).toEqual([id]);
+    const { rows: afterDelete } = await pool.query('SELECT deleted_at FROM est_markups WHERE id=$1', [id]);
+    expect(afterDelete[0].deleted_at).toBeTruthy();
+
+    // Undo: re-create the SAME id (this is exactly what a client-side undo
+    // does — restore the pre-delete snapshot and let autosave's own
+    // create-is-idempotent-by-id batch shape re-send it).
+    const undoRes = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 10, y: 10 }] }],
+      updates: [], deletes: [],
+    }).expect(200);
+    expect(undoRes.body.created.length).toBe(1); // NOT skipped
+    expect(undoRes.body.skipped).toEqual([]);
+
+    const { rows: revived } = await pool.query('SELECT deleted_at FROM est_markups WHERE id=$1', [id]);
+    expect(revived[0].deleted_at).toBeNull();
+
+    // It's genuinely back — counted by the rollup and by the plain markups list.
+    const listed = await request(app).get(`/api/estimating/${bidId}/markups`).set(auth(u.token)).expect(200);
+    expect(listed.body.markups.map((m: { id: string }) => m.id)).toContain(id);
+  });
+
+  // Regression guard for the SAME fix: only bid_id (never deleted_at) gates
+  // the ON CONFLICT WHERE clause now — confirm a genuinely cross-bid id
+  // collision is STILL rejected, not accidentally opened up by the
+  // deleted_at removal.
+  it('a create id colliding with a DIFFERENT bid\'s existing markup is still skipped, never overwritten', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidA = await makeBid(app, u);
+    const bidB = await makeBid(app, u);
+    const { docId: docA } = await makePlanDocAndSheet(app, u, bidA);
+    const { docId: docB } = await makePlanDocAndSheet(app, u, bidB);
+    const id = randomUUID();
+
+    await request(app).post(`/api/estimating/${bidA}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: docA, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }] }],
+      updates: [], deletes: [],
+    }).expect(200);
+
+    const crossBidRes = await request(app).post(`/api/estimating/${bidB}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: docB, page_index: 0, kind: 'count', points: [{ x: 2, y: 2 }] }],
+      updates: [], deletes: [],
+    }).expect(200);
+    expect(crossBidRes.body.created).toEqual([]);
+    expect(crossBidRes.body.skipped).toEqual([{ id, reason: 'id already belongs to a different bid' }]);
+
+    // Bid A's own row is untouched.
+    const { rows } = await pool.query('SELECT bid_id, points FROM est_markups WHERE id=$1', [id]);
+    expect(rows.length).toBe(1);
+    expect(rows[0].bid_id).toBe(bidA);
+    expect(rows[0].points).toEqual([{ x: 1, y: 1 }]);
+  });
+
   it('is idempotent by client-generated uuid: re-sending the same create id does not duplicate or error', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
