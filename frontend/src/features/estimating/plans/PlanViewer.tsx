@@ -384,6 +384,38 @@ export default function PlanViewer({
     zoomBy(e.deltaY < 0 ? MAX_SCALE_STEP : 1 / MAX_SCALE_STEP, { x: e.clientX, y: e.clientY });
   }, [zoomBy]);
 
+  // Fix round 1 / S11 — "onWheel requires ctrlKey, so pinch does nothing
+  // on a phone." A trackpad's pinch gesture arrives as a synthetic wheel
+  // event with ctrlKey set (handled above); a real TOUCH pinch is an
+  // entirely different event family (touchstart/touchmove with 2 active
+  // touches) that onWheel never sees at all. Tracks the distance between
+  // the two touches incrementally (this touchmove's distance / the LAST
+  // touchmove's, not the gesture's original start distance) so each
+  // frame's zoomBy call is the same small relative step zoomBy already
+  // expects from a wheel tick — zoomed around the touches' own midpoint,
+  // same anchor-preserving math onWheel/zoomBy already use.
+  const touchPinchRef = useRef<{ lastDist: number } | null>(null);
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      touchPinchRef.current = { lastDist: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY) };
+    }
+  }, []);
+  const onTouchMove = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length !== 2 || !touchPinchRef.current) return;
+    const [a, b] = [e.touches[0], e.touches[1]];
+    const dist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+    const prior = touchPinchRef.current.lastDist;
+    touchPinchRef.current.lastDist = dist;
+    if (!(prior > 0) || !Number.isFinite(dist)) return;
+    const factor = dist / prior;
+    if (!Number.isFinite(factor) || factor <= 0) return;
+    zoomBy(factor, { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+  }, [zoomBy]);
+  const onTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length < 2) touchPinchRef.current = null;
+  }, []);
+
   const dragPanRef = useRef<{ startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null);
   // mouseup (which clears dragPanRef/dragMarkerRef) fires BEFORE click in
   // DOM event order, so onCanvasClick can't check those refs directly — it
@@ -519,20 +551,23 @@ export default function PlanViewer({
 
   return (
     <div className="plan-viewer">
-      {!viewOnly && (
-        <div className="plan-toolbar" role="toolbar" aria-label="Plan tools">
-          <button className="plan-toolbar-btn" onClick={fitWidth}>Fit width</button>
-          <button className="plan-toolbar-btn" onClick={fitPage}>Fit page</button>
-          <button className="plan-toolbar-btn" onClick={() => zoomBy(1 / MAX_SCALE_STEP)} aria-label="Zoom out">−</button>
-          <span style={{ fontSize: 11.5, color: 'var(--text3)', minWidth: 44, textAlign: 'center' }}>{Math.round(renderScale * 100)}%</span>
-          <button className="plan-toolbar-btn" onClick={() => zoomBy(MAX_SCALE_STEP)} aria-label="Zoom in">+</button>
-          <div className="plan-toolbar-scale">
-            {sheet.ft_per_pt == null
-              ? <span className="plan-toolbar-scale-warn">No scale set — measuring disabled</span>
-              : <span>Scale: {sheet.scale_label ?? 'calibrated'}</span>}
-          </div>
+      {/* Fix round 1 / S11 — "the zoom and fit controls sit inside
+          !viewOnly ... a phone user sees only the first sheet, at
+          fit-width [with no way to] change sheets or zoom." Zoom/fit
+          stays available in view-only mode too — only DRAWING (markup
+          tools) is unavailable there, never navigation. */}
+      <div className="plan-toolbar" role="toolbar" aria-label="Plan tools">
+        <button className="plan-toolbar-btn" onClick={fitWidth}>Fit width</button>
+        <button className="plan-toolbar-btn" onClick={fitPage}>Fit page</button>
+        <button className="plan-toolbar-btn" onClick={() => zoomBy(1 / MAX_SCALE_STEP)} aria-label="Zoom out">−</button>
+        <span style={{ fontSize: 11.5, color: 'var(--text3)', minWidth: 44, textAlign: 'center' }}>{Math.round(renderScale * 100)}%</span>
+        <button className="plan-toolbar-btn" onClick={() => zoomBy(MAX_SCALE_STEP)} aria-label="Zoom in">+</button>
+        <div className="plan-toolbar-scale">
+          {sheet.ft_per_pt == null
+            ? <span className="plan-toolbar-scale-warn">No scale set — measuring disabled</span>
+            : <span>Scale: {sheet.scale_label ?? 'calibrated'}</span>}
         </div>
-      )}
+      </div>
       {viewOnly && (
         <div className="plan-viewer-mobile-notice">View only on this screen size — open on a larger screen to mark up.</div>
       )}
@@ -546,6 +581,9 @@ export default function PlanViewer({
           onMouseUp={onMouseUpPan}
           onMouseLeave={onMouseUpPan}
           onScroll={scheduleTileUpdate}
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
         >
           {status !== 'error' && (
             // The canvas/svg are mounted as soon as we're past the initial

@@ -865,8 +865,25 @@ export default function PlansWorkspace({
   }, [history.present]);
 
   if (viewOnly) {
+    // Fix round 1 / S11 — this used to render ONLY PlanViewer: a phone
+    // user saw just the first sheet, at fit-width, with no way to change
+    // sheets or zoom at all (PlanViewer's own zoom/fit toolbar was
+    // ALSO !viewOnly-gated — fixed directly in PlanViewer.tsx). The
+    // dropdown-mode SheetNavigator (already built for the 900-1279px
+    // "mid" range, widened by this same fix to cover any width at or
+    // under 1279px — see SheetNavigator.tsx) is exactly the compact,
+    // phone-width-appropriate navigator this needs; only DRAWING stays
+    // unavailable in view-only, never navigation.
     return (
       <div className="plan-view">
+        <SheetNavigator
+          sheets={sheets}
+          currentKey={currentKey}
+          onSelect={(doc, page) => setCurrentKey(sheetKey(doc, page))}
+          markerCounts={markerCounts}
+          disciplineFilter={disciplineFilter}
+          onDisciplineFilterChange={setDisciplineFilter}
+        />
         {currentSheet ? (
           <PlanViewer
             bidId={bidId} documentId={currentSheet.document_id} pageIndex={currentSheet.page_index} sheet={currentSheet}

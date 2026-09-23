@@ -9,25 +9,30 @@ export function sheetKey(documentId: string, pageIndex: number): string {
   return `${documentId}:${pageIndex}`;
 }
 
-/** Task 9 (deferral closed) — 900-1279px: the navigator collapses from the
- *  full scrollable list column into a real `<select>` dropdown (previously
- *  this range only narrowed the SAME list column via CSS — a documented
- *  gap; a narrow list column is still a list, not a dropdown). Below
- *  900px, PlansWorkspace's own Decision 2 view-only mode doesn't render
- *  SheetNavigator at all, so this hook only ever matters in the range it's
- *  named for. Same addEventListener-with-legacy-fallback shape as
- *  PlansWorkspace.tsx's own useIsNarrowViewport(), kept local since the
- *  breakpoint and what changes at it are both specific to this component. */
-function useIsMidViewport(): boolean {
-  const query = '(min-width: 900px) and (max-width: 1279px)';
-  const getIsMid = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+/** Task 9 (deferral closed), widened by Fix round 1 / S11 — up to 1279px:
+ *  the navigator collapses from the full scrollable list column into a
+ *  real `<select>` dropdown (previously this range only narrowed the SAME
+ *  list column via CSS — a documented gap; a narrow list column is still
+ *  a list, not a dropdown). Originally 900-1279px only, with a HARD lower
+ *  bound: PlansWorkspace's own Decision 2 view-only mode (<900px) used to
+ *  not render SheetNavigator AT ALL, so nothing below 900px ever reached
+ *  this hook. S11's fix (PlansWorkspace.tsx now renders SheetNavigator in
+ *  view-only mode too) means this component needs a sensible mode all
+ *  the way down to phone widths — dropped the 900px floor so "compact"
+ *  now just means "at or under 1279px", any width. Same
+ *  addEventListener-with-legacy-fallback shape as PlansWorkspace.tsx's
+ *  own useIsNarrowViewport(), kept local since the breakpoint and what
+ *  changes at it are both specific to this component. */
+function useIsCompactViewport(): boolean {
+  const query = '(max-width: 1279px)';
+  const getIsCompact = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function'
     ? window.matchMedia(query).matches
     : false;
-  const [isMid, setIsMid] = useState(getIsMid);
+  const [isCompact, setIsCompact] = useState(getIsCompact);
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
     const mql = window.matchMedia(query);
-    const update = () => setIsMid(mql.matches);
+    const update = () => setIsCompact(mql.matches);
     update();
     if (typeof mql.addEventListener === 'function') {
       mql.addEventListener('change', update);
@@ -37,7 +42,7 @@ function useIsMidViewport(): boolean {
     legacy.addListener?.(update);
     return () => legacy.removeListener?.(update);
   }, []);
-  return isMid;
+  return isCompact;
 }
 
 const DISCIPLINE_ORDER: SheetDiscipline[] = ['E', 'A', 'M', 'P', 'other'];
@@ -67,7 +72,7 @@ function sortSheets(sheets: SheetRow[]): SheetRow[] {
 
 export default function SheetNavigator({ sheets, currentKey, onSelect, markerCounts, disciplineFilter, onDisciplineFilterChange }: SheetNavigatorProps) {
   const listRef = useRef<HTMLDivElement>(null);
-  const isMid = useIsMidViewport();
+  const isCompact = useIsCompactViewport();
 
   const disciplinesPresent = useMemo(() => {
     const set = new Set(sheets.map(s => s.discipline));
@@ -110,11 +115,13 @@ export default function SheetNavigator({ sheets, currentKey, onSelect, markerCou
     </div>
   );
 
-  // Task 9 (deferral closed) — 900-1279px: a real dropdown, not a narrowed
-  // copy of the full list. The discipline filter chips still narrow what
-  // the dropdown itself offers; Up/Down navigation is native <select>
-  // behavior, so there's no separate onKeyDown handler to wire here.
-  if (isMid) {
+  // Task 9 (deferral closed), widened by S11 — at or under 1279px
+  // (including phone-width view-only, since S11): a real dropdown, not a
+  // narrowed copy of the full list. The discipline filter chips still
+  // narrow what the dropdown itself offers; Up/Down navigation is native
+  // <select> behavior, so there's no separate onKeyDown handler to wire
+  // here.
+  if (isCompact) {
     const currentIndex = filtered.findIndex(s => sheetKey(s.document_id, s.page_index) === currentKey);
     return (
       <div className="plan-sheet-nav plan-sheet-nav-dropdown">

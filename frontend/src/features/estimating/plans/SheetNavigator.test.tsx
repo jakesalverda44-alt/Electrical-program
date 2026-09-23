@@ -190,7 +190,7 @@ describe('SheetNavigator — keyboard navigation', () => {
   });
 });
 
-describe('SheetNavigator — 900-1279px real dropdown (Task 9, deferral closed)', () => {
+describe('SheetNavigator — at-or-under-1279px real dropdown (Task 9, deferral closed; widened by Fix round 1 / S11)', () => {
   it('renders a <select> instead of the listbox/full-list markup at a mid-range width', () => {
     mockWidthMatchMedia(1024);
     setup();
@@ -208,11 +208,25 @@ describe('SheetNavigator — 900-1279px real dropdown (Task 9, deferral closed)'
     expect(screen.getByRole('listbox')).toBeTruthy();
   });
 
-  it('renders the full list (not the dropdown) just below the range, at 899px', () => {
+  // Fix round 1 / S11 — this used to be the OTHER edge of the range (a
+  // hard 900px floor, since below it PlansWorkspace's Decision 2
+  // view-only mode never rendered SheetNavigator AT ALL, so nothing below
+  // 900px could ever reach this component to notice). Now that S11 has
+  // PlansWorkspace render SheetNavigator in view-only mode too, this
+  // component needs a real mode all the way down to phone widths — the
+  // dropdown, same as the rest of the compact range, rather than a full
+  // scrollable list column that would never fit a phone screen.
+  it('still renders the dropdown at 899px (view-only, phone-width) — no lower bound anymore', () => {
     mockWidthMatchMedia(899);
     setup();
-    expect(screen.queryByTestId('sheet-nav-select')).toBeNull();
-    expect(screen.getByRole('listbox')).toBeTruthy();
+    expect(screen.getByTestId('sheet-nav-select')).toBeTruthy();
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('renders the dropdown at a typical phone width (390px)', () => {
+    mockWidthMatchMedia(390);
+    setup();
+    expect(screen.getByTestId('sheet-nav-select')).toBeTruthy();
   });
 
   it('every sheet appears as an <option>, sorted E-first same as the full list, with the marker count and scanned status folded into its label', () => {

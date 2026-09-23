@@ -510,3 +510,95 @@ describe('PlanViewer — marker drag is one commit, gated by a 3px threshold and
     expect(onMoveMarker).not.toHaveBeenCalled();
   });
 });
+
+// Fix round 1 / S11 — "the zoom and fit controls sit inside !viewOnly ...
+// a phone user sees only the first sheet, at fit-width [with] no way to
+// change sheets or zoom [and] pinch does nothing on a phone."
+describe('PlanViewer — zoom/fit stay available in view-only mode, and touch pinch zooms (S11)', () => {
+  it('the zoom/fit toolbar renders (and works) even when viewOnly is true', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { getByLabelText } = render(<PlanViewer {...baseProps({ viewOnly: true })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalledTimes(1));
+    const scaleBefore = (page.getViewport.mock.calls[page.getViewport.mock.calls.length - 1][0] as { scale: number }).scale;
+
+    fireEvent.click(getByLabelText('Zoom in'));
+    await waitFor(() => expect(page.render.mock.calls.length).toBeGreaterThan(1));
+    const scaleAfter = (page.getViewport.mock.calls[page.getViewport.mock.calls.length - 1][0] as { scale: number }).scale;
+    expect(scaleAfter).toBeGreaterThan(scaleBefore);
+  });
+
+  it('the mobile view-only notice still shows alongside the (now-available) toolbar', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { getByLabelText, getByText } = render(<PlanViewer {...baseProps({ viewOnly: true })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalledTimes(1));
+    expect(getByLabelText('Zoom in')).toBeTruthy();
+    expect(getByText(/View only on this screen size/)).toBeTruthy();
+  });
+
+  it('a 2-finger pinch OUT (fingers moving apart) zooms in', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { container } = render(<PlanViewer {...baseProps({ viewOnly: true })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalledTimes(1));
+    const scaleBefore = (page.getViewport.mock.calls[page.getViewport.mock.calls.length - 1][0] as { scale: number }).scale;
+    const scrollEl = container.querySelector('.plan-canvas-scroll')!;
+
+    fireEvent.touchStart(scrollEl, { touches: [{ clientX: 100, clientY: 100 }, { clientX: 150, clientY: 100 }] });
+    fireEvent.touchMove(scrollEl, { touches: [{ clientX: 80, clientY: 100 }, { clientX: 220, clientY: 100 }] }); // distance 50 -> 140
+    await waitFor(() => expect(page.render.mock.calls.length).toBeGreaterThan(1));
+    const scaleAfter = (page.getViewport.mock.calls[page.getViewport.mock.calls.length - 1][0] as { scale: number }).scale;
+    expect(scaleAfter).toBeGreaterThan(scaleBefore);
+  });
+
+  it('a 2-finger pinch IN (fingers moving together) zooms out', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { container } = render(<PlanViewer {...baseProps({ viewOnly: true })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalledTimes(1));
+    const scaleBefore = (page.getViewport.mock.calls[page.getViewport.mock.calls.length - 1][0] as { scale: number }).scale;
+    const scrollEl = container.querySelector('.plan-canvas-scroll')!;
+
+    fireEvent.touchStart(scrollEl, { touches: [{ clientX: 80, clientY: 100 }, { clientX: 220, clientY: 100 }] });
+    fireEvent.touchMove(scrollEl, { touches: [{ clientX: 100, clientY: 100 }, { clientX: 150, clientY: 100 }] }); // distance 140 -> 50
+    await waitFor(() => expect(page.render.mock.calls.length).toBeGreaterThan(1));
+    const scaleAfter = (page.getViewport.mock.calls[page.getViewport.mock.calls.length - 1][0] as { scale: number }).scale;
+    expect(scaleAfter).toBeLessThan(scaleBefore);
+  });
+
+  it('a ONE-finger touch (a normal tap/scroll, not a pinch) never triggers a zoom', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { container } = render(<PlanViewer {...baseProps({ viewOnly: true })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalledTimes(1));
+    page.render.mockClear();
+    const scrollEl = container.querySelector('.plan-canvas-scroll')!;
+
+    fireEvent.touchStart(scrollEl, { touches: [{ clientX: 100, clientY: 100 }] });
+    fireEvent.touchMove(scrollEl, { touches: [{ clientX: 200, clientY: 100 }] });
+    await new Promise(r => setTimeout(r, 50));
+    expect(page.render).not.toHaveBeenCalled();
+  });
+
+  it('touchend dropping below 2 touches ends the pinch — a stray touchmove afterward does not zoom', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { container } = render(<PlanViewer {...baseProps({ viewOnly: true })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalledTimes(1));
+    const scrollEl = container.querySelector('.plan-canvas-scroll')!;
+
+    fireEvent.touchStart(scrollEl, { touches: [{ clientX: 100, clientY: 100 }, { clientX: 150, clientY: 100 }] });
+    fireEvent.touchEnd(scrollEl, { touches: [{ clientX: 100, clientY: 100 }] }); // down to 1 touch
+    page.render.mockClear();
+    fireEvent.touchMove(scrollEl, { touches: [{ clientX: 100, clientY: 100 }] });
+    await new Promise(r => setTimeout(r, 50));
+    expect(page.render).not.toHaveBeenCalled();
+  });
+});

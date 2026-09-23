@@ -677,11 +677,25 @@ describe('PlansWorkspace — responsive view-only (Decision 2)', () => {
     await waitFor(() => expect(screen.getByTestId('plan-viewer-mock').dataset.viewOnly).toBe('true'));
   });
 
-  it('the toolbar/items-panel/sheet-navigator chrome is hidden in view-only mode', async () => {
+  it('the markup-tools toolbar/items-panel chrome is hidden in view-only mode (drawing is unavailable)', async () => {
     mockMatchMediaWidth(700);
     setup();
     await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
     expect(screen.queryByRole('group', { name: 'Markup tools' })).toBeNull();
+  });
+
+  // Fix round 1 / S11 — "a phone user sees only the first sheet, at
+  // fit-width [with] no way to change sheets or zoom." This used to
+  // render ONLY PlanViewer in view-only mode; the (real, since
+  // PlanViewer itself is mocked in this file) SheetNavigator now renders
+  // there too, in its own compact dropdown mode (SheetNavigator.tsx's
+  // useIsCompactViewport, widened by this same fix to cover any width at
+  // or under 1279px, no longer just 900-1279).
+  it('the sheet navigator (dropdown) still renders in view-only mode — only drawing is unavailable', async () => {
+    mockMatchMediaWidth(700);
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect(screen.getByTestId('sheet-nav-select')).toBeTruthy();
   });
 
   it('an explicit viewOnly prop still applies at a wide viewport', async () => {
