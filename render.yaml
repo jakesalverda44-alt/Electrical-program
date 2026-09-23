@@ -19,7 +19,7 @@ services:
       # (Render resolves the latest release in that major), so this never
       # goes stale the same way again, while still never silently dropping
       # onto an unpinned/rolled-back default. Kept in sync with
-      # backend/package.json's own `engines.node` (">=22 <23").
+      # backend/package.json's own `engines.node` (">=22").
       - key: NODE_VERSION
         value: 22
       - key: JWT_SECRET

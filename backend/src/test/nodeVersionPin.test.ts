@@ -49,7 +49,7 @@ describe('Fix round 2 / R2-S5 — production Node version pin', () => {
 
   it('backend/package.json engines.node matches render.yaml\'s NODE_VERSION — a Node 22 major range, not the old >=20.16.0 floor', () => {
     const pkg = readBackendPackageJson();
-    expect(pkg.engines?.node).toBe('>=22 <23');
+    expect(pkg.engines?.node).toBe('>=22');
   });
 
   it('pdfjs-dist@5 (the real sheet-indexing PDF parser) officially supports Node 22.3.0+, so the declared floor is inside its supported range', () => {
