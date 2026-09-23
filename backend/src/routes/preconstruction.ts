@@ -8,6 +8,7 @@ import AdmZip from 'adm-zip';
 import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM, AGENT4_SYSTEM, PREBID_COMPARE_SYSTEM } from '../ai/prompts';
 import { buildProposalDocx, ProposalJSON, renderBidDocx, legacyProposalWithBidMeta, bidDocxFilename } from '../utils/proposalDocx';
 import { callWithRetry } from '../ai/retry';
+import { assertNotTruncated, isAgentTruncatedError } from '../ai/stopReason';
 import { parseAIJSON, extractJSONText } from '../ai/json';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
@@ -56,13 +57,16 @@ const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'war
 const router = Router();
 const upload = drawingUpload;
 
-interface AIConfig {
+export interface AIConfig {
   model: string;
   modelA2: string;
   modelA3: string;
   modelA4: string;
   /** Task 2 — cheap model used to classify pages by title block before tiling. */
   modelClassifier: string;
+  /** Takeoff accuracy — the dedicated counting stage (Agent 1C). */
+  modelCounter: string;
+  maxTokensCounter: number;
   maxTokensA1: number;
   maxTokensA2: number;
   maxTokensA3: number;
@@ -81,6 +85,11 @@ const DEFAULT_MAX_TOKENS_A1 = 16000;
 const DEFAULT_MAX_TOKENS_A2 = 4000;
 const DEFAULT_MAX_TOKENS_A3 = 4000;
 const DEFAULT_MAX_TOKENS_A4 = 8000;
+/** Takeoff accuracy Decision 1 — Opus 5.5 counts symbols. Its thinking cannot
+ *  be disabled and thinking tokens count against max_tokens, so the budget is
+ *  sized for thinking plus ~200-400 compact marks per sheet (see counter.ts). */
+export const DEFAULT_COUNTER_MODEL = 'claude-opus-5-5';
+export const DEFAULT_MAX_TOKENS_COUNTER = 32000;
 const DEFAULT_TEMPERATURE = 0.3;
 
 function parseNumberSetting(value: string, fallback: number, min: number, max: number): number {
@@ -89,13 +98,14 @@ function parseNumberSetting(value: string, fallback: number, min: number, max: n
   return Math.min(max, Math.max(min, n));
 }
 
-async function loadAIConfig(): Promise<AIConfig> {
+export async function loadAIConfig(): Promise<AIConfig> {
   const [
     modelSetting, modelA2Setting, modelA3Setting, modelA4Setting, modelClassifierSetting,
     maxA1Setting, maxA2Setting, maxA3Setting, maxA4Setting,
     temperatureSetting,
     promptA1Setting, promptA2Setting, promptA3Setting, promptA4Setting,
     dpiScheduleSetting, dpiPlanSetting, tilesScheduleSetting, tilesPlanSetting,
+    modelCounterSetting, maxCounterSetting,
   ] = await Promise.all([
     getSetting('ai_model'),
     getSetting('ai_takeoff_agent2_model'),
@@ -115,6 +125,8 @@ async function loadAIConfig(): Promise<AIConfig> {
     getSetting('ai_prep_dpi_plan'),
     getSetting('ai_prep_tiles_schedule'),
     getSetting('ai_prep_tiles_plan'),
+    getSetting('ai_takeoff_counter_model'),
+    getSetting('ai_max_tokens_counter'),
   ]);
   const defaultModel = (process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim();
   return {
@@ -123,6 +135,8 @@ async function loadAIConfig(): Promise<AIConfig> {
     modelA3: (modelA3Setting || 'claude-haiku-4-5-20251001'),
     modelA4: (modelA4Setting || 'claude-sonnet-4-6'),
     modelClassifier: (modelClassifierSetting || 'claude-haiku-4-5-20251001'),
+    modelCounter: ((modelCounterSetting || '').trim() || DEFAULT_COUNTER_MODEL),
+    maxTokensCounter: parseNumberSetting(maxCounterSetting || '', DEFAULT_MAX_TOKENS_COUNTER, 1024, 128000),
     maxTokensA1: parseNumberSetting(maxA1Setting || '', DEFAULT_MAX_TOKENS_A1, 256, 64000),
     maxTokensA2: parseNumberSetting(maxA2Setting || '', DEFAULT_MAX_TOKENS_A2, 256, 64000),
     maxTokensA3: parseNumberSetting(maxA3Setting || '', DEFAULT_MAX_TOKENS_A3, 256, 64000),
@@ -146,6 +160,10 @@ async function loadAIConfig(): Promise<AIConfig> {
 }
 
 function describeAIError(err: unknown): string {
+  // Takeoff accuracy Task 1 — a truncation carries its own estimator-facing
+  // message ("Agent N ran out of room — raise its Max Tokens"); never bury it
+  // under a generic "AI request failed:" prefix.
+  if (isAgentTruncatedError(err)) return (err as Error).message;
   const e = err as { message?: string; status?: number; error?: { message?: string }; response?: { data?: { error?: string; message?: string } } };
   const status = e.status ? `Anthropic ${e.status}` : 'AI request failed';
   const detail = e.error?.message || e.response?.data?.error || e.response?.data?.message || e.message || 'Unknown error';
@@ -347,6 +365,9 @@ async function prepOnePdf(
   try {
     classified = await classifyPages(client, classifierModel, crops, filename);
   } catch (err) {
+    // Takeoff accuracy Task 1 — a truncated classifier response fails the run
+    // (Decision 9) instead of degrading silently to the whole-file fallback.
+    if (isAgentTruncatedError(err)) throw err;
     logger.warn({ err, filename }, '[takeoff] page classification AI call failed — whole-file fallback');
     return fallback();
   }
@@ -503,7 +524,9 @@ function compactOutput(text: string, max = 500): string {
 }
 
 // ── Background pipeline ───────────────────────────────────────────────────────
-async function runPipeline(
+// Exported (takeoff accuracy) so integration tests can drive the real pipeline
+// with an injected fake Anthropic client — never a real API call from tests.
+export async function runPipeline(
   bidId: string,
   files: Express.Multer.File[],
   client: Anthropic,
@@ -552,6 +575,7 @@ async function runPipeline(
     try {
       uploadPrep = await prepareAgent1Upload(filesToSend, client, config.modelClassifier, config.tileOverrides);
     } catch (err) {
+      if (isAgentTruncatedError(err)) throw err;
       logger.warn({ err, bidId }, '[takeoff] Stage 0 document prep failed for the whole upload — falling back to one legacy document-block call');
       uploadPrep = { batches: [legacyContentBlocks(filesToSend)], inventory: [], classifierUsage: { ...NO_USAGE } };
     }
@@ -591,6 +615,9 @@ async function runPipeline(
         `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
         [JSON.stringify(mergedUsage), config.model, JSON.stringify(prepInventory), prepFidelity, bidId]
       ).catch(() => {});
+      // Takeoff accuracy Task 1 — after the usage write, so a truncated (but
+      // still billed) call's cost is recorded before the run fails.
+      assertNotTruncated(resp, 'Agent 1', config.maxTokensA1);
 
     } else {
       // Batched: N token-budgeted calls (mergeAgent1Batches already merges results).
@@ -616,6 +643,10 @@ async function runPipeline(
         , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
         logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${agent1Batches.length}`, prep);
+        // Takeoff accuracy Task 1 — a truncated batch used to fall through to
+        // parseAIJSON, fail, and be silently skipped by the merge below: the
+        // takeoff just lost every sheet that batch carried.
+        assertNotTruncated(bResp, `Agent 1 (batch ${bi + 1} of ${agent1Batches.length})`, config.maxTokensA1);
         if (!bText.trim()) {
           logger.warn({ bidId, batch: `${bi + 1}/${agent1Batches.length}` },
             '[takeoff] Agent 1 batch returned empty output — skipping');
@@ -674,7 +705,7 @@ async function runPipeline(
       [agent1Output, bidId]
     );
   } catch (err) {
-    const message = `Agent 1 failed: ${describeAIError(err)}`;
+    const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 1 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 1 failed');
     await pool.query(
       `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
@@ -697,6 +728,7 @@ async function runPipeline(
         content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}`,
       }],
     }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
+    assertNotTruncated(resp, 'Agent 2', config.maxTokensA2);
     agent2Output = extractText(resp);
     const agent2ToStore = extractJSONText(agent2Output) ?? agent2Output;
 
@@ -705,7 +737,7 @@ async function runPipeline(
       [agent2ToStore, JSON.stringify(resp.usage), config.modelA2, bidId]
     );
   } catch (err) {
-    const message = `Agent 2 failed: ${describeAIError(err)}`;
+    const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 2 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 2 failed');
     await pool.query(
       `UPDATE takeoff_results SET status='error', agent2_output=$1 WHERE bid_id=$2`,
@@ -744,6 +776,7 @@ async function runPipeline(
         content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}\n\n---\n\nESTIMATOR OUTPUT:\n\n${compactForHandoff(agent2Output)}${prebidCrossCheck ? `\n\n---\n\n${prebidCrossCheck}` : ''}`,
       }],
     }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
+    assertNotTruncated(resp, 'Agent 3', config.maxTokensA3);
     agent3Output = extractText(resp);
     const agent3ToStore = extractJSONText(agent3Output) ?? agent3Output;
 
@@ -813,7 +846,7 @@ async function runPipeline(
       }
     })();
   } catch (err) {
-    const message = `Agent 3 failed: ${describeAIError(err)}`;
+    const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 3 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 3 failed');
     await pool.query(
       `UPDATE takeoff_results SET status='error', agent3_output=$1 WHERE bid_id=$2`,
@@ -1249,6 +1282,7 @@ router.post('/:bidId/prebid-analyze', requireAuth, requireAIPermission('run_anal
           messages: [{ role: 'user', content: `Compare these two pre-bid packages.\n\n${payload}` }],
         }), { onRetry: (a, _e, d) => console.warn(`[prebid-analyze] transient error, retry ${a} in ${d}ms`) });
 
+        assertNotTruncated(resp, 'Pre-bid comparison', config.maxTokensA2, 'it uses Agent 2\'s Max Tokens in Settings → AI');
         const parsed = parseAIJSON(extractText(resp));
         if (!parsed) throw new Error('model did not return parseable JSON');
         await pool.query(
@@ -1708,6 +1742,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
         messages: [{ role: 'user', content: userMsg }],
       }), { onRetry: (a, _e, d) => logger.warn(`[agent4] retry ${a} in ${d}ms`) });
 
+      assertNotTruncated(resp, 'Agent 4', config.maxTokensA4);
       const rawText = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');
       const parsed = parseAIJSON(rawText);
       if (!parsed) {

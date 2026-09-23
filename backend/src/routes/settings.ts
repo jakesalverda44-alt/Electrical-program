@@ -27,6 +27,14 @@ const ALLOWED_KEYS = [
   'ai_temperature',
   'ai_prompt_agent1', 'ai_prompt_agent2', 'ai_prompt_agent3',
   'ai_takeoff_agent4_model', 'ai_max_tokens_agent4', 'ai_prompt_agent4',
+  // Takeoff accuracy Task 1 — the dedicated counting stage (Agent 1C).
+  'ai_takeoff_counter_model', 'ai_max_tokens_counter',
+  // Takeoff accuracy Task 1 (pre-existing gap found while adding the two keys
+  // above) — Settings > AI > Document Prep has always PUT these five keys and
+  // loadAIConfig has always read them, but none were in this list, so every
+  // save was silently discarded (the loop below only writes listed keys).
+  'ai_prep_classifier_model',
+  'ai_prep_dpi_schedule', 'ai_prep_dpi_plan', 'ai_prep_tiles_schedule', 'ai_prep_tiles_plan',
   'ai_reply_draft_model', 'ai_build_from_notes_model',
   'unit_cost_library',
   'ai_enabled', 'ai_analysis_enabled', 'ai_daily_limit_per_user', 'ai_role_permissions',
