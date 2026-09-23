@@ -187,9 +187,30 @@ export default function PlansWorkspace({
     return () => window.removeEventListener('keydown', onKey);
   }, [viewOnly]);
 
-  const mutate = useCallback((next: MarkupDraft[]) => {
-    setHistory(h => commit(h, next));
+  // Fix round 1 / B3(b) — `next` may be a plain value (every SYNCHRONOUS
+  // call site — a click always mutates against the current render's own
+  // `history.present`, no staleness possible) or a function of the
+  // CURRENT present (every call site that follows an `await` — see
+  // suggestTagsOnSheet/createLineFromMarkup below). The function form is
+  // what fixes F2: `setHistory`'s own updater always receives whatever
+  // `history.present` truly is at COMMIT time, never a value captured in
+  // an async closure before the await, which could already be stale by
+  // the time the await resolves (a marker the user drew while a
+  // suggestion search was loading used to simply vanish, overwritten by
+  // the stale pre-await snapshot).
+  const mutate = useCallback((next: MarkupDraft[] | ((current: MarkupDraft[]) => MarkupDraft[])) => {
+    setHistory(h => commit(h, typeof next === 'function' ? (next as (current: MarkupDraft[]) => MarkupDraft[])(h.present) : next));
   }, []);
+  // Fix round 1 / B3(b) — kept in sync every render (not in an effect) so
+  // an async continuation can read the FRESHEST available snapshot the
+  // instant its `await` resolves, same pattern useMarkupAutosave.ts
+  // already uses for markupsRef/bidIdRef. Used only to decide what NEW
+  // drafts/reassignments to compute (e.g. dedup, which markers exist to
+  // reassign) — the actual commit into state always goes through
+  // `mutate`'s functional form above, which is correct even if this ref
+  // is a render behind by the time the commit itself runs.
+  const historyPresentRef = useRef(history.present);
+  historyPresentRef.current = history.present;
 
   const dispatch = useCallback((event: ToolEvent) => {
     setToolState(prev => {
@@ -336,15 +357,23 @@ export default function PlansWorkspace({
       const items = await getSheetTextItems(bidId, targetSheet.document_id, targetSheet.page_index);
       const geom: PageGeometry = { widthPt: targetSheet.width_pt, heightPt: targetSheet.height_pt, rotation: targetSheet.rotation as never };
       const candidates = suggestTagMarkers(items, tags, { geom, sheetKind: targetSheet.kind });
+      // Fix round 1 / B3(b) — dedup against the FRESHEST snapshot available
+      // right now (post-await), not the `history.present` this callback's
+      // closure captured before `getSheetTextItems` ever started (the
+      // estimator may well have kept drawing while the text loaded).
       const drafts = draftsFromTagCandidates(
         candidates, targetSheet.document_id, targetSheet.page_index, lineKeyForTag,
-        history.present, () => crypto.randomUUID()
+        historyPresentRef.current, () => crypto.randomUUID()
       );
       if (drafts.length === 0) {
         showToast?.({ variant: 'info', title: 'No new suggestions', sub: 'Nothing new matched on this sheet.' });
         return;
       }
-      mutate([...history.present, ...drafts]);
+      // The actual commit spreads onto whatever `current` truly is at
+      // commit time (mutate's functional form) — even if something ELSE
+      // changed in the narrow window between the dedup above and this
+      // call, nothing already in state is ever discarded.
+      mutate(current => [...current, ...drafts]);
       showToast?.({ title: `${drafts.length} suggested marker${drafts.length === 1 ? '' : 's'} added` });
     } catch {
       showToast?.({ variant: 'error', title: 'Could not search this sheet', sub: 'Try again' });
@@ -455,7 +484,10 @@ export default function PlansWorkspace({
       // this one, exactly like previewPriceImpact already sends `lines`
       // wholesale to the /price endpoint.
       await api.put(`/estimating/${bidId}`, { lines: [...lines, newLine], settings });
-      mutate(reassignMarkups(history.present, selectedIds, newKey));
+      // Fix round 1 / B3(b) — same pattern: reassign against whatever
+      // `current` truly is at commit time, not the `history.present` this
+      // callback's closure captured before `api.put` ever started.
+      mutate(current => reassignMarkups(current, selectedIds, newKey));
       setToolState(s => ({ ...s, selectedIds: [] }));
       setNewLineOpen(false);
       onApplied?.();

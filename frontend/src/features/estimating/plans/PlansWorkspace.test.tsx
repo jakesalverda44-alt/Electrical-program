@@ -337,6 +337,34 @@ describe('PlansWorkspace — suggested markers (Task 7, deferral closed)', () =>
     // suggested marker there for the searched tag.
     await waitFor(() => expect(screen.getByText(/1 suggested/)).toBeTruthy());
   });
+
+  // Fix round 1 / B3(b) — the reviewer's exact F2 scenario: click "Suggest
+  // markers for this sheet" (a full-PDF text-layer fetch), then keep
+  // drawing while it loads. Before the fix, suggestTagsOnSheet's `mutate`
+  // spread its new drafts onto the `history.present` its closure captured
+  // BEFORE the await — discarding the manually-drawn marker the instant
+  // the suggestions landed (1 marker where 2 were expected).
+  it('a marker drawn WHILE "Suggest markers for this sheet" is still loading text survives — never overwritten by the stale pre-await snapshot', async () => {
+    let resolveGetItems!: (items: { str: string; transform: number[] }[]) => void;
+    getSheetTextItems.mockImplementation(() => new Promise(res => { resolveGetItems = res; }));
+    setup({ lines: [line({ description: 'Type A1 duplex receptacle', line_key: 'k1' })] });
+    await waitFor(() => expect(screen.getByText('Suggest markers for this sheet')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Suggest markers for this sheet'));
+    await waitFor(() => expect(getSheetTextItems).toHaveBeenCalled()); // in flight, not yet resolved
+
+    // The estimator keeps counting while the text loads.
+    fireEvent.click(screen.getByTitle('Count (C)'));
+    fireEvent.click(screen.getByText('Simulate canvas click'));
+    await waitFor(() => expect(screen.getAllByText(/^Select marker /)).toHaveLength(1)); // the manual marker exists NOW
+
+    // The text finally arrives and the suggestion lands.
+    await act(async () => { resolveGetItems([{ str: 'A1', transform: [1, 0, 0, 1, 50, 50] }]); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(screen.getByText(/1 suggested/)).toBeTruthy()); // the suggestion landed too
+
+    // BOTH markers exist — the manual one was never discarded.
+    expect(screen.getAllByText(/^Select marker /)).toHaveLength(2);
+  });
 });
 
 // Task 6 (deferral closed) — "New line from markup" (the Phase A
