@@ -39,6 +39,12 @@ export interface ToolbarProps {
    *  keeping these optional matches the rest of this component's props). */
   onNewLineFromMarkup?: () => void;
   onReassignSelected?: () => void;
+  /** Fix round 1 / B8 — shown whenever provided; disabled unless the
+   *  current selection is exactly one linear marker (the caller decides
+   *  that, same convention as the other per-button disabled reasons on
+   *  this component). */
+  onEditDropsSlack?: () => void;
+  editDropsSlackDisabled?: boolean;
 }
 
 const TOOLS: { id: ToolId; label: string; shortcut: string }[] = [
@@ -53,6 +59,7 @@ const SHORTCUT_TO_TOOL: Record<string, ToolId> = { v: 'select', c: 'count', l: '
 export default function Toolbar({
   toolState, dispatch, onUndo, onRedo, canUndo, canRedo, onDeleteSelected, hasSelection, scaleDisabledReason,
   countLinearDisabledReason, linearDisabledReason, onNewLineFromMarkup, onReassignSelected,
+  onEditDropsSlack, editDropsSlackDisabled,
 }: ToolbarProps) {
   // Fix round 1 / B2/B7 — one lookup covers both the click handler's
   // `disabled` and the keyboard shortcut gate below, so the two can never
@@ -122,6 +129,11 @@ export default function Toolbar({
       {onReassignSelected && (
         <button className="plan-toolbar-btn" onClick={onReassignSelected} disabled={!hasSelection} title="Reassign the selected marker(s) to a different line">
           Reassign to line…
+        </button>
+      )}
+      {onEditDropsSlack && (
+        <button className="plan-toolbar-btn" onClick={onEditDropsSlack} disabled={!!editDropsSlackDisabled} title="Edit this run's drops and slack">
+          Edit drops/slack
         </button>
       )}
     </div>

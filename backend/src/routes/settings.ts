@@ -63,6 +63,13 @@ const ALLOWED_KEYS = [
   // than a dedicated route, same as every other global default on this page.
   'est_default_labor_rate', 'est_default_material_tax_pct', 'est_default_small_tools_pct',
   'est_default_supervision_pct', 'est_default_consumables_pct',
+  // Fix round 1 / B8 — migration 108 seeded these two (Decision 7's
+  // drops/slack defaults for a linear run's rollup) but never added them
+  // here, so PUT /api/settings silently discarded any attempt to edit
+  // them — the same FIX-4 gap this file's own comment above describes
+  // for a different key. GET already returned them (unfiltered), so
+  // Settings > Labor Library > Defaults could read but never save them.
+  'est_default_drop_ft', 'est_default_slack_pct',
 ];
 
 // Credentials that must never leave the server via GET /api/settings, even to an

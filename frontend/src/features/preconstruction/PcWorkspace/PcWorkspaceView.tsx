@@ -1032,6 +1032,20 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }
   });
 
+  // Fix round 1 / B8 — Settings > Labor Library > Defaults, parsed once
+  // per settings change. Number('') is 0 (falsy check needed, not just
+  // Number.isFinite) and an unset/never-saved settings object omits the
+  // key entirely (undefined), so both fall back to 10 — matching
+  // DEFAULT_APP_SETTINGS in useAppSettings.ts.
+  const defaultDropFt = useMemo(() => {
+    const raw = Number(settings?.est_default_drop_ft);
+    return Number.isFinite(raw) && raw > 0 ? raw : 10;
+  }, [settings?.est_default_drop_ft]);
+  const defaultSlackPct = useMemo(() => {
+    const raw = Number(settings?.est_default_slack_pct);
+    return Number.isFinite(raw) && raw >= 0 ? raw : 10;
+  }, [settings?.est_default_slack_pct]);
+
   const estimatingBid = useEstimatingBid(bid.id);
   // Task 9 — the new engine's own dirty check, independent of the legacy
   // pricingDirty registration above (both are real, harmless to register
@@ -1214,6 +1228,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   onSaveDirtyLinesFirst={estimatingBid.save}
                   onCreateLine={onCreateLineFromMarkup}
                   proposed={estimatingBid.proposed}
+                  // Fix round 1 / B8 — Settings > Labor Library > Defaults
+                  // (app-wide, this component's own `settings` prop —
+                  // NOT estimatingBid.settings above, which is this
+                  // BID's own settings). Falls back to 10/10 (matching
+                  // DEFAULT_APP_SETTINGS) when unset or unparsable.
+                  defaultDropFt={defaultDropFt}
+                  defaultSlackPct={defaultSlackPct}
                   showToast={showToastStable}
                 />
               </Suspense>

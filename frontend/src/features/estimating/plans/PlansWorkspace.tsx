@@ -14,6 +14,7 @@ import PlanViewer from './PlanViewer';
 import Toolbar from './Toolbar';
 import ItemsPanel from './ItemsPanel';
 import ScaleCalibrationPopover from './ScaleCalibrationPopover';
+import DropsSlackPopover from './DropsSlackPopover';
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
 import SuggestMarkersBar, { FindTagResult } from './SuggestMarkersBar';
 import NewLineFromMarkupModal, { NewLineFromMarkupInput } from './NewLineFromMarkupModal';
@@ -124,6 +125,14 @@ export interface PlansWorkspaceProps {
    *  owner of `lines` and no snapshot can ever go stale. Returns whether
    *  the line was actually created. */
   onCreateLine?: (newLine: EstimateLine) => Promise<boolean>;
+  /** Fix round 1 / B8 — Decision 7's own defaults (Settings > Labor
+   *  Library > Defaults, app_settings.est_default_drop_ft/
+   *  est_default_slack_pct), stamped onto every new linear run at
+   *  creation time. Falls back to 10/10 (the migration's own seeded
+   *  values) when omitted, e.g. a test harness with no app settings wired
+   *  up. */
+  defaultDropFt?: number;
+  defaultSlackPct?: number;
   viewOnly?: boolean;
   /** Matches the rest of the estimating feature's convention (see
    *  LaborPricingStep.tsx) of taking showToast as a prop rather than
@@ -134,7 +143,8 @@ export interface PlansWorkspaceProps {
 
 export default function PlansWorkspace({
   bidId, lines, settings, initialSheetKey, initialLineKey, onSheetKeyChange, onLineKeyChange, onApplied,
-  dirty, onSaveDirtyLinesFirst, onCreateLine, proposed, viewOnly: viewOnlyProp, showToast,
+  dirty, onSaveDirtyLinesFirst, onCreateLine, proposed, defaultDropFt = 10, defaultSlackPct = 10,
+  viewOnly: viewOnlyProp, showToast,
 }: PlansWorkspaceProps) {
   const confirm = useConfirm();
   // Fix round 1 / B1 — shared by Apply and "New line from markup": if
@@ -302,29 +312,53 @@ export default function PlansWorkspace({
   const historyPresentRef = useRef(history.present);
   historyPresentRef.current = history.present;
 
+  // Fix round 1 / B8 — the marker id the DropsSlackPopover is currently
+  // open for: set the instant a linear run finishes (dispatch's
+  // 'commitLinear' branch below), or by the toolbar's "Edit drops/slack"
+  // button for an already-selected linear marker. null means closed.
+  const [dropsSlackTargetId, setDropsSlackTargetId] = useState<string | null>(null);
+
+  // Fix round 1 / N1 — the previous version called setToolState(prev =>
+  // {...; mutate(...); crypto.randomUUID(); ...; return state;}) — side
+  // effects (another state setter, AND a fresh random id) INSIDE a
+  // setState updater. Under <React.StrictMode> (main.tsx), React invokes
+  // an updater function twice in dev to surface exactly this class of
+  // impurity — crypto.randomUUID() would mint a DIFFERENT id on the
+  // second (discarded) invocation than what actually got used, and a
+  // phantom undo step could appear whose marker id doesn't match anything
+  // real. `dispatch` is only ever called from a single discrete user
+  // action (a click, a keypress) — reading `toolState` via this
+  // callback's own closure (recreated whenever toolState itself changes)
+  // is exactly as fresh as the old `prev` was for that use, without
+  // needing a functional update at all.
   const dispatch = useCallback((event: ToolEvent) => {
-    setToolState(prev => {
-      const { state, effect } = reduceTool(prev, event);
-      if (effect.type === 'commitCount') {
-        const draft: MarkupDraft = {
-          id: crypto.randomUUID(), documentId: currentSheet?.document_id ?? '', pageIndex: currentSheet?.page_index ?? 0,
-          lineKey: activeLineKey, kind: 'count', points: [effect.point], drops: 0, dropFt: null, slackPct: null,
-          status: 'confirmed', label: null,
-        };
-        mutate(createMarkup(history.present, draft));
-      } else if (effect.type === 'commitLinear') {
-        const draft: MarkupDraft = {
-          id: crypto.randomUUID(), documentId: currentSheet?.document_id ?? '', pageIndex: currentSheet?.page_index ?? 0,
-          lineKey: activeLineKey, kind: 'linear', points: effect.points, drops: 0, dropFt: null, slackPct: null,
-          status: 'confirmed', label: null,
-        };
-        mutate(createMarkup(history.present, draft));
-      } else if (effect.type === 'commitScalePoints') {
-        setPendingScalePoints(effect.points);
-      }
-      return state;
-    });
-  }, [currentSheet, activeLineKey, mutate, history.present]);
+    const { state, effect } = reduceTool(toolState, event);
+    setToolState(state);
+    if (effect.type === 'commitCount') {
+      const draft: MarkupDraft = {
+        id: crypto.randomUUID(), documentId: currentSheet?.document_id ?? '', pageIndex: currentSheet?.page_index ?? 0,
+        lineKey: activeLineKey, kind: 'count', points: [effect.point], drops: 0, dropFt: null, slackPct: null,
+        status: 'confirmed', label: null,
+      };
+      mutate(createMarkup(history.present, draft));
+    } else if (effect.type === 'commitLinear') {
+      // Fix round 1 / B8 — stamp the app-wide drops/slack defaults onto
+      // every new run at creation time (Decision 7's own fallback, in
+      // case the popover this opens is dismissed without editing
+      // anything), then open the popover so the estimator can adjust
+      // them for THIS run immediately.
+      const draft: MarkupDraft = {
+        id: crypto.randomUUID(), documentId: currentSheet?.document_id ?? '', pageIndex: currentSheet?.page_index ?? 0,
+        lineKey: activeLineKey, kind: 'linear', points: effect.points,
+        drops: 0, dropFt: defaultDropFt, slackPct: defaultSlackPct,
+        status: 'confirmed', label: null,
+      };
+      mutate(createMarkup(history.present, draft));
+      setDropsSlackTargetId(draft.id);
+    } else if (effect.type === 'commitScalePoints') {
+      setPendingScalePoints(effect.points);
+    }
+  }, [toolState, currentSheet, activeLineKey, mutate, history.present, defaultDropFt, defaultSlackPct]);
 
   const onSelectMarker = useCallback((id: string, additive: boolean) => {
     dispatch({ type: 'SELECT_MARKERS', ids: [id], additive });
@@ -339,6 +373,34 @@ export default function PlansWorkspace({
   }, [toolState.selectedIds, mutate, history.present]);
   const onUndo = useCallback(() => setHistory(h => undo(h)), []);
   const onRedo = useCallback(() => setHistory(h => redo(h)), []);
+
+  // Fix round 1 / B8 — the popover's actual target marker (or null once
+  // it's been deleted/undone out from under an open popover — the
+  // popover just closes itself rather than rendering against nothing).
+  const dropsSlackTarget = useMemo(
+    () => (dropsSlackTargetId ? history.present.find(m => m.id === dropsSlackTargetId) ?? null : null),
+    [dropsSlackTargetId, history.present]
+  );
+  useEffect(() => {
+    if (dropsSlackTargetId && !dropsSlackTarget) setDropsSlackTargetId(null);
+  }, [dropsSlackTargetId, dropsSlackTarget]);
+  const onDropsSlackChange = useCallback((patch: { drops?: number; dropFt?: number | null; slackPct?: number | null }) => {
+    if (!dropsSlackTargetId) return;
+    mutate(updateMarkup(history.present, dropsSlackTargetId, patch));
+  }, [dropsSlackTargetId, mutate, history.present]);
+  const onCloseDropsSlack = useCallback(() => setDropsSlackTargetId(null), []);
+  // Toolbar's "Edit drops/slack" — enabled only when exactly one linear
+  // marker is selected (editing drops/slack on a count marker is
+  // meaningless; editing several runs' drops/slack at once is ambiguous,
+  // same reasoning as Reassign's own single-vs-multi affordances).
+  const selectedLinearMarker = useMemo(() => {
+    if (toolState.selectedIds.length !== 1) return null;
+    const m = history.present.find(x => x.id === toolState.selectedIds[0]);
+    return m && m.kind === 'linear' ? m : null;
+  }, [toolState.selectedIds, history.present]);
+  const onEditDropsSlack = useCallback(() => {
+    if (selectedLinearMarker) setDropsSlackTargetId(selectedLinearMarker.id);
+  }, [selectedLinearMarker]);
 
   // ── Scale calibration ────────────────────────────────────────────────────
   const [pendingScalePoints, setPendingScalePoints] = useState<[PdfPoint, PdfPoint] | null>(null);
@@ -724,6 +786,8 @@ export default function PlansWorkspace({
               linearDisabledReason={currentSheet && currentSheet.ft_per_pt == null ? 'This sheet has no confirmed scale yet — calibrate, or confirm the suggested scale below' : null}
               onNewLineFromMarkup={onNewLineFromMarkup}
               onReassignSelected={onReassignSelected}
+              onEditDropsSlack={onEditDropsSlack}
+              editDropsSlackDisabled={!selectedLinearMarker}
             />
           </div>
           {currentSheet && (
@@ -830,6 +894,15 @@ export default function PlansWorkspace({
             titleBlockLabel={currentSheet && !currentSheet.scale_ambiguous ? currentSheet.suggested_label : null}
             onCommit={commitScale}
             onCancel={() => setPendingScalePoints(null)}
+          />
+        )}
+        {dropsSlackTarget && (
+          <DropsSlackPopover
+            drops={dropsSlackTarget.drops}
+            dropFt={dropsSlackTarget.dropFt}
+            slackPct={dropsSlackTarget.slackPct}
+            onChange={onDropsSlackChange}
+            onClose={onCloseDropsSlack}
           />
         )}
         <NewLineFromMarkupModal

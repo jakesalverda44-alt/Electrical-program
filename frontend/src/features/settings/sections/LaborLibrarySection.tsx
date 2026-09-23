@@ -268,6 +268,11 @@ const DEFAULT_FIELDS: { key: keyof AppSettings; label: string; fallback: string 
   { key: 'est_default_small_tools_pct', label: 'Small tools (%)', fallback: '3' },
   { key: 'est_default_supervision_pct', label: 'Supervision (%)', fallback: '0' },
   { key: 'est_default_consumables_pct', label: 'Consumables (%)', fallback: '2' },
+  // Fix round 1 / B8 — Decision 7's drops/slack defaults, stamped onto a
+  // new linear run at creation time (PlansWorkspace.tsx) and editable per-
+  // run afterward via the DropsSlackPopover.
+  { key: 'est_default_drop_ft', label: 'Default drop (ft, per drop)', fallback: '10' },
+  { key: 'est_default_slack_pct', label: 'Default slack (%)', fallback: '10' },
 ];
 
 function DefaultsPanel({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {

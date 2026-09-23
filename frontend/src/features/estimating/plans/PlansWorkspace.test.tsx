@@ -26,6 +26,16 @@ vi.mock('./PlanViewer', () => ({
       <button onClick={() => props.dispatchTool({ type: 'POINTER_CLICK', point: { x: 10, y: 10 } })}>
         Simulate canvas click
       </button>
+      {/* Fix round 1 / B8 — a SECOND point (a real linear run needs two
+          distinct clicks before FINISH_LINEAR is even a no-op-vs-commit
+          question — see toolMachine.ts's MIN_LINEAR_POINTS) plus the
+          double-click/Enter that actually commits it. */}
+      <button onClick={() => props.dispatchTool({ type: 'POINTER_CLICK', point: { x: 40, y: 10 } })}>
+        Simulate second canvas click
+      </button>
+      <button onClick={() => props.dispatchTool({ type: 'FINISH_LINEAR' })}>
+        Simulate finish linear run
+      </button>
       {/* Task 6 (deferral closed) — exposes each current-sheet marker's
           (unpredictable, server/crypto-generated) id as its own button so
           tests can select a REAL marker without guessing/mocking
@@ -422,6 +432,94 @@ describe('PlansWorkspace — scale suggestion, Linear gating, and half-size (Fix
     });
     setup();
     await waitFor(() => expect((screen.getByLabelText('Half-size set?') as HTMLInputElement).checked).toBe(true));
+  });
+});
+
+// Fix round 1 / B8 — the drops/slack popover: build it (it was never
+// built before this round despite Decision 7's own ask), stamp the
+// app-wide defaults onto every new run, open it the instant the run
+// finishes, and let it be reopened later for an already-selected run.
+describe('PlansWorkspace — drops/slack popover (Fix round 1 / B8)', () => {
+  function drawLinearRun() {
+    fireEvent.click(screen.getByTitle('Linear (L)'));
+    fireEvent.click(screen.getByText('Simulate canvas click'));
+    fireEvent.click(screen.getByText('Simulate second canvas click'));
+    fireEvent.click(screen.getByText('Simulate finish linear run'));
+  }
+
+  it('finishing a linear run stamps the app-wide defaults and opens the popover automatically', async () => {
+    setup({ defaultDropFt: 12, defaultSlackPct: 8 });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+
+    drawLinearRun();
+
+    await waitFor(() => expect(screen.getByLabelText('Feet per drop:')).toBeTruthy());
+    expect((screen.getByLabelText('Feet per drop:') as HTMLInputElement).value).toBe('12');
+    expect((screen.getByLabelText('Slack (%):') as HTMLInputElement).value).toBe('8');
+  });
+
+  it('falls back to 10/10 when defaultDropFt/defaultSlackPct are omitted', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+
+    drawLinearRun();
+
+    await waitFor(() => expect(screen.getByLabelText('Feet per drop:')).toBeTruthy());
+    expect((screen.getByLabelText('Feet per drop:') as HTMLInputElement).value).toBe('10');
+    expect((screen.getByLabelText('Slack (%):') as HTMLInputElement).value).toBe('10');
+  });
+
+  it('a count marker never opens the popover', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    fireEvent.click(screen.getByTitle('Count (C)'));
+    fireEvent.click(screen.getByText('Simulate canvas click'));
+    expect(screen.queryByLabelText('Drops (count):')).toBeNull();
+  });
+
+  it('editing a field updates the marker\'s value, and "Done" closes the popover', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    drawLinearRun();
+    await waitFor(() => expect(screen.getByLabelText('Drops (count):')).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText('Drops (count):'), { target: { value: '4' } });
+    expect((screen.getByLabelText('Drops (count):') as HTMLInputElement).value).toBe('4');
+
+    fireEvent.click(screen.getByText('Done'));
+    expect(screen.queryByLabelText('Drops (count):')).toBeNull();
+  });
+
+  it('"Edit drops/slack" is disabled with no selection', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect((screen.getByText('Edit drops/slack') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('selecting a single linear marker enables "Edit drops/slack", which reopens the popover for it', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    drawLinearRun();
+    await waitFor(() => expect(screen.getByLabelText('Drops (count):')).toBeTruthy());
+    fireEvent.click(screen.getByText('Done'));
+    expect(screen.queryByLabelText('Drops (count):')).toBeNull();
+
+    fireEvent.click(screen.getByTitle('Select (V)'));
+    fireEvent.click(screen.getByText(/^Select marker /));
+
+    expect((screen.getByText('Edit drops/slack') as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByText('Edit drops/slack'));
+    await waitFor(() => expect(screen.getByLabelText('Drops (count):')).toBeTruthy());
+  });
+
+  it('a count marker does not enable "Edit drops/slack" even when selected', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    fireEvent.click(screen.getByTitle('Count (C)'));
+    fireEvent.click(screen.getByText('Simulate canvas click'));
+    fireEvent.click(screen.getByTitle('Select (V)'));
+    fireEvent.click(screen.getByText(/^Select marker /));
+    expect((screen.getByText('Edit drops/slack') as HTMLButtonElement).disabled).toBe(true);
   });
 });
 
