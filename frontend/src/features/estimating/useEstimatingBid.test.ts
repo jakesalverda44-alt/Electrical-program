@@ -156,6 +156,24 @@ describe('useEstimatingBid — save', () => {
     expect(result.current.dirty).toBe(false);
   });
 
+  // Phase B, Task 1 — a brand-new line gets its real, server-minted
+  // line_key only once the save response is adopted; markups created
+  // right after saving need this to point at without a second round trip.
+  it('adopts the server\'s returned lines (with their real line_key) when present', async () => {
+    get.mockResolvedValue({ data: initialResponse });
+    const savedLines = [{ ...initialResponse.lines[0], line_key: 'server-minted-uuid', qty: 12 }];
+    put.mockResolvedValue({ data: { recap: { ...EMPTY_RECAP, totals: { ...EMPTY_RECAP.totals, grandTotal: 500 } }, lines: savedLines } });
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => { result.current.setLines(prev => prev.map(l => ({ ...l, qty: 12 }))); });
+
+    await act(async () => { await result.current.save(); });
+
+    expect(result.current.lines).toEqual(savedLines);
+    expect(result.current.lines[0].line_key).toBe('server-minted-uuid');
+    expect(result.current.dirty).toBe(false); // the adopted server lines match what was just persisted
+  });
+
   it('sets saveError and stays dirty when the save fails', async () => {
     get.mockResolvedValue({ data: initialResponse });
     put.mockRejectedValue(new Error('boom'));

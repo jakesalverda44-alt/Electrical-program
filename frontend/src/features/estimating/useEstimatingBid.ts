@@ -135,15 +135,23 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     setSaving(true);
     setSaveError(null);
     try {
-      const { data: res } = await api.put<{ recap: PricingRecap }>(`/estimating/${bidId}`, { lines, settings });
+      const { data: res } = await api.put<{ recap: PricingRecap; lines?: EstimateLine[] }>(`/estimating/${bidId}`, { lines, settings });
       if (!aliveRef.current) return;
       setRecap(res.recap);
       setProposed(false);
+      // Phase B, Task 1 — the server may have minted a fresh line_key for
+      // any brand-new line; adopt its own returned lines (when present —
+      // older test mocks that only stub `recap` still work, falling back
+      // to the client's own lines) rather than the client's pre-save copy,
+      // so a markup created against a just-saved new line has a real
+      // line_key to point at without a second round trip.
+      const savedLines = res.lines ?? lines;
+      setLinesState(savedLines);
       // Fix round 2 / SF3 — a save writes bid_estimates.grand_total from
       // exactly this recap, in the same transaction — the two can't drift
       // apart the instant this response lands.
       setSavedGrandTotal(res.recap.totals.grandTotal);
-      persistedRef.current = { lines, settings };
+      persistedRef.current = { lines: savedLines, settings };
     } catch (err) {
       if (aliveRef.current) setSaveError(err instanceof Error ? err.message : 'Save failed');
       throw err;
