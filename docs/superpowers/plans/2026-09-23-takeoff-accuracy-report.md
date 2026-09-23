@@ -182,9 +182,9 @@ The renderer now matches Cowork's proposal:
 - **Tiles are sized for 1568 px** even though Opus 5.5 supports 2576 px (see
   above).
 - **Same-area detection** (enlarged plans, same level) relies on the page
-  classifier's sheet titles and levels. A sheet with an unusual title can be
-  summed when it should be max-kept. The merge flags every max-keep so the
-  estimator sees it.
+  classifier's sheet titles and levels. *Superseded by fix round 1 (B4):* named
+  areas are summed, enlarged plans are max-kept, and anything the titles can't
+  classify is a blocking question showing both numbers.
 - **Counter accuracy on real drawings is unmeasured.** All counter tests use a
   perfect fake counter on real pdftoppm tiles of a committed vector fixture.
   They prove the geometry, de-dup and merge, not Opus's symbol recognition.
@@ -201,3 +201,199 @@ The renderer now matches Cowork's proposal:
 6. `backend/src/ai/outputHygiene.ts`, `backend/src/bidstd/scopeList.ts`, `backend/src/bidstd/verifyBid.ts`
 7. `backend/src/utils/proposalDocx.ts` and `frontend/src/features/preconstruction/PcWorkspace/ProposalPaper.tsx`
 8. `frontend/src/features/preconstruction/PcWorkspace/TakeoffReviewPanel.tsx`
+
+---
+
+# Fix round 1 (review 2026-09-23, verdict MERGE AFTER FIXES)
+
+Review: `2026-09-23-takeoff-accuracy-review.md` (051bd8e). Commits
+**e1c0f2e..(this report commit)** on `feat/takeoff-accuracy` (not pushed). Same rules: worktree only,
+no Agent tool, no real Anthropic / Drive / email, the eval not run. Every
+reproduced finding has its repro committed as a test.
+
+| Commit | Findings |
+|---|---|
+| e1c0f2e | S1, S2, N2, N3, S17 (counter) |
+| 1262e5a | B1, B2, B3, B4, B5, S3, S4, S12, S13, S15, N1, N4, N5, N6 |
+| e3f0e5b | B6, B7, S6, S7, S8, S9, S10, S11, S14, S17 (compose path + renders), N7-N12 |
+| 73766b2 | S5, S16, N13, and the Takeoff-step / pre-bid / proposal UI for B2, B4, B5, N4, S8, S12, N7 |
+| 352a60b | S15 test |
+| (last) | this section |
+
+Migrations: **118** (run ids on takeoff results and filed documents,
+`review_status 'pending'`, `manual_count_targets`) and **119** (7-11 / 711
+aliases on the seeded 7-Eleven rule). The next plan starts at **120**.
+
+## Blockers
+
+- **B1 — counted and resolved quantities are enforced by code.**
+  `bidstd/enforceCounts.ts` runs after Agent 4 / the draft inside the one
+  composition path (`bidstd/composeProposal.ts`): each counted type's line
+  (Agent 4's new `count_type`, else the merge's tag/description match) gets
+  the counted or estimator-resolved qty; a dropped line is re-inserted; extra
+  lines for a type and every line for a "not on this job" type are removed;
+  every change is a correction in the preview. `countMismatchProblems`
+  re-checks the final takeoff and blocks the GC documents (422
+  `count_mismatch`). End-to-end test: Agent 4 drops A and writes B = 37 → the
+  rendered .docx says A 73 / B 52. The check runs in compose validation (it
+  gates generate-docx, the GC xlsx and so the only files draft-proposal can
+  attach); `verifyBid` itself reads rendered text and is not the place for it.
+- **B2 — no schedule/legend → blocking "No fixture schedule/legend found —
+  counts not verified".** Also when counting didn't run for any reason. The
+  estimator confirms Agent 1's counts with a reason, or enters the types
+  (`PUT /count-types`, a text box in the Takeoff step). **Limit:** the entered
+  types are counted on the *next* analysis run (one click, but it re-runs the
+  whole pipeline); counting-only re-runs would need the plan PDFs and page
+  inventory re-loaded outside `/analyze`, which I didn't build.
+- **B3 — unscheduled Agent 1 fixture rows** are blocking "Unscheduled
+  fixture: …" items (count it / not on this job). A count is written back into
+  the takeoff by B1. Kissimmee's "Site lights 4 (PH0.1)" is one click.
+- **B4 — split areas.** PARTIAL is a partition, not an enlarged plan. Named
+  areas of one level (AREA A/B, NORTH/SOUTH, PART, UNIT, WING, ZONE,
+  BUILDING) are **summed** (the reviewer's 40 + 35 = 75, both title shapes,
+  tested); enlarged plans of a covered area are max-kept; two same-level
+  sheets whose titles can't tell same-area from partitions raise a
+  **blocking** choice ("E-2.1 40 / E-2.2 35 — same area (keep 40) or
+  different areas (sum 75)?") and the answer is enforced.
+- **B5 — nothing from an earlier run reaches the GC or Chris.** Each
+  `/analyze` is a run: Agent 4's output and price, the draft and the counts
+  are cleared and the review is `pending` (every GC path blocked) until the
+  counting stage writes it. Agent 4 and the draft write only if no newer run
+  started. Composed output from an earlier run is never used. Filed documents
+  carry the run id; "Draft email to GC" attaches **only the current run's
+  verified PDF** (409 otherwise — so a bid analysed after this change needs
+  LibreOffice on the server to send); the pre-bid package and the email to
+  Chris are gated by the review and current-run only. Kissimmee stale-PDF
+  scenario tested (re-analyse → blocked while running → still refused after
+  the review clears).
+- **B6 — Section C is edited in place.** The lighting term replaces the
+  procurement bullet, else the bullet about the fixtures, else bullet 1;
+  never a 4th bullet. The Cowork Kissimmee bullets go through the real
+  enforcement + compose + `validateBidData` + `verifyBidDocx` in tests, and
+  the committed `after-*` renders were regenerated through exactly that path
+  (`scripts/renderProposalSample.ts` now refuses anything the app would).
+- **B7 — power poles.** Asked in two halves (furnished by / installed by —
+  APT / GC / Owner / Vendor each); a half the drawings state isn't asked.
+  Applying an answer rewrites only text about the poles: a bullet solely
+  about them is removed, they are struck from a list bullet (the Kissimmee
+  "receptacles, retail power poles, and display baseflex" keeps receptacles
+  and baseflex), circuits / conduit / feeds / connections to them stay, and
+  anything else is flagged, not deleted. The realistic "GC furnishes, APT
+  installs" removes nothing and labels the line "GC (EC installs)".
+
+## Should-fix
+
+- **S1** wrong reply shape / every mark rejected → the sheet fails (its types
+  become unreadable review items), never "counted 0"; a bare top-level array
+  is accepted explicitly.
+- **S2** overlap de-dup: nearest-first one-to-one pairing within 0.83" plus
+  tile-core ownership for anything unpaired. **Not exact at every noise
+  level** — seeded simulation of 120 fixtures on a D sheet, 100 sheets:
+
+  | Position error (sd, of a tile) | Old (review) | Now |
+  |---|---|---|
+  | 1% | 21 of 20 in one band | exact (band test, 5 seeds) |
+  | 2% | 27 of 20 in one band | band exact (5 seeds); full sheet exact on ≥ 97/100, never off by more than 1 of 120 |
+  | 3% | 32 of 20 in one band | band within 1; full sheet exact on ≥ 60/100, off by at most 2 of 120 |
+
+  Position errors of 2-3% of a tile are 0.15-0.22", comparable to fixture
+  spacing, so no position-only rule can be exact there; the eval must measure
+  Opus's real position error. A 2% jittered counter on the real pdftoppm
+  tiles gives the true counts (3 seeds).
+- **S3** partial coverage (lighting only from the power plan, no plan of the
+  right kind, only an enlarged / lone partial plan) and uncounted plan pages
+  (classified schedule/detail/non-electrical but titled PLAN; a PDF the
+  classifier returned nothing for) → blocking items.
+- **S4** a counted legend/equipment type replaces Agent 1's row in any
+  category and keeps its category (4 disconnects, not 8).
+- **S5** legacy bids: non-blocking note with their AutoZone questions (tested).
+- **S6** an answered term is never also "NOT YET DECIDED".
+- **S7** furnish and install parsed separately (GC / EC, F&I, BY EQUIPMENT
+  VENDOR, BY OTHERS); conflict options carry structured parties.
+- **S8** matching never uses the bid's GC; 7-11 / 711 aliases (migration
+  119 — note "711" also matches a bid named "... #711"); a brand that only
+  matched Default warns in the Takeoff step.
+- **S9** non-electrical gate: hard block only for drywall/finishes,
+  storm/sanitary/water pipe, plumbing-fixture supply and roofing; everything
+  ambiguous (and an SF unit alone) is a flag cleared by keeping it with a
+  reason; the reviewer's electrical lines are all allowed; overrides survive
+  rewording.
+- **S10** other-region spec text is a warning with an override, never a
+  verify block; only a conflicting named region or a named store type
+  "…only" triggers it; the reviewer's three sentences don't.
+- **S11** RFIs / TBDs / "to be determined" / "request for information".
+- **S12** the draft prompt and its hash come from one repeatable-read
+  snapshot; a stale draft is never used (package refuses; UI offers
+  "Compose the draft again").
+- **S13** auto-draft only for run_analysis users; running state claimed
+  atomically (two concurrent starts → one model call, tested); logged.
+- **S14** section rows keep with their first item; the reviewer's sweep is a
+  test (mutation: 5 orphaned bands without the fix, 0 with).
+- **S15** confirmed markers count only on the sheets a type is counted from;
+  others are listed, never added (tested: 70 + 73 → 73).
+- **S16** the eval defaults to `electrical_crm_test`, refuses the live DB
+  unless `--db electrical_crm`, and prices the draft call.
+- **S17** noisy / malformed counter tests (above); the Cowork structure test
+  runs through real enforcement and the GC verify gate.
+
+## Nits
+
+N1 "found only on E-1 (5) — not counted there"; N2 context-window
+exceeded = truncation (own message), refusal throws at every pipeline call;
+N3 zero-tile sheet fails; N4 changed evidence → re-confirm (earlier answer
+shown); N5 carry-over under a row lock; N6 reasons ≥ 10 chars with a word;
+N7 Included carve-outs + a keep-with-reason override for Not-included hits;
+N8 a missing-sheet entry is dropped only if every sheet it names is loaded;
+N9 plumbing fixtures / fire-alarm panels aren't lighting / panels; N10
+"Fixture A/B" tags; N11 an unreadable price never prints without words;
+N12 no repeated item names in descriptions; N13 preview bands match the .docx.
+
+**N14 (note):** draft reuse is the *uncommon* case in Jake's order of work —
+Chris's scope list, notes and price usually arrive after the draft, and any
+scope-input change forces a full Agent 4 run. That is safe (never stale), it
+just doesn't save the call often.
+
+**N15:** frontend known flakes now include `ElecProjectsSaveSection`
+(fails under full-suite load on `main` too).
+
+## Test suites (fix round 1)
+
+`tsc --noEmit` clean in both packages. Both suites run twice, one after the
+other (backend, frontend, backend, frontend):
+
+| Run | Backend (142 files, 1432 tests) | Frontend (122 files, 1223 tests) |
+|---|---|---|
+| 1 | 1425 passed, 3 failed, 4 not run | 1222 passed, 1 failed |
+| 2 | 1425 passed, 3 failed, 4 not run | 1223 / 1223 |
+
+Before fix round 1: backend 1340 passed of 1348; frontend 1214. Every
+failure is a known flake or load timeout, with evidence:
+
+- **Backend `notificationsRetention.test.ts`** is the file lost to "Worker
+  exited unexpectedly" in both runs (its 4 tests are the 4 not run). It is the
+  one test file absent from both runs' output. The review saw the same crash
+  on `main`.
+- **Backend `intakeSimilarCache` ×2** failed in both full runs. Run alone it
+  passed 2/2. Run together with `integration.test` it failed again, so it's
+  load-sensitive. This branch touches no intake code.
+- **Backend `integration.test` "backfills a follow-up…"** is a 30 s timeout in
+  both full runs, and passed when run alone next to `intakeSimilarCache`
+  (31/31 in that file). This branch doesn't touch leads.
+- **Frontend `SurveyMarkupEditor`** (Escape / full screen) failed in run 1,
+  passed in run 2, and passed 1/1 alone. The review showed it failing on
+  `main`.
+- **Frontend `Takeoff step — List|Plans toggle`** (lazy chunk) failed once in
+  a targeted run during the work, then passed in every later run. I'm listing
+  it as a timing flake, but it has only been seen once.
+
+## Not fixed / limits
+
+- B2's "enter the types" counts them on the next full analysis run, not
+  instantly.
+- S2 is not exact at 3% position error (numbers above); the eval must
+  measure the real error before the counter prices a live bid.
+- The Kissimmee eval has still not been run against the real API.
+- B5 requires the current run's PDF to send; a server without LibreOffice
+  can no longer attach the .docx fallback for a bid analysed with run ids.
+- Earlier limits above (job-wide load check, weak panel-circuit fallback,
+  1568 px tiles, HTML preview) are unchanged.
