@@ -48,6 +48,26 @@ function rowToMarkup(r: Record<string, unknown>): MarkupRow {
   };
 }
 
+/** Fix round 2 / R2-S3 — the route's per-item line_key-belongs-to-this-bid
+ *  check needs to know each update's CURRENT stored line_key, to tell
+ *  "unchanged" (the marker already had this now-orphaned line_key before
+ *  its line was deleted — allow the rest of the update through) from
+ *  "changed to something invalid" (reject). Scoped to just the ids the
+ *  batch actually touches, and to this bid — an id belonging to a
+ *  different bid, or a soft-deleted marker, simply won't appear in the
+ *  returned map, which the caller treats the same as "no prior value",
+ *  i.e. any non-null line_key on that update is a change. */
+export async function getMarkupLineKeysByIds(bidId: string, ids: string[]): Promise<Map<string, string | null>> {
+  const map = new Map<string, string | null>();
+  if (ids.length === 0) return map;
+  const { rows } = await pool.query(
+    `SELECT id, line_key FROM est_markups WHERE bid_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL`,
+    [bidId, ids]
+  );
+  for (const r of rows) map.set(r.id as string, (r.line_key as string | null) ?? null);
+  return map;
+}
+
 export async function getMarkups(bidId: string, opts: { documentId?: string; pageIndex?: number } = {}): Promise<MarkupRow[]> {
   const conds = ['bid_id = $1', 'deleted_at IS NULL'];
   const params: unknown[] = [bidId];

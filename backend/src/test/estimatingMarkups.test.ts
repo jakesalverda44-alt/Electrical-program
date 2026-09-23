@@ -354,6 +354,88 @@ describe('POST /api/estimating/:bidId/markups/batch — create/update/delete', (
     expect(rows[0].line_key).toBeNull();
   });
 
+  // Fix round 2 / R2-S3 — the real client (useMarkupAutosave's
+  // toWireMarkup) echoes a marker's CURRENT line_key on every update, not
+  // just the ones that actually change it. If the marker's line was
+  // deleted out from under it, that echoed line_key is now orphaned —
+  // this must not block the rest of the update (moving the marker,
+  // confirming it, etc.). Only a line_key that's CHANGING to something
+  // invalid is rejected.
+  it('an update that resends a marker\'s existing (now-orphaned) line_key unchanged is accepted, and its other fields still apply', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+
+    const saveRes = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ category: 'Branch Power', description: 'Duplex', qty: 5, unit: 'EA', source: 'manual', material_unit_override: 5, labor_hours_override: 0.5 }],
+      settings: { labor_rate: 38, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: 0 },
+    }).expect(200);
+    const orphanedLineKey = saveRes.body.lines[0].line_key as string;
+    const id = randomUUID();
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }], line_key: orphanedLineKey }],
+      updates: [], deletes: [],
+    }).expect(200);
+
+    // Re-save with the line OMITTED — a full delete+reinsert of
+    // est_bid_lines (saveBidEstimate), so orphanedLineKey no longer
+    // belongs to any line on this bid, but the marker still has it.
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [],
+      settings: { labor_rate: 38, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: 0 },
+    }).expect(200);
+
+    // Move the (now-orphaned) marker and re-confirm it — the client
+    // resends line_key: orphanedLineKey unchanged alongside the real change.
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [], updates: [{ id, line_key: orphanedLineKey, points: [{ x: 9, y: 9 }], status: 'confirmed' }], deletes: [],
+    }).expect(200);
+    expect(res.body.skipped).toEqual([]);
+    expect(res.body.updated.length).toBe(1);
+    expect(res.body.updated[0]).toMatchObject({ id, lineKey: orphanedLineKey, points: [{ x: 9, y: 9 }], status: 'confirmed' });
+
+    const { rows } = await pool.query('SELECT line_key, points, status FROM est_markups WHERE id=$1', [id]);
+    expect(rows[0].line_key).toBe(orphanedLineKey);
+    expect(rows[0].points).toEqual([{ x: 9, y: 9 }]);
+    expect(rows[0].status).toBe('confirmed');
+  });
+
+  it('an update that CHANGES an orphaned marker\'s line_key to a different invalid one is still rejected', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+
+    const saveRes = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ category: 'Branch Power', description: 'Duplex', qty: 5, unit: 'EA', source: 'manual', material_unit_override: 5, labor_hours_override: 0.5 }],
+      settings: { labor_rate: 38, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: 0 },
+    }).expect(200);
+    const orphanedLineKey = saveRes.body.lines[0].line_key as string;
+    const id = randomUUID();
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }], line_key: orphanedLineKey }],
+      updates: [], deletes: [],
+    }).expect(200);
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [],
+      settings: { labor_rate: 38, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: 0 },
+    }).expect(200);
+
+    const someOtherForeignKey = randomUUID(); // well-formed, but never belonged to any line on this bid, and != orphanedLineKey
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [], updates: [{ id, line_key: someOtherForeignKey }], deletes: [],
+    }).expect(200);
+    expect(res.body.updated).toEqual([]);
+    expect(res.body.skipped[0]).toMatchObject({ id, reason: expect.stringContaining(someOtherForeignKey) });
+
+    // Still holds its old (orphaned) line_key — the bad reassignment never applied.
+    const { rows } = await pool.query('SELECT line_key FROM est_markups WHERE id=$1', [id]);
+    expect(rows[0].line_key).toBe(orphanedLineKey);
+  });
+
   // Fix round 1 / S5 — document_id is checked against this bid now, same
   // as line_key: a count/linear markup used to be able to reference
   // ANOTHER bid's document id and still roll up (getRollup never

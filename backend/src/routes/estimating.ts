@@ -22,7 +22,7 @@ import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, 
 // instead of the plan-file route rolling its own (looser) header logic.
 import { serveDocument } from './documents';
 import {
-  getMarkups, batchMarkups, getRollup, applyMarkups,
+  getMarkups, batchMarkups, getRollup, applyMarkups, getMarkupLineKeysByIds,
   MarkupCreateInput, MarkupUpdateInput,
 } from '../estimating/markups';
 import { MarkupKind, MarkupStatus, MarkupPoint } from '../estimating/markupMath';
@@ -791,8 +791,25 @@ router.post('/:bidId/markups/batch', requireAuth, async (req: AuthRequest, res) 
     }
     return true;
   });
+  // Fix round 2 / R2-S3 — toWireMarkup (frontend) echoes every markup's
+  // current line_key on EVERY update, not just ones that actually change
+  // it (moving a point, confirming a suggested marker, etc. all resend the
+  // unchanged line_key alongside whatever field really changed). If that
+  // line was deleted out from under an already-placed marker, the marker
+  // is legitimately "orphaned" but still fully editable — only a line_key
+  // that's CHANGING to something invalid is a real problem. Compare each
+  // update's line_key against what the marker already has on record: an
+  // update that keeps its existing (possibly now-orphaned) line_key passes
+  // through untouched; only a line_key that differs from the stored value
+  // and isn't a valid line on this bid gets rejected. This is also what
+  // lets an orphaned marker be moved, confirmed, or reassigned — a
+  // reassignment sends a NEW, valid line_key, which was already accepted
+  // before this fix; it's the "resend the same orphaned one" case that was
+  // wrongly blocking every other field on the same update.
+  const existingLineKeyById = await getMarkupLineKeysByIds(bidId, v.updates.map(u => u.id));
   const updates = v.updates.filter(u => {
     if (u.lineKey != null && !validLineKeys.has(u.lineKey)) {
+      if (existingLineKeyById.get(u.id) === u.lineKey) return true; // unchanged — allow
       rejected.push({ id: u.id, reason: `line_key does not belong to this bid: ${u.lineKey}` });
       return false;
     }
