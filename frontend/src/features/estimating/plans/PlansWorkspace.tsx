@@ -330,22 +330,14 @@ export default function PlansWorkspace({
   // warning on every LATER navigation even after nothing is left to lose.
   useEffect(() => () => onMarkupUnsavedChange?.(false), [onMarkupUnsavedChange]);
 
+  // Fix round 2 / R2-N4 — hydratedMarkupsRef itself stays here (no
+  // temporal-dead-zone issue, unlike the effect body below); the actual
+  // hydration effect is declared further down (after historyPresentRef
+  // exists — same TDZ reasoning onSaveProposedMapping's own comment
+  // documents: it's a `const` declared LATER in this same component
+  // body, and referencing it here would be a genuine error, not just a
+  // stale-closure risk).
   const hydratedMarkupsRef = useRef(false);
-  useEffect(() => {
-    if (!markupsData || hydratedMarkupsRef.current) return;
-    hydratedMarkupsRef.current = true;
-    const drafts = markupsData.markups.map(wireToDraft);
-    setHistory(initHistory(drafts));
-    // Fix round 1 / B3(d) — install the REAL hydrated list as the
-    // autosave hook's own confirmed-synced baseline, in the SAME effect
-    // that first populates it. Without this, useMarkupAutosave's own
-    // "first render establishes the baseline" heuristic already locked in
-    // `[]` (this component's own first render, before this GET resolved)
-    // — so hydrating N existing markups moments later would diff as N
-    // brand-new creates and re-POST the whole bid's markup list on every
-    // Plans open.
-    autosaveResetRef.current(drafts);
-  }, [markupsData]);
 
   const [rollup, setRollup] = useState<RollupEntry[]>([]);
   const reloadRollup = useCallback(async () => {
@@ -404,6 +396,50 @@ export default function PlansWorkspace({
   // is a render behind by the time the commit itself runs.
   const historyPresentRef = useRef(history.present);
   historyPresentRef.current = history.present;
+
+  // Fix round 2 / R2-N4 — a marker the estimator placed BEFORE this GET
+  // resolved (drawing starts the instant a tool is picked; nothing gates
+  // it on markups having loaded first) used to be wiped out entirely
+  // here: setHistory(initHistory(serverDrafts)) replaced history.present
+  // outright, discarding anything not yet known to the server. Narrow
+  // and pre-existing (the review's own characterization) — a real
+  // regression only on a slow markups GET plus a very fast first click.
+  //
+  // Fix: merge instead of replace. This effect only ever runs ONCE (the
+  // hydratedMarkupsRef guard, below), on the FIRST markupsData — so a
+  // shared id between the server's rows and historyPresentRef.current
+  // can't happen (every marker's id is a client-generated UUID, minted
+  // once, the instant it's created); there's no conflict to resolve,
+  // only local-only drafts to carry forward. The server's own rows are
+  // otherwise authoritative and come first in the merged list.
+  useEffect(() => {
+    if (!markupsData || hydratedMarkupsRef.current) return;
+    hydratedMarkupsRef.current = true;
+    const serverDrafts = markupsData.markups.map(wireToDraft);
+    const serverIds = new Set(serverDrafts.map(d => d.id));
+    const localOnly = historyPresentRef.current.filter(d => !serverIds.has(d.id));
+    const merged = [...serverDrafts, ...localOnly];
+    setHistory(initHistory(merged));
+    // Fix round 1 / B3(d) — install the REAL hydrated list as the
+    // autosave hook's own confirmed-synced baseline, in the SAME effect
+    // that first populates it. Without this, useMarkupAutosave's own
+    // "first render establishes the baseline" heuristic already locked
+    // in `[]` (this component's own first render, before this GET
+    // resolved) — so hydrating N existing markups moments later would
+    // diff as N brand-new creates and re-POST the whole bid's markup
+    // list on every Plans open.
+    //
+    // Deliberately `serverDrafts`, NOT `merged` — reset()'s baseline is
+    // "what the server already has confirmed"; the local-only drafts are
+    // genuinely UNSAVED (the server has never seen them). Baselining on
+    // `merged` would make autosave's own diff (history.present vs. this
+    // baseline) see them as already-synced and never send them at all —
+    // the opposite of what R2-N4 needs. Baselining on `serverDrafts`
+    // alone means autosave's next diff correctly sees the local-only
+    // drafts (now part of `history.present` via setHistory(initHistory
+    // (merged)) above) as new creates and sends them normally.
+    autosaveResetRef.current(serverDrafts);
+  }, [markupsData]);
 
   // Fix round 1 / B2, remap added by Fix round 2 / R2-S1 — one-click
   // "save the proposed mapping" for the Count/Linear-disabled banner

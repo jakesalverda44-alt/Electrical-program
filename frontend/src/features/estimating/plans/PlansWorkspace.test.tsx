@@ -208,6 +208,79 @@ describe('PlansWorkspace — opening with existing markups does not re-save them
   });
 });
 
+// Fix round 2 / R2-N4 — a marker the estimator draws BEFORE the /markups
+// GET resolves (drawing starts the instant a tool is picked; nothing gates
+// it on markups having loaded first) used to be wiped out entirely once
+// hydration ran: setHistory(initHistory(serverDrafts)) replaced
+// history.present outright. Narrow (needs a slow GET plus a fast first
+// click) but a real regression — this proves the fix merges instead.
+describe('PlansWorkspace — a marker placed before hydration survives it, merged not wiped (R2-N4)', () => {
+  it('a locally-drawn marker and the server\'s hydrated markers both end up present, and the local one still autosaves', async () => {
+    let resolveMarkupsGet!: (v: { data: { markups: unknown[] } }) => void;
+    const markupsPromise = new Promise<{ data: { markups: unknown[] } }>(r => { resolveMarkupsGet = r; });
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet()] } });
+      if (url.endsWith('/markups')) return markupsPromise; // deliberately slow — not resolved yet
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      return Promise.resolve({ data: {} });
+    });
+
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+
+    // Draw a marker while the markups GET is STILL pending.
+    fireEvent.click(screen.getByTitle('Count (C)'));
+    fireEvent.click(screen.getByText('Simulate canvas click'));
+    await waitFor(() => expect(screen.getAllByText(/^Select marker /)).toHaveLength(1));
+    const localMarkerId = screen.getByText(/^Select marker /).textContent!.replace('Select marker ', '');
+
+    // NOW the (slow) GET resolves, with an EXISTING server-side marker the
+    // estimator never drew themselves.
+    await act(async () => {
+      resolveMarkupsGet({ data: { markups: [
+        { id: 'm-server', bidId: 'bid1', documentId: 'doc-1', pageIndex: 0, lineKey: null, kind: 'count', points: [{ x: 50, y: 50 }], drops: 0, dropFt: null, slackPct: null, status: 'confirmed', label: null },
+      ] } });
+      await Promise.resolve(); await Promise.resolve();
+    });
+
+    // Both the locally-drawn marker AND the server's marker are present —
+    // hydration merged instead of wiping the local one.
+    await waitFor(() => expect(screen.getAllByText(/^Select marker /)).toHaveLength(2));
+    expect(screen.getByText(`Select marker ${localMarkerId}`)).toBeTruthy();
+    expect(screen.getByText('Select marker m-server')).toBeTruthy();
+
+    // The local-only marker is correctly diffed as a new create against
+    // the server-only baseline (autosaveResetRef installed serverDrafts,
+    // not the merged list) — it still autosaves normally.
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    expect(post).toHaveBeenCalledWith(
+      '/estimating/bid1/markups/batch',
+      expect.objectContaining({ creates: [expect.objectContaining({ id: localMarkerId, kind: 'count' })] })
+    );
+    // And the server's own marker is never re-sent as if it were new.
+    expect(post).not.toHaveBeenCalledWith(
+      '/estimating/bid1/markups/batch',
+      expect.objectContaining({ creates: expect.arrayContaining([expect.objectContaining({ id: 'm-server' })]) })
+    );
+  });
+
+  it('with NO local markers drawn before hydration, only the server\'s markers appear (baseline: unaffected common case)', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet()] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [
+        { id: 'm-server', bidId: 'bid1', documentId: 'doc-1', pageIndex: 0, lineKey: null, kind: 'count', points: [{ x: 50, y: 50 }], drops: 0, dropFt: null, slackPct: null, status: 'confirmed', label: null },
+      ] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup();
+    await waitFor(() => expect(screen.getAllByText(/^Select marker /)).toHaveLength(1));
+    expect(screen.getByText('Select marker m-server')).toBeTruthy();
+  });
+});
+
 describe('PlansWorkspace — placing a count marker autosaves', () => {
   it('a POINTER_CLICK while the Count tool is active creates a draft and, after the debounce, POSTs a batch', async () => {
     setup();
