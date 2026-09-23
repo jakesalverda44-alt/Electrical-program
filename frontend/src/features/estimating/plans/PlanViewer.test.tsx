@@ -464,3 +464,49 @@ describe('PlanViewer — click to confirm a suggested marker (Task 7)', () => {
     expect(onSelectMarker).toHaveBeenCalledWith('m1', false);
   });
 });
+
+// Fix round 1 / S10 — a marker drag used to call onMoveMarker (a commit)
+// on every mousemove, with no distance threshold and no gating on the
+// active tool.
+describe('PlanViewer — marker drag is one commit, gated by a 3px threshold and the Select tool (S10)', () => {
+  async function setupDraggable(over: Partial<React.ComponentProps<typeof PlanViewer>> = {}) {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const onMoveMarker = vi.fn();
+    const utils = render(<PlanViewer {...baseProps({ markups: [markup({ status: 'confirmed' })], onMoveMarker, ...over })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalled());
+    const markerEl = utils.container.querySelector('[data-marker]')!;
+    const scrollEl = utils.container.querySelector('.plan-canvas-scroll')!;
+    return { ...utils, markerEl, scrollEl, onMoveMarker };
+  }
+
+  it('movement below the 3px threshold never calls onMoveMarker, even after mouseup', async () => {
+    const { markerEl, scrollEl, onMoveMarker } = await setupDraggable();
+    fireEvent.mouseDown(markerEl, { clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(scrollEl, { clientX: 101, clientY: 101 }); // ~1.4px — under threshold
+    fireEvent.mouseUp(scrollEl);
+    expect(onMoveMarker).not.toHaveBeenCalled();
+  });
+
+  it('movement past the threshold calls onMoveMarker EXACTLY ONCE, on mouseup — not per mousemove', async () => {
+    const { markerEl, scrollEl, onMoveMarker } = await setupDraggable();
+    fireEvent.mouseDown(markerEl, { clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(scrollEl, { clientX: 130, clientY: 100 }); // well past 3px
+    expect(onMoveMarker).not.toHaveBeenCalled(); // not yet — only on mouseup
+    fireEvent.mouseMove(scrollEl, { clientX: 150, clientY: 110 }); // a second move, same drag
+    expect(onMoveMarker).not.toHaveBeenCalled();
+    fireEvent.mouseUp(scrollEl);
+    expect(onMoveMarker).toHaveBeenCalledTimes(1);
+    expect(onMoveMarker).toHaveBeenCalledWith('m1', expect.any(Array));
+  });
+
+  it('a drag never starts while a non-Select tool is active — onMoveMarker is never called', async () => {
+    const countToolState = { tool: 'count' as const, drawPoints: [], selectedIds: [], scaleFirstPoint: null };
+    const { markerEl, scrollEl, onMoveMarker } = await setupDraggable({ toolState: countToolState });
+    fireEvent.mouseDown(markerEl, { clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(scrollEl, { clientX: 200, clientY: 200 }); // a large move — would easily cross the threshold in Select
+    fireEvent.mouseUp(scrollEl);
+    expect(onMoveMarker).not.toHaveBeenCalled();
+  });
+});

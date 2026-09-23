@@ -396,7 +396,26 @@ export default function PlanViewer({
   // inside MarkerShape, so the SAME mousemove/mouseup handlers that already
   // run over the whole canvas resolve it; MarkerShape only needs to report
   // "drag started on me".
-  const dragMarkerRef = useRef<{ id: string; startPdf: { x: number; y: number }; originPoints: { x: number; y: number }[] } | null>(null);
+  //
+  // Fix round 1 / S10 — this used to call onMoveMarker (-> PlansWorkspace's
+  // mutate -> commit()) on EVERY mousemove: one drag across a few hundred
+  // pixels could burn through a meaningful fraction of the 200-step undo
+  // history cap, and Undo walked back through every intermediate position
+  // instead of undoing the drag as one action. `moved` (crossed the 3px
+  // threshold, in SCREEN pixels — matching the existing pan-drag's own
+  // convention, not PDF points, which would behave inconsistently across
+  // zoom levels) gates BOTH when the marker visually starts following the
+  // pointer (via the transient `liveDrag` state below, never committed
+  // mid-drag) and whether mouseup calls onMoveMarker at all — exactly ONE
+  // call, with the final position, per real drag. A drag that never
+  // crosses the threshold (a plain click-to-select) never moves the
+  // marker at all, fixing "a click-to-select nudges them" too.
+  const dragMarkerRef = useRef<{
+    id: string; startPdf: { x: number; y: number }; startClientX: number; startClientY: number;
+    originPoints: { x: number; y: number }[]; moved: boolean;
+  } | null>(null);
+  const [liveDrag, setLiveDrag] = useState<{ id: string; points: { x: number; y: number }[] } | null>(null);
+  const liveDragRef = useRef<{ id: string; points: { x: number; y: number }[] } | null>(null);
 
   const toPdfPointFromEvent = useCallback((e: { clientX: number; clientY: number }): { x: number; y: number } | null => {
     const svg = svgRef.current;
@@ -406,10 +425,17 @@ export default function PlanViewer({
   }, [geom, renderScale]);
 
   const onStartMarkerDrag = useCallback((id: string, originPoints: { x: number; y: number }[], e: React.MouseEvent) => {
+    // Fix round 1 / S10 — "Marker drag also starts while the Count or
+    // Linear tool is active." Selecting a marker is already a no-op
+    // outside Select at the reducer level (toolMachine.ts's own
+    // SELECT_MARKERS case), but nothing stopped a DRAG from starting
+    // anyway — a Count/Linear click that happened to land on an existing
+    // marker could silently relocate it mid-draw.
+    if (toolState.tool !== 'select') return;
     const p = toPdfPointFromEvent(e);
     if (!p) return;
-    dragMarkerRef.current = { id, startPdf: p, originPoints };
-  }, [toPdfPointFromEvent]);
+    dragMarkerRef.current = { id, startPdf: p, startClientX: e.clientX, startClientY: e.clientY, originPoints, moved: false };
+  }, [toPdfPointFromEvent, toolState.tool]);
 
   const onMouseDownPan = useCallback((e: React.MouseEvent) => {
     if (toolState.tool !== 'select' || !scrollRef.current) return;
@@ -418,13 +444,28 @@ export default function PlanViewer({
   }, [toolState.tool]);
   const onMouseMovePan = useCallback((e: React.MouseEvent) => {
     if (dragMarkerRef.current) {
+      const drag = dragMarkerRef.current;
+      // Fix round 1 / S10 — 3px SCREEN-pixel threshold (matching the pan-
+      // drag's own convention below), never PDF points (which scale with
+      // zoom, so a fixed PDF-point threshold would feel inconsistent at
+      // different zoom levels). Below it: not a real drag yet — no visual
+      // move, no undo-step, same as a plain click.
+      if (!drag.moved) {
+        const screenDx = e.clientX - drag.startClientX;
+        const screenDy = e.clientY - drag.startClientY;
+        if (Math.hypot(screenDx, screenDy) < DRAG_THRESHOLD_PX) return;
+        drag.moved = true;
+      }
       didDragRef.current = true;
       const p = toPdfPointFromEvent(e);
       if (!p) return;
-      const { startPdf, originPoints, id } = dragMarkerRef.current;
-      const dx = p.x - startPdf.x;
-      const dy = p.y - startPdf.y;
-      onMoveMarker(id, originPoints.map(pt => ({ x: pt.x + dx, y: pt.y + dy })));
+      const dx = p.x - drag.startPdf.x;
+      const dy = p.y - drag.startPdf.y;
+      const points = drag.originPoints.map(pt => ({ x: pt.x + dx, y: pt.y + dy }));
+      // Visual-only — never committed until mouseup, so a drag across
+      // N mousemoves is still exactly ONE undo step, not N.
+      liveDragRef.current = { id: drag.id, points };
+      setLiveDrag(liveDragRef.current);
       return;
     }
     const d = dragPanRef.current;
@@ -435,8 +476,20 @@ export default function PlanViewer({
     scrollRef.current.scrollLeft = d.scrollLeft - dx;
     scrollRef.current.scrollTop = d.scrollTop - dy;
     scheduleTileUpdate();
-  }, [toPdfPointFromEvent, onMoveMarker, scheduleTileUpdate]);
-  const onMouseUpPan = useCallback(() => { dragPanRef.current = null; dragMarkerRef.current = null; }, []);
+  }, [toPdfPointFromEvent, scheduleTileUpdate]);
+  const onMouseUpPan = useCallback(() => {
+    const drag = dragMarkerRef.current;
+    // Fix round 1 / S10 — the ONE commit for the whole drag, with the
+    // final position. A drag that never crossed the threshold (moved ===
+    // false) never calls onMoveMarker at all — nothing to commit.
+    if (drag && drag.moved && liveDragRef.current) {
+      onMoveMarker(drag.id, liveDragRef.current.points);
+    }
+    dragPanRef.current = null;
+    dragMarkerRef.current = null;
+    liveDragRef.current = null;
+    setLiveDrag(null);
+  }, [onMoveMarker]);
 
   const onCanvasClick = useCallback((e: React.MouseEvent) => {
     if (viewOnly) return;
@@ -537,7 +590,13 @@ export default function PlanViewer({
                     {markups.map(m => (
                       <MarkerShape
                         key={m.id}
-                        markup={m}
+                        // Fix round 1 / S10 — while THIS marker is the one
+                        // actively being dragged, render at the transient
+                        // liveDrag position (never committed until
+                        // mouseup) instead of the prop-driven `m.points`,
+                        // which won't move until onMoveMarker's single
+                        // post-drag commit causes a re-render.
+                        markup={liveDrag && liveDrag.id === m.id ? { ...m, points: liveDrag.points } : m}
                         color={colorForLine(m.lineKey)}
                         selected={toolState.selectedIds.includes(m.id)}
                         strokeWidth={1.5 / renderScale}
