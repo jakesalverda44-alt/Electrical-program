@@ -9,7 +9,7 @@ import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { computeBidComps } from '../utils/bidComps';
 import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence } from './pricing';
-import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible } from './mapper';
+import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MapConfidence } from './mapper';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
 
 // Fix round 1 / B2 — thrown instead of writing a recap whose grand total (or
@@ -76,6 +76,21 @@ export interface ClientLineInput {
    *  checkbox in either direction; saveBidEstimate() also enforces the
    *  invariant server-side (can never be true while excluded is false). */
   sync_excluded?: boolean;
+  /** Fix round 2 / SF1 — how confident the mapper was about this line's
+   *  match (null for a manual line). Round-tripped by the client the same
+   *  way as sync_excluded/qty_overridden, so the UI can badge a fuzzy match
+   *  "check match" after a reload, not just live right after a sync. */
+  match_confidence?: MapConfidence | null;
+  /** Fix round 2 / SF4 — whether this line's current item_id/assembly_id
+   *  came from the mapper ('auto') or an estimator's manual resolve
+   *  ('manual'). Sync-takeoff re-runs the mapper on an 'auto' line whose
+   *  underlying takeoff description changed; a 'manual' pick is left alone
+   *  (flagged instead — see synced_description). */
+  match_source?: 'auto' | 'manual' | null;
+  /** Fix round 2 / SF4 — the raw takeoff description this line was last
+   *  synced against. Lets a later sync tell "the takeoff line itself
+   *  changed" apart from "the estimator renamed this line's description". */
+  synced_description?: string | null;
   source: 'takeoff' | 'manual';
   sort?: number;
 }
@@ -130,6 +145,9 @@ function rowToBidLine(r: Record<string, unknown>): BidLineRow {
     excluded: !!r.excluded,
     qty_overridden: !!r.qty_overridden,
     sync_excluded: !!r.sync_excluded,
+    match_confidence: (r.match_confidence as MapConfidence | null) ?? null,
+    match_source: (r.match_source as 'auto' | 'manual' | null) ?? null,
+    synced_description: (r.synced_description as string | null) ?? null,
     source: r.source as 'takeoff' | 'manual',
     sort: Number(r.sort),
   };
@@ -301,6 +319,7 @@ export function resolveLines(lines: BidLineRow[], library: Library): PricingLine
       unresolved,
       unverifiedPrice,
       unitUnknown,
+      matchConfidence: line.match_confidence ?? null,
     };
   });
 }
@@ -460,6 +479,13 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     excluded: false,
     qty_overridden: false,
     sync_excluded: false,
+    // Fix round 2 / SF1 + SF4 — a proposed mapping is always an 'auto'
+    // mapper result (there's no way to have manually resolved a line that
+    // was never saved), so match_confidence/match_source are meaningful
+    // from the very first GET, not just after a sync.
+    match_confidence: m.matchedKind ? m.matchConfidence : null,
+    match_source: m.matchedKind ? 'auto' : null,
+    synced_description: m.description,
     source: 'takeoff',
     sort: idx,
   }));
@@ -534,7 +560,28 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
         const nextExcluded = wasSyncExcluded ? false : !!existingLine.excluded;
         const nextSyncExcluded = wasSyncExcluded ? false : !!existingLine.sync_excluded;
 
-        // Keep the existing match/overrides; refresh the takeoff-owned facts
+        // Fix round 2 / SF4 — an 'auto' (mapper-picked) match re-runs the
+        // mapper whenever the underlying takeoff description at this same
+        // key has changed since the last sync (e.g. "5.1" respecs from 3/4"
+        // EMT to 1" EMT) — round 1 kept the OLD match forever regardless. A
+        // 'manual' pick is never touched by sync no matter what the takeoff
+        // now says; a line with no recorded match_source yet (any line
+        // saved before this feature) defaults to 'auto' — safer than
+        // assuming a manual resolution we have no record of.
+        const isAuto = existingLine.match_source !== 'manual';
+        const descriptionChanged = existingLine.synced_description != null
+          && existingLine.synced_description !== m.description;
+        const rematch = isAuto && descriptionChanged;
+        const nextAssemblyId = rematch ? (m.matchedKind === 'assembly' ? m.matchedId : null) : (existingLine.assembly_id ?? null);
+        const nextItemId = rematch ? (m.matchedKind === 'item' ? m.matchedId : null) : (existingLine.item_id ?? null);
+        const nextMatchConfidence = rematch ? m.matchConfidence : (existingLine.match_confidence ?? null);
+        // A manual line's synced_description is deliberately NOT advanced —
+        // it stays the description the estimator's pick was actually made
+        // against, so a later read can still tell "the takeoff changed
+        // since this manual pick" apart from "nothing changed".
+        const nextSyncedDescription = isAuto ? m.description : existingLine.synced_description;
+
+        // Keep the existing overrides; refresh the takeoff-owned facts
         // (takeoff_item_id included — it's a takeoff fact, not an estimator
         // edit). `m.description` is always the FRESH mapped text, so a line
         // that reappears after being vanished-prefixed is naturally restored
@@ -543,20 +590,23 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
         await client.query(
           `UPDATE est_bid_lines
              SET qty=$1, unit=$2, description=$3, confidence=$4, takeoff_item_id=$5,
-                 excluded=$6, sync_excluded=$7, updated_at=now()
-           WHERE id=$8`,
+                 excluded=$6, sync_excluded=$7, assembly_id=$8, item_id=$9,
+                 match_confidence=$10, synced_description=$11, updated_at=now()
+           WHERE id=$12`,
           [nextQty, m.unit, m.description, m.sourceConfidence ?? null, row.item ?? null,
-           nextExcluded, nextSyncExcluded, existingLine.id]
+           nextExcluded, nextSyncExcluded, nextAssemblyId, nextItemId,
+           nextMatchConfidence, nextSyncedDescription, existingLine.id]
         );
         updated++;
       } else {
         await client.query(
-          `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id, confidence, source, excluded)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',false)`,
+          `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id, confidence, source, excluded, match_confidence, match_source, synced_description)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',false,$12,$13,$14)`,
           [bidId, i, row.category, m.description, m.qty, m.unit,
            m.matchedKind === 'assembly' ? m.matchedId : null,
            m.matchedKind === 'item' ? m.matchedId : null,
-           key, row.item ?? null, m.sourceConfidence ?? null]
+           key, row.item ?? null, m.sourceConfidence ?? null,
+           m.matchedKind ? m.matchConfidence : null, m.matchedKind ? 'auto' : null, m.description]
         );
         added++;
       }
@@ -707,8 +757,9 @@ export async function saveBidEstimate(
       await client.query(
         `INSERT INTO est_bid_lines
            (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id,
-            material_unit_override, labor_hours_override, confidence, excluded, source, qty_overridden, sync_excluded)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+            material_unit_override, labor_hours_override, confidence, excluded, source, qty_overridden, sync_excluded,
+            match_confidence, match_source, synced_description)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
         [bidId, l.sort, l.category, l.description, l.qty, l.unit,
          l.assembly_id ?? null, l.item_id ?? null, l.takeoff_key ?? null, l.takeoff_item_id ?? null,
          l.material_unit_override ?? null, l.labor_hours_override ?? null,
@@ -724,7 +775,11 @@ export async function saveBidEstimate(
          // forgets to. Round 1's bug was hardcoding this to false
          // unconditionally, which defeated sync-takeoff's own un-exclude-on-
          // reappearance logic on the very next sync.
-         !!l.excluded && !!l.sync_excluded]
+         !!l.excluded && !!l.sync_excluded,
+         // Fix round 2 / SF1 + SF4 — round-tripped the same way as
+         // sync_excluded/qty_overridden: the client received these on the
+         // last GET/sync-takeoff and carries them forward on save.
+         l.match_confidence ?? null, l.match_source ?? null, l.synced_description ?? null]
       );
     }
 

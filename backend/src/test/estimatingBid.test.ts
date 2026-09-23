@@ -16,7 +16,7 @@ async function makeBid(app: import('express').Express, user: TestUser, extra: Re
   return res.body.id as string;
 }
 
-async function seedTakeoff(bidId: string, rows: { category: string; item: string; qty: number | string; unit: string; confidence?: string }[]) {
+async function seedTakeoff(bidId: string, rows: { category: string; item: string; spec?: string; qty: number | string; unit: string; confidence?: string }[]) {
   const json = JSON.stringify({ takeoff: rows });
   await pool.query(
     `INSERT INTO takeoff_results (bid_id, agent2_output, status) VALUES ($1,$2,'agent2_complete')
@@ -402,6 +402,61 @@ describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regression
     const afterUnexclude = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
     expect(afterUnexclude.body.lines[0].excluded).toBe(false);
     expect(afterUnexclude.body.lines[0].sync_excluded).toBe(false); // invariant enforced server-side
+  });
+
+  it('R2-SF4: an auto-matched line re-matches when the underlying takeoff description at the same id changes', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    await seedTakeoff(bidId, [
+      { category: 'Branch Power', item: '5.1', spec: '3/4" EMT', qty: 100, unit: 'LF' },
+    ]);
+    const firstSync = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const firstItemId = firstSync.body.lines[0].item_id;
+    expect(firstItemId).toBeTruthy();
+    expect(firstSync.body.lines[0].match_source).toBe('auto');
+
+    // Same takeoff id ("5.1"), respec'd to a different size — an 'auto' line
+    // must re-run the mapper, not keep pricing as the old 3/4" EMT.
+    await seedTakeoff(bidId, [
+      { category: 'Branch Power', item: '5.1', spec: '1" EMT', qty: 100, unit: 'LF' },
+    ]);
+    const secondSync = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    expect(secondSync.body.lines[0].item_id).not.toBe(firstItemId);
+    expect(secondSync.body.lines[0].description).toContain('1" EMT');
+  });
+
+  it('R2-SF4: a manually-resolved line is never re-matched by sync, even when the takeoff description changes', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    await seedTakeoff(bidId, [
+      { category: 'Branch Power', item: '5.1', spec: 'Some unmatched gizmo', qty: 1, unit: 'EA' },
+    ]);
+    await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const afterSync = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    const line = afterSync.body.lines[0];
+    expect(line.item_id).toBeFalsy(); // unmatched by the mapper
+
+    // The estimator manually resolves it to a real item and saves.
+    const lib = await request(app).get('/api/estimating/library').set(auth(u.token)).expect(200);
+    const manualItem = lib.body.items.find((i: { unit: string }) => i.unit === 'EA');
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ ...line, item_id: manualItem.id, match_source: 'manual' }],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3 },
+    }).expect(200);
+
+    // The takeoff respecs the SAME id to something the mapper WOULD now match.
+    await seedTakeoff(bidId, [
+      { category: 'Branch Power', item: '5.1', spec: '20A 125V duplex receptacle, spec grade', qty: 1, unit: 'EA' },
+    ]);
+    const resync = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    expect(resync.body.lines[0].item_id).toBe(manualItem.id); // the manual pick survives untouched
+    expect(resync.body.lines[0].match_source).toBe('manual');
   });
 
   it('never drops a line when the takeoff has duplicate category+item keys', async (ctx) => {

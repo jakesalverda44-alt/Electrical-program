@@ -53,6 +53,7 @@ describe('priceBid — empty input', () => {
       excludedCount: 0,
       unverifiedMaterialShare: 0,
       unitUnknownCount: 0,
+      fuzzyMatchCount: 0,
     });
   });
 
@@ -333,6 +334,21 @@ describe('priceBid — warnings', () => {
     expect(recap.warnings.unmatchedCount).toBe(1); // the excluded one doesn't count
   });
 
+  it('R2-SF1: counts non-excluded lines matched only at fuzzy confidence, and passes matchConfidence through to the priced line', () => {
+    const recap = priceBid(
+      [
+        line({ id: 'a', matchConfidence: 'fuzzy' }),
+        line({ id: 'b', matchConfidence: 'exact' }),
+        line({ id: 'c', matchConfidence: 'fuzzy', excluded: true }),
+      ],
+      baseSettings,
+      []
+    );
+    expect(recap.warnings.fuzzyMatchCount).toBe(1); // the excluded fuzzy line doesn't count
+    expect(recap.lines.find(l => l.id === 'a')!.matchConfidence).toBe('fuzzy');
+    expect(recap.lines.find(l => l.id === 'b')!.matchConfidence).toBe('exact');
+  });
+
   it('counts VERIFY-confidence lines', () => {
     const recap = priceBid(
       [line({ confidence: 'VERIFY', qty: 0 })],
@@ -395,6 +411,7 @@ describe('priceBid — golden recap for a realistic C-store bid', () => {
       excludedCount: 1,
       unverifiedMaterialShare: 0.13,
       unitUnknownCount: 0,
+      fuzzyMatchCount: 0,
     });
 
     expect(recap.categories).toEqual([

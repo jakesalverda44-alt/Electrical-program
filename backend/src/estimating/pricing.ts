@@ -23,6 +23,10 @@
 
 export type EstUnit = 'EA' | 'LF' | 'C' | 'M';
 export type LineConfidence = 'FIRM' | 'APPROX' | 'VERIFY';
+// Fix round 2 / SF1 — mirrors mapper.ts's MapConfidence (this module never
+// imports from mapper.ts by design — pure/no cross-module coupling — so the
+// same four values are declared again here).
+export type MatchConfidence = 'exact' | 'alias' | 'fuzzy' | 'none';
 
 /** Per-100 (C) / per-1000 (M) unit divisors; EA and LF are 1:1 with qty. */
 const UNIT_DIVISOR: Record<EstUnit, number> = { EA: 1, LF: 1, C: 100, M: 1000 };
@@ -75,6 +79,11 @@ export interface PricingLineInput {
    *  laborHoursUnit are forced to 0), and defaults to $0 with a warning
    *  rather than ever producing NaN. */
   unitUnknown?: boolean;
+  /** Fix round 2 / SF1 — how confident the mapper was about this line's
+   *  match (null for a manual line, which never went through the mapper).
+   *  Passed straight through to PricedLine for the UI to badge a 'fuzzy'
+   *  match "check match", and counted in PricingWarnings.fuzzyMatchCount. */
+  matchConfidence?: MatchConfidence | null;
 }
 
 export interface PricingFactorInput {
@@ -122,6 +131,8 @@ export interface PricedLine {
   laborExt: number;
   confidence: LineConfidence | null;
   excluded: boolean;
+  /** Fix round 2 / SF1 — see PricingLineInput.matchConfidence. */
+  matchConfidence: MatchConfidence | null;
   /** Fix round 1 / S10 — this line's fully-loaded share of `totals.directCost`:
    *  materialExt + this line's pro-rata share of consumables/tax (by material)
    *  plus laborExt-with-supervision + this line's pro-rata share of small
@@ -170,6 +181,9 @@ export interface PricingWarnings {
   unverifiedMaterialShare: number;
   /** Fix round 1 / B2 — count of non-excluded lines with an unrecognized unit. */
   unitUnknownCount: number;
+  /** Fix round 2 / SF1 — count of non-excluded lines the mapper matched only
+   *  at 'fuzzy' confidence — worth a "check match" review, not wrong outright. */
+  fuzzyMatchCount: number;
 }
 
 export interface PricingRecap {
@@ -260,6 +274,7 @@ export function priceBid(
   let verifyCount = 0;
   let zeroMaterialMatchedCount = 0;
   let unitUnknownCount = 0;
+  let fuzzyMatchCount = 0;
   let excludedCount = 0;
   let unverifiedMaterialCents = 0;
 
@@ -334,6 +349,7 @@ export function priceBid(
     if (line.unresolved && !excluded) unmatchedCount++;
     if (line.confidence === 'VERIFY' && !excluded) verifyCount++;
     if (line.unitUnknown && !excluded) unitUnknownCount++;
+    if (line.matchConfidence === 'fuzzy' && !excluded) fuzzyMatchCount++;
     if (line.matched && !excluded && line.materialUnitOverride == null && line.materialUnitCost === 0) {
       zeroMaterialMatchedCount++;
     }
@@ -350,6 +366,7 @@ export function priceBid(
       hoursExt,
       laborExt,
       confidence: line.confidence ?? null,
+      matchConfidence: line.matchConfidence ?? null,
       excluded,
       directShare: 0, // filled in below, once the pools it's allocated from are known
     });
@@ -462,6 +479,7 @@ export function priceBid(
       excludedCount,
       unverifiedMaterialShare,
       unitUnknownCount,
+      fuzzyMatchCount,
     },
   };
 }
