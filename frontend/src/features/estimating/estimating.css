@@ -267,6 +267,19 @@
   padding: 12px 16px;
 }
 
+/* Fix round 1 / N11 — below 768px, styles.css's .mobile-nav becomes a fixed,
+   64px-tall, z-index:200 bar pinned to the viewport bottom. Left at
+   `bottom: 0`, this sticky summary bar shares that same screen region and
+   the (much higher z-index) nav bar paints over its bottom ~64px, hiding
+   the grand total and any warning chips that land there. Clearing the
+   nav's height, not raising z-index, is the actual fix — raising z-index
+   would just put the summary bar ON TOP of the nav instead of beside it. */
+@media (max-width: 768px) {
+  .est-summary-bottom {
+    bottom: 64px;
+  }
+}
+
 /* ── Bid Summary panel content (shared across breakpoints) ──────────────── */
 
 .bs-section {
