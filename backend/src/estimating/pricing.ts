@@ -87,6 +87,12 @@ export interface PricingSettings {
   crewSize: number;
   /** Known square footage for the bid, when available — enables sell_per_sf. */
   sqFt?: number | null;
+  /** Fix round 1 / N3 — count of floors above 2, multiplying the MULTI-STORY
+   *  labor factor's pct (see effectiveFactorPct). A building's 3rd floor and
+   *  up each adds the same per-floor labor penalty; the seed factor's own
+   *  pct (3%) is the PER-FLOOR rate, not a flat one-time bump. Defaults to 0
+   *  (no multi-story adjustment) when omitted. */
+  floorsAbove2?: number;
 }
 
 export interface PricedLine {
@@ -198,16 +204,24 @@ function roundHours(n: number): number {
   return Math.round(n * 10000) / 10000;
 }
 
+// Fix round 1 / N3 — the seed's MULTI-STORY factor is deliberately labeled
+// "per floor above 2": its pct is a PER-FLOOR rate, not a flat bump applied
+// once whenever selected. Special-cased by groupKey since it's the only
+// factor with a real per-unit basis (every other factor is a flat pct).
+const PER_FLOOR_GROUP_KEY = 'multistory';
+
 /** Sum of pcts, at most one per group_key (first occurrence per group wins — the UI is
  *  responsible for offering a single radio-style choice per group; this only guards
- *  against being handed more than one, which the plan calls "factor exclusivity"). */
-export function effectiveFactorPct(factors: PricingFactorInput[]): number {
+ *  against being handed more than one, which the plan calls "factor exclusivity").
+ *  `floorsAbove2` (fix round 1 / N3) multiplies the multistory group's pct —
+ *  0 floors above 2 means that factor contributes 0 even if selected. */
+export function effectiveFactorPct(factors: PricingFactorInput[], floorsAbove2 = 0): number {
   const seenGroups = new Set<string>();
   let total = 0;
   for (const f of factors) {
     if (seenGroups.has(f.groupKey)) continue;
     seenGroups.add(f.groupKey);
-    total += f.pct;
+    total += f.groupKey === PER_FLOOR_GROUP_KEY ? f.pct * Math.max(0, floorsAbove2) : f.pct;
   }
   return total;
 }
@@ -221,7 +235,7 @@ export function priceBid(
   settings: PricingSettings,
   factors: PricingFactorInput[]
 ): PricingRecap {
-  const factorPct = effectiveFactorPct(factors);
+  const factorPct = effectiveFactorPct(factors, settings.floorsAbove2 ?? 0);
   const factorMultiplier = 1 + factorPct / 100;
 
   const pricedLines: PricedLine[] = [];

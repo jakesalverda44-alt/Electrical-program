@@ -52,6 +52,8 @@ export interface EstimateSettings {
   overhead_pct: number;
   profit_pct: number;
   crew_size: number;
+  /** Fix round 1 / N3 — multiplies the MULTI-STORY labor factor's pct. */
+  floors_above_2: number;
 }
 
 export interface PricedLine {
@@ -96,6 +98,7 @@ export interface SyncTakeoffResponse {
 export const DEFAULT_SETTINGS: EstimateSettings = {
   labor_rate: 38, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3,
   supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3,
+  floors_above_2: 0,
 };
 
 export const EMPTY_RECAP: PricingRecap = {

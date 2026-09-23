@@ -200,6 +200,11 @@ export function LaborPricingStep({
           <input type="number" value={settings.crew_size}
             onChange={e => setSettings(prev => ({ ...prev, crew_size: Number(e.target.value) }))} />
         </label>
+        <label className="lp-settings-field" title="Multiplies the MULTI-STORY labor factor below — 0 means no multi-story adjustment even if that factor is selected.">
+          Floors above 2
+          <input type="number" min={0} value={settings.floors_above_2} data-testid="lp-floors-above-2"
+            onChange={e => { const v = Number(e.target.value); setSettings(prev => ({ ...prev, floors_above_2: v })); }} />
+        </label>
         {SETTINGS_PCT_FIELDS.map(f => (
           <label className="lp-settings-field" key={f.key}>
             {f.label}

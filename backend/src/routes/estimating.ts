@@ -52,6 +52,12 @@ function validateSettings(body: unknown): ValidationResult<ClientSettingsInput> 
   if (!Number.isFinite(crewSize) || crewSize < 0) {
     return { ok: false, error: 'crew_size must be a non-negative number' };
   }
+  // Fix round 1 / N3 — defaults to 0 (no multi-story adjustment) when
+  // omitted, same as every other numeric settings field's fallback pattern.
+  const floorsAbove2 = s.floors_above_2 != null ? Number(s.floors_above_2) : 0;
+  if (!Number.isFinite(floorsAbove2) || floorsAbove2 < 0) {
+    return { ok: false, error: 'floors_above_2 must be a non-negative number' };
+  }
   const pcts: Record<string, number> = {};
   for (const field of SETTINGS_PCT_FIELDS) {
     const v = Number(s[field]);
@@ -73,6 +79,7 @@ function validateSettings(body: unknown): ValidationResult<ClientSettingsInput> 
       overhead_pct: pcts.overhead_pct,
       profit_pct: pcts.profit_pct,
       crew_size: crewSize,
+      floors_above_2: floorsAbove2,
     },
   };
 }

@@ -442,6 +442,57 @@ describe('B1 — end to end: takeoff -> mapper -> priceBid -> saveBidEstimate, r
   });
 });
 
+describe('N3 — floors_above_2 multiplies the MULTI-STORY factor instead of applying it flat', () => {
+  it('a line priced with the MULTI-STORY factor selected scales with floors_above_2', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const lib = await request(app).get('/api/estimating/library').set(auth(u.token)).expect(200);
+    const multistory = lib.body.factors.find((f: { code: string }) => f.code === 'MULTI-STORY');
+    expect(multistory).toBeTruthy();
+
+    const baseSettings = {
+      labor_rate: 40, factor_ids: [multistory.id], material_tax_pct: 0, small_tools_pct: 0,
+      supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3,
+    };
+    const line = { category: 'Branch Power', description: 'Manual', qty: 1, unit: 'EA', material_unit_override: 0, labor_hours_override: 10, source: 'manual' as const };
+
+    const zeroFloors = await request(app).post(`/api/estimating/${bidId}/price`).set(auth(u.token))
+      .send({ lines: [line], settings: { ...baseSettings, floors_above_2: 0 } }).expect(200);
+    expect(zeroFloors.body.recap.lines[0].hoursExt).toBe(10); // no adjustment at 0 floors above 2
+
+    const fourFloors = await request(app).post(`/api/estimating/${bidId}/price`).set(auth(u.token))
+      .send({ lines: [line], settings: { ...baseSettings, floors_above_2: 4 } }).expect(200);
+    // MULTI-STORY seed pct is 3% per floor -> 4 floors = +12%
+    expect(fourFloors.body.recap.lines[0].hoursExt).toBe(11.2);
+  });
+
+  it('rejects a negative floors_above_2 with 400', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: -1 },
+    }).expect(400);
+  });
+
+  it('persists floors_above_2 through save and returns it on the next GET', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: 5 },
+    }).expect(200);
+    const res = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    expect(res.body.settings.floors_above_2).toBe(5);
+  });
+});
+
 describe('S6 — a bid\'s first-ever settings inherit overhead/profit from bid_workspaces, not the hardcoded 10/15', () => {
   it('GET returns the bid_workspaces overhead_pct/profit_pct before any est_bid_settings row exists', async (ctx) => {
     if (!ok) return ctx.skip();

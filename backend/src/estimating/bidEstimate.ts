@@ -89,6 +89,8 @@ export interface ClientSettingsInput {
   overhead_pct: number;
   profit_pct: number;
   crew_size: number;
+  /** Fix round 1 / N3 — multiplies the MULTI-STORY labor factor's pct. */
+  floors_above_2: number;
 }
 
 function round2(n: number): number {
@@ -171,6 +173,7 @@ export async function getBidSettings(bidId: string): Promise<ClientSettingsInput
       overhead_pct: numberOr(r.overhead_pct, 10),
       profit_pct: numberOr(r.profit_pct, 15),
       crew_size: numberOr(r.crew_size, 3),
+      floors_above_2: numberOr(r.floors_above_2, 0),
     };
   }
   const [laborRate, taxPct, toolsPct, supervisionPct, consumablesPct, inherited] = await Promise.all([
@@ -191,6 +194,7 @@ export async function getBidSettings(bidId: string): Promise<ClientSettingsInput
     overhead_pct: inherited.overhead_pct,
     profit_pct: inherited.profit_pct,
     crew_size: 3,
+    floors_above_2: 0,
   };
 }
 
@@ -306,6 +310,7 @@ function toPricingSettings(settings: ClientSettingsInput, sqFt: number | null): 
     profitPct: settings.profit_pct,
     crewSize: settings.crew_size,
     sqFt,
+    floorsAbove2: settings.floors_above_2,
   };
 }
 
@@ -689,13 +694,14 @@ export async function saveBidEstimate(
 
     await client.query(
       `INSERT INTO est_bid_settings
-         (bid_id, labor_rate, factor_ids, material_tax_pct, small_tools_pct, supervision_pct, consumables_pct, overhead_pct, profit_pct, crew_size, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
+         (bid_id, labor_rate, factor_ids, material_tax_pct, small_tools_pct, supervision_pct, consumables_pct, overhead_pct, profit_pct, crew_size, floors_above_2, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
        ON CONFLICT (bid_id) DO UPDATE SET
          labor_rate=$2, factor_ids=$3, material_tax_pct=$4, small_tools_pct=$5,
-         supervision_pct=$6, consumables_pct=$7, overhead_pct=$8, profit_pct=$9, crew_size=$10, updated_at=now()`,
+         supervision_pct=$6, consumables_pct=$7, overhead_pct=$8, profit_pct=$9, crew_size=$10, floors_above_2=$11, updated_at=now()`,
       [bidId, settings.labor_rate, settings.factor_ids, settings.material_tax_pct, settings.small_tools_pct,
-       settings.supervision_pct, settings.consumables_pct, settings.overhead_pct, settings.profit_pct, settings.crew_size]
+       settings.supervision_pct, settings.consumables_pct, settings.overhead_pct, settings.profit_pct, settings.crew_size,
+       settings.floors_above_2]
     );
 
     const bidEstimate = await writeBidEstimateSnapshot(

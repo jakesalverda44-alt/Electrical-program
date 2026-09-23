@@ -213,6 +213,31 @@ describe('priceBid — factor exclusivity and application', () => {
     expect(effectiveFactorPct(heightFactors)).toBe(10);
   });
 
+  it('N3: the multistory factor multiplies by floorsAbove2 instead of applying flat', () => {
+    const multistory: PricingFactorInput[] = [{ code: 'MULTI-STORY', pct: 3, groupKey: 'multistory' }];
+    expect(effectiveFactorPct(multistory)).toBe(0); // no floorsAbove2 given -> no adjustment
+    expect(effectiveFactorPct(multistory, 0)).toBe(0);
+    expect(effectiveFactorPct(multistory, 1)).toBe(3);
+    expect(effectiveFactorPct(multistory, 4)).toBe(12); // 4 floors above 2 * 3% each
+  });
+
+  it('N3: floorsAbove2 combines with an ordinary flat-pct factor from a different group', () => {
+    const factors: PricingFactorInput[] = [
+      { code: 'MULTI-STORY', pct: 3, groupKey: 'multistory' },
+      { code: 'OCCUPIED', pct: 15, groupKey: 'occupied' },
+    ];
+    expect(effectiveFactorPct(factors, 3)).toBe(9 + 15); // 3 floors * 3% + flat 15%
+  });
+
+  it('N3: priceBid applies floorsAbove2 through settings.floorsAbove2 end to end', () => {
+    const recap = priceBid(
+      [line({ materialUnitCost: 100, laborHoursUnit: 1 })],
+      { ...baseSettings, supervisionPct: 0, floorsAbove2: 2 },
+      [{ code: 'MULTI-STORY', pct: 3, groupKey: 'multistory' }]
+    );
+    expect(recap.lines[0].hoursExt).toBe(1.06); // +6% (2 floors * 3%)
+  });
+
   it('applies the factor pct to hours (and therefore labor $), never to material', () => {
     const recap = priceBid(
       [line({ materialUnitCost: 100, laborHoursUnit: 1 })],

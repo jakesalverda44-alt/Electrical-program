@@ -27,7 +27,7 @@ beforeEach(() => {
 });
 
 function baseSettings(): EstimateSettings {
-  return { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3 };
+  return { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: 0 };
 }
 
 function makeRecap(): PricingRecap {
@@ -74,6 +74,20 @@ describe('LaborPricingStep — renders from a recap fixture', () => {
   it('renders category subtotals in the group header', async () => {
     renderStep();
     await waitFor(() => expect(screen.getByText(/Branch Power/).textContent).toContain('60 mat / 140 labor'));
+  });
+});
+
+describe('LaborPricingStep — N3: floors above 2', () => {
+  it('editing the floors-above-2 field calls setSettings with the new value', async () => {
+    const setSettings = vi.fn();
+    render(
+      <LaborPricingStep lines={[]} settings={baseSettings()} recap={EMPTY_RECAP} saving={false} syncing={false} saveError={null}
+        setLines={vi.fn()} setSettings={setSettings} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    const input = await screen.findByTestId('lp-floors-above-2');
+    fireEvent.change(input, { target: { value: '4' } });
+    const updater = setSettings.mock.calls[0][0] as (prev: EstimateSettings) => EstimateSettings;
+    expect(updater(baseSettings()).floors_above_2).toBe(4);
   });
 });
 
