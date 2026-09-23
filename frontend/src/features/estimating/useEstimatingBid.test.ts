@@ -29,6 +29,7 @@ const initialResponse: EstimatingBidResponse = {
   settings: DEFAULT_SETTINGS,
   recap: { ...EMPTY_RECAP, totals: { ...EMPTY_RECAP.totals, grandTotal: 100 } },
   proposed: false,
+  savedGrandTotal: 100,
 };
 
 describe('useEstimatingBid — hydration', () => {

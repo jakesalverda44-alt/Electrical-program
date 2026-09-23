@@ -23,6 +23,10 @@ export interface UseEstimatingBidResult {
   syncing: boolean;
   pricing: boolean;
   saveError: string | null;
+  /** Fix round 2 / SF3 — what's actually persisted in bid_estimates.grand_total;
+   *  compare against recap.totals.grandTotal to detect drift from a library
+   *  edit or calibration apply since the last save. null if never saved. */
+  savedGrandTotal: number | null;
   setLines: (updater: EstimateLine[] | ((prev: EstimateLine[]) => EstimateLine[])) => void;
   setSettings: (updater: EstimateSettings | ((prev: EstimateSettings) => EstimateSettings)) => void;
   save: () => Promise<void>;
@@ -44,6 +48,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
   const [settings, setSettingsState] = useState<EstimateSettings>(DEFAULT_SETTINGS);
   const [recap, setRecap] = useState<PricingRecap>(EMPTY_RECAP);
   const [proposed, setProposed] = useState(false);
+  const [savedGrandTotal, setSavedGrandTotal] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [pricing, setPricing] = useState(false);
@@ -74,6 +79,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     setSettingsState(nextSettings);
     setRecap(data.recap ?? EMPTY_RECAP);
     setProposed(!!data.proposed);
+    setSavedGrandTotal(data.savedGrandTotal ?? null);
     persistedRef.current = { lines, settings: nextSettings };
   }, [data]);
 
@@ -133,6 +139,10 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       if (!aliveRef.current) return;
       setRecap(res.recap);
       setProposed(false);
+      // Fix round 2 / SF3 — a save writes bid_estimates.grand_total from
+      // exactly this recap, in the same transaction — the two can't drift
+      // apart the instant this response lands.
+      setSavedGrandTotal(res.recap.totals.grandTotal);
       persistedRef.current = { lines, settings };
     } catch (err) {
       if (aliveRef.current) setSaveError(err instanceof Error ? err.message : 'Save failed');
@@ -153,6 +163,9 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       // sync-takeoff writes to est_bid_lines directly — the bid now has saved
       // lines regardless of whether it did before.
       setProposed(false);
+      // Fix round 2 / SF3 — sync-takeoff also writes bid_estimates/bids.amount
+      // in the same transaction (fix round 1 / B5) from this same recap.
+      setSavedGrandTotal(res.recap.totals.grandTotal);
       persistedRef.current = { lines: res.lines, settings };
       return { added: res.added, updated: res.updated, vanished: res.vanished };
     } finally {
@@ -163,7 +176,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
 
   return {
     loading: initialLoading && !hydratedRef.current,
-    lines, settings, recap, proposed, dirty, saving, syncing, pricing, saveError,
+    lines, settings, recap, proposed, dirty, saving, syncing, pricing, saveError, savedGrandTotal,
     setLines, setSettings, save, syncTakeoff, reload,
   };
 }

@@ -17,6 +17,12 @@ export interface BidSummaryProps {
   /** Fix round 1 / S1 — genuine unsaved edits, distinct from `proposed`
    *  (an unsaved SERVER suggestion the estimator hasn't touched yet). */
   dirty?: boolean;
+  /** Fix round 2 / SF3 — what's actually persisted in bid_estimates.grand_total.
+   *  Compared against recap.totals.grandTotal to catch drift from a library
+   *  edit or calibration apply since the last save — a cause other than the
+   *  estimator's own in-progress edits (already covered by `dirty`), so
+   *  nothing ever silently differs from bids.amount with no indicator at all. */
+  savedGrandTotal?: number | null;
   comparables?: ComparableForSummary[];
   onJumpToUnmatched?: () => void;
   onJumpToVerify?: () => void;
@@ -34,10 +40,17 @@ function pctLabel(share: number): string {
   return `${Math.round(share * 100)}%`;
 }
 
-export function BidSummary({ recap, proposed, dirty, comparables, onJumpToUnmatched, onJumpToVerify, insights, initialInsightsOpen }: BidSummaryProps) {
+export function BidSummary({ recap, proposed, dirty, savedGrandTotal, comparables, onJumpToUnmatched, onJumpToVerify, insights, initialInsightsOpen }: BidSummaryProps) {
   const [insightsOpen, setInsightsOpen] = useState(!!initialInsightsOpen);
   const { totals, warnings } = recap;
   const materialAllIn = totals.materialSubtotal + totals.consumables + totals.materialTax;
+  // Fix round 2 / SF3 — a cause OTHER than the estimator's own unsaved edits
+  // (dirty covers those already): a library edit or calibration apply since
+  // the last save recomputes this SAME saved bid's recap differently. Only
+  // meaningful once there IS a saved total and nothing else already
+  // explains the number on screen.
+  const staleEstimate = !dirty && !proposed && savedGrandTotal != null
+    && Math.abs(totals.grandTotal - savedGrandTotal) > 0.005;
 
   const compsPerSf = (comparables ?? [])
     .filter((c): c is { amount: number; sqFt: number } => c.amount != null && c.sqFt != null && c.sqFt > 0)
@@ -79,6 +92,7 @@ export function BidSummary({ recap, proposed, dirty, comparables, onJumpToUnmatc
               neither (a saved bid with no pending edits shows no tag). */}
           {proposed && <span className="bs-unsaved-tag" data-testid="bs-unsaved-tag">Unsaved proposal</span>}
           {!proposed && dirty && <span className="bs-unsaved-tag" data-testid="bs-dirty-tag">Unsaved changes</span>}
+          {staleEstimate && <span className="bs-unsaved-tag" data-testid="bs-stale-tag">Estimate changed since last save</span>}
         </span>
         <span className="bs-total-value" data-testid="bs-grand-total">{moneyFull(totals.grandTotal)}</span>
       </div>

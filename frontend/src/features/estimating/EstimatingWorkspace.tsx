@@ -24,6 +24,8 @@ export interface EstimatingWorkspaceProps {
   /** Fix round 1 / S1 — genuine unsaved edits (not just "proposed"); drives
    *  BidSummary's "unsaved proposal" tag and LaborPricingStep's sync-confirm. */
   dirty?: boolean;
+  /** Fix round 2 / SF3 — see BidSummaryProps.savedGrandTotal. */
+  savedGrandTotal?: number | null;
   saving: boolean;
   syncing: boolean;
   saveError: string | null;
@@ -45,7 +47,7 @@ export interface EstimatingWorkspaceProps {
 
 export default function EstimatingWorkspace({
   currentStep, onSelectStep, doneByStep, saveState, nextAction,
-  lines, settings, recap, proposed, dirty, saving, syncing, saveError, setLines, setSettings, save, syncTakeoff, showToast,
+  lines, settings, recap, proposed, dirty, savedGrandTotal, saving, syncing, saveError, setLines, setSettings, save, syncTakeoff, showToast,
   comparables, insights, otherStepContent, initialInsightsOpen,
 }: EstimatingWorkspaceProps) {
   return (
@@ -60,6 +62,7 @@ export default function EstimatingWorkspace({
           recap={recap}
           proposed={proposed}
           dirty={dirty}
+          savedGrandTotal={savedGrandTotal}
           comparables={comparables}
           onJumpToUnmatched={() => onSelectStep('pricing')}
           onJumpToVerify={() => onSelectStep('takeoff')}

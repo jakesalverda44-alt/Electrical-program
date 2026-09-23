@@ -89,6 +89,12 @@ export interface EstimatingBidResponse {
   settings: EstimateSettings;
   recap: PricingRecap;
   proposed: boolean;
+  /** Fix round 2 / SF3 — what's actually persisted in bid_estimates.grand_total;
+   *  `recap.totals.grandTotal` is always freshly recomputed against the
+   *  CURRENT library/settings and can legitimately drift from it (a library
+   *  edit or calibration apply since the last save). null for a bid that's
+   *  never been saved through the new engine (including a proposed mapping). */
+  savedGrandTotal: number | null;
 }
 
 export interface SyncTakeoffResponse {

@@ -996,10 +996,28 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     if (propPriceEdited) return;
     if (estimatingBid.dirty || estimatingBid.proposed) return;
     const total = estimatingBid.recap.totals.grandTotal;
-    if (total > 0) setPropPrice(String(Math.round(total)));
+    // Fix round 2 / N4 — cents, not Math.round() to the nearest whole
+    // dollar: the old rounding meant bids.amount (written from this exact
+    // string after Agent 4 runs) could differ from bid_estimates.grand_total
+    // by up to $0.50 even when nothing else was wrong.
+    if (total > 0) setPropPrice(total.toFixed(2));
   }, [estimatingBid.dirty, estimatingBid.proposed, estimatingBid.recap.totals.grandTotal, propPriceEdited]);
 
   const setPropPriceManual = useStableFn((v: string) => { setPropPrice(v); setPropPriceEdited(true); });
+  // Fix round 2 / SF3 — "use engine total": resets propPrice to the current
+  // engine total AND clears propPriceEdited, so the sync effect above
+  // resumes keeping it live instead of freezing on the just-applied value.
+  const useEngineTotal = useStableFn(() => {
+    setPropPrice(estimatingBid.recap.totals.grandTotal.toFixed(2));
+    setPropPriceEdited(false);
+  });
+  // Fix round 2 / SF3 — a visible mismatch: the estimator typed a price by
+  // hand and it no longer matches what the engine would compute right now.
+  // Once propPriceEdited is set it never used to reset and showed no
+  // "differs from the engine total" warning at all.
+  const propPriceNumeric = Number(propPrice.replace(/[$,\s]/g, ''));
+  const propPriceMismatch = propPriceEdited && Number.isFinite(propPriceNumeric)
+    && Math.abs(propPriceNumeric - estimatingBid.recap.totals.grandTotal) > 0.005;
 
   const doneByStep = deriveStepStatus({
     hasFiles: ws.files.length > 0,
@@ -1139,6 +1157,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               aiResults={aiResults}
               propPrice={propPrice}
               setPropPrice={setPropPriceManual}
+              priceMismatch={propPriceMismatch}
+              engineTotal={estimatingBid.recap.totals.grandTotal}
+              onUseEngineTotal={useEngineTotal}
               propNotes={propNotes}
               setPropNotes={setPropNotes}
               agent4StartError={agent4StartError}
@@ -1217,6 +1238,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           recap={estimatingBid.recap}
           proposed={estimatingBid.proposed}
           dirty={estimatingBid.dirty}
+          savedGrandTotal={estimatingBid.savedGrandTotal}
           saving={estimatingBid.saving}
           syncing={estimatingBid.syncing}
           saveError={estimatingBid.saveError}

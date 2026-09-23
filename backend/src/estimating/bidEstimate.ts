@@ -340,6 +340,19 @@ export async function computeRecapForBid(bidId: string): Promise<PricingRecap> {
   return priceBid(resolved, toPricingSettings(settings, sqFt), factors);
 }
 
+/** Fix round 2 / SF3 — computeRecapForBid() always recomputes LIVE against
+ *  the current library/settings, which can legitimately differ from what
+ *  was actually saved to bid_estimates.grand_total (a library edit or a
+ *  calibration apply changes every recap that touches the items it
+ *  changed, for every bid, without anyone re-saving those bids). Callers
+ *  that need to detect that drift (S3's "stale estimate" warning) compare
+ *  this against the live recap's totals.grandTotal — null when the bid has
+ *  never been saved through the new engine at all. */
+export async function getSavedGrandTotal(bidId: string): Promise<number | null> {
+  const { rows } = await pool.query('SELECT grand_total FROM bid_estimates WHERE bid_id = $1', [bidId]);
+  return rows[0]?.grand_total != null ? Number(rows[0].grand_total) : null;
+}
+
 /** Price an unsaved payload (POST /:bidId/price) — no writes. */
 export async function priceUnsaved(
   bidId: string, lines: ClientLineInput[], settings: ClientSettingsInput

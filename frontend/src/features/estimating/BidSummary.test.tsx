@@ -50,6 +50,32 @@ describe('BidSummary — values render from the recap fixture', () => {
   });
 });
 
+describe('BidSummary — fix round 2 / SF3: "Estimate changed since last save"', () => {
+  it('shows the stale tag when the live recap total differs from what was actually saved', () => {
+    render(<BidSummary recap={recap({ grandTotal: 11000 })} proposed={false} dirty={false} savedGrandTotal={10000} />);
+    expect(screen.getByTestId('bs-stale-tag')).toBeTruthy();
+    // Mutually exclusive with the other two states — nothing else explains this number.
+    expect(screen.queryByTestId('bs-unsaved-tag')).toBeNull();
+    expect(screen.queryByTestId('bs-dirty-tag')).toBeNull();
+  });
+
+  it('does not show the stale tag when the live total matches what was saved', () => {
+    render(<BidSummary recap={recap({ grandTotal: 10000 })} proposed={false} dirty={false} savedGrandTotal={10000} />);
+    expect(screen.queryByTestId('bs-stale-tag')).toBeNull();
+  });
+
+  it('does not show the stale tag for a bid that has never been saved (savedGrandTotal null)', () => {
+    render(<BidSummary recap={recap({ grandTotal: 11000 })} proposed={false} dirty={false} savedGrandTotal={null} />);
+    expect(screen.queryByTestId('bs-stale-tag')).toBeNull();
+  });
+
+  it('defers to the dirty/unsaved-proposal tags instead of double-flagging while the estimator has unsaved edits', () => {
+    render(<BidSummary recap={recap({ grandTotal: 11000 })} proposed={false} dirty={true} savedGrandTotal={10000} />);
+    expect(screen.getByTestId('bs-dirty-tag')).toBeTruthy();
+    expect(screen.queryByTestId('bs-stale-tag')).toBeNull();
+  });
+});
+
 describe('BidSummary — warnings', () => {
   it('renders no warnings section when everything is clean', () => {
     render(<BidSummary recap={recap()} proposed={false} />);

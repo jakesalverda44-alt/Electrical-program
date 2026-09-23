@@ -11,7 +11,7 @@ import {
 import {
   getBidLines, getBidSettings, getProposedLinesFromTakeoff, computeRecapForBid,
   priceUnsaved, syncTakeoff, saveBidEstimate, ClientLineInput, ClientSettingsInput,
-  NonFiniteTotalError,
+  NonFiniteTotalError, getSavedGrandTotal,
 } from '../estimating/bidEstimate';
 import { normalizeUnit } from '../estimating/mapper';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
@@ -361,12 +361,18 @@ router.get('/:bidId', requireAuth, async (req: AuthRequest, res) => {
     const proposed = await getProposedLinesFromTakeoff(bidId);
     if (proposed.hasTakeoff) {
       const recap = await priceUnsaved(bidId, proposed.lines, settings);
-      return res.json({ lines: proposed.lines, settings, recap, proposed: true });
+      return res.json({ lines: proposed.lines, settings, recap, proposed: true, savedGrandTotal: null });
     }
   }
 
-  const recap = await computeRecapForBid(bidId);
-  res.json({ lines: existingLines, settings, recap, proposed: false });
+  const [recap, savedGrandTotal] = await Promise.all([computeRecapForBid(bidId), getSavedGrandTotal(bidId)]);
+  // Fix round 2 / SF3 — savedGrandTotal is what's actually persisted in
+  // bid_estimates.grand_total; `recap` is always freshly recomputed against
+  // the CURRENT library/settings. They can legitimately differ (a library
+  // edit or calibration apply since the last save) — the frontend surfaces
+  // that drift as "Estimate changed since last save" rather than silently
+  // showing a number that no longer matches bids.amount.
+  res.json({ lines: existingLines, settings, recap, proposed: false, savedGrandTotal });
 });
 
 router.post('/:bidId/sync-takeoff', requireAuth, async (req: AuthRequest, res) => {
