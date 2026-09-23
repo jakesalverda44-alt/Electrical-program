@@ -682,6 +682,24 @@ describe('PlansWorkspace — suggested markers (Task 7, deferral closed)', () =>
     ));
   });
 
+  // Fix round 1 / S2 — "Confirm all" now reports what it did (exact
+  // proximity/dedup-against-a-hand-placed-marker cases are covered
+  // exhaustively at the pure-function level in
+  // suggestedMarkerFlow.test.ts; this just proves PlansWorkspace actually
+  // wires confirmAllOnSheet's counts into a toast, not the old
+  // fire-and-forget "flip everything, say nothing" behavior).
+  it('"Confirm all on this sheet" shows a toast reporting how many were confirmed', async () => {
+    getSheetTextItems.mockResolvedValue([{ str: 'A1', transform: [1, 0, 0, 1, 50, 50] }]);
+    const showToast = vi.fn();
+    setup({ lines: [line({ description: 'Type A1 duplex receptacle', line_key: 'k1' })], showToast });
+    await waitFor(() => expect(screen.getByText('Suggest markers for this sheet')).toBeTruthy());
+    fireEvent.click(screen.getByText('Suggest markers for this sheet'));
+    await waitFor(() => expect(screen.getByText(/1 suggested/)).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Confirm all on this sheet'));
+    expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ title: '1 confirmed', sub: undefined }));
+  });
+
   it('"Reject all" removes every suggested marker on the sheet — nothing is ever autosaved as confirmed', async () => {
     getSheetTextItems.mockResolvedValue([{ str: 'A1', transform: [1, 0, 0, 1, 50, 50] }]);
     setup({ lines: [line({ description: 'Type A1 duplex receptacle', line_key: 'k1' })] });

@@ -32,6 +32,64 @@ function samePoint(a: MarkupPoint, b: MarkupPoint): boolean {
  *  tagSuggest.ts's buildLineTagIndex for "Suggest markers for this sheet",
  *  which returns null — left for the estimator to assign — when a tag is
  *  claimed by more than one line, or by none). */
+// Fix round 1 / S2 — "Confirm all on this sheet" used to blindly promote
+// EVERY 'suggested' marker on the sheet to 'confirmed', with no check at
+// all against markers the estimator had already hand-placed (and
+// confirmed) nearby. The review's own scenario: hand-count 40 A1 troffers
+// (40 confirmed count markers), run "Suggest markers" (40 MORE, dashed,
+// assigned to the same line via tag matching, each sitting near — but
+// past DEDUP_TOLERANCE_PT's tight 0.5pt, and further still once S1's
+// geometry fix landed — its corresponding hand click), then "Confirm all":
+// the line's rollup doubled to 80. A much LOOSER tolerance (roughly the
+// width of a typical device symbol, not floating-point noise) and scoped
+// to the SAME line (an unrelated confirmed marker on a different line
+// nearby must never block this one) fixes it.
+const CONFIRM_DEDUP_TOLERANCE_PT = 24;
+
+export interface ConfirmAllResult {
+  /** The full markers array with the applicable suggested -> confirmed
+   *  transitions applied — pass straight to mutate(). */
+  markers: MarkupDraft[];
+  confirmedCount: number;
+  /** Left as 'suggested' (never auto-confirmed OR auto-rejected — still
+   *  visible, still awaiting the estimator's own explicit call) because a
+   *  same-line CONFIRMED marker already existed within
+   *  CONFIRM_DEDUP_TOLERANCE_PT. */
+  skippedCount: number;
+}
+
+/** Promotes every 'suggested' marker on (documentId, pageIndex) to
+ *  'confirmed', EXCEPT one within CONFIRM_DEDUP_TOLERANCE_PT of an
+ *  ALREADY-confirmed marker on the SAME line — checked against the
+ *  marker list as it stood BEFORE this action (never against a sibling
+ *  suggested marker also being confirmed in this same pass, which would
+ *  wrongly suppress two genuinely distinct, closely-spaced real fixtures
+ *  from ever both landing). */
+export function confirmAllOnSheet(markers: MarkupDraft[], documentId: string, pageIndex: number): ConfirmAllResult {
+  const onSheet = markers.filter(m => m.documentId === documentId && m.pageIndex === pageIndex);
+  const alreadyConfirmed = onSheet.filter(m => m.status === 'confirmed');
+
+  const isNearSameLineConfirmed = (m: MarkupDraft): boolean => {
+    if (!m.points[0]) return false;
+    return alreadyConfirmed.some(c =>
+      c.lineKey === m.lineKey && c.points[0]
+      && Math.abs(c.points[0].x - m.points[0].x) < CONFIRM_DEDUP_TOLERANCE_PT
+      && Math.abs(c.points[0].y - m.points[0].y) < CONFIRM_DEDUP_TOLERANCE_PT
+    );
+  };
+
+  let confirmedCount = 0;
+  let skippedCount = 0;
+  const result = markers.map(m => {
+    if (!(m.documentId === documentId && m.pageIndex === pageIndex && m.status === 'suggested')) return m;
+    if (isNearSameLineConfirmed(m)) { skippedCount++; return m; }
+    confirmedCount++;
+    return { ...m, status: 'confirmed' as const };
+  });
+
+  return { markers: result, confirmedCount, skippedCount };
+}
+
 export function draftsFromTagCandidates(
   candidates: TagCandidate[],
   documentId: string,

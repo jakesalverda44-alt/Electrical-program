@@ -31,7 +31,7 @@ import {
 import { useMarkupAutosave } from './useMarkupAutosave';
 import { PageGeometry } from './overlay';
 import { suggestTagMarkers, candidateTagsFromDescription, buildLineTagIndex } from './tagSuggest';
-import { draftsFromTagCandidates } from './suggestedMarkerFlow';
+import { draftsFromTagCandidates, confirmAllOnSheet } from './suggestedMarkerFlow';
 import { getSheetTextItems } from './sheetTextCache';
 import { TAKEOFF_CATEGORIES } from '../categories';
 import './plans.css';
@@ -551,14 +551,20 @@ export default function PlansWorkspace({
     mutate(updateMarkup(history.present, id, { status: 'confirmed' }));
   }, [mutate, history.present]);
 
+  // Fix round 1 / S2 — no longer a blind promote-everything: dedupes
+  // against same-line ALREADY-confirmed markers within ~24pt (the
+  // reviewer's exact "hand-count 40, suggest 40 more, confirm-all doubles
+  // to 80" scenario), and reports back what happened rather than leaving
+  // the estimator to notice a doubled count later.
   const onConfirmAllOnSheet = useCallback(() => {
     if (!currentSheet) return;
-    mutate(history.present.map(m => (
-      m.documentId === currentSheet.document_id && m.pageIndex === currentSheet.page_index && m.status === 'suggested'
-        ? { ...m, status: 'confirmed' as const }
-        : m
-    )));
-  }, [currentSheet, mutate, history.present]);
+    const { markers, confirmedCount, skippedCount } = confirmAllOnSheet(history.present, currentSheet.document_id, currentSheet.page_index);
+    mutate(markers);
+    showToast?.({
+      title: `${confirmedCount} confirmed`,
+      sub: skippedCount > 0 ? `${skippedCount} skipped as near an existing marker` : undefined,
+    });
+  }, [currentSheet, mutate, history.present, showToast]);
 
   const onRejectAllOnSheet = useCallback(() => {
     if (!currentSheet) return;
