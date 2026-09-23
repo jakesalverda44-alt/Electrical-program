@@ -252,6 +252,63 @@ describe('composeBidData', () => {
     });
   });
 
+  // Fix round 2 / R2-S4(b) — R5's exact repro: a markup-applied line whose
+  // unit is C or M used to write {qty: <raw feet>, unit: 'C'} straight into
+  // the composed takeoff. That reads as 1,234 raw feet to pricing.ts and to
+  // the estimator's own saved line, but a GC reading the takeoff sees
+  // "1234 C" and (C = per-hundred) reads it as 123,400 feet. Since B4,
+  // est_bid_lines.qty on ANY linear-family line (LF/C/M) is always raw
+  // feet — the unit is purely an internal pricing denomination — so the
+  // takeoff must always label a linear override 'LF', regardless of which
+  // pricing unit the saved line itself uses.
+  describe('Fix round 2 / R2-S4(b) — a markup-confirmed C/M-priced line is emitted as LF in the takeoff, never the internal pricing unit', () => {
+    const agent4WithUnderground: Agent4Output = {
+      ...agent4Base,
+      takeoff: [
+        ...(agent4Base.takeoff ?? []),
+        { name: 'Underground Feeders', items: [
+          { item: '5.1', description: '4" PVC conduit run', unit: 'LF', qty: 999, source: 'E1.0 Site Plan' },
+        ] },
+      ],
+    };
+
+    it('a C-priced markup-confirmed line reads {qty: raw feet, unit: "LF"}, never {unit: "C"} (R5: 1234 C would read as 123,400 ft to a GC)', () => {
+      const { data } = composeBidData(bidRow, agent4WithUnderground, '$1', {
+        savedLineItems: [{ category: 'Underground Feeders', item: '5.1', qty: 1234, unit: 'C', qty_source: 'markup' }],
+      });
+      const item = data.takeoff.find(c => c.name === 'Underground Feeders')!.items[0];
+      expect(item.qty).toBe(1234); // raw feet, per B4 — NOT divided by 100
+      expect(item.unit).toBe('LF');
+    });
+
+    it('same for an M-priced markup-confirmed line', () => {
+      const { data } = composeBidData(bidRow, agent4WithUnderground, '$1', {
+        savedLineItems: [{ category: 'Underground Feeders', item: '5.1', qty: 4321, unit: 'M', qty_source: 'markup' }],
+      });
+      const item = data.takeoff.find(c => c.name === 'Underground Feeders')!.items[0];
+      expect(item.qty).toBe(4321); // raw feet — NOT divided by 1000
+      expect(item.unit).toBe('LF');
+    });
+
+    it('an LF-priced markup-confirmed line is unaffected (already LF)', () => {
+      const { data } = composeBidData(bidRow, agent4WithUnderground, '$1', {
+        savedLineItems: [{ category: 'Underground Feeders', item: '5.1', qty: 555, unit: 'LF', qty_source: 'markup' }],
+      });
+      const item = data.takeoff.find(c => c.name === 'Underground Feeders')!.items[0];
+      expect(item.qty).toBe(555);
+      expect(item.unit).toBe('LF');
+    });
+
+    it('an EA-priced markup-confirmed line is still unaffected — only the LINEAR family is normalized', () => {
+      const { data } = composeBidData(bidRow, agent4Base, '$1', {
+        savedLineItems: [{ category: 'Service & Distribution', item: '1.1', qty: 2, unit: 'EA', qty_source: 'markup' }],
+      });
+      const item = data.takeoff.find(c => c.name === 'Service & Distribution')!.items[0];
+      expect(item.qty).toBe(2);
+      expect(item.unit).toBe('EA');
+    });
+  });
+
   it('carries furnish_by through onto the composed takeoff item', () => {
     const { data } = composeBidData(bidRow, agent4Base, '$1');
     const svc = data.takeoff.find(c => c.name === 'Service & Distribution')!;

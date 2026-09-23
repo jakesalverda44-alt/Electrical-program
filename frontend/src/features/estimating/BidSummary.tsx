@@ -33,6 +33,14 @@ export interface BidSummaryProps {
    *  markups rollup. */
   linesNotVerifiedOnPlansCount?: number;
   onJumpToPlans?: () => void;
+  /** Fix round 2 / R2-S4(a) — composeBidData's own `category::item` keys
+   *  where the GC takeoff and the saved estimate disagree on how many rows
+   *  share that key, so no markup-confirmed qty was safely overridable for
+   *  ANY of them (the takeoff silently kept Agent 4's own echoed qty while
+   *  the price used the marked one — the same disagreement B5 fixed for
+   *  the unambiguous case). Undefined/empty when the proposal preview
+   *  hasn't loaded yet or there's nothing to flag. */
+  ambiguousQtyKeys?: string[];
   insights?: React.ReactNode;
   /** Fix round 1 / N7 — start the Insights panel pre-opened when the
    *  estimator arrived here from a legacy tab that conceptually IS insights
@@ -49,7 +57,7 @@ function pctLabel(share: number): string {
 
 export function BidSummary({
   recap, proposed, dirty, savedGrandTotal, comparables, onJumpToUnmatched, onJumpToVerify,
-  linesNotVerifiedOnPlansCount, onJumpToPlans, insights, initialInsightsOpen,
+  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, insights, initialInsightsOpen,
 }: BidSummaryProps) {
   const [insightsOpen, setInsightsOpen] = useState(!!initialInsightsOpen);
   const { totals, warnings } = recap;
@@ -151,7 +159,7 @@ export function BidSummary({
 
       {(warnings.unmatchedCount > 0 || warnings.verifyCount > 0 || warnings.zeroMaterialMatchedCount > 0
         || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0
-        || !!linesNotVerifiedOnPlansCount) && (
+        || !!linesNotVerifiedOnPlansCount || !!ambiguousQtyKeys?.length) && (
         <div className="bs-section" data-testid="bs-warnings">
           {!!linesNotVerifiedOnPlansCount && (
             <button type="button" className="bs-warning" data-testid="bs-warning-not-verified-on-plans" onClick={onJumpToPlans}>
@@ -189,6 +197,14 @@ export function BidSummary({
           {warnings.excludedCount > 0 && (
             <div className="bs-warning" data-testid="bs-warning-excluded" style={{ cursor: 'default', color: 'var(--text3)' }}>
               {warnings.excludedCount} line{warnings.excludedCount === 1 ? '' : 's'} excluded
+            </div>
+          )}
+          {/* Fix round 2 / R2-S4(a) — no jump target: reconciling this means
+              reviewing which of the duplicate category+item rows the marked
+              qty belongs to, not a single screen to navigate to. */}
+          {!!ambiguousQtyKeys?.length && (
+            <div className="bs-warning" data-testid="bs-warning-ambiguous-qty" style={{ cursor: 'default' }} title={ambiguousQtyKeys.join(', ')}>
+              {ambiguousQtyKeys.length} item{ambiguousQtyKeys.length === 1 ? '' : 's'} where the GC takeoff qty may not match the saved estimate
             </div>
           )}
         </div>

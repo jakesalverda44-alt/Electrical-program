@@ -4,6 +4,7 @@
 import { BidData, Bullet, Section, TakeoffCategory } from './bidData';
 import { standardScope6, standardTerms, jobNumber, SECTION_HEADERS } from './boilerplate';
 import { Agent4Output } from '../ai/agent4Message';
+import { unitFamily } from '../estimating/mapper';
 
 // ── composeBidData ──────────────────────────────────────────────────────────
 
@@ -72,9 +73,10 @@ export interface ComposeBidDataResult {
    *  estimate does, and at least one of the saved rows is markup-confirmed.
    *  Positional (occurrence-order) matching can't be trusted here — no qty
    *  was overridden for ANY row under these keys, rather than risk
-   *  assigning a confirmed quantity to the wrong physical run. The caller
-   *  should surface this as a pre-send warning (not yet wired into the
-   *  Review checklist UI — see the Fix round 1 report). */
+   *  assigning a confirmed quantity to the wrong physical run. Fix round 2
+   *  / R2-S4(a) — now wired all the way through composeCurrentBidData and
+   *  GET /:bidId/proposal-preview into the Review step's pre-send
+   *  checklist and BidSummary (see PcWorkspaceView.tsx). */
   ambiguousQtyKeys: string[];
 }
 
@@ -201,9 +203,13 @@ export function composeBidData(
   }
   if (ambiguousQtyKeys.size > 0) {
     // "log it" (the fix's own wording) — this is a data-integrity signal
-    // worth an operator's attention even though nothing crashes; the
-    // caller (routes/preconstruction.ts) is expected to eventually surface
-    // ambiguousQtyKeys as a pre-send warning too (see ComposeBidDataResult).
+    // worth an operator's attention even though nothing crashes. Fix round
+    // 2 / R2-S4(a) — this used to be the ONLY place this ever surfaced;
+    // routes/preconstruction.ts's composeCurrentBidData now also returns
+    // ambiguousQtyKeys on its ok:true result, and GET
+    // /:bidId/proposal-preview includes it in the response body, so the
+    // frontend can show it as a real pre-send warning (BidSummary + the
+    // Review step's checklist) instead of only ever reaching server logs.
     // eslint-disable-next-line no-console
     console.warn(
       `composeBidData: ${ambiguousQtyKeys.size} category::item key(s) have a mismatched Agent 4 vs. saved-estimate occurrence count and were left un-overridden: ${Array.from(ambiguousQtyKeys).join(', ')}`
@@ -220,8 +226,19 @@ export function composeBidData(
       const n = occurrenceSoFar.get(key) ?? 0;
       occurrenceSoFar.set(key, n + 1);
       const savedEntry = ambiguousQtyKeys.has(key) ? undefined : savedGroups.get(key)?.[n];
+      // Fix round 2 / R2-S4(b) — est_bid_lines.qty on ANY linear-family line
+      // (LF, C or M) is always a RAW FEET count (markupMath.ts's rollupLines,
+      // B4's own fix); the unit itself (C/M) is only ever a PRICING
+      // denomination, applied by pricing.ts's UNIT_DIVISOR, never a display
+      // divisor. Emitting savedEntry.unit as-is here used to hand the GC
+      // takeoff `{qty: 1234, unit: 'C'}` for a markup-applied C-priced line —
+      // meaning 1,234 raw feet, but a GC reads "1234 C" as 123,400 feet (C =
+      // hundreds). The saved qty is already in feet, so the takeoff must
+      // always LABEL a linear-family override as 'LF' — never echo the
+      // internal C/M pricing unit into GC-facing output. An EA override is
+      // unaffected (EA's display and pricing unit are always the same).
       const confirmedQty = savedEntry && savedEntry.qtySource === 'markup' && savedEntry.qty != null
-        ? { qty: savedEntry.qty, unit: savedEntry.unit }
+        ? { qty: savedEntry.qty, unit: unitFamily(savedEntry.unit ?? '') === 'LINEAR' ? 'LF' : savedEntry.unit }
         : null;
 
       return {

@@ -156,3 +156,85 @@ describe('Review step — pre-send checklist "N lines not verified on plans" (Ta
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Plans' }).getAttribute('aria-selected')).toBe('true'));
   });
 });
+
+// Fix round 2 / R2-S4(a) — composeBidData.ts's own ambiguousQtyKeys used to
+// only ever reach server logs; GET /preconstruction/:bidId/proposal-preview
+// now includes it, and it's only meaningful once a proposal exists
+// (agent4_status: 'complete' — the same proposalReady gate the Proposal tab
+// itself uses), which is why this needs its own mock setup rather than
+// reusing the plain mockApi() above (which never mocks /results or
+// /proposal-preview at all, so ambiguousQtyKeys stays empty by construction
+// there).
+describe('Review step — pre-send checklist ambiguous-qty warning (Fix round 2 / R2-S4(a))', () => {
+  function mockApiWithProposal(lines: EstimateLine[], ambiguousQtyKeys: string[]) {
+    get.mockImplementation((url: string) => {
+      if (/\/estimating\/.+\/sheets$/.test(url)) return Promise.resolve({ data: { sheets: [] } });
+      if (/\/estimating\/.+\/markups\/rollup/.test(url)) return Promise.resolve({ data: { rollup: [] } });
+      if (/\/estimating\/.+\/markups$/.test(url)) return Promise.resolve({ data: { markups: [] } });
+      if (/\/estimating\/[^/]+$/.test(url)) {
+        return Promise.resolve({
+          data: {
+            lines, settings: {
+              labor_rate: 38, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3,
+              supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: 0,
+            },
+            recap: {
+              lines: [], categories: [],
+              totals: { materialSubtotal: 0, consumables: 0, materialTax: 0, laborHours: 0, laborCost: 0, smallTools: 0, directCost: 0, overhead: 0, profit: 0, grandTotal: 0, sellPerSf: null, crewWeeks: 0 },
+              warnings: { unmatchedCount: 0, verifyCount: 0, zeroMaterialMatchedCount: 0, excludedCount: 0, unverifiedMaterialShare: 0, unitUnknownCount: 0, fuzzyMatchCount: 0 },
+            },
+            proposed: false, savedGrandTotal: null,
+          },
+        });
+      }
+      if (/\/preconstruction\/.+\/results$/.test(url)) {
+        return Promise.resolve({ data: { agent2_output: '{"scopeOfWork":{}}', agent4_status: 'complete', agent4_output: '{}' } });
+      }
+      if (/\/preconstruction\/.+\/proposal-preview$/.test(url)) {
+        return Promise.resolve({
+          data: {
+            project_name: 'Test Job', project_address: '', client: '', job_number: 'JS.09022026',
+            total_price: '$1', scope: [], sections: [], exclusions: [],
+            takeoff: [{ name: 'Service & Distribution', items: [{ item: '1.1', description: 'Panel', unit: 'EA', qty: 1, source: 'E1.0' }] }],
+            terms: [], ambiguousQtyKeys,
+          },
+        });
+      }
+      if (url === '/documents') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: null });
+    });
+    post.mockResolvedValue({ data: {} });
+    put.mockResolvedValue({ data: {} });
+  }
+
+  it('shows the ambiguous-qty warning in the checklist, naming the count, once the proposal preview has ambiguousQtyKeys', async () => {
+    mockDesktopMatchMedia();
+    mockApiWithProposal([line({ qty_source: 'markup' })], ['Branch Power::3.1', 'Underground Feeders::5.1']);
+    renderAtReviewStep();
+
+    await waitFor(() => expect(screen.getByTestId('review-presend-checklist')).toBeTruthy());
+    // Same wording/count as BidSummary's own sidebar warning — scoped to
+    // the checklist specifically.
+    expect(within(screen.getByTestId('review-presend-checklist'))
+      .getByText('2 items where the GC takeoff qty may not match the saved estimate')).toBeTruthy();
+  });
+
+  it('uses singular phrasing for exactly one ambiguous key', async () => {
+    mockDesktopMatchMedia();
+    mockApiWithProposal([line({ qty_source: 'markup' })], ['Branch Power::3.1']);
+    renderAtReviewStep();
+
+    await waitFor(() => expect(screen.getByTestId('review-presend-checklist')).toBeTruthy());
+    expect(within(screen.getByTestId('review-presend-checklist'))
+      .getByText('1 item where the GC takeoff qty may not match the saved estimate')).toBeTruthy();
+  });
+
+  it('shows no checklist at all when there is nothing unverified AND ambiguousQtyKeys is empty', async () => {
+    mockDesktopMatchMedia();
+    mockApiWithProposal([line({ qty_source: 'markup' })], []);
+    renderAtReviewStep();
+
+    await waitFor(() => expect(screen.getByTestId('est-step-review')).toBeTruthy());
+    expect(screen.queryByTestId('review-presend-checklist')).toBeNull();
+  });
+});

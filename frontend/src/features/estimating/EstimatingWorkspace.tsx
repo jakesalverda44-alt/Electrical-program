@@ -45,6 +45,8 @@ export interface EstimatingWorkspaceProps {
   /** Phase B, Task 8 — see BidSummaryProps.linesNotVerifiedOnPlansCount. */
   linesNotVerifiedOnPlansCount?: number;
   onJumpToPlans?: () => void;
+  /** Fix round 2 / R2-S4(a) — see BidSummaryProps.ambiguousQtyKeys. */
+  ambiguousQtyKeys?: string[];
   insights: React.ReactNode;
   /** Fix round 1 / N7 — see BidSummaryProps.initialInsightsOpen. */
   initialInsightsOpen?: boolean;
@@ -63,7 +65,7 @@ export default function EstimatingWorkspace({
   currentStep, onSelectStep, doneByStep, saveState, nextAction,
   lines, settings, recap, proposed, dirty, savedGrandTotal, saving, syncing, saveError, setLines, setSettings, save, syncTakeoff, showToast,
   comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary,
-  linesNotVerifiedOnPlansCount, onJumpToPlans,
+  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys,
 }: EstimatingWorkspaceProps) {
   return (
     <EstimateShell
@@ -84,6 +86,7 @@ export default function EstimatingWorkspace({
           onJumpToVerify={() => onSelectStep('takeoff')}
           linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
           onJumpToPlans={onJumpToPlans}
+          ambiguousQtyKeys={ambiguousQtyKeys}
           insights={insights}
           initialInsightsOpen={initialInsightsOpen}
         />

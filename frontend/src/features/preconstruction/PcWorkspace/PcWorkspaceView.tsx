@@ -1306,7 +1306,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
       case 'review': {
         const w = estimatingBid.recap.warnings;
-        const hasPreSendFlags = w.unmatchedCount > 0 || w.verifyCount > 0 || w.unverifiedMaterialShare > 0 || linesNotVerifiedOnPlansCount > 0;
+        const ambiguousQtyKeys = proposalPreview?.ambiguousQtyKeys ?? [];
+        const hasPreSendFlags = w.unmatchedCount > 0 || w.verifyCount > 0 || w.unverifiedMaterialShare > 0
+          || linesNotVerifiedOnPlansCount > 0 || ambiguousQtyKeys.length > 0;
         return (
           <>
             {hasPreSendFlags && (
@@ -1332,6 +1334,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                     >
                       review on plans
                     </button>
+                  </span>
+                )}
+                {/* Fix round 2 / R2-S4(a) — same source (proposalPreview.
+                    ambiguousQtyKeys) and same count as BidSummary's own
+                    warning; composeBidData.ts's own comment explains why
+                    there's nowhere to jump for this one. */}
+                {ambiguousQtyKeys.length > 0 && (
+                  <span title={ambiguousQtyKeys.join(', ')}>
+                    {ambiguousQtyKeys.length} item{ambiguousQtyKeys.length === 1 ? '' : 's'} where the GC takeoff qty may not match the saved estimate
                   </span>
                 )}
               </div>
@@ -1420,6 +1431,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           forceSlimSummary={currentStep === 'takeoff' && planView.view === 'plans'}
           linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
           onJumpToPlans={jumpToTakeoffPlans}
+          // Fix round 2 / R2-S4(a) — only meaningful once a proposal has
+          // actually been composed (proposalPreview is null until
+          // proposalReady, same gate composeBidData's own ambiguity check
+          // needs Agent 4's takeoff array for).
+          ambiguousQtyKeys={proposalPreview?.ambiguousQtyKeys}
           lines={estimatingBid.lines}
           settings={estimatingBid.settings}
           recap={estimatingBid.recap}

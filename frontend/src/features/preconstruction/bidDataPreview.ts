@@ -42,6 +42,12 @@ export interface BidDataPreview {
   takeoff: PreviewTakeoffCategory[];
   terms: PreviewBullet[];
   alternates?: PreviewBullet[];
+  /** Fix round 2 / R2-S4(a) — backend/src/bidstd/composeBidData.ts's own
+   *  `category::item` keys left un-overridden because the GC takeoff and
+   *  the saved estimate disagree on how many rows share that key. Always
+   *  present (possibly empty) once composeCurrentBidData succeeds — see
+   *  GET /:bidId/proposal-preview's own comment on including it here. */
+  ambiguousQtyKeys?: string[];
 }
 
 /** Flatten a bullet (plain string, or a {b,t} mixed-bold run) into display text. */

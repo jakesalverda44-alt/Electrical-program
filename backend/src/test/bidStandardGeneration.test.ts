@@ -124,6 +124,47 @@ describe('proposal-preview (Task 7)', () => {
     const { rows } = await pool.query('SELECT job_number FROM bids WHERE id=$1', [bidId]);
     expect(rows[0].job_number).toBeNull();
   });
+
+  // Fix round 2 / R2-S4(a) — ambiguousQtyKeys used to only ever reach
+  // server logs (composeBidData.ts's own console.warn); it's now threaded
+  // through composeCurrentBidData and included in this route's response
+  // body, so the frontend (BidSummary + the Review step's pre-send
+  // checklist) has something real to read instead of nothing at all.
+  it('ambiguousQtyKeys is an empty array when nothing is ambiguous', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBidWithAgent4(u.token, 'PreviewNoAmbiguity', CLEAN_AGENT4_OUTPUT);
+
+    const res = await request(app)
+      .get(`/api/preconstruction/${bidId}/proposal-preview`).set(auth(u.token))
+      .expect(200);
+    expect(res.body.ambiguousQtyKeys).toEqual([]);
+  });
+
+  it('surfaces a category::item key in ambiguousQtyKeys when a markup-confirmed saved line\'s occurrence count for that key doesn\'t match Agent 4\'s own — the R5 disagreement, now visible instead of only logged', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBidWithAgent4(u.token, 'PreviewAmbiguous', CLEAN_AGENT4_OUTPUT);
+    // Agent 4 emits exactly ONE 'Service & Distribution::1.1' row (see
+    // CLEAN_AGENT4_OUTPUT above); saving TWO lines under that same key
+    // (one markup-confirmed) makes positional matching unsafe.
+    await pool.query(
+      `INSERT INTO bid_estimates (bid_id, line_items) VALUES ($1, $2::jsonb)`,
+      [bidId, JSON.stringify([
+        { category: 'Service & Distribution', item: '1.1', qty: 1, unit: 'EA', qty_source: 'markup' },
+        { category: 'Service & Distribution', item: '1.1', qty: 1, unit: 'EA', qty_source: 'manual' },
+      ])]
+    );
+
+    const res = await request(app)
+      .get(`/api/preconstruction/${bidId}/proposal-preview`).set(auth(u.token))
+      .expect(200);
+    expect(res.body.ambiguousQtyKeys).toEqual(['Service & Distribution::1.1']);
+    // Never guessed — the takeoff item stays at Agent 4's own echoed qty (1).
+    expect(res.body.takeoff[0].items[0].qty).toBe(1);
+  });
 });
 
 describe('generate-docx — verify gate (Task 6)', () => {
