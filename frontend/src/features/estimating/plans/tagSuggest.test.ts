@@ -176,12 +176,31 @@ describe('suggestTagMarkers — schedule-like sheet kinds never produce suggesti
 
 describe('candidateTagsFromDescription — Task 7 (deferral closed)', () => {
   it('extracts every plan-tag-like token (letters+digits together, 2-6 chars, has a digit)', () => {
-    // "2x4" tokenizes to "2X4" (x is alphanumeric, no separator) — it looks
-    // exactly as tag-like as "A1" by this heuristic, and is intentionally
-    // included; both are low-cost false-positive candidates (see the
-    // module-level comment: every candidate only ever produces a DASHED,
-    // unconfirmed marker, never an auto-applied one).
-    expect(candidateTagsFromDescription('Type A1 - 2x4 LED troffer')).toEqual(['A1', '2X4']);
+    // Fix round 1 / S3 — "2x4" tokenizes to "2X4" (x is alphanumeric, no
+    // separator) and used to be treated as tag-like as "A1" by the old
+    // "2-6 chars, has a digit" rule alone; it's now explicitly excluded as
+    // a dimension pattern (^\d+X\d+$) — a fixture SIZE, never a plan tag.
+    expect(candidateTagsFromDescription('Type A1 - 2x4 LED troffer')).toEqual(['A1']);
+  });
+
+  // Fix round 1 / S3 — the old rule ("2-6 chars, contains a digit") let a
+  // spec-heavy description flood the sheet with false suggested markers:
+  // a wire gauge ("#12" -> "12"), amp/voltage ratings ("20A", "125V"), and
+  // a fixture dimension ("2X4") all read as tag-like. A real device tag
+  // always mixes letters and digits AND isn't one of these specific shapes.
+  it('rejects rating/spec tokens (amps, volts, watts, poles, wire gauge, NEMA enclosure ratings) and dimension pairs', () => {
+    expect(candidateTagsFromDescription('#12 THHN wire')).toEqual([]);
+    expect(candidateTagsFromDescription('20A 125V duplex receptacle, NEMA 3R enclosure')).toEqual([]);
+    expect(candidateTagsFromDescription('2P breaker, 4KVA transformer, 500KCMIL feeder, 4AWG ground')).toEqual([]);
+    expect(candidateTagsFromDescription('2X4 LED troffer, 4X8 panel')).toEqual([]);
+  });
+
+  it('still extracts a real device tag even alongside rating/dimension noise in the same description', () => {
+    expect(candidateTagsFromDescription('A1 - 2x4 LED troffer, 20A 125V')).toEqual(['A1']);
+  });
+
+  it('rejects a pure number even inside the 2-6 char range (no letter at all)', () => {
+    expect(candidateTagsFromDescription('circuit 12 panel 1234')).toEqual([]);
   });
 
   it('extracts multiple distinct candidates in description order, deduped', () => {

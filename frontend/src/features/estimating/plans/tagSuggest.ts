@@ -68,12 +68,29 @@ export function tokenize(s: string): string[] {
 // unconfirmed "suggested" marker (Decision 3 / markupMath.ts: suggested
 // markers never roll up), so a false-positive tag costs the estimator one
 // glance and a "Reject all", never a wrong quantity. */
+// Fix round 1 / S3 — a token that's ENTIRELY a rating/spec number (an amp,
+// voltage, wattage, pole count, wire gauge, or NEMA enclosure rating) or a
+// dimension pair reads like a tag by the old "2-6 chars, has a digit" rule
+// alone ("#12 THHN" -> "12"; "20A 125V duplex" -> "20A", "125V"; "2X4"
+// troffer size; "3R" enclosure), but is never itself a device/fixture tag —
+// suggesting a dashed marker on every occurrence of "20A" or "2X4" in a
+// spec-heavy description flooded the sheet with false candidates. A real
+// plan tag (device/fixture designator) always mixes letters and digits AND
+// isn't one of these specific spec shapes ("A1", "T-1", "ATS1" all still
+// qualify).
+const RATING_TOKEN_RE = /^\d+(A|V|W|P|R|KVA|KW|AWG|MCM|KCMIL)$/;
+const DIMENSION_TOKEN_RE = /^\d+X\d+$/;
+
 export function candidateTagsFromDescription(description: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const t of tokenize(description)) {
     if (t.length < 2 || t.length > 6) continue;
     if (!/[0-9]/.test(t)) continue;
+    // A pure number ("12") is never a tag — require at least one letter too.
+    if (!/[A-Z]/.test(t)) continue;
+    if (RATING_TOKEN_RE.test(t)) continue;
+    if (DIMENSION_TOKEN_RE.test(t)) continue;
     if (seen.has(t)) continue;
     seen.add(t);
     out.push(t);
