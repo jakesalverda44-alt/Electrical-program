@@ -6,6 +6,8 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, waitFor, cleanup, act, fireEvent } from '@testing-library/react';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 const get = vi.fn();
 vi.mock('../../../api/client', async () => {
@@ -640,5 +642,83 @@ describe('PlanViewer — zoom/fit stay available in view-only mode, and touch pi
     fireEvent.touchMove(scrollEl, { touches: [{ clientX: 100, clientY: 100 }] });
     await new Promise(r => setTimeout(r, 50));
     expect(page.render).not.toHaveBeenCalled();
+  });
+
+  // Fix round 2 / R2-N1 — the OLD implementation called zoomBy(stepFactor,
+  // ...) directly from every touchmove; zoomBy computes nextScale from the
+  // CLOSED-OVER renderScale, which hasn't been updated by React yet for a
+  // second touchmove arriving before a re-render — so the first
+  // touchmove's own setRenderScale call was simply overwritten (not
+  // compounded) by the second one's, computed off the SAME stale base.
+  // Net effect: multiple touchmoves inside one frame under-zoomed (as if
+  // only the LAST one had ever happened) and fired one full re-render
+  // EACH. The fix accumulates step factors in a ref and only calls zoomBy
+  // once per animation frame with the fully compounded factor.
+  it('two touchmoves before the next animation frame compound into ONE zoomBy call with the combined factor — not just the last touchmove\'s (R2-N1)', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+
+    // Captures every requestAnimationFrame call instead of auto-firing it,
+    // so the test controls exactly when "the next frame" happens — letting
+    // both touchmoves below land BEFORE any flush, which is the only way
+    // to prove they compound instead of racing a real timer.
+    const rafQueue: FrameRequestCallback[] = [];
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb: FrameRequestCallback) => {
+      rafQueue.push(cb);
+      return rafQueue.length;
+    });
+    const flushRAF = () => rafQueue.splice(0, rafQueue.length).forEach(cb => cb(0));
+
+    const { container } = render(<PlanViewer {...baseProps({ viewOnly: true })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalledTimes(1));
+    const scaleBefore = (page.getViewport.mock.calls[page.getViewport.mock.calls.length - 1][0] as { scale: number }).scale;
+    const renderCallsBefore = page.render.mock.calls.length;
+    rafQueue.splice(0, rafQueue.length); // discard anything queued by mount itself
+    const scrollEl = container.querySelector('.plan-canvas-scroll')!;
+
+    fireEvent.touchStart(scrollEl, { touches: [{ clientX: 100, clientY: 100 }, { clientX: 200, clientY: 100 }] }); // dist 100
+    fireEvent.touchMove(scrollEl, { touches: [{ clientX: 90, clientY: 100 }, { clientX: 220, clientY: 100 }] }); // dist 130 -> f1 = 1.3
+    fireEvent.touchMove(scrollEl, { touches: [{ clientX: 80, clientY: 100 }, { clientX: 249, clientY: 100 }] }); // dist 169 -> f2 = 169/130
+
+    // Nothing applied yet, and only ONE frame was ever scheduled for the
+    // whole gesture — the second touchmove didn't queue its own.
+    expect(page.render.mock.calls.length).toBe(renderCallsBefore);
+    expect(rafQueue.length).toBe(1);
+
+    flushRAF();
+    await waitFor(() => expect(page.render.mock.calls.length).toBeGreaterThan(renderCallsBefore));
+    expect(page.render.mock.calls.length).toBe(renderCallsBefore + 1); // exactly one new render — not two
+
+    const scaleAfter = (page.getViewport.mock.calls[page.getViewport.mock.calls.length - 1][0] as { scale: number }).scale;
+    const compoundFactor = (130 / 100) * (169 / 130); // both steps, correctly multiplied together
+    expect(scaleAfter).toBeCloseTo(scaleBefore * compoundFactor, 5);
+    // The old, buggy result: the first touchmove's factor silently lost,
+    // landing on scaleBefore * f2 alone — provably a different number.
+    expect(scaleAfter).not.toBeCloseTo(scaleBefore * (169 / 130), 5);
+
+    rafSpy.mockRestore();
+  });
+
+  // Vitest here doesn't run the CSS pipeline (no `test.css` in vite.config.ts,
+  // and PlanViewer.tsx itself doesn't even import plans.css — PlansWorkspace.
+  // tsx, its parent, does), so a rendered element's getComputedStyle never
+  // reflects the real stylesheet in this test environment. Reading the CSS
+  // source directly is the reliable way to guard this rule, the same
+  // approach nodeVersionPin.test.ts (R2-S5) uses for render.yaml.
+  it('.plan-canvas-scroll opts out of the browser\'s own touch pinch/double-tap zoom in plans.css, so it never fights this component\'s own zoomBy (R2-N1)', () => {
+    const css = readFileSync(join(__dirname, 'plans.css'), 'utf8');
+    const ruleMatch = /\.plan-canvas-scroll\s*\{([^}]*)\}/.exec(css);
+    expect(ruleMatch).toBeTruthy();
+    // Strip comments first — the rule's own explanatory comment mentions
+    // the literal string "touch-action: none" (explaining why it's NOT
+    // used), which would otherwise false-positive the very check below.
+    const rule = ruleMatch![1].replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(rule).toMatch(/touch-action:\s*pan-x pan-y;/);
+    // Never "none" — see plans.css's own comment: `none` would ALSO
+    // disable native single-finger panning, which this component has no
+    // JS fallback for at all (onTouchMove only ever handles exactly 2
+    // touches).
+    expect(rule).not.toMatch(/touch-action:\s*none/);
   });
 });

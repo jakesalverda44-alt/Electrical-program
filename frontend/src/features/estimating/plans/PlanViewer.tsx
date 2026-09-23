@@ -399,26 +399,78 @@ export default function PlanViewer({
   // frame's zoomBy call is the same small relative step zoomBy already
   // expects from a wheel tick — zoomed around the touches' own midpoint,
   // same anchor-preserving math onWheel/zoomBy already use.
-  const touchPinchRef = useRef<{ lastDist: number } | null>(null);
+  //
+  // Fix round 2 / R2-N1 — the original version called zoomBy(stepFactor,
+  // ...) on EVERY touchmove. zoomBy computes `nextScale = renderScale *
+  // factor` from the CLOSED-OVER `renderScale` (this render's committed
+  // value) — a real device can fire several touchmoves inside a single
+  // animation frame, each one still closing over the SAME pre-update
+  // renderScale (setRenderScale/React hasn't re-rendered yet), so every
+  // touchmove but the first computed its target from a value that was
+  // already stale by the time it ran: under-zooming and jittering instead
+  // of compounding smoothly, plus a full setRenderScale (whole-page
+  // re-render) per touchmove rather than per frame.
+  //
+  // Fix: accumulate the step factors themselves in a ref across every
+  // touchmove since the last flush, and only call zoomBy ONCE per
+  // animation frame (rAF-throttled) with the fully compounded factor —
+  // "the live scale" for that frame, not a value one or more touchmoves
+  // behind it. This also caps the re-render rate at once per frame,
+  // matching the display's own refresh rate instead of the touch
+  // sampling rate (which can run well above it).
+  const touchPinchRef = useRef<{
+    lastDist: number;
+    pendingFactor: number;
+    anchor: { x: number; y: number };
+    rafId: number | null;
+  } | null>(null);
+
+  const flushPinchRef = useRef<() => void>(() => {});
+  flushPinchRef.current = () => {
+    const state = touchPinchRef.current;
+    if (!state) return;
+    state.rafId = null;
+    const factor = state.pendingFactor;
+    state.pendingFactor = 1;
+    if (factor === 1) return; // nothing accumulated since the last flush
+    zoomBy(factor, state.anchor);
+  };
+
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length === 2) {
       const [a, b] = [e.touches[0], e.touches[1]];
-      touchPinchRef.current = { lastDist: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY) };
+      touchPinchRef.current = {
+        lastDist: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY),
+        pendingFactor: 1,
+        anchor: { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 },
+        rafId: null,
+      };
     }
   }, []);
   const onTouchMove = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length !== 2 || !touchPinchRef.current) return;
+    const state = touchPinchRef.current;
+    if (e.touches.length !== 2 || !state) return;
     const [a, b] = [e.touches[0], e.touches[1]];
     const dist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
-    const prior = touchPinchRef.current.lastDist;
-    touchPinchRef.current.lastDist = dist;
+    const prior = state.lastDist;
+    state.lastDist = dist;
+    // The anchor tracks the touches' latest midpoint, even across several
+    // touchmoves accumulated into the same not-yet-flushed frame.
+    state.anchor = { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
     if (!(prior > 0) || !Number.isFinite(dist)) return;
-    const factor = dist / prior;
-    if (!Number.isFinite(factor) || factor <= 0) return;
-    zoomBy(factor, { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
-  }, [zoomBy]);
+    const stepFactor = dist / prior;
+    if (!Number.isFinite(stepFactor) || stepFactor <= 0) return;
+    state.pendingFactor *= stepFactor;
+    if (state.rafId == null) {
+      state.rafId = requestAnimationFrame(() => flushPinchRef.current());
+    }
+  }, []);
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length < 2) touchPinchRef.current = null;
+    if (e.touches.length < 2) {
+      const state = touchPinchRef.current;
+      if (state?.rafId != null) cancelAnimationFrame(state.rafId);
+      touchPinchRef.current = null;
+    }
   }, []);
 
   const dragPanRef = useRef<{ startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null);

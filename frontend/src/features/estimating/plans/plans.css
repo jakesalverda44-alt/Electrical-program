@@ -210,6 +210,23 @@
   position: absolute;
   inset: 0;
   overflow: auto;
+  /* Fix round 2 / R2-N1 — without this, a real two-finger pinch on iOS
+     pinch-zoomed the WHOLE PAGE (Safari's own native gesture) at the same
+     time PlanViewer.tsx's own onTouchMove was computing and applying its
+     own zoomBy() — the app and the OS fighting over the same gesture.
+     The review/decision text says "touch-action: none", but PlanViewer.tsx
+     has NO single-finger touch handler at all (onTouchMove bails unless
+     e.touches.length === 2) — single-finger panning on a touch device
+     works today purely through this element's native `overflow: auto`
+     touch-scroll. A literal `none` disables EVERY native touch gesture,
+     including that one-finger scroll, with no JS fallback to replace it —
+     trading the pinch-jitter bug for a worse one (no touch panning at
+     all). `pan-x pan-y` keeps native single-finger panning working while
+     still opting OUT of the browser's own pinch-zoom/double-tap-zoom
+     (pinch-zoom isn't in the allowed list), which is the actual conflict
+     this fix is for. Mouse-wheel scrolling is unaffected either way —
+     touch-action only governs touch input. */
+  touch-action: pan-x pan-y;
 }
 
 .plan-canvas-page {
