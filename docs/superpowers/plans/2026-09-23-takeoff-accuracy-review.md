@@ -338,3 +338,183 @@ The `after-*` renders match Cowork's order and content:
 They run 5 pages in LibreOffice against Cowork's 6. Jake's two corrections are in: change orders are approved by the GC, and disconnects are APT-furnished.
 
 The render fixture is missing Cowork's Section C bullet "Fixture types per schedule: …". The same fixture would fail `validateBidData`, so the renders are not evidence that the app produces this document (B6, S17).
+
+---
+
+# Round 2 (fix range e1c0f2e..98b882d, migrations 118–119)
+
+**Verdict: MERGE AFTER FIXES.** B1, B2, B3, B4, B6 and B7 (core) are fixed. B5 is fixed across runs but not within one run. There are three blockers:
+
+- **R2-B1**, a stale same-run PDF attached to the GC email (the rest of B5);
+- **R2-B2**, a new regression where the count enforcement deletes unrelated takeoff lines;
+- **R2-B3**, the new bare "711" alias.
+
+## Verification run (round 2)
+
+| Check | Result |
+|---|---|
+| `tsc --noEmit` backend / frontend | clean / clean |
+| `npm test` backend, run 1 | 1426 passed, 2 failed, 4 not run, of 1432 (142 files) |
+| `npm test` backend, run 2 | 1425 passed, 3 failed, 4 not run, of 1432 |
+| `vitest run` frontend, run 1 | 1222 / 1223 (`SurveyMarkupEditor`) |
+| `vitest run` frontend, run 2 | 1223 / 1223 |
+
+Every failure is a known flake or load timeout, and none is a regression:
+
+- **`notificationsRetention.test.ts`** is lost to "Worker exited unexpectedly" in both backend runs. Its 4 tests are the 4 not run, and it is the only file missing from both logs. Round 1 showed the same crash on `main`.
+- **`intakeSimilarCache`**: 1 failure in run 1 and 2 in run 2. Round 1 showed it passing alone on both the branch and `main`.
+- **`integration.test` "backfills a follow-up…"** timed out at 30 s in both runs. Round 1 showed it passing alone.
+- **Frontend `SurveyMarkupEditor`** is the known flake and fails on `main` too.
+
+All the new fix-round test files pass, including `fixRound1Staleness`, `fixRound1CountEnforcement`, `enforceCounts`, `proposalPagination` and `proposalCoworkStructure`.
+
+**How findings were reproduced.**
+
+- Pure vitest scratch files ran in throwaway detached worktrees, all removed and pruned.
+- DB-backed supertest repros against `electrical_crm_test` ran only after both full suites had finished.
+- There were no Anthropic, Drive or email calls, and the eval was not run.
+
+## Round-1 blockers: status
+
+| # | Status | Evidence |
+|---|---|---|
+| B1 | **Fixed**, but see the new R2-B2 | `bidstd/composeProposal.ts` is the single composition path. `enforceCountsOnTakeoff` enforces the counts, and `countMismatchProblems` 422s generate-docx and generate-takeoff-xlsx (`preconstruction.ts` compose validation). The GC paths are generate-docx (docx, soffice PDF, Drive), the GC xlsx, draft-proposal (which attaches only those files) and the pre-bid package. The bid-level public `/p/:token` page no longer exists; `gens.ts /p/:token` serves generator proposals only. **[reproduced]** "Agent 4 drops A, writes B = 37" becomes A 73 / B 52 (branch test, re-run). |
+| B2 | **Fixed**, with a partial accepted | With no targets, the review now returns the blocking item `counting:not_run` and status `needs_review`. **[reproduced]** |
+| B3 | **Fixed** | An unscheduled "Type M downlight 6" becomes the blocking item `unscheduled:TYPE-M-DOWNLIGHT`. **[reproduced]** |
+| B4 | **Fixed** | Summed at 75: "PARTIAL … AREA A/B", "AREA A/B", "EAST/WEST" and "SECTOR 1/2". "LIGHTING PLAN" plus "LIGHTING PLAN - ALTERNATE" raises a blocking `area:` choice. An ENLARGED plan is still max-kept. **[reproduced]** See N-R2-5 for PHASE. |
+| B5 | **Partial**: fixed across runs, not within a run | See R2-B1. The cross-run cases are fixed: `/analyze` clears agent4 and the draft and sets `pending`; the writes are run-guarded; compose uses only current-run output; draft-proposal refuses a previous run's PDF. The Kissimmee stale-PDF test passes. |
+| B6 | **Fixed** | The Cowork C bullets, an "(Owner-furnished)" install bullet, and 2 bullets not about fixtures each come out at exactly 3 C bullets through enforce → compose → validate. **[reproduced]** The renders were regenerated through `composeProposal`. |
+| B7 | **Fixed in the core; two edge cases remain (S-R2-2, S-R2-3)** | The two halves are asked separately. "GC furnishes / APT installs" removes nothing. With GC/GC, "retail power poles" is struck from the list bullet and receptacles and baseflex are kept; "Branch circuits and conduit to the power poles" and the "Power pole feed" line are kept. **[reproduced]** |
+
+## Rulings on the disclosed partials
+
+- **B2 (entered types are counted only on the next full re-run): acceptable follow-up.** The gate never clears silently. The estimator must either confirm Agent 1's counts with a reason (an explicit, logged acknowledgement) or re-run. A counting-only re-run is a UX improvement, not a correctness gap.
+- **S2 (not exact at 3% jitter): acceptable follow-up.** The Kissimmee eval must measure the real position error and the miss rate before the counter prices a live bid.
+  - **[reproduced, simulation]** 20 symbols in one overlap band: sd 1% / 2% / 3% gives 19.9 / 19.85 / 19.75 placed (the round-1 code gave 21 / 27 / 32).
+  - The new rule assigns a symbol reported by only one tile to one tile's core. Model misses therefore cost in the overlap band what they cost everywhere else: at a 10% per-report miss rate, 17.45 of 20. The old code got a second chance there. This is not a new bias, but the eval should report the miss rate as well as the position error.
+- **B5 side effect (sending needs LibreOffice): acceptable follow-up.** Jake's Mac has soffice. The 409 says why. Note it in the deploy checklist for any server host.
+
+## Blockers (round 2)
+
+### R2-B1. Within one run, "Draft email to GC" attaches a PDF that no longer matches the current counts, answers or price [reproduced, DB/supertest]
+
+- **Evidence.**
+  - `routes/bids.ts:315-330`: `loadMostRecentBidDoc` filters only on `takeoff_run_id = run_id`, and `draft-proposal` (`:376-390`) checks the gate and then attaches that file.
+  - `utils/storeDocument.ts:149` stamps the run id only.
+  - Nothing invalidates a filed document when the review, the scope list, the account answers or `agent4_price` change.
+- **Repro.**
+  - Case 1: file a current-run PDF with A resolved at 73. Reopen A, re-resolve it at 37 (status clear). draft-proposal returns 200 and attaches the 73 PDF.
+  - Case 2: set `agent4_price` to 95,000. draft-proposal returns 200 and attaches the old-price PDF.
+  - `email-prebid-chris` (`bids.ts:524-526`) has the same problem with a pre-bid package filed before the draft went stale.
+- **Scenario.** Jake re-prices, or Chris corrects a count, then clicks "Draft email to GC" without regenerating. The GC receives the old number while the gate is green.
+- **Fix.**
+  - Stamp each filed document with a compose-inputs hash: agent4_output + price + `hashScopeSnapshot` + count_result digest.
+  - Have draft-proposal and email-prebid-chris recompute the hash and return 409 on a mismatch ("regenerate").
+  - Alternatively, clear `gate_passed` on the bid's proposal and package documents from every route that changes an input: run-agent4, review resolve/reopen, scope items, count-types, account answers.
+
+### R2-B2. NEW REGRESSION: count enforcement deletes unrelated takeoff lines that mention a counted tag [reproduced]
+
+- **Evidence.**
+  - `bidstd/enforceCounts.ts:42-57`: `lineCountKey` maps any line to a target through `rowMatchScore`, which gives a tag with a digit a score of 3 anywhere in the text, and a description substring a score of 1. For non-fixture categories it searches every equipment or device target.
+  - `:132-142` keeps the *first* located line and **removes every other line** mapped to the key as an "extra". It removes them whatever their unit and even when an Agent 4 line carries the right `count_type`.
+  - `countMismatchProblems` then passes, so nothing blocks.
+- **Repro (pure, real `mergeCountsIntoTakeoff`, `enforcedCounts` and `enforceCountsOnTakeoff`).**
+  - Equipment RTU-1 (counted 1). Takeoff lines:
+    - "60A/3P NF disconnect for RTU-1" (Service & Distribution)
+    - "RTU-1 … (connection)"
+    - "Feeder to RTU-1, 3#6 #10G 1" EMT" (**80 LF**)
+
+    Result: the disconnect is kept as "the" RTU-1 line. The connection and the 80 LF feeder are deleted.
+  - Equipment P1 (pump): "Panel P1" is kept and relabelled as the pump. "Feeder to panel P1" (60 LF) and the pump connection are deleted.
+  - Site type S1: "Concrete pole base for S1" is deleted as an extra S1 line.
+  - Legend "J — Junction box": "Junction box for RTU disconnect" (2) is deleted.
+- **Scenario.** Every car-wash or C-store job with tagged equipment (RTU-1, EF-1, WH-1, P-1) loses priced feeders and disconnects from the GC takeoff. The only trace is a correction line in the preview. This is a silent scope loss introduced by the B1 fix.
+- **Fix.**
+  - Consider a line for a type only if it carries that `count_type` (Agent 4 now emits it), or matches the target in a fixture/device category by an explicit tag form with unit EA.
+  - Never treat a line as a duplicate when its unit isn't EA, or when it names a different item (feeder, disconnect, base, breaker, whip, conduit).
+  - When several lines map to one type, prefer the `count_type` line as the one to keep. Flag the others (a blocking review), don't delete them.
+  - Add these four cases as tests.
+
+### R2-B3. The new bare "711" alias hands AutoZone and Default bids 7-Eleven terms [reproduced]
+
+- **Evidence.**
+  - Migration 119 adds `'711'`.
+  - `matchAccountRule` (`bidstd/accountRules.ts:174-196`) matches the alias in the brand, owner, bid name or drawings text, then sorts by score, priority and **name**.
+  - "7-Eleven" sorts before "AutoZone", so on a tie it wins even when the brand field says AutoZone.
+- **Repro.** All of these matched 7-Eleven:
+  - brand "AutoZone" with bid name "AutoZone Store #711 Orlando";
+  - bid name "Dunkin' - 711 Main St";
+  - drawings text "… SUITE 711".
+- **Scenario.**
+  - Lighting, panels and disconnects become GC-furnished with EC installing.
+  - On AutoZone, APT drops the disconnects it is supposed to furnish.
+  - On a Default job, the whole lighting package, the panels and the disconnects become install-only, which silently underbids.
+  - The brand warning only fires when the Default rule matched.
+- **Fix.**
+  - Remove the bare `711` alias (migration 120, or amend 119 before merge) and keep `7-11`.
+  - Make a match on the brand field outrank bid-name or drawings matches.
+  - Warn when two account rules match, or a rule matched only from the name or drawings.
+  - Test "AutoZone #711", "711 Main St" and "Suite 711".
+
+## Should-fix (round 2)
+
+- **S-R2-1. `/analyze` runs can overlap and interleave.** [reproduced by simulating the unguarded write]
+  - Every `runPipeline` write is `WHERE bid_id=$n` with no run-id check: `preconstruction.ts` ~752, 894–937, 995–998, 1047–1169, and the `/analyze` catch at ~2143. `/analyze` has no "already running" guard.
+  - Run A's counting-stage write lifts run B's `pending` to `clear` while B is still in Agent 1, and A's Agent 1/2 outputs overwrite B's.
+  - Fix: thread `runId` into every write (stop on rowCount 0), or return 409 from `/analyze` while a run is in progress.
+- **S-R2-2. B7 regression: the verb is treated as a list element.** [reproduced]
+  - With GC/GC or Owner/Owner, "Furnish and install power poles and receptacles per E-2." becomes "Furnish and receptacles per E-2." in the GC document (`accountRules.ts:568-580`).
+  - Fix: keep verbs out of the element pattern, or flag instead of strip when a verb comes right before the term.
+- **S-R2-3. B7 hole: an APT-furnish statement survives when APT only installs.** [reproduced]
+  - With GC/APT or Owner/APT, step 2 skips the term (`accountRules.ts:640`), so "Power poles furnished and installed by APT" and "Furnish and install power poles…" reach the GC with no correction or flag, while the takeoff says "GC (EC installs)".
+  - Fix: flag or rewrite any bullet that pairs the term with an APT furnish verb when the furnisher isn't APT.
+- **S-R2-4. S9 went too soft: clear other-trade lines are now only warnings.** [reproduced]
+  - `nonElectricalVerdict` (`scopeList.ts:180-209`) returns flag, not block, for lines with no electrical wording at all:
+    - HVAC ductwork, fire sprinkler piping
+    - concrete paving (SF), asphalt paving
+    - painting, carpet, doors and hardware, framing and metal studs, fencing
+    - "Rooftop unit furnish and set"
+  - Flags never block (`composeProposal.ts:79`), so these reach the GC.
+  - Fix: block (with the existing override) whenever a trade word matches and there's no electrical context. Keep flag-only for lines that have electrical context.
+- **S-R2-5. A fuzzy override clears a different line.** [reproduced]
+  - `overrideFor` (`scopeList.ts:220-234`) accepts a 60% word overlap, so an override for "Fire alarm conduit and boxes" also clears the *excluded* "Fire alarm devices and boxes".
+  - The same happens with a 100 SF override applied to a 900 SF line.
+  - Fix: require the override's line to cover every significant word of the new line (or a threshold of about 0.8), never clear a line that adds devices/wiring/cabling, and show the original wording.
+- **S-R2-6. S10 over-corrected.** [reproduced] "Generator scope applies to Puerto Rico stores only." on the Kissimmee, FL job is now only a preview warning (`outputHygiene.ts:163-178`, `preconstruction.ts:~2538`), and that sentence was one of the Kissimmee errors.
+  - Fix: block (with the override) when a sentence names a region that conflicts with a known project state. Warn otherwise.
+- **S-R2-7. An unscheduled-line resolution can dead-lock with a counted line.** [reproduced]
+  - `enforceCounts.ts:145-160` matches estimator extra lines by substring, *including lines already enforced for a counted type*.
+  - Setup: counted D = 5 and an unscheduled item "Wall pack" resolved at 3. D's line is set to 3, then `countMismatchProblems` 422s every GC document permanently.
+  - Fix: skip lines already located to a counted type, and match on the stored row identity rather than a substring.
+- **S-R2-8. N7 carve-outs are too broad.** [reproduced]
+  - With "Low voltage" excluded and "Low voltage: conduit and pull strings only" included, "Low voltage conduit, cabling and devices" counts as carved out (`scopeList.ts:91-100`) and reaches the GC.
+  - Fix: a carve-out must not also contain excluded work (cabling, devices, wiring, programming).
+
+## Nits (round 2)
+
+- **N-R2-1.** Error writes from a superseded Agent 4 or draft call land on the new run.
+  - `agent4_status='error'` (`preconstruction.ts` ~2262/2278/2302) and `draft_status='error'` (~681) have no run guard.
+  - The draft's `finally` (~685) can release the new run's claim.
+  - Add `AND run_id IS NOT DISTINCT FROM $runId`.
+- **N-R2-2.** No `agent4_inputs_hash` is stored.
+  - Counts, exclusions and account answers are re-enforced at compose time.
+  - Included items, SOW edits and notes added after Agent 4 are absent from the proposal with no warning.
+  - Store the hash on run-agent4 and warn in preview and generate.
+- **N-R2-3.** B6 fails safe but can loop. If Agent 4 writes 3 control/testing C bullets (or a count other than 2), the "Fixture types per schedule" bullet makes C ≠ 3 and generate 422s until Agent 4 is re-run. Trim or merge C back to 3 after enforcement.
+- **N-R2-4.** With APT/APT poles, an exclusion "Power poles by others." survives next to ECFECI scope. Check exclusions against the resolved terms.
+- **N-R2-5.** `areaOf` treats `PHASE` as a partition (`countSheets.ts:80`). Phased remodel sets often show the same area in each phase, so "LIGHTING PLAN – PHASE 1/2" would be summed and come out clear. Make PHASE a blocking same-area-or-different choice.
+- **N-R2-6.** Legacy bids (`review_status` NULL) are still ungated, with the note shown only in the Takeoff step (S5 partial; acceptable). Show the same note in the Proposal step.
+- **N-R2-7.** `ai_draft` activity isn't counted toward the `run_analysis` daily limit.
+
+## Still holding from round 1
+
+- The tile and point geometry.
+- Streaming everywhere, and truncation, context-window and refusal handling.
+- The counter's reply-shape strictness (S1).
+- Suggested markers never rolling up; S15 marker scoping.
+- Atomic draft claims and the permission check (S13).
+- The row lock on carry-over (N5).
+- The stale-draft refusal (S12).
+- S6, S7 and S11.
+- The eval defaulting to `electrical_crm_test` (S16).
+- Migrations 118–119 are additive and idempotent. 119 is an `UPDATE` guarded by `NOT ('7-11' = ANY(...))`; its only problem is the content (R2-B3).
