@@ -2,19 +2,30 @@
 // Fix round 1 / B3(c) — the Takeoff step's List/Plans toggle and the step
 // rail's onSelectStep both used to unmount PlansWorkspace (and whatever
 // pending/failed markup autosave it was holding) unconditionally, never
-// consulting useUnsavedGuard the way App.tsx's own navigation already does.
-// PlansWorkspace itself is mocked here (a real one needs real sheets/pdf.js
-// wiring this test has no reason to also exercise) as a component that
-// registers a permanently-dirty guard, standing in for "an in-flight or
-// failed markup autosave batch" — the exact condition useMarkupAutosave.ts
-// registers under real use.
+// consulting an unsaved-work guard the way App.tsx's own navigation does.
+//
+// Fix round 2 / R2-S2 — rewritten from the original version of this test,
+// which routed through the GLOBAL confirmLeave (the whole
+// UnsavedGuardContext registry, which also includes the separate Labor &
+// Pricing dirty guard — a step change never actually loses THAT, since it
+// lives in this component's own shared estimatingBid state). Step/toggle
+// navigation now checks ONLY the markup-autosave condition, surfaced via a
+// dedicated onMarkupUnsavedChange callback prop (not useUnsavedGuard/the
+// global registry at all), through the app's own ad-hoc useConfirm()
+// dialog with markup-specific wording — never the generic
+// "You have unsaved changes" / "the changes on this screen will be lost"
+// text, which was false for this exact case. The mocked PlansWorkspace
+// below calls onMarkupUnsavedChange(true) instead of useUnsavedGuard(true),
+// standing in for "there's an unsynced or failed markup autosave batch"
+// exactly the way useMarkupAutosave.ts's own status tracking does it for
+// real.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import PcWorkspaceView from './PcWorkspace';
 import { blankWorkspace } from './constants';
 import { Bid } from '../../types';
 import { UnsavedGuardProvider } from '../../contexts/UnsavedGuardContext';
-import { useUnsavedGuard } from '../../hooks/useUnsavedGuard';
+import { ConfirmProvider } from '../../components/ConfirmDialog';
 
 afterEach(cleanup);
 
@@ -45,12 +56,13 @@ vi.mock('../../api/client', () => ({
   },
 }));
 
-// A stand-in for the real PlansWorkspace that registers a PERMANENTLY
-// dirty guard the instant it mounts — simulating "there's an unsynced or
-// failed markup batch" without needing real sheets/pdf.js.
+// A stand-in for the real PlansWorkspace that reports "unsaved markup
+// work" via the SAME callback prop the real one uses
+// (autosave.status === 'pending'/'saving'/'error') — without needing real
+// sheets/pdf.js.
 vi.mock('../estimating/plans/PlansWorkspace', () => ({
-  default: () => {
-    useUnsavedGuard(true);
+  default: ({ onMarkupUnsavedChange }: { onMarkupUnsavedChange?: (v: boolean) => void }) => {
+    onMarkupUnsavedChange?.(true);
     return <div data-testid="plans-workspace-mock">Plans (unsaved markup work)</div>;
   },
 }));
@@ -88,14 +100,16 @@ const bid: Bid = {
 function renderTakeoffStep() {
   const ws = { ...blankWorkspace('b1', 'Test Job', 0), activeTab: 'takeoff' as const };
   render(
-    <UnsavedGuardProvider>
-      <PcWorkspaceView ws={ws} bid={bid} onUpdate={() => {}} onBack={() => {}} onConverted={() => {}} onBidUpdated={() => {}} showToast={() => {}} embedded />
-    </UnsavedGuardProvider>,
+    <ConfirmProvider>
+      <UnsavedGuardProvider>
+        <PcWorkspaceView ws={ws} bid={bid} onUpdate={() => {}} onBack={() => {}} onConverted={() => {}} onBidUpdated={() => {}} showToast={() => {}} embedded />
+      </UnsavedGuardProvider>
+    </ConfirmProvider>,
   );
 }
 
-describe('PcWorkspaceView — step/toggle navigation routes through the unsaved-work guard (Fix round 1 / B3(c))', () => {
-  it('clicking "List" while Plans has unsaved markup work shows the confirm dialog instead of switching immediately', async () => {
+describe('PcWorkspaceView — step/toggle navigation checks ONLY the markup-unsaved guard (Fix round 2 / R2-S2)', () => {
+  it('clicking "List" while Plans has unsaved markup work shows the markup-specific confirm dialog instead of switching immediately', async () => {
     mockDesktopMatchMedia();
     mockApi();
     renderTakeoffStep();
@@ -104,11 +118,13 @@ describe('PcWorkspaceView — step/toggle navigation routes through the unsaved-
 
     fireEvent.click(screen.getByRole('tab', { name: 'List' }));
 
-    expect(screen.getByText('You have unsaved changes')).toBeTruthy();
+    expect(screen.getByText('Unsaved plan markup')).toBeTruthy();
+    // NOT the generic, pricing-implying wording from the global guard.
+    expect(screen.queryByText('You have unsaved changes')).toBeNull();
     expect(screen.getByTestId('plans-workspace-mock')).toBeTruthy(); // still mounted — nothing switched yet
   });
 
-  it('"Keep editing" cancels the switch — Plans stays open', async () => {
+  it('"Cancel" cancels the switch — Plans stays open', async () => {
     mockDesktopMatchMedia();
     mockApi();
     renderTakeoffStep();
@@ -116,14 +132,14 @@ describe('PcWorkspaceView — step/toggle navigation routes through the unsaved-
     await waitFor(() => expect(screen.getByTestId('plans-workspace-mock')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('tab', { name: 'List' }));
-    fireEvent.click(screen.getByText('Keep editing'));
+    fireEvent.click(screen.getByText('Cancel'));
 
-    expect(screen.queryByText('You have unsaved changes')).toBeNull();
+    expect(screen.queryByText('Unsaved plan markup')).toBeNull();
     expect(screen.getByTestId('plans-workspace-mock')).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Plans' }).getAttribute('aria-selected')).toBe('true');
   });
 
-  it('"Leave without saving" proceeds — switches to List and unmounts Plans', async () => {
+  it('"Leave anyway" proceeds — switches to List and unmounts Plans', async () => {
     mockDesktopMatchMedia();
     mockApi();
     renderTakeoffStep();
@@ -131,13 +147,13 @@ describe('PcWorkspaceView — step/toggle navigation routes through the unsaved-
     await waitFor(() => expect(screen.getByTestId('plans-workspace-mock')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('tab', { name: 'List' }));
-    fireEvent.click(screen.getByText('Leave without saving'));
+    fireEvent.click(screen.getByText('Leave anyway'));
 
-    expect(screen.queryByTestId('plans-workspace-mock')).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId('plans-workspace-mock')).toBeNull());
     expect(screen.getByRole('tab', { name: 'List' }).getAttribute('aria-selected')).toBe('true');
   });
 
-  it('switching to a DIFFERENT STEP (not just the List/Plans toggle) also routes through the guard', async () => {
+  it('switching to a DIFFERENT STEP (not just the List/Plans toggle) also routes through the markup guard', async () => {
     mockDesktopMatchMedia();
     mockApi();
     renderTakeoffStep();
@@ -146,7 +162,14 @@ describe('PcWorkspaceView — step/toggle navigation routes through the unsaved-
 
     fireEvent.click(screen.getByTestId('est-step-pricing'));
 
-    expect(screen.getByText('You have unsaved changes')).toBeTruthy();
+    expect(screen.getByText('Unsaved plan markup')).toBeTruthy();
     expect(screen.getByTestId('plans-workspace-mock')).toBeTruthy(); // Takeoff/Plans still showing
   });
+
+  // The genuine "nothing unsaved" case (autosave idle/saved ->
+  // onMarkupUnsavedChange(false), no dialog at all) is covered at the
+  // unit level in PlansWorkspace.test.tsx itself, where the REAL
+  // autosave status drives the callback — this file's own mock always
+  // reports true (module-level, not per-test), so it only exercises the
+  // "something IS unsaved" path.
 });

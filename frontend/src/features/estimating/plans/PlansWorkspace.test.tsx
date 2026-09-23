@@ -136,7 +136,7 @@ function setup(props: Partial<React.ComponentProps<typeof PlansWorkspace>> = {})
   // back the SAME mock reference that's actually wired to the component.
   const onCreateLine = props.onCreateLine ?? vi.fn().mockResolvedValue(true);
   const onSaveDirtyLinesFirst = props.onSaveDirtyLinesFirst ?? vi.fn().mockResolvedValue(undefined);
-  render(
+  const utils = render(
     <ConfirmProvider>
       <PlansWorkspace
         bidId="bid1" lines={[line()]} settings={settings} dirty={false}
@@ -145,7 +145,7 @@ function setup(props: Partial<React.ComponentProps<typeof PlansWorkspace>> = {})
       />
     </ConfirmProvider>
   );
-  return { onApplied, onCreateLine, onSaveDirtyLinesFirst };
+  return { onApplied, onCreateLine, onSaveDirtyLinesFirst, unmount: utils.unmount };
 }
 
 describe('PlansWorkspace — sheet list + selection', () => {
@@ -237,6 +237,55 @@ describe('PlansWorkspace — placing a count marker autosaves', () => {
       const rollupCallsAfter = get.mock.calls.filter(c => String(c[0]).endsWith('/rollup')).length;
       expect(rollupCallsAfter).toBeGreaterThan(rollupCallsBefore);
     });
+  });
+});
+
+// Fix round 2 / R2-S2 — onMarkupUnsavedChange mirrors EXACTLY
+// useMarkupAutosave.ts's own useUnsavedGuard(pending/saving/error)
+// predicate, surfaced so PcWorkspaceView.tsx's step/toggle navigation can
+// check ONLY this, never the separate Labor & Pricing guard.
+describe('PlansWorkspace — onMarkupUnsavedChange (Fix round 2 / R2-S2)', () => {
+  it('is called with false on mount when there is nothing to save, true the instant a marker is placed, and false again once it saves', async () => {
+    post.mockResolvedValue({ data: { created: [{ id: 'm1' }], updated: [], deleted: [], skipped: [] } });
+    const onMarkupUnsavedChange = vi.fn();
+    setup({ onMarkupUnsavedChange });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    await waitFor(() => expect(onMarkupUnsavedChange).toHaveBeenLastCalledWith(false));
+
+    fireEvent.click(screen.getByTitle('Count (C)'));
+    fireEvent.click(screen.getByText('Simulate canvas click'));
+    // 'pending' the instant the draft is created — before the 800ms
+    // debounce even fires.
+    await waitFor(() => expect(onMarkupUnsavedChange).toHaveBeenLastCalledWith(true));
+
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(onMarkupUnsavedChange).toHaveBeenLastCalledWith(false));
+  });
+
+  it('stays true while the batch is in an error state', async () => {
+    post.mockRejectedValue(new Error('network down'));
+    const onMarkupUnsavedChange = vi.fn();
+    setup({ onMarkupUnsavedChange });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+
+    fireEvent.click(screen.getByTitle('Count (C)'));
+    fireEvent.click(screen.getByText('Simulate canvas click'));
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+
+    await waitFor(() => expect(onMarkupUnsavedChange).toHaveBeenLastCalledWith(true));
+  });
+
+  it('is called with false on unmount, even if it was last true — a stale true must never survive this component being gone', async () => {
+    const onMarkupUnsavedChange = vi.fn();
+    const { unmount } = setup({ onMarkupUnsavedChange });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+
+    fireEvent.click(screen.getByTitle('Count (C)'));
+    fireEvent.click(screen.getByText('Simulate canvas click'));
+    await waitFor(() => expect(onMarkupUnsavedChange).toHaveBeenLastCalledWith(true));
+
+    unmount();
+    expect(onMarkupUnsavedChange).toHaveBeenLastCalledWith(false);
   });
 });
 

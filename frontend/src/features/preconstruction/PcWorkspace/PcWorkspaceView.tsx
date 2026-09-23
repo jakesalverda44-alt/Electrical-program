@@ -4,7 +4,6 @@ import { PcWorkspace, PcTabKey, ConfirmedService } from '../constants';
 import api from '../../../api/client';
 import { useApi } from '../../../hooks/useApi';
 import { useUnsavedGuard } from '../../../hooks/useUnsavedGuard';
-import { useConfirmLeave } from '../../../contexts/UnsavedGuardContext';
 import { useMutation } from '../../../hooks/useMutation';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { AppSettings } from '../../../hooks/useAppSettings';
@@ -992,22 +991,51 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // registered the whole time a batch is pending/saving/error) to ever be
   // consulted — App.tsx's OWN navigation already routes through this same
   // confirmLeave; PcWorkspaceView's internal step rail simply never did.
-  const confirmLeave = useConfirmLeave();
+  //
+  // Fix round 2 / R2-S2 — that fix over-corrected: confirmLeave checks
+  // the WHOLE global guard registry, which ALSO includes
+  // useUnsavedGuard(estimatingBid.dirty) below (Labor & Pricing) and
+  // saveState==='error'. A step change or the List/Plans toggle never
+  // actually loses either of those — they live in this component's own
+  // shared `estimatingBid` state, untouched by which step is showing —
+  // so the dialog's "the changes you have made on this screen will be
+  // lost" was simply false for that case, and trained estimators to
+  // click through it. Step/toggle navigation now checks ONLY the markup
+  // autosave guard (markupUnsavedRef, kept in sync by PlansWorkspace's
+  // own onMarkupUnsavedChange callback below — the exact
+  // pending/saving/error condition useMarkupAutosave.ts's own
+  // useUnsavedGuard call already uses), with its own markup-specific
+  // wording, via the ad-hoc `confirm()` dialog (not the global
+  // ConfirmLeaveDialog). Leaving the BID entirely still goes through
+  // App.tsx's own navigation -> its own useConfirmLeave() -> the full
+  // registry (pricing AND markup), unchanged — nothing here removes
+  // either useUnsavedGuard registration; this component just no longer
+  // calls the global confirmLeave itself for step/toggle navigation.
+  const markupUnsavedRef = useRef(false);
+  const onMarkupUnsavedChange = useStableFn((hasUnsaved: boolean) => { markupUnsavedRef.current = hasUnsaved; });
+  const confirmMarkupLeave = useStableFn((proceed: () => void) => {
+    if (!markupUnsavedRef.current) { proceed(); return; }
+    void confirm({
+      title: 'Unsaved plan markup',
+      body: 'This sheet has plan markup that hasn\'t finished saving yet. Leave anyway?',
+      confirmLabel: 'Leave anyway',
+    }).then(ok => { if (ok) proceed(); });
+  });
   const onSelectStep = useStableFn((step: EstimateStepKey) => {
-    confirmLeave(() => {
+    confirmMarkupLeave(() => {
       setCurrentStepParam(step);
       set({ activeTab: stepToLegacyTab(step) });
     });
   });
   // "review on plans" / "jump to plans" both switch step AND view in one
-  // click — nested inside ONE confirmLeave so `planView.setView('plans')`
-  // only actually runs if the user chose to proceed (calling onSelectStep
-  // then unconditionally calling planView.setView right after it would
-  // flip the view immediately regardless of what the confirm dialog is
-  // about to ask, since onSelectStep's own confirmLeave only defers ITS
-  // half of the action).
+  // click — nested inside ONE confirmMarkupLeave so `planView.setView
+  // ('plans')` only actually runs if the user chose to proceed (calling
+  // onSelectStep then unconditionally calling planView.setView right
+  // after it would flip the view immediately regardless of what the
+  // confirm dialog is about to ask, since onSelectStep's own
+  // confirmMarkupLeave only defers ITS half of the action).
   const jumpToTakeoffPlans = useStableFn(() => {
-    confirmLeave(() => {
+    confirmMarkupLeave(() => {
       setCurrentStepParam('takeoff');
       set({ activeTab: stepToLegacyTab('takeoff') });
       planView.setView('plans');
@@ -1193,7 +1221,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 role="tab"
                 aria-selected={planView.view === 'list'}
                 className={`est-view-toggle-btn${planView.view === 'list' ? ' active' : ''}`}
-                onClick={() => confirmLeave(() => planView.setView('list'))}
+                onClick={() => confirmMarkupLeave(() => planView.setView('list'))}
               >
                 List
               </button>
@@ -1202,7 +1230,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 role="tab"
                 aria-selected={planView.view === 'plans'}
                 className={`est-view-toggle-btn${planView.view === 'plans' ? ' active' : ''}`}
-                onClick={() => confirmLeave(() => planView.setView('plans'))}
+                onClick={() => confirmMarkupLeave(() => planView.setView('plans'))}
               >
                 Plans
               </button>
@@ -1228,6 +1256,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   onSaveDirtyLinesFirst={estimatingBid.save}
                   onCreateLine={onCreateLineFromMarkup}
                   proposed={estimatingBid.proposed}
+                  // Fix round 2 / R2-S2 — feeds markupUnsavedRef, which
+                  // confirmMarkupLeave (above) checks for step/toggle
+                  // navigation instead of the global (pricing-inclusive)
+                  // confirmLeave.
+                  onMarkupUnsavedChange={onMarkupUnsavedChange}
                   // Fix round 1 / B8 — Settings > Labor Library > Defaults
                   // (app-wide, this component's own `settings` prop —
                   // NOT estimatingBid.settings above, which is this

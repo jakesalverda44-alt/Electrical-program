@@ -120,6 +120,15 @@ export interface PlansWorkspaceProps {
    *  survive past this session, so Count/Linear are disabled and a banner
    *  offers to save the estimate (via onSaveDirtyLinesFirst) first. */
   proposed?: boolean;
+  /** Fix round 2 / R2-S2 — called whenever the markup autosave's own
+   *  pending/saving/error condition changes (the exact predicate
+   *  useMarkupAutosave.ts's own useUnsavedGuard call already uses).
+   *  PcWorkspaceView.tsx uses this to gate its step-rail/List-Plans-
+   *  toggle navigation on ONLY markup work, never the separate Labor &
+   *  Pricing dirty guard a step change doesn't actually affect. Also
+   *  called with `false` on unmount, so a stale `true` never outlives
+   *  this component. */
+  onMarkupUnsavedChange?: (hasUnsaved: boolean) => void;
   /** Fix round 1 / B1 — replaces PlansWorkspace's own direct `api.put` of a
    *  `[...lines, newLine]` snapshot (built from the `lines` PROP, which
    *  useEstimatingBid.reload() never actually refreshed — B1's other
@@ -148,7 +157,7 @@ export interface PlansWorkspaceProps {
 
 export default function PlansWorkspace({
   bidId, lines, settings, initialSheetKey, initialLineKey, onSheetKeyChange, onLineKeyChange, onApplied,
-  dirty, onSaveDirtyLinesFirst, onCreateLine, proposed, defaultDropFt = 10, defaultSlackPct = 10,
+  dirty, onSaveDirtyLinesFirst, onCreateLine, proposed, onMarkupUnsavedChange, defaultDropFt = 10, defaultSlackPct = 10,
   viewOnly: viewOnlyProp, showToast,
 }: PlansWorkspaceProps) {
   const confirm = useConfirm();
@@ -306,6 +315,20 @@ export default function PlansWorkspace({
   const autosave = useMarkupAutosave(bidId, history.present, onSynced);
   const autosaveResetRef = useRef(autosave.reset);
   autosaveResetRef.current = autosave.reset;
+  // Fix round 2 / R2-S2 — mirrors EXACTLY useMarkupAutosave.ts's own
+  // useUnsavedGuard(status === 'pending' || status === 'saving' ||
+  // status === 'error') predicate, surfaced to PcWorkspaceView so its
+  // step-rail/List-Plans-toggle navigation can check ONLY this (never the
+  // Labor & Pricing dirty guard, which a step change never actually
+  // affects) instead of the global confirmLeave's full registry.
+  useEffect(() => {
+    onMarkupUnsavedChange?.(autosave.status === 'pending' || autosave.status === 'saving' || autosave.status === 'error');
+  }, [autosave.status, onMarkupUnsavedChange]);
+  // A stale `true` must never survive this component being gone —
+  // otherwise a Leave-anyway that unmounts PlansWorkspace while
+  // status==='error' would leave markupUnsavedRef stuck true forever,
+  // warning on every LATER navigation even after nothing is left to lose.
+  useEffect(() => () => onMarkupUnsavedChange?.(false), [onMarkupUnsavedChange]);
 
   const hydratedMarkupsRef = useRef(false);
   useEffect(() => {
