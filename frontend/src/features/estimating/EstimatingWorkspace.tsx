@@ -43,12 +43,17 @@ export interface EstimatingWorkspaceProps {
   /** The other four steps' (already re-homed, unchanged) content — Labor &
    *  Pricing is the only step this module itself renders. */
   otherStepContent: React.ReactNode;
+
+  /** Phase B, Decision 1 — forwarded to EstimateShell; true while the
+   *  Takeoff step's Plans view is open (the caller, PcWorkspaceView, is the
+   *  one that knows the List|Plans toggle state). */
+  forceSlimSummary?: boolean;
 }
 
 export default function EstimatingWorkspace({
   currentStep, onSelectStep, doneByStep, saveState, nextAction,
   lines, settings, recap, proposed, dirty, savedGrandTotal, saving, syncing, saveError, setLines, setSettings, save, syncTakeoff, showToast,
-  comparables, insights, otherStepContent, initialInsightsOpen,
+  comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary,
 }: EstimatingWorkspaceProps) {
   return (
     <EstimateShell
@@ -57,6 +62,7 @@ export default function EstimatingWorkspace({
       doneByStep={doneByStep}
       saveState={saveState}
       nextAction={nextAction}
+      forceSlimSummary={forceSlimSummary}
       summary={
         <BidSummary
           recap={recap}
