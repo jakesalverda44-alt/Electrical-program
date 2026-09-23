@@ -1,0 +1,359 @@
+/* Estimating Phase B — Plan Viewer (Tasks 4-9). Its own stylesheet, loaded
+   only when the Plans view's lazy chunk loads (Task 9) — never part of the
+   main bundle's CSS. Dark-only design system, matching estimating.css and
+   the rest of the app (confirmed: no light theme exists anywhere in this
+   codebase) — the one deliberate exception is the plan sheet's own canvas,
+   which stays white regardless of theme (a PDF page is white paper; the
+   surrounding CHROME follows the app's dark tokens). */
+
+.plan-view {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  gap: 0;
+}
+
+/* ── Sheet navigator (left column) ───────────────────────────────────────── */
+
+.plan-sheet-nav {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  outline: none;
+}
+
+.plan-sheet-nav-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.plan-sheet-nav-chip {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text2);
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 999px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+
+.plan-sheet-nav-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.plan-sheet-nav-list {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.plan-sheet-nav-empty {
+  padding: 16px 12px;
+  font-size: 12px;
+  color: var(--text3);
+}
+
+.plan-sheet-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.plan-sheet-nav-item:hover {
+  background: var(--surface);
+}
+
+.plan-sheet-nav-item.current {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.plan-sheet-nav-no {
+  font-weight: 800;
+  font-family: var(--mono);
+  flex-shrink: 0;
+  min-width: 44px;
+}
+
+.plan-sheet-nav-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text2);
+}
+
+.plan-sheet-nav-count {
+  font-size: 10.5px;
+  font-weight: 800;
+  background: var(--surface3);
+  color: var(--text2);
+  border-radius: 999px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+
+.plan-sheet-nav-scanned {
+  font-size: 10px;
+  color: var(--amber);
+  flex-shrink: 0;
+}
+
+/* ── Center: toolbar + canvas/overlay ────────────────────────────────────── */
+
+.plan-viewer {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.plan-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex-wrap: wrap;
+}
+
+.plan-toolbar-btn {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text2);
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.plan-toolbar-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.plan-toolbar-btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.plan-toolbar-scale {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plan-toolbar-scale-warn {
+  color: var(--amber);
+  font-weight: 700;
+}
+
+.plan-canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  background: #1a1a1a; /* neutral surround, not the app's blue-toned dark bg — reads as "outside the paper" */
+}
+
+.plan-canvas-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+
+.plan-canvas-page {
+  position: relative;
+  /* The page itself is always white — a PDF is printed on white paper
+     regardless of the app's own dark theme (Task 9's explicit rule). */
+  background: #fff;
+  box-shadow: 0 4px 24px rgba(0,0,0,.5);
+}
+
+.plan-canvas-page canvas {
+  display: block;
+}
+
+.plan-overlay-svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.plan-overlay-svg .plan-marker {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.plan-viewer-loading,
+.plan-viewer-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text2);
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--bg);
+}
+
+.plan-viewer-error {
+  color: var(--red);
+}
+
+.plan-viewer-mobile-notice {
+  padding: 10px 14px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* ── Items panel (right column) ──────────────────────────────────────────── */
+
+.plan-items-panel {
+  width: 300px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.plan-items-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 1;
+}
+
+.plan-items-panel-toggle {
+  font-size: 11.5px;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.plan-items-panel-group-header {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--text3);
+  padding: 10px 10px 4px;
+}
+
+.plan-items-panel-row {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plan-items-panel-row:hover {
+  background: var(--surface);
+}
+
+.plan-items-panel-row.active {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.plan-items-panel-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.plan-items-panel-row-qty {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text3);
+}
+
+.plan-items-panel-sheets {
+  font-size: 10.5px;
+  color: var(--text3);
+}
+
+.plan-items-panel-row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* ── Responsive (Task 9) ──────────────────────────────────────────────────── */
+
+/* <900px: view-only — the toolbar/items panel are hidden by the component,
+   this just tightens layout for whatever remains. */
+@media (max-width: 899px) {
+  .plan-view {
+    flex-direction: column;
+  }
+  .plan-sheet-nav,
+  .plan-items-panel {
+    width: 100%;
+    border: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+/* 900-1279: sheet navigator collapses to a dropdown-style bar instead of a
+   full column (the component swaps markup; this narrows what's left). */
+@media (min-width: 900px) and (max-width: 1279px) {
+  .plan-sheet-nav {
+    width: 180px;
+  }
+  .plan-items-panel {
+    width: 260px;
+  }
+}
