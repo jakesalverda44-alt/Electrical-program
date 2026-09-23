@@ -1039,6 +1039,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     proposalFiled: ws.proposalGenerated,
   });
 
+  // Task 8 (deferral closed) — a takeoff-sourced line whose qty has never
+  // actually been confirmed against the plans (qty_source !== 'markup') —
+  // shared by BidSummary's own warning banner and the Review step's
+  // pre-send checklist below, so both always report the identical count.
+  const linesNotVerifiedOnPlansCount = estimatingBid.lines.filter(l => l.source === 'takeoff' && l.qty_source !== 'markup').length;
+
   // Task 8 — re-homed step content: each step stacks the same existing tab
   // components on one screen rather than switching between them, with no
   // change to any of those components' own props/behavior.
@@ -1193,7 +1199,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
       case 'review': {
         const w = estimatingBid.recap.warnings;
-        const hasPreSendFlags = w.unmatchedCount > 0 || w.verifyCount > 0 || w.unverifiedMaterialShare > 0;
+        const hasPreSendFlags = w.unmatchedCount > 0 || w.verifyCount > 0 || w.unverifiedMaterialShare > 0 || linesNotVerifiedOnPlansCount > 0;
         return (
           <>
             {hasPreSendFlags && (
@@ -1205,6 +1211,22 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 {w.unmatchedCount > 0 && <span>{w.unmatchedCount} unmatched line{w.unmatchedCount === 1 ? '' : 's'} in Labor &amp; Pricing</span>}
                 {w.verifyCount > 0 && <span>{w.verifyCount} VERIFY quantit{w.verifyCount === 1 ? 'y' : 'ies'} to confirm</span>}
                 {w.unverifiedMaterialShare > 0 && <span>{Math.round(w.unverifiedMaterialShare * 100)}% of material pricing is unverified</span>}
+                {/* Task 8 (deferral closed) — same count/wording as
+                    BidSummary's own warning; clicking it jumps straight to
+                    the Plans view instead of just naming the problem. */}
+                {linesNotVerifiedOnPlansCount > 0 && (
+                  <span>
+                    {linesNotVerifiedOnPlansCount} line{linesNotVerifiedOnPlansCount === 1 ? '' : 's'} not verified on plans{' '}
+                    <button
+                      type="button"
+                      className="lp-reset-btn"
+                      style={{ display: 'inline', color: 'var(--amber)', textDecoration: 'underline', fontWeight: 700 }}
+                      onClick={() => { onSelectStep('takeoff'); planView.setView('plans'); }}
+                    >
+                      review on plans
+                    </button>
+                  </span>
+                )}
               </div>
             )}
             <ProposalTab
@@ -1289,7 +1311,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           saveState={saveState}
           nextAction={nextStep ? { label: ESTIMATE_STEP_LABELS[nextStep], onClick: () => onSelectStep(nextStep) } : null}
           forceSlimSummary={currentStep === 'takeoff' && planView.view === 'plans'}
-          linesNotVerifiedOnPlansCount={estimatingBid.lines.filter(l => l.source === 'takeoff' && l.qty_source !== 'markup').length}
+          linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
           onJumpToPlans={() => { onSelectStep('takeoff'); planView.setView('plans'); }}
           lines={estimatingBid.lines}
           settings={estimatingBid.settings}
