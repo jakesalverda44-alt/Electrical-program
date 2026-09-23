@@ -13,13 +13,53 @@
 // network request for the same document. Acceptable for Phase B (this is an
 // on-demand, user-initiated action, not something that runs on every
 // render/scroll), flagged as a follow-up to share one cache between the two
-// if profiling ever shows it matters.
+// if profiling ever shows it matters — NOT done in this round (Fix round 1
+// / S9): a full shared-cache merge with PlanViewer.tsx's own load/render/
+// unmount lifecycle was judged too large and too risky to that already-
+// tested, already-shipped code (this round's own N7/S10/N2 fixes) to take
+// on with the budget remaining; disclosed explicitly, not silently
+// dropped. What S9 DOES fix here, self-contained to this module: this
+// cache used to keep every document ever text-searched open (with its own
+// pdf.js worker) for the WHOLE SPA session, never evicting anything short
+// of a full logout — "Find tag on sheets…" alone can open every plan
+// document in the bid in one search. Now an LRU of MAX_CACHED_DOCS.
 import api from '../../../api/client';
 import { openPdfDocument, PdfJsDocument } from './pdfjsClient';
 import { TextItem } from './tagSuggest';
 import { SESSION_CLEARED_EVENT } from '../../../api/session';
 
+// Fix round 1 / S9 — 2, matching the review's own "LRU of 1-2 documents"
+// ask. A `Map` already preserves insertion order; touchEntry (below) moves
+// an entry to the END on every access, so the FRONT is always the true
+// least-recently-USED entry (not just least-recently-inserted) once one
+// needs evicting.
+const MAX_CACHED_DOCS = 2;
 const docCache = new Map<string, Promise<PdfJsDocument>>();
+
+/** Moves `key` to the end of the Map (most-recently-used) and evicts+
+ *  destroys the LEAST-recently-used entries past MAX_CACHED_DOCS. Safe to
+ *  call with an entry still in flight (not yet resolved) — eviction just
+ *  removes it from the CACHE; a caller already awaiting that exact
+ *  promise still gets it when it resolves (this module's own real call
+ *  pattern — PlansWorkspace.tsx's "Find tag on sheets…" — awaits one
+ *  document fully, sequentially, before ever starting the next, so an
+ *  eviction never actually races an in-progress read in practice; nothing
+ *  here depends on that for CORRECTNESS, only for how promptly a document
+ *  gets freed). `.then(doc => doc.destroy())` naturally waits for the
+ *  promise to resolve before destroying, and a promise that ends up
+ *  REJECTING is already removed by loadDoc's own failure handler below,
+ *  so it's never double-destroyed. */
+function touchEntry(key: string, pending: Promise<PdfJsDocument>) {
+  docCache.delete(key);
+  docCache.set(key, pending);
+  while (docCache.size > MAX_CACHED_DOCS) {
+    const oldestKey = docCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    const evicted = docCache.get(oldestKey);
+    docCache.delete(oldestKey);
+    evicted?.then(doc => { void doc.destroy(); }).catch(() => { /* never loaded — nothing to destroy */ });
+  }
+}
 
 // Fix round 1 / N11 — this module-level cache used to survive a logout for
 // the whole SPA session: a second person signing in on the same tab could
@@ -55,11 +95,14 @@ function loadDoc(bidId: string, documentId: string): Promise<PdfJsDocument> {
       // longer than that on a slow link.
       .get<ArrayBuffer>(`/estimating/${bidId}/sheets/${documentId}/file`, { responseType: 'arraybuffer', timeout: 0 })
       .then(res => openPdfDocument(res.data));
-    docCache.set(documentId, pending);
     // A failed fetch/parse must not poison the cache forever — the next
     // caller gets a fresh attempt rather than a permanently-rejected entry.
     pending.catch(() => { if (docCache.get(documentId) === pending) docCache.delete(documentId); });
   }
+  // Fix round 1 / S9 — touchEntry both inserts (cache miss) and re-
+  // promotes to most-recently-used (cache hit); either way this document
+  // is now the freshest entry, least likely to be the next one evicted.
+  touchEntry(documentId, pending);
   return pending;
 }
 

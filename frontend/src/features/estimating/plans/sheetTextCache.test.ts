@@ -96,6 +96,63 @@ describe('getSheetTextItems', () => {
   });
 });
 
+// Fix round 1 / S9 — this cache used to keep every document ever text-
+// searched open (with its own pdf.js worker) for the whole SPA session,
+// never evicting anything short of a full logout.
+describe('sheetTextCache — LRU eviction at MAX_CACHED_DOCS (S9)', () => {
+  it('a 3rd distinct document evicts and destroys the LEAST-recently-used one (not the most recent)', async () => {
+    const docA = makeDoc({ 1: [{ str: 'A', transform: [1, 0, 0, 1, 0, 0] }] });
+    const docB = makeDoc({ 1: [{ str: 'B', transform: [1, 0, 0, 1, 0, 0] }] });
+    const docC = makeDoc({ 1: [{ str: 'C', transform: [1, 0, 0, 1, 0, 0] }] });
+    openPdfDocument.mockResolvedValueOnce(docA).mockResolvedValueOnce(docB).mockResolvedValueOnce(docC);
+
+    await getSheetTextItems('bid1', 'doc-A', 0);
+    await getSheetTextItems('bid1', 'doc-B', 0);
+    await getSheetTextItems('bid1', 'doc-C', 0); // 3rd distinct document — doc-A (oldest, never re-touched) evicted
+
+    await Promise.resolve(); // let the eviction's doc.destroy().then(...) microtask run
+    expect(docA.destroy).toHaveBeenCalledTimes(1);
+    expect(docB.destroy).not.toHaveBeenCalled();
+    expect(docC.destroy).not.toHaveBeenCalled();
+
+    // doc-A is gone from the cache — fetching it again is a fresh fetch.
+    openPdfDocument.mockResolvedValueOnce(makeDoc({ 1: [] }));
+    await getSheetTextItems('bid1', 'doc-A', 0);
+    expect(get).toHaveBeenCalledTimes(4); // A, B, C, A-again
+  });
+
+  it('re-accessing a document promotes it to most-recently-used, protecting it from eviction', async () => {
+    const docA = makeDoc({ 1: [{ str: 'A', transform: [1, 0, 0, 1, 0, 0] }] });
+    const docB = makeDoc({ 1: [{ str: 'B', transform: [1, 0, 0, 1, 0, 0] }] });
+    const docC = makeDoc({ 1: [{ str: 'C', transform: [1, 0, 0, 1, 0, 0] }] });
+    openPdfDocument.mockResolvedValueOnce(docA).mockResolvedValueOnce(docB).mockResolvedValueOnce(docC);
+
+    await getSheetTextItems('bid1', 'doc-A', 0);
+    await getSheetTextItems('bid1', 'doc-B', 0);
+    await getSheetTextItems('bid1', 'doc-A', 1); // re-touch A — now B is the least-recently-used, not A
+    await getSheetTextItems('bid1', 'doc-C', 0); // 3rd distinct document — B evicted instead of A
+
+    await Promise.resolve();
+    expect(docB.destroy).toHaveBeenCalledTimes(1);
+    expect(docA.destroy).not.toHaveBeenCalled();
+  });
+
+  it('never evicts while at or under the cap (2 documents stay cached indefinitely)', async () => {
+    const docA = makeDoc({ 1: [] });
+    const docB = makeDoc({ 1: [] });
+    openPdfDocument.mockResolvedValueOnce(docA).mockResolvedValueOnce(docB);
+
+    await getSheetTextItems('bid1', 'doc-A', 0);
+    await getSheetTextItems('bid1', 'doc-B', 0);
+    await getSheetTextItems('bid1', 'doc-A', 1);
+    await getSheetTextItems('bid1', 'doc-B', 1);
+
+    expect(docA.destroy).not.toHaveBeenCalled();
+    expect(docB.destroy).not.toHaveBeenCalled();
+    expect(get).toHaveBeenCalledTimes(2); // still just the original two fetches
+  });
+});
+
 // Fix round 1 / N11 — a second person signing in on the same tab must
 // never be able to read the previous user's already-cached plan text.
 describe('sheetTextCache — cleared on logout (SESSION_CLEARED_EVENT, N11)', () => {
