@@ -728,3 +728,133 @@ describe('POST /api/estimating/:bidId/price — no writes', () => {
     expect(rows[0].cnt).toBe(0); // nothing written
   });
 });
+
+// Phase B, Task 1 — est_bid_lines.line_key must survive every save/sync path
+// even though the underlying rows are replaced (DELETE + re-INSERT) on every
+// plain save. Markups (Task 3) point at line_key, not at `id`.
+describe('PUT/sync-takeoff — line_key stability (Phase B, Task 1)', () => {
+  it('a brand-new line gets a line_key on first save, and it survives an unchanged re-save', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    const settings = { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 };
+    const firstSave = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [
+        { category: 'Branch Power', description: 'Line A', qty: 1, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, source: 'manual' },
+        { category: 'Grounding', description: 'Line B', qty: 2, unit: 'EA', material_unit_override: 10, labor_hours_override: 1, source: 'manual' },
+      ],
+      settings,
+    }).expect(200);
+    expect(firstSave.body.lines.length).toBe(2);
+    const keysAfterFirstSave = firstSave.body.lines.map((l: { line_key: string }) => l.line_key).sort();
+    expect(keysAfterFirstSave.every((k: string) => typeof k === 'string' && k.length > 0)).toBe(true);
+    expect(new Set(keysAfterFirstSave).size).toBe(2); // distinct
+
+    // Re-save with exactly the lines the server just handed back (the normal
+    // "edit and save again" flow — the client always round-trips line_key).
+    const secondSave = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: firstSave.body.lines,
+      settings,
+    }).expect(200);
+    const keysAfterSecondSave = secondSave.body.lines.map((l: { line_key: string }) => l.line_key).sort();
+    expect(keysAfterSecondSave).toEqual(keysAfterFirstSave);
+  });
+
+  it('keeps a takeoff line\'s line_key stable across save, sync-takeoff, and another save', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const settings = { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 };
+
+    await seedTakeoff(bidId, [
+      { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' },
+    ]);
+    await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const afterSync1 = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    const originalKey = afterSync1.body.lines[0].line_key as string;
+    expect(originalKey).toBeTruthy();
+
+    // Save (round-tripping the line, with an override) — line_key unchanged.
+    const saved = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ ...afterSync1.body.lines[0], material_unit_override: 42 }],
+      settings,
+    }).expect(200);
+    expect(saved.body.lines[0].line_key).toBe(originalKey);
+
+    // Sync again (takeoff qty changes, but the line survives by takeoff_key) — still stable.
+    await seedTakeoff(bidId, [
+      { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 15, unit: 'EA' },
+    ]);
+    const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    expect(syncRes.body.lines[0].line_key).toBe(originalKey);
+
+    // Save once more — still the same key.
+    const saved2 = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: syncRes.body.lines,
+      settings,
+    }).expect(200);
+    expect(saved2.body.lines[0].line_key).toBe(originalKey);
+  });
+
+  it('drops a client-sent line_key that is not a well-formed UUID and mints a fresh one instead', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const res = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ line_key: 'proposed-0', category: 'Branch Power', description: 'Line', qty: 1, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, source: 'manual' }],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },
+    }).expect(200);
+    expect(res.body.lines[0].line_key).not.toBe('proposed-0');
+    expect(res.body.lines[0].line_key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  });
+});
+
+// Phase B, Task 1 — qty_source round-trips and defaults sensibly.
+describe('PUT /api/estimating/:bidId — qty_source (Phase B, Task 1)', () => {
+  it('defaults to takeoff for an un-overridden line and manual when qty_overridden is set without an explicit qty_source', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const res = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [
+        { category: 'Branch Power', description: 'Untouched', qty: 1, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, source: 'manual' },
+        { category: 'Grounding', description: 'Hand-edited qty', qty: 3, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, qty_overridden: true, source: 'manual' },
+      ],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },
+    }).expect(200);
+    const byCategory = new Map(res.body.lines.map((l: { category: string }) => [l.category, l]));
+    expect((byCategory.get('Branch Power') as { qty_source: string }).qty_source).toBe('takeoff');
+    expect((byCategory.get('Grounding') as { qty_source: string }).qty_source).toBe('manual');
+  });
+
+  it('honors an explicit qty_source of markup sent by the client', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const res = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [
+        { category: 'Branch Power', description: 'Marked up', qty: 12, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, qty_overridden: true, qty_source: 'markup', confidence: 'FIRM', source: 'manual' },
+      ],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },
+    }).expect(200);
+    expect(res.body.lines[0].qty_source).toBe('markup');
+  });
+
+  it('rejects a qty_source outside takeoff/manual/markup by dropping it to the safe default rather than 500ing', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const res = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ category: 'Branch Power', description: 'Bad qty_source', qty: 1, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, qty_source: 'ai-guessed', source: 'manual' }],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },
+    }).expect(200);
+    expect(res.body.lines[0].qty_source).toBe('takeoff');
+  });
+});

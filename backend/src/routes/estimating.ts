@@ -35,6 +35,8 @@ const ALLOWED_UNITS: EstUnit[] = ['EA', 'LF', 'C', 'M'];
 const ALLOWED_CONFIDENCE: LineConfidence[] = ['FIRM', 'APPROX', 'VERIFY'];
 const ALLOWED_MATCH_CONFIDENCE: MapConfidence[] = ['exact', 'alias', 'fuzzy', 'none'];
 const ALLOWED_MATCH_SOURCE = ['auto', 'manual'] as const;
+const ALLOWED_QTY_SOURCE = ['takeoff', 'manual', 'markup'] as const;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ── Validation ───────────────────────────────────────────────────────────────
 
@@ -116,6 +118,11 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
     }
     out.push({
       id: typeof raw.id === 'string' ? raw.id : undefined,
+      // Phase B, Task 1 — only a well-formed UUID is trusted as an existing
+      // line's stable key; anything else (absent, or a proposed-mapping
+      // placeholder like "proposed-0") is dropped so bidEstimate.ts mints a
+      // fresh one rather than trying to INSERT a non-UUID string.
+      line_key: typeof raw.line_key === 'string' && UUID_RE.test(raw.line_key) ? raw.line_key : undefined,
       category: String(raw.category ?? ''),
       description: String(raw.description ?? ''),
       qty,
@@ -144,6 +151,12 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
       match_source: (ALLOWED_MATCH_SOURCE as readonly string[]).includes(raw.match_source as string)
         ? (raw.match_source as 'auto' | 'manual') : null,
       synced_description: typeof raw.synced_description === 'string' ? raw.synced_description : null,
+      // Phase B, Task 1 — round-tripped like match_confidence/match_source;
+      // absent (every caller before frontend Task 9 wires this field through)
+      // falls back to bidEstimate.ts's own qty_overridden-implies-'manual'
+      // default rather than being forced to 'takeoff' here.
+      qty_source: (ALLOWED_QTY_SOURCE as readonly string[]).includes(raw.qty_source as string)
+        ? (raw.qty_source as 'takeoff' | 'manual' | 'markup') : undefined,
       source: raw.source as 'takeoff' | 'manual',
       sort: typeof raw.sort === 'number' ? raw.sort : undefined,
     });

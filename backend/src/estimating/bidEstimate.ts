@@ -5,6 +5,7 @@
 // never drift apart. Existing readers of bid_estimates keep working: this
 // module WRITES that table, nothing downstream changes.
 import type { PoolClient } from 'pg';
+import { randomUUID } from 'crypto';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { computeBidComps } from '../utils/bidComps';
@@ -41,6 +42,12 @@ export const VANISHED_PREFIX = '[No longer in takeoff] ';
 
 export interface ClientLineInput {
   id?: string;
+  /** Phase B, Task 1 — stable across every save/sync (est_bid_lines rows are
+   *  replaced wholesale on every save; `id` is not stable, this is). The
+   *  client round-trips whatever it last received on GET/PUT/sync-takeoff;
+   *  absent (a brand-new line) mints a fresh one server-side. Markups
+   *  (est_markups.line_key) point at this, not at `id`. */
+  line_key?: string;
   category: string;
   description: string;
   qty: number;
@@ -91,12 +98,19 @@ export interface ClientLineInput {
    *  synced against. Lets a later sync tell "the takeoff line itself
    *  changed" apart from "the estimator renamed this line's description". */
   synced_description?: string | null;
+  /** Phase B, Task 1 — why this line's CURRENT qty is what it is: the takeoff
+   *  (default), an estimator's hand-typed qty ('manual'), or a confirmed
+   *  Plan Viewer markup rollup ('markup', set only by apply-markups —
+   *  Task 3). Round-tripped by the client the same way as qty_overridden;
+   *  never inferred server-side from a value diff. */
+  qty_source?: 'takeoff' | 'manual' | 'markup';
   source: 'takeoff' | 'manual';
   sort?: number;
 }
 
 export interface BidLineRow extends ClientLineInput {
   id: string;
+  line_key: string;
   sort: number;
 }
 
@@ -118,6 +132,30 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Phase B, Task 1 — the value saveBidEstimate() writes for a line's
+ *  line_key: the client's own value when it's a real UUID (an existing line
+ *  round-tripping what it was given), a fresh one otherwise (a brand-new
+ *  line, or the placeholder getProposedLinesFromTakeoff() hands out before
+ *  anything is ever saved). Computed in JS rather than leaned on the
+ *  column's DEFAULT so the INSERT below can always supply an explicit,
+ *  non-null value — passing SQL NULL here would trip the NOT NULL
+ *  constraint instead of falling through to the default. */
+function resolveLineKey(clientValue: string | undefined | null): string {
+  return clientValue && UUID_RE.test(clientValue) ? clientValue : randomUUID();
+}
+
+/** Phase B, Task 1 — same backfill rule migration 108 applied once to
+ *  existing rows, applied per-request for any line whose client didn't send
+ *  qty_source explicitly (true of every caller until frontend Task 9 wires
+ *  the field through): a hand-typed qty is 'manual', anything else is
+ *  'takeoff'. A caller that DOES send qty_source (apply-markups, Task 3) is
+ *  always honored as-is. */
+function resolveQtySource(l: Pick<ClientLineInput, 'qty_source' | 'qty_overridden'>): 'takeoff' | 'manual' | 'markup' {
+  return l.qty_source ?? (l.qty_overridden ? 'manual' : 'takeoff');
+}
+
 // ── Loading ──────────────────────────────────────────────────────────────────
 
 export async function getBidLines(bidId: string): Promise<BidLineRow[]> {
@@ -131,6 +169,7 @@ export async function getBidLines(bidId: string): Promise<BidLineRow[]> {
 function rowToBidLine(r: Record<string, unknown>): BidLineRow {
   return {
     id: r.id as string,
+    line_key: r.line_key as string,
     category: r.category as string,
     description: r.description as string,
     qty: Number(r.qty),
@@ -148,6 +187,7 @@ function rowToBidLine(r: Record<string, unknown>): BidLineRow {
     match_confidence: (r.match_confidence as MapConfidence | null) ?? null,
     match_source: (r.match_source as 'auto' | 'manual' | null) ?? null,
     synced_description: (r.synced_description as string | null) ?? null,
+    qty_source: (r.qty_source as 'takeoff' | 'manual' | 'markup' | undefined) ?? 'takeoff',
     source: r.source as 'takeoff' | 'manual',
     sort: Number(r.sort),
   };
@@ -465,6 +505,12 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
 
   const lines: BidLineRow[] = mapped.map((m, idx) => ({
     id: `proposed-${idx}`,
+    // Not a real UUID — a proposed mapping was never saved, so it has no
+    // real line_key yet. validateLines() (routes/estimating.ts) only ever
+    // passes a well-formed UUID through to saveBidEstimate, so if a client
+    // ever echoed this placeholder back unchanged on save, the server would
+    // simply mint a fresh line_key rather than choke on it.
+    line_key: `proposed-${idx}`,
     category: m.category,
     description: m.description,
     qty: m.qty,
@@ -486,6 +532,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     match_confidence: m.matchedKind ? m.matchConfidence : null,
     match_source: m.matchedKind ? 'auto' : null,
     synced_description: m.description,
+    qty_source: 'takeoff',
     source: 'takeoff',
     sort: idx,
   }));
@@ -553,7 +600,16 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
 
       if (existingLine) {
         // qty_overridden: the estimator's hand-typed qty survives untouched.
+        // Phase B — this is also how a markup-confirmed qty (qty_source=
+        // 'markup', which apply-markups always sets alongside
+        // qty_overridden=true) survives a re-sync: the plan's "sync-takeoff
+        // must treat qty_source='markup' like an estimator override" is
+        // exactly what qty_overridden already does here, with no extra
+        // branching needed. When a line's qty DOES refresh from the takeoff
+        // (qty_overridden false), its qty_source resets to 'takeoff' — it's
+        // no longer anything but a fresh takeoff value.
         const nextQty = existingLine.qty_overridden ? existingLine.qty : m.qty;
+        const nextQtySource = existingLine.qty_overridden ? (existingLine.qty_source ?? 'manual') : 'takeoff';
         // Reappearance un-excludes only a line SYNC itself excluded earlier;
         // a line the estimator excluded on purpose stays excluded.
         const wasSyncExcluded = !!existingLine.excluded && !!existingLine.sync_excluded;
@@ -591,11 +647,11 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
           `UPDATE est_bid_lines
              SET qty=$1, unit=$2, description=$3, confidence=$4, takeoff_item_id=$5,
                  excluded=$6, sync_excluded=$7, assembly_id=$8, item_id=$9,
-                 match_confidence=$10, synced_description=$11, updated_at=now()
-           WHERE id=$12`,
+                 match_confidence=$10, synced_description=$11, qty_source=$12, updated_at=now()
+           WHERE id=$13`,
           [nextQty, m.unit, m.description, m.sourceConfidence ?? null, row.item ?? null,
            nextExcluded, nextSyncExcluded, nextAssemblyId, nextItemId,
-           nextMatchConfidence, nextSyncedDescription, existingLine.id]
+           nextMatchConfidence, nextSyncedDescription, nextQtySource, existingLine.id]
         );
         updated++;
       } else {
@@ -650,6 +706,12 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
 export interface SaveResult {
   recap: PricingRecap;
   bidEstimate: Record<string, unknown>;
+  /** Phase B, Task 1 — the freshly-saved lines, each carrying the line_key
+   *  that survived (or was newly minted for) this save. The client needs
+   *  this to know what a brand-new line's line_key ended up being, so a
+   *  markup created against it right after saving has something stable to
+   *  point at without a second round-trip. */
+  lines: BidLineRow[];
 }
 
 interface LegacyLineItem {
@@ -747,6 +809,7 @@ export async function saveBidEstimate(
   const recap = priceBid(resolved, toPricingSettings(settings, sqFt), factors);
   assertFiniteRecap(recap); // fail fast, before opening a transaction
 
+  let bidEstimate: Record<string, unknown>;
   const client: PoolClient = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -758,8 +821,8 @@ export async function saveBidEstimate(
         `INSERT INTO est_bid_lines
            (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id,
             material_unit_override, labor_hours_override, confidence, excluded, source, qty_overridden, sync_excluded,
-            match_confidence, match_source, synced_description)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+            match_confidence, match_source, synced_description, line_key, qty_source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
         [bidId, l.sort, l.category, l.description, l.qty, l.unit,
          l.assembly_id ?? null, l.item_id ?? null, l.takeoff_key ?? null, l.takeoff_item_id ?? null,
          l.material_unit_override ?? null, l.labor_hours_override ?? null,
@@ -779,7 +842,12 @@ export async function saveBidEstimate(
          // Fix round 2 / SF1 + SF4 — round-tripped the same way as
          // sync_excluded/qty_overridden: the client received these on the
          // last GET/sync-takeoff and carries them forward on save.
-         l.match_confidence ?? null, l.match_source ?? null, l.synced_description ?? null]
+         l.match_confidence ?? null, l.match_source ?? null, l.synced_description ?? null,
+         // Phase B, Task 1 — line_key survives THIS save/reinsert cycle by
+         // being explicitly re-supplied (see resolveLineKey's comment);
+         // qty_source is the client's own value, or the same
+         // qty_overridden-implies-'manual' backfill migration 108 applied.
+         resolveLineKey(l.line_key), resolveQtySource(l)]
       );
     }
 
@@ -795,16 +863,21 @@ export async function saveBidEstimate(
        settings.floors_above_2]
     );
 
-    const bidEstimate = await writeBidEstimateSnapshot(
+    bidEstimate = await writeBidEstimateSnapshot(
       client, bidId, recap, rows, settings.overhead_pct, settings.profit_pct, comps
     );
 
     await client.query('COMMIT');
-    return { recap, bidEstimate };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
   } finally {
     client.release();
   }
+
+  // Phase B, Task 1 — read back the persisted rows (same pattern as
+  // syncTakeoff) so the caller gets each line's actual line_key, not just
+  // what it sent (a brand-new line's was minted server-side).
+  const savedLines = await getBidLines(bidId);
+  return { recap, bidEstimate, lines: savedLines };
 }
