@@ -162,6 +162,9 @@ export interface Agent4TakeoffItem {
    *  authoritative value over this echo when both are available. */
   conf?: string;
   furnish_by?: string;
+  /** Fix round 1 / B1 — the count type tag this line carries (Agent 1's
+   *  counter row countType), so code can enforce the counted quantity. */
+  count_type?: string;
 }
 
 export interface Agent4TakeoffCategory {

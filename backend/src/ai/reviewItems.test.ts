@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { carryOverResolutions, validateResolution, reviewResolutionsForAgent4, buildReviewItems, type ReviewItem } from './reviewItems';
+import { carryOverResolutions, validateResolution, reviewResolutionsForAgent4, buildReviewItems, enforcedCounts, type ReviewItem } from './reviewItems';
+import { runCountingStage, type CountResult } from './countingStage';
+import { mergeCountsIntoTakeoff } from './countMerge';
+import { buildCountTargets } from './countTargets';
+import { selectCountSheets } from './countSheets';
+import { kissimmeeAgent1 } from '../test/fixtures/takeoff/agent1Fixtures';
+import type Anthropic from '@anthropic-ai/sdk';
 import { buildAgent4UserMessage } from './agent4Message';
 
 const countItem = (id: string, over: Partial<ReviewItem> = {}): ReviewItem => ({ id, kind: 'count', title: `Type ${id}`, detail: '', ...over });
@@ -63,9 +69,131 @@ describe('Agent 4 receives the resolutions as authoritative', () => {
 describe('buildReviewItems — scope questions', () => {
   it('adds one item per question', () => {
     const items = buildReviewItems(null, [{ term: 'power_poles', label: 'Power poles', question: 'Who furnishes and installs the power poles? (APT / GC / Owner)', options: ['APT', 'GC', 'Owner'], notes: ['AI count: 8 poles'] }]);
-    expect(items).toEqual([{
+    expect(items).toMatchObject([{
       id: 'scope:power_poles', kind: 'scope_question', title: 'Power poles', detail: 'Who furnishes and installs the power poles? (APT / GC / Owner)',
       term: 'power_poles', question: 'Who furnishes and installs the power poles? (APT / GC / Owner)', options: ['APT', 'GC', 'Owner'], notes: ['AI count: 8 poles'],
     }]);
+  });
+});
+
+// ── Fix round 1 ─────────────────────────────────────────────────────────────
+
+function countResultFrom(a1: Record<string, unknown>, sheets: Parameters<typeof mergeCountsIntoTakeoff>[2], extra: Partial<CountResult> = {}): CountResult {
+  const { targets } = buildCountTargets(a1);
+  const m = mergeCountsIntoTakeoff(a1, targets, sheets, { countingRan: true });
+  return { version: 2, ran: true, model: 'm', targets, targetNotes: [], sheets: [], skippedSheets: [], types: m.types, loadCheck: m.loadCheck,
+    removedRows: m.removedRows, flags: m.flags, marks: [], noScheduleOrLegend: !targets.some(t => t.source === 'fixture_schedule' || t.source === 'legend'), ...extra };
+}
+const pick = (inv: Array<[string, string]>) => selectCountSheets(inv.map(([no, title], i) => ({ file: 'set.pdf', page: i + 1, sheetNo: no, title, discipline: 'electrical', cls: 'plan', included: true }))).counted;
+const marks = (counts: Record<string, number>) => Object.entries(counts).flatMap(([k, n]) => Array.from({ length: n }, () => ({ typeKey: k })));
+
+describe('B2 — counting that could not verify the counts is never "clear"', () => {
+  it('review repro C: no fixture schedule and no legend -> one BLOCKING item, never a clear review', async () => {
+    const a1 = { quantities: [{ category: 'Interior Lighting', item: '2x4 LED troffer', qty: 40 }] };
+    const stage = await runCountingStage({ client: {} as Anthropic, model: 'm', maxTokens: 1000, agent1: a1, inventory: [], pdfs: new Map() });
+    expect(stage.countResult.targets).toEqual([]);
+    const items = buildReviewItems(stage.countResult);
+    expect(items.map(i => [i.id, i.kind, i.title])).toEqual([
+      ['counting:not_run', 'confirm', 'No fixture schedule/legend found — counts not verified'],
+    ]);
+    expect(items[0].detail).toMatch(/^Counting did not run: no fixture schedule, legend/);
+  });
+  it('counting ran on equipment only (no schedule/legend) -> the same blocking item', () => {
+    const cr = countResultFrom({ equipment: [{ tag: 'EQ-1', description: 'Dryer 15 HP' }] }, [
+      { sheet: pick([['E-2', 'POWER PLAN']])[0], status: 'counted', placed: marks({ 'EQ-1': 1 }), unreadable: [] },
+    ]);
+    expect(buildReviewItems(cr).map(i => i.id)).toContain('counting:no_schedule');
+  });
+  it('resolved only by a confirmation with a real reason', () => {
+    const [item] = buildReviewItems({ ...countResultFrom({}, []), ran: false, notRunReason: 'x' });
+    expect(validateResolution(item, { action: 'count', qty: 3 }, null).ok).toBe(false);
+    expect(validateResolution(item, { action: 'confirm', reason: 'ok' }, null)).toEqual({ ok: false, error: 'Give the reason you are confirming this (at least 10 characters).' });
+    expect(validateResolution(item, { action: 'confirm', reason: 'Checked E-3 by hand, 40 troffers' }, null).ok).toBe(true);
+  });
+});
+
+describe('B3 — an unscheduled Agent 1 fixture row becomes a blocking item', () => {
+  it('review repro C: "Type M ... qty 6" with M missing from the schedule', () => {
+    const a1 = kissimmeeAgent1();
+    a1.fixtureSchedule = (a1.fixtureSchedule as Array<{ type: string }>).filter(f => f.type !== 'M');
+    (a1.quantities as Array<Record<string, unknown>>).push({ category: 'Interior Lighting', item: 'Type M — 2x2 LED flat panel', qty: 6, unit: 'EA', sourceSheet: 'E-3' });
+    const [e3] = pick([['E-3', 'LIGHTING PLAN']]);
+    const cr = countResultFrom(a1, [{ sheet: e3, status: 'counted', placed: marks({ A: 73 }), unreadable: [] }]);
+    const items = buildReviewItems(cr);
+    const m = items.find(i => i.title === 'Unscheduled fixture: Type M — 2x2 LED flat panel')!;
+    expect(m).toMatchObject({ kind: 'count', aiCount: 6, rowItem: 'Type M — 2x2 LED flat panel', category: 'Interior Lighting', actions: ['count', 'not_on_job'] });
+    // Kissimmee's "Site lights 4 (E-7)" is one "not on this job" click, not a silent deletion.
+    const site = items.find(i => /Unscheduled fixture: Site lights/i.test(i.title));
+    expect(site?.detail).toMatch(/found 4 × Site lights/);
+    // A count resolution puts the line back (B1 enforcement).
+    m.resolution = { action: 'count', qty: 6, by: 'J', at: 't' };
+    expect(enforcedCounts(cr, items).extraLines).toEqual([{ category: 'Interior Lighting', item: 'Type M — 2x2 LED flat panel', qty: 6 }]);
+  });
+});
+
+describe('B4 — an unclassifiable same-level pair is a blocking choice showing both numbers', () => {
+  const A = { fixtureSchedule: [{ type: 'A', description: '2x4 LED troffer', location: 'interior', wattage: 32 }] };
+  const [a, b] = pick([['E-2.1', 'LIGHTING PLAN'], ['E-2.2', 'LIGHTING PLAN']]);
+  const cr = countResultFrom(A, [
+    { sheet: a, status: 'counted', placed: marks({ A: 40 }), unreadable: [] },
+    { sheet: b, status: 'counted', placed: marks({ A: 35 }), unreadable: [] },
+  ]);
+  const item = buildReviewItems(cr).find(i => i.id === 'area:A')!;
+  it('asks keep 40 vs sum 75', () => {
+    expect(item.detail).toBe('E-2.1 "LIGHTING PLAN" 40 / E-2.2 "LIGHTING PLAN" 35 — same area (keep 40) or different areas (sum 75)?');
+    expect(item.options).toEqual(['Same area — keep 40', 'Different areas — sum 75']);
+  });
+  it('the answer carries the quantity the GC documents must show', () => {
+    const r = validateResolution(item, { action: 'answer', answer: 'Different areas — sum 75' }, null);
+    expect(r).toEqual({ ok: true, resolution: { action: 'answer', answer: 'Different areas — sum 75', qty: 75 } });
+    const resolved = [{ ...item, resolution: { ...(r as unknown as { resolution: NonNullable<ReviewItem["resolution"]> }).resolution, by: 'J', at: 't' } }];
+    expect(enforcedCounts(cr, resolved).byType.get('A')).toBe(75);
+    expect(enforcedCounts(cr, []).byType.get('A')).toBe(40);
+  });
+  it('AREA A + AREA B raises no question and enforces 75', () => {
+    const [x, y] = pick([['E-2.1', 'PARTIAL LIGHTING PLAN - AREA A'], ['E-2.2', 'PARTIAL LIGHTING PLAN - AREA B']]);
+    const cr2 = countResultFrom(A, [
+      { sheet: x, status: 'counted', placed: marks({ A: 40 }), unreadable: [] },
+      { sheet: y, status: 'counted', placed: marks({ A: 35 }), unreadable: [] },
+    ]);
+    expect(buildReviewItems(cr2).filter(i => i.typeKey === 'A')).toEqual([]);
+    expect(enforcedCounts(cr2, []).byType.get('A')).toBe(75);
+  });
+});
+
+describe('S3 — partial coverage and uncounted plan pages block', () => {
+  it('lighting counted only from the power plan -> blocking coverage item; confirm keeps the AI count', () => {
+    const A = { fixtureSchedule: [{ type: 'A', description: '2x4 LED troffer', location: 'interior', wattage: 32 }] };
+    const cr = countResultFrom(A, [{ sheet: pick([['E-2', 'POWER PLAN']])[0], status: 'counted', placed: marks({ A: 12 }), unreadable: [] }]);
+    const item = buildReviewItems(cr).find(i => i.id === 'coverage:A')!;
+    expect(item.detail).toMatch(/counted only on the power plan/);
+    const r = validateResolution(item, { action: 'confirm', reason: 'Lighting plan is E-2 too on this job' }, null);
+    expect(r).toMatchObject({ ok: true, resolution: { action: 'confirm', qty: 12 } });
+  });
+  it('a lighting plan classified as "schedule", and a PDF the classifier returned nothing for, are blocking items', () => {
+    const sel = selectCountSheets([
+      { file: 'set.pdf', page: 1, sheetNo: 'E-3', title: 'LIGHTING PLAN', discipline: 'electrical', cls: 'schedule', included: true },
+      { file: 'set.pdf', page: 2, sheetNo: 'E-0.1', title: 'FIXTURE SCHEDULE', discipline: 'electrical', cls: 'schedule', included: true },
+      { file: 'set.pdf', page: 3, sheetNo: 'E-3.1', title: 'ENLARGED RESTROOM PLAN', discipline: 'electrical', cls: 'detail', included: true },
+    ]);
+    const cr = { ...countResultFrom({}, []), skippedSheets: sel.skipped, unclassifiedFiles: ['addendum.pdf'] };
+    expect(buildReviewItems(cr).filter(i => i.kind === 'confirm' && !i.id.startsWith('counting:')).map(i => i.title)).toEqual([
+      'Not counted: E-3 "LIGHTING PLAN"', 'Not counted: E-3.1 "ENLARGED RESTROOM PLAN"', 'Not counted: addendum.pdf',
+    ]);
+  });
+});
+
+describe('N4 / N6 — re-confirmation after a new drawing set; real reasons', () => {
+  it('a resolution carries over only when the item was built from the same evidence', () => {
+    const prev = [countItem('count:G', { fingerprint: 'zero|0|', resolution: { action: 'count', qty: 11, by: 'J', at: 't' } })];
+    expect(carryOverResolutions([countItem('count:G', { fingerprint: 'zero|0|' })], prev)[0].resolution).toMatchObject({ qty: 11, carriedOver: true });
+    const changed = carryOverResolutions([countItem('count:G', { fingerprint: 'unreadable|0|E-3: 4' })], prev)[0];
+    expect(changed.resolution).toBeUndefined();
+    expect(changed.previousResolution).toMatchObject({ qty: 11 });
+  });
+  it('"Not on this job" needs a real reason', () => {
+    expect(validateResolution(countItem('count:A'), { action: 'not_on_job', reason: '...' }, null).ok).toBe(false);
+    expect(validateResolution(countItem('count:A'), { action: 'not_on_job', reason: '1234567890' }, null).ok).toBe(false);
+    expect(validateResolution(countItem('count:A'), { action: 'not_on_job', reason: 'Alternate only, not bid' }, null).ok).toBe(true);
   });
 });

@@ -290,6 +290,7 @@ export function composeBidData(
         source: it.source ?? '',
         ...(conf ? { conf } : {}),
         ...(it.furnish_by ? { furnish_by: it.furnish_by } : {}),
+        ...(it.count_type ? { count_type: String(it.count_type) } : {}),
       };
     }),
   }));

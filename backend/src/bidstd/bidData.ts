@@ -25,6 +25,8 @@ export interface TakeoffItem {
   /** e.g. "APT (ECFECI)", "GC / Graybar national account". Presence on ANY
    *  item across the whole takeoff is what turns on the FURNISH BY column. */
   furnish_by?: string;
+  /** Fix round 1 / B1 — the count type this line carries (never rendered). */
+  count_type?: string;
 }
 
 export interface TakeoffCategory {

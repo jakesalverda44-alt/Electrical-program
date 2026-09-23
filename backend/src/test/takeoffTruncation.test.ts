@@ -81,9 +81,13 @@ describe('runPipeline — every agent call streams (SDK refuses non-streaming ab
     expect(rows[0].status).toBe('complete');
     expect(paths.length).toBe(calls.length);
     expect(new Set(paths)).toEqual(new Set(['stream']));
-    // Agents 1-3, then (Task 12) the pre-bid draft composed right after the
-    // analysis at Agent 4's own Max Tokens — also over stream.
-    expect(calls.map(c => c.max_tokens)).toEqual([32000, 32000, 32000, config.maxTokensA4]);
+    // Agents 1-3. No pre-bid draft: an image-only upload can't be counted, so
+    // (fix round 1 / B2) the review holds a blocking "counts not verified"
+    // item and the draft waits for it.
+    expect(calls.map(c => c.max_tokens)).toEqual([32000, 32000, 32000]);
+    const { rows: rv } = await pool.query('SELECT review_status, review_items FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    expect(rv[0].review_status).toBe('needs_review');
+    expect(rv[0].review_items.map((i: { id: string }) => i.id)).toContain('counting:not_run');
   });
 });
 

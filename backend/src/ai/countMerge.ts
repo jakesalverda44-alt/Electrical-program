@@ -43,6 +43,20 @@ export interface TypeSheetCount {
   used: boolean;
   /** Why a non-zero count on this sheet was not used. */
   ignoredReason?: string;
+  /** Fix round 1 / S15 — the merge would take this type's count from this
+   *  sheet (allowed kind of sheet, not the anti-focus plan). Confirmed
+   *  markers count toward the type only on eligible sheets. */
+  eligible?: boolean;
+}
+
+/** Fix round 1 / B4 — two or more sheets of one level show the type and the
+ *  titles don't say whether they are the same area or partitions of it. */
+export interface AreaQuestion {
+  sheets: Array<{ label: string; count: number }>;
+  /** The total if they show the same area (larger kept). */
+  keep: number;
+  /** The total if they are different areas (summed). */
+  sum: number;
 }
 
 export interface TypeCountResult {
@@ -61,6 +75,12 @@ export interface TypeCountResult {
   sheets: TypeSheetCount[];
   flags: string[];
   wattage: number | null;
+  /** B4 — blocking: same area or different areas? */
+  areaQuestion?: AreaQuestion;
+  /** S3 — blocking: the count covers only part of what should have been
+   *  counted (no plan of the right kind, only the power plan for lighting,
+   *  only an enlarged or partial plan). */
+  coverage?: string[];
 }
 
 export interface LoadCheck {
@@ -79,6 +99,10 @@ export interface RemovedRow {
   row: Record<string, unknown>;
   reason: string;
   replacedByType: string | null;
+  /** B3 — an Agent 1 fixture row that matches no scheduled type. Removed so
+   *  it can't stack on the counted types, but NEVER silently: it becomes a
+   *  blocking review item (count it / not on this job). */
+  unscheduled?: boolean;
 }
 
 export interface CountMergeResult {
@@ -163,15 +187,13 @@ export function matchRowToTarget(row: Record<string, unknown>, targets: CountTar
 export function combineSheetCounts(
   t: CountTarget,
   sheets: SheetCountInput[],
-): Pick<TypeCountResult, 'count' | 'sheets' | 'flags'> & { allowedFailed: string[]; unreadableOn: string[] } {
+): Pick<TypeCountResult, 'count' | 'sheets' | 'flags' | 'areaQuestion' | 'coverage'> & { allowedFailed: string[]; unreadableOn: string[] } {
   const flags: string[] = [];
+  const coverage: string[] = [];
   const counted = sheets.filter(s => s.status === 'counted');
   const role = preferredRole(t.category);
   const hasPreferredRole = counted.some(s => s.sheet.role === role);
   const allowed = (s: SheetCountInput) => s.sheet.role === 'enlarged' || !hasPreferredRole || s.sheet.role === role;
-  if (!hasPreferredRole && counted.length) {
-    flags.push(`No ${role === 'site' ? 'site' : 'building'} plan was counted — ${t.type} was taken from every counted plan sheet.`);
-  }
   const anti = antiFocus(t.category);
   const hasNonAnti = counted.some(s => allowed(s) && s.sheet.role !== 'enlarged' && s.sheet.focus !== anti);
 
@@ -180,6 +202,7 @@ export function combineSheetCounts(
     label: s.sheet.label,
     count: s.placed.filter(p => p.typeKey === t.key).length,
     used: false,
+    eligible: false,
   }));
 
   const usable: Array<{ s: SheetCountInput; c: TypeSheetCount }> = [];
@@ -202,10 +225,13 @@ export function combineSheetCounts(
       }
       return;
     }
+    c.eligible = true;
     usable.push({ s, c });
   });
 
-  // Main (non-enlarged) sheets: sum across distinct levels, max within a level.
+  // Main (non-enlarged) sheets: summed across levels; within a level, summed
+  // across named areas (AREA A + AREA B), larger kept within one area; when
+  // the titles can't tell same-area from partitions, a blocking question.
   const main = usable.filter(u => u.s.sheet.role !== 'enlarged');
   const byLevel = new Map<string, Array<{ s: SheetCountInput; c: TypeSheetCount }>>();
   for (const u of main) {
@@ -214,17 +240,54 @@ export function combineSheetCounts(
     byLevel.get(lv)!.push(u);
   }
   let mainTotal = 0;
+  let ambiguousExtra = 0; // sum-if-different-areas minus keep, over ambiguous levels
+  const ambiguousSheets: AreaQuestion['sheets'] = [];
   for (const group of byLevel.values()) {
     const nonzero = group.filter(g => g.c.count > 0);
     if (nonzero.length === 0) continue;
+    if (nonzero.length === 1) {
+      const only = nonzero[0];
+      only.c.used = true;
+      mainTotal += only.c.count;
+      if (only.s.sheet.partial && !only.s.sheet.area) {
+        coverage.push(`${t.type} was counted only on the partial plan ${only.s.sheet.label} (${only.c.count}) — the rest of that level may not have been counted.`);
+      }
+      continue;
+    }
+    if (nonzero.every(g => g.s.sheet.area)) {
+      // Named partitions: max within an area, sum across areas.
+      const byArea = new Map<string, typeof nonzero>();
+      for (const g of nonzero) {
+        const a = g.s.sheet.area!;
+        if (!byArea.has(a)) byArea.set(a, []);
+        byArea.get(a)!.push(g);
+      }
+      const parts: string[] = [];
+      for (const [area, gs] of byArea) {
+        const best = gs.reduce((a, b) => (b.c.count > a.c.count ? b : a));
+        best.c.used = true;
+        mainTotal += best.c.count;
+        parts.push(`${best.s.sheet.label} (${best.c.count})`);
+        for (const g of gs) {
+          if (g === best) continue;
+          g.c.ignoredReason = `same area (${area}) as ${best.s.sheet.label} — larger count kept`;
+          flags.push(`${t.type} counted on both ${best.s.sheet.label} (${best.c.count}) and ${g.s.sheet.label} (${g.c.count}), both ${area} — kept ${best.c.count}, not summed.`);
+        }
+      }
+      if (byArea.size > 1) flags.push(`${t.type}: different areas of one level summed — ${parts.join(' + ')}.`);
+      continue;
+    }
+    // Ambiguous: provisionally keep the larger; the estimator decides.
     const best = nonzero.reduce((a, b) => (b.c.count > a.c.count ? b : a));
     best.c.used = true;
     mainTotal += best.c.count;
+    const sum = nonzero.reduce((acc, g) => acc + g.c.count, 0);
+    ambiguousExtra += sum - best.c.count;
     for (const g of nonzero) {
-      if (g === best) continue;
-      g.c.ignoredReason = `same area as ${best.s.sheet.label} — larger count kept`;
-      flags.push(`${t.type} counted on both ${best.s.sheet.label} (${best.c.count}) and ${g.s.sheet.label} (${g.c.count}) — kept ${best.c.count}, not summed. Check whether these sheets show the same area.`);
+      ambiguousSheets.push({ label: g.s.sheet.label, count: g.c.count });
+      if (g !== best) g.c.ignoredReason = `same area as ${best.s.sheet.label}? — needs the estimator (larger kept for now)`;
     }
+    flags.push(`${t.type} counted on ${nonzero.map(g => `${g.s.sheet.label} (${g.c.count})`).join(' and ')} — the titles don't say whether these show the same area or different parts of the level. Needs review.`);
   }
 
   // Enlarged plans: never summed with the main plan.
@@ -244,14 +307,31 @@ export function combineSheetCounts(
     } else {
       bestEnl.c.used = true;
       count = bestEnl.c.count;
+      const msg = `${t.type} was counted only on the enlarged plan${enlarged.length > 1 ? 's' : ''} ${enlarged.map(u => `${u.s.sheet.label} (${u.c.count})`).join(', ')} — no main plan count; kept ${bestEnl.c.count}.`;
+      flags.push(msg);
+      coverage.push(msg);
     }
     for (const u of enlarged) if (u !== bestEnl && !u.c.ignoredReason) u.c.ignoredReason = `enlarged plan — ${bestEnl.s.sheet.label} kept`;
+  }
+
+  // S3 — coverage: the count stands on the wrong kind of sheet.
+  if (count > 0 && !hasPreferredRole && counted.length) {
+    const msg = `No ${role === 'site' ? 'site' : 'building'} plan was counted — ${t.type} was taken from ${usable.filter(u => u.c.used).map(u => u.s.sheet.label).join(', ') || 'the counted sheets'}.`;
+    flags.push(msg);
+    coverage.push(msg);
+  }
+  if (count > 0 && anti && !hasNonAnti && usable.some(u => u.c.used && u.s.sheet.focus === anti)) {
+    coverage.push(`${t.type} was counted only on the ${anti} plan (${usable.filter(u => u.c.used).map(u => u.s.sheet.label).join(', ')}) — no ${anti === 'power' ? 'lighting' : 'power'} plan was counted for it.`);
   }
 
   const allowedFailed = sheets.filter(s => s.status === 'failed' && allowed(s)).map(s => s.sheet.label);
   const unreadableOn = [...new Set(sheets.filter(s => s.status === 'counted' && allowed(s))
     .filter(s => s.unreadable.some(u => u.typeKey === t.key)).map(s => s.sheet.label))];
-  return { count, sheets: perSheet, flags, allowedFailed, unreadableOn };
+  return {
+    count, sheets: perSheet, flags, allowedFailed, unreadableOn,
+    ...(ambiguousSheets.length ? { areaQuestion: { sheets: ambiguousSheets, keep: count, sum: count + ambiguousExtra } } : {}),
+    ...(coverage.length ? { coverage } : {}),
+  };
 }
 
 export function computeLoadCheck(types: TypeCountResult[], panelCircuits: unknown): LoadCheck {
@@ -290,7 +370,7 @@ export function computeLoadCheck(types: TypeCountResult[], panelCircuits: unknow
   return { ...base, ran: true, countedWatts, gapPct, discrepancy: Math.abs(gapPct) > LOAD_GAP_THRESHOLD };
 }
 
-function countedRowItem(t: CountTarget): string {
+export function countedRowItem(t: CountTarget): string {
   const desc = t.description || t.type;
   if (t.source === 'legend') return normalizeTypeKey(t.description) === t.key ? desc : `${desc} (${t.type})`;
   return t.category === 'equipment' ? `${t.type} — ${desc} (connection)` : `Type ${t.type} — ${desc}`;
@@ -325,7 +405,10 @@ export function mergeCountsIntoTakeoff(
       reason = `${c.allowedFailed.join(', ')} could not be counted`;
     } else if (c.count === 0) {
       status = 'zero';
-      reason = sheets.some(s => s.status === 'counted') ? 'not found on any counted plan sheet' : 'no plan sheets were counted';
+      const elsewhere = c.sheets.filter(x => x.count > 0 && !x.used);
+      reason = elsewhere.length
+        ? `found only on ${elsewhere.map(x => `${x.label} (${x.count})`).join(', ')} — not counted there (${elsewhere[0].ignoredReason ?? 'not a sheet this type is counted on'})`
+        : sheets.some(s => s.status === 'counted') ? 'not found on any counted plan sheet' : 'no plan sheets were counted';
     }
     let heads: number | null = null;
     if (t.category === 'site_lighting') {
@@ -337,6 +420,8 @@ export function mergeCountsIntoTakeoff(
     types.push({
       key: t.key, type: t.type, description: t.description, category: t.category, wattage: t.wattage,
       count: c.count, heads, status, reason, sheets: c.sheets, flags: c.flags,
+      ...(c.areaQuestion && status === 'counted' ? { areaQuestion: c.areaQuestion } : {}),
+      ...(c.coverage && status === 'counted' ? { coverage: c.coverage } : {}),
     });
     flags.push(...c.flags);
   }
@@ -363,11 +448,17 @@ export function mergeCountsIntoTakeoff(
     && sheets.some(s => s.status === 'counted');
   const equipmentTargetsCounted = opts.countingRan && targets.some(t => t.category === 'equipment')
     && sheets.some(s => s.status === 'counted');
+  // S4 — a counted device/equipment type (a legend disconnect, say) also
+  // replaces Agent 1's row for it in ANY category (Service & Distribution),
+  // and the counted line takes that row's category, so it never stacks.
+  const deviceTargets = targets.filter(t => t.category === 'equipment' || t.category === 'device');
+  const categoryByType = new Map<string, string>();
   for (const row of original) {
     const cat = String(row.category ?? '').trim().toLowerCase();
-    const match = TYPE_ROW_CATEGORIES.has(cat) ? matchRowToTarget(row, targets) : undefined;
+    const match = TYPE_ROW_CATEGORIES.has(cat) ? matchRowToTarget(row, targets) : matchRowToTarget(row, deviceTargets);
     if (match) {
       removedRows.push({ row, reason: `replaced by the counted quantity for type ${match.type}`, replacedByType: match.type });
+      if (!categoryByType.has(match.key) && String(row.category ?? '').trim()) categoryByType.set(match.key, String(row.category).trim());
       continue;
     }
     if (equipmentTargetsCounted && cat === 'branch power' && /equipment\s+connection/i.test(String(row.item ?? ''))) {
@@ -375,7 +466,7 @@ export function mergeCountsIntoTakeoff(
       continue;
     }
     if (fixtureTargetsCounted && FIXTURE_ROW_CATEGORIES.has(cat)) {
-      removedRows.push({ row, reason: 'fixture row that matches no scheduled type — removed so it cannot stack on the counted types; add it back if it is real', replacedByType: null });
+      removedRows.push({ row, reason: 'fixture row that matches no scheduled type — held for the estimator (count it or mark it not on this job)', replacedByType: null, unscheduled: true });
       continue;
     }
     kept.push(row);
@@ -386,7 +477,7 @@ export function mergeCountsIntoTakeoff(
     const r = types.find(x => x.key === t.key)!;
     const sheetsUsed = r.sheets.filter(s => s.used).map(s => s.label.split(' ')[0]);
     const base = {
-      category: CATEGORY_ROW[t.category],
+      category: (t.category === 'equipment' || t.category === 'device') ? (categoryByType.get(t.key) ?? CATEGORY_ROW[t.category]) : CATEGORY_ROW[t.category],
       unit: 'EA',
       sourceSheet: sheetsUsed.join(', ') || t.sourceSheet,
       // AI symbol counts are visual counts (APPROX), never FIRM — the

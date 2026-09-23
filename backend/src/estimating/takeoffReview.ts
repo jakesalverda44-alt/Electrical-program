@@ -10,7 +10,7 @@ import {
 import type { CountResult } from '../ai/countingStage';
 
 export interface TakeoffReview {
-  status: 'clear' | 'needs_review' | null;
+  status: 'clear' | 'needs_review' | 'pending' | null;
   items: ReviewItem[];
 }
 
@@ -29,6 +29,14 @@ export interface GateBlock {
  *  before the counting stage (review_status NULL) is never blocked. */
 export async function takeoffGate(bidId: string): Promise<GateBlock | null> {
   const review = await getTakeoffReview(bidId);
+  // Fix round 1 / B5 — a run in progress (or one that stopped before the
+  // counting stage wrote its review) blocks everything, never 'ungated'.
+  if (review.status === 'pending') {
+    return {
+      error: 'The takeoff analysis is running or did not finish — wait for it to complete (or re-run it) before generating or sending a proposal.',
+      openItems: [],
+    };
+  }
   if (review.status !== 'needs_review') return null;
   const open = review.items.filter(reviewItemIsOpen);
   if (!open.length) return null;
@@ -38,20 +46,49 @@ export async function takeoffGate(bidId: string): Promise<GateBlock | null> {
   };
 }
 
+export interface MarkerTally {
+  /** Confirmed markers on the sheets the merge takes this type from. */
+  counted: number;
+  /** Confirmed markers elsewhere — shown, never counted (S15). */
+  excluded: Array<{ label: string; count: number }>;
+}
+
 /** Confirmed count markers for a type on this bid: markers labeled with the
- *  type tag, or sitting on the one saved line the type maps to. */
-export async function countConfirmedMarkersForType(bidId: string, typeKey: string): Promise<number> {
+ *  type tag, or sitting on the one saved line the type maps to — counted only
+ *  on the sheets that are eligible for the type (fix round 1 / S15: a lighting
+ *  type's markers on the power plan's background don't add to the lighting
+ *  plan's). A run from before sheet/document tracking counts every page. */
+export async function confirmedMarkersForType(bidId: string, typeKey: string): Promise<MarkerTally> {
   const { rows } = await pool.query('SELECT count_result FROM takeoff_results WHERE bid_id = $1', [bidId]);
-  const target = (rows[0]?.count_result as CountResult | null)?.targets?.find(t => t.key === typeKey);
+  const cr = rows[0]?.count_result as (CountResult & { markers?: { sheetDocuments?: Array<{ sheetKey: string; label: string; documentId: string; pageIndex: number }> } }) | null;
+  const target = cr?.targets?.find(t => t.key === typeKey);
   const tag = (target?.type ?? typeKey).toUpperCase();
   const lineKey = target ? lineForType(target, await getBidLines(bidId)) : null;
   const res = await pool.query(
-    `SELECT count(*)::int AS n FROM est_markups
+    `SELECT document_id, page_index, count(*)::int AS n FROM est_markups
       WHERE bid_id = $1 AND kind = 'count' AND status = 'confirmed' AND deleted_at IS NULL
-        AND (upper(coalesce(label, '')) = $2 OR ($3::uuid IS NOT NULL AND line_key = $3::uuid))`,
+        AND (upper(coalesce(label, '')) = $2 OR ($3::uuid IS NOT NULL AND line_key = $3::uuid))
+      GROUP BY document_id, page_index`,
     [bidId, tag, lineKey]
   );
-  return Number(res.rows[0]?.n ?? 0);
+  const docs = cr?.markers?.sheetDocuments;
+  const type = cr?.types?.find(t => t.key === typeKey);
+  if (!docs || !type) {
+    return { counted: res.rows.reduce((s, r) => s + Number(r.n), 0), excluded: [] };
+  }
+  const tally: MarkerTally = { counted: 0, excluded: [] };
+  for (const r of res.rows) {
+    const sheet = docs.find(d => d.documentId === r.document_id && d.pageIndex === Number(r.page_index));
+    const eligible = sheet ? type.sheets.find(x => x.sheetKey === sheet.sheetKey)?.eligible === true : false;
+    if (eligible) tally.counted += Number(r.n);
+    else tally.excluded.push({ label: sheet ? `${sheet.label} (not a sheet ${type.type} is counted from)` : `page ${Number(r.page_index) + 1} of a plan set that was not counted`, count: Number(r.n) });
+  }
+  return tally;
+}
+
+/** Back-compat: the number that counts. */
+export async function countConfirmedMarkersForType(bidId: string, typeKey: string): Promise<number> {
+  return (await confirmedMarkersForType(bidId, typeKey)).counted;
 }
 
 export type ResolveOutcome =
@@ -65,11 +102,12 @@ async function applyResolution(
   by: string,
 ): Promise<ResolveOutcome> {
   // 'markers' needs a count computed outside the row lock.
-  const markerCounts = new Map<string, number>();
+  const markerCounts = new Map<string, MarkerTally>();
   if (input?.action === 'markers') {
     for (const id of itemIds) {
-      const isTypeItem = id.startsWith('count:') && !id.endsWith(':heads');
-      markerCounts.set(id, isTypeItem ? await countConfirmedMarkersForType(bidId, id.slice('count:'.length)) : 0);
+      const m = /^(?:count|coverage):(.+)$/.exec(id);
+      const isTypeItem = !!m && !id.endsWith(':heads');
+      markerCounts.set(id, isTypeItem ? await confirmedMarkersForType(bidId, m![1]) : { counted: 0, excluded: [] });
     }
   }
   const client = await pool.connect();
@@ -86,9 +124,18 @@ async function applyResolution(
         await client.query('ROLLBACK');
         return { ok: false, status: 400, error: 'Heads are not marked on the plans — enter the head count.' };
       }
-      const check = validateResolution(item, input, markerCounts.get(id) ?? null);
-      if (!check.ok) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: check.error }; }
-      item.resolution = { ...check.resolution, by, at: new Date().toISOString() };
+      const tally = markerCounts.get(id);
+      const check = validateResolution(item, input, tally?.counted ?? null);
+      if (!check.ok) {
+        await client.query('ROLLBACK');
+        const excl = tally?.excluded.length ? ` Not counted: ${tally.excluded.map(e => `${e.count} on ${e.label}`).join('; ')}.` : '';
+        return { ok: false, status: 400, error: check.error + excl };
+      }
+      item.resolution = {
+        ...check.resolution,
+        ...(tally?.excluded.length ? { reason: `Markers not counted: ${tally.excluded.map(e => `${e.count} on ${e.label}`).join('; ')}` } : {}),
+        by, at: new Date().toISOString(),
+      };
     }
     const status = reviewStatus(items);
     await client.query('UPDATE takeoff_results SET review_items = $1, review_status = $2 WHERE bid_id = $3', [JSON.stringify(items), status, bidId]);

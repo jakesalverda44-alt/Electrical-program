@@ -140,8 +140,12 @@ describe('combineSheetCounts — edge rules', () => {
       { sheet: cs('E-202', 'building', 'lighting', '2'), status: 'counted', placed: marks({ A: 30 }), unreadable: [] },
       { sheet: cs('E-202B', 'building', 'lighting', '2'), status: 'counted', placed: marks({ A: 28 }), unreadable: [] },
     ]);
+    // Fix round 1 / B4: two same-level sheets whose titles name no area are
+    // NOT silently max-kept — the larger is kept provisionally and the
+    // estimator is asked (same area 70 vs different areas 98).
     expect(r.count).toBe(70);
-    expect(r.flags[0]).toMatch(/counted on both E-202 \(30\) and E-202B \(28\) — kept 30, not summed/);
+    expect(r.areaQuestion).toEqual({ sheets: [{ label: 'E-202', count: 30 }, { label: 'E-202B', count: 28 }], keep: 70, sum: 98 });
+    expect(r.flags[0]).toMatch(/E-202 \(30\) and E-202B \(28\) — the titles don't say whether these show the same area/);
   });
 
   it('enlarged plan with MORE than the main plan: larger kept and flagged', () => {
@@ -172,7 +176,123 @@ describe('combineSheetCounts — edge rules', () => {
   });
 });
 
+// Fix round 1 / B4 (review repros R3a, R3b) and S3 (R3c): split-area plans
+// are partitions of one level — summed, never max-kept — and a count taken
+// from the wrong kind of sheet is a blocking coverage problem.
+describe('split areas and partial coverage (fix round 1)', () => {
+  const A: CountTarget = { type: 'A', key: 'A', description: '2x4 LED troffer', symbolHint: '', wattage: null, category: 'interior_lighting', source: 'fixture_schedule', sourceSheet: '', headsPerPole: null, emergency: false };
+  const pick = (inv: Array<[string, string]>) => selectCountSheets(inv.map(([no, title], i) => ({ file: 'set.pdf', page: i + 1, sheetNo: no, title, discipline: 'electrical', cls: 'plan', included: true }))).counted;
+
+  it('R3a — "PARTIAL LIGHTING PLAN - AREA A" 40 + "- AREA B" 35 = 75, counted, no question', () => {
+    const [a, b] = pick([['E-2.1', 'PARTIAL LIGHTING PLAN - AREA A'], ['E-2.2', 'PARTIAL LIGHTING PLAN - AREA B']]);
+    expect([a.role, a.area, a.partial, b.area]).toEqual(['building', 'AREA A', true, 'AREA B']);
+    const r = combineSheetCounts(A, [
+      { sheet: a, status: 'counted', placed: marks({ A: 40 }), unreadable: [] },
+      { sheet: b, status: 'counted', placed: marks({ A: 35 }), unreadable: [] },
+    ]);
+    expect(r.count).toBe(75);
+    expect(r.areaQuestion).toBeUndefined();
+    expect(r.coverage).toBeUndefined();
+    expect(r.flags).toEqual(['A: different areas of one level summed — E-2.1 "PARTIAL LIGHTING PLAN - AREA A" (40) + E-2.2 "PARTIAL LIGHTING PLAN - AREA B" (35).']);
+  });
+
+  it('R3b — "LIGHTING PLAN - AREA A" 40 + "LIGHTING PLAN - AREA B" 35 = 75; NORTH/SOUTH and PART 1/2 the same', () => {
+    for (const [ta, tb] of [['LIGHTING PLAN - AREA A', 'LIGHTING PLAN - AREA B'], ['LIGHTING PLAN - NORTH', 'LIGHTING PLAN - SOUTH'], ['FLOOR PLAN LIGHTING PART 1', 'FLOOR PLAN LIGHTING PART 2']]) {
+      const [a, b] = pick([['E-2.1', ta], ['E-2.2', tb]]);
+      const r = combineSheetCounts(A, [
+        { sheet: a, status: 'counted', placed: marks({ A: 40 }), unreadable: [] },
+        { sheet: b, status: 'counted', placed: marks({ A: 35 }), unreadable: [] },
+      ]);
+      expect(r.count, `${ta} / ${tb}`).toBe(75);
+      expect(r.areaQuestion).toBeUndefined();
+    }
+  });
+
+  it('two "LIGHTING PLAN" sheets of one level with no area named: 40 kept for now, BLOCKING question 40 vs 75', () => {
+    const [a, b] = pick([['E-2.1', 'LIGHTING PLAN'], ['E-2.2', 'LIGHTING PLAN']]);
+    const r = combineSheetCounts(A, [
+      { sheet: a, status: 'counted', placed: marks({ A: 40 }), unreadable: [] },
+      { sheet: b, status: 'counted', placed: marks({ A: 35 }), unreadable: [] },
+    ]);
+    expect(r.count).toBe(40);
+    expect(r.areaQuestion).toEqual({ sheets: [{ label: 'E-2.1 "LIGHTING PLAN"', count: 40 }, { label: 'E-2.2 "LIGHTING PLAN"', count: 35 }], keep: 40, sum: 75 });
+  });
+
+  it('an ENLARGED plan of an area the main plan covers is max-kept (never summed); only an enlarged plan counted is a coverage problem', () => {
+    const [main, enl] = pick([['E-3', 'LIGHTING PLAN'], ['E-3.1', 'ENLARGED RESTROOM LIGHTING PLAN']]);
+    const r1 = combineSheetCounts(A, [
+      { sheet: main, status: 'counted', placed: marks({ A: 40 }), unreadable: [] },
+      { sheet: enl, status: 'counted', placed: marks({ A: 6 }), unreadable: [] },
+    ]);
+    expect(r1.count).toBe(40);
+    expect(r1.areaQuestion).toBeUndefined();
+    const r2 = combineSheetCounts(A, [{ sheet: enl, status: 'counted', placed: marks({ A: 6 }), unreadable: [] }]);
+    expect(r2.count).toBe(6);
+    expect(r2.coverage?.[0]).toMatch(/counted only on the enlarged plan E-3.1 .* \(6\) — no main plan count/);
+    expect(r2.flags.join(' ')).toMatch(/counted only on the enlarged plan/);
+  });
+
+  it('a lone PARTIAL plan with no named area is a coverage problem', () => {
+    const [p] = pick([['E-2.1', 'PARTIAL LIGHTING PLAN']]);
+    const r = combineSheetCounts(A, [{ sheet: p, status: 'counted', placed: marks({ A: 40 }), unreadable: [] }]);
+    expect(r.coverage?.[0]).toMatch(/only on the partial plan/);
+  });
+
+  it('R3c — only a POWER PLAN counted: lighting taken from it, but flagged as a BLOCKING coverage problem', () => {
+    const [pw] = pick([['E-2', 'POWER PLAN']]);
+    const r = combineSheetCounts(A, [{ sheet: pw, status: 'counted', placed: marks({ A: 12 }), unreadable: [] }]);
+    expect(r.count).toBe(12);
+    expect(r.coverage).toEqual(['A was counted only on the power plan (E-2 "POWER PLAN") — no lighting plan was counted for it.']);
+  });
+
+  it('eligible sheets are marked (confirmed markers count only there)', () => {
+    const [light, pw] = pick([['E-3', 'LIGHTING PLAN'], ['E-2', 'POWER PLAN']]);
+    const r = combineSheetCounts(A, [
+      { sheet: light, status: 'counted', placed: marks({ A: 73 }), unreadable: [] },
+      { sheet: pw, status: 'counted', placed: marks({ A: 70 }), unreadable: [] },
+    ]);
+    expect(r.sheets.map(x => [x.label.split(' ')[0], x.eligible, x.used])).toEqual([['E-3', true, true], ['E-2', false, false]]);
+  });
+});
+
 describe('mergeCountsIntoTakeoff — status and edge cases', () => {
+  it('N1 — a type seen only on a sheet it is not counted on says so', () => {
+    const a1 = { quantities: [], fixtureSchedule: [{ type: 'D', description: 'LED wall pack', location: 'exterior_building', wattage: 40 }] };
+    const { targets } = buildCountTargets(a1);
+    const site: CountSheet = { key: 'k1', file: 'f', page: 1, sheetNo: 'E-1', title: 'ELECTRICAL SITE PLAN', label: 'E-1', role: 'site', focus: 'combined', level: '' };
+    const bldg: CountSheet = { key: 'k2', file: 'f', page: 2, sheetNo: 'E-3', title: 'LIGHTING PLAN', label: 'E-3', role: 'building', focus: 'lighting', level: '' };
+    const r = mergeCountsIntoTakeoff(a1, targets, [
+      { sheet: site, status: 'counted', placed: marks({ D: 5 }), unreadable: [] },
+      { sheet: bldg, status: 'counted', placed: [], unreadable: [] },
+    ], { countingRan: true });
+    expect(r.types[0].status).toBe('zero');
+    expect(r.types[0].reason).toBe('found only on E-1 (5) — not counted there (building fixtures and devices are counted only on the building plan)');
+  });
+
+  it('B3 (review repro C) — an Agent 1 fixture row matching no scheduled type is held for review, never silently dropped', () => {
+    const a1 = kissimmeeAgent1();
+    a1.fixtureSchedule = (a1.fixtureSchedule as Array<{ type: string }>).filter(f => f.type !== 'M');
+    (a1.quantities as Array<Record<string, unknown>>).push({ category: 'Interior Lighting', item: 'Type M — 2x2 LED flat panel', qty: 6, unit: 'EA', sourceSheet: 'E-3' });
+    const { targets } = buildCountTargets(a1);
+    const r = mergeCountsIntoTakeoff(a1, targets, KISSIMMEE_SHEETS, { countingRan: true });
+    const held = r.removedRows.filter(x => x.unscheduled);
+    expect(held.map(x => [x.row.item, x.row.qty])).toContainEqual(['Type M — 2x2 LED flat panel', 6]);
+    expect(held.every(x => x.replacedByType === null)).toBe(true);
+  });
+
+  it('S4 (review repro R5) — a counted legend disconnect replaces Agent 1\'s Service & Distribution row and stays in that category (4, not 8)', () => {
+    const a1 = {
+      quantities: [{ category: 'Service & Distribution', item: '60A fused disconnect switch, NEMA 3R', qty: 4, unit: 'EA', sourceSheet: 'E-4' }],
+      symbolLegend: [{ symbol: 'DS', description: 'Fused disconnect switch', kind: 'device' }],
+    };
+    const { targets } = buildCountTargets(a1);
+    expect(targets.map(t => [t.type, t.category])).toEqual([['DS', expect.stringMatching(/device|equipment/)]]);
+    const s: CountSheet = { key: 'k', file: 'f', page: 1, sheetNo: 'E-2', title: 'POWER PLAN', label: 'E-2', role: 'building', focus: 'power', level: '' };
+    const r = mergeCountsIntoTakeoff(a1, targets, [{ sheet: s, status: 'counted', placed: marks({ DS: 4 }), unreadable: [] }], { countingRan: true });
+    const disc = r.quantities.filter(q => /disconnect/i.test(String(q.item)));
+    expect(disc.map(q => [q.category, q.qty])).toEqual([['Service & Distribution', 4]]);
+  });
+
   it('counting that never ran makes every target unreadable (review), not zero, and keeps Agent 1 rows', () => {
     const a1 = kissimmeeAgent1();
     const { targets } = buildCountTargets(a1);

@@ -238,3 +238,13 @@ async function checkDailyLimit(userId: string, next: NextFunction, res: Response
     next();
   }
 }
+
+/** Fix round 1 / S13 — the same decision requireAIPermission makes (kill
+ *  switches, per-user override, role, daily limit for run_analysis), as a
+ *  boolean for code paths that start paid AI work as a side effect. */
+export function hasAIPermission(user: AuthRequest['user'], permission: AIPermission): Promise<boolean> {
+  return new Promise(resolve => {
+    const res = { status: () => ({ json: () => resolve(false) }) } as unknown as Response;
+    void requireAIPermission(permission)({ user } as AuthRequest, res, () => resolve(true));
+  });
+}

@@ -40,6 +40,10 @@ export interface AiMarkerWriteSummary {
   unassigned: number;
   /** Per sheet: why no markers were written for it. */
   sheetsWithoutMarkers: Array<{ label: string; reason: string }>;
+  /** Fix round 1 / S15 — where each counted sheet lives in the Plans view
+   *  (document + page), so confirmed markers can be tied back to the sheets
+   *  a type is counted from. */
+  sheetDocuments?: Array<{ sheetKey: string; label: string; documentId: string; pageIndex: number }>;
 }
 
 /** Pure: the saved line a type maps to — exactly one line scoring an explicit
@@ -78,7 +82,11 @@ async function writeWithClient(
   docByFile: Map<string, string>,
   lines: BidLineRow[],
 ): Promise<AiMarkerWriteSummary> {
-  const summary: AiMarkerWriteSummary = { written: 0, skippedAlreadyMarked: 0, replacedSuggestions: 0, assigned: 0, unassigned: 0, sheetsWithoutMarkers: [] };
+  const summary: AiMarkerWriteSummary = { written: 0, skippedAlreadyMarked: 0, replacedSuggestions: 0, assigned: 0, unassigned: 0, sheetsWithoutMarkers: [], sheetDocuments: [] };
+  for (const sheet of countResult.sheets) {
+    const documentId = docByFile.get(sheet.file);
+    if (documentId) summary.sheetDocuments!.push({ sheetKey: sheet.key, label: sheet.label, documentId, pageIndex: sheet.page - 1 });
+  }
   const replaced = await client.query(
     `UPDATE est_markups SET deleted_at = now(), updated_at = now()
       WHERE bid_id = $1 AND source = 'ai_count' AND status = 'suggested' AND deleted_at IS NULL`,

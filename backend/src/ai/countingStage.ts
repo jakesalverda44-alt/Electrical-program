@@ -17,7 +17,7 @@ import { runCounter, type SheetCountResult } from './counter';
 import { mergeCountsIntoTakeoff, type CountMergeResult } from './countMerge';
 import { logger } from '../utils/logger';
 
-export const COUNT_RESULT_VERSION = 1;
+export const COUNT_RESULT_VERSION = 2;
 
 export interface CountResultSheet {
   key: string;
@@ -57,6 +57,12 @@ export interface CountResult {
   removedRows: CountMergeResult['removedRows'];
   flags: string[];
   marks: CountMark[];
+  /** Fix round 1 / B2 — Agent 1 found neither a fixture schedule nor a
+   *  device/symbol legend: the fixture counts are Agent 1's own, unverified. */
+  noScheduleOrLegend?: boolean;
+  /** S3 — PDFs the page classifier returned nothing for (whole file never
+   *  looked at by the counter). */
+  unclassifiedFiles?: string[];
 }
 
 export interface CountingStageInput {
@@ -90,9 +96,13 @@ function finish(
   const marks: CountMark[] = sheetResults.flatMap(r => r.status === 'counted'
     ? r.placed.map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100 }))
     : []);
+  const classified = new Set(input.inventory.map(p => p.file));
+  const unclassifiedFiles = input.inventory.length ? [...input.pdfs.keys()].filter(f => !classified.has(f)) : [];
   const countResult: CountResult = {
     version: COUNT_RESULT_VERSION,
     ran,
+    noScheduleOrLegend: !targets.some(t => t.source === 'fixture_schedule' || t.source === 'legend'),
+    ...(unclassifiedFiles.length ? { unclassifiedFiles } : {}),
     ...(notRunReason ? { notRunReason } : {}),
     model: input.model,
     targets,

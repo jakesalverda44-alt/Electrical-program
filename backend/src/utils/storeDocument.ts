@@ -67,6 +67,10 @@ export interface StoreDocumentInput {
    * reach a GC.
    */
   gatePassed?: boolean;
+  /** Takeoff accuracy fix round 1 / B5 — the analysis run a generated GC /
+   *  pre-bid document was composed from; only a document from the CURRENT
+   *  run is ever attached to an email. */
+  takeoffRunId?: string | null;
 }
 
 async function resolveDriveFolder(linkedId: string, div: string, category: string): Promise<string | null> {
@@ -142,12 +146,12 @@ export async function storeDocument(input: StoreDocumentInput) {
 
   const { rows } = await pool.query(
     `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category,
-                            file_size, file_type, uploaded_by, storage_url, file_data, gate_passed)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                            file_size, file_type, uploaded_by, storage_url, file_data, gate_passed, takeoff_run_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      RETURNING id, linked_id, linked_name, div, name, display_name, category, file_size,
                file_type, storage_url, uploaded_by, created_at, gate_passed`,
     [linkedId || null, linkedName || null, div, file.originalname, displayName, category,
-     file.size, safeMimeType, uploadedBy, storageUrl || null, fileData, !!input.gatePassed]
+     file.size, safeMimeType, uploadedBy, storageUrl || null, fileData, !!input.gatePassed, input.takeoffRunId ?? null]
   );
   return rows[0];
 }

@@ -112,8 +112,8 @@ describe('resolving items', () => {
     const post = (body: object) => request(app).post(`/api/preconstruction/${bidId}/review/resolve`).set(auth(user.token)).send(body);
     expect((await post({ itemIds: ['count:G'], action: 'count', qty: 0 })).body.error).toMatch(/whole-number count of at least 1/);
     expect((await post({ itemIds: ['count:G'], action: 'count', qty: 2.5 })).status).toBe(400);
-    expect((await post({ itemIds: ['count:G'], action: 'not_on_job', reason: ' ' })).body.error).toBe('Say why this type is not on this job.');
-    expect((await post({ itemIds: ['count:G'], action: 'markers' })).body.error).toMatch(/No confirmed markers for this type yet/);
+    expect((await post({ itemIds: ['count:G'], action: 'not_on_job', reason: ' ' })).body.error).toBe('Say why this is not on this job (at least 10 characters).');
+    expect((await post({ itemIds: ['count:G'], action: 'markers' })).body.error).toMatch(/No confirmed markers for this type on the sheets it is counted from/);
     expect((await post({ itemIds: ['count:S1:heads'], action: 'markers' })).body.error).toMatch(/Heads are not marked/);
     expect((await post({ itemIds: ['count:NOPE'], action: 'count', qty: 3 })).status).toBe(404);
     // Nothing was saved by any failed attempt.
