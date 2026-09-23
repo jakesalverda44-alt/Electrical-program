@@ -331,6 +331,28 @@
   gap: 6px;
 }
 
+/* ── Keyboard shortcuts help (Task 9) ────────────────────────────────────── */
+
+.plan-shortcuts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.plan-shortcuts-table td {
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text2);
+}
+
+.plan-shortcuts-keys {
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  width: 1%;
+}
+
 /* ── Responsive (Task 9) ──────────────────────────────────────────────────── */
 
 /* <900px: view-only — the toolbar/items panel are hidden by the component,

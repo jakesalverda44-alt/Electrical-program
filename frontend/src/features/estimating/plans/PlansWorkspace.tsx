@@ -13,6 +13,7 @@ import PlanViewer from './PlanViewer';
 import Toolbar from './Toolbar';
 import ItemsPanel from './ItemsPanel';
 import ScaleCalibrationPopover from './ScaleCalibrationPopover';
+import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
 import { reduceTool, initToolState, ToolEvent, PdfPoint } from './toolMachine';
 import {
   initHistory, commit, undo, redo, canUndo, canRedo, replacePresent,
@@ -156,6 +157,21 @@ export default function PlansWorkspace({
   // ── Tool state + undo/redo ──────────────────────────────────────────────
   const [toolState, setToolState] = useState(initToolState);
 
+  // Task 9 — "?" opens keyboard shortcut help. Same "ignore while typing"
+  // guard as Toolbar.tsx's own shortcuts.
+  const [helpOpen, setHelpOpen] = useState(false);
+  useEffect(() => {
+    if (viewOnly) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const typing = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      if (typing) return;
+      if (e.key === '?') setHelpOpen(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [viewOnly]);
+
   const mutate = useCallback((next: MarkupDraft[]) => {
     setHistory(h => commit(h, next));
   }, []);
@@ -286,17 +302,32 @@ export default function PlansWorkspace({
         onDisciplineFilterChange={setDisciplineFilter}
       />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <Toolbar
-          toolState={toolState}
-          dispatch={dispatch}
-          onUndo={onUndo}
-          onRedo={onRedo}
-          canUndo={canUndo(history)}
-          canRedo={canRedo(history)}
-          onDeleteSelected={onDeleteSelected}
-          hasSelection={toolState.selectedIds.length > 0}
-          scaleDisabledReason={currentSheet ? null : 'Select a sheet first'}
-        />
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <Toolbar
+              toolState={toolState}
+              dispatch={dispatch}
+              onUndo={onUndo}
+              onRedo={onRedo}
+              canUndo={canUndo(history)}
+              canRedo={canRedo(history)}
+              onDeleteSelected={onDeleteSelected}
+              hasSelection={toolState.selectedIds.length > 0}
+              scaleDisabledReason={currentSheet ? null : 'Select a sheet first'}
+            />
+          </div>
+          <button
+            type="button"
+            className="plan-toolbar-btn"
+            style={{ marginRight: 10 }}
+            title="Keyboard shortcuts (?)"
+            aria-label="Keyboard shortcuts"
+            onClick={() => setHelpOpen(true)}
+          >
+            ?
+          </button>
+        </div>
+        <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
         <div style={{ fontSize: 11, color: 'var(--text3)', padding: '2px 10px' }}>
           {autosave.status === 'saving' && 'Saving…'}
           {autosave.status === 'pending' && 'Unsaved changes'}

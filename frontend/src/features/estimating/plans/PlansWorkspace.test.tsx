@@ -177,3 +177,21 @@ describe('PlansWorkspace — responsive view-only (Decision 2)', () => {
     await waitFor(() => expect(screen.getByTestId('plan-viewer-mock').dataset.viewOnly).toBe('true'));
   });
 });
+
+// Task 9 — keyboard shortcut help.
+describe('PlansWorkspace — keyboard shortcut help ("?")', () => {
+  it('opens via the "?" toolbar button', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Keyboard shortcuts'));
+    expect(screen.getByText('Keyboard shortcuts')).toBeTruthy();
+    expect(screen.getByText('Select / Pan tool')).toBeTruthy();
+  });
+
+  it('opens via the "?" key', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    fireEvent.keyDown(window, { key: '?' });
+    expect(screen.getByText('Count tool')).toBeTruthy();
+  });
+});
