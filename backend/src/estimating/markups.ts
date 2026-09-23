@@ -336,7 +336,15 @@ export async function applyMarkups(bidId: string, lineKeys: string[]): Promise<A
     applied.push(l.line_key);
     return {
       ...l,
-      qty: r.markedQty,
+      // Fix round 1 / N6 — a linear run's markedQty is a SUM of many
+      // segment lengths (each itself point-distance * ft_per_pt), which
+      // routinely lands on long floating-point noise (123.45678199...).
+      // Applied quantities used to be stored at that raw precision and
+      // flowed straight into the GC takeoff as "123.4568 LF". Rounding to
+      // 2 decimals here is a no-op for an EA (count) line's markedQty,
+      // which is already a whole number — this is safe to apply
+      // unconditionally rather than branching on the line's own unit.
+      qty: Math.round(r.markedQty * 100) / 100,
       qty_source: 'markup',
       qty_overridden: true,
       confidence: 'FIRM',

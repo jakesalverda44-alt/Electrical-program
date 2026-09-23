@@ -437,6 +437,36 @@ describe('POST /api/estimating/:bidId/apply-markups', () => {
     expect(composedItem.qty).toBe(24); // NOT Agent 4's echoed 10
   });
 
+  // Fix round 1 / N6 — a linear run's markedQty is a sum of point-distance
+  // * ft_per_pt segments, which routinely lands on floating-point noise
+  // (e.g. 100pt * 1/3 ft/pt = 33.3333333...). Applying that raw precision
+  // used to flow straight into est_bid_lines/the takeoff output; it's now
+  // rounded to 2 decimals at apply time.
+  it('rounds a linear run\'s applied qty to 2 decimals (no floating-point noise in the saved qty)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    await calibrateSheet(app, u, bidId, docId, 1 / 3); // 0.333333... ft/pt
+    await seedTakeoff(bidId, [{ category: 'Branch Power', item: '3/4" EMT', qty: 500, unit: 'LF' }]);
+    await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const lines = (await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body.lines;
+    const lineKey = lines[0].line_key as string;
+
+    // 100pt * (1/3) ft/pt = 33.333333... ft, well past 2 decimals of noise.
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id: randomUUID(), document_id: docId, page_index: 0, line_key: lineKey, kind: 'linear', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], drops: 0, slack_pct: 0 }],
+      updates: [], deletes: [],
+    }).expect(200);
+
+    const applyRes = await request(app).post(`/api/estimating/${bidId}/apply-markups`).set(auth(u.token)).send({ line_keys: [lineKey] }).expect(200);
+    expect(applyRes.body.applied).toEqual([lineKey]);
+
+    const { rows } = await pool.query('SELECT qty FROM est_bid_lines WHERE line_key=$1', [lineKey]);
+    expect(Number(rows[0].qty)).toBe(33.33); // not 33.333333333333336
+  });
+
   it('skips a line with no confirmed markups, without silently zeroing its qty (Decision 4: never overwrite silently)', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
