@@ -45,7 +45,11 @@ function TakeoffTab({ ws, bid, aiResults, analysisTab, setAnalysisTab, copied, c
   const MODEL_PRICING: Record<string, [number, number]> = {
     'claude-haiku-4-5-20251001': [0.80, 4.00],
     'claude-sonnet-4-6': [3.00, 15.00],
-    'claude-opus-4-8': [15.00, 75.00],
+    // Takeoff accuracy — corrected to the current list price ($5/$25; the
+    // $15/$75 here was Opus 4.0/4.1 pricing) and the counter's default model.
+    'claude-opus-4-8': [5.00, 25.00],
+    'claude-opus-5': [5.00, 25.00],
+    'claude-opus-5-5': [4.00, 20.00],
   };
   function estimateCost(usage: { input_tokens: number; output_tokens: number } | null | undefined, model: string | null | undefined): number | null {
     if (!usage || !model) return null;
@@ -57,6 +61,10 @@ function TakeoffTab({ ws, bid, aiResults, analysisTab, setAnalysisTab, copied, c
   const usageA2 = aiResults?.usage_agent2 as { input_tokens: number; output_tokens: number } | null | undefined;
   const usageA3 = aiResults?.usage_agent3 as { input_tokens: number; output_tokens: number } | null | undefined;
   const usageA4 = aiResults?.usage_agent4 as { input_tokens: number; output_tokens: number } | null | undefined;
+  // Takeoff accuracy — the counting stage (Agent 1C) is its own line.
+  const usageC = aiResults?.usage_counter as { input_tokens: number; output_tokens: number } | null | undefined;
+  const modelC = aiResults?.model_counter as string | null | undefined;
+  const costC = estimateCost(usageC, modelC);
   const modelA1 = aiResults?.model_agent1 as string | null | undefined;
   const modelA2 = aiResults?.model_agent2 as string | null | undefined;
   const modelA3 = aiResults?.model_agent3 as string | null | undefined;
@@ -65,10 +73,10 @@ function TakeoffTab({ ws, bid, aiResults, analysisTab, setAnalysisTab, copied, c
   const costA2 = estimateCost(usageA2, modelA2);
   const costA3 = estimateCost(usageA3, modelA3);
   const costA4 = estimateCost(usageA4, modelA4);
-  const hasUsage = !!(usageA1 || usageA2 || usageA3 || usageA4);
-  const totalIn  = (usageA1?.input_tokens  ?? 0) + (usageA2?.input_tokens  ?? 0) + (usageA3?.input_tokens  ?? 0) + (usageA4?.input_tokens  ?? 0);
-  const totalOut = (usageA1?.output_tokens ?? 0) + (usageA2?.output_tokens ?? 0) + (usageA3?.output_tokens ?? 0) + (usageA4?.output_tokens ?? 0);
-  const totalCost = (costA1 ?? 0) + (costA2 ?? 0) + (costA3 ?? 0) + (costA4 ?? 0);
+  const hasUsage = !!(usageA1 || usageC || usageA2 || usageA3 || usageA4);
+  const totalIn  = (usageA1?.input_tokens  ?? 0) + (usageC?.input_tokens  ?? 0) + (usageA2?.input_tokens  ?? 0) + (usageA3?.input_tokens  ?? 0) + (usageA4?.input_tokens  ?? 0);
+  const totalOut = (usageA1?.output_tokens ?? 0) + (usageC?.output_tokens ?? 0) + (usageA2?.output_tokens ?? 0) + (usageA3?.output_tokens ?? 0) + (usageA4?.output_tokens ?? 0);
+  const totalCost = (costA1 ?? 0) + (costC ?? 0) + (costA2 ?? 0) + (costA3 ?? 0) + (costA4 ?? 0);
   // Task 2 (phase 2 takeoff fidelity): surface the page-classification
   // inventory so a low-fidelity run is visible instead of a silent log
   // line — "Prep: 14 of 62 pages sent (tiled+text)".
@@ -237,6 +245,7 @@ function TakeoffTab({ ws, bid, aiResults, analysisTab, setAnalysisTab, copied, c
                 <tbody>
                   {[
                     { label: 'Drawing Analysis',  usage: usageA1, model: modelA1, cost: costA1 },
+                    ...(usageC ? [{ label: 'Symbol Counting', usage: usageC, model: modelC, cost: costC }] : []),
                     { label: 'Scope & Estimate',  usage: usageA2, model: modelA2, cost: costA2 },
                     { label: 'QA Review',         usage: usageA3, model: modelA3, cost: costA3 },
                     { label: 'Proposal Formatter', usage: usageA4, model: modelA4, cost: costA4 },

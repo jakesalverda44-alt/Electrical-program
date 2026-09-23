@@ -28,6 +28,7 @@ import { importReducer, initialImportState } from './importReducer';
 import FilesTab from './FilesTab';
 import BidTab from './BidTab';
 import TakeoffTab from './TakeoffTab';
+import TakeoffReviewPanel, { type TakeoffReview } from './TakeoffReviewPanel';
 import ScopeTab from './ScopeTab';
 import RfisTab from './RfisTab';
 import ProposalTab from './ProposalTab';
@@ -1213,8 +1214,24 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             />
           </>
         );
+        // Takeoff accuracy Task 7 — the Needs-review list sits above both the
+        // List and Plans views (resolving a zero type by confirming markers
+        // happens in Plans).
+        const reviewPanel = (
+          <TakeoffReviewPanel
+            bidId={bid.id}
+            review={{
+              status: (aiResults?.review_status as TakeoffReview['status']) ?? null,
+              items: (aiResults?.review_items as TakeoffReview['items'] | null) ?? [],
+            }}
+            countResult={(aiResults?.count_result as React.ComponentProps<typeof TakeoffReviewPanel>['countResult']) ?? null}
+            onReviewChange={r => setAiResults(prev => (prev ? { ...prev, review_status: r.status, review_items: r.items } : prev))}
+            showToast={showToast}
+          />
+        );
         return (
           <>
+            {reviewPanel}
             <div className="est-view-toggle" role="tablist" aria-label="Takeoff view">
               <button
                 type="button"
