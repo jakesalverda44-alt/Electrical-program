@@ -81,7 +81,9 @@ describe('runPipeline — every agent call streams (SDK refuses non-streaming ab
     expect(rows[0].status).toBe('complete');
     expect(paths.length).toBe(calls.length);
     expect(new Set(paths)).toEqual(new Set(['stream']));
-    expect(calls.map(c => c.max_tokens)).toEqual([32000, 32000, 32000]);
+    // Agents 1-3, then (Task 12) the pre-bid draft composed right after the
+    // analysis at Agent 4's own Max Tokens — also over stream.
+    expect(calls.map(c => c.max_tokens)).toEqual([32000, 32000, 32000, config.maxTokensA4]);
   });
 });
 
