@@ -738,3 +738,103 @@ already spent on Tasks 7–11 and the Task 8 integration/test-fallout work:
 4. **The deferred items above**, especially the undeleted `PricingTab`/
    `UnitCostSection` dead code and the un-wired `legacyTabWantsInsights()`.
    test` run against a DB that hasn't seen migration 102 before.
+
+## Fix round 1 (independent adversarial review response)
+
+An independent Opus 5 read-only review
+(`docs/superpowers/plans/2026-09-22-estimating-review.md`, committed at
+`d4d5fd0`) returned verdict **DO NOT MERGE**, with five Blockers, ten
+Should-fix items and twelve Nits. The coordinator confirmed B1 and B4
+directly and directed every fix listed below, plus a hard test rule: every
+new test must use Agent 2/4's real line shape
+(`{item: '5.1', spec: '3/4" EMT', qty: 1200, unit: 'LF'}`), and an explicit
+end-to-end test (takeoff → mapper → priceBid → saveBidEstimate) proving real
+seed magnitudes.
+
+**Commit range:** `2201b20..9697d1a` (10 commits, this worktree/branch).
+
+### Blockers
+
+| ID | Fix | Commit(s) | Tests |
+|---|---|---|---|
+| B1 | `PricingLineInput.libraryUnit` — pricing.ts divides by the MATCHED LIBRARY ITEM's unit, not the takeoff line's display unit; mapper.ts gates every match on unit-family compatibility (EA vs LF/C/M) via new `isUnitCompatible`/`unitFamily`; `resolveLines()` resolves `libraryUnit` from the matched item/assembly and discards a unit-incompatible match | `2201b20`, `a8161ca`, `db2ec49` | `pricing.test.ts` "B1: libraryUnit conversion" (4 cases); `mapper.test.ts` EA/linear gate case; **`estimatingBid.test.ts`'s "B1 — end to end" describe block** — the required real-shape e2e test, proving 1,200 LF 3/4" EMT = $720 and 3,600 LF #12 THHN = $342 against the real seed through takeoff → sync → save |
+| B2 | Unit alias normalization (`normalizeUnit`, applied in both mapper adapters and `validateLines`); `unitUnknown` flag on unmatched/unpriced lines (never NaN, prices only from an explicit override); `NonFiniteTotalError` + `assertFiniteRecap()` block any non-finite total from being written (400, not 500 or a silent bad write); sync-takeoff can no longer 500 on a missing/unrecognized unit | `2201b20`, `a8161ca`, `0599a33`, `db2ec49` | `pricing.test.ts` "B2: unit-unknown lines never produce NaN" (3 cases); `estimatingBid.test.ts` "B2 — unit-unknown lines never 500 and never NaN" (3 cases) |
+| B3 | Token-boundary alias matching (was raw substring — "4 EMT" no longer falsely matches "3/4 EMT"); digit/rating conflict guard extended to every non-exact tier with a `scheduleDigits()` carve-out for "Sch 40/80"; new material-type conflict guard (EMT/PVC/RMC/MC/THHN); `normalize()` unifies all three written forms of a fractional trade size; confidence-tier now strictly gates ranking (fuzzy can never outrank alias/exact via bonuses); `altText` fixes the item-vs-spec field-choice bug (receptacle→switch, GFCI→duplex); `ASM-SVCENT-800` now consumes a new `DISC-800` item instead of `DISC-400` | `a8161ca` (mapper/seed), `c5eb269` (migration 105 applies the seed fix to already-migrated databases) | `mapper.test.ts` "B3: mismatch regressions against the real seed library" — 11 cases covering every mismatch the review listed, all run against real `SEED_ITEMS`/`SEED_ASSEMBLIES` |
+| B4 | `suggestedAdjustmentPct` (global and per-category) is now `(accubid/engine - 1) * 100`, not `(engine/accubid - 1) * 100` (the old formula pointed every correction the wrong direction); `computeCalibrationReport()` canonicalizes each line's category before grouping (`canonicalizeTakeoffCategory`, also used in mapper.ts's category bonus — B3/N4); `applyCalibrationAdjustment` canonicalizes its own category input, caps \|adjustmentPct\| at 50, and throws (400) on a 0-rows-changed apply instead of returning a silent 200 success; `LaborLibrarySection.tsx`'s apply flow now shows a success toast naming the row count and an error toast on failure | `f53ad71` | `estimatingCalibration.test.ts` — fixed the two locked-in-wrong-sign assertions (Branch Power now expects ≈-16.67%, Interior Lighting +25%) and added 3 new cases (0-rows/400, >50%/400, short-category-name canonicalization, with real seed rows snapshotted and restored); `LaborLibrarySection.test.tsx` +2 (success toast names count, 400 shows error toast) |
+| B5 | `qty_overridden` (migration 104) — sync-takeoff never overwrites an estimator-set qty; `sync_excluded` (migration 104) distinguishes a sync-driven exclusion (vanished from takeoff) from a user exclusion — only the former reverses on reappearance; `dedupeTakeoffKeys()` suffixes duplicate category+item takeoff keys so a duplicate row is never dropped; `syncTakeoff()` now writes `bid_estimates`/`bids.amount` in the SAME transaction as the `est_bid_lines` changes (new `writeBidEstimateSnapshot()`, shared with `saveBidEstimate()`); frontend: `LaborPricingStep`'s sync button confirms (`useConfirm`) when `dirty` | `db2ec49` (backend), `c5eb269` (frontend confirm) | `estimatingBid.test.ts` "B5 fix round 1 regressions" — 4 cases (qty_overridden survives a re-sync, sync- vs user-exclusion on reappearance, duplicate keys never dropped, sync persists bid_estimates/bids.amount without a separate PUT); `LaborPricingStep.test.tsx` "B5: sync-takeoff confirms..." (2 cases) |
+
+### Should-fix
+
+| ID | Fix | Commit(s) | Tests |
+|---|---|---|---|
+| S1 | `dirty` no longer includes "proposed && lines.length > 0" — a proposed-but-unedited mapping is not dirty; `BidSummary` shows "Unsaved proposal" (proposed) and, separately, "Unsaved changes" (dirty && !proposed) | `c5eb269` | Rewrote the 2 `useEstimatingBid.test.ts` cases that locked in the old behavior; `BidSummary`'s existing tag test still covers `proposed` |
+| S2 | Deleted `PricingTab.tsx`, `PricingRow.tsx`, `UnitCostSection.tsx` (confirmed zero remaining references) and PcWorkspaceView.tsx's fully-dead call chain that only fed them (`pricingLineItems`, `saveEstimate`/`runSaveEstimate`/`savingEstimate`, `estimateSaved`, `onSaveEstimate`) | `ce59ce9` | Existing `PcWorkspacePricingDirtyGuard.test.tsx` was already testing the NEW engine's real dirty source (edit qty → Leave → prompt; Save → Leave → no prompt) — confirmed, no rewrite needed |
+| S3 | Found the concrete stale-total bug: `runAgent4Proposal()` POSTs `propPrice` straight to Agent 4 as the price it writes into `bids.amount`, and `propPrice` was only ever pre-filled ONCE from the legacy `savedEstimate.grand_total`. Now syncs from `estimatingBid.recap.totals.grandTotal` whenever it reflects a saved state (`!dirty && !proposed`) and stops once the estimator types into the field by hand (`propPriceEdited`) | `ce59ce9` | Covered indirectly by existing `PcWorkspaceProposal.test.tsx` (still green); no new dedicated test added — see "Not fixed / deferred" |
+| S4 | Restored Workspace Notes and Import Finished Bid (Accubid breakdown upload — calibration.ts's only data source) into the Documents step; both were orphaned on `PcWorkspace/OverviewTab.tsx`, which nothing imports (BidHubPage's own, different `OverviewTab` shadowed the name) | `ce59ce9` | No new test added — see "Not fixed / deferred" |
+| S5 | `numberOr()` replaces every `Number(x) \|\| fallback` in `getBidSettings()` | `db2ec49` | `estimatingBid.test.ts` "S5 — an explicit 0 settings value is honored" |
+| S6 | A bid's first-ever `est_bid_settings` inherits `overhead_pct`/`profit_pct` from `bid_workspaces`, then `bid_estimates`, before the hardcoded 10/15 | `db2ec49` | `estimatingBid.test.ts` "S6 — ... inherit overhead/profit from bid_workspaces" |
+| S7 | Backend: reject negative `material_unit_override`/`labor_hours_override` (qty/rates/pcts were already validated). Frontend: clearing an override input sets `null` not `0`; "Keep as manual line" requires a material $ or hours value first | `db2ec49` (backend), `c5eb269` (frontend) | `estimatingBid.test.ts` negative-override 400 case; `LaborPricingStep.test.tsx` clear-to-null + keep-as-manual-disabled (2 cases) |
+| S8 | `recapByKey` pairs by stable line id, never array position; every line gets an id the instant it's created (`newLineId()` for new manual lines, not a server-derived array-index synthetic id); `useEstimatingBid`'s live recalc gained a request-sequence guard (an older `/price` response can't clobber a newer one) | `c5eb269` | `useEstimatingBid.test.ts` "S8: a stale (older) /price response..."; `LaborPricingStep.test.tsx`'s existing id-keyed rendering tests continue to pass |
+| S9 | `PUT /api/estimates/:bidId` returns 410 Gone. Grepped every caller first: one frontend call site (removed in the same commit, S2) and one backend test (renamed/rewritten). `GET /api/estimates/:bidId` is unchanged — still read by `PcWorkspaceView.tsx`'s overhead/profit hydration | `ce59ce9` | `estimatesLegacyRetired.test.ts` (renamed from `estimates.confidence.test.ts`) — 410 + still-requires-auth + GET-still-works (3 cases); its old confidence-round-trip coverage now lives in `estimatingComposeBidDataFix.test.ts` for the new engine |
+| S10 | `bid_estimates.line_items[].total`/`unit_cost` and `.subtotals` now come from pricing.ts's `directShare`/`subtotal` (new fields, pro-rata allocated so they sum exactly to `directCost`) instead of `materialExt+laborExt`/`material+labor` alone | `2201b20` (pricing.ts), `db2ec49` (bidEstimate.ts wiring) | `pricing.test.ts` "S10: subtotals/directShare always reconcile..." (2 cases) plus reconciliation assertions added to the golden-recap test |
+
+### Nits
+
+| ID | Fix | Commit(s) |
+|---|---|---|
+| N1 | Exact half-cent rounding via `Number.EPSILON` in `toCents()` | `2201b20` |
+| N2 | `BidSummary`'s comps-vs-$/SF marker no longer disappears with exactly one comparable — falls back to 0/50/100% instead of a `compsMax > compsMin` guard that hid it entirely | `c5eb269` |
+| N3 | New `floors_above_2` per-bid setting (migration 106) multiplies the MULTI-STORY labor factor's pct instead of applying it flat | `a5bbfe3` |
+| N4 | `canonicalizeTakeoffCategory()` (boilerplate.ts) maps Agent 2's shorter categorization-prompt spellings to the canonical `TAKEOFF_CATEGORIES` strings; used in the mapper's category bonus and calibration's category grouping | `a8161ca` |
+| N5 | `ASM-DUPLEX` gained qualified aliases (`duplex`, `duplex outlet`, `receptacle outlet`, `standard receptacle`) — bare `receptacle`/`outlet` deliberately excluded (would steal GFCI/quad/twist-lock/data-outlet matches) | `a8161ca` (seed), `c5eb269` (migration 105 applies it to already-migrated DBs) |
+| N6 | Checked — "View Results" (`BidTab.tsx`) already only renders under the Takeoff step's `case` in `renderStepContent`'s switch, so it's already unreachable from anywhere else; no bug reproduced, no change made |
+| N7 | `BidSummary` gained `initialInsightsOpen`, wired from `steps.ts`'s `legacyTabWantsInsights(ws.activeTab)` in `PcWorkspaceView.tsx` — previously computed but never called anywhere | `c5eb269` |
+| N8 | Manual lines get a Delete button with Undo; a failed `sync-takeoff` shows an error toast instead of failing silently | `c5eb269` |
+| N9 | `generateLaborSeedSql.ts`'s header now says `npx ts-node` (a resolvable devDependency) instead of `npx tsx` (never installed) — verified by actually running it | `c5eb269` |
+| N11 | `.est-summary-bottom` clears the mobile bottom nav's height (`bottom: 64px` at ≤768px) instead of sharing its screen region and losing the z-index fight | `9697d1a` |
+| N10, N12 | Skipped per the coordinator's explicit instruction |
+
+### Not fixed / deferred, and why
+
+- **S2's literal scope** ("the pricingDirty/savedEstimate/pricingLineItems
+  state and its hydration") was only partially done. `pricingLineItems` and
+  everything that only fed the deleted `PricingTab`/`onSaveEstimate` dead
+  code IS removed. `savedEstimate`/`savedEstimateData`, `pricingDirty`, and
+  the ~80-line overhead/profit/estimate_overrides hydration effect (three
+  code-review passes deep per its own comments) were deliberately KEPT —
+  they still hydrate `ws.overheadPct`/`profitPct`/`estimateOverrides` from
+  whichever of `bid_estimates`/`bid_workspaces` is newer, a real cross-check
+  I could not fully trace every downstream consumer of within this fix
+  round's budget (composeBidData's fallback path for bids that never adopt
+  the new engine is one; there may be others). Removing it outright without
+  that mapping felt like a bigger, less-reversible risk than leaving one
+  extra (harmless — it registers its own `useUnsavedGuard`, independent of
+  the new engine's) legacy hydration path in place. Flagging this explicitly
+  rather than silently under-scoping it.
+- **S3/S4 have no NEW dedicated test** — S3's fix is covered indirectly by
+  the existing `PcWorkspaceProposal.test.tsx` suite staying green (it
+  exercises `runAgent4Proposal`/`propPrice` already) and S4's by
+  `PcWorkspaceFiles.test.tsx`/manual reasoning about the JSX addition; a
+  purpose-built test proving `propPrice` re-syncs after a save, and that the
+  Documents step renders the notes textarea/ImportPanel, would be a good
+  follow-up.
+- **N6**: investigated, found no reproducible bug (see table above) — not a
+  deferral, just recorded here since the finding list expected a fix.
+
+### Verification
+
+- Backend: `npx tsc --noEmit` clean. Full `npx vitest run`: **107/108 files,
+  955/959 tests passed** — the one uncounted file,
+  `src/test/notificationsRetention.test.ts`, crashes its worker with a
+  V8 "JavaScript heap out of memory" error; reproduced in isolation
+  (unrelated to any file this fix round touched) and is the same class of
+  pre-existing flake noted in the Part 2 report's baseline run (there, 3
+  assertion failures in the same file; here, a full OOM crash — same root
+  cause, not a regression this round introduced).
+- Frontend: `npx tsc --noEmit` clean. Full `npx vitest run`: **89/89 files,
+  643/643 tests passed.**
+- The required end-to-end test (real Agent 2/4 line shape, through
+  takeoff → mapper → priceBid → saveBidEstimate, real seed magnitudes) is in
+  `backend/src/test/estimatingBid.test.ts`, describe block
+  `"B1 — end to end: takeoff -> mapper -> priceBid -> saveBidEstimate, real
+  seed magnitudes"`.
