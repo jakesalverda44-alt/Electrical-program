@@ -154,6 +154,29 @@ describe('PlansWorkspace — sheet list + selection', () => {
     await waitFor(() => expect(screen.getByText('E1.1')).toBeTruthy());
     await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
   });
+
+  // Fix round 1 / S13 — a stale ?sheet= deep link (another bid's sheet, or
+  // one since deleted/re-indexed) used to leave the viewer permanently
+  // blank ("No plan sheets found for this bid yet") even though this
+  // bid's sheets loaded fine — the old guard treated `currentKey` being
+  // SET (regardless of whether it matched anything real) as "already
+  // resolved, nothing to default".
+  it('a stale/unknown initialSheetKey falls back to the first real sheet, with a toast', async () => {
+    const showToast = vi.fn();
+    setup({ initialSheetKey: 'doc-does-not-exist:0', showToast });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect(screen.queryByText('No plan sheets found for this bid yet.')).toBeNull();
+    expect(showToast).toHaveBeenCalledWith(expect.objectContaining({
+      variant: 'info', title: 'That sheet is no longer available',
+    }));
+  });
+
+  it('a VALID initialSheetKey is honored as-is, with no fallback toast', async () => {
+    const showToast = vi.fn();
+    setup({ initialSheetKey: 'doc-1:0', showToast }); // matches the default sheet() fixture
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect(showToast).not.toHaveBeenCalled();
+  });
 });
 
 // Fix round 1 / B3(d) — the reviewer's exact F1 scenario: opening Plans on

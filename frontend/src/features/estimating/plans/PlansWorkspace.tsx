@@ -258,12 +258,27 @@ export default function PlansWorkspace({
     ? `The active line's unit is EA — use Count, not Linear`
     : null;
 
-  // Default to the first sheet once the list loads, if nothing was in the URL.
+  // Default to the first sheet once the list loads, if nothing was in the
+  // URL — OR (Fix round 1 / S13) if `currentKey` WAS set but doesn't match
+  // any REAL sheet in this bid (a stale `?sheet=` deep link left over from
+  // another bid, or a sheet since deleted/re-indexed under a different
+  // document_id). The old guard (`if (currentKey ...) return`) treated
+  // "currentKey is truthy" as "already resolved" — a non-matching key left
+  // `currentSheet` (below) permanently null, showing "No plan sheets found
+  // for this bid yet" even though sheets plainly exist. Re-running this
+  // check after `setCurrentKey` below never loops: the new key IS the
+  // first sheet's own, so `matches` is true on the next pass.
   useEffect(() => {
-    if (currentKey || sheets.length === 0) return;
+    if (sheets.length === 0) return;
+    const matches = currentKey != null && sheets.some(s => sheetKey(s.document_id, s.page_index) === currentKey);
+    if (matches) return;
+    const staleKey = currentKey;
     const first = sheets[0];
     setCurrentKey(sheetKey(first.document_id, first.page_index));
-  }, [sheets, currentKey]);
+    if (staleKey != null) {
+      showToast?.({ variant: 'info', title: 'That sheet is no longer available', sub: 'Showing the first sheet instead.' });
+    }
+  }, [sheets, currentKey, showToast]);
 
   useEffect(() => { onSheetKeyChange?.(currentKey); }, [currentKey, onSheetKeyChange]);
   useEffect(() => { onLineKeyChange?.(activeLineKey); }, [activeLineKey, onLineKeyChange]);
