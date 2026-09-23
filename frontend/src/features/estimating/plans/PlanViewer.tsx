@@ -22,6 +22,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api from '../../../api/client';
 import { openPdfDocument, PdfJsDocument, PdfJsRenderTask } from './pdfjsClient';
 import { PageGeometry, pdfToRenderMatrix, screenToPdf, fitScale, clampRenderScale, renderedSize } from './overlay';
+import { needsTiledRender, planTileRender, tilePlansRoughlyEqual, TileRenderPlan, VisibleRect } from './regionRender';
 import { SheetRow } from '../types';
 import { ToolState, ToolEvent } from './toolMachine';
 import { MarkupDraft } from './markupHistory';
@@ -51,6 +52,25 @@ interface LoadedDoc {
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE_STEP = 1.25;
+// Task 9 (deferral closed) — visible-region tiling past the canvas-area
+// cap. TILE_SETTLE_MS debounces "re-render on pan/zoom settle" (never on
+// every scroll-event pixel); TILE_MARGIN_FACTOR extends the tile beyond
+// the visible viewport (half a viewport on every side) so a small pan
+// doesn't immediately reveal an un-tiled edge before the next settle fires.
+const TILE_SETTLE_MS = 200;
+const TILE_MARGIN_FACTOR = 0.5;
+// Task 9 (deferral closed) — the user's TARGET zoom (`renderScale`) is
+// intentionally allowed to exceed overlay.ts's canvas-area cap; that's the
+// entire point of tiling (the tile canvas is viewport-sized, not
+// page-sized, so its own pixel budget never grows with scale). Clamping
+// `renderScale` itself to the area cap — as this component did before
+// tiling existed — would silently defeat tiling by never letting the
+// target scale get past the same limit the base canvas is capped at.
+// MAX_TARGET_SCALE is a separate, much more generous ceiling that exists
+// only to stop `zoomBy` from running away unboundedly; estimators need to
+// comfortably reach 300-600% (the coordinator's own figures) on a D-size
+// sheet, so this leaves real headroom above that.
+const MAX_TARGET_SCALE = 16;
 
 export default function PlanViewer({
   bidId, documentId, pageIndex, sheet, toolState, dispatchTool, markups, colorForLine,
@@ -70,6 +90,17 @@ export default function PlanViewer({
   const aliveRef = useRef(true);
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
 
+  // Task 9 (deferral closed) — the visible-region tile, rendered at the
+  // full (uncapped) renderScale, drawn on top of the low-res base canvas
+  // whenever renderScale exceeds what a whole-page render can afford
+  // (overlay.ts's canvas-area cap). null = tiling isn't needed right now
+  // (the base canvas alone is already sharp enough).
+  const [tilePlan, setTilePlan] = useState<TileRenderPlan | null>(null);
+  const tilePlanRef = useRef<TileRenderPlan | null>(null);
+  const tileCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const tileRenderTaskRef = useRef<PdfJsRenderTask | null>(null);
+  const tileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const geom: PageGeometry = useMemo(
     () => ({ widthPt: sheet.width_pt, heightPt: sheet.height_pt, rotation: sheet.rotation as never }),
     [sheet.width_pt, sheet.height_pt, sheet.rotation]
@@ -83,6 +114,10 @@ export default function PlanViewer({
     if (!el) return;
     const initial = clampRenderScale(geom, fitScale(geom, el.clientWidth || 900, el.clientHeight || 700, 'width'));
     setRenderScale(initial > 0 ? initial : 1);
+    // A new sheet/page starts with no tile — the reset avoids a stale tile
+    // from the PREVIOUS page briefly showing over the new one's base render.
+    setTilePlan(null);
+    tilePlanRef.current = null;
     // Only on sheet identity change (new document/page geometry) — the
     // user's own subsequent zoom choices are never overridden by this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -138,6 +173,15 @@ export default function PlanViewer({
   }, []);
 
   // Render the current page whenever the loaded doc, page, or scale changes.
+  // `renderScale` is always the TARGET (uncapped) scale — `pageSize` (the
+  // wrapper/svg/matrix size everything else in this component uses) is
+  // always renderedSize(geom, renderScale), the TRUE zoom level. The base
+  // canvas's own NATIVE pixel resolution is separately clamped
+  // (`baseScale`) to stay under overlay.ts's canvas-area cap, and CSS-
+  // stretched up to pageSize when the two differ — a deliberately blurry
+  // placeholder while the sharp tile (below) catches up. At any scale that
+  // doesn't hit the cap, baseScale === renderScale and this is exactly the
+  // single-canvas behavior this component had before tiling existed.
   useEffect(() => {
     if (status !== 'ready') return;
     const loaded = loadedDocRef.current;
@@ -154,12 +198,13 @@ export default function PlanViewer({
         renderTaskRef.current.cancel();
         renderTaskRef.current = null;
       }
-      const viewport = page.getViewport({ scale: renderScale });
+      const baseScale = clampRenderScale(geom, renderScale);
+      const viewport = page.getViewport({ scale: baseScale });
       const canvas = canvasRef.current;
       if (!canvas) return;
       canvas.width = viewport.width;
       canvas.height = viewport.height;
-      setPageSize({ width: viewport.width, height: viewport.height });
+      setPageSize(renderedSize(geom, renderScale));
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       const task = page.render({ canvasContext: ctx, viewport });
@@ -180,11 +225,83 @@ export default function PlanViewer({
     })();
 
     return () => { cancelled = true; };
-  }, [status, documentId, pageIndex, renderScale]);
+  }, [status, documentId, pageIndex, renderScale, geom]);
+
+  // ── Visible-region tiling (Task 9, deferral closed) ─────────────────────
+  // Debounced "compute where the tile should be, if one is needed at all"
+  // — never renders directly; only ever updates `tilePlan`, which the
+  // separate render effect below reacts to.
+  const scheduleTileUpdate = useCallback(() => {
+    if (tileTimerRef.current) clearTimeout(tileTimerRef.current);
+    tileTimerRef.current = setTimeout(() => {
+      const el = scrollRef.current;
+      if (!el || !aliveRef.current) return;
+      const baseScale = clampRenderScale(geom, renderScale);
+      if (!needsTiledRender(renderScale, baseScale)) {
+        if (tilePlanRef.current) { tilePlanRef.current = null; setTilePlan(null); }
+        return;
+      }
+      const visible: VisibleRect = { left: el.scrollLeft, top: el.scrollTop, width: el.clientWidth, height: el.clientHeight };
+      const margin = Math.max(el.clientWidth, el.clientHeight) * TILE_MARGIN_FACTOR;
+      const plan = planTileRender(geom, renderScale, visible, margin);
+      if (tilePlanRef.current && tilePlansRoughlyEqual(tilePlanRef.current, plan)) return;
+      tilePlanRef.current = plan;
+      setTilePlan(plan);
+    }, TILE_SETTLE_MS);
+  }, [geom, renderScale]);
+
+  useEffect(() => () => { if (tileTimerRef.current) clearTimeout(tileTimerRef.current); }, []);
+
+  // Re-evaluate whenever the target scale (or the page itself) changes —
+  // scroll position also triggers this via the container's onScroll below.
+  useEffect(() => { scheduleTileUpdate(); }, [scheduleTileUpdate, pageSize]);
+
+  // Actually renders the tile once `tilePlan` settles on a new value.
+  // Same cancel-stale-task discipline as the base render effect, on its
+  // OWN render task ref — a stale tile render must never paint over a
+  // newer one, and must never be confused with the base canvas's task.
+  useEffect(() => {
+    if (!tilePlan || status !== 'ready') return;
+    const loaded = loadedDocRef.current;
+    if (!loaded || loaded.documentId !== documentId) return;
+    let cancelled = false;
+
+    (async () => {
+      const page = await loaded.doc.getPage(pageIndex + 1);
+      if (cancelled || !aliveRef.current) return;
+      if (tileRenderTaskRef.current) {
+        tileRenderTaskRef.current.cancel();
+        tileRenderTaskRef.current = null;
+      }
+      const viewport = page.getViewport({ scale: renderScale });
+      const canvas = tileCanvasRef.current;
+      if (!canvas) return;
+      canvas.width = tilePlan.width;
+      canvas.height = tilePlan.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const task = page.render({ canvasContext: ctx, viewport, transform: tilePlan.transform });
+      tileRenderTaskRef.current = task;
+      try {
+        await task.promise;
+      } catch (err) {
+        // A cancelled tile render is expected/harmless; any OTHER failure
+        // just means the tile doesn't update — the (correct, just softer)
+        // base canvas underneath is still there, so this never needs to
+        // surface as a page-level error the way a failed BASE render does.
+        const name = (err as { name?: string } | undefined)?.name;
+        void name;
+      } finally {
+        if (tileRenderTaskRef.current === task) tileRenderTaskRef.current = null;
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [tilePlan, status, documentId, pageIndex, renderScale]);
 
   const zoomBy = useCallback((factor: number, anchorClient?: { x: number; y: number }) => {
     const el = scrollRef.current;
-    const nextScale = clampRenderScale(geom, Math.max(MIN_SCALE, renderScale * factor));
+    const nextScale = Math.min(MAX_TARGET_SCALE, Math.max(MIN_SCALE, renderScale * factor));
     if (!el || !pageSize) { setRenderScale(nextScale); return; }
     // Zoom around the given anchor (defaults to viewport center): find the
     // PDF point under the anchor at the OLD scale, then after the scale
@@ -204,8 +321,9 @@ export default function PlanViewer({
       newLocal.y = m[1] * pdfPoint.x + m[3] * pdfPoint.y + m[5];
       scrollRef.current.scrollLeft = newLocal.x - (anchor.x - rect.left);
       scrollRef.current.scrollTop = newLocal.y - (anchor.y - rect.top);
+      scheduleTileUpdate();
     });
-  }, [geom, renderScale, pageSize]);
+  }, [geom, renderScale, pageSize, scheduleTileUpdate]);
 
   const fitWidth = useCallback(() => {
     const el = scrollRef.current;
@@ -274,7 +392,8 @@ export default function PlanViewer({
     if (Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX) didDragRef.current = true;
     scrollRef.current.scrollLeft = d.scrollLeft - dx;
     scrollRef.current.scrollTop = d.scrollTop - dy;
-  }, [toPdfPointFromEvent, onMoveMarker]);
+    scheduleTileUpdate();
+  }, [toPdfPointFromEvent, onMoveMarker, scheduleTileUpdate]);
   const onMouseUpPan = useCallback(() => { dragPanRef.current = null; dragMarkerRef.current = null; }, []);
 
   const onCanvasClick = useCallback((e: React.MouseEvent) => {
@@ -331,6 +450,7 @@ export default function PlanViewer({
           onMouseMove={onMouseMovePan}
           onMouseUp={onMouseUpPan}
           onMouseLeave={onMouseUpPan}
+          onScroll={scheduleTileUpdate}
         >
           {status !== 'error' && (
             // The canvas/svg are mounted as soon as we're past the initial
@@ -341,7 +461,28 @@ export default function PlanViewer({
             // effect wait on each other forever). Sized 0x0 until the
             // first page render reports real dimensions.
             <div className="plan-canvas-page" style={{ width: pageSize?.width ?? 0, height: pageSize?.height ?? 0 }}>
-              <canvas ref={canvasRef} onClick={onCanvasClick} onDoubleClick={onCanvasDoubleClick} />
+              {/* Base canvas: its NATIVE resolution is the capped
+                  baseScale (set imperatively in the render effect via
+                  canvas.width/height), but its CSS box always fills the
+                  true renderScale size — the browser stretches the
+                  (possibly softer) raster to fit, which is exactly the
+                  "low-res placeholder while the sharp tile renders"
+                  behavior Task 9 asks for. At any scale under the cap
+                  baseScale===renderScale and this stretch is a no-op. */}
+              <canvas
+                ref={canvasRef}
+                onClick={onCanvasClick}
+                onDoubleClick={onCanvasDoubleClick}
+                style={{ width: pageSize?.width ?? 0, height: pageSize?.height ?? 0 }}
+              />
+              {tilePlan && (
+                <canvas
+                  ref={tileCanvasRef}
+                  className="plan-tile-canvas"
+                  style={{ left: tilePlan.left, top: tilePlan.top, width: tilePlan.width, height: tilePlan.height }}
+                  data-testid="plan-tile-canvas"
+                />
+              )}
               <svg
                 ref={svgRef}
                 className="plan-overlay-svg"

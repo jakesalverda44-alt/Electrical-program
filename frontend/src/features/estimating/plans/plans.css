@@ -206,6 +206,15 @@
   display: block;
 }
 
+/* Task 9 (deferral closed) — the sharp visible-region tile, drawn over the
+   (possibly CSS-stretched, softer) base canvas. pointer-events:none so
+   every click/drag still lands on the base canvas beneath it — the tile is
+   purely a rendering layer, never its own separate hit-test target. */
+.plan-tile-canvas {
+  position: absolute;
+  pointer-events: none;
+}
+
 .plan-overlay-svg {
   position: absolute;
   inset: 0;

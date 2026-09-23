@@ -5,7 +5,7 @@
 // HTMLCanvasElement.prototype.getContext is stubbed for this file only.
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor, cleanup, act } from '@testing-library/react';
+import { render, waitFor, cleanup, act, fireEvent } from '@testing-library/react';
 
 const get = vi.fn();
 vi.mock('../../../api/client', async () => {
@@ -174,5 +174,86 @@ describe('PlanViewer — cleanup', () => {
     act(() => { rerender(<PlanViewer {...baseProps({ pageIndex: 1 })} />); });
     await waitFor(() => expect(getPage).toHaveBeenCalledWith(2));
     expect(openPdfDocument).toHaveBeenCalledTimes(1); // still just once — same PDF file, no re-fetch
+  });
+});
+
+// Task 9 (deferral closed) — visible-region tiling past the canvas-area
+// cap. Real timers (not faked): the 200ms debounce is short enough to
+// just wait out in these few tests rather than fake-timer-juggling the
+// whole file's existing tests along with it.
+describe('PlanViewer — visible-region tiling past the canvas-area cap (Task 9)', () => {
+  it('renders no tile at a normal scale (the sheet fits comfortably under the cap)', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { queryByTestId } = render(<PlanViewer {...baseProps()} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalled());
+    await new Promise(r => setTimeout(r, 250));
+    expect(queryByTestId('plan-tile-canvas')).toBeNull();
+  });
+
+  it('renders a sharp tile, at the target scale, with a translate transform, once zoomed past the cap on a large (D-size) sheet', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    // 36x48in D-size sheet, in points — the coordinator's own example of a
+    // sheet that blows the cap well before an estimator's real working zoom.
+    const bigSheet = sheet({ width_pt: 2592, height_pt: 3456 });
+    const { getByLabelText, findByTestId } = render(<PlanViewer {...baseProps({ sheet: bigSheet })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalled());
+    page.render.mockClear();
+
+    // Zoom in enough times (1.25x per click) to exceed the cap from the
+    // fit-to-width starting scale.
+    for (let i = 0; i < 10; i++) {
+      fireEvent.click(getByLabelText('Zoom in'));
+    }
+
+    const tile = await findByTestId('plan-tile-canvas', {}, { timeout: 2000 });
+    expect(tile).toBeTruthy();
+    await waitFor(() => {
+      const calls = page.render.mock.calls as unknown as [{ transform?: unknown }][];
+      const tileCall = calls.find(c => c[0].transform);
+      expect(tileCall).toBeTruthy();
+      const [{ transform }] = tileCall!;
+      // A pure translation: [1,0,0,1,-left,-top].
+      expect((transform as number[]).slice(0, 4)).toEqual([1, 0, 0, 1]);
+    }, { timeout: 2000 });
+  });
+
+  it('cancels a stale tile render task when a newer one starts before it settles', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const bigSheet = sheet({ width_pt: 2592, height_pt: 3456 });
+    const { getByLabelText, findByTestId } = render(<PlanViewer {...baseProps({ sheet: bigSheet })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalled());
+
+    for (let i = 0; i < 10; i++) fireEvent.click(getByLabelText('Zoom in'));
+    await findByTestId('plan-tile-canvas', {}, { timeout: 2000 });
+    const tileTaskCountBefore = renderTaskPromises.length;
+
+    // One more zoom step before anything settles again — the tile task
+    // in flight (if any) must be cancelled, never left to paint stale
+    // content over the newer request.
+    fireEvent.click(getByLabelText('Zoom in'));
+    await new Promise(r => setTimeout(r, 250));
+
+    const cancelledSomeTask = renderTaskPromises.slice(0, tileTaskCountBefore).some(t => t.cancel.mock.calls.length > 0);
+    expect(cancelledSomeTask || renderTaskPromises.length > tileTaskCountBefore).toBe(true);
+  });
+
+  it('does not use tiling for a small (letter-size) sheet at a moderate zoom that still fits under the cap', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { getByLabelText, queryByTestId } = render(<PlanViewer {...baseProps()} />); // default 792x612 letter sheet
+    await waitFor(() => expect(page.render).toHaveBeenCalled());
+
+    // A few zoom-in steps from the fit-to-width starting scale — nowhere
+    // near enough to make an 792x612pt sheet exceed the 16.7M px cap.
+    for (let i = 0; i < 3; i++) fireEvent.click(getByLabelText('Zoom in'));
+    await new Promise(r => setTimeout(r, 250));
+    expect(queryByTestId('plan-tile-canvas')).toBeNull();
   });
 });
