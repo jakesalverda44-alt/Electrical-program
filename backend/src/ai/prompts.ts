@@ -3,6 +3,25 @@
 // Agent 1: Sonnet (vision) | Agent 2: Sonnet (scope) | Agent 3: Haiku (QC)
 // Target max_tokens: 4000 per agent call
 
+/** Takeoff accuracy (Task 2) — the four structured arrays the counting stage
+ *  (Agent 1C) is built from. Kept as its own constant so a CUSTOMIZED
+ *  ai_prompt_agent1 that predates these fields still gets them appended
+ *  (see agent1PromptWithCountingSections) — without them the counting stage
+ *  has no type list and every run would land in Needs review. */
+export const AGENT1_COUNTING_SECTIONS = `FIXTURE SCHEDULE — fixtureSchedule[] lists EVERY row of the luminaire/fixture schedule(s), one entry per fixture type: type = the type tag exactly as printed ("A", "B1", "EM", "S1"); description = the schedule description; wattage = input watts per fixture as a number (0 if not stated); location = exactly one of interior | exterior_building (wall packs, canopy, soffit — mounted on the building) | site (pole-mounted / area lights on the site); headsPerPole = heads per pole for a pole-mounted site type (0 when not pole-mounted or not stated); emergency = true for exit signs, emergency units and battery-backed types; symbol = a short description of how the type is drawn on the plans (shape, fill, tag bubble). Do NOT put quantities here — counting is a separate step.
+SYMBOL LEGEND — symbolLegend[] lists every countable device/equipment symbol in the electrical legend or symbol schedule that is used on this job's plans: receptacles (duplex, GFCI, quad, dedicated), switches, occupancy sensors, junction boxes, disconnects, equipment connections. symbol = the label or tag printed with the symbol when there is one (e.g. "GFI", "OS", "$3"), else a short description of the shape; category = device | lighting_control | equipment.
+PANEL CIRCUITS — panelCircuits[] lists every branch circuit on the panel schedules whose description serves lighting (lighting, LTG, exit, emergency, site/pole lights, wall packs): loadVA = the connected load in VOLT-AMPERES as a number (convert kVA x 1000; 0 if not shown).
+FURNISH STATEMENTS — furnishStatements[] lists every EXPLICIT statement on the drawings or specifications about who furnishes and/or installs something (power poles, fixtures, panels, disconnects, equipment, service gear): item = what it covers; furnishBy / installBy = the party exactly as stated (Owner, GC, EC, vendor, "by others") or "" when that half is not stated; quote = the statement verbatim, max 200 characters; sourceSheet = where it is printed. Only statements actually printed — never infer one.`;
+
+/** A customized Agent 1 prompt (Settings -> AI) that predates the counting
+ *  sections gets them appended, so the counting stage always has its inputs. */
+export function agent1PromptWithCountingSections(customPrompt: string): string {
+  const p = customPrompt.trim();
+  if (!p) return AGENT1_SYSTEM;
+  if (p.includes('fixtureSchedule')) return p;
+  return `${p}\n\nALSO RETURN these four arrays in the same JSON object:\n{"fixtureSchedule":[{"type":"","description":"","wattage":0,"voltage":"","mounting":"","location":"interior","headsPerPole":0,"emergency":false,"symbol":"","sourceSheet":""}],"symbolLegend":[{"symbol":"","description":"","category":"device","sourceSheet":""}],"panelCircuits":[{"panel":"","circuit":"","description":"","loadVA":0,"sourceSheet":""}],"furnishStatements":[{"item":"","furnishBy":"","installBy":"","sourceSheet":"","quote":""}]}\n\n${AGENT1_COUNTING_SECTIONS}`;
+}
+
 export const AGENT1_SYSTEM = `You are a Senior Electrical Drawing Analyzer for Accurate Power & Technology, a commercial electrical subcontractor in Florida.
 
 Analyze the provided electrical construction documents and extract verified electrical data only. You are the source of truth for all quantities and project data.
@@ -91,8 +110,50 @@ Return ONLY valid compact JSON — no prose, no markdown, no explanation.
     }
   ],
   "scopeNotes": [],
-  "missingSheets": []
+  "missingSheets": [],
+  "fixtureSchedule": [
+    {
+      "type": "",
+      "description": "",
+      "wattage": 0,
+      "voltage": "",
+      "mounting": "",
+      "location": "interior",
+      "headsPerPole": 0,
+      "emergency": false,
+      "symbol": "",
+      "sourceSheet": ""
+    }
+  ],
+  "symbolLegend": [
+    {
+      "symbol": "",
+      "description": "",
+      "category": "device",
+      "sourceSheet": ""
+    }
+  ],
+  "panelCircuits": [
+    {
+      "panel": "",
+      "circuit": "",
+      "description": "",
+      "loadVA": 0,
+      "sourceSheet": ""
+    }
+  ],
+  "furnishStatements": [
+    {
+      "item": "",
+      "furnishBy": "",
+      "installBy": "",
+      "sourceSheet": "",
+      "quote": ""
+    }
+  ]
 }
+
+${AGENT1_COUNTING_SECTIONS}
 
 PROJECT TYPE — classify the overall project from the cover sheet / architectural plans into exactly one of: cstore_fuel, car_wash, self_storage, office, warehouse, restaurant, medical, retail, other. Leave "" only if the building type cannot be determined at all.
 SQ FT — total building square footage from the cover sheet, architectural plans, or code data plate. 0 if not stated anywhere in the documents.

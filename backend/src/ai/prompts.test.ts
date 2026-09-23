@@ -48,3 +48,20 @@ describe('AGENT4_SYSTEM — data-only contract (Task 5)', () => {
     expect(AGENT4_SYSTEM).toContain('TBD');
   });
 });
+
+describe('agent1PromptWithCountingSections (takeoff accuracy Task 2)', () => {
+  it('default prompt already carries the four counting arrays', async () => {
+    const { AGENT1_SYSTEM, agent1PromptWithCountingSections } = await import('./prompts');
+    for (const k of ['fixtureSchedule', 'symbolLegend', 'panelCircuits', 'furnishStatements']) expect(AGENT1_SYSTEM).toContain(`"${k}"`);
+    expect(agent1PromptWithCountingSections('')).toBe(AGENT1_SYSTEM);
+  });
+  it('appends the counting sections to a customized prompt that predates them', async () => {
+    const { agent1PromptWithCountingSections, AGENT1_COUNTING_SECTIONS } = await import('./prompts');
+    const out = agent1PromptWithCountingSections('My custom analyzer prompt.');
+    expect(out.startsWith('My custom analyzer prompt.')).toBe(true);
+    expect(out).toContain(AGENT1_COUNTING_SECTIONS);
+    expect(out).toContain('"furnishStatements"');
+    // Already has them -> untouched.
+    expect(agent1PromptWithCountingSections('custom with fixtureSchedule')).toBe('custom with fixtureSchedule');
+  });
+});
