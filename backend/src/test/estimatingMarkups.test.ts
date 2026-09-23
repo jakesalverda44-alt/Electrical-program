@@ -1,0 +1,331 @@
+// Estimating Phase B, Task 3 — /api/estimating/:bidId/markups* routes:
+// batch create/update/delete (idempotent), soft delete, rollup, apply ->
+// est_bid_lines + bid_estimates + bids.amount + composeBidData takeoff all
+// show the confirmed qty, and sync-takeoff keeps a markup-confirmed qty.
+//
+// Real data shapes throughout (Phase A review lesson): lines come from a
+// real seedTakeoff() -> sync-takeoff round trip (real takeoff_key/
+// takeoff_item_id/line_key), not hand-crafted est_bid_lines rows; the sheet
+// comes from the real fixture PDF parsed through the real sheets pipeline.
+import { describe, it, expect, beforeAll } from 'vitest';
+import request from 'supertest';
+import { randomUUID } from 'crypto';
+import { pool } from '../db/pool';
+import { dbAvailable, makeUser, auth, TestUser } from './harness';
+import { buildSampleSheetPdf } from './fixtures/estimating/buildSheetPdf';
+import { composeBidData, SavedConfidenceItem } from '../bidstd/composeBidData';
+import { Agent4Output } from '../ai/agent4Message';
+
+let ok = false;
+beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
+
+async function makeBid(app: import('express').Express, user: TestUser): Promise<string> {
+  const res = await request(app).post('/api/bids').set(auth(user.token))
+    .send({ name: `Markups ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, gc: 'GC' })
+    .expect(200);
+  return res.body.id as string;
+}
+
+async function seedTakeoff(bidId: string, rows: { category: string; item: string; spec?: string; qty: number | string; unit: string; confidence?: string }[]) {
+  const json = JSON.stringify({ takeoff: rows });
+  await pool.query(
+    `INSERT INTO takeoff_results (bid_id, agent2_output, status) VALUES ($1,$2,'agent2_complete')
+     ON CONFLICT (bid_id) DO UPDATE SET agent2_output=$2, status='agent2_complete'`,
+    [bidId, '```json\n' + json + '\n```']
+  );
+}
+
+async function makePlanDocAndSheet(app: import('express').Express, user: TestUser, bidId: string): Promise<{ docId: string }> {
+  const buf = buildSampleSheetPdf();
+  const { rows } = await pool.query(
+    `INSERT INTO documents (linked_id, name, category, file_type, file_data, uploaded_by)
+     VALUES ($1, 'plans.pdf', 'plans', 'application/pdf', $2, 'test') RETURNING id`,
+    [bidId, buf.toString('base64')]
+  );
+  const docId = rows[0].id as string;
+  await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(user.token)).expect(200);
+  return { docId };
+}
+
+async function calibrateSheet(app: import('express').Express, user: TestUser, bidId: string, docId: string, ftPerPt: number) {
+  await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/0/scale`).set(auth(user.token))
+    .send({ ft_per_pt: ftPerPt, source: 'calibrated', label: 'Calibrated' }).expect(200);
+}
+
+describe('POST /api/estimating/:bidId/markups/batch — create/update/delete', () => {
+  it('creates count and linear markups, lists them, updates one, and soft-deletes another', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+
+    const countId = randomUUID();
+    const linearId = randomUUID();
+    const toDeleteId = randomUUID();
+
+    const created = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [
+        { id: countId, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 100, y: 100 }] },
+        { id: linearId, document_id: docId, page_index: 0, kind: 'linear', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], drops: 1, drop_ft: 10, slack_pct: 10 },
+        { id: toDeleteId, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 50, y: 50 }] },
+      ],
+      updates: [], deletes: [],
+    }).expect(200);
+    expect(created.body.created.length).toBe(3);
+    expect(created.body.skipped.length).toBe(0);
+
+    const listed = await request(app).get(`/api/estimating/${bidId}/markups`).set(auth(u.token)).expect(200);
+    expect(listed.body.markups.length).toBe(3);
+
+    // Update the linear markup's points and reassign it, delete the third.
+    const batch2 = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [],
+      updates: [{ id: linearId, points: [{ x: 0, y: 0 }, { x: 200, y: 0 }], label: 'Home run to panel' }],
+      deletes: [toDeleteId],
+    }).expect(200);
+    expect(batch2.body.updated.length).toBe(1);
+    expect(batch2.body.updated[0].points).toEqual([{ x: 0, y: 0 }, { x: 200, y: 0 }]);
+    expect(batch2.body.updated[0].label).toBe('Home run to panel');
+    expect(batch2.body.deleted).toEqual([toDeleteId]);
+
+    const afterDelete = await request(app).get(`/api/estimating/${bidId}/markups`).set(auth(u.token)).expect(200);
+    expect(afterDelete.body.markups.length).toBe(2); // the deleted one is gone from the live list
+    expect(afterDelete.body.markups.map((m: { id: string }) => m.id)).not.toContain(toDeleteId);
+
+    // Soft delete, not gone: deleted_at is set, the row still exists.
+    const { rows } = await pool.query('SELECT deleted_at FROM est_markups WHERE id=$1', [toDeleteId]);
+    expect(rows[0].deleted_at).toBeTruthy();
+  });
+
+  it('is idempotent by client-generated uuid: re-sending the same create id does not duplicate or error', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    const id = randomUUID();
+    const payload = { creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 10, y: 10 }] }], updates: [], deletes: [] };
+
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send(payload).expect(200);
+    // Retry (simulating a lost-ack autosave retry) with different point data —
+    // same id, so it should re-apply (upsert), not fail or create a second row.
+    const retryPayload = { creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 20, y: 20 }] }], updates: [], deletes: [] };
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send(retryPayload).expect(200);
+
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM est_markups WHERE id=$1', [id]);
+    expect(rows[0].cnt).toBe(1); // never duplicated
+    const listed = await request(app).get(`/api/estimating/${bidId}/markups`).set(auth(u.token)).expect(200);
+    expect(listed.body.markups[0].points).toEqual([{ x: 20, y: 20 }]); // the retry's values won
+  });
+
+  it('validates points (finite x/y, correct cardinality per kind) and rejects a malformed batch item with 400', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id: randomUUID(), document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }], // 2 points on a count markup
+      updates: [], deletes: [],
+    }).expect(400);
+
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      // "abc" over the wire (NaN itself isn't valid JSON — JSON.stringify
+      // would silently turn it into null, which is finite as a number).
+      creates: [{ id: randomUUID(), document_id: docId, page_index: 0, kind: 'linear', points: [{ x: 'abc', y: 1 }, { x: 2, y: 2 }] }],
+      updates: [], deletes: [],
+    }).expect(400);
+
+    // 0 confirmed rows written after either rejected batch.
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM est_markups WHERE bid_id=$1', [bidId]);
+    expect(rows[0].cnt).toBe(0);
+  });
+});
+
+describe('GET /api/estimating/:bidId/markups/rollup', () => {
+  it('rolls up confirmed count markups into an EA line\'s markedQty, ignoring suggested ones', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    await seedTakeoff(bidId, [{ category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' }]);
+    await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const lines = (await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body.lines;
+    const lineKey = lines[0].line_key as string;
+
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [
+        { id: randomUUID(), document_id: docId, page_index: 0, line_key: lineKey, kind: 'count', points: [{ x: 10, y: 10 }] },
+        { id: randomUUID(), document_id: docId, page_index: 0, line_key: lineKey, kind: 'count', points: [{ x: 20, y: 20 }] },
+        { id: randomUUID(), document_id: docId, page_index: 0, line_key: lineKey, kind: 'count', points: [{ x: 30, y: 30 }], status: 'suggested' },
+      ],
+      updates: [], deletes: [],
+    }).expect(200);
+
+    const rollup = await request(app).get(`/api/estimating/${bidId}/markups/rollup`).set(auth(u.token)).expect(200);
+    const entry = rollup.body.rollup.find((r: { lineKey: string }) => r.lineKey === lineKey);
+    expect(entry.markedQty).toBe(2); // only the 2 confirmed markers
+    expect(entry.currentQty).toBe(10); // the takeoff's qty, unchanged so far
+    expect(entry.qtySource).toBe('takeoff');
+  });
+
+  it('rolls up a confirmed linear run into feet, converted via the sheet\'s calibrated scale', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    await calibrateSheet(app, u, bidId, docId, 0.1); // 0.1 ft/pt
+    await seedTakeoff(bidId, [{ category: 'Branch Power', item: '3/4" EMT', qty: 500, unit: 'LF' }]);
+    await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const lines = (await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body.lines;
+    const lineKey = lines[0].line_key as string;
+
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id: randomUUID(), document_id: docId, page_index: 0, line_key: lineKey, kind: 'linear', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], drops: 0, slack_pct: 0 }],
+      updates: [], deletes: [],
+    }).expect(200);
+
+    const rollup = await request(app).get(`/api/estimating/${bidId}/markups/rollup`).set(auth(u.token)).expect(200);
+    const entry = rollup.body.rollup.find((r: { lineKey: string }) => r.lineKey === lineKey);
+    expect(entry.markedQty).toBeCloseTo(10, 6); // 100pt * 0.1 ft/pt
+  });
+});
+
+describe('POST /api/estimating/:bidId/apply-markups', () => {
+  it('applies a confirmed count rollup: est_bid_lines, bid_estimates.line_items and bids.amount all reflect the confirmed qty, and composeBidData routes it into the takeoff output', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    await seedTakeoff(bidId, [{ category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' }]);
+    await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const before = (await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body;
+    const line = before.lines[0];
+    const lineKey = line.line_key as string;
+    const takeoffItemId = line.takeoff_item_id as string;
+    expect(takeoffItemId).toBeTruthy();
+
+    // Confirm 24 fixtures on the plans — more than the AI's takeoff qty of 10.
+    const points = Array.from({ length: 24 }, (_, i) => [{ x: 10 + i * 5, y: 10 }]);
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: points.map((p, i) => ({ id: randomUUID(), document_id: docId, page_index: 0, line_key: lineKey, kind: 'count', points: p })),
+      updates: [], deletes: [],
+    }).expect(200);
+
+    const applyRes = await request(app).post(`/api/estimating/${bidId}/apply-markups`).set(auth(u.token)).send({ line_keys: [lineKey] }).expect(200);
+    expect(applyRes.body.applied).toEqual([lineKey]);
+    expect(applyRes.body.skipped).toEqual([]);
+    const grandTotal = applyRes.body.save.recap.totals.grandTotal;
+
+    // est_bid_lines reflects the confirmed qty and its provenance.
+    const { rows: lineRows } = await pool.query('SELECT qty, qty_source, qty_overridden, confidence FROM est_bid_lines WHERE line_key=$1', [lineKey]);
+    expect(Number(lineRows[0].qty)).toBe(24);
+    expect(lineRows[0].qty_source).toBe('markup');
+    expect(lineRows[0].qty_overridden).toBe(true);
+    expect(lineRows[0].confidence).toBe('FIRM');
+
+    // bid_estimates.line_items carries qty_source through, and bids.amount
+    // agrees with the recap the apply call returned (Decision 4: the two
+    // can never drift, same as every other save).
+    const { rows: beRows } = await pool.query('SELECT line_items, grand_total FROM bid_estimates WHERE bid_id=$1', [bidId]);
+    const savedLineItems = beRows[0].line_items as SavedConfidenceItem[];
+    const savedLine = savedLineItems.find(li => li.item === takeoffItemId)!;
+    expect(savedLine.qty_source).toBe('markup');
+    expect(savedLine.qty).toBe(24);
+    expect(Number(beRows[0].grand_total)).toBeCloseTo(grandTotal, 2);
+    const { rows: bidRows } = await pool.query('SELECT amount FROM bids WHERE id=$1', [bidId]);
+    expect(Number(bidRows[0].amount)).toBeCloseTo(grandTotal, 2);
+
+    // composeBidData (pure) picks the confirmed qty up for the takeoff
+    // outputs (takeoff xlsx / pre-bid package / the proposal's own takeoff
+    // table all read data.takeoff, composed from exactly this).
+    const agent4: Agent4Output = {
+      plan_date: '01.01.2026', sheets: ['E1.1'],
+      takeoff: [{ name: 'Branch Power', items: [{ item: takeoffItemId, description: 'Duplex receptacle', unit: 'EA', qty: 10, source: 'E1.1' }] }],
+    };
+    const { data } = composeBidData({ name: 'Test', gc: 'GC' }, agent4, '$1', { savedLineItems });
+    const composedItem = data.takeoff.find(c => c.name === 'Branch Power')!.items[0];
+    expect(composedItem.qty).toBe(24); // NOT Agent 4's echoed 10
+  });
+
+  it('skips a line with no confirmed markups, without silently zeroing its qty (Decision 4: never overwrite silently)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await makePlanDocAndSheet(app, u, bidId);
+    await seedTakeoff(bidId, [{ category: 'Grounding', item: '5/8" x 10\' copper-clad ground rod w/ exothermic connection', qty: 2, unit: 'EA' }]);
+    await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const before = (await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body;
+    const lineKey = before.lines[0].line_key as string;
+
+    const applyRes = await request(app).post(`/api/estimating/${bidId}/apply-markups`).set(auth(u.token)).send({ line_keys: [lineKey] }).expect(200);
+    expect(applyRes.body.applied).toEqual([]);
+    expect(applyRes.body.skipped[0].lineKey).toBe(lineKey);
+
+    const { rows } = await pool.query('SELECT qty, qty_source FROM est_bid_lines WHERE line_key=$1', [lineKey]);
+    expect(Number(rows[0].qty)).toBe(2); // untouched
+    expect(rows[0].qty_source).toBe('takeoff');
+  });
+
+  it('a re-sync AFTER apply keeps the markup-confirmed qty even when the AI takeoff qty changes (Task 3: sync treats qty_source=markup like an override)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    await seedTakeoff(bidId, [{ category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' }]);
+    await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const before = (await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body;
+    const lineKey = before.lines[0].line_key as string;
+
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [
+        { id: randomUUID(), document_id: docId, page_index: 0, line_key: lineKey, kind: 'count', points: [{ x: 1, y: 1 }] },
+        { id: randomUUID(), document_id: docId, page_index: 0, line_key: lineKey, kind: 'count', points: [{ x: 2, y: 2 }] },
+      ],
+      updates: [], deletes: [],
+    }).expect(200);
+    await request(app).post(`/api/estimating/${bidId}/apply-markups`).set(auth(u.token)).send({ line_keys: [lineKey] }).expect(200);
+
+    // The AI re-runs and now says 99 — a re-sync must NOT clobber the
+    // estimator's confirmed 2.
+    await seedTakeoff(bidId, [{ category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 99, unit: 'EA' }]);
+    const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const synced = syncRes.body.lines.find((l: { line_key: string }) => l.line_key === lineKey);
+    expect(synced.qty).toBe(2); // NOT 99
+    expect(synced.qty_source).toBe('markup');
+    expect(synced.qty_overridden).toBe(true);
+
+    const { rows } = await pool.query('SELECT qty, qty_source FROM est_bid_lines WHERE line_key=$1', [lineKey]);
+    expect(Number(rows[0].qty)).toBe(2);
+    expect(rows[0].qty_source).toBe('markup');
+  });
+
+  it('404s a bid that does not exist, 403s a salesperson applying to another rep\'s bid', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    await request(app).post('/api/estimating/00000000-0000-0000-0000-000000000000/apply-markups')
+      .set(auth(u.token)).send({ line_keys: [randomUUID()] }).expect(404);
+
+    const owner = await makeUser('salesperson');
+    const bidId = await makeBid(app, owner);
+    const intruder = await makeUser('salesperson');
+    await request(app).post(`/api/estimating/${bidId}/apply-markups`).set(auth(intruder.token))
+      .send({ line_keys: [randomUUID()] }).expect(403);
+  });
+
+  it('rejects an empty line_keys array with 400', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await request(app).post(`/api/estimating/${bidId}/apply-markups`).set(auth(u.token)).send({ line_keys: [] }).expect(400);
+  });
+});

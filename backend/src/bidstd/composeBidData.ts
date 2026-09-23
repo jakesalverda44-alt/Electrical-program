@@ -21,11 +21,28 @@ export interface ComposeBidRow {
 /** A saved-estimate line item carrying Phase 2's confidence value — the
  *  authoritative source composeBidData prefers over whatever Agent 4 itself
  *  echoed on the matching takeoff item (see bid_estimates.line_items /
- *  frontend/src/types/index.ts's EstimateLineItem). */
+ *  frontend/src/types/index.ts's EstimateLineItem).
+ *
+ *  Phase B, Task 3 — also carries qty/unit/qty_source. When qty_source is
+ *  'markup' (an estimator confirmed this quantity on the plans and applied
+ *  it — Decision 4), composeBidData prefers the SAVED qty/unit over Agent
+ *  4's own echoed values too, the same way it already prefers the saved
+ *  confidence. Every "takeoff output" this data feeds (the GC-facing
+ *  takeoff xlsx, the pre-bid package xlsx, and the takeoff table embedded
+ *  in the proposal doc itself) all read data.takeoff, which is built here —
+ *  fixing it once, here, is what keeps the GC sheet and the priced estimate
+ *  from disagreeing (see routes/preconstruction.ts's renderTakeoffXlsx
+ *  callers, both of which consume composeCurrentBidData's output). A
+ *  qty_source of 'takeoff' or 'manual' still defers to Agent 4's own echo —
+ *  only a Plan-Viewer-confirmed quantity is authoritative enough to
+ *  override what the AI itself wrote for the GC-facing takeoff. */
 export interface SavedConfidenceItem {
   category: string;
   item: string;
   confidence?: string | null;
+  qty?: number | null;
+  unit?: string | null;
+  qty_source?: string | null;
 }
 
 export interface ComposeBidDataOptions {
@@ -111,9 +128,18 @@ export function composeBidData(
   // Confidence: prefer the saved estimate's authoritative value; fall back
   // to whatever Agent 4 itself carried on the item.
   const confLookup = new Map<string, string>();
+  // Phase B, Task 3 — a Plan-Viewer-confirmed qty (qty_source='markup')
+  // similarly overrides Agent 4's own echoed qty/unit for the matching
+  // takeoff item, so the GC-facing takeoff xlsx and the priced estimate
+  // never disagree once an estimator has applied a marked quantity.
+  const qtyLookup = new Map<string, { qty: number; unit: string | null }>();
   for (const li of opts.savedLineItems ?? []) {
+    const key = `${li.category}::${li.item}`;
     const normalized = normalizeConfidence(li.confidence);
-    if (normalized) confLookup.set(`${li.category}::${li.item}`, normalized);
+    if (normalized) confLookup.set(key, normalized);
+    if (li.qty_source === 'markup' && typeof li.qty === 'number' && Number.isFinite(li.qty)) {
+      qtyLookup.set(key, { qty: li.qty, unit: li.unit ?? null });
+    }
   }
 
   const takeoff: TakeoffCategory[] = (agent4.takeoff ?? []).map(cat => ({
@@ -121,11 +147,12 @@ export function composeBidData(
     items: (cat.items ?? []).map(it => {
       const key = `${cat.name}::${it.item ?? ''}`;
       const conf = confLookup.get(key) ?? normalizeConfidence(it.conf);
+      const confirmedQty = qtyLookup.get(key);
       return {
         item: it.item ?? '',
         description: it.description ?? '',
-        unit: it.unit ?? '',
-        qty: it.qty ?? '',
+        unit: confirmedQty?.unit ?? it.unit ?? '',
+        qty: confirmedQty ? confirmedQty.qty : (it.qty ?? ''),
         source: it.source ?? '',
         ...(conf ? { conf } : {}),
         ...(it.furnish_by ? { furnish_by: it.furnish_by } : {}),

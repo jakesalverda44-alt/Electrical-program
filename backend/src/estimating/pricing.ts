@@ -28,8 +28,11 @@ export type LineConfidence = 'FIRM' | 'APPROX' | 'VERIFY';
 // same four values are declared again here).
 export type MatchConfidence = 'exact' | 'alias' | 'fuzzy' | 'none';
 
-/** Per-100 (C) / per-1000 (M) unit divisors; EA and LF are 1:1 with qty. */
-const UNIT_DIVISOR: Record<EstUnit, number> = { EA: 1, LF: 1, C: 100, M: 1000 };
+/** Per-100 (C) / per-1000 (M) unit divisors; EA and LF are 1:1 with qty.
+ *  Exported for markupMath.ts (Phase B, Task 3), which converts a measured
+ *  linear run in feet into a bid line's own display unit using the exact
+ *  same divisor convention this module already prices with. */
+export const UNIT_DIVISOR: Record<EstUnit, number> = { EA: 1, LF: 1, C: 100, M: 1000 };
 
 export interface PricingLineInput {
   /** Caller-assigned id (e.g. est_bid_lines.id) — carried through to the output line and warnings, never interpreted. */

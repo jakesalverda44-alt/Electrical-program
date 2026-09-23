@@ -723,6 +723,12 @@ interface LegacyLineItem {
   total: number;
   overridden: boolean;
   confidence: LineConfidence | null;
+  /** Phase B, Task 3 — carried so composeBidData.ts can tell a Plan Viewer-
+   *  confirmed qty apart from an AI/manual one and route the TAKEOFF
+   *  OUTPUTS (takeoff xlsx / pre-bid package / the embedded proposal
+   *  takeoff table) through the confirmed value instead of Agent 4's own
+   *  echoed qty — see composeBidData.ts's SavedConfidenceItem. */
+  qty_source: 'takeoff' | 'manual' | 'markup';
 }
 
 /** Shared by saveBidEstimate() and syncTakeoff() — both need to write the
@@ -769,6 +775,7 @@ async function writeBidEstimateSnapshot(
       total: round2(l.directShare),
       overridden: original?.material_unit_override != null || original?.labor_hours_override != null,
       confidence: l.confidence,
+      qty_source: original?.qty_source ?? 'takeoff',
     }));
 
   const { rows: beRows } = await client.query(

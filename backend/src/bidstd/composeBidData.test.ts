@@ -133,6 +133,39 @@ describe('composeBidData', () => {
     expect(svc.items[0].conf).toBe('VERIFY'); // overrides Agent 4's 'VERIFIED' -> would've been FIRM
   });
 
+  // Phase B, Task 3 — a Plan-Viewer-confirmed quantity (qty_source='markup')
+  // must reach the takeoff outputs (this data feeds the GC takeoff xlsx,
+  // the pre-bid package xlsx, and the proposal's own embedded takeoff
+  // table — all read data.takeoff, composed here).
+  it('prefers a markup-confirmed qty/unit over Agent 4\'s own echoed qty', () => {
+    const { data } = composeBidData(bidRow, agent4Base, '$1', {
+      savedLineItems: [{ category: 'Service & Distribution', item: '1.1', qty: 2, unit: 'EA', qty_source: 'markup' }],
+    });
+    const svc = data.takeoff.find(c => c.name === 'Service & Distribution')!;
+    expect(svc.items[0].qty).toBe(2); // NOT Agent 4's echoed qty of 1
+    expect(svc.items[0].unit).toBe('EA');
+  });
+
+  it('does NOT override qty for a takeoff- or manual-sourced saved line — only "markup" is authoritative enough', () => {
+    const takeoffSourced = composeBidData(bidRow, agent4Base, '$1', {
+      savedLineItems: [{ category: 'Service & Distribution', item: '1.1', qty: 999, unit: 'EA', qty_source: 'takeoff' }],
+    });
+    const manualSourced = composeBidData(bidRow, agent4Base, '$1', {
+      savedLineItems: [{ category: 'Service & Distribution', item: '1.1', qty: 999, unit: 'EA', qty_source: 'manual' }],
+    });
+    expect(takeoffSourced.data.takeoff.find(c => c.name === 'Service & Distribution')!.items[0].qty).toBe(1); // Agent 4's own qty
+    expect(manualSourced.data.takeoff.find(c => c.name === 'Service & Distribution')!.items[0].qty).toBe(1);
+  });
+
+  it('a markup-confirmed qty and a saved confidence combine independently (both override, from the same saved line)', () => {
+    const { data } = composeBidData(bidRow, agent4Base, '$1', {
+      savedLineItems: [{ category: 'Service & Distribution', item: '1.1', qty: 3, unit: 'EA', qty_source: 'markup', confidence: 'FIRM' }],
+    });
+    const item = data.takeoff.find(c => c.name === 'Service & Distribution')!.items[0];
+    expect(item.qty).toBe(3);
+    expect(item.conf).toBe('FIRM');
+  });
+
   it('carries furnish_by through onto the composed takeoff item', () => {
     const { data } = composeBidData(bidRow, agent4Base, '$1');
     const svc = data.takeoff.find(c => c.name === 'Service & Distribution')!;

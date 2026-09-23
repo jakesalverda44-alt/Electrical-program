@@ -17,6 +17,11 @@ import { normalizeUnit, MapConfidence } from '../estimating/mapper';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
 import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
 import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale } from '../estimating/sheets';
+import {
+  getMarkups, batchMarkups, getRollup, applyMarkups,
+  MarkupCreateInput, MarkupUpdateInput,
+} from '../estimating/markups';
+import { MarkupKind, MarkupStatus, MarkupPoint } from '../estimating/markupMath';
 
 // Fix round 1 / B2 — a route handler awaiting saveBidEstimate/syncTakeoff
 // catches this specific error and returns 400; any other error still bubbles
@@ -163,6 +168,130 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
     });
   }
   return { ok: true, value: out };
+}
+
+// ── Markups validation (Phase B, Task 3) ────────────────────────────────────
+
+const ALLOWED_MARKUP_KIND: MarkupKind[] = ['count', 'linear'];
+const ALLOWED_MARKUP_STATUS: MarkupStatus[] = ['confirmed', 'suggested'];
+
+/** Every point must have finite x/y (hard safety rule — never write a
+ *  non-finite number to the DB). `kind` enforces the plan's own cardinality
+ *  rule (count = exactly one point, linear = 2+) on CREATE only — an UPDATE
+ *  (e.g. dragging a point) doesn't carry kind (it's immutable after
+ *  creation), so cardinality there is left to whatever the existing markup
+ *  already is. */
+function validatePoints(raw: unknown, kind?: MarkupKind): ValidationResult<MarkupPoint[]> {
+  if (!Array.isArray(raw) || raw.length === 0) return { ok: false, error: 'points must be a non-empty array' };
+  const points: MarkupPoint[] = [];
+  for (const p of raw as Record<string, unknown>[]) {
+    const x = Number(p?.x);
+    const y = Number(p?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return { ok: false, error: 'every point needs finite x/y' };
+    points.push({ x, y });
+  }
+  if (kind === 'count' && points.length !== 1) return { ok: false, error: 'a count markup must have exactly one point' };
+  if (kind === 'linear' && points.length < 2) return { ok: false, error: 'a linear markup must have at least two points' };
+  return { ok: true, value: points };
+}
+
+function validateMarkupCreate(raw: Record<string, unknown>): ValidationResult<MarkupCreateInput> {
+  const id = typeof raw.id === 'string' && UUID_RE.test(raw.id) ? raw.id : null;
+  if (!id) return { ok: false, error: 'id must be a well-formed, client-generated UUID' };
+  const documentId = typeof raw.document_id === 'string' ? raw.document_id : '';
+  if (!documentId) return { ok: false, error: 'document_id is required' };
+  const pageIndex = Number(raw.page_index);
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) return { ok: false, error: 'page_index must be a non-negative integer' };
+  const kind = raw.kind as MarkupKind;
+  if (!ALLOWED_MARKUP_KIND.includes(kind)) return { ok: false, error: 'kind must be "count" or "linear"' };
+  const pointsV = validatePoints(raw.points, kind);
+  if (!pointsV.ok) return pointsV;
+
+  let drops = 0;
+  if (raw.drops != null) {
+    drops = Number(raw.drops);
+    if (!Number.isFinite(drops) || drops < 0) return { ok: false, error: 'drops must be a non-negative number' };
+  }
+  let dropFt: number | null = null;
+  if (raw.drop_ft != null) {
+    dropFt = Number(raw.drop_ft);
+    if (!Number.isFinite(dropFt) || dropFt < 0) return { ok: false, error: 'drop_ft must be a non-negative number' };
+  }
+  let slackPct: number | null = null;
+  if (raw.slack_pct != null) {
+    slackPct = Number(raw.slack_pct);
+    if (!Number.isFinite(slackPct) || slackPct < 0) return { ok: false, error: 'slack_pct must be a non-negative number' };
+  }
+  let status: MarkupStatus = 'confirmed';
+  if (raw.status != null) {
+    if (!ALLOWED_MARKUP_STATUS.includes(raw.status as MarkupStatus)) return { ok: false, error: 'status must be "confirmed" or "suggested"' };
+    status = raw.status as MarkupStatus;
+  }
+  const lineKey = typeof raw.line_key === 'string' && UUID_RE.test(raw.line_key) ? raw.line_key : null;
+  const label = typeof raw.label === 'string' ? raw.label : null;
+
+  return { ok: true, value: { id, documentId, pageIndex, lineKey, kind, points: pointsV.value, drops, dropFt, slackPct, status, label } };
+}
+
+function validateMarkupUpdate(raw: Record<string, unknown>): ValidationResult<MarkupUpdateInput> {
+  const id = typeof raw.id === 'string' ? raw.id : '';
+  if (!id) return { ok: false, error: 'id is required' };
+  const out: MarkupUpdateInput = { id };
+
+  if (raw.line_key !== undefined) {
+    out.lineKey = typeof raw.line_key === 'string' && UUID_RE.test(raw.line_key) ? raw.line_key : null;
+  }
+  if (raw.points !== undefined) {
+    const pointsV = validatePoints(raw.points);
+    if (!pointsV.ok) return pointsV;
+    out.points = pointsV.value;
+  }
+  if (raw.drops !== undefined) {
+    const v = Number(raw.drops);
+    if (!Number.isFinite(v) || v < 0) return { ok: false, error: 'drops must be a non-negative number' };
+    out.drops = v;
+  }
+  if (raw.drop_ft !== undefined) {
+    if (raw.drop_ft === null) out.dropFt = null;
+    else {
+      const v = Number(raw.drop_ft);
+      if (!Number.isFinite(v) || v < 0) return { ok: false, error: 'drop_ft must be a non-negative number' };
+      out.dropFt = v;
+    }
+  }
+  if (raw.slack_pct !== undefined) {
+    if (raw.slack_pct === null) out.slackPct = null;
+    else {
+      const v = Number(raw.slack_pct);
+      if (!Number.isFinite(v) || v < 0) return { ok: false, error: 'slack_pct must be a non-negative number' };
+      out.slackPct = v;
+    }
+  }
+  if (raw.status !== undefined) {
+    if (!ALLOWED_MARKUP_STATUS.includes(raw.status as MarkupStatus)) return { ok: false, error: 'status must be "confirmed" or "suggested"' };
+    out.status = raw.status as MarkupStatus;
+  }
+  if (raw.label !== undefined) out.label = typeof raw.label === 'string' ? raw.label : null;
+
+  return { ok: true, value: out };
+}
+
+function validateMarkupBatch(body: unknown): ValidationResult<{ creates: MarkupCreateInput[]; updates: MarkupUpdateInput[]; deletes: string[] }> {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const creates: MarkupCreateInput[] = [];
+  for (const raw of (Array.isArray(b.creates) ? b.creates : []) as Record<string, unknown>[]) {
+    const v = validateMarkupCreate(raw);
+    if (!v.ok) return v;
+    creates.push(v.value);
+  }
+  const updates: MarkupUpdateInput[] = [];
+  for (const raw of (Array.isArray(b.updates) ? b.updates : []) as Record<string, unknown>[]) {
+    const v = validateMarkupUpdate(raw);
+    if (!v.ok) return v;
+    updates.push(v.value);
+  }
+  const deletes = (Array.isArray(b.deletes) ? b.deletes : []).filter((x): x is string => typeof x === 'string');
+  return { ok: true, value: { creates, updates, deletes } };
 }
 
 function validateItemInput(body: Record<string, unknown>): ValidationResult<ItemInput> {
@@ -498,6 +627,45 @@ router.put('/:bidId/sheets/:documentId/:pageIndex/scale', requireAuth, async (re
   // cross-bid protection the file route gets from loadPlanDocumentForBid.
   if (!ok) return res.status(404).json({ error: 'Sheet not found for this bid/document/page' });
   res.json({ ok: true });
+});
+
+// ── Markups (Phase B, Task 3) ────────────────────────────────────────────────
+
+router.get('/:bidId/markups', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const documentId = typeof req.query.document_id === 'string' ? req.query.document_id : undefined;
+  const pageIndex = req.query.page_index != null ? Number(req.query.page_index) : undefined;
+  const markups = await getMarkups(bidId, { documentId, pageIndex: Number.isFinite(pageIndex as number) ? pageIndex : undefined });
+  res.json({ markups });
+});
+
+router.post('/:bidId/markups/batch', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const v = validateMarkupBatch(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const result = await batchMarkups(bidId, req.user!.name ?? null, v.value);
+  res.json(result);
+});
+
+router.get('/:bidId/markups/rollup', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const rollup = await getRollup(bidId);
+  res.json({ rollup });
+});
+
+router.post('/:bidId/apply-markups', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const lineKeys = Array.isArray(body.line_keys) ? body.line_keys.filter((x): x is string => typeof x === 'string') : [];
+  if (lineKeys.length === 0) return res.status(400).json({ error: 'line_keys must be a non-empty array' });
+
+  const result = await catchNonFiniteTotal(applyMarkups(bidId, lineKeys));
+  if (!result.ok) return res.status(400).json({ error: 'Computed totals are not finite — refusing to apply' });
+  res.json(result.value);
 });
 
 export default router;
