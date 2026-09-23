@@ -729,6 +729,15 @@ interface LegacyLineItem {
    *  takeoff table) through the confirmed value instead of Agent 4's own
    *  echoed qty — see composeBidData.ts's SavedConfidenceItem. */
   qty_source: 'takeoff' | 'manual' | 'markup';
+  /** Fix round 1 / B5 — the ORIGINATING takeoff row's own key (dedupe
+   *  Taken from `dedupeTakeoffKeys()`: `${category}||${item}` for a first
+   *  occurrence, `::1`/`::2`/... for later ones sharing the same
+   *  category+item). Lets composeBidData.ts match a markup-confirmed qty
+   *  to the SPECIFIC Agent 4 takeoff row it belongs to, by occurrence
+   *  order, instead of overwriting every row that happens to share the
+   *  same category+item text. null for a manual line (no originating
+   *  takeoff row). */
+  takeoff_key: string | null;
 }
 
 /** Shared by saveBidEstimate() and syncTakeoff() — both need to write the
@@ -776,6 +785,7 @@ async function writeBidEstimateSnapshot(
       overridden: original?.material_unit_override != null || original?.labor_hours_override != null,
       confidence: l.confidence,
       qty_source: original?.qty_source ?? 'takeoff',
+      takeoff_key: original?.takeoff_key ?? null,
     }));
 
   const { rows: beRows } = await client.query(

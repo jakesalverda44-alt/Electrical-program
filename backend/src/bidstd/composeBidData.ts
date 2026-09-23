@@ -43,6 +43,16 @@ export interface SavedConfidenceItem {
   qty?: number | null;
   unit?: string | null;
   qty_source?: string | null;
+  /** Fix round 1 / B5 — `bidEstimate.ts`'s own takeoff_key: `${category}||
+   *  ${item}` for the first occurrence of a duplicate category+item pair,
+   *  `::1`/`::2`/... for later ones (dedupeTakeoffKeys). Lets composeBidData
+   *  tell TWO saved lines with the identical category+item apart, and match
+   *  each to its own occurrence in Agent 4's takeoff array by position —
+   *  see the qty-matching block below and its own comment. Absent on a
+   *  manual line (no originating takeoff row) or on data saved before this
+   *  field existed; both fall back to ordinal 0 (the pre-fix, single-
+   *  occurrence-only behavior). */
+  takeoff_key?: string | null;
 }
 
 export interface ComposeBidDataOptions {
@@ -57,6 +67,15 @@ export interface ComposeBidDataResult {
    *  composeBidData is pure and never writes to the DB; the caller persists
    *  this back to bids.job_number on first use. */
   jobNumberGenerated: boolean;
+  /** Fix round 1 / B5 — `category::item` keys where Agent 4's own takeoff
+   *  array has a DIFFERENT number of rows sharing that key than the saved
+   *  estimate does, and at least one of the saved rows is markup-confirmed.
+   *  Positional (occurrence-order) matching can't be trusted here — no qty
+   *  was overridden for ANY row under these keys, rather than risk
+   *  assigning a confirmed quantity to the wrong physical run. The caller
+   *  should surface this as a pre-send warning (not yet wired into the
+   *  Review checklist UI — see the Fix round 1 report). */
+  ambiguousQtyKeys: string[];
 }
 
 /** Agent 1/2's VERIFIED/ASSUMED/NOT SHOWN, or an already-playbook value,
@@ -128,26 +147,83 @@ export function composeBidData(
   // Confidence: prefer the saved estimate's authoritative value; fall back
   // to whatever Agent 4 itself carried on the item.
   const confLookup = new Map<string, string>();
-  // Phase B, Task 3 — a Plan-Viewer-confirmed qty (qty_source='markup')
-  // similarly overrides Agent 4's own echoed qty/unit for the matching
-  // takeoff item, so the GC-facing takeoff xlsx and the priced estimate
-  // never disagree once an estimator has applied a marked quantity.
-  const qtyLookup = new Map<string, { qty: number; unit: string | null }>();
+  for (const li of opts.savedLineItems ?? []) {
+    const normalized = normalizeConfidence(li.confidence);
+    if (normalized) confLookup.set(`${li.category}::${li.item}`, normalized);
+  }
+
+  // Fix round 1 / B5 — a Plan-Viewer-confirmed qty (qty_source='markup')
+  // overrides Agent 4's own echoed qty/unit for the matching takeoff item,
+  // so the GC-facing takeoff xlsx and the priced estimate never disagree
+  // once an estimator has applied a marked quantity. The OLD version keyed
+  // this purely on `${category}::${item}` — real takeoffs legitimately
+  // repeat the same category+item id across multiple rows (a re-split, or
+  // the same fixture type on two floors), and the last SAVED row sharing a
+  // key silently overwrote every Agent 4 row sharing it, even ones that
+  // were never marked/applied at all.
+  //
+  // Fix: match each Agent 4 occurrence of a key to the SAME-ORDINAL saved
+  // line for that key (both ultimately derive from the same underlying
+  // takeoff rows, in the same order — bidEstimate.ts's dedupeTakeoffKeys
+  // suffixes duplicates `::1`, `::2`... in original-row order; Agent 4's
+  // own takeoff array preserves the source rows' order the same way).
+  // Only override the occurrences that are individually markup-confirmed;
+  // a sibling occurrence that was never marked keeps Agent 4's own echo —
+  // see the reviewer's own two-row example (composeBidData.test.ts).
+  const savedGroups = new Map<string, { qty: number | null; unit: string | null; qtySource: string | null; ordinal: number }[]>();
   for (const li of opts.savedLineItems ?? []) {
     const key = `${li.category}::${li.item}`;
-    const normalized = normalizeConfidence(li.confidence);
-    if (normalized) confLookup.set(key, normalized);
-    if (li.qty_source === 'markup' && typeof li.qty === 'number' && Number.isFinite(li.qty)) {
-      qtyLookup.set(key, { qty: li.qty, unit: li.unit ?? null });
+    const list = savedGroups.get(key) ?? [];
+    list.push({
+      qty: typeof li.qty === 'number' && Number.isFinite(li.qty) ? li.qty : null,
+      unit: li.unit ?? null,
+      qtySource: li.qty_source ?? null,
+      ordinal: takeoffKeyOrdinal(li.takeoff_key),
+    });
+    savedGroups.set(key, list);
+  }
+  for (const list of savedGroups.values()) list.sort((a, b) => a.ordinal - b.ordinal);
+
+  const agent4KeyCounts = new Map<string, number>();
+  for (const cat of agent4.takeoff ?? []) {
+    for (const it of cat.items ?? []) {
+      const key = `${cat.name}::${it.item ?? ''}`;
+      agent4KeyCounts.set(key, (agent4KeyCounts.get(key) ?? 0) + 1);
     }
   }
 
+  const ambiguousQtyKeys = new Set<string>();
+  for (const [key, list] of savedGroups) {
+    const hasMarkupEntry = list.some(e => e.qtySource === 'markup');
+    if (hasMarkupEntry && list.length !== (agent4KeyCounts.get(key) ?? 0)) {
+      ambiguousQtyKeys.add(key);
+    }
+  }
+  if (ambiguousQtyKeys.size > 0) {
+    // "log it" (the fix's own wording) — this is a data-integrity signal
+    // worth an operator's attention even though nothing crashes; the
+    // caller (routes/preconstruction.ts) is expected to eventually surface
+    // ambiguousQtyKeys as a pre-send warning too (see ComposeBidDataResult).
+    // eslint-disable-next-line no-console
+    console.warn(
+      `composeBidData: ${ambiguousQtyKeys.size} category::item key(s) have a mismatched Agent 4 vs. saved-estimate occurrence count and were left un-overridden: ${Array.from(ambiguousQtyKeys).join(', ')}`
+    );
+  }
+
+  const occurrenceSoFar = new Map<string, number>();
   const takeoff: TakeoffCategory[] = (agent4.takeoff ?? []).map(cat => ({
     name: cat.name,
     items: (cat.items ?? []).map(it => {
       const key = `${cat.name}::${it.item ?? ''}`;
       const conf = confLookup.get(key) ?? normalizeConfidence(it.conf);
-      const confirmedQty = qtyLookup.get(key);
+
+      const n = occurrenceSoFar.get(key) ?? 0;
+      occurrenceSoFar.set(key, n + 1);
+      const savedEntry = ambiguousQtyKeys.has(key) ? undefined : savedGroups.get(key)?.[n];
+      const confirmedQty = savedEntry && savedEntry.qtySource === 'markup' && savedEntry.qty != null
+        ? { qty: savedEntry.qty, unit: savedEntry.unit }
+        : null;
+
       return {
         item: it.item ?? '',
         description: it.description ?? '',
@@ -212,7 +288,19 @@ export function composeBidData(
     takeoff_notes: agent4.takeoff_notes ?? [],
   };
 
-  return { data, jobNumberGenerated };
+  return { data, jobNumberGenerated, ambiguousQtyKeys: Array.from(ambiguousQtyKeys) };
+}
+
+/** `${category}||${item}` (unsuffixed = ordinal 0) or `${category}||${item}
+ *  ::N` (ordinal N) — the exact suffix convention bidEstimate.ts's own
+ *  dedupeTakeoffKeys() produces. Missing/malformed input (a manual line
+ *  with no originating takeoff row, or data saved before takeoff_key was
+ *  carried through this far) defaults to ordinal 0 — the single-occurrence
+ *  case, which is also correct behavior when there's truly only one row. */
+function takeoffKeyOrdinal(takeoffKey: string | null | undefined): number {
+  if (!takeoffKey) return 0;
+  const m = /::(\d+)$/.exec(takeoffKey);
+  return m ? Number(m[1]) : 0;
 }
 
 // ── legacyProposalToBidData ─────────────────────────────────────────────────
