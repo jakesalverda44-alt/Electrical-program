@@ -54,18 +54,32 @@ function toMessage(req: FakeRequest, r: FakeReply): Anthropic.Message {
   } as unknown as Anthropic.Message;
 }
 
-export function fakeAnthropic(responder: Responder): { client: Anthropic; calls: FakeRequest[] } {
+/** The Anthropic SDK (0.100.x) refuses a NON-streaming messages.create whose
+ *  max_tokens implies it may run past 10 minutes (calculateNonstreamingTimeout
+ *  — about 21,333 tokens). The fake enforces the same rule so a call site that
+ *  regresses to messages.create with a big budget fails in tests exactly as it
+ *  did live (Agent 4 at 32,000). */
+export const SDK_NONSTREAMING_MAX_TOKENS = 21_333;
+
+export function fakeAnthropic(responder: Responder): { client: Anthropic; calls: FakeRequest[]; paths: Array<'create' | 'stream'> } {
   const calls: FakeRequest[] = [];
-  const run = async (req: FakeRequest) => {
+  const paths: Array<'create' | 'stream'> = [];
+  const run = async (req: FakeRequest, path: 'create' | 'stream') => {
     const i = calls.length;
     calls.push(req);
+    paths.push(path);
     return toMessage(req, await responder(req, i));
   };
   const client = {
     messages: {
-      create: (req: FakeRequest) => run(req),
-      stream: (req: FakeRequest) => ({ finalMessage: () => run(req) }),
+      create: (req: FakeRequest) => {
+        if (req.max_tokens > SDK_NONSTREAMING_MAX_TOKENS) {
+          return Promise.reject(new Error('Streaming is required for operations that may take longer than 10 minutes. See https://github.com/anthropics/anthropic-sdk-typescript#long-requests for more details'));
+        }
+        return run(req, 'create');
+      },
+      stream: (req: FakeRequest) => ({ finalMessage: () => run(req, 'stream') }),
     },
   } as unknown as Anthropic;
-  return { client, calls };
+  return { client, calls, paths };
 }

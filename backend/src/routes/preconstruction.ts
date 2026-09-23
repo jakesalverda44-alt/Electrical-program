@@ -774,7 +774,7 @@ export async function runPipeline(
   // ── Agent 2 ─────────────────────────────────────────────────────────────────
   try {
     await updateStatus('agent2_running');
-    const resp = await callWithRetry(() => client.messages.create({
+    const resp = await callWithRetry(() => client.messages.stream({
       model: config.modelA2,
       max_tokens: config.maxTokensA2,
       system: [{ type: 'text', text: config.promptA2 || AGENT2_SYSTEM, cache_control: { type: 'ephemeral' } }],
@@ -784,7 +784,7 @@ export async function runPipeline(
         // and the UI keep the pretty agent1Output exactly as today.
         content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}`,
       }],
-    }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
+    }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
     assertNotTruncated(resp, 'Agent 2', config.maxTokensA2);
     agent2Output = extractText(resp);
     const agent2ToStore = extractJSONText(agent2Output) ?? agent2Output;
@@ -823,7 +823,7 @@ export async function runPipeline(
       logger.warn({ err, bidId }, '[takeoff] pre-bid cross-check load failed — continuing without it');
     }
 
-    const resp = await callWithRetry(() => client.messages.create({
+    const resp = await callWithRetry(() => client.messages.stream({
       model: config.modelA3,
       max_tokens: config.maxTokensA3,
       system: [{ type: 'text', text: config.promptA3 || AGENT3_SYSTEM, cache_control: { type: 'ephemeral' } }],
@@ -832,7 +832,7 @@ export async function runPipeline(
         // Task 4.1 — compact in the request body (both prior agents' outputs).
         content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}\n\n---\n\nESTIMATOR OUTPUT:\n\n${compactForHandoff(agent2Output)}${prebidCrossCheck ? `\n\n---\n\n${prebidCrossCheck}` : ''}`,
       }],
-    }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
+    }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
     assertNotTruncated(resp, 'Agent 3', config.maxTokensA3);
     agent3Output = extractText(resp);
     const agent3ToStore = extractJSONText(agent3Output) ?? agent3Output;
@@ -1332,12 +1332,12 @@ router.post('/:bidId/prebid-analyze', requireAuth, requireAIPermission('run_anal
           comparable: { name: comp.name, sqFt: comp.sq_ft, furnishModel: comp.furnish_model,
                         sections: comp.sections, categories: comp.categories ?? [] },
         });
-        const resp = await callWithRetry(() => client.messages.create({
+        const resp = await callWithRetry(() => client.messages.stream({
           model: config.modelA2,
           max_tokens: config.maxTokensA2,
           system: [{ type: 'text', text: PREBID_COMPARE_SYSTEM, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: `Compare these two pre-bid packages.\n\n${payload}` }],
-        }), { onRetry: (a, _e, d) => console.warn(`[prebid-analyze] transient error, retry ${a} in ${d}ms`) });
+        }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[prebid-analyze] transient error, retry ${a} in ${d}ms`) });
 
         assertNotTruncated(resp, 'Pre-bid comparison', config.maxTokensA2, 'it uses Agent 2\'s Max Tokens in Settings → AI');
         const parsed = parseAIJSON(extractText(resp));
@@ -1833,12 +1833,12 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
 
   (async () => {
     try {
-      const resp = await callWithRetry(() => client.messages.create({
+      const resp = await callWithRetry(() => client.messages.stream({
         model: config.modelA4,
         max_tokens: config.maxTokensA4,
           system: [{ type: 'text', text: config.promptA4 || AGENT4_SYSTEM, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: userMsg }],
-      }), { onRetry: (a, _e, d) => logger.warn(`[agent4] retry ${a} in ${d}ms`) });
+      }).finalMessage(), { onRetry: (a, _e, d) => logger.warn(`[agent4] retry ${a} in ${d}ms`) });
 
       assertNotTruncated(resp, 'Agent 4', config.maxTokensA4);
       const rawText = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');

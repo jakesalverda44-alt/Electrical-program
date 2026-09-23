@@ -65,6 +65,26 @@ describe('runPipeline — max_tokens fails the run (no silent truncation)', () =
   });
 });
 
+describe('runPipeline — every agent call streams (SDK refuses non-streaming above ~21,333 max_tokens)', () => {
+  it('Agents 1-3 with 32,000 Max Tokens all complete over messages.stream', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const bidId = await makeBid();
+    const { client, paths, calls } = fakeAnthropic((req) => {
+      const sys = systemText(req);
+      if (sys.includes('Senior Electrical Drawing Analyzer')) return { text: AGENT1_OK };
+      if (sys.includes('Senior Electrical Estimator')) return { text: '{"takeoff":[]}' };
+      return { text: '{"overallRisk":"LOW"}' };
+    });
+    const config = { ...(await loadAIConfig()), maxTokensA1: 32000, maxTokensA2: 32000, maxTokensA3: 32000 };
+    await runPipeline(bidId, [await imageFile('E-3 Lighting Plan.jpg')], client, config);
+    const { rows } = await pool.query('SELECT status FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    expect(rows[0].status).toBe('complete');
+    expect(paths.length).toBe(calls.length);
+    expect(new Set(paths)).toEqual(new Set(['stream']));
+    expect(calls.map(c => c.max_tokens)).toEqual([32000, 32000, 32000]);
+  });
+});
+
 describe('Settings — counter keys and ai_prep_* persist', () => {
   it('PUT then GET round-trips ai_takeoff_counter_model / ai_max_tokens_counter / ai_prep_dpi_plan', async (ctx) => {
     if (!ok) return ctx.skip();

@@ -12,23 +12,41 @@ import { describe, it, expect, beforeAll, vi } from 'vitest';
 import request from 'supertest';
 
 const reply = { text: '', stop_reason: 'end_turn', output_tokens: 7912 };
-vi.mock('@anthropic-ai/sdk', () => ({
-  default: class FakeAnthropic {
-    messages = {
-      create: async () => ({
-        id: 'fake', type: 'message', role: 'assistant', model: 'fake',
-        content: [{ type: 'text', text: reply.text }],
-        stop_reason: reply.stop_reason, stop_sequence: null,
-        usage: { input_tokens: 1000, output_tokens: reply.output_tokens },
-      }),
-    };
-  },
-}));
+const seen: Array<{ path: 'create' | 'stream'; max_tokens: number }> = [];
+vi.mock('@anthropic-ai/sdk', () => {
+  const message = () => ({
+    id: 'fake', type: 'message', role: 'assistant', model: 'fake',
+    content: [{ type: 'text', text: reply.text }],
+    stop_reason: reply.stop_reason, stop_sequence: null,
+    usage: { input_tokens: 1000, output_tokens: reply.output_tokens },
+  });
+  return {
+    default: class FakeAnthropic {
+      messages = {
+        // Same rule as the real SDK 0.100.x: a non-streaming call with a
+        // budget that may exceed 10 minutes is refused outright.
+        create: async (req: { max_tokens: number }) => {
+          seen.push({ path: 'create', max_tokens: req.max_tokens });
+          if (req.max_tokens > 21_333) throw new Error('Streaming is required for operations that may take longer than 10 minutes.');
+          return message();
+        },
+        stream: (req: { max_tokens: number }) => ({
+          finalMessage: async () => { seen.push({ path: 'stream', max_tokens: req.max_tokens }); return message(); },
+        }),
+      };
+    },
+  };
+});
 vi.mock('../db/getSetting', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../db/getSetting')>();
   return {
     ...actual,
-    getSetting: async (key: string) => (key === 'ai_anthropic_key' ? 'sk-test-not-a-real-key' : actual.getSetting(key)),
+    getSetting: async (key: string) => {
+      if (key === 'ai_anthropic_key') return 'sk-test-not-a-real-key';
+      // The live setting that broke non-streaming Agent 4.
+      if (key === 'ai_max_tokens_agent4') return '32000';
+      return actual.getSetting(key);
+    },
   };
 });
 
@@ -93,5 +111,16 @@ describe('Agent 4 failure reporting', () => {
     expect(row.agent4_error).toBeNull();
     expect(row.agent4_status).toBe('complete');
     expect(JSON.parse(row.agent4_output).sections[0].bullets[0]).toBe('See ```E-2``` note');
+  });
+
+  it('Max Tokens 32,000 goes through the STREAMING path (the SDK refuses it non-streaming)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId } = await setup();
+    seen.length = 0;
+    reply.text = '{"sections":[],"takeoff":[]}';
+    reply.stop_reason = 'end_turn';
+    const row = await runAndWait(user, bidId);
+    expect(row.agent4_status).toBe('complete');
+    expect(seen).toEqual([{ path: 'stream', max_tokens: 32000 }]);
   });
 });

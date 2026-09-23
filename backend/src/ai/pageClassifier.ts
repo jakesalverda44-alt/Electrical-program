@@ -305,13 +305,13 @@ export async function classifyPages(
       text: `Classify each of the ${batch.length} title-block crops above from "${safeFilename}", in the order given. Each crop's "Page N" label states its ABSOLUTE page number in the full document — echo that exact number back in the "page" field of your JSON output; do NOT renumber starting from 1 for this batch. Return the STRICT JSON array only.`,
     });
 
-    const resp = await callWithRetry(() => client.messages.create({
+    const resp = await callWithRetry(() => client.messages.stream({
       model,
       max_tokens: CLASSIFIER_MAX_TOKENS,
       temperature: 0,
       system: [{ type: 'text', text: PAGE_CLASSIFIER_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content }],
-    }), { onRetry: (a, _e, d) => logger.warn(`[pageClassifier] retry ${a} in ${d}ms`) });
+    }).finalMessage(), { onRetry: (a, _e, d) => logger.warn(`[pageClassifier] retry ${a} in ${d}ms`) });
 
     assertNotTruncated(resp, 'Page classifier', CLASSIFIER_MAX_TOKENS, 'the classifier budget is fixed in code at 2,500 tokens per 20-page batch, not a Settings field');
     const text = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');
