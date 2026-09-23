@@ -16,8 +16,12 @@ import ScaleCalibrationPopover from './ScaleCalibrationPopover';
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
 import { reduceTool, initToolState, ToolEvent, PdfPoint } from './toolMachine';
 import {
-  initHistory, commit, undo, redo, canUndo, canRedo, replacePresent,
-  createMarkup, deleteMarkups, reassignMarkups, moveMarkup, MarkupDraft,
+  initHistory, commit, undo, redo, canUndo, canRedo,
+  createMarkup, deleteMarkups, moveMarkup, MarkupDraft,
+  // reassignMarkups (multi-select "reassign to another line") and
+  // replacePresent are exported and tested (markupHistory.test.ts) but not
+  // yet wired to a UI affordance here — see the Phase B report's
+  // deferrals for Task 5's "reassign selected markers to another line".
 } from './markupHistory';
 import { useMarkupAutosave } from './useMarkupAutosave';
 import './plans.css';
