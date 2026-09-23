@@ -7,7 +7,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api from '../../../api/client';
 import { useApi } from '../../../hooks/useApi';
 import { Toast } from '../../../types';
-import { EstimateLine, EstimateSettings, SheetRow, SheetDiscipline, MarkupWire, RollupEntry, ApplyMarkupsResponse } from '../types';
+import { EstimateLine, EstimateSettings, SheetRow, SheetDiscipline, MarkupWire, RollupEntry, ApplyMarkupsResponse, Library } from '../types';
 import SheetNavigator, { sheetKey } from './SheetNavigator';
 import PlanViewer from './PlanViewer';
 import Toolbar from './Toolbar';
@@ -15,20 +15,23 @@ import ItemsPanel from './ItemsPanel';
 import ScaleCalibrationPopover from './ScaleCalibrationPopover';
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
 import SuggestMarkersBar, { FindTagResult } from './SuggestMarkersBar';
+import NewLineFromMarkupModal, { NewLineFromMarkupInput } from './NewLineFromMarkupModal';
+import ReassignMarkersModal from './ReassignMarkersModal';
 import { reduceTool, initToolState, ToolEvent, PdfPoint } from './toolMachine';
 import {
   initHistory, commit, undo, redo, canUndo, canRedo,
-  createMarkup, updateMarkup, deleteMarkups, moveMarkup, MarkupDraft,
-  // reassignMarkups (multi-select "reassign to another line") and
-  // replacePresent are exported and tested (markupHistory.test.ts) but not
-  // yet wired to a UI affordance here — see the Phase B report's
-  // deferrals for Task 5's "reassign selected markers to another line".
+  createMarkup, updateMarkup, deleteMarkups, moveMarkup, reassignMarkups, MarkupDraft,
+  // replacePresent is exported and tested (markupHistory.test.ts) but not
+  // yet needed here — every mutation this component makes already goes
+  // through commit() via mutate(), which is what replacePresent exists to
+  // bypass (syncing a server-confirmed value without a spurious undo step).
 } from './markupHistory';
 import { useMarkupAutosave } from './useMarkupAutosave';
 import { PageGeometry } from './overlay';
 import { suggestTagMarkers, candidateTagsFromDescription, buildLineTagIndex } from './tagSuggest';
 import { draftsFromTagCandidates } from './suggestedMarkerFlow';
 import { getSheetTextItems } from './sheetTextCache';
+import { TAKEOFF_CATEGORIES } from '../categories';
 import './plans.css';
 
 const LINE_COLORS = ['#4D8DF7', '#E0A53B', '#34C588', '#F2854F', '#E06A6A', '#9B7EDE', '#3BB6C9', '#D96BA0'];
@@ -107,6 +110,9 @@ export default function PlansWorkspace({
   const viewOnly = !!viewOnlyProp || isNarrow;
   const { data: sheetsData, loading: sheetsLoading, reload: reloadSheets } = useApi<{ sheets: SheetRow[] }>(`/estimating/${bidId}/sheets`);
   const sheets = useMemo(() => sheetsData?.sheets ?? [], [sheetsData]);
+  // Task 6 (deferral closed) — "New line from markup" reuses the Phase A
+  // resolver's own library search (LaborPricingStep.tsx's pattern).
+  const { data: library } = useApi<Library>('/estimating/library');
 
   const [disciplineFilter, setDisciplineFilter] = useState<SheetDiscipline | 'all'>('all');
   const [currentKey, setCurrentKey] = useState<string | null>(initialSheetKey ?? null);
@@ -399,6 +405,92 @@ export default function PlansWorkspace({
 
   const suggestedCountOnSheet = useMemo(() => currentPageMarkups.filter(m => m.status === 'suggested').length, [currentPageMarkups]);
 
+  // ── "New line from markup" + reassign selected markers (Task 6, deferral
+  // closed) ─────────────────────────────────────────────────────────────
+  const [newLineOpen, setNewLineOpen] = useState(false);
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const [creatingLine, setCreatingLine] = useState(false);
+
+  const selectedMarkups = useMemo(
+    () => history.present.filter(m => toolState.selectedIds.includes(m.id)),
+    [history.present, toolState.selectedIds]
+  );
+  // A "New line from markup" selection is expected to be homogeneous (an
+  // estimator wouldn't usually multi-select a mix of counts and linear
+  // runs to attach to one line) — default to whichever kind is actually
+  // present; count (EA) wins a tie/empty selection since Count is this
+  // feature's more common case.
+  const newLineUnit: EstimateLine['unit'] = selectedMarkups.some(m => m.kind === 'linear') && !selectedMarkups.some(m => m.kind === 'count')
+    ? 'LF' : 'EA';
+
+  const onNewLineFromMarkup = useCallback(() => {
+    if (toolState.selectedIds.length === 0) return;
+    setNewLineOpen(true);
+  }, [toolState.selectedIds]);
+
+  const onReassignSelected = useCallback(() => {
+    if (toolState.selectedIds.length === 0) return;
+    setReassignOpen(true);
+  }, [toolState.selectedIds]);
+
+  const createLineFromMarkup = useCallback(async (input: NewLineFromMarkupInput) => {
+    const newKey = crypto.randomUUID();
+    const newLine: EstimateLine = {
+      id: newKey, line_key: newKey, category: input.category, description: input.description,
+      qty: input.qty, unit: input.unit, source: 'manual',
+      item_id: input.itemId, assembly_id: input.assemblyId,
+      material_unit_override: input.materialUnitOverride, labor_hours_override: input.laborHoursOverride,
+    };
+    const selectedIds = toolState.selectedIds;
+    setCreatingLine(true);
+    try {
+      // Same self-contained "call the bid save endpoint directly, then let
+      // the caller refresh" shape as applyLines (below) — PlansWorkspace
+      // doesn't own the shared `lines` state (useEstimatingBid does), so a
+      // new line is persisted with a full save of the current lines plus
+      // this one, exactly like previewPriceImpact already sends `lines`
+      // wholesale to the /price endpoint.
+      await api.put(`/estimating/${bidId}`, { lines: [...lines, newLine], settings });
+      mutate(reassignMarkups(history.present, selectedIds, newKey));
+      setToolState(s => ({ ...s, selectedIds: [] }));
+      setNewLineOpen(false);
+      onApplied?.();
+      showToast?.({ title: 'Line created', sub: `${selectedIds.length} marker${selectedIds.length === 1 ? '' : 's'} attached` });
+    } catch {
+      showToast?.({ variant: 'error', title: 'Could not create the line', sub: 'Try again' });
+    } finally {
+      setCreatingLine(false);
+    }
+  }, [bidId, lines, settings, mutate, history.present, toolState.selectedIds, onApplied, showToast]);
+
+  const onReassignConfirm = useCallback((lineKeyToAssign: string | null) => {
+    mutate(reassignMarkups(history.present, toolState.selectedIds, lineKeyToAssign));
+    setToolState(s => ({ ...s, selectedIds: [] }));
+    setReassignOpen(false);
+  }, [mutate, history.present, toolState.selectedIds]);
+
+  // The unassigned-markers bucket (Task 6, deferral closed) — CONFIRMED
+  // markers with no line_key, grouped by sheet, across the whole bid (not
+  // just the current sheet — a marker on another sheet is just as "lost"
+  // and needs the same visibility). Suggested-but-unconfirmed markers are
+  // already visible via SuggestMarkersBar's own "N suggested" indicator on
+  // whatever sheet they're on; this bucket is specifically for CONFIRMED
+  // markers that rolled up into nothing because nobody assigned them yet.
+  const unassignedMarkers = useMemo(() => {
+    const bySheet = new Map<string, { sheetKey: string; documentId: string; pageIndex: number; count: number }>();
+    for (const m of history.present) {
+      if (m.status !== 'confirmed' || m.lineKey) continue;
+      const key = sheetKey(m.documentId, m.pageIndex);
+      const existing = bySheet.get(key);
+      if (existing) existing.count += 1;
+      else bySheet.set(key, { sheetKey: key, documentId: m.documentId, pageIndex: m.pageIndex, count: 1 });
+    }
+    return Array.from(bySheet.values()).map(entry => {
+      const s = sheets.find(x => x.document_id === entry.documentId && x.page_index === entry.pageIndex);
+      return { sheetKey: entry.sheetKey, label: s ? `${s.sheet_no} ${s.title}`.trim() : entry.sheetKey, count: entry.count };
+    });
+  }, [history.present, sheets]);
+
   const markerCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const m of history.present) {
@@ -446,6 +538,8 @@ export default function PlansWorkspace({
               onDeleteSelected={onDeleteSelected}
               hasSelection={toolState.selectedIds.length > 0}
               scaleDisabledReason={currentSheet ? null : 'Select a sheet first'}
+              onNewLineFromMarkup={onNewLineFromMarkup}
+              onReassignSelected={onReassignSelected}
             />
           </div>
           <button
@@ -511,6 +605,23 @@ export default function PlansWorkspace({
             onCancel={() => setPendingScalePoints(null)}
           />
         )}
+        <NewLineFromMarkupModal
+          open={newLineOpen}
+          selectedCount={toolState.selectedIds.length}
+          unit={newLineUnit}
+          categories={TAKEOFF_CATEGORIES}
+          library={library ?? null}
+          busy={creatingLine}
+          onCancel={() => setNewLineOpen(false)}
+          onCreate={createLineFromMarkup}
+        />
+        <ReassignMarkersModal
+          open={reassignOpen}
+          selectedCount={toolState.selectedIds.length}
+          lines={lines}
+          onCancel={() => setReassignOpen(false)}
+          onReassign={onReassignConfirm}
+        />
       </div>
       <ItemsPanel
         lines={lines}
@@ -522,6 +633,8 @@ export default function PlansWorkspace({
         onToggleShowOnlyActiveLine={() => setShowOnlyActiveLine(v => !v)}
         previewPriceImpact={previewPriceImpact}
         onSuggestMarkersForLine={onSuggestForLine}
+        unassignedMarkers={unassignedMarkers}
+        onJumpToUnassigned={key => setCurrentKey(key)}
       />
     </div>
   );

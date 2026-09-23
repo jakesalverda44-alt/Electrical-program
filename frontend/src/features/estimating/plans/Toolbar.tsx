@@ -15,6 +15,12 @@ export interface ToolbarProps {
   onDeleteSelected: () => void;
   hasSelection: boolean;
   scaleDisabledReason: string | null;
+  /** Task 6 (deferral closed) — both require 1+ selected markers, same
+   *  gating as Delete. Omitted entirely hides the buttons (e.g. view-only
+   *  contexts that never render a Toolbar at all already skip this, but
+   *  keeping these optional matches the rest of this component's props). */
+  onNewLineFromMarkup?: () => void;
+  onReassignSelected?: () => void;
 }
 
 const TOOLS: { id: ToolId; label: string; shortcut: string }[] = [
@@ -28,6 +34,7 @@ const SHORTCUT_TO_TOOL: Record<string, ToolId> = { v: 'select', c: 'count', l: '
 
 export default function Toolbar({
   toolState, dispatch, onUndo, onRedo, canUndo, canRedo, onDeleteSelected, hasSelection, scaleDisabledReason,
+  onNewLineFromMarkup, onReassignSelected,
 }: ToolbarProps) {
   // Keyboard shortcuts: V/C/L/S select a tool, Delete/Backspace removes the
   // current selection, Cmd/Ctrl+Z undoes, Shift+Cmd/Ctrl+Z redoes. Ignored
@@ -76,6 +83,16 @@ export default function Toolbar({
       <button className="plan-toolbar-btn" onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)">Undo</button>
       <button className="plan-toolbar-btn" onClick={onRedo} disabled={!canRedo} title="Redo (⇧⌘Z)">Redo</button>
       <button className="plan-toolbar-btn" onClick={onDeleteSelected} disabled={!hasSelection} title="Delete (Del)">Delete</button>
+      {onNewLineFromMarkup && (
+        <button className="plan-toolbar-btn" onClick={onNewLineFromMarkup} disabled={!hasSelection} title="Create a new takeoff line from the selected marker(s)">
+          New line from markup
+        </button>
+      )}
+      {onReassignSelected && (
+        <button className="plan-toolbar-btn" onClick={onReassignSelected} disabled={!hasSelection} title="Reassign the selected marker(s) to a different line">
+          Reassign to line…
+        </button>
+      )}
     </div>
   );
 }

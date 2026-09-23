@@ -195,3 +195,33 @@ describe('ItemsPanel — "Suggest markers" per line (Task 7, deferral closed)', 
     expect(onSelectLine).not.toHaveBeenCalled();
   });
 });
+
+describe('ItemsPanel — unassigned-markers bucket (Task 6, deferral closed)', () => {
+  it('is absent when unassignedMarkers is omitted or empty', () => {
+    setup();
+    expect(screen.queryByTestId('unassigned-markers-bucket')).toBeNull();
+    setup({ unassignedMarkers: [] });
+    expect(screen.queryByTestId('unassigned-markers-bucket')).toBeNull();
+  });
+
+  it('shows the total unassigned count in the header, and each sheet as its own row', () => {
+    setup({ unassignedMarkers: [
+      { sheetKey: 'doc-1:0', label: 'E1.1 Lighting Plan', count: 2 },
+      { sheetKey: 'doc-1:1', label: 'E1.2 Power Plan', count: 1 },
+    ] });
+    expect(screen.getByText('Unassigned markers (3)')).toBeTruthy();
+    expect(screen.getByText('E1.1 Lighting Plan')).toBeTruthy();
+    expect(screen.getByText('2 unassigned')).toBeTruthy();
+    expect(screen.getByText('E1.2 Power Plan')).toBeTruthy();
+  });
+
+  it('"Jump to sheet" calls onJumpToUnassigned with that sheet\'s key', () => {
+    const onJumpToUnassigned = vi.fn();
+    setup({
+      unassignedMarkers: [{ sheetKey: 'doc-1:0', label: 'E1.1 Lighting Plan', count: 2 }],
+      onJumpToUnassigned,
+    });
+    fireEvent.click(screen.getByText('Jump to sheet'));
+    expect(onJumpToUnassigned).toHaveBeenCalledWith('doc-1:0');
+  });
+});

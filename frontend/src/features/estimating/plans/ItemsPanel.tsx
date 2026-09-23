@@ -53,11 +53,18 @@ export interface ItemsPanelProps {
    *  candidateTagsFromDescription). Omitted entirely hides the button
    *  (e.g. a read-only context). */
   onSuggestMarkersForLine?: (line: EstimateLine) => void;
+  /** Task 6 (deferral closed) — the unassigned-markers bucket: CONFIRMED
+   *  markers with no line_key, grouped by sheet (PlansWorkspace computes
+   *  this from its own markup draft list — ItemsPanel has no markup data
+   *  of its own). Omitted/empty hides the section entirely. */
+  unassignedMarkers?: { sheetKey: string; label: string; count: number }[];
+  onJumpToUnassigned?: (sheetKey: string) => void;
 }
 
 export default function ItemsPanel({
   lines, rollup, activeLineKey, onSelectLine, onApplyLines, onJumpToSource,
   showOnlyActiveLine, onToggleShowOnlyActiveLine, previewPriceImpact, onSuggestMarkersForLine,
+  unassignedMarkers, onJumpToUnassigned,
 }: ItemsPanelProps) {
   const confirm = useConfirm();
   const [applyingKeys, setApplyingKeys] = useState<Set<string>>(new Set());
@@ -130,6 +137,29 @@ export default function ItemsPanel({
           Apply all that differ{differingKeys.length > 0 ? ` (${differingKeys.length})` : ''}
         </button>
       </div>
+
+      {unassignedMarkers && unassignedMarkers.length > 0 && (
+        <div className="plan-items-panel-group" data-testid="unassigned-markers-bucket">
+          <div className="plan-items-panel-group-header">
+            Unassigned markers ({unassignedMarkers.reduce((sum, u) => sum + u.count, 0)})
+          </div>
+          {unassignedMarkers.map(u => (
+            <div key={u.sheetKey} className="plan-items-panel-row" style={{ cursor: 'default' }}>
+              <div className="plan-items-panel-row-main">
+                <span className="plan-items-panel-desc">{u.label}</span>
+                <Badge tone="warn" size="sm">{u.count} unassigned</Badge>
+              </div>
+              {onJumpToUnassigned && (
+                <div className="plan-items-panel-row-actions">
+                  <button className="btn ghost sm" onClick={() => onJumpToUnassigned(u.sheetKey)}>
+                    Jump to sheet
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {groups.map(g => (
         <div key={g.category} className="plan-items-panel-group">

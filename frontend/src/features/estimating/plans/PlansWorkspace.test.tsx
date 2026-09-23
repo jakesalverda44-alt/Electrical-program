@@ -18,11 +18,23 @@ vi.mock('../../../api/client', async () => {
 });
 
 vi.mock('./PlanViewer', () => ({
-  default: (props: { dispatchTool: (e: unknown) => void; viewOnly?: boolean }) => (
+  default: (props: {
+    dispatchTool: (e: unknown) => void; viewOnly?: boolean;
+    markups: { id: string }[]; onSelectMarker: (id: string, additive: boolean) => void;
+  }) => (
     <div data-testid="plan-viewer-mock" data-view-only={String(!!props.viewOnly)}>
       <button onClick={() => props.dispatchTool({ type: 'POINTER_CLICK', point: { x: 10, y: 10 } })}>
         Simulate canvas click
       </button>
+      {/* Task 6 (deferral closed) — exposes each current-sheet marker's
+          (unpredictable, server/crypto-generated) id as its own button so
+          tests can select a REAL marker without guessing/mocking
+          crypto.randomUUID's call order. */}
+      {props.markups.map(m => (
+        <button key={m.id} onClick={() => props.onSelectMarker(m.id, false)}>
+          Select marker {m.id}
+        </button>
+      ))}
     </div>
   ),
 }));
@@ -78,6 +90,12 @@ beforeEach(() => {
     if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet()] } });
     if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
     if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+    // Task 6 (deferral closed) — NewLineFromMarkupModal's library search
+    // is mounted (though gated closed) throughout every PlansWorkspace
+    // test, so this needs a well-formed empty Library, not the generic
+    // `{}` fallback below (which would crash its candidates useMemo on
+    // `library.assemblies.filter`).
+    if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
     return Promise.resolve({ data: {} });
   });
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -306,6 +324,102 @@ describe('PlansWorkspace — suggested markers (Task 7, deferral closed)', () =>
     // Jumping navigates to doc-2's sheet AND places an (unassigned)
     // suggested marker there for the searched tag.
     await waitFor(() => expect(screen.getByText(/1 suggested/)).toBeTruthy());
+  });
+});
+
+// Task 6 (deferral closed) — "New line from markup" (the Phase A
+// resolver's own library-search pattern, reused), reassigning selected
+// markers to a different line, and the unassigned-markers bucket.
+describe('PlansWorkspace — "New line from markup" and reassign selected markers (Task 6, deferral closed)', () => {
+  /** Places one confirmed count marker (via the mocked PlanViewer's
+   *  "Simulate canvas click", with the Count tool active), then switches
+   *  to Select and clicks that marker's own "Select marker <id>" button
+   *  (SELECT_MARKERS only takes effect while tool==='select' —
+   *  toolMachine.ts's own rule) so it becomes the Toolbar's selection. */
+  async function placeAndSelectOneMarker() {
+    fireEvent.click(screen.getByTitle('Count (C)'));
+    fireEvent.click(screen.getByText('Simulate canvas click'));
+    await waitFor(() => expect(screen.getByText(/^Select marker /)).toBeTruthy());
+    fireEvent.click(screen.getByTitle('Select (V)'));
+    fireEvent.click(screen.getByText(/^Select marker /));
+  }
+
+  it('"New line from markup"/"Reassign to line…" are disabled with nothing selected, and enabled once a marker is selected', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect((screen.getByText('New line from markup') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByText('Reassign to line…') as HTMLButtonElement).disabled).toBe(true);
+
+    await placeAndSelectOneMarker();
+
+    expect((screen.getByText('New line from markup') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByText('Reassign to line…') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('creating a manual line from the selection PUTs the full lines array with the new line, then reassigns the selected marker to it (verified via the next autosave batch)', async () => {
+    put.mockResolvedValue({ data: { lines: [], recap: {}, bidEstimate: {} } });
+    post.mockResolvedValue({ data: { created: [], updated: [], deleted: [], skipped: [] } });
+    const { onApplied } = setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    await placeAndSelectOneMarker();
+
+    fireEvent.click(screen.getByText('New line from markup'));
+    fireEvent.change(screen.getByTestId('nlfm-description'), { target: { value: 'Custom manual item' } });
+    fireEvent.change(screen.getByTestId('nlfm-manual-material'), { target: { value: '42' } });
+    fireEvent.click(screen.getByTestId('nlfm-keep-manual'));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1', expect.objectContaining({
+      lines: expect.arrayContaining([expect.objectContaining({
+        description: 'Custom manual item', source: 'manual', material_unit_override: 42, unit: 'EA',
+      })]),
+    })));
+    await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('nlfm-description')).toBeNull(); // the modal closed on success
+
+    // The marker was reassigned to the brand-new line's key (not left
+    // unassigned) — the next autosave batch carries that as its line_key.
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(post).toHaveBeenCalledWith(
+      '/estimating/bid1/markups/batch',
+      expect.objectContaining({ creates: [expect.objectContaining({ line_key: expect.any(String) })] })
+    ));
+  });
+
+  it('"Reassign to line…" moves the selected marker onto a different EXISTING line', async () => {
+    post.mockResolvedValue({ data: { created: [{ id: 'm1' }], updated: [], deleted: [], skipped: [] } });
+    setup({ lines: [line({ line_key: 'k1' }), line({ line_key: 'k2', description: 'Type A1 troffer' })] });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    await placeAndSelectOneMarker();
+
+    fireEvent.click(screen.getByText('Reassign to line…'));
+    fireEvent.click(screen.getByTestId('ram-line-k2'));
+    expect(screen.queryByTestId('ram-search')).toBeNull(); // the modal closed
+
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(post).toHaveBeenCalledWith(
+      '/estimating/bid1/markups/batch',
+      expect.objectContaining({ creates: [expect.objectContaining({ line_key: 'k2' })] })
+    ));
+  });
+
+  it('"Reassign to line…" -> "Unassign" clears the marker\'s line_key', async () => {
+    post.mockResolvedValue({ data: { created: [{ id: 'm1' }], updated: [], deleted: [], skipped: [] } });
+    setup({ initialLineKey: 'k1' }); // markers placed while a line is active start assigned to it
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    await placeAndSelectOneMarker();
+
+    fireEvent.click(screen.getByText('Reassign to line…'));
+    fireEvent.click(screen.getByTestId('ram-unassign'));
+
+    await waitFor(() => expect(screen.getByText('Unassigned markers (1)')).toBeTruthy());
+  });
+
+  it('a confirmed marker with no line assigned shows up in the "Unassigned markers" bucket', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    fireEvent.click(screen.getByTitle('Count (C)'));
+    fireEvent.click(screen.getByText('Simulate canvas click'));
+    await waitFor(() => expect(screen.getByText('Unassigned markers (1)')).toBeTruthy());
   });
 });
 
