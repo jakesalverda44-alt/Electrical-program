@@ -431,11 +431,14 @@ export function enforceAccountTerms(agent4: Agent4Output, snap: AccountTermsSnap
   const out: Agent4Output = JSON.parse(JSON.stringify(agent4));
   const sections: Agent4Section[] = out.sections ?? [];
   const byTerm = new Map(resolved.map(r => [r.term, r]));
+  // An output with no scope sections at all is left without them (the
+  // callers report "no scope data"); enforcement never invents a scope.
+  const hasScope = sections.length > 0;
 
   // 1. Section C bullet 1 — the lighting procurement sentence.
   const lighting = byTerm.get('lighting');
   const cBullet = lightingSectionCBullet(lighting);
-  if (cBullet) {
+  if (cBullet && hasScope) {
     let c = sections.find(s => SECTION_LETTER.exec(s.title)?.[1] === 'C');
     if (!c) { c = { title: 'C. Lighting & Controls', bullets: [] }; sections.push(c); }
     c.bullets = c.bullets ?? [];
@@ -526,7 +529,7 @@ export function enforceAccountTerms(agent4: Agent4Output, snap: AccountTermsSnap
   }
 
   // 5. Required scope bullets.
-  for (const rb of snap.requiredScopeBullets) {
+  for (const rb of hasScope ? snap.requiredScopeBullets : []) {
     let s = sections.find(x => SECTION_LETTER.exec(x.title)?.[1] === rb.section);
     if (!s) { s = { title: `${rb.section}.`, bullets: [] }; sections.push(s); }
     s.bullets = s.bullets ?? [];

@@ -98,7 +98,7 @@ describe('runPipeline — counting stage on kissimmee-mini.pdf', () => {
     const file = { originalname: 'AZ 10077 set.pdf', buffer: PDF, mimetype: 'application/pdf', size: PDF.length } as Express.Multer.File;
     await runPipeline(bidId, [file], client, config);
 
-    const { rows } = await pool.query('SELECT status, agent1_output, count_result, usage_counter, model_counter, account_terms, review_items, review_status FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    const { rows } = await pool.query('SELECT status, agent1_output, count_result, usage_counter, model_counter, account_terms, review_items, review_status, hygiene FROM takeoff_results WHERE bid_id=$1', [bidId]);
     expect(rows[0].status).toBe('complete');
     expect(rows[0].model_counter).toBe(config.modelCounter);
 
@@ -129,11 +129,17 @@ describe('runPipeline — counting stage on kissimmee-mini.pdf', () => {
     ]);
     expect(a1.countingSummary.pendingEstimatorReview).toEqual(['G (not found on any counted plan sheet)']);
 
+    // Task 9 — the bid's GC, not the owner the drawings print.
+    const a1Now = JSON.parse(rows[0].agent1_output);
+    expect(a1Now.project.gcName).toBe('Summit General Contractors');
+    expect(a1Now.project.gc_extracted).toBe('AutoZone Stores LLC');
+
     // Task 8 — the AutoZone rule (bid brand), with no drawing statement for the
     // power poles -> a scope question in the review list next to type G.
     expect(rows[0].account_terms.ruleName).toBe('AutoZone');
     expect(rows[0].review_items.map((i: { id: string }) => i.id)).toEqual(['count:G', 'scope:power_poles']);
     expect(rows[0].review_status).toBe('needs_review');
+    expect(rows[0].hygiene.gc).toEqual({ bidGc: 'Summit General Contractors', extracted: 'AutoZone Stores LLC', owner: '', mismatch: true });
 
     // Agent 2 saw the counted rows, not Agent 1's zeros / 8 wall packs / stacked site lights.
     const a2 = calls.find(c => systemText(c).includes('Senior Electrical Estimator'))!;

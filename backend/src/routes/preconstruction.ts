@@ -43,6 +43,7 @@ import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
 import { runCountingStage } from '../ai/countingStage';
+import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
 import { writeAiCountMarkers } from '../estimating/aiMarkers';
 import { buildReviewItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, type ReviewItem } from '../ai/reviewItems';
 import { takeoffGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
@@ -568,6 +569,11 @@ export async function runPipeline(
   // Task 8 — set by the counting stage, read by Agent 2's message.
   let accountTerms: AccountTermsSnapshot | null = null;
   let reviewItemsNow: ReviewItem[] = [];
+  // Task 9 — what the deterministic clean-up changed (takeoff_results.hygiene).
+  const hygiene: HygieneReport = emptyHygiene();
+  let agent1BatchResults: Record<string, unknown>[] = [];
+  const { rows: bidGcRows } = await pool.query('SELECT gc FROM bids WHERE id=$1', [bidId]);
+  const bidGc = String(bidGcRows[0]?.gc ?? '');
 
   const updateStatus = (status: string) =>
     pool.query(`UPDATE takeoff_results SET status=$1 WHERE bid_id=$2`, [status, bidId]);
@@ -700,6 +706,7 @@ export async function runPipeline(
       // (project, service, panels, equipment, quantities, allowances, ecfeciItems,
       // flags, scopeNotes, missingSheets), not a hardcoded legacy key list.
       // See backend/src/ai/mergeAgent1.ts for the merge rules.
+      agent1BatchResults = batchResults;
       agent1JSON = mergeAgent1Batches(batchResults);
       agent1Output = JSON.stringify(agent1JSON, null, 2);
     }
@@ -734,9 +741,21 @@ export async function runPipeline(
       return;
     }
 
+    // Task 9 — output hygiene on the drawing analysis, before anything reads it.
+    collectSqFt(agent1BatchResults.length ? agent1BatchResults : [agent1JSON], hygiene);
+    let cleaned = applyGcHygiene(agent1JSON, bidGc, hygiene);
+    const loadedSheetNos = [
+      ...countingInventory.map(p => p.sheetNo),
+      ...(Array.isArray((cleaned.project as Record<string, unknown> | undefined)?.sheets) ? ((cleaned.project as Record<string, unknown>).sheets as unknown[]).map(String) : []),
+    ];
+    cleaned = filterMissingSheets(cleaned, loadedSheetNos, hygiene);
+    cleaned = downgradeNotFound(cleaned, hygiene);
+    agent1JSON = cleaned;
+    agent1Output = JSON.stringify(agent1JSON, null, 2);
+
     await pool.query(
-      `UPDATE takeoff_results SET status='agent1_complete', agent1_output=$1 WHERE bid_id=$2`,
-      [agent1Output, bidId]
+      `UPDATE takeoff_results SET status='agent1_complete', agent1_output=$1, hygiene=$2 WHERE bid_id=$3`,
+      [agent1Output, JSON.stringify(hygiene), bidId]
     );
   } catch (err) {
     const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 1 failed: ${describeAIError(err)}`;
@@ -813,6 +832,18 @@ export async function runPipeline(
     }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
     assertNotTruncated(resp, 'Agent 2', config.maxTokensA2);
     agent2Output = extractText(resp);
+    // Task 9 — the same hygiene on Agent 2's JSON: the bid's GC, no
+    // not-found value left VERIFIED.
+    const agent2Parsed = parseAIJSON(agent2Output);
+    if (agent2Parsed) {
+      const a2Report = emptyHygiene();
+      agent2Output = JSON.stringify(downgradeNotFound(applyGcHygiene(agent2Parsed, bidGc, a2Report), a2Report));
+      if (a2Report.downgraded.length) {
+        hygiene.downgraded.push(...a2Report.downgraded.map(d => ({ ...d, path: `agent2.${d.path}` })));
+        hygiene.flags.push(...a2Report.downgraded.map(d => `Agent 2 ${d.path}: "${d.value}" can't be ${d.from} — downgraded to ${d.to}.`));
+        await pool.query('UPDATE takeoff_results SET hygiene=$1 WHERE bid_id=$2', [JSON.stringify(hygiene), bidId]);
+      }
+    }
     const agent2ToStore = extractJSONText(agent2Output) ?? agent2Output;
 
     await pool.query(
@@ -889,7 +920,8 @@ export async function runPipeline(
     // Auto-fill project_type/sq_ft from the takeoff extraction — never overwrite a manually-set value
     const a1Project = (a1.project ?? {}) as Record<string, unknown>;
     const extractedType = String(a1Project.projectType ?? '');
-    const extractedSqFt = Number(a1Project.sqFt) || null;
+    // Task 9 — two different SF values on the drawings: never auto-fill.
+    const extractedSqFt = hygiene.sqFt?.conflict ? null : (Number(a1Project.sqFt) || null);
     const validType = PROJECT_TYPES.includes(extractedType) ? extractedType : null;
     if (validType || extractedSqFt) {
       await pool.query(
@@ -1947,7 +1979,10 @@ export type ComposeCurrentBidDataResult =
       accountCorrections: string[];
       /** verifyBid options from the account terms (forbidden phrases, ECFECI
        *  checks sized to what APT furnishes). */
-      verifyOptions: VerifyOptions }
+      verifyOptions: VerifyOptions;
+      /** Takeoff accuracy Task 9 — GC-facing problems to show before
+       *  generating: zero-quantity lines, other-region spec text. */
+      hygieneWarnings: string[] }
   | { ok: false; status: number; error: string; failures?: { check: string; detail: string }[] };
 
 export interface ComposeCurrentBidDataOptions {
@@ -2076,12 +2111,20 @@ export async function composeCurrentBidData(
     // New-shape only, per opts.validate above.
     if (validate) {
       const problems = validateBidData(bidData);
-      if (problems.length) {
+      // Takeoff accuracy Task 9 — never a zero-quantity line or zero-footage
+      // allowance in a GC document.
+      const zeros = zeroQuantityProblems(bidData);
+      if (problems.length || zeros.length) {
         return {
           ok: false,
           status: 422,
-          error: 'This proposal did not pass data validation — fix the composed data before generating documents.',
-          failures: problems.map(detail => ({ check: 'data', detail })),
+          error: zeros.length && !problems.length
+            ? 'This proposal has zero-quantity lines — resolve them before generating.'
+            : 'This proposal did not pass data validation — fix the composed data before generating documents.',
+          failures: [
+            ...zeros.map(detail => ({ check: 'zero_quantity', detail })),
+            ...problems.map(detail => ({ check: 'data', detail })),
+          ],
         };
       }
     }
@@ -2107,7 +2150,18 @@ export async function composeCurrentBidData(
     bidData = legacyData;
   }
 
-  return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys, accountCorrections, verifyOptions };
+  verifyOptions.projectAddress = bid?.loc ?? '';
+  const gcText = [
+    ...bidData.sections.flatMap(s => s.bullets.map(b => (typeof b === 'string' ? b : `${b.b} ${b.t}`))),
+    ...bidData.exclusions.map(b => (typeof b === 'string' ? b : `${b.b} ${b.t}`)),
+  ].join('\n');
+  const spec = irrelevantSpecSentences(gcText, bid?.loc ?? '');
+  const hygieneWarnings = [
+    ...zeroQuantityProblems(bidData),
+    ...spec.block.map(s => `Applies to other stores/regions, not this project: "${s}"`),
+    ...spec.warn.map(s => `Names another state/region — check it applies: "${s}"`),
+  ];
+  return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys, accountCorrections, verifyOptions, hygieneWarnings };
 }
 
 /** Flatten every takeoff item's text fields — the pre-bid scope docx never
@@ -2144,7 +2198,7 @@ router.get('/:bidId/proposal-preview', requireAuth, requireAIPermission('view_re
   // fields (rather than a separate round trip) is what lets the frontend
   // show it as a real pre-send warning instead of it only ever reaching
   // server logs (see composeBidData.ts's own comment on this).
-  res.json({ ...loaded.bidData, ambiguousQtyKeys: loaded.ambiguousQtyKeys, accountCorrections: loaded.accountCorrections });
+  res.json({ ...loaded.bidData, ambiguousQtyKeys: loaded.ambiguousQtyKeys, accountCorrections: loaded.accountCorrections, hygieneWarnings: loaded.hygieneWarnings });
 }));
 
 // GET generate-docx — build and return the .docx proposal file

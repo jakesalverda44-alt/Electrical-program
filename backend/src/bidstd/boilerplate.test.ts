@@ -17,7 +17,7 @@ describe('standardScope6', () => {
     expect(bullets).toEqual([
       'The project is understood to be electrical work and has been reviewed and quoted as such.',
       'All work to be completed during normal business hours, 8:00 AM – 4:00 PM, Monday through Friday.',
-      'Installation per plan. All changes will require a written Change Order approved by the Owner before work proceeds.',
+      'Installation per plan. All changes will require a written Change Order approved by the GC before work proceeds.',
       'Based on the electrical specifications, schedules, and drawing set dated 07.15.2026. Sheets: E0.1, E1.0, E1.1.',
       'Coordinate with Sample General Contractor for scheduling, tie-ins, and required access.',
       'Submit for and obtain all required electrical permits prior to commencement of work.',
@@ -35,7 +35,7 @@ describe('standardTerms', () => {
       'A deposit of 25% of the contract value is required upon execution of this agreement to initiate material procurement.',
       'Lighting package to be procured through the Southern Lighting Source national account. EC to receive, inventory, and install.',
       'Equipment lead times subject to market and manufacturer availability. APT not responsible for vendor delays.',
-      'All changes to the approved scope require a written Change Order signed by the Owner prior to proceeding.',
+      'All changes to the approved scope require a written Change Order signed by the GC prior to proceeding.',
       'Painting, patching, concrete cutting, and finish restoration are excluded from this scope.',
       "Low-voltage cabling, devices, and programming (security, tele/data, sound/intercom) by Owner's vendor. EC provides conduit and boxes only.",
       "Utility company transformer, primary-side work, and utility fees excluded. EC provides 8' conductor slack at transformer secondary.",

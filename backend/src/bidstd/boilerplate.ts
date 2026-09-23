@@ -14,7 +14,10 @@ export function standardScope6(planDates: string, sheetList: string, gcName: str
   return [
     'The project is understood to be electrical work and has been reviewed and quoted as such.',
     'All work to be completed during normal business hours, 8:00 AM – 4:00 PM, Monday through Friday.',
-    'Installation per plan. All changes will require a written Change Order approved by the Owner before work proceeds.',
+    // Takeoff accuracy Task 9 (Jake, 2026-09-23): change orders are approved
+    // by the GC — APT's contract is with the GC, not the owner.
+    // PROJECT_INSTRUCTIONS.md §8/§9 still read "Owner"; flagged in the report.
+    'Installation per plan. All changes will require a written Change Order approved by the GC before work proceeds.',
     `Based on the electrical specifications, schedules, and drawing set dated ${planDates}. Sheets: ${sheetList}.`,
     `Coordinate with ${gcName} for scheduling, tie-ins, and required access.`,
     'Submit for and obtain all required electrical permits prior to commencement of work.',
@@ -36,7 +39,7 @@ export function standardTerms(planDates: string, opts: { lightingBullet?: string
     // (accountRules.ts lightingTermsBullet); the default is unchanged.
     opts.lightingBullet ?? 'Lighting package to be procured through the Southern Lighting Source national account. EC to receive, inventory, and install.',
     'Equipment lead times subject to market and manufacturer availability. APT not responsible for vendor delays.',
-    'All changes to the approved scope require a written Change Order signed by the Owner prior to proceeding.',
+    'All changes to the approved scope require a written Change Order signed by the GC prior to proceeding.',
     'Painting, patching, concrete cutting, and finish restoration are excluded from this scope.',
     "Low-voltage cabling, devices, and programming (security, tele/data, sound/intercom) by Owner's vendor. EC provides conduit and boxes only.",
     "Utility company transformer, primary-side work, and utility fees excluded. EC provides 8' conductor slack at transformer secondary.",

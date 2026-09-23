@@ -20,6 +20,7 @@ import * as path from 'path';
 import { extractDocxText } from '../utils/bidDocParse';
 import { logger } from '../utils/logger';
 import { SECTION_HEADERS } from './boilerplate';
+import { irrelevantSpecSentences } from '../ai/outputHygiene';
 
 const execFileAsync = promisify(execFile);
 
@@ -47,6 +48,9 @@ export interface VerifyOptions {
    *  AutoZone proposal must NOT be forced to call owner-furnished lighting
    *  ECFECI. */
   ecfeci?: { requireInSectionA: boolean; requireInSectionC: boolean; minCount: number };
+  /** Takeoff accuracy Task 9 — the project's address, to catch owner-spec
+   *  boilerplate scoped to other regions / store types. */
+  projectAddress?: string;
 }
 
 export interface VerifyResult extends VerifyTextResult {
@@ -79,6 +83,8 @@ const BANNED_PATTERNS: RegExp[] = [
   /please confirm/gi,
   /clarification requested/gi,
   /field verif\w*/gi,
+  // Takeoff accuracy Task 9 — the reversed form too.
+  /verif(y|ied|ication)\s+in\s+(the\s+)?field/gi,
   /\bcounted\b/gi,
   /±/g,
   /↳/g,
@@ -225,6 +231,19 @@ export function verifyBidText(text: string, kind: VerifyKind, opts: VerifyOption
 
     const ecfeci = checkEcfeciPlacement(text, opts.ecfeci?.requireInSectionA ?? true, opts.ecfeci?.requireInSectionC ?? true);
     if (ecfeci) failures.push(ecfeci);
+
+    // Takeoff accuracy Task 9 — owner-spec boilerplate for other places or
+    // store types ("generator scope applies to Puerto Rico stores only").
+    if (opts.projectAddress !== undefined) {
+      const { block } = irrelevantSpecSentences(text, opts.projectAddress);
+      if (block.length) {
+        failures.push({
+          check: 'irrelevant_spec',
+          detail: 'Owner-spec text that applies to other stores, regions or prototypes — not to this project.',
+          matches: block,
+        });
+      }
+    }
 
     // Takeoff accuracy Task 8 — the account rule's forbidden phrases.
     const lower = text.toLowerCase();

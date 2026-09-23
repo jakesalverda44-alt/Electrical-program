@@ -168,3 +168,20 @@ describe('resolving items', () => {
     expect(rows[0].review_status).toBe('needs_review');
   });
 });
+
+describe('Task 9 — zero-quantity lines never reach a GC document', () => {
+  it('generate-takeoff-xlsx and generate-docx 422 with the zero lines listed', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId } = await setup();
+    const agent4 = {
+      plan_date: 'Feb 7, 2025', sheets: ['E-1'], sections: [{ title: 'A. Service & Distribution', bullets: ['Service (ECFECI).'] }],
+      exclusions: [], allowances_bullets: [], fixture_types: [], alternates: [], takeoff_notes: [],
+      takeoff: [{ name: 'Site / Underground / Allowances', items: [{ item: 'Site underground', description: 'Allowance', unit: 'LF', qty: 0, source: 'E-1' }] }],
+    };
+    await pool.query(`UPDATE takeoff_results SET review_status=NULL, review_items=NULL, agent4_output=$2, agent4_price=1000 WHERE bid_id=$1`, [bidId, JSON.stringify(agent4)]);
+    const x = await request(app).get(`/api/preconstruction/${bidId}/generate-takeoff-xlsx`).set(auth(user.token)).expect(422);
+    expect(x.body.failures[0]).toEqual({ check: 'zero_quantity', detail: 'Site / Underground / Allowances: "Site underground — Allowance" has quantity 0' });
+    const d = await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(user.token)).expect(422);
+    expect(d.body.failures[0].check).toBe('zero_quantity');
+  });
+});

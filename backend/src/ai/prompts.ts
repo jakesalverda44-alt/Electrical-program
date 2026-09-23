@@ -45,10 +45,12 @@ Return ONLY valid compact JSON — no prose, no markdown, no explanation.
     "gcName": "",
     "gcContact": "",
     "gcEmail": "",
+    "owner": "",
     "drawingDate": "",
     "sheets": [],
     "projectType": "",
-    "sqFt": 0
+    "sqFt": 0,
+    "sqFtSource": ""
   },
   "service": {
     "voltage": "",
@@ -156,7 +158,8 @@ Return ONLY valid compact JSON — no prose, no markdown, no explanation.
 ${AGENT1_COUNTING_SECTIONS}
 
 PROJECT TYPE — classify the overall project from the cover sheet / architectural plans into exactly one of: cstore_fuel, car_wash, self_storage, office, warehouse, restaurant, medical, retail, other. Leave "" only if the building type cannot be determined at all.
-SQ FT — total building square footage from the cover sheet, architectural plans, or code data plate. 0 if not stated anywhere in the documents.
+SQ FT — total building square footage from the cover sheet, architectural plans, or code data plate. 0 if not stated anywhere in the documents. sqFtSource = the sheet and label it came from (e.g. "A-001 code data: GROSS AREA").
+GC vs OWNER — gcName is the GENERAL CONTRACTOR only when the drawings name one; the building owner / tenant / developer (e.g. "AutoZone Stores LLC") goes in owner, never in gcName.
 
 CATEGORIES for quantities array:
 Service & Distribution | Interior Lighting | Exterior Site Lighting | Lighting Controls | Branch Power | Site Underground Allowances | Low Voltage | Grounding
