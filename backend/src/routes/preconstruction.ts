@@ -5,6 +5,7 @@ import { loadAccessibleBid } from '../utils/ownership';
 import { getSetting } from '../db/getSetting';
 import Anthropic from '@anthropic-ai/sdk';
 import AdmZip from 'adm-zip';
+import crypto from 'crypto';
 import { AGENT1_SYSTEM, agent1PromptWithCountingSections, AGENT2_SYSTEM, AGENT3_SYSTEM, AGENT4_SYSTEM, PREBID_COMPARE_SYSTEM } from '../ai/prompts';
 import { buildProposalDocx, ProposalJSON, renderBidDocx, legacyProposalWithBidMeta, bidDocxFilename } from '../utils/proposalDocx';
 import { callWithRetry } from '../ai/retry';
@@ -536,6 +537,95 @@ function compactOutput(text: string, max = 500): string {
  *  document (document_ids), so counted locations can be placed on it. */
 type PipelineFile = Express.Multer.File & { documentId?: string };
 
+// ── Takeoff accuracy Task 12: the pre-bid draft ───────────────────────────
+// After the analysis (and once the Needs-review list is clear) Agent 4 runs
+// in DRAFT mode — the same output contract, the same account-terms /
+// scope-list / review blocks, no price — and the result is stored as
+// draft_output. Choice: re-using Agent 4 with an explicit mode (rather than a
+// separate composer prompt) keeps ONE contract for sections + takeoff, so the
+// pre-bid package and the GC proposal render the same composed data through
+// the same enforcement and verification; the price was never part of Agent
+// 4's output (code applies it), so "no price" is just a different request
+// header plus no saved-estimate figures.
+
+/** sha256 of every input that shapes the scope: equal at proposal time means
+ *  the draft can be reused with just the price inserted. */
+export async function scopeInputsHash(bidId: string): Promise<string> {
+  const [{ rows: tr }, { rows: ws }, scope] = await Promise.all([
+    pool.query('SELECT agent2_output, account_terms, review_items FROM takeoff_results WHERE bid_id=$1', [bidId]),
+    pool.query('SELECT scope FROM bid_workspaces WHERE bid_id=$1', [bidId]),
+    getBidScopeList(bidId),
+  ]);
+  const resolutions = ((tr[0]?.review_items ?? []) as ReviewItem[]).map(i => [i.id, i.resolution?.action ?? null, i.resolution?.qty ?? null, i.resolution?.answer ?? null, i.resolution?.reason ?? null]);
+  const payload = JSON.stringify([
+    tr[0]?.agent2_output ?? '', tr[0]?.account_terms ?? null, resolutions,
+    scope.items.map(i => [i.kind, i.text]), scope.overrides.map(o => [o.lineKey, o.reason]),
+    ws[0]?.scope ?? {},
+  ]);
+  return crypto.createHash('sha256').update(payload).digest('hex');
+}
+
+/** Compose the pre-bid draft. Never throws: failures land in draft_status /
+ *  draft_error. Refuses (records why) while the takeoff still needs review. */
+export async function runDraftComposition(bidId: string, client: Anthropic, config: AIConfig): Promise<void> {
+  try {
+    const gate = await takeoffGate(bidId);
+    if (gate) {
+      await pool.query(`UPDATE takeoff_results SET draft_status=NULL, draft_error=$2 WHERE bid_id=$1`, [bidId, 'Waiting on the takeoff review.']);
+      return;
+    }
+    const { rows } = await pool.query('SELECT agent1_output, agent2_output, review_items, account_terms FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    if (!rows[0]?.agent2_output) return;
+    await pool.query(`UPDATE takeoff_results SET draft_status='running', draft_error=NULL WHERE bid_id=$1`, [bidId]);
+    const { rows: ws } = await pool.query('SELECT scope FROM bid_workspaces WHERE bid_id=$1', [bidId]);
+    const inputsHash = await scopeInputsHash(bidId);
+    const userMsg = buildAgent4UserMessage({
+      mode: 'draft',
+      price: '',
+      agent1Output: (rows[0].agent1_output as string) || '',
+      agent2Output: (rows[0].agent2_output as string) || '',
+      workspaceScope: (ws[0]?.scope as Record<string, string> | undefined) ?? null,
+      savedEstimate: null,
+      reviewResolutions: reviewResolutionsForAgent4(rows[0].review_items as ReviewItem[] | null),
+      accountTerms: await accountTermsBlockFor(bidId, rows[0].account_terms as AccountTermsSnapshot | null, rows[0].review_items as ReviewItem[] | null, (rows[0].agent1_output as string) || ''),
+      scopeList: renderScopeListBlock((await getBidScopeList(bidId)).items),
+    });
+    const resp = await callWithRetry(() => client.messages.stream({
+      model: config.modelA4,
+      max_tokens: config.maxTokensA4,
+      system: [{ type: 'text', text: config.promptA4 || AGENT4_SYSTEM, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: userMsg }],
+    }).finalMessage(), { onRetry: (a, _e, d) => logger.warn(`[draft] retry ${a} in ${d}ms`) });
+    assertNotTruncated(resp, 'Agent 4 (pre-bid draft)', config.maxTokensA4);
+    const parsed = parseAIJSON(extractText(resp));
+    if (!parsed || !isAgent4Shape(parsed)) {
+      throw new Error(`The pre-bid draft could not be parsed (stop_reason: ${resp.stop_reason ?? 'unknown'}). Compose it again.`);
+    }
+    await pool.query(
+      `UPDATE takeoff_results SET draft_output=$2, draft_status='complete', draft_error=NULL, draft_model=$3,
+         usage_draft=$4, draft_inputs_hash=$5, draft_at=now() WHERE bid_id=$1`,
+      [bidId, JSON.stringify(parsed), config.modelA4, JSON.stringify(resp.usage), inputsHash]
+    );
+  } catch (err) {
+    logger.error({ err, bidId }, '[draft] pre-bid draft composition failed');
+    await pool.query(`UPDATE takeoff_results SET draft_status='error', draft_error=$2 WHERE bid_id=$1`,
+      [bidId, isAgentTruncatedError(err) ? (err as Error).message : describeAIError(err)]).catch(() => {});
+  }
+}
+
+/** Kick off a draft in the background with the configured key (the resolve
+ *  route, once the review clears). No key -> nothing happens (the Takeoff
+ *  step offers "Compose pre-bid draft"). */
+async function startDraftInBackground(bidId: string): Promise<boolean> {
+  const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!apiKey) return false;
+  let client: Anthropic;
+  try { client = new Anthropic({ apiKey }); } catch (err) { logger.warn({ err, bidId }, '[draft] client could not be created'); return false; }
+  const config = await loadAIConfig();
+  void runDraftComposition(bidId, client, config);
+  return true;
+}
+
 /** Takeoff accuracy Task 8 — the account terms for a bid: the snapshot taken
  *  at analysis time, or (a run from before account rules existed) one built
  *  now from the current rules and the stored drawing analysis, never
@@ -908,6 +998,11 @@ export async function runPipeline(
         model_agent3=$4
       WHERE bid_id=$5
     `, [agent3ToStore, agent1Output, JSON.stringify(resp.usage), config.modelA3, bidId]);
+
+    // Takeoff accuracy Task 12 — the pre-bid draft, right after the analysis,
+    // when nothing is waiting on the estimator (otherwise it's composed the
+    // moment the Needs-review list clears).
+    await runDraftComposition(bidId, client, config);
 
     // Also persist structured fields from agent1 JSON for backward compatibility
     const a1 = parseAIJSON(agent1Output) ?? {};
@@ -1604,7 +1699,14 @@ router.post('/:bidId/review/resolve', requireAuth, asyncHandler(async (req: Auth
   }
   const out = await resolveReviewItems(bidId, itemIds, { action, qty: body.qty, reason: body.reason, answer: body.answer }, req.user!.name);
   if (!out.ok) return res.status(out.status).json({ error: out.error });
-  res.json(out.review);
+  // Task 12 — the last open item just cleared: compose the pre-bid draft.
+  let draftStarted = false;
+  if (out.review.status === 'clear') {
+    const { rows } = await pool.query('SELECT draft_status, draft_inputs_hash FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    const upToDate = rows[0]?.draft_status === 'complete' && rows[0]?.draft_inputs_hash === await scopeInputsHash(bidId);
+    if (!upToDate && rows[0]?.draft_status !== 'running') draftStarted = await startDraftInBackground(bidId);
+  }
+  res.json({ ...out.review, draftStarted });
 }));
 
 router.post('/:bidId/review/reopen', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
@@ -1615,6 +1717,20 @@ router.post('/:bidId/review/reopen', requireAuth, asyncHandler(async (req: AuthR
   const out = await reopenReviewItem(bidId, itemId);
   if (!out.ok) return res.status(out.status).json({ error: out.error });
   res.json(out.review);
+}));
+
+// Task 12 — compose (or re-compose) the pre-bid draft on demand.
+router.post('/:bidId/compose-draft', requireAuth, requireAIPermission('run_analysis'), asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const gate = await takeoffGate(bidId);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+  const { rows } = await pool.query('SELECT agent2_output, draft_status FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  if (!rows[0]?.agent2_output) return res.status(400).json({ error: 'Run the AI analysis first.' });
+  if (rows[0].draft_status === 'running') return res.json({ status: 'running' });
+  const started = await startDraftInBackground(bidId);
+  if (!started) return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI.' });
+  res.json({ status: 'running' });
 }));
 
 // ── Takeoff accuracy Task 11: the estimator's scope list ────────────────────
@@ -1896,6 +2012,22 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
     return res.status(400).json({ error: 'No scope data found. Run the 3-agent analysis first.' });
   }
 
+  // Takeoff accuracy Task 12 — the proposal reuses the pre-bid draft when the
+  // scope inputs haven't changed since it was composed and there are no new
+  // notes: the price goes in, no model call. Otherwise Agent 4 re-composes.
+  const { rows: draftRows } = await pool.query('SELECT draft_output, draft_status, draft_inputs_hash, draft_model FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const draft = draftRows[0];
+  if (draft?.draft_status === 'complete' && draft.draft_output && !internalNotes?.trim()
+      && draft.draft_inputs_hash === await scopeInputsHash(bidId)) {
+    await pool.query(
+      `UPDATE takeoff_results SET agent4_output=$2, agent4_price=$3, agent4_notes=NULL, agent4_model=$4, usage_agent4=NULL,
+         agent4_status='complete', agent4_error=NULL, agent4_source='draft' WHERE bid_id=$1`,
+      [bidId, draft.draft_output, parsedPrice, draft.draft_model]
+    );
+    await pool.query('UPDATE bids SET amount=$1 WHERE id=$2 AND deleted_at IS NULL', [parsedPrice, bidId]);
+    return res.json({ status: 'complete', reusedDraft: true });
+  }
+
   const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
   if (!apiKey) return res.status(503).json({ error: 'Anthropic API key not configured.' });
 
@@ -1983,7 +2115,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
         `UPDATE takeoff_results SET
           agent4_output=$1, agent4_price=$2, agent4_notes=$3,
           agent4_model=$4, usage_agent4=$5,
-          agent4_status='complete', agent4_error=NULL
+          agent4_status='complete', agent4_error=NULL, agent4_source='model'
         WHERE bid_id=$6`,
         [JSON.stringify(parsed), parsedPrice, internalNotes?.trim() || null, config.modelA4, JSON.stringify(resp.usage), bidId]
       );
@@ -2047,6 +2179,10 @@ export interface ComposeCurrentBidDataOptions {
    *  wrong. Defaults true.
    */
   validate?: boolean;
+  /** Takeoff accuracy Task 12 — 'draft' composes from the pre-bid draft
+   *  (no price; the pre-bid package), falling back to agent4_output for a bid
+   *  that predates drafts. Default 'final' (the GC proposal). */
+  source?: 'final' | 'draft';
 }
 
 // Exported (Phase 4 Task 2.2) so the public proposal page (routes/bids.ts's
@@ -2061,11 +2197,17 @@ export async function composeCurrentBidData(
   const validate = opts.validate ?? true;
 
   const { rows: trRows } = await pool.query(
-    'SELECT agent4_output, agent4_price, agent1_output, account_terms, review_items FROM takeoff_results WHERE bid_id=$1',
+    'SELECT agent4_output, agent4_price, agent1_output, account_terms, review_items, draft_output, draft_status FROM takeoff_results WHERE bid_id=$1',
     [bidId]
   );
-  if (!trRows.length || !trRows[0].agent4_output) {
-    return { ok: false, status: 404, error: 'No proposal data found. Run Agent 4 first.' };
+  const useDraft = opts.source === 'draft' && !!trRows[0]?.draft_output && trRows[0]?.draft_status === 'complete';
+  if (!trRows.length || (!trRows[0].agent4_output && !useDraft)) {
+    return {
+      ok: false, status: 404,
+      error: opts.source === 'draft'
+        ? 'The pre-bid draft is not ready yet — it is composed right after the analysis once the takeoff review is clear.'
+        : 'No proposal data found. Run Agent 4 first.',
+    };
   }
   // Takeoff accuracy Task 8 — the job's account terms (+ the estimator's
   // scope answers), enforced on Agent 4's output below.
@@ -2078,13 +2220,14 @@ export async function composeCurrentBidData(
   // agent4_price NUMERIC(12,2) is the authoritative, DB-validated price (see
   // run-agent4's parseMoney gate) — format it here rather than trusting whatever
   // string the LLM echoed back into the data blob.
-  const rawPrice = trRows[0].agent4_price as string | number | null;
+  // A pre-bid draft has no price — ever.
+  const rawPrice = useDraft ? null : (trRows[0].agent4_price as string | number | null);
   const priceNum = rawPrice === null || rawPrice === undefined ? null : Number(rawPrice);
   const formattedPrice = priceNum !== null && Number.isFinite(priceNum)
     ? `$${priceNum.toLocaleString('en-US', { minimumFractionDigits: Number.isInteger(priceNum) ? 0 : 2, maximumFractionDigits: 2 })}`
     : undefined;
 
-  const raw = trRows[0].agent4_output as string;
+  const raw = (useDraft ? trRows[0].draft_output : trRows[0].agent4_output) as string;
   const parsed = parseAIJSON(raw);
   if (!parsed) return { ok: false, status: 422, error: 'Proposal data could not be parsed. Re-run Agent 4 to regenerate.' };
 
@@ -2111,7 +2254,7 @@ export async function composeCurrentBidData(
   // (composeBidData never runs there, so there's nothing to flag).
   let ambiguousQtyKeys: string[] = [];
   if (isAgent4Shape(parsed)) {
-    if (!formattedPrice) {
+    if (!formattedPrice && !useDraft) {
       return { ok: false, status: 422, error: 'No validated price on file for this proposal. Re-run Agent 4.' };
     }
     const bidRow: ComposeBidRow = {
@@ -2127,7 +2270,7 @@ export async function composeCurrentBidData(
       enforced.output.exclusions = [...(enforced.output.exclusions ?? []), ...addExclusions];
       accountCorrections.push(...addExclusions.map(b => `Exclusion added from the estimator's scope list: "${b}"`));
     }
-    const { data, jobNumberGenerated, ambiguousQtyKeys: keys } = composeBidData(bidRow, enforced.output, formattedPrice, {
+    const { data, jobNumberGenerated, ambiguousQtyKeys: keys } = composeBidData(bidRow, enforced.output, formattedPrice ?? '', {
       savedLineItems,
       lightingTermsBullet: lightingTermsBullet(accountResolved.find(t => t.term === 'lighting')),
     });
@@ -2478,7 +2621,10 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
   // non-negotiables, not requirements on this internal/rougher pre-bid
   // deliverable — this route already has its own, more specific and
   // friendlier "no scope data" check just below.
-  const loaded = await composeCurrentBidData(bidId, { validate: false });
+  // Takeoff accuracy Task 12 — the pre-bid package builds from the pre-bid
+  // draft (no price), available right after the analysis; a bid from before
+  // drafts falls back to its Agent 4 output.
+  const loaded = await composeCurrentBidData(bidId, { validate: false, source: 'draft' });
   if (!loaded.ok) {
     return res.status(400).json({
       error: `Cannot generate a pre-bid package: ${loaded.error}`,

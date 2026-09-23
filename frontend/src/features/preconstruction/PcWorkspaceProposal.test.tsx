@@ -155,7 +155,24 @@ describe('PcWorkspace Proposal tab — verify-gate 422 panel (Task 7.2)', () => 
   });
 });
 
-describe('PcWorkspace Proposal tab — pre-bid package (Task 7.3)', () => {
+// Takeoff accuracy Task 12 — the pre-bid package moved from Review & Proposal
+// to the END of the Takeoff step (it builds from the pre-bid draft, before
+// any price); these tests now open the Takeoff step.
+function renderTakeoffStep() {
+  const ws = { ...blankWorkspace('b1', 'Circle K #4521', 0), activeTab: 'takeoff' as const };
+  return render(
+    <PcWorkspaceView ws={ws} bid={bid} onUpdate={() => {}} onBack={() => {}} onConverted={() => {}} onBidUpdated={() => {}} showToast={() => {}} embedded />,
+  );
+}
+
+describe('PcWorkspace Takeoff step — pre-bid package (Task 7.3, moved by takeoff accuracy Task 12)', () => {
+  it('is no longer in Review & Proposal', async () => {
+    baseMocks();
+    renderProposalTab();
+    await waitFor(() => expect(screen.getByText('Proposal Preview')).toBeTruthy());
+    expect(screen.queryByText('Generate Pre-Bid Package for Chris')).toBeNull();
+  });
+
   it('the Generate Pre-Bid Package button posts to generate-prebid-package and renders download links', async () => {
     baseMocks();
     post.mockImplementation((url: string) => {
@@ -165,7 +182,7 @@ describe('PcWorkspace Proposal tab — pre-bid package (Task 7.3)', () => {
       return Promise.resolve({ data: {} });
     });
 
-    renderProposalTab();
+    renderTakeoffStep();
     await waitFor(() => expect(screen.getByText('Generate Pre-Bid Package for Chris')).toBeTruthy());
 
     fireEvent.click(screen.getByText('Generate Pre-Bid Package for Chris'));
@@ -175,11 +192,11 @@ describe('PcWorkspace Proposal tab — pre-bid package (Task 7.3)', () => {
     expect(screen.getByText('Download Pre-Bid Takeoff')).toBeTruthy();
   });
 
-  it('is labeled as an internal-only action', async () => {
+  it('is labeled as an internal-only, no-price action', async () => {
     baseMocks();
-    renderProposalTab();
+    renderTakeoffStep();
     await waitFor(() => expect(screen.getByText('Pre-Bid Package for Chris')).toBeTruthy());
-    expect(within(screen.getByText('Pre-Bid Package for Chris').closest('span') as HTMLElement).getByText('Internal only')).toBeTruthy();
+    expect(within(screen.getByText('Pre-Bid Package for Chris').closest('span') as HTMLElement).getByText('Internal only · no price')).toBeTruthy();
   });
 });
 

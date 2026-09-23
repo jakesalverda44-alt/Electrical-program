@@ -220,62 +220,9 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
         />
       )}
 
-      {/* Task 6.3 — internal-only pre-bid package for Chris, from the
-          same composed BidData the GC docx/xlsx render from. */}
-      {hasProposal && (
-        <div className="panel" style={{ marginBottom: 16 }}>
-          <div className="panel-hdr">
-            <span className="panel-title">
-              <span className="pt-ic"><Icon name="users" size={14} stroke={1.9}/></span>
-              Pre-Bid Package for Chris
-              <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 800, color: 'var(--amber)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                Internal only
-              </span>
-            </span>
-          </div>
-          <div style={{ padding: '14px 20px' }}>
-            <div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.6, marginBottom: 12 }}>
-              Generates the internal scope docx (no price, no signature) and a confidence-coded
-              takeoff xlsx for Chris to price against, filed under this bid&apos;s Pre-Bid documents.
-            </div>
-            <button className="btn ghost" onClick={generatePrebidPackage} disabled={prebidBusy} style={{ fontSize: 13 }}>
-              <Icon name="doc" size={14} stroke={1.9}/> {prebidBusy ? 'Generating…' : 'Generate Pre-Bid Package for Chris'}
-            </button>
-            {prebidResult && (
-              <div style={{ marginTop: 12, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-                {prebidResult.scopeDocumentId && (
-                  <button onClick={() => downloadFiledDocument(prebidResult.scopeDocumentId!, `PreBid Scope — ${bid.name}.docx`)}
-                    style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                    <Icon name="doc" size={12} stroke={2}/> Download Pre-Bid Scope
-                  </button>
-                )}
-                {prebidResult.takeoffDocumentId && (
-                  <button onClick={() => downloadFiledDocument(prebidResult.takeoffDocumentId!, `PreBid Takeoff — ${bid.name}.xlsx`)}
-                    style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                    <Icon name="doc" size={12} stroke={2}/> Download Pre-Bid Takeoff
-                  </button>
-                )}
-              </div>
-            )}
-            {/* Phase 4 Task 1.5 — a DRAFT (never a send) to Chris with
-                both filed pre-bid files attached; Jake reviews/sends
-                from Outlook, same as the "Email Bid to Team" pattern. */}
-            {prebidResult && (prebidResult.scopeDocumentId || prebidResult.takeoffDocumentId) && (
-              <div style={{ marginTop: 12 }}>
-                <button className="btn ghost" onClick={emailPrebidToChris} disabled={chrisDraftBusy} style={{ fontSize: 12.5 }}>
-                  <Icon name="mail" size={13} stroke={1.9}/> {chrisDraftBusy ? 'Drafting…' : 'Email to Chris (draft)'}
-                </button>
-                {chrisDraftLink && (
-                  <a href={chrisDraftLink} target="_blank" rel="noreferrer"
-                    style={{ marginLeft: 10, fontSize: 12, fontWeight: 700, color: 'var(--blue)' }}>
-                    Open draft in Outlook →
-                  </a>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Takeoff accuracy Task 12 — the Pre-Bid Package for Chris moved to
+          the end of the Takeoff step (it builds from the pre-bid draft, before
+          any price). */}
 
       {/* Task 6/7 — the verify gate's failures never fail silently: list
           each check + its matched text with re-run guidance. */}

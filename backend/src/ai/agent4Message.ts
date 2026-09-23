@@ -34,6 +34,10 @@ export interface SavedEstimateContext {
 }
 
 export interface Agent4MessageInput {
+  /** Takeoff accuracy Task 12 — 'draft' composes the scope + takeoff for the
+   *  pre-bid package BEFORE any price exists: no price line, and an explicit
+   *  instruction never to write one. */
+  mode?: 'proposal' | 'draft';
   price: string;
   internalNotes?: string | null;
   agent1Output: string;
@@ -69,14 +73,23 @@ function truncateWithMarker(text: string, cap: number): string {
 }
 
 export function buildAgent4UserMessage(input: Agent4MessageInput): string {
-  const lines: string[] = [
-    'PROPOSAL REQUEST',
-    '',
-    `Total Bid Price: ${input.price.trim()}`,
-    '',
-    'Internal Notes from Estimator:',
-    input.internalNotes?.trim() || '(none)',
-  ];
+  const lines: string[] = input.mode === 'draft'
+    ? [
+        'PRE-BID DRAFT REQUEST',
+        '',
+        'There is NO price yet: this draft (scope sections + takeoff) goes to the estimator to price. Never write a price, a dollar amount, a total or a price summary anywhere.',
+        '',
+        'Internal Notes from Estimator:',
+        input.internalNotes?.trim() || '(none)',
+      ]
+    : [
+        'PROPOSAL REQUEST',
+        '',
+        `Total Bid Price: ${input.price.trim()}`,
+        '',
+        'Internal Notes from Estimator:',
+        input.internalNotes?.trim() || '(none)',
+      ];
 
   const scopeEntries = SCOPE_SECS_BACKEND
     .map(s => ({ title: s.label, text: (input.workspaceScope?.[s.id] || '').trim() }))
