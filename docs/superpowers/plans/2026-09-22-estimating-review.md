@@ -236,3 +236,170 @@ The pricing formulas are right, but the inputs they receive in practice produce 
 S1 then pushes users to Save these numbers over real historical estimates on every bid they open.
 
 Re-review after B1–B5 and S1–S4 are fixed. Each fix needs a test built from Agent 2's real `{item, spec, qty, unit: 'LF'}` shape, not from lines pre-converted to C/M.
+
+---
+
+# Round 2: re-review of fix round 1 (`2201b20..c41a73c`)
+
+**Reviewer:** Opus 5 (read-only). The only file this round wrote is this review record.
+
+## Verification run (round 2)
+
+| Check | Result |
+|---|---|
+| Backend `npm test` | **955 passed / 959**, 107 of 108 files. The one file that doesn't finish is `notificationsRetention.test.ts`: V8 "JavaScript heap out of memory". |
+| Backend `tsc --noEmit` | clean |
+| Frontend `npm test -- --run` | **642 / 643**, 88 of 89 files. The one failure is `SurveyMarkupEditor.test.tsx` (known flake); it passes when re-run on its own. |
+| Frontend `tsc --noEmit` | clean |
+
+**`notificationsRetention` (item e) is pre-existing.** I created a temporary detached worktree of `main` (`c662ceb`) in the scratchpad, symlinked `backend/node_modules`, and ran that one file against `electrical_crm_test`. It dies with the same heap OOM. The branch touches none of its imports (`db/pool`, `test/harness`, `notifications/engine`, `utils/audit`). I removed the temp worktree afterwards (`git worktree remove` + `prune`; `git worktree list` shows only Local Version and this worktree).
+
+## Round-1 findings: verified with real-shape reproductions against the seed
+
+I re-ran my own probes through `fromLegacyTakeoff` → `mapTakeoffLines` → `priceBid` using `SEED_ITEMS`/`SEED_ASSEMBLIES` and the `{item:'5.1', spec, qty, unit:'LF'}` shape.
+
+| ID | Status | Evidence |
+|---|---|---|
+| B1 | **Fixed.** | 1,200 LF 3/4" EMT → $720 / 48 h. 3,600 LF #12 THHN → $342 / 12.6 h. 500 lf 12/2 MC → $350. 1,000 FT #1 THHN → $1,050. `pricing.ts:269` divides by `libraryUnit`. `resolveLines` (`bidEstimate.ts:240-262`) refuses EA↔linear matches. |
+| B2 | **Fixed.** | LS, blank and SET lines price at $0 and count as unmatched, never NaN. A mismatched item_id on a unit-unknown or incompatible line resolves as unmatched. The 400 guard is `assertFiniteRecap` plus `catchNonFiniteTotal`. The `toFixed` calls in the UI are guarded. |
+| B3 | **Fixed for every case listed.** | 4"/2" EMT, 4"/2" PVC, 1-1/4" EMT, "2 EMT", duplex+spec, GFCI+spec and the 800A service ($4,487, now above the 400A panel) all map correctly. Unknown sizes (3-1/2" EMT or rigid, 150A/600A disconnect, 600A panel) now return `none`. Residual misses: see R2-SF1. |
+| B4 | **Fixed.** | The suggestion is `(accubid/engine − 1)`, so an engine 20% high gives −16.7%. The ±50% cap is in place, categories are canonicalized, and a 0-row apply returns 400. |
+| B5 | **Partly fixed.** | `qty_overridden`, duplicate-key dedupe, sync writing `bid_estimates`/`bids.amount` in the same transaction, and the dirty-sync confirm all work. The sync_excluded reversal is defeated by any Save (R2-B2). |
+| S1 | **Fixed.** | A proposed mapping is not dirty. BidSummary shows "Unsaved proposal" or "Unsaved changes". |
+| S2 | **Partial.** | The dead code is gone, but `pricingDirty` still arms the leave prompt (R2-B3). |
+| S3 | **Code fixed, untested.** | See the S3/S4 test judgment below. |
+| S4 | **Fixed.** | The notes textarea and `ImportPanel` are back in Documents (`PcWorkspaceView.tsx:1042-1048`). |
+| S5 | **Fixed.** | — |
+| S6 | **Fixed.** | Precedence nit: see R2-SF7. |
+| S7 | **Fixed, one remainder.** | Negative overrides now get a 400. Clearing an override sets null. "Keep as manual" requires a value. The settings inputs still turn `''` into 0 (R2-N1). |
+| S8 | **Fixed.** | Sequence guard in place, and recap lines are keyed by id. |
+| S9 | **Fixed.** | `PUT /api/estimates/:bidId` returns 410 (`routes/estimates.ts:55-59`). |
+| S10 / (d) | **Fixed.** | The hand case still gives $6,236.74 exactly. A 20,000-case randomized fuzz (mixed EA/LF lines against EA/C/M library units, 15% of lines excluded, random pcts and rates) checked five things: Σ line `directShare` = `directCost`, Σ category `subtotal` = `directCost`, grand = direct + OH + profit, no negative shares, and no non-finite values. **0 violations, max drift 0¢.** `bid_estimates.subtotals` and `line_items[].total` are written from these values (`bidEstimate.ts:609-631`). |
+| N1–N3, N7–N9, N11 | **Fixed.** | — |
+
+## Round 2 blockers
+
+### R2-B1. Per-unit prices are shown and entered in the library unit, but the row is labelled with the takeoff unit, so a per-foot override prices 100× (C) or 1000× (M) low
+
+- **Evidence.**
+  - `LaborPricingStep.tsx:330` renders the unit column as `line.unit` ("LF").
+  - `:332` fills the "Mat $/unit" input with `priced.materialUnit`, which is $60, the per-**C** price. The hours input works the same way.
+  - `pricing.ts:269-273`: the override replaces `materialUnitCost` and is then divided by the **library** unit's divisor.
+  - For a manual or unmatched line, `libraryUnit` is null, so the divisor is the display unit (1).
+- **Reproduction.** A line of 1,200 LF matched to EMT-075, with a supplier quote of $0.62/LF typed as the override:
+  - Prices **$7.44** material and 0.48 h.
+  - The same numbers on a manual line price **$744** and 48 h.
+
+  The same typed number means two different things depending on whether the line was ever matched. The screen shows "LF | $60.00 | $720.00", which reads as $60/LF. Estimators routinely override with per-foot quotes.
+- **Fix.** Display and accept per-unit values in the **display** unit. The UI should show `materialUnit × divisor(display)/divisor(library)`, and pricing should convert the override back, or store overrides in display-unit terms and convert in `priceBid`. At minimum, label the column with the library unit ("$60.00 / C"). Add a test that a per-LF override on a C-matched line gives $744.
+
+### R2-B2. A Save wipes `sync_excluded`, so a line that vanished from the takeoff and later returns stays excluded
+
+- **Evidence.**
+  - `bidEstimate.ts:686-691`: `saveBidEstimate` always inserts `sync_excluded = false`. Its comment says "a plain save never sets it".
+  - The client does not round-trip the flag: `validateLines` doesn't read it.
+  - The round-1 test (`estimatingBid.test.ts:278-313`) runs the PUT *before* the vanishing sync, so this path is never exercised.
+- **Scenario.**
+  1. A re-run drops the Grounding line; sync excludes it and sets `sync_excluded = true`.
+  2. The estimator edits anything and saves. The flag becomes false.
+  3. The next re-run restores Grounding. `wasSyncExcluded` is false, so the line **stays excluded**.
+  4. `:519` also strips the "[No longer in takeoff]" prefix, so the line now looks like a deliberate exclusion.
+
+  That is round-1 B5(3) again, silently leaving scope out of the bid.
+- **Fix.** Accept `sync_excluded` in `validateLines` and persist it in the save. Keep it true only while `excluded` is true, and clear it if the user toggles exclusion. Add the missing test: sync (vanish) → PUT → sync (reappear) → line not excluded.
+
+### R2-B3. The legacy `pricingDirty` guard still arms the leave prompt, and it can get stuck on with nothing in the UI to clear it (answers item a)
+
+- **Evidence.**
+  - `PcWorkspaceView.tsx:289-294`: `useUnsavedGuard(pricingDirty || saveState === 'error')`.
+  - `pricingDirty` compares `ws.overheadPct`/`profitPct`/`estimateOverrides` (hydrated once at mount, `:367-409`) against `savedEstimate`, which is `GET /estimates/:bidId` fetched once at mount (`:308`).
+  - The workspace autosave keeps writing the hydrated ws values into `bid_workspaces` with a fresh `updated_at` on every autosave (`:196-198`), and changing step alone triggers one.
+  - The hydration rule is "workspace wins when strictly newer".
+- **Scenario.**
+  1. Session 2 hydrates OH 12 from `bid_estimates`.
+  2. The estimator reprices through the engine to OH 14. The save writes `bid_estimates` (14).
+  3. The estimator clicks the next step. Autosave writes `bid_workspaces` with OH 12, newer than the estimate.
+  4. Session 3 hydrates 12 from the newer workspace. `pricingDirty` sees 12 ≠ 14 and becomes **permanently true**. The `beforeunload` and in-app leave prompts fire on every navigation away from the bid's hub. `PcWorkspaceView` is mounted for any opened bid, even on its Overview tab.
+
+  The same thing happens with overrides even faster. `line_items[].unit_cost` for an overridden line is now `directShare/qty`, which shifts on *any* engine save (tax, other lines, OH). So `overridesFromEstimate()` drifts from the hydrated copy after one repricing on any bid with an override.
+
+  There is no UI left that edits `ws.overheadPct`/`estimateOverrides`: `onOverheadChange`, `onProfitChange` and `onUnitCostChange` at `:951-954` are wired to nothing. `PcWorkspacePricingDirtyGuard.test.tsx` mocks `/estimates/:bidId` as null, so this path is untested.
+- **Why it's a blocker.** It is a false, un-clearable prompt in normal multi-session use. It trains estimators to click through the one dialog that protects real unsaved pricing edits (money).
+- **What depends on this state.**
+  - **Nothing server-side reads the frontend state itself.** `composeBidData` reads only `bid_estimates.line_items` for the per-item confidence lookup (`preconstruction.ts:1830-1841`). Agent 4 reads `bid_estimates` grand_total/OH/profit/subtotals (`:1680`). Neither reads `bid_workspaces` pricing or ws state. The executor's stated reason for keeping the hydration ("composeBidData's fallback path for bids that never adopt the new engine") is incorrect. For such bids `bid_estimates.line_items` is whatever the legacy Save wrote, and hydration only ever writes `bid_workspaces`.
+  - **The one real consumer** is `inheritedOverheadProfit()` (`bidEstimate.ts:~140-160`, S6). It reads `bid_workspaces.overhead_pct`/`profit_pct` first when a bid has no `est_bid_settings` row. The hydration keeps those columns equal to the legacy estimate's values.
+- **Minimal safe removal.**
+  - **Required:** delete the `pricingDirty` computation (`:283-293`) and change `:294` to `useUnsavedGuard(saveState === 'error')`. Nothing else reads `pricingDirty`. `savedEstimate`/`setSavedEstimate` (`:87`, `:309`) then have no readers and can go too.
+  - **Keep for now:** the `savedEstimateData`/`workspaceRow` fetches and the hydration effect, because they feed S6 inheritance through the autosave.
+  - **Full cleanup, as a follow-up:** remove the hydration, both fetches, `onUnitCostChange`/`onOverheadChange`/`onProfitChange`, the `/estimates/unit-costs` fetch (`:140`) and the ws pricing fields. This must happen together with switching `inheritedOverheadProfit` to read `bid_estimates` first (or only). Otherwise every autosave writes 10/15 into `bid_workspaces` and S6 inherits 10/15 instead of the bid's real legacy markup.
+- **Test.** Mock `/estimates/:bidId` with OH 14 and `/workspace` newer with OH 12, then assert that Leave does not prompt.
+
+## Round 2 should-fix
+
+- **R2-SF1. Fuzzy and generic mis-maps still price silently; match confidence is never shown.**
+  - Examples:
+
+    | Takeoff line | Maps to | Tier | Effect |
+    |---|---|---|---|
+    | `#4/0 aluminum XHHW`, 1,000 LF | #4/0 **copper** THHN | fuzzy | $2,260; aluminum is far cheaper |
+    | `1" flex`, 100 LF | **#1 THHN wire** (M) | fuzzy | "#" is stripped, so gauge 1 equals trade size 1 |
+    | `3/4" conduit` | **liquidtight** | alias | generic phrase is a subset of the LFMC name |
+
+  - `matchConfidence` is dropped in `getProposedLinesFromTakeoff`/`syncTakeoff`. It is not persisted, and `LaborPricingStep` never shows it, so a fuzzy match looks exactly like an exact one.
+  - **Fix:**
+    - Keep "#" as a gauge marker in `normalize()`.
+    - Add material tags for aluminum/AL, XHHW, LFMC/liquidtight/flex, and FMC.
+    - Make generic one-noun descriptions (a desc ⊂ name match that carries no material tag) fuzzy, not alias.
+    - Persist `match_confidence` and badge fuzzy rows "review".
+- **R2-SF2. The resolver offers unit-incompatible candidates, and picking one silently prices $0 and hides the resolve button.**
+  - `LaborPricingStep.tsx:153-161` offers every active item and assembly. `pickResolution` (`:164-169`) sets the id but not the unit. `resolveLines` then rejects the pair (LS/blank/SET, or EA vs LF), so the line prices $0.
+  - The client-side `unmatchedIndices`/`isUnresolved` (`:148-151`, `:310`) now treat the line as resolved: the banner and resolve button disappear. Only the server's `unmatchedCount` in BidSummary and the pre-send checklist still flags it.
+  - **Fix:** filter candidates to compatible units, or let the resolver set the unit. Derive unresolved from the server recap, not from id presence.
+- **R2-SF3. S3 has no test, and the price can still drift (answers item b).**
+  - The proposal price → Agent 4 → `bids.amount` path *is* the plan's acceptance test. **Shipping S3 with zero coverage is not acceptable.** Add two tests: `propPrice` re-syncs to the saved engine total after a Save, and it is not overwritten once hand-edited.
+  - For S4 (a JSX re-home), missing tests are acceptable as a follow-up, but one render assertion for the Documents step (notes textarea + ImportPanel present) is cheap and worth adding.
+  - **Remaining gaps:**
+    - Once `propPriceEdited` is set (`PcWorkspaceView.tsx:989-995`) it never resets and shows no "differs from saved estimate $X" warning.
+    - `GET /:bidId` recomputes a saved bid against the *current* library. After any library edit or calibration apply, the displayed and prefilled total silently differs from `bid_estimates`/`bids.amount` with no dirty or stale flag.
+  - **Fix:** add a mismatch line to the pre-send checklist, and flag the estimate as stale when the recomputed grand total differs from the saved `bid_estimates.grand_total`.
+- **R2-SF4. Sync keeps an old match when the takeoff row behind the same key changes.**
+  - `bidEstimate.ts:514-521` refreshes description, qty and unit, but keeps `assembly_id`/`item_id` and overrides.
+  - The key is `category||item`, and `item` is Agent 4's positional id ("5.1"). If a re-run renumbers or respecs ("5.1" goes from 3/4" EMT to 1" EMT), the line keeps pricing as 3/4" EMT under the new description.
+  - **Fix:** when the normalized description changes and the line has no manual resolution or overrides, re-map it. Otherwise flag it for review.
+- **R2-SF5. Migration 105 does not follow its own "never touch edited rows" rule (item c).**
+  - The DISC-800 insert is `ON CONFLICT DO NOTHING` and the ASM-DUPLEX alias update is guarded by `source = 'seed'`. The 800A **component swap** (`DO $$ … UPDATE est_assembly_components SET qty_per = 0 …`) has **no** `source = 'seed'` check on `ASM-SVCENT-800`, so it would overwrite an admin-edited assembly.
+  - Practical risk is nil today: 101–106 have never run on the live DB and will all land together at merge, before any edits exist. Add the guard anyway.
+  - **Regression:** the leftover `qty_per = 0` DISC-400 row makes the 800A assembly **uneditable in Settings**. `LaborLibrarySection.tsx:178` sends every component, and the route rejects `qty_per <= 0` (`routes/estimating.ts` assembly PUT) with a 400.
+  - **Fix:** `DELETE` that component row. 102 will not re-run because it is recorded in `schema_migrations`. Alternatively, filter zero-qty components in the editor.
+- **R2-SF6. The sync confirm text is wrong.**
+  - `LaborPricingStep.tsx:132` says "Manual lines and estimator overrides are never touched". In fact `useEstimatingBid.syncTakeoff` replaces **all** client lines with the server copy, so every unsaved edit is lost, including overrides and manual lines added since the last save.
+  - **Fix:** say "Syncing discards all unsaved changes", or save first.
+- **R2-SF7. The S6 inheritance source is backwards.**
+  - `inheritedOverheadProfit` prefers `bid_workspaces` over `bid_estimates` regardless of recency. The deliberate save (`bid_estimates`) should win, or the frontend's "newer wins" rule should be reused.
+  - This becomes mandatory as soon as the R2-B3 full cleanup lands.
+
+## Round 2 nits
+
+- **R2-N1.** `LaborPricingStep.tsx:196` and the percentage inputs still do `Number(e.target.value)`. Clearing Labor rate gives $0 labor in the live recap, and 0 passes validation.
+- **R2-N2.** `qty_overridden` sticks forever. There is no "takeoff now says N" hint and no reset, so a later takeoff revision with more devices is silently ignored.
+- **R2-N3.** Calibration's per-category "gap" is each bid's overall Accubid/engine ratio spread by category hours; Accubid gives only a total. Label it as an approximation. There is no audit log of applies.
+- **R2-N4.** `propPrice` is `Math.round(total)`, so after Agent 4 `bids.amount` differs from `grand_total` by up to $0.50.
+- **R2-N5.** A display unit of `C` or `M` (possible only if a takeoff emits it) is priced as raw feet (`pricing.ts:269-270`). Convert with `divisor(display)/divisor(library)`.
+- **R2-N6.** A 2" PVC line in Branch Power maps to the underground PVC item (the only 2" PVC). Correct price, wrong category label.
+
+## Verdict (round 2): **MERGE AFTER FIXES**
+
+The core money engine is now sound, and the round-1 blockers are verified fixed against real Agent 2 shapes: magnitudes, NaN safety, the listed size mismatches, calibration direction, and exact reconciliation.
+
+Merge after the fixes below, each with a real-shape test. A main-session spot-check of those fixes is enough; a full third review is not needed.
+
+**Required before merge:**
+- **R2-B1:** unit semantics of per-unit overrides.
+- **R2-B2:** a Save must preserve `sync_excluded`.
+- **R2-B3:** remove the `pricingDirty` guard term.
+- **R2-SF3:** the S3 tests.
+
+**Strongly recommended in the same pass:**
+- **R2-SF1:** surface fuzzy matches; add the aluminum and flex tags.
+- **R2-SF2:** resolver unit filter.
+- **R2-SF5:** delete the zero-qty component row and add the `source = 'seed'` guard.
