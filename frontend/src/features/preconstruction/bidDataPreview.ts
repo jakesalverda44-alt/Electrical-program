@@ -80,4 +80,6 @@ export interface VerifyFailure {
    *  the estimator can keep it (with a reason). */
   category?: string;
   line?: string;
+  /** Fix round 2 — the override flag that keeps / picks this line. */
+  flag?: string;
 }

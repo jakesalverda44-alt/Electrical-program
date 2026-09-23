@@ -252,8 +252,8 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
                   {f.check.replace(/_/g, ' ')}
                 </div>
                 <div style={{ marginBottom: (f.matches ?? []).length ? 4 : 0 }}>{f.detail}</div>
-                {(f.check === 'non_electrical' || f.check === 'excluded_scope') && f.category && f.line && (
-                  <KeepLineControl bidId={bid.id} category={f.category} line={f.line} showToast={showToast} />
+                {(f.check === 'non_electrical' || f.check === 'excluded_scope' || f.check === 'count_line_ambiguous' || f.check === 'irrelevant_spec') && f.category && f.line && (
+                  <KeepLineControl bidId={bid.id} category={f.category} line={f.line} flag={f.flag ?? f.check} showToast={showToast} />
                 )}
                 {(f.matches ?? []).length > 0 && (
                   <div style={{ fontSize: 12, color: 'var(--text3)' }}>

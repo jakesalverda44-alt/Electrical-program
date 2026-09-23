@@ -152,11 +152,12 @@ export async function buildAccountTermsSnapshot(
   const project = (agent1.project ?? {}) as Record<string, unknown>;
   // Fix round 1 / S8 — never the bid's own GC name (project.gcName is the
   // bid's GC after the hygiene step): drawing text only.
-  const { rule, matchedBy } = matchAccountRule(rules, {
+  const { rule, matchedBy, warning } = matchAccountRule(rules, {
     brand: bid.brand, bidName: bid.name, projectType: bid.project_type,
     owner: String(project.owner ?? ''), drawingsProject: String(project.name ?? ''), gcExtracted: String(project.gc_extracted ?? ''),
   });
   const snap = resolveAccountTerms(rule, matchedBy, agent1.furnishStatements, mdpOnDrawings(agent1), aiNotesFor(agent1));
+  if (warning) snap.warning = warning;
   if (bid.brand?.trim() && (!rule || rule.isDefault)) {
     snap.warning = `The bid's brand "${bid.brand.trim()}" matched no account rule — the Default terms apply. Add the brand to a rule's aliases in Settings → Account Rules if it has its own terms.`;
   }

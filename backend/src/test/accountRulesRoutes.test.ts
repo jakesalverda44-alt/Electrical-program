@@ -78,6 +78,11 @@ describe('buildAccountTermsSnapshot on the seeded rules', () => {
     if (!ok) return ctx.skip();
     const snap = await buildAccountTermsSnapshot({ name: '7-11 #41234', brand: null, project_type: null }, { project: {} });
     expect(snap.ruleName).toBe('7-Eleven');
+    // Fix round 2 / R2-B3 — migration 120 removed the bare "711": store
+    // numbers, street numbers and suites never make a job 7-Eleven.
+    expect((await buildAccountTermsSnapshot({ name: 'AutoZone Store #711 Orlando', brand: 'AutoZone', project_type: null }, { project: {} })).ruleName).toBe('AutoZone');
+    expect((await buildAccountTermsSnapshot({ name: "Dunkin' - 711 Main St", brand: null, project_type: null }, { project: {} })).ruleName).toBe('Default');
+    expect((await buildAccountTermsSnapshot({ name: 'Retail shell', brand: null, project_type: null }, { project: { name: 'SUITE 711' } })).ruleName).toBe('Default');
     const other = await buildAccountTermsSnapshot({ name: 'Store', brand: 'Wawa', project_type: null }, { project: {} });
     expect(other.ruleName).toBe('Default');
     expect(other.warning).toMatch(/brand "Wawa" matched no account rule/);

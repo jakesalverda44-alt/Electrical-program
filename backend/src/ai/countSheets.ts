@@ -75,10 +75,13 @@ export function levelOf(title: string): string {
 
 /** Fix round 1 / B4 — the partition of a level a sheet shows, '' when the
  *  title names none. "AREA A", "AREA A/B", "NORTH", "NORTH HALF", "PART 2",
- *  "UNIT B", "WING 1", "BUILDING 2", "ZONE 3", "SECTOR C". */
+ *  "UNIT B", "WING 1", "BUILDING 2", "ZONE 3", "SECTOR C". Fix round 2 /
+ *  N-R2-5: never PHASE — phased remodel sets often show the SAME area in each
+ *  phase, so two PHASE sheets of one level get the blocking same-area-or-
+ *  additive question instead of being summed. */
 export function areaOf(title: string): string {
   const t = title.toUpperCase().replace(/\s+/g, ' ');
-  let m = /\b(AREA|PART|UNIT|WING|ZONE|SECTOR|SECTION|BUILDING|BLDG\.?|PHASE)(?:\s+|\s*[#:-]\s*)([A-Z0-9]+(?:\s*[/&]\s*[A-Z0-9]+)*)\b/.exec(t);
+  let m = /\b(AREA|PART|UNIT|WING|ZONE|SECTOR|SECTION|BUILDING|BLDG\.?)(?:\s+|\s*[#:-]\s*)([A-Z0-9]+(?:\s*[/&]\s*[A-Z0-9]+)*)\b/.exec(t);
   if (m) {
     const kind = m[1].replace(/^BLDG\.?$/, 'BUILDING');
     // "SECTION" is only an area with a short tag ("SECTION A"), never "SECTION VIEW"

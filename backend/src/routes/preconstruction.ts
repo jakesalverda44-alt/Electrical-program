@@ -50,7 +50,7 @@ import { buildReviewItems, carryOverResolutions, reviewStatus, reviewResolutions
 import { takeoffGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
 import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
-import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey } from '../bidstd/scopeList';
+import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey, overrideFor } from '../bidstd/scopeList';
 import { getBidScopeList } from '../bidstd/scopeListDb';
 import { ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
 import { composeProposal } from '../bidstd/composeProposal';
@@ -1910,14 +1910,17 @@ router.post('/:bidId/non-electrical-overrides', requireAuth, asyncHandler(async 
   const category = typeof req.body?.category === 'string' ? req.body.category : '';
   const line = typeof req.body?.line === 'string' ? req.body.line.trim() : '';
   const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  // S-R2-5 — bound to this exact line AND this flag.
+  const flag = typeof req.body?.flag === 'string' ? req.body.flag : 'non_electrical';
+  if (!/^(non_electrical|excluded_scope|spec|count_line:[A-Z0-9 .:-]{1,40})$/.test(flag)) return res.status(400).json({ error: 'unknown flag' });
   if (!category || !line) return res.status(400).json({ error: 'category and line required' });
   // Fix round 1 — one override mechanism for every "keep this" decision: a
   // non-electrical line (S9), a line on the Not-included list (N7), or an
   // other-region spec sentence (S10, category 'spec'). A real reason (N6).
   if (!isRealReason(reason)) return res.status(400).json({ error: 'Say why this belongs on this job (at least 10 characters).' });
   await pool.query(
-    `INSERT INTO bid_scope_items (bid_id, kind, text, line_key, reason, created_by) VALUES ($1,'override_non_electrical',$2,$3,$4,$5)`,
-    [bidId, line, normalizeLineKey(category, line), reason, req.user!.name]
+    `INSERT INTO bid_scope_items (bid_id, kind, text, line_key, reason, created_by, flag_code) VALUES ($1,'override_non_electrical',$2,$3,$4,$5,$6)`,
+    [bidId, line, normalizeLineKey(category, line), reason, req.user!.name, flag]
   );
   res.json(await getBidScopeList(bidId));
 }));
@@ -2527,7 +2530,7 @@ export async function composeCurrentBidData(
     ...bidData.exclusions.map(b => (typeof b === 'string' ? b : `${b.b} ${b.t}`)),
   ].join('\n');
   const spec = irrelevantSpecSentences(gcText, bid?.loc ?? '');
-  const specKept = (sentence: string) => scopeList.overrides.some(o => o.lineKey === normalizeLineKey('spec', sentence));
+  const specKept = (sentence: string) => overrideFor(normalizeLineKey('spec', sentence), scopeList.overrides, 'spec') !== null;
   const hygieneWarnings = [
     ...zeroQuantityProblems(bidData),
     ...excludedScopeProblems(bidData, scopeList.items, scopeList.overrides),
@@ -2536,7 +2539,8 @@ export async function composeCurrentBidData(
       : `${f.category}: "${f.line}" (${f.unit}) looks like ${f.reason} — ${f.block ? 'not electrical scope (blocks the GC documents until kept with a reason)' : 'check it is electrical scope (keep it with a reason to clear this)'}`),
     ...nearDuplicateLines(bidData).map(d => `Possible duplicate lines in ${d.category}: ${d.lines.map(l => `"${l}"`).join(' / ')}`),
     // S10 — other-region / store-type spec text: a warning with an override.
-    ...spec.warn.filter(x => !specKept(x)).map(x => `Owner-spec text for another region or store type — check it applies to this project: "${x}"`),
+    ...spec.block.filter(x => specKept(x)).map(x => `Kept by the estimator: "${x}"`),
+    ...spec.warn.filter(x => !specKept(x)).map(x => `Owner-spec text for another store type — check it applies to this project: "${x}"`),
     ...countWarnings,
   ];
   return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys, accountCorrections, verifyOptions, hygieneWarnings, runId };

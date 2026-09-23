@@ -30,6 +30,18 @@ export interface NonElectricalOverride {
   /** normalizeLineKey(category, item/description) of the overridden line. */
   lineKey: string;
   reason: string;
+  /** Fix round 2 / S-R2-5 — what was overridden: 'non_electrical',
+   *  'excluded_scope', 'spec', 'count_line:<KEY>'. A row from before round 2
+   *  has none and counts as 'non_electrical'. */
+  flag?: string | null;
+}
+
+/** S-R2-5 — an override clears ONLY the exact line it was made on (same
+ *  category and the same significant words) and only for the flag it was
+ *  made for. No fuzzy word overlap. */
+export function overrideFor(lineKey: string, overrides: NonElectricalOverride[], flag = 'non_electrical'): string | null {
+  const o = overrides.find(x => x.lineKey === lineKey && (x.flag ?? 'non_electrical') === flag);
+  return o ? o.reason : null;
 }
 
 // ── Terms ───────────────────────────────────────────────────────────────────
@@ -95,9 +107,15 @@ function carvedOut(text: string, ex: ScopeItem, includes: ScopeItem[]): boolean 
     if (!exTerms.every(t => incTerms.includes(t)) || incTerms.length <= exTerms.length) return false;
     const have = new Set(significantTerms(text));
     // the text carries the carve-out's own extra words ("conduit", "pull", "string")
-    return incTerms.filter(t => !exTerms.includes(t)).some(t => have.has(t));
+    if (!incTerms.filter(t => !exTerms.includes(t)).some(t => have.has(t))) return false;
+    // S-R2-8 — precise: a carve-out covers only conduit, boxes and pull
+    // strings; text that also names cabling, devices, wiring, terminations or
+    // programming is the excluded work and fails.
+    return !EXCLUDED_WORK.test(text);
   });
 }
+
+const EXCLUDED_WORK = /\b(cabl(e|es|ing)|devices?|wir(e|es|ing|ed)|terminat(e|es|ed|ion|ions)|programming|program|equipment|heads?|speakers?|cameras?|readers?|panels?)\b/i;
 
 export interface ExcludedScopeFinding { category: string; line: string; detail: string }
 
@@ -106,7 +124,7 @@ export interface ExcludedScopeFinding { category: string; line: string; detail: 
 export function excludedScopeFindings(data: Pick<BidData, 'takeoff' | 'sections'>, items: ScopeItem[], overrides: NonElectricalOverride[] = []): ExcludedScopeFinding[] {
   const excluded = items.filter(i => i.kind === 'exclude');
   const includes = items.filter(i => i.kind === 'include');
-  const kept = (cat: string, text: string) => overrideFor(normalizeLineKey(cat, text), overrides) !== null;
+  const kept = (cat: string, text: string) => overrideFor(normalizeLineKey(cat, text), overrides, 'excluded_scope') !== null;
   const out: ExcludedScopeFinding[] = [];
   for (const ex of excluded) {
     for (const cat of data.takeoff ?? []) {
@@ -170,25 +188,40 @@ interface TradeRule { trade: string; hard: boolean; test: (t: string) => boolean
 /** Words that make a line EC work whatever other trade's word it contains. */
 const ELECTRICAL_CONTEXT = /\b(conduits?|duct\s*banks?|raceways?|conductors?|wire|wiring|cables?|circuits?|feeders?|feeds?|disconnects?|receptacles?|panels?|breakers?|electrical|power(ed)?|connections?|connect|j-?box(es)?|junction|light|lighting|fixtures?|luminaires?|grounding|ground rods?|transformers?|meters?|switch(es)?|whips?|homeruns?|home runs?|motors?|operators?|controllers?|\d{3}\s*v|\d{2,3}\s*volts?|120v|208v|277v|480v|penetrations?|pitch\s*pockets?|sleeves?|stub[- ]?ups?|core\s*drill(ing)?|saw\s*cut(ting)?|encase(ment|d)?|pole\s*(bases?|foundations?|piers?)|foundations?\s+for\s+(the\s+)?(light|pole)|light\s*pole|equipment\s*pads?|housekeeping\s*pads?|transformer\s*pads?)\b/i;
 
+// Fix round 2 / S-R2-4 — clear other-trade scope HARD-BLOCKS (keep it with a
+// reason to override) whenever there is no electrical context: drywall /
+// finishes, storm / sanitary pipe, plumbing piping and fixtures, roofing,
+// HVAC ductwork / equipment supply, fire-sprinkler piping, paving / asphalt,
+// painting. Electrical-adjacent words (concrete, flooring/ceilings, doors,
+// framing, fencing, landscaping) only flag.
 const TRADES: TradeRule[] = [
   { trade: 'drywall / finishes', hard: true, test: t => /\b(drywall|gypsum|gyp\.?\s*board|sheetrock|level\s*[45]\s*finish|taping|mud(ding)?)\b/i.test(t) },
   { trade: 'site piping (HDPE / storm / sanitary / water)', hard: true, test: t => /\b(pipe|piping)\b/i.test(t) && /\b(hdpe|storm|sanitary|sewer|water|drain(age)?|pvc\s*drain|culvert|rcp)\b/i.test(t) && !/\b(conduit|duct|sleeve)\b/i.test(t) },
   { trade: 'plumbing fixtures', hard: true, test: t => /\b(toilet|water closet|urinal|lavator(y|ies)|faucet|mop sink|sink|plumbing fixture)\b/i.test(t) },
+  { trade: 'plumbing piping', hard: true, test: t => /\b(plumbing|domestic water|waste and vent|dwv|gas piping|gas pipe)\b/i.test(t) },
   { trade: 'roofing', hard: true, test: t => /\b(roofing|roof membrane|shingles?|flashing|re-?roof)\b/i.test(t), ecWork: /\b(pitch\s*pockets?|penetrations?|conduits?|roof\s*jacks?|pipe\s*portals?)\b/i },
+  { trade: 'HVAC equipment / ductwork supply', hard: true, test: t => /\bductwork\b/i.test(t) || (/\b(rtu|rooftop unit|air handler|ahu|condenser|mini-?split|diffuser|grille)\b/i.test(t) && /\b(furnish|supply|provide|purchase|set)\b/i.test(t)) },
+  { trade: 'fire sprinkler', hard: true, test: t => /\b(sprinkler|fire suppression)\b/i.test(t) && !/\b(flow switch|tamper|monitor)\b/i.test(t) },
+  { trade: 'paving / asphalt', hard: true, test: t => /\b(asphalt|paving|pavement)\b/i.test(t) && !/\b(conduit|sleeve|saw\s*cut|patch(ing)?\s+(at|for|over)\s+(the\s+)?(trench|conduit))\b/i.test(t) },
+  { trade: 'painting', hard: true, test: t => /\b(paint(ing)?|primer|repaint)\b/i.test(t) },
   { trade: 'concrete (not an electrical pad or base)', hard: false, test: t => /\b(concrete|slab|sidewalk|curb|footing|cmu|masonry)\b/i.test(t) },
-  { trade: 'HVAC equipment / ductwork supply', hard: false, test: t => (/\b(rtu|rooftop unit|air handler|ahu|condenser|mini-?split|diffuser|grille)\b/i.test(t) && /\b(furnish|supply|provide|purchase)\b/i.test(t)) || /\bductwork\b/i.test(t) },
-  { trade: 'painting / flooring / ceilings', hard: false, test: t => /\b(paint(ing)?|flooring|carpet|vct|floor tile|ceiling tile|acoustical ceiling|ceiling grid)\b/i.test(t) },
+  { trade: 'flooring / ceilings', hard: false, test: t => /\b(flooring|carpet|vct|floor tile|ceiling tile|acoustical ceiling|ceiling grid)\b/i.test(t) },
   { trade: 'framing / doors / insulation', hard: false, test: t => /\b(framing|metal studs?|wood studs?|door hardware|doors?\b|insulation|batt)\b/i.test(t) },
-  { trade: 'paving / landscaping / fencing', hard: false, test: t => /\b(asphalt|paving|landscap(e|ing)|irrigation|sod|fenc(e|ing))\b/i.test(t) },
-  { trade: 'fire sprinkler', hard: false, test: t => /\b(sprinkler|fire suppression)\b/i.test(t) && !/\b(flow switch|tamper|monitor)\b/i.test(t) },
+  { trade: 'landscaping / fencing', hard: false, test: t => /\b(landscap(e|ing)|irrigation|sod|fenc(e|ing))\b/i.test(t) && !/\b(conduit|sleeve|gate operator)\b/i.test(t) },
 ];
 
 /** Units that don't belong on an electrical takeoff (SF of drywall is the
  *  classic). Lighting per SF, conduit per LF, devices per EA are fine. */
 const NON_ELECTRICAL_UNITS = /^(sf|sq\.?\s*ft|sy|sq\.?\s*yd|cy|cu\.?\s*yd|ton|tons|gal|gallons)$/i;
 
+/** The exact identity of a line an override is bound to (S-R2-5): its
+ *  category and every word and number in it (quantities and ratings
+ *  included — a 100 SF line is not a 900 SF line), order-insensitive. */
 export function normalizeLineKey(category: string, text: string): string {
-  return `${category.trim().toLowerCase()}::${significantTerms(text).sort().join(' ')}`;
+  const words = text.toLowerCase().replace(/[^a-z0-9./]+/g, ' ').split(/\s+/).filter(Boolean)
+    .map(w => w.replace(/[./]+$/, ''))
+    .filter(w => w && !STOP.has(w));
+  return `${category.trim().toLowerCase()}::${[...new Set(words)].sort().join(' ')}`;
 }
 
 export interface NonElectricalVerdict { reason: string; block: boolean }
@@ -213,25 +246,6 @@ export function nonElectricalReason(text: string, unit: string): string | null {
 }
 
 export interface NonElectricalFinding { category: string; line: string; unit: string; reason: string; lineKey: string; overridden: string | null; block: boolean }
-
-/** An override still applies after Agent 4 rewords the line: same category,
- *  and most of the significant words shared (S9: overrides were keyed on
- *  exact wording, so a re-run brought the block back). */
-function overrideFor(lineKey: string, overrides: NonElectricalOverride[]): string | null {
-  const exact = overrides.find(o => o.lineKey === lineKey);
-  if (exact) return exact.reason;
-  const [cat, words] = lineKey.split('::');
-  const a = new Set((words ?? '').split(' ').filter(Boolean));
-  for (const o of overrides) {
-    const [oc, ow] = (o.lineKey ?? '').split('::');
-    if (oc !== cat) continue;
-    const b = new Set((ow ?? '').split(' ').filter(Boolean));
-    const inter = [...a].filter(w => b.has(w)).length;
-    const union = new Set([...a, ...b]).size;
-    if (union && inter / union >= 0.6) return o.reason;
-  }
-  return null;
-}
 
 export function nonElectricalFindings(data: Pick<BidData, 'takeoff'>, overrides: NonElectricalOverride[]): NonElectricalFinding[] {
   const out: NonElectricalFinding[] = [];

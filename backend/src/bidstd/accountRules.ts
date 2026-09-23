@@ -171,28 +171,44 @@ export interface MatchInput { brand?: string | null; bidName?: string | null; ow
 /** The one rule for this bid: rules whose aliases match win (a rule that ALSO
  *  matches the project type outranks one that doesn't), then project-type-only
  *  rules, then the Default. Ties: lower priority number, then name. */
-export function matchAccountRule(rules: AccountRule[], input: MatchInput): { rule: AccountRule | null; matchedBy: string } {
+export function matchAccountRule(rules: AccountRule[], input: MatchInput): { rule: AccountRule | null; matchedBy: string; warning?: string } {
   const texts: Array<[string, string]> = [
     ['brand', input.brand ?? ''], ['owner', input.owner ?? ''], ['bid name', input.bidName ?? ''],
     ['drawings', `${input.drawingsProject ?? ''} ${input.gcExtracted ?? ''}`.trim()],
   ];
   const pt = (input.projectType ?? '').trim();
   const active = rules.filter(r => r.active);
-  const scored: Array<{ r: AccountRule; score: number; by: string }> = [];
+  const scored: Array<{ r: AccountRule; score: number; by: string; where: string }> = [];
   for (const r of active) {
     if (r.isDefault) continue;
     const typeOk = r.projectTypes.length === 0 || (pt !== '' && r.projectTypes.includes(pt));
     if (!typeOk) continue;
-    const hit = r.matchAliases.map(a => texts.find(([, t]) => t && aliasMatches(a, t)) ? { a, where: texts.find(([, t]) => t && aliasMatches(a, t))![0] } : null).find(Boolean);
+    // The strongest place an alias matched: the brand field first (R2-B3).
+    let hit: { a: string; where: string } | null = null;
+    for (const [where, t] of texts) {
+      const a = t ? r.matchAliases.find(al => aliasMatches(al, t)) : undefined;
+      if (a) { hit = { a, where }; break; }
+    }
     if (r.matchAliases.length) {
       if (!hit) continue;
-      scored.push({ r, score: r.projectTypes.length ? 3 : 2, by: `"${hit.a}" in the ${hit.where}` });
+      // R2-B3 — a match on the brand field always outranks a name/drawings one.
+      const base = hit.where === 'brand' ? 10 : 2;
+      scored.push({ r, score: base + (r.projectTypes.length ? 1 : 0), by: `"${hit.a}" in the ${hit.where}`, where: hit.where });
     } else if (r.projectTypes.length) {
-      scored.push({ r, score: 1, by: `project type ${pt}` });
+      scored.push({ r, score: 1, by: `project type ${pt}`, where: 'project type' });
     }
   }
   scored.sort((x, y) => y.score - x.score || x.r.priority - y.r.priority || x.r.name.localeCompare(y.r.name));
-  if (scored.length) return { rule: scored[0].r, matchedBy: scored[0].by };
+  if (scored.length) {
+    const top = scored[0];
+    const others = scored.slice(1).filter(x => x.r.matchAliases.length).map(x => `${x.r.name} (${x.by})`);
+    const warning = others.length
+      ? `More than one account rule matched: ${top.r.name} (${top.by}) was used; also matched ${others.join(', ')}. Check the brand field.`
+      : top.where !== 'brand' && top.where !== 'project type'
+        ? `The ${top.r.name} rule matched only from the ${top.where} (${top.by}), not the brand field — confirm this is a ${top.r.name} job.`
+        : undefined;
+    return { rule: top.r, matchedBy: top.by, ...(warning ? { warning } : {}) };
+  }
   const def = active.find(r => r.isDefault) ?? null;
   return { rule: def, matchedBy: def ? 'default (no account rule matched)' : 'no rule' };
 }
@@ -553,11 +569,15 @@ export function isEcWorkToTerm(term: TermKey, text: string): boolean {
 export function stripTermFromBullet(term: TermKey, text: string): { action: 'keep' | 'remove' | 'flag' } | { action: 'strip'; text: string } {
   if (isEcWorkToTerm(term, text)) return { action: 'keep' };
   const t = TERM_PATTERNS[term].source.replace(/^\\b|\\b$/g, '');
-  const el = String.raw`(?:[A-Za-z-]+\s+){0,2}?${t}`;
+  // S-R2-2 — a verb is never a list element ("Furnish and install power
+  // poles and receptacles" must not become "Furnish and receptacles").
+  const el = String.raw`(?:(?!(?:furnish|install|provide|supply|set|mount|and|or)\b)[A-Za-z-]+\s+){0,2}?${t}`;
   const tidy = (x: string) => x.replace(/\s{2,}/g, ' ').replace(/\s+([.,;])/g, '$1').replace(/,\s*,/g, ',').trim();
   const stillMentions = (x: string) => new RegExp(t, 'i').test(x);
   // First element: "Provide retail power poles, receptacles and baseflex."
-  const first = new RegExp(String.raw`(\b(?:provide|furnish(?:\s+and\s+install)?|install|supply)\s+(?:all\s+)?)${el}\s*,\s*`, 'i').exec(text);
+  // ... or "Furnish and install power poles and receptacles per E-2." (the
+  // word after "and" is another item, not a verb like "hard-wire").
+  const first = new RegExp(String.raw`(\b(?:provide|furnish(?:\s+and\s+install)?|install|supply)\s+(?:all\s+)?)${el}\s*(?:,\s*|\s+and\s+(?!(?:hard[- ]?wire|wire|connect|set|mount|test|terminate|energize|install|furnish|provide)\b))`, 'i').exec(text);
   if (first) {
     let fixed = text.slice(0, first.index) + first[1] + text.slice(first.index + first[0].length);
     if ((fixed.match(/,/g) ?? []).length === 1 && /,\s*and\s+/i.test(fixed)) fixed = fixed.replace(/,\s*and\s+/i, ' and ');
@@ -582,6 +602,39 @@ export function stripTermFromBullet(term: TermKey, text: string): { action: 'kee
   }
   const words = text.replace(/[^A-Za-z ]/g, ' ').split(/\s+/).filter(Boolean);
   return words.length <= 10 ? { action: 'remove' } : { action: 'flag' };
+}
+
+/** Who a scope bullet / exclusion SAYS furnishes and installs a term:
+ *  "Furnish and install power poles" -> APT/APT; "Install AutoZone-furnished
+ *  power poles" -> Owner/APT; "Power poles by others" -> Others/Others;
+ *  "furnished by GC, installed by EC" -> GC/APT. null when it states nothing
+ *  about the item itself (circuits / conduit / feeds TO it are EC work). */
+export function statedParties(term: TermKey, text: string): { furnish: Party | null; install: Party | null } | null {
+  if (!mentionsTerm(term, text) || isEcWorkToTerm(term, text)) return null;
+  const t = TERM_PATTERNS[term].source.replace(/^\\b|\\b$/g, '');
+  const at = new RegExp(t, 'i').exec(text)!.index;
+  const before = text.slice(0, at).toLowerCase();
+  const explicit = parseStatementParties('', '', text);
+  let furnish = explicit.furnish;
+  let install = explicit.install;
+  const adj = /\b([a-z0-9]+(?:\s+[a-z0-9]+)?)-(furnished|supplied|provided)\b/i.exec(text.slice(Math.max(0, at - 40), at + 5));
+  if (adj && !furnish) furnish = normalizeParty(adj[1]);
+  if (/\b(furnish|supply|provide)(es|ed)?\s+(and|&)\s+install\b/.test(before)) { furnish ??= 'APT'; install ??= 'APT'; }
+  else if (/\bprovide[sd]?\b/.test(before)) { furnish ??= 'APT'; install ??= 'APT'; }
+  else if (/\b(furnish|supply)\b/.test(before) && !furnish) furnish = 'APT';
+  if (/\b(install|set|mount)\b/.test(before) && !install) install = 'APT';
+  if (!furnish && !install) return null;
+  return { furnish, install };
+}
+
+/** The scope bullet that states a resolved term correctly (APT is in it), or
+ *  null when another party furnishes AND installs (the exclusion says so). */
+export function scopeStatementFor(t: ResolvedTerm): string | null {
+  const what = TERM_LABELS[t.term].toLowerCase();
+  if (t.furnishBy === 'APT' && t.installBy === 'APT') return `Furnish and install the ${what} per plans.`;
+  if (t.installBy === 'APT') return `Install the ${what} furnished by ${partyPhrase(t.furnishBy)}.`;
+  if (t.furnishBy === 'APT') return `Furnish the ${what}; installed by ${partyPhrase(t.installBy)}.`;
+  return null;
 }
 
 export function enforceAccountTerms(agent4: Agent4Output, snap: AccountTermsSnapshot | null, resolved: ResolvedTerm[]): EnforcementResult {
@@ -669,6 +722,51 @@ export function enforceAccountTerms(agent4: Agent4Output, snap: AccountTermsSnap
     if (!out.exclusions.some(e => mentionsTerm(t.term, bulletText(e)))) {
       out.exclusions.push(excl);
       corrections.push(`Exclusion added: "${excl}"`);
+    }
+  }
+
+  // 2b. Fix round 2 / S-R2-2, S-R2-3, N-R2-4 — after the answers are applied,
+  //     every scope bullet and exclusion that STATES who furnishes or installs
+  //     an answered term (power poles, or any term the estimator answered) is
+  //     checked against the answer: a contradicting bullet solely about the
+  //     item is rewritten to the right statement, a mixed bullet is split (the
+  //     rest keeps its verb; the item gets its own correct bullet), a
+  //     contradicting exclusion is removed, anything else is flagged.
+  for (const t of resolved) {
+    if (!(t.term === 'power_poles' || t.source === 'estimator') || t.term === 'lighting') continue;
+    const right = scopeStatementFor(t);
+    for (const s of sections) {
+      const next: typeof s.bullets = [];
+      for (const b of s.bullets ?? []) {
+        const text = bulletText(b);
+        const said = statedParties(t.term, text);
+        const contradicts = said && ((said.furnish && said.furnish !== t.furnishBy) || (said.install && said.install !== t.installBy));
+        if (!contradicts) { next.push(b); continue; }
+        const r = stripTermFromBullet(t.term, text);
+        const addRight = () => { if (right && !next.some(x => bulletText(x) === right)) next.push(right); };
+        if (r.action === 'strip') {
+          next.push(typeof b === 'string' ? r.text : { b: '', t: r.text });
+          addRight();
+          corrections.push(`${s.title}: "${text}" split — "${r.text}"${right ? ` and "${right}"` : ''} (${describeTerm(t)})`);
+        } else if (r.action === 'remove') {
+          addRight();
+          corrections.push(`${s.title}: "${text}" ${right ? `rewritten to "${right}"` : 'removed'} — ${describeTerm(t)}`);
+        } else {
+          next.push(b);
+          corrections.push(`CHECK ${s.title}: "${text}" contradicts the answer — ${describeTerm(t)} Reword it.`);
+        }
+      }
+      s.bullets = next;
+    }
+    if (out.exclusions?.length) {
+      const before = out.exclusions;
+      out.exclusions = before.filter(e => {
+        const text = bulletText(e);
+        const said = statedParties(t.term, text);
+        const contradicts = said && ((said.furnish && said.furnish !== t.furnishBy) || (said.install && said.install !== t.installBy));
+        if (contradicts) corrections.push(`Exclusion removed: "${text}" contradicts the answer — ${describeTerm(t)}`);
+        return !contradicts;
+      });
     }
   }
 

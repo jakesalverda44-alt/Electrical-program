@@ -151,18 +151,18 @@ export function projectStateOf(address: string): string | null {
   return full ?? null;
 }
 
-/** Fix round 1 / S10 — sentences in GC-facing text that look like owner-spec
- *  boilerplate for OTHER places or store types. A WARNING only (with an
- *  estimator override), never a block. It triggers only on a NAMED region
- *  that conflicts with the project's location (another state / territory /
- *  country — never when the project's own state can't be read), or a named
- *  store type scoped with "only" ("Hub stores only"). "Warranty only applies
- *  to APT-furnished material" and "Deliveries to the site only during
- *  business hours" name neither. `block` is kept (always empty) for callers
- *  that still read it. */
+/** Owner-spec text for OTHER places or store types.
+ *  Fix round 2 / S-R2-6: a sentence that NAMES a state, territory or country
+ *  other than the project's (known) location BLOCKS the GC documents until
+ *  the estimator keeps it with a reason (the Kissimmee "Generator scope
+ *  applies to Puerto Rico stores only"); a named store type scoped "only"
+ *  ("Hub stores only") is a warning. Never when the project's own state
+ *  can't be read; utilities and streets named for a state ("Georgia Power",
+ *  "Washington St") never count. */
 export function irrelevantSpecSentences(text: string, projectAddress: string): { block: string[]; warn: string[] } {
   const state = projectStateOf(projectAddress);
   const sentences = text.split(/(?<=[.;!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
+  const block: string[] = [];
   const warn: string[] = [];
   const clip = (s: string) => (s.length > 160 ? `${s.slice(0, 157)}…` : s);
   const places = state ? [...Object.values(US_STATES), ...OTHER_PLACES].filter(p => p !== state) : [];
@@ -170,9 +170,10 @@ export function irrelevantSpecSentences(text: string, projectAddress: string): {
     const place = places.find(p => new RegExp(`\\b${p}\\b(?!\\s+(St|Street|Ave|Avenue|Rd|Road|Blvd|Dr|Drive|Hwy|Power|Pkwy|Energy)\\b)`, 'i').test(s));
     const storeType = /\b((?:[A-Z][\w&'-]*\s+){1,3})(stores?|locations?|prototypes?|markets?)\s+only\b/.exec(s);
     const namedType = storeType && !/^(the|all|these|those|this|our|existing|new)\s/i.test(storeType[1]);
-    if (place || namedType) warn.push(clip(s));
+    if (place) block.push(clip(s));
+    else if (namedType) warn.push(clip(s));
   }
-  return { block: [], warn: [...new Set(warn)] };
+  return { block: [...new Set(block)], warn: [...new Set(warn)] };
 }
 
 /** Takeoff lines with a zero quantity and allowances with zero footage in

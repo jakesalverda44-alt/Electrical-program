@@ -8,9 +8,9 @@ export interface BidScopeList {
 }
 
 export async function getBidScopeList(bidId: string, db: Pick<typeof pool, 'query'> | { query: typeof pool.query } = pool): Promise<BidScopeList> {
-  const { rows } = await db.query('SELECT id, kind, text, line_key, reason FROM bid_scope_items WHERE bid_id = $1 ORDER BY created_at, id', [bidId]);
+  const { rows } = await db.query('SELECT id, kind, text, line_key, reason, flag_code FROM bid_scope_items WHERE bid_id = $1 ORDER BY created_at, id', [bidId]);
   return {
     items: rows.filter(r => r.kind === 'include' || r.kind === 'exclude').map(r => ({ id: r.id, kind: r.kind, text: r.text })),
-    overrides: rows.filter(r => r.kind === 'override_non_electrical').map(r => ({ id: r.id, text: r.text, lineKey: r.line_key, reason: r.reason })),
+    overrides: rows.filter(r => r.kind === 'override_non_electrical').map(r => ({ id: r.id, text: r.text, lineKey: r.line_key, reason: r.reason, flag: r.flag_code ?? null })),
   };
 }

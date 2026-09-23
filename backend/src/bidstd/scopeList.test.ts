@@ -143,11 +143,20 @@ describe('S9 — the non-electrical gate: hard block only for clear other trades
     expect(nonElectricalVerdict('Misc. work', 'SF')).toEqual({ reason: 'unit "SF" is not an electrical takeoff unit', block: false });
     expect(nonElectricalVerdict('Drywall patch at new receptacles', 'EA')).toEqual({ reason: 'drywall / finishes', block: false });
   });
-  it('an override survives Agent 4 rewording the line', () => {
-    const key = normalizeLineKey('Site / Underground / Allowances', 'Concrete sidewalk replacement at the service trench');
-    const f = nonElectricalFindings({ takeoff: [{ name: 'Site / Underground / Allowances', items: [{ item: 'Sidewalk replacement', description: 'concrete, at the service trench', unit: 'SF', qty: 40, source: '' }] }] },
-      [{ lineKey: key, reason: 'Utility requires EC to restore' }]);
-    expect(f[0].overridden).toBe('Utility requires EC to restore');
+  // Fix round 2 / S-R2-5 — replaces round 1's "survives rewording": an
+  // override binds to the exact line (same significant words) and flag.
+  it('S-R2-5 — an override clears only its exact line: never a similar line (review repros)', () => {
+    const cat = 'Low Voltage';
+    const kept = [{ lineKey: normalizeLineKey(cat, 'Fire alarm conduit and boxes'), reason: 'Conduit and boxes are ours', flag: 'excluded_scope' }];
+    const items: ScopeItem[] = [{ id: 'e', kind: 'exclude', text: 'Fire alarm — not included' }];
+    const data = { sections: [], takeoff: [{ name: cat, items: [
+      { item: 'Fire alarm conduit and boxes', description: '', unit: 'EA', qty: 10, source: '' },
+      { item: 'Fire alarm devices and boxes', description: '', unit: 'EA', qty: 10, source: '' },
+    ] }] };
+    expect(excludedScopeProblems(data, items, kept)).toEqual(['Takeoff Low Voltage: "Fire alarm devices and boxes" is on the Not-included list ("Fire alarm — not included")']);
+    const sf = [{ lineKey: normalizeLineKey('Site', 'Concrete patch 100 SF'), reason: 'Trench patch is ours' }];
+    const f = nonElectricalFindings({ takeoff: [{ name: 'Site', items: [{ item: 'Concrete patch 900 SF', description: '', unit: 'SF', qty: 900, source: '' }] }] }, sf);
+    expect(f[0].overridden).toBeNull();
   });
 });
 
@@ -160,7 +169,17 @@ describe('N7 — an Included carve-out never dead-locks against an Excluded item
     const data = { sections: [{ title: 'E. Low Voltage', bullets: ['Low voltage: empty conduit and pull strings only.', 'Low voltage cabling and devices.'] }], takeoff: [] };
     expect(excludedScopeProblems(data, items)).toEqual(['E. Low Voltage: "Low voltage cabling and devices." is on the Not-included list ("Low voltage — not included")']);
     // ...and the estimator can keep a line with a reason.
-    expect(excludedScopeProblems(data, items, [{ lineKey: normalizeLineKey('E. Low Voltage', 'Low voltage cabling and devices.'), reason: 'GC asked for the cabling price' }])).toEqual([]);
+    expect(excludedScopeProblems(data, items, [{ lineKey: normalizeLineKey('E. Low Voltage', 'Low voltage cabling and devices.'), reason: 'GC asked for the cabling price', flag: 'excluded_scope' }])).toEqual([]);
+    // S-R2-5 — an override made for a different flag, or a different line, clears nothing.
+    expect(excludedScopeProblems(data, items, [{ lineKey: normalizeLineKey('E. Low Voltage', 'Low voltage cabling and devices.'), reason: 'x', flag: 'non_electrical' }])).toHaveLength(1);
+  });
+  it('S-R2-8 — "Low voltage conduit, cabling and devices" is NOT carved out (review repro)', () => {
+    const items: ScopeItem[] = [
+      { id: 'e', kind: 'exclude', text: 'Low voltage — not included' },
+      { id: 'i', kind: 'include', text: 'Low voltage: conduit and pull strings only' },
+    ];
+    const data = { sections: [{ title: 'E. Low Voltage', bullets: ['Low voltage conduit, cabling and devices.', 'Low voltage: conduit, boxes and pull strings.'] }], takeoff: [] };
+    expect(excludedScopeProblems(data, items)).toEqual(['E. Low Voltage: "Low voltage conduit, cabling and devices." is on the Not-included list ("Low voltage — not included")']);
   });
 });
 
@@ -171,5 +190,24 @@ describe('N10 — "Fixture A" and "Fixture B" are different types, not near-dupl
       { item: 'Fixture B', description: '2x4 LED troffer', unit: 'EA', qty: 12, source: '' },
     ] }] };
     expect(nearDuplicateLines(data)).toEqual([]);
+  });
+});
+
+describe('S-R2-4 — clear other-trade scope hard-blocks again (review repro)', () => {
+  it.each([
+    ['HVAC ductwork, 24x12 supply', 'LF'],
+    ['Fire sprinkler piping, 1" black steel', 'LF'],
+    ['Asphalt paving', 'SF'],
+    ['Concrete paving', 'SF'],
+    ['Paint exposed structure', 'SF'],
+    ['Domestic water piping', 'LF'],
+    ['Rooftop unit furnish and set', 'EA'],
+  ])('%s blocks', (line, unit) => {
+    expect(nonElectricalVerdict(line, unit)?.block).toBe(true);
+  });
+  it.each([
+    ['Carpet tile', 'SF'], ['Door hardware', 'EA'], ['Metal stud framing', 'LF'], ['Chain-link fencing', 'LF'],
+  ])('%s (electrical-adjacent / ambiguous) only flags', (line, unit) => {
+    expect(nonElectricalVerdict(line, unit)).toMatchObject({ block: false });
   });
 });

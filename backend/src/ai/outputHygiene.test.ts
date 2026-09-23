@@ -97,26 +97,26 @@ describe('GC-facing text', () => {
   // Fix round 1 / S10 — a WARNING (with an override), never a verify block;
   // only a named region that conflicts with the project's location, or a
   // named store type scoped "only", triggers it.
-  it('Puerto Rico / Texas-prototype text is a warning; verifyBid no longer blocks it', () => {
+  // Fix round 2 / S-R2-6 — a NAMED conflicting region blocks (with an
+  // estimator override, in compose); a named store type is a warning.
+  it('Puerto Rico / Texas text on a Florida job BLOCKS; a store type "only" is a warning', () => {
     const text = 'Generator scope applies to Puerto Rico stores only.\nCoordinate the service with Duke Energy.\nFlorida Building Code 2023 applies.\nMeter per Georgia Power standards.';
     expect(irrelevantSpecSentences(text, '2860 N Old Lake Wilson Rd, Kissimmee, FL 34747')).toEqual({
-      block: [],
-      warn: ['Generator scope applies to Puerto Rico stores only.'],
+      block: ['Generator scope applies to Puerto Rico stores only.'],
+      warn: [],
     });
-    const v = verifyBidText(text, 'gc', { projectAddress: 'Kissimmee, FL 34747' });
-    expect(v.failures.find(f => f.check === 'irrelevant_spec')).toBeUndefined();
-    expect(irrelevantSpecSentences('Service from Georgia Power per utility standards.', 'Kissimmee, FL 34747').warn).toEqual([]);
-    expect(irrelevantSpecSentences('Per the Texas prototype details.', 'Kissimmee, FL 34747').warn).toEqual(['Per the Texas prototype details.']);
-    expect(irrelevantSpecSentences('Generator scope applies to Hub stores only.', 'Kissimmee, FL 34747').warn).toEqual(['Generator scope applies to Hub stores only.']);
+    expect(irrelevantSpecSentences('Service from Georgia Power per utility standards.', 'Kissimmee, FL 34747').block).toEqual([]);
+    expect(irrelevantSpecSentences('Per the Texas prototype details.', 'Kissimmee, FL 34747').block).toEqual(['Per the Texas prototype details.']);
+    expect(irrelevantSpecSentences('Generator scope applies to Hub stores only.', 'Kissimmee, FL 34747')).toEqual({ block: [], warn: ['Generator scope applies to Hub stores only.'] });
   });
   it('review repro A: ordinary sentences never trigger it', () => {
     for (const t of [
       'Warranty only applies to APT-furnished material.',
       'Deliveries to the site only during business hours.',
       'Coordinate with Duke Energy Florida for the service.',
-    ]) expect(irrelevantSpecSentences(t, '2860 N Old Lake Wilson Rd, Kissimmee, FL 34747').warn, t).toEqual([]);
+    ]) expect(irrelevantSpecSentences(t, '2860 N Old Lake Wilson Rd, Kissimmee, FL 34747'), t).toEqual({ block: [], warn: [] });
     // Project state unknown (no state/zip in bid.loc): no region can conflict.
-    expect(irrelevantSpecSentences('Coordinate with Duke Energy Florida.', 'Old Lake Wilson Rd').warn).toEqual([]);
+    expect(irrelevantSpecSentences('Coordinate with Duke Energy Florida.', 'Old Lake Wilson Rd')).toEqual({ block: [], warn: [] });
   });
   it('S11 — banned language is plural-safe and catches the spelled-out forms', () => {
     const v = verifyBidText('Pending RFIs on the panel schedule. Two TBDs remain. Mounting height to be determined. See Request for Information 4.', 'gc', {});

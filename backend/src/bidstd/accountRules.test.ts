@@ -45,7 +45,7 @@ const RULES = [DEFAULT, AUTOZONE, SEVEN, CARWASH_TYPE];
 describe('matchAccountRule', () => {
   it('AutoZone by brand, by the owner the drawings print, or by the bid name; case/punctuation-insensitive', () => {
     expect(matchAccountRule(RULES, { brand: 'AutoZone' }).rule?.name).toBe('AutoZone');
-    expect(matchAccountRule(RULES, { gcExtracted: 'AUTOZONE STORES LLC' })).toEqual({ rule: AUTOZONE, matchedBy: '"AutoZone" in the drawings' });
+    expect(matchAccountRule(RULES, { gcExtracted: 'AUTOZONE STORES LLC' })).toMatchObject({ rule: AUTOZONE, matchedBy: '"AutoZone" in the drawings' });
     expect(matchAccountRule(RULES, { bidName: 'Auto-Zone #10077 Kissimmee' }).rule?.name).toBe('AutoZone');
     expect(matchAccountRule(RULES, { bidName: '7 Eleven #41182 Ocala' }).rule?.name).toBe('7-Eleven');
   });
@@ -317,9 +317,14 @@ describe('B7 — power poles: answered in two halves; applying the answer rewrit
     expect(bp).toContain('Baseflex');
     expect(r.output.exclusions!.map(bt)).toContain('Power poles furnished and installed by the GC.');
   });
-  it('GC furnishes / APT installs (the realistic answer): nothing is removed, the poles are "GC (EC installs)"', () => {
+  it('GC furnishes / APT installs (the realistic answer): nothing is lost; "Provide ... retail power poles" is split so it no longer says APT furnishes them (fix round 2 / S-R2-3); the poles are "GC (EC installs)"', () => {
     const r = enforceAccountTerms(a4, snap, applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'GC', 'scope:power_poles:install': 'APT' }));
-    expect(r.output.sections!.find(x => x.title.startsWith('B.'))!.bullets).toHaveLength(3);
+    expect(r.output.sections!.find(x => x.title.startsWith('B.'))!.bullets!.map(bt)).toEqual([
+      bt(coworkAgent4().sections![1].bullets![0]),
+      'Provide all receptacles and display baseflex floor connections per the power plans.',
+      'Install the power poles furnished by the GC.',
+      'Branch circuits and conduit to the power poles per E-2.',
+    ]);
     const poles = r.output.takeoff!.find(c => c.name === 'Branch Power')!.items!.find(i => i.item === 'Retail power poles')!;
     expect(poles.furnish_by).toBe('GC (EC installs)');
     expect(r.output.takeoff!.find(c => c.name === 'Branch Power')!.items!.find(i => i.item === 'Power pole feed')!.furnish_by).toBeUndefined();
@@ -386,9 +391,22 @@ describe('S8 — matching never uses the bid\'s GC; 7-11 aliases', () => {
     const r = matchAccountRule([DEFAULT, AUTOZONE], { brand: "Dunkin'", bidName: "Dunkin' #350", owner: 'Dunkin Brands' });
     expect(r.rule!.name).toBe('Default');
   });
-  it('"7-11 #41234" and "711 Store" match 7-Eleven', () => {
+  it('"7-11 #41234" matches 7-Eleven', () => {
     expect(matchAccountRule([DEFAULT, SEVEN], { bidName: '7-11 #41234' }).rule!.name).toBe('7-Eleven');
-    expect(matchAccountRule([DEFAULT, SEVEN], { bidName: '711 Store Ocala' }).rule!.name).toBe('7-Eleven');
+  });
+  // Fix round 2 / R2-B3 — the bare "711" alias is gone (migration 120) and a
+  // brand-field match outranks a name / drawings match.
+  it('R2-B3 — "AutoZone Store #711", "711 Main St" and "Suite 711" are never 7-Eleven (review repro)', () => {
+    const SEVEN2: AccountRule = { ...SEVEN, matchAliases: ['7-Eleven', '7 Eleven', 'Seven Eleven', '7Eleven', '7-11'] };
+    expect(matchAccountRule([DEFAULT, AUTOZONE, SEVEN2], { brand: 'AutoZone', bidName: 'AutoZone Store #711 Orlando' }).rule!.name).toBe('AutoZone');
+    expect(matchAccountRule([DEFAULT, AUTOZONE, SEVEN2], { bidName: "Dunkin' - 711 Main St" }).rule!.name).toBe('Default');
+    expect(matchAccountRule([DEFAULT, AUTOZONE, SEVEN2], { drawingsProject: 'RETAIL SHELL SUITE 711' }).rule!.name).toBe('Default');
+    // Even with the old bare alias, the brand field wins.
+    expect(matchAccountRule([DEFAULT, AUTOZONE, SEVEN], { brand: 'AutoZone', bidName: 'AutoZone Store #711' }).rule!.name).toBe('AutoZone');
+  });
+  it('a name-only match warns; two matching rules warn', () => {
+    expect(matchAccountRule([DEFAULT, SEVEN], { bidName: '7-11 #41234' }).warning).toMatch(/matched only from the bid name/);
+    expect(matchAccountRule([DEFAULT, AUTOZONE, SEVEN], { brand: 'AutoZone', bidName: 'AutoZone next to 7-Eleven' }).warning).toMatch(/More than one account rule matched/);
   });
   it('drawing text (owner / project name the drawings print) still matches', () => {
     expect(matchAccountRule([DEFAULT, AUTOZONE], { drawingsProject: 'AUTOZONE STORE #10077' }).matchedBy).toBe('"AutoZone" in the drawings');
@@ -405,5 +423,48 @@ describe('N9 — look-alikes are not the term', () => {
       { item: 'Fire alarm panel', furnishBy: 'GC', installBy: 'GC', sourceSheet: 'FA-1', quote: 'FIRE ALARM PANEL BY GC VENDOR.' },
     ], false);
     expect(snap.questions.filter(q => q.kind === 'conflict')).toEqual([]);
+  });
+});
+
+// ── Fix round 2 ─────────────────────────────────────────────────────────────
+import { statedParties, scopeStatementFor } from './accountRules';
+
+describe('S-R2-2 / S-R2-3 / N-R2-4 — pole statements after the answers', () => {
+  const snap = resolveAccountTerms(AUTOZONE, 'brand', [], false);
+  const withB = (bullets: string[], exclusions: string[] = []) => ({ ...coworkAgent4(), sections: [
+    ...coworkAgent4().sections!.filter(s => !s.title.startsWith('B.')),
+    { title: 'B. Branch Power', bullets },
+  ], exclusions });
+  const bB = (o: Agent4Output) => o.sections!.find(s => s.title.startsWith('B.'))!.bullets!.map(bt);
+
+  it('S-R2-2 (review repro): GC/GC — "Furnish and install power poles and receptacles per E-2." keeps its verb: "Furnish and install receptacles per E-2."', () => {
+    const r = enforceAccountTerms(withB(['Furnish and install power poles and receptacles per E-2.']), snap,
+      applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'GC', 'scope:power_poles:install': 'GC' }));
+    expect(bB(r.output)).toEqual(['Furnish and install receptacles per E-2.']);
+    expect(r.output.exclusions!.map(bt)).toContain('Power poles furnished and installed by the GC.');
+  });
+  it('S-R2-3 (review repro): GC furnishes / APT installs — an APT-furnish statement is split, never left standing', () => {
+    const r = enforceAccountTerms(withB([
+      'Furnish and install power poles and receptacles per E-2.',
+      'Power poles furnished and installed by APT.',
+      'Branch circuits and conduit to the power poles per E-2.',
+    ]), snap, applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'GC', 'scope:power_poles:install': 'APT' }));
+    expect(bB(r.output)).toEqual([
+      'Furnish and install receptacles per E-2.',
+      'Install the power poles furnished by the GC.',
+      'Branch circuits and conduit to the power poles per E-2.',
+    ]);
+  });
+  it('N-R2-4 (review repro): APT/APT — "Power poles by others." is removed from the exclusions', () => {
+    const r = enforceAccountTerms(withB(['Furnish and install power poles per E-2.'], ['Power poles by others.', 'Utility fees excluded.']), snap,
+      applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'APT', 'scope:power_poles:install': 'APT' }));
+    expect(r.output.exclusions!.map(bt)).toEqual(['Utility fees excluded.']);
+    expect(bB(r.output)).toEqual(['Furnish and install power poles per E-2.']);
+  });
+  it('statedParties / scopeStatementFor', () => {
+    expect(statedParties('power_poles', 'Install AutoZone-furnished power poles and hard-wire per E-2.')).toEqual({ furnish: 'Owner', install: 'APT' });
+    expect(statedParties('power_poles', 'Power poles by others.')).toEqual({ furnish: 'Others', install: 'Others' });
+    expect(statedParties('power_poles', 'Branch circuits and conduit to the power poles per E-2.')).toBeNull();
+    expect(scopeStatementFor({ term: 'power_poles', furnishBy: 'GC', installBy: 'GC', source: 'estimator' })).toBeNull();
   });
 });

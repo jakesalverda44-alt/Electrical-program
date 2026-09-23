@@ -5,7 +5,10 @@ import React, { useState } from 'react';
 import api from '../../../api/client';
 import type { Toast } from '../../../types';
 
-export default function KeepLineControl({ bidId, category, line, showToast }: { bidId: string; category: string; line: string; showToast: (t: Toast) => void }) {
+/** Fix round 2 / S-R2-5 — the override binds to this exact line AND this
+ *  flag ('non_electrical', 'excluded_scope', 'spec', 'count_line:<KEY>'). */
+export default function KeepLineControl({ bidId, category, line, flag = 'non_electrical', showToast }: { bidId: string; category: string; line: string; flag?: string; showToast: (t: Toast) => void }) {
+  const isPick = flag.startsWith('count_line:');
   const [reason, setReason] = useState('');
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -13,8 +16,8 @@ export default function KeepLineControl({ bidId, category, line, showToast }: { 
   return (
     <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', margin: '4px 0' }}>
       <input
-        aria-label={`Why "${line}" is electrical scope`}
-        placeholder="Why this is electrical scope on this job"
+        aria-label={isPick ? `Why "${line}" is the counted line` : `Why "${line}" belongs on this job`}
+        placeholder={isPick ? 'Why this is the counted line (at least 10 characters)' : 'Why this belongs on this job (at least 10 characters)'}
         value={reason}
         onChange={e => setReason(e.target.value)}
         style={{ flex: 1, minWidth: 200, padding: '4px 8px', fontSize: 12, borderRadius: 6, border: '1px solid var(--border2)', background: 'var(--surface)', color: 'var(--text)' }}
@@ -23,7 +26,7 @@ export default function KeepLineControl({ bidId, category, line, showToast }: { 
         onClick={async () => {
           setBusy(true);
           try {
-            await api.post(`/preconstruction/${bidId}/non-electrical-overrides`, { category, line, reason });
+            await api.post(`/preconstruction/${bidId}/non-electrical-overrides`, { category, line, reason, flag });
             setDone(true);
           } catch (err) {
             showToast({ variant: 'error', title: 'Could not keep the line', sub: (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Try again' });
@@ -31,7 +34,7 @@ export default function KeepLineControl({ bidId, category, line, showToast }: { 
             setBusy(false);
           }
         }}>
-        Keep this line
+        {isPick ? 'This is the counted line' : 'Keep this line'}
       </button>
     </div>
   );

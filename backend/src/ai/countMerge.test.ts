@@ -208,6 +208,17 @@ describe('split areas and partial coverage (fix round 1)', () => {
     }
   });
 
+  it('N-R2-5 — "LIGHTING PLAN - PHASE 1" / "PHASE 2" is NOT summed: a blocking same-area-or-additive question', () => {
+    const [a, b] = pick([['E-2.1', 'LIGHTING PLAN - PHASE 1'], ['E-2.2', 'LIGHTING PLAN - PHASE 2']]);
+    expect([a.area, b.area]).toEqual(['', '']);
+    const r = combineSheetCounts(A, [
+      { sheet: a, status: 'counted', placed: marks({ A: 40 }), unreadable: [] },
+      { sheet: b, status: 'counted', placed: marks({ A: 35 }), unreadable: [] },
+    ]);
+    expect(r.count).toBe(40);
+    expect(r.areaQuestion).toMatchObject({ keep: 40, sum: 75 });
+  });
+
   it('two "LIGHTING PLAN" sheets of one level with no area named: 40 kept for now, BLOCKING question 40 vs 75', () => {
     const [a, b] = pick([['E-2.1', 'LIGHTING PLAN'], ['E-2.2', 'LIGHTING PLAN']]);
     const r = combineSheetCounts(A, [
