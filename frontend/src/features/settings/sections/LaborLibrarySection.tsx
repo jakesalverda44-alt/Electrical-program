@@ -320,13 +320,32 @@ function CalibrationPanel() {
   const confirm = useConfirm();
   const [applying, setApplying] = useState<string | null>(null);
 
+  // Fix round 1 / B4 — the old version fired the request and reloaded on
+  // success with no feedback at all: a 400 (e.g. "0 rows changed", now a
+  // real error from the server) went completely unnoticed, and even a
+  // successful apply never told the estimator HOW MANY rows it touched.
+  // useMutation's default error toast plus an explicit success toast fix
+  // both.
+  const applyMutation = useMutation(
+    (scope: 'global' | 'category', category: string | undefined, pct: number) =>
+      api.post<{ updatedCount: number }>('/estimating/calibration/apply', { scope, category, adjustmentPct: pct }).then(r => r.data),
+    {
+      successToast: (result, scope, category) => ({
+        title: 'Adjustment applied',
+        sub: `${result.updatedCount} item${result.updatedCount === 1 ? '' : 's'} updated${scope === 'category' ? ` in "${category}"` : ''}.`,
+        variant: 'success',
+      }),
+      errorTitle: 'Could not apply adjustment',
+    }
+  );
+
   const apply = async (scope: 'global' | 'category', category: string | undefined, pct: number) => {
     const label = scope === 'global' ? 'every active item' : `every active item in "${category}"`;
     if (!(await confirm({ title: 'Apply suggested adjustment?', body: `Multiplies labor_hours by ${(1 + pct / 100).toFixed(2)}x for ${label} and marks them source=calibrated.` }))) return;
     setApplying(scope === 'global' ? 'global' : category ?? null);
     try {
-      await api.post('/estimating/calibration/apply', { scope, category, adjustmentPct: pct });
-      reload();
+      const result = await applyMutation.run(scope, category, pct);
+      if (result) reload(); // undefined means the mutation failed — its own error toast already fired
     } finally {
       setApplying(null);
     }

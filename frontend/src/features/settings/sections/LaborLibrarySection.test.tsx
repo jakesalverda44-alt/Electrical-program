@@ -5,6 +5,7 @@ import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-li
 import { ConfirmProvider } from '../../../components/ConfirmDialog';
 import { AppProviders } from '../../../contexts/AppContext';
 import { DEFAULT_APP_SETTINGS } from '../../../hooks/useAppSettings';
+import type { Toast } from '../../../types';
 
 const get = vi.fn();
 const put = vi.fn();
@@ -44,11 +45,11 @@ beforeEach(() => {
   post.mockResolvedValue({ data: { updatedCount: 1 } });
 });
 
-function setup() {
+function setup(showToast: (t: Toast) => void = () => {}) {
   render(
     <AppProviders
       user={{ id: 'u1', name: 'Test User', email: 't@test.local', role: 'owner' }}
-      showToast={() => {}}
+      showToast={showToast}
       settings={DEFAULT_APP_SETTINGS}
       reloadSettings={() => {}}
     >
@@ -132,6 +133,35 @@ describe('LaborLibrarySection — Calibration: apply payload', () => {
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByText('Confirm'));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/estimating/calibration/apply', { scope: 'category', category: 'Branch Power', adjustmentPct: 20 }));
+  });
+
+  it('B4: shows a success toast naming how many items were updated', async () => {
+    post.mockResolvedValueOnce({ data: { updatedCount: 3 } });
+    const showToast = vi.fn();
+    setup(showToast);
+    fireEvent.click(screen.getByTestId('ll-subtab-calibration'));
+    const btn = await screen.findByTestId('ll-apply-global');
+    fireEvent.click(btn);
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByText('Confirm'));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ sub: expect.stringContaining('3 items updated') })
+    ));
+  });
+
+  it('B4: a 0-rows-changed failure (server 400) shows an error toast, not a silent success', async () => {
+    post.mockReset();
+    post.mockRejectedValueOnce({ response: { status: 400, data: { error: 'No active items found in category "Branch Power" — nothing was adjusted' } } });
+    const showToast = vi.fn();
+    setup(showToast);
+    fireEvent.click(screen.getByTestId('ll-subtab-calibration'));
+    const btn = await screen.findByTestId('ll-apply-category-Branch Power');
+    fireEvent.click(btn);
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByText('Confirm'));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'error' })
+    ));
   });
 });
 

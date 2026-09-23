@@ -9,6 +9,7 @@
 import { pool } from '../db/pool';
 import { PricingRecap } from './pricing';
 import { getBidSettings, getBidLines, getProposedLinesFromTakeoff, priceUnsaved, computeRecapForBid } from './bidEstimate';
+import { canonicalizeTakeoffCategory } from '../bidstd/boilerplate';
 
 export interface BidCalibration {
   bidId: string;
@@ -16,24 +17,42 @@ export interface BidCalibration {
   engineHours: number;
   accubidHours: number;
   /** engineHours / accubidHours — 1.0 means the engine matches Accubid exactly;
-   *  >1 means the engine is estimating MORE hours than Accubid actually took. */
+   *  >1 means the engine is estimating MORE hours than Accubid actually took.
+   *  Diagnostic only — see suggestedAdjustmentPct (below, and on CategoryGap)
+   *  for the number that actually corrects the seed library; it is NOT a
+   *  simple sign-flip of this ratio (fix round 1 / B4). */
   ratio: number;
 }
 
 export interface CategoryGap {
+  /** Always the canonical TAKEOFF_CATEGORIES spelling (fix round 1 / B4) — a
+   *  takeoff-sourced line's raw category can be Agent 2's shorter,
+   *  slash-free prompt-facing spelling ("Exterior Site Lighting"); without
+   *  canonicalizing it here, applyCalibrationAdjustment's per-category
+   *  UPDATE (which matches against est_items.category, always canonical)
+   *  would match zero rows for exactly the categories most likely to need
+   *  an adjustment. */
   category: string;
   /** Total engine hours in this category, across every bid in the report. */
   totalEngineHours: number;
-  /** Hours-weighted average (ratio - 1) across the bids that have hours in this
-   *  category — the suggested per-category adjustment, as a percent. */
+  /** Hours-weighted average of each bid's (accubidHours/engineHours - 1)
+   *  across the bids that have hours in this category — the suggested
+   *  per-category adjustment, as a percent, to APPLY TO THE SEED (fix round
+   *  1 / B4: not (engine/accubid - 1), which points the adjustment the
+   *  wrong direction and by the wrong magnitude — a bid where the engine
+   *  under-estimates by 20 hours out of 100 accubid hours needs +25%, not
+   *  the -20% the old formula produced). */
   suggestedAdjustmentPct: number;
 }
 
 export interface CalibrationReport {
   bids: BidCalibration[];
-  /** Σ engineHours / Σ accubidHours across every bid in the report. */
+  /** Σ engineHours / Σ accubidHours across every bid in the report — diagnostic only, see suggestedGlobalAdjustmentPct to actually correct the seed. */
   overallRatio: number;
-  /** (overallRatio - 1) * 100 — e.g. +12 means seed hours should go up ~12%. */
+  /** (Σ accubidHours / Σ engineHours - 1) * 100 — e.g. +12 means seed hours
+   *  should go up ~12% to match what Accubid's real breakdowns show (fix
+   *  round 1 / B4 — see CategoryGap.suggestedAdjustmentPct for why this
+   *  isn't just -(overallRatio-1)*100). */
   suggestedGlobalAdjustmentPct: number;
   /** Sorted by |suggestedAdjustmentPct| descending — the biggest miscalibrations first. */
   categoryGaps: CategoryGap[];
@@ -86,17 +105,24 @@ export async function computeCalibrationReport(): Promise<CalibrationReport> {
     const ratio = engineHours / candidate.accubidHours;
     bids.push({ bidId: candidate.id, bidName: candidate.name, engineHours, accubidHours: candidate.accubidHours, ratio });
 
-    const deviation = ratio - 1;
+    // Fix round 1 / B4 — the CORRECTION to apply to the seed is
+    // (accubid/engine - 1), not (engine/accubid - 1): if the engine
+    // under-estimates (engineHours < accubidHours), the seed's hours need to
+    // go UP, and by how much depends on accubid relative to engine, not the
+    // other way around.
+    const deviation = candidate.accubidHours / engineHours - 1;
     for (const cat of recap.categories) {
       if (cat.hours <= 0) continue;
-      categoryEngineHours.set(cat.category, (categoryEngineHours.get(cat.category) ?? 0) + cat.hours);
-      categoryWeightedDeviation.set(cat.category, (categoryWeightedDeviation.get(cat.category) ?? 0) + cat.hours * deviation);
+      const category = canonicalizeTakeoffCategory(cat.category);
+      categoryEngineHours.set(category, (categoryEngineHours.get(category) ?? 0) + cat.hours);
+      categoryWeightedDeviation.set(category, (categoryWeightedDeviation.get(category) ?? 0) + cat.hours * deviation);
     }
   }
 
   const totalEngineHours = bids.reduce((sum, b) => sum + b.engineHours, 0);
   const totalAccubidHours = bids.reduce((sum, b) => sum + b.accubidHours, 0);
   const overallRatio = totalAccubidHours > 0 ? totalEngineHours / totalAccubidHours : 1;
+  const suggestedGlobalAdjustmentPct = totalEngineHours > 0 ? (totalAccubidHours / totalEngineHours - 1) * 100 : 0;
 
   const categoryGaps: CategoryGap[] = Array.from(categoryEngineHours.entries())
     .map(([category, totalEngineHoursForCat]) => {
@@ -109,7 +135,7 @@ export async function computeCalibrationReport(): Promise<CalibrationReport> {
   return {
     bids,
     overallRatio,
-    suggestedGlobalAdjustmentPct: (overallRatio - 1) * 100,
+    suggestedGlobalAdjustmentPct,
     categoryGaps,
   };
 }
@@ -133,18 +159,40 @@ export interface ApplyCalibrationResult {
  * edit (library.ts's updateItem) already sets source='manual' on any single
  * field change, this is the calibration-specific bulk equivalent.
  */
+// Fix round 1 / B4 — a calibration adjustment beyond ±50% is almost
+// certainly a UI/unit mistake (a typo'd 500 instead of 50, or an
+// accubid/engine ratio computed from a garbage bid), not a real correction —
+// cap it rather than silently letting one bad "apply" wreck the whole
+// library. -100% (multiplier 0) is already rejected below as not finite/
+// sane for labor_hours.
+const MAX_ABS_ADJUSTMENT_PCT = 50;
+
 export async function applyCalibrationAdjustment(input: ApplyCalibrationInput): Promise<ApplyCalibrationResult> {
+  if (!Number.isFinite(input.adjustmentPct) || Math.abs(input.adjustmentPct) > MAX_ABS_ADJUSTMENT_PCT) {
+    throw new Error(`adjustmentPct must be a finite number within ±${MAX_ABS_ADJUSTMENT_PCT}`);
+  }
   const multiplier = 1 + input.adjustmentPct / 100;
   if (!Number.isFinite(multiplier) || multiplier < 0) {
     throw new Error('adjustmentPct must be a finite number no less than -100');
   }
   if (input.scope === 'category') {
     if (!input.category) throw new Error('category is required when scope is "category"');
+    // Fix round 1 / B4 — the report's category names are already
+    // canonicalized (computeCalibrationReport), but apply is a public route
+    // — canonicalize defensively here too so a caller passing Agent 2's
+    // shorter spelling still matches est_items.category (always canonical).
+    const category = canonicalizeTakeoffCategory(input.category);
     const { rows } = await pool.query(
       `UPDATE est_items SET labor_hours = ROUND((labor_hours * $1)::numeric, 4), source = 'calibrated', updated_at = now()
        WHERE active = true AND category = $2 RETURNING id`,
-      [multiplier, input.category]
+      [multiplier, category]
     );
+    // Fix round 1 / B4 — 0 rows changed is a silent no-op that LOOKS like
+    // success (200, updatedCount: 0) unless the caller happens to check the
+    // count. A category adjustment that touches nothing is always a
+    // mistake (an unrecognized/mistyped category), never a legitimate
+    // outcome — surface it as an error instead.
+    if (rows.length === 0) throw new Error(`No active items found in category "${category}" — nothing was adjusted`);
     return { updatedCount: rows.length };
   }
   const { rows } = await pool.query(
@@ -152,5 +200,6 @@ export async function applyCalibrationAdjustment(input: ApplyCalibrationInput): 
      WHERE active = true RETURNING id`,
     [multiplier]
   );
+  if (rows.length === 0) throw new Error('No active items found — nothing was adjusted');
   return { updatedCount: rows.length };
 }

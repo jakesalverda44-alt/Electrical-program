@@ -72,9 +72,16 @@ describe('computeCalibrationReport()', () => {
       const branchGap = report.categoryGaps.find(c => c.category === 'Branch Power')!;
       const lightingGap = report.categoryGaps.find(c => c.category === 'Interior Lighting')!;
       expect(branchGap.totalEngineHours).toBe(120);
-      expect(branchGap.suggestedAdjustmentPct).toBeCloseTo(20, 5);
+      // Fix round 1 / B4 — the engine over-estimated Branch Power by 20h out
+      // of 120 (accubid only took 100h) — the CORRECTION to the seed is
+      // accubid/engine - 1 = 100/120 - 1 ≈ -16.67% (bring the seed's hours
+      // DOWN by about a sixth), not the old (engine/accubid - 1) = +20%,
+      // which pointed the adjustment the wrong direction entirely.
+      expect(branchGap.suggestedAdjustmentPct).toBeCloseTo(-16.6667, 3);
       expect(lightingGap.totalEngineHours).toBe(80);
-      expect(lightingGap.suggestedAdjustmentPct).toBeCloseTo(-20, 5);
+      // The engine under-estimated Interior Lighting (80h engine vs 100h
+      // accubid) — accubid/engine - 1 = 100/80 - 1 = +25%, not the old -20%.
+      expect(lightingGap.suggestedAdjustmentPct).toBeCloseTo(25, 5);
     } finally {
       await deleteBreakdown(bid1, bid2);
     }
@@ -188,6 +195,58 @@ describe('POST /api/estimating/calibration/apply', () => {
       // touches them (applyCalibrationAdjustment only ever affects active rows).
       await request(app).put(`/api/estimating/library/items/${created.body.id}`).set(auth(owner.token)).send({ active: false });
       await request(app).put(`/api/estimating/library/items/${untouched.body.id}`).set(auth(owner.token)).send({ active: false });
+    }
+  });
+
+  it('B4: a category apply that matches zero active items returns 400, not a silent success', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const owner = await makeUser('owner');
+    const res = await request(app).post('/api/estimating/calibration/apply').set(auth(owner.token))
+      .send({ scope: 'category', category: `__NoSuchCategory__${Date.now()}`, adjustmentPct: 10 }).expect(400);
+    expect(res.body.error).toBeTruthy();
+  });
+
+  it('B4: rejects an adjustmentPct beyond +/-50%', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const owner = await makeUser('owner');
+    await request(app).post('/api/estimating/calibration/apply').set(auth(owner.token))
+      .send({ scope: 'global', adjustmentPct: 500 }).expect(400);
+  });
+
+  it('B4: a category apply canonicalizes Agent 2\'s shorter category spelling to the library\'s canonical form', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const owner = await makeUser('owner');
+    const created = await request(app).post('/api/estimating/library/items').set(auth(owner.token))
+      .send({ code: `CALTEST-CANON-${Date.now()}`, name: 'Canonical category test item', category: 'Exterior / Site Lighting', unit: 'EA', material_cost: 1, labor_hours: 10 })
+      .expect(200);
+    // "Exterior Site Lighting" (no slashes, Agent 2's own categorization
+    // prompt spelling) matches the WHOLE canonical "Exterior / Site
+    // Lighting" category (the real seed's active items included) once
+    // canonicalized — snapshot and restore every row this touches so the
+    // never-reset shared test DB isn't left permanently perturbed for every
+    // later test/run that depends on the seed's known labor_hours.
+    const { rows: before } = await pool.query(
+      `SELECT id, labor_hours, source FROM est_items WHERE active = true AND category = 'Exterior / Site Lighting'`
+    );
+    try {
+      const res = await request(app).post('/api/estimating/calibration/apply').set(auth(owner.token))
+        .send({ scope: 'category', category: 'Exterior Site Lighting', adjustmentPct: 10 }).expect(200);
+      // If canonicalization didn't fire, the short spelling would match
+      // ZERO rows (est_items.category is always the long/canonical form)
+      // and applyCalibrationAdjustment would 400 instead of reaching here.
+      expect(res.body.updatedCount).toBe(before.length);
+      const lib = await request(app).get('/api/estimating/library').set(auth(owner.token)).expect(200);
+      const updated = lib.body.items.find((i: { id: string }) => i.id === created.body.id);
+      expect(updated.source).toBe('calibrated');
+      expect(updated.labor_hours).toBeCloseTo(11, 4); // 10 * 1.10
+    } finally {
+      for (const row of before) {
+        await pool.query(`UPDATE est_items SET labor_hours = $1, source = $2 WHERE id = $3`, [row.labor_hours, row.source, row.id]);
+      }
+      await request(app).put(`/api/estimating/library/items/${created.body.id}`).set(auth(owner.token)).send({ active: false });
     }
   });
 });
