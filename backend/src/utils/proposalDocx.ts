@@ -204,7 +204,7 @@ interface CellOpts {
   span?: number;
 }
 
-function cell(text: string, i: number, o: CellOpts = {}): TableCell {
+function cell(text: string, i: number, o: CellOpts & { keepNext?: boolean } = {}): TableCell {
   return new TableCell({
     width: { size: o.span ? TABLE_WIDTH : COLS[i], type: WidthType.DXA },
     shading: o.fill ? { type: ShadingType.CLEAR, fill: o.fill, color: 'auto' } : undefined,
@@ -215,6 +215,10 @@ function cell(text: string, i: number, o: CellOpts = {}): TableCell {
     children: [new Paragraph({
       alignment: o.align || AlignmentType.LEFT,
       spacing: { before: 0, after: 0 },
+      // Fix round 1 / S14 — a section row keeps with its first item row, so
+      // a page never ends on a lone section band.
+      keepNext: o.keepNext,
+      keepLines: o.keepNext,
       children: [run(text, { bold: o.bold, color: o.color, size: 18 })],
     })],
   });
@@ -228,6 +232,13 @@ export function takeoffDescription(item: string, description: string): string {
   const d = (description || '').trim();
   if (!d) return i;
   if (!i || d.toLowerCase().includes(i.toLowerCase())) return d;
+  // N12 — an item code ("1.1") or a name whose every word the description
+  // already says ("RTU connection" / "RTU final connection, 10-ton") adds
+  // nothing: the description alone.
+  if (/^[\d.\s-]+$/.test(i)) return d;
+  const words = (x: string) => x.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length > 1).map(w => w.replace(/s$/, ''));
+  const dw = new Set(words(d));
+  if (words(i).every(w => dw.has(w))) return d;
   return `${i} — ${d}`;
 }
 
@@ -247,7 +258,7 @@ function takeoffTable(categories: TakeoffCategory[]): Table {
     // Section row — light-blue fill, bold title-case name, spans all columns.
     rows.push(new TableRow({
       cantSplit: true,
-      children: [cell(cat.name || '', 0, { fill: ACCENT, bold: true, color: BLACK, span: 5 })],
+      children: [cell(cat.name || '', 0, { fill: ACCENT, bold: true, color: BLACK, span: 5, keepNext: true })],
     }));
     // Items numbered 1, 2, 3… per section.
     cat.items.forEach((it, n) => {
@@ -338,6 +349,11 @@ export function priceLine(totalPrice: string): string {
 export async function renderBidDocx(data: BidData): Promise<Buffer> {
   if (!data.total_price || !String(data.total_price).trim()) {
     throw new Error('Proposal has no price — re-run the proposal step');
+  }
+  // N11 — the price line is always words AND figures; a price that can't be
+  // read as dollars (a legacy "TBD", "see attached") never prints bare.
+  if (!amountInWords(data.total_price)) {
+    throw new Error(`The proposal price "${data.total_price}" could not be read as a dollar amount — re-run the proposal step with a price`);
   }
 
   const logo = loadLogo();

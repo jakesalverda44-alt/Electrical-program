@@ -7,8 +7,13 @@ import { describe, expect, it } from 'vitest';
 import {
   matchAccountRule, resolveAccountTerms, applyScopeAnswers, enforceAccountTerms, renderAccountTermsBlock,
   lightingSectionCBullet, lightingTermsBullet, verifyOptionsFor, normalizeParty, aliasMatches, DEFAULT_LIGHTING_BULLET,
+  parseStatementParties, stripTermFromBullet, mentionsTerm,
   type AccountRule,
 } from './accountRules';
+import { composeBidData } from './composeBidData';
+import { validateBidData, type BidData } from './bidData';
+import fs from 'fs';
+import path from 'path';
 import { verifyBidText } from './verifyBid';
 import { standardTerms } from './boilerplate';
 import type { Agent4Output } from '../ai/agent4Message';
@@ -79,13 +84,19 @@ describe('resolveAccountTerms — power poles (ask) with and without a drawing s
   });
   it('no statement: a scope question with the AI\'s notes; the answer then drives the term', () => {
     const snap = resolveAccountTerms(AUTOZONE, 'brand', [], false, () => ['AI count: 8 × Retail power pole (E-2)']);
-    expect(snap.questions).toEqual([{
-      term: 'power_poles', kind: 'ask', label: 'Power poles',
-      question: 'Who furnishes and installs the power poles? (APT / GC / Owner)', options: ['APT', 'GC', 'Owner'],
-      notes: ['No furnish/install statement for this was found on the drawings.', 'AI count: 8 × Retail power pole (E-2)'],
-    }]);
-    const resolved = applyScopeAnswers(snap, { 'scope:power_poles': 'APT' });
-    expect(resolved.find(t => t.term === 'power_poles')).toEqual({ term: 'power_poles', furnishBy: 'APT', installBy: 'APT', source: 'estimator' });
+    // Fix round 1 / B7 — furnish-by and install-by are asked SEPARATELY.
+    const notes = ['No furnish/install statement for this was found on the drawings.', 'AI count: 8 × Retail power pole (E-2)'];
+    expect(snap.questions).toEqual([
+      { term: 'power_poles', kind: 'ask', half: 'furnish', label: 'Power poles — furnished by',
+        question: 'Who FURNISHES the power poles? (APT / GC / Owner / Vendor)', options: ['APT', 'GC', 'Owner', 'Vendor'], notes, known: {} },
+      { term: 'power_poles', kind: 'ask', half: 'install', label: 'Power poles — installed by',
+        question: 'Who INSTALLS the power poles? (APT / GC / Owner / Vendor)', options: ['APT', 'GC', 'Owner', 'Vendor'], notes, known: {} },
+    ]);
+    // Half answered: still open.
+    expect(applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'GC' }).find(t => t.term === 'power_poles')).toBeUndefined();
+    // The realistic AutoZone answer: GC furnishes, APT installs and wires.
+    const resolved = applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'GC', 'scope:power_poles:install': 'APT' });
+    expect(resolved.find(t => t.term === 'power_poles')).toEqual({ term: 'power_poles', furnishBy: 'GC', installBy: 'APT', source: 'estimator' });
   });
   it('a fixed rule value that contradicts the drawings is a conflict question, never silently applied', () => {
     const snap = resolveAccountTerms(AUTOZONE, 'brand', [
@@ -240,5 +251,159 @@ describe('enforcement keeps {b, t} bold-lead bullets (Task 13)', () => {
       takeoff: [],
     }, snap, snap.resolved);
     expect(out.output.sections![0].bullets![0]).toEqual({ b: 'Furnish and install', t: ' the service entrance assembly (ECFECI).' });
+  });
+});
+
+// ── Fix round 1 ─────────────────────────────────────────────────────────────
+
+/** The Cowork Kissimmee proposal's own sections, as Agent 4 output. */
+function coworkAgent4(): Agent4Output {
+  const d = JSON.parse(fs.readFileSync(path.join(__dirname, '../test/fixtures/bidstd/kissimmee.bid_data.json'), 'utf8')) as BidData;
+  return {
+    plan_date: d.plan_date, sheets: ['E-1', 'E-2', 'E-3'],
+    sections: d.sections.map(x => ({ title: x.title, bullets: [...x.bullets] })),
+    exclusions: [...d.exclusions], fixture_types: ['A', 'B', 'C', 'M', 'G', 'D', 'S1', 'S2'], allowances_bullets: [],
+    takeoff: d.takeoff.map(c => ({ name: c.name, items: c.items.map(i => ({ ...i })) })),
+    alternates: [], takeoff_notes: [],
+  };
+}
+const bt = (b: unknown) => (typeof b === 'string' ? b : `${(b as { b: string }).b}${(b as { t: string }).t}`);
+
+describe('B6 — enforcement edits Section C in place, never past its limit (review repro B)', () => {
+  it('a Cowork-style C bullet ("Install all interior and site fixtures ... (Owner-furnished)") is REPLACED; C = 3 after compose; validateBidData passes', () => {
+    const a4 = coworkAgent4();
+    a4.sections![2].bullets = ['Install all interior and site fixtures per the luminaire schedule (Owner-furnished).', a4.sections![2].bullets![1]];
+    const snap = resolveAccountTerms(AUTOZONE, 'brand', [], false);
+    const r = enforceAccountTerms(a4, snap, applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'GC', 'scope:power_poles:install': 'APT' }));
+    const c = r.output.sections!.find(x => x.title.startsWith('C.'))!;
+    expect(c.bullets!.map(bt)).toEqual([
+      'Lighting fixtures furnished by the Owner through the Graybar national account. EC to receive, inventory, and install all fixtures per schedule.',
+      bt(coworkAgent4().sections![2].bullets![1]),
+    ]);
+    const { data } = composeBidData({ name: 'AutoZone Store #10077', loc: '2860 N Old Lake Wilson Rd, Kissimmee, FL 34747', gc: 'Summit General Contractors', brand: 'AutoZone' }, r.output, '$81,485.60');
+    expect(data.sections.find(x => x.title.startsWith('C.'))!.bullets).toHaveLength(3);
+    expect(validateBidData(data)).toEqual([]);
+  });
+  it('a full Section C with no lighting-ish bullet: bullet 1 is replaced, not a 4th added', () => {
+    const a4 = coworkAgent4();
+    a4.fixture_types = [];
+    a4.sections![2].bullets = ['Controls per E-5.', 'Photocell on the roof.', 'Occupancy sensors per plan.'];
+    const snap = resolveAccountTerms(AUTOZONE, 'brand', [], false);
+    const r = enforceAccountTerms(a4, snap, snap.resolved);
+    expect(r.output.sections!.find(x => x.title.startsWith('C.'))!.bullets).toHaveLength(3);
+  });
+});
+
+describe('B7 — power poles: answered in two halves; applying the answer rewrites only text about the poles', () => {
+  const a4 = coworkAgent4();
+  a4.sections![1].bullets!.push('Branch circuits and conduit to the power poles per E-2.');
+  a4.takeoff!.find(c => c.name === 'Branch Power')!.items!.push({ item: 'Power pole feed', description: '20A circuit to each retail power pole', unit: 'EA', qty: 8, source: 'E-2' });
+  a4.takeoff!.find(c => c.name === 'Branch Power')!.items!.push({ item: 'Retail power poles', description: '', unit: 'EA', qty: 8, source: 'E-2' });
+  const snap = resolveAccountTerms(AUTOZONE, 'brand', [], false);
+
+  it('the review repro: GC furnishes AND installs -> receptacles, the pole feed and the circuits to the poles all stay; only the poles go', () => {
+    const r = enforceAccountTerms(a4, snap, applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'GC', 'scope:power_poles:install': 'GC' }));
+    const b = r.output.sections!.find(x => x.title.startsWith('B.'))!.bullets!.map(bt);
+    expect(b).toEqual([
+      bt(coworkAgent4().sections![1].bullets![0]),
+      'Provide all receptacles and display baseflex floor connections per the power plans.',
+      'Branch circuits and conduit to the power poles per E-2.',
+    ]);
+    const bp = r.output.takeoff!.find(c => c.name === 'Branch Power')!.items!.map(i => i.item);
+    expect(bp).toContain('Power pole feed');
+    expect(bp).not.toContain('Retail power poles');
+    expect(bp).not.toContain('Power pole');
+    expect(bp).toContain('Receptacles');
+    expect(bp).toContain('Baseflex');
+    expect(r.output.exclusions!.map(bt)).toContain('Power poles furnished and installed by the GC.');
+  });
+  it('GC furnishes / APT installs (the realistic answer): nothing is removed, the poles are "GC (EC installs)"', () => {
+    const r = enforceAccountTerms(a4, snap, applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'GC', 'scope:power_poles:install': 'APT' }));
+    expect(r.output.sections!.find(x => x.title.startsWith('B.'))!.bullets).toHaveLength(3);
+    const poles = r.output.takeoff!.find(c => c.name === 'Branch Power')!.items!.find(i => i.item === 'Retail power poles')!;
+    expect(poles.furnish_by).toBe('GC (EC installs)');
+    expect(r.output.takeoff!.find(c => c.name === 'Branch Power')!.items!.find(i => i.item === 'Power pole feed')!.furnish_by).toBeUndefined();
+  });
+  it('stripTermFromBullet cases', () => {
+    expect(stripTermFromBullet('power_poles', 'Provide retail power poles, receptacles and baseflex connections.')).toEqual({ action: 'strip', text: 'Provide receptacles and baseflex connections.' });
+    expect(stripTermFromBullet('power_poles', 'Provide receptacles, baseflex connections, and retail power poles.')).toEqual({ action: 'strip', text: 'Provide receptacles and baseflex connections.' });
+    expect(stripTermFromBullet('power_poles', 'Power pole feeds and final connections by EC.')).toEqual({ action: 'keep' });
+    expect(stripTermFromBullet('power_poles', 'Furnish and install eight (8) retail power poles.')).toEqual({ action: 'remove' });
+    expect(stripTermFromBullet('power_poles', 'Retail power poles as shown on E-2, coordinated with the store fixture vendor and set before the ceiling grid is complete.').action).toBe('flag');
+  });
+});
+
+describe('S6 — an answered question is rendered as decided, never also "NOT YET DECIDED"', () => {
+  it('the block after the estimator answers', () => {
+    const snap = resolveAccountTerms(AUTOZONE, 'brand', [], false);
+    expect(renderAccountTermsBlock(snap, snap.resolved)).toContain('- Power poles: NOT YET DECIDED');
+    const block = renderAccountTermsBlock(snap, applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'GC', 'scope:power_poles:install': 'APT' }))!;
+    expect(block).toContain('- Power poles: furnished by the GC; installed by APT.');
+    expect(block).not.toContain('NOT YET DECIDED');
+  });
+});
+
+describe('S7 — drawing statements: furnish and install parsed separately, multi-word parties', () => {
+  it.each([
+    ['POWER POLES FURNISHED BY GC, INSTALLED AND WIRED BY EC.', 'GC', 'APT'],
+    ['FURNISHED AND INSTALLED BY OWNER', 'Owner', 'Owner'],
+    ['F&I BY GC', 'GC', 'GC'],
+    ['BY EQUIPMENT VENDOR', 'Vendor', 'Vendor'],
+    ['BY OTHERS', 'Others', 'Others'],
+    ['FURNISHED BY THE EQUIPMENT VENDOR, INSTALLED BY EC', 'Vendor', 'APT'],
+    ['PROVIDED BY OWNER', 'Owner', null],
+  ])('%s', (quote, f, i) => {
+    expect(parseStatementParties('', '', quote)).toEqual({ furnish: f, install: i });
+  });
+  it('the review repro: "FURNISHED BY GC, INSTALLED AND WIRED BY EC" is GC / APT, not GC / GC', () => {
+    const snap = resolveAccountTerms(AUTOZONE, 'brand', [
+      { item: 'Power poles', furnishBy: '', installBy: '', sourceSheet: 'E-2', quote: 'POWER POLES FURNISHED BY GC, INSTALLED AND WIRED BY EC.' },
+    ], false);
+    expect(snap.resolved.find(t => t.term === 'power_poles')).toMatchObject({ furnishBy: 'GC', installBy: 'APT', source: 'drawings' });
+  });
+  it('a drawing that gives only one half asks only the other', () => {
+    const snap = resolveAccountTerms(AUTOZONE, 'brand', [
+      { item: 'Power poles', furnishBy: '', installBy: '', sourceSheet: 'E-2', quote: 'POWER POLES PROVIDED BY OWNER.' },
+    ], false);
+    expect(snap.questions.map(q => q.half)).toEqual(['install']);
+    expect(applyScopeAnswers(snap, { 'scope:power_poles:install': 'APT' }).find(t => t.term === 'power_poles')).toMatchObject({ furnishBy: 'Owner', installBy: 'APT' });
+  });
+  it('a conflict answer carries its structured parties (the equipment-vendor case no longer vanishes)', () => {
+    const snap = resolveAccountTerms(AUTOZONE, 'brand', [
+      { item: 'Disconnects', furnishBy: '', installBy: '', sourceSheet: 'E-4', quote: 'DISCONNECTS FURNISHED BY THE EQUIPMENT VENDOR, INSTALLED BY EC.' },
+    ], false);
+    const q = snap.questions.find(x => x.term === 'disconnects')!;
+    expect(q.optionParties![0]).toEqual({ furnishBy: 'Vendor', installBy: 'APT' });
+    expect(applyScopeAnswers(snap, { 'scope:disconnects': { answer: q.options[0], furnishBy: 'Vendor', installBy: 'APT' } }).find(t => t.term === 'disconnects'))
+      .toMatchObject({ furnishBy: 'Vendor', installBy: 'APT', source: 'estimator' });
+  });
+});
+
+describe('S8 — matching never uses the bid\'s GC; 7-11 aliases', () => {
+  const SEVEN: AccountRule = { ...AUTOZONE, id: 'r-7', name: '7-Eleven', matchAliases: ['7-Eleven', '7 Eleven', 'Seven Eleven', '7Eleven', '7-11', '711'], terms: {} };
+  it('a GC named "Auto Zone Construction Group" on a Dunkin\' job gets the Default', () => {
+    // The bid's GC is not a match input at all (MatchInput has no bid-GC field).
+    const r = matchAccountRule([DEFAULT, AUTOZONE], { brand: "Dunkin'", bidName: "Dunkin' #350", owner: 'Dunkin Brands' });
+    expect(r.rule!.name).toBe('Default');
+  });
+  it('"7-11 #41234" and "711 Store" match 7-Eleven', () => {
+    expect(matchAccountRule([DEFAULT, SEVEN], { bidName: '7-11 #41234' }).rule!.name).toBe('7-Eleven');
+    expect(matchAccountRule([DEFAULT, SEVEN], { bidName: '711 Store Ocala' }).rule!.name).toBe('7-Eleven');
+  });
+  it('drawing text (owner / project name the drawings print) still matches', () => {
+    expect(matchAccountRule([DEFAULT, AUTOZONE], { drawingsProject: 'AUTOZONE STORE #10077' }).matchedBy).toBe('"AutoZone" in the drawings');
+  });
+});
+
+describe('N9 — look-alikes are not the term', () => {
+  it('plumbing fixtures are not lighting; a fire alarm panel is not a panelboard', () => {
+    expect(mentionsTerm('lighting', 'Plumbing fixtures by owner')).toBe(false);
+    expect(mentionsTerm('panels', 'Fire alarm panel by GC vendor')).toBe(false);
+    expect(mentionsTerm('lighting', 'Light fixtures furnished by owner')).toBe(true);
+    const snap = resolveAccountTerms(AUTOZONE, 'brand', [
+      { item: 'Plumbing fixtures', furnishBy: 'Owner', installBy: 'Owner', sourceSheet: 'P-1', quote: 'PLUMBING FIXTURES BY OWNER.' },
+      { item: 'Fire alarm panel', furnishBy: 'GC', installBy: 'GC', sourceSheet: 'FA-1', quote: 'FIRE ALARM PANEL BY GC VENDOR.' },
+    ], false);
+    expect(snap.questions.filter(q => q.kind === 'conflict')).toEqual([]);
   });
 });

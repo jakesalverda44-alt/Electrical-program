@@ -20,7 +20,6 @@ import * as path from 'path';
 import { extractDocxText } from '../utils/bidDocParse';
 import { logger } from '../utils/logger';
 import { SECTION_HEADERS } from './boilerplate';
-import { irrelevantSpecSentences } from '../ai/outputHygiene';
 
 const execFileAsync = promisify(execFile);
 
@@ -79,7 +78,10 @@ const PLACEHOLDER_RE = /\[[A-Z][A-Z0-9 ()/&._-]{1,60}\]/g;
 // the exact same estimator-language meaning verify.sh's plain substring was
 // trying to catch.
 const BANNED_PATTERNS: RegExp[] = [
-  /\bRFI\b/gi,
+  /\bRFIs?\b/gi,
+  // Fix round 1 / S11 — plural-safe, and the spelled-out forms.
+  /requests?\s+for\s+information/gi,
+  /to\s+be\s+determined/gi,
   /please confirm/gi,
   /clarification requested/gi,
   /field verif\w*/gi,
@@ -92,7 +94,7 @@ const BANNED_PATTERNS: RegExp[] = [
   /DQC/gi,
   /For Presentation Only/gi,
   /Not For Construction/gi,
-  /\bTBD\b/gi,
+  /\bTBDs?\b/gi,
 ];
 
 function scanBanned(text: string): string[] {
@@ -232,18 +234,10 @@ export function verifyBidText(text: string, kind: VerifyKind, opts: VerifyOption
     const ecfeci = checkEcfeciPlacement(text, opts.ecfeci?.requireInSectionA ?? true, opts.ecfeci?.requireInSectionC ?? true);
     if (ecfeci) failures.push(ecfeci);
 
-    // Takeoff accuracy Task 9 — owner-spec boilerplate for other places or
-    // store types ("generator scope applies to Puerto Rico stores only").
-    if (opts.projectAddress !== undefined) {
-      const { block } = irrelevantSpecSentences(text, opts.projectAddress);
-      if (block.length) {
-        failures.push({
-          check: 'irrelevant_spec',
-          detail: 'Owner-spec text that applies to other stores, regions or prototypes — not to this project.',
-          matches: block,
-        });
-      }
-    }
+    // Fix round 1 / S10 — owner-spec text for other places / store types is
+    // a WARNING (proposal preview, with an estimator override), never a
+    // verify-gate block: it can't tell "applies to APT-furnished material
+    // only" from a real other-region spec reliably enough to stop a proposal.
 
     // Takeoff accuracy Task 8 — the account rule's forbidden phrases.
     const lower = text.toLowerCase();

@@ -18,3 +18,4 @@ ALTER TABLE takeoff_results ADD CONSTRAINT takeoff_results_review_status_check
 -- B2 — fixture/device types the estimator entered when the drawing analysis
 -- found no schedule or legend; the next analysis run counts them.
 ALTER TABLE takeoff_results ADD COLUMN IF NOT EXISTS manual_count_targets JSONB;
+

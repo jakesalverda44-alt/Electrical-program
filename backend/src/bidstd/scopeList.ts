@@ -85,19 +85,36 @@ function bulletText(b: Bullet): string {
 
 /** GC-facing takeoff lines and scope bullets (never the exclusions) that
  *  mention a Not-included item. */
-export function excludedScopeProblems(data: Pick<BidData, 'takeoff' | 'sections'>, items: ScopeItem[]): string[] {
+/** N7 — an Included item that carves out part of an Excluded one ("Low
+ *  voltage" excluded, "Low voltage: conduit and pull strings only" included):
+ *  text matching the Included item is its scope, not the excluded item. */
+function carvedOut(text: string, ex: ScopeItem, includes: ScopeItem[]): boolean {
+  const exTerms = excludedItemTerms(ex);
+  return includes.some(inc => {
+    const incTerms = significantTerms(inc.text);
+    if (!exTerms.every(t => incTerms.includes(t)) || incTerms.length <= exTerms.length) return false;
+    const have = new Set(significantTerms(text));
+    // the text carries the carve-out's own extra words ("conduit", "pull", "string")
+    return incTerms.filter(t => !exTerms.includes(t)).some(t => have.has(t));
+  });
+}
+
+export function excludedScopeProblems(data: Pick<BidData, 'takeoff' | 'sections'>, items: ScopeItem[], overrides: NonElectricalOverride[] = []): string[] {
   const excluded = items.filter(i => i.kind === 'exclude');
+  const includes = items.filter(i => i.kind === 'include');
+  const kept = (cat: string, text: string) => overrideFor(normalizeLineKey(cat, text), overrides) !== null;
   const out: string[] = [];
   for (const ex of excluded) {
     for (const cat of data.takeoff ?? []) {
       for (const it of cat.items ?? []) {
         const text = `${it.item ?? ''} ${it.description ?? ''}`;
-        if (mentionsExcludedItem(text, ex)) out.push(`Takeoff ${cat.name}: "${text.trim()}" is on the Not-included list ("${ex.text}")`);
+        if (mentionsExcludedItem(text, ex) && !carvedOut(text, ex, includes) && !kept(cat.name, text)) out.push(`Takeoff ${cat.name}: "${text.trim()}" is on the Not-included list ("${ex.text}")`);
       }
     }
     for (const s of data.sections ?? []) {
       for (const b of s.bullets ?? []) {
-        if (mentionsExcludedItem(bulletText(b), ex)) out.push(`${s.title}: "${bulletText(b)}" is on the Not-included list ("${ex.text}")`);
+        const text = bulletText(b);
+        if (mentionsExcludedItem(text, ex) && !carvedOut(text, ex, includes) && !kept(s.title, text)) out.push(`${s.title}: "${text}" is on the Not-included list ("${ex.text}")`);
       }
     }
   }
@@ -128,22 +145,30 @@ export function renderScopeListBlock(items: ScopeItem[]): string | null {
 }
 
 // ── Non-electrical gate ─────────────────────────────────────────────────────
+// Fix round 1 / S9: a FLAG with an estimator override (reason required) for
+// anything ambiguous; a hard BLOCK only for clearly other-trade lines
+// (drywall/finishes, storm/sanitary/water piping, plumbing-fixture supply,
+// roofing). Electrical context (pole bases/foundations, conduit
+// encasement, equipment pads, EC roof penetrations, door-operator power,
+// landscape-lighting / irrigation-controller power, saw cutting / core
+// drilling for conduit) is never flagged. An SF unit alone only flags.
 
-interface TradeRule { trade: string; test: (t: string) => boolean }
+interface TradeRule { trade: string; hard: boolean; test: (t: string) => boolean; /** EC work that uses this trade's word (an EC roof penetration). */ ecWork?: RegExp }
 
-const ELECTRICAL_CONTEXT = /\b(conduit|duct\s*bank|raceway|conductor|wire|wiring|cable|circuit|feeder|disconnect|receptacle|panel|breaker|electrical|power|connection|connect|j-?box|junction|light|lighting|fixture|luminaire|grounding|ground rod|transformer|meter|switch|whip|homerun|home run)\b/i;
+/** Words that make a line EC work whatever other trade's word it contains. */
+const ELECTRICAL_CONTEXT = /\b(conduits?|duct\s*banks?|raceways?|conductors?|wire|wiring|cables?|circuits?|feeders?|feeds?|disconnects?|receptacles?|panels?|breakers?|electrical|power(ed)?|connections?|connect|j-?box(es)?|junction|light|lighting|fixtures?|luminaires?|grounding|ground rods?|transformers?|meters?|switch(es)?|whips?|homeruns?|home runs?|motors?|operators?|controllers?|\d{3}\s*v|\d{2,3}\s*volts?|120v|208v|277v|480v|penetrations?|pitch\s*pockets?|sleeves?|stub[- ]?ups?|core\s*drill(ing)?|saw\s*cut(ting)?|encase(ment|d)?|pole\s*(bases?|foundations?|piers?)|foundations?\s+for\s+(the\s+)?(light|pole)|light\s*pole|equipment\s*pads?|housekeeping\s*pads?|transformer\s*pads?)\b/i;
 
 const TRADES: TradeRule[] = [
-  { trade: 'drywall / finishes', test: t => /\b(drywall|gypsum|gyp\.?\s*board|sheetrock|level\s*[45]\s*finish|taping|mud(ding)?)\b/i.test(t) },
-  { trade: 'site piping (HDPE / storm / sanitary / water)', test: t => /\b(pipe|piping)\b/i.test(t) && /\b(hdpe|storm|sanitary|sewer|water|drain(age)?|pvc\s*drain|culvert|rcp)\b/i.test(t) && !/\b(conduit|duct|sleeve)\b/i.test(t) },
-  { trade: 'concrete (not an electrical pad or base)', test: t => /\b(concrete|slab|sidewalk|curb|footing|cmu|masonry)\b/i.test(t) && !/\b(pad|base|pole base|light base|housekeeping|encase(ment)?|duct\s*bank)\b/i.test(t) },
-  { trade: 'roofing', test: t => /\b(roofing|roof membrane|shingles?|flashing)\b/i.test(t) },
-  { trade: 'plumbing fixtures', test: t => /\b(toilet|water closet|urinal|lavator(y|ies)|faucet|mop sink|sink|plumbing fixture)\b/i.test(t) && !ELECTRICAL_CONTEXT.test(t) },
-  { trade: 'HVAC equipment / ductwork supply', test: t => (/\b(rtu|rooftop unit|air handler|ahu|condenser|mini-?split|ductwork|diffuser|grille)\b/i.test(t) && /\b(furnish|supply|provide|purchase)\b/i.test(t) && !ELECTRICAL_CONTEXT.test(t)) || /\bductwork\b/i.test(t) },
-  { trade: 'painting / flooring / ceilings', test: t => /\b(paint(ing)?|flooring|carpet|vct|floor tile|ceiling tile|acoustical ceiling|ceiling grid)\b/i.test(t) && !ELECTRICAL_CONTEXT.test(t) },
-  { trade: 'framing / doors / insulation', test: t => /\b(framing|metal studs?|wood studs?|door hardware|doors?\b|insulation|batt)\b/i.test(t) && !ELECTRICAL_CONTEXT.test(t) },
-  { trade: 'paving / landscaping / fencing', test: t => /\b(asphalt|paving|landscap(e|ing)|irrigation|sod|fenc(e|ing))\b/i.test(t) && !/\b(conduit|sleeve|gate operator)\b/i.test(t) },
-  { trade: 'fire sprinkler', test: t => /\b(sprinkler|fire suppression)\b/i.test(t) && !/\b(flow switch|tamper|monitor)\b/i.test(t) },
+  { trade: 'drywall / finishes', hard: true, test: t => /\b(drywall|gypsum|gyp\.?\s*board|sheetrock|level\s*[45]\s*finish|taping|mud(ding)?)\b/i.test(t) },
+  { trade: 'site piping (HDPE / storm / sanitary / water)', hard: true, test: t => /\b(pipe|piping)\b/i.test(t) && /\b(hdpe|storm|sanitary|sewer|water|drain(age)?|pvc\s*drain|culvert|rcp)\b/i.test(t) && !/\b(conduit|duct|sleeve)\b/i.test(t) },
+  { trade: 'plumbing fixtures', hard: true, test: t => /\b(toilet|water closet|urinal|lavator(y|ies)|faucet|mop sink|sink|plumbing fixture)\b/i.test(t) },
+  { trade: 'roofing', hard: true, test: t => /\b(roofing|roof membrane|shingles?|flashing|re-?roof)\b/i.test(t), ecWork: /\b(pitch\s*pockets?|penetrations?|conduits?|roof\s*jacks?|pipe\s*portals?)\b/i },
+  { trade: 'concrete (not an electrical pad or base)', hard: false, test: t => /\b(concrete|slab|sidewalk|curb|footing|cmu|masonry)\b/i.test(t) },
+  { trade: 'HVAC equipment / ductwork supply', hard: false, test: t => (/\b(rtu|rooftop unit|air handler|ahu|condenser|mini-?split|diffuser|grille)\b/i.test(t) && /\b(furnish|supply|provide|purchase)\b/i.test(t)) || /\bductwork\b/i.test(t) },
+  { trade: 'painting / flooring / ceilings', hard: false, test: t => /\b(paint(ing)?|flooring|carpet|vct|floor tile|ceiling tile|acoustical ceiling|ceiling grid)\b/i.test(t) },
+  { trade: 'framing / doors / insulation', hard: false, test: t => /\b(framing|metal studs?|wood studs?|door hardware|doors?\b|insulation|batt)\b/i.test(t) },
+  { trade: 'paving / landscaping / fencing', hard: false, test: t => /\b(asphalt|paving|landscap(e|ing)|irrigation|sod|fenc(e|ing))\b/i.test(t) },
+  { trade: 'fire sprinkler', hard: false, test: t => /\b(sprinkler|fire suppression)\b/i.test(t) && !/\b(flow switch|tamper|monitor)\b/i.test(t) },
 ];
 
 /** Units that don't belong on an electrical takeoff (SF of drywall is the
@@ -154,24 +179,57 @@ export function normalizeLineKey(category: string, text: string): string {
   return `${category.trim().toLowerCase()}::${significantTerms(text).sort().join(' ')}`;
 }
 
-export function nonElectricalReason(text: string, unit: string): string | null {
-  for (const r of TRADES) if (r.test(text)) return r.trade;
-  if (NON_ELECTRICAL_UNITS.test(unit.trim())) return `unit "${unit}" is not an electrical takeoff unit`;
+export interface NonElectricalVerdict { reason: string; block: boolean }
+
+/** null = electrical (or electrical context); otherwise why it looks like
+ *  another trade and whether that is a hard block or a flag. */
+export function nonElectricalVerdict(text: string, unit: string): NonElectricalVerdict | null {
+  const context = ELECTRICAL_CONTEXT.test(text);
+  for (const r of TRADES) {
+    if (!r.test(text)) continue;
+    if (r.ecWork?.test(text)) return null;
+    if (context) return r.hard ? { reason: r.trade, block: false } : null; // a hard trade word WITH electrical context: flag only
+    return { reason: r.trade, block: r.hard };
+  }
+  if (NON_ELECTRICAL_UNITS.test(unit.trim())) return { reason: `unit "${unit}" is not an electrical takeoff unit`, block: false };
   return null;
 }
 
-export interface NonElectricalFinding { category: string; line: string; unit: string; reason: string; lineKey: string; overridden: string | null }
+/** Back-compat: the reason only. */
+export function nonElectricalReason(text: string, unit: string): string | null {
+  return nonElectricalVerdict(text, unit)?.reason ?? null;
+}
+
+export interface NonElectricalFinding { category: string; line: string; unit: string; reason: string; lineKey: string; overridden: string | null; block: boolean }
+
+/** An override still applies after Agent 4 rewords the line: same category,
+ *  and most of the significant words shared (S9: overrides were keyed on
+ *  exact wording, so a re-run brought the block back). */
+function overrideFor(lineKey: string, overrides: NonElectricalOverride[]): string | null {
+  const exact = overrides.find(o => o.lineKey === lineKey);
+  if (exact) return exact.reason;
+  const [cat, words] = lineKey.split('::');
+  const a = new Set((words ?? '').split(' ').filter(Boolean));
+  for (const o of overrides) {
+    const [oc, ow] = (o.lineKey ?? '').split('::');
+    if (oc !== cat) continue;
+    const b = new Set((ow ?? '').split(' ').filter(Boolean));
+    const inter = [...a].filter(w => b.has(w)).length;
+    const union = new Set([...a, ...b]).size;
+    if (union && inter / union >= 0.6) return o.reason;
+  }
+  return null;
+}
 
 export function nonElectricalFindings(data: Pick<BidData, 'takeoff'>, overrides: NonElectricalOverride[]): NonElectricalFinding[] {
-  const byKey = new Map(overrides.map(o => [o.lineKey, o.reason]));
   const out: NonElectricalFinding[] = [];
   for (const cat of data.takeoff ?? []) {
     for (const it of cat.items ?? []) {
       const line = `${it.item ?? ''} ${it.description ?? ''}`.trim();
-      const reason = nonElectricalReason(line, String(it.unit ?? ''));
-      if (!reason) continue;
+      const v = nonElectricalVerdict(line, String(it.unit ?? ''));
+      if (!v) continue;
       const lineKey = normalizeLineKey(cat.name, line);
-      out.push({ category: cat.name, line, unit: String(it.unit ?? ''), reason, lineKey, overridden: byKey.get(lineKey) ?? null });
+      out.push({ category: cat.name, line, unit: String(it.unit ?? ''), reason: v.reason, lineKey, overridden: overrideFor(lineKey, overrides), block: v.block });
     }
   }
   return out;
@@ -182,7 +240,11 @@ export function nonElectricalFindings(data: Pick<BidData, 'takeoff'>, overrides:
 const DUP_NOISE = new Set(['surface', 'mounted', 'surface-mounted', 'recessed', 'complete', 'new', 'led', 'type', 'fixture', 'unit']);
 
 function typeTag(text: string): string | null {
-  return /\btype\s*[:#-]?\s*([a-z]{1,2}\d{0,2})\b/i.exec(text)?.[1]?.toUpperCase() ?? null;
+  // N10 — "Type A", "Fixture A", "Fixture Type B1", "(A)", "A:" all carry a tag.
+  const m = /\b(?:type|fixture(?:\s+type)?|luminaire)\s*[:#-]?\s*([a-z]{1,2}\d{0,2})\b/i.exec(text)
+    ?? /\(([a-z]{1,2}\d{0,2})\)/i.exec(text)
+    ?? /^([A-Z]{1,2}\d{0,2})\s*[-–—:]\s/.exec(text);
+  return m?.[1]?.toUpperCase() ?? null;
 }
 
 export interface NearDuplicate { category: string; lines: string[] }

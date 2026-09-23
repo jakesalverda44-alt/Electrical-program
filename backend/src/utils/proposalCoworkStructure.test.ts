@@ -10,19 +10,20 @@ import path from 'path';
 import { execFileSync } from 'child_process';
 import AdmZip from 'adm-zip';
 import { renderBidDocx } from './proposalDocx';
-import { standardScope6, standardTerms } from '../bidstd/boilerplate';
-import { formatSheetCitation } from '../bidstd/composeBidData';
-import { findSoffice } from '../bidstd/verifyBid';
+import { findSoffice, verifyBidDocx } from '../bidstd/verifyBid';
 import type { BidData } from '../bidstd/bidData';
+import { kissimmeeThroughCompose } from '../test/fixtures/bidstd/kissimmeeProposal';
 
 const FIX = path.join(__dirname, '../test/fixtures/bidstd');
 const outline = JSON.parse(fs.readFileSync(path.join(FIX, 'cowork-kissimmee.outline.json'), 'utf8'));
 
+/** Fix round 1 / B6 + S17 — composed through the app's own path (account
+ *  terms enforced, composeBidData, the blocking checks), never hand-built. */
 function kissimmee(): BidData {
-  const d = JSON.parse(fs.readFileSync(path.join(FIX, 'kissimmee.bid_data.json'), 'utf8')) as BidData;
-  d.scope = standardScope6(d.plan_date || '', formatSheetCitation(['E-1', 'E-2', 'E-3', 'E-4', 'E-5', 'E-6', 'E-7', 'PH0.1', 'A-101']), d.client);
-  d.terms = standardTerms(d.plan_date || '', { lightingBullet: 'Lighting fixtures furnished by the Owner through the Graybar national account. EC to receive, inventory, and install.' });
-  return d;
+  const r = kissimmeeThroughCompose();
+  expect(r.dataProblems).toEqual([]);
+  expect(r.lineFailures).toEqual([]);
+  return r.data;
 }
 
 /** Paragraph texts in document order (table cells included, one per cell). */
@@ -61,6 +62,12 @@ describe('proposal structure matches Cowork', () => {
     expect(p.some(t => /Change Order approved by the Owner|signed by the Owner/.test(t))).toBe(false);
     expect(p.some(t => /disconnects? .*furnished by AutoZone/i.test(t))).toBe(false);
   });
+
+  it('the composed Kissimmee proposal passes the GC verify gate with the AutoZone terms', async () => {
+    const r = kissimmeeThroughCompose();
+    const v = await verifyBidDocx(await renderBidDocx(r.data), { kind: 'gc', ...r.verifyOptions });
+    expect(v.failures).toEqual([]);
+  }, 150_000);
 
   it('bullets are small "•" with a tight hanging indent; the takeoff table has no cell borders', async () => {
     const zip = new AdmZip(await renderBidDocx(kissimmee()));

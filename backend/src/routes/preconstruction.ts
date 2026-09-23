@@ -46,19 +46,19 @@ import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
 import { runCountingStage, type CountResult } from '../ai/countingStage';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
 import { writeAiCountMarkers } from '../estimating/aiMarkers';
-import { buildReviewItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, enforcedCounts, type ReviewItem } from '../ai/reviewItems';
-import { enforceCountsOnTakeoff, countMismatchProblems } from '../bidstd/enforceCounts';
+import { buildReviewItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
 import { takeoffGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
-import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms, listAccountRules, getAccountRule, validateRuleInput, saveAccountRule } from '../bidstd/accountRulesDb';
-import { renderAccountTermsBlock, enforceAccountTerms, lightingTermsBullet, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
-import { renderScopeListBlock, excludedScopeProblems, exclusionBulletsFor, nonElectricalFindings, nearDuplicateLines, normalizeLineKey } from '../bidstd/scopeList';
+import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
+import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
+import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey } from '../bidstd/scopeList';
 import { getBidScopeList } from '../bidstd/scopeListDb';
-import { composeBidData, ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
+import { ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
+import { composeProposal } from '../bidstd/composeProposal';
 import { resolveUniqueJobNumber } from '../bidstd/boilerplate';
 import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
 import { renderPrebidScopeDocx, prebidScopeFilename } from '../bidstd/prebidScopeDocx';
 import { verifyBidDocx, verifyBidText, type VerifyOptions } from '../bidstd/verifyBid';
-import { BidData, validateBidData } from '../bidstd/bidData';
+import { BidData } from '../bidstd/bidData';
 import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
 import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
 
@@ -1887,7 +1887,10 @@ router.post('/:bidId/non-electrical-overrides', requireAuth, asyncHandler(async 
   const line = typeof req.body?.line === 'string' ? req.body.line.trim() : '';
   const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
   if (!category || !line) return res.status(400).json({ error: 'category and line required' });
-  if (reason.length < 3) return res.status(400).json({ error: 'Say why this line is electrical scope on this job.' });
+  // Fix round 1 — one override mechanism for every "keep this" decision: a
+  // non-electrical line (S9), a line on the Not-included list (N7), or an
+  // other-region spec sentence (S10, category 'spec'). A real reason (N6).
+  if (!isRealReason(reason)) return res.status(400).json({ error: 'Say why this belongs on this job (at least 10 characters).' });
   await pool.query(
     `INSERT INTO bid_scope_items (bid_id, kind, text, line_key, reason, created_by) VALUES ($1,'override_non_electrical',$2,$3,$4,$5)`,
     [bidId, line, normalizeLineKey(category, line), reason, req.user!.name]
@@ -2409,7 +2412,6 @@ export async function composeCurrentBidData(
   // Fix round 2 / R2-S4(a) — [] for the legacy-shape branch below
   // (composeBidData never runs there, so there's nothing to flag).
   let ambiguousQtyKeys: string[] = [];
-  let countProblems: string[] = [];
   if (isAgent4Shape(parsed)) {
     if (!formattedPrice && !useDraft) {
       return { ok: false, status: 422, error: 'No validated price on file for this proposal. Re-run Agent 4.' };
@@ -2418,38 +2420,17 @@ export async function composeCurrentBidData(
       name: bid?.name, loc: bid?.loc, gc: bid?.gc, contact: bid?.contact,
       sq_ft: bid?.sq_ft ?? null, job_number: bid?.job_number ?? null, brand: bid?.brand ?? null,
     };
-    const enforced = enforceAccountTerms(parsed as Agent4Output, accountSnap, accountResolved);
-    accountCorrections = enforced.corrections;
-    // Task 11 — every Not-included item on the estimator's scope list is an
-    // exclusion bullet (deterministic, once).
-    const addExclusions = exclusionBulletsFor(scopeList.items, enforced.output.exclusions ?? []);
-    if (addExclusions.length) {
-      enforced.output.exclusions = [...(enforced.output.exclusions ?? []), ...addExclusions];
-      accountCorrections.push(...addExclusions.map(b => `Exclusion added from the estimator's scope list: "${b}"`));
-    }
-    const { data, jobNumberGenerated, ambiguousQtyKeys: keys } = composeBidData(bidRow, enforced.output, formattedPrice ?? '', {
-      savedLineItems,
-      lightingTermsBullet: lightingTermsBullet(accountResolved.find(t => t.term === 'lighting')),
+    // Fix round 1 — the one pure composition path (bidstd/composeProposal.ts):
+    // account terms, scope-list exclusions, composeBidData, CKT rows out,
+    // counted quantities enforced (B1), and the checks that block GC documents.
+    const composed = composeProposal({
+      agent4: parsed as Agent4Output, bidRow, price: formattedPrice ?? '', savedLineItems,
+      accountSnap, accountResolved, scopeItems: scopeList.items, overrides: scopeList.overrides,
+      countResult: trRows[0].count_result as CountResult | null, reviewItems: trRows[0].review_items as ReviewItem[] | null,
     });
-    ambiguousQtyKeys = keys;
-    // Takeoff accuracy Task 13 — circuit rows ("CKT") are panel-schedule
-    // bookkeeping, not takeoff items: they never reach the GC documents.
-    for (const cat of data.takeoff) {
-      const kept = cat.items.filter(it => !/^ckts?$/i.test(String(it.unit ?? '').trim()));
-      for (const it of cat.items) if (!kept.includes(it)) accountCorrections.push(`Circuit row removed from the takeoff: ${cat.name} "${it.item}${it.description ? ` — ${it.description}` : ''}" (${it.qty} CKT).`);
-      cat.items = kept;
-    }
-    data.takeoff = data.takeoff.filter(cat => cat.items.length > 0);
-    // Fix round 1 / B1 — the counted and estimator-resolved quantities are
-    // enforced here, deterministically, on whatever Agent 4 (or the draft)
-    // wrote: qty overwritten, a dropped line re-inserted, extra lines for a
-    // type removed — every change recorded — then re-checked below.
-    const countRes = trRows[0].count_result as CountResult | null;
-    const countSet = enforcedCounts(countRes, trRows[0].review_items as ReviewItem[] | null);
-    const countFix = enforceCountsOnTakeoff(data.takeoff, countRes, countSet);
-    data.takeoff = countFix.takeoff;
-    accountCorrections.push(...countFix.corrections);
-    countProblems = countMismatchProblems(data.takeoff, countRes, countSet);
+    const { data, jobNumberGenerated } = composed;
+    ambiguousQtyKeys = composed.ambiguousQtyKeys;
+    accountCorrections = composed.corrections;
     if (jobNumberGenerated && persist) {
       // Task 6.2 — two bids generated the same day compute the identical
       // JS.MMDDYYYY (jobNumber() is a pure function of today's date only),
@@ -2481,31 +2462,15 @@ export async function composeCurrentBidData(
     // FIX-7 — validateBidData actually runs now (it was dead code: wired
     // into nothing, despite a stale comment below claiming otherwise).
     // New-shape only, per opts.validate above.
-    if (validate) {
-      const problems = validateBidData(bidData);
-      // Takeoff accuracy Task 9 — never a zero-quantity line or zero-footage
-      // allowance in a GC document.
-      const zeros = zeroQuantityProblems(bidData);
-      // Task 11 — nothing on the Not-included list, and no other trade's
-      // line unless the estimator overrode it with a reason.
-      const excludedHits = excludedScopeProblems(bidData, scopeList.items);
-      const otherTrades = nonElectricalFindings(bidData, scopeList.overrides).filter(f => !f.overridden);
-      if (problems.length || zeros.length || excludedHits.length || otherTrades.length || countProblems.length) {
-        return {
-          ok: false,
-          status: 422,
-          error: problems.length
-            ? 'This proposal did not pass data validation — fix the composed data before generating documents.'
-            : 'This proposal has lines that can\'t go to the GC — fix or override them before generating.',
-          failures: [
-            ...countProblems.map(detail => ({ check: 'count_mismatch', detail })),
-            ...zeros.map(detail => ({ check: 'zero_quantity', detail })),
-            ...excludedHits.map(detail => ({ check: 'excluded_scope', detail })),
-            ...otherTrades.map(f => ({ check: 'non_electrical', detail: `${f.category}: "${f.line}" (${f.unit}) looks like ${f.reason}`, category: f.category, line: f.line })),
-            ...problems.map(detail => ({ check: 'data', detail })),
-          ],
-        };
-      }
+    if (validate && (composed.dataProblems.length || composed.lineFailures.length)) {
+      return {
+        ok: false,
+        status: 422,
+        error: composed.dataProblems.length
+          ? 'This proposal did not pass data validation — fix the composed data before generating documents.'
+          : 'This proposal has lines that can\'t go to the GC — fix or override them before generating.',
+        failures: [...composed.lineFailures, ...composed.dataProblems.map(detail => ({ check: 'data', detail }))],
+      };
     }
   } else {
     // The bid record is the authoritative source for the project name — the
@@ -2530,20 +2495,25 @@ export async function composeCurrentBidData(
   }
 
   verifyOptions.projectAddress = bid?.loc ?? '';
+  // S8 / S3 — shown before generating: the account rule warning, and the
+  // counting stage's non-blocking flags stay in the Takeoff step.
+  const countWarnings = accountSnap?.warning ? [accountSnap.warning] : [];
   const gcText = [
     ...bidData.sections.flatMap(s => s.bullets.map(b => (typeof b === 'string' ? b : `${b.b} ${b.t}`))),
     ...bidData.exclusions.map(b => (typeof b === 'string' ? b : `${b.b} ${b.t}`)),
   ].join('\n');
   const spec = irrelevantSpecSentences(gcText, bid?.loc ?? '');
+  const specKept = (sentence: string) => scopeList.overrides.some(o => o.lineKey === normalizeLineKey('spec', sentence));
   const hygieneWarnings = [
     ...zeroQuantityProblems(bidData),
-    ...excludedScopeProblems(bidData, scopeList.items),
+    ...excludedScopeProblems(bidData, scopeList.items, scopeList.overrides),
     ...nonElectricalFindings(bidData, scopeList.overrides).map(f => f.overridden
       ? `Kept by the estimator: ${f.category} "${f.line}" (${f.reason}) — ${f.overridden}`
-      : `${f.category}: "${f.line}" (${f.unit}) looks like ${f.reason} — not electrical scope`),
+      : `${f.category}: "${f.line}" (${f.unit}) looks like ${f.reason} — ${f.block ? 'not electrical scope (blocks the GC documents until kept with a reason)' : 'check it is electrical scope (keep it with a reason to clear this)'}`),
     ...nearDuplicateLines(bidData).map(d => `Possible duplicate lines in ${d.category}: ${d.lines.map(l => `"${l}"`).join(' / ')}`),
-    ...spec.block.map(s => `Applies to other stores/regions, not this project: "${s}"`),
-    ...spec.warn.map(s => `Names another state/region — check it applies: "${s}"`),
+    // S10 — other-region / store-type spec text: a warning with an override.
+    ...spec.warn.filter(x => !specKept(x)).map(x => `Owner-spec text for another region or store type — check it applies to this project: "${x}"`),
+    ...countWarnings,
   ];
   return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys, accountCorrections, verifyOptions, hygieneWarnings, runId };
 }

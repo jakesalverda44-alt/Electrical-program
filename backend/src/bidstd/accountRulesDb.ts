@@ -2,7 +2,7 @@
 // per-run snapshot. Pure rules live in ./accountRules.ts.
 import { pool } from '../db/pool';
 import {
-  PARTIES, TERM_KEYS, TERM_PATTERNS, TERM_LABELS, matchAccountRule, resolveAccountTerms, applyScopeAnswers,
+  PARTIES, TERM_KEYS, TERM_PATTERNS, TERM_LABELS, matchAccountRule, resolveAccountTerms, applyScopeAnswers, type ScopeAnswer,
   type AccountRule, type AccountTermsSnapshot, type RuleTerm, type TermKey, type RequiredBullet, type ResolvedTerm, type Party,
 } from './accountRules';
 import type { ReviewItem, ScopeQuestionInput } from '../ai/reviewItems';
@@ -150,15 +150,28 @@ export async function buildAccountTermsSnapshot(
 ): Promise<AccountTermsSnapshot> {
   const rules = await listAccountRules();
   const project = (agent1.project ?? {}) as Record<string, unknown>;
+  // Fix round 1 / S8 — never the bid's own GC name (project.gcName is the
+  // bid's GC after the hygiene step): drawing text only.
   const { rule, matchedBy } = matchAccountRule(rules, {
     brand: bid.brand, bidName: bid.name, projectType: bid.project_type,
-    owner: String(project.owner ?? ''), gcExtracted: String(project.gcName ?? ''),
+    owner: String(project.owner ?? ''), drawingsProject: String(project.name ?? ''), gcExtracted: String(project.gc_extracted ?? ''),
   });
-  return resolveAccountTerms(rule, matchedBy, agent1.furnishStatements, mdpOnDrawings(agent1), aiNotesFor(agent1));
+  const snap = resolveAccountTerms(rule, matchedBy, agent1.furnishStatements, mdpOnDrawings(agent1), aiNotesFor(agent1));
+  if (bid.brand?.trim() && (!rule || rule.isDefault)) {
+    snap.warning = `The bid's brand "${bid.brand.trim()}" matched no account rule — the Default terms apply. Add the brand to a rule's aliases in Settings → Account Rules if it has its own terms.`;
+  }
+  return snap;
 }
 
 export function scopeQuestionsFor(snap: AccountTermsSnapshot | null): ScopeQuestionInput[] {
-  return (snap?.questions ?? []).map(q => ({ term: q.term, label: q.label, question: q.question, options: q.options, notes: q.notes }));
+  // B7 — an `ask` term's furnish and install halves are separate items
+  // (scope:<term>:furnish / scope:<term>:install); a conflict carries its
+  // options' structured parties.
+  return (snap?.questions ?? []).map(q => ({
+    term: q.half ? `${q.term}:${q.half}` : q.term,
+    label: q.label, question: q.question, options: q.options, notes: q.notes,
+    ...(q.optionParties ? { optionParties: q.optionParties } : {}),
+  }));
 }
 
 /** The terms in force right now: the snapshot plus the estimator's answers. */
@@ -167,7 +180,11 @@ export function effectiveAccountTerms(
   reviewItems: ReviewItem[] | null,
 ): ResolvedTerm[] {
   if (!snap) return [];
-  const answers: Record<string, string> = {};
-  for (const i of reviewItems ?? []) if (i.kind === 'scope_question' && i.resolution?.answer) answers[i.id] = i.resolution.answer;
+  const answers: Record<string, ScopeAnswer> = {};
+  for (const i of reviewItems ?? []) {
+    if (i.kind === 'scope_question' && i.resolution?.answer) {
+      answers[i.id] = { answer: i.resolution.answer, furnishBy: i.resolution.furnishBy, installBy: i.resolution.installBy };
+    }
+  }
   return applyScopeAnswers(snap, answers);
 }

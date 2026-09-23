@@ -36,6 +36,12 @@ describe('"Missing sheets" filtered against what was loaded', () => {
     expect(out.missingSheets).toEqual(['E-5']);
     expect(r.removedMissingSheets).toEqual(['E-3', 'E-7', 'E-3']);
   });
+  it('N8 — "Panel schedule on E-5 references E-9" stays when only E-5 is loaded (every sheet named must be loaded)', () => {
+    const r = emptyHygiene();
+    const out = filterMissingSheets({ missingSheets: ['Panel schedule on E-5 references E-9', 'E-5 referenced in note 3'] }, ['E-5'], r);
+    expect(out.missingSheets).toEqual(['Panel schedule on E-5 references E-9']);
+    expect(r.removedMissingSheets).toEqual(['E-5 referenced in note 3']);
+  });
   it('normalizes sheet numbers', () => {
     expect(normalizeSheetNo('E-3.0')).toBe('E3');
     expect(normalizeSheetNo('sheet e 101')).toBe('E101');
@@ -88,16 +94,33 @@ describe('GC-facing text', () => {
       'D. Site Lighting, Underground Work & Allowances: zero-footage allowance "0\' allowance — field verify site underground."',
     ]);
   });
-  it('owner-spec text scoped to other stores/regions is blocked; a mere state name is only a warning', () => {
+  // Fix round 1 / S10 — a WARNING (with an override), never a verify block;
+  // only a named region that conflicts with the project's location, or a
+  // named store type scoped "only", triggers it.
+  it('Puerto Rico / Texas-prototype text is a warning; verifyBid no longer blocks it', () => {
     const text = 'Generator scope applies to Puerto Rico stores only.\nCoordinate the service with Duke Energy.\nFlorida Building Code 2023 applies.\nMeter per Georgia Power standards.';
     expect(irrelevantSpecSentences(text, '2860 N Old Lake Wilson Rd, Kissimmee, FL 34747')).toEqual({
-      block: ['Generator scope applies to Puerto Rico stores only.'],
-      warn: [],
+      block: [],
+      warn: ['Generator scope applies to Puerto Rico stores only.'],
     });
     const v = verifyBidText(text, 'gc', { projectAddress: 'Kissimmee, FL 34747' });
-    expect(v.failures.find(f => f.check === 'irrelevant_spec')!.matches).toEqual(['Generator scope applies to Puerto Rico stores only.']);
+    expect(v.failures.find(f => f.check === 'irrelevant_spec')).toBeUndefined();
     expect(irrelevantSpecSentences('Service from Georgia Power per utility standards.', 'Kissimmee, FL 34747').warn).toEqual([]);
-    expect(irrelevantSpecSentences('Per the Texas prototype details.', 'Kissimmee, FL 34747')).toEqual({ block: [], warn: ['Per the Texas prototype details.'] });
+    expect(irrelevantSpecSentences('Per the Texas prototype details.', 'Kissimmee, FL 34747').warn).toEqual(['Per the Texas prototype details.']);
+    expect(irrelevantSpecSentences('Generator scope applies to Hub stores only.', 'Kissimmee, FL 34747').warn).toEqual(['Generator scope applies to Hub stores only.']);
+  });
+  it('review repro A: ordinary sentences never trigger it', () => {
+    for (const t of [
+      'Warranty only applies to APT-furnished material.',
+      'Deliveries to the site only during business hours.',
+      'Coordinate with Duke Energy Florida for the service.',
+    ]) expect(irrelevantSpecSentences(t, '2860 N Old Lake Wilson Rd, Kissimmee, FL 34747').warn, t).toEqual([]);
+    // Project state unknown (no state/zip in bid.loc): no region can conflict.
+    expect(irrelevantSpecSentences('Coordinate with Duke Energy Florida.', 'Old Lake Wilson Rd').warn).toEqual([]);
+  });
+  it('S11 — banned language is plural-safe and catches the spelled-out forms', () => {
+    const v = verifyBidText('Pending RFIs on the panel schedule. Two TBDs remain. Mounting height to be determined. See Request for Information 4.', 'gc', {});
+    expect(v.failures.find(f => f.check === 'banned_language')!.matches).toEqual(expect.arrayContaining(['RFIs', 'TBDs', 'to be determined', 'Request for Information']));
   });
   it('reads the project state from the address', () => {
     expect(projectStateOf('2860 N Old Lake Wilson Rd, Kissimmee, FL 34747')).toBe('Florida');

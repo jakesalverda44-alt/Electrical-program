@@ -139,7 +139,7 @@ describe('runPipeline — counting stage on kissimmee-mini.pdf', () => {
     expect(rows[0].account_terms.ruleName).toBe('AutoZone');
     // Fix round 1 / B3 — Agent 1's stacked "Site lights 4 (PH0.1)" row is
     // held for the estimator (one "not on this job" click), never silently dropped.
-    expect(rows[0].review_items.map((i: { id: string }) => i.id)).toEqual(['count:G', 'unscheduled:SITE-LIGHTS-PH0-1', 'scope:power_poles']);
+    expect(rows[0].review_items.map((i: { id: string }) => i.id)).toEqual(['count:G', 'unscheduled:SITE-LIGHTS-PH0-1', 'scope:power_poles:furnish', 'scope:power_poles:install']);
     expect(rows[0].review_status).toBe('needs_review');
     expect(rows[0].hygiene.gc).toEqual({ bidGc: 'Summit General Contractors', extracted: 'AutoZone Stores LLC', owner: '', mismatch: true });
 

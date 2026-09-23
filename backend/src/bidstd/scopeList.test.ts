@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   significantTerms, mentionsExcludedItem, excludedScopeProblems, exclusionBulletsFor, renderScopeListBlock,
-  nonElectricalFindings, nonElectricalReason, nearDuplicateLines, normalizeLineKey, type ScopeItem,
+  nonElectricalFindings, nonElectricalReason, nonElectricalVerdict, nearDuplicateLines, normalizeLineKey, type ScopeItem,
 } from './scopeList';
 import type { BidData } from './bidData';
 
@@ -115,5 +115,61 @@ describe('3. Near-duplicate lines', () => {
       { category: 'Interior Lighting', lines: ['Exit sign Exit sign', 'Exit sign LED exit sign w/ battery'] },
       { category: 'Lighting Controls', lines: ['Contactor Lighting contactor', 'Contactor Furnish and install lighting contactors', 'Contactor Lighting contactor, 8-pole'] },
     ]);
+  });
+});
+
+// ── Fix round 1 ─────────────────────────────────────────────────────────────
+
+describe('S9 — the non-electrical gate: hard block only for clear other trades; a flag (keep with a reason) otherwise', () => {
+  it('review repro A: ordinary electrical lines are never flagged', () => {
+    for (const [line, unit] of [
+      ['Saw cut and patch concrete slab for underground conduit', 'LF'],
+      ['Core drill CMU wall for feeder penetration', 'EA'],
+      ['Concrete light pole foundations', 'EA'],
+      ['Roof flashing / pitch pocket for RTU conduit', 'EA'],
+      ['Roll-up door motor — 208V', 'EA'],
+      ['Landscape lighting fixtures', 'EA'],
+      ['Irrigation controller 120V circuit', 'EA'],
+      ['Transformer pad', 'EA'],
+      ['Concrete encasement of the duct bank', 'LF'],
+    ]) expect(nonElectricalVerdict(line, unit), line).toBeNull();
+  });
+  it('clear other-trade lines block; ambiguous ones and a bare SF unit only flag', () => {
+    expect(nonElectricalVerdict('Install 5/8" drywall – Level 5 finish', 'SF')).toEqual({ reason: 'drywall / finishes', block: true });
+    expect(nonElectricalVerdict('Supply and install 12" HDPE storm pipe', 'LF')).toEqual({ reason: 'site piping (HDPE / storm / sanitary / water)', block: true });
+    expect(nonElectricalVerdict('Furnish toilets and lavatories', 'EA')).toEqual({ reason: 'plumbing fixtures', block: true });
+    expect(nonElectricalVerdict('Re-roof over the canopy', 'SQ')).toEqual({ reason: 'roofing', block: true });
+    expect(nonElectricalVerdict('Concrete sidewalk', 'SF')).toEqual({ reason: 'concrete (not an electrical pad or base)', block: false });
+    expect(nonElectricalVerdict('Misc. work', 'SF')).toEqual({ reason: 'unit "SF" is not an electrical takeoff unit', block: false });
+    expect(nonElectricalVerdict('Drywall patch at new receptacles', 'EA')).toEqual({ reason: 'drywall / finishes', block: false });
+  });
+  it('an override survives Agent 4 rewording the line', () => {
+    const key = normalizeLineKey('Site / Underground / Allowances', 'Concrete sidewalk replacement at the service trench');
+    const f = nonElectricalFindings({ takeoff: [{ name: 'Site / Underground / Allowances', items: [{ item: 'Sidewalk replacement', description: 'concrete, at the service trench', unit: 'SF', qty: 40, source: '' }] }] },
+      [{ lineKey: key, reason: 'Utility requires EC to restore' }]);
+    expect(f[0].overridden).toBe('Utility requires EC to restore');
+  });
+});
+
+describe('N7 — an Included carve-out never dead-locks against an Excluded item', () => {
+  it('"Low voltage" excluded, "Low voltage: conduit and pull strings only" included', () => {
+    const items: ScopeItem[] = [
+      { id: 'e', kind: 'exclude', text: 'Low voltage — not included' },
+      { id: 'i', kind: 'include', text: 'Low voltage: conduit and pull strings only' },
+    ];
+    const data = { sections: [{ title: 'E. Low Voltage', bullets: ['Low voltage: empty conduit and pull strings only.', 'Low voltage cabling and devices.'] }], takeoff: [] };
+    expect(excludedScopeProblems(data, items)).toEqual(['E. Low Voltage: "Low voltage cabling and devices." is on the Not-included list ("Low voltage — not included")']);
+    // ...and the estimator can keep a line with a reason.
+    expect(excludedScopeProblems(data, items, [{ lineKey: normalizeLineKey('E. Low Voltage', 'Low voltage cabling and devices.'), reason: 'GC asked for the cabling price' }])).toEqual([]);
+  });
+});
+
+describe('N10 — "Fixture A" and "Fixture B" are different types, not near-duplicates', () => {
+  it('tags from "Fixture A", "(A)", "A -"', () => {
+    const data = { takeoff: [{ name: 'Interior Lighting', items: [
+      { item: 'Fixture A', description: '2x4 LED troffer', unit: 'EA', qty: 40, source: '' },
+      { item: 'Fixture B', description: '2x4 LED troffer', unit: 'EA', qty: 12, source: '' },
+    ] }] };
+    expect(nearDuplicateLines(data)).toEqual([]);
   });
 });

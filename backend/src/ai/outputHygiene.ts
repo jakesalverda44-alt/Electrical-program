@@ -62,8 +62,13 @@ export function filterMissingSheets(json: Record<string, unknown>, loadedSheetNo
   const keep: string[] = [];
   for (const m of missing) {
     // A missing-sheet entry can carry prose ("E-5 referenced in note 3").
-    const tok = /\b([A-Z]{1,3}[-\s]?\d+(?:\.\d+)?[A-Z]?)\b/i.exec(m)?.[1] ?? m;
-    if (loaded.has(normalizeSheetNo(tok))) report.removedMissingSheets.push(m);
+    // N8 — "Panel schedule on E-5 references E-9": the entry is about the
+    // sheet it says is missing, which is the LAST sheet token when the prose
+    // points from one sheet to another; removed only when EVERY sheet it
+    // names is loaded.
+    const toks = [...m.matchAll(/\b([A-Z]{1,3}[-\s]?\d+(?:\.\d+)?[A-Z]?)\b/gi)].map(x => x[1]);
+    const names = toks.length ? toks : [m];
+    if (names.every(t => loaded.has(normalizeSheetNo(t)))) report.removedMissingSheets.push(m);
     else keep.push(m);
   }
   if (report.removedMissingSheets.length) {
@@ -146,26 +151,28 @@ export function projectStateOf(address: string): string | null {
   return full ?? null;
 }
 
-/** Sentences in GC-facing text that look like owner-spec boilerplate for
- *  OTHER places or store types. `block`: a qualifier that scopes the text to
- *  other stores/locations ("applies to Puerto Rico stores only"); `warn`: a
- *  sentence that merely names another state/territory (could be a utility or
- *  a street — "Georgia Power", "Washington St" — so it is only surfaced). */
+/** Fix round 1 / S10 — sentences in GC-facing text that look like owner-spec
+ *  boilerplate for OTHER places or store types. A WARNING only (with an
+ *  estimator override), never a block. It triggers only on a NAMED region
+ *  that conflicts with the project's location (another state / territory /
+ *  country — never when the project's own state can't be read), or a named
+ *  store type scoped with "only" ("Hub stores only"). "Warranty only applies
+ *  to APT-furnished material" and "Deliveries to the site only during
+ *  business hours" name neither. `block` is kept (always empty) for callers
+ *  that still read it. */
 export function irrelevantSpecSentences(text: string, projectAddress: string): { block: string[]; warn: string[] } {
   const state = projectStateOf(projectAddress);
-  const places = [...Object.values(US_STATES), ...OTHER_PLACES].filter(p => p !== state);
   const sentences = text.split(/(?<=[.;!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
-  const block: string[] = [];
   const warn: string[] = [];
   const clip = (s: string) => (s.length > 160 ? `${s.slice(0, 157)}…` : s);
+  const places = state ? [...Object.values(US_STATES), ...OTHER_PLACES].filter(p => p !== state) : [];
   for (const s of sentences) {
-    const place = places.find(p => new RegExp(`\\b${p}\\b(?!\\s+(St|Street|Ave|Avenue|Rd|Road|Blvd|Dr|Drive|Hwy|Power|Pkwy)\\b)`, 'i').test(s));
-    const scopedToOthers = /\b(stores?|locations?|sites?|markets?|regions?|prototypes?)\s+only\b/i.test(s)
-      || /\bonly\s+(applies|apply|applicable)\s+to\b/i.test(s);
-    if (scopedToOthers || (place && /\b(stores?|locations?|markets?|regions?)\b/i.test(s))) block.push(clip(s));
-    else if (place) warn.push(clip(s));
+    const place = places.find(p => new RegExp(`\\b${p}\\b(?!\\s+(St|Street|Ave|Avenue|Rd|Road|Blvd|Dr|Drive|Hwy|Power|Pkwy|Energy)\\b)`, 'i').test(s));
+    const storeType = /\b((?:[A-Z][\w&'-]*\s+){1,3})(stores?|locations?|prototypes?|markets?)\s+only\b/.exec(s);
+    const namedType = storeType && !/^(the|all|these|those|this|our|existing|new)\s/i.test(storeType[1]);
+    if (place || namedType) warn.push(clip(s));
   }
-  return { block: [...new Set(block)], warn: [...new Set(warn)] };
+  return { block: [], warn: [...new Set(warn)] };
 }
 
 /** Takeoff lines with a zero quantity and allowances with zero footage in

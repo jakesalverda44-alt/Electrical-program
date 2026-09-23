@@ -48,6 +48,24 @@ export const TERM_PATTERNS: Record<TermKey, RegExp> = {
   other_equipment: /\bequipment\b/i,
 };
 
+/** N9 — look-alikes that are NOT the term: "plumbing fixtures" are not
+ *  lighting fixtures, a "fire alarm panel" is not a panelboard. */
+const TERM_EXCLUDE: Partial<Record<TermKey, RegExp>> = {
+  lighting: /\b(plumbing|sanitary|toilet|lavatory|water\s+closet|urinal|sink)\b[^.;]*\bfixtures?\b|\bfixtures?\b[^.;]*\b(plumbing|toilet|lavator)/i,
+  panels: /\b(fire\s+alarm|facp|annunciator|security|access\s+control|solar|pv|control|access|data|patch|telephone|nurse\s+call)\s+panels?\b/i,
+  disconnects: /\bdisconnect(ed|ing)?\s+(from|the\s+existing|existing)\b/i,
+};
+
+/** Text is about the term (its pattern, minus the N9 look-alikes). */
+export function mentionsTerm(term: TermKey, text: string): boolean {
+  if (!TERM_PATTERNS[term].test(text)) return false;
+  const ex = TERM_EXCLUDE[term];
+  if (!ex || !ex.test(text)) return true;
+  // The look-alike is there — only count it if the term also appears on its own.
+  const stripped = text.replace(new RegExp(ex.source, 'gi'), ' ');
+  return TERM_PATTERNS[term].test(stripped);
+}
+
 export interface FixedTerm {
   mode: 'fixed';
   furnishBy: Party;
@@ -96,7 +114,17 @@ export interface TermQuestion {
   question: string;
   options: string[];
   notes: string[];
+  /** B7 — an `ask` term is asked in two halves: who FURNISHES and who
+   *  INSTALLS (APT / GC / Owner / Vendor each). A half the drawings state is
+   *  not asked (it is in `known`). */
+  half?: 'furnish' | 'install';
+  known?: { furnishBy?: Party; installBy?: Party; citation?: { sheet: string; quote: string } };
+  /** B7/S7 — conflict options carry their structured parties (same order as
+   *  options); nothing re-parses the display text. */
+  optionParties?: Array<{ furnishBy: Party; installBy: Party }>;
 }
+
+export const ASK_PARTIES: Party[] = ['APT', 'GC', 'Owner', 'Vendor'];
 
 export interface AccountTermsSnapshot {
   ruleId: string | null;
@@ -115,6 +143,9 @@ export interface AccountTermsSnapshot {
   forbiddenPhrases: string[];
   noMdpUnlessOnDrawings: boolean;
   mdpOnDrawings: boolean;
+  /** S8 — shown in the Takeoff step: e.g. a brand is set but only the
+   *  Default rule matched. */
+  warning?: string;
 }
 
 // ── Matching ────────────────────────────────────────────────────────────────
@@ -131,14 +162,19 @@ export function aliasMatches(alias: string, text: string): boolean {
   return !!a && t.includes(` ${a} `);
 }
 
-export interface MatchInput { brand?: string | null; bidName?: string | null; owner?: string | null; gcExtracted?: string | null; projectType?: string | null }
+/** S8 — the bid's own GC name is NEVER a match input (a GC called "Auto
+ *  Zone Construction Group" must not make a Dunkin' job AutoZone). Drawing
+ *  text only: the owner and project name the drawings print (and what they
+ *  print in the contractor slot, moved to gc_extracted by the GC hygiene). */
+export interface MatchInput { brand?: string | null; bidName?: string | null; owner?: string | null; drawingsProject?: string | null; gcExtracted?: string | null; projectType?: string | null }
 
 /** The one rule for this bid: rules whose aliases match win (a rule that ALSO
  *  matches the project type outranks one that doesn't), then project-type-only
  *  rules, then the Default. Ties: lower priority number, then name. */
 export function matchAccountRule(rules: AccountRule[], input: MatchInput): { rule: AccountRule | null; matchedBy: string } {
   const texts: Array<[string, string]> = [
-    ['brand', input.brand ?? ''], ['owner', input.owner ?? ''], ['bid name', input.bidName ?? ''], ['drawings', input.gcExtracted ?? ''],
+    ['brand', input.brand ?? ''], ['owner', input.owner ?? ''], ['bid name', input.bidName ?? ''],
+    ['drawings', `${input.drawingsProject ?? ''} ${input.gcExtracted ?? ''}`.trim()],
   ];
   const pt = (input.projectType ?? '').trim();
   const active = rules.filter(r => r.active);
@@ -189,22 +225,42 @@ export function describeTerm(t: Pick<ResolvedTerm, 'term' | 'furnishBy' | 'insta
 // ── Resolution ──────────────────────────────────────────────────────────────
 
 function statementsFor(term: TermKey, statements: FurnishStatement[]): FurnishStatement[] {
-  return statements.filter(s => TERM_PATTERNS[term].test(`${s.item} ${s.quote}`)
+  return statements.filter(s => mentionsTerm(term, `${s.item} ${s.quote}`)
     // "power poles" also matches /equipment/-free patterns; keep poles out of panels/lighting
     && (term === 'power_poles' || !TERM_PATTERNS.power_poles.test(`${s.item}`)));
 }
 
-/** Parties a statement assigns, reading the quote when a field is blank
- *  ("FURNISHED, INSTALLED AND HARD-WIRED BY GC" -> GC/GC). */
-function statementParties(s: FurnishStatement): { furnish: Party | null; install: Party | null } {
-  let furnish = normalizeParty(s.furnishBy);
-  let install = normalizeParty(s.installBy);
-  const q = s.quote.toLowerCase();
-  const byParty = /\bby\s+([a-z0-9 .\-]+?)(?:[.;,]|$)/.exec(q);
-  const quoted = byParty ? normalizeParty(byParty[1]) : null;
-  if (!furnish && /furnish/.test(q) && quoted) furnish = quoted;
-  if (!install && /install/.test(q) && quoted) install = quoted;
+const PARTY_WORDS = String.raw`(?:the\s+)?([a-z0-9.&'\- ]+?)`;
+/** S7 — furnish and install parsed SEPARATELY from a drawing statement:
+ *  "FURNISHED BY GC, INSTALLED AND WIRED BY EC" -> GC / APT;
+ *  "FURNISHED AND INSTALLED BY OWNER", "F&I BY GC" -> both;
+ *  "BY EQUIPMENT VENDOR", "BY OTHERS" -> both (multi-word parties);
+ *  a half the statement doesn't give stays null (never copied from the other). */
+export function parseStatementParties(furnishByRaw: string, installByRaw: string, quoteRaw: string): { furnish: Party | null; install: Party | null } {
+  let furnish = normalizeParty(furnishByRaw);
+  let install = normalizeParty(installByRaw);
+  const q = ` ${quoteRaw.toLowerCase().replace(/\s+/g, ' ')} `;
+  const end = String.raw`(?=[.;,)]|\s+and\s+(?:install|furnish|wir)|\s+(?:to|for|per|at|on|in)\s|$| $)`;
+  const both = new RegExp(String.raw`(?:furnish(?:ed)?(?:,)?\s+(?:and|&)\s+install(?:ed)?|f\s*&\s*i|f\/i|provided\s+and\s+installed|supplied\s+and\s+installed)(?:[a-z ,&-]*?)\s+by\s+${PARTY_WORDS}${end}`).exec(q);
+  if (both) {
+    const p = normalizeParty(both[1]);
+    if (p) { furnish ??= p; install ??= p; }
+  }
+  const f = new RegExp(String.raw`(?:furnish(?:ed)?|supplied|provided)\s+by\s+${PARTY_WORDS}${end}`).exec(q);
+  if (f && !furnish) furnish = normalizeParty(f[1]);
+  const i = new RegExp(String.raw`install(?:ed)?(?:\s+(?:and|&)\s+(?:hard[- ]?)?wired)?\s+by\s+${PARTY_WORDS}${end}`).exec(q);
+  if (i && !install) install = normalizeParty(i[1]);
+  if (!furnish && !install) {
+    // "BY OTHERS", "(BY EQUIPMENT VENDOR)", "N.I.C. — BY OWNER": a bare "by X" covers both.
+    const bare = new RegExp(String.raw`\bby\s+${PARTY_WORDS}${end}`).exec(q);
+    const p = bare ? normalizeParty(bare[1]) : null;
+    if (p && !/\b(furnish|install|supplied|provided)\b/.test(q.slice(0, bare!.index))) { furnish = p; install = p; }
+  }
   return { furnish, install };
+}
+
+function statementParties(s: FurnishStatement): { furnish: Party | null; install: Party | null } {
+  return parseStatementParties(s.furnishBy, s.installBy, s.quote);
 }
 
 export function resolveAccountTerms(
@@ -232,24 +288,33 @@ export function resolveAccountTerms(
       .filter(x => x.furnish || x.install);
     const label = TERM_LABELS[term];
     if (rt.mode === 'ask') {
+      // B7/S7 — an explicit drawing statement wins, half by half; any half
+      // the drawings leave open is asked on its own (APT / GC / Owner / Vendor).
       const best = found.find(x => x.furnish && x.install) ?? found[0];
-      if (best) {
-        resolved.push({
-          term,
-          furnishBy: best.furnish ?? best.install!,
-          installBy: best.install ?? best.furnish!,
-          source: 'drawings',
-          citation: { sheet: best.s.sourceSheet, quote: best.s.quote },
-        });
-      } else {
+      const furnishBy = best?.furnish ?? null;
+      const installBy = best?.install ?? found.find(x => x.install)?.install ?? null;
+      const citation = best ? { sheet: best.s.sourceSheet, quote: best.s.quote } : undefined;
+      if (furnishBy && installBy) {
+        resolved.push({ term, furnishBy, installBy, source: 'drawings', citation });
+        continue;
+      }
+      const notes = [
+        best ? `${best.s.sourceSheet || 'Drawings'}: "${best.s.quote}"` : 'No furnish/install statement for this was found on the drawings.',
+        ...aiNotesForTerm(term),
+      ];
+      const known = { ...(furnishBy ? { furnishBy } : {}), ...(installBy ? { installBy } : {}), ...(citation ? { citation } : {}) };
+      if (!furnishBy) {
         questions.push({
-          term, kind: 'ask', label,
-          question: `Who furnishes and installs the ${label.toLowerCase()}? (APT / GC / Owner)`,
-          options: ['APT', 'GC', 'Owner'],
-          notes: [
-            'No furnish/install statement for this was found on the drawings.',
-            ...aiNotesForTerm(term),
-          ],
+          term, kind: 'ask', half: 'furnish', label: `${label} — furnished by`,
+          question: `Who FURNISHES the ${label.toLowerCase()}? (APT / GC / Owner / Vendor)`,
+          options: [...ASK_PARTIES], notes, known,
+        });
+      }
+      if (!installBy) {
+        questions.push({
+          term, kind: 'ask', half: 'install', label: `${label} — installed by`,
+          question: `Who INSTALLS the ${label.toLowerCase()}? (APT / GC / Owner / Vendor)`,
+          options: [...ASK_PARTIES], notes, known,
         });
       }
       continue;
@@ -266,6 +331,10 @@ export function resolveAccountTerms(
         options: [
           `Drawings — ${describeTerm(drawings)}`,
           `Account rule — ${describeTerm({ term, ...rt })}`,
+        ],
+        optionParties: [
+          { furnishBy: drawings.furnishBy, installBy: drawings.installBy },
+          { furnishBy: rt.furnishBy, installBy: rt.installBy },
         ],
         notes: [
           `${conflict.s.sourceSheet || 'Drawings'}: "${conflict.s.quote}"`,
@@ -297,31 +366,62 @@ export function resolveAccountTerms(
   };
 }
 
-/** Apply the estimator's answers (review items `scope:<term>`) to the
- *  snapshot: every term the snapshot left as a question becomes resolved from
- *  its answer. Unanswered questions stay open (the gate keeps them blocked). */
+/** One answered scope question, as the review item stores it (S7: with
+ *  the structured parties of the chosen option — never re-parsed text). */
+export interface ScopeAnswer { answer: string; furnishBy?: string; installBy?: string }
+
+/** The review item id for a question. */
+export function scopeQuestionId(q: Pick<TermQuestion, 'term' | 'half'>): string {
+  return q.half ? `scope:${q.term}:${q.half}` : `scope:${q.term}`;
+}
+
+/** Apply the estimator's answers to the snapshot: a term becomes resolved
+ *  once every one of its questions is answered (an `ask` term's furnish and
+ *  install halves, or a conflict's choice). Unanswered questions stay open
+ *  (the gate keeps them blocked). An answer that doesn't parse resolves
+ *  nothing. */
 export function applyScopeAnswers(
   snap: AccountTermsSnapshot,
-  answers: Record<string, string>,
+  answersIn: Record<string, string | ScopeAnswer>,
 ): ResolvedTerm[] {
+  const answers: Record<string, ScopeAnswer> = {};
+  for (const [k, v] of Object.entries(answersIn)) answers[k] = typeof v === 'string' ? { answer: v } : v;
   const out = [...snap.resolved];
-  for (const q of snap.questions) {
-    const a = answers[`scope:${q.term}`];
-    if (!a) continue;
-    if (q.kind === 'ask') {
-      const p = normalizeParty(a);
-      if (p) out.push({ term: q.term, furnishBy: p, installBy: p, source: 'estimator' });
+  const terms = [...new Set(snap.questions.map(q => q.term))];
+  for (const term of terms) {
+    const qs = snap.questions.filter(q => q.term === term);
+    const conflict = qs.find(q => q.kind === 'conflict');
+    if (conflict) {
+      const a = answers[scopeQuestionId(conflict)];
+      if (!a) continue;
+      const idx = conflict.options.indexOf(a.answer);
+      const parties = conflict.optionParties?.[idx];
+      const rt = snap.ruleTerms[term];
+      if (parties) {
+        const fromRule = idx === 1 && rt && rt.mode === 'fixed';
+        out.push({ term, furnishBy: parties.furnishBy, installBy: parties.installBy, source: 'estimator',
+          ...(fromRule ? { vendor: rt.vendor, contact: rt.contact } : {}) });
+      } else if (a.answer.startsWith('Account rule') && rt && rt.mode === 'fixed') {
+        out.push({ term, furnishBy: rt.furnishBy, installBy: rt.installBy, vendor: rt.vendor, contact: rt.contact, source: 'estimator' });
+      }
       continue;
     }
-    const rt = snap.ruleTerms[q.term];
-    if (a.startsWith('Account rule') && rt && rt.mode === 'fixed') {
-      out.push({ term: q.term, furnishBy: rt.furnishBy, installBy: rt.installBy, vendor: rt.vendor, contact: rt.contact, source: 'estimator' });
-    } else if (a.startsWith('Drawings')) {
-      const m = /furnished and installed by (the )?(\w+)|furnished by (the )?(\w+)[^;]*; installed by (the )?(\w+)/i.exec(a);
-      const f = normalizeParty(m?.[2] ?? m?.[4] ?? '');
-      const i = normalizeParty(m?.[2] ?? m?.[6] ?? '');
-      if (f && i) out.push({ term: q.term, furnishBy: f, installBy: i, source: 'estimator' });
-    }
+    // ask: halves. A legacy single question (`scope:<term>`, one party for
+    // both) from a run before fix round 1 still resolves.
+    const legacy = answers[`scope:${term}`];
+    const known = qs[0]?.known ?? {};
+    const pick = (half: 'furnish' | 'install'): Party | null => {
+      const a = answers[`scope:${term}:${half}`];
+      const fromAnswer: Party | null = !a ? null
+        : (PARTIES as string[]).includes(a.answer) ? (a.answer as Party) : normalizeParty(a.answer);
+      if (fromAnswer) return fromAnswer;
+      const k = half === 'furnish' ? known.furnishBy : known.installBy;
+      if (k) return k;
+      return legacy && !qs.some(q => q.half) ? normalizeParty(legacy.answer) : null;
+    };
+    const f = pick('furnish');
+    const i = pick('install');
+    if (f && i) out.push({ term, furnishBy: f, installBy: i, source: 'estimator', ...(known.citation ? { citation: known.citation } : {}) });
   }
   return out;
 }
@@ -393,7 +493,10 @@ export function renderAccountTermsBlock(snap: AccountTermsSnapshot | null, resol
   const lighting = resolved.find(r => r.term === 'lighting');
   const cBullet = lightingSectionCBullet(lighting);
   if (cBullet) lines.push(`- Section C bullet 1 must read exactly: "${cBullet}"`);
-  for (const q of snap.questions) lines.push(`- ${q.label}: NOT YET DECIDED — do not state who furnishes or installs them.`);
+  // S6 — a question the estimator answered is decided: it appears above as
+  // a resolved term, never also as "NOT YET DECIDED".
+  const openTerms = [...new Set(snap.questions.map(q => q.term))].filter(t => !resolved.some(r => r.term === t));
+  for (const t of openTerms) lines.push(`- ${TERM_LABELS[t]}: NOT YET DECIDED — do not state who furnishes or installs them.`);
   if (snap.noMdpUnlessOnDrawings && !snap.mdpOnDrawings) lines.push('- There is NO MDP on the drawings: never write "MDP" or "main distribution panel".');
   for (const b of snap.requiredScopeBullets) lines.push(`- Required Section ${b.section} bullet: "${b.text}"`);
   const forbidden = effectiveForbiddenPhrases(snap, resolved);
@@ -430,6 +533,57 @@ function partyMentioned(text: string, p: Party): boolean {
   return /\b(apt|e\.?c\.?|electrical contractor)\b/.test(s);
 }
 
+const EC_WORK_WORDS = String.raw`(?:feeds?|feeders?|circuits?|circuiting|conduits?|raceways?|connections?|wiring|conductors?|homeruns?|stub[- ]?ups?|j-?box(?:es)?|junction\s+box(?:es)?|whips?|power)`;
+
+/** EC work TO the item: "circuits and conduit to the power poles",
+ *  "power pole feed", "connections at the power poles". */
+export function isEcWorkToTerm(term: TermKey, text: string): boolean {
+  const t = TERM_PATTERNS[term].source.replace(/^\\b|\\b$/g, '');
+  const to = new RegExp(String.raw`\b${EC_WORK_WORDS}\b[^.;]{0,40}?\b(?:to|for|at|serving|feeding|into)\s+(?:the\s+|all\s+|each\s+)?(?:[a-z-]+\s+){0,2}${t}`, 'i');
+  const after = new RegExp(String.raw`${t}\s+(?:[a-z-]+\s+)?(?:feeds?|feeders?|circuits?|connections?|whips?|wiring|conduits?|homeruns?|stub[- ]?ups?)\b`, 'i');
+  return to.test(text) || after.test(text);
+}
+
+/** B7 — what to do with a bullet that mentions a term another party
+ *  furnishes AND installs:
+ *    keep   — it is EC work to the item (circuits/conduit/feeds/connections);
+ *    strip  — the item is one element of a list: drop just that element;
+ *    remove — a short bullet solely about the item;
+ *    flag   — anything else (left unchanged, reported). */
+export function stripTermFromBullet(term: TermKey, text: string): { action: 'keep' | 'remove' | 'flag' } | { action: 'strip'; text: string } {
+  if (isEcWorkToTerm(term, text)) return { action: 'keep' };
+  const t = TERM_PATTERNS[term].source.replace(/^\\b|\\b$/g, '');
+  const el = String.raw`(?:[A-Za-z-]+\s+){0,2}?${t}`;
+  const tidy = (x: string) => x.replace(/\s{2,}/g, ' ').replace(/\s+([.,;])/g, '$1').replace(/,\s*,/g, ',').trim();
+  const stillMentions = (x: string) => new RegExp(t, 'i').test(x);
+  // First element: "Provide retail power poles, receptacles and baseflex."
+  const first = new RegExp(String.raw`(\b(?:provide|furnish(?:\s+and\s+install)?|install|supply)\s+(?:all\s+)?)${el}\s*,\s*`, 'i').exec(text);
+  if (first) {
+    let fixed = text.slice(0, first.index) + first[1] + text.slice(first.index + first[0].length);
+    if ((fixed.match(/,/g) ?? []).length === 1 && /,\s*and\s+/i.test(fixed)) fixed = fixed.replace(/,\s*and\s+/i, ' and ');
+    fixed = tidy(fixed);
+    if (!stillMentions(fixed)) return { action: 'strip', text: fixed };
+  }
+  // Middle/last element: ", retail power poles," / ", and retail power poles" / " and retail power poles"
+  const mid = new RegExp(String.raw`(,\s*(?:and\s+)?|\s+and\s+)${el}(?=\s*(?:,|\s+and\b|\s+(?:per|as|to|in|on)\b|\.|$))`, 'i').exec(text);
+  if (mid) {
+    const wasLast = !/^\s*,/.test(text.slice(mid.index + mid[0].length)) && /and/i.test(mid[1]);
+    let fixed = text.slice(0, mid.index) + text.slice(mid.index + mid[0].length);
+    if (wasLast) {
+      // "A, B, and C" minus C -> "A and B"
+      const lc = fixed.lastIndexOf(',');
+      if (lc > 0 && !/\band\b/i.test(fixed.slice(lc))) fixed = `${fixed.slice(0, lc)} and${fixed.slice(lc + 1)}`;
+    } else if ((fixed.match(/,/g) ?? []).length === 1 && /,\s*and\s+/i.test(fixed)) {
+      // "A, B, and C" minus B -> "A and C"
+      fixed = fixed.replace(/,\s*and\s+/i, ' and ');
+    }
+    fixed = tidy(fixed);
+    if (!stillMentions(fixed)) return { action: 'strip', text: fixed };
+  }
+  const words = text.replace(/[^A-Za-z ]/g, ' ').split(/\s+/).filter(Boolean);
+  return words.length <= 10 ? { action: 'remove' } : { action: 'flag' };
+}
+
 export function enforceAccountTerms(agent4: Agent4Output, snap: AccountTermsSnapshot | null, resolved: ResolvedTerm[]): EnforcementResult {
   const corrections: string[] = [];
   if (!snap) return { output: agent4, corrections };
@@ -440,14 +594,27 @@ export function enforceAccountTerms(agent4: Agent4Output, snap: AccountTermsSnap
   // callers report "no scope data"); enforcement never invents a scope.
   const hasScope = sections.length > 0;
 
-  // 1. Section C bullet 1 — the lighting procurement sentence.
+  // 1. Section C bullet 1 — the lighting procurement sentence. B6: edited IN
+  //    PLACE (the procurement bullet, else the bullet about the fixtures,
+  //    else bullet 1) — never appended past Section C's limit (3 bullets in
+  //    the proposal, one of which is the code-built "Fixture types per
+  //    schedule" bullet when fixture_types is set).
   const lighting = byTerm.get('lighting');
   const cBullet = lightingSectionCBullet(lighting);
   if (cBullet && hasScope) {
     let c = sections.find(s => SECTION_LETTER.exec(s.title)?.[1] === 'C');
     if (!c) { c = { title: 'C. Lighting & Controls', bullets: [] }; sections.push(c); }
     c.bullets = c.bullets ?? [];
-    const idx = c.bullets.findIndex(b => LIGHTING_PROCUREMENT.test(bulletText(b)));
+    const limit = 3 - ((out.fixture_types ?? []).length ? 1 : 0);
+    let idx = c.bullets.findIndex(b => LIGHTING_PROCUREMENT.test(bulletText(b)));
+    if (idx < 0) {
+      idx = c.bullets.findIndex(b => {
+        const t = bulletText(b);
+        return /\b(fixtures?|luminaires?|light(ing)?\s+package)\b/i.test(t) && !/^\s*fixture types per schedule/i.test(t)
+          && !/\b(control|photocell|occupancy|sensor|contactor|time\s*clock|testing)\b/i.test(t);
+      });
+    }
+    if (idx < 0 && c.bullets.length >= limit) idx = 0;
     if (idx >= 0) {
       if (bulletText(c.bullets[idx]) !== cBullet) {
         corrections.push(`Section C lighting bullet replaced with the ${snap.ruleName} terms: "${cBullet}" (was: "${bulletText(c.bullets[idx])}").`);
@@ -459,24 +626,47 @@ export function enforceAccountTerms(agent4: Agent4Output, snap: AccountTermsSnap
     }
   }
 
-  // 2. Items another party furnishes AND installs are not APT scope: a scope
-  //    bullet or takeoff line about them that doesn't name that party goes.
+  // 2. Items another party furnishes AND installs are not APT scope. B7:
+  //    only text that asserts furnishing/installing THE ITEM ITSELF changes —
+  //    a bullet solely about it goes; the item is struck from a list bullet
+  //    ("receptacles, retail power poles, and baseflex" keeps the rest);
+  //    circuits, conduit, feeds and connections TO it are EC work and stay;
+  //    anything else is left as is and flagged.
   for (const t of resolved) {
     if (t.furnishBy === 'APT' || t.installBy === 'APT' || t.term === 'lighting') continue;
-    const re = TERM_PATTERNS[t.term];
     for (const s of sections) {
-      const before = s.bullets ?? [];
-      s.bullets = before.filter(b => !(re.test(bulletText(b)) && !partyMentioned(bulletText(b), t.furnishBy)));
-      for (const b of before) if (!s.bullets.includes(b)) corrections.push(`Removed from ${s.title}: "${bulletText(b)}" — ${describeTerm(t)}`);
+      const next: typeof s.bullets = [];
+      for (const b of s.bullets ?? []) {
+        const text = bulletText(b);
+        if (!mentionsTerm(t.term, text) || partyMentioned(text, t.furnishBy)) { next.push(b); continue; }
+        const r = stripTermFromBullet(t.term, text);
+        if (r.action === 'keep') { next.push(b); continue; }
+        if (r.action === 'remove') {
+          corrections.push(`Removed from ${s.title}: "${text}" — ${describeTerm(t)}`);
+          continue;
+        }
+        if (r.action === 'strip') {
+          corrections.push(`${s.title}: "${text}" -> "${r.text}" — ${describeTerm(t)}`);
+          next.push(typeof b === 'string' ? r.text : { b: '', t: r.text });
+          continue;
+        }
+        corrections.push(`CHECK ${s.title}: "${text}" mentions the ${TERM_LABELS[t.term].toLowerCase()} — ${describeTerm(t)} Left unchanged; reword it if it says APT furnishes or installs them.`);
+        next.push(b);
+      }
+      s.bullets = next;
     }
     for (const cat of out.takeoff ?? []) {
       const before = cat.items ?? [];
-      cat.items = before.filter(it => !(re.test(`${it.item ?? ''} ${it.description ?? ''}`) && !partyMentioned(`${it.description ?? ''} ${it.furnish_by ?? ''}`, t.furnishBy)));
+      cat.items = before.filter(it => {
+        const text = `${it.item ?? ''} ${it.description ?? ''}`;
+        if (!mentionsTerm(t.term, text) || partyMentioned(`${it.description ?? ''} ${it.furnish_by ?? ''}`, t.furnishBy)) return true;
+        return isEcWorkToTerm(t.term, text); // "Power pole feed" stays; "Power poles 8 EA" goes
+      });
       for (const it of before) if (!cat.items.includes(it)) corrections.push(`Removed takeoff line "${it.item}" (${cat.name}) — ${describeTerm(t)}`);
     }
     const excl = `${TERM_LABELS[t.term]} furnished and installed by ${partyPhrase(t.furnishBy)}.`;
     out.exclusions = out.exclusions ?? [];
-    if (!out.exclusions.some(e => re.test(bulletText(e)))) {
+    if (!out.exclusions.some(e => mentionsTerm(t.term, bulletText(e)))) {
       out.exclusions.push(excl);
       corrections.push(`Exclusion added: "${excl}"`);
     }
@@ -487,9 +677,12 @@ export function enforceAccountTerms(agent4: Agent4Output, snap: AccountTermsSnap
   for (const cat of out.takeoff ?? []) {
     for (const it of cat.items ?? []) {
       const text = `${it.item ?? ''} ${it.description ?? ''}`;
-      const isFixtureLine = /lighting/i.test(cat.name) && !/control/i.test(cat.name);
+      // A power connection in a lighting category ("Sign power", "Building /
+      // pylon sign power connection") is EC work, not a fixture.
+      const isFixtureLine = /lighting/i.test(cat.name) && !/control/i.test(cat.name)
+        && !/\b(power|connections?|circuits?|feeds?|feeders?|conduits?)\b/i.test(text);
       const term = isFixtureLine && byTerm.get('lighting') ? byTerm.get('lighting')
-        : (['power_poles', 'disconnects', 'panels', 'other_equipment'] as TermKey[]).map(k => (TERM_PATTERNS[k].test(text) ? byTerm.get(k) : undefined)).find(Boolean);
+        : (['power_poles', 'disconnects', 'panels', 'other_equipment'] as TermKey[]).map(k => (mentionsTerm(k, text) && !(k !== 'power_poles' && TERM_PATTERNS.power_poles.test(text)) && !isEcWorkToTerm(k, text) ? byTerm.get(k) : undefined)).find(Boolean);
       if (!term) continue;
       const label = furnishByLabel(term);
       if (it.furnish_by !== label) {
@@ -509,10 +702,10 @@ export function enforceAccountTerms(agent4: Agent4Output, snap: AccountTermsSnap
     for (const s of sections) {
       s.bullets = (s.bullets ?? []).map(b => {
         const text = bulletText(b);
-        if (!re.test(text) || !/ECFECI/.test(text)) return b;
+        if (!re.test(text) || !mentionsTerm(t.term, text) || !/ECFECI/.test(text)) return b;
         // Only when the bullet is about this term alone — a mixed gear bullet
         // ("panels [...] and disconnects (ECFECI)") is left for verifyBid.
-        const otherTerms = TERM_KEYS.filter(k => k !== t.term && TERM_PATTERNS[k].test(text));
+        const otherTerms = TERM_KEYS.filter(k => k !== t.term && mentionsTerm(k, text));
         if (otherTerms.length) return b;
         corrections.push(`Removed "(ECFECI)" from ${s.title}: "${text}" — ${TERM_LABELS[t.term].toLowerCase()} are not APT-furnished.`);
         return mapBullet(b, x => x.replace(/\s*\(ECFECI\)/g, ''));

@@ -232,3 +232,19 @@ describe('buildProposalDocx (legacy compat path)', () => {
     expect(text).toMatch(/400' allowance — Underground conduit \(Per site plan\)/);
   });
 });
+
+// ── Fix round 1 ─────────────────────────────────────────────────────────────
+import { takeoffDescription as fr1Desc, renderBidDocx as fr1Render } from './proposalDocx';
+import { kissimmeeThroughCompose as fr1Kissimmee } from '../test/fixtures/bidstd/kissimmeeProposal';
+
+describe('fix round 1 — N11 / N12', () => {
+  it('N12: a description that already says the item name is used alone (after-3.png "RTU connection — RTU final connection")', () => {
+    expect(fr1Desc('RTU connection', 'RTU final connection, 10-ton 60A/3P')).toBe('RTU final connection, 10-ton 60A/3P');
+    expect(fr1Desc('1.1', '800A service entrance assembly')).toBe('800A service entrance assembly');
+    expect(fr1Desc('Type A', '4 ft LED linear')).toBe('Type A — 4 ft LED linear');
+  });
+  it('N11: a price that can\'t be read as dollars never prints without words', async () => {
+    const d = fr1Kissimmee().data;
+    await expect(fr1Render({ ...d, total_price: 'TBD per addendum' })).rejects.toThrow(/could not be read as a dollar amount/);
+  });
+});

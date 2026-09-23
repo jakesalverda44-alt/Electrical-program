@@ -71,6 +71,15 @@ describe('buildAccountTermsSnapshot on the seeded rules', () => {
     if (!ok) return ctx.skip();
     const a1 = { ...kissimmeeAgent1(), furnishStatements: [] };
     const snap = await buildAccountTermsSnapshot({ name: 'x', brand: 'AutoZone', project_type: null }, a1);
-    expect(snap.questions.map(q => q.term)).toEqual(['power_poles']);
+    // Fix round 1 / B7 — asked in two halves.
+    expect(snap.questions.map(q => `${q.term}:${q.half}`)).toEqual(['power_poles:furnish', 'power_poles:install']);
+  });
+  it('S8 — the seeded 7-Eleven rule carries the 7-11 / 711 aliases (migration 119); a brand with no rule warns', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const snap = await buildAccountTermsSnapshot({ name: '7-11 #41234', brand: null, project_type: null }, { project: {} });
+    expect(snap.ruleName).toBe('7-Eleven');
+    const other = await buildAccountTermsSnapshot({ name: 'Store', brand: 'Wawa', project_type: null }, { project: {} });
+    expect(other.ruleName).toBe('Default');
+    expect(other.warning).toMatch(/brand "Wawa" matched no account rule/);
   });
 });
