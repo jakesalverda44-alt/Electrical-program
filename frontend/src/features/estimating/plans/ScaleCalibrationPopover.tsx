@@ -34,18 +34,42 @@ export interface ScaleCalibrationPopoverProps {
 // still fully committable either way, just flagged.
 const DISAGREEMENT_WARN_PCT = 2;
 
+// Fix round 1 / N4 — calibration used to accept two points ANY distance
+// apart, even 1pt: two clicks that landed almost on top of each other
+// (a shaky trackpad, a mis-click) turned a tiny pixel error into a huge
+// relative scale error, since ft_per_pt = knownLength / distancePt — the
+// smaller the denominator, the more a 1-2pt click imprecision swings the
+// result. 50pt (~0.7in on the printed sheet) is short enough to still
+// calibrate off a real dimension line on a typical architectural sheet,
+// long enough that ordinary click imprecision stops dominating the
+// result. This is a hard requirement — Set scale stays disabled below it
+// — unlike the (softer, still-committable) warnings below.
+const MIN_CALIBRATION_DISTANCE_PT = 50;
+
+// Fix round 1 / N4 — "warn when the implied scale is extreme". Generous
+// bounds around every real architectural/site-plan scale this app's own
+// scaleParse.ts documents (1/8"=1'-0" -> 0.111 ft/pt, up to a large site
+// plan at 1"=100' -> 1.157 ft/pt) — wide enough that a legitimate large-
+// format sheet never trips it, tight enough to catch the obvious typo
+// (a known length entered as "1266" instead of "12'6"", or a decimal
+// slip) that produces a scale nothing on a real plan set would ever use.
+const MIN_SANE_FT_PER_PT = 0.01;
+const MAX_SANE_FT_PER_PT = 5;
+
 export default function ScaleCalibrationPopover({ points, titleBlockLabel, onCommit, onCancel }: ScaleCalibrationPopoverProps) {
   const [input, setInput] = useState('');
   const dPt = distancePt(points[0], points[1]);
   const parsedFeet = parseFeetInches(input);
-  const canCommit = parsedFeet != null && dPt > 0;
+  const tooShort = dPt > 0 && dPt < MIN_CALIBRATION_DISTANCE_PT;
+  const canCommit = parsedFeet != null && dPt >= MIN_CALIBRATION_DISTANCE_PT;
 
-  const typedFtPerPt = canCommit && parsedFeet != null ? parsedFeet / dPt : null;
+  const typedFtPerPt = parsedFeet != null && dPt > 0 ? parsedFeet / dPt : null;
   const suggestedFtPerPt = titleBlockLabel ? ftPerPtFromLabel(titleBlockLabel) : null;
   const disagreementPct = typedFtPerPt != null && suggestedFtPerPt != null && suggestedFtPerPt > 0
     ? Math.abs(typedFtPerPt - suggestedFtPerPt) / suggestedFtPerPt * 100
     : null;
   const disagreesWithTitleBlock = disagreementPct != null && disagreementPct > DISAGREEMENT_WARN_PCT;
+  const extremeScale = typedFtPerPt != null && (typedFtPerPt < MIN_SANE_FT_PER_PT || typedFtPerPt > MAX_SANE_FT_PER_PT);
 
   const commitTyped = () => {
     if (!canCommit || parsedFeet == null) return;
@@ -80,9 +104,22 @@ export default function ScaleCalibrationPopover({ points, titleBlockLabel, onCom
       {input.trim() !== '' && parsedFeet == null && (
         <div className="plan-scale-popover-error">Enter a length like 12'6", 12.5, or 150'</div>
       )}
+      {/* Fix round 1 / N4 — a hard requirement (Set scale stays disabled
+          below MIN_CALIBRATION_DISTANCE_PT), never just a warning: two
+          clicks this close together can't calibrate anything reliably. */}
+      {tooShort && (
+        <div className="plan-scale-popover-error" data-testid="plan-scale-too-short-error">
+          These two points are too close together to calibrate accurately — draw a longer reference line.
+        </div>
+      )}
       {disagreesWithTitleBlock && (
         <div className="plan-scale-popover-warn" data-testid="plan-scale-disagreement-warning">
           This measurement disagrees with the title block's {titleBlockLabel} by {Math.round(disagreementPct as number)}% — double check before setting.
+        </div>
+      )}
+      {!tooShort && extremeScale && (
+        <div className="plan-scale-popover-warn" data-testid="plan-scale-extreme-warning">
+          That implies an unusually {(typedFtPerPt as number) > MAX_SANE_FT_PER_PT ? 'large' : 'small'} scale — double-check the length you entered.
         </div>
       )}
       <div className="plan-scale-popover-actions">
