@@ -169,6 +169,22 @@ export function useMarkupAutosave(
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [markups]);
 
+  // Fix round 1 / B3(c) — flush on unmount. The debounce effect's own
+  // cleanup (above) only clears the pending timer; nothing used to fire
+  // the save it was about to make. A step switch or the Takeoff List/Plans
+  // toggle used to unmount this hook's owner mid-debounce with 0 POSTs
+  // ever sent, and a batch that had already FAILED (status='error', no
+  // timer running at all) was equally abandoned. Fires attempt() directly
+  // (fire-and-forget — a cleanup function can't usefully await one) so
+  // the request is issued before this hook's own render tree is gone; the
+  // network request itself is independent of the React component's
+  // lifecycle once started, so it still completes and reaches the server
+  // even though nothing here is listening to the result anymore.
+  useEffect(() => () => {
+    if (isEmptyBatch(diffMarkups(syncedRef.current, markupsRef.current))) return;
+    void attemptRef.current();
+  }, []);
+
   const retryNow = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
     void attemptRef.current();

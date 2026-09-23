@@ -4,6 +4,7 @@ import { PcWorkspace, PcTabKey, ConfirmedService } from '../constants';
 import api from '../../../api/client';
 import { useApi } from '../../../hooks/useApi';
 import { useUnsavedGuard } from '../../../hooks/useUnsavedGuard';
+import { useConfirmLeave } from '../../../contexts/UnsavedGuardContext';
 import { useMutation } from '../../../hooks/useMutation';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { AppSettings } from '../../../hooks/useAppSettings';
@@ -984,9 +985,32 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // (?view=plans&sheet=<doc>:<page>&line=<key>), independent of `currentStep`
   // itself (a switch away from Takeoff and back keeps whichever view was open).
   const planView = usePlanViewParams();
+  // Fix round 1 / B3(c) — switching steps used to unmount PlansWorkspace
+  // (and whatever else the previous step held) unconditionally, with no
+  // chance for its own useUnsavedGuard registration (useMarkupAutosave.ts,
+  // registered the whole time a batch is pending/saving/error) to ever be
+  // consulted — App.tsx's OWN navigation already routes through this same
+  // confirmLeave; PcWorkspaceView's internal step rail simply never did.
+  const confirmLeave = useConfirmLeave();
   const onSelectStep = useStableFn((step: EstimateStepKey) => {
-    setCurrentStepParam(step);
-    set({ activeTab: stepToLegacyTab(step) });
+    confirmLeave(() => {
+      setCurrentStepParam(step);
+      set({ activeTab: stepToLegacyTab(step) });
+    });
+  });
+  // "review on plans" / "jump to plans" both switch step AND view in one
+  // click — nested inside ONE confirmLeave so `planView.setView('plans')`
+  // only actually runs if the user chose to proceed (calling onSelectStep
+  // then unconditionally calling planView.setView right after it would
+  // flip the view immediately regardless of what the confirm dialog is
+  // about to ask, since onSelectStep's own confirmLeave only defers ITS
+  // half of the action).
+  const jumpToTakeoffPlans = useStableFn(() => {
+    confirmLeave(() => {
+      setCurrentStepParam('takeoff');
+      set({ activeTab: stepToLegacyTab('takeoff') });
+      planView.setView('plans');
+    });
   });
 
   const estimatingBid = useEstimatingBid(bid.id);
@@ -1136,7 +1160,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 role="tab"
                 aria-selected={planView.view === 'list'}
                 className={`est-view-toggle-btn${planView.view === 'list' ? ' active' : ''}`}
-                onClick={() => planView.setView('list')}
+                onClick={() => confirmLeave(() => planView.setView('list'))}
               >
                 List
               </button>
@@ -1145,7 +1169,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 role="tab"
                 aria-selected={planView.view === 'plans'}
                 className={`est-view-toggle-btn${planView.view === 'plans' ? ' active' : ''}`}
-                onClick={() => planView.setView('plans')}
+                onClick={() => confirmLeave(() => planView.setView('plans'))}
               >
                 Plans
               </button>
@@ -1221,7 +1245,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                       type="button"
                       className="lp-reset-btn"
                       style={{ display: 'inline', color: 'var(--amber)', textDecoration: 'underline', fontWeight: 700 }}
-                      onClick={() => { onSelectStep('takeoff'); planView.setView('plans'); }}
+                      onClick={jumpToTakeoffPlans}
                     >
                       review on plans
                     </button>
@@ -1312,7 +1336,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           nextAction={nextStep ? { label: ESTIMATE_STEP_LABELS[nextStep], onClick: () => onSelectStep(nextStep) } : null}
           forceSlimSummary={currentStep === 'takeoff' && planView.view === 'plans'}
           linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
-          onJumpToPlans={() => { onSelectStep('takeoff'); planView.setView('plans'); }}
+          onJumpToPlans={jumpToTakeoffPlans}
           lines={estimatingBid.lines}
           settings={estimatingBid.settings}
           recap={estimatingBid.recap}

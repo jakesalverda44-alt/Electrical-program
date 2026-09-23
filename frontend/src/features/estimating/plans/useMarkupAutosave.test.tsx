@@ -264,6 +264,55 @@ describe('useMarkupAutosave — a 200 response with `skipped` items is treated a
   });
 });
 
+// Fix round 1 / B3(c) — F4's exact scenario: place a marker and switch
+// steps within the 800ms debounce window (never sent, 0 POSTs); or a save
+// already failed and the estimator navigates away without noticing.
+describe('useMarkupAutosave — flush on unmount (B3(c))', () => {
+  it('unmounting DURING the pending debounce (no timer has fired yet) still fires the batch', async () => {
+    post.mockResolvedValueOnce({ data: { created: [{ id: 'a' }], updated: [], deleted: [], skipped: [] } });
+    let markups: MarkupDraft[] = [];
+    const { rerender, unmount } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, vi.fn()), { initialProps: { m: markups } });
+
+    markups = [draft('a')];
+    rerender({ m: markups });
+    // Advance LESS than the 800ms debounce — nothing has been sent yet.
+    await act(async () => { vi.advanceTimersByTime(200); });
+    expect(post).not.toHaveBeenCalled();
+
+    unmount(); // e.g. switching steps or the List/Plans toggle, within the debounce window
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith('/estimating/bid1/markups/batch', expect.objectContaining({
+      creates: [expect.objectContaining({ id: 'a' })],
+    }));
+  });
+
+  it('unmounting while a PREVIOUS batch is in status=error (nothing pending, no timer running) retries it', async () => {
+    post.mockRejectedValueOnce(new Error('offline'));
+    post.mockResolvedValueOnce({ data: { created: [{ id: 'a' }], updated: [], deleted: [], skipped: [] } });
+    let markups: MarkupDraft[] = [];
+    const { result, rerender, unmount } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, vi.fn()), { initialProps: { m: markups } });
+
+    markups = [draft('a')];
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(post).toHaveBeenCalledTimes(1);
+
+    unmount(); // the estimator navigates away without noticing the failure
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(post).toHaveBeenCalledTimes(2); // retried on the way out
+  });
+
+  it('unmounting with NOTHING unsaved (already "saved"/"idle") sends no extra request', async () => {
+    let markups: MarkupDraft[] = [];
+    const { unmount } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, vi.fn()), { initialProps: { m: markups } });
+    unmount();
+    await act(async () => { await Promise.resolve(); });
+    expect(post).not.toHaveBeenCalled();
+  });
+});
+
 describe('applyBatchToSnapshot', () => {
   it('upserts creates and updates, removes deletes, leaves everything else untouched', () => {
     const synced = [draft('a'), draft('b'), draft('c')];
