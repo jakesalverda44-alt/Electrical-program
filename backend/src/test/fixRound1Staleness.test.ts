@@ -213,3 +213,37 @@ describe('S5 — a bid analysed before the accuracy checks', () => {
     await request(app).get(`/api/preconstruction/${bidId}/proposal-preview`).set(auth(user.token)).expect(200);
   });
 });
+
+describe('S15 — "Use confirmed markers" counts only the sheets a type is counted from', () => {
+  it('70 A markers on the power plan background + 73 on the lighting plan -> 73, the 70 listed as not counted', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { confirmedMarkersForType } = await import('../estimating/takeoffReview');
+    const user = await makeUser('owner');
+    const { rows } = await pool.query(`INSERT INTO bids (name, gc, loc, salesperson_id) VALUES ($1,'G','Ocala, FL',$2) RETURNING id`, [`Markers ${Date.now()}`, user.id]);
+    const bidId = rows[0].id as string;
+    const doc = await pool.query(
+      `INSERT INTO documents (linked_id, name, category, file_type, file_data, file_size, uploaded_by) VALUES ($1,'set.pdf','plans','application/pdf','',0,'t') RETURNING id`, [bidId]);
+    const docId = doc.rows[0].id as string;
+    const countResult = {
+      targets: [{ type: 'A', key: 'A', description: 'Troffer', category: 'interior_lighting' }],
+      types: [{ key: 'A', type: 'A', sheets: [
+        { sheetKey: 'set.pdf#2', label: 'E-2 "POWER PLAN"', count: 70, used: false, eligible: false },
+        { sheetKey: 'set.pdf#3', label: 'E-3 "LIGHTING PLAN"', count: 73, used: true, eligible: true },
+      ] }],
+      markers: { sheetDocuments: [
+        { sheetKey: 'set.pdf#2', label: 'E-2 "POWER PLAN"', documentId: docId, pageIndex: 1 },
+        { sheetKey: 'set.pdf#3', label: 'E-3 "LIGHTING PLAN"', documentId: docId, pageIndex: 2 },
+      ] },
+    };
+    await pool.query(`INSERT INTO takeoff_results (bid_id, status, count_result) VALUES ($1,'complete',$2)`, [bidId, JSON.stringify(countResult)]);
+    const values: string[] = [];
+    const params: unknown[] = [bidId, docId];
+    for (const [page, n] of [[1, 70], [2, 73]] as const) {
+      for (let k = 0; k < n; k++) values.push(`($1, $2, ${page}, 'count', '[{"x":${k},"y":${page}}]'::jsonb, 'confirmed', 'A', 't')`);
+    }
+    await pool.query(`INSERT INTO est_markups (bid_id, document_id, page_index, kind, points, status, label, created_by) VALUES ${values.join(',')}`, params);
+    const tally = await confirmedMarkersForType(bidId, 'A');
+    expect(tally.counted).toBe(73);
+    expect(tally.excluded).toEqual([{ label: 'E-2 "POWER PLAN" (not a sheet A is counted from)', count: 70 }]);
+  });
+});
