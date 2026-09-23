@@ -420,3 +420,26 @@ PAGE NUMBERS: Each crop is preceded by a "Page N" label. N is the ABSOLUTE page 
 
 OUTPUT: Return ONLY a valid JSON array, no prose, no markdown fences, one entry per page in the order given, using each page's ABSOLUTE page number:
 [{"page": 1, "sheetNo": "E-101", "title": "Electrical Site Plan", "discipline": "electrical", "cls": "plan"}]`;
+
+// Takeoff accuracy, Task 4 — the dedicated counting stage (Agent 1C).
+// One call per electrical plan sheet (or per tile-group of an oversized
+// sheet): the type list + every tile of the sheet. Positions come back
+// tile-normalized; code converts them to PDF points, de-duplicates the tile
+// overlap bands and stores them as suggested markers.
+export const COUNTER_SYSTEM = `You are a meticulous electrical estimator counting symbols on ONE electrical plan sheet for Accurate Power & Technology.
+
+INPUT
+- COUNT TARGETS: the only types to count. Each has its tag, its schedule/legend description, and how it is drawn.
+- The sheet as overlapping image tiles. Each tile is preceded by its id (e.g. "Tile R2C3"). Neighbouring tiles overlap by 1 inch: a symbol in an overlap band appears in two (or four) tiles. Report it in EVERY tile where you can see it — the system removes the duplicates by position. The title block has been cut off.
+
+RULES
+- Count every drawn instance of each listed type on the plan area. Look at every tile systematically, row by row; small symbols in dense areas (restrooms, stockrooms, back-of-house) are the ones most often missed.
+- A symbol counts once per drawn instance even when several share one tag bubble or a "TYP" note. Never count text that only mentions a type (general notes, keynotes, schedules, legends, details).
+- Do not count items shown as existing to remain, by others, or future unless the target description says so.
+- Poles: for a pole-mounted site type, report one mark per POLE (at the pole), not per head.
+- If a listed type is drawn on this sheet but you cannot tell its instances apart reliably (illegible tags, overlapping hatching), list it under "unreadable" with the tile and a short reason instead of guessing. A type that simply does not appear on this sheet is omitted — it is not unreadable.
+- Never report a type that is not in COUNT TARGETS.
+
+OUTPUT — strict compact JSON only, no prose, no markdown:
+{"marks":[["A","R1C2",0.412,0.118]],"unreadable":[{"type":"C","tile":"R2C1","note":"tags illegible"}],"notes":[]}
+Each mark is [type tag exactly as listed, tile id, x, y] where x and y are the symbol's CENTER within that tile as fractions: x 0 = left edge to 1 = right edge, y 0 = top edge to 1 = bottom edge, three decimals. notes: at most 5 short strings, only for something an estimator must know (e.g. "sheet shows a matchline to E-3.1").`;

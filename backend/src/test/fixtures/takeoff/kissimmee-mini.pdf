@@ -29,7 +29,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [100 200 1396 1928] /CropBox [136 236 1360 1892] /Rotate 90 /Resources << /Font << /F1 3 0 R >> >> /Contents 7 0 R >>
 endobj
 7 0 obj
-<< /Length 744 >>
+<< /Length 874 >>
 stream
 0 g
 293.00 393.00 14 14 re f
@@ -42,6 +42,8 @@ stream
 173.00 293.00 14 14 re f
 1243.00 1293.00 14 14 re f
 173.00 1393.00 14 14 re f
+547.00 733.00 14 14 re f
+273.00 1208.00 14 14 re f
 BT /F1 9 Tf 328.00 428.00 Td (A) Tj ET
 BT /F1 9 Tf 448.00 428.00 Td (A) Tj ET
 BT /F1 9 Tf 568.00 428.00 Td (A) Tj ET
@@ -52,6 +54,8 @@ BT /F1 9 Tf 928.00 928.00 Td (B) Tj ET
 BT /F1 9 Tf 208.00 328.00 Td (D) Tj ET
 BT /F1 9 Tf 1278.00 1328.00 Td (D) Tj ET
 BT /F1 9 Tf 208.00 1428.00 Td (D) Tj ET
+BT /F1 9 Tf 582.00 768.00 Td (A) Tj ET
+BT /F1 9 Tf 308.00 1243.00 Td (B) Tj ET
 BT /F1 16 Tf 300.00 1800.00 Td (E-3) Tj ET
 BT /F1 8 Tf 300.00 1780.00 Td (LIGHTING PLAN) Tj ET
 endstream
@@ -100,12 +104,12 @@ xref
 0000000359 00000 n 
 0000000945 00000 n 
 0000001117 00000 n 
-0000001912 00000 n 
-0000002040 00000 n 
-0000002394 00000 n 
+0000002042 00000 n 
+0000002170 00000 n 
 0000002524 00000 n 
+0000002654 00000 n 
 trailer
 << /Size 12 /Root 1 0 R >>
 startxref
-2882
+3012
 %%EOF
