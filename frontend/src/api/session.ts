@@ -12,6 +12,20 @@
  */
 export const UNAUTHORIZED_EVENT = 'crm:unauthorized';
 
+/** Fix round 1 / N11 — fired on every clearSession() call (an explicit
+ *  Logout AND a 401-triggered signalUnauthorized both go through it), so
+ *  any per-session, in-memory cache elsewhere in the SPA can drop what it
+ *  was holding for the user who just left. A second person signing in on
+ *  the same tab/browser must never be able to read the previous user's
+ *  cached data (estimating/plans/sheetTextCache.ts's module-level pdf.js
+ *  document cache is the first, and so far only, subscriber — it survived
+ *  logout with no access re-check, since it never even round-trips
+ *  through the API again once a document is cached). Deliberately a
+ *  SEPARATE event from UNAUTHORIZED_EVENT (which also carries navigation
+ *  detail and has its own single App.tsx subscriber) rather than piggy-
+ *  backing a second meaning onto it. */
+export const SESSION_CLEARED_EVENT = 'crm:session-cleared';
+
 export interface UnauthorizedDetail {
   /** Path to return to after signing in; defaults to the current location. */
   next?: string;
@@ -22,6 +36,7 @@ export interface UnauthorizedDetail {
 export function clearSession() {
   localStorage.removeItem('crm_token');
   localStorage.removeItem('crm_user');
+  window.dispatchEvent(new Event(SESSION_CLEARED_EVENT));
 }
 
 export function signalUnauthorized(detail: UnauthorizedDetail = {}) {

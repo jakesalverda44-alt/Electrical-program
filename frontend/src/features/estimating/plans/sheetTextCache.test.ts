@@ -1,5 +1,9 @@
+// @vitest-environment happy-dom
 // Estimating Phase B, Task 7 (deferral closed) — sheetTextCache.ts.
+// happy-dom (not the repo's default 'node' env) — Fix round 1 / N11's own
+// SESSION_CLEARED_EVENT listener needs a real `window` to dispatch against.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { SESSION_CLEARED_EVENT } from '../../../api/session';
 
 const get = vi.fn();
 vi.mock('../../../api/client', async () => {
@@ -19,6 +23,9 @@ function makeDoc(pages: Record<number, { str?: string; transform?: number[]; wid
     getPage: vi.fn((n: number) => Promise.resolve({
       getTextContent: () => Promise.resolve({ items: pages[n] ?? [] }),
     })),
+    // Fix round 1 / N11 — every real PdfJsDocument has a destroy(); the
+    // SESSION_CLEARED_EVENT listener calls it on every cached document.
+    destroy: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -86,5 +93,37 @@ describe('getSheetTextItems', () => {
     const items = await getSheetTextItems('bid1', 'doc-1', 0);
     expect(items.map(i => i.str)).toEqual(['A1']);
     expect(get).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Fix round 1 / N11 — a second person signing in on the same tab must
+// never be able to read the previous user's already-cached plan text.
+describe('sheetTextCache — cleared on logout (SESSION_CLEARED_EVENT, N11)', () => {
+  it('a cached document is destroyed and the cache emptied when the session is cleared', async () => {
+    const doc = makeDoc({ 1: [{ str: 'A1', transform: [1, 0, 0, 1, 0, 0] }] });
+    openPdfDocument.mockResolvedValue(doc);
+    await getSheetTextItems('bid1', 'doc-1', 0);
+    expect(get).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new Event(SESSION_CLEARED_EVENT));
+    await Promise.resolve(); // let the destroy().then(...) microtask run
+
+    expect(doc.destroy).toHaveBeenCalledTimes(1);
+
+    // The cache is empty — the SAME documentId is fetched fresh again.
+    await getSheetTextItems('bid1', 'doc-1', 0);
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('clearing an empty cache (nothing ever loaded) is a harmless no-op', () => {
+    expect(() => window.dispatchEvent(new Event(SESSION_CLEARED_EVENT))).not.toThrow();
+  });
+
+  it('a document whose fetch/open is still in flight is dropped from the cache without throwing', async () => {
+    get.mockReturnValueOnce(new Promise(() => { /* never settles */ }));
+    void getSheetTextItems('bid1', 'doc-pending', 0).catch(() => {}); // fire and forget — intentionally left in flight
+
+    expect(() => window.dispatchEvent(new Event(SESSION_CLEARED_EVENT))).not.toThrow();
+    await Promise.resolve();
   });
 });
