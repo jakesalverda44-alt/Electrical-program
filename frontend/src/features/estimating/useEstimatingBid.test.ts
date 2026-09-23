@@ -42,10 +42,24 @@ describe('useEstimatingBid — hydration', () => {
     expect(result.current.dirty).toBe(false);
   });
 
-  it('is dirty immediately when the initial response is a proposed (unsaved) mapping with lines', async () => {
+  it('fix round 1 / S1: is NOT dirty when the initial response is a proposed (unsaved) mapping the estimator hasn\'t touched yet', async () => {
+    // The old behavior forced dirty=true the instant a proposed mapping
+    // loaded, which fired useUnsavedGuard (PcWorkspaceView) and forced a
+    // save before the estimator had done anything — an unsaved SERVER
+    // suggestion is not the same thing as unsaved ESTIMATOR work.
     get.mockResolvedValue({ data: { ...initialResponse, proposed: true } });
     const { result } = renderHook(() => useEstimatingBid('bid1'));
     await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.proposed).toBe(true);
+    expect(result.current.dirty).toBe(false);
+  });
+
+  it('fix round 1 / S1: a proposed mapping DOES become dirty once the estimator actually edits a line', async () => {
+    get.mockResolvedValue({ data: { ...initialResponse, proposed: true } });
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.dirty).toBe(false);
+    act(() => { result.current.setLines(prev => prev.map(l => ({ ...l, qty: 42 }))); });
     expect(result.current.dirty).toBe(true);
   });
 
@@ -89,6 +103,33 @@ describe('useEstimatingBid — live recalc', () => {
     act(() => { result.current.setLines(prev => prev.map(l => ({ ...l, qty: 99 }))); });
     expect(result.current.dirty).toBe(true);
   });
+
+  it('fix round 1 / S8: a stale (older) /price response arriving after a newer one never overwrites the recap', async () => {
+    get.mockResolvedValue({ data: initialResponse });
+    let resolveFirst!: (v: { data: { recap: typeof EMPTY_RECAP } }) => void;
+    let resolveSecond!: (v: { data: { recap: typeof EMPTY_RECAP } }) => void;
+    const firstPromise = new Promise(res => { resolveFirst = res; });
+    const secondPromise = new Promise(res => { resolveSecond = res; });
+    post.mockReturnValueOnce(firstPromise).mockReturnValueOnce(secondPromise);
+
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // First edit -> debounced request #1 fires.
+    act(() => { result.current.setLines(prev => prev.map(l => ({ ...l, qty: 11 }))); });
+    await act(async () => { vi.advanceTimersByTime(400); });
+    // Second edit, far enough later that it's a SEPARATE debounced request, not a coalesced one.
+    act(() => { result.current.setLines(prev => prev.map(l => ({ ...l, qty: 22 }))); });
+    await act(async () => { vi.advanceTimersByTime(400); });
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+
+    // The NEWER request (#2) resolves first; the OLDER one (#1) resolves after.
+    await act(async () => { resolveSecond({ data: { recap: { ...EMPTY_RECAP, totals: { ...EMPTY_RECAP.totals, grandTotal: 22 } } } }); });
+    await waitFor(() => expect(result.current.recap.totals.grandTotal).toBe(22));
+    await act(async () => { resolveFirst({ data: { recap: { ...EMPTY_RECAP, totals: { ...EMPTY_RECAP.totals, grandTotal: 11 } } } }); });
+    // The stale #1 response must NOT clobber #2's already-applied recap.
+    expect(result.current.recap.totals.grandTotal).toBe(22);
+  });
 });
 
 describe('useEstimatingBid — save', () => {
@@ -97,11 +138,18 @@ describe('useEstimatingBid — save', () => {
     put.mockResolvedValue({ data: { recap: { ...EMPTY_RECAP, totals: { ...EMPTY_RECAP.totals, grandTotal: 500 } } } });
     const { result } = renderHook(() => useEstimatingBid('bid1'));
     await waitFor(() => expect(result.current.loading).toBe(false));
+    // Fix round 1 / S1: dirty now reflects a REAL edit, not merely being a
+    // proposed mapping — make one so save() has genuine unsaved work to clear.
+    expect(result.current.dirty).toBe(false);
+    act(() => { result.current.setLines(prev => prev.map(l => ({ ...l, qty: 12 }))); });
     expect(result.current.dirty).toBe(true);
 
     await act(async () => { await result.current.save(); });
 
-    expect(put).toHaveBeenCalledWith('/estimating/bid1', { lines: initialResponse.lines, settings: initialResponse.settings });
+    expect(put).toHaveBeenCalledWith('/estimating/bid1', {
+      lines: initialResponse.lines.map(l => ({ ...l, qty: 12 })),
+      settings: initialResponse.settings,
+    });
     expect(result.current.recap.totals.grandTotal).toBe(500);
     expect(result.current.proposed).toBe(false);
     expect(result.current.dirty).toBe(false);

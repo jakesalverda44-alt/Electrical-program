@@ -33,8 +33,8 @@ function baseSettings(): EstimateSettings {
 function makeRecap(): PricingRecap {
   return {
     ...EMPTY_RECAP,
-    lines: [{ id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', materialUnit: 6, materialExt: 60, hoursUnit: 0.35, hoursExt: 3.5, laborExt: 140, confidence: null, excluded: false }],
-    categories: [{ category: 'Branch Power', material: 60, hours: 3.5, labor: 140 }],
+    lines: [{ id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', materialUnit: 6, materialExt: 60, hoursUnit: 0.35, hoursExt: 3.5, laborExt: 140, confidence: null, excluded: false, directShare: 200 }],
+    categories: [{ category: 'Branch Power', material: 60, hours: 3.5, labor: 140, subtotal: 200 }],
   };
 }
 
@@ -135,7 +135,7 @@ describe('LaborPricingStep — unmatched banner and resolver pick', () => {
     expect(result[0].assembly_id).toBeFalsy();
   });
 
-  it('"Keep as manual line" clears the takeoff source into a manual override line', async () => {
+  it('"Keep as manual line" is disabled until a material $ or labor hours value is entered (S7)', async () => {
     const setLines = vi.fn();
     const lines: EstimateLine[] = [{ id: 'l1', category: 'Branch Power', description: 'Some unmatched thing', qty: 1, unit: 'EA', source: 'takeoff' }];
     render(
@@ -143,9 +143,28 @@ describe('LaborPricingStep — unmatched banner and resolver pick', () => {
         setLines={setLines} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={vi.fn()} />
     );
     fireEvent.click(await screen.findByTestId('lp-resolve-0'));
-    fireEvent.click(await screen.findByTestId('lp-resolver-keep-manual'));
+    const keepManualBtn = await screen.findByTestId('lp-resolver-keep-manual') as HTMLButtonElement;
+    expect(keepManualBtn.disabled).toBe(true);
+    fireEvent.click(keepManualBtn); // clicking a disabled button is a no-op
+    expect(setLines).not.toHaveBeenCalled();
+  });
+
+  it('"Keep as manual line" clears the takeoff source into a manual override line once a value is entered', async () => {
+    const setLines = vi.fn();
+    const lines: EstimateLine[] = [{ id: 'l1', category: 'Branch Power', description: 'Some unmatched thing', qty: 1, unit: 'EA', source: 'takeoff' }];
+    render(
+      <LaborPricingStep lines={lines} settings={baseSettings()} recap={{ ...EMPTY_RECAP }} saving={false} syncing={false} saveError={null}
+        setLines={setLines} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    fireEvent.click(await screen.findByTestId('lp-resolve-0'));
+    fireEvent.change(await screen.findByTestId('lp-resolver-manual-material'), { target: { value: '25' } });
+    const keepManualBtn = await screen.findByTestId('lp-resolver-keep-manual') as HTMLButtonElement;
+    expect(keepManualBtn.disabled).toBe(false);
+    fireEvent.click(keepManualBtn);
     const updater = setLines.mock.calls[0][0] as (prev: EstimateLine[]) => EstimateLine[];
-    expect(updater(lines)[0].source).toBe('manual');
+    const result = updater(lines);
+    expect(result[0].source).toBe('manual');
+    expect(result[0].material_unit_override).toBe(25);
   });
 });
 
@@ -205,5 +224,98 @@ describe('LaborPricingStep — factor chips', () => {
     const updater = setSettings.mock.calls[0][0] as (prev: EstimateSettings) => EstimateSettings;
     const result = updater({ ...baseSettings(), factor_ids: ['f1'] });
     expect(result.factor_ids).toEqual(['f2']);
+  });
+});
+
+describe('LaborPricingStep — B2: null-safe rendering', () => {
+  it('renders "—" instead of crashing when a recap line has no priced entry', async () => {
+    const lines: EstimateLine[] = [{ id: 'unpriced', category: 'Branch Power', description: 'No recap yet', qty: 1, unit: 'EA', source: 'manual' }];
+    render(
+      <LaborPricingStep lines={lines} settings={baseSettings()} recap={EMPTY_RECAP} saving={false} syncing={false} saveError={null}
+        setLines={vi.fn()} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    const row = await screen.findByTestId('lp-row-0');
+    expect(row.textContent).toContain('—');
+  });
+});
+
+describe('LaborPricingStep — S7: clearing an override reverts to the library value (null), not 0', () => {
+  it('clearing the material override field sets it to null, not 0', async () => {
+    const setLines = vi.fn();
+    const lines: EstimateLine[] = [{ id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'manual', material_unit_override: 12 }];
+    render(
+      <LaborPricingStep lines={lines} settings={baseSettings()} recap={makeRecap()} saving={false} syncing={false} saveError={null}
+        setLines={setLines} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    const input = (await screen.findByTestId('lp-row-0')).querySelector('input[data-field="material_unit_override"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '' } });
+    const updater = setLines.mock.calls[0][0] as (prev: EstimateLine[]) => EstimateLine[];
+    expect(updater(lines)[0].material_unit_override).toBeNull();
+  });
+});
+
+describe('LaborPricingStep — N8: delete a manual line with Undo', () => {
+  it('deletes the manual line and Undo restores it at the same position', async () => {
+    const setLines = vi.fn();
+    const lines: EstimateLine[] = [
+      { id: 'l1', category: 'Branch Power', description: 'Row 1', qty: 1, unit: 'EA', source: 'manual' },
+      { id: 'l2', category: 'Branch Power', description: 'Row 2 (to delete)', qty: 2, unit: 'EA', source: 'manual' },
+    ];
+    render(
+      <LaborPricingStep lines={lines} settings={baseSettings()} recap={EMPTY_RECAP} saving={false} syncing={false} saveError={null}
+        setLines={setLines} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    fireEvent.click(await screen.findByTestId('lp-delete-1'));
+    const deleteUpdater = setLines.mock.calls[0][0] as (prev: EstimateLine[]) => EstimateLine[];
+    const afterDelete = deleteUpdater(lines);
+    expect(afterDelete.length).toBe(1);
+    expect(afterDelete.find(l => l.id === 'l2')).toBeUndefined();
+
+    const undoBtn = await screen.findByTestId('lp-undo-delete');
+    fireEvent.click(undoBtn);
+    const undoUpdater = setLines.mock.calls[1][0] as (prev: EstimateLine[]) => EstimateLine[];
+    const afterUndo = undoUpdater(afterDelete);
+    expect(afterUndo.length).toBe(2);
+    expect(afterUndo[1].id).toBe('l2');
+  });
+});
+
+describe('LaborPricingStep — N8: sync failure shows an error toast', () => {
+  it('shows an error toast (not a silent failure) when syncTakeoff rejects', async () => {
+    const showToast = vi.fn();
+    const syncTakeoff = vi.fn().mockRejectedValue(new Error('network down'));
+    const lines: EstimateLine[] = [];
+    render(
+      <LaborPricingStep lines={lines} settings={baseSettings()} recap={EMPTY_RECAP} saving={false} syncing={false} saveError={null}
+        setLines={vi.fn()} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={syncTakeoff} showToast={showToast} />
+    );
+    fireEvent.click(screen.getByTestId('lp-sync-button'));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Sync failed', variant: 'error' })));
+  });
+});
+
+describe('LaborPricingStep — B5: sync-takeoff confirms when there are unsaved edits', () => {
+  it('does not call syncTakeoff when dirty=true and confirmation is declined (no ConfirmProvider = auto-decline)', async () => {
+    const syncTakeoff = vi.fn().mockResolvedValue({ added: 0, updated: 0, vanished: 0 });
+    const lines: EstimateLine[] = [];
+    render(
+      <LaborPricingStep lines={lines} settings={baseSettings()} recap={EMPTY_RECAP} saving={false} syncing={false} saveError={null}
+        dirty
+        setLines={vi.fn()} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={syncTakeoff} />
+    );
+    fireEvent.click(screen.getByTestId('lp-sync-button'));
+    await new Promise(r => setTimeout(r, 0));
+    expect(syncTakeoff).not.toHaveBeenCalled();
+  });
+
+  it('calls syncTakeoff immediately when dirty is false/absent — no confirmation needed', async () => {
+    const syncTakeoff = vi.fn().mockResolvedValue({ added: 0, updated: 0, vanished: 0 });
+    const lines: EstimateLine[] = [];
+    render(
+      <LaborPricingStep lines={lines} settings={baseSettings()} recap={EMPTY_RECAP} saving={false} syncing={false} saveError={null}
+        setLines={vi.fn()} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={syncTakeoff} />
+    );
+    fireEvent.click(screen.getByTestId('lp-sync-button'));
+    await waitFor(() => expect(syncTakeoff).toHaveBeenCalled());
   });
 });

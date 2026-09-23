@@ -53,6 +53,11 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
   // The last lines/settings the server actually priced/saved — dirty compares against this.
   const persistedRef = useRef<{ lines: EstimateLine[]; settings: EstimateSettings } | null>(null);
   const priceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Fix round 1 / S8 — a request-sequence guard: if a second live-recalc
+  // request starts before the first one's response arrives (rapid edits) and
+  // the two resolve out of order, a stale response must never overwrite the
+  // recap belonging to a newer edit.
+  const priceSeqRef = useRef(0);
   const aliveRef = useRef(true);
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
 
@@ -92,20 +97,33 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     if (priceTimerRef.current) clearTimeout(priceTimerRef.current);
     priceTimerRef.current = setTimeout(() => {
       setPricing(true);
+      const mySeq = ++priceSeqRef.current;
       api.post<{ recap: PricingRecap }>(`/estimating/${bidId}/price`, { lines, settings })
-        .then(({ data: res }) => { if (aliveRef.current) setRecap(res.recap); })
+        .then(({ data: res }) => {
+          // Only the MOST RECENT request may write the recap — an older,
+          // slower request that resolves after a newer one must not clobber
+          // it (S8).
+          if (aliveRef.current && mySeq === priceSeqRef.current) setRecap(res.recap);
+        })
         .catch(() => { /* live recalc is best-effort; the next edit or an explicit Save will retry */ })
-        .finally(() => { if (aliveRef.current) setPricing(false); });
+        .finally(() => { if (aliveRef.current && mySeq === priceSeqRef.current) setPricing(false); });
     }, PRICE_DEBOUNCE_MS);
     return () => { if (priceTimerRef.current) clearTimeout(priceTimerRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lines, settings, bidId]);
 
+  // Fix round 1 / S1 — an unsaved PROPOSED mapping (the bid has takeoff
+  // output but no saved est_bid_lines yet) is NOT by itself dirty: it's the
+  // server's own suggestion, not something the estimator typed. The old
+  // `(proposed && lines.length > 0)` term forced dirty=true the instant a
+  // proposed mapping loaded, which fired useUnsavedGuard and forced a save
+  // before the estimator had touched anything. dirty now means exactly one
+  // thing: the current lines/settings differ from the last snapshot the
+  // server actually returned (persistedRef, set on hydration AND on every
+  // successful save/sync) — genuinely unsaved work, proposed or not.
   const dirty = !persistedRef.current
-    ? proposed && lines.length > 0
-    : (proposed && lines.length > 0)
-      || !linesEqual(lines, persistedRef.current.lines)
-      || !settingsEqual(settings, persistedRef.current.settings);
+    ? false
+    : !linesEqual(lines, persistedRef.current.lines) || !settingsEqual(settings, persistedRef.current.settings);
 
   const save = useCallback(async () => {
     setSaving(true);

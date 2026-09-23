@@ -21,6 +21,9 @@ export interface EstimatingWorkspaceProps {
   settings: EstimateSettings;
   recap: PricingRecap;
   proposed: boolean;
+  /** Fix round 1 / S1 — genuine unsaved edits (not just "proposed"); drives
+   *  BidSummary's "unsaved proposal" tag and LaborPricingStep's sync-confirm. */
+  dirty?: boolean;
   saving: boolean;
   syncing: boolean;
   saveError: string | null;
@@ -28,10 +31,12 @@ export interface EstimatingWorkspaceProps {
   setSettings: (updater: EstimateSettings | ((prev: EstimateSettings) => EstimateSettings)) => void;
   save: () => Promise<void>;
   syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number } | null>;
-  showToast?: (t: { title: string; sub?: string }) => void;
+  showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
 
   comparables: ComparableForSummary[];
   insights: React.ReactNode;
+  /** Fix round 1 / N7 — see BidSummaryProps.initialInsightsOpen. */
+  initialInsightsOpen?: boolean;
 
   /** The other four steps' (already re-homed, unchanged) content — Labor &
    *  Pricing is the only step this module itself renders. */
@@ -40,8 +45,8 @@ export interface EstimatingWorkspaceProps {
 
 export default function EstimatingWorkspace({
   currentStep, onSelectStep, doneByStep, saveState, nextAction,
-  lines, settings, recap, proposed, saving, syncing, saveError, setLines, setSettings, save, syncTakeoff, showToast,
-  comparables, insights, otherStepContent,
+  lines, settings, recap, proposed, dirty, saving, syncing, saveError, setLines, setSettings, save, syncTakeoff, showToast,
+  comparables, insights, otherStepContent, initialInsightsOpen,
 }: EstimatingWorkspaceProps) {
   return (
     <EstimateShell
@@ -54,10 +59,12 @@ export default function EstimatingWorkspace({
         <BidSummary
           recap={recap}
           proposed={proposed}
+          dirty={dirty}
           comparables={comparables}
           onJumpToUnmatched={() => onSelectStep('pricing')}
           onJumpToVerify={() => onSelectStep('takeoff')}
           insights={insights}
+          initialInsightsOpen={initialInsightsOpen}
         />
       }
     >
@@ -69,6 +76,7 @@ export default function EstimatingWorkspace({
           saving={saving}
           syncing={syncing}
           saveError={saveError}
+          dirty={dirty}
           setLines={setLines}
           setSettings={setSettings}
           save={save}

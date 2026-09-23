@@ -4,6 +4,7 @@
 import React, { useMemo, useState } from 'react';
 import { useApi } from '../../hooks/useApi';
 import Modal from '../../components/Modal';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { EstimateLine, EstimateSettings, Library, LibraryFactor, PricingRecap } from './types';
 
 export interface LaborPricingStepProps {
@@ -13,11 +14,23 @@ export interface LaborPricingStepProps {
   saving: boolean;
   syncing: boolean;
   saveError: string | null;
+  /** Fix round 1 / B5 — when true, onSync confirms before overwriting
+   *  takeoff-sourced lines with unsaved estimator edits. */
+  dirty?: boolean;
   setLines: (updater: EstimateLine[] | ((prev: EstimateLine[]) => EstimateLine[])) => void;
   setSettings: (updater: EstimateSettings | ((prev: EstimateSettings) => EstimateSettings)) => void;
   save: () => Promise<void>;
   syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number } | null>;
-  showToast?: (t: { title: string; sub?: string }) => void;
+  showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
+}
+
+/** Fix round 1 / S8 — a brand-new manual line needs a STABLE id the instant
+ *  it's created, before it's ever priced/saved. Without one, recapByKey had
+ *  to fall back to pairing by array index, which misaligns a line with the
+ *  wrong priced values the moment a request resolves out of order or a row
+ *  is deleted/reordered while a live-recalc request is in flight. */
+function newLineId(): string {
+  return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `new-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 const SETTINGS_PCT_FIELDS: { key: keyof EstimateSettings; label: string }[] = [
@@ -34,17 +47,34 @@ function lineKey(line: EstimateLine, idx: number): string {
 }
 
 export function LaborPricingStep({
-  lines, settings, recap, saving, syncing, saveError, setLines, setSettings, save, syncTakeoff, showToast,
+  lines, settings, recap, saving, syncing, saveError, dirty, setLines, setSettings, save, syncTakeoff, showToast,
 }: LaborPricingStepProps) {
   const { data: library } = useApi<Library>('/estimating/library');
   const [resolverIndex, setResolverIndex] = useState<number | null>(null);
   const [resolverQuery, setResolverQuery] = useState('');
+  // Fix round 1 / S7 — "Keep as manual line" used to accept a line with
+  // material_unit_override/labor_hours_override silently defaulted to 0/0 —
+  // an invisible $0 line an estimator never meant to create. Require an
+  // explicit value in at least one field before the button is even clickable.
+  const [manualMaterial, setManualMaterial] = useState('');
+  const [manualHours, setManualHours] = useState('');
+  const closeResolver = () => { setResolverIndex(null); setResolverQuery(''); setManualMaterial(''); setManualHours(''); };
+  const confirm = useConfirm();
+  // N8: the most recently deleted manual line, kept around just long enough
+  // to offer Undo — cleared on the next delete or once the toast fades.
+  const [lastDeleted, setLastDeleted] = useState<{ line: EstimateLine; index: number } | null>(null);
 
+  // Fix round 1 / S8 — pair each priced recap line with its CLIENT line by
+  // stable id, not array position. A line's id is always present: real
+  // lines have their DB uuid, proposed/takeoff lines have a stable
+  // `proposed-N`/DB id, and every manual line gets one the instant it's
+  // created (newLineId(), below) — so there is no longer a need to fall
+  // back to an index-derived key at all.
   const recapByKey = useMemo(() => {
     const map = new Map<string, PricingRecap['lines'][number]>();
-    recap.lines.forEach((l, i) => map.set(lineKey(lines[i] ?? { category: l.category, description: l.description, qty: l.qty, unit: l.unit, source: 'manual' }, i), l));
+    recap.lines.forEach(l => { if (l.id) map.set(l.id, l); });
     return map;
-  }, [recap.lines, lines]);
+  }, [recap.lines]);
 
   const categories = useMemo(() => {
     const order: string[] = [];
@@ -64,15 +94,54 @@ export function LaborPricingStep({
 
   const addManualLine = () => {
     setLines(prev => [...prev, {
+      id: newLineId(),
       category: categories[0]?.category ?? 'Branch Power', description: '', qty: 1, unit: 'EA',
       material_unit_override: 0, labor_hours_override: 0, source: 'manual',
     }]);
   };
 
+  // N8: delete a manual line with Undo, rather than only exposing "exclude".
+  const deleteManualLine = (idx: number) => {
+    setLines(prev => {
+      setLastDeleted({ line: prev[idx], index: idx });
+      return prev.filter((_, i) => i !== idx);
+    });
+    if (showToast) {
+      showToast({ title: 'Line deleted', sub: 'Undo available — re-add it from the Add manual line button if needed.' });
+    }
+  };
+  const undoDelete = () => {
+    if (!lastDeleted) return;
+    setLines(prev => {
+      const next = [...prev];
+      next.splice(Math.min(lastDeleted.index, next.length), 0, lastDeleted.line);
+      return next;
+    });
+    setLastDeleted(null);
+  };
+
   const onSync = async () => {
-    const res = await syncTakeoff();
-    if (res && showToast) {
-      showToast({ title: 'Synced from takeoff', sub: `${res.added} added · ${res.updated} updated · ${res.vanished} removed` });
+    // Fix round 1 / B5 — sync-takeoff overwrites takeoff-sourced lines'
+    // qty/unit/description (except an estimator-overridden qty) from
+    // whatever the current takeoff says. Ask first when there's unsaved
+    // work sitting on top of the last saved/proposed snapshot, so a sync
+    // never silently discards an in-progress edit.
+    if (dirty) {
+      const ok = await confirm({
+        title: 'Sync from takeoff?',
+        body: 'You have unsaved changes. Syncing refreshes takeoff-sourced lines from the current takeoff — your unsaved edits to THOSE lines could be affected. Manual lines and estimator overrides are never touched.',
+      });
+      if (!ok) return;
+    }
+    try {
+      const res = await syncTakeoff();
+      if (res && showToast) {
+        showToast({ title: 'Synced from takeoff', sub: `${res.added} added · ${res.updated} updated · ${res.vanished} removed` });
+      }
+    } catch (err) {
+      // N8: a failed sync used to fail silently from the estimator's POV
+      // (the button just stopped spinning) — surface it.
+      if (showToast) showToast({ title: 'Sync failed', sub: err instanceof Error ? err.message : 'Could not sync from takeoff', variant: 'error' });
     }
   };
 
@@ -97,8 +166,7 @@ export function LaborPricingStep({
       assembly_id: candidate.kind === 'assembly' ? candidate.id : null,
       item_id: candidate.kind === 'item' ? candidate.id : null,
     });
-    setResolverIndex(null);
-    setResolverQuery('');
+    closeResolver();
   };
 
   const factorsByGroup = useMemo(() => {
@@ -179,6 +247,12 @@ export function LaborPricingStep({
           {saving ? 'Saving…' : 'Save'}
         </button>
         {saveError && <span style={{ color: 'var(--red)', fontSize: 12, alignSelf: 'center' }} data-testid="lp-save-error">{saveError}</span>}
+        {lastDeleted && (
+          <span style={{ fontSize: 12, alignSelf: 'center', color: 'var(--text3)' }}>
+            Line deleted.{' '}
+            <button type="button" className="lp-reset-btn" data-testid="lp-undo-delete" onClick={undoDelete}>Undo</button>
+          </span>
+        )}
       </div>
 
       <table
@@ -224,7 +298,7 @@ export function LaborPricingStep({
                   </td>
                 </tr>
                 {!isCollapsed && rows.map(({ line, idx }) => {
-                  const priced = recapByKey.get(lineKey(line, idx));
+                  const priced = line.id ? recapByKey.get(line.id) : undefined;
                   const matEdited = line.material_unit_override != null;
                   const hrsEdited = line.labor_hours_override != null;
                   const isUnresolved = line.source === 'takeoff' && !line.assembly_id && !line.item_id;
@@ -240,34 +314,54 @@ export function LaborPricingStep({
                       </td>
                       <td>
                         <input type="number" value={line.qty} data-field="qty" data-row={idx}
-                          onChange={e => updateLine(idx, { qty: Number(e.target.value) })} />
+                          onChange={e => updateLine(idx, {
+                            qty: Number(e.target.value),
+                            // Fix round 1 / B5 — mark this line's qty as
+                            // estimator-set so a future sync-takeoff never
+                            // overwrites it, even for a takeoff-sourced line.
+                            qty_overridden: true,
+                          })} />
                       </td>
                       <td>{line.unit}</td>
                       <td className={matEdited ? 'lp-cell-edited' : ''}>
                         <input type="number" value={line.material_unit_override ?? priced?.materialUnit ?? 0}
                           data-field="material_unit_override" data-row={idx}
-                          onChange={e => updateLine(idx, { material_unit_override: Number(e.target.value) })} />
+                          onChange={e => updateLine(idx, {
+                            // Fix round 1 / S7 — clearing the field (empty
+                            // string) reverts to the library value (null),
+                            // never a real $0 override; Number('') is 0,
+                            // which would otherwise silently zero the price.
+                            material_unit_override: e.target.value === '' ? null : Number(e.target.value),
+                          })} />
                         {matEdited && (
                           <button type="button" className="lp-reset-btn" onClick={() => updateLine(idx, { material_unit_override: null })}>reset</button>
                         )}
                       </td>
-                      <td>{priced?.materialExt.toFixed(2) ?? '—'}</td>
+                      <td>{Number.isFinite(priced?.materialExt) ? priced!.materialExt.toFixed(2) : '—'}</td>
                       <td className={hrsEdited ? 'lp-cell-edited' : ''}>
                         <input type="number" value={line.labor_hours_override ?? priced?.hoursUnit ?? 0}
                           data-field="labor_hours_override" data-row={idx}
-                          onChange={e => updateLine(idx, { labor_hours_override: Number(e.target.value) })} />
+                          onChange={e => updateLine(idx, {
+                            labor_hours_override: e.target.value === '' ? null : Number(e.target.value), // S7, same as material above
+                          })} />
                         {hrsEdited && (
                           <button type="button" className="lp-reset-btn" onClick={() => updateLine(idx, { labor_hours_override: null })}>reset</button>
                         )}
                       </td>
-                      <td>{priced?.hoursExt.toFixed(2) ?? '—'}</td>
-                      <td>{priced?.laborExt.toFixed(2) ?? '—'}</td>
+                      <td>{Number.isFinite(priced?.hoursExt) ? priced!.hoursExt.toFixed(2) : '—'}</td>
+                      <td>{Number.isFinite(priced?.laborExt) ? priced!.laborExt.toFixed(2) : '—'}</td>
                       <td>{line.confidence ?? ''}</td>
                       <td>
                         <label style={{ fontSize: 11 }}>
                           <input type="checkbox" checked={!!line.excluded} data-testid={`lp-exclude-${idx}`}
                             onChange={e => updateLine(idx, { excluded: e.target.checked })} /> excl.
                         </label>
+                        {line.source === 'manual' && (
+                          <button type="button" className="lp-reset-btn" style={{ marginLeft: 6 }}
+                            onClick={() => deleteManualLine(idx)} data-testid={`lp-delete-${idx}`}>
+                            delete
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -279,7 +373,7 @@ export function LaborPricingStep({
       </table>
 
       {resolverIndex != null && (
-        <Modal open onClose={() => setResolverIndex(null)} title="Resolve line">
+        <Modal open onClose={closeResolver} title="Resolve line">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 320 }}>
             <input
               placeholder="Search items and assemblies…"
@@ -302,14 +396,39 @@ export function LaborPricingStep({
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              className="btn ghost"
-              data-testid="lp-resolver-keep-manual"
-              onClick={() => { updateLine(resolverIndex, { source: 'manual', material_unit_override: 0, labor_hours_override: 0 }); setResolverIndex(null); setResolverQuery(''); }}
-            >
-              Keep as manual line
-            </button>
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                No match? Keep it as a manual line — enter a material $ or labor hours value first (fix round 1 / S7: an unpriced manual line can't be created silently at $0).
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="number" placeholder="Material $" value={manualMaterial}
+                  onChange={e => setManualMaterial(e.target.value)}
+                  data-testid="lp-resolver-manual-material"
+                />
+                <input
+                  type="number" placeholder="Labor hours" value={manualHours}
+                  onChange={e => setManualHours(e.target.value)}
+                  data-testid="lp-resolver-manual-hours"
+                />
+              </div>
+              <button
+                type="button"
+                className="btn ghost"
+                data-testid="lp-resolver-keep-manual"
+                disabled={manualMaterial.trim() === '' && manualHours.trim() === ''}
+                onClick={() => {
+                  updateLine(resolverIndex, {
+                    source: 'manual',
+                    material_unit_override: manualMaterial.trim() === '' ? 0 : Number(manualMaterial),
+                    labor_hours_override: manualHours.trim() === '' ? 0 : Number(manualHours),
+                  });
+                  closeResolver();
+                }}
+              >
+                Keep as manual line
+              </button>
+            </div>
           </div>
         </Modal>
       )}

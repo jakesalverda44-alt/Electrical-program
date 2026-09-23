@@ -46,7 +46,7 @@ import { useEstimatingBid } from '../../estimating/useEstimatingBid';
 // bundle-heavy part) load as their own chunk; useEstimateStepParam/
 // useEstimatingBid above are hooks and must stay a static import.
 const EstimatingWorkspace = React.lazy(() => import('../../estimating/EstimatingWorkspace'));
-import { EstimateStepKey, mapLegacyTabToStep, stepToLegacyTab, deriveStepStatus, ESTIMATE_STEPS } from '../../estimating/steps';
+import { EstimateStepKey, mapLegacyTabToStep, stepToLegacyTab, deriveStepStatus, legacyTabWantsInsights, ESTIMATE_STEPS } from '../../estimating/steps';
 
 const ESTIMATE_STEP_ORDER = ESTIMATE_STEPS.map(s => s.key);
 const ESTIMATE_STEP_LABELS = Object.fromEntries(ESTIMATE_STEPS.map(s => [s.key, s.label])) as Record<EstimateStepKey, string>;
@@ -1242,6 +1242,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           settings={estimatingBid.settings}
           recap={estimatingBid.recap}
           proposed={estimatingBid.proposed}
+          dirty={estimatingBid.dirty}
           saving={estimatingBid.saving}
           syncing={estimatingBid.syncing}
           saveError={estimatingBid.saveError}
@@ -1250,6 +1251,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           save={estimatingBid.save}
           syncTakeoff={estimatingBid.syncTakeoff}
           showToast={showToastStable}
+          initialInsightsOpen={legacyTabWantsInsights(ws.activeTab)}
           comparables={comparablesForSummary}
           insights={
             <>

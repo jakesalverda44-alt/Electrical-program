@@ -14,18 +14,28 @@ export interface ComparableForSummary {
 export interface BidSummaryProps {
   recap: PricingRecap;
   proposed: boolean;
+  /** Fix round 1 / S1 — genuine unsaved edits, distinct from `proposed`
+   *  (an unsaved SERVER suggestion the estimator hasn't touched yet). */
+  dirty?: boolean;
   comparables?: ComparableForSummary[];
   onJumpToUnmatched?: () => void;
   onJumpToVerify?: () => void;
   insights?: React.ReactNode;
+  /** Fix round 1 / N7 — start the Insights panel pre-opened when the
+   *  estimator arrived here from a legacy tab that conceptually IS insights
+   *  (Costs/Intel — see steps.ts's legacyTabWantsInsights()), instead of
+   *  always collapsed regardless of where they came from. Only consulted on
+   *  the FIRST render (a plain useState initializer) — later prop changes
+   *  don't re-collapse/reopen a panel the estimator has since toggled. */
+  initialInsightsOpen?: boolean;
 }
 
 function pctLabel(share: number): string {
   return `${Math.round(share * 100)}%`;
 }
 
-export function BidSummary({ recap, proposed, comparables, onJumpToUnmatched, onJumpToVerify, insights }: BidSummaryProps) {
-  const [insightsOpen, setInsightsOpen] = useState(false);
+export function BidSummary({ recap, proposed, dirty, comparables, onJumpToUnmatched, onJumpToVerify, insights, initialInsightsOpen }: BidSummaryProps) {
+  const [insightsOpen, setInsightsOpen] = useState(!!initialInsightsOpen);
   const { totals, warnings } = recap;
   const materialAllIn = totals.materialSubtotal + totals.consumables + totals.materialTax;
 
@@ -63,7 +73,12 @@ export function BidSummary({ recap, proposed, comparables, onJumpToUnmatched, on
       <div className="bs-total">
         <span className="bs-total-label">
           Total
-          {proposed && <span className="bs-unsaved-tag" data-testid="bs-unsaved-tag">Unsaved</span>}
+          {/* Fix round 1 / S1 — "proposed" (an unsaved server suggestion) and
+              "dirty" (genuine unsaved estimator edits) are distinct states
+              with distinct tags; a bid can be one, the other, both, or
+              neither (a saved bid with no pending edits shows no tag). */}
+          {proposed && <span className="bs-unsaved-tag" data-testid="bs-unsaved-tag">Unsaved proposal</span>}
+          {!proposed && dirty && <span className="bs-unsaved-tag" data-testid="bs-dirty-tag">Unsaved changes</span>}
         </span>
         <span className="bs-total-value" data-testid="bs-grand-total">{moneyFull(totals.grandTotal)}</span>
       </div>
@@ -84,13 +99,23 @@ export function BidSummary({ recap, proposed, comparables, onJumpToUnmatched, on
           <div data-testid="bs-comps-bar-wrap">
             <div className="bs-row"><span>$/SF vs comparables</span></div>
             <div className="bs-comps-bar" data-testid="bs-comps-bar">
-              {compsMax > compsMin && (
-                <div
-                  className="bs-comps-bar-marker"
-                  data-testid="bs-comps-bar-marker"
-                  style={{ left: `${Math.max(0, Math.min(100, ((totals.sellPerSf - compsMin) / (compsMax - compsMin)) * 100))}%` }}
-                />
-              )}
+              {/* Fix round 1 / N2 — a single comparable (or several identical
+                  ones) makes compsMin === compsMax; the old `compsMax >
+                  compsMin` guard then skipped the marker entirely, silently
+                  hiding the estimator's only comparable data point instead
+                  of just not being able to place it on a range. Fall back to
+                  0/50/100% depending on whether our own $/SF is below, at,
+                  or above that single value. */}
+              <div
+                className="bs-comps-bar-marker"
+                data-testid="bs-comps-bar-marker"
+                style={{
+                  left: `${compsMax > compsMin
+                    ? Math.max(0, Math.min(100, ((totals.sellPerSf - compsMin) / (compsMax - compsMin)) * 100))
+                    : (totals.sellPerSf < compsMin ? 0 : totals.sellPerSf > compsMax ? 100 : 50)
+                  }%`,
+                }}
+              />
             </div>
             <div className="bs-row" style={{ fontSize: 11 }}>
               <span>{moneyDec(compsMin)}</span>
