@@ -27,11 +27,17 @@ import { logger } from '../utils/logger';
 
 export const COUNTER_CONCURRENCY = 3;
 /** Two marks of the same type from DIFFERENT tiles within this distance of
- *  each other, inside both tiles' areas, are the same symbol seen twice in an
- *  overlap band. 0.25" on paper — well under the spacing of two real fixtures
- *  (4 ft at 1/8" scale = 0.5") and well over the model's position error on a
- *  196 px/in tile. */
-export const OVERLAP_DEDUP_RADIUS_PT = 18;
+ *  each other (midpoint inside both tiles) may be one symbol seen twice in an
+ *  overlap band. Fix round 1 / S2: was 0.25", which assumed the model places a
+ *  symbol to within ~0.18"; its position error is more like 1-3% of a tile
+ *  (0.1-0.25"). 0.83" was tuned on the seeded jittered-counter simulation in
+ *  counter.test.ts. Pairing is one-to-one and nearest-first, so two real
+ *  fixtures that both tiles report still pair with their own copies. */
+export const OVERLAP_DEDUP_RADIUS_PT = 60;
+/** A paired symbol's midpoint must lie inside every reporting tile, padded by
+ *  this much (a copy reported at the very edge of a tile, clamped by the
+ *  parser, still pairs). */
+const PAIR_TILE_PAD_IN = 0.25;
 /** A reported position may overshoot the tile edge slightly; beyond this it
  *  is rejected rather than clamped. */
 const EDGE_TOLERANCE = 0.02;
@@ -96,6 +102,29 @@ export function buildCounterContent(
 
 // ── Pure: response parsing ─────────────────────────────────────────────────
 
+/** Fix round 1 / S1 — the reply must have the requested SHAPE: an object
+ *  whose `marks` is an array (or, accepted explicitly, a bare top-level array
+ *  of marks). Anything else — `{"symbols":[...]}`, a single mark object, a
+ *  prose answer — is null, so the sheet FAILS instead of counting zero. */
+export function counterReplyShape(text: string): { marks: unknown[]; unreadable: unknown[]; notes: unknown[] } | null {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  const body = (fenced ? fenced[1] : text).trim();
+  if (body.startsWith('[')) {
+    try {
+      const v = JSON.parse(body.slice(0, body.lastIndexOf(']') + 1)) as unknown;
+      if (Array.isArray(v)) return { marks: v, unreadable: [], notes: [] };
+    } catch { /* not a bare array — fall through to the object parse */ }
+  }
+  const parsed = parseAIJSON(text);
+  if (!parsed || !Array.isArray(parsed.marks)) return null;
+  return {
+    marks: parsed.marks,
+    unreadable: Array.isArray(parsed.unreadable) ? parsed.unreadable : [],
+    notes: Array.isArray(parsed.notes) ? parsed.notes : [],
+  };
+}
+
+
 /** Tolerant parse of the counter's JSON. Accepts marks as [type, tile, x, y]
  *  arrays (the requested compact form) or {type, tile, x, y} objects. Every
  *  mark is validated: the type must be a listed target, the tile must be one
@@ -106,10 +135,11 @@ export function parseCounterResponse(
   targetKeys: Set<string>,
   tileIds: Set<string>,
 ): ParsedCounterResponse | null {
-  const parsed = parseAIJSON(text);
-  if (!parsed) return null;
+  const shape = counterReplyShape(text);
+  if (!shape) return null;
+  const parsed = shape;
   const out: ParsedCounterResponse = { marks: [], unreadable: [], rejected: [], notes: [] };
-  const rawMarks = Array.isArray(parsed.marks) ? parsed.marks : [];
+  const rawMarks = parsed.marks;
   for (const m of rawMarks) {
     let type: unknown, tile: unknown, x: unknown, y: unknown;
     if (Array.isArray(m)) [type, tile, x, y] = m;
@@ -128,7 +158,7 @@ export function parseCounterResponse(
     }
     out.marks.push({ typeKey, tileId, nx: Math.min(1, Math.max(0, nx)), ny: Math.min(1, Math.max(0, ny)) });
   }
-  for (const u of Array.isArray(parsed.unreadable) ? parsed.unreadable : []) {
+  for (const u of parsed.unreadable) {
     if (!u || typeof u !== 'object') continue;
     const r = u as Record<string, unknown>;
     const typeKey = normalizeTypeKey(String(r.type ?? ''));
@@ -136,7 +166,7 @@ export function parseCounterResponse(
     const tileId = String(r.tile ?? '').trim().toUpperCase();
     out.unreadable.push({ typeKey, tileId: tileIds.has(tileId) ? tileId : null, note: String(r.note ?? '').slice(0, 200) });
   }
-  for (const n of Array.isArray(parsed.notes) ? parsed.notes : []) {
+  for (const n of parsed.notes) {
     if (typeof n === 'string' && n.trim()) out.notes.push(n.trim().slice(0, 200));
     if (out.notes.length >= 5) break;
   }
@@ -155,59 +185,112 @@ export interface PlacedMark {
 
 interface TileArea { id: string; leftIn: number; topIn: number; widthIn: number; heightIn: number }
 
-/** Displayed-inch bounds of a tile. Displayed coords are what the overlap
- *  test needs; PDF points are what we store. */
-function inTileDisplayed(tile: TileArea, dxIn: number, dyIn: number, padIn: number): boolean {
-  return dxIn >= tile.leftIn - padIn && dxIn <= tile.leftIn + tile.widthIn + padIn
-    && dyIn >= tile.topIn - padIn && dyIn <= tile.topIn + tile.heightIn + padIn;
+const EPS = 1e-6;
+
+/** Fix round 1 / S2 — each tile OWNS the core of its area: its rectangle
+ *  with every side that overlaps a neighbour pulled in to the middle of that
+ *  overlap band. The cores tile the page exactly once. Bounds in displayed
+ *  inches: [left, right) x [top, bottom). */
+export function tileCores(tiles: TileArea[]): Map<string, { left: number; right: number; top: number; bottom: number }> {
+  const out = new Map<string, { left: number; right: number; top: number; bottom: number }>();
+  for (const t of tiles) {
+    let left = -Infinity, right = Infinity, top = -Infinity, bottom = Infinity;
+    const tRight = t.leftIn + t.widthIn, tBottom = t.topIn + t.heightIn;
+    for (const u of tiles) {
+      if (u === t) continue;
+      const uRight = u.leftIn + u.widthIn, uBottom = u.topIn + u.heightIn;
+      const sameRow = Math.abs(u.topIn - t.topIn) < EPS;
+      const sameCol = Math.abs(u.leftIn - t.leftIn) < EPS;
+      if (sameRow && u.leftIn > t.leftIn + EPS && u.leftIn < tRight - EPS) right = Math.min(right, (u.leftIn + tRight) / 2);
+      if (sameRow && u.leftIn < t.leftIn - EPS && uRight > t.leftIn + EPS) left = Math.max(left, (t.leftIn + uRight) / 2);
+      if (sameCol && u.topIn > t.topIn + EPS && u.topIn < tBottom - EPS) bottom = Math.min(bottom, (u.topIn + tBottom) / 2);
+      if (sameCol && u.topIn < t.topIn - EPS && uBottom > t.topIn + EPS) top = Math.max(top, (t.topIn + uBottom) / 2);
+    }
+    out.set(t.id, { left, right, top, bottom });
+  }
+  return out;
 }
 
-/** Converts raw marks to PDF points and merges overlap-band duplicates: the
- *  same type, reported from DIFFERENT tiles, within `radiusPt`, whose merged
- *  position lies inside both tiles (padded by the radius). Two marks from the
- *  SAME tile are never merged — the model reported them as distinct symbols. */
+/** Converts raw marks to PDF points and resolves overlap-band duplicates.
+ *  1. Pairing: same type, DIFFERENT tiles, within `radiusPt`, midpoint inside
+ *     every tile involved — merged nearest-first, one mark per tile per
+ *     symbol (two marks from the SAME tile are never merged: the model
+ *     reported them as distinct symbols). A merged symbol is kept once.
+ *  2. Ownership: a mark no other tile paired with is kept only when its
+ *     position lies in its own tile's core — a mark outside it is the
+ *     neighbour's to report. So a duplicate that position error kept out of
+ *     pairing is still counted once unless its two copies land on opposite
+ *     wrong sides of the band's midline, which needs an error close to half
+ *     the band on both reports. */
 export function placeAndDedupe(
   marks: RawMark[],
   tiles: TileArea[],
   geom: PageGeometry,
   radiusPt = OVERLAP_DEDUP_RADIUS_PT,
-): { placed: PlacedMark[]; mergedDuplicates: number } {
+): { placed: PlacedMark[]; mergedDuplicates: number; outsideCore: number } {
   const byId = new Map(tiles.map(t => [t.id, t]));
-  type Work = PlacedMark & { dIn: { x: number; y: number } };
-  const clusters: Work[] = [];
-  let merged = 0;
-  const sorted = [...marks].sort((a, b) =>
-    a.typeKey.localeCompare(b.typeKey) || a.tileId.localeCompare(b.tileId) || a.ny - b.ny || a.nx - b.nx);
-  const padIn = radiusPt / 72;
-  for (const m of sorted) {
-    const tile = byId.get(m.tileId);
-    if (!tile) continue;
-    const p = tileToPdfPoint(tile, m.nx, m.ny, geom);
-    const dIn = { x: tile.leftIn + m.nx * tile.widthIn, y: tile.topIn + m.ny * tile.heightIn };
-    let target: Work | undefined;
-    let best = Infinity;
-    for (const c of clusters) {
-      if (c.typeKey !== m.typeKey || c.tileIds.includes(m.tileId)) continue;
-      const d = Math.hypot(c.x - p.x, c.y - p.y);
-      if (d > radiusPt || d >= best) continue;
-      const mid = { x: (c.dIn.x + dIn.x) / 2, y: (c.dIn.y + dIn.y) / 2 };
-      const allTiles = [...c.tileIds, m.tileId].map(id => byId.get(id)!);
-      if (!allTiles.every(t => inTileDisplayed(t, mid.x, mid.y, padIn))) continue;
-      target = c;
-      best = d;
-    }
-    if (target) {
-      const n = target.tileIds.length;
-      target.x = (target.x * n + p.x) / (n + 1);
-      target.y = (target.y * n + p.y) / (n + 1);
-      target.dIn = { x: (target.dIn.x * n + dIn.x) / (n + 1), y: (target.dIn.y * n + dIn.y) / (n + 1) };
-      target.tileIds.push(m.tileId);
-      merged++;
-    } else {
-      clusters.push({ typeKey: m.typeKey, tileIds: [m.tileId], x: p.x, y: p.y, dIn });
+  const cores = tileCores(tiles);
+  const radiusIn = radiusPt / 72;
+  const pts = marks.filter(m => byId.has(m.tileId)).map(m => {
+    const tile = byId.get(m.tileId)!;
+    return { m, dx: tile.leftIn + m.nx * tile.widthIn, dy: tile.topIn + m.ny * tile.heightIn };
+  });
+  // Union-find over marks, nearest pairs first.
+  const parent = pts.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const tilesOf = pts.map(p => new Set([p.m.tileId]));
+  const pairs: Array<{ i: number; j: number; d: number }> = [];
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const a = pts[i], b = pts[j];
+      if (a.m.typeKey !== b.m.typeKey || a.m.tileId === b.m.tileId) continue;
+      const d = Math.hypot(a.dx - b.dx, a.dy - b.dy);
+      if (d > radiusIn) continue;
+      pairs.push({ i, j, d });
     }
   }
-  return { placed: clusters.map(({ dIn: _d, ...rest }) => rest), mergedDuplicates: merged };
+  pairs.sort((x, y) => x.d - y.d || x.i - y.i || x.j - y.j);
+  const pad = PAIR_TILE_PAD_IN + EPS;
+  const inTile = (t: TileArea, x: number, y: number) =>
+    x >= t.leftIn - pad && x <= t.leftIn + t.widthIn + pad && y >= t.topIn - pad && y <= t.topIn + t.heightIn + pad;
+  for (const { i, j } of pairs) {
+    const ri = find(i), rj = find(j);
+    if (ri === rj) continue;
+    const ti = tilesOf[ri], tj = tilesOf[rj];
+    if ([...ti].some(t => tj.has(t))) continue; // one mark per tile per symbol
+    const mx = (pts[i].dx + pts[j].dx) / 2, my = (pts[i].dy + pts[j].dy) / 2;
+    if (![...ti, ...tj].every(id => inTile(byId.get(id)!, mx, my))) continue;
+    parent[rj] = ri;
+    tj.forEach(t => ti.add(t));
+  }
+  const clusters = new Map<number, number[]>();
+  pts.forEach((_, i) => {
+    const r = find(i);
+    if (!clusters.has(r)) clusters.set(r, []);
+    clusters.get(r)!.push(i);
+  });
+  const placed: PlacedMark[] = [];
+  let mergedDuplicates = 0;
+  let outsideCore = 0;
+  const ordered = [...clusters.values()].sort((a, b) => a[0] - b[0]);
+  for (const members of ordered) {
+    const first = pts[members[0]];
+    if (members.length === 1) {
+      const c = cores.get(first.m.tileId)!;
+      const inCore = first.dx >= c.left - EPS && first.dx < c.right && first.dy >= c.top - EPS && first.dy < c.bottom;
+      if (!inCore) { outsideCore++; continue; }
+    }
+    mergedDuplicates += members.length - 1;
+    const dx = members.reduce((s, i) => s + pts[i].dx, 0) / members.length;
+    const dy = members.reduce((s, i) => s + pts[i].dy, 0) / members.length;
+    const p = displayedInToPdf(dx, dy, geom);
+    placed.push({ typeKey: first.m.typeKey, tileIds: members.map(i => pts[i].m.tileId), x: p.x, y: p.y });
+  }
+  return { placed, mergedDuplicates, outsideCore };
+}
+
+function displayedInToPdf(dxIn: number, dyIn: number, geom: PageGeometry): { x: number; y: number } {
+  return tileToPdfPoint({ leftIn: 0, topIn: 0, widthIn: 1, heightIn: 1 }, dxIn, dyIn, geom);
 }
 
 // ── I/O orchestration ──────────────────────────────────────────────────────
@@ -268,7 +351,13 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
   const work: Array<{ si: number; tiles: CountTile[]; index: number; of: number }> = [];
   const rawBySheet = new Map<number, RawMark[]>();
   input.sheets.forEach(({ rendered }, si) => {
-    if (!rendered || rendered.tiles.length === 0) return;
+    if (!rendered) return;
+    if (rendered.tiles.length === 0) {
+      // N3 — nothing was sent, so nothing was counted: never "counted 0".
+      results[si].status = 'failed';
+      results[si].error = 'the sheet rendered to no tiles';
+      return;
+    }
     const groups = groupTilesForCalls(rendered.tiles);
     groups.forEach((g, gi) => work.push({ si, tiles: g.tiles, index: gi + 1, of: groups.length }));
     rawBySheet.set(si, []);
@@ -293,10 +382,13 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
       usage.output_tokens += resp.usage?.output_tokens ?? 0;
       usage.cache_creation_input_tokens += resp.usage?.cache_creation_input_tokens ?? 0;
       usage.cache_read_input_tokens += resp.usage?.cache_read_input_tokens ?? 0;
-      assertNotTruncated(resp, `Counter (Agent 1C) on ${r.sheet.label}`, input.maxTokens);
       if (resp.stop_reason === 'refusal') throw new Error('the model declined to count this sheet');
+      assertNotTruncated(resp, `Counter (Agent 1C) on ${r.sheet.label}`, input.maxTokens);
       const parsed = parseCounterResponse(extractText(resp), targetKeys, new Set(w.tiles.map(t => t.id)));
-      if (!parsed) throw new Error('the counter did not return parseable JSON');
+      if (!parsed) throw new Error('the counter reply was not in the expected shape (a JSON object with a "marks" array)');
+      if (parsed.marks.length === 0 && parsed.rejected.length > 0) {
+        throw new Error(`every mark the counter returned was rejected (${[...new Set(parsed.rejected.map(x => x.reason))].join('; ')})`);
+      }
       rawBySheet.get(w.si)!.push(...parsed.marks);
       r.unreadable.push(...parsed.unreadable);
       r.rejected.push(...parsed.rejected);
@@ -315,9 +407,9 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
   input.sheets.forEach(({ rendered }, si) => {
     const r = results[si];
     if (!rendered || r.status !== 'counted') return;
-    const { placed, mergedDuplicates } = placeAndDedupe(rawBySheet.get(si) ?? [], rendered.tiles, rendered.geometry);
+    const { placed, mergedDuplicates, outsideCore } = placeAndDedupe(rawBySheet.get(si) ?? [], rendered.tiles, rendered.geometry);
     r.placed = placed;
-    r.mergedDuplicates = mergedDuplicates;
+    r.mergedDuplicates = mergedDuplicates + outsideCore;
   });
   return { sheets: results, usage };
 }

@@ -8,13 +8,13 @@ import { describe, expect, it, beforeAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { selectCountSheets, levelOf, roleOf, focusOf, type InventoryPage } from './countSheets';
-import { parseCounterResponse, placeAndDedupe, buildCounterContent, runCounter, supportsEffort, OVERLAP_DEDUP_RADIUS_PT } from './counter';
+import { parseCounterResponse, placeAndDedupe, buildCounterContent, runCounter, supportsEffort, OVERLAP_DEDUP_RADIUS_PT, tileCores, counterReplyShape } from './counter';
 import { planCountTiles, readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry } from './countRender';
 import { buildCountTargets } from './countTargets';
 import { isPdftoppmAvailable } from './documentPrep';
 import { MINI_P2_SYMBOLS, MINI_P3_SYMBOLS } from '../test/fixtures/takeoff/buildSymbolPdf';
 import { fakeAnthropic, userText, imageCount } from '../test/fixtures/takeoff/fakeAnthropic';
-import { perfectCounter } from '../test/fixtures/takeoff/perfectCounter';
+import { perfectCounter, jitteredCounter, seededGauss } from '../test/fixtures/takeoff/perfectCounter';
 import { kissimmeeAgent1 } from '../test/fixtures/takeoff/agent1Fixtures';
 
 const inv = (file: string, page: number, sheetNo: string, title: string, cls = 'plan', discipline = 'electrical', included = true): InventoryPage =>
@@ -81,6 +81,21 @@ describe('parseCounterResponse — strict validation', () => {
   it('returns null for unparseable output', () => {
     expect(parseCounterResponse('I counted 12 fixtures.', keys, tiles)).toBeNull();
   });
+  // Fix round 1 / S1 (review repro R1a/R1b): the wrong top-level shape used
+  // to parse as "0 marks" and the sheet was recorded as counted.
+  it('a reply with the wrong shape is null (the sheet fails), never "0 marks"', () => {
+    expect(parseCounterResponse('{"symbols":[["A","R1C1",0.5,0.5]]}', keys, tiles)).toBeNull();
+    expect(parseCounterResponse('{"type":"A","tile":"R1C1","x":0.5,"y":0.5}', keys, tiles)).toBeNull();
+    expect(parseCounterResponse('{"marks":{"A":3}}', keys, tiles)).toBeNull();
+    expect(counterReplyShape('{"notes":["nothing here"]}')).toBeNull();
+  });
+  it('a bare top-level array of marks is accepted explicitly (objects or compact arrays, fenced or not)', () => {
+    const r1 = parseCounterResponse('[{"type":"A","tile":"R1C1","x":0.5,"y":0.25},{"type":"B","tile":"R1C2","x":0.1,"y":0.9}]', keys, tiles)!;
+    expect(r1.marks.map(m => m.typeKey)).toEqual(['A', 'B']);
+    const r2 = parseCounterResponse('```json\n[["A","R1C1",0.5,0.25]]\n```', keys, tiles)!;
+    expect(r2.marks).toHaveLength(1);
+    expect(parseCounterResponse('{"marks":[]}', keys, tiles)!.marks).toEqual([]);
+  });
 });
 
 describe('placeAndDedupe — overlap bands, in PDF points', () => {
@@ -117,13 +132,40 @@ describe('placeAndDedupe — overlap bands, in PDF points', () => {
   });
 
   it('different types at the same spot are never merged', () => {
-    const r = placeAndDedupe([rep('A', 'R1C1', seamX, 2), rep('B', 'R1C2', seamX, 2)], tiles, geom);
-    expect(r.placed).toHaveLength(2);
+    const r = placeAndDedupe([rep('A', 'R1C1', seamX, 2), rep('B', 'R1C1', seamX, 2), rep('A', 'R1C2', seamX, 2), rep('B', 'R1C2', seamX, 2)], tiles, geom);
+    expect(r.placed.map(p => p.typeKey).sort()).toEqual(['A', 'B']);
   });
 
   it('marks further apart than the radius stay separate even across a seam', () => {
     const d = (OVERLAP_DEDUP_RADIUS_PT + 6) / 72;
-    const r = placeAndDedupe([rep('A', 'R1C1', seamX, 2), rep('A', 'R1C2', seamX + d, 2)], tiles, geom);
+    // R1C1's mark sits in its own core, R1C2's in its own (the band's midline is seamX).
+    const r = placeAndDedupe([rep('A', 'R1C1', seamX - 0.3, 2), rep('A', 'R1C2', seamX - 0.3 + d, 2)], tiles, geom);
+    expect(r.placed).toHaveLength(2);
+  });
+
+  it('the tile cores partition the page exactly: each overlap band is split at its midline', () => {
+    const cores = tileCores(tiles);
+    const c11 = cores.get('R1C1')!, c12 = cores.get('R1C2')!, c21 = cores.get('R2C1')!;
+    expect(c11.right).toBeCloseTo(seamX, 9);
+    expect(c12.left).toBeCloseTo(seamX, 9);
+    expect(c11.left).toBe(-Infinity);
+    expect(c11.bottom).toBeCloseTo(c21.top, 9);
+    expect(c11.bottom).toBeCloseTo(byId.R2C1.topIn + 0.5, 9);
+  });
+
+  it('a mark reported by one tile only (the neighbour missed or mis-placed it) counts only inside that tile\'s core', () => {
+    // In R1C1's half of the band: kept. In R1C2's half: R1C2's to report, dropped.
+    expect(placeAndDedupe([rep('A', 'R1C1', seamX - 0.2, 2)], tiles, geom).placed).toHaveLength(1);
+    const r = placeAndDedupe([rep('A', 'R1C1', seamX + 0.2, 2)], tiles, geom);
+    expect(r.placed).toHaveLength(0);
+    expect(r.outsideCore).toBe(1);
+  });
+
+  it('two different symbols in a band, both reported by both tiles, pair with their own copies (one-to-one, nearest first)', () => {
+    const r = placeAndDedupe([
+      rep('A', 'R1C1', seamX - 0.25, 2), rep('A', 'R1C1', seamX + 0.25, 2.1),
+      rep('A', 'R1C2', seamX - 0.2, 2.05), rep('A', 'R1C2', seamX + 0.3, 2.05),
+    ], tiles, geom);
     expect(r.placed).toHaveLength(2);
   });
 
@@ -131,6 +173,72 @@ describe('placeAndDedupe — overlap bands, in PDF points', () => {
     const r = placeAndDedupe([rep('A', 'R1C1', 2, 2)], tiles, geom);
     expect(r.placed[0].x).toBeCloseTo(144, 6);
     expect(r.placed[0].y).toBeCloseTo(1296 - 144, 6);
+  });
+});
+
+// Fix round 1 / S2 + S17 — the review's simulation: position error of
+// 2-3% of a tile on EVERY report. The old 0.25" de-dup turned 20 true band
+// symbols into 27 (2%) and 32 (3%). Seeded, so the numbers are stable.
+describe('placeAndDedupe — a jittered counter (position error on every report)', () => {
+  const geom: PageGeometry = { widthPt: 36 * 72, heightPt: 24 * 72, originX: 0, originY: 0, rotation: 0 };
+  const tiles = planCountTiles(36, 24); // a D sheet: 5 x 4 = 20 tiles
+  const r11 = tiles.find(t => t.id === 'R1C1')!, r12 = tiles.find(t => t.id === 'R1C2')!;
+  const midX = (r12.leftIn + r11.leftIn + r11.widthIn) / 2;
+
+  /** Every tile reports every symbol inside its area, each position off by
+   *  N(0, sd) of the tile in x and y (clamped to the tile). */
+  function simulate(symbols: Array<[number, number]>, sd: number, seed: number): number {
+    const g = seededGauss(seed);
+    const marks = [];
+    for (const t of tiles) for (const [x, y] of symbols) {
+      if (x < t.leftIn || x > t.leftIn + t.widthIn || y < t.topIn || y > t.topIn + t.heightIn) continue;
+      marks.push({ typeKey: 'A', tileId: t.id,
+        nx: Math.min(1, Math.max(0, (x - t.leftIn) / t.widthIn + g() * sd)),
+        ny: Math.min(1, Math.max(0, (y - t.topIn) / t.heightIn + g() * sd)) });
+    }
+    return placeAndDedupe(marks, tiles, geom).placed.length;
+  }
+  /** Symbols at least `spacing` inches apart (a 2x4 troffer grid at 1/8" = 1'
+   *  is 1" or more), placed by a seeded generator. */
+  function layout(n: number, seed: number, area: (u: () => number) => [number, number], spacing = 1): Array<[number, number]> {
+    const g = seededGauss(seed + 1000);
+    const u = () => (Math.atan(g()) / Math.PI) + 0.5; // a uniform-ish 0-1 from the same seeded stream
+    const out: Array<[number, number]> = [];
+    for (let tries = 0; out.length < n && tries < 50_000; tries++) {
+      const p = area(u);
+      if (out.every(([a, b]) => Math.hypot(a - p[0], b - p[1]) >= spacing)) out.push(p);
+    }
+    return out;
+  }
+
+  it('the review\'s case — 20 symbols in one 1" overlap band (was 27 at 2%, 32 at 3%): exact at 1% and 2%, within 1 at 3%', () => {
+    const band = layout(20, 7, u => [midX - 0.5 + u(), 0.5 + u() * 22.5], 0.75);
+    expect(band).toHaveLength(20);
+    for (const seed of [42, 43, 44, 45, 46]) {
+      expect(simulate(band, 0.01, seed), `1% seed ${seed}`).toBe(20);
+      expect(simulate(band, 0.02, seed), `2% seed ${seed}`).toBe(20);
+      expect(Math.abs(simulate(band, 0.03, seed) - 20), `3% seed ${seed}`).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('120 fixtures on a whole D sheet, 100 seeded sheets: 2% error is exact on >= 97 sheets and never off by more than 1', () => {
+    const errs: number[] = [];
+    for (let seed = 1; seed <= 100; seed++) {
+      const syms = layout(120, seed, u => [u() * 32.4, u() * 24]);
+      errs.push(simulate(syms, 0.02, seed) - syms.length);
+    }
+    expect(errs.filter(e => e === 0).length).toBeGreaterThanOrEqual(97);
+    expect(Math.max(...errs.map(Math.abs))).toBeLessThanOrEqual(1);
+  });
+
+  it('3% error (0.22" on a 7.3" tile): off by at most 2 of 120, >= 60% of sheets exact — NOT exact; the residual the eval must measure', () => {
+    const errs: number[] = [];
+    for (let seed = 1; seed <= 100; seed++) {
+      const syms = layout(120, seed, u => [u() * 32.4, u() * 24]);
+      errs.push(simulate(syms, 0.03, seed) - syms.length);
+    }
+    expect(errs.filter(e => e === 0).length).toBeGreaterThanOrEqual(60);
+    expect(Math.max(...errs.map(Math.abs))).toBeLessThanOrEqual(2);
   });
 });
 
@@ -231,7 +339,7 @@ describe('runCounter — real tiles of kissimmee-mini.pdf, perfect fake counter'
     const r = await runCounter({ client, model: 'claude-opus-5-5', maxTokens: 32000, targets,
       sheets: [{ sheet: sheet(2, 'E-3', 'LIGHTING PLAN'), rendered: rendered[2] }, { sheet: sheet(3, 'E-1', 'ELECTRICAL SITE PLAN'), rendered: rendered[3] }] });
     expect(r.sheets[0].status).toBe('failed');
-    expect(r.sheets[0].error).toBe('the counter did not return parseable JSON');
+    expect(r.sheets[0].error).toBe('the counter reply was not in the expected shape (a JSON object with a "marks" array)');
     expect(r.sheets[0].placed).toEqual([]);
     expect(r.sheets[1].status).toBe('counted');
 
@@ -239,6 +347,46 @@ describe('runCounter — real tiles of kissimmee-mini.pdf, perfect fake counter'
     const r2 = await runCounter({ client: refusing, model: 'claude-opus-5-5', maxTokens: 32000, targets,
       sheets: [{ sheet: sheet(3, 'E-1', 'ELECTRICAL SITE PLAN'), rendered: rendered[3] }] });
     expect(r2.sheets[0].error).toBe('the model declined to count this sheet');
+  });
+
+  it('S1 — {"symbols":[...]} fails the sheet instead of counting it as zero', async (ctx) => {
+    if (!have) return ctx.skip();
+    const { client } = fakeAnthropic(() => ({ text: '{"symbols":[["A","R1C1",0.5,0.5]]}' }));
+    const r = await runCounter({ client, model: 'claude-opus-5-5', maxTokens: 32000, targets,
+      sheets: [{ sheet: sheet(2, 'E-3', 'LIGHTING PLAN'), rendered: rendered[2] }] });
+    expect(r.sheets[0].status).toBe('failed');
+  });
+
+  it('S1 — every mark rejected (tags spelled differently) fails the sheet, never "counted 0"', async (ctx) => {
+    if (!have) return ctx.skip();
+    const { client } = fakeAnthropic(() => ({ text: '{"marks":[["TYPE-AA","R1C1",0.5,0.5],["Fixture A","R1C1",0.2,0.2]]}' }));
+    const r = await runCounter({ client, model: 'claude-opus-5-5', maxTokens: 32000, targets,
+      sheets: [{ sheet: sheet(2, 'E-3', 'LIGHTING PLAN'), rendered: rendered[2] }] });
+    expect(r.sheets[0]).toMatchObject({ status: 'failed', error: 'every mark the counter returned was rejected (type is not a count target)' });
+  });
+
+  it('S17 — a jittered counter (2% of a tile on every report) on the real tiles still gives the true counts', async (ctx) => {
+    if (!have) return ctx.skip();
+    for (const seed of [1, 2, 3]) {
+      const { client } = fakeAnthropic(jitteredCounter({
+        'E-3 "LIGHTING PLAN"': { rendered: rendered[2], symbols: MINI_P2_SYMBOLS },
+        'E-1 "ELECTRICAL SITE PLAN"': { rendered: rendered[3], symbols: MINI_P3_SYMBOLS },
+      }, 0.02, seed));
+      const r = await runCounter({ client, model: 'claude-opus-5-5', maxTokens: 32000, targets,
+        sheets: [{ sheet: sheet(2, 'E-3', 'LIGHTING PLAN'), rendered: rendered[2] }, { sheet: sheet(3, 'E-1', 'ELECTRICAL SITE PLAN'), rendered: rendered[3] }] });
+      const perType = (placed: typeof r.sheets[0]['placed']) => placed.reduce<Record<string, number>>((m, p) => ({ ...m, [p.typeKey]: (m[p.typeKey] ?? 0) + 1 }), {});
+      expect(perType(r.sheets[0].placed), `seed ${seed}`).toEqual({ A: 6, B: 3, D: 3 });
+      expect(perType(r.sheets[1].placed), `seed ${seed}`).toEqual({ S1: 2, S2: 1 });
+    }
+  });
+
+  it('N3 — a sheet that rendered to no tiles is failed, not counted 0', async () => {
+    const { client, calls } = fakeAnthropic(() => ({ text: '{"marks":[]}' }));
+    const empty = { page: 2, geometry: { widthPt: 100, heightPt: 100, originX: 0, originY: 0, rotation: 0 }, tiles: [], geometryOk: true, rasterWidthPx: 0, rasterHeightPx: 0 };
+    const r = await runCounter({ client, model: 'claude-opus-5-5', maxTokens: 32000, targets,
+      sheets: [{ sheet: sheet(2, 'E-3', 'LIGHTING PLAN'), rendered: empty }] });
+    expect(calls).toHaveLength(0);
+    expect(r.sheets[0]).toMatchObject({ status: 'failed', error: 'the sheet rendered to no tiles' });
   });
 
   it('a sheet that could not be rendered is failed without a call', async () => {

@@ -174,6 +174,7 @@ function describeAIError(err: unknown): string {
   // message ("Agent N ran out of room — raise its Max Tokens"); never bury it
   // under a generic "AI request failed:" prefix.
   if (isAgentTruncatedError(err)) return (err as Error).message;
+  if ((err as { name?: string })?.name === 'AgentRefusedError') return (err as Error).message;
   const e = err as { message?: string; status?: number; error?: { message?: string }; response?: { data?: { error?: string; message?: string } } };
   const status = e.status ? `Anthropic ${e.status}` : 'AI request failed';
   const detail = e.error?.message || e.response?.data?.error || e.response?.data?.message || e.message || 'Unknown error';
