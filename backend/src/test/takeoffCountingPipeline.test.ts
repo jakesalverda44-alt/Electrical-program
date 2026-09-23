@@ -98,7 +98,7 @@ describe('runPipeline — counting stage on kissimmee-mini.pdf', () => {
     const file = { originalname: 'AZ 10077 set.pdf', buffer: PDF, mimetype: 'application/pdf', size: PDF.length } as Express.Multer.File;
     await runPipeline(bidId, [file], client, config);
 
-    const { rows } = await pool.query('SELECT status, agent1_output, count_result, usage_counter, model_counter FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    const { rows } = await pool.query('SELECT status, agent1_output, count_result, usage_counter, model_counter, account_terms, review_items, review_status FROM takeoff_results WHERE bid_id=$1', [bidId]);
     expect(rows[0].status).toBe('complete');
     expect(rows[0].model_counter).toBe(config.modelCounter);
 
@@ -129,12 +129,23 @@ describe('runPipeline — counting stage on kissimmee-mini.pdf', () => {
     ]);
     expect(a1.countingSummary.pendingEstimatorReview).toEqual(['G (not found on any counted plan sheet)']);
 
+    // Task 8 — the AutoZone rule (bid brand), with no drawing statement for the
+    // power poles -> a scope question in the review list next to type G.
+    expect(rows[0].account_terms.ruleName).toBe('AutoZone');
+    expect(rows[0].review_items.map((i: { id: string }) => i.id)).toEqual(['count:G', 'scope:power_poles']);
+    expect(rows[0].review_status).toBe('needs_review');
+
     // Agent 2 saw the counted rows, not Agent 1's zeros / 8 wall packs / stacked site lights.
     const a2 = calls.find(c => systemText(c).includes('Senior Electrical Estimator'))!;
     const a2Text = userText(a2);
     expect(a2Text).toContain('"item":"Type A — 4 ft LED linear wraparound","qty":6');
     expect(a2Text).not.toContain('Site lights');
     expect(a2Text).not.toContain('"qty":8');
+    // ...and the ACCOUNT TERMS block, not the old hard-coded supplier.
+    expect(a2Text).toContain('--- ACCOUNT TERMS (AUTHORITATIVE');
+    expect(a2Text).toContain('Lighting fixtures: furnished by the Owner through the Graybar national account; installed by APT.');
+    expect(a2Text).toContain('Power poles: NOT YET DECIDED');
+    expect(systemText(a2)).not.toContain('Southern Lighting Source');
   }, 120_000);
 
   it('a truncated counter call fails the run with the counter\'s own message', async (ctx) => {

@@ -175,8 +175,8 @@ COUNTED QUANTITIES: quantities rows with "countedBy":"counter" are per-type symb
 COMPANY CONTEXT
 - Accurate Power & Technology (APT), Eustis FL
 - License: EC13007737 | LI45063
-- Lighting procured through Southern Lighting Source national account (770-242-4000)
 - ECFECI = Electrical Contractor Furnished, Electrical Contractor Installed
+- WHO FURNISHES AND INSTALLS each kind of material (lighting fixtures and the supplier, panels, disconnects, power poles, equipment) comes ONLY from the ACCOUNT TERMS block in the user message. Never assume APT furnishes something the block assigns to the Owner, GC or others, and never name a supplier the block doesn't.
 
 SCOPE FORMAT
 Generate scope in APT's standard A–F section format:
@@ -187,10 +187,10 @@ D. Site Lighting, Underground Work & Allowances
 E. Low Voltage Infrastructure (Conduit & Boxes Only)
 F. Project Coordination & Closeout
 
-ECFECI RULES — Apply these exactly:
-- Service entrance and MDP: "...service entrance assembly and MDP (ECFECI)..."
-- Distribution panels: "Distribution gear (ECFECI): panels [list]..."
-- Lighting: "Complete lighting package (ECFECI) — procured through the Southern Lighting Source national account (770-242-4000)..."
+ECFECI RULES — apply only to items the ACCOUNT TERMS block says APT furnishes:
+- Service entrance: "...service entrance assembly (ECFECI)..." — add "and MDP" only when an MDP is on the drawings.
+- Distribution panels APT furnishes: "Distribution gear (ECFECI): panels [list]..."
+- Lighting: use the Section C lighting sentence from the ACCOUNT TERMS block exactly.
 
 OUTPUT
 Return ONLY valid compact JSON — no prose, no markdown.
@@ -246,7 +246,7 @@ Return ONLY valid compact JSON — no prose, no markdown.
 }
 
 SCOPE BULLETS: Max 3 bullets per section. Max 25 words each. Contractor-standard language.
-SECTION C always has exactly 3 bullets: (1) lighting package ECFECI + Southern Lighting Source, (2) controls and testing, (3) fixture types listed.
+SECTION C always has exactly 3 bullets: (1) the lighting procurement sentence from the ACCOUNT TERMS block, (2) controls and testing, (3) fixture types listed.
 TAKEOFF CATEGORIES: Service & Distribution | Interior Lighting | Exterior Site Lighting | Lighting Controls | Branch Power | Site Underground Allowances | Low Voltage | Grounding
 EXCLUSIONS: Short phrases only. Max 8 items.
 ALLOWANCES: Only items with footage from the Analyzer data or flagged as scope allowances. No dollar values.
@@ -309,16 +309,17 @@ You receive structured scope data from Agent 2, confirmed project details, a tot
 
 Everything about APT's identity and the standard boilerplate is owned by CODE now, not by you: the letterhead/logo, the 6 standard "SCOPE OF WORK" bullets, the 10 standard "TERMS, CONDITIONS & SPECIAL REQUIREMENTS" bullets, every section header name, the price summary, and the entire signature/closing block are appended automatically after your output. Do NOT write any of that. Do NOT include a total price field — the bid record's validated price is authoritative and is applied by the system, not by you.
 
-REQUIRED ECFECI LANGUAGE — apply exactly as written, inside the section bullets below:
-- Section A, service entrance bullet: "...service entrance assembly and MDP (ECFECI), fed by..."
-- Section A, distribution gear bullet: "Distribution gear (ECFECI): panels [list], with feeders and disconnects throughout."
-- Section C, bullet 1: "Complete lighting package (ECFECI) — procured through the Southern Lighting Source national account (770-242-4000). EC to receive, inventory, and install all fixtures per schedule."
-- Every gear line you write into the takeoff (service entrance, disconnects, line gutter, CT cabinet, panels, transformers, breakers) — tag it "(ECFECI)" in the description, or set its furnish_by to "APT (ECFECI)". If the GC prints only the takeoff, there must be zero ambiguity about who supplies.
+FURNISH / INSTALL LANGUAGE — the user message's ACCOUNT TERMS block is authoritative for who furnishes and who installs lighting fixtures, panels, disconnects, power poles and equipment on THIS job, and for the supplier. It overrides anything below and anything in Agent 2's scope.
+- Section A, service entrance bullet (APT-furnished gear only): "...service entrance assembly (ECFECI), fed by..." — write "and MDP" only when an MDP is on the drawings.
+- Section A, distribution gear bullet: "Distribution gear (ECFECI): panels [list], with feeders and disconnects throughout." ONLY when the block says APT furnishes the panels; otherwise say who furnishes them and that EC installs.
+- Section C, bullet 1: the exact lighting sentence the ACCOUNT TERMS block gives.
+- Every gear line you write into the takeoff (service entrance, disconnects, line gutter, CT cabinet, panels, transformers, breakers): set furnish_by to who supplies it per the block ("APT (ECFECI)" only for APT-furnished items). If the GC prints only the takeoff, there must be zero ambiguity about who supplies.
+- Items the block says another party furnishes AND installs (e.g. power poles by the GC) are not APT scope: no scope bullet or takeoff line for them except an exclusion naming that party.
 
 SECTIONS — A through F, this order, these EXACT titles (the code-level verifier checks for them literally — do not paraphrase):
 A. Service & Distribution — 3 to 4 bullets
 B. Branch Power — 1 to 2 bullets
-C. Lighting & Controls — write EXACTLY 2 bullets here: (1) lighting ECFECI + Southern Lighting Source procurement, (2) controls & testing. Do NOT write a 3rd "fixture types" bullet — put the raw fixture-type codes in the separate fixture_types array instead; the system builds that bullet from it deterministically.
+C. Lighting & Controls — write EXACTLY 2 bullets here: (1) the lighting sentence from the ACCOUNT TERMS block, (2) controls & testing. Do NOT write a 3rd "fixture types" bullet — put the raw fixture-type codes in the separate fixture_types array instead; the system builds that bullet from it deterministically.
 D. Site Lighting, Underground Work & Allowances — write only the site-lighting and conduit-spec bullets here. Do NOT write allowance bullets yourself — put each one, already phrased as "XXX' allowance - description.", in the separate allowances_bullets array instead; the system appends them to this section.
 E. Low Voltage Infrastructure (Conduit & Boxes Only) — 1 to 2 bullets
 F. Project Coordination & Closeout — 1 to 2 bullets

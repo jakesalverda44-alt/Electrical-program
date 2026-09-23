@@ -43,6 +43,9 @@ export interface Agent4MessageInput {
   /** Takeoff accuracy Task 7 — the estimator's resolutions of the Needs-review
    *  list (reviewResolutionsForAgent4), authoritative over Agents 1/2. */
   reviewResolutions?: string | null;
+  /** Takeoff accuracy Task 8 — the job's ACCOUNT TERMS block
+   *  (accountRules.ts renderAccountTermsBlock), authoritative. */
+  accountTerms?: string | null;
 }
 
 function money(n: number | string | null | undefined): string {
@@ -98,6 +101,9 @@ export function buildAgent4UserMessage(input: Agent4MessageInput): string {
     }
   }
 
+  if (input.accountTerms) {
+    lines.push('', input.accountTerms);
+  }
   if (input.reviewResolutions) {
     lines.push('', input.reviewResolutions);
   }

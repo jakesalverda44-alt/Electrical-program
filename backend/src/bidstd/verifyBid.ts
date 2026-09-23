@@ -36,6 +36,19 @@ export interface VerifyTextResult {
   failures: VerifyFailure[];
 }
 
+/** Takeoff accuracy Task 8 — per-job options from the matched account rule.
+ *  Omitted = the standard checks exactly as before. */
+export interface VerifyOptions {
+  /** Case-insensitive phrases that must not appear in a GC-facing document
+   *  (the rule's list, plus e.g. the default supplier when the owner furnishes
+   *  the fixtures). */
+  forbiddenPhrases?: string[];
+  /** ECFECI checks sized to what APT actually furnishes on this job: an
+   *  AutoZone proposal must NOT be forced to call owner-furnished lighting
+   *  ECFECI. */
+  ecfeci?: { requireInSectionA: boolean; requireInSectionC: boolean; minCount: number };
+}
+
 export interface VerifyResult extends VerifyTextResult {
   /** Present only when `soffice` was found and conversion succeeded. */
   pdf?: Buffer;
@@ -97,12 +110,14 @@ const SQFT_RE = /[0-9,]+ *(?:SF|S\.F\.|sq\.? ?ft)/gi;
 // (there is no such check in the shell script) — kept GC-only, since it's a
 // stricter invented rule about the two most price-sensitive sections, not
 // something the pre-bid scope needs to satisfy.
-function checkEcfeciCount(text: string): VerifyFailure | null {
+function checkEcfeciCount(text: string, minCount = 3): VerifyFailure | null {
   const occurrences = text.match(/ECFECI/g) ?? [];
-  if (occurrences.length < 3) {
+  if (occurrences.length < minCount) {
     return {
       check: 'ecfeci',
-      detail: `only ${occurrences.length} ECFECI occurrence(s) — expected at least 3 (Section A x2, Section C x1, plus takeoff gear lines)`,
+      detail: minCount === 3
+        ? `only ${occurrences.length} ECFECI occurrence(s) — expected at least 3 (Section A x2, Section C x1, plus takeoff gear lines)`
+        : `only ${occurrences.length} ECFECI occurrence(s) — expected at least ${minCount} for the APT-furnished items on this job`,
       matches: [],
     };
   }
@@ -146,14 +161,14 @@ function ecfeciWindow(text: string, startMarker: string): { ok: boolean; termina
   return { ok: /ECFECI/.test(text.slice(start, end)), terminator };
 }
 
-function checkEcfeciPlacement(text: string): VerifyFailure | null {
+function checkEcfeciPlacement(text: string, requireA = true, requireC = true): VerifyFailure | null {
   const problems: string[] = [];
 
-  const winA = ecfeciWindow(text, SECTION_HEADERS.A);
+  const winA = requireA ? ecfeciWindow(text, SECTION_HEADERS.A) : null;
   if (winA && !winA.ok) {
     problems.push(`ECFECI not found between "${SECTION_HEADERS.A}" and "${winA.terminator}"`);
   }
-  const winC = ecfeciWindow(text, SECTION_HEADERS.C);
+  const winC = requireC ? ecfeciWindow(text, SECTION_HEADERS.C) : null;
   if (winC && !winC.ok) {
     problems.push(`ECFECI not found between "${SECTION_HEADERS.C}" and "${winC.terminator}"`);
   }
@@ -172,7 +187,7 @@ function checkEcfeciPlacement(text: string): VerifyFailure | null {
  * placement-window check, this port's own addition beyond verify.sh, is
  * skipped for internal).
  */
-export function verifyBidText(text: string, kind: VerifyKind): VerifyTextResult {
+export function verifyBidText(text: string, kind: VerifyKind, opts: VerifyOptions = {}): VerifyTextResult {
   const failures: VerifyFailure[] = [];
 
   const placeholders = dedupe([...text.matchAll(PLACEHOLDER_RE)].map(m => m[0]));
@@ -186,7 +201,7 @@ export function verifyBidText(text: string, kind: VerifyKind): VerifyTextResult 
 
   // ECFECI occurrence count — both kinds (verify.sh v4 parity: it runs the
   // count check on every document it verifies, not just the GC bid).
-  const ecfeciCount = checkEcfeciCount(text);
+  const ecfeciCount = checkEcfeciCount(text, opts.ecfeci?.minCount ?? 3);
   if (ecfeciCount) failures.push(ecfeciCount);
 
   if (kind === 'gc') {
@@ -208,8 +223,19 @@ export function verifyBidText(text: string, kind: VerifyKind): VerifyTextResult 
       });
     }
 
-    const ecfeci = checkEcfeciPlacement(text);
+    const ecfeci = checkEcfeciPlacement(text, opts.ecfeci?.requireInSectionA ?? true, opts.ecfeci?.requireInSectionC ?? true);
     if (ecfeci) failures.push(ecfeci);
+
+    // Takeoff accuracy Task 8 — the account rule's forbidden phrases.
+    const lower = text.toLowerCase();
+    const forbidden = (opts.forbiddenPhrases ?? []).filter(p => p.trim() && lower.includes(p.trim().toLowerCase()));
+    if (forbidden.length) {
+      failures.push({
+        check: 'account_terms',
+        detail: 'Language this account\'s terms forbid (e.g. a supplier or furnish model that does not apply to this job).',
+        matches: forbidden,
+      });
+    }
   }
 
   return { pass: failures.length === 0, failures };
@@ -278,9 +304,9 @@ async function convertToPdf(sofficePath: string, docxBuffer: Buffer): Promise<Bu
  * then — only when `soffice` is present — also converts to PDF and returns
  * it. A missing soffice is never a failure (see the plan's environment note).
  */
-export async function verifyBidDocx(buffer: Buffer, opts: { kind: VerifyKind }): Promise<VerifyResult> {
+export async function verifyBidDocx(buffer: Buffer, opts: { kind: VerifyKind } & VerifyOptions): Promise<VerifyResult> {
   const text = extractDocxText(buffer);
-  const core = verifyBidText(text, opts.kind);
+  const core = verifyBidText(text, opts.kind, opts);
 
   const soffice = findSoffice();
   if (!soffice) return core;

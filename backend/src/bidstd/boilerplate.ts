@@ -27,12 +27,14 @@ export function standardScope6(planDates: string, sheetList: string, gcName: str
  *  PROJECT_INSTRUCTIONS §9, that's a per-job call the estimator makes, not a
  *  parameter this function exposes; callers who need a different code year
  *  build bullet 1 themselves and splice it in. */
-export function standardTerms(planDates: string): string[] {
+export function standardTerms(planDates: string, opts: { lightingBullet?: string } = {}): string[] {
   return [
     `Based on electrical drawings and SOW dated ${planDates}. All work per NEC 2020, FBC 2023, and FFPC 2021.`,
     'Price valid for 30 days from date of proposal. Material costs subject to market fluctuation at time of order.',
     'A deposit of 25% of the contract value is required upon execution of this agreement to initiate material procurement.',
-    'Lighting package to be procured through the Southern Lighting Source national account. EC to receive, inventory, and install.',
+    // Takeoff accuracy Task 8 — bullet 4 follows the job's account rule
+    // (accountRules.ts lightingTermsBullet); the default is unchanged.
+    opts.lightingBullet ?? 'Lighting package to be procured through the Southern Lighting Source national account. EC to receive, inventory, and install.',
     'Equipment lead times subject to market and manufacturer availability. APT not responsible for vendor delays.',
     'All changes to the approved scope require a written Change Order signed by the Owner prior to proceeding.',
     'Painting, patching, concrete cutting, and finish restoration are excluded from this scope.',

@@ -46,11 +46,13 @@ import { runCountingStage } from '../ai/countingStage';
 import { writeAiCountMarkers } from '../estimating/aiMarkers';
 import { buildReviewItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, type ReviewItem } from '../ai/reviewItems';
 import { takeoffGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
+import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms, listAccountRules, getAccountRule, validateRuleInput, saveAccountRule } from '../bidstd/accountRulesDb';
+import { renderAccountTermsBlock, enforceAccountTerms, lightingTermsBullet, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
 import { composeBidData, ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
 import { resolveUniqueJobNumber } from '../bidstd/boilerplate';
 import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
 import { renderPrebidScopeDocx, prebidScopeFilename } from '../bidstd/prebidScopeDocx';
-import { verifyBidDocx, verifyBidText } from '../bidstd/verifyBid';
+import { verifyBidDocx, verifyBidText, type VerifyOptions } from '../bidstd/verifyBid';
 import { BidData, validateBidData } from '../bidstd/bidData';
 import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
 import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
@@ -531,6 +533,23 @@ function compactOutput(text: string, max = 500): string {
  *  document (document_ids), so counted locations can be placed on it. */
 type PipelineFile = Express.Multer.File & { documentId?: string };
 
+/** Takeoff accuracy Task 8 — the account terms for a bid: the snapshot taken
+ *  at analysis time, or (a run from before account rules existed) one built
+ *  now from the current rules and the stored drawing analysis, never
+ *  persisted from here. */
+async function accountTermsFor(bidId: string, stored: AccountTermsSnapshot | null, agent1Output: string): Promise<AccountTermsSnapshot | null> {
+  if (stored) return stored;
+  const agent1 = parseAIJSON(agent1Output || '') ?? {};
+  const { rows } = await pool.query('SELECT name, brand, project_type FROM bids WHERE id=$1', [bidId]);
+  if (!rows.length) return null;
+  return buildAccountTermsSnapshot(rows[0], agent1);
+}
+
+async function accountTermsBlockFor(bidId: string, stored: AccountTermsSnapshot | null, reviewItems: ReviewItem[] | null, agent1Output: string): Promise<string | null> {
+  const snap = await accountTermsFor(bidId, stored, agent1Output);
+  return renderAccountTermsBlock(snap, effectiveAccountTerms(snap, reviewItems));
+}
+
 // ── Background pipeline ───────────────────────────────────────────────────────
 // Exported (takeoff accuracy) so integration tests can drive the real pipeline
 // with an injected fake Anthropic client — never a real API call from tests.
@@ -546,6 +565,9 @@ export async function runPipeline(
   // Takeoff accuracy Task 5 — the counting stage needs the page inventory and
   // the PDF bytes Agent 1 was built from.
   let countingInventory: PrepInventoryEntry[] = [];
+  // Task 8 — set by the counting stage, read by Agent 2's message.
+  let accountTerms: AccountTermsSnapshot | null = null;
+  let reviewItemsNow: ReviewItem[] = [];
 
   const updateStatus = (status: string) =>
     pool.query(`UPDATE takeoff_results SET status=$1 WHERE bid_id=$2`, [status, bidId]);
@@ -751,18 +773,22 @@ export async function runPipeline(
       logger.warn({ err, bidId }, '[takeoff] writing AI count markers failed');
       (stage.countResult as unknown as Record<string, unknown>).markers = { error: 'suggested markers could not be written' };
     }
+    // Task 8 — the account rule for this bid, resolved against the drawings'
+    // explicit furnish/install statements; open terms become scope questions.
+    const { rows: bidRows } = await pool.query('SELECT name, brand, project_type FROM bids WHERE id=$1', [bidId]);
+    accountTerms = await buildAccountTermsSnapshot(bidRows[0] ?? {}, stage.agent1);
     // Task 7 — the Needs-review list. A re-run keeps the estimator's earlier
     // resolutions for the same items (their work is never discarded).
     const { rows: prevRows } = await pool.query('SELECT review_items FROM takeoff_results WHERE bid_id=$1', [bidId]);
-    const reviewItems = carryOverResolutions(
-      buildReviewItems(stage.countResult, []),
+    reviewItemsNow = carryOverResolutions(
+      buildReviewItems(stage.countResult, scopeQuestionsFor(accountTerms)),
       (prevRows[0]?.review_items as ReviewItem[] | null) ?? null,
     );
     await pool.query(
       `UPDATE takeoff_results SET agent1_output=$1, count_result=$2, usage_counter=$3, model_counter=$4,
-         review_items=$5, review_status=$6 WHERE bid_id=$7`,
+         review_items=$5, review_status=$6, account_terms=$7 WHERE bid_id=$8`,
       [agent1Output, JSON.stringify(stage.countResult), JSON.stringify(stage.usage), config.modelCounter,
-       JSON.stringify(reviewItems), reviewStatus(reviewItems), bidId]
+       JSON.stringify(reviewItemsNow), reviewStatus(reviewItemsNow), JSON.stringify(accountTerms), bidId]
     );
   } catch (err) {
     const message = isAgentTruncatedError(err) ? (err as Error).message : `Counting stage failed: ${describeAIError(err)}`;
@@ -782,7 +808,7 @@ export async function runPipeline(
         role: 'user',
         // Task 4.1 — compact (no 2-space indent) in the request body; storage
         // and the UI keep the pretty agent1Output exactly as today.
-        content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}`,
+        content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\n${renderAccountTermsBlock(accountTerms, effectiveAccountTerms(accountTerms, reviewItemsNow)) ?? ''}\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}`,
       }],
     }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
     assertNotTruncated(resp, 'Agent 2', config.maxTokensA2);
@@ -1786,7 +1812,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
 
   const { rows: trRows } = await pool.query(
-    'SELECT agent1_output, agent2_output, review_items FROM takeoff_results WHERE bid_id=$1',
+    'SELECT agent1_output, agent2_output, review_items, account_terms FROM takeoff_results WHERE bid_id=$1',
     [bidId]
   );
   if (!trRows.length || !trRows[0].agent2_output) {
@@ -1829,6 +1855,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
     workspaceScope,
     savedEstimate,
     reviewResolutions: reviewResolutionsForAgent4(trRows[0].review_items as ReviewItem[] | null),
+    accountTerms: await accountTermsBlockFor(bidId, trRows[0].account_terms as AccountTermsSnapshot | null, trRows[0].review_items as ReviewItem[] | null, agent1Output),
   });
 
   (async () => {
@@ -1914,7 +1941,13 @@ export type ComposeCurrentBidDataResult =
   // way out here so a caller (the proposal-preview route) can surface it
   // to the estimator instead of it only ever reaching server logs. Always
   // present, empty for a legacy-shape row (composeBidData never runs).
-  | { ok: true; bidData: BidData; bidName: string; asciiName: string; ambiguousQtyKeys: string[] }
+  | { ok: true; bidData: BidData; bidName: string; asciiName: string; ambiguousQtyKeys: string[];
+      /** Takeoff accuracy Task 8 — every deterministic change the account
+       *  terms made to Agent 4's output (shown in the preview). */
+      accountCorrections: string[];
+      /** verifyBid options from the account terms (forbidden phrases, ECFECI
+       *  checks sized to what APT furnishes). */
+      verifyOptions: VerifyOptions }
   | { ok: false; status: number; error: string; failures?: { check: string; detail: string }[] };
 
 export interface ComposeCurrentBidDataOptions {
@@ -1947,12 +1980,18 @@ export async function composeCurrentBidData(
   const validate = opts.validate ?? true;
 
   const { rows: trRows } = await pool.query(
-    'SELECT agent4_output, agent4_price FROM takeoff_results WHERE bid_id=$1',
+    'SELECT agent4_output, agent4_price, agent1_output, account_terms, review_items FROM takeoff_results WHERE bid_id=$1',
     [bidId]
   );
   if (!trRows.length || !trRows[0].agent4_output) {
     return { ok: false, status: 404, error: 'No proposal data found. Run Agent 4 first.' };
   }
+  // Takeoff accuracy Task 8 — the job's account terms (+ the estimator's
+  // scope answers), enforced on Agent 4's output below.
+  const accountSnap = await accountTermsFor(bidId, trRows[0].account_terms as AccountTermsSnapshot | null, (trRows[0].agent1_output as string) || '');
+  const accountResolved = effectiveAccountTerms(accountSnap, trRows[0].review_items as ReviewItem[] | null);
+  const verifyOptions: VerifyOptions = accountSnap ? verifyOptionsFor(accountSnap, accountResolved) : {};
+  let accountCorrections: string[] = [];
 
   // agent4_price NUMERIC(12,2) is the authoritative, DB-validated price (see
   // run-agent4's parseMoney gate) — format it here rather than trusting whatever
@@ -1997,7 +2036,12 @@ export async function composeCurrentBidData(
       name: bid?.name, loc: bid?.loc, gc: bid?.gc, contact: bid?.contact,
       sq_ft: bid?.sq_ft ?? null, job_number: bid?.job_number ?? null,
     };
-    const { data, jobNumberGenerated, ambiguousQtyKeys: keys } = composeBidData(bidRow, parsed as Agent4Output, formattedPrice, { savedLineItems });
+    const enforced = enforceAccountTerms(parsed as Agent4Output, accountSnap, accountResolved);
+    accountCorrections = enforced.corrections;
+    const { data, jobNumberGenerated, ambiguousQtyKeys: keys } = composeBidData(bidRow, enforced.output, formattedPrice, {
+      savedLineItems,
+      lightingTermsBullet: lightingTermsBullet(accountResolved.find(t => t.term === 'lighting')),
+    });
     ambiguousQtyKeys = keys;
     if (jobNumberGenerated && persist) {
       // Task 6.2 — two bids generated the same day compute the identical
@@ -2063,7 +2107,7 @@ export async function composeCurrentBidData(
     bidData = legacyData;
   }
 
-  return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys };
+  return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys, accountCorrections, verifyOptions };
 }
 
 /** Flatten every takeoff item's text fields — the pre-bid scope docx never
@@ -2100,7 +2144,7 @@ router.get('/:bidId/proposal-preview', requireAuth, requireAIPermission('view_re
   // fields (rather than a separate round trip) is what lets the frontend
   // show it as a real pre-send warning instead of it only ever reaching
   // server logs (see composeBidData.ts's own comment on this).
-  res.json({ ...loaded.bidData, ambiguousQtyKeys: loaded.ambiguousQtyKeys });
+  res.json({ ...loaded.bidData, ambiguousQtyKeys: loaded.ambiguousQtyKeys, accountCorrections: loaded.accountCorrections });
 }));
 
 // GET generate-docx — build and return the .docx proposal file
@@ -2125,7 +2169,7 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
   // Task 6 — hard verify gate: on failure, file nothing and never send the
   // docx. Mirrors verify.sh v4's "exits non-zero — do not deliver a file
   // that failed it."
-  const verifyResult = await verifyBidDocx(buf, { kind: 'gc' });
+  const verifyResult = await verifyBidDocx(buf, { kind: 'gc', ...loaded.verifyOptions });
   if (!verifyResult.pass) {
     return res.status(422).json({
       error: 'This proposal did not pass the bid-standard verification gate.',
@@ -2255,7 +2299,7 @@ router.get('/:bidId/generate-takeoff-xlsx', requireAuth, requireAIPermission('vi
   // (the docx path has always had verifyBidDocx(kind:'gc')). Same pure text
   // core (Task 4), same failure shape, applied to the takeoff's own text
   // content — failure blocks both filing and streaming.
-  const verifyResult = verifyBidText(takeoffAsText(bidData), 'gc');
+  const verifyResult = verifyBidText(takeoffAsText(bidData), 'gc', loaded.verifyOptions);
   if (!verifyResult.pass) {
     return res.status(422).json({
       error: 'This takeoff did not pass the bid-standard verification gate.',
@@ -2350,7 +2394,7 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
   // (Task 4), reused directly here rather than verifyBidDocx (which is
   // docx/PDF-specific and can't read an xlsx).
   const combinedText = `${extractDocxText(scopeDocx)}\n${takeoffAsText(bidData)}`;
-  const verifyResult = verifyBidText(combinedText, 'internal');
+  const verifyResult = verifyBidText(combinedText, 'internal', { ecfeci: loaded.verifyOptions.ecfeci });
   if (!verifyResult.pass) {
     return res.status(422).json({
       error: 'The pre-bid package did not pass verification.',

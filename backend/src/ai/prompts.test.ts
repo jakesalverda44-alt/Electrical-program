@@ -41,9 +41,12 @@ describe('AGENT4_SYSTEM — data-only contract (Task 5)', () => {
     expect(AGENT4_SYSTEM).not.toContain('"scopeOfWork"');
   });
 
-  it('still instructs the required ECFECI language and the banned-word list', () => {
+  it('still instructs the required ECFECI language and the banned-word list; the supplier comes from the account terms, not the prompt', () => {
     expect(AGENT4_SYSTEM).toContain('ECFECI');
-    expect(AGENT4_SYSTEM).toContain('Southern Lighting Source');
+    // Takeoff accuracy Task 8 — Southern Lighting Source moved into the Default
+    // account rule; the prompt defers to the ACCOUNT TERMS block.
+    expect(AGENT4_SYSTEM).not.toContain('Southern Lighting Source');
+    expect(AGENT4_SYSTEM).toContain('ACCOUNT TERMS block');
     expect(AGENT4_SYSTEM).toContain('RFI');
     expect(AGENT4_SYSTEM).toContain('TBD');
   });

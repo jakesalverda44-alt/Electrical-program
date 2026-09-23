@@ -60,6 +60,8 @@ export interface ComposeBidDataOptions {
   /** Injected for deterministic tests; defaults to `new Date()`. */
   now?: Date;
   savedLineItems?: SavedConfidenceItem[];
+  /** Takeoff accuracy Task 8 — TERMS bullet 4 per the job's account rule. */
+  lightingTermsBullet?: string;
 }
 
 export interface ComposeBidDataResult {
@@ -300,7 +302,7 @@ export function composeBidData(
     sections,
     exclusions: (agent4.exclusions ?? []) as Bullet[],
     takeoff,
-    terms: standardTerms(planDate),
+    terms: standardTerms(planDate, { lightingBullet: opts.lightingTermsBullet }),
     alternates: (agent4.alternates ?? []) as Bullet[],
     takeoff_notes: agent4.takeoff_notes ?? [],
   };
