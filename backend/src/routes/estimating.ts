@@ -195,6 +195,21 @@ function validatePoints(raw: unknown, kind?: MarkupKind): ValidationResult<Marku
   return { ok: true, value: points };
 }
 
+/** Fix round 1 / B2 — `line_key` absent/null means "unassigned", a real
+ *  and always-valid state (Decision-signed-off in the review: unassigned
+ *  markers never roll up, and the estimator can reassign them later). A
+ *  PRESENT-but-malformed value (anything from a `proposed-N` placeholder
+ *  line_key on a never-saved estimate, to a stray typo) used to be
+ *  silently coerced to null too — the exact failure this fixes: the
+ *  client never learns its create was quietly demoted, the marker just
+ *  looks assigned forever while the server has it unassigned. Now it's a
+ *  400, naming the field. */
+function validateLineKeyField(raw: unknown): ValidationResult<string | null> {
+  if (raw === undefined || raw === null) return { ok: true, value: null };
+  if (typeof raw === 'string' && UUID_RE.test(raw)) return { ok: true, value: raw };
+  return { ok: false, error: 'line_key must be a well-formed UUID, or null/absent for unassigned' };
+}
+
 function validateMarkupCreate(raw: Record<string, unknown>): ValidationResult<MarkupCreateInput> {
   const id = typeof raw.id === 'string' && UUID_RE.test(raw.id) ? raw.id : null;
   if (!id) return { ok: false, error: 'id must be a well-formed, client-generated UUID' };
@@ -227,10 +242,11 @@ function validateMarkupCreate(raw: Record<string, unknown>): ValidationResult<Ma
     if (!ALLOWED_MARKUP_STATUS.includes(raw.status as MarkupStatus)) return { ok: false, error: 'status must be "confirmed" or "suggested"' };
     status = raw.status as MarkupStatus;
   }
-  const lineKey = typeof raw.line_key === 'string' && UUID_RE.test(raw.line_key) ? raw.line_key : null;
+  const lineKeyV = validateLineKeyField(raw.line_key);
+  if (!lineKeyV.ok) return lineKeyV;
   const label = typeof raw.label === 'string' ? raw.label : null;
 
-  return { ok: true, value: { id, documentId, pageIndex, lineKey, kind, points: pointsV.value, drops, dropFt, slackPct, status, label } };
+  return { ok: true, value: { id, documentId, pageIndex, lineKey: lineKeyV.value, kind, points: pointsV.value, drops, dropFt, slackPct, status, label } };
 }
 
 function validateMarkupUpdate(raw: Record<string, unknown>): ValidationResult<MarkupUpdateInput> {
@@ -239,7 +255,9 @@ function validateMarkupUpdate(raw: Record<string, unknown>): ValidationResult<Ma
   const out: MarkupUpdateInput = { id };
 
   if (raw.line_key !== undefined) {
-    out.lineKey = typeof raw.line_key === 'string' && UUID_RE.test(raw.line_key) ? raw.line_key : null;
+    const lineKeyV = validateLineKeyField(raw.line_key);
+    if (!lineKeyV.ok) return lineKeyV;
+    out.lineKey = lineKeyV.value;
   }
   if (raw.points !== undefined) {
     const pointsV = validatePoints(raw.points);
@@ -645,6 +663,29 @@ router.post('/:bidId/markups/batch', requireAuth, async (req: AuthRequest, res) 
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const v = validateMarkupBatch(req.body);
   if (!v.ok) return res.status(400).json({ error: v.error });
+
+  // Fix round 1 / B2 — a line_key that's well-formed but does not belong
+  // to THIS bid's own est_bid_lines is now a 400, not a silent write. The
+  // most common real-world source is a "proposed-N" placeholder that
+  // already failed the UUID format check above, but a well-formed UUID
+  // from a stale client cache (a line deleted, or from a different bid
+  // entirely) needs the same rejection — it would otherwise write a
+  // markup that never rolls up to anything and is invisible everywhere
+  // except the sheet itself (see S6's unassigned-orphan handling for the
+  // symptom once a line legitimately disappears AFTER a markup was
+  // already pointed at it).
+  const referencedKeys = [...v.value.creates, ...v.value.updates]
+    .map(item => item.lineKey)
+    .filter((k): k is string => k != null);
+  if (referencedKeys.length > 0) {
+    const bidLines = await getBidLines(bidId);
+    const validKeys = new Set(bidLines.map(l => l.line_key));
+    const unknown = [...new Set(referencedKeys)].filter(k => !validKeys.has(k));
+    if (unknown.length > 0) {
+      return res.status(400).json({ error: `line_key does not belong to this bid: ${unknown.join(', ')}` });
+    }
+  }
+
   const result = await batchMarkups(bidId, req.user!.name ?? null, v.value);
   res.json(result);
 });

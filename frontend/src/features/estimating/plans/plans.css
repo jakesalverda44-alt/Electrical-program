@@ -235,6 +235,22 @@
 
 /* Task 7 (deferral closed) — "Suggest markers"/"Find tag on sheets…" bar,
    sat between the toolbar and the canvas. */
+/* Fix round 1 / B2 — the proposed-mapping banner: Count/Linear are
+   disabled (Toolbar.tsx's own countLinearDisabledReason) until the
+   estimate is saved, so this offers the fix in one click. */
+.plan-proposed-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 12.5px;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(224,165,59,.3);
+}
+
 .plan-suggest-bar {
   display: flex;
   align-items: center;

@@ -15,6 +15,15 @@ export interface ToolbarProps {
   onDeleteSelected: () => void;
   hasSelection: boolean;
   scaleDisabledReason: string | null;
+  /** Fix round 1 / B2 — while set, BOTH Count and Linear are disabled: a
+   *  marker drawn against a "proposed-N" placeholder line_key (the only
+   *  kind of line_key that exists before the estimate has ever been
+   *  saved) can never survive past this session — the server mints a
+   *  real line_key only once the mapping is actually saved, so nothing
+   *  drawn beforehand can ever be reassigned to it after the fact.
+   *  Drawing is blocked until the estimate is saved (see PlansWorkspace.
+   *  tsx's "Save the estimate to start marking up plans" banner). */
+  countLinearDisabledReason?: string | null;
   /** Task 6 (deferral closed) — both require 1+ selected markers, same
    *  gating as Delete. Omitted entirely hides the buttons (e.g. view-only
    *  contexts that never render a Toolbar at all already skip this, but
@@ -34,8 +43,18 @@ const SHORTCUT_TO_TOOL: Record<string, ToolId> = { v: 'select', c: 'count', l: '
 
 export default function Toolbar({
   toolState, dispatch, onUndo, onRedo, canUndo, canRedo, onDeleteSelected, hasSelection, scaleDisabledReason,
-  onNewLineFromMarkup, onReassignSelected,
+  countLinearDisabledReason, onNewLineFromMarkup, onReassignSelected,
 }: ToolbarProps) {
+  // Fix round 1 / B2 — one lookup covers both the click handler's
+  // `disabled` and the keyboard shortcut gate below, so the two can never
+  // drift apart (a tool disabled in the UI but still reachable via 'c'/'l'
+  // would be its own bug).
+  const disabledReasonFor = (id: ToolId): string | null => {
+    if (id === 'scale') return scaleDisabledReason;
+    if (id === 'count' || id === 'linear') return countLinearDisabledReason ?? null;
+    return null;
+  };
+
   // Keyboard shortcuts: V/C/L/S select a tool, Delete/Backspace removes the
   // current selection, Cmd/Ctrl+Z undoes, Shift+Cmd/Ctrl+Z redoes. Ignored
   // while focus is in a text input (a label field, a known-length popover)
@@ -56,25 +75,27 @@ export default function Toolbar({
         return;
       }
       const tool = SHORTCUT_TO_TOOL[e.key.toLowerCase()];
-      if (tool && (tool !== 'scale' || !scaleDisabledReason)) {
+      if (tool && !disabledReasonFor(tool)) {
         dispatch({ type: 'SELECT_TOOL', tool });
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [dispatch, onUndo, onRedo, onDeleteSelected, hasSelection, scaleDisabledReason]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispatch, onUndo, onRedo, onDeleteSelected, hasSelection, scaleDisabledReason, countLinearDisabledReason]);
 
   return (
     <div className="plan-tools" role="group" aria-label="Markup tools">
       {TOOLS.map(t => {
-        const disabled = t.id === 'scale' && !!scaleDisabledReason;
+        const reason = disabledReasonFor(t.id);
+        const disabled = !!reason;
         return (
           <button
             key={t.id}
             className={`plan-toolbar-btn${toolState.tool === t.id ? ' active' : ''}`}
             onClick={() => dispatch({ type: 'SELECT_TOOL', tool: t.id })}
             disabled={disabled}
-            title={disabled ? scaleDisabledReason ?? undefined : `${t.label} (${t.shortcut})`}
+            title={disabled ? reason ?? undefined : `${t.label} (${t.shortcut})`}
           >
             {t.label}
           </button>

@@ -219,6 +219,113 @@ describe('POST /api/estimating/:bidId/markups/batch — create/update/delete', (
     const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM est_markups WHERE bid_id=$1', [bidId]);
     expect(rows[0].cnt).toBe(0);
   });
+
+  // Fix round 1 / B2 — the reviewer's exact repro: a proposed (never-saved)
+  // estimate's lines carry a "proposed-N" placeholder line_key, not a real
+  // UUID. Before the fix this was silently coerced to null (unassigned) —
+  // the client never learned, the marker just looked assigned forever
+  // while the server quietly dropped it.
+  it('a present-but-malformed line_key (e.g. a "proposed-N" placeholder) is a 400, never silently coerced to null', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    const id = randomUUID();
+
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }], line_key: 'proposed-0' }],
+      updates: [], deletes: [],
+    }).expect(400);
+
+    // Nothing was written — not even as unassigned.
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM est_markups WHERE id=$1', [id]);
+    expect(rows[0].cnt).toBe(0);
+  });
+
+  it('line_key absent or explicitly null is still valid (unassigned is a real, intentional state)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    const idAbsent = randomUUID();
+    const idNull = randomUUID();
+
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [
+        { id: idAbsent, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }] }, // line_key omitted
+        { id: idNull, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 2, y: 2 }], line_key: null },
+      ],
+      updates: [], deletes: [],
+    }).expect(200);
+    expect(res.body.created.length).toBe(2);
+    expect(res.body.skipped).toEqual([]);
+  });
+
+  // Fix round 1 / B2 — a WELL-FORMED UUID that simply doesn't belong to
+  // this bid's own est_bid_lines (a stale client cache, or literally
+  // another bid's line_key) must also be rejected, not silently written.
+  it('a well-formed line_key UUID that does not belong to THIS bid\'s lines is a 400', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    const id = randomUUID();
+    const foreignLineKey = randomUUID(); // well-formed, but no est_bid_lines row anywhere has this key
+
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }], line_key: foreignLineKey }],
+      updates: [], deletes: [],
+    }).expect(400);
+
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM est_markups WHERE id=$1', [id]);
+    expect(rows[0].cnt).toBe(0);
+  });
+
+  it('a REAL line_key belonging to this bid is accepted normally', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+
+    const saveRes = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ category: 'Branch Power', description: 'Duplex', qty: 5, unit: 'EA', source: 'manual', material_unit_override: 5, labor_hours_override: 0.5 }],
+      settings: { labor_rate: 38, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: 0 },
+    }).expect(200);
+    const lineKey = saveRes.body.lines[0].line_key as string;
+    const id = randomUUID();
+
+    const res = await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }], line_key: lineKey }],
+      updates: [], deletes: [],
+    }).expect(200);
+    expect(res.body.created.length).toBe(1);
+    expect(res.body.created[0].lineKey).toBe(lineKey);
+  });
+
+  it('an UPDATE that reassigns to a malformed/foreign line_key is rejected the same way as a create', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { docId } = await makePlanDocAndSheet(app, u, bidId);
+    const id = randomUUID();
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id, document_id: docId, page_index: 0, kind: 'count', points: [{ x: 1, y: 1 }] }],
+      updates: [], deletes: [],
+    }).expect(200);
+
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [], updates: [{ id, line_key: 'proposed-0' }], deletes: [],
+    }).expect(400);
+
+    // Still unassigned — the bad update never applied.
+    const { rows } = await pool.query('SELECT line_key FROM est_markups WHERE id=$1', [id]);
+    expect(rows[0].line_key).toBeNull();
+  });
 });
 
 describe('GET /api/estimating/:bidId/markups/rollup', () => {

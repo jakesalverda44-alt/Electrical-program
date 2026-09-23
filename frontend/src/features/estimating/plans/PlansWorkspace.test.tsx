@@ -276,6 +276,61 @@ describe('PlansWorkspace — apply flow', () => {
   });
 });
 
+// Fix round 1 / B2 — a proposed (never-saved) estimate: markers can't
+// survive against a "proposed-N" placeholder line_key, so Count/Linear
+// are disabled and a banner offers a one-click save.
+describe('PlansWorkspace — proposed (never-saved) estimate (Fix round 1 / B2)', () => {
+  it('shows the "save the estimate" banner, and Count/Linear are disabled with a reason', async () => {
+    setup({ proposed: true });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+
+    expect(screen.getByTestId('plan-proposed-banner')).toBeTruthy();
+    expect(screen.getByText(/save it to start marking up plans/)).toBeTruthy();
+
+    const disabledButtons = screen.getAllByTitle('Save the estimate first to start marking up plans');
+    expect(disabledButtons.map(b => b.textContent).sort()).toEqual(['Count', 'Linear']);
+    for (const btn of disabledButtons) expect((btn as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('the banner is absent, and Count/Linear are enabled, once the estimate is saved (proposed=false)', async () => {
+    setup({ proposed: false });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+
+    expect(screen.queryByTestId('plan-proposed-banner')).toBeNull();
+    expect((screen.getByTitle('Count (C)') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('clicking "Save the estimate" calls onSaveDirtyLinesFirst (the same estimatingBid.save action) and shows a success toast', async () => {
+    const showToast = vi.fn();
+    const { onSaveDirtyLinesFirst } = setup({ proposed: true, showToast });
+    await waitFor(() => expect(screen.getByTestId('plan-proposed-banner')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Save the estimate'));
+
+    await waitFor(() => expect(onSaveDirtyLinesFirst).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Estimate saved' })));
+  });
+
+  it('a save failure shows an error toast, not a silent no-op', async () => {
+    const showToast = vi.fn();
+    const onSaveDirtyLinesFirst = vi.fn().mockRejectedValue(new Error('network'));
+    setup({ proposed: true, showToast, onSaveDirtyLinesFirst });
+    await waitFor(() => expect(screen.getByTestId('plan-proposed-banner')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Save the estimate'));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error', title: 'Could not save the estimate' })));
+  });
+
+  it('Delete/Undo/Redo and the Select tool stay usable while proposed — only Count/Linear are gated', async () => {
+    setup({ proposed: true });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+
+    expect((screen.getByTitle('Select (V)') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTitle('Undo (⌘Z)') as HTMLButtonElement).disabled).toBe(true); // nothing to undo yet — unrelated to proposed gating
+  });
+});
+
 // Decision 2 — below 900px the viewer is view-only regardless of the
 // caller's own viewOnly prop.
 describe('PlansWorkspace — responsive view-only (Decision 2)', () => {

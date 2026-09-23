@@ -104,9 +104,16 @@ export interface PlansWorkspaceProps {
    *  proceeding — neither is allowed to silently overwrite unsaved work in
    *  either direction. */
   dirty?: boolean;
-  /** Fix round 1 / B1 — estimatingBid.save(), used ONLY by
-   *  ensureLinesSavedFirst's "save first" prompt. */
+  /** Fix round 1 / B1 — estimatingBid.save(), used by
+   *  ensureLinesSavedFirst's "save first" prompt AND (Fix round 1 / B2)
+   *  the proposed-mapping banner's one-click save. */
   onSaveDirtyLinesFirst?: () => Promise<void>;
+  /** Fix round 1 / B2 — true when the estimate has never been saved
+   *  (useEstimatingBid.proposed): its lines carry "proposed-N" placeholder
+   *  line_keys, not real UUIDs. A marker drawn against one can never
+   *  survive past this session, so Count/Linear are disabled and a banner
+   *  offers to save the estimate (via onSaveDirtyLinesFirst) first. */
+  proposed?: boolean;
   /** Fix round 1 / B1 — replaces PlansWorkspace's own direct `api.put` of a
    *  `[...lines, newLine]` snapshot (built from the `lines` PROP, which
    *  useEstimatingBid.reload() never actually refreshed — B1's other
@@ -127,7 +134,7 @@ export interface PlansWorkspaceProps {
 
 export default function PlansWorkspace({
   bidId, lines, settings, initialSheetKey, initialLineKey, onSheetKeyChange, onLineKeyChange, onApplied,
-  dirty, onSaveDirtyLinesFirst, onCreateLine, viewOnly: viewOnlyProp, showToast,
+  dirty, onSaveDirtyLinesFirst, onCreateLine, proposed, viewOnly: viewOnlyProp, showToast,
 }: PlansWorkspaceProps) {
   const confirm = useConfirm();
   // Fix round 1 / B1 — shared by Apply and "New line from markup": if
@@ -152,6 +159,26 @@ export default function PlansWorkspace({
       return false;
     }
   }, [dirty, confirm, onSaveDirtyLinesFirst, showToast]);
+
+  // Fix round 1 / B2 — one-click "save the proposed mapping" for the
+  // Count/Linear-disabled banner (below). This is the SAME action as
+  // onSaveDirtyLinesFirst (estimatingBid.save()) — a proposed mapping's
+  // lines are exactly what gets PUT, minting real UUIDs for every
+  // "proposed-N" placeholder line_key in the same transaction.
+  const [savingProposed, setSavingProposed] = useState(false);
+  const onSaveProposedMapping = useCallback(async () => {
+    if (!onSaveDirtyLinesFirst) return;
+    setSavingProposed(true);
+    try {
+      await onSaveDirtyLinesFirst();
+      showToast?.({ title: 'Estimate saved', sub: 'You can now mark up the plans.' });
+    } catch {
+      showToast?.({ variant: 'error', title: 'Could not save the estimate', sub: 'Try again' });
+    } finally {
+      setSavingProposed(false);
+    }
+  }, [onSaveDirtyLinesFirst, showToast]);
+
   // Decision 2 — below 900px, view-only regardless of the caller's own prop
   // (a caller can still force it on above 900px, e.g. a read-only role —
   // that's what the prop is for; the viewport check only ever ADDS the
@@ -655,6 +682,7 @@ export default function PlansWorkspace({
               onDeleteSelected={onDeleteSelected}
               hasSelection={toolState.selectedIds.length > 0}
               scaleDisabledReason={currentSheet ? null : 'Select a sheet first'}
+              countLinearDisabledReason={proposed ? 'Save the estimate first to start marking up plans' : null}
               onNewLineFromMarkup={onNewLineFromMarkup}
               onReassignSelected={onReassignSelected}
             />
@@ -670,6 +698,14 @@ export default function PlansWorkspace({
             ?
           </button>
         </div>
+        {proposed && (
+          <div className="plan-proposed-banner" data-testid="plan-proposed-banner">
+            <span>This estimate hasn&apos;t been saved yet — save it to start marking up plans.</span>
+            <button type="button" className="btn primary sm" disabled={savingProposed} onClick={() => void onSaveProposedMapping()}>
+              {savingProposed ? 'Saving…' : 'Save the estimate'}
+            </button>
+          </div>
+        )}
         <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
         {currentSheet && (
           <SuggestMarkersBar

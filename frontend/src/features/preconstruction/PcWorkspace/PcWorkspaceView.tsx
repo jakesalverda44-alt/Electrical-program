@@ -1213,6 +1213,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   dirty={estimatingBid.dirty}
                   onSaveDirtyLinesFirst={estimatingBid.save}
                   onCreateLine={onCreateLineFromMarkup}
+                  proposed={estimatingBid.proposed}
                   showToast={showToastStable}
                 />
               </Suspense>
