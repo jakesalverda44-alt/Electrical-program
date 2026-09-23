@@ -49,6 +49,8 @@ import { buildReviewItems, carryOverResolutions, reviewStatus, reviewResolutions
 import { takeoffGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms, listAccountRules, getAccountRule, validateRuleInput, saveAccountRule } from '../bidstd/accountRulesDb';
 import { renderAccountTermsBlock, enforceAccountTerms, lightingTermsBullet, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
+import { renderScopeListBlock, excludedScopeProblems, exclusionBulletsFor, nonElectricalFindings, nearDuplicateLines, normalizeLineKey } from '../bidstd/scopeList';
+import { getBidScopeList } from '../bidstd/scopeListDb';
 import { composeBidData, ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
 import { resolveUniqueJobNumber } from '../bidstd/boilerplate';
 import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
@@ -819,6 +821,8 @@ export async function runPipeline(
   // ── Agent 2 ─────────────────────────────────────────────────────────────────
   try {
     await updateStatus('agent2_running');
+    // Task 11 — the estimator's scope list, binding for Agent 2.
+    const agent2ScopeBlock = renderScopeListBlock((await getBidScopeList(bidId)).items);
     const resp = await callWithRetry(() => client.messages.stream({
       model: config.modelA2,
       max_tokens: config.maxTokensA2,
@@ -827,7 +831,7 @@ export async function runPipeline(
         role: 'user',
         // Task 4.1 — compact (no 2-space indent) in the request body; storage
         // and the UI keep the pretty agent1Output exactly as today.
-        content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\n${renderAccountTermsBlock(accountTerms, effectiveAccountTerms(accountTerms, reviewItemsNow)) ?? ''}\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}`,
+        content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\n${renderAccountTermsBlock(accountTerms, effectiveAccountTerms(accountTerms, reviewItemsNow)) ?? ''}\n\n${agent2ScopeBlock ?? ''}\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}`,
       }],
     }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
     assertNotTruncated(resp, 'Agent 2', config.maxTokensA2);
@@ -1613,6 +1617,47 @@ router.post('/:bidId/review/reopen', requireAuth, asyncHandler(async (req: AuthR
   res.json(out.review);
 }));
 
+// ── Takeoff accuracy Task 11: the estimator's scope list ────────────────────
+router.get('/:bidId/scope-items', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
+  res.json(await getBidScopeList(req.params.bidId));
+}));
+
+router.post('/:bidId/scope-items', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const kind = req.body?.kind;
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  if (kind !== 'include' && kind !== 'exclude') return res.status(400).json({ error: 'kind must be include or exclude' });
+  if (text.length < 2 || text.length > 300) return res.status(400).json({ error: 'Describe the item (2-300 characters).' });
+  await pool.query('INSERT INTO bid_scope_items (bid_id, kind, text, created_by) VALUES ($1,$2,$3,$4)', [bidId, kind, text, req.user!.name]);
+  res.json(await getBidScopeList(bidId));
+}));
+
+// Keep a line the non-electrical gate flagged: {category, line, reason}.
+router.post('/:bidId/non-electrical-overrides', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const category = typeof req.body?.category === 'string' ? req.body.category : '';
+  const line = typeof req.body?.line === 'string' ? req.body.line.trim() : '';
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (!category || !line) return res.status(400).json({ error: 'category and line required' });
+  if (reason.length < 3) return res.status(400).json({ error: 'Say why this line is electrical scope on this job.' });
+  await pool.query(
+    `INSERT INTO bid_scope_items (bid_id, kind, text, line_key, reason, created_by) VALUES ($1,'override_non_electrical',$2,$3,$4,$5)`,
+    [bidId, line, normalizeLineKey(category, line), reason, req.user!.name]
+  );
+  res.json(await getBidScopeList(bidId));
+}));
+
+router.delete('/:bidId/scope-items/:itemId', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId, itemId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  if (!/^[0-9a-f-]{36}$/i.test(itemId)) return res.status(404).json({ error: 'Not found' });
+  await pool.query('DELETE FROM bid_scope_items WHERE id=$1 AND bid_id=$2', [itemId, bidId]);
+  res.json(await getBidScopeList(bidId));
+}));
+
 // GET results for a bid
 router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), async (req: AuthRequest, res) => {
   if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
@@ -1888,6 +1933,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
     savedEstimate,
     reviewResolutions: reviewResolutionsForAgent4(trRows[0].review_items as ReviewItem[] | null),
     accountTerms: await accountTermsBlockFor(bidId, trRows[0].account_terms as AccountTermsSnapshot | null, trRows[0].review_items as ReviewItem[] | null, agent1Output),
+    scopeList: renderScopeListBlock((await getBidScopeList(bidId)).items),
   });
 
   (async () => {
@@ -2025,6 +2071,7 @@ export async function composeCurrentBidData(
   // scope answers), enforced on Agent 4's output below.
   const accountSnap = await accountTermsFor(bidId, trRows[0].account_terms as AccountTermsSnapshot | null, (trRows[0].agent1_output as string) || '');
   const accountResolved = effectiveAccountTerms(accountSnap, trRows[0].review_items as ReviewItem[] | null);
+  const scopeList = await getBidScopeList(bidId);
   const verifyOptions: VerifyOptions = accountSnap ? verifyOptionsFor(accountSnap, accountResolved) : {};
   let accountCorrections: string[] = [];
 
@@ -2073,6 +2120,13 @@ export async function composeCurrentBidData(
     };
     const enforced = enforceAccountTerms(parsed as Agent4Output, accountSnap, accountResolved);
     accountCorrections = enforced.corrections;
+    // Task 11 — every Not-included item on the estimator's scope list is an
+    // exclusion bullet (deterministic, once).
+    const addExclusions = exclusionBulletsFor(scopeList.items, enforced.output.exclusions ?? []);
+    if (addExclusions.length) {
+      enforced.output.exclusions = [...(enforced.output.exclusions ?? []), ...addExclusions];
+      accountCorrections.push(...addExclusions.map(b => `Exclusion added from the estimator's scope list: "${b}"`));
+    }
     const { data, jobNumberGenerated, ambiguousQtyKeys: keys } = composeBidData(bidRow, enforced.output, formattedPrice, {
       savedLineItems,
       lightingTermsBullet: lightingTermsBullet(accountResolved.find(t => t.term === 'lighting')),
@@ -2114,15 +2168,21 @@ export async function composeCurrentBidData(
       // Takeoff accuracy Task 9 — never a zero-quantity line or zero-footage
       // allowance in a GC document.
       const zeros = zeroQuantityProblems(bidData);
-      if (problems.length || zeros.length) {
+      // Task 11 — nothing on the Not-included list, and no other trade's
+      // line unless the estimator overrode it with a reason.
+      const excludedHits = excludedScopeProblems(bidData, scopeList.items);
+      const otherTrades = nonElectricalFindings(bidData, scopeList.overrides).filter(f => !f.overridden);
+      if (problems.length || zeros.length || excludedHits.length || otherTrades.length) {
         return {
           ok: false,
           status: 422,
-          error: zeros.length && !problems.length
-            ? 'This proposal has zero-quantity lines — resolve them before generating.'
-            : 'This proposal did not pass data validation — fix the composed data before generating documents.',
+          error: problems.length
+            ? 'This proposal did not pass data validation — fix the composed data before generating documents.'
+            : 'This proposal has lines that can\'t go to the GC — fix or override them before generating.',
           failures: [
             ...zeros.map(detail => ({ check: 'zero_quantity', detail })),
+            ...excludedHits.map(detail => ({ check: 'excluded_scope', detail })),
+            ...otherTrades.map(f => ({ check: 'non_electrical', detail: `${f.category}: "${f.line}" (${f.unit}) looks like ${f.reason}`, category: f.category, line: f.line })),
             ...problems.map(detail => ({ check: 'data', detail })),
           ],
         };
@@ -2158,6 +2218,11 @@ export async function composeCurrentBidData(
   const spec = irrelevantSpecSentences(gcText, bid?.loc ?? '');
   const hygieneWarnings = [
     ...zeroQuantityProblems(bidData),
+    ...excludedScopeProblems(bidData, scopeList.items),
+    ...nonElectricalFindings(bidData, scopeList.overrides).map(f => f.overridden
+      ? `Kept by the estimator: ${f.category} "${f.line}" (${f.reason}) — ${f.overridden}`
+      : `${f.category}: "${f.line}" (${f.unit}) looks like ${f.reason} — not electrical scope`),
+    ...nearDuplicateLines(bidData).map(d => `Possible duplicate lines in ${d.category}: ${d.lines.map(l => `"${l}"`).join(' / ')}`),
     ...spec.block.map(s => `Applies to other stores/regions, not this project: "${s}"`),
     ...spec.warn.map(s => `Names another state/region — check it applies: "${s}"`),
   ];

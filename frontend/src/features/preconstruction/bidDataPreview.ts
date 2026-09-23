@@ -59,5 +59,11 @@ export function bulletText(b: PreviewBullet): string {
 export interface VerifyFailure {
   check: string;
   detail: string;
-  matches: string[];
+  /** Absent on compose-level failures (data / zero_quantity / excluded_scope
+   *  / non_electrical) — always read as `matches ?? []`. */
+  matches?: string[];
+  /** Takeoff accuracy Task 11 — a non_electrical failure names its line so
+   *  the estimator can keep it (with a reason). */
+  category?: string;
+  line?: string;
 }

@@ -46,6 +46,9 @@ export interface Agent4MessageInput {
   /** Takeoff accuracy Task 8 — the job's ACCOUNT TERMS block
    *  (accountRules.ts renderAccountTermsBlock), authoritative. */
   accountTerms?: string | null;
+  /** Takeoff accuracy Task 11 — the estimator's scope list
+   *  (scopeList.ts renderScopeListBlock), binding. */
+  scopeList?: string | null;
 }
 
 function money(n: number | string | null | undefined): string {
@@ -103,6 +106,9 @@ export function buildAgent4UserMessage(input: Agent4MessageInput): string {
 
   if (input.accountTerms) {
     lines.push('', input.accountTerms);
+  }
+  if (input.scopeList) {
+    lines.push('', input.scopeList);
   }
   if (input.reviewResolutions) {
     lines.push('', input.reviewResolutions);

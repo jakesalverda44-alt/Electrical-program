@@ -29,6 +29,7 @@ import FilesTab from './FilesTab';
 import BidTab from './BidTab';
 import TakeoffTab from './TakeoffTab';
 import TakeoffReviewPanel, { type TakeoffReview } from './TakeoffReviewPanel';
+import ScopeListPanel from './ScopeListPanel';
 import ScopeTab from './ScopeTab';
 import RfisTab from './RfisTab';
 import ProposalTab from './ProposalTab';
@@ -1232,6 +1233,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         return (
           <>
             {reviewPanel}
+            {/* Takeoff accuracy Task 11 — the estimator's scope list. */}
+            <ScopeListPanel bidId={bid.id} showToast={showToast} />
             <div className="est-view-toggle" role="tablist" aria-label="Takeoff view">
               <button
                 type="button"

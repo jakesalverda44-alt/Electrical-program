@@ -3,6 +3,7 @@ import Icon from '../../../components/Icon';
 import { Bid } from '../../../types';
 import SendBidProposalModal from '../SendBidProposalModal';
 import { BidDataPreview, VerifyFailure, bulletText } from '../bidDataPreview';
+import KeepLineControl from './KeepLineControl';
 import { AiResults } from './shared';
 
 interface ProposalTabProps {
@@ -298,10 +299,13 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
                 <div style={{ fontWeight: 800, color: 'var(--red)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 3 }}>
                   {f.check.replace(/_/g, ' ')}
                 </div>
-                <div style={{ marginBottom: f.matches.length ? 4 : 0 }}>{f.detail}</div>
-                {f.matches.length > 0 && (
+                <div style={{ marginBottom: (f.matches ?? []).length ? 4 : 0 }}>{f.detail}</div>
+                {f.check === 'non_electrical' && f.category && f.line && (
+                  <KeepLineControl bidId={bid.id} category={f.category} line={f.line} showToast={showToast} />
+                )}
+                {(f.matches ?? []).length > 0 && (
                   <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-                    Matched: {f.matches.map((m, mi) => (
+                    Matched: {(f.matches ?? []).map((m, mi) => (
                       <code key={mi} style={{ background: 'var(--surface3)', padding: '1px 5px', borderRadius: 4, marginRight: 5 }}>{m}</code>
                     ))}
                   </div>
