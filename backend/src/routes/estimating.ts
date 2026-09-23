@@ -16,6 +16,7 @@ import {
 import { normalizeUnit, MapConfidence } from '../estimating/mapper';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
 import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
+import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale } from '../estimating/sheets';
 
 // Fix round 1 / B2 — a route handler awaiting saveBidEstimate/syncTakeoff
 // catches this specific error and returns 400; any other error still bubbles
@@ -434,6 +435,69 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const result = await catchNonFiniteTotal(saveBidEstimate(bidId, linesV.value, settingsV.value));
   if (!result.ok) return res.status(400).json({ error: 'Computed totals are not finite — refusing to save' });
   res.json(result.value);
+});
+
+// ── Sheets (Phase B, Task 2) ─────────────────────────────────────────────────
+
+router.get('/:bidId/sheets', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const refresh = req.query.refresh === '1';
+  const sheets = await listSheets(bidId, { refresh });
+  res.json({ sheets });
+});
+
+// Authenticated PDF stream — never a public Drive link (env facts). Access is
+// checked TWICE, deliberately: loadAccessibleBid gates this USER against this
+// BID (same as every other route here), and loadPlanDocumentForBid separately
+// requires the document to be linked_id=bidId — closing the gap where a user
+// with legitimate access to bid A requests bid B's document id in bid A's URL.
+router.get('/:bidId/sheets/:documentId/file', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId, documentId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const doc = await loadPlanDocumentForBid(bidId, documentId);
+  if (!doc) return res.status(404).json({ error: 'Plan document not found for this bid' });
+
+  const streamed = await streamPlanDocument(doc);
+  if (!streamed) return res.status(502).json({ error: 'Could not fetch the plan file. Try again later.' });
+
+  res.setHeader('Content-Type', streamed.contentType);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // Never a shared/public cache — this bytes-over-the-wire response is
+  // gated by requireAuth + the two ownership checks above, on every request.
+  res.setHeader('Cache-Control', 'private, no-store');
+  if (streamed.contentLength != null) res.setHeader('Content-Length', String(streamed.contentLength));
+  streamed.stream.on('error', () => { if (!res.headersSent) res.status(502).end(); });
+  streamed.stream.pipe(res);
+});
+
+router.put('/:bidId/sheets/:documentId/:pageIndex/scale', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId, documentId } = req.params;
+  const pageIndex = Number(req.params.pageIndex);
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) {
+    return res.status(400).json({ error: 'pageIndex must be a non-negative integer' });
+  }
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const ftPerPt = Number(body.ft_per_pt);
+  if (!Number.isFinite(ftPerPt) || ftPerPt <= 0) {
+    return res.status(400).json({ error: 'ft_per_pt must be a finite positive number' });
+  }
+  if (body.source !== 'calibrated' && body.source !== 'titleblock') {
+    return res.status(400).json({ error: 'source must be "calibrated" or "titleblock"' });
+  }
+
+  const ok = await setSheetScale(bidId, documentId, pageIndex, {
+    ft_per_pt: ftPerPt,
+    source: body.source,
+    label: typeof body.label === 'string' ? body.label : null,
+  });
+  // setSheetScale's UPDATE is scoped to (bid_id, document_id, page_index) —
+  // this also 404s a documentId that belongs to a different bid, the same
+  // cross-bid protection the file route gets from loadPlanDocumentForBid.
+  if (!ok) return res.status(404).json({ error: 'Sheet not found for this bid/document/page' });
+  res.json({ ok: true });
 });
 
 export default router;
