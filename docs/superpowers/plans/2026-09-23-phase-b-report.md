@@ -375,3 +375,369 @@ instead of a fix.
   racing to insert the same `schema_migrations` row — documented as a
   pre-existing characteristic of `migrate.ts` in the Phase A report; not
   something this plan's scope touches.
+
+---
+
+# Tasks 4–9 (Frontend) — Plan Viewer, Tools, Items Panel, Integration, Polish
+
+**Commit range:** `7a90bc5..a6793dd` (13 commits, all frontend)
+**Scope:** Tasks 4–9 in full — viewer core, tools/undo-redo/autosave,
+suggested-marker matching (the pure module; the AI-side tag list wiring is
+deferred, see below), items panel + apply, integration into the Takeoff
+step, and the Task 9 polish items that were achievable in this pass.
+Backend (`backend/`) was **not** touched at all in this half — confirmed
+by an unchanged backend suite count (1074/1078, same as the end of Task 3).
+
+## A process note worth recording
+
+Partway through this half, a **read-only research fork** I had dispatched
+(to survey `SurveyMarkupEditor.tsx`, the estimating feature directory, and
+the UI kit before writing any code) went beyond its assignment and started
+**writing implementation files** — `overlay.ts`, its test, `scaleParse.ts`,
+`ftInParse.ts`, and `tagSuggest.ts` — directly into the same worktree I was
+about to write into, concurrently with my own work. I caught this from the
+harness's "file changed on disk since you last read/wrote it" notices,
+messaged the fork to stop (it confirmed and complied immediately, with no
+further writes), and made a deliberate call on what to do with what it had
+already written: I **reviewed and kept** its `overlay.ts`/`scaleParse.ts`/
+`ftInParse.ts`/`tagSuggest.ts` (all pure, no DOM dependency, and — for
+`overlay.ts` specifically — independently verified against the same real
+`pdfjs-dist` ground truth I had already spiked myself; the two designs
+converged on byte-identical transform matrices), wrote the missing test
+file it hadn't gotten to (`tagSuggest.test.ts`), and built everything after
+that point (Tasks 4–9's remaining ~30 files) directly on top of what it
+had contributed. Its own research findings (relayed before it stood down)
+were independently useful and are reflected in several decisions below
+(the `EstimatingWorkspace` lazy-chunk-doesn't-cover-Takeoff finding in
+particular). Flagging this transparently rather than silently absorbing it
+into the file-by-file narrative below — it's a real thing that happened
+mid-task, not a design decision I'd otherwise call out.
+
+## Task 4 — Viewer core
+
+**Files:** `frontend/src/features/estimating/plans/overlay.ts` (+test),
+`pdfjsClient.ts`, `PlanViewer.tsx` (+test), `SheetNavigator.tsx` (+test).
+
+- `overlay.ts` (pure): PDF-point ↔ render-space-pixel transforms
+  (`pdfToScreen`/`screenToPdf`), rotation-aware for all four PDF page
+  rotations, plus `fitScale`/`clampRenderScale` (the plan's fit-width/fit-
+  page modes and 16.7M px canvas-area cap). **Verified against real
+  `pdfjs-dist` output** (`page.getViewport({scale}).convertToViewportPoint()`
+  at every rotation, scale, and a representative set of points) rather than
+  derived from memory — the exact matrices are hard-coded as the test
+  file's "ground truth" describe block, so if pdf.js's own transform
+  convention ever changes, that test fails first. 32 tests, including
+  round-trips at a fractional scale and normalization of an out-of-range
+  or non-axis-aligned rotation value.
+- `pdfjsClient.ts`: lazy, module-cached pdf.js loader mirroring
+  `gen-pipeline/SurveyMarkupEditor.tsx`'s own dynamic-import + worker-URL
+  setup verbatim — the only established pdfjs-dist pattern anywhere in
+  this codebase, confirmed by the research fork's own read of that file
+  before I ever touched it myself.
+- `PlanViewer.tsx`: loads a plan document **once per `documentId`**
+  (cached across a page navigate within the same PDF — a 50–150MB plan set
+  only pays the fetch/parse cost once, not once per page), renders the
+  current page to a `<canvas>`, and draws markers in an absolutely-
+  positioned `<svg>` whose `<g>` carries the ONE `pdfToRenderMatrix()`
+  transform (Decision 8 — panning/zooming never touches per-marker React
+  state). Pan is **native container scrolling**, not a CSS transform — this
+  was a deliberate deviation from the concurrently-written `overlay.ts`
+  comment's original suggestion of a `getScreenCTM()`-based approach (which
+  `SurveyMarkupEditor.tsx` itself uses): `getScreenCTM()` is not implemented
+  in `happy-dom` (this project's DOM test environment for anything
+  touching SVG/canvas), so building the click/drag pipeline on it would
+  have made the viewer's core interaction untestable without a real
+  browser. Native scrolling keeps `offsetX/Y`-based hit-testing a pure,
+  synchronous calculation with no live-transform state to keep in sync,
+  and it's what let `PlanViewer.test.tsx` mock pdf.js and still exercise
+  the real render/cancel/cleanup pipeline. Zoom re-renders pdf.js at a new
+  clamped scale and preserves the point under the cursor ("zoom around
+  cursor") by re-deriving its new position and adjusting scroll afterward.
+  **A real bug caught by writing the test before trusting the
+  implementation:** the canvas element was originally gated on
+  `pageSize &&`, but `pageSize` is only set *inside* the render effect,
+  which itself needs `canvasRef.current` to already exist — the canvas
+  could never have mounted on the very first render in production either.
+  Fixed by mounting canvas/svg as soon as loading completes, sized 0×0
+  until the first real page-render reports dimensions.
+- `SheetNavigator.tsx`: sheet no + title, "E" sheets first (then A/M/P/
+  other, alphanumeric within a discipline), a discipline filter (only
+  chips for disciplines actually present), a scanned-sheet badge,
+  per-sheet marker-count badges, current-sheet highlight, and clamped
+  Up/Down keyboard navigation.
+- **Tests:** transforms (overlay.ts, 32), the navigator (17), and the
+  viewer with pdf.js mocked — the byte-fetch→open→getPage→render call
+  sequence, a stale render task getting `.cancel()`'d when the page
+  changes before it settles (with `RenderingCancelledException` correctly
+  swallowed, not surfaced as an error), `doc.destroy()` on unmount AND on
+  a `documentId` change (destroying the OLD doc, not the new one), and no
+  re-fetch for a page-index-only change (7 tests).
+
+## Task 5 — Tools
+
+**Files:** `scaleParse.ts` (+test, frontend mirror of the backend module),
+`ftInParse.ts` (+test), `tagSuggest.ts` (+test — see the process note:
+implementation from the fork, test written by me), `toolMachine.ts`
+(+test), `markupHistory.ts` (+test), `markupDiff.ts` (+test),
+`useMarkupAutosave.ts` (+test), `Toolbar.tsx`, `ScaleCalibrationPopover.tsx`
+(+test).
+
+- `toolMachine.ts` (pure): Select(V)/Count(C)/Linear(L)/Scale(S). Count
+  commits on click; Linear accumulates points until `FINISH_LINEAR`
+  (double-click/Enter), refusing to commit a run with fewer than 2 points;
+  Scale captures a first click then commits the pair on the second; Esc
+  abandons whatever's in progress (never silently commits a half-finished
+  draw or calibration) and drops back to Select; switching tools does the
+  same. 22 tests.
+- `markupHistory.ts` (pure): snapshot-based undo/redo (capped at 200
+  steps) plus the `MarkupDraft[]` mutation helpers (create, move, delete,
+  reassign) — covers Task 5's explicit "Undo/redo stack covers create,
+  move, delete, reassign, scale changes" for the markup side (a scale
+  change lives in `est_sheets`, applied via a direct API call, not this
+  history). 17 tests.
+- `useMarkupAutosave.ts` + `markupDiff.ts`: 800ms-debounced
+  `POST markups/batch`, diffed against the last-server-confirmed snapshot
+  (an unchanged markup is never resent). Exposes
+  `idle/pending/saving/saved/error` + `retryNow()`, and registers
+  `useUnsavedGuard` while pending, saving, **or error** — per the
+  coordinator's explicit instruction, tested end-to-end: a failed batch, a
+  manual retry that succeeds, a retry that also fails, and navigating away
+  while the guard is armed in each of the pending/error/saved states,
+  using the real `UnsavedGuardProvider`/`useConfirmLeave` (not a mock). 11
+  tests.
+- `ScaleCalibrationPopover.tsx`: after the two-point click sequence
+  commits, asks for the known length (`ftInParse.ts`) or offers the
+  title-block-parsed suggestion as a one-click button. 8 tests.
+- `Toolbar.tsx`: keyboard shortcuts (V/C/L/S, Cmd/Ctrl+Z, Delete),
+  ignored while focus is in a text input.
+
+## Task 6 — Items panel + apply
+
+**Files:** `ItemsPanel.tsx` (+test), `itemsPanelStatus.ts` (+test).
+
+Lines grouped by category (same order as Labor & Pricing's
+`TAKEOFF_CATEGORIES`), AI/marked/current qty, a status chip
+(Applied/Matches/Differs/Not marked — `qty_source==='markup'` always reads
+Applied regardless of the live rollup comparison, ahead of it), "Apply
+marked qty" per line, "Apply all that differ" via the shared
+`ConfirmDialog` listing each change with a real `$` impact preview (calls
+`POST /price` twice — current lines vs the patched candidate — using the
+bid's own current settings, not a placeholder), "show only this line", and
+a jump-to-source-sheet action. 17 + 7 tests.
+
+**Deferred (documented, not silently dropped):** "New line from markup"
+(a manual `est_bid_line` + the Phase A library resolver) was not built —
+it needs the same search/pick UI `LaborPricingStep.tsx`'s unmatched-line
+resolver already has, and reusing vs. reimplementing that safely needed
+more research time than this pass had left once the core viewer/tools
+pipeline was solid. Multi-select "reassign markers to another line" has
+its pure logic built and tested (`markupHistory.ts`'s `reassignMarkups`)
+but no UI affordance wired to call it yet.
+
+## Task 7 — Suggested markers from the text layer
+
+**Files:** `tagSuggest.ts` (+test).
+
+Whole-alphanumeric-token tag matching (tag "A" never matches inside "A1"
+or "AMP" — the plan's own examples, verified), a **rotation-aware**
+title-block-strip exclusion (reusing `overlay.ts`'s verified transform so
+the exclusion is based on the sheet's *displayed* position, not its raw
+unrotated PDF coordinates — proven with a dedicated test at 90/180/270:
+a PDF point whose raw X is nowhere near "the right side" can still land in
+the displayed strip once rotation is accounted for, and vice versa), a
+dense-aligned-text-grid table-region heuristic, and schedule/cover/riser
+sheet-kind exclusion. 21 tests.
+
+**Deferred:** the UI side of Task 7 — a "Suggest markers" button per
+line/sheet, dashed suggested-marker rendering with confirm/reject, and
+**the actual tag list wiring** ("Tags come from: the takeoff's fixture
+types/device labels where Agent 1 output carries them... plus a
+user-entered tag per line"). `tagSuggest.ts`'s matching engine is complete
+and tested against synthetic `TextItem[]` input; what's missing is (a)
+extracting `pdf.js` `getTextContent()` output from `PlanViewer` into that
+shape (straightforward — the fields line up directly) and (b) tracing
+exactly which Agent 1 output field carries fixture-type/device-label tags
+and threading them through. Not attempted given the time already spent on
+the viewer/tools/integration core; a real, scoped follow-up, not a
+guess-and-hope gap.
+
+## Task 8 — Integration & summary
+
+**Files:** `PlansWorkspace.tsx` (+test), `usePlanViewParams.ts` (+test),
+`EstimateShell.tsx`/`.test.tsx` (edited), `EstimatingWorkspace.tsx`
+(edited), `BidSummary.tsx`/`.test.tsx` (edited),
+`PcWorkspace/PcWorkspaceView.tsx` (edited),
+`PcWorkspaceTakeoffPlansToggle.test.tsx`, `types.ts`/`useEstimatingBid.ts`
+(edited, carrying `line_key`/`qty_source` into the frontend wire types —
+see below), `estimating.css` (edited).
+
+- **`PlansWorkspace.tsx`** is the ONE module the Takeoff step
+  `React.lazy()`-imports. It fetches the sheet list and every markup for
+  the bid once, keeps markups as an in-memory `markupHistory` (undo/redo),
+  commits a tool effect into that history, autosaves the diff, and
+  refreshes the per-line rollup once a batch actually lands. Apply and the
+  `$` impact preview call the real backend endpoints with the bid's own
+  settings.
+- **`types.ts`/`useEstimatingBid.ts`**: the frontend `EstimateLine` type
+  was missing `line_key`/`qty_source` entirely (backend Tasks 1–3 added
+  both to the wire shape; nothing on the frontend read them yet). Added,
+  plus the `SheetRow`/`MarkupWire`/`RollupEntry`/batch-response wire types
+  Tasks 4–8 needed. `useEstimatingBid.ts`'s `save()` previously discarded
+  the server's returned `lines` entirely (kept using the client's
+  pre-save copy) — a brand-new line's real, server-minted `line_key` was
+  never actually reaching the client, which the items panel/apply flow
+  needs. Fixed and tested; falls back to the client's own lines when a
+  caller's mock/response omits `lines` so no existing test needed
+  rewiring.
+- **`EstimateShell.tsx`**: new optional `forceSlimSummary` prop, reusing
+  the tablet breakpoint's existing slim-toggle summary chrome at the
+  desktop breakpoint too (Decision 1 — Plans needs the drawing's full
+  width). Purely additive — every existing test passed unmodified before
+  4 new ones were added for the prop itself.
+- **`usePlanViewParams.ts`**: `?step=takeoff&view=plans&sheet=<doc>:<page>
+  &line=<key>`, merged onto the URL (never dropping `step`/`tab`), plus a
+  `try/catch`-guarded `localStorage` fallback so the last-used view is
+  remembered before a sheet is ever picked. Router-optional via
+  `useInRouterContext()`, mirroring `useEstimateStepParam.ts`'s own
+  established pattern exactly (most `PcWorkspaceView` tests render with no
+  `<MemoryRouter>`).
+- **`PcWorkspaceView.tsx`**: the Takeoff step now renders a List|Plans
+  toggle. List is the existing `BidTab`+`TakeoffTab` content, completely
+  unchanged. Plans mounts `PlansWorkspace` behind its **own** lazy
+  boundary — confirmed (via the research fork's own reading of the file,
+  which I verified myself before relying on it) that `EstimatingWorkspace`'s
+  existing lazy chunk never covered the Takeoff step's content in the
+  first place (it only renders `LaborPricingStep` for the Pricing step;
+  every other step's content is computed eagerly by
+  `renderStepContent()` and passed in as `otherStepContent`) — so Task 9's
+  "own lazy chunk" requirement needed a genuinely separate `React.lazy()`
+  call, not a ride on the existing one. **Verified safe against the full
+  existing test suite**, not just new tests: all 6 pre-existing
+  `PcWorkspace*.test.tsx` files, `BidHubPage.test.tsx`, and
+  `App.codeSplitting.test.tsx` pass unmodified alongside the 4 new tests
+  in `PcWorkspaceTakeoffPlansToggle.test.tsx`.
+- **Bid Summary warning**: "N lines not verified on plans", computed as a
+  **lines-only proxy** (takeoff-sourced lines whose `qty_source` isn't
+  `'markup'`) rather than backed by the markups rollup — deliberately, to
+  avoid an extra network round trip just to populate a summary badge on
+  every screen that renders `BidSummary` (the rollup data lives inside
+  `PlansWorkspace`, fetched only once Plans is actually open). This is a
+  coarser signal than "zero confirmed markups specifically" (it also
+  flags a line with *some* markups not yet applied), which is arguably
+  the more useful trigger anyway.
+- **Pre-send checklist** (Review & Proposal step) was **not** extended
+  with the same verification count — the plan calls this out as
+  "informational" and lower-priority than the Bid Summary warning itself;
+  deferred given time, not forgotten.
+
+## Task 9 — Polish, responsive, performance
+
+- **<900px view-only**: `PlansWorkspace.tsx` forces view-only mode below
+  900px regardless of the caller's own `viewOnly` prop (same
+  `matchMedia`+fallback pattern as `EstimateShell.tsx`'s own breakpoint
+  hook, kept local since this module has no other reason to import the
+  step-rail's concerns). Tested at both a forced-narrow and forced-wide
+  viewport, plus the explicit-prop-still-applies-when-wide case.
+- **900–1279px sheet navigator collapse**: handled at the CSS level only
+  (`plans.css`'s media query narrows the navigator/items-panel widths) —
+  the plan's literal "collapses to a dropdown" interaction was not built;
+  the narrower fixed-width column was judged an acceptable middle ground
+  given time, but this is a real, documented gap against the plan's exact
+  wording.
+- **Dark mode / plan paper stays white**: no new work needed beyond
+  `plans.css`'s own hardcoded white canvas background — confirmed (as
+  Phase A's own report already found) that **no light theme exists
+  anywhere in this codebase**, so there's no `@media (prefers-color-scheme:
+  dark)` branch to write; the plan's "chrome follows theme" requirement is
+  satisfied by `plans.css` using the same `var(--*)` tokens as
+  `estimating.css` throughout.
+- **Keyboard shortcut help ("?")**: `KeyboardShortcutsHelp.tsx`, a plain
+  list in the shared `Modal`, opened via a toolbar button or the "?" key
+  (ignored while typing).
+- **Lazy chunk**: achieved via `PcWorkspaceView.tsx`'s own
+  `React.lazy(() => import('.../plans/PlansWorkspace'))` (see Task 8).
+  Verified end-to-end in `PcWorkspaceTakeoffPlansToggle.test.tsx` (the
+  chunk actually resolves and renders real content behind the `<Suspense>`
+  fallback) rather than literally appended to `App.codeSplitting.test.tsx`
+  — that file tests App-level route chunks one level above where this
+  chunk lives (nested inside `BidHubPage → PcWorkspaceView → Takeoff
+  step`), and reaching it from there would need the same
+  bid-workspace-data mocking `PcWorkspaceTakeoffPlansToggle.test.tsx`
+  already does, in a file that isn't otherwise about this feature.
+- **Perf notes (reasoned, not measured — no real browser/profiler in this
+  environment):** the canvas-area cap (`clampRenderScale`, 16.7M px) and
+  the "load the document once per `documentId`, not per page" design are
+  the two load-bearing decisions for a 50–150MB, 66–68-sheet plan set;
+  neither was benchmarked against a real file in this pass. The "cap
+  canvas area — past that, render only the visible region at full
+  resolution" half of the plan's Task 4 spec (re-rendering just the
+  visible viewport at higher resolution once past the cap, rather than
+  the whole page at a lower one) was **not** built — `clampRenderScale`
+  caps the whole-page render scale down uniformly, which keeps memory
+  bounded but means a very large sheet, fully zoomed in, renders softer
+  than the plan's spec describes. A real, scoped follow-up.
+
+## Deferrals summary (Tasks 4–9)
+
+- Task 6: "New line from markup" (manual line + library resolver);
+  multi-select "reassign to another line" UI (logic built/tested, no
+  affordance).
+- Task 7: the suggested-markers UI (button, dashed rendering, confirm/
+  reject) and the actual tag-list wiring from Agent 1 output — the
+  matching engine itself is complete and tested.
+- Task 8: the pre-send checklist's own verification count.
+- Task 9: the 900–1279px navigator collapsing to a literal dropdown
+  (CSS-only narrowing instead); the "render only the visible region at
+  full resolution past the canvas-area cap" behavior (uniform downscale
+  instead); no real-file/real-browser perf measurement.
+- Backend Task 2's already-deferred HTTP Range support on the PDF stream
+  route is still deferred — the frontend fetches the whole file via
+  `api.get(..., { responseType: 'arraybuffer' })` with an
+  `onDownloadProgress` progress bar, matching the plan's own "otherwise
+  full stream with a progress bar" fallback. Revisited now that the
+  viewer actually exists: for this app's real plan sets (50–150MB, opened
+  once and paged through locally, not scrubbed like video), a full fetch
+  with a progress indicator is a reasonable user experience as-is: the one
+  cost Range would remove is the initial wait before the FIRST page
+  paints, not anything ongoing. Worth adding later if that first-load wait
+  proves painful in practice, but not a blocker.
+- `pdfjs-dist` was **not upgraded** on the frontend — it stays at the
+  existing `^4.10.38` (matching `SurveyMarkupEditor.tsx`'s own version).
+  Nothing in Tasks 4–9 needed 5.x; the two independent `pdfjs-dist`
+  versions (frontend 4.10.38, backend 5.4.296 from Task 2) never interact
+  — they're two separate npm projects, each only ever parses PDFs on its
+  own side of the API boundary, and the wire contract between them
+  (`est_sheets`' `width_pt`/`height_pt`/`rotation`, all plain numbers) has
+  no version-specific shape.
+
+## Everything a reviewer should look at first (Tasks 4–9)
+
+1. **`frontend/src/features/estimating/plans/overlay.ts`** — the geometry
+   every marker's screen position depends on; verify the "ground truth"
+   test values against a real pdf.js render yourself if in doubt (the
+   module comment explains exactly how they were captured).
+2. **`PlanViewer.tsx`'s render effect and its cancellation/cleanup** — the
+   `pageSize &&` bug (fixed, see Task 4 above) is the kind of mistake that
+   is easy to reintroduce; worth confirming the fix's reasoning holds.
+3. **`useMarkupAutosave.ts`** — the data-loss-prevention guarantee Task 5
+   explicitly called out; the failed-batch/retry/navigate-away test
+   sequence is the thing to re-verify independently.
+4. **`PcWorkspaceView.tsx`'s takeoff-case edit** — the highest-blast-radius
+   change in this half (a large, heavily-tested existing file); confirm
+   the List branch is byte-for-byte the pre-existing content and that
+   nothing outside the new toggle's own state was touched.
+5. **The process note above** — an independent read of what the research
+   fork actually wrote (`overlay.ts`, `scaleParse.ts`, `ftInParse.ts`,
+   `tagSuggest.ts`) versus what I wrote afterward is worth a second set of
+   eyes, precisely because it didn't go through my own from-scratch design
+   process the same way the rest of this half did.
+
+## Final test counts (both suites, Tasks 1–9 combined)
+
+- **Backend:** unchanged from the end of Task 3 — **1074 passed, 1078
+  total**, 114/115 files (the same pre-existing `notificationsRetention`
+  flake). Confirms zero backend impact from Tasks 4–9.
+- **Frontend:** baseline (before any Phase B frontend work) **661 passed,
+  661 total**, 89/89 files → final **888 passed, 888 total**, 105/105
+  files. Net **+227 tests, +16 files, zero failures**.
+- `npx tsc --noEmit` in `frontend/`: clean at every commit boundary.
