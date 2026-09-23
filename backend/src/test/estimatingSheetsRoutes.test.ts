@@ -66,9 +66,16 @@ describe('GET /api/estimating/:bidId/sheets — build on first call, cache after
     expect(page1.title).toBe('LIGHTING PLAN');
     expect(page1.discipline).toBe('E');
     expect(page1.has_text_layer).toBe(true);
-    expect(page1.scale_label).toBe(`1/8" = 1'-0"`);
-    // 6, not 10, decimals — est_sheets.ft_per_pt is NUMERIC(14,8) in the DB.
-    expect(page1.ft_per_pt).toBeCloseTo(1 / (0.125 * 72), 6);
+    // Fix round 1 / B7 — the indexer's parse is a SUGGESTION only; it
+    // never auto-applies to ft_per_pt/scale_label anymore (those stay
+    // null until an explicit confirm/calibration — see setSheetScale).
+    expect(page1.suggested_label).toBe(`1/8" = 1'-0"`);
+    // 6, not 10, decimals — est_sheets.suggested_ft_per_pt is NUMERIC(14,8) in the DB.
+    expect(page1.suggested_ft_per_pt).toBeCloseTo(1 / (0.125 * 72), 6);
+    expect(page1.ft_per_pt).toBeNull();
+    expect(page1.scale_label).toBeNull();
+    expect(page1.scale_source).toBeNull();
+    expect(page1.scale_ambiguous).toBe(false);
     const page2 = res.body.sheets.find((s: { page_index: number }) => s.page_index === 1);
     expect(page2.has_text_layer).toBe(false);
   });
@@ -146,6 +153,109 @@ describe('PUT /api/estimating/:bidId/sheets/:documentId/:pageIndex/scale', () =>
     // Never called GET /sheets, so est_sheets has no rows for this document yet.
     await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/0/scale`).set(auth(u.token))
       .send({ ft_per_pt: 0.01, source: 'calibrated' }).expect(404);
+  });
+});
+
+// Fix round 1 / B7 — the "Half-size set?" toggle, per document.
+describe('PUT /api/estimating/:bidId/sheets/:documentId/half-size', () => {
+  it('doubles both ft_per_pt and suggested_ft_per_pt for EVERY sheet of the document when turned on', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    const before = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const page1Before = before.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    expect(page1Before.suggested_ft_per_pt).toBeCloseTo(1 / (0.125 * 72), 6);
+    // Confirm the suggestion too, so both columns have a real value to double.
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/0/scale`).set(auth(u.token))
+      .send({ ft_per_pt: page1Before.suggested_ft_per_pt, source: 'titleblock', label: page1Before.suggested_label }).expect(200);
+
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token))
+      .send({ half_size: true }).expect(200);
+
+    const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const page1After = after.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    expect(page1After.half_size).toBe(true);
+    expect(page1After.ft_per_pt).toBeCloseTo(page1Before.suggested_ft_per_pt * 2, 6);
+    expect(page1After.suggested_ft_per_pt).toBeCloseTo(page1Before.suggested_ft_per_pt * 2, 6);
+    // The OTHER page (no scale of its own — a blank/scanned page) stays null, not NaN or 0.
+    const page2After = after.body.sheets.find((s: { page_index: number }) => s.page_index === 1);
+    expect(page2After.half_size).toBe(true);
+    expect(page2After.ft_per_pt).toBeNull();
+    expect(page2After.suggested_ft_per_pt).toBeNull();
+  });
+
+  it('turning it back OFF halves the values again — round-trips to the original', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    const initial = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const originalSuggested = initial.body.sheets.find((s: { page_index: number }) => s.page_index === 0).suggested_ft_per_pt as number;
+
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: false }).expect(200);
+
+    const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const page1 = after.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    expect(page1.half_size).toBe(false);
+    expect(page1.suggested_ft_per_pt).toBeCloseTo(originalSuggested, 6);
+  });
+
+  it('calling it twice with the SAME value is a no-op the second time (idempotent, never double-doubles)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    const initial = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const originalSuggested = initial.body.sheets.find((s: { page_index: number }) => s.page_index === 0).suggested_ft_per_pt as number;
+
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
+
+    const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const page1 = after.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    expect(page1.suggested_ft_per_pt).toBeCloseTo(originalSuggested * 2, 6); // exactly 2x, not 4x
+  });
+
+  it('a re-index (?refresh=1) never resets half_size — only setHalfSize itself ever writes it', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
+
+    await request(app).get(`/api/estimating/${bidId}/sheets?refresh=1`).set(auth(u.token)).expect(200);
+
+    const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    expect(after.body.sheets.find((s: { page_index: number }) => s.page_index === 0).half_size).toBe(true);
+  });
+
+  it('rejects a non-boolean half_size with 400', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token))
+      .send({ half_size: 'yes' }).expect(400);
+  });
+
+  it('404s a document with no indexed sheets yet', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    // Never indexed — no est_sheets rows for this document.
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token))
+      .send({ half_size: true }).expect(404);
   });
 });
 

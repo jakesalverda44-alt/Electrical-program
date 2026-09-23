@@ -251,6 +251,98 @@
   border-bottom: 1px solid rgba(224,165,59,.3);
 }
 
+/* Fix round 1 / B7 — the title-block suggestion / "multiple scales"
+   banner, same shape as .plan-proposed-banner above. */
+.plan-scale-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--surface);
+  color: var(--text2);
+  font-size: 12.5px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.plan-scale-banner-warn {
+  background: var(--amber-soft);
+  color: var(--amber);
+  border-bottom-color: rgba(224,165,59,.3);
+}
+
+.plan-half-size-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text2);
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+/* Fix round 1 / N3 — this rule was entirely missing, so the popover
+   rendered unpositioned, in normal flow below the viewer, instead of as a
+   floating panel. `fixed` (not `absolute`) since this component is
+   rendered as a sibling of PlanViewer, outside any of its own positioned
+   containers — fixed always centers over the viewport regardless of
+   where it sits in the DOM, with no dependency on an ancestor's own
+   `position` staying `relative` forever. */
+.plan-scale-popover {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 280px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.45);
+}
+
+.plan-scale-popover-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.plan-scale-popover-row input {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.plan-scale-popover-error {
+  font-size: 11px;
+  color: var(--red);
+  font-weight: 600;
+}
+
+.plan-scale-popover-warn {
+  font-size: 11px;
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.plan-scale-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .plan-suggest-bar {
   display: flex;
   align-items: center;

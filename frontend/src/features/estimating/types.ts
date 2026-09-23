@@ -176,6 +176,16 @@ export interface SheetRow {
   scale_source: ScaleSource;
   scale_label: string | null;
   has_text_layer: boolean;
+  /** Fix round 1 / B7 — the title-block-parsed scale, a SUGGESTION only
+   *  (never auto-applied to ft_per_pt). null when nothing was found, or
+   *  when scale_ambiguous is true. */
+  suggested_ft_per_pt: number | null;
+  suggested_label: string | null;
+  /** Fix round 1 / B7 — true when the page's text has more than one
+   *  DISTINCT scale value; no suggestion is offered for it at all. */
+  scale_ambiguous: boolean;
+  /** Fix round 1 / B7 — shared by every sheet of the same document_id. */
+  half_size: boolean;
 }
 
 export interface SheetsResponse {

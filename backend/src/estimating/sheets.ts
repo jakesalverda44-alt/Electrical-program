@@ -6,7 +6,7 @@ import { pool } from '../db/pool';
 import { getFileMedia } from '../services/googleDrive';
 import { logger } from '../utils/logger';
 import { titleBlockCropRect } from '../ai/pageClassifier';
-import { findScaleLabel } from './scaleParse';
+import { findScaleLabel, findAllScaleLabels } from './scaleParse';
 import { openPdfDocument, PdfJsDocument, PdfJsTextItem } from './pdfjsLoader';
 
 export type SheetDiscipline = 'E' | 'A' | 'M' | 'P' | 'other';
@@ -30,6 +30,20 @@ export interface SheetRow {
   scale_source: ScaleSource;
   scale_label: string | null;
   has_text_layer: boolean;
+  /** Fix round 1 / B7 — the title-block-parsed scale, offered as a
+   *  one-click suggestion (never auto-applied to ft_per_pt). null when
+   *  nothing was found, OR when scale_ambiguous is true (more than one
+   *  distinct scale on the page — no single suggestion can be trusted). */
+  suggested_ft_per_pt: number | null;
+  suggested_label: string | null;
+  /** Fix round 1 / B7 — true when the page's text contains more than one
+   *  DISTINCT scale value (e.g. an enlarged detail callout alongside the
+   *  main plan's own scale). The UI shows "Multiple scales on this sheet
+   *  — calibrate" and offers no suggestion at all. */
+  scale_ambiguous: boolean;
+  /** Fix round 1 / B7 — a document-wide (not per-sheet) toggle: every
+   *  sheet of the same document_id shares this value. */
+  half_size: boolean;
 }
 
 export interface PlanDocument {
@@ -151,8 +165,12 @@ export interface ExtractedPageInfo {
   title: string;
   discipline: SheetDiscipline;
   kind: SheetKind;
-  scale_label: string | null;
-  ft_per_pt: number | null;
+  /** Fix round 1 / B7 — the parsed scale is ALWAYS a suggestion now; the
+   *  indexer never writes to est_sheets.ft_per_pt/scale_source/scale_label
+   *  itself (see upsertSheetPage). null when scale_ambiguous is true. */
+  suggested_label: string | null;
+  suggested_ft_per_pt: number | null;
+  scale_ambiguous: boolean;
 }
 
 /** Pure-ish (no DB/network — everything it needs is already on the pdfjs
@@ -200,11 +218,24 @@ export async function extractPageInfo(doc: PdfJsDocument, pageIndex: number): Pr
     if (trimmed.length > title.length) title = trimmed;
   }
 
-  // Scale: search the WHOLE page's text, not just the strip — some sheet
-  // formats print the scale label near the drawing itself, not inside the
-  // title block strip.
+  // Fix round 1 / B7 — every DISTINCT scale value anywhere on the page,
+  // first: a page with more than one (an enlarged-detail callout's own
+  // "SCALE: 1/4" = 1'-0"" alongside the main plan's real scale) can never
+  // safely offer a single one-click suggestion — scale_ambiguous covers
+  // that case regardless of where either cue sits in content-stream order.
   const fullText = items.map(i => i.str).join('\n');
-  const scale = findScaleLabel(fullText);
+  const allScales = findAllScaleLabels(fullText);
+  const scale_ambiguous = allScales.length > 1;
+
+  // Otherwise, prefer the TITLE BLOCK STRIP's own scale cue over a
+  // whole-page search — the strip is where a sheet's real, printed scale
+  // for the MAIN plan actually lives; an unrelated "SCALE: ..." elsewhere
+  // on the sheet (a detail, a note) must never win just because it
+  // happens to appear earlier in the PDF's own content stream. Falls back
+  // to the whole-page search only when the strip itself has no cue at all
+  // (some sheet formats print the scale near the drawing, not the strip).
+  const stripText = stripItems.map(i => i.str).join('\n');
+  const scale = scale_ambiguous ? null : (findScaleLabel(stripText) ?? findScaleLabel(fullText));
 
   const discipline = disciplineFromSheetNo(sheet_no);
   const kind = kindFromTitle(title, has_text_layer);
@@ -212,20 +243,28 @@ export async function extractPageInfo(doc: PdfJsDocument, pageIndex: number): Pr
   return {
     width_pt, height_pt, rotation, has_text_layer,
     sheet_no, title, discipline, kind,
-    scale_label: scale?.normalized ?? null,
-    ft_per_pt: scale?.ftPerPt ?? null,
+    suggested_label: scale?.normalized ?? null,
+    suggested_ft_per_pt: scale?.ftPerPt ?? null,
+    scale_ambiguous,
   };
 }
 
-/** Upserts one document's pages into est_sheets. A page whose EXISTING row
- *  has scale_source='calibrated' keeps its calibrated scale — a refresh
- *  must never silently discard an estimator's own two-point calibration
- *  (Decision 6) just because the title-block guess changed or disagreed. */
+/** Upserts one document's pages into est_sheets.
+ *
+ *  Fix round 1 / B7 — the indexer NEVER writes ft_per_pt/scale_source/
+ *  scale_label itself anymore (those three are confirmed-only, set
+ *  exclusively by setSheetScale — an explicit one-click confirm or a
+ *  two-point calibration). It only ever refreshes suggested_ft_per_pt/
+ *  suggested_label/scale_ambiguous, which a re-index is free to update on
+ *  every refresh (they're just the parser's current best guess, not a
+ *  commitment) — half_size is intentionally left OUT of this upsert
+ *  entirely so a re-index can never reset an estimator's own per-document
+ *  toggle (setHalfSize, below, is its one and only writer). */
 async function upsertSheetPage(bidId: string, documentId: string, pageIndex: number, info: ExtractedPageInfo): Promise<void> {
   await pool.query(
     `INSERT INTO est_sheets
        (bid_id, document_id, page_index, sheet_no, title, discipline, kind,
-        width_pt, height_pt, rotation, ft_per_pt, scale_source, scale_label, has_text_layer, updated_at)
+        width_pt, height_pt, rotation, has_text_layer, suggested_ft_per_pt, suggested_label, scale_ambiguous, updated_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now())
      ON CONFLICT (document_id, page_index) DO UPDATE SET
        sheet_no = EXCLUDED.sheet_no,
@@ -235,14 +274,14 @@ async function upsertSheetPage(bidId: string, documentId: string, pageIndex: num
        width_pt = EXCLUDED.width_pt,
        height_pt = EXCLUDED.height_pt,
        rotation = EXCLUDED.rotation,
-       ft_per_pt = CASE WHEN est_sheets.scale_source = 'calibrated' THEN est_sheets.ft_per_pt ELSE EXCLUDED.ft_per_pt END,
-       scale_source = CASE WHEN est_sheets.scale_source = 'calibrated' THEN est_sheets.scale_source ELSE EXCLUDED.scale_source END,
-       scale_label = CASE WHEN est_sheets.scale_source = 'calibrated' THEN est_sheets.scale_label ELSE EXCLUDED.scale_label END,
        has_text_layer = EXCLUDED.has_text_layer,
+       suggested_ft_per_pt = EXCLUDED.suggested_ft_per_pt,
+       suggested_label = EXCLUDED.suggested_label,
+       scale_ambiguous = EXCLUDED.scale_ambiguous,
        updated_at = now()`,
     [bidId, documentId, pageIndex, info.sheet_no, info.title, info.discipline, info.kind,
-     info.width_pt, info.height_pt, info.rotation, info.ft_per_pt,
-     info.ft_per_pt != null ? 'titleblock' : null, info.scale_label, info.has_text_layer]
+     info.width_pt, info.height_pt, info.rotation, info.has_text_layer,
+     info.suggested_ft_per_pt, info.suggested_label, info.scale_ambiguous]
   );
 }
 
@@ -287,7 +326,8 @@ export async function buildOrRefreshSheets(bidId: string): Promise<void> {
 export async function getSheetRows(bidId: string): Promise<SheetRow[]> {
   const { rows } = await pool.query(
     `SELECT bid_id, document_id, page_index, sheet_no, title, discipline, kind,
-            width_pt, height_pt, rotation, ft_per_pt, scale_source, scale_label, has_text_layer
+            width_pt, height_pt, rotation, ft_per_pt, scale_source, scale_label, has_text_layer,
+            suggested_ft_per_pt, suggested_label, scale_ambiguous, half_size
      FROM est_sheets WHERE bid_id = $1
      ORDER BY document_id, page_index`,
     [bidId]
@@ -307,6 +347,10 @@ export async function getSheetRows(bidId: string): Promise<SheetRow[]> {
     scale_source: r.scale_source,
     scale_label: r.scale_label,
     has_text_layer: !!r.has_text_layer,
+    suggested_ft_per_pt: r.suggested_ft_per_pt != null ? Number(r.suggested_ft_per_pt) : null,
+    suggested_label: r.suggested_label,
+    scale_ambiguous: !!r.scale_ambiguous,
+    half_size: !!r.half_size,
   }));
 }
 
@@ -335,6 +379,39 @@ export async function setSheetScale(bidId: string, documentId: string, pageIndex
     `UPDATE est_sheets SET ft_per_pt = $1, scale_source = $2, scale_label = $3, updated_at = now()
      WHERE bid_id = $4 AND document_id = $5 AND page_index = $6`,
     [input.ft_per_pt, input.source, input.label ?? null, bidId, documentId, pageIndex]
+  );
+  return (rowCount ?? 0) > 0;
+}
+
+/** Fix round 1 / B7 — the "Half-size set?" toggle, per DOCUMENT (every
+ *  sheet of that document_id shares one value — the physical print size
+ *  is a property of the whole plan set PDF, not one page of it). Doubles
+ *  (turning on) or halves (turning off) BOTH ft_per_pt and
+ *  suggested_ft_per_pt on every sheet of the document in one statement —
+ *  idempotent against being called twice with the same value (a row
+ *  already at that half_size is left untouched by the CASE branches
+ *  below), and never touches a row with no scale set yet (NULL stays
+ *  NULL either way). Returns false when the document has no est_sheets
+ *  rows for this bid at all (404 for the route). */
+export async function setHalfSize(bidId: string, documentId: string, halfSize: boolean): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `UPDATE est_sheets SET
+       ft_per_pt = CASE
+         WHEN ft_per_pt IS NULL THEN NULL
+         WHEN half_size = $3 THEN ft_per_pt
+         WHEN $3 = true THEN ft_per_pt * 2
+         ELSE ft_per_pt / 2
+       END,
+       suggested_ft_per_pt = CASE
+         WHEN suggested_ft_per_pt IS NULL THEN NULL
+         WHEN half_size = $3 THEN suggested_ft_per_pt
+         WHEN $3 = true THEN suggested_ft_per_pt * 2
+         ELSE suggested_ft_per_pt / 2
+       END,
+       half_size = $3,
+       updated_at = now()
+     WHERE bid_id = $1 AND document_id = $2`,
+    [bidId, documentId, halfSize]
   );
   return (rowCount ?? 0) > 0;
 }

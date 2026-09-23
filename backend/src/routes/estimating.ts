@@ -16,7 +16,7 @@ import {
 import { normalizeUnit, MapConfidence } from '../estimating/mapper';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
 import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
-import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale } from '../estimating/sheets';
+import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, setHalfSize } from '../estimating/sheets';
 import {
   getMarkups, batchMarkups, getRollup, applyMarkups,
   MarkupCreateInput, MarkupUpdateInput,
@@ -644,6 +644,20 @@ router.put('/:bidId/sheets/:documentId/:pageIndex/scale', requireAuth, async (re
   // this also 404s a documentId that belongs to a different bid, the same
   // cross-bid protection the file route gets from loadPlanDocumentForBid.
   if (!ok) return res.status(404).json({ error: 'Sheet not found for this bid/document/page' });
+  res.json({ ok: true });
+});
+
+// Fix round 1 / B7 — "Half-size set?" toggle, per document.
+router.put('/:bidId/sheets/:documentId/half-size', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId, documentId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (typeof body.half_size !== 'boolean') {
+    return res.status(400).json({ error: 'half_size must be a boolean' });
+  }
+  const ok = await setHalfSize(bidId, documentId, body.half_size);
+  if (!ok) return res.status(404).json({ error: 'Document not found for this bid (no sheets indexed yet)' });
   res.json({ ok: true });
 });
 

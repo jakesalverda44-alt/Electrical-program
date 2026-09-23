@@ -132,3 +132,47 @@ export function findScaleLabel(pageText: string): ParsedScale | null {
   }
   return null;
 }
+
+/** Fix round 1 / B7 — every DISTINCT scale value found anywhere in
+ *  pageText, deduped by parsed ftPerPt (two differently-worded labels
+ *  that mean the same real scale, e.g. "1:100" appearing twice, are NOT
+ *  "multiple scales"). Used by sheets.ts to detect a page carrying more
+ *  than one genuinely different scale (an enlarged-detail callout's own
+ *  "SCALE: 1/4" = 1'-0"" alongside the main plan's real scale) so the
+ *  indexer can refuse to offer any single one-click suggestion for it —
+ *  guessing which one applies to the main plan is exactly the failure
+ *  mode this whole fix exists to close. */
+export function findAllScaleLabels(pageText: string): ParsedScale[] {
+  if (!pageText) return [];
+  const normalized = normalizeQuotes(pageText);
+  const found: ParsedScale[] = [];
+  // Rounding to 1e-8 absorbs float noise while still treating two
+  // genuinely different scales (even a close pair, e.g. 1/8" vs 1/4")
+  // as distinct — matches est_sheets.ft_per_pt's own NUMERIC(14,8) precision.
+  const seen = new Set<number>();
+  const record = (parsed: ParsedScale) => {
+    const key = Math.round(parsed.ftPerPt * 1e8);
+    if (seen.has(key)) return;
+    seen.add(key);
+    found.push(parsed);
+  };
+
+  // Every "SCALE ..." cue on the page, not just the first.
+  const cueRe = /SCALE\s*:?\s*([^\n\r]{1,60})/gi;
+  let m: RegExpExecArray | null;
+  while ((m = cueRe.exec(normalized))) {
+    const words = m[1].trim().split(/\s+/);
+    for (let end = words.length; end > 0; end--) {
+      const parsed = parseScaleLabel(words.slice(0, end).join(' '));
+      if (parsed) { record(parsed); break; }
+    }
+  }
+  // Bare scale-shaped lines with no "SCALE" cue at all (mirrors
+  // findScaleLabel's own fallback).
+  const lines = normalized.split(/[\n\r]+/);
+  for (const line of lines) {
+    const parsed = parseScaleLabel(line.trim());
+    if (parsed) record(parsed);
+  }
+  return found;
+}

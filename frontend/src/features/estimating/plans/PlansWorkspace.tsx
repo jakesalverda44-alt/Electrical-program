@@ -342,11 +342,17 @@ export default function PlansWorkspace({
 
   // ── Scale calibration ────────────────────────────────────────────────────
   const [pendingScalePoints, setPendingScalePoints] = useState<[PdfPoint, PdfPoint] | null>(null);
-  const commitScale = useCallback(async (ftPerPt: number, label: string) => {
+  // Fix round 1 / B7 — `source` distinguishes an estimator's own two-point
+  // measurement ('calibrated', the default — every EXISTING caller of
+  // this) from a one-click CONFIRM of the title-block suggestion
+  // ('titleblock', used only by onConfirmSuggestedScale below). Both are
+  // equally "confirmed" for gating purposes (Linear only cares that
+  // ft_per_pt IS set) — the distinction is purely informational display.
+  const commitScale = useCallback(async (ftPerPt: number, label: string, source: 'calibrated' | 'titleblock' = 'calibrated') => {
     if (!currentSheet) return;
     try {
       await api.put(`/estimating/${bidId}/sheets/${currentSheet.document_id}/${currentSheet.page_index}/scale`, {
-        ft_per_pt: ftPerPt, source: 'calibrated', label,
+        ft_per_pt: ftPerPt, source, label,
       });
       await reloadSheets();
       showToast?.({ title: 'Scale set', sub: label });
@@ -354,6 +360,38 @@ export default function PlansWorkspace({
       showToast?.({ variant: 'error', title: 'Could not set the scale', sub: 'Try again' });
     } finally {
       setPendingScalePoints(null);
+    }
+  }, [bidId, currentSheet, reloadSheets, showToast]);
+
+  // Fix round 1 / B7 — the ONE-CLICK confirm for the title-block
+  // suggestion, with no calibration line drawn at all (Decision 6 always
+  // required drawing two points first; the suggestion banner below is the
+  // "one click to confirm" the fix asks for).
+  const [confirmingScale, setConfirmingScale] = useState(false);
+  const onConfirmSuggestedScale = useCallback(async () => {
+    if (!currentSheet || currentSheet.suggested_ft_per_pt == null || !currentSheet.suggested_label) return;
+    setConfirmingScale(true);
+    try {
+      await commitScale(currentSheet.suggested_ft_per_pt, currentSheet.suggested_label, 'titleblock');
+    } finally {
+      setConfirmingScale(false);
+    }
+  }, [currentSheet, commitScale]);
+
+  // Fix round 1 / B7 — the "Half-size set?" toggle, per document.
+  const [settingHalfSize, setSettingHalfSize] = useState(false);
+  const onToggleHalfSize = useCallback(async () => {
+    if (!currentSheet) return;
+    setSettingHalfSize(true);
+    try {
+      await api.put(`/estimating/${bidId}/sheets/${currentSheet.document_id}/half-size`, {
+        half_size: !currentSheet.half_size,
+      });
+      await reloadSheets();
+    } catch {
+      showToast?.({ variant: 'error', title: 'Could not update half-size', sub: 'Try again' });
+    } finally {
+      setSettingHalfSize(false);
     }
   }, [bidId, currentSheet, reloadSheets, showToast]);
 
@@ -683,10 +721,22 @@ export default function PlansWorkspace({
               hasSelection={toolState.selectedIds.length > 0}
               scaleDisabledReason={currentSheet ? null : 'Select a sheet first'}
               countLinearDisabledReason={proposed ? 'Save the estimate first to start marking up plans' : null}
+              linearDisabledReason={currentSheet && currentSheet.ft_per_pt == null ? 'This sheet has no confirmed scale yet — calibrate, or confirm the suggested scale below' : null}
               onNewLineFromMarkup={onNewLineFromMarkup}
               onReassignSelected={onReassignSelected}
             />
           </div>
+          {currentSheet && (
+            <label className="plan-half-size-toggle" title="Every sheet of this document was printed at half its designed physical size — doubles the measured scale.">
+              <input
+                type="checkbox"
+                checked={currentSheet.half_size}
+                disabled={settingHalfSize}
+                onChange={() => void onToggleHalfSize()}
+              />
+              Half-size set?
+            </label>
+          )}
           <button
             type="button"
             className="plan-toolbar-btn"
@@ -703,6 +753,24 @@ export default function PlansWorkspace({
             <span>This estimate hasn&apos;t been saved yet — save it to start marking up plans.</span>
             <button type="button" className="btn primary sm" disabled={savingProposed} onClick={() => void onSaveProposedMapping()}>
               {savingProposed ? 'Saving…' : 'Save the estimate'}
+            </button>
+          </div>
+        )}
+        {/* Fix round 1 / B7 — the title-block scale is a suggestion that
+            needs one click to confirm; it's never auto-applied to
+            ft_per_pt. A page with more than one distinct scale value
+            offers no suggestion at all — calibration is the only path. */}
+        {currentSheet && currentSheet.ft_per_pt == null && currentSheet.scale_ambiguous && (
+          <div className="plan-scale-banner plan-scale-banner-warn" data-testid="plan-scale-ambiguous-banner">
+            Multiple scales on this sheet — calibrate.
+          </div>
+        )}
+        {currentSheet && currentSheet.ft_per_pt == null && !currentSheet.scale_ambiguous
+          && currentSheet.suggested_ft_per_pt != null && currentSheet.suggested_label && (
+          <div className="plan-scale-banner" data-testid="plan-scale-suggestion-banner">
+            <span>Suggested scale (from the title block): {currentSheet.suggested_label}</span>
+            <button type="button" className="btn primary sm" disabled={confirmingScale} onClick={() => void onConfirmSuggestedScale()}>
+              {confirmingScale ? 'Confirming…' : 'Confirm'}
             </button>
           </div>
         )}
@@ -753,7 +821,13 @@ export default function PlansWorkspace({
         {pendingScalePoints && (
           <ScaleCalibrationPopover
             points={pendingScalePoints}
-            titleBlockLabel={currentSheet?.scale_source === 'titleblock' ? currentSheet.scale_label : null}
+            // Fix round 1 / B7 — the raw SUGGESTION (never gated on it
+            // having been confirmed yet — that's exactly the one-click
+            // "Use X" path this popover already offers, independent of
+            // the standalone banner above), and never offered at all when
+            // the sheet has more than one distinct scale (nothing here
+            // can safely say which one the estimator meant).
+            titleBlockLabel={currentSheet && !currentSheet.scale_ambiguous ? currentSheet.suggested_label : null}
             onCommit={commitScale}
             onCancel={() => setPendingScalePoints(null)}
           />

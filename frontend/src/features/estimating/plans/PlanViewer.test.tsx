@@ -58,6 +58,7 @@ function sheet(over: Partial<SheetRow> = {}): SheetRow {
     bid_id: 'bid1', document_id: 'doc-1', page_index: 0, sheet_no: 'E1.1', title: 'Lighting Plan',
     discipline: 'E', kind: 'plan', width_pt: 792, height_pt: 612, rotation: 0,
     ft_per_pt: 0.01, scale_source: 'calibrated', scale_label: '1/8" = 1\'-0"', has_text_layer: true,
+    suggested_ft_per_pt: null, suggested_label: null, scale_ambiguous: false, half_size: false,
     ...over,
   };
 }

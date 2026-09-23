@@ -20,8 +20,8 @@ describe('extractPageInfo — sample sheet fixture', () => {
       expect(info.title).toBe('LIGHTING PLAN');
       expect(info.discipline).toBe('E');
       expect(info.kind).toBe('plan');
-      expect(info.scale_label).toBe(`1/8" = 1'-0"`);
-      expect(info.ft_per_pt).toBeCloseTo(1 / (0.125 * 72), 10);
+      expect(info.suggested_label).toBe(`1/8" = 1'-0"`);
+      expect(info.suggested_ft_per_pt).toBeCloseTo(1 / (0.125 * 72), 10);
     } finally {
       await doc.destroy();
     }
@@ -34,8 +34,8 @@ describe('extractPageInfo — sample sheet fixture', () => {
       expect(info.has_text_layer).toBe(false);
       expect(info.sheet_no).toBe('');
       expect(info.title).toBe('');
-      expect(info.scale_label).toBeNull();
-      expect(info.ft_per_pt).toBeNull();
+      expect(info.suggested_label).toBeNull();
+      expect(info.suggested_ft_per_pt).toBeNull();
       expect(info.kind).toBe('other'); // never guessed 'plan' with nothing to read
     } finally {
       await doc.destroy();
@@ -58,6 +58,97 @@ describe('extractPageInfo — title-block strip heuristic (right 25%, full heigh
       expect(info.sheet_no).toBe('M2.0');
       expect(info.discipline).toBe('M');
       expect(info.title).toBe('MECHANICAL PLAN');
+    } finally {
+      await doc.destroy();
+    }
+  });
+});
+
+// Fix round 1 / B7 — the indexer's parsed scale is ALWAYS a suggestion
+// (suggested_ft_per_pt/suggested_label), never auto-applied; a page with
+// more than one DISTINCT scale value is flagged ambiguous and offers NO
+// suggestion at all — never a guess at which one is right.
+describe('extractPageInfo — scale suggestion vs. ambiguity (B7)', () => {
+  it('a single scale cue in the title-block strip is offered as the suggestion, not ambiguous', async () => {
+    const buf = buildSheetPdf([
+      { page: 1, x: 650, y: 550, text: 'E1.1' },
+      { page: 1, x: 650, y: 500, text: `SCALE: 1/8" = 1'-0"` },
+    ], { width: 800, height: 600 });
+    const doc = await openPdfDocument(buf);
+    try {
+      const info = await extractPageInfo(doc, 0);
+      expect(info.scale_ambiguous).toBe(false);
+      expect(info.suggested_label).toBe(`1/8" = 1'-0"`);
+      expect(info.suggested_ft_per_pt).toBeCloseTo(1 / (0.125 * 72), 10);
+    } finally {
+      await doc.destroy();
+    }
+  });
+
+  it('TWO DISTINCT scale values anywhere on the page (an enlarged-detail callout alongside the main plan) flags scale_ambiguous and offers NO suggestion', async () => {
+    const buf = buildSheetPdf([
+      { page: 1, x: 650, y: 550, text: 'E1.1' },
+      { page: 1, x: 650, y: 500, text: `SCALE: 1/8" = 1'-0"` }, // the main plan's real scale, in the strip
+      { page: 1, x: 100, y: 300, text: `ENLARGED ELECTRICAL ROOM PLAN — SCALE: 1/4" = 1'-0"` }, // a detail callout elsewhere
+    ], { width: 800, height: 600 });
+    const doc = await openPdfDocument(buf);
+    try {
+      const info = await extractPageInfo(doc, 0);
+      expect(info.scale_ambiguous).toBe(true);
+      expect(info.suggested_label).toBeNull();
+      expect(info.suggested_ft_per_pt).toBeNull();
+    } finally {
+      await doc.destroy();
+    }
+  });
+
+  it('the SAME scale value appearing twice (worded identically, e.g. a repeated note) is NOT ambiguous', async () => {
+    const buf = buildSheetPdf([
+      { page: 1, x: 650, y: 550, text: 'E1.1' },
+      { page: 1, x: 650, y: 500, text: `SCALE: 1/8" = 1'-0"` },
+      { page: 1, x: 100, y: 300, text: `SCALE: 1/8" = 1'-0"` }, // identical value, elsewhere
+    ], { width: 800, height: 600 });
+    const doc = await openPdfDocument(buf);
+    try {
+      const info = await extractPageInfo(doc, 0);
+      expect(info.scale_ambiguous).toBe(false);
+      expect(info.suggested_ft_per_pt).toBeCloseTo(1 / (0.125 * 72), 10);
+    } finally {
+      await doc.destroy();
+    }
+  });
+
+  it('prefers the title-block strip\'s OWN scale cue over one elsewhere on the page, when the strip has one at all', async () => {
+    // Two DIFFERENT-looking labels that parse to the SAME real scale (a
+    // ratio vs. an architectural fraction) — not ambiguous (same ftPerPt),
+    // but the STRIP's own phrasing (the authoritative one) is what should
+    // be offered, not whichever text happens to come first in scan order.
+    const buf = buildSheetPdf([
+      { page: 1, x: 100, y: 300, text: 'SCALE: 1:96' }, // same real scale as 1/8"=1'-0" (96 = 12*8), off-strip, appears FIRST
+      { page: 1, x: 650, y: 550, text: 'E1.1' },
+      { page: 1, x: 650, y: 500, text: `SCALE: 1/8" = 1'-0"` }, // the strip's own phrasing
+    ], { width: 800, height: 600 });
+    const doc = await openPdfDocument(buf);
+    try {
+      const info = await extractPageInfo(doc, 0);
+      expect(info.scale_ambiguous).toBe(false);
+      expect(info.suggested_label).toBe(`1/8" = 1'-0"`); // the strip's own label text, not "1:96"
+    } finally {
+      await doc.destroy();
+    }
+  });
+
+  it('a sheet with no SCALE cue at all offers no suggestion and is not ambiguous', async () => {
+    const buf = buildSheetPdf([
+      { page: 1, x: 650, y: 550, text: 'E1.1' },
+      { page: 1, x: 650, y: 520, text: 'LIGHTING PLAN' },
+    ], { width: 800, height: 600 });
+    const doc = await openPdfDocument(buf);
+    try {
+      const info = await extractPageInfo(doc, 0);
+      expect(info.scale_ambiguous).toBe(false);
+      expect(info.suggested_label).toBeNull();
+      expect(info.suggested_ft_per_pt).toBeNull();
     } finally {
       await doc.destroy();
     }

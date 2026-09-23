@@ -80,6 +80,7 @@ function sheet(over: Partial<SheetRow> = {}): SheetRow {
     bid_id: 'bid1', document_id: 'doc-1', page_index: 0, sheet_no: 'E1.1', title: 'Lighting Plan',
     discipline: 'E', kind: 'plan', width_pt: 792, height_pt: 612, rotation: 0,
     ft_per_pt: 0.01, scale_source: 'calibrated', scale_label: null, has_text_layer: true,
+    suggested_ft_per_pt: null, suggested_label: null, scale_ambiguous: false, half_size: false,
     ...over,
   };
 }
@@ -328,6 +329,99 @@ describe('PlansWorkspace — proposed (never-saved) estimate (Fix round 1 / B2)'
 
     expect((screen.getByTitle('Select (V)') as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByTitle('Undo (⌘Z)') as HTMLButtonElement).disabled).toBe(true); // nothing to undo yet — unrelated to proposed gating
+  });
+});
+
+// Fix round 1 / B7 — the title-block scale is a suggestion needing one
+// click to confirm (never auto-applied); Linear is disabled until the
+// sheet has a confirmed scale; a page with multiple distinct scales
+// offers no suggestion at all; a per-document half-size toggle.
+describe('PlansWorkspace — scale suggestion, Linear gating, and half-size (Fix round 1 / B7)', () => {
+  it('the suggestion banner\'s "Confirm" PUTs the suggested scale with source "titleblock"', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [sheet({ ft_per_pt: null, scale_source: null, scale_label: null, suggested_ft_per_pt: 0.111111, suggested_label: `1/8" = 1'-0"` })] },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    put.mockResolvedValue({ data: { ok: true } });
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-scale-suggestion-banner')).toBeTruthy());
+    expect(screen.getByText(/Suggested scale \(from the title block\): 1\/8" = 1'-0"/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Confirm'));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/sheets/doc-1/0/scale', {
+      ft_per_pt: 0.111111, source: 'titleblock', label: `1/8" = 1'-0"`,
+    }));
+  });
+
+  it('shows "Multiple scales on this sheet — calibrate" (and NO suggestion banner) when scale_ambiguous is true', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [sheet({ ft_per_pt: null, scale_source: null, scale_label: null, scale_ambiguous: true, suggested_ft_per_pt: null, suggested_label: null })] },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-scale-ambiguous-banner')).toBeTruthy());
+    expect(screen.getByText('Multiple scales on this sheet — calibrate.')).toBeTruthy();
+    expect(screen.queryByTestId('plan-scale-suggestion-banner')).toBeNull();
+  });
+
+  it('shows neither banner once the sheet has a confirmed scale', async () => {
+    setup(); // default sheet() fixture already has ft_per_pt: 0.01 (confirmed)
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect(screen.queryByTestId('plan-scale-suggestion-banner')).toBeNull();
+    expect(screen.queryByTestId('plan-scale-ambiguous-banner')).toBeNull();
+  });
+
+  it('Linear is disabled with a reason when the sheet has no confirmed scale', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet({ ft_per_pt: null, scale_source: null, scale_label: null })] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    const linearBtn = screen.getByTitle('This sheet has no confirmed scale yet — calibrate, or confirm the suggested scale below');
+    expect(linearBtn.textContent).toBe('Linear');
+    expect((linearBtn as HTMLButtonElement).disabled).toBe(true);
+    // Count is NOT gated by scale — only by B2's proposed-estimate rule.
+    expect((screen.getByTitle('Count (C)') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('Linear is enabled once the sheet has a confirmed scale', async () => {
+    setup(); // default sheet() fixture has ft_per_pt: 0.01
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect((screen.getByTitle('Linear (L)') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('the "Half-size set?" toggle PUTs the opposite of the current half_size value', async () => {
+    put.mockResolvedValue({ data: { ok: true } });
+    setup({ }); // default sheet() has half_size: false
+    await waitFor(() => expect(screen.getByLabelText('Half-size set?')).toBeTruthy());
+    expect((screen.getByLabelText('Half-size set?') as HTMLInputElement).checked).toBe(false);
+
+    fireEvent.click(screen.getByLabelText('Half-size set?'));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/sheets/doc-1/half-size', { half_size: true }));
+  });
+
+  it('the toggle reflects an already-half-size sheet as checked', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet({ half_size: true })] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup();
+    await waitFor(() => expect((screen.getByLabelText('Half-size set?') as HTMLInputElement).checked).toBe(true));
   });
 });
 

@@ -1,7 +1,7 @@
 // Estimating Phase B, Task 2/5 — scaleParse.ts is pure; exhaustive table
 // tests per the plan's explicit list plus garbage input.
 import { describe, it, expect } from 'vitest';
-import { parseScaleLabel, findScaleLabel } from './scaleParse';
+import { parseScaleLabel, findScaleLabel, findAllScaleLabels } from './scaleParse';
 
 const PT_PER_INCH = 72;
 
@@ -131,5 +131,44 @@ describe('findScaleLabel — locating a scale expression inside a block of page 
 
   it('returns null for empty page text', () => {
     expect(findScaleLabel('')).toBeNull();
+  });
+});
+
+// Fix round 1 / B7
+describe('findAllScaleLabels — every DISTINCT scale value on a page', () => {
+  it('finds a single scale', () => {
+    const found = findAllScaleLabels(`E1.1\nSCALE: 1/8" = 1'-0"`);
+    expect(found.length).toBe(1);
+    expect(found[0].normalized).toBe(`1/8" = 1'-0"`);
+  });
+
+  it('finds TWO distinct scales (an enlarged detail alongside the main plan)', () => {
+    const found = findAllScaleLabels([
+      `SCALE: 1/8" = 1'-0"`,
+      'ENLARGED ELECTRICAL ROOM PLAN',
+      `SCALE: 1/4" = 1'-0"`,
+    ].join('\n'));
+    expect(found.length).toBe(2);
+    expect(found.map(f => f.normalized).sort()).toEqual([`1/4" = 1'-0"`, `1/8" = 1'-0"`].sort());
+  });
+
+  it('dedupes the SAME value appearing twice, even worded differently (a ratio vs. an architectural fraction)', () => {
+    // 1:96 and 1/8"=1'-0" are the same real scale (96 = 12in/ft * 8).
+    const found = findAllScaleLabels([`SCALE: 1/8" = 1'-0"`, 'SCALE: 1:96'].join('\n'));
+    expect(found.length).toBe(1);
+  });
+
+  it('three distinct scales are all found, not just the first two', () => {
+    const found = findAllScaleLabels([
+      `SCALE: 1/8" = 1'-0"`,
+      `SCALE: 1/4" = 1'-0"`,
+      'SCALE: 1:50',
+    ].join('\n'));
+    expect(found.length).toBe(3);
+  });
+
+  it('returns an empty array for no scale cues, or empty text', () => {
+    expect(findAllScaleLabels('E1.1\nLIGHTING PLAN')).toEqual([]);
+    expect(findAllScaleLabels('')).toEqual([]);
   });
 });
