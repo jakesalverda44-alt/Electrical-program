@@ -11,9 +11,23 @@ import {
 import {
   getBidLines, getBidSettings, getProposedLinesFromTakeoff, computeRecapForBid,
   priceUnsaved, syncTakeoff, saveBidEstimate, ClientLineInput, ClientSettingsInput,
+  NonFiniteTotalError,
 } from '../estimating/bidEstimate';
+import { normalizeUnit } from '../estimating/mapper';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
 import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
+
+// Fix round 1 / B2 — a route handler awaiting saveBidEstimate/syncTakeoff
+// catches this specific error and returns 400; any other error still bubbles
+// to the default error handler (500), same as before this fix.
+async function catchNonFiniteTotal<T>(work: Promise<T>): Promise<{ ok: true; value: T } | { ok: false }> {
+  try {
+    return { ok: true, value: await work };
+  } catch (err) {
+    if (err instanceof NonFiniteTotalError) return { ok: false };
+    throw err;
+  }
+}
 
 const router = Router();
 
@@ -72,11 +86,15 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
     if (!Number.isFinite(qty) || qty < 0) {
       return { ok: false, error: `qty must be a non-negative number for line "${label}"` };
     }
-    if (raw.material_unit_override != null && !Number.isFinite(Number(raw.material_unit_override))) {
-      return { ok: false, error: `material_unit_override must be a number for line "${label}"` };
+    if (raw.material_unit_override != null) {
+      const v = Number(raw.material_unit_override);
+      if (!Number.isFinite(v)) return { ok: false, error: `material_unit_override must be a number for line "${label}"` };
+      if (v < 0) return { ok: false, error: `material_unit_override cannot be negative for line "${label}"` }; // S7
     }
-    if (raw.labor_hours_override != null && !Number.isFinite(Number(raw.labor_hours_override))) {
-      return { ok: false, error: `labor_hours_override must be a number for line "${label}"` };
+    if (raw.labor_hours_override != null) {
+      const v = Number(raw.labor_hours_override);
+      if (!Number.isFinite(v)) return { ok: false, error: `labor_hours_override must be a number for line "${label}"` };
+      if (v < 0) return { ok: false, error: `labor_hours_override cannot be negative for line "${label}"` }; // S7
     }
     if (raw.source !== 'takeoff' && raw.source !== 'manual') {
       return { ok: false, error: `line "${label}" source must be "takeoff" or "manual"` };
@@ -92,7 +110,12 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
       category: String(raw.category ?? ''),
       description: String(raw.description ?? ''),
       qty,
-      unit: raw.unit as EstUnit,
+      // B2: canonicalize unit aliases (ea/each, ft/lf) here too — a manual
+      // line typed straight into the UI never goes through the mapper's
+      // adapters, which is where every OTHER path normalizes. An
+      // unrecognized unit (LS/SET/LOT/blank) passes through unchanged;
+      // resolveLines()/pricing.ts treat that as unit_unknown, never a crash.
+      unit: normalizeUnit(raw.unit as string) as EstUnit,
       assembly_id: (raw.assembly_id as string | null) ?? null,
       item_id: (raw.item_id as string | null) ?? null,
       takeoff_key: (raw.takeoff_key as string | null) ?? null,
@@ -101,6 +124,7 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
       labor_hours_override: raw.labor_hours_override != null ? Number(raw.labor_hours_override) : null,
       confidence: (raw.confidence as LineConfidence | null) ?? null,
       excluded: !!raw.excluded,
+      qty_overridden: !!raw.qty_overridden,
       source: raw.source as 'takeoff' | 'manual',
       sort: typeof raw.sort === 'number' ? raw.sort : undefined,
     });
@@ -337,9 +361,14 @@ router.get('/:bidId', requireAuth, async (req: AuthRequest, res) => {
 router.post('/:bidId/sync-takeoff', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const result = await syncTakeoff(bidId);
+  // Fix round 1 / B2 — sync-takeoff must never 500 just because a takeoff
+  // line has a missing/unrecognized unit; syncTakeoff/pricing.ts already
+  // price that line at $0 with a warning rather than throwing, so the only
+  // failure mode left here is the (very unlikely) non-finite-total guard.
+  const result = await catchNonFiniteTotal(syncTakeoff(bidId));
+  if (!result.ok) return res.status(400).json({ error: 'Computed totals are not finite — refusing to sync' });
   const recap = await computeRecapForBid(bidId);
-  res.json({ ...result, recap });
+  res.json({ ...result.value, recap });
 });
 
 router.post('/:bidId/price', requireAuth, async (req: AuthRequest, res) => {
@@ -364,8 +393,9 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const settingsV = validateSettings(req.body?.settings);
   if (!settingsV.ok) return res.status(400).json({ error: settingsV.error });
 
-  const { recap, bidEstimate } = await saveBidEstimate(bidId, linesV.value, settingsV.value);
-  res.json({ recap, bidEstimate });
+  const result = await catchNonFiniteTotal(saveBidEstimate(bidId, linesV.value, settingsV.value));
+  if (!result.ok) return res.status(400).json({ error: 'Computed totals are not finite — refusing to save' });
+  res.json(result.value);
 });
 
 export default router;

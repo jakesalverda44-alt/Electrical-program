@@ -242,6 +242,234 @@ describe('POST /api/estimating/:bidId/sync-takeoff — preserves estimator edits
   });
 });
 
+describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regressions', () => {
+  it('never overwrites a qty_overridden line\'s qty, even when the takeoff qty changes (VERIFY line the estimator hand-filled)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    // A VERIFY-confidence line arrives with qty 0 (the mapper never guesses
+    // a non-numeric takeoff qty) — the estimator fills in the real number by
+    // hand and marks it qty_overridden.
+    await seedTakeoff(bidId, [
+      { category: 'Grounding', item: '5/8" x 10\' copper-clad ground rod w/ exothermic connection', qty: 'VERIFY', unit: 'EA', confidence: 'VERIFY' },
+    ]);
+    await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const afterFirstSync = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    const groundLine = afterFirstSync.body.lines[0];
+    expect(groundLine.qty).toBe(0);
+
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ ...groundLine, qty: 7, qty_overridden: true }],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3 },
+    }).expect(200);
+
+    // Takeoff re-runs with a DIFFERENT (still non-numeric) qty — must not
+    // clobber the estimator's hand-typed 7.
+    await seedTakeoff(bidId, [
+      { category: 'Grounding', item: '5/8" x 10\' copper-clad ground rod w/ exothermic connection', qty: 'TBD', unit: 'EA', confidence: 'VERIFY' },
+    ]);
+    const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    expect(syncRes.body.lines[0].qty).toBe(7);
+    expect(syncRes.body.lines[0].qty_overridden).toBe(true);
+  });
+
+  it('un-excludes a line that vanished-then-reappeared (sync-excluded), but keeps a USER-excluded line excluded on reappearance', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    await seedTakeoff(bidId, [
+      { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' },
+      { category: 'Grounding', item: '5/8" x 10\' copper-clad ground rod w/ exothermic connection', qty: 2, unit: 'EA' },
+    ]);
+    await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const afterFirstSync = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    const duplexLine = afterFirstSync.body.lines.find((l: { category: string }) => l.category === 'Branch Power');
+    const groundLine = afterFirstSync.body.lines.find((l: { category: string }) => l.category === 'Grounding');
+
+    // The estimator deliberately excludes the duplex line (a user decision).
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ ...duplexLine, excluded: true }, groundLine],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3 },
+    }).expect(200);
+
+    // Takeoff re-runs with BOTH lines vanishing, then a THIRD run brings
+    // both back exactly as before.
+    await seedTakeoff(bidId, []);
+    await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    await seedTakeoff(bidId, [
+      { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' },
+      { category: 'Grounding', item: '5/8" x 10\' copper-clad ground rod w/ exothermic connection', qty: 2, unit: 'EA' },
+    ]);
+    const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+
+    const linesByCategory = new Map(syncRes.body.lines.map((l: { category: string }) => [l.category, l]));
+    const duplex = linesByCategory.get('Branch Power') as { excluded: boolean };
+    const ground = linesByCategory.get('Grounding') as { excluded: boolean };
+    expect(duplex.excluded).toBe(true); // user exclusion survives a vanish + reappear cycle
+    expect(ground.excluded).toBe(false); // sync-exclusion reverses itself on reappearance
+  });
+
+  it('never drops a line when the takeoff has duplicate category+item keys', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    await seedTakeoff(bidId, [
+      { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' },
+      { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 4, unit: 'EA' },
+    ]);
+    const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    expect(syncRes.body.added).toBe(2);
+    expect(syncRes.body.lines.length).toBe(2);
+    const qtys = syncRes.body.lines.map((l: { qty: number }) => l.qty).sort((a: number, b: number) => a - b);
+    expect(qtys).toEqual([4, 10]); // both rows kept, neither overwrote the other
+  });
+
+  it('persists bid_estimates/bids.amount from the sync itself, without a separate PUT', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    await seedTakeoff(bidId, [
+      { category: 'Grounding', item: '5/8" x 10\' copper-clad ground rod w/ exothermic connection', qty: 2, unit: 'EA' },
+    ]);
+    const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    expect(syncRes.body.recap.totals.grandTotal).toBeGreaterThan(0);
+
+    const { rows: bidRows } = await pool.query('SELECT amount FROM bids WHERE id=$1', [bidId]);
+    const { rows: beRows } = await pool.query('SELECT grand_total FROM bid_estimates WHERE bid_id=$1', [bidId]);
+    expect(Number(bidRows[0].amount)).toBeCloseTo(syncRes.body.recap.totals.grandTotal, 2);
+    expect(Number(beRows[0].grand_total)).toBeCloseTo(syncRes.body.recap.totals.grandTotal, 2);
+  });
+});
+
+describe('B2 — unit-unknown lines never 500 and never NaN', () => {
+  it('a takeoff line with an unrecognized unit (SET) syncs without 500ing and prices at $0 with a warning', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    await seedTakeoff(bidId, [
+      { category: 'Site / Underground / Allowances', item: 'Temporary power allowance', qty: 1, unit: 'SET' },
+    ]);
+    const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    expect(syncRes.body.lines.length).toBe(1);
+    expect(Number.isFinite(syncRes.body.recap.totals.grandTotal)).toBe(true);
+    expect(syncRes.body.recap.warnings.unitUnknownCount).toBe(1);
+    expect(syncRes.body.lines[0].qty).not.toBeNaN();
+  });
+
+  it('a manual line with a blank unit still saves (200) and prices at $0 unless overridden', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const saveRes = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ category: 'Branch Power', description: 'Odd line', qty: 3, unit: '', source: 'manual' }],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },
+    }).expect(200);
+    expect(saveRes.body.recap.totals.grandTotal).toBe(0);
+    expect(Number.isFinite(saveRes.body.recap.totals.grandTotal)).toBe(true);
+  });
+
+  it('rejects a negative material_unit_override with 400 (S7)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ category: 'Branch Power', description: 'Bad override', qty: 1, unit: 'EA', material_unit_override: -5, source: 'manual' }],
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3 },
+    }).expect(400);
+  });
+});
+
+describe('B1 — end to end: takeoff -> mapper -> priceBid -> saveBidEstimate, real seed magnitudes', () => {
+  it('1,200 LF of 3/4" EMT and 3,600 LF of #12 THHN price at the right order of magnitude against the real seed', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    // Agent 2/4's REAL line shape: { item: '5.1', spec: '3/4" EMT', qty: 1200, unit: 'LF' }
+    // — `item` is Agent 4's short takeoff id, `spec` is the descriptive text.
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, agent2_output, status) VALUES ($1,$2,'agent2_complete')
+       ON CONFLICT (bid_id) DO UPDATE SET agent2_output=$2, status='agent2_complete'`,
+      [bidId, '```json\n' + JSON.stringify({
+        takeoff: [
+          { category: 'Branch Power', item: '5.1', spec: '3/4" EMT', qty: 1200, unit: 'LF' },
+          { category: 'Branch Power', item: '5.2', spec: '#12 THHN', qty: 3600, unit: 'LF' },
+        ],
+      }) + '\n```']
+    );
+
+    const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    expect(syncRes.body.added).toBe(2);
+    const emtLine = syncRes.body.lines.find((l: { description: string }) => /emt/i.test(l.description));
+    const thhnLine = syncRes.body.lines.find((l: { description: string }) => /thhn/i.test(l.description));
+    expect(emtLine.item_id).toBeTruthy(); // actually matched a library item, not left unresolved
+    expect(thhnLine.item_id).toBeTruthy();
+
+    const saveRes = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: syncRes.body.lines,
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },
+    }).expect(200);
+
+    const emtPriced = saveRes.body.recap.lines.find((l: { id: string }) => l.id === emtLine.id);
+    const thhnPriced = saveRes.body.recap.lines.find((l: { id: string }) => l.id === thhnLine.id);
+
+    // Real seed: EMT-075 = $60/C (per 100 ft), so 1200 LF = 12 C = $720 material.
+    // THHN-12 = $95/M (per 1000 ft) per the branch wire rows, so 3600 LF = 3.6 M = $342 material.
+    // The review's whole point: these must NOT come out at $72,000 / $342,000
+    // (the pre-fix bug divided by the wrong unit's denominator, or not at all).
+    expect(emtPriced.materialExt).toBeGreaterThan(100);
+    expect(emtPriced.materialExt).toBeLessThan(2000);
+    expect(thhnPriced.materialExt).toBeGreaterThan(50);
+    expect(thhnPriced.materialExt).toBeLessThan(2000);
+
+    // Precise assertion against the actual real seed values (locks in the
+    // exact numbers so a future seed-data edit shows up as an intentional diff).
+    expect(emtPriced.materialExt).toBe(720);
+    expect(thhnPriced.materialExt).toBe(342);
+  });
+});
+
+describe('S6 — a bid\'s first-ever settings inherit overhead/profit from bid_workspaces, not the hardcoded 10/15', () => {
+  it('GET returns the bid_workspaces overhead_pct/profit_pct before any est_bid_settings row exists', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await pool.query('INSERT INTO bid_workspaces (bid_id, overhead_pct, profit_pct) VALUES ($1,22,18) ON CONFLICT (bid_id) DO UPDATE SET overhead_pct=22, profit_pct=18', [bidId]);
+
+    const res = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    expect(res.body.settings.overhead_pct).toBe(22);
+    expect(res.body.settings.profit_pct).toBe(18);
+  });
+});
+
+describe('S5 — an explicit 0 settings value is honored, not silently replaced by a fallback', () => {
+  it('a bid_workspaces overhead_pct of exactly 0 is NOT treated as absent', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await pool.query('INSERT INTO bid_workspaces (bid_id, overhead_pct, profit_pct) VALUES ($1,0,0) ON CONFLICT (bid_id) DO UPDATE SET overhead_pct=0, profit_pct=0', [bidId]);
+
+    const res = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    expect(res.body.settings.overhead_pct).toBe(0);
+    expect(res.body.settings.profit_pct).toBe(0);
+  });
+});
+
 describe('bid-level auth', () => {
   it("forbids a salesperson from reading or pricing another rep's bid", async (ctx) => {
     if (!ok) return ctx.skip();

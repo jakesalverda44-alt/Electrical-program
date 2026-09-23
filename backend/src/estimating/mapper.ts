@@ -104,13 +104,13 @@ const KNOWN_UNITS = new Set(['EA', 'LF', 'C', 'M']);
 // different kind of quantity (a count of discrete things) and must never be
 // paired with a linear unit (B1: "If the line unit is incompatible with the
 // library unit (EA vs LF), don't match; leave the line unmatched").
-function unitFamily(u: string): 'EA' | 'LINEAR' | 'OTHER' {
+export function unitFamily(u: string): 'EA' | 'LINEAR' | 'OTHER' {
   const n = normalizeUnit(u);
   if (n === 'EA') return 'EA';
   if (n === 'LF' || n === 'C' || n === 'M') return 'LINEAR';
   return 'OTHER';
 }
-function isUnitCompatible(lineUnit: string, candidateUnit: string): boolean {
+export function isUnitCompatible(lineUnit: string, candidateUnit: string): boolean {
   const a = unitFamily(lineUnit);
   const b = unitFamily(candidateUnit);
   // An unrecognized unit on either side can't be judged compatible or not —
@@ -433,7 +433,7 @@ export function fromTakeoffCategories(categories: TakeoffCategoryLike[]): Normal
         description: (it.description && it.description.trim()) || it.item,
         takeoffItemId: it.item ?? null,
         qty: it.qty,
-        unit: it.unit,
+        unit: normalizeUnit(it.unit), // B2: canonicalize aliases (ea/each, ft/lf) here, once, for every downstream consumer
         sourceConfidence: normalizeSourceConfidence(it.conf),
       });
     }
@@ -481,7 +481,7 @@ export function fromLegacyTakeoff(rows: LegacyTakeoffRow[]): NormalizedTakeoffLi
       description,
       takeoffItemId: r.item ?? null,
       qty: r.qty,
-      unit: r.unit,
+      unit: normalizeUnit(r.unit), // B2: canonicalize aliases (ea/each, ft/lf) here, once, for every downstream consumer
       sourceConfidence: normalizeSourceConfidence(r.confidence),
       altText,
     };
