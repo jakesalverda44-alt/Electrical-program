@@ -12,8 +12,18 @@ import { useConfirm } from '../../../components/ConfirmDialog';
 import Badge, { BadgeTone } from '../../../components/Badge';
 
 const STATUS_TONE: Record<LineMarkupStatus, BadgeTone> = {
-  applied: 'good', matches: 'info', differs: 'warn', not_marked: 'neutral',
+  applied: 'good', changed_since_applied: 'warn', matches: 'info', differs: 'warn', not_marked: 'neutral',
 };
+
+// Fix round 1 / B6 — 'changed_since_applied' behaves exactly like 'differs'
+// everywhere a status feeds the bulk Apply flow: it's still "there's a
+// marked qty that hasn't reached the line yet", whether the line was
+// never applied or was applied once and has since diverged. Deliberately
+// excludes 'not_marked' (nothing to apply at all) — same as the original
+// 'differs'-only set.
+function hasUnappliedMarkedQty(status: LineMarkupStatus): boolean {
+  return status === 'differs' || status === 'changed_since_applied';
+}
 
 function groupByCategory(lines: EstimateLine[]): { category: string; lines: EstimateLine[] }[] {
   const byCategory = new Map<string, EstimateLine[]>();
@@ -74,7 +84,7 @@ export default function ItemsPanel({
 
   const differingKeys = useMemo(
     () => lines
-      .filter(l => l.line_key && computeLineStatus(l, rollupByKey.get(l.line_key)) === 'differs')
+      .filter(l => l.line_key && hasUnappliedMarkedQty(computeLineStatus(l, rollupByKey.get(l.line_key))))
       .map(l => l.line_key as string),
     [lines, rollupByKey]
   );
@@ -203,7 +213,7 @@ export default function ItemsPanel({
                       Suggest markers
                     </button>
                   )}
-                  {key && (status === 'differs' || status === 'not_marked') && r?.markedQty != null && (
+                  {key && (hasUnappliedMarkedQty(status) || status === 'not_marked') && r?.markedQty != null && (
                     <button
                       className="btn ghost sm"
                       disabled={isApplying}

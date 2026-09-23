@@ -81,6 +81,27 @@ describe('ItemsPanel — statuses and grouping', () => {
     setup({ rollup: [rollup({ markedQty: 24, sheets: [{ documentId: 'd1', pageIndex: 0, markerCount: 24 }] })] });
     expect(screen.getByText('Marked on 1 sheet')).toBeTruthy();
   });
+
+  // Fix round 1 / B6 — the reviewer's exact failure scenario: 20 applied,
+  // 6 more fixtures found and marked later (26 total) — the row must NOT
+  // stay stuck reading "Applied" with no way to re-apply the new count.
+  it('shows "Changed since applied", WITH an Apply button, when a markup-applied line\'s rollup has since diverged from its qty', () => {
+    setup({ lines: [line({ qty: 20, qty_source: 'markup' })], rollup: [rollup({ markedQty: 26 })] });
+    expect(screen.getByText('Changed since applied')).toBeTruthy();
+    expect(screen.getByText('Apply marked qty')).toBeTruthy();
+    expect(screen.queryByText('Applied')).toBeNull();
+  });
+
+  it('"Apply all that differ" counts a changed_since_applied line, not just a never-applied "differs" one', () => {
+    setup({ lines: [line({ qty: 20, qty_source: 'markup' })], rollup: [rollup({ markedQty: 26 })] });
+    expect(screen.getByText('Apply all that differ (1)')).toBeTruthy();
+  });
+
+  it('per-line Apply on a changed_since_applied line sends its own line_key, same as any other unapplied line', async () => {
+    const { onApplyLines } = setup({ lines: [line({ qty: 20, qty_source: 'markup' })], rollup: [rollup({ markedQty: 26 })] });
+    fireEvent.click(screen.getByText('Apply marked qty'));
+    await waitFor(() => expect(onApplyLines).toHaveBeenCalledWith(['k1']));
+  });
 });
 
 describe('ItemsPanel — selection and show-only-active-line', () => {
