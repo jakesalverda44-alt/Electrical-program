@@ -109,8 +109,20 @@ const PVC_UNDERGROUND_ROWS: SizeRow[] = [
   { size: '3"', suffix: '300', material: 180, hours: 12.0 },
   { size: '4"', suffix: '400', material: 250, hours: 15.5 },
 ];
+// Fix round 2 / N6 — an above-grade Branch Power 2" PVC item, distinct from
+// PVC-200 (the underground-only item at the same size) — a bare "2\" PVC"
+// takeoff line in a Branch Power category now has a same-size candidate
+// that actually earns the category bonus, instead of the only 2" PVC item
+// in the library being the underground one (correct price, wrong category).
+// A different code prefix ("PVCB", not "PVC") avoids colliding with
+// PVC_UNDERGROUND_ROWS' own '200' suffix under the shared 'PVC' prefix.
+const PVC_BRANCH_200: SeedItem = {
+  code: 'PVCB-200', name: '2" PVC Sch 40 (incl. fittings/glue)', category: CAT.BRANCH, unit: 'C',
+  materialCost: 75, laborHours: 7.0, aliases: ['2" pvc sch 40 (incl. fittings/glue)'],
+};
 const PVC_ITEMS = [
   ...raceway('PVC', CAT.BRANCH, 'PVC Sch 40 (incl. fittings/glue)', PVC_BRANCH_ROWS),
+  PVC_BRANCH_200,
   ...raceway('PVC', CAT.SITE, 'PVC Sch 40, underground (incl. fittings/glue)', PVC_UNDERGROUND_ROWS),
 ];
 

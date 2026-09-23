@@ -225,6 +225,15 @@ describe('mapTakeoffLine — B3: mismatch regressions against the real seed libr
   it('2" PVC never alias-matches 1/2" PVC', () => {
     const m = mapTakeoffLine(line({ description: '2" PVC', unit: 'LF' }), library);
     expect(m.matchedCode).not.toBe('PVC-050');
+    // R2-N6 — a bare "2\" PVC" line defaults to Branch Power (line()'s
+    // default category), which now has its OWN above-grade 2" PVC item
+    // (PVCB-200) — the category bonus prefers it over the underground-only
+    // PVC-200, fixing the "correct price, wrong category" the review flagged.
+    expect(m.matchedCode).toBe('PVCB-200');
+  });
+
+  it('R2-N6: a 2" PVC line explicitly in Site / Underground / Allowances still prefers the underground item', () => {
+    const m = mapTakeoffLine(line({ description: '2" PVC', unit: 'LF', category: 'Site / Underground / Allowances' }), library);
     expect(m.matchedCode).toBe('PVC-200');
   });
 

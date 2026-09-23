@@ -80,6 +80,22 @@ describe('migration 102 — seed insert is idempotent', () => {
               (SELECT COUNT(*) FROM est_labor_factors) AS factors`
     );
     await pool.query(sql);
+    // Fix round 2 / SF5 — migration 107 DELETEs a component row 102's own
+    // (immutable, never-edited-in-place) text still inserts: the
+    // ASM-SVCENT-800/DISC-400 link, removed because a leftover qty_per=0
+    // row made that assembly uneditable in Settings. Re-running 102's raw
+    // text in isolation (as this test does, on purpose, to catch a genuinely
+    // non-idempotent INSERT) necessarily resurrects that one row — that's a
+    // known, deliberate consequence of a LATER migration correcting
+    // something 102 got wrong, not a bug in 102's own INSERTs. Re-apply
+    // 107's cleanup (itself idempotent — DELETE ... WHERE finds nothing the
+    // second time) before asserting true idempotency of everything else.
+    await pool.query(
+      `DELETE FROM est_assembly_components eac
+       USING est_assemblies asm, est_items it
+       WHERE eac.assembly_id = asm.id AND eac.item_id = it.id
+         AND asm.code = 'ASM-SVCENT-800' AND asm.source = 'seed' AND it.code = 'DISC-400'`
+    );
     const after = await pool.query(
       `SELECT (SELECT COUNT(*) FROM est_items) AS items,
               (SELECT COUNT(*) FROM est_assemblies) AS assemblies,
