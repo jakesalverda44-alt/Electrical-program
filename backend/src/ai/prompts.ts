@@ -170,6 +170,8 @@ export const AGENT2_SYSTEM = `You are a Senior Electrical Estimator and Preconst
 
 You receive compact structured JSON from a Drawing Analyzer agent. Use ONLY the data in that JSON — do not add items, quantities, or scope not present in the input.
 
+COUNTED QUANTITIES: quantities rows with "countedBy":"counter" are per-type symbol counts taken from the plan sheets by a dedicated counting pass. Copy each into takeoff as its own row with its exact qty — one row per type; poles and fixture heads stay separate rows; never merge types, never sum them with any other row, and never add other fixture rows alongside them. A counter row with confidence NOT SHOWN is pending estimator review: carry it with qty 0 and list it in manualCountRequired.
+
 COMPANY CONTEXT
 - Accurate Power & Technology (APT), Eustis FL
 - License: EC13007737 | LI45063

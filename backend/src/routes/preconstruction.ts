@@ -42,6 +42,7 @@ import { parseMoney } from '../utils/money';
 import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
+import { runCountingStage } from '../ai/countingStage';
 import { composeBidData, ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
 import { resolveUniqueJobNumber } from '../bidstd/boilerplate';
 import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
@@ -535,6 +536,9 @@ export async function runPipeline(
   let agent1Output = '';
   let agent2Output = '';
   let agent3Output = '';
+  // Takeoff accuracy Task 5 — the counting stage needs the page inventory and
+  // the PDF bytes Agent 1 was built from.
+  let countingInventory: PrepInventoryEntry[] = [];
 
   const updateStatus = (status: string) =>
     pool.query(`UPDATE takeoff_results SET status=$1 WHERE bid_id=$2`, [status, bidId]);
@@ -580,6 +584,7 @@ export async function runPipeline(
       uploadPrep = { batches: [legacyContentBlocks(filesToSend)], inventory: [], classifierUsage: { ...NO_USAGE } };
     }
     const { batches: agent1Batches, inventory: prepInventory, classifierUsage } = uploadPrep;
+    countingInventory = prepInventory;
     let agent1JSON: Record<string, unknown> = {};
 
     if (agent1Batches.length <= 1) {
@@ -711,6 +716,32 @@ export async function runPipeline(
       `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
       [message, bidId]
     );
+    return;
+  }
+
+  // ── Agent 1C: counting stage (takeoff accuracy, Decisions 1-7) ─────────────
+  // Every fixture/device/equipment type from the schedules and legend is
+  // counted on each electrical plan sheet at 300 DPI; the counts REPLACE
+  // Agent 1's own for those types before Agent 2 ever sees them.
+  try {
+    await updateStatus('counting');
+    const pdfs = new Map<string, Buffer>();
+    for (const f of files) {
+      if ((f.originalname.split('.').pop() || '').toLowerCase() === 'pdf') pdfs.set(f.originalname, f.buffer);
+    }
+    const stage = await runCountingStage({
+      client, model: config.modelCounter, maxTokens: config.maxTokensCounter,
+      agent1: parseAIJSON(agent1Output) ?? {}, inventory: countingInventory, pdfs,
+    });
+    agent1Output = JSON.stringify(stage.agent1, null, 2);
+    await pool.query(
+      `UPDATE takeoff_results SET agent1_output=$1, count_result=$2, usage_counter=$3, model_counter=$4 WHERE bid_id=$5`,
+      [agent1Output, JSON.stringify(stage.countResult), JSON.stringify(stage.usage), config.modelCounter, bidId]
+    );
+  } catch (err) {
+    const message = isAgentTruncatedError(err) ? (err as Error).message : `Counting stage failed: ${describeAIError(err)}`;
+    logger.error({ err, bidId }, 'Takeoff counting stage failed');
+    await pool.query(`UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`, [message, bidId]);
     return;
   }
 

@@ -12,9 +12,9 @@ import { parseCounterResponse, placeAndDedupe, buildCounterContent, runCounter, 
 import { planCountTiles, readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry } from './countRender';
 import { buildCountTargets } from './countTargets';
 import { isPdftoppmAvailable } from './documentPrep';
-import { screenPosition } from '../estimating/pageGeometry';
-import { MINI_P2_SYMBOLS, MINI_P3_SYMBOLS, type SymbolSpec } from '../test/fixtures/takeoff/buildSymbolPdf';
-import { fakeAnthropic, userText, imageCount, type FakeRequest } from '../test/fixtures/takeoff/fakeAnthropic';
+import { MINI_P2_SYMBOLS, MINI_P3_SYMBOLS } from '../test/fixtures/takeoff/buildSymbolPdf';
+import { fakeAnthropic, userText, imageCount } from '../test/fixtures/takeoff/fakeAnthropic';
+import { perfectCounter } from '../test/fixtures/takeoff/perfectCounter';
 import { kissimmeeAgent1 } from '../test/fixtures/takeoff/agent1Fixtures';
 
 const inv = (file: string, page: number, sheetNo: string, title: string, cls = 'plan', discipline = 'electrical', included = true): InventoryPage =>
@@ -156,29 +156,6 @@ describe('buildCounterContent', () => {
 // ── Orchestrator on real tiles ──────────────────────────────────────────────
 
 const PDF = fs.readFileSync(path.join(__dirname, '../test/fixtures/takeoff/kissimmee-mini.pdf'));
-
-/** A perfect counter: for the sheet named in the request, report every drawn
- *  symbol in EVERY tile of this call whose area contains it. */
-function perfectCounter(truth: Record<string, { rendered: RenderedCountPage; symbols: SymbolSpec[] }>) {
-  return (req: FakeRequest) => {
-    const text = userText(req);
-    const sheet = Object.keys(truth).find(label => text.includes(`SHEET: ${label}`))!;
-    const { rendered, symbols } = truth[sheet];
-    const g = rendered.geometry;
-    const ids = [...text.matchAll(/Tile (R\d+C\d+) \(row/g)].map(m => m[1]);
-    const marks: unknown[] = [];
-    for (const s of symbols) {
-      const d = screenPosition(s.x, s.y, g.originX, g.originY, g.widthPt, g.heightPt, g.rotation);
-      for (const id of ids) {
-        const t = rendered.tiles.find(x => x.id === id)!;
-        const nx = (d.x / 72 - t.leftIn) / t.widthIn;
-        const ny = (d.y / 72 - t.topIn) / t.heightIn;
-        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) marks.push([s.type, id, Number(nx.toFixed(3)), Number(ny.toFixed(3))]);
-      }
-    }
-    return { text: JSON.stringify({ marks, unreadable: [], notes: [] }) };
-  };
-}
 
 describe('runCounter — real tiles of kissimmee-mini.pdf, perfect fake counter', () => {
   let have = false;

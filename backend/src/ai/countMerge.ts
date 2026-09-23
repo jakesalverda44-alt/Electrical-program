@@ -1,0 +1,414 @@
+// Takeoff accuracy, Task 5 — merge the counting stage into the takeoff
+// (Decisions 5-7). Pure: no I/O, no AI.
+//
+// 1. Per type, per sheet: how many de-duplicated marks.
+// 2. Cross-sheet rules (Decision 7) — ONE line per type:
+//    * photometric / calc / schedule sheets were never counted (countSheets);
+//    * site pole types count only on the site sheet; building-mounted
+//      exterior and interior types only on the building plan(s) — a count on
+//      the wrong kind of sheet is ignored (recorded, never silently);
+//    * a lighting type counted on both a lighting plan and a power plan keeps
+//      the lighting plan's count (and vice versa for devices);
+//    * sheets for DIFFERENT levels are summed; two sheets for the same area
+//      keep the larger count and flag it;
+//    * an enlarged/partial plan that shows a type also on the main plan is
+//      flagged and the larger count kept — never summed.
+//    If a category has no sheet of its preferred kind at all (one sheet
+//    carries site and building), every counted sheet is allowed for it.
+// 3. Poles and heads are separate lines (S1 x2 + S2 x1 = 3 poles; heads from
+//    the schedule's heads-per-pole).
+// 4. Load cross-check (Decision 5): counted fixture watts vs the panel
+//    schedules' lighting circuit loads; > 20% apart is flagged, not blocked.
+// 5. Agent 1's own rows for counted types are REPLACED (not summed) by the
+//    counted rows; Agent 1 fixture rows that match no scheduled type are
+//    removed too (that is where Kissimmee's stacked "4 site lights" came
+//    from) and listed so the estimator can see exactly what left the takeoff.
+import { isFixtureCategory, normalizeTypeKey, type CountTarget, type TargetCategory } from './countTargets';
+import type { CountSheet, SheetRole, SheetFocus } from './countSheets';
+
+export interface SheetCountInput {
+  sheet: CountSheet;
+  status: 'counted' | 'failed';
+  error?: string;
+  placed: Array<{ typeKey: string }>;
+  unreadable: Array<{ typeKey: string; tileId: string | null; note: string }>;
+}
+
+export type TypeCountStatus = 'counted' | 'zero' | 'unreadable';
+
+export interface TypeSheetCount {
+  sheetKey: string;
+  label: string;
+  count: number;
+  used: boolean;
+  /** Why a non-zero count on this sheet was not used. */
+  ignoredReason?: string;
+}
+
+export interface TypeCountResult {
+  key: string;
+  type: string;
+  description: string;
+  category: TargetCategory;
+  /** Final quantity (poles, for a site pole type). */
+  count: number;
+  /** Site pole types only: poles x heads-per-pole, or null when the schedule
+   *  gives no heads-per-pole (then the heads line needs the estimator). */
+  heads: number | null;
+  status: TypeCountStatus;
+  /** Why the status is zero/unreadable, in the estimator's words. */
+  reason: string;
+  sheets: TypeSheetCount[];
+  flags: string[];
+  wattage: number | null;
+}
+
+export interface LoadCheck {
+  ran: boolean;
+  skippedReason?: string;
+  countedWatts: number;
+  circuitVA: number;
+  /** (circuit - counted) / circuit, e.g. 0.35 = counted load is 35% under. */
+  gapPct: number | null;
+  discrepancy: boolean;
+  perPanel: Array<{ panel: string; va: number; circuits: number }>;
+  suspectCircuits: Array<{ panel: string; circuit: string; loadVA: number; note: string }>;
+}
+
+export interface RemovedRow {
+  row: Record<string, unknown>;
+  reason: string;
+  replacedByType: string | null;
+}
+
+export interface CountMergeResult {
+  types: TypeCountResult[];
+  loadCheck: LoadCheck;
+  /** Agent 1 quantities after the merge. */
+  quantities: Record<string, unknown>[];
+  removedRows: RemovedRow[];
+  flags: string[];
+}
+
+const LOAD_GAP_THRESHOLD = 0.2;
+/** A lighting circuit load under 10 "VA" is almost certainly kVA mis-entered;
+ *  it is excluded from the comparison and flagged, never auto-converted. */
+const SUSPECT_VA_BELOW = 10;
+
+function preferredRole(c: TargetCategory): SheetRole {
+  return c === 'site_lighting' ? 'site' : 'building';
+}
+
+/** The sheet focus that is the WRONG place to count a category, if any. */
+function antiFocus(c: TargetCategory): SheetFocus | null {
+  if (c === 'interior_lighting' || c === 'exterior_building' || c === 'site_lighting' || c === 'lighting_control') return 'power';
+  if (c === 'device' || c === 'equipment') return 'lighting';
+  return null;
+}
+
+const CATEGORY_ROW: Record<TargetCategory, string> = {
+  interior_lighting: 'Interior Lighting',
+  exterior_building: 'Exterior Site Lighting',
+  site_lighting: 'Exterior Site Lighting',
+  lighting_control: 'Lighting Controls',
+  device: 'Branch Power',
+  equipment: 'Branch Power',
+  panel_circuit: 'Branch Power',
+};
+
+const FIXTURE_ROW_CATEGORIES = new Set(['interior lighting', 'exterior site lighting', 'exterior / site lighting']);
+const TYPE_ROW_CATEGORIES = new Set([...FIXTURE_ROW_CATEGORIES, 'lighting controls', 'branch power']);
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** How strongly an Agent 1 quantity row describes this type: 3 = an explicit
+ *  tag form ("Type A", "(A)", "A - ...", or a distinctive tag with a digit
+ *  like "S1" anywhere), 2 = the schedule description exactly, 1 = one
+ *  contains the other (multi-word), 0 = no match. A bare one-letter tag only
+ *  matches in an explicit tag form, never as a word. */
+export function rowMatchScore(row: Record<string, unknown>, t: CountTarget): number {
+  const item = String(row.item ?? '').toUpperCase().replace(/\s+/g, ' ').trim();
+  const text = `${item} ${String(row.spec ?? '').toUpperCase().replace(/\s+/g, ' ').trim()}`.trim();
+  if (!text) return 0;
+  const k = escapeRe(t.key);
+  const tagForms = [
+    new RegExp(`\\bTYPE\\s*[:#-]?\\s*${k}(?![A-Z0-9])`),
+    new RegExp(`\\(\\s*${k}\\s*\\)`),
+    new RegExp(`^${k}\\s*[-–—:]`),
+  ];
+  if (t.key.length >= 2 && /\d/.test(t.key)) {
+    tagForms.push(new RegExp(`(?:^|[^A-Z0-9-])${k}(?![A-Z0-9])`));
+  }
+  if (tagForms.some(re => re.test(text))) return 3;
+  const desc = t.description.toUpperCase().replace(/\s+/g, ' ').trim();
+  if (!desc || desc.split(' ').length < 2) return 0;
+  if (item === desc) return 2;
+  if (item.length > 6 && (item.includes(desc) || desc.includes(item))) return 1;
+  return 0;
+}
+
+/** The target this row belongs to (highest score; first on ties), if any. */
+export function matchRowToTarget(row: Record<string, unknown>, targets: CountTarget[]): CountTarget | undefined {
+  let best: CountTarget | undefined;
+  let bestScore = 0;
+  for (const t of targets) {
+    const sc = rowMatchScore(row, t);
+    if (sc > bestScore) { best = t; bestScore = sc; }
+  }
+  return best;
+}
+
+export function combineSheetCounts(
+  t: CountTarget,
+  sheets: SheetCountInput[],
+): Pick<TypeCountResult, 'count' | 'sheets' | 'flags'> & { allowedFailed: string[]; unreadableOn: string[] } {
+  const flags: string[] = [];
+  const counted = sheets.filter(s => s.status === 'counted');
+  const role = preferredRole(t.category);
+  const hasPreferredRole = counted.some(s => s.sheet.role === role);
+  const allowed = (s: SheetCountInput) => s.sheet.role === 'enlarged' || !hasPreferredRole || s.sheet.role === role;
+  if (!hasPreferredRole && counted.length) {
+    flags.push(`No ${role === 'site' ? 'site' : 'building'} plan was counted — ${t.type} was taken from every counted plan sheet.`);
+  }
+  const anti = antiFocus(t.category);
+  const hasNonAnti = counted.some(s => allowed(s) && s.sheet.role !== 'enlarged' && s.sheet.focus !== anti);
+
+  const perSheet: TypeSheetCount[] = sheets.map(s => ({
+    sheetKey: s.sheet.key,
+    label: s.sheet.label,
+    count: s.placed.filter(p => p.typeKey === t.key).length,
+    used: false,
+  }));
+
+  const usable: Array<{ s: SheetCountInput; c: TypeSheetCount }> = [];
+  sheets.forEach((s, i) => {
+    const c = perSheet[i];
+    if (s.status !== 'counted') { c.ignoredReason = 'sheet could not be counted'; return; }
+    if (!allowed(s)) {
+      if (c.count > 0) {
+        c.ignoredReason = t.category === 'site_lighting'
+          ? 'site pole fixtures are counted only on the site plan'
+          : 'building fixtures and devices are counted only on the building plan';
+        flags.push(`${t.type}: ${c.count} on ${s.sheet.label} ignored — ${c.ignoredReason}.`);
+      }
+      return;
+    }
+    if (anti && s.sheet.role !== 'enlarged' && s.sheet.focus === anti && hasNonAnti) {
+      if (c.count > 0) {
+        c.ignoredReason = anti === 'power' ? 'lighting is taken from the lighting plan' : 'devices are taken from the power plan';
+        flags.push(`${t.type}: ${c.count} on ${s.sheet.label} ignored — ${c.ignoredReason}.`);
+      }
+      return;
+    }
+    usable.push({ s, c });
+  });
+
+  // Main (non-enlarged) sheets: sum across distinct levels, max within a level.
+  const main = usable.filter(u => u.s.sheet.role !== 'enlarged');
+  const byLevel = new Map<string, Array<{ s: SheetCountInput; c: TypeSheetCount }>>();
+  for (const u of main) {
+    const lv = u.s.sheet.level;
+    if (!byLevel.has(lv)) byLevel.set(lv, []);
+    byLevel.get(lv)!.push(u);
+  }
+  let mainTotal = 0;
+  for (const group of byLevel.values()) {
+    const nonzero = group.filter(g => g.c.count > 0);
+    if (nonzero.length === 0) continue;
+    const best = nonzero.reduce((a, b) => (b.c.count > a.c.count ? b : a));
+    best.c.used = true;
+    mainTotal += best.c.count;
+    for (const g of nonzero) {
+      if (g === best) continue;
+      g.c.ignoredReason = `same area as ${best.s.sheet.label} — larger count kept`;
+      flags.push(`${t.type} counted on both ${best.s.sheet.label} (${best.c.count}) and ${g.s.sheet.label} (${g.c.count}) — kept ${best.c.count}, not summed. Check whether these sheets show the same area.`);
+    }
+  }
+
+  // Enlarged plans: never summed with the main plan.
+  const enlarged = usable.filter(u => u.s.sheet.role === 'enlarged' && u.c.count > 0);
+  let count = mainTotal;
+  if (enlarged.length) {
+    const bestEnl = enlarged.reduce((a, b) => (b.c.count > a.c.count ? b : a));
+    if (mainTotal > 0) {
+      flags.push(`${t.type} appears on the enlarged plan ${bestEnl.s.sheet.label} (${bestEnl.c.count}) and on the main plan (${mainTotal}) — kept the larger (${Math.max(mainTotal, bestEnl.c.count)}), not summed. Confirm the main plan shows that area.`);
+      if (bestEnl.c.count > mainTotal) {
+        for (const u of main) if (u.c.used) { u.c.used = false; u.c.ignoredReason = `enlarged plan ${bestEnl.s.sheet.label} shows more`; }
+        bestEnl.c.used = true;
+        count = bestEnl.c.count;
+      } else {
+        bestEnl.c.ignoredReason = 'enlarged plan — main plan count kept';
+      }
+    } else {
+      bestEnl.c.used = true;
+      count = bestEnl.c.count;
+    }
+    for (const u of enlarged) if (u !== bestEnl && !u.c.ignoredReason) u.c.ignoredReason = `enlarged plan — ${bestEnl.s.sheet.label} kept`;
+  }
+
+  const allowedFailed = sheets.filter(s => s.status === 'failed' && allowed(s)).map(s => s.sheet.label);
+  const unreadableOn = [...new Set(sheets.filter(s => s.status === 'counted' && allowed(s))
+    .filter(s => s.unreadable.some(u => u.typeKey === t.key)).map(s => s.sheet.label))];
+  return { count, sheets: perSheet, flags, allowedFailed, unreadableOn };
+}
+
+export function computeLoadCheck(types: TypeCountResult[], panelCircuits: unknown): LoadCheck {
+  const circuits = Array.isArray(panelCircuits) ? panelCircuits.filter((c): c is Record<string, unknown> => !!c && typeof c === 'object') : [];
+  const suspect: LoadCheck['suspectCircuits'] = [];
+  const perPanel = new Map<string, { va: number; circuits: number }>();
+  let circuitVA = 0;
+  for (const c of circuits) {
+    const va = Number(c.loadVA);
+    const panel = String(c.panel ?? '').trim() || '(unnamed panel)';
+    const circuit = String(c.circuit ?? '').trim();
+    if (!Number.isFinite(va) || va <= 0) continue;
+    if (va < SUSPECT_VA_BELOW) {
+      suspect.push({ panel, circuit, loadVA: va, note: `${va} VA is implausibly small for a lighting circuit — probably kVA; excluded from the comparison, not converted` });
+      continue;
+    }
+    circuitVA += va;
+    const p = perPanel.get(panel) ?? { va: 0, circuits: 0 };
+    p.va += va; p.circuits++;
+    perPanel.set(panel, p);
+  }
+  const fixtures = types.filter(t => isFixtureCategory(t.category));
+  const base: LoadCheck = {
+    ran: false, countedWatts: 0, circuitVA, gapPct: null, discrepancy: false,
+    perPanel: [...perPanel.entries()].map(([panel, v]) => ({ panel, ...v })),
+    suspectCircuits: suspect,
+  };
+  if (circuitVA <= 0) return { ...base, skippedReason: 'no lighting circuit loads on the panel schedules' };
+  const missingWatts = fixtures.filter(t => t.count > 0 && t.wattage == null).map(t => t.type);
+  if (missingWatts.length) return { ...base, skippedReason: `no wattage on the schedule for type(s) ${missingWatts.join(', ')}` };
+  if (fixtures.some(t => t.status !== 'counted')) return { ...base, skippedReason: 'some fixture types still need review' };
+  // Site types: the schedule wattage is taken per scheduled luminaire (pole
+  // assembly), times the pole count. LED power factor ~1, so W ~ VA.
+  const countedWatts = fixtures.reduce((s, t) => s + t.count * (t.wattage ?? 0), 0);
+  const gapPct = (circuitVA - countedWatts) / circuitVA;
+  return { ...base, ran: true, countedWatts, gapPct, discrepancy: Math.abs(gapPct) > LOAD_GAP_THRESHOLD };
+}
+
+function countedRowItem(t: CountTarget): string {
+  const desc = t.description || t.type;
+  if (t.source === 'legend') return normalizeTypeKey(t.description) === t.key ? desc : `${desc} (${t.type})`;
+  return t.category === 'equipment' ? `${t.type} — ${desc} (connection)` : `Type ${t.type} — ${desc}`;
+}
+
+export function mergeCountsIntoTakeoff(
+  agent1: Record<string, unknown>,
+  targets: CountTarget[],
+  sheets: SheetCountInput[],
+  opts: { countingRan: boolean; notRunReason?: string },
+): CountMergeResult {
+  const flags: string[] = [];
+  const types: TypeCountResult[] = [];
+
+  for (const t of targets) {
+    if (!opts.countingRan) {
+      types.push({
+        key: t.key, type: t.type, description: t.description, category: t.category, wattage: t.wattage,
+        count: 0, heads: null, status: 'unreadable', reason: opts.notRunReason || 'the counting stage did not run',
+        sheets: [], flags: [],
+      });
+      continue;
+    }
+    const c = combineSheetCounts(t, sheets);
+    let status: TypeCountStatus = 'counted';
+    let reason = '';
+    if (c.unreadableOn.length) {
+      status = 'unreadable';
+      reason = `symbols could not be read reliably on ${c.unreadableOn.join(', ')}`;
+    } else if (c.allowedFailed.length) {
+      status = 'unreadable';
+      reason = `${c.allowedFailed.join(', ')} could not be counted`;
+    } else if (c.count === 0) {
+      status = 'zero';
+      reason = sheets.some(s => s.status === 'counted') ? 'not found on any counted plan sheet' : 'no plan sheets were counted';
+    }
+    let heads: number | null = null;
+    if (t.category === 'site_lighting') {
+      heads = t.headsPerPole != null ? c.count * t.headsPerPole : null;
+      if (c.count > 0 && t.headsPerPole == null) {
+        c.flags.push(`${t.type}: heads per pole is not on the schedule — the heads line needs a count.`);
+      }
+    }
+    types.push({
+      key: t.key, type: t.type, description: t.description, category: t.category, wattage: t.wattage,
+      count: c.count, heads, status, reason, sheets: c.sheets, flags: c.flags,
+    });
+    flags.push(...c.flags);
+  }
+
+  const loadCheck = computeLoadCheck(types, agent1.panelCircuits);
+  if (loadCheck.discrepancy && loadCheck.gapPct != null) {
+    const dir = loadCheck.gapPct > 0 ? 'under' : 'over';
+    flags.push(`Counted fixture load ${Math.round(loadCheck.countedWatts)} W is ${Math.round(Math.abs(loadCheck.gapPct) * 100)}% ${dir} the panel schedules' lighting circuits (${Math.round(loadCheck.circuitVA)} VA) — check the lighting counts.`);
+  }
+  for (const s of loadCheck.suspectCircuits) flags.push(`Panel ${s.panel} circuit ${s.circuit}: ${s.note}.`);
+
+  // ── Replace Agent 1's rows ────────────────────────────────────────────────
+  // When counting never ran there is nothing to replace them WITH: Agent 1's
+  // rows stay exactly as they were (they are the only numbers there are) and
+  // every type goes to review as unreadable.
+  if (!opts.countingRan) {
+    const quantities = Array.isArray(agent1.quantities) ? [...agent1.quantities] as Record<string, unknown>[] : [];
+    return { types, loadCheck, quantities, removedRows: [], flags };
+  }
+  const original = Array.isArray(agent1.quantities) ? agent1.quantities.filter((r): r is Record<string, unknown> => !!r && typeof r === 'object') : [];
+  const removedRows: RemovedRow[] = [];
+  const kept: Record<string, unknown>[] = [];
+  const fixtureTargetsCounted = opts.countingRan && targets.some(t => isFixtureCategory(t.category))
+    && sheets.some(s => s.status === 'counted');
+  const equipmentTargetsCounted = opts.countingRan && targets.some(t => t.category === 'equipment')
+    && sheets.some(s => s.status === 'counted');
+  for (const row of original) {
+    const cat = String(row.category ?? '').trim().toLowerCase();
+    const match = TYPE_ROW_CATEGORIES.has(cat) ? matchRowToTarget(row, targets) : undefined;
+    if (match) {
+      removedRows.push({ row, reason: `replaced by the counted quantity for type ${match.type}`, replacedByType: match.type });
+      continue;
+    }
+    if (equipmentTargetsCounted && cat === 'branch power' && /equipment\s+connection/i.test(String(row.item ?? ''))) {
+      removedRows.push({ row, reason: 'aggregate equipment-connection row — replaced by one counted line per equipment tag', replacedByType: null });
+      continue;
+    }
+    if (fixtureTargetsCounted && FIXTURE_ROW_CATEGORIES.has(cat)) {
+      removedRows.push({ row, reason: 'fixture row that matches no scheduled type — removed so it cannot stack on the counted types; add it back if it is real', replacedByType: null });
+      continue;
+    }
+    kept.push(row);
+  }
+
+  const counted: Record<string, unknown>[] = [];
+  for (const t of targets) {
+    const r = types.find(x => x.key === t.key)!;
+    const sheetsUsed = r.sheets.filter(s => s.used).map(s => s.label.split(' ')[0]);
+    const base = {
+      category: CATEGORY_ROW[t.category],
+      unit: 'EA',
+      sourceSheet: sheetsUsed.join(', ') || t.sourceSheet,
+      // AI symbol counts are visual counts (APPROX), never FIRM — the
+      // estimator confirms markers on the plans to make a line FIRM.
+      confidence: r.status === 'counted' ? 'ASSUMED' : 'NOT SHOWN',
+      countedBy: 'counter',
+      countType: t.type,
+    };
+    const pending = r.status === 'counted' ? '' : `COUNT PENDING ESTIMATOR REVIEW (${r.reason})`;
+    if (t.category === 'site_lighting') {
+      counted.push({ ...base, item: `Type ${t.type} — pole (${t.description || 'site light'})`, qty: r.status === 'counted' ? r.count : 0, spec: pending || 'site pole' });
+      counted.push({
+        ...base,
+        item: `Type ${t.type} — fixture heads${t.headsPerPole != null ? ` (${t.headsPerPole} per pole)` : ''}`,
+        qty: r.status === 'counted' && r.heads != null ? r.heads : 0,
+        spec: pending || (r.heads == null ? 'COUNT PENDING ESTIMATOR REVIEW (heads per pole not on the schedule)' : t.description),
+        ...(r.heads == null ? { confidence: 'NOT SHOWN' } : {}),
+      });
+      continue;
+    }
+    counted.push({ ...base, item: countedRowItem(t), qty: r.status === 'counted' ? r.count : 0, spec: pending || t.description });
+  }
+
+  return { types, loadCheck, quantities: [...kept, ...counted], removedRows, flags };
+}

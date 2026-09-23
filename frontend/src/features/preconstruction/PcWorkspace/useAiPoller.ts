@@ -11,7 +11,10 @@ import { analysisErrorMessage, buildScopeFromAgent2 } from './parsing';
 
 // A stuck 'running' status used to poll every 3s for the rest of the session
 // (audit data #5). Ten minutes is well past the pipeline's real worst case.
-export const POLL_DEADLINE_MS = 10 * 60 * 1000;
+// Takeoff accuracy — the counting stage (Agent 1C, Opus on every electrical
+// plan sheet at 300 DPI, 3 sheets at a time) adds minutes to a run; 30 min
+// covers a large set without polling forever.
+export const POLL_DEADLINE_MS = 30 * 60 * 1000;
 export const POLL_TIMEOUT_MESSAGE = 'Analysis timed out — check status in the Plan Review tab.';
 
 interface UseAiPollerArgs {
@@ -36,7 +39,7 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
   const pollCancelled = useRef(false);
   const [pollTimedOut, setPollTimedOut] = useState<null | 'analysis' | 'proposal'>(null);
 
-  const pollForResults = (startMs = Date.now(), shownAgent2 = false, shownAgent3 = false, failStreak = 0) => {
+  const pollForResults = (startMs = Date.now(), shownAgent2 = false, shownAgent3 = false, failStreak = 0, shownCounting = false) => {
     pollRef.current = setTimeout(async () => {
       if (pollCancelled.current) return;
       if (Date.now() - startMs > POLL_DEADLINE_MS) {
@@ -47,13 +50,17 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
       try {
         const { data } = await api.get(`/preconstruction/${bidId}/results`);
         if (pollCancelled.current) return;
-        const elapsed = Date.now() - startMs;
         let nextA2 = shownAgent2, nextA3 = shownAgent3;
-        if (!shownAgent2 && (elapsed > 90_000 || data?.status === 'agent1_complete' || data?.status === 'agent2_running')) {
+        let nextCounting = shownCounting;
+        if (data?.status === 'counting' && !shownCounting) {
+          nextCounting = true;
+          set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Counting fixtures, devices and equipment on each plan sheet…'] }));
+        }
+        if (!shownAgent2 && (data?.status === 'agent2_running' || data?.status === 'agent2_complete')) {
           set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Agent 2 of 3: Building scope & estimate…'] }));
           nextA2 = true;
         }
-        if (!shownAgent3 && (elapsed > 150_000 || data?.status === 'agent2_complete' || data?.status === 'agent3_running')) {
+        if (!shownAgent3 && (data?.status === 'agent2_complete' || data?.status === 'agent3_running')) {
           set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Agent 3 of 3: Running QA review & risk assessment…'] }));
           nextA3 = true;
         }
@@ -82,13 +89,13 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
           setAiResults(data);
           set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${analysisErrorMessage(data)}`] }));
         } else {
-          pollForResults(startMs, nextA2, nextA3, 0);
+          pollForResults(startMs, nextA2, nextA3, 0, nextCounting);
         }
       } catch {
         if (pollCancelled.current) return;
         // Retry up to 5 times before giving up — handles transient connection drops
         if (failStreak < 5) {
-          pollForResults(startMs, shownAgent2, shownAgent3, failStreak + 1);
+          pollForResults(startMs, shownAgent2, shownAgent3, failStreak + 1, shownCounting);
         } else {
           set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), '✗ Could not reach server after several retries. The analysis may still be running — check the Plan Review tab in a minute.'] }));
         }
@@ -134,7 +141,7 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
   useEffect(() => {
     pollCancelled.current = false;
     setPollTimedOut(null);
-    const RUNNING_STATUSES = ['running', 'agent1_complete', 'agent2_running', 'agent2_complete', 'agent3_running'];
+    const RUNNING_STATUSES = ['running', 'agent1_complete', 'counting', 'agent2_running', 'agent2_complete', 'agent3_running'];
     api.get(`/preconstruction/${bidId}/results`).then(r => {
       if (pollCancelled.current || !r.data) return;
       setAiResults(r.data);
