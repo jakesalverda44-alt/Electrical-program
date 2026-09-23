@@ -1170,3 +1170,84 @@ reasons, not overlooked). Of the Nits, only N8 (tied directly to S9's
 own scoping) remains open. Full commit range across both rounds:
 `90fdee0..c810594` (32 commits total: 18 from the first pass + 1 report
 commit + 13 from this continuation).
+
+# Fix round 2 (adversarial review, verdict DO NOT MERGE)
+
+Responds to `docs/superpowers/plans/2026-09-23-phase-b-review.md`'s own
+"Round 2" section (commit `3987871`) and the coordinator's Decisions for
+R2-B1 through R2-B3, R2-S1 through R2-S6, and R2-N1/N2/N4/N5 (R2-N3
+folds into R2-B3 per the coordinator's own text). R2-B1 was confirmed
+directly by the coordinator at `PlanViewer.tsx:549` before this round
+started. Same worktree, same rules, one commit per finding, every
+commit with its own test reproducing the finding where one was
+reasonably constructible — **no Agent tool calls of any kind this
+round** (no forks, no subagents), a stricter instruction than round 1's
+own wording, followed with zero exceptions.
+
+**Commit range:** `e065875..1ecc51e` (12 commits, in order below).
+
+## Finding → commit → test
+
+| Finding | Commit | Test |
+|---|---|---|
+| R2-B1 | `e065875` | `overlay.test.ts` (+5: a full click→store→draw round trip, using the ACTUAL draw-path matrix rather than re-calling the same store function, at all 4 rotations on the reviewer's own MediaBox `[100 200 712 992]` sheet, plus the same round trip for the `zoomBy` anchor), `PlanViewer.test.tsx` (+1: reads the real rendered `<g transform>` off the DOM and checks it against the origin-aware matrix, guarding against a regression back to the raw zero-origin one) |
+| R2-B2 | `f66cb7e` | `estimatingSheetsRoutes.test.ts` (half-size describe block rewritten: titleblock `ft_per_pt` doubles, `suggested_ft_per_pt` never touched; new test for the reviewer's own calibrated-scale repro — 0.2 stays 0.2, never doubled), `scaleParse.test.ts` (+3: `effectiveTitleBlockFtPerPt` doubles/unchanged/null-safe), `ScaleCalibrationPopover.test.tsx` (+4: Use commits the doubled value on half-size and the raw value on normal-size, the 2% check compares against the doubled value), `PlansWorkspace.test.tsx` (+1: the banner also sends the doubled value) |
+| R2-B3 | `98e1e81` | `estimatingSheetsRoutes.test.ts` (Drive-failure test rewritten to the REAL `getFileMedia` contract — `mockResolvedValueOnce(null)`, never a rejection, which was itself the bug the reviewer flagged; +1 corrupt-PDF test — `indexDocument` now throws, marking the row `failed` instead of `done` with 0 pages; +2 stale-lease reclaim tests; +2 `resetStuckIndexingOnBoot` tests; +2 `indexErrors`/`documentNames` response-shape assertions), `PlansWorkspace.test.tsx` (+2: the failed banner names the document and its own error, Retry sends `refresh=1`). R2-N3 (migration 110's header + sheets.ts's own doc comment corrected — 'failed' is STICKY until an explicit Refresh) closed in the same commit, comment-only |
+| R2-S1 | `8a1dc1f` | `estimatingBid.test.ts` (+2: the proposed-key→real-`line_key` remap map for multiple proposed lines, empty when nothing needed remapping), `useEstimatingBid.test.ts` (+2: `save()` resolves to the server's `remappedLineKeys`, or `{}` when the response omits it), `PlansWorkspace.test.tsx` (+2: the reviewer's own exact first-use flow — after save, both the active line and a pre-existing marker already pointing at the placeholder are remapped; a separate test confirms an empty remap touches nothing) |
+| R2-S2 | `4f147eb` | `PcWorkspaceStepGuard.test.tsx` (rewritten, 4 tests: step/toggle navigation now shows markup-specific "Unsaved plan markup" wording, not the global registry's pricing-implying copy, and routes through a dedicated `onMarkupUnsavedChange` callback instead of the shared `UnsavedGuardContext`), `PlansWorkspace.test.tsx` (+3: `onMarkupUnsavedChange` mirrors the real `useMarkupAutosave` status — false on mount/once saved, true the instant a marker is placed, stays true on a batch error, and fires false on unmount even mid-batch) |
+| R2-S3 | `2a29de7` | `estimatingMarkups.test.ts` (+2: an update that resends a marker's existing, now-orphaned `line_key` unchanged is accepted and its other fields still apply; an update that CHANGES an orphaned marker's `line_key` to a different invalid one is still rejected) |
+| R2-S4 | `209085c` | `composeBidData.test.ts` (+4: a markup-confirmed C-priced and M-priced line both compose as `{qty: <raw feet>, unit: 'LF'}`, never the internal pricing denomination — the reviewer's own R5 repro; LF and EA lines unaffected), `bidStandardGeneration.test.ts` (+2: `proposal-preview`'s `ambiguousQtyKeys` is `[]` when nothing is ambiguous, surfaces the expected key when saved-line/Agent-4 occurrence counts disagree), `BidSummary.test.tsx` (+3: the new warning row's count/plural wording, nothing rendered when empty), `PcWorkspaceReviewChecklist.test.tsx` (+3: the Review step's checklist shows the same count/wording, scoped to the checklist, singular phrasing, nothing when clean) |
+| R2-S5 | `8f59cbe` | `nodeVersionPin.test.ts` (new file, +4: `render.yaml`'s `NODE_VERSION` is exactly `"22"` and never the old `"20.16.0"`; `backend/package.json`'s `engines.node` is exactly `">=22 <23"`; pdfjs-dist's and pdf-parse's own declared `engines` both officially support `>=22.3.0`) — a dependency-free regression guard; no nvm/n/asdf/volta or network access available in this sandbox to literally boot a real Node 22 binary, disclosed in the commit |
+| R2-S6 | `011c5d3` | `concurrencyLimit.test.ts` (new file, +6, pure: 5 fake items with limit 2 never exceed 2 concurrent, asserted at multiple points as the pool rotates through all 5; every item still runs exactly once; a limit above the item count runs everything at once; one item's rejection doesn't stop its siblings; empty list/zero-limit edge cases), `estimatingSheetsRoutes.test.ts` (+1: drives 5 REAL Drive-backed documents through the actual background-indexing path, observed peak concurrency exactly 2) |
+| R2-N1 | `fffeeb3` | `PlanViewer.test.tsx` (+2: mocks `requestAnimationFrame` to capture instead of auto-fire, fires two touchmoves before flushing — asserts only ONE frame was ever scheduled, only ONE new render happened, and the resulting scale is the CORRECTLY COMPOUNDED factor, provably different from the old buggy "only the last touchmove's factor" result; a source-level check that `plans.css`'s `.plan-canvas-scroll` rule is `pan-x pan-y`, never `none`) |
+| R2-N2 (+ R2-N5 folded in) | `e488a92` | `sheetTextCache.test.ts` (+3: an eviction while another caller is mid-`getTextContent()` does not destroy the document until that read finishes; re-acquiring a just-evicted-but-still-in-use document starts a genuinely fresh fetch; an eviction of a still-in-flight fetch aborts the underlying request), `PlanViewer.test.tsx` (+1: at `devicePixelRatio` 8, the same moderate zoom that needs no tile at the default test-environment dpr now produces one — confirmed by temporarily reverting just the dpr multiplication and rerunning, which failed as expected) |
+| R2-N4 | `1ecc51e` | `PlansWorkspace.test.tsx` (+2: a marker drawn while the `/markups` GET is still pending survives hydration merged alongside the server's own markers — not wiped — and still autosaves correctly afterward; the unaffected common case, no local markers before hydration, still shows only the server's) |
+
+Every commit's own message states, per-commit, that both `tsc --noEmit`
+runs were clean and both full suites were run at that point in the
+sequence — not repeated here per-row for brevity.
+
+## R2-S5 — verification caveat, disclosed
+
+R2-S5 (the Node version pin) can only be verified by proxy in this
+sandbox: there is no nvm/n/asdf/volta and no network access available
+to literally install and boot a real Node 22 binary. What IS verified:
+pdfjs-dist's and pdf-parse's own published `engines` fields both
+officially declare support for `>=22.3.0` (matching the new floor), and
+the existing real-PDF sheet-indexing suite
+(`estimatingSheetsRoutes.test.ts`), which already drives the actual
+pdfjs-dist parse path against real PDF bytes, passes unmodified on
+whatever Node this sandbox runs. The actual production runtime swap
+only takes effect on Render's next deploy.
+
+## Final verification (this round)
+
+- `npx tsc --noEmit`: clean, both `frontend/` and `backend/`.
+- Full frontend suite (`npx vitest run`, no path filter): **115/115
+  files, 1188/1188 tests passing.** Two intermediate full-suite runs
+  during this round hit unrelated, unreproducible flakes
+  (`ElecProjectsSaveSection.test.tsx`, `SurveyMarkupEditor.test.tsx`) —
+  both pass in isolation and on immediate retry, and neither file
+  touches plans/estimating code; not present in this final run.
+- Full backend suite (`npm test`): **117/118 files, 1161/1166 tests
+  passing** — the shortfall is the same pre-existing, unrelated
+  `tinypool` "Worker exited unexpectedly"/timeout flake in
+  `intakeSimilarCache.test.ts` documented in every prior round of this
+  report; one intermediate run also hit a one-off "socket hang up" in
+  `estimatingComposeBidDataFix.test.ts` under full-suite parallel DB
+  load — passes cleanly standalone (2/2) and did not recur on rerun.
+
+## Not fixed
+
+Nothing from Round 2's task list (R2-B1-B3, R2-S1-S6, R2-N1/N2/N4/N5;
+R2-N3 folded into R2-B3) was left undone. R2-S5's own verification is
+by proxy only, disclosed above — the sandbox cannot literally boot Node
+22 to prove it, only cite both PDF-parsing dependencies' own declared
+support for it plus the existing real-PDF test suite passing unmodified.
+
+**Bottom line:** every Round 2 Blocker, Should-fix, and Nit the
+coordinator assigned is fixed and tested, with one process constraint
+followed with zero exceptions this round (no Agent tool calls at all)
+after the disclosed fork incident in Round 1. Full commit range across
+all rounds: `90fdee0..1ecc51e` (44 commits total: 32 from Round 1 + 12
+from this round).
