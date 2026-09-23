@@ -10,7 +10,7 @@ vi.mock('../../api/client', async () => {
 });
 
 import { LaborPricingStep } from './LaborPricingStep';
-import { EstimateLine, EstimateSettings, PricingRecap, EMPTY_RECAP, Library } from './types';
+import { DEFAULT_SETTINGS, EstimateLine, EstimateSettings, PricingRecap, EMPTY_RECAP, Library } from './types';
 
 afterEach(cleanup);
 beforeEach(() => {
@@ -33,7 +33,7 @@ function baseSettings(): EstimateSettings {
 function makeRecap(): PricingRecap {
   return {
     ...EMPTY_RECAP,
-    lines: [{ id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', materialUnit: 6, materialExt: 60, hoursUnit: 0.35, hoursExt: 3.5, laborExt: 140, confidence: null, excluded: false, directShare: 200 }],
+    lines: [{ id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', materialUnit: 6, materialExt: 60, hoursUnit: 0.35, hoursExt: 3.5, laborExt: 140, confidence: null, excluded: false, directShare: 200, matchConfidence: null, unresolved: false }],
     categories: [{ category: 'Branch Power', material: 60, hours: 3.5, labor: 140, subtotal: 200 }],
   };
 }
@@ -88,6 +88,33 @@ describe('LaborPricingStep — N3: floors above 2', () => {
     fireEvent.change(input, { target: { value: '4' } });
     const updater = setSettings.mock.calls[0][0] as (prev: EstimateSettings) => EstimateSettings;
     expect(updater(baseSettings()).floors_above_2).toBe(4);
+  });
+});
+
+describe('LaborPricingStep — R2-N1: clearing a rate/pct input reverts to its default, not 0', () => {
+  it('clearing Labor rate reverts to DEFAULT_SETTINGS.labor_rate, not 0', async () => {
+    const setSettings = vi.fn();
+    render(
+      <LaborPricingStep lines={[]} settings={baseSettings()} recap={EMPTY_RECAP} saving={false} syncing={false} saveError={null}
+        setLines={vi.fn()} setSettings={setSettings} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    const input = screen.getByDisplayValue('40') as HTMLInputElement; // labor_rate
+    fireEvent.change(input, { target: { value: '' } });
+    const updater = setSettings.mock.calls[0][0] as (prev: EstimateSettings) => EstimateSettings;
+    expect(updater(baseSettings()).labor_rate).toBe(DEFAULT_SETTINGS.labor_rate);
+    expect(updater(baseSettings()).labor_rate).not.toBe(0);
+  });
+
+  it('clearing a pct field (e.g. Overhead %) reverts to its own default, not 0', async () => {
+    const setSettings = vi.fn();
+    render(
+      <LaborPricingStep lines={[]} settings={baseSettings()} recap={EMPTY_RECAP} saving={false} syncing={false} saveError={null}
+        setLines={vi.fn()} setSettings={setSettings} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    const input = screen.getByDisplayValue('10') as HTMLInputElement; // overhead_pct
+    fireEvent.change(input, { target: { value: '' } });
+    const updater = setSettings.mock.calls[0][0] as (prev: EstimateSettings) => EstimateSettings;
+    expect(updater(baseSettings()).overhead_pct).toBe(DEFAULT_SETTINGS.overhead_pct);
   });
 });
 
@@ -179,6 +206,78 @@ describe('LaborPricingStep — unmatched banner and resolver pick', () => {
     const result = updater(lines);
     expect(result[0].source).toBe('manual');
     expect(result[0].material_unit_override).toBe(25);
+  });
+});
+
+describe('LaborPricingStep — R2-SF2: resolver only offers unit-compatible candidates', () => {
+  it('never offers an EA item/assembly to an LF line', async () => {
+    const lines: EstimateLine[] = [{ id: 'l1', category: 'Branch Power', description: 'Conduit run', qty: 100, unit: 'LF', source: 'takeoff' }];
+    render(
+      <LaborPricingStep lines={lines} settings={baseSettings()} recap={{ ...EMPTY_RECAP }} saving={false} syncing={false} saveError={null}
+        setLines={vi.fn()} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    fireEvent.click(await screen.findByTestId('lp-resolve-0'));
+    await screen.findByTestId('lp-resolver-search');
+    expect(screen.queryByTestId('lp-resolver-candidate-i1')).toBeNull(); // i1 is EA
+    expect(screen.queryByTestId('lp-resolver-candidate-a1')).toBeNull(); // a1 is EA
+  });
+
+  it('requires the estimator to pick a real unit first for an LS/unknown-unit line, and hides the candidate list until then', async () => {
+    const setLines = vi.fn();
+    const lines: EstimateLine[] = [{ id: 'l1', category: 'Branch Power', description: 'Allowance', qty: 1, unit: 'LS' as EstimateLine['unit'], source: 'takeoff' }];
+    render(
+      <LaborPricingStep lines={lines} settings={baseSettings()} recap={{ ...EMPTY_RECAP }} saving={false} syncing={false} saveError={null}
+        setLines={setLines} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    fireEvent.click(await screen.findByTestId('lp-resolve-0'));
+    expect(screen.queryByTestId('lp-resolver-search')).toBeNull(); // no candidate search until a unit is chosen
+    const unitSelect = await screen.findByTestId('lp-resolver-unit-select');
+    fireEvent.change(unitSelect, { target: { value: 'EA' } });
+    const updater = setLines.mock.calls[0][0] as (prev: EstimateLine[]) => EstimateLine[];
+    expect(updater(lines)[0].unit).toBe('EA');
+  });
+});
+
+describe('LaborPricingStep — R2-SF1: fuzzy match badge', () => {
+  it('shows a "check match" badge on a line matched only at fuzzy confidence', async () => {
+    const lines: EstimateLine[] = [{ id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'takeoff', match_confidence: 'fuzzy' }];
+    const recap: PricingRecap = {
+      ...EMPTY_RECAP,
+      lines: [{ id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', materialUnit: 6, materialExt: 60, hoursUnit: 0.35, hoursExt: 3.5, laborExt: 140, confidence: null, excluded: false, directShare: 200, matchConfidence: 'fuzzy', unresolved: false }],
+      categories: [{ category: 'Branch Power', material: 60, hours: 3.5, labor: 140, subtotal: 200 }],
+    };
+    render(
+      <LaborPricingStep lines={lines} settings={baseSettings()} recap={recap} saving={false} syncing={false} saveError={null}
+        setLines={vi.fn()} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    expect(await screen.findByTestId('lp-fuzzy-badge-0')).toBeTruthy();
+  });
+
+  it('does not show the fuzzy badge for an exact match', async () => {
+    const lines: EstimateLine[] = [{ id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'takeoff', match_confidence: 'exact' }];
+    render(
+      <LaborPricingStep lines={lines} settings={baseSettings()} recap={makeRecap()} saving={false} syncing={false} saveError={null}
+        setLines={vi.fn()} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    await screen.findByTestId('lp-row-0');
+    expect(screen.queryByTestId('lp-fuzzy-badge-0')).toBeNull();
+  });
+});
+
+describe('LaborPricingStep — R2-N2: locked-qty hint', () => {
+  it('shows a hint on a line whose qty was hand-edited (qty_overridden)', async () => {
+    const lines: EstimateLine[] = [{ id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 12, unit: 'EA', item_id: 'i1', source: 'takeoff', qty_overridden: true }];
+    render(
+      <LaborPricingStep lines={lines} settings={baseSettings()} recap={makeRecap()} saving={false} syncing={false} saveError={null}
+        setLines={vi.fn()} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    expect(await screen.findByTestId('lp-qty-locked-hint-0')).toBeTruthy();
+  });
+
+  it('shows no hint when qty was never hand-edited', async () => {
+    const { } = renderStep();
+    await screen.findByTestId('lp-row-0');
+    expect(screen.queryByTestId('lp-qty-locked-hint-0')).toBeNull();
   });
 });
 

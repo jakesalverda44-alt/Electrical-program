@@ -133,6 +133,13 @@ export interface PricedLine {
   excluded: boolean;
   /** Fix round 2 / SF1 — see PricingLineInput.matchConfidence. */
   matchConfidence: MatchConfidence | null;
+  /** Fix round 2 / SF2 — true when this line never resolved to a real
+   *  library row (a takeoff line with no match, or one whose item_id/
+   *  assembly_id turned out unit-incompatible and was discarded by
+   *  resolveLines). The UI derives its "unresolved" banner/badge from THIS,
+   *  not from id presence — an item_id can be set on a line that still
+   *  didn't actually match (an incompatible unit silently prices it at $0). */
+  unresolved: boolean;
   /** Fix round 1 / S10 — this line's fully-loaded share of `totals.directCost`:
    *  materialExt + this line's pro-rata share of consumables/tax (by material)
    *  plus laborExt-with-supervision + this line's pro-rata share of small
@@ -367,6 +374,7 @@ export function priceBid(
       laborExt,
       confidence: line.confidence ?? null,
       matchConfidence: line.matchConfidence ?? null,
+      unresolved: !!line.unresolved,
       excluded,
       directShare: 0, // filled in below, once the pools it's allocated from are known
     });

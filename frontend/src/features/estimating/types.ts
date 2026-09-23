@@ -38,6 +38,15 @@ export interface EstimateLine {
    *  sync-takeoff (it vanished from the takeoff), not by the estimator.
    *  Server-managed / read-only from the client's perspective. */
   sync_excluded?: boolean;
+  /** Fix round 2 / SF1 — how confident the mapper was about this line's
+   *  match; null for a manual line. Drives the "check match" badge. */
+  match_confidence?: MatchConfidence | null;
+  /** Fix round 2 / SF4 — whether the current item_id/assembly_id came from
+   *  the mapper ('auto') or an estimator's manual resolve ('manual'). */
+  match_source?: 'auto' | 'manual' | null;
+  /** Fix round 2 / SF4 — the raw takeoff description this line was last
+   *  synced against (server-managed). */
+  synced_description?: string | null;
   source: 'takeoff' | 'manual';
   sort?: number;
 }
@@ -62,6 +71,13 @@ export interface PricedLine {
   confidence: LineConfidence | null; excluded: boolean;
   /** Fix round 1 / S10 — this line's fully-loaded share of totals.directCost; sums exactly across all lines. */
   directShare: number;
+  /** Fix round 2 / SF1 — see EstimateLine.match_confidence. */
+  matchConfidence: MatchConfidence | null;
+  /** Fix round 2 / SF2 — the server-derived "did this actually resolve to a
+   *  library row" signal — an item_id/assembly_id can be set on a line that
+   *  still didn't match (an incompatible unit). Use this, not id presence,
+   *  to decide whether a line still needs resolving. */
+  unresolved: boolean;
 }
 export interface CategoryTotal {
   category: string; material: number; hours: number; labor: number;
@@ -79,6 +95,8 @@ export interface PricingWarnings {
   excludedCount: number; unverifiedMaterialShare: number;
   /** Fix round 1 / B2 — count of non-excluded lines with an unrecognized unit. */
   unitUnknownCount: number;
+  /** Fix round 2 / SF1 — count of non-excluded lines matched only at 'fuzzy' confidence. */
+  fuzzyMatchCount: number;
 }
 export interface PricingRecap {
   lines: PricedLine[]; categories: CategoryTotal[]; totals: PricingTotals; warnings: PricingWarnings;
@@ -113,5 +131,5 @@ export const EMPTY_RECAP: PricingRecap = {
     materialSubtotal: 0, consumables: 0, materialTax: 0, laborHours: 0, laborCost: 0,
     smallTools: 0, directCost: 0, overhead: 0, profit: 0, grandTotal: 0, sellPerSf: null, crewWeeks: 0,
   },
-  warnings: { unmatchedCount: 0, verifyCount: 0, zeroMaterialMatchedCount: 0, excludedCount: 0, unverifiedMaterialShare: 0, unitUnknownCount: 0 },
+  warnings: { unmatchedCount: 0, verifyCount: 0, zeroMaterialMatchedCount: 0, excludedCount: 0, unverifiedMaterialShare: 0, unitUnknownCount: 0, fuzzyMatchCount: 0 },
 };

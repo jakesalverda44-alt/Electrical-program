@@ -91,6 +91,15 @@ describe('BidSummary — warnings', () => {
     expect(onJumpToUnmatched).toHaveBeenCalled();
   });
 
+  it('R2-SF1: shows and counts fuzzy matches separately from unmatched lines', () => {
+    const onJumpToUnmatched = vi.fn();
+    render(<BidSummary recap={recap({}, { fuzzyMatchCount: 3 })} proposed={false} onJumpToUnmatched={onJumpToUnmatched} />);
+    const btn = screen.getByTestId('bs-warning-fuzzy');
+    expect(btn.textContent).toContain('3 fuzzy matches');
+    fireEvent.click(btn);
+    expect(onJumpToUnmatched).toHaveBeenCalled();
+  });
+
   it('clicking the VERIFY-quantities warning calls onJumpToVerify', () => {
     const onJumpToVerify = vi.fn();
     render(<BidSummary recap={recap({}, { verifyCount: 1 })} proposed={false} onJumpToVerify={onJumpToVerify} />);

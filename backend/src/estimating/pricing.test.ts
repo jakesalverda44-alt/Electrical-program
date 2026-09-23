@@ -321,6 +321,27 @@ describe('priceBid — factor exclusivity and application', () => {
   });
 });
 
+describe('priceBid — R2-SF2: PricedLine.unresolved is a real, server-derived signal', () => {
+  it('a line with unresolved:true (e.g. an item_id the resolver discarded for an incompatible unit) reports it back, not just the warnings count', () => {
+    const recap = priceBid(
+      [line({ id: 'a', matched: false, unresolved: true, materialUnitCost: 0, laborHoursUnit: 0 })],
+      baseSettings,
+      []
+    );
+    expect(recap.lines[0].unresolved).toBe(true);
+    expect(recap.warnings.unmatchedCount).toBe(1);
+  });
+
+  it('a genuinely resolved line reports unresolved:false', () => {
+    const recap = priceBid(
+      [line({ id: 'a', matched: true, unresolved: false, materialUnitCost: 10, laborHoursUnit: 1 })],
+      baseSettings,
+      []
+    );
+    expect(recap.lines[0].unresolved).toBe(false);
+  });
+});
+
 describe('priceBid — warnings', () => {
   it('counts unresolved (unmatched) non-excluded lines', () => {
     const recap = priceBid(

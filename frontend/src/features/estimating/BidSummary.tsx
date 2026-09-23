@@ -140,11 +140,19 @@ export function BidSummary({ recap, proposed, dirty, savedGrandTotal, comparable
       </div>
 
       {(warnings.unmatchedCount > 0 || warnings.verifyCount > 0 || warnings.zeroMaterialMatchedCount > 0
-        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0) && (
+        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0) && (
         <div className="bs-section" data-testid="bs-warnings">
           {warnings.unmatchedCount > 0 && (
             <button type="button" className="bs-warning" data-testid="bs-warning-unmatched" onClick={onJumpToUnmatched}>
               {warnings.unmatchedCount} unmatched line{warnings.unmatchedCount === 1 ? '' : 's'}
+            </button>
+          )}
+          {/* Fix round 2 / SF1 — a fuzzy match isn't wrong, just worth a
+              second look; counted separately from "unmatched" (which means
+              no match at all) so the two aren't confused. */}
+          {warnings.fuzzyMatchCount > 0 && (
+            <button type="button" className="bs-warning" data-testid="bs-warning-fuzzy" onClick={onJumpToUnmatched}>
+              {warnings.fuzzyMatchCount} fuzzy match{warnings.fuzzyMatchCount === 1 ? '' : 'es'} — check match
             </button>
           )}
           {warnings.verifyCount > 0 && (

@@ -5,7 +5,37 @@ import React, { useMemo, useState } from 'react';
 import { useApi } from '../../hooks/useApi';
 import Modal from '../../components/Modal';
 import { useConfirm } from '../../components/ConfirmDialog';
-import { EstimateLine, EstimateSettings, Library, LibraryFactor, PricingRecap } from './types';
+import { DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap } from './types';
+
+// Fix round 2 / SF2 — the resolver only offers items/assemblies whose unit
+// FAMILY is compatible with the line's own unit: EA is its own family; LF/C/M
+// are one family (mirrors backend/src/estimating/mapper.ts's isUnitCompatible —
+// duplicated here since the frontend has no reason to import backend code).
+function unitFamily(u: string): 'EA' | 'LINEAR' | 'OTHER' {
+  const n = (u ?? '').trim().toUpperCase();
+  if (n === 'EA') return 'EA';
+  if (n === 'LF' || n === 'C' || n === 'M') return 'LINEAR';
+  return 'OTHER';
+}
+function isUnitCompatible(a: string, b: string): boolean {
+  const fa = unitFamily(a);
+  const fb = unitFamily(b);
+  if (fa === 'OTHER' || fb === 'OTHER') return false;
+  return fa === fb;
+}
+const KNOWN_UNITS: EstUnit[] = ['EA', 'LF', 'C', 'M'];
+
+// Fix round 2 / N1 — clearing a rate/pct input (empty string) used to become
+// Number('') = 0, a REAL zero rate/pct silently substituted for "I haven't
+// decided yet" — reverts to the field's own default instead. Read eagerly
+// (before setSettings' updater callback runs), same reasoning as N3's
+// floors_above_2 fix: a controlled input's DOM value can be reset by React
+// before a LAZY read inside the updater would see it.
+function numberOrDefault(raw: string, fallback: number): number {
+  if (raw.trim() === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
 
 export interface LaborPricingStepProps {
   lines: EstimateLine[];
@@ -121,15 +151,20 @@ export function LaborPricingStep({
   };
 
   const onSync = async () => {
-    // Fix round 1 / B5 — sync-takeoff overwrites takeoff-sourced lines'
-    // qty/unit/description (except an estimator-overridden qty) from
-    // whatever the current takeoff says. Ask first when there's unsaved
-    // work sitting on top of the last saved/proposed snapshot, so a sync
-    // never silently discards an in-progress edit.
+    // Fix round 1 / B5 — ask first when there's unsaved work sitting on top
+    // of the last saved/proposed snapshot, so a sync never silently
+    // discards an in-progress edit. Fix round 2 / SF6 — the old copy here
+    // ("Manual lines and estimator overrides are never touched") was wrong:
+    // useEstimatingBid.syncTakeoff() REPLACES the entire client `lines`
+    // array with the server's response, so every unsaved edit is lost —
+    // including a brand-new unsaved manual line or an override that was
+    // never saved. Saved overrides and estimator-edited quantities (any
+    // qty_overridden line) DO survive, because the server itself preserves
+    // those (fix round 1 / B5) — but only for what was actually saved.
     if (dirty) {
       const ok = await confirm({
         title: 'Sync from takeoff?',
-        body: 'You have unsaved changes. Syncing refreshes takeoff-sourced lines from the current takeoff — your unsaved edits to THOSE lines could be affected. Manual lines and estimator overrides are never touched.',
+        body: 'Syncing discards any unsaved changes on this screen. Already-saved overrides and quantities you\'ve edited are kept — save first if you want to keep unsaved work.',
       });
       if (!ok) return;
     }
@@ -145,26 +180,50 @@ export function LaborPricingStep({
     }
   };
 
+  // Fix round 2 / SF2 — derive "needs resolving" from the SERVER's recap
+  // (PricedLine.unresolved), not from id presence: an item_id/assembly_id
+  // can be set on a line that still didn't actually match (an incompatible
+  // unit silently prices it at $0 server-side while looking "resolved"
+  // here). Falls back to the old id-based heuristic only before any
+  // priced data has arrived at all (e.g. the very first render).
   const unmatchedIndices = lines
     .map((l, idx) => ({ l, idx }))
-    .filter(({ l }) => l.source === 'takeoff' && !l.assembly_id && !l.item_id && !l.excluded)
+    .filter(({ l }) => {
+      if (l.excluded || l.source !== 'takeoff') return false;
+      const priced = l.id ? recapByKey.get(l.id) : undefined;
+      return priced ? priced.unresolved : (!l.assembly_id && !l.item_id);
+    })
     .map(({ idx }) => idx);
 
+  const resolverLine = resolverIndex != null ? lines[resolverIndex] : null;
+  // Fix round 2 / SF2 — an LS/SET/LOT/blank/unrecognized unit can't be
+  // judged compatible with anything; the estimator sets a real unit first
+  // (the select below) before the resolver can offer any candidates at all.
+  const resolverLineUnitKnown = !!resolverLine && unitFamily(resolverLine.unit) !== 'OTHER';
+
   const resolverCandidates = useMemo(() => {
-    if (!library || resolverIndex == null) return [];
+    if (!library || resolverIndex == null || !resolverLine || !resolverLineUnitKnown) return [];
     const q = resolverQuery.trim().toLowerCase();
     const all: { kind: 'assembly' | 'item'; id: string; name: string; unit: string }[] = [
       ...library.assemblies.filter(a => a.active).map(a => ({ kind: 'assembly' as const, id: a.id, name: a.name, unit: a.unit })),
       ...library.items.filter(i => i.active).map(i => ({ kind: 'item' as const, id: i.id, name: i.name, unit: i.unit })),
-    ];
+    ]
+      // Fix round 2 / SF2 — never offer a unit-incompatible candidate: picking
+      // one used to silently price the line at $0 (resolveLines discards the
+      // match server-side) while the UI showed it as "resolved".
+      .filter(c => isUnitCompatible(c.unit, resolverLine.unit));
     if (!q) return all.slice(0, 25);
     return all.filter(c => c.name.toLowerCase().includes(q)).slice(0, 25);
-  }, [library, resolverIndex, resolverQuery]);
+  }, [library, resolverIndex, resolverLine, resolverLineUnitKnown, resolverQuery]);
 
   const pickResolution = (idx: number, candidate: { kind: 'assembly' | 'item'; id: string }) => {
     updateLine(idx, {
       assembly_id: candidate.kind === 'assembly' ? candidate.id : null,
       item_id: candidate.kind === 'item' ? candidate.id : null,
+      // Fix round 2 / SF4 — an estimator's own pick from the resolver is a
+      // manual resolution; a later sync-takeoff must never silently replace
+      // it with a fresh mapper guess.
+      match_source: 'manual',
     });
     closeResolver();
   };
@@ -193,23 +252,23 @@ export function LaborPricingStep({
         <label className="lp-settings-field">
           Labor rate ($/hr)
           <input type="number" value={settings.labor_rate}
-            onChange={e => setSettings(prev => ({ ...prev, labor_rate: Number(e.target.value) }))} />
+            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.labor_rate); setSettings(prev => ({ ...prev, labor_rate: v })); }} />
         </label>
         <label className="lp-settings-field">
           Crew size
           <input type="number" value={settings.crew_size}
-            onChange={e => setSettings(prev => ({ ...prev, crew_size: Number(e.target.value) }))} />
+            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.crew_size); setSettings(prev => ({ ...prev, crew_size: v })); }} />
         </label>
         <label className="lp-settings-field" title="Multiplies the MULTI-STORY labor factor below — 0 means no multi-story adjustment even if that factor is selected.">
           Floors above 2
           <input type="number" min={0} value={settings.floors_above_2} data-testid="lp-floors-above-2"
-            onChange={e => { const v = Number(e.target.value); setSettings(prev => ({ ...prev, floors_above_2: v })); }} />
+            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.floors_above_2); setSettings(prev => ({ ...prev, floors_above_2: v })); }} />
         </label>
         {SETTINGS_PCT_FIELDS.map(f => (
           <label className="lp-settings-field" key={f.key}>
             {f.label}
             <input type="number" value={settings[f.key] as number}
-              onChange={e => setSettings(prev => ({ ...prev, [f.key]: Number(e.target.value) }))} />
+              onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS[f.key] as number); setSettings(prev => ({ ...prev, [f.key]: v })); }} />
           </label>
         ))}
       </div>
@@ -306,7 +365,14 @@ export function LaborPricingStep({
                   const priced = line.id ? recapByKey.get(line.id) : undefined;
                   const matEdited = line.material_unit_override != null;
                   const hrsEdited = line.labor_hours_override != null;
-                  const isUnresolved = line.source === 'takeoff' && !line.assembly_id && !line.item_id;
+                  // Fix round 2 / SF2 — see unmatchedIndices above for why
+                  // this reads the server's recap, not id presence.
+                  const isUnresolved = line.source === 'takeoff'
+                    && (priced ? priced.unresolved : (!line.assembly_id && !line.item_id));
+                  // Fix round 2 / SF1 — a fuzzy match is not WRONG, just
+                  // worth a second look; badge it distinctly from a genuinely
+                  // unresolved line.
+                  const isFuzzyMatch = !isUnresolved && (priced?.matchConfidence ?? line.match_confidence) === 'fuzzy';
                   return (
                     <tr key={lineKey(line, idx)} className={line.excluded ? 'lp-row-excluded' : ''} data-testid={`lp-row-${idx}`}>
                       <td>
@@ -315,6 +381,30 @@ export function LaborPricingStep({
                         {isUnresolved && (
                           <button type="button" className="lp-reset-btn" style={{ display: 'inline', color: 'var(--amber)' }}
                             onClick={() => setResolverIndex(idx)} data-testid={`lp-resolve-${idx}`}>resolve</button>
+                        )}
+                        {isFuzzyMatch && (
+                          <span
+                            className="lp-fuzzy-badge"
+                            data-testid={`lp-fuzzy-badge-${idx}`}
+                            title="Matched at fuzzy confidence — worth a second look, not necessarily wrong."
+                            style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: 'var(--amber)', border: '1px solid var(--amber)', borderRadius: 4, padding: '1px 4px' }}
+                          >
+                            check match
+                          </span>
+                        )}
+                        {/* Fix round 2 / N2 — a hand-typed qty won't ever be
+                            refreshed by a future sync; a quiet hint, not a
+                            comparison against a live takeoff value (that
+                            would need another sync round-trip this UI
+                            doesn't have on hand). */}
+                        {line.qty_overridden && (
+                          <span
+                            data-testid={`lp-qty-locked-hint-${idx}`}
+                            title="Quantity was entered by hand — sync from takeoff will never overwrite it. Re-sync to check whether the takeoff itself changed."
+                            style={{ marginLeft: 6, fontSize: 10, color: 'var(--text3)' }}
+                          >
+                            🔒 qty
+                          </span>
                         )}
                       </td>
                       <td>
@@ -387,30 +477,50 @@ export function LaborPricingStep({
         </tbody>
       </table>
 
-      {resolverIndex != null && (
+      {resolverIndex != null && resolverLine && (
         <Modal open onClose={closeResolver} title="Resolve line">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 320 }}>
-            <input
-              placeholder="Search items and assemblies…"
-              value={resolverQuery}
-              onChange={e => setResolverQuery(e.target.value)}
-              data-testid="lp-resolver-search"
-              autoFocus
-            />
-            <div style={{ maxHeight: 280, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {resolverCandidates.map(c => (
-                <button
-                  key={`${c.kind}-${c.id}`}
-                  type="button"
-                  className="btn ghost"
-                  style={{ justifyContent: 'flex-start' }}
-                  data-testid={`lp-resolver-candidate-${c.id}`}
-                  onClick={() => pickResolution(resolverIndex, c)}
+            {!resolverLineUnitKnown ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 12, color: 'var(--amber)', fontWeight: 700 }}>
+                  This line's unit ("{resolverLine.unit || '(blank)'}") isn't EA/LF/C/M — set the real unit
+                  before picking a match (fix round 2 / SF2: an LS/SET/LOT/blank unit can't be judged
+                  compatible with anything).
+                </div>
+                <select
+                  value={KNOWN_UNITS.includes(resolverLine.unit) ? resolverLine.unit : ''}
+                  data-testid="lp-resolver-unit-select"
+                  onChange={e => updateLine(resolverIndex, { unit: e.target.value as EstUnit })}
                 >
-                  {c.name} <span style={{ marginLeft: 'auto', color: 'var(--text3)' }}>{c.unit}</span>
-                </button>
-              ))}
-            </div>
+                  <option value="" disabled>Choose a unit…</option>
+                  {KNOWN_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
+            ) : (
+              <>
+                <input
+                  placeholder="Search items and assemblies…"
+                  value={resolverQuery}
+                  onChange={e => setResolverQuery(e.target.value)}
+                  data-testid="lp-resolver-search"
+                  autoFocus
+                />
+                <div style={{ maxHeight: 280, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {resolverCandidates.map(c => (
+                    <button
+                      key={`${c.kind}-${c.id}`}
+                      type="button"
+                      className="btn ghost"
+                      style={{ justifyContent: 'flex-start' }}
+                      data-testid={`lp-resolver-candidate-${c.id}`}
+                      onClick={() => pickResolution(resolverIndex, c)}
+                    >
+                      {c.name} <span style={{ marginLeft: 'auto', color: 'var(--text3)' }}>{c.unit}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
               <div style={{ fontSize: 11, color: 'var(--text3)' }}>
                 No match? Keep it as a manual line — enter a material $ or labor hours value first (fix round 1 / S7: an unpriced manual line can't be created silently at $0).
