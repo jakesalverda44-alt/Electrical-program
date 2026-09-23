@@ -71,6 +71,9 @@ export interface StoreDocumentInput {
    *  pre-bid document was composed from; only a document from the CURRENT
    *  run is ever attached to an email. */
   takeoffRunId?: string | null;
+  /** Fix round 2 / R2-B1 — the compose-inputs hash of a generated GC /
+   *  pre-bid document (sending refuses a file whose inputs changed). */
+  composeInputsHash?: string | null;
 }
 
 async function resolveDriveFolder(linkedId: string, div: string, category: string): Promise<string | null> {
@@ -146,12 +149,12 @@ export async function storeDocument(input: StoreDocumentInput) {
 
   const { rows } = await pool.query(
     `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category,
-                            file_size, file_type, uploaded_by, storage_url, file_data, gate_passed, takeoff_run_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                            file_size, file_type, uploaded_by, storage_url, file_data, gate_passed, takeoff_run_id, compose_inputs_hash)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      RETURNING id, linked_id, linked_name, div, name, display_name, category, file_size,
                file_type, storage_url, uploaded_by, created_at, gate_passed`,
     [linkedId || null, linkedName || null, div, file.originalname, displayName, category,
-     file.size, safeMimeType, uploadedBy, storageUrl || null, fileData, !!input.gatePassed, input.takeoffRunId ?? null]
+     file.size, safeMimeType, uploadedBy, storageUrl || null, fileData, !!input.gatePassed, input.takeoffRunId ?? null, input.composeInputsHash ?? null]
   );
   return rows[0];
 }

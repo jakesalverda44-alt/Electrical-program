@@ -319,3 +319,14 @@ describe('PcWorkspace Proposal tab — fix round 2 / S3: propPrice and Agent 4 r
     expect(screen.queryByTestId('propprice-mismatch-warning')).toBeNull();
   });
 });
+
+describe('Fix round 2 / N-R2-6 — the legacy note shows in Review & Proposal too', () => {
+  it('a bid analysed before the accuracy checks (no review status, no run id)', async () => {
+    baseMocks();
+    get.mockImplementation((url: string) => url === `/preconstruction/${bid.id}/results`
+      ? Promise.resolve({ data: { ...AI_RESULTS_COMPLETE, agent1_output: '{}', review_status: null, run_id: null } })
+      : url === `/preconstruction/${bid.id}/proposal-preview` ? Promise.resolve({ data: PREVIEW }) : Promise.resolve({ data: null }));
+    renderProposalTab();
+    await waitFor(() => expect(screen.getByTestId('proposal-legacy-note').textContent).toContain('Analyzed before accuracy checks'));
+  });
+});

@@ -140,6 +140,15 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
               {agent4StartError}
             </div>
           )}
+          {/* Fix round 2 / N-R2-6 — the legacy note, here as well as in the Takeoff step. */}
+          {!aiResults?.review_status && !!aiResults?.agent1_output && !aiResults?.run_id && (
+            <div data-testid="proposal-legacy-note" style={{
+              marginBottom: 16, padding: '10px 14px', borderRadius: 8, background: 'var(--surface2)',
+              border: '1px solid var(--border2)', color: 'var(--text2)', fontSize: 12.5, fontWeight: 700,
+            }}>
+              Analyzed before accuracy checks — re-run analysis to enable counting and account rules. Its account-rule questions are listed in the Takeoff step.
+            </div>
+          )}
           {reviewBlocked && (
             <div data-testid="proposal-review-blocked" style={{
               marginBottom: 16, padding: '10px 14px', borderRadius: 8,

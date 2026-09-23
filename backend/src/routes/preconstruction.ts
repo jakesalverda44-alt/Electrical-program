@@ -625,10 +625,14 @@ export async function startAnalysisRun(bidId: string): Promise<string> {
  *  draft_error. Refuses (records why) while the takeoff still needs review. */
 export async function runDraftComposition(bidId: string, client: Anthropic, config: AIConfig, opts: { claimed?: boolean } = {}): Promise<void> {
   let claimedHere = false;
+  // N-R2-1 — every write below is bound to the run this draft belongs to; a
+  // superseded draft can't mark the new run's draft as error or release its claim.
+  const { rows: runRows } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const draftRun = (runRows[0]?.run_id as string | null) ?? null;
   try {
     const gate = await takeoffGate(bidId);
     if (gate) {
-      if (opts.claimed) await pool.query(`UPDATE takeoff_results SET draft_status=NULL WHERE bid_id=$1 AND draft_status='running'`, [bidId]);
+      if (opts.claimed) await pool.query(`UPDATE takeoff_results SET draft_status=NULL WHERE bid_id=$1 AND draft_status='running' AND run_id IS NOT DISTINCT FROM $2`, [bidId, draftRun]);
       await pool.query(`UPDATE takeoff_results SET draft_error=$2 WHERE bid_id=$1`, [bidId, 'Waiting on the takeoff review.']);
       return;
     }
@@ -642,7 +646,7 @@ export async function runDraftComposition(bidId: string, client: Anthropic, conf
     }
     const snap = await loadScopeSnapshot(bidId);
     if (!snap?.agent2Output) {
-      await pool.query(`UPDATE takeoff_results SET draft_status=NULL WHERE bid_id=$1 AND draft_status='running'`, [bidId]);
+      await pool.query(`UPDATE takeoff_results SET draft_status=NULL WHERE bid_id=$1 AND draft_status='running' AND run_id IS NOT DISTINCT FROM $2`, [bidId, draftRun]);
       return;
     }
     const inputsHash = hashScopeSnapshot(snap);
@@ -678,11 +682,11 @@ export async function runDraftComposition(bidId: string, client: Anthropic, conf
     if (!w.rowCount) logger.warn({ bidId }, '[draft] a new analysis started while the draft was composing — result discarded');
   } catch (err) {
     logger.error({ err, bidId }, '[draft] pre-bid draft composition failed');
-    await pool.query(`UPDATE takeoff_results SET draft_status='error', draft_error=$2 WHERE bid_id=$1`,
-      [bidId, isAgentTruncatedError(err) ? (err as Error).message : describeAIError(err)]).catch(() => {});
+    await pool.query(`UPDATE takeoff_results SET draft_status='error', draft_error=$2 WHERE bid_id=$1 AND run_id IS NOT DISTINCT FROM $3`,
+      [bidId, isAgentTruncatedError(err) ? (err as Error).message : describeAIError(err), draftRun]).catch(() => {});
   } finally {
     if (claimedHere || opts.claimed) {
-      await pool.query(`UPDATE takeoff_results SET draft_status=NULL WHERE bid_id=$1 AND draft_status='running'`, [bidId]).catch(() => {});
+      await pool.query(`UPDATE takeoff_results SET draft_status=NULL WHERE bid_id=$1 AND draft_status='running' AND run_id IS NOT DISTINCT FROM $2`, [bidId, draftRun]).catch(() => {});
     }
   }
 }
@@ -748,8 +752,22 @@ export async function runPipeline(
   const { rows: bidGcRows } = await pool.query('SELECT gc FROM bids WHERE id=$1', [bidId]);
   const bidGc = String(bidGcRows[0]?.gc ?? '');
 
+  // Fix round 2 / S-R2-1 — every write of this run is guarded by its run id:
+  // once a newer /analyze starts, nothing this run does can change status,
+  // outputs or the review (not even an error write). The run then stops.
+  const { rows: runRows } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const runId = (runRows[0]?.run_id as string | null) ?? null;
+  let superseded = false;
+  const guarded = async (sql: string, params: unknown[]) => {
+    const r = await pool.query(`${sql.trimEnd()} AND run_id IS NOT DISTINCT FROM $${params.length + 1}`, [...params, runId]);
+    if (!r.rowCount) {
+      if (!superseded) logger.warn({ bidId, runId }, '[takeoff] a newer analysis run started — this run stops writing');
+      superseded = true;
+    }
+    return r;
+  };
   const updateStatus = (status: string) =>
-    pool.query(`UPDATE takeoff_results SET status=$1 WHERE bid_id=$2`, [status, bidId]);
+    guarded(`UPDATE takeoff_results SET status=$1 WHERE bid_id=$2`, [status, bidId]);
 
   // ── Agent 1 ─────────────────────────────────────────────────────────────────
   try {
@@ -824,8 +842,7 @@ export async function runPipeline(
         input_tokens: (resp.usage?.input_tokens ?? 0) + classifierUsage.input_tokens,
         output_tokens: (resp.usage?.output_tokens ?? 0) + classifierUsage.output_tokens,
       };
-      await pool.query(
-        `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
+      await guarded(`UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
         [JSON.stringify(mergedUsage), config.model, JSON.stringify(prepInventory), prepFidelity, bidId]
       ).catch(() => {});
       // Takeoff accuracy Task 1 — after the usage write, so a truncated (but
@@ -870,8 +887,7 @@ export async function runPipeline(
         if (bResp.usage) batchUsage = mergeUsage(batchUsage, bResp.usage as unknown as Record<string, unknown>);
       }
       batchUsage = mergeUsage(batchUsage, classifierUsage);
-      await pool.query(
-        `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
+      await guarded(`UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
         [JSON.stringify(batchUsage), config.model, JSON.stringify(prepInventory), prepFidelity, bidId]
       ).catch(() => {});
 
@@ -890,8 +906,7 @@ export async function runPipeline(
       const stopHint = agent1Output.trim().startsWith('```') || agent1Output.trim().startsWith('{')
         ? 'Agent 1 returned JSON that could not be parsed. The response may have been cut off. Try fewer sheets or increase AI Max Tokens in Settings > AI.'
         : 'Agent 1 did not return JSON.';
-      await pool.query(
-        `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
+      await guarded(`UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
         [`${stopHint}\n\nRaw preview: ${compactOutput(agent1Output)}`, bidId]
       );
       console.error('[takeoff] Agent 1 JSON parse failed');
@@ -903,8 +918,7 @@ export async function runPipeline(
     // mergeAgent1Batches still returns a valid-looking {} that would otherwise
     // flow straight into Agents 2-3, billing two more paid calls for nothing.
     if (analysisIsEmpty(agent1JSON)) {
-      await pool.query(
-        `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
+      await guarded(`UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
         [
           'Drawing analysis found no electrical content. Check that the right sheets were uploaded (see the prep inventory) — the run was stopped before Agents 2–3 to avoid billing for an empty takeoff.',
           bidId,
@@ -926,20 +940,19 @@ export async function runPipeline(
     agent1JSON = cleaned;
     agent1Output = JSON.stringify(agent1JSON, null, 2);
 
-    await pool.query(
-      `UPDATE takeoff_results SET status='agent1_complete', agent1_output=$1, hygiene=$2 WHERE bid_id=$3`,
+    await guarded(`UPDATE takeoff_results SET status='agent1_complete', agent1_output=$1, hygiene=$2 WHERE bid_id=$3`,
       [agent1Output, JSON.stringify(hygiene), bidId]
     );
   } catch (err) {
     const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 1 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 1 failed');
-    await pool.query(
-      `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
+    await guarded(`UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
       [message, bidId]
     );
     return;
   }
 
+  if (superseded) return;
   // ── Agent 1C: counting stage (takeoff accuracy, Decisions 1-7) ─────────────
   // Every fixture/device/equipment type from the schedules and legend is
   // counted on each electrical plan sheet at 300 DPI; the counts REPLACE
@@ -967,6 +980,7 @@ export async function runPipeline(
       agent1: agent1ForCounting, inventory: countingInventory, pdfs,
     });
     agent1Output = JSON.stringify(stage.agent1, null, 2);
+    if (superseded) return;
     // Task 6 — counted locations become suggested markers in the Plans view.
     // Non-fatal: a failure here loses the markers, never the counts.
     try {
@@ -991,12 +1005,13 @@ export async function runPipeline(
       await tx.query('BEGIN');
       const { rows: prevRows } = await tx.query('SELECT review_items FROM takeoff_results WHERE bid_id=$1 FOR UPDATE', [bidId]);
       reviewItemsNow = carryOverResolutions(freshItems, (prevRows[0]?.review_items as ReviewItem[] | null) ?? null);
-      await tx.query(
+      const w = await tx.query(
         `UPDATE takeoff_results SET agent1_output=$1, count_result=$2, usage_counter=$3, model_counter=$4,
-           review_items=$5, review_status=$6, account_terms=$7 WHERE bid_id=$8`,
+           review_items=$5, review_status=$6, account_terms=$7 WHERE bid_id=$8 AND run_id IS NOT DISTINCT FROM $9`,
         [agent1Output, JSON.stringify(stage.countResult), JSON.stringify(stage.usage), config.modelCounter,
-         JSON.stringify(reviewItemsNow), reviewStatus(reviewItemsNow), JSON.stringify(accountTerms), bidId]
+         JSON.stringify(reviewItemsNow), reviewStatus(reviewItemsNow), JSON.stringify(accountTerms), bidId, runId]
       );
+      if (!w.rowCount) superseded = true;
       await tx.query('COMMIT');
     } catch (err) {
       await tx.query('ROLLBACK').catch(() => {});
@@ -1007,10 +1022,11 @@ export async function runPipeline(
   } catch (err) {
     const message = isAgentTruncatedError(err) ? (err as Error).message : `Counting stage failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff counting stage failed');
-    await pool.query(`UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`, [message, bidId]);
+    await guarded(`UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`, [message, bidId]);
     return;
   }
 
+  if (superseded) return;
   // ── Agent 2 ─────────────────────────────────────────────────────────────────
   try {
     await updateStatus('agent2_running');
@@ -1038,25 +1054,24 @@ export async function runPipeline(
       if (a2Report.downgraded.length) {
         hygiene.downgraded.push(...a2Report.downgraded.map(d => ({ ...d, path: `agent2.${d.path}` })));
         hygiene.flags.push(...a2Report.downgraded.map(d => `Agent 2 ${d.path}: "${d.value}" can't be ${d.from} — downgraded to ${d.to}.`));
-        await pool.query('UPDATE takeoff_results SET hygiene=$1 WHERE bid_id=$2', [JSON.stringify(hygiene), bidId]);
+        await guarded('UPDATE takeoff_results SET hygiene=$1 WHERE bid_id=$2', [JSON.stringify(hygiene), bidId]);
       }
     }
     const agent2ToStore = extractJSONText(agent2Output) ?? agent2Output;
 
-    await pool.query(
-      `UPDATE takeoff_results SET status='agent2_complete', agent2_output=$1, usage_agent2=$2, model_agent2=$3 WHERE bid_id=$4`,
+    await guarded(`UPDATE takeoff_results SET status='agent2_complete', agent2_output=$1, usage_agent2=$2, model_agent2=$3 WHERE bid_id=$4`,
       [agent2ToStore, JSON.stringify(resp.usage), config.modelA2, bidId]
     );
   } catch (err) {
     const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 2 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 2 failed');
-    await pool.query(
-      `UPDATE takeoff_results SET status='error', agent2_output=$1 WHERE bid_id=$2`,
+    await guarded(`UPDATE takeoff_results SET status='error', agent2_output=$1 WHERE bid_id=$2`,
       [message, bidId]
     );
     return;
   }
 
+  if (superseded) return;
   // ── Agent 3 ─────────────────────────────────────────────────────────────────
   try {
     await updateStatus('agent3_running');
@@ -1092,7 +1107,7 @@ export async function runPipeline(
     const agent3ToStore = extractJSONText(agent3Output) ?? agent3Output;
 
     // Final write — all three complete
-    await pool.query(`
+    await guarded(`
       UPDATE takeoff_results SET
         status='complete',
         agent3_output=$1,
@@ -1105,11 +1120,12 @@ export async function runPipeline(
     // Takeoff accuracy Task 12 — the pre-bid draft, right after the analysis,
     // when nothing is waiting on the estimator (otherwise it's composed the
     // moment the Needs-review list clears).
+    if (superseded) return;
     await runDraftComposition(bidId, client, config);
 
     // Also persist structured fields from agent1 JSON for backward compatibility
     const a1 = parseAIJSON(agent1Output) ?? {};
-    await pool.query(`
+    await guarded(`
       UPDATE takeoff_results SET
         scope=$1, materials=$2
       WHERE bid_id=$3
@@ -1165,8 +1181,7 @@ export async function runPipeline(
   } catch (err) {
     const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 3 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 3 failed');
-    await pool.query(
-      `UPDATE takeoff_results SET status='error', agent3_output=$1 WHERE bid_id=$2`,
+    await guarded(`UPDATE takeoff_results SET status='error', agent3_output=$1 WHERE bid_id=$2`,
       [message, bidId]
     );
   }
@@ -2118,7 +2133,7 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   // and the review is 'pending' — every GC document and send is blocked —
   // until the counting stage writes this run's review. The estimator's
   // earlier resolutions stay in review_items for the carry-over (N4).
-  await startAnalysisRun(bidId);
+  const analysisRunId = await startAnalysisRun(bidId);
 
   // Log AI usage for rate limiting and audit
   await pool.query(
@@ -2143,8 +2158,8 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
     const message = `Pipeline failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff pipeline failed');
     await pool.query(
-      `UPDATE takeoff_results SET status='error', raw_response=$1 WHERE bid_id=$2`,
-      [message, bidId]
+      `UPDATE takeoff_results SET status='error', raw_response=$1 WHERE bid_id=$2 AND run_id = $3`,
+      [message, bidId, analysisRunId]
     ).catch(dbErr => logger.error({ err: dbErr, bidId }, 'Could not persist takeoff pipeline failure'));
   });
 }));
@@ -2222,8 +2237,8 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
 
   // Mark as running and respond immediately — don't wait for AI
   await pool.query(
-    `UPDATE takeoff_results SET agent4_status='running', agent4_error=NULL, agent4_output=NULL WHERE bid_id=$1`,
-    [bidId]
+    `UPDATE takeoff_results SET agent4_status='running', agent4_error=NULL, agent4_output=NULL WHERE bid_id=$1 AND run_id IS NOT DISTINCT FROM $2`,
+    [bidId, runId]
   );
   res.json({ status: 'running' });
 
@@ -2262,8 +2277,8 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
         const tail = rawText.slice(-300);
         logger.warn({ bidId, stop_reason: resp.stop_reason, output_tokens: outTokens, max_tokens: config.maxTokensA4, text_length: rawText.length, preview: rawText.slice(0, 200), tail }, '[agent4] Could not parse JSON from response');
         await pool.query(
-          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2`,
-          [`AI response could not be parsed as valid JSON (stop_reason: ${resp.stop_reason ?? 'unknown'}, ${outTokens ?? '?'} of ${config.maxTokensA4} output tokens, ${rawText.length} characters). Try re-running Agent 4. End of the response: …${tail.replace(/\s+/g, ' ').slice(-200)}`, bidId]
+          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2 AND run_id IS NOT DISTINCT FROM $3`,
+          [`AI response could not be parsed as valid JSON (stop_reason: ${resp.stop_reason ?? 'unknown'}, ${outTokens ?? '?'} of ${config.maxTokensA4} output tokens, ${rawText.length} characters). Try re-running Agent 4. End of the response: …${tail.replace(/\s+/g, ' ').slice(-200)}`, bidId, runId]
         );
         return;
       }
@@ -2278,8 +2293,8 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
       if (!isAgent4Shape(parsed)) {
         logger.warn({ bidId, preview: rawText.slice(0, 300) }, '[agent4] Response parsed as JSON but is not the expected shape (sections[]/takeoff[] missing)');
         await pool.query(
-          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2`,
-          ['AI response was valid JSON but missing the expected sections/takeoff arrays. Try re-running Agent 4.', bidId]
+          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2 AND run_id IS NOT DISTINCT FROM $3`,
+          ['AI response was valid JSON but missing the expected sections/takeoff arrays. Try re-running Agent 4.', bidId, runId]
         );
         return;
       }
@@ -2302,8 +2317,8 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
       logger.error({ err, bidId }, '[agent4] Background run failed');
       const message = err instanceof Error ? err.message : 'Unknown error during proposal generation';
       await pool.query(
-        `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2`,
-        [message, bidId]
+        `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2 AND run_id IS NOT DISTINCT FROM $3`,
+        [message, bidId, runId]
       );
     }
   })().catch(err => logger.error({ err, bidId }, '[agent4] Uncaught background error'));
@@ -2335,7 +2350,11 @@ export type ComposeCurrentBidDataResult =
       hygieneWarnings: string[];
       /** Fix round 1 / B5 — the analysis run this was composed from (NULL for
        *  a bid from before run ids); filed documents carry it. */
-      runId: string | null }
+      runId: string | null;
+      /** Fix round 2 / R2-B1 — sha256 of every input this was composed from;
+       *  each filed document carries it, and a send refuses a file whose
+       *  inputs have changed since. */
+      inputsHash: string }
   | { ok: false; status: number; error: string; failures?: { check: string; detail: string }[] };
 
 export interface ComposeCurrentBidDataOptions {
@@ -2543,7 +2562,30 @@ export async function composeCurrentBidData(
     ...spec.warn.filter(x => !specKept(x)).map(x => `Owner-spec text for another store type — check it applies to this project: "${x}"`),
     ...countWarnings,
   ];
-  return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys, accountCorrections, verifyOptions, hygieneWarnings, runId };
+  // R2-B1 — the inputs the document was made from: the analysis run, which
+  // Agent 4 output / draft, the price, the counts and every estimator
+  // resolution and answer, the account-rule snapshot, the scope list and
+  // overrides, and the bid fields printed on the page.
+  const inputsHash = composeInputsHash({
+    runId, source: useDraft ? 'draft' : 'final', composed: raw, price: rawPrice,
+    countResult: trRows[0].count_result, reviewItems: trRows[0].review_items, accountTerms: accountSnap,
+    scopeList, bid: bid ?? null,
+  });
+  return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys, accountCorrections, verifyOptions, hygieneWarnings, runId, inputsHash };
+}
+
+/** Fix round 2 / R2-B1 — the compose-inputs hash (see composeCurrentBidData). */
+export function composeInputsHash(x: {
+  runId: string | null; source: 'draft' | 'final'; composed: string; price: unknown; countResult: unknown; reviewItems: unknown;
+  accountTerms: unknown; scopeList: { items: unknown[]; overrides: unknown[] }; bid: Record<string, unknown> | null;
+}): string {
+  const sha = (v: unknown) => crypto.createHash('sha256').update(typeof v === 'string' ? v : JSON.stringify(v ?? null)).digest('hex');
+  const resolutions = ((x.reviewItems ?? []) as ReviewItem[]).map(i => [i.id, i.resolution ? [i.resolution.action, i.resolution.qty ?? null, i.resolution.answer ?? null, i.resolution.furnishBy ?? null, i.resolution.installBy ?? null] : null]);
+  return sha([
+    x.runId, x.source, sha(x.composed ?? ''), x.price == null ? null : Number(x.price), sha(x.countResult ?? null), resolutions,
+    sha(x.accountTerms ?? null), sha(x.scopeList.items), sha(x.scopeList.overrides),
+    x.bid ? [x.bid.name, x.bid.loc, x.bid.gc, x.bid.contact, x.bid.job_number, x.bid.brand, x.bid.sq_ft ?? null] : null,
+  ]);
 }
 
 /** Flatten every takeoff item's text fields — the pre-bid scope docx never
@@ -2661,6 +2703,7 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
       // only kind of 'proposal' row draft-proposal will ever attach.
       gatePassed: true,
       takeoffRunId: loaded.runId,
+      composeInputsHash: loaded.inputsHash,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-docx] storeDocument (proposal) failed');
@@ -2688,6 +2731,7 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
       // it reads.
       gatePassed: true,
       takeoffRunId: loaded.runId,
+      composeInputsHash: loaded.inputsHash,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-docx] storeDocument (bid_data) failed');
@@ -2711,6 +2755,7 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
         uploadedBy: req.user!.name,
         gatePassed: true,
         takeoffRunId: loaded.runId,
+        composeInputsHash: loaded.inputsHash,
       });
     } catch (err) {
       logger.error({ err, bidId }, '[generate-docx] storeDocument (pdf) failed');
@@ -2772,6 +2817,7 @@ router.get('/:bidId/generate-takeoff-xlsx', requireAuth, requireAIPermission('vi
       uploadedBy: req.user!.name,
       gatePassed: true,
       takeoffRunId: loaded.runId,
+      composeInputsHash: loaded.inputsHash,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-takeoff-xlsx] storeDocument failed');
@@ -2882,6 +2928,7 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
       uploadedBy: req.user!.name,
       gatePassed: true,
       takeoffRunId: loaded.runId,
+      composeInputsHash: loaded.inputsHash,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-prebid-package] storeDocument (scope) failed');
@@ -2905,6 +2952,7 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
       uploadedBy: req.user!.name,
       gatePassed: true,
       takeoffRunId: loaded.runId,
+      composeInputsHash: loaded.inputsHash,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-prebid-package] storeDocument (takeoff) failed');

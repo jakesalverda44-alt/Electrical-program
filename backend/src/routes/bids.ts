@@ -312,15 +312,15 @@ const TAKEOFF_XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreads
 // xlsx/generate-prebid-package routes, and only on the rows they file after
 // their own verify gate passes (see utils/storeDocument.ts) — so this query
 // can only ever return something that's actually been through that gate.
-async function loadMostRecentBidDoc(bidId: string, category: string, mimetype: string): Promise<DocRow | null> {
+async function loadMostRecentBidDoc(bidId: string, category: string, mimetype: string): Promise<(DocRow & { compose_inputs_hash?: string | null }) | null> {
   // Takeoff accuracy fix round 1 / B5 — when the bid has an analysis run id,
   // only a document filed from THAT run qualifies: after a re-analysis the
   // previous run's proposal / takeoff / pre-bid package can never be
   // attached. A bid from before run ids (run_id NULL) keeps the old rule.
   const { rows: tr } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id = $1', [bidId]);
   const runId = (tr[0]?.run_id as string | null) ?? null;
-  const { rows } = await pool.query<DocRow>(
-    `SELECT id, name, display_name, category, file_type, file_size, file_data, storage_url
+  const { rows } = await pool.query<DocRow & { compose_inputs_hash?: string | null }>(
+    `SELECT id, name, display_name, category, file_type, file_size, file_data, storage_url, compose_inputs_hash
        FROM documents
       WHERE linked_id = $1 AND category = $2 AND file_type = $3 AND deleted_at IS NULL AND gate_passed = true
         AND ($4::uuid IS NULL OR takeoff_run_id = $4::uuid)
@@ -328,6 +328,25 @@ async function loadMostRecentBidDoc(bidId: string, category: string, mimetype: s
     [bidId, category, mimetype, runId]
   );
   return rows[0] ?? null;
+}
+
+/** Fix round 2 / R2-B1 — a filed document may be sent only if the inputs it
+ *  was made from (counts, resolutions, answers, price, scope list, account
+ *  rule snapshot, the Agent 4 output / draft) are still the current ones.
+ *  null = OK to send; otherwise the refusal message. A bid from before run
+ *  ids keeps the old behaviour. */
+async function staleFileMessage(bidId: string, docs: Array<{ compose_inputs_hash?: string | null } | null>, source: 'final' | 'draft'): Promise<string | null> {
+  if (!(await currentRunId(bidId))) return null;
+  const { composeCurrentBidData } = await import('./preconstruction');
+  const loaded = await composeCurrentBidData(bidId, { persist: false, validate: false, source });
+  const stale = 'Regenerate — inputs changed since this file was made.';
+  if (!loaded.ok) return `${stale} (${loaded.error})`;
+  for (const d of docs) {
+    if (d && d.compose_inputs_hash !== loaded.inputsHash) {
+      return `${stale} The counts, review answers, price, scope list or proposal text changed after it was generated — ${source === 'draft' ? 'generate the pre-bid package again' : 'download the proposal again (it re-files the PDF)'}, then send.`;
+    }
+  }
+  return null;
 }
 
 async function currentRunId(bidId: string): Promise<string | null> {
@@ -389,6 +408,10 @@ router.post('/:id/draft-proposal', requireAuth, async (req: AuthRequest, res) =>
   if (!proposalDoc) {
     return res.status(409).json({ error: 'No filed proposal on file yet. Generate/download the proposal .docx first.' });
   }
+  // R2-B1 — never a file whose inputs changed since it was made.
+  const takeoffForSend = includeTakeoff ? await loadMostRecentBidDoc(bid.id, 'takeoff', TAKEOFF_XLSX_MIME) : null;
+  const staleProposal = await staleFileMessage(bid.id, [proposalDoc, takeoffForSend], 'final');
+  if (staleProposal) return res.status(409).json({ error: staleProposal });
   const proposalBytes = await fetchDocBytes(proposalDoc);
   if (!proposalBytes) {
     return res.status(409).json({ error: 'The filed proposal document could not be loaded. Try re-downloading it first.' });
@@ -526,6 +549,8 @@ router.post('/:id/email-prebid-chris', requireAuth, async (req: AuthRequest, res
   if (!scopeDoc && !takeoffDoc) {
     return res.status(409).json({ error: 'No pre-bid package from the current analysis is on file. Generate it first.' });
   }
+  const stalePackage = await staleFileMessage(bid.id, [scopeDoc, takeoffDoc], 'draft');
+  if (stalePackage) return res.status(409).json({ error: stalePackage });
 
   const attachments: GraphAttachment[] = [];
   for (const doc of [scopeDoc, takeoffDoc]) {
