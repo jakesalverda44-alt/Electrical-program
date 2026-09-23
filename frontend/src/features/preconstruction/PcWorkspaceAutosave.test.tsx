@@ -14,12 +14,30 @@
 // These use fake timers throughout (the debounce is 800ms and the backoff runs
 // to 8s), so element lookups are synchronous `getBy*` after an explicit
 // microtask flush rather than `findBy*`/`waitFor`, which stall under them.
+//
+// Task 7/8 (estimating redesign) — the Overview tab (and its Notes textarea,
+// the original trigger for every edit below) is retired; Documents/Takeoff/
+// Scope & RFIs/Review & Proposal are the only steps left. The autosave
+// mechanism under test here doesn't care WHICH watched `ws` field changes
+// (step, activeTab, notes, scope, rfis, files, ...), so every edit below now
+// goes through the Scope & RFIs step's Section A textarea instead — same
+// debounce/retry/backoff/StrictMode behavior, a different (still real, still
+// re-homed unchanged) trigger.
 import React, { useState } from 'react';
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach, beforeAll } from 'vitest';
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
 import PcWorkspaceView from './PcWorkspace';
 import { blankWorkspace, PcWorkspace } from './constants';
 import { Bid } from '../../types';
+
+// React.lazy()'s dynamic import (Task 12's estimating chunk) resolves a real,
+// bundler-mediated promise the first time it's evaluated — under fake timers
+// that first resolution can take more microtask turns than a couple of bare
+// act() flushes reliably cover, showing the Suspense fallback instead of the
+// Scope & RFIs textarea these tests type into. Pre-warming it once, with real
+// timers, before any test in this file runs means every render below hits
+// React.lazy's already-resolved internal promise and paints synchronously.
+beforeAll(async () => { await import('../estimating/EstimatingWorkspace'); });
 
 afterEach(() => {
   cleanup();
@@ -46,7 +64,7 @@ const bid: Bid = {
 
 const RESULTS_URL = `/preconstruction/${bid.id}/results`;
 const WORKSPACE_URL = `/preconstruction/${bid.id}/workspace`;
-const NOTES_PLACEHOLDER = 'Add notes, reminders, or key info about this bid…';
+const SCOPE_PLACEHOLDER = 'Scope notes for Service & Distribution…';
 
 function mockApi(results: Record<string, unknown> | null = {}) {
   get.mockImplementation((url: string) => {
@@ -67,7 +85,7 @@ function mockApi(results: Record<string, unknown> | null = {}) {
 const offline = () => Object.assign(new Error('offline'), { isAxiosError: true, code: 'ERR_NETWORK' });
 
 function Harness() {
-  const [ws, setWs] = useState<PcWorkspace>({ ...blankWorkspace('b1', 'Circle K #4521', 0), activeTab: 'overview' });
+  const [ws, setWs] = useState<PcWorkspace>({ ...blankWorkspace('b1', 'Circle K #4521', 0), activeTab: 'scope' });
   return (
     <PcWorkspaceView
       ws={ws}
@@ -101,7 +119,10 @@ async function tick(ms: number) {
 
 const workspacePuts = () => put.mock.calls.filter(c => c[0] === WORKSPACE_URL);
 const resultsGets = () => get.mock.calls.filter(c => c[0] === RESULTS_URL).length;
-const saveChip = () => screen.getByTestId('pc-save-state').textContent;
+// Task 7 (estimating redesign) — the save-state indicator moved from the old
+// TabStrip (`pc-save-state`) into the new EstimateShell rail header
+// (`est-save-state`); the autosave mechanism itself under test is unchanged.
+const saveChip = () => screen.getByTestId('est-save-state').textContent;
 
 beforeEach(() => {
   get.mockReset();
@@ -127,13 +148,13 @@ describe('PcWorkspace autosave', () => {
     render(<Harness/>);
     await flush();
 
-    fireEvent.change(screen.getByPlaceholderText(NOTES_PLACEHOLDER), {
+    fireEvent.change(screen.getByPlaceholderText(SCOPE_PLACEHOLDER), {
       target: { value: 'Panel schedule needs verifying' },
     });
     await tick(900);
 
     expect(workspacePuts()).toHaveLength(1);
-    expect(workspacePuts()[0][1]).toMatchObject({ notes: 'Panel schedule needs verifying' });
+    expect(workspacePuts()[0][1]).toMatchObject({ scope: { A: 'Panel schedule needs verifying' } });
     expect(saveChip()).toBe('Saved');
   });
 
@@ -143,7 +164,7 @@ describe('PcWorkspace autosave', () => {
     render(<Harness/>);
     await flush();
 
-    fireEvent.change(screen.getByPlaceholderText(NOTES_PLACEHOLDER), { target: { value: 'an afternoon of work' } });
+    fireEvent.change(screen.getByPlaceholderText(SCOPE_PLACEHOLDER), { target: { value: 'an afternoon of work' } });
     await tick(900);
 
     expect(workspacePuts()).toHaveLength(1);
@@ -173,17 +194,17 @@ describe('PcWorkspace autosave', () => {
     render(<Harness/>);
     await flush();
 
-    const notes = screen.getByPlaceholderText(NOTES_PLACEHOLDER);
-    fireEvent.change(notes, { target: { value: 'first' } });
+    const scopeField = screen.getByPlaceholderText(SCOPE_PLACEHOLDER);
+    fireEvent.change(scopeField, { target: { value: 'first' } });
     await tick(900);
-    expect(workspacePuts()[0][1]).toMatchObject({ notes: 'first' });
+    expect(workspacePuts()[0][1]).toMatchObject({ scope: { A: 'first' } });
 
     // Typing again while a retry is pending supersedes it.
-    fireEvent.change(notes, { target: { value: 'first and second' } });
+    fireEvent.change(scopeField, { target: { value: 'first and second' } });
     await tick(900);
 
     const last = workspacePuts()[workspacePuts().length - 1][1];
-    expect(last).toMatchObject({ notes: 'first and second' });
+    expect(last).toMatchObject({ scope: { A: 'first and second' } });
   });
 
   it('stops retrying once the workspace is unmounted', async () => {
@@ -192,7 +213,7 @@ describe('PcWorkspace autosave', () => {
     const { unmount } = render(<Harness/>);
     await flush();
 
-    fireEvent.change(screen.getByPlaceholderText(NOTES_PLACEHOLDER), { target: { value: 'x' } });
+    fireEvent.change(screen.getByPlaceholderText(SCOPE_PLACEHOLDER), { target: { value: 'x' } });
     await tick(900);
     expect(workspacePuts()).toHaveLength(1);
 
@@ -288,11 +309,11 @@ describe('PcWorkspace autosave under React.StrictMode', () => {
     render(<StrictHarness/>);
     await flush();
 
-    fireEvent.change(screen.getByPlaceholderText(NOTES_PLACEHOLDER), { target: { value: 'survives the double mount' } });
+    fireEvent.change(screen.getByPlaceholderText(SCOPE_PLACEHOLDER), { target: { value: 'survives the double mount' } });
     await tick(900);
 
     expect(workspacePuts()).toHaveLength(1);
-    expect(workspacePuts()[0][1]).toMatchObject({ notes: 'survives the double mount' });
+    expect(workspacePuts()[0][1]).toMatchObject({ scope: { A: 'survives the double mount' } });
     expect(saveChip()).toBe('Saved');
   });
 
@@ -302,7 +323,7 @@ describe('PcWorkspace autosave under React.StrictMode', () => {
     render(<StrictHarness/>);
     await flush();
 
-    fireEvent.change(screen.getByPlaceholderText(NOTES_PLACEHOLDER), { target: { value: 'an afternoon of work' } });
+    fireEvent.change(screen.getByPlaceholderText(SCOPE_PLACEHOLDER), { target: { value: 'an afternoon of work' } });
     await tick(900);
 
     expect(workspacePuts()).toHaveLength(1);
@@ -329,7 +350,7 @@ describe('PcWorkspace autosave under React.StrictMode', () => {
     render(<StrictHarness/>);
     await flush();
 
-    fireEvent.change(screen.getByPlaceholderText(NOTES_PLACEHOLDER), { target: { value: 'unsaved' } });
+    fireEvent.change(screen.getByPlaceholderText(SCOPE_PLACEHOLDER), { target: { value: 'unsaved' } });
     await tick(900);
 
     expect(saveChip()).toBe('Not saved — retrying');

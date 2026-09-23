@@ -1,0 +1,532 @@
+/* Estimating workspace (Task 7-12). Dark-only design system — no light-theme
+   tokens, matching the rest of the app. All spacing/typography reuses the
+   tokens from styles.css (--border, --panel, --surface, --text, etc.). */
+
+.est-shell {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.est-shell-desktop {
+  flex-direction: row;
+}
+
+.est-shell-tablet {
+  flex-direction: row;
+}
+
+.est-shell-mobile {
+  flex-direction: column;
+}
+
+/* ── Rail (desktop/tablet) ─────────────────────────────────────────────── */
+
+.est-rail {
+  width: 208px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  padding: 12px 8px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.est-rail-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 4px 8px 10px;
+}
+
+.est-rail-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+
+.est-save-state {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text3);
+  white-space: nowrap;
+}
+
+.est-save-state-error {
+  color: var(--red);
+}
+
+.est-rail-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: var(--rxs);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text2);
+}
+
+.est-rail-step:hover {
+  background: var(--surface);
+}
+
+.est-rail-step-active {
+  background: var(--surface2);
+  color: var(--text);
+}
+
+.est-rail-step-marker {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 800;
+  background: var(--surface3);
+  color: var(--text3);
+}
+
+.est-rail-step-done .est-rail-step-marker {
+  background: var(--green);
+  color: #fff;
+}
+
+.est-rail-step-active .est-rail-step-marker {
+  background: var(--blue);
+  color: #fff;
+}
+
+.est-rail-step-label {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.est-rail-step-hint {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text3);
+}
+
+/* ── Work area ─────────────────────────────────────────────────────────── */
+
+.est-work {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 24px;
+  gap: 16px;
+  overflow: auto;
+}
+
+.est-work-header {
+  display: flex;
+  align-items: center;
+}
+
+.est-work-step-index {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.est-work-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.est-work-next {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Summary (desktop) ─────────────────────────────────────────────────── */
+
+.est-summary {
+  width: 300px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  padding: 16px;
+  overflow: auto;
+}
+
+/* ── Tablet: slim collapsible summary bar above the work area ──────────── */
+
+.est-tablet-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.est-summary-slim {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 24px;
+  background: var(--surface);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.est-summary-slim-body {
+  padding: 16px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Mobile: chip row rail + sticky bottom summary bar ──────────────────── */
+
+.est-chip-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.est-chip-row-savestate {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text3);
+}
+
+.est-chip-row-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.est-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--border2);
+  background: var(--surface);
+  color: var(--text2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.est-chip span {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  background: var(--surface3);
+}
+
+.est-chip-active {
+  border-color: var(--blue);
+  color: var(--text);
+}
+
+.est-chip-done {
+  color: var(--green);
+}
+
+.est-summary-bottom {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  padding: 12px 16px;
+}
+
+/* Fix round 1 / N11 — below 768px, styles.css's .mobile-nav becomes a fixed,
+   64px-tall, z-index:200 bar pinned to the viewport bottom. Left at
+   `bottom: 0`, this sticky summary bar shares that same screen region and
+   the (much higher z-index) nav bar paints over its bottom ~64px, hiding
+   the grand total and any warning chips that land there. Clearing the
+   nav's height, not raising z-index, is the actual fix — raising z-index
+   would just put the summary bar ON TOP of the nav instead of beside it. */
+@media (max-width: 768px) {
+  .est-summary-bottom {
+    bottom: 64px;
+  }
+}
+
+/* ── Bid Summary panel content (shared across breakpoints) ──────────────── */
+
+.bs-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.bs-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--text2);
+}
+
+.bs-row-value {
+  font-weight: 700;
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+.bs-total {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 0;
+}
+
+.bs-total-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+
+.bs-total-value {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+.bs-unsaved-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  font-size: 10px;
+  font-weight: 800;
+  background: var(--amber-soft);
+  color: var(--amber);
+  vertical-align: middle;
+}
+
+.bs-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--rxs);
+  border: none;
+  background: transparent;
+  color: var(--amber);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bs-warning:hover {
+  background: var(--amber-soft);
+}
+
+.bs-comps-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--surface3);
+  margin: 6px 0;
+}
+
+.bs-comps-bar-marker {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 14px;
+  background: var(--blue);
+  border-radius: 1px;
+}
+
+.bs-insights-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+/* ── Labor & Pricing step (Task 9) ───────────────────────────────────────── */
+
+.lp-settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  padding: 12px;
+  background: var(--surface);
+  border-radius: var(--rs);
+}
+
+.lp-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text3);
+}
+
+.lp-settings-field input {
+  width: 84px;
+}
+
+.lp-factor-chip {
+  padding: 4px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--border2);
+  background: var(--surface2);
+  color: var(--text2);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.lp-factor-chip-active {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+  color: var(--text);
+}
+
+.lp-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--rs);
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.lp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.lp-table th {
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--text3);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.lp-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text2);
+}
+
+.lp-category-row td {
+  font-weight: 800;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.lp-table input {
+  width: 100%;
+  min-width: 56px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--rxs);
+  color: var(--text);
+  font: inherit;
+  padding: 3px 5px;
+}
+
+.lp-table input:focus {
+  border-color: var(--blue);
+  background: var(--surface);
+}
+
+.lp-cell-edited {
+  position: relative;
+}
+
+.lp-cell-edited input {
+  border-color: var(--border2);
+  background: var(--surface2);
+}
+
+.lp-reset-btn {
+  display: none;
+  margin-left: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text3);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.lp-cell-edited:hover .lp-reset-btn {
+  display: inline;
+}
+
+.lp-row-excluded td {
+  opacity: .5;
+  text-decoration: line-through;
+}
+
+.lp-unverified-marker {
+  color: var(--amber);
+  font-weight: 800;
+  cursor: help;
+}
+
+/* ── Responsive: 16px gutters, no horizontal page scroll ─────────────────── */
+
+@media (max-width: 899px) {
+  .est-work {
+    padding: 16px;
+  }
+}

@@ -98,3 +98,13 @@ describe('PcWorkspace Files tab — "From Project Files" preview', () => {
     expect(get).not.toHaveBeenCalledWith('/documents/doc-2/view', expect.anything());
   });
 });
+
+describe('PcWorkspace Documents step — fix round 2 / S3: S4 render check (Import Finished Bid + notes)', () => {
+  it('renders the Workspace Notes textarea and the Import Finished Bid panel', async () => {
+    mockApi();
+    renderFilesTab();
+    await waitFor(() => expect(screen.getByText('takeoff.xlsx')).toBeTruthy());
+    expect(screen.getByTestId('documents-workspace-notes')).toBeTruthy();
+    expect(screen.getByText('Import Finished Bid')).toBeTruthy();
+  });
+});

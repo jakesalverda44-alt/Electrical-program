@@ -182,3 +182,79 @@ describe('PcWorkspace Proposal tab — pre-bid package (Task 7.3)', () => {
     expect(within(screen.getByText('Pre-Bid Package for Chris').closest('span') as HTMLElement).getByText('Internal only')).toBeTruthy();
   });
 });
+
+describe('PcWorkspace Proposal tab — fix round 2 / S3: propPrice and Agent 4 read the engine\'s latest saved total', () => {
+  const EMPTY_TOTALS = {
+    materialSubtotal: 0, consumables: 0, materialTax: 0, laborHours: 0, laborCost: 0,
+    smallTools: 0, directCost: 0, overhead: 0, profit: 0, sellPerSf: null, crewWeeks: 0,
+  };
+  const EMPTY_WARNINGS = { unmatchedCount: 0, verifyCount: 0, zeroMaterialMatchedCount: 0, excludedCount: 0, unverifiedMaterialShare: 0, unitUnknownCount: 0 };
+  const ESTIMATING_SETTINGS = {
+    labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3,
+    supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: 0,
+  };
+  const ESTIMATING_LINE = { id: 'l1', category: 'Branch Power', description: 'Duplex', qty: 10, unit: 'EA' as const, source: 'manual' as const };
+
+  function mocksWithEngineTotal(grandTotal: number) {
+    get.mockImplementation((url: string) => {
+      if (url === `/preconstruction/${bid.id}/results`) return Promise.resolve({ data: AI_RESULTS_COMPLETE });
+      if (url === `/preconstruction/${bid.id}/proposal-preview`) return Promise.resolve({ data: PREVIEW });
+      if (url === '/preconstruction/costs') return Promise.resolve({ data: [] });
+      if (url === `/preconstruction/${bid.id}/takeoff`) return Promise.resolve({ data: null });
+      if (url === `/preconstruction/intelligence/${bid.id}`) return Promise.resolve({ data: null });
+      if (url === '/estimates/unit-costs') return Promise.resolve({ data: { global: {}, by_project_type: {} } });
+      if (url === `/estimates/${bid.id}`) return Promise.resolve({ data: null });
+      if (url === '/documents') return Promise.resolve({ data: [] });
+      // The new engine — a SAVED (not proposed) bid whose recap's grandTotal
+      // is what propPrice and Agent 4 must read.
+      if (url === `/estimating/${bid.id}`) return Promise.resolve({
+        data: {
+          lines: [ESTIMATING_LINE], settings: ESTIMATING_SETTINGS,
+          recap: { lines: [], categories: [], totals: { ...EMPTY_TOTALS, grandTotal }, warnings: EMPTY_WARNINGS },
+          proposed: false, savedGrandTotal: grandTotal,
+        },
+      });
+      return Promise.resolve({ data: null });
+    });
+    post.mockResolvedValue({ data: {} });
+    put.mockResolvedValue({ data: {} });
+    del.mockResolvedValue({ data: {} });
+  }
+
+  it('propPrice equals the engine\'s saved grand total, in cents, not rounded to a whole dollar (N4)', async () => {
+    mocksWithEngineTotal(12345.67);
+    renderProposalTab();
+    await waitFor(() => expect(screen.getByText('Proposal Preview')).toBeTruthy());
+    const priceInput = await screen.findByPlaceholderText('e.g. 285000') as HTMLInputElement;
+    await waitFor(() => expect(priceInput.value).toBe('12345.67'));
+  });
+
+  it('Agent 4 receives exactly that total as `price` when Run Agent 4 is clicked', async () => {
+    mocksWithEngineTotal(12345.67);
+    renderProposalTab();
+    await waitFor(() => expect(screen.getByText('Proposal Preview')).toBeTruthy());
+    const priceInput = await screen.findByPlaceholderText('e.g. 285000') as HTMLInputElement;
+    await waitFor(() => expect(priceInput.value).toBe('12345.67'));
+
+    fireEvent.click(screen.getByText(/Re-run Agent 4|Run Agent 4/));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(
+      `/preconstruction/${bid.id}/run-agent4`,
+      expect.objectContaining({ price: '12345.67' }),
+    ));
+  });
+
+  it('shows a mismatch warning with a "Use engine total" action once the estimator hand-types a different price', async () => {
+    mocksWithEngineTotal(12345.67);
+    renderProposalTab();
+    await waitFor(() => expect(screen.getByText('Proposal Preview')).toBeTruthy());
+    const priceInput = await screen.findByPlaceholderText('e.g. 285000') as HTMLInputElement;
+    await waitFor(() => expect(priceInput.value).toBe('12345.67'));
+
+    fireEvent.change(priceInput, { target: { value: '99999' } });
+    expect(await screen.findByTestId('propprice-mismatch-warning')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('propprice-use-engine-total'));
+    await waitFor(() => expect(priceInput.value).toBe('12345.67'));
+    expect(screen.queryByTestId('propprice-mismatch-warning')).toBeNull();
+  });
+});

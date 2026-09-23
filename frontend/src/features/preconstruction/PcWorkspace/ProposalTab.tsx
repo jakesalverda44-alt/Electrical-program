@@ -10,6 +10,13 @@ interface ProposalTabProps {
   aiResults: AiResults;
   propPrice: string;
   setPropPrice: (v: string) => void;
+  /** Fix round 2 / SF3 — true when propPrice was typed by hand and differs
+   *  from the engine's current total. */
+  priceMismatch?: boolean;
+  /** Fix round 2 / SF3 — the engine's current (live) grand total, for the mismatch banner's message. */
+  engineTotal?: number | null;
+  /** Fix round 2 / SF3 — resets propPrice to engineTotal and resumes auto-sync. */
+  onUseEngineTotal?: () => void;
   propNotes: string;
   setPropNotes: (v: string) => void;
   agent4StartError: string | null;
@@ -38,7 +45,7 @@ interface ProposalTabProps {
   handleConvert: () => void;
 }
 
-function ProposalTab({ bid, aiResults, propPrice, setPropPrice, propNotes, setPropNotes,
+function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, engineTotal, onUseEngineTotal, propNotes, setPropNotes,
   agent4StartError, setAgent4StartError, agent4Running, runAgent4Proposal, downloadDocx, docxBusy,
   downloadTakeoffXlsx, xlsxBusy, sendProposalOpen, setSendProposalOpen, onBidUpdated, showToast,
   generatePrebidPackage, prebidBusy, prebidResult, downloadFiledDocument, emailPrebidToChris,
@@ -91,6 +98,22 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, propNotes, setPr
               <input type="number" value={propPrice}
                 onChange={e => { setPropPrice(e.target.value); setAgent4StartError(null); }}
                 placeholder="e.g. 285000" style={fieldStyle}/>
+              {priceMismatch && engineTotal != null && (
+                <div
+                  data-testid="propprice-mismatch-warning"
+                  style={{
+                    marginTop: 8, padding: '8px 10px', borderRadius: 8, fontSize: 12, fontWeight: 700,
+                    background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.4)', color: 'var(--amber)',
+                    display: 'flex', flexDirection: 'column', gap: 6,
+                  }}
+                >
+                  <span>Differs from the engine total (${engineTotal.toFixed(2)}).</span>
+                  <button type="button" className="btn ghost" style={{ fontSize: 11, alignSelf: 'flex-start' }}
+                    onClick={onUseEngineTotal} data-testid="propprice-use-engine-total">
+                    Use engine total
+                  </button>
+                </div>
+              )}
             </div>
             <div>
               <label style={labelStyle}>Internal Notes for Agent 4 (optional)</label>
