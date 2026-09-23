@@ -409,7 +409,12 @@ export interface EnforcementResult {
 }
 
 function bulletText(b: string | { b: string; t: string }): string {
-  return typeof b === 'string' ? b : `${b.b} ${b.t}`;
+  return typeof b === 'string' ? b : `${b.b}${b.t}`;
+}
+
+/** Apply a text fix to a bullet, keeping a {b, t} bold-lead bullet's shape. */
+function mapBullet<T extends string | { b: string; t: string }>(b: T, fn: (s: string) => string): T {
+  return (typeof b === 'string' ? fn(b) : { b: fn(b.b), t: fn(b.t) }) as T;
 }
 
 const SECTION_LETTER = /^\s*([A-F])\./;
@@ -504,14 +509,13 @@ export function enforceAccountTerms(agent4: Agent4Output, snap: AccountTermsSnap
     for (const s of sections) {
       s.bullets = (s.bullets ?? []).map(b => {
         const text = bulletText(b);
-        if (typeof b !== 'string' || !re.test(text) || !/ECFECI/.test(text)) return b;
+        if (!re.test(text) || !/ECFECI/.test(text)) return b;
         // Only when the bullet is about this term alone — a mixed gear bullet
         // ("panels [...] and disconnects (ECFECI)") is left for verifyBid.
         const otherTerms = TERM_KEYS.filter(k => k !== t.term && TERM_PATTERNS[k].test(text));
         if (otherTerms.length) return b;
-        const fixed = text.replace(/\s*\(ECFECI\)/g, '');
         corrections.push(`Removed "(ECFECI)" from ${s.title}: "${text}" — ${TERM_LABELS[t.term].toLowerCase()} are not APT-furnished.`);
-        return fixed;
+        return mapBullet(b, x => x.replace(/\s*\(ECFECI\)/g, ''));
       });
     }
   }
@@ -520,9 +524,9 @@ export function enforceAccountTerms(agent4: Agent4Output, snap: AccountTermsSnap
   if (snap.noMdpUnlessOnDrawings && !snap.mdpOnDrawings) {
     for (const s of sections) {
       s.bullets = (s.bullets ?? []).map(b => {
-        if (typeof b !== 'string' || !MDP_RE.test(b)) return b;
-        const fixed = b.replace(/\s*(,\s*)?(and|&)\s+(the\s+)?(MDP|main distribution panel)\b/gi, '').replace(/\s*\/\s*MDP\b/g, '');
-        if (fixed !== b) corrections.push(`MDP language removed (no MDP on the drawings): "${b}" -> "${fixed}"`);
+        if (!MDP_RE.test(bulletText(b))) return b;
+        const fixed = mapBullet(b, x => x.replace(/\s*(,\s*)?(and|&)\s+(the\s+)?(MDP|main distribution panel)\b/gi, '').replace(/\s*\/\s*MDP\b/g, ''));
+        if (bulletText(fixed) !== bulletText(b)) corrections.push(`MDP language removed (no MDP on the drawings): "${bulletText(b)}" -> "${bulletText(fixed)}"`);
         return fixed;
       });
     }

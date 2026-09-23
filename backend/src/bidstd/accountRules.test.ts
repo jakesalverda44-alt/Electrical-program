@@ -231,3 +231,14 @@ describe('rendering', () => {
     ]);
   });
 });
+
+describe('enforcement keeps {b, t} bold-lead bullets (Task 13)', () => {
+  it('MDP removed and the lead stays bold', () => {
+    const snap = resolveAccountTerms(AUTOZONE, 'brand', [], false);
+    const out = enforceAccountTerms({
+      sections: [{ title: 'A. Service & Distribution', bullets: [{ b: 'Furnish and install', t: ' the service entrance assembly and MDP (ECFECI).' }] }],
+      takeoff: [],
+    }, snap, snap.resolved);
+    expect(out.output.sections![0].bullets![0]).toEqual({ b: 'Furnish and install', t: ' the service entrance assembly (ECFECI).' });
+  });
+});

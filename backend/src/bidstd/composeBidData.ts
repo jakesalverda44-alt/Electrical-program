@@ -17,6 +17,45 @@ export interface ComposeBidRow {
   contact?: string | null;
   sq_ft?: number | string | null;
   job_number?: string | null;
+  /** Takeoff accuracy Task 13 — for the Cowork "Re:  AutoZone Store #10077" line. */
+  brand?: string | null;
+}
+
+/** Task 13 — "Sheets E-1 through E-7 and the civil/photometric set (Sheet
+ *  PH0.1)": the electrical sheets (a run when they're consecutive) plus the
+ *  photometric / civil sheets, never every A/S/M/P sheet in the set. */
+export function formatSheetCitation(sheets: string[]): string {
+  const clean = [...new Set(sheets.map(s => s.trim()).filter(Boolean))];
+  const elec = clean.filter(s => /^E[\s-]?\d/i.test(s));
+  const other = clean.filter(s => /^(PH|C|CE|CS|CU)[\s-]?\d/i.test(s));
+  const num = (s: string) => Number(/(\d+(?:\.\d+)?)/.exec(s)?.[1] ?? NaN);
+  elec.sort((a, b) => num(a) - num(b));
+  let elecText = '';
+  if (elec.length) {
+    const ints = elec.map(num);
+    const consecutive = elec.length >= 3 && ints.every((n, i) => Number.isInteger(n) && (i === 0 || n === ints[i - 1] + 1));
+    elecText = consecutive ? `${elec[0]} through ${elec[elec.length - 1]}` : elec.join(', ');
+  }
+  const otherText = other.length ? `the civil/photometric set (Sheet${other.length > 1 ? 's' : ''} ${other.join(', ')})` : '';
+  if (!elecText && !otherText) return clean.join(', ') || '—';
+  if (elecText && otherText) return `${elecText} and ${otherText}`;
+  return elecText || otherText;
+}
+
+/** Task 13 — "AutoZone Store #10077" when the bid has a brand and a store
+ *  number; otherwise the bid name. */
+export function reLineFor(name: string, brand?: string | null): string {
+  const store = /#\s*(\d{3,6})\b/.exec(name)?.[1];
+  const b = (brand || '').trim();
+  return b && store ? `${b} Store #${store}` : name;
+}
+
+/** Task 13 — a contact field holding "Name <email>" / "email" splits into the
+ *  Attn line and the email line. */
+export function splitContact(contact: string): { name?: string; email?: string } {
+  const email = /[^\s<>(),;]+@[^\s<>(),;]+\.[a-z]{2,}/i.exec(contact)?.[0];
+  const name = (email ? contact.replace(email, '') : contact).replace(/[<>()]/g, ' ').replace(/[\s,;:—-]+$/g, '').replace(/^[\s,;:—-]+/g, '').replace(/\s+/g, ' ').trim();
+  return { ...(name ? { name } : {}), ...(email ? { email } : {}) };
 }
 
 /** A saved-estimate line item carrying Phase 2's confidence value — the
@@ -143,7 +182,7 @@ export function composeBidData(
   const jobNo = existingJobNumber || jobNumber(now);
 
   const planDate = (agent4.plan_date || '').trim() || '—';
-  const sheetList = (agent4.sheets || []).join(', ') || '—';
+  const sheetList = formatSheetCitation(agent4.sheets || []);
   const gcName = (bidRow.gc || '').trim() || '—';
   const projectName = (bidRow.name || '').trim() || '—';
   const projectAddress = (bidRow.loc || '').trim();
@@ -291,7 +330,9 @@ export function composeBidData(
     location_slug: slug(projectAddress.split(',')[0] || 'FL'),
     date: formatDate(now),
     client: gcName,
-    contact: (bidRow.contact || '').trim() || undefined,
+    contact: splitContact(bidRow.contact || '').name,
+    email: splitContact(bidRow.contact || '').email,
+    re_line: reLineFor(projectName, bidRow.brand),
     project_name: projectName,
     project_address: projectAddress,
     job_number: jobNo,

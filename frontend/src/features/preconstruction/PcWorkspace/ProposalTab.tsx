@@ -2,8 +2,9 @@ import React, { memo } from 'react';
 import Icon from '../../../components/Icon';
 import { Bid } from '../../../types';
 import SendBidProposalModal from '../SendBidProposalModal';
-import { BidDataPreview, VerifyFailure, bulletText } from '../bidDataPreview';
+import { BidDataPreview, VerifyFailure } from '../bidDataPreview';
 import KeepLineControl from './KeepLineControl';
+import ProposalPaper from './ProposalPaper';
 import { AiResults } from './shared';
 
 interface ProposalTabProps {
@@ -298,76 +299,7 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
           <div className="panel-hdr">
             <span className="panel-title">Proposal Preview</span>
           </div>
-          <div style={{ padding: '16px 20px', fontSize: 13 }}>
-            {/* Header row */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16, padding: '12px 16px', background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border2)' }}>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Prepared For</div>
-                <div style={{ fontWeight: 700, color: 'var(--text)' }}>{proposalPreview.client || '—'}</div>
-                {proposalPreview.contact ? <div style={{ color: 'var(--text3)' }}>{proposalPreview.contact}</div> : null}
-              </div>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Project</div>
-                <div style={{ fontWeight: 700, color: 'var(--text)' }}>{proposalPreview.project_name || bid.name}</div>
-                {proposalPreview.project_address ? <div style={{ color: 'var(--text3)' }}>{proposalPreview.project_address}</div> : null}
-              </div>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Job Number</div>
-                <div style={{ fontWeight: 700, color: 'var(--text)' }}>{proposalPreview.job_number || '—'}</div>
-              </div>
-            </div>
-
-            {/* Price */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'rgba(31,56,100,.06)', border: '1px solid rgba(31,56,100,.2)', borderRadius: 8, marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>Total Proposed Contract Value:</div>
-              <div style={{ fontSize: 20, fontWeight: 900, color: '#1F3864' }}>{proposalPreview.total_price || propPrice}</div>
-            </div>
-
-            {/* Scope sections — real titles, straight off the composed data */}
-            {proposalPreview.sections.length > 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Scope of Work</div>
-                {proposalPreview.sections.map((s, si) => (
-                  <div key={si} style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: '#1F3864', marginBottom: 4 }}>{s.title}</div>
-                    <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
-                      {s.bullets.map((b, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{bulletText(b)}</li>)}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Exclusions */}
-            {proposalPreview.exclusions.length > 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Exclusions</div>
-                <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
-                  {proposalPreview.exclusions.map((e, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{bulletText(e)}</li>)}
-                </ul>
-              </div>
-            )}
-
-            {/* Alternates */}
-            {!!proposalPreview.alternates?.length && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Alternates</div>
-                <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
-                  {proposalPreview.alternates.map((a, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{bulletText(a)}</li>)}
-                </ul>
-              </div>
-            )}
-
-            {/* Terms */}
-            {proposalPreview.terms.length > 0 && (
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Terms, Conditions &amp; Special Requirements</div>
-                <ol style={{ margin: 0, paddingLeft: 18 }}>
-                  {proposalPreview.terms.map((t, i) => <li key={i} style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{bulletText(t)}</li>)}
-                </ol>
-              </div>
-            )}
-          </div>
+          <ProposalPaper data={proposalPreview} fallbackName={bid.name} fallbackPrice={propPrice} />
         </div>
       )}
 

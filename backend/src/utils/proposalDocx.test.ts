@@ -66,8 +66,9 @@ describe('renderBidDocx', () => {
     const buf = await renderBidDocx(fixture);
     const text = extractDocxText(buf);
     expect(text).toContain('Proposal Price Summary');
-    expect(text).toContain(`Total for ${fixture.project_name}:`);
-    expect(text).toContain(fixture.total_price);
+    // Takeoff accuracy Task 13 — Cowork's line: amount in words + figure to the cent.
+    expect(text).toContain('Total Electrical Scope — ');
+    expect(text).toMatch(/and \d\d\/100 Dollars {3}\$[\d,]+\.\d\d/);
   });
 
   it('renders every takeoff item and category band', async () => {
@@ -81,32 +82,36 @@ describe('renderBidDocx', () => {
     }
   });
 
-  it('band header paragraphs are centered (navy-filled cells carry w:jc center)', async () => {
+  it('band headers are centered navy-shaded paragraphs that keep with their first bullet (Task 13: not one-cell tables)', async () => {
     const buf = await renderBidDocx(fixture);
     const xml = documentXml(buf);
-    // Every navy-filled table cell (a section band) must have a centered
-    // paragraph inside it — critical per PROJECT_INSTRUCTIONS §4: "section
-    // header text is centered in the navy band — not left-aligned."
-    const bandCellPattern = /<w:tc>(?:(?!<\/w:tc>).)*?w:fill="1F3864"(?:(?!<\/w:tc>).)*?<\/w:tc>/gs;
-    const bandCells = xml.match(bandCellPattern) ?? [];
-    // The header row of the takeoff table is also navy-filled but its cells
-    // are individually centered per-column (ITEM/QTY centered, DESCRIPTION/
-    // SOURCE left) — filter to cells that actually contain a paragraph.
-    expect(bandCells.length).toBeGreaterThan(0);
-    const centeredBandCells = bandCells.filter(c => /<w:jc w:val="center"\/>/.test(c));
-    expect(centeredBandCells.length).toBeGreaterThan(0);
+    // PROJECT_INSTRUCTIONS §4: "section header text is centered in the navy
+    // band — not left-aligned." Takeoff accuracy Task 13 renders the band as a
+    // shaded paragraph (a table band broke keep-with-next and left pages half
+    // empty).
+    const bands = [...xml.matchAll(/<w:p>(?:(?!<\/w:p>).)*?w:fill="1F3864"(?:(?!<\/w:p>).)*?<\/w:p>/gs)].map(m => m[0])
+      .filter(p => !p.includes('<w:tc'));
+    expect(bands.length).toBeGreaterThanOrEqual(4);
+    for (const b of bands) {
+      expect(b).toMatch(/<w:jc w:val="center"\/>/);
+      expect(b).toMatch(/<w:keepNext\/>/);
+    }
   });
 
   it('the takeoff table column-width grid matches the spec exactly', async () => {
     const buf = await renderBidDocx(fixture);
     const xml = documentXml(buf);
     // The takeoff table is the only table with 5 gridCols totaling 9360 DXA —
-    // pull every tblGrid and find the one matching [620,3640,720,700,3680].
+    // pull every tblGrid. Takeoff accuracy Task 13: build_bid.js's 620 DXA ITEM
+    // column wrapped the "ITEM" header to "ITE / M" at 10 pt; 100 DXA moved from
+    // DESCRIPTION to ITEM (still totals 9360), fixed layout.
     const grids = [...xml.matchAll(/<w:tblGrid>(.*?)<\/w:tblGrid>/gs)].map(m =>
       [...m[1].matchAll(/w:w="(\d+)"/g)].map(g => Number(g[1]))
     );
     const takeoffGrid = grids.find(g => g.length === 5);
-    expect(takeoffGrid).toEqual([620, 3640, 720, 700, 3680]);
+    expect(takeoffGrid).toEqual([720, 3540, 720, 700, 3680]);
+    expect(takeoffGrid!.reduce((a, b) => a + b, 0)).toBe(9360);
+    expect(xml).toContain('<w:tblLayout w:type="fixed"/>');
   });
 
   it('takeoff category band cells span all 5 columns', async () => {

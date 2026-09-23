@@ -21,8 +21,9 @@
 import {
   Document, Packer, Paragraph, TextRun, ImageRun,
   Table, TableRow, TableCell, WidthType, BorderStyle,
-  AlignmentType, ShadingType,
+  AlignmentType, ShadingType, LevelFormat, TableLayoutType,
 } from 'docx';
+import { amountInWords, formatPriceCents } from '../bidstd/amountWords';
 import * as fs from 'fs';
 import * as path from 'path';
 import { BidData, TakeoffCategory, Bullet } from '../bidstd/bidData';
@@ -46,8 +47,11 @@ const SP_HDR_AFTER  = 160;
 const SP_BUL_BEFORE = 40;
 const SP_BUL_AFTER  = 80;
 
-// Takeoff column widths (DXA) — must total 9360.
-const COLS = [620, 3640, 720, 700, 3680] as const;
+// Takeoff column widths (DXA) — must total 9360. build_bid.js's locked
+// widths; Task 13 makes them FIXED so the ITEM column can't collapse to one
+// letter per line.
+const COLS = [720, 3540, 720, 700, 3680] as const;
+const TABLE_WIDTH = 9360;
 
 const NO_BORDER = {
   top:    { style: BorderStyle.NONE, size: 0, color: 'auto' },
@@ -92,35 +96,27 @@ function line(text: string, o: LineOpts = {}): Paragraph {
   });
 }
 
-/** Navy band header, centered white bold. CRITICAL: centered, not left. */
-function sectionHeader(text: string): Table {
-  return new Table({
-    width: { size: 9360, type: WidthType.DXA },
-    borders: NO_BORDER,
-    rows: [new TableRow({
-      children: [new TableCell({
-        width: { size: 9360, type: WidthType.DXA },
-        shading: { type: ShadingType.CLEAR, fill: NAVY, color: 'auto' },
-        margins: { top: 60, bottom: 60, left: 120, right: 120 },
-        borders: NO_BORDER,
-        children: [new Paragraph({
-          alignment: AlignmentType.CENTER,
-          spacing: { before: 0, after: 0 },
-          keepNext: true,
-          children: [run(text, { bold: true, color: WHITE, size: SIZE_HEADER })],
-        })],
-      })],
-    })],
+/** Navy band header, centered white bold, full text width. Takeoff accuracy
+ *  Task 13 — a SHADED PARAGRAPH, not a one-cell table: a table band can't
+ *  carry keep-with-next reliably (LibreOffice/Word pushed whole blocks to the
+ *  next page and left pages half empty). A paragraph band keeps with its
+ *  first bullet and nothing more, so the document flows like Cowork's. The
+ *  navy top/bottom borders give the band its height. */
+function sectionHeader(text: string): Paragraph {
+  const edge = { style: BorderStyle.SINGLE, size: 12, color: NAVY, space: 1 };
+  return new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing: { before: SP_HDR_BEFORE, after: SP_HDR_AFTER },
+    keepNext: true,
+    keepLines: true,
+    shading: { type: ShadingType.CLEAR, fill: NAVY, color: 'auto' },
+    border: { top: edge, bottom: edge, left: { ...edge, space: 4 }, right: { ...edge, space: 4 } },
+    children: [run(text, { bold: true, color: WHITE, size: SIZE_HEADER })],
   });
 }
 
-/** Wrapper that supplies the 440-before / 160-after spacing around a band. */
 function headerBlock(text: string): (Paragraph | Table)[] {
-  return [
-    new Paragraph({ spacing: { before: SP_HDR_BEFORE, after: 0 }, keepNext: true, children: [] }),
-    sectionHeader(text),
-    new Paragraph({ spacing: { before: SP_HDR_AFTER, after: 0 }, keepNext: true, children: [] }),
-  ];
+  return [sectionHeader(text)];
 }
 
 /** Flatten a Bullet (string | {b,t}) into plain text, e.g. for a banned-word scan. */
@@ -128,13 +124,28 @@ export function bulletText(b: Bullet): string {
   return typeof b === 'string' ? b : `${b.b ?? ''}${b.t ?? ''}`;
 }
 
+/** Task 13 — Cowork's bullet: a small "•" with a tight hanging indent (the
+ *  docx default was a large "●" with a wide one). */
+const BULLET_REF = 'apt-bullet';
+const NUMBERING = {
+  config: [{
+    reference: BULLET_REF,
+    levels: [
+      { level: 0, format: LevelFormat.BULLET, text: '•', alignment: AlignmentType.LEFT,
+        style: { paragraph: { indent: { left: 360, hanging: 180 } }, run: { font: FONT, size: SIZE_BODY } } },
+      { level: 1, format: LevelFormat.BULLET, text: '•', alignment: AlignmentType.LEFT,
+        style: { paragraph: { indent: { left: 720, hanging: 180 } }, run: { font: FONT, size: SIZE_BODY } } },
+    ],
+  }],
+};
+
 /** Bullet. `text` may be a string, or {b:"bold lead", t:"rest"} for mixed runs. */
-function bullet(text: Bullet): Paragraph {
+function bullet(text: Bullet, level = 0): Paragraph {
   const kids = typeof text === 'string'
     ? [run(text)]
     : [run(text.b, { bold: true }), run(text.t)];
   return new Paragraph({
-    bullet: { level: 0 },
+    numbering: { reference: BULLET_REF, level },
     spacing: { before: SP_BUL_BEFORE, after: SP_BUL_AFTER },
     keepLines: true,
     children: kids,
@@ -195,10 +206,11 @@ interface CellOpts {
 
 function cell(text: string, i: number, o: CellOpts = {}): TableCell {
   return new TableCell({
-    width: { size: COLS[i], type: WidthType.DXA },
+    width: { size: o.span ? TABLE_WIDTH : COLS[i], type: WidthType.DXA },
     shading: o.fill ? { type: ShadingType.CLEAR, fill: o.fill, color: 'auto' } : undefined,
-    margins: { top: 40, bottom: 40, left: 80, right: 80 },
-    borders: CELL_BORDER,
+    margins: { top: 60, bottom: 60, left: 100, right: 100 },
+    // Task 13 — Cowork's takeoff table has no cell borders.
+    borders: NO_BORDER,
     columnSpan: o.span,
     children: [new Paragraph({
       alignment: o.align || AlignmentType.LEFT,
@@ -208,28 +220,42 @@ function cell(text: string, i: number, o: CellOpts = {}): TableCell {
   });
 }
 
+/** Task 13 — one readable description per line: the item name and its
+ *  description, without repeating the name when the description already
+ *  starts with it. */
+export function takeoffDescription(item: string, description: string): string {
+  const i = (item || '').trim();
+  const d = (description || '').trim();
+  if (!d) return i;
+  if (!i || d.toLowerCase().includes(i.toLowerCase())) return d;
+  return `${i} — ${d}`;
+}
+
 function takeoffTable(categories: TakeoffCategory[]): Table {
   const rows: TableRow[] = [];
 
-  // Column header row — navy, white bold.
+  // Column header row — navy, white bold, repeated on every page the table
+  // continues onto (Cowork).
   rows.push(new TableRow({
     tableHeader: true,
+    cantSplit: true,
     children: ['ITEM', 'DESCRIPTION', 'UNIT', 'QTY', 'SOURCE / NOTES'].map((h, i) =>
-      cell(h, i, { fill: NAVY, bold: true, color: WHITE, align: AlignmentType.CENTER })),
+      cell(h, i, { fill: NAVY, bold: true, color: WHITE })),
   }));
 
   categories.forEach((cat) => {
-    // Category band — light navy fill, navy bold text, spans all 5 columns.
+    // Section row — light-blue fill, bold title-case name, spans all columns.
     rows.push(new TableRow({
-      children: [cell((cat.name || '').toUpperCase(), 0, {
-        fill: ACCENT, bold: true, color: NAVY, span: 5,
-      })],
+      cantSplit: true,
+      children: [cell(cat.name || '', 0, { fill: ACCENT, bold: true, color: BLACK, span: 5 })],
     }));
-    cat.items.forEach((it) => {
+    // Items numbered 1, 2, 3… per section.
+    cat.items.forEach((it, n) => {
       rows.push(new TableRow({
+        cantSplit: true,
         children: [
-          cell(it.item || '', 0, { align: AlignmentType.CENTER }),
-          cell(it.description || '', 1),
+          cell(String(n + 1), 0),
+          cell(takeoffDescription(it.item, it.description), 1),
           cell(it.unit || '', 2, { align: AlignmentType.CENTER }),
           cell(String(it.qty ?? ''), 3, { align: AlignmentType.CENTER }),
           cell(it.source || '', 4),
@@ -239,8 +265,10 @@ function takeoffTable(categories: TakeoffCategory[]): Table {
   });
 
   return new Table({
-    width: { size: 9360, type: WidthType.DXA },
+    width: { size: TABLE_WIDTH, type: WidthType.DXA },
     columnWidths: [...COLS],
+    layout: TableLayoutType.FIXED,
+    borders: NO_BORDER,
     rows,
   });
 }
@@ -275,6 +303,29 @@ export function bidDocxFilename(data: BidData, fallbackAsciiName: string): strin
   return `Proposal - ${fallbackAsciiName}.docx`;
 }
 
+/** Task 13 — the Cowork header lines, in order; blanks omitted. */
+export function headerLines(data: BidData): Array<{ text: string; bold?: boolean }> {
+  const out: Array<{ text: string; bold?: boolean }> = [{ text: data.date }];
+  if (data.client && data.client !== '—') out.push({ text: data.client, bold: true });
+  out.push({ text: `Attn:  ${(data.contact || '').trim() || 'Estimating Department'}` });
+  if (data.email) out.push({ text: data.email });
+  out.push({ text: `Re:  ${data.re_line || data.project_name}` });
+  if (data.project_address) out.push({ text: data.project_address });
+  if (data.job_number) out.push({ text: `Job No:  ${data.job_number}` });
+  return out;
+}
+
+export function introLine(data: BidData): string {
+  return `Please accept this proposal to complete the electrical work for ${(data.re_line || data.project_name).toUpperCase()} you have out for bid.`;
+}
+
+/** "Total Electrical Scope — Eighty-One Thousand … and 60/100 Dollars   $81,485.60". */
+export function priceLine(totalPrice: string): string {
+  const words = amountInWords(totalPrice);
+  const figure = formatPriceCents(totalPrice);
+  return words && figure ? `Total Electrical Scope — ${words}   ${figure}` : `Total Electrical Scope — ${totalPrice}`;
+}
+
 /**
  * Render a composed BidData into the standard APT proposal .docx. Faithful,
  * data-only port of build_bid.js's build() — no boilerplate strings live
@@ -296,19 +347,14 @@ export async function renderBidDocx(data: BidData): Promise<Buffer> {
   // 1. Logo
   body.push(image(logo, 280, 224));
 
-  // 2. Header block
-  body.push(line(data.date));
-  body.push(line(data.client, { bold: true, before: 120 }));
-  if (data.contact) body.push(line(`Attn: ${data.contact}`));
-  if (data.email) body.push(line(data.email));
-  body.push(line(`Re: ${data.project_name}`, { before: 120 }));
-  body.push(line(data.project_address));
-  body.push(line(`Job No. ${data.job_number}`));
+  // 2. Header block (Task 13 — Cowork's): date, GC (bold), Attn, email,
+  // Re (with the store number), street address, Job No; a missing line is
+  // simply omitted.
+  const hdr = headerLines(data);
+  hdr.forEach((h) => body.push(line(h.text, { bold: h.bold, after: 50 })));
 
-  // 3. Bold opening statement
-  body.push(line(
-    `Please accept this proposal to complete the electrical work for ${data.project_name} you have out for bid.`,
-    { bold: true, before: 240, after: 120 }));
+  // 3. Bold opening statement, project name in caps.
+  body.push(line(introLine(data), { bold: true, before: 200, after: 120 }));
 
   // 4-10. Scope + lettered sections
   body.push(...headerBlock(SECTION_HEADERS.scope));
@@ -331,11 +377,16 @@ export async function renderBidDocx(data: BidData): Promise<Buffer> {
   body.push(...headerBlock(SECTION_HEADERS.terms));
   data.terms.forEach((b) => body.push(bullet(b)));
 
-  // 14. Price summary
-  body.push(line('Proposal Price Summary', { bold: true, before: 320, after: 40 }));
-  body.push(line(`Total for ${data.project_name}:  ${data.total_price}`,
-    { bold: true, color: NAVY, size: SIZE_TOTAL, after: 160 }));
-  (data.alternates || []).forEach((b) => body.push(bullet(b)));
+  // 14. Price summary — Cowork's: bold heading, then the amount in words and
+  // figures in navy bold; kept on the same page as the signature block.
+  body.push(line('Proposal Price Summary', { bold: true, before: 320, after: 40, keepNext: true }));
+  body.push(line(priceLine(data.total_price), { bold: true, color: NAVY, size: SIZE_TOTAL, after: 160, keepNext: true }));
+  (data.alternates || []).forEach((b) => body.push(new Paragraph({
+    numbering: { reference: BULLET_REF, level: 0 },
+    spacing: { before: SP_BUL_BEFORE, after: SP_BUL_AFTER },
+    keepNext: true, keepLines: true,
+    children: typeof b === 'string' ? [run(b)] : [run(b.b, { bold: true }), run(b.t)],
+  })));
 
   // 15. Signature / acceptance block
   body.push(line(CLOSING.respectfully, { before: 240, after: 40, keepNext: true }));
@@ -351,6 +402,7 @@ export async function renderBidDocx(data: BidData): Promise<Buffer> {
     creator: 'Accurate Power & Technology',
     title: `APT Electrical Proposal — ${data.project_name}`,
     styles: { default: { document: { run: { font: FONT, size: SIZE_BODY } } } },
+    numbering: NUMBERING,
     sections: [{
       properties: {
         page: {

@@ -7,7 +7,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import AdmZip from 'adm-zip';
 import crypto from 'crypto';
 import { AGENT1_SYSTEM, agent1PromptWithCountingSections, AGENT2_SYSTEM, AGENT3_SYSTEM, AGENT4_SYSTEM, PREBID_COMPARE_SYSTEM } from '../ai/prompts';
-import { buildProposalDocx, ProposalJSON, renderBidDocx, legacyProposalWithBidMeta, bidDocxFilename } from '../utils/proposalDocx';
+import { buildProposalDocx, ProposalJSON, renderBidDocx, legacyProposalWithBidMeta, bidDocxFilename, headerLines, introLine, priceLine, takeoffDescription } from '../utils/proposalDocx';
 import { callWithRetry } from '../ai/retry';
 import { assertNotTruncated, isAgentTruncatedError } from '../ai/stopReason';
 import { parseAIJSON, extractJSONText } from '../ai/json';
@@ -2233,12 +2233,12 @@ export async function composeCurrentBidData(
 
   const [{ rows: bidRows }, { rows: estRows }] = await Promise.all([
     pool.query(
-      'SELECT name, loc, gc, contact, sq_ft, job_number FROM bids WHERE id=$1 AND deleted_at IS NULL',
+      'SELECT name, loc, gc, contact, sq_ft, job_number, brand FROM bids WHERE id=$1 AND deleted_at IS NULL',
       [bidId]
     ),
     pool.query('SELECT line_items FROM bid_estimates WHERE bid_id=$1', [bidId]),
   ]);
-  const bid = bidRows[0] as { name?: string; loc?: string; gc?: string; contact?: string; sq_ft?: number | string | null; job_number?: string | null } | undefined;
+  const bid = bidRows[0] as { name?: string; loc?: string; gc?: string; contact?: string; sq_ft?: number | string | null; job_number?: string | null; brand?: string | null } | undefined;
   const bidName = bid?.name ?? bidId;
   // HTTP headers must be Latin-1. Strip any non-ASCII (em dashes, accents, etc.)
   // from the filename or res.setHeader throws ERR_INVALID_CHAR.
@@ -2259,7 +2259,7 @@ export async function composeCurrentBidData(
     }
     const bidRow: ComposeBidRow = {
       name: bid?.name, loc: bid?.loc, gc: bid?.gc, contact: bid?.contact,
-      sq_ft: bid?.sq_ft ?? null, job_number: bid?.job_number ?? null,
+      sq_ft: bid?.sq_ft ?? null, job_number: bid?.job_number ?? null, brand: bid?.brand ?? null,
     };
     const enforced = enforceAccountTerms(parsed as Agent4Output, accountSnap, accountResolved);
     accountCorrections = enforced.corrections;
@@ -2275,6 +2275,14 @@ export async function composeCurrentBidData(
       lightingTermsBullet: lightingTermsBullet(accountResolved.find(t => t.term === 'lighting')),
     });
     ambiguousQtyKeys = keys;
+    // Takeoff accuracy Task 13 — circuit rows ("CKT") are panel-schedule
+    // bookkeeping, not takeoff items: they never reach the GC documents.
+    for (const cat of data.takeoff) {
+      const kept = cat.items.filter(it => !/^ckts?$/i.test(String(it.unit ?? '').trim()));
+      for (const it of cat.items) if (!kept.includes(it)) accountCorrections.push(`Circuit row removed from the takeoff: ${cat.name} "${it.item}${it.description ? ` — ${it.description}` : ''}" (${it.qty} CKT).`);
+      cat.items = kept;
+    }
+    data.takeoff = data.takeoff.filter(cat => cat.items.length > 0);
     if (jobNumberGenerated && persist) {
       // Task 6.2 — two bids generated the same day compute the identical
       // JS.MMDDYYYY (jobNumber() is a pure function of today's date only),
@@ -2406,7 +2414,17 @@ router.get('/:bidId/proposal-preview', requireAuth, requireAIPermission('view_re
   // fields (rather than a separate round trip) is what lets the frontend
   // show it as a real pre-send warning instead of it only ever reaching
   // server logs (see composeBidData.ts's own comment on this).
-  res.json({ ...loaded.bidData, ambiguousQtyKeys: loaded.ambiguousQtyKeys, accountCorrections: loaded.accountCorrections, hygieneWarnings: loaded.hygieneWarnings });
+  // Takeoff accuracy Task 13 — `paper` carries the exact strings the .docx
+  // prints (header lines, intro, price in words, takeoff descriptions) so the
+  // white-paper preview never re-implements them client-side.
+  const bd = loaded.bidData;
+  const paper = {
+    headerLines: headerLines(bd),
+    introLine: introLine(bd),
+    priceLine: bd.total_price ? priceLine(bd.total_price) : null,
+    takeoffDescriptions: bd.takeoff.map(c => c.items.map(it => takeoffDescription(it.item, it.description))),
+  };
+  res.json({ ...bd, ambiguousQtyKeys: loaded.ambiguousQtyKeys, accountCorrections: loaded.accountCorrections, hygieneWarnings: loaded.hygieneWarnings, paper });
 }));
 
 // GET generate-docx — build and return the .docx proposal file

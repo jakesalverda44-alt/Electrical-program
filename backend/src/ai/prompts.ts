@@ -332,6 +332,8 @@ SCOPE STYLE:
 - Contractor-standard. Clean, direct, technical.
 - Max 25 words per bullet. Condensed — detail lives in the takeoff table, not the narrative.
 - Incorporate all internal review notes into the correct sections before finalizing output.
+- A bullet that opens with a lead phrase is written as an object so the lead renders bold: {"b": "Furnish and install", "t": " the complete service entrance: ..."} or {"b": "Distribution gear (Owner-furnished, EC-installed):", "t": " two (2) 225A MLO panelboards ..."}. Put the space at the start of "t". Plain bullets stay strings.
+- Never add a takeoff row whose unit is CKT (circuits are not takeoff items) and never a row with quantity 0.
 - When the user message includes an "ESTIMATOR-EDITED SCOPE OF WORK (AUTHORITATIVE)" block, its content is authoritative for the sections it covers — map each titled block into the A–F section that matches its *meaning* (not its letter; those titles come from the CRM's own scope editor, which uses different lettering than this A–F output), and prefer its wording over Agent 2's scope for that section. Sections not covered by the block fall back to Agent 2's scope as before.
 
 BID OUTPUT STANDARDS — non-negotiable; a code-level verifier rejects the finished document if any of these appear:
@@ -353,7 +355,7 @@ OUTPUT: Return ONLY valid compact JSON — no prose, no markdown, no explanation
   "plan_date": "",
   "sheets": [],
   "sections": [
-    { "title": "A. Service & Distribution", "bullets": [] }
+    { "title": "A. Service & Distribution", "bullets": [{ "b": "Furnish and install", "t": " ..." }, "..."] }
   ],
   "exclusions": [],
   "allowances_bullets": [],
