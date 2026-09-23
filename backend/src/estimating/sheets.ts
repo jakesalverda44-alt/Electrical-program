@@ -78,11 +78,23 @@ export async function getPlanPdfDocuments(bidId: string): Promise<PlanDocument[]
  *  review concern the plan calls out explicitly: "no cross-bid document
  *  access by id"). Bid-level access itself (does this user get to act on
  *  this bidId at all) is the caller's job via loadAccessibleBid, same as
- *  every other route in this router. */
+ *  every other route in this router.
+ *
+ *  Fix round 1 / S4 — this comment used to claim "plans-category" but the
+ *  query never actually checked it: ANY document linked to the bid (a W9,
+ *  a contract, a spec PDF, a stray text/html upload) could be streamed
+ *  through the "plan file" route by id, with routes/documents.ts's own
+ *  Content-Type/Content-Disposition lockdown (Security #6) bypassed
+ *  entirely — a category:'other' text/html document came back as a plain
+ *  200 text/html with no Content-Disposition. Now filters exactly like
+ *  getPlanPdfDocuments() above: plans-category AND (a real PDF file_type,
+ *  or a .pdf name for older rows that never got file_type populated). */
 export async function loadPlanDocumentForBid(bidId: string, documentId: string): Promise<PlanDocument | null> {
   const { rows } = await pool.query(
     `SELECT id, name, file_type, file_data, storage_url FROM documents
-     WHERE id = $1 AND linked_id = $2 AND deleted_at IS NULL`,
+     WHERE id = $1 AND linked_id = $2 AND deleted_at IS NULL
+       AND category = 'plans'
+       AND (file_type = 'application/pdf' OR name ILIKE '%.pdf')`,
     [documentId, bidId]
   );
   return (rows[0] as PlanDocument | undefined) ?? null;

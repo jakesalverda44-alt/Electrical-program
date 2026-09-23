@@ -17,6 +17,10 @@ import { normalizeUnit, MapConfidence } from '../estimating/mapper';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
 import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
 import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, setHalfSize } from '../estimating/sheets';
+// Fix round 1 / S4 — reuse the exact same Content-Type/Content-Disposition/
+// nosniff lockdown routes/documents.ts already applies (audit Security #6),
+// instead of the plan-file route rolling its own (looser) header logic.
+import { serveDocument } from './documents';
 import {
   getMarkups, batchMarkups, getRollup, applyMarkups,
   MarkupCreateInput, MarkupUpdateInput,
@@ -611,11 +615,27 @@ router.get('/:bidId/sheets/:documentId/file', requireAuth, async (req: AuthReque
   const doc = await loadPlanDocumentForBid(bidId, documentId);
   if (!doc) return res.status(404).json({ error: 'Plan document not found for this bid' });
 
+  // Fix round 1 / S4 — loadPlanDocumentForBid above now filters to
+  // plans-category PDFs only (it used to accept ANY document linked to
+  // the bid), but this is a second, independent guard: never trust
+  // whatever Content-Type a re-fetched storage provider reports (Drive's
+  // own mimeType, or a stale file_type column) for what gets sent to the
+  // browser. A document that somehow isn't a real PDF gets 415, not a
+  // 200 with an attacker-influenced Content-Type.
+  if (doc.file_type && doc.file_type !== 'application/pdf') {
+    return res.status(415).json({ error: 'This document is not a PDF' });
+  }
+
   const streamed = await streamPlanDocument(doc);
   if (!streamed) return res.status(502).json({ error: 'Could not fetch the plan file. Try again later.' });
 
-  res.setHeader('Content-Type', streamed.contentType);
-  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // Always application/pdf — never streamed.contentType (which can carry
+  // Drive's own reported mimeType) — plus the same Content-Disposition/
+  // nosniff lockdown every other document-serving route in this app uses
+  // (routes/documents.ts's serveDocument, audit Security #6). 'inline' is
+  // safe here because the type is hard-pinned to application/pdf, one of
+  // the two types serveDocument ever allows inline.
+  serveDocument(res, 'application/pdf', doc.name, 'inline');
   // Never a shared/public cache — this bytes-over-the-wire response is
   // gated by requireAuth + the two ownership checks above, on every request.
   res.setHeader('Cache-Control', 'private, no-store');

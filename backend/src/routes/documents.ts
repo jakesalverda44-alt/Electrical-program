@@ -21,7 +21,7 @@ const upload = documentUpload;
 // whatever was declared at upload time on old rows. nosniff stops a browser from
 // second-guessing that; only PDF/image are ever safe to render inline — anything
 // else forces a download (audit: Security #6, High).
-function serveDocument(
+export function serveDocument(
   res: import('express').Response,
   contentType: string | null | undefined,
   name: string,

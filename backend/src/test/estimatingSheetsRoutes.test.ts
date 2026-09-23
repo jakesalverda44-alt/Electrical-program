@@ -434,6 +434,63 @@ describe('GET /api/estimating/:bidId/sheets/:documentId/file — authenticated P
     const bidId = await makeBid(app, u);
     await request(app).get(`/api/estimating/${bidId}/sheets/00000000-0000-0000-0000-000000000000/file`).set(auth(u.token)).expect(404);
   });
+
+  // Fix round 1 / S4 (security) — R4's reproduced failure: a category:
+  // 'other' text/html document, linked to the same bid, used to stream
+  // straight through this route as a plain 200 text/html with no
+  // Content-Disposition — routes/documents.ts's own lockdown (Security
+  // #6) never applied to this route at all. loadPlanDocumentForBid now
+  // filters to plans-category PDFs only, so a non-plans document 404s
+  // exactly like a document that doesn't belong to this bid.
+  it('404s a document linked to this bid that is NOT plans-category (was: streamed as text/html with no Content-Disposition)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { rows } = await pool.query(
+      `INSERT INTO documents (linked_id, name, category, file_type, file_data, uploaded_by)
+       VALUES ($1, 'notes.html', 'other', 'text/html', $2, 'test') RETURNING id`,
+      [bidId, Buffer.from('<script>alert(1)</script>').toString('base64')]
+    );
+    const otherDocId = rows[0].id as string;
+
+    const res = await request(app).get(`/api/estimating/${bidId}/sheets/${otherDocId}/file`).set(auth(u.token));
+    expect(res.status).toBe(404);
+    expect(res.headers['content-type']).not.toContain('text/html');
+  });
+
+  // Fix round 1 / S4 — a plans-category row whose file_type somehow isn't
+  // application/pdf (a mislabeled upload, an old row) gets 415, never a
+  // 200 with an attacker/upload-influenced Content-Type.
+  it('415s a plans-category document whose file_type is not application/pdf', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const { rows } = await pool.query(
+      `INSERT INTO documents (linked_id, name, category, file_type, file_data, uploaded_by)
+       VALUES ($1, 'plans.pdf', 'plans', 'text/html', $2, 'test') RETURNING id`,
+      [bidId, Buffer.from('<script>alert(1)</script>').toString('base64')]
+    );
+    const docId = rows[0].id as string;
+
+    const res = await request(app).get(`/api/estimating/${bidId}/sheets/${docId}/file`).set(auth(u.token));
+    expect(res.status).toBe(415);
+  });
+
+  it('sends application/pdf, inline Content-Disposition with the filename, and nosniff for a real plan PDF', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+
+    const res = await request(app).get(`/api/estimating/${bidId}/sheets/${docId}/file`).set(auth(u.token)).expect(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.headers['content-disposition']).toContain('inline');
+    expect(res.headers['content-disposition']).toContain('plans.pdf');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
 });
 
 describe('GET /api/estimating/:bidId/sheets — bid access', () => {
