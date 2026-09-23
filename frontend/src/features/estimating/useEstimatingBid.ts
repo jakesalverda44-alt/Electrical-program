@@ -29,9 +29,25 @@ export interface UseEstimatingBidResult {
   savedGrandTotal: number | null;
   setLines: (updater: EstimateLine[] | ((prev: EstimateLine[]) => EstimateLine[])) => void;
   setSettings: (updater: EstimateSettings | ((prev: EstimateSettings) => EstimateSettings)) => void;
-  save: () => Promise<void>;
+  /** Fix round 1 / B1 — `linesOverride`, when given, is PUT verbatim
+   *  instead of this hook's own `lines` state. Exists so a caller that
+   *  just called `setLines(...)` and wants to save that EXACT array can
+   *  do so without a stale-closure race: `save`'s own `lines` closure
+   *  still reflects whatever it was on the LAST render, since calling
+   *  `setLines` and then `save()` back-to-back in the same synchronous
+   *  function never gets a re-render in between (see PcWorkspaceView.
+   *  tsx's onCreateLine). */
+  save: (linesOverride?: EstimateLine[]) => Promise<void>;
   syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number } | null>;
   reload: () => void;
+  /** Fix round 1 / B1 — installs a server-confirmed {lines, recap} DIRECTLY
+   *  (no GET round trip) as the new live state AND the new persisted
+   *  baseline — e.g. apply-markups' own response, which already contains
+   *  the exact lines/recap saveBidEstimate just wrote. Call sites are
+   *  expected to have already confirmed nothing else is unsaved (see
+   *  PlansWorkspace.tsx's ensureLinesSavedFirst) — this always overwrites,
+   *  same as `save()` itself does after ITS OWN PUT succeeds. */
+  installSaved: (saved: { lines: EstimateLine[]; recap: PricingRecap }) => void;
 }
 
 function linesEqual(a: EstimateLine[], b: EstimateLine[]): boolean {
@@ -131,11 +147,17 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     ? false
     : !linesEqual(lines, persistedRef.current.lines) || !settingsEqual(settings, persistedRef.current.settings);
 
-  const save = useCallback(async () => {
+  const save = useCallback(async (linesOverride?: EstimateLine[]) => {
+    // Fix round 1 / B1 — `linesOverride` (when given) is what gets PUT,
+    // not the `lines` this closure captured on its last render — see
+    // UseEstimatingBidResult.save's own comment for why that distinction
+    // matters (a caller that just called setLines and wants THAT exact
+    // array saved, with no chance of a stale-closure race).
+    const linesToSave = linesOverride ?? lines;
     setSaving(true);
     setSaveError(null);
     try {
-      const { data: res } = await api.put<{ recap: PricingRecap; lines?: EstimateLine[] }>(`/estimating/${bidId}`, { lines, settings });
+      const { data: res } = await api.put<{ recap: PricingRecap; lines?: EstimateLine[] }>(`/estimating/${bidId}`, { lines: linesToSave, settings });
       if (!aliveRef.current) return;
       setRecap(res.recap);
       setProposed(false);
@@ -145,7 +167,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       // to the client's own lines) rather than the client's pre-save copy,
       // so a markup created against a just-saved new line has a real
       // line_key to point at without a second round trip.
-      const savedLines = res.lines ?? lines;
+      const savedLines = res.lines ?? linesToSave;
       setLinesState(savedLines);
       // Fix round 2 / SF3 — a save writes bid_estimates.grand_total from
       // exactly this recap, in the same transaction — the two can't drift
@@ -160,6 +182,20 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bidId, lines, settings]);
+
+  // Fix round 1 / B1 — see UseEstimatingBidResult.installSaved's own
+  // comment. Mirrors exactly what `save()` does with ITS OWN response,
+  // for a caller (PlansWorkspace's Apply flow) whose own POST already
+  // returned the fresh {lines, recap} and has no reason to PUT again.
+  const installSaved = useCallback((saved: { lines: EstimateLine[]; recap: PricingRecap }) => {
+    if (!aliveRef.current) return;
+    setLinesState(saved.lines);
+    setRecap(saved.recap);
+    setProposed(false);
+    setSavedGrandTotal(saved.recap.totals.grandTotal);
+    persistedRef.current = { lines: saved.lines, settings };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings]);
 
   const syncTakeoff = useCallback(async () => {
     setSyncing(true);
@@ -185,6 +221,6 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
   return {
     loading: initialLoading && !hydratedRef.current,
     lines, settings, recap, proposed, dirty, saving, syncing, pricing, saveError, savedGrandTotal,
-    setLines, setSettings, save, syncTakeoff, reload,
+    setLines, setSettings, save, syncTakeoff, reload, installSaved,
   };
 }

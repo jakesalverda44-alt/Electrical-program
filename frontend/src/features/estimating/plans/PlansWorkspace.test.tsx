@@ -115,13 +115,26 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); cleanup(); });
 
 function setup(props: Partial<React.ComponentProps<typeof PlansWorkspace>> = {}) {
-  const onApplied = vi.fn();
+  const onApplied = props.onApplied ?? vi.fn();
+  // Fix round 1 / B1 — PlansWorkspace no longer PUTs a new line itself;
+  // the caller (PcWorkspaceView, via estimatingBid.setLines + save) does.
+  // Defaults to a working create so every EXISTING test (written before
+  // B1) that never cared about this plumbing keeps passing unchanged.
+  // `props.onCreateLine ?? ...` (not just spreading `{...props}` after a
+  // separately-returned local default) so a caller that overrides it gets
+  // back the SAME mock reference that's actually wired to the component.
+  const onCreateLine = props.onCreateLine ?? vi.fn().mockResolvedValue(true);
+  const onSaveDirtyLinesFirst = props.onSaveDirtyLinesFirst ?? vi.fn().mockResolvedValue(undefined);
   render(
     <ConfirmProvider>
-      <PlansWorkspace bidId="bid1" lines={[line()]} settings={settings} onApplied={onApplied} {...props} />
+      <PlansWorkspace
+        bidId="bid1" lines={[line()]} settings={settings} dirty={false}
+        {...props}
+        onApplied={onApplied} onSaveDirtyLinesFirst={onSaveDirtyLinesFirst} onCreateLine={onCreateLine}
+      />
     </ConfirmProvider>
   );
-  return { onApplied };
+  return { onApplied, onCreateLine, onSaveDirtyLinesFirst };
 }
 
 describe('PlansWorkspace — sheet list + selection', () => {
@@ -211,6 +224,55 @@ describe('PlansWorkspace — apply flow', () => {
 
     await waitFor(() => expect(post).toHaveBeenCalledWith('/estimating/bid1/apply-markups', { line_keys: ['k1'] }));
     await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
+  });
+
+  // Fix round 1 / B1 — onApplied now receives the save transaction's own
+  // {lines, recap} directly (apply-markups' response already has them),
+  // so the caller can install them without a broken reload().
+  it('onApplied is called with the save transaction\'s own {lines, recap} from the apply-markups response', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet()] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({
+        data: { rollup: [{ lineKey: 'k1', markedQty: 24, markerCount: 24, sheets: [], incompatibleCount: 0, missingScaleCount: 0, category: 'Branch Power', description: 'Duplex receptacle', unit: 'EA', currentQty: 10, qtySource: 'takeoff', aiQty: 10 }] },
+      });
+      return Promise.resolve({ data: {} });
+    });
+    const savedLines = [line({ qty: 24, qty_source: 'markup' })];
+    const savedRecap = { totals: { grandTotal: 999 } };
+    post.mockResolvedValue({ data: { applied: ['k1'], skipped: [], save: { recap: savedRecap, bidEstimate: {}, lines: savedLines } } });
+
+    const { onApplied } = setup();
+    await waitFor(() => expect(screen.getByText('Apply marked qty')).toBeTruthy());
+    fireEvent.click(screen.getByText('Apply marked qty'));
+
+    await waitFor(() => expect(onApplied).toHaveBeenCalledWith({ recap: savedRecap, bidEstimate: {}, lines: savedLines }));
+  });
+
+  // Fix round 1 / B1 — same "never silently overwrite" rule as New line
+  // from markup: Apply must not install a fresh {lines, recap} snapshot
+  // over unsaved Labor & Pricing work without asking first.
+  it('when Labor & Pricing has unsaved edits (dirty=true), Apply prompts to save first', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet()] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({
+        data: { rollup: [{ lineKey: 'k1', markedQty: 24, markerCount: 24, sheets: [], incompatibleCount: 0, missingScaleCount: 0, category: 'Branch Power', description: 'Duplex receptacle', unit: 'EA', currentQty: 10, qtySource: 'takeoff', aiQty: 10 }] },
+      });
+      return Promise.resolve({ data: {} });
+    });
+    post.mockResolvedValue({ data: { applied: ['k1'], skipped: [], save: { recap: {}, bidEstimate: {}, lines: [] } } });
+
+    const { onSaveDirtyLinesFirst } = setup({ dirty: true });
+    await waitFor(() => expect(screen.getByText('Apply marked qty')).toBeTruthy());
+    fireEvent.click(screen.getByText('Apply marked qty'));
+
+    await waitFor(() => expect(screen.getByText('Save Labor & Pricing changes first?')).toBeTruthy());
+    expect(post).not.toHaveBeenCalledWith('/estimating/bid1/apply-markups', expect.anything());
+
+    fireEvent.click(screen.getByText('Save and continue'));
+    await waitFor(() => expect(onSaveDirtyLinesFirst).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/estimating/bid1/apply-markups', { line_keys: ['k1'] }));
   });
 });
 
@@ -425,10 +487,12 @@ describe('PlansWorkspace — "New line from markup" and reassign selected marker
     expect((screen.getByText('Reassign to line…') as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('creating a manual line from the selection PUTs the full lines array with the new line, then reassigns the selected marker to it (verified via the next autosave batch)', async () => {
-    put.mockResolvedValue({ data: { lines: [], recap: {}, bidEstimate: {} } });
+  // Fix round 1 / B1 — creating a line now goes through the caller's own
+  // onCreateLine (live estimatingBid.setLines + save), never a direct PUT
+  // of a `lines` snapshot PlansWorkspace itself doesn't own.
+  it('creating a manual line from the selection calls onCreateLine with the new line, then reassigns the selected marker to it (verified via the next autosave batch)', async () => {
     post.mockResolvedValue({ data: { created: [], updated: [], deleted: [], skipped: [] } });
-    const { onApplied } = setup();
+    const { onApplied, onCreateLine } = setup();
     await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
     await placeAndSelectOneMarker();
 
@@ -437,12 +501,11 @@ describe('PlansWorkspace — "New line from markup" and reassign selected marker
     fireEvent.change(screen.getByTestId('nlfm-manual-material'), { target: { value: '42' } });
     fireEvent.click(screen.getByTestId('nlfm-keep-manual'));
 
-    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1', expect.objectContaining({
-      lines: expect.arrayContaining([expect.objectContaining({
-        description: 'Custom manual item', source: 'manual', material_unit_override: 42, unit: 'EA',
-      })]),
+    await waitFor(() => expect(onCreateLine).toHaveBeenCalledWith(expect.objectContaining({
+      description: 'Custom manual item', source: 'manual', material_unit_override: 42, unit: 'EA',
     })));
-    await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
+    expect(put).not.toHaveBeenCalled(); // PlansWorkspace itself never PUTs
+    expect(onApplied).not.toHaveBeenCalled(); // onApplied is Apply-flow-only now — onCreateLine is the line-creation channel
     expect(screen.queryByTestId('nlfm-description')).toBeNull(); // the modal closed on success
 
     // The marker was reassigned to the brand-new line's key (not left
@@ -452,6 +515,72 @@ describe('PlansWorkspace — "New line from markup" and reassign selected marker
       '/estimating/bid1/markups/batch',
       expect.objectContaining({ creates: [expect.objectContaining({ line_key: expect.any(String) })] })
     ));
+  });
+
+  it('when onCreateLine reports failure (returns false), the modal stays open and shows an error toast, and no marker is reassigned', async () => {
+    const { onCreateLine } = setup({ onCreateLine: vi.fn().mockResolvedValue(false) });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    await placeAndSelectOneMarker();
+
+    fireEvent.click(screen.getByText('New line from markup'));
+    fireEvent.change(screen.getByTestId('nlfm-description'), { target: { value: 'Custom manual item' } });
+    fireEvent.change(screen.getByTestId('nlfm-manual-material'), { target: { value: '42' } });
+    fireEvent.click(screen.getByTestId('nlfm-keep-manual'));
+
+    await waitFor(() => expect(onCreateLine).toHaveBeenCalled());
+    expect(screen.getByTestId('nlfm-description')).toBeTruthy(); // modal still open — the create failed
+  });
+
+  // Fix round 1 / B1 — never silently overwrite unsaved Labor & Pricing
+  // work: both Apply and "New line from markup" must ask first when dirty.
+  it('when Labor & Pricing has unsaved edits (dirty=true), creating a line prompts to save first', async () => {
+    const { onCreateLine, onSaveDirtyLinesFirst } = setup({ dirty: true });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    await placeAndSelectOneMarker();
+
+    fireEvent.click(screen.getByText('New line from markup'));
+    fireEvent.change(screen.getByTestId('nlfm-description'), { target: { value: 'Custom manual item' } });
+    fireEvent.change(screen.getByTestId('nlfm-manual-material'), { target: { value: '42' } });
+    fireEvent.click(screen.getByTestId('nlfm-keep-manual'));
+
+    await waitFor(() => expect(screen.getByText('Save Labor & Pricing changes first?')).toBeTruthy());
+    expect(onCreateLine).not.toHaveBeenCalled(); // not yet — waiting on the confirm
+
+    fireEvent.click(screen.getByText('Save and continue'));
+    await waitFor(() => expect(onSaveDirtyLinesFirst).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onCreateLine).toHaveBeenCalledTimes(1));
+  });
+
+  it('declining the "save first" prompt cancels the create — onCreateLine is never called', async () => {
+    const { onCreateLine } = setup({ dirty: true });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    await placeAndSelectOneMarker();
+
+    fireEvent.click(screen.getByText('New line from markup'));
+    fireEvent.change(screen.getByTestId('nlfm-description'), { target: { value: 'Custom manual item' } });
+    fireEvent.change(screen.getByTestId('nlfm-manual-material'), { target: { value: '42' } });
+    fireEvent.click(screen.getByTestId('nlfm-keep-manual'));
+
+    await waitFor(() => expect(screen.getByText('Save Labor & Pricing changes first?')).toBeTruthy());
+    fireEvent.click(screen.getByText('Cancel'));
+
+    expect(onCreateLine).not.toHaveBeenCalled();
+    expect(screen.getByTestId('nlfm-description')).toBeTruthy(); // modal still open
+  });
+
+  it('when Labor & Pricing is NOT dirty, creating a line proceeds immediately with no prompt', async () => {
+    const { onCreateLine, onSaveDirtyLinesFirst } = setup({ dirty: false });
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    await placeAndSelectOneMarker();
+
+    fireEvent.click(screen.getByText('New line from markup'));
+    fireEvent.change(screen.getByTestId('nlfm-description'), { target: { value: 'Custom manual item' } });
+    fireEvent.change(screen.getByTestId('nlfm-manual-material'), { target: { value: '42' } });
+    fireEvent.click(screen.getByTestId('nlfm-keep-manual'));
+
+    await waitFor(() => expect(onCreateLine).toHaveBeenCalledTimes(1));
+    expect(onSaveDirtyLinesFirst).not.toHaveBeenCalled();
+    expect(screen.queryByText('Save Labor & Pricing changes first?')).toBeNull();
   });
 
   it('"Reassign to line…" moves the selected marker onto a different EXISTING line', async () => {

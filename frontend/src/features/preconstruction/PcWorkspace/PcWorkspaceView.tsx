@@ -51,6 +51,7 @@ const EstimatingWorkspace = React.lazy(() => import('../../estimating/Estimating
 // imported inside it) loads into the main bundle unless Plans view opens.
 const PlansWorkspace = React.lazy(() => import('../../estimating/plans/PlansWorkspace'));
 import { EstimateStepKey, mapLegacyTabToStep, stepToLegacyTab, deriveStepStatus, legacyTabWantsInsights, ESTIMATE_STEPS } from '../../estimating/steps';
+import { EstimateLine } from '../../estimating/types';
 import { usePlanViewParams } from '../../estimating/plans/usePlanViewParams';
 
 const ESTIMATE_STEP_ORDER = ESTIMATE_STEPS.map(s => s.key);
@@ -1013,6 +1014,24 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     });
   });
 
+  // Fix round 1 / B1 — "New line from markup" (PlansWorkspace.tsx) adds a
+  // line through the SAME live lines state Labor & Pricing edits, instead
+  // of PUTting its own snapshot. `nextLines` is computed synchronously and
+  // passed straight to save() (not read back from estimatingBid.lines,
+  // which wouldn't reflect the just-called setLines until the next
+  // render) — see useEstimatingBid.ts's save(linesOverride) comment for
+  // why that distinction matters.
+  const onCreateLineFromMarkup = useStableFn(async (newLine: EstimateLine): Promise<boolean> => {
+    const nextLines = [...estimatingBid.lines, newLine];
+    estimatingBid.setLines(nextLines);
+    try {
+      await estimatingBid.save(nextLines);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
   const estimatingBid = useEstimatingBid(bid.id);
   // Task 9 — the new engine's own dirty check, independent of the legacy
   // pricingDirty registration above (both are real, harmless to register
@@ -1184,7 +1203,16 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   initialLineKey={planView.lineKey}
                   onSheetKeyChange={planView.setSheetKey}
                   onLineKeyChange={planView.setLineKey}
-                  onApplied={estimatingBid.reload}
+                  // Fix round 1 / B1 — estimatingBid.reload() (a bare
+                  // useApi refetch) never actually re-hydrated past its
+                  // own first-load guard, so Apply's own applied quantity
+                  // silently reverted on the estimator's very next Labor &
+                  // Pricing save. installSaved installs apply-markups' own
+                  // {lines, recap} response directly — no refetch needed.
+                  onApplied={estimatingBid.installSaved}
+                  dirty={estimatingBid.dirty}
+                  onSaveDirtyLinesFirst={estimatingBid.save}
+                  onCreateLine={onCreateLineFromMarkup}
                   showToast={showToastStable}
                 />
               </Suspense>

@@ -7,7 +7,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api from '../../../api/client';
 import { useApi } from '../../../hooks/useApi';
 import { Toast } from '../../../types';
-import { EstimateLine, EstimateSettings, SheetRow, SheetDiscipline, MarkupWire, RollupEntry, ApplyMarkupsResponse, Library } from '../types';
+import { EstimateLine, EstimateSettings, SheetRow, SheetDiscipline, MarkupWire, RollupEntry, ApplyMarkupsResponse, Library, SaveBidResponse } from '../types';
+import { useConfirm } from '../../../components/ConfirmDialog';
 import SheetNavigator, { sheetKey } from './SheetNavigator';
 import PlanViewer from './PlanViewer';
 import Toolbar from './Toolbar';
@@ -88,9 +89,34 @@ export interface PlansWorkspaceProps {
   initialLineKey?: string | null;
   onSheetKeyChange?: (key: string | null) => void;
   onLineKeyChange?: (key: string | null) => void;
-  /** Called after a successful apply-markups so the caller (PcWorkspaceView,
-   *  via useEstimatingBid) can refresh lines/recap/Bid Summary. */
-  onApplied?: () => void;
+  /** Fix round 1 / B1 — called after a successful apply-markups with the
+   *  save-transaction's own {lines, recap} (already returned by the
+   *  apply-markups endpoint — see routes/estimating.ts's ApplyMarkupsResult).
+   *  The caller (PcWorkspaceView) is expected to install these DIRECTLY
+   *  into useEstimatingBid (installSaved), not merely refetch-and-hope —
+   *  useEstimatingBid.reload() alone never actually re-hydrated past its
+   *  own first-load guard, which is exactly what silently reverted every
+   *  applied quantity on the estimator's next Labor & Pricing save. */
+  onApplied?: (saved: SaveBidResponse) => void;
+  /** Fix round 1 / B1 — true when Labor & Pricing has unsaved edits
+   *  (useEstimatingBid.dirty). Apply and "New line from markup" both check
+   *  this FIRST (see ensureLinesSavedFirst) and prompt to save before
+   *  proceeding — neither is allowed to silently overwrite unsaved work in
+   *  either direction. */
+  dirty?: boolean;
+  /** Fix round 1 / B1 — estimatingBid.save(), used ONLY by
+   *  ensureLinesSavedFirst's "save first" prompt. */
+  onSaveDirtyLinesFirst?: () => Promise<void>;
+  /** Fix round 1 / B1 — replaces PlansWorkspace's own direct `api.put` of a
+   *  `[...lines, newLine]` snapshot (built from the `lines` PROP, which
+   *  useEstimatingBid.reload() never actually refreshed — B1's other
+   *  failure mode: the new line vanished on the next Labor & Pricing save
+   *  because it was never in the SHARED lines state to begin with). The
+   *  caller is expected to add `newLine` through its own live
+   *  estimatingBid.setLines + save(nextLines), so there is exactly ONE
+   *  owner of `lines` and no snapshot can ever go stale. Returns whether
+   *  the line was actually created. */
+  onCreateLine?: (newLine: EstimateLine) => Promise<boolean>;
   viewOnly?: boolean;
   /** Matches the rest of the estimating feature's convention (see
    *  LaborPricingStep.tsx) of taking showToast as a prop rather than
@@ -100,8 +126,32 @@ export interface PlansWorkspaceProps {
 }
 
 export default function PlansWorkspace({
-  bidId, lines, settings, initialSheetKey, initialLineKey, onSheetKeyChange, onLineKeyChange, onApplied, viewOnly: viewOnlyProp, showToast,
+  bidId, lines, settings, initialSheetKey, initialLineKey, onSheetKeyChange, onLineKeyChange, onApplied,
+  dirty, onSaveDirtyLinesFirst, onCreateLine, viewOnly: viewOnlyProp, showToast,
 }: PlansWorkspaceProps) {
+  const confirm = useConfirm();
+  // Fix round 1 / B1 — shared by Apply and "New line from markup": if
+  // Labor & Pricing has unsaved edits, ask before either proceeds (never
+  // silently overwrite in either direction — installSaved/save(nextLines)
+  // both replace the ENTIRE lines array, which would otherwise discard
+  // whatever the estimator was mid-typing on the Pricing screen).
+  const ensureLinesSavedFirst = useCallback(async (): Promise<boolean> => {
+    if (!dirty) return true;
+    const ok = await confirm({
+      title: 'Save Labor & Pricing changes first?',
+      body: 'You have unsaved changes in Labor & Pricing. They need to be saved before this action can continue.',
+      confirmLabel: 'Save and continue',
+    });
+    if (!ok) return false;
+    if (!onSaveDirtyLinesFirst) return true; // no save hook wired (e.g. a test harness) — proceed, matching the pre-fix behavior for that case
+    try {
+      await onSaveDirtyLinesFirst();
+      return true;
+    } catch {
+      showToast?.({ variant: 'error', title: 'Could not save your Labor & Pricing changes', sub: 'Try again' });
+      return false;
+    }
+  }, [dirty, confirm, onSaveDirtyLinesFirst, showToast]);
   // Decision 2 — below 900px, view-only regardless of the caller's own prop
   // (a caller can still force it on above 900px, e.g. a read-only role —
   // that's what the prop is for; the viewport check only ever ADDS the
@@ -282,6 +332,11 @@ export default function PlansWorkspace({
 
   // ── Apply markups ────────────────────────────────────────────────────────
   const applyLines = useCallback(async (lineKeys: string[]) => {
+    // Fix round 1 / B1 — never silently overwrite unsaved Labor & Pricing
+    // work: apply-markups' own response REPLACES the entire lines array
+    // (via installSaved) once it lands, which would otherwise discard
+    // whatever the estimator was mid-editing there.
+    if (!(await ensureLinesSavedFirst())) return;
     try {
       const { data } = await api.post<ApplyMarkupsResponse>(`/estimating/${bidId}/apply-markups`, { line_keys: lineKeys });
       if (data.skipped.length > 0) {
@@ -289,12 +344,16 @@ export default function PlansWorkspace({
       } else {
         showToast?.({ title: `Applied ${data.applied.length} line${data.applied.length === 1 ? '' : 's'}` });
       }
-      onApplied?.();
+      // Fix round 1 / B1 — install the save transaction's own {lines,
+      // recap} directly; this IS the fix for "apply, then any later Labor
+      // & Pricing save silently reverts the applied quantity" (the caller
+      // no longer relies on a reload() that never actually re-hydrated).
+      onApplied?.(data.save);
       await reloadRollup();
     } catch {
       showToast?.({ variant: 'error', title: 'Apply failed', sub: 'Try again' });
     }
-  }, [bidId, onApplied, reloadRollup, showToast]);
+  }, [bidId, ensureLinesSavedFirst, onApplied, reloadRollup, showToast]);
 
   const previewPriceImpact = useCallback(async (lineKeys: string[]): Promise<number> => {
     const keySet = new Set(lineKeys);
@@ -480,6 +539,8 @@ export default function PlansWorkspace({
   }, [toolState.selectedIds]);
 
   const createLineFromMarkup = useCallback(async (input: NewLineFromMarkupInput) => {
+    // Fix round 1 / B1 — same "never silently overwrite" rule as Apply.
+    if (!(await ensureLinesSavedFirst())) return;
     const newKey = crypto.randomUUID();
     const newLine: EstimateLine = {
       id: newKey, line_key: newKey, category: input.category, description: input.description,
@@ -490,27 +551,34 @@ export default function PlansWorkspace({
     const selectedIds = toolState.selectedIds;
     setCreatingLine(true);
     try {
-      // Same self-contained "call the bid save endpoint directly, then let
-      // the caller refresh" shape as applyLines (below) — PlansWorkspace
-      // doesn't own the shared `lines` state (useEstimatingBid does), so a
-      // new line is persisted with a full save of the current lines plus
-      // this one, exactly like previewPriceImpact already sends `lines`
-      // wholesale to the /price endpoint.
-      await api.put(`/estimating/${bidId}`, { lines: [...lines, newLine], settings });
+      // Fix round 1 / B1 — PlansWorkspace no longer PUTs a `[...lines,
+      // newLine]` snapshot itself: `lines` is a PROP, and the caller's own
+      // useEstimatingBid.reload() never actually re-hydrated past its
+      // first-load guard, so the new line was never in the SHARED lines
+      // state — the estimator's very next Labor & Pricing save silently
+      // dropped it (and reverted every earlier apply besides, since that
+      // save PUT the same stale snapshot). onCreateLine is expected to add
+      // it through the caller's own LIVE setLines + save(nextLines) — see
+      // PcWorkspaceView.tsx's implementation.
+      const ok = onCreateLine ? await onCreateLine(newLine) : false;
+      if (!ok) {
+        showToast?.({ variant: 'error', title: 'Could not create the line', sub: 'Try again' });
+        return;
+      }
       // Fix round 1 / B3(b) — same pattern: reassign against whatever
       // `current` truly is at commit time, not the `history.present` this
-      // callback's closure captured before `api.put` ever started.
+      // callback's closure captured before the (now-awaited) create ever
+      // started.
       mutate(current => reassignMarkups(current, selectedIds, newKey));
       setToolState(s => ({ ...s, selectedIds: [] }));
       setNewLineOpen(false);
-      onApplied?.();
       showToast?.({ title: 'Line created', sub: `${selectedIds.length} marker${selectedIds.length === 1 ? '' : 's'} attached` });
     } catch {
       showToast?.({ variant: 'error', title: 'Could not create the line', sub: 'Try again' });
     } finally {
       setCreatingLine(false);
     }
-  }, [bidId, lines, settings, mutate, history.present, toolState.selectedIds, onApplied, showToast]);
+  }, [ensureLinesSavedFirst, onCreateLine, mutate, toolState.selectedIds, showToast]);
 
   const onReassignConfirm = useCallback((lineKeyToAssign: string | null) => {
     mutate(reassignMarkups(history.present, toolState.selectedIds, lineKeyToAssign));
