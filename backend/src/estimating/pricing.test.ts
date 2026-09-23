@@ -52,6 +52,7 @@ describe('priceBid — empty input', () => {
       zeroMaterialMatchedCount: 0,
       excludedCount: 0,
       unverifiedMaterialShare: 0,
+      unitUnknownCount: 0,
     });
   });
 
@@ -298,6 +299,7 @@ describe('priceBid — golden recap for a realistic C-store bid', () => {
       zeroMaterialMatchedCount: 1,
       excludedCount: 1,
       unverifiedMaterialShare: 0.13,
+      unitUnknownCount: 0,
     });
 
     expect(recap.categories).toEqual([
@@ -316,6 +318,50 @@ describe('priceBid — golden recap for a realistic C-store bid', () => {
     expect(categorySum).toBeCloseTo(recap.totals.directCost, 10);
     const lineSum = recap.lines.reduce((s, l) => s + l.directShare, 0);
     expect(lineSum).toBeCloseTo(recap.totals.directCost, 10);
+  });
+});
+
+describe('priceBid — B2: unit-unknown lines never produce NaN', () => {
+  it('an unmatched/unresolved line with a non-EstUnit raw unit ("SET") prices at $0 with a warning, never NaN', () => {
+    const recap = priceBid(
+      [line({
+        unit: 'EA', // caller (bidEstimate.ts) always narrows to a valid EstUnit for the type;
+        // libraryUnit omitted (never matched — unit_unknown lines never match a library row)
+        matched: false, unresolved: true, unitUnknown: true,
+        materialUnitCost: 0, laborHoursUnit: 0,
+      })],
+      baseSettings,
+      []
+    );
+    expect(recap.lines[0].materialExt).toBe(0);
+    expect(recap.lines[0].hoursExt).toBe(0);
+    expect(Number.isFinite(recap.totals.grandTotal)).toBe(true);
+    expect(recap.warnings.unitUnknownCount).toBe(1);
+  });
+
+  it('a unit-unknown line still prices from an explicit override', () => {
+    const recap = priceBid(
+      [line({
+        unit: 'EA', matched: false, unresolved: true, unitUnknown: true,
+        materialUnitCost: 0, laborHoursUnit: 0,
+        materialUnitOverride: 250, laborHoursOverride: 4, qty: 1,
+      })],
+      { ...baseSettings, supervisionPct: 0 },
+      []
+    );
+    expect(recap.lines[0].materialExt).toBe(250);
+    expect(recap.lines[0].hoursExt).toBe(4);
+  });
+
+  it('a non-finite override never propagates into the recap totals', () => {
+    const recap = priceBid(
+      [line({ materialUnitOverride: NaN, laborHoursOverride: Infinity, qty: 5 })],
+      baseSettings,
+      []
+    );
+    expect(Number.isFinite(recap.lines[0].materialExt)).toBe(true);
+    expect(Number.isFinite(recap.lines[0].hoursExt)).toBe(true);
+    expect(Number.isFinite(recap.totals.grandTotal)).toBe(true);
   });
 });
 

@@ -61,6 +61,13 @@ export interface PricingLineInput {
   unresolved?: boolean;
   /** True when the matched item/assembly's material price has no verified `material_price_date` (a seed row, or any row an estimator hasn't confirmed). */
   unverifiedPrice?: boolean;
+  /** Fix round 1 / B2 — true when this line's raw unit is not one of the four
+   *  known EstUnit values (LS/SET/LOT/blank/anything unrecognized). The
+   *  caller (bidEstimate.ts) never lets such a line match a library row —
+   *  it's priced only from an explicit override (materialUnitCost/
+   *  laborHoursUnit are forced to 0), and defaults to $0 with a warning
+   *  rather than ever producing NaN. */
+  unitUnknown?: boolean;
 }
 
 export interface PricingFactorInput {
@@ -142,6 +149,8 @@ export interface PricingWarnings {
   excludedCount: number;
   /** Share (0–1) of materialSubtotal that comes from lines whose price is unverified. */
   unverifiedMaterialShare: number;
+  /** Fix round 1 / B2 — count of non-excluded lines with an unrecognized unit. */
+  unitUnknownCount: number;
 }
 
 export interface PricingRecap {
@@ -223,6 +232,7 @@ export function priceBid(
   let unmatchedCount = 0;
   let verifyCount = 0;
   let zeroMaterialMatchedCount = 0;
+  let unitUnknownCount = 0;
   let excludedCount = 0;
   let unverifiedMaterialCents = 0;
 
@@ -248,15 +258,24 @@ export function priceBid(
     const materialUnit = line.materialUnitOverride ?? line.materialUnitCost;
     const hoursUnitEffective = line.laborHoursOverride ?? line.laborHoursUnit;
 
-    const materialExt = roundMoney(materialUnit * qtyFactor);
+    // Fix round 1 / B2 — a NaN/Infinity anywhere upstream (a corrupt override,
+    // a qty that slipped through as non-numeric) must never propagate into
+    // the recap; treat it as $0/0h for this line rather than poisoning every
+    // total downstream. The route-level guard (routes/estimating.ts) still
+    // refuses to WRITE a recap whose grand total isn't finite — this is the
+    // pure-function-level "never produce NaN" backstop underneath that.
+    const materialExtRaw = materialUnit * qtyFactor;
+    const materialExt = Number.isFinite(materialExtRaw) ? roundMoney(materialExtRaw) : 0;
     const hoursExtRaw = hoursUnitEffective * qtyFactor * factorMultiplier;
-    const hoursExt = roundHours(hoursExtRaw);
-    const laborExt = roundMoney(hoursExt * settings.laborRate);
+    const hoursExt = Number.isFinite(hoursExtRaw) ? roundHours(hoursExtRaw) : 0;
+    const laborExtRaw = hoursExt * settings.laborRate;
+    const laborExt = Number.isFinite(laborExtRaw) ? roundMoney(laborExtRaw) : 0;
 
     const excluded = !!line.excluded;
     if (excluded) excludedCount++;
     if (line.unresolved && !excluded) unmatchedCount++;
     if (line.confidence === 'VERIFY' && !excluded) verifyCount++;
+    if (line.unitUnknown && !excluded) unitUnknownCount++;
     if (line.matched && !excluded && line.materialUnitOverride == null && line.materialUnitCost === 0) {
       zeroMaterialMatchedCount++;
     }
@@ -384,6 +403,7 @@ export function priceBid(
       zeroMaterialMatchedCount,
       excludedCount,
       unverifiedMaterialShare,
+      unitUnknownCount,
     },
   };
 }
