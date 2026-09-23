@@ -384,3 +384,184 @@ The server-side core (line_key, the apply transaction, rollup filtering, scale m
 - large-file loading.
 
 After fixing, do a focused re-review of B1–B9 with repro tests like R1–R6 and F1–F5 committed. Also open a real 100 MB set in a browser before Jake's test drive.
+
+---
+
+# Round 2 (re-review of fix range `90fdee0..c810594`, plus report commits `2238ec7`, `576540e`)
+
+**Reviewer:** Opus 5 (independent, read-only) · **Date:** 2026-09-23
+
+## Verification run
+
+| Check | Result |
+|---|---|
+| `npm test` (backend, `electrical_crm_test`) | **1134 passed / 1139**, 114 of 116 files. Two files failed, and both are known flakes. `notificationsRetention.test.ts`: the worker crashed. `intakeSimilarCache.test.ts`: timed out at 30 s under full-suite load; alone it passes 2/2 in 22.8 s. The branch touches neither. |
+| `npx tsc --noEmit` (backend) | clean |
+| `npx vitest run` (frontend) | **1151 passed / 1151**, 115 of 115 files |
+| `npx tsc --noEmit` (frontend) | clean |
+
+**How findings were reproduced.** I built a throwaway detached worktree (since removed) and ran the round-1 scenarios in it again, plus new ones. All ran against `electrical_crm_test` with Drive mocked:
+
+- **Backend (supertest):** R1–R5, **B9-a/b/c**, **B7-half** and **S5-orphan**.
+- **Frontend (vitest):** F1, F4 and F5 against the real `PlansWorkspace`, plus **B2-reg** and **B7-half-popover**.
+- **Pure script:** **S1-reg**, using the real `overlay.ts`.
+- **Node buffer check:** whether the new zero-copy `Uint8Array` view in `pdfjsLoader.ts` detaches pooled Node buffers. It does not; pdf.js leaves the pool intact.
+
+Each finding is marked **[reproduced]** or **[reasoned]**.
+
+## Round-1 findings: status
+
+| # | Status | Evidence |
+|---|---|---|
+| B1 | **Fixed** | `installSaved` replaces the dead `reload()`. Apply and New-line ask to save a dirty Labor & Pricing first, and New-line goes through `estimatingBid.setLines` + `save(nextLines)`. The Apply → edit → save revert is covered by a new test. |
+| B2 | **Fixed, with a regression (R2-S1)** | The server returns a per-item 400 for malformed or foreign `line_key` (my repro: `proposed-3` → skipped). Count and Linear are disabled while the estimate is `proposed`. |
+| B3(a) | **Fixed** [reproduced] | Re-creating a soft-deleted id revives it (R1 again: `created 1, live 1`). Client: `skipped` → error status plus quarantine (F5 again: error indicator). |
+| B3(b) | **Fixed** | Functional `mutate`; F2 is covered by the fixer's own test. |
+| B3(c) | **Fixed, with a regression (R2-S2)** | Unmount flushes: F4 again shows 1 POST after an unmount inside the debounce. |
+| B3(d) | **Fixed** [reproduced] | F1 again: 0 batches on open. |
+| B4 | **Fixed** | `markedQty = feetSum` (raw feet) for every linear unit. Latent follow-on: R2-S4. |
+| B5 | **Fixed** [reproduced] | R5 again: `[42, 30]`. When the counts don't match, the override is skipped, but that is never surfaced (R2-S4). |
+| B6 | **Fixed** | "Changed since applied" status keeps Apply available and is included in Apply-all. |
+| B7 | **Fixed, with a new blocker (R2-B2)** | The title-block scale is suggestion-only (migration 109 demotes existing auto-applied scales). Linear is gated on a confirmed scale. Multiple-scale detection and the 2% warning were added. The half-size toggle is broken. |
+| B8 | **Fixed** | The drops/slack popover and app-settings defaults are stamped on each run at creation. |
+| B9 | **Partly fixed, with a new blocker (R2-B3)** | Background job, `timeout: 0`, abort, progress bar, Refresh sheets. Status handling has holes (below). |
+| S1 | **Regressed: new blocker (R2-B1)** | The origin is stored and used when *storing* points but not when *drawing* them. |
+| S2, S3, S4, S5, S6, S7, S8, S10, S11, S12, S13 | **Fixed** | S4 [reproduced]: HTML doc → 404; plan PDF → `application/pdf`, `inline`, `nosniff`. S5 [reproduced]: fractional drops, slack 12000, null point and `proposed-3` are all skipped per item; the one valid create in the same batch saves. |
+| S9 | Partial, disclosed | Ruling below |
+| N1, N3–N7, N9, N11, N12 | Fixed | |
+| N2 | Partial (base canvas only) | Ruling below |
+| N8 | Not done | Ruling below |
+| N10 | **Regressed (R2-S5)** | |
+
+---
+
+## Round 2 blockers
+
+### R2-B1. S1 regression: on any sheet whose PDF page origin isn't (0,0), markers are now drawn away from where they were clicked [reproduced]
+
+- **Evidence.**
+  - Clicks go through `screenToPdf`, which now **adds** the origin (`overlay.ts:136-139`).
+  - The SVG group that draws every marker still uses `pdfToRenderMatrix(geom, renderScale)` (`PlanViewer.tsx:549-550`, `:627`). The commit deliberately left that matrix origin-less (`overlay.ts:118-123`).
+  - The fix therefore made storing origin-aware without making drawing origin-aware. `zoomBy`'s anchor math has the same mismatch (`PlanViewer.tsx:361`).
+- **Failure.** On a MediaBox `[100 200 712 992]` sheet at scale 2, clicking at screen (300,400) stores a point that the SVG group draws at:
+
+  | Rotation | Drawn at | Offset from click |
+  |---|---|---|
+  | 0 | (500, 0) | (+200, −400) px |
+  | 90 | (700, 600) | |
+  | 180 | (100, 800) | |
+  | 270 | (−100, 200) | off the page |
+
+  `pdfToScreen` itself returns the correct (300,400) in every case; only the drawing path is wrong.
+  - Every clicked count and run, and every suggested marker, lands hundreds of pixels from its symbol.
+  - Estimators will re-click and double-count, or distrust the counts. The quantities themselves are unaffected, since lengths are translation-invariant.
+  - Before this "fix", clicked markers were at least drawn where they were clicked.
+- **Fix.** Fold the origin into the group matrix: `e' = e − a·ox − c·oy`, `f' = f − b·ox − d·oy`, via one exported `pdfToRenderMatrixWithOrigin`. Use it in `PlanViewer`'s `<g transform>` and in `zoomBy`. Add a test that runs click → `screenToPdf` → the *rendered group matrix* and gets the click point back at every rotation, including an offset origin.
+
+### R2-B2. The half-size toggle corrupts scales two ways, silently doubling or halving every run [reproduced]
+
+1. **The toggle doubles or halves two-point calibrations.**
+   - `setHalfSize` (`sheets.ts:591-610`) multiplies `ft_per_pt` by 2 or ½ no matter what `scale_source` is. A two-point calibration measures the real ratio on *this* PDF and is already correct whatever size the set was printed at.
+   - B7-half: calibrate at 0.2 ft/pt, toggle half-size on, and `ft_per_pt` becomes **0.4** (`scale_source` still `calibrated`). Every run on every sheet of that document now measures **2× long**. Toggling back halves any calibration made while the toggle was on.
+2. **The popover's "Use <title-block label>" ignores half-size.**
+   - `ScaleCalibrationPopover.tsx:79-83` re-parses the raw label and commits it as `source: 'calibrated'` (through `commitScale`'s default, `PlansWorkspace.tsx:1063`).
+   - B7-half-popover: on a half-size document whose correct suggestion is 0.2222, the popover commits **0.1111** (runs measure ½). The banner's Confirm sends the correct 0.2222, so two buttons with the same label disagree.
+   - The popover's 2% disagreement check also compares against the raw label, so a correct calibration on a half-size set always warns.
+3. **Refresh re-index drops the doubling.**
+   - `upsertSheetPage` writes the raw `suggested_ft_per_pt` (`sheets.ts:325`) while `half_size` stays true.
+   - B7-half: after Refresh sheets the suggestion is **0.1111** again, with `half_size: true`.
+- **Fix.** Store only the raw parse in `suggested_ft_per_pt` and derive the effective suggestion as `raw × (half_size ? 2 : 1)` at read time. Never rescale a `calibrated` `ft_per_pt`: either scale only `scale_source='titleblock'` rows, or clear confirmed title-block scales when the toggle changes. Have the popover's "Use" button send the sheet's effective `suggested_ft_per_pt` with `source 'titleblock'`, and compare the 2% check against that value. Add tests for all three.
+
+### R2-B3. B9 status machine: a restart leaves a document stuck in "indexing" forever, and Drive failures and corrupt PDFs report "done" with 0 sheets [reproduced]
+
+1. **Stuck `indexing` with no way out** (B9-c).
+   - The claim flips `pending → indexing` (`sheets.ts:449`) and only the in-process job ever leaves that state.
+   - If the process dies mid-index, the row stays `indexing` forever. Real causes: a Render deploy or instance restart, an OOM on a 150 MB parse, or `ts-node-dev --respawn` on any file save in the live Local Version.
+   - `resetIndexStatusForRefresh` deliberately skips `indexing` rows (`:424`), so **Refresh sheets can't recover it** either.
+   - The client polls every 2 s forever (`PlansWorkspace.tsx`, `sheetsIndexing`) and shows "indexing" for good. Repro: a row left `indexing` three days ago was still `indexing` after `?refresh=1` plus 500 ms, with 0 sheets.
+   - This also happens if `markIndexFailed` itself throws inside the catch: the rejection is only logged by the global handler (`index.ts:43`).
+2. **Real failures report "done".**
+   - `indexDocument` still returns `0` (not a throw) when the bytes can't be fetched or parsed (`sheets.ts:357`, `:364`).
+   - The real `getFileMedia` never throws; it returns `null` on any Drive error (`googleDrive.ts:134-137`). So a Drive outage, a revoked share or a corrupt PDF is marked `done`, `page_count 0`.
+   - B9-a: Drive `null` → `done`, 0 sheets. B9-b: corrupt PDF → `done`, 0 sheets.
+   - The UI shows "No plan sheets found", with no failed banner and no reason to click Refresh.
+   - The fork's "failed" test only passes because its mock *rejects* (`mockRejectedValueOnce`), which the real function never does.
+- **Fix.**
+  - Make `indexDocument` throw on a null fetch or a parse failure, so it ends in `failed` with a message.
+  - Treat `indexing` older than a lease (for example `updated_at < now() − 10 min`, refreshed per page) as reclaimable, both on a plain GET and on Refresh.
+  - On startup, reset `indexing` → `pending`.
+  - Wrap `markIndexFailed` so a failure there can't strand the row.
+  - Stop polling after N minutes with an "indexing seems stuck — Refresh" message.
+  - Add tests with a `null`-returning Drive mock and a stale `indexing` row.
+
+---
+
+## Round 2 should-fix
+
+- **R2-S1. The one-click proposed save leaves the chosen line's key as `proposed-N` [reproduced: B2-reg].**
+  - `activeLineKey` is initialized once (`PlansWorkspace.tsx:243`) and never remapped after the save mints real UUIDs.
+  - Scenario: pick a line, click "Save the estimate", then Count. The tools unlock, but no row is highlighted and the marker is sent with `line_key "proposed-0"`. The server rejects it per item, so it's quarantined with a "could not save" error.
+  - It's visible, not silent, but it lands on the exact first-use flow B2 was about.
+  - **Fix:** after `proposed` flips to false, remap `activeLineKey` (and the `?line=` URL param) by `takeoff_key`/sort index to the saved line's real `line_key`, or clear it.
+
+- **R2-S2. The step guard now fires for unsaved *Pricing* edits, with a false "will be lost" message [reasoned].**
+  - `onSelectStep`, the Plans jump and the List/Plans toggle all go through `confirmLeave` (`PcWorkspaceView.tsx:996+`). The guard registry also includes `useUnsavedGuard(estimatingBid.dirty)` (`:1053`) and `saveState==='error'` (`:306`).
+  - So every step change with unsaved Labor & Pricing edits pops "Leave without saving? The changes you have made on this screen will be lost." Those edits live in shared hook state and are *not* lost by a step change. The same is true for pending markups, because unmount now flushes them.
+  - The wording is false, and it trains estimators to click through the dialog for the cases where it matters.
+  - **Fix:** guard step/toggle navigation only on markup autosave `error` (the only state a step change can really lose), with markup-specific wording. Keep the app-level guard for real navigation. If the unmount flush fails after leaving, raise a toast.
+
+- **R2-S3. A marker whose line was deleted can't be moved or confirmed [reproduced: S5-orphan].**
+  - Every update re-sends the full markup including `line_key` (`useMarkupAutosave.ts:281`). The new check rejects any update carrying a key not in the bid's lines (`routes/estimating.ts:790`).
+  - After a line is deleted, or a sync re-keys it, dragging or confirming that marker gives `skipped: line_key does not belong to this bid`, gets quarantined and stays in error. S6 correctly lists it as unassigned, but the estimator must reassign it before doing anything else, and nothing says so.
+  - **Fix:** send `line_key` on update only when it changed, or treat a dead key on an unchanged field as allowed, or have the server null it out.
+
+- **R2-S4. `composeBidData` loose ends [reproduced: R5 again].**
+  - (a) `ambiguousQtyKeys` goes only to `console.warn`; nothing in the UI or the pre-send checklist reads it (grep). When the counts don't match, the GC takeoff silently keeps the AI qty while the price uses the marked qty, which is the B5 disagreement in its safe-but-silent form.
+  - (b) Since B4, a markup-applied line whose unit is `C`/`M` writes `{qty: <raw feet>, unit: 'C'}` into the GC takeoff (`composeBidData.ts:230`). R5 again shows `{qty: 1234, unit: 'C'}` meaning 1,234 ft, which a GC reads as 123,400 ft.
+    - This is latent today: the agents emit only EA/LF (`ai/prompts.ts:71,81,158`), and a manual C line never matches an Agent 4 row.
+  - **Fix:** surface the ambiguous keys as a pre-send warning. Emit `unit: 'LF'` (or convert qty to the display unit) whenever the override is linear.
+
+- **R2-S5. N10 (unsanctioned fork) pins production to Node 20.16.0 exactly (`render.yaml:16`).**
+  - Node 20 reached end of life in April 2026.
+  - Before this commit Render used its default. This merge could silently *downgrade* the production runtime to an unsupported patch release.
+  - `pdfjs-dist@5` accepts `>=22.3.0`.
+  - **Fix:** pin a supported LTS major (`22` or the current LTS) and keep `engines` as `>=20.16.0 <21 || >=22.3.0`, matching `pdf-parse`.
+
+- **R2-S6. Background indexing starts every claimed document at once** (`sheets.ts:477-488`, fire-and-forget per doc).
+  - A 68-file set means 68 parallel Drive downloads.
+  - Three 150 MB PDFs is about 450 MB of buffers plus three pdf.js parses in the API process, on the main thread.
+  - `setImmediate` between pages keeps latency bounded per page, but not memory.
+  - **Fix:** a per-process queue with concurrency 1–2.
+
+## Round 2 nits
+
+- **R2-N1.** Pinch zoom calls `zoomBy` with a stale `renderScale` for every `touchmove` in the same frame, so it under-zooms and jitters, and every step re-renders the whole page. There's no `touch-action: none` on `.plan-canvas-scroll`, so iOS also pinch-zooms the whole app. Accumulate the scale in a ref, rAF-throttle it, and add `touch-action: none`.
+- **R2-N2.** When the LRU evicts a document another caller is mid-`getTextContent` on, it destroys it underneath them. "Find tag" then silently drops that sheet from its results. The evicted in-flight 150 MB fetch isn't aborted either. Ref-count before destroying, and abort on eviction.
+- **R2-N3.** The migration 110 header says "'failed' is always retried on the NEXT GET /sheets", but the code makes `failed` sticky until Refresh. Fix the comment.
+- **R2-N4.** A marker placed before the markups GET resolves is wiped by hydration's `initHistory` + `reset`. This is pre-existing and narrow. Disable the tools until markups have hydrated.
+- **R2-N5.** When the base canvas is DPR-scaled and `renderScale × dpr` passes the area cap but `renderScale` doesn't, the base is clamped (soft) and no tile renders, because `needsTiledRender` compares `renderScale` without DPR. It's cosmetic; fold it into the N2 follow-up.
+
+## Rulings on disclosed partials
+
+- **S9: acceptable follow-up, not a blocker.** Yes, the same file is still downloaded twice: `PlanViewer`'s own fetch plus `sheetTextCache`'s separate LRU fetch. That happens once per text-cache miss, only on a user-initiated Suggest or Find tag, not on render or scroll. Worst case the tab holds the viewer's document plus 2 cached documents (about 3 × 150 MB). The backend double-buffer is fixed (zero-copy view, verified safe). Main-thread indexing is mitigated by the per-page `setImmediate` yield; the real remaining risk there is R2-S6 (memory). Before this ships widely, consider an LRU of 1, or reuse the viewer's document when the ids match.
+- **N2 (tile canvas without DPR): acceptable follow-up.** It's purely cosmetic, softer only above the area cap on HiDPI screens, and hit-testing and overlay math are unaffected.
+- **N8: acceptable follow-up.** It re-downloads when switching between sheets of *different* single-sheet PDFs. That costs time, not correctness.
+
+## Unsanctioned fork commits (scrutinized as untrusted)
+
+- **`d4882e4` (B9):** the structure is right: atomic CAS claim, fire-and-forget job, status table, `setImmediate` yield, zero-copy buffer (verified safe for pooled buffers). The status transitions are not: R2-B3 (stuck `indexing`; failures reported as `done`) and R2-S6 (unbounded concurrency). Its "failed" test mocks a rejection the real `getFileMedia` never produces, which is why it passes.
+- **`597614a` (S3):** fine. Rating, dimension and pure-number tokens are rejected and real tags survive.
+- **`b854d5e` (S7):** fine (one line, `qty_source: 'manual'` on a qty edit).
+- **`733b6ff` (S6 + S12):** fine. Dead or excluded keys count as unassigned, and Jump to source is wired. See R2-S3 for the interaction with the new server check.
+- **`6fa6595` (N10):** not acceptable as written (R2-S5).
+- **`7b43a0a` (N11):** fine. Session-cleared event, then destroy and clear; no import cycle.
+
+## Verdict (round 2): **DO NOT MERGE**
+
+Round 1's blockers are mostly closed, several with good tests. But the fix round introduced three new blockers, each reproduced:
+
+- **R2-B1:** every marker on an offset-origin sheet is drawn displaced from its symbol. The round-1 S1 fix is incomplete and made the display worse.
+- **R2-B2:** the half-size toggle silently doubles calibrated scales, and the popover commits half-scale on half-size sets. That's a 2× linear quantity error either way.
+- **R2-B3:** a restart mid-index leaves a document stuck in "indexing" with no recovery, and real Drive or PDF failures report "done" with 0 sheets.
+
+All three are small, contained fixes: one matrix, one CASE plus a read-time multiply, and the status-machine lease plus a throw. Fix them and R2-S1 through R2-S5, each with the repro above as a committed test. After that, a main-session spot-check is enough; a full round 3 isn't needed.
