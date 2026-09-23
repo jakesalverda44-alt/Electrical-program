@@ -4,7 +4,7 @@
 // a <canvas> via pdf.js, and draws markers/in-progress draws in an
 // absolutely-positioned <svg> whose own coordinate space is native
 // render-space pixels at the CURRENT renderScale — a marker's <g> carries
-// the one pdfToRenderMatrix() transform (Decision 8: "transform the group,
+// the one pdfToRenderMatrixWithOrigin() transform (Decision 8: "transform the group,
 // not each child"), so panning (native scroll — see below) never touches
 // React state for 1,000 markers, and only a renderScale change re-renders
 // the transform.
@@ -22,7 +22,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api from '../../../api/client';
 import { isAbortError } from '../../../api/errors';
 import { openPdfDocument, PdfJsDocument, PdfJsRenderTask } from './pdfjsClient';
-import { PageGeometry, pdfToRenderMatrix, screenToPdf, fitScale, clampRenderScale, renderedSize } from './overlay';
+import { PageGeometry, pdfToRenderMatrixWithOrigin, screenToPdf, fitScale, clampRenderScale, renderedSize } from './overlay';
 import { needsTiledRender, planTileRender, tilePlansRoughlyEqual, TileRenderPlan, VisibleRect } from './regionRender';
 import { SheetRow } from '../types';
 import { ToolState, ToolEvent } from './toolMachine';
@@ -358,7 +358,12 @@ export default function PlanViewer({
     requestAnimationFrame(() => {
       if (!scrollRef.current) return;
       const newLocal = { x: 0, y: 0 };
-      const m = pdfToRenderMatrix(geom, nextScale);
+      // Fix round 2 / R2-B1 — the origin-aware matrix, not the raw
+      // zero-origin one: screenToPdf above already folded the origin in
+      // computing pdfPoint, and converting it back to screen space has
+      // to use the SAME origin convention or the anchor drifts on any
+      // sheet whose MediaBox doesn't start at (0,0).
+      const m = pdfToRenderMatrixWithOrigin(geom, nextScale);
       newLocal.x = m[0] * pdfPoint.x + m[2] * pdfPoint.y + m[4];
       newLocal.y = m[1] * pdfPoint.x + m[3] * pdfPoint.y + m[5];
       scrollRef.current.scrollLeft = newLocal.x - (anchor.x - rect.left);
@@ -546,7 +551,14 @@ export default function PlanViewer({
     return () => window.removeEventListener('keydown', onKey);
   }, [viewOnly, dispatchTool]);
 
-  const matrix = pageSize ? pdfToRenderMatrix(geom, renderScale) : null;
+  // Fix round 2 / R2-B1 — the origin-aware matrix. toPdfPointFromEvent
+  // (above) already stores a click through the origin-aware screenToPdf;
+  // this <g transform> is what actually DRAWS every marker back on
+  // screen (Decision 8: one group transform, not per-marker math) — it
+  // has to fold the same origin, or a marker stored at the correct
+  // pdf-space point gets drawn hundreds of pixels from where it was
+  // clicked on any sheet whose MediaBox doesn't start at (0,0).
+  const matrix = pageSize ? pdfToRenderMatrixWithOrigin(geom, renderScale) : null;
   const matrixStr = matrix ? `matrix(${matrix.join(',')})` : undefined;
 
   return (

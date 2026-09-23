@@ -79,7 +79,16 @@ export function renderedSize(geom: PageGeometry, renderScale: number): { width: 
 /** The affine matrix mapping PDF user-space points to render-space pixels
  *  at `renderScale`, for one of the four axis-aligned rotations pdf.js (and
  *  this app's PDFs) ever use. Verified against real pdfjs-dist output —
- *  see this file's header comment. */
+ *  see this file's header comment. This is the ZERO-ORIGIN form — it
+ *  assumes the page's own MediaBox starts at (0,0). Every real call site
+ *  (pdfToScreen/screenToPdf/pdfToScreenMany below, PlanViewer's own <g>
+ *  transform and zoomBy anchor) must go through
+ *  `pdfToRenderMatrixWithOrigin` instead, which folds a non-zero origin
+ *  into this same matrix — see R2-B1's own fix note there. Kept exported
+ *  (not merged away) because it's still the right building block for that
+ *  fold, and overlay.test.ts's own zero-origin corner-case assertions
+ *  check it directly against pdfjs-dist's real output with no origin
+ *  involved at all. */
 export function pdfToRenderMatrix(geom: PageGeometry, renderScale: number): AffineMatrix {
   const { widthPt: W, heightPt: H, rotation } = geom;
   const s = renderScale;
@@ -93,6 +102,30 @@ export function pdfToRenderMatrix(geom: PageGeometry, renderScale: number): Affi
     case 270:
       return [0, -s, -s, 0, H * s, W * s];
   }
+}
+
+// Fix round 2 / R2-B1 — S1 (round 1) made STORING a click origin-aware
+// (screenToPdf subtracts/re-adds geom.originXPt/originYPt around the raw,
+// zero-origin pdfToRenderMatrix above) but left every DRAWING path on the
+// raw matrix: PlanViewer's own <g transform> (its SVG group matrix, drawing
+// every marker in one shot per Decision 8) and zoomBy's anchor-preserving
+// math both called pdfToRenderMatrix directly. The result: a marker stored
+// through screenToPdf landed at the CORRECT pdf-space point, but got drawn
+// back at the WRONG screen position, since nothing subtracted the origin a
+// second time on the way out through the group matrix. Folding the origin
+// directly into the matrix's own translation terms — e' = e - a*ox - c*oy,
+// f' = f - b*ox - d*oy — makes ONE matrix correct for every use: apply it
+// to a RAW (un-adjusted) pdf-space point and get the right screen position,
+// with no separate "subtract origin first" step the caller could forget.
+// pdfToScreen/screenToPdf/pdfToScreenMany below, PlanViewer.tsx's <g>
+// transform, and zoomBy's anchor math all now go through this ONE function
+// — never the raw pdfToRenderMatrix — so there is exactly one place this
+// math can ever drift out of sync again.
+export function pdfToRenderMatrixWithOrigin(geom: PageGeometry, renderScale: number): AffineMatrix {
+  const [a, b, c, d, e, f] = pdfToRenderMatrix(geom, renderScale);
+  const ox = geom.originXPt ?? 0;
+  const oy = geom.originYPt ?? 0;
+  return [a, b, c, d, e - a * ox - c * oy, f - b * ox - d * oy];
 }
 
 function invertMatrix([a, b, c, d, e, f]: AffineMatrix): AffineMatrix {
@@ -117,32 +150,30 @@ function applyMatrix([a, b, c, d, e, f]: AffineMatrix, p: Point): Point {
 }
 
 /** PDF user-space point -> render-space pixel, at `renderScale`,
- *  rotation- and origin-aware (Fix round 1 / S1: the page's own
- *  originXPt/originYPt is subtracted BEFORE the rotation+scale matrix —
- *  pdfToRenderMatrix itself is unchanged and still assumes a zero-origin
- *  page, since width/height are already origin-independent extents). */
+ *  rotation- and origin-aware. Fix round 2 / R2-B1 — goes through
+ *  pdfToRenderMatrixWithOrigin (the origin folded into the matrix
+ *  itself) rather than subtracting the origin from the point first: the
+ *  SAME function PlanViewer.tsx's <g> transform and zoomBy's anchor math
+ *  now use directly, so there is exactly one origin-handling code path
+ *  for every consumer of this module, not one for "compute a point" and
+ *  a separately-maintained one for "compute a matrix to draw with". */
 export function pdfToScreen(geom: PageGeometry, renderScale: number, p: Point): Point {
-  const rel: Point = { x: p.x - (geom.originXPt ?? 0), y: p.y - (geom.originYPt ?? 0) };
-  return applyMatrix(pdfToRenderMatrix(geom, renderScale), rel);
+  return applyMatrix(pdfToRenderMatrixWithOrigin(geom, renderScale), p);
 }
 
 /** Render-space pixel -> PDF user-space point — the inverse of pdfToScreen.
  *  Used when the estimator clicks/drags on the overlay and the resulting
  *  point needs to be stored (Decision 5: markups are always stored in PDF
- *  points, never screen pixels). Adds the origin back so a stored marker
- *  point is a real, absolute PDF-space coordinate — exactly what a
- *  re-load of the SAME page (or a future export) expects, not one
- *  silently relative to this page's own MediaBox. */
+ *  points, never screen pixels) — a real, absolute PDF-space coordinate,
+ *  exactly what a re-load of the SAME page (or a future export) expects,
+ *  never one silently relative to this page's own MediaBox. */
 export function screenToPdf(geom: PageGeometry, renderScale: number, p: Point): Point {
-  const rel = applyMatrix(invertMatrix(pdfToRenderMatrix(geom, renderScale)), p);
-  return { x: rel.x + (geom.originXPt ?? 0), y: rel.y + (geom.originYPt ?? 0) };
+  return applyMatrix(invertMatrix(pdfToRenderMatrixWithOrigin(geom, renderScale)), p);
 }
 
 export function pdfToScreenMany(geom: PageGeometry, renderScale: number, points: Point[]): Point[] {
-  const m = pdfToRenderMatrix(geom, renderScale);
-  const ox = geom.originXPt ?? 0;
-  const oy = geom.originYPt ?? 0;
-  return points.map(p => applyMatrix(m, { x: p.x - ox, y: p.y - oy }));
+  const m = pdfToRenderMatrixWithOrigin(geom, renderScale);
+  return points.map(p => applyMatrix(m, p));
 }
 
 // ── Fit-to-container scale ──────────────────────────────────────────────

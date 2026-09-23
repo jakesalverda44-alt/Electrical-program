@@ -25,6 +25,7 @@ import PlanViewer from './PlanViewer';
 import { SheetRow } from '../types';
 import { initToolState } from './toolMachine';
 import { MarkupDraft } from './markupHistory';
+import { fitScale, clampRenderScale, pdfToRenderMatrixWithOrigin, PageGeometry } from './overlay';
 
 function markup(over: Partial<MarkupDraft> = {}): MarkupDraft {
   return {
@@ -111,6 +112,45 @@ describe('PlanViewer — load + render', () => {
     get.mockRejectedValue(new Error('network down'));
     const { getByRole } = render(<PlanViewer {...baseProps()} />);
     await waitFor(() => expect(getByRole('alert')).toBeTruthy());
+  });
+});
+
+// Fix round 2 / R2-B1 — S1 (round 1) made STORING a click origin-aware but
+// left DRAWING (this <g transform>) on the raw, zero-origin matrix: a
+// marker stored at the correct pdf-space point got drawn hundreds of
+// pixels away on any sheet whose MediaBox doesn't start at (0,0).
+// overlay.test.ts proves the MATH (pdfToRenderMatrixWithOrigin) round-
+// trips correctly in isolation; this proves PlanViewer.tsx's actual
+// rendered <g> element uses that same origin-aware matrix, not the raw
+// one — the exact regression this round's fix guards against reverting.
+describe('PlanViewer — the rendered <g> transform is origin-aware (R2-B1 integration)', () => {
+  it('the <g> transform matrix matches pdfToRenderMatrixWithOrigin, not the raw zero-origin matrix, on an offset-origin sheet', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    // MediaBox [100 200 712 992] — the review's own worked example.
+    const offsetSheet = sheet({ width_pt: 612, height_pt: 792, origin_x_pt: 100, origin_y_pt: 200, rotation: 0 });
+    const { container } = render(<PlanViewer {...baseProps({ sheet: offsetSheet })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalledTimes(1));
+
+    const g = container.querySelector('svg.plan-overlay-svg > g')!;
+    const transformAttr = g.getAttribute('transform')!;
+    const actualMatrix = transformAttr.match(/matrix\(([^)]+)\)/)![1].split(',').map(Number);
+
+    // The same fit-to-width computation PlanViewer's own initial-fit
+    // effect uses (happy-dom reports clientWidth 0, so the 900/700
+    // fallback applies — matching PlanViewer.tsx's own `el.clientWidth
+    // || 900` exactly).
+    const geom: PageGeometry = { widthPt: 612, heightPt: 792, rotation: 0, originXPt: 100, originYPt: 200 };
+    const expectedScale = clampRenderScale(geom, fitScale(geom, 900, 700, 'width'));
+    const expectedMatrix = pdfToRenderMatrixWithOrigin(geom, expectedScale);
+
+    for (let i = 0; i < 6; i++) expect(actualMatrix[i]).toBeCloseTo(expectedMatrix[i], 6);
+
+    // And explicitly NOT the raw (origin-less) matrix — e/f would be
+    // completely different (H*scale/0 instead of origin-shifted) if
+    // PlanViewer regressed to importing pdfToRenderMatrix directly.
+    expect(actualMatrix[4]).not.toBeCloseTo(0, 1);
   });
 });
 

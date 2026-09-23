@@ -6,9 +6,13 @@
 // rotation's test below.
 import { describe, it, expect } from 'vitest';
 import {
-  pdfToScreen, screenToPdf, pdfToScreenMany, renderedSize, fitScale, clampRenderScale,
+  pdfToScreen, screenToPdf, pdfToScreenMany, pdfToRenderMatrixWithOrigin, renderedSize, fitScale, clampRenderScale,
   MAX_CANVAS_AREA_PX, PageGeometry,
 } from './overlay';
+
+function applyMatrixForTest([a, b, c, d, e, f]: readonly [number, number, number, number, number, number], p: { x: number; y: number }) {
+  return { x: a * p.x + c * p.y + e, y: b * p.x + d * p.y + f };
+}
 
 const W = 800;
 const H = 600;
@@ -133,6 +137,65 @@ describe('pdfToScreen — non-zero origin (S1, the review\'s own worked numbers)
     const many = pdfToScreenMany(geom0, 2, [p, { x: 200, y: 300 }]);
     expect(many[0]).toEqual({ x: 100, y: 1484 });
     expect(many[1]).toEqual(pdfToScreen(geom0, 2, { x: 200, y: 300 }));
+  });
+});
+
+// Fix round 2 / R2-B1 — the exact scenario the reviewer reproduced: S1
+// (round 1) made STORING a click origin-aware (screenToPdf) but left
+// DRAWING (PlanViewer.tsx's <g transform>, built from the raw, zero-
+// origin pdfToRenderMatrix) un-fixed, so a marker was stored at the
+// right pdf-space point but drawn hundreds of pixels from where it was
+// clicked. pdfToRenderMatrixWithOrigin is the ONE matrix PlanViewer.tsx's
+// <g> transform and zoomBy's anchor math both now use directly (never
+// the raw pdfToRenderMatrix) — this proves that applying THAT matrix
+// (simulating the actual SVG draw, not just calling pdfToScreen again)
+// to a stored point reproduces the original screen click, at every
+// rotation, on the review's own offset-origin sheet.
+describe('R2-B1 — click -> store -> draw round trip, via the SAME matrix the <g> transform uses', () => {
+  const W = 612, H = 792, OX = 100, OY = 200;
+  const rotations = [0, 90, 180, 270] as const;
+  const screenClicks: Array<{ x: number; y: number }> = [{ x: 300, y: 400 }, { x: 50, y: 50 }, { x: 0, y: 0 }];
+  const scale = 2;
+
+  for (const rotation of rotations) {
+    it(`rotation ${rotation}: a screen click round-trips through screenToPdf (store) then the group matrix (draw) back to the same screen point`, () => {
+      const geom: PageGeometry = { widthPt: W, heightPt: H, rotation, originXPt: OX, originYPt: OY };
+      for (const clicked of screenClicks) {
+        // 1. Click at screen (x,y) -> stored PDF-space point (exactly
+        //    what toPdfPointFromEvent/onCanvasClick does).
+        const stored = screenToPdf(geom, scale, clicked);
+        // 2. Drawn at: apply the SAME matrix PlanViewer's <g transform>
+        //    uses directly to the raw stored point — never pdfToScreen
+        //    again, which would trivially round-trip by construction;
+        //    this simulates the actual SVG draw path.
+        const matrix = pdfToRenderMatrixWithOrigin(geom, scale);
+        const drawnAt = applyMatrixForTest(matrix, stored);
+        expect(drawnAt.x).toBeCloseTo(clicked.x, 9);
+        expect(drawnAt.y).toBeCloseTo(clicked.y, 9);
+      }
+    });
+  }
+
+  it('the SAME round trip for the zoomBy anchor: screenToPdf at the OLD scale, then the group matrix at the NEW scale, lands the anchor point back where expected', () => {
+    // Mirrors PlanViewer.tsx's own zoomBy: compute the pdf point under the
+    // anchor at the CURRENT scale, then (after the scale changes) find
+    // where that same pdf point now lands, via the SAME origin-aware
+    // matrix — this is exactly what the post-zoom scroll-adjustment math
+    // depends on to keep the anchor visually fixed.
+    for (const rotation of rotations) {
+      const geom: PageGeometry = { widthPt: W, heightPt: H, rotation, originXPt: OX, originYPt: OY };
+      const anchor = { x: 150, y: 220 };
+      const oldScale = 1;
+      const newScale = 2.5;
+      const pdfPoint = screenToPdf(geom, oldScale, anchor);
+      const matrixAtNewScale = pdfToRenderMatrixWithOrigin(geom, newScale);
+      const newScreenPos = applyMatrixForTest(matrixAtNewScale, pdfPoint);
+      // The anchor's NEW screen position must be exactly pdfToScreen's own
+      // answer at the new scale — proving the zoom-anchor math and
+      // pdfToScreen agree on where an origin-shifted point lands, the
+      // same invariant the drawing round trip above checks.
+      expect(newScreenPos).toEqual(pdfToScreen(geom, newScale, pdfPoint));
+    }
   });
 });
 
