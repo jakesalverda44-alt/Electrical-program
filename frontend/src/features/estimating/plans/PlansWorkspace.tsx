@@ -138,12 +138,6 @@ export default function PlansWorkspace({
   // autosave the diff. ────────────────────────────────────────────────────
   const { data: markupsData } = useApi<{ markups: MarkupWire[] }>(`/estimating/${bidId}/markups`);
   const [history, setHistory] = useState(() => initHistory<MarkupDraft[]>([]));
-  const hydratedMarkupsRef = useRef(false);
-  useEffect(() => {
-    if (!markupsData || hydratedMarkupsRef.current) return;
-    hydratedMarkupsRef.current = true;
-    setHistory(initHistory(markupsData.markups.map(wireToDraft)));
-  }, [markupsData]);
 
   const onSynced = useCallback((synced: MarkupDraft[]) => {
     // The server confirmed exactly this snapshot — nothing to reconcile
@@ -153,6 +147,25 @@ export default function PlansWorkspace({
     void synced;
   }, []);
   const autosave = useMarkupAutosave(bidId, history.present, onSynced);
+  const autosaveResetRef = useRef(autosave.reset);
+  autosaveResetRef.current = autosave.reset;
+
+  const hydratedMarkupsRef = useRef(false);
+  useEffect(() => {
+    if (!markupsData || hydratedMarkupsRef.current) return;
+    hydratedMarkupsRef.current = true;
+    const drafts = markupsData.markups.map(wireToDraft);
+    setHistory(initHistory(drafts));
+    // Fix round 1 / B3(d) — install the REAL hydrated list as the
+    // autosave hook's own confirmed-synced baseline, in the SAME effect
+    // that first populates it. Without this, useMarkupAutosave's own
+    // "first render establishes the baseline" heuristic already locked in
+    // `[]` (this component's own first render, before this GET resolved)
+    // — so hydrating N existing markups moments later would diff as N
+    // brand-new creates and re-POST the whole bid's markup list on every
+    // Plans open.
+    autosaveResetRef.current(drafts);
+  }, [markupsData]);
 
   const [rollup, setRollup] = useState<RollupEntry[]>([]);
   const reloadRollup = useCallback(async () => {

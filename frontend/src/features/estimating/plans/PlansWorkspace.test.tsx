@@ -132,6 +132,35 @@ describe('PlansWorkspace — sheet list + selection', () => {
   });
 });
 
+// Fix round 1 / B3(d) — the reviewer's exact F1 scenario: opening Plans on
+// a bid with 2 EXISTING markups must not re-POST them as brand-new creates.
+describe('PlansWorkspace — opening with existing markups does not re-save them (B3(d))', () => {
+  it('hydrating 2 existing markups sends NO autosave batch, even well past the debounce', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet()] } });
+      if (url.endsWith('/markups')) return Promise.resolve({
+        data: {
+          markups: [
+            { id: 'm1', bidId: 'bid1', documentId: 'doc-1', pageIndex: 0, lineKey: null, kind: 'count', points: [{ x: 10, y: 10 }], drops: 0, dropFt: null, slackPct: null, status: 'confirmed', label: null },
+            { id: 'm2', bidId: 'bid1', documentId: 'doc-1', pageIndex: 0, lineKey: null, kind: 'count', points: [{ x: 20, y: 20 }], drops: 0, dropFt: null, slackPct: null, status: 'confirmed', label: null },
+          ],
+        },
+      });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup();
+    await waitFor(() => expect(screen.getAllByText(/^Select marker /)).toHaveLength(2)); // both hydrated onto the mock viewer
+
+    await act(async () => { vi.advanceTimersByTime(1500); await Promise.resolve(); await Promise.resolve(); });
+    expect(post).not.toHaveBeenCalledWith('/estimating/bid1/markups/batch', expect.anything());
+    // idle (reset(), never diffed as dirty) — not "Unsaved changes" or an error.
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+    expect(screen.queryByText('Could not save — Retry')).toBeNull();
+  });
+});
+
 describe('PlansWorkspace — placing a count marker autosaves', () => {
   it('a POINTER_CLICK while the Count tool is active creates a draft and, after the debounce, POSTs a batch', async () => {
     setup();

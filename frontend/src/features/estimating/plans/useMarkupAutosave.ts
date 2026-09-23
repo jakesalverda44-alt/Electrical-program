@@ -22,6 +22,17 @@ export interface UseMarkupAutosaveResult {
    *  "retry" affordance the save-indicator shows on error, and by a
    *  caller that wants to flush before e.g. an explicit navigation. */
   retryNow: () => void;
+  /** Fix round 1 / B3(d) — installs `baseline` as the confirmed-synced
+   *  snapshot WITHOUT diffing/sending anything, and returns to 'idle'. The
+   *  caller MUST call this exactly once, synchronously in the same effect
+   *  that first populates `markups` with real hydrated data — see
+   *  PlansWorkspace.tsx's own hydration effect. Without it, this hook's
+   *  own "first render establishes the baseline" heuristic locks in
+   *  whatever `markups` was on ITS OWN first render (typically `[]`,
+   *  before the GET for existing markups has even resolved), so hydrating
+   *  the real list moments later reads as N brand-new creates — a full
+   *  re-POST of every existing markup on every open. */
+  reset: (baseline: MarkupDraft[]) => void;
 }
 
 interface BatchResponseMarkup { id: string }
@@ -190,13 +201,25 @@ export function useMarkupAutosave(
     void attemptRef.current();
   }, []);
 
+  // Fix round 1 / B3(d) — see UseMarkupAutosaveResult.reset's own comment.
+  // Cancels any in-flight debounce timer too (a reset always means "the
+  // caller just replaced the whole draft list wholesale" — a pending diff
+  // computed against the OLD baseline is meaningless once the baseline
+  // itself has moved).
+  const reset = useCallback((baseline: MarkupDraft[]) => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    syncedRef.current = baseline;
+    initializedRef.current = true;
+    if (aliveRef.current) { setStatus('idle'); setError(null); }
+  }, []);
+
   // Never lose a markup: the guard is armed for anything not yet
   // confirmed by the server (pending debounce, in-flight save, OR a
   // failed attempt still needing a retry) — 'saved'/'idle' are the only
   // safe-to-leave states.
   useUnsavedGuard(status === 'pending' || status === 'saving' || status === 'error');
 
-  return { status, error, retryNow };
+  return { status, error, retryNow, reset };
 }
 
 function toWireMarkup(m: MarkupDraft) {

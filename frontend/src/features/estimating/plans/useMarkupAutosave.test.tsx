@@ -313,6 +313,69 @@ describe('useMarkupAutosave — flush on unmount (B3(c))', () => {
   });
 });
 
+// Fix round 1 / B3(d) — the reviewer's exact F1 scenario: hydrating N
+// EXISTING markups (a delayed GET, arriving after this hook's own first
+// render already locked in `[]` as its baseline) must not re-POST them as
+// brand-new creates the instant they land.
+describe('useMarkupAutosave — reset() installs a hydrated baseline without sending anything (B3(d))', () => {
+  it('calling reset() with the SAME markups the hook is about to receive next render never triggers a save', async () => {
+    const onSynced = vi.fn();
+    let markups: MarkupDraft[] = []; // this hook's own first render — the "stale []" baseline the bug used to lock in
+    const { result, rerender } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, onSynced), { initialProps: { m: markups } });
+    expect(result.current.status).toBe('idle');
+
+    // The delayed GET for existing markups lands: 2 pre-existing markups,
+    // hydrated via reset() in the SAME effect that updates `markups` too
+    // (mirroring PlansWorkspace.tsx's own hydration effect).
+    const existing = [draft('m1'), draft('m2')];
+    act(() => { result.current.reset(existing); });
+    markups = existing;
+    rerender({ m: markups });
+
+    // Advance well past the debounce — if this were misdiagnosed as 2 new
+    // creates, a batch would have fired by now.
+    await act(async () => { vi.advanceTimersByTime(1000); await Promise.resolve(); });
+    expect(post).not.toHaveBeenCalled();
+    expect(result.current.status).toBe('idle');
+  });
+
+  it('reset() returns status to "idle" and clears any pending error', async () => {
+    post.mockRejectedValueOnce(new Error('offline'));
+    let markups: MarkupDraft[] = [];
+    const { result, rerender } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, vi.fn()), { initialProps: { m: markups } });
+    markups = [draft('a')];
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+
+    act(() => { result.current.reset([draft('a')]); });
+    expect(result.current.status).toBe('idle');
+    expect(result.current.error).toBeNull();
+  });
+
+  it('AFTER reset(), a genuinely NEW change still autosaves normally (reset only sets the baseline, it doesn\'t disable the hook)', async () => {
+    post.mockResolvedValueOnce({ data: { created: [{ id: 'b' }], updated: [], deleted: [], skipped: [] } });
+    const onSynced = vi.fn();
+    let markups: MarkupDraft[] = [];
+    const { result, rerender } = renderHook(({ m }: { m: MarkupDraft[] }) => useMarkupAutosave('bid1', m, onSynced), { initialProps: { m: markups } });
+
+    const existing = [draft('a')];
+    act(() => { result.current.reset(existing); });
+    markups = existing;
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(1000); await Promise.resolve(); });
+    expect(post).not.toHaveBeenCalled(); // hydration alone sends nothing
+
+    markups = [draft('a'), draft('b')]; // a genuine new marker
+    rerender({ m: markups });
+    await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(post).toHaveBeenCalledWith('/estimating/bid1/markups/batch', expect.objectContaining({
+      creates: [expect.objectContaining({ id: 'b' })], // only the NEW one, not 'a' again
+    }));
+  });
+});
+
 describe('applyBatchToSnapshot', () => {
   it('upserts creates and updates, removes deletes, leaves everything else untouched', () => {
     const synced = [draft('a'), draft('b'), draft('c')];
