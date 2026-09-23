@@ -88,6 +88,14 @@ export default function PlanViewer({
   const [progress, setProgress] = useState<{ loaded: number; total: number | null } | null>(null);
   const [renderScale, setRenderScale] = useState(1);
   const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null);
+  // Fix round 1 / N2 — devicePixelRatio was never applied anywhere (the
+  // fitScale dpr parameter that already existed for it went unused), so
+  // the base canvas's NATIVE pixel buffer matched its CSS display size
+  // 1:1 — on a Retina screen (dpr 2), the browser then stretches that 1x
+  // raster to fill 2x the physical pixels, rendering soft. Read once per
+  // mount (a dpr change mid-session, e.g. dragging the window to another
+  // display, is rare enough not to need a live matchMedia listener here).
+  const dpr = typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
 
   const loadedDocRef = useRef<LoadedDoc | null>(null);
   const renderTaskRef = useRef<PdfJsRenderTask | null>(null);
@@ -224,8 +232,16 @@ export default function PlanViewer({
         renderTaskRef.current.cancel();
         renderTaskRef.current = null;
       }
-      const baseScale = clampRenderScale(geom, renderScale);
-      const viewport = page.getViewport({ scale: baseScale });
+      // Fix round 1 / N2 — the NATIVE pixel buffer renders at
+      // renderScale*dpr (capped at the same MAX_CANVAS_AREA_PX as the
+      // un-multiplied scale would be, via clampRenderScale's own call
+      // here — never a separately-capped baseScale multiplied by dpr
+      // afterward, which could exceed it); the CSS box below
+      // (canvas.style, from pageSize) is untouched and still exactly
+      // renderedSize(geom, renderScale) — dpr sharpens the raster the
+      // browser has to stretch, it never changes the displayed size.
+      const nativeScale = clampRenderScale(geom, renderScale * dpr);
+      const viewport = page.getViewport({ scale: nativeScale });
       const canvas = canvasRef.current;
       if (!canvas) return;
       canvas.width = viewport.width;
@@ -251,7 +267,7 @@ export default function PlanViewer({
     })();
 
     return () => { cancelled = true; };
-  }, [status, documentId, pageIndex, renderScale, geom]);
+  }, [status, documentId, pageIndex, renderScale, geom, dpr]);
 
   // ── Visible-region tiling (Task 9, deferral closed) ─────────────────────
   // Debounced "compute where the tile should be, if one is needed at all"

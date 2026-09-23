@@ -251,6 +251,80 @@ describe('PlanViewer — the file GET has a real AbortController, and no fixed t
   });
 });
 
+// Fix round 1 / N2 — devicePixelRatio was never applied, so the base
+// canvas's native pixel buffer matched its CSS display size 1:1 and
+// rendered soft on a Retina screen. Verified here by comparing the
+// canvas's NATIVE resolution (canvas.width, driven by devicePixelRatio)
+// against its CSS-facing size (pageSize, which must stay dpr-independent
+// — the fix must sharpen the raster, never change the displayed size).
+describe('PlanViewer — canvas resolution scales with devicePixelRatio (N2)', () => {
+  const originalDpr = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+  afterEach(() => {
+    if (originalDpr) Object.defineProperty(window, 'devicePixelRatio', originalDpr);
+  });
+
+  it('renders the base canvas at devicePixelRatio times the CSS-facing scale', async () => {
+    Object.defineProperty(window, 'devicePixelRatio', { value: 1, configurable: true });
+    const page1x = makePage();
+    getPage.mockResolvedValue(page1x);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { unmount } = render(<PlanViewer {...baseProps()} />);
+    await waitFor(() => expect(page1x.render).toHaveBeenCalledTimes(1));
+    const scale1x = (page1x.getViewport.mock.calls[0][0] as { scale: number }).scale;
+    unmount();
+
+    getPage.mockReset();
+    Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true });
+    const page2x = makePage();
+    getPage.mockResolvedValue(page2x);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    render(<PlanViewer {...baseProps()} />);
+    await waitFor(() => expect(page2x.render).toHaveBeenCalledTimes(1));
+    const scale2x = (page2x.getViewport.mock.calls[0][0] as { scale: number }).scale;
+
+    // Both renders fit the SAME (tiny, well under the canvas-area cap)
+    // page into the same fallback container size, so the un-multiplied
+    // "CSS-facing" scale is identical either way — only the NATIVE scale
+    // (what actually reaches getViewport/canvas.width/height) should
+    // differ, by exactly the dpr ratio.
+    expect(scale2x).toBeCloseTo(scale1x * 2, 6);
+  });
+
+  it('the CSS-facing display size (pageSize) is unaffected by devicePixelRatio', async () => {
+    Object.defineProperty(window, 'devicePixelRatio', { value: 1, configurable: true });
+    const page1x = makePage();
+    getPage.mockResolvedValue(page1x);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { container: c1, unmount } = render(<PlanViewer {...baseProps()} />);
+    await waitFor(() => expect(page1x.render).toHaveBeenCalledTimes(1));
+    const style1x = (c1.querySelector('canvas') as HTMLCanvasElement).style.width;
+    unmount();
+
+    getPage.mockReset();
+    Object.defineProperty(window, 'devicePixelRatio', { value: 3, configurable: true });
+    const page3x = makePage();
+    getPage.mockResolvedValue(page3x);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const { container: c3 } = render(<PlanViewer {...baseProps()} />);
+    await waitFor(() => expect(page3x.render).toHaveBeenCalledTimes(1));
+    const style3x = (c3.querySelector('canvas') as HTMLCanvasElement).style.width;
+
+    expect(style3x).toBe(style1x); // identical CSS box either way
+  });
+
+  it('a missing/invalid devicePixelRatio falls back to 1, not NaN/0', async () => {
+    Object.defineProperty(window, 'devicePixelRatio', { value: 0, configurable: true });
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    render(<PlanViewer {...baseProps()} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalledTimes(1));
+    const scale = (page.getViewport.mock.calls[0][0] as { scale: number }).scale;
+    expect(Number.isFinite(scale)).toBe(true);
+    expect(scale).toBeGreaterThan(0);
+  });
+});
+
 // Task 9 (deferral closed) — visible-region tiling past the canvas-area
 // cap. Real timers (not faked): the 200ms debounce is short enough to
 // just wait out in these few tests rather than fake-timer-juggling the
