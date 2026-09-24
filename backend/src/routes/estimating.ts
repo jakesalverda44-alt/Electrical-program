@@ -19,6 +19,10 @@ import { normalizeUnit, MapConfidence } from '../estimating/mapper';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
 import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
 import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, setHalfSize, getPlanPdfDocuments } from '../estimating/sheets';
+import { parseAccubidBom } from '../estimating/accubidBom';
+import { buildImportPreview, applyImportPreview, derivePoleBaseAssembly, applyPoleBaseAssembly } from '../estimating/accubidImport';
+import { extractPdfPageTexts } from '../ai/pdfText';
+import { pdfUpload } from '../utils/upload';
 // Fix round 1 / S4 — reuse the exact same Content-Type/Content-Disposition/
 // nosniff lockdown routes/documents.ts already applies (audit Security #6),
 // instead of the plan-file route rolling its own (looser) header logic.
@@ -577,6 +581,62 @@ router.put('/library/factors/:id', requireAuth, requireAdmin, async (req, res) =
   const updated = await updateFactor(req.params.id, patch);
   if (!updated) return res.status(404).json({ error: 'Factor not found' });
   res.json(updated);
+});
+
+// ── Accubid BOM import (Next round Part B, Task 1) ──────────────────────────
+// Settings > Labor Library > "Import Accubid BOM": upload a BOM PDF -> preview
+// diff -> apply. Declared before /:bidId so these paths are never captured as
+// a bid id.
+
+const KISSIMMEE_PRICE_DATE = '2026-06-18'; // Decision B1 — the only current-price BOM.
+
+async function resolveBomText(req: AuthRequest & { file?: Express.Multer.File }): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  if (req.file?.buffer) {
+    try {
+      const pages = await extractPdfPageTexts(req.file.buffer);
+      return { ok: true, text: pages.join('\n') };
+    } catch {
+      return { ok: false, error: 'Could not extract text from the uploaded PDF (pdftotext failed or is unavailable).' };
+    }
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (typeof body.bomText === 'string' && body.bomText.trim()) return { ok: true, text: body.bomText };
+  return { ok: false, error: 'Upload a BOM PDF, or pass bomText (pdftotext -layout output).' };
+}
+
+router.post('/library/accubid-import/preview', requireAuth, requireAdmin, pdfUpload.single('file'), async (req: AuthRequest, res) => {
+  const resolved = await resolveBomText(req as AuthRequest & { file?: Express.Multer.File });
+  if (!resolved.ok) return res.status(400).json({ error: resolved.error });
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const applyPrices = body.applyPrices === true || body.applyPrices === 'true';
+  const bomDate = typeof body.bomDate === 'string' && body.bomDate ? body.bomDate : (applyPrices ? KISSIMMEE_PRICE_DATE : null);
+  const library = await getLibrary();
+  const preview = buildImportPreview(resolved.text, library, { applyPrices, bomDate });
+  const poleBase = derivePoleBaseAssembly(parseAccubidBom(resolved.text).rows);
+  res.json({ ...preview, poleBase });
+});
+
+router.post('/library/accubid-import/apply', requireAuth, requireAdmin, pdfUpload.single('file'), async (req: AuthRequest, res) => {
+  const resolved = await resolveBomText(req as AuthRequest & { file?: Express.Multer.File });
+  if (!resolved.ok) return res.status(400).json({ error: resolved.error });
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const applyPrices = body.applyPrices === true || body.applyPrices === 'true';
+  const bomDate = typeof body.bomDate === 'string' && body.bomDate ? body.bomDate : (applyPrices ? KISSIMMEE_PRICE_DATE : null);
+  const library = await getLibrary();
+  const preview = buildImportPreview(resolved.text, library, { applyPrices, bomDate });
+  const result = await applyImportPreview(preview);
+
+  const rows = parseAccubidBom(resolved.text).rows;
+  const poleBasePlan = derivePoleBaseAssembly(rows);
+  let poleBase: { itemsCreated: number; itemsUpdated: number } | null = null;
+  if (poleBasePlan) {
+    // Re-read the library — applyImportPreview may have just created some of
+    // these same component items as plain BOM rows.
+    const libraryAfter = await getLibrary();
+    poleBase = await applyPoleBaseAssembly(poleBasePlan, libraryAfter, { applyPrices, bomDate });
+  }
+
+  res.json({ ...result, poleBase });
 });
 
 // ── Calibration (Task 6) ─────────────────────────────────────────────────────
