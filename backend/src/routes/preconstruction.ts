@@ -62,6 +62,7 @@ import { BidData } from '../bidstd/bidData';
 import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
 import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
 import { resetForRerun, type RerunResetSummary, GENERATED_OUTPUT_CATEGORIES } from '../services/rerunReset';
+import { registerRun, abortableClient, abortRuns, isCancellationError, RunCancelledError } from '../ai/runControl';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
 const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'warehouse', 'restaurant', 'medical', 'retail', 'other'];
@@ -636,6 +637,7 @@ export async function beginAnalysisRun(bidId: string): Promise<{ runId: string; 
         -- them), the account-term snapshot, output hygiene and the last
         -- error go too: nothing from the previous run carries over.
         review_items=NULL, account_terms=NULL, hygiene=NULL, raw_response=NULL,
+        progress=NULL, cancelled_at=NULL, cancelled_by=NULL,
         reset_run_id=$2
     `, [bidId, runId]);
     const reset = await resetForRerun(c, bidId, runId, {
@@ -664,6 +666,10 @@ export async function runDraftComposition(bidId: string, client: Anthropic, conf
   // superseded draft can't mark the new run's draft as error or release its claim.
   const { rows: runRows } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
   const draftRun = (runRows[0]?.run_id as string | null) ?? null;
+  // Stop analysis — the draft can be stopped on its own (draft_status
+  // 'cancelled'); its model call carries this job's abort signal.
+  const handle = registerRun(bidId, 'draft');
+  client = abortableClient(client, handle.signal);
   try {
     const gate = await takeoffGate(bidId);
     if (gate) {
@@ -696,6 +702,8 @@ export async function runDraftComposition(bidId: string, client: Anthropic, conf
       accountTerms: await accountTermsBlockFor(bidId, snap.accountTerms, snap.reviewItems, snap.agent1Output),
       scopeList: renderScopeListBlock(snap.scopeList.items),
     });
+    const { rows: live } = await pool.query('SELECT draft_status FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    if (handle.signal.aborted || live[0]?.draft_status === 'cancelled') throw new RunCancelledError();
     const resp = await callWithRetry(() => client.messages.stream({
       model: config.modelA4,
       max_tokens: config.maxTokensA4,
@@ -711,15 +719,20 @@ export async function runDraftComposition(bidId: string, client: Anthropic, conf
     const w = await pool.query(
       `UPDATE takeoff_results SET draft_output=$2, draft_status='complete', draft_error=NULL, draft_model=$3,
          usage_draft=$4, draft_inputs_hash=$5, draft_at=now(), draft_run_id=run_id
-        WHERE bid_id=$1 AND run_id IS NOT DISTINCT FROM $6`,
+        WHERE bid_id=$1 AND run_id IS NOT DISTINCT FROM $6 AND draft_status IS DISTINCT FROM 'cancelled'`,
       [bidId, JSON.stringify(parsed), config.modelA4, JSON.stringify(resp.usage), inputsHash, snap.runId]
     );
-    if (!w.rowCount) logger.warn({ bidId }, '[draft] a new analysis started while the draft was composing — result discarded');
+    if (!w.rowCount) logger.warn({ bidId }, '[draft] the draft was stopped or a new analysis started while it was composing — result discarded');
   } catch (err) {
-    logger.error({ err, bidId }, '[draft] pre-bid draft composition failed');
-    await pool.query(`UPDATE takeoff_results SET draft_status='error', draft_error=$2 WHERE bid_id=$1 AND run_id IS NOT DISTINCT FROM $3`,
-      [bidId, isAgentTruncatedError(err) ? (err as Error).message : describeAIError(err), draftRun]).catch(() => {});
+    if (isCancellationError(err) || handle.signal.aborted) {
+      logger.info({ bidId }, '[draft] pre-bid draft stopped — nothing written');
+    } else {
+      logger.error({ err, bidId }, '[draft] pre-bid draft composition failed');
+      await pool.query(`UPDATE takeoff_results SET draft_status='error', draft_error=$2 WHERE bid_id=$1 AND run_id IS NOT DISTINCT FROM $3 AND draft_status IS DISTINCT FROM 'cancelled'`,
+        [bidId, isAgentTruncatedError(err) ? (err as Error).message : describeAIError(err), draftRun]).catch(() => {});
+    }
   } finally {
+    handle.release();
     if (claimedHere || opts.claimed) {
       await pool.query(`UPDATE takeoff_results SET draft_status=NULL WHERE bid_id=$1 AND draft_status='running' AND run_id IS NOT DISTINCT FROM $2`, [bidId, draftRun]).catch(() => {});
     }
@@ -772,6 +785,23 @@ export async function runPipeline(
   client: Anthropic,
   config: AIConfig
 ): Promise<void> {
+  // Stop analysis — every model call of this run carries the run's abort
+  // signal (POST /:bidId/stop-analysis aborts it).
+  const handle = registerRun(bidId, 'analysis');
+  try {
+    await runPipelineStages(bidId, files, abortableClient(client, handle.signal), config, handle.signal);
+  } finally {
+    handle.release();
+  }
+}
+
+async function runPipelineStages(
+  bidId: string,
+  files: Express.Multer.File[],
+  client: Anthropic,
+  config: AIConfig,
+  signal: AbortSignal,
+): Promise<void> {
   let agent1Output = '';
   let agent2Output = '';
   let agent3Output = '';
@@ -793,19 +823,49 @@ export async function runPipeline(
   const { rows: runRows } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
   const runId = (runRows[0]?.run_id as string | null) ?? null;
   let superseded = false;
+  // Stop analysis — a cancelled run (status 'cancelled', same run id) is
+  // treated exactly like a superseded one: nothing it does writes anymore.
   const guarded = async (sql: string, params: unknown[]) => {
-    const r = await pool.query(`${sql.trimEnd()} AND run_id IS NOT DISTINCT FROM $${params.length + 1}`, [...params, runId]);
+    const r = await pool.query(
+      `${sql.trimEnd()} AND run_id IS NOT DISTINCT FROM $${params.length + 1} AND status IS DISTINCT FROM 'cancelled'`,
+      [...params, runId]
+    );
     if (!r.rowCount) {
-      if (!superseded) logger.warn({ bidId, runId }, '[takeoff] a newer analysis run started — this run stops writing');
+      if (!superseded) logger.warn({ bidId, runId }, '[takeoff] this run was stopped or a newer analysis run started — this run stops writing');
       superseded = true;
     }
     return r;
   };
   const updateStatus = (status: string) =>
     guarded(`UPDATE takeoff_results SET status=$1 WHERE bid_id=$2`, [status, bidId]);
+  /** Stop analysis — true once the run was stopped (or superseded). Checked
+   *  between steps: between Agent 1 batches, before counting, Agents 2 / 3
+   *  and the draft. The in-memory signal answers at once; the database
+   *  covers a stop sent to another server process. */
+  const checkpoint = async (): Promise<boolean> => {
+    if (superseded) return true;
+    if (signal.aborted) { superseded = true; return true; }
+    const { rows } = await pool.query('SELECT run_id, status FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    if ((rows[0]?.run_id ?? null) !== runId || rows[0]?.status === 'cancelled') { superseded = true; return true; }
+    return false;
+  };
+  /** Stop analysis — a model call or checkpoint ended because the run was
+   *  stopped: log it quietly and write nothing. */
+  const stoppedBy = (err: unknown): boolean => {
+    if (!isCancellationError(err) && !signal.aborted) return false;
+    superseded = true;
+    logger.info({ bidId, runId }, '[takeoff] analysis stopped — no further calls, nothing written');
+    return true;
+  };
+  /** Live progress for the UI (takeoff_results.progress). Best effort. */
+  const setProgress = (stage: string, label: string, step: number | null = null, of: number | null = null) =>
+    guarded('UPDATE takeoff_results SET progress=$1 WHERE bid_id=$2',
+      [JSON.stringify({ stage, label, step, of, at: new Date().toISOString() }), bidId]).catch(() => {});
 
   // ── Agent 1 ─────────────────────────────────────────────────────────────────
   try {
+    if (await checkpoint()) throw new RunCancelledError();
+    await setProgress('prep', 'Reading the plan set — sorting pages');
     // Task 2: the whole-FILE isElectricalSheet filter only applies to non-PDF
     // images now — every PDF passes through here unfiltered, and gets filtered
     // PAGE-BY-PAGE inside prepareAgent1Upload via pageClassifier.ts's title-block
@@ -840,7 +900,7 @@ export async function runPipeline(
     try {
       uploadPrep = await prepareAgent1Upload(filesToSend, client, config.modelClassifier, config.tileOverrides);
     } catch (err) {
-      if (isAgentTruncatedError(err)) throw err;
+      if (isAgentTruncatedError(err) || isCancellationError(err) || signal.aborted) throw err;
       logger.warn({ err, bidId }, '[takeoff] Stage 0 document prep failed for the whole upload — falling back to one legacy document-block call');
       uploadPrep = { batches: [legacyContentBlocks(filesToSend)], inventory: [], classifierUsage: { ...NO_USAGE } };
     }
@@ -857,6 +917,8 @@ export async function runPipeline(
         text: 'Analyze all uploaded electrical plans and provide your complete Drawing Analyzer output following your output format exactly. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if a sheet contains no electrical equipment, you MUST return a valid JSON object. For non-electrical sheets, include the sheet name in sheet_inventory with a note and leave equipment arrays empty.',
       });
 
+      if (await checkpoint()) throw new RunCancelledError();
+      await setProgress('agent1', 'Agent 1: reading the drawings (1 call)', 1, 1);
       logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, 'single', prep);
       const resp = await callWithRetry(() =>
         client.messages.stream({
@@ -890,6 +952,9 @@ export async function runPipeline(
       let batchUsage: Record<string, unknown> = { ...NO_USAGE };
 
       for (let bi = 0; bi < agent1Batches.length; bi++) {
+        // Stop analysis — no further batch starts once the run is stopped.
+        if (await checkpoint()) throw new RunCancelledError();
+        await setProgress('agent1', `Agent 1: batch ${bi + 1} of ${agent1Batches.length}`, bi + 1, agent1Batches.length);
         const contentBlocks = agent1Batches[bi];
         const prep = summarizePrep(contentBlocks);
         contentBlocks.push({
@@ -979,6 +1044,7 @@ export async function runPipeline(
       [agent1Output, JSON.stringify(hygiene), bidId]
     );
   } catch (err) {
+    if (stoppedBy(err)) return;
     const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 1 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 1 failed');
     await guarded(`UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
@@ -993,7 +1059,9 @@ export async function runPipeline(
   // counted on each electrical plan sheet at 300 DPI; the counts REPLACE
   // Agent 1's own for those types before Agent 2 ever sees them.
   try {
+    if (await checkpoint()) throw new RunCancelledError();
     await updateStatus('counting');
+    await setProgress('counting', 'Counting: preparing sheets');
     const pdfs = new Map<string, Buffer>();
     for (const f of files) {
       if ((f.originalname.split('.').pop() || '').toLowerCase() === 'pdf') pdfs.set(f.originalname, f.buffer);
@@ -1013,13 +1081,18 @@ export async function runPipeline(
     const stage = await runCountingStage({
       client, model: config.modelCounter, maxTokens: config.maxTokensCounter,
       agent1: agent1ForCounting, inventory: countingInventory, pdfs,
+      shouldStop: () => signal.aborted,
+      onProgress: (done, total) => {
+        if (total) void setProgress('counting', `Counting sheet ${Math.min(done + 1, total)} of ${total}`, Math.min(done + 1, total), total);
+      },
     });
     agent1Output = JSON.stringify(stage.agent1, null, 2);
     if (superseded) return;
     // Task 6 — counted locations become suggested markers in the Plans view.
     // Non-fatal: a failure here loses the markers, never the counts.
     try {
-      const markers = await writeAiCountMarkers(bidId, stage.countResult,
+      if (await checkpoint()) throw new RunCancelledError();
+    const markers = await writeAiCountMarkers(bidId, stage.countResult,
         files.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })), runId);
       (stage.countResult as unknown as Record<string, unknown>).markers = markers;
     } catch (err) {
@@ -1042,7 +1115,8 @@ export async function runPipeline(
       reviewItemsNow = carryOverResolutions(freshItems, (prevRows[0]?.review_items as ReviewItem[] | null) ?? null);
       const w = await tx.query(
         `UPDATE takeoff_results SET agent1_output=$1, count_result=$2, usage_counter=$3, model_counter=$4,
-           review_items=$5, review_status=$6, account_terms=$7 WHERE bid_id=$8 AND run_id IS NOT DISTINCT FROM $9`,
+           review_items=$5, review_status=$6, account_terms=$7 WHERE bid_id=$8 AND run_id IS NOT DISTINCT FROM $9
+           AND status IS DISTINCT FROM 'cancelled'`,
         [agent1Output, JSON.stringify(stage.countResult), JSON.stringify(stage.usage), config.modelCounter,
          JSON.stringify(reviewItemsNow), reviewStatus(reviewItemsNow), JSON.stringify(accountTerms), bidId, runId]
       );
@@ -1055,6 +1129,7 @@ export async function runPipeline(
       tx.release();
     }
   } catch (err) {
+    if (stoppedBy(err)) return;
     const message = isAgentTruncatedError(err) ? (err as Error).message : `Counting stage failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff counting stage failed');
     await guarded(`UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`, [message, bidId]);
@@ -1064,7 +1139,9 @@ export async function runPipeline(
   if (superseded) return;
   // ── Agent 2 ─────────────────────────────────────────────────────────────────
   try {
+    if (await checkpoint()) throw new RunCancelledError();
     await updateStatus('agent2_running');
+    await setProgress('agent2', 'Agent 2 of 3: building scope & estimate', 1, 1);
     // Task 11 — the estimator's scope list, binding for Agent 2.
     const agent2ScopeBlock = renderScopeListBlock((await getBidScopeList(bidId)).items);
     const resp = await callWithRetry(() => client.messages.stream({
@@ -1098,6 +1175,7 @@ export async function runPipeline(
       [agent2ToStore, JSON.stringify(resp.usage), config.modelA2, bidId]
     );
   } catch (err) {
+    if (stoppedBy(err)) return;
     const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 2 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 2 failed');
     await guarded(`UPDATE takeoff_results SET status='error', agent2_output=$1 WHERE bid_id=$2`,
@@ -1109,7 +1187,9 @@ export async function runPipeline(
   if (superseded) return;
   // ── Agent 3 ─────────────────────────────────────────────────────────────────
   try {
+    if (await checkpoint()) throw new RunCancelledError();
     await updateStatus('agent3_running');
+    await setProgress('agent3', 'Agent 3 of 3: QA review & risk assessment', 1, 1);
 
     // Task 6 — feed Agent 3 the independent pre-bid takeoff (Cowork package,
     // bid_takeoffs kind='prebid') when one exists, so QC can reconcile two
@@ -1155,8 +1235,9 @@ export async function runPipeline(
     // Takeoff accuracy Task 12 — the pre-bid draft, right after the analysis,
     // when nothing is waiting on the estimator (otherwise it's composed the
     // moment the Needs-review list clears).
-    if (superseded) return;
+    if (await checkpoint()) return;
     await runDraftComposition(bidId, client, config);
+    if (await checkpoint()) return;
 
     // Also persist structured fields from agent1 JSON for backward compatibility
     const a1 = parseAIJSON(agent1Output) ?? {};
@@ -1214,6 +1295,7 @@ export async function runPipeline(
       }
     })();
   } catch (err) {
+    if (stoppedBy(err)) return;
     const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 3 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 3 failed');
     await guarded(`UPDATE takeoff_results SET status='error', agent3_output=$1 WHERE bid_id=$2`,
@@ -2290,10 +2372,65 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
     const message = `Pipeline failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff pipeline failed');
     await pool.query(
-      `UPDATE takeoff_results SET status='error', raw_response=$1 WHERE bid_id=$2 AND run_id = $3`,
+      `UPDATE takeoff_results SET status='error', raw_response=$1 WHERE bid_id=$2 AND run_id = $3 AND status IS DISTINCT FROM 'cancelled'`,
       [message, bidId, analysisRunId]
     ).catch(dbErr => logger.error({ err: dbErr, bidId }, 'Could not persist takeoff pipeline failure'));
   });
+}));
+
+/** Stop analysis — the statuses of an analysis that is still running. */
+export const ANALYSIS_RUNNING_STATUSES = ['running', 'agent1_complete', 'counting', 'agent2_running', 'agent2_complete', 'agent3_running'];
+
+// POST stop-analysis — stops whatever AI job is running for the bid: the
+// analysis pipeline, an Agent 4 proposal run and/or a pre-bid draft. The run
+// keeps its run id and is marked 'cancelled' ("Stopped by <user>"); the
+// in-flight model calls are aborted (billing stops at tokens already
+// produced) and the run-id / status guards mean nothing it does afterwards is
+// written. `what`: 'analysis' | 'agent4' | 'draft' | 'all' (default).
+router.post('/:bidId/stop-analysis', requireAuth, requireAIPermission('run_analysis'), asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const what = String(req.body?.what ?? 'all');
+  if (!['analysis', 'agent4', 'draft', 'all'].includes(what)) return res.status(400).json({ error: 'what must be analysis, agent4, draft or all' });
+  const message = `Stopped by ${req.user?.name ?? 'the estimator'}`;
+  const want = (k: string) => what === 'all' || what === k;
+
+  const stopped = { analysis: false, agent4: false, draft: false };
+  if (want('analysis')) {
+    const r = await pool.query(
+      `UPDATE takeoff_results SET status='cancelled', raw_response=$2, cancelled_at=now(), cancelled_by=$3, progress=NULL
+        WHERE bid_id=$1 AND status = ANY($4::text[])`,
+      [bidId, message, req.user?.name ?? null, ANALYSIS_RUNNING_STATUSES]
+    );
+    stopped.analysis = (r.rowCount ?? 0) > 0;
+  }
+  if (want('agent4')) {
+    const r = await pool.query(
+      `UPDATE takeoff_results SET agent4_status='cancelled', agent4_error=$2 WHERE bid_id=$1 AND agent4_status='running'`, [bidId, message]
+    );
+    stopped.agent4 = (r.rowCount ?? 0) > 0;
+  }
+  if (want('draft')) {
+    const r = await pool.query(
+      `UPDATE takeoff_results SET draft_status='cancelled', draft_error=$2 WHERE bid_id=$1 AND draft_status='running'`, [bidId, message]
+    );
+    stopped.draft = (r.rowCount ?? 0) > 0;
+  }
+  // Abort in-flight calls even when the DB row had already moved on (a job
+  // between its last write and its exit still holds a live stream).
+  const kinds = (['analysis', 'agent4', 'draft'] as const).filter(k => want(k));
+  const aborted = abortRuns(bidId, [...kinds]);
+  if (stopped.analysis || stopped.agent4 || stopped.draft) {
+    await pool.query(
+      `INSERT INTO activity (kind, div, text, user_id) VALUES ('ai_analysis','preconstruction',$1,$2)`,
+      [`AI run stopped (${Object.entries(stopped).filter(([, v]) => v).map(([k]) => k).join(', ')}) by ${req.user?.name}`, req.user?.id]
+    ).catch(() => {});
+  }
+  logger.info({ bidId, stopped, aborted, by: req.user?.name }, '[takeoff] stop-analysis');
+  if (!stopped.analysis && !stopped.agent4 && !stopped.draft && !aborted) {
+    return res.status(409).json({ error: 'Nothing is running for this bid.', stopped, aborted });
+  }
+  res.json({ stopped, aborted, message });
 }));
 
 // POST run-agent4 — kicks off Proposal Formatter in background, returns immediately
@@ -2387,9 +2524,13 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
     scopeList: renderScopeListBlock((await getBidScopeList(bidId)).items),
   });
 
+  // Stop analysis — Agent 4 can be stopped (agent4_status 'cancelled'); its
+  // call carries this job's abort signal and no write lands after a stop.
+  const agent4Handle = registerRun(bidId, 'agent4');
+  const a4Client = abortableClient(client, agent4Handle.signal);
   (async () => {
     try {
-      const resp = await callWithRetry(() => client.messages.stream({
+      const resp = await callWithRetry(() => a4Client.messages.stream({
         model: config.modelA4,
         max_tokens: config.maxTokensA4,
           system: [{ type: 'text', text: config.promptA4 || AGENT4_SYSTEM, cache_control: { type: 'ephemeral' } }],
@@ -2409,7 +2550,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
         const tail = rawText.slice(-300);
         logger.warn({ bidId, stop_reason: resp.stop_reason, output_tokens: outTokens, max_tokens: config.maxTokensA4, text_length: rawText.length, preview: rawText.slice(0, 200), tail }, '[agent4] Could not parse JSON from response');
         await pool.query(
-          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2 AND run_id IS NOT DISTINCT FROM $3`,
+          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2 AND run_id IS NOT DISTINCT FROM $3 AND agent4_status IS DISTINCT FROM 'cancelled'`,
           [`AI response could not be parsed as valid JSON (stop_reason: ${resp.stop_reason ?? 'unknown'}, ${outTokens ?? '?'} of ${config.maxTokensA4} output tokens, ${rawText.length} characters). Try re-running Agent 4. End of the response: …${tail.replace(/\s+/g, ' ').slice(-200)}`, bidId, runId]
         );
         return;
@@ -2425,7 +2566,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
       if (!isAgent4Shape(parsed)) {
         logger.warn({ bidId, preview: rawText.slice(0, 300) }, '[agent4] Response parsed as JSON but is not the expected shape (sections[]/takeoff[] missing)');
         await pool.query(
-          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2 AND run_id IS NOT DISTINCT FROM $3`,
+          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2 AND run_id IS NOT DISTINCT FROM $3 AND agent4_status IS DISTINCT FROM 'cancelled'`,
           ['AI response was valid JSON but missing the expected sections/takeoff arrays. Try re-running Agent 4.', bidId, runId]
         );
         return;
@@ -2435,7 +2576,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
           agent4_output=$1, agent4_price=$2, agent4_notes=$3,
           agent4_model=$4, usage_agent4=$5,
           agent4_status='complete', agent4_error=NULL, agent4_source='model', agent4_run_id=run_id
-        WHERE bid_id=$6 AND run_id IS NOT DISTINCT FROM $7`,
+        WHERE bid_id=$6 AND run_id IS NOT DISTINCT FROM $7 AND agent4_status IS DISTINCT FROM 'cancelled'`,
         [JSON.stringify(parsed), parsedPrice, internalNotes?.trim() || null, config.modelA4, JSON.stringify(resp.usage), bidId, runId]
       );
       // The proposal price is the later, more authoritative number — sync it into
@@ -2450,12 +2591,18 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
       }
       logger.info({ bidId }, '[agent4] Proposal generated successfully');
     } catch (err) {
+      if (isCancellationError(err) || agent4Handle.signal.aborted) {
+        logger.info({ bidId }, '[agent4] stopped — nothing written');
+        return;
+      }
       logger.error({ err, bidId }, '[agent4] Background run failed');
       const message = err instanceof Error ? err.message : 'Unknown error during proposal generation';
       await pool.query(
-        `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2 AND run_id IS NOT DISTINCT FROM $3`,
+        `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2 AND run_id IS NOT DISTINCT FROM $3 AND agent4_status IS DISTINCT FROM 'cancelled'`,
         [message, bidId, runId]
       );
+    } finally {
+      agent4Handle.release();
     }
   })().catch(err => logger.error({ err, bidId }, '[agent4] Uncaught background error'));
 }));

@@ -73,6 +73,9 @@ export interface CountingStageInput {
   inventory: InventoryPage[];
   /** PDF bytes by uploaded filename (the inventory's `file`). */
   pdfs: Map<string, Buffer>;
+  /** Stop analysis — see CounterRunInput. */
+  shouldStop?: () => boolean;
+  onProgress?: (done: number, total: number) => void;
 }
 
 export interface CountingStageOutput {
@@ -190,7 +193,7 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
 
   // A truncated call throws AgentTruncatedError out of here (the run fails);
   // every other per-sheet failure is recorded on that sheet by runCounter.
-  const run = await runCounter({ client: input.client, model: input.model, maxTokens: input.maxTokens, targets, sheets: rendered });
+  const run = await runCounter({ client: input.client, model: input.model, maxTokens: input.maxTokens, targets, sheets: rendered, shouldStop: input.shouldStop, onProgress: input.onProgress });
   const { agent1, countResult } = finish(input, targets, targetNotes, run.sheets, selection.skipped, true, undefined);
   return { agent1, countResult, usage: run.usage };
 }

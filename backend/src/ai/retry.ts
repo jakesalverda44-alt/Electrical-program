@@ -3,6 +3,8 @@
 // and otherwise fail permanently on a momentary blip; this makes a single run far
 // more likely to complete end-to-end.
 
+import { isCancellationError } from './runControl';
+
 const RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
 
 /** True for errors worth retrying: rate limits, overload, 5xx, and network errors. */
@@ -40,6 +42,8 @@ export async function callWithRetry<T>(fn: () => Promise<T>, opts: RetryOptions 
       return await fn();
     } catch (err) {
       lastErr = err;
+      // Stop analysis — a stopped run is never retried.
+      if (isCancellationError(err)) throw err;
       if (attempt === retries || !isRetryableError(err)) throw err;
       const delay = backoffDelay(attempt, opts.baseDelayMs, opts.maxDelayMs);
       opts.onRetry?.(attempt + 1, err, delay);

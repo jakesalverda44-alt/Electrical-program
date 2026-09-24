@@ -147,8 +147,8 @@ export async function writeAiCountMarkers(
   try {
     await client.query('BEGIN');
     if (runId !== undefined) {
-      const { rows } = await client.query('SELECT run_id FROM takeoff_results WHERE bid_id = $1 FOR SHARE', [bidId]);
-      if ((rows[0]?.run_id ?? null) !== runId) {
+      const { rows } = await client.query('SELECT run_id, status FROM takeoff_results WHERE bid_id = $1 FOR SHARE', [bidId]);
+      if ((rows[0]?.run_id ?? null) !== runId || rows[0]?.status === 'cancelled') {
         await client.query('ROLLBACK');
         return {
           written: 0, skippedAlreadyMarked: 0, replacedSuggestions: 0, assigned: 0, unassigned: 0,

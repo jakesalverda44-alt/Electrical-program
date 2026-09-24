@@ -17,6 +17,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { COUNTER_SYSTEM } from './prompts';
 import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { callWithRetry } from './retry';
+import { RunCancelledError } from './runControl';
 import { assertNotTruncated, AgentTruncatedError, isAgentTruncatedError } from './stopReason';
 import { parseAIJSON } from './json';
 import { normalizeTypeKey, type CountTarget } from './countTargets';
@@ -318,6 +319,11 @@ export interface CounterRunInput {
   maxTokens: number;
   targets: CountTarget[];
   sheets: Array<{ sheet: CountSheet; rendered: RenderedCountPage | null; renderError?: string }>;
+  /** Stop analysis — checked before every call; true = start nothing new
+   *  and throw RunCancelledError once the in-flight calls settle. */
+  shouldStop?: () => boolean;
+  /** Live progress: sheets whose every call has finished, of all sheets. */
+  onProgress?: (done: number, total: number) => void;
 }
 
 export interface CounterRunResult {
@@ -364,8 +370,35 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
   });
 
   let truncation: AgentTruncatedError | null = null;
+  // Progress by sheet: a sheet is done when all of its calls have settled.
+  const callsLeft = new Map<number, number>();
+  for (const w of work) callsLeft.set(w.si, (callsLeft.get(w.si) ?? 0) + 1);
+  const sheetsTotal = callsLeft.size;
+  let sheetsDone = 0;
+  input.onProgress?.(0, sheetsTotal);
+  const settle = (si: number) => {
+    const left = (callsLeft.get(si) ?? 1) - 1;
+    callsLeft.set(si, left);
+    if (left === 0) { sheetsDone++; input.onProgress?.(sheetsDone, sheetsTotal); }
+  };
   await runWithConcurrencyLimit(work, COUNTER_CONCURRENCY, async (w) => {
     if (truncation) return; // a truncated call fails the run — start nothing new
+    if (input.shouldStop?.()) return; // Stop analysis — start nothing new
+    try { await countOne(w); } finally { settle(w.si); }
+  });
+  if (input.shouldStop?.()) throw new RunCancelledError();
+  if (truncation) throw truncation;
+
+  input.sheets.forEach(({ rendered }, si) => {
+    const r = results[si];
+    if (!rendered || r.status !== 'counted') return;
+    const { placed, mergedDuplicates, outsideCore } = placeAndDedupe(rawBySheet.get(si) ?? [], rendered.tiles, rendered.geometry);
+    r.placed = placed;
+    r.mergedDuplicates = mergedDuplicates + outsideCore;
+  });
+  return { sheets: results, usage };
+
+  async function countOne(w: { si: number; tiles: CountTile[]; index: number; of: number }): Promise<void> {
     const r = results[w.si];
     if (r.status === 'failed') return;
     const content = buildCounterContent(r.sheet, input.targets, w.tiles, { index: w.index, of: w.of });
@@ -401,15 +434,5 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
       r.error = err instanceof Error ? err.message : String(err);
       logger.warn({ err, sheet: r.sheet.label }, '[counter] sheet count failed');
     }
-  });
-  if (truncation) throw truncation;
-
-  input.sheets.forEach(({ rendered }, si) => {
-    const r = results[si];
-    if (!rendered || r.status !== 'counted') return;
-    const { placed, mergedDuplicates, outsideCore } = placeAndDedupe(rawBySheet.get(si) ?? [], rendered.tiles, rendered.geometry);
-    r.placed = placed;
-    r.mergedDuplicates = mergedDuplicates + outsideCore;
-  });
-  return { sheets: results, usage };
+  }
 }
