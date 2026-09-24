@@ -886,3 +886,32 @@ clean window" caveat on this worktree's now heavily-populated test database.
 - S8 validates the BOM reference and keeps the source honest, but does not implement BOM parsing itself —
   `expected` is still confirmed-counts-derived either way, exactly as the finding asked ("keep
   confirmed_counts as source until BOM is actually parsed").
+
+## Re-review — two gaps closed (d03b5a8, d9d6fac)
+
+The Parts 4–5 fix round's own report (above) understated two things; both are now closed.
+
+1. **TakeoffReviewPanel's legend-zero group answers member by member in the UI.** The backend already
+   required a per-member resolution (B6, ba04579); the frontend still rendered the whole group as one row
+   with a single set of controls (no `memberKey`) and still let the group's id enter the cross-item
+   multi-select's bulk "Mark selected not on this job" bar — either path could resolve every member at
+   once with one action, reintroducing what B6 closed. Fixed: one row per member with its own count/not-
+   on-job controls; the group is removed from the multi-select entirely; the only remaining shortcut
+   ("mark all N remaining not on this job") requires its own reason and a confirm dialog listing every
+   member by name before it posts (still with no memberKey server-side, so each member still gets its own
+   recorded resolution). 7 new tests in `TakeoffReviewPanel.test.tsx`.
+2. **The evidence gate's jump-to-line now covers every GC-facing path.** The backend gate itself was never
+   the gap — `generate-docx`, `generate-takeoff-xlsx`, `draft-proposal` (send) and `run-agent4` all already
+   called `evidenceGate()` before this round even started (this report's own earlier "deferred" note
+   claiming the takeoff xlsx "never runs that gate" was simply wrong). The actual gap was that B5's
+   jump-to-line frontend wiring only fired from Download .docx. Now `downloadTakeoffXlsx`,
+   `runAgent4Proposal` and `SendBidProposalModal` (draft-proposal) all extract the 409's `reviewItems` and
+   jump to the named line the same way. 3 new frontend integration tests (one per path, through the real
+   `PcWorkspaceView`) plus 2 new backend HTTP tests (`takeoffReviewGate.test.ts`) hitting all four routes
+   with a real unresolved manual line, isolated from the review-items and budget gates.
+
+Affected test files run: `TakeoffReviewPanel.test.tsx` (29), `PcWorkspaceProposal.test.tsx` (15),
+`takeoffReviewGate.test.ts` (12), `evidenceGate.test.ts`, `finishBid.test.ts`, `reviewGroupMembers.test.ts`,
+`reviewBulk.test.ts`, `gapFillEndToEnd.test.ts`, `kissimmeeEvidence.test.ts` — all passing (45 backend + 44
+frontend across the touched files) — plus a full frontend `npx vitest run` (1306/1306) and `tsc --noEmit`
+clean in both packages.
