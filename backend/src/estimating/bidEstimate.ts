@@ -1030,9 +1030,15 @@ export async function saveBidEstimate(
       // note was last whatever it is now, and the note is STILL exactly the
       // placeholder, it is cleared (never silently kept while the number
       // changed under it).
+      // Fix round 3 / S6 nit — the placeholder is legitimate ONLY on a line
+      // that actually carried it forward from BEFORE migration 134 (a real
+      // prior row with this exact line_key, same qty). A line with NO prior
+      // row at all can never have earned it honestly — it only got there by
+      // being copied/duplicated in the UI from a line that did, which is
+      // exactly the case that must clear it too, not just a changed qty.
       const priorForThis = priorByKey.get(resolvedLineKey);
       const sentNote = typeof l.evidence_note === 'string' && l.evidence_note.trim() ? l.evidence_note.trim() : null;
-      const evidenceNote = (sentNote === EVIDENCE_NOTE_PLACEHOLDER && priorForThis && priorForThis.qty !== l.qty) ? null : sentNote;
+      const evidenceNote = (sentNote === EVIDENCE_NOTE_PLACEHOLDER && (!priorForThis || priorForThis.qty !== l.qty)) ? null : sentNote;
       await client.query(
         `INSERT INTO est_bid_lines
            (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id,

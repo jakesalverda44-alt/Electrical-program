@@ -4,6 +4,7 @@
 // reason, each block; a real reason (or real evidence) clears them; the
 // gate is never wired into generate-prebid-package / email-prebid-chris.
 import { describe, it, expect, beforeAll } from 'vitest';
+import { randomUUID } from 'crypto';
 import request from 'supertest';
 import { app } from '../index';
 import { pool } from '../db/pool';
@@ -116,12 +117,23 @@ describe('evidenceGate', () => {
     const bidId = await createBid(u.token);
     await setCountResult(bidId, []);
     const settings = { labor_rate: 65, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 10, profit_pct: 10, crew_size: 1, floors_above_2: 0 };
-    // Simulate a grandfathered line: saved once with the exact placeholder.
+    // Simulate a grandfathered line: saved once with a real reason, then
+    // (exactly what migration 134 itself did with a raw UPDATE, never
+    // through this save path) its note is overwritten with the placeholder
+    // directly in the DB — a genuine PRIOR row carrying it, unlike a line
+    // that merely arrives with the placeholder text on its very first save
+    // (fix round 3 / S6 nit, below).
     const saved = await saveBidEstimate(bidId,
-      [{ category: 'Allowance', description: 'Grandfathered allowance', qty: 3, unit: 'EA' as const, source: 'manual' as const, evidence_note: EVIDENCE_NOTE_PLACEHOLDER }],
+      [{ category: 'Allowance', description: 'Grandfathered allowance', qty: 3, unit: 'EA' as const, source: 'manual' as const, evidence_note: 'A real reason from before the gate existed' }],
+      settings);
+    const lineKey = saved.lines[0].line_key;
+    await pool.query('UPDATE est_bid_lines SET evidence_note = $1 WHERE line_key = $2', [EVIDENCE_NOTE_PLACEHOLDER, lineKey]);
+    // Re-saved with the SAME qty, the client round-tripping the placeholder
+    // it just read back — a genuine prior row, same qty: still passes.
+    await saveBidEstimate(bidId,
+      [{ category: 'Allowance', description: 'Grandfathered allowance', qty: 3, unit: 'EA' as const, source: 'manual' as const, line_key: lineKey, evidence_note: EVIDENCE_NOTE_PLACEHOLDER }],
       settings);
     expect(await evidenceGate(bidId)).toBeNull(); // the placeholder passes, for now
-    const lineKey = saved.lines[0].line_key;
     // Re-saved with a DIFFERENT qty, note still (from the client's stale
     // cache) the exact placeholder text — it must be cleared, not kept.
     await saveBidEstimate(bidId,
@@ -130,6 +142,32 @@ describe('evidenceGate', () => {
     const blocked = await evidenceGate(bidId);
     expect(blocked).not.toBeNull();
     const { rows } = await pool.query('SELECT evidence_note FROM est_bid_lines WHERE bid_id=$1', [bidId]);
+    expect(rows[0].evidence_note).toBeNull();
+  });
+
+  // Fix round 3 / S6 nit — a line copied/duplicated in the UI (a brand new
+  // line_key, never saved before) that happens to carry the placeholder
+  // text along with it (copied from the line it was duplicated from) must
+  // NOT pass the gate just because its qty happens to match — there is no
+  // real prior row for THIS line_key at all, so it never legitimately
+  // earned the grandfather clause.
+  it('S6 nit — a line with no prior row at all never keeps the placeholder, even with a matching qty', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bidId = await createBid(u.token);
+    await setCountResult(bidId, []);
+    const settings = { labor_rate: 65, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 10, profit_pct: 10, crew_size: 1, floors_above_2: 0 };
+    // A genuinely new line (its own fresh line_key), sent on its VERY FIRST
+    // save already carrying the exact placeholder — e.g. duplicated in the
+    // UI from a grandfathered line, never itself saved before.
+    const copyKey = randomUUID();
+    await saveBidEstimate(bidId,
+      [{ category: 'Allowance', description: 'Grandfathered allowance (copy)', qty: 3, unit: 'EA' as const, source: 'manual' as const, line_key: copyKey, evidence_note: EVIDENCE_NOTE_PLACEHOLDER }],
+      settings);
+    const blocked = await evidenceGate(bidId);
+    expect(blocked).not.toBeNull();
+    expect(blocked!.openItems.some(i => i.lineKey === copyKey)).toBe(true);
+    const { rows } = await pool.query('SELECT evidence_note FROM est_bid_lines WHERE line_key=$1', [copyKey]);
     expect(rows[0].evidence_note).toBeNull();
   });
 
