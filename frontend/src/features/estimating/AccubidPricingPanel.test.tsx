@@ -85,6 +85,39 @@ describe('AccubidPricingPanel', () => {
     expect(Array.from(manualRow.querySelectorAll('button')).some(b => b.textContent === 'Remove')).toBe(true);
   });
 
+  // Review round 2 / N15 — a null night rate used to be passed straight as
+  // an <input>'s `value`, which React treats as an uncontrolled input and
+  // warns about the moment it later gets a real number (or vice versa).
+  it('N15: switching to night shift renders blank (not crashing, not warning) night-rate inputs, and a typed value saves; clearing it back to blank saves null', async () => {
+    get.mockResolvedValue({ data: base }); // DEFAULT_ACCUBID_SETTINGS — all three night rates are null
+    put.mockResolvedValue({ data: base });
+    const warnSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(<AccubidPricingPanel bidId="bid1" />);
+      await waitFor(() => expect(screen.getByTestId('accubid-shift')).toBeTruthy());
+      fireEvent.change(screen.getByTestId('accubid-shift'), { target: { value: 'night' } });
+
+      const nightJourneyman = await screen.findByLabelText('Night journeyman $/hr') as HTMLInputElement;
+      expect(nightJourneyman.value).toBe(''); // never the literal string "null"
+
+      fireEvent.change(nightJourneyman, { target: { value: '42' } });
+      fireEvent.click(screen.getByTestId('accubid-save-settings'));
+      await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/accubid/settings', expect.objectContaining({ nightJourneymanRate: 42 })));
+
+      put.mockClear();
+      fireEvent.change(nightJourneyman, { target: { value: '' } });
+      fireEvent.click(screen.getByTestId('accubid-save-settings'));
+      await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/accubid/settings', expect.objectContaining({ nightJourneymanRate: null })));
+
+      // No React "changing an uncontrolled input to be controlled" (or the
+      // reverse) warning was ever printed through this whole sequence.
+      const reactWarning = warnSpy.mock.calls.some(args => typeof args[0] === 'string' && /uncontrolled/i.test(args[0]));
+      expect(reactWarning).toBe(false);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('saving crew settings PUTs the form values', async () => {
     get.mockResolvedValue({ data: base });
     put.mockResolvedValue({ data: base });

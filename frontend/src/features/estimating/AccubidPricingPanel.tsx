@@ -18,6 +18,17 @@ function numberOrDefault(raw: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+// Review round 2 / N15 — a night rate is OPTIONAL (null = "use the day rate
+// at night too"): parses to null on a blank field, a validated non-negative
+// number otherwise (falling back to the previous value on bad input, same
+// as numberOrDefault above), so `nightJourneymanRate` etc. never carry a
+// stray NaN into the save payload.
+function nullableNumberOrDefault(raw: string, fallback: number | null): number | null {
+  if (raw.trim() === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 export interface AccubidPricingPanelProps {
   bidId: string;
   showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
@@ -54,6 +65,20 @@ export function AccubidPricingPanel({ bidId, showToast }: AccubidPricingPanelPro
     </label>
   );
 
+  // Review round 2 / N15 — a nullable (night-rate) field. `value={null}` on a
+  // controlled <input> is what React warns about ("changing an uncontrolled
+  // input to be controlled", or vice versa, as it flips between a real
+  // number and null) — coalescing to '' keeps the input controlled the
+  // whole time, and reads back as null exactly when the estimator leaves it
+  // blank (meaning "use the day rate at night too").
+  const nullableField = (label: string, key: keyof AccubidSettings, opts: { step?: number; title?: string } = {}) => (
+    <label className="lp-settings-field" key={key} title={opts.title}>
+      {label}
+      <input type="number" step={opts.step ?? 1} value={(form[key] as number | null) ?? ''}
+        onChange={e => setForm(prev => ({ ...prev, [key]: nullableNumberOrDefault(e.target.value, settings[key] as number | null) }))} />
+    </label>
+  );
+
   return (
     <div data-testid="accubid-pricing-panel">
       {recap.blocksSend && (
@@ -82,9 +107,9 @@ export function AccubidPricingPanel({ bidId, showToast }: AccubidPricingPanelPro
       </div>
       {form.shift === 'night' && (
         <div className="lp-settings-row" title="Night rates override the day rates above only while Shift is set to Night; leave blank to use the day rate at night too.">
-          {field('Night journeyman $/hr', 'nightJourneymanRate', { step: 0.01 })}
-          {field('Night apprentice $/hr', 'nightApprenticeRate', { step: 0.01 })}
-          {field('Night foreman $/hr', 'nightForemanRate', { step: 0.01 })}
+          {nullableField('Night journeyman $/hr', 'nightJourneymanRate', { step: 0.01 })}
+          {nullableField('Night apprentice $/hr', 'nightApprenticeRate', { step: 0.01 })}
+          {nullableField('Night foreman $/hr', 'nightForemanRate', { step: 0.01 })}
         </div>
       )}
       <div className="lp-settings-row">

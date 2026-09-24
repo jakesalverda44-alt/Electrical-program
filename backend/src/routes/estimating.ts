@@ -841,7 +841,22 @@ function validateAccubidSettings(body: unknown): ValidationResult<AccubidSetting
     fields[key] = r;
   }
   const shift = s.shift === 'night' ? 'night' : 'day';
-  const nightField = (v: unknown): number | null => (v == null || v === '') ? null : Number(v);
+  // Review round 2 / N15 — a night rate is OPTIONAL (null = "use the day
+  // rate at night too"), but when the client DOES send one it must be a
+  // real, non-negative number: the old version did `Number(v)` unchecked,
+  // so a bad value (NaN, e.g. from a stray non-numeric string) sailed
+  // straight through to a NUMERIC(10,2) column and 500'd instead of 400ing.
+  const nightFieldNames: Array<[keyof AccubidSettings, string]> = [
+    ['nightJourneymanRate', 'nightJourneymanRate'], ['nightApprenticeRate', 'nightApprenticeRate'], ['nightForemanRate', 'nightForemanRate'],
+  ];
+  const nightFields: Record<string, number | null> = {};
+  for (const [key, field] of nightFieldNames) {
+    const v = s[key];
+    if (v == null || v === '') { nightFields[key] = null; continue; }
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) return { ok: false, error: `${field} must be a non-negative number, or left blank` };
+    nightFields[key] = n;
+  }
   return {
     ok: true,
     value: {
@@ -849,7 +864,7 @@ function validateAccubidSettings(body: unknown): ValidationResult<AccubidSetting
       journeymanCount: fields.journeymanCount, journeymanRate: fields.journeymanRate,
       apprenticeCount: fields.apprenticeCount, apprenticeRate: fields.apprenticeRate,
       foremanCount: fields.foremanCount, foremanRate: fields.foremanRate,
-      nightJourneymanRate: nightField(s.nightJourneymanRate), nightApprenticeRate: nightField(s.nightApprenticeRate), nightForemanRate: nightField(s.nightForemanRate),
+      nightJourneymanRate: nightFields.nightJourneymanRate, nightApprenticeRate: nightFields.nightApprenticeRate, nightForemanRate: nightFields.nightForemanRate,
       burdenPct: fields.burdenPct, fringePerHr: fields.fringePerHr, materialTaxPct: fields.materialTaxPct,
       laborOverheadPct: fields.laborOverheadPct, materialMarkupPct: fields.materialMarkupPct, laborMarkupPct: fields.laborMarkupPct,
       quoteMarkupDefaultPct: fields.quoteMarkupDefaultPct, adjustmentMarkupPct: fields.adjustmentMarkupPct, salesMarkupPct: fields.salesMarkupPct,

@@ -87,6 +87,44 @@ describe('PUT /api/estimating/:bidId/accubid/settings', () => {
       quoteMarkupDefaultPct: 18, adjustmentMarkupPct: 0, salesMarkupPct: 0,
     }).expect(400);
   });
+
+  // Review round 2 / N15 — a night rate used to go straight through
+  // `Number(v)` unchecked: a bad value (NaN, or a negative number) would
+  // reach a NUMERIC(10,2) DB column and 500, instead of 400ing here.
+  it('N15: rejects a non-numeric night rate with 400, never a 500', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const base = {
+      shift: 'night', journeymanCount: 1, journeymanRate: 40, apprenticeCount: 0, apprenticeRate: 0, foremanCount: 0, foremanRate: 0,
+      burdenPct: 0, fringePerHr: 0, materialTaxPct: 0, laborOverheadPct: 0, materialMarkupPct: 10, laborMarkupPct: 0,
+      quoteMarkupDefaultPct: 18, adjustmentMarkupPct: 0, salesMarkupPct: 0,
+    };
+    const bad = await request(app).put(`/api/estimating/${bidId}/accubid/settings`).set(auth(u.token))
+      .send({ ...base, nightJourneymanRate: 'not-a-number' }).expect(400);
+    expect(bad.body.error).toMatch(/nightJourneymanRate/);
+    const negative = await request(app).put(`/api/estimating/${bidId}/accubid/settings`).set(auth(u.token))
+      .send({ ...base, nightApprenticeRate: -5 }).expect(400);
+    expect(negative.body.error).toMatch(/nightApprenticeRate/);
+  });
+
+  it('N15: a blank/omitted night rate is null (use the day rate), and a real number saves correctly', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const base = {
+      shift: 'night', journeymanCount: 1, journeymanRate: 40, apprenticeCount: 0, apprenticeRate: 0, foremanCount: 0, foremanRate: 0,
+      burdenPct: 0, fringePerHr: 0, materialTaxPct: 0, laborOverheadPct: 0, materialMarkupPct: 10, laborMarkupPct: 0,
+      quoteMarkupDefaultPct: 18, adjustmentMarkupPct: 0, salesMarkupPct: 0,
+    };
+    await request(app).put(`/api/estimating/${bidId}/accubid/settings`).set(auth(u.token))
+      .send({ ...base, nightJourneymanRate: '', nightForemanRate: 45 }).expect(200);
+    const res = await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200);
+    expect(res.body.settings.nightJourneymanRate).toBeNull();
+    expect(res.body.settings.nightForemanRate).toBe(45);
+  });
 });
 
 describe('Quotes / cost lines / alternates CRUD', () => {
