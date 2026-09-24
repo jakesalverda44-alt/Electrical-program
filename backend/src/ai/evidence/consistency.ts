@@ -10,24 +10,36 @@
 // time on a tile grid shifted by half a tile — a symbol cut by a tile edge
 // in one pass sits whole in the other — and the two passes are reconciled
 // BY LOCATION:
-//   * a mark both passes found (nearest-first, one-to-one, within 0.4") is
-//     counted;
-//   * a mark only one pass found is a SUGGESTED marker with a review item,
+//   * review fix B1 — the pass NEVER lowers a count without a human: pass
+//     1's marks stay counted; re-found marks only raise confidence;
+//   * a mark only pass 2 found is a SUGGESTED marker (a possible addition),
 //     never counted until the estimator confirms it;
-//   * the agreement rate is reported per type.
+//   * pass-1 marks pass 2 did not re-find stay counted; under 85% re-found
+//     a BLOCKING review item shows both counts and the disagreeing marks;
+//   * the agreement rate (re-found / pass 1) is reported per type.
 // Bounded: only those types, only on those sheets, only the shifted tiles
 // that cover their marks.
 import type { RectIn } from './viewports';
 
 /** A type counted at least this many times on one sheet gets the second pass. */
 export const CONSISTENCY_MIN_COUNT = 20;
-/** Under this agreement the two passes are no check on each other (one of
- *  them saw next to nothing): the first pass stands, flagged. */
-export const CONSISTENCY_MIN_AGREEMENT = 0.5;
-/** Two passes' marks within this distance are the same symbol. */
+/** Review fix B1 — agreement = first-pass marks the second pass re-found ÷
+ *  first-pass marks. Under this (strictly), a BLOCKING review item shows
+ *  both counts and the marks the passes disagree on. The count itself is
+ *  never lowered: pass 1's marks stay counted either way. */
+export const CONSISTENCY_AGREEMENT_THRESHOLD = 0.85;
+/** Two passes' marks within this distance may be the same symbol (the
+ *  default; the real radius is tied to the type's own mark spacing). */
 export const AGREE_RADIUS_IN = 0.4;
 /** The shifted tiles cover the dense types' marks plus this margin. */
 export const DENSE_MARGIN_IN = 0.25;
+/** Review fix S8 — per-run bounds: at most this many sheets get the pass,
+ *  and a sheet needing more shifted tiles than this is left unchecked
+ *  (noted), never run unbounded. */
+export const MAX_CONSISTENCY_SHEETS = 3;
+export const MAX_CONSISTENCY_TILES = 16;
+/** Bump when the consistency pass's counter note changes (cache key). */
+export const CONSISTENCY_PROMPT_VERSION = 'cs1';
 
 export interface PassMark { typeKey: string; x: number; y: number; circuit?: string; tileIds?: string[] }
 
@@ -36,16 +48,19 @@ export interface ConsistencyEntry {
   sheetLabel: string;
   typeKey: string;
   why: 'high count' | 'density flagged';
+  /** The count: pass 1's marks (never lowered by pass 2). */
   first: number;
   second: number;
+  /** First-pass marks the second pass re-found. */
   agreed: number;
+  /** First-pass marks the second pass did not re-find — still counted. */
   onlyFirst: number;
+  /** Second-pass marks the first pass did not have — suggested only. */
   onlySecond: number;
-  /** agreed / (agreed + onlyFirst + onlySecond): 1 = the passes agree mark for mark. */
+  /** agreed / first: 1 = pass 2 re-found every counted mark. */
   agreement: number;
-  /** Under CONSISTENCY_MIN_AGREEMENT: the first pass's count stands,
-   *  unconfirmed (a blocking review item), nothing suggested. */
-  inconclusive?: boolean;
+  /** agreement < CONSISTENCY_AGREEMENT_THRESHOLD: a blocking review item. */
+  lowAgreement?: boolean;
 }
 
 export interface ConsistencySuggestion { typeKey: string; sheetKey: string; x: number; y: number; pass: 'first' | 'second' }
@@ -60,24 +75,38 @@ export function consistencyTypes(placed: Array<{ typeKey: string }>, unreadable:
   return [...out.entries()].map(([typeKey, why]) => ({ typeKey, why })).sort((a, b) => a.typeKey.localeCompare(b.typeKey));
 }
 
-/** Nearest-first, one-to-one matching of two passes' marks of ONE type
- *  (PDF points). */
-export function reconcilePasses<T extends PassMark>(first: T[], second: T[], radiusPt = AGREE_RADIUS_IN * 72): { agreed: T[]; onlyFirst: T[]; onlySecond: T[] } {
-  const pairs: Array<{ i: number; j: number; d: number }> = [];
-  first.forEach((a, i) => second.forEach((b, j) => {
-    const d = Math.hypot(a.x - b.x, a.y - b.y);
-    if (d <= radiusPt) pairs.push({ i, j, d });
-  }));
-  pairs.sort((p, q) => p.d - q.d || p.i - q.i || p.j - q.j);
-  const ui = new Set<number>(), uj = new Set<number>();
-  for (const p of pairs) {
-    if (ui.has(p.i) || uj.has(p.j)) continue;
-    ui.add(p.i); uj.add(p.j);
-  }
+/** Review fix S8 — the matching radius, tied to how close this type's own
+ *  marks sit: 0.75 × the median nearest-neighbour spacing, between 0.2" and
+ *  0.5" (0.4" when there are too few marks to measure). */
+export function agreeRadiusPt(marks: Array<{ x: number; y: number }>): number {
+  if (marks.length < 3) return AGREE_RADIUS_IN * 72;
+  const nn = marks.map((a, i) => Math.min(...marks.filter((_, j) => j !== i).map(b => Math.hypot(a.x - b.x, a.y - b.y)))).sort((a, b) => a - b);
+  const median = nn[Math.floor(nn.length / 2)];
+  return Math.min(0.5 * 72, Math.max(0.2 * 72, 0.75 * median));
+}
+
+/** Review fix S8 — a MAXIMUM one-to-one matching of two passes' marks of
+ *  ONE type within the radius (augmenting paths, nearest candidates
+ *  first), so a jittered mark never steals its neighbour's partner. */
+export function reconcilePasses<T extends PassMark>(first: T[], second: T[], radiusPt = agreeRadiusPt(first)): { agreed: T[]; onlyFirst: T[]; onlySecond: T[] } {
+  const adj: number[][] = first.map(a => second.map((b, j) => ({ j, d: Math.hypot(a.x - b.x, a.y - b.y) }))
+    .filter(e => e.d <= radiusPt).sort((p, q) => p.d - q.d).map(e => e.j));
+  const matchOfSecond = new Array<number>(second.length).fill(-1);
+  const order = first.map((_, i) => i).sort((p, q) => adj[p].length - adj[q].length || p - q);
+  const tryAssign = (i: number, seen: boolean[]): boolean => {
+    for (const j of adj[i]) {
+      if (seen[j]) continue;
+      seen[j] = true;
+      if (matchOfSecond[j] < 0 || tryAssign(matchOfSecond[j], seen)) { matchOfSecond[j] = i; return true; }
+    }
+    return false;
+  };
+  for (const i of order) tryAssign(i, new Array<boolean>(second.length).fill(false));
+  const matchedFirst = new Set(matchOfSecond.filter(i => i >= 0));
   return {
-    agreed: first.filter((_, i) => ui.has(i)),
-    onlyFirst: first.filter((_, i) => !ui.has(i)),
-    onlySecond: second.filter((_, j) => !uj.has(j)),
+    agreed: first.filter((_, i) => matchedFirst.has(i)),
+    onlyFirst: first.filter((_, i) => !matchedFirst.has(i)),
+    onlySecond: second.filter((_, j) => matchOfSecond[j] < 0),
   };
 }
 
@@ -91,6 +120,9 @@ export function coverRect(pointsIn: Array<{ x: number; y: number }>, marginIn = 
 
 export function entryOf(sheetKey: string, sheetLabel: string, typeKey: string, why: ConsistencyEntry['why'], r: { agreed: unknown[]; onlyFirst: unknown[]; onlySecond: unknown[] }): ConsistencyEntry {
   const first = r.agreed.length + r.onlyFirst.length, second = r.agreed.length + r.onlySecond.length;
-  const union = r.agreed.length + r.onlyFirst.length + r.onlySecond.length;
-  return { sheetKey, sheetLabel, typeKey, why, first, second, agreed: r.agreed.length, onlyFirst: r.onlyFirst.length, onlySecond: r.onlySecond.length, agreement: union ? Math.round((r.agreed.length / union) * 1000) / 1000 : 1 };
+  const agreement = first ? Math.round((r.agreed.length / first) * 1000) / 1000 : 1;
+  return {
+    sheetKey, sheetLabel, typeKey, why, first, second, agreed: r.agreed.length, onlyFirst: r.onlyFirst.length, onlySecond: r.onlySecond.length, agreement,
+    ...(agreement < CONSISTENCY_AGREEMENT_THRESHOLD ? { lowAgreement: true } : {}),
+  };
 }

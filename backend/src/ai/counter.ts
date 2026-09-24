@@ -347,6 +347,8 @@ export interface SheetCountResult {
    *  found (SUGGESTED, not in `placed`). */
   consistency?: import('./evidence/consistency').ConsistencyEntry[];
   consistencySuggested?: import('./evidence/consistency').ConsistencySuggestion[];
+  /** Review fix B1 — pass-1 marks pass 2 did not re-find (still counted). */
+  consistencyNotReseen?: import('./evidence/consistency').ConsistencySuggestion[];
 }
 
 export interface CounterRunInput {

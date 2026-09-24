@@ -168,6 +168,22 @@ export async function confirmedMarkersForType(bidId: string, typeKey: string): P
   return tally;
 }
 
+/** Review fix S8 — the consistency check's own SUGGESTED marks the
+ *  estimator confirmed, for one type: "confirm the found marks" ADDS these
+ *  to the kept (first-pass) count, never replaces it with a bid-wide tally. */
+export async function confirmedConsistencyMarkers(bidId: string, typeKey: string): Promise<number> {
+  const { rows } = await pool.query('SELECT count_result FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  const cr = rows[0]?.count_result as CountResult | null;
+  const tag = (cr?.targets?.find(t => t.key === typeKey)?.type ?? typeKey).toUpperCase();
+  const r = await pool.query(
+    `SELECT count(*)::int AS n FROM est_markups
+      WHERE bid_id = $1 AND kind = 'count' AND status = 'confirmed' AND deleted_at IS NULL
+        AND source = 'gap_fill' AND created_by = 'Consistency check' AND upper(coalesce(label, '')) = $2`,
+    [bidId, tag]
+  );
+  return Number(r.rows[0]?.n ?? 0);
+}
+
 /** Back-compat: the number that counts. */
 export async function countConfirmedMarkersForType(bidId: string, typeKey: string): Promise<number> {
   return (await confirmedMarkersForType(bidId, typeKey)).counted;
@@ -295,7 +311,10 @@ async function applyResolution(
           };
           const mine = perItemInput(memberItem, input);
           if ('error' in mine) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: mine.error }; }
-          const markerTally = mine.action === 'markers' ? await confirmedMarkersForType(bidId, t.key) : null;
+          const consistency = item.id.startsWith('consistency:');
+          const markerTally = mine.action === 'markers'
+            ? (consistency ? { counted: await confirmedConsistencyMarkers(bidId, t.key), excluded: [] as MarkerTally['excluded'] } : await confirmedMarkersForType(bidId, t.key))
+            : null;
           const check = validateResolution(memberItem, mine, markerTally?.counted ?? null);
           if (!check.ok) {
             await client.query('ROLLBACK');
@@ -310,6 +329,8 @@ async function applyResolution(
           // complete a half-done answer (N9).
           const resolution: Parameters<typeof applyReconcileMemberResolution>[2] = check.resolution.action === 'confirm'
             ? { ...check.resolution, qty: t.currentQty }
+            // Review fix S8 — the confirmed consistency suggestions are added to the kept count.
+            : consistency && check.resolution.action === 'markers' ? { ...check.resolution, qty: t.currentQty + (check.resolution.qty ?? 0) }
             : check.resolution; // heads members: applyReconcileMemberResolution turns it into poles + heads
           Object.assign(item, applyReconcileMemberResolution(item, t.key, resolution, by));
           // B10 — "No more on this job" rejects only THIS type's own

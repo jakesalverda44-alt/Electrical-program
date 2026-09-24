@@ -23,7 +23,7 @@ import { buildRasterSet, type RasterPage } from '../evidence/buildRasterSheet';
 import { screenPosition } from '../../../estimating/pageGeometry';
 import sharp from 'sharp';
 import { planCountTiles, planOffsetTiles } from '../../../ai/countRender';
-import { counterTileSpec, imageTokens } from '../../../ai/modelLimits';
+import { counterTileSpec, imageTokens, retryTileIn } from '../../../ai/modelLimits';
 import { normalizeTypeKey } from '../../../ai/countTargets';
 import { rectInToBoxPt, type Viewport } from '../../../ai/evidence/viewports';
 import type { EvidenceCache } from '../../../ai/evidence/evidenceStage';
@@ -134,7 +134,7 @@ export function replayCounter(
     const asked = new Set(text.split('\n').filter(l => l.startsWith('- ') && l.includes(' | ')).map(l => normalizeTypeKey(l.slice(2).split(' | ')[0])));
     const shown = g.rotation === 90 || g.rotation === 270 ? { w: g.heightPt / 72, h: g.widthPt / 72 } : { w: g.widthPt / 72, h: g.heightPt / 72 };
     const rects = new Map<string, { leftIn: number; topIn: number; widthIn: number; heightIn: number }>();
-    for (const r of [...planCountTiles(shown.w, shown.h, { tileIn: spec.tileIn }), ...planOffsetTiles(shown.w, shown.h, { tileIn: spec.tileIn }), ...(opts.extraTiles?.(shown.w, shown.h) ?? [])]) {
+    for (const r of [...planCountTiles(shown.w, shown.h, { tileIn: spec.tileIn }), ...planOffsetTiles(shown.w, shown.h, { tileIn: retryTileIn(spec.tileIn, spec.limits) }), ...(opts.extraTiles?.(shown.w, shown.h) ?? [])]) {
       if (text.includes(`Tile ${r.id} (row`)) rects.set(r.id, r);
     }
     const out: unknown[] = [];

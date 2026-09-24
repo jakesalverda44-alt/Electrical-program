@@ -573,32 +573,51 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       });
     }
   }
-  // Real-run fix 5 — the dense-sheet consistency pass: marks only ONE of
-  // the two counting passes found are SUGGESTED markers (Plans view), never
-  // counted until the estimator confirms them. One item for the whole check,
-  // answered type by type (the gap-fill mechanics: confirm the found marks /
-  // keep the current count / enter the count).
-  if (ev?.consistency && (ev.consistency.suggested.length || ev.consistency.entries.some(e => e.inconclusive))) {
+  // Real-run fix 5 / review fix B1 — the dense-sheet consistency pass. It
+  // NEVER lowers a count: pass 1's marks stay counted. Marks only pass 2
+  // found are SUGGESTED (Plans view) — possible additions; pass-1 marks
+  // pass 2 did not re-find are listed. One item for the check, answered
+  // type by type: "keep the counted number" keeps pass 1's; "confirm the
+  // found marks" ADDS the confirmed suggestions; or enter the count.
+  // Blocking when there is something to confirm or the passes agree under
+  // 85%.
+  if (ev?.consistency && (ev.consistency.suggested.length || ev.consistency.entries.some(e => e.lowAgreement))) {
     const cons = ev.consistency;
     const typeByKey = new Map((countResult?.types ?? []).map(t => [t.key, t]));
-    const keys = [...new Set([...cons.suggested.map(s => s.typeKey), ...cons.entries.filter(e => e.inconclusive).map(e => e.typeKey)])].sort();
+    const keys = [...new Set([...cons.suggested.map(s => s.typeKey), ...cons.entries.filter(e => e.lowAgreement).map(e => e.typeKey)])].sort();
     const per = keys.map(k => {
       const es = cons.entries.filter(e => e.typeKey === k);
       const sum = (f: (e: typeof es[number]) => number) => es.reduce((n, e) => n + f(e), 0);
-      const agreed = sum(e => e.agreed), union = agreed + sum(e => e.onlyFirst) + sum(e => e.onlySecond);
-      return { k, t: typeByKey.get(k), first: sum(e => e.first), second: sum(e => e.second), agreed, only: union - agreed, rate: union ? agreed / union : 1, inconclusive: es.some(e => e.inconclusive) };
+      const first = sum(e => e.first), agreed = sum(e => e.agreed);
+      return { k, t: typeByKey.get(k), first, second: sum(e => e.second), agreed, notReseen: sum(e => e.onlyFirst), suggested: cons.suggested.filter(x => x.typeKey === k).length, rate: first ? agreed / first : 1, low: es.some(e => e.lowAgreement) };
     });
     const n = cons.suggested.length;
+    const low = per.filter(p => p.low);
     items.push({
       id: `consistency:${keys.join('+')}`,
       kind: 'count',
-      title: n ? `Dense-sheet check: ${n} mark${n === 1 ? '' : 's'} only one of two counting passes found — confirm on plans` : 'Dense-sheet check: the two counting passes disagree — confirm the count on the plans',
-      detail: `${per.map(p => `Type ${p.t?.type ?? p.k}: first pass ${p.first}, second pass (shifted tiles) ${p.second}, both found ${p.agreed} (${Math.round(p.rate * 100)}% agree) — ${p.inconclusive ? `the passes disagree too much to check each other: the first pass's ${p.first} stands, unconfirmed` : `${p.agreed} counted, ${p.only} suggested`}`).join('; ')}. The suggested marks are in the Plans view (SUGGESTED). Confirm the real ones there, answer "No more on this job" to keep the counted number, or enter the count — none is counted until you do.`,
+      title: low.length
+        ? `Dense-sheet check: the two counting passes disagree on ${low.map(p => `Type ${p.t?.type ?? p.k}`).join(', ')} — check the count on the plans`
+        : `Dense-sheet check: ${n} possible mark${n === 1 ? '' : 's'} the second counting pass found — confirm on plans`,
+      detail: `${per.map(p => `Type ${p.t?.type ?? p.k}: counted ${p.first} (first pass); the second pass (shifted tiles) found ${p.second}, re-finding ${p.agreed} of the ${p.first} (${Math.round(p.rate * 100)}%)${p.notReseen ? `; ${p.notReseen} counted mark${p.notReseen === 1 ? '' : 's'} it did not re-find (still counted)` : ''}${p.suggested ? `; ${p.suggested} more it found (SUGGESTED, not counted)` : ''}`).join('; ')}. The first pass's count stands. Confirm the suggested marks on the plans (they are added to it), answer "keep the counted number", or enter the count.`,
       typeKey: keys.length === 1 ? keys[0] : undefined,
       type: per.map(p => p.t?.type ?? p.k).join('/'),
       actions: ['markers', 'confirm', 'count'],
       reconcileMembers: per.map(p => ({ key: p.k, type: p.t?.type ?? p.k, description: p.t?.description ?? '', unit: 'count' as const, currentQty: p.t?.count ?? 0, headsPerPole: null })),
-      fingerprint: `consistency|${per.map(p => `${p.k}:${p.agreed}/${p.only}`).join(';')}`,
+      fingerprint: `consistency|${per.map(p => `${p.k}:${p.first}/${p.agreed}/${p.suggested}`).join(';')}`,
+    });
+  }
+  // Review fix S8 — a consistency pass that was skipped (cap, failure,
+  // truncation) is said, never silent; it never blocks.
+  if (ev?.consistency?.warnings?.length) {
+    items.push({
+      id: 'consistency-skipped',
+      kind: 'confirm',
+      blocking: false,
+      title: 'Dense-sheet check skipped on part of the set',
+      detail: `${ev.consistency.warnings.join('; ')}. Those counts are the first pass's, unchecked.`,
+      actions: ['confirm'],
+      fingerprint: `consistency-skipped|${ev.consistency.warnings.join('|')}`,
     });
   }
   // Evidence round 3.4 — a panel schedule the viewport reader found but the
