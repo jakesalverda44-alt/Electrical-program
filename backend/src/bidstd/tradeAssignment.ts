@@ -39,7 +39,8 @@ function party(raw: string): { p: AssignedParty; viaGc: boolean; trade?: string 
   if (!s) return null;
   const trade = OTHER_TRADE.exec(s);
   if (trade) return { p: 'OtherTrade', viaGc: false, trade: trade[1].replace(/\.$/, '').toUpperCase() === 'HVAC' ? 'HVAC' : trade[1].toLowerCase() };
-  if (/\bowner['’]?s\s+(vendor|contractor|supplier)\b/.test(s)) return { p: 'Vendor', viaGc: false };
+  if (/\bowner['’]?s\s+(?:[a-z]+\s+)?(vendor|contractor|supplier)\b/.test(s)) return { p: 'Vendor', viaGc: false };
+  if (/\bvendor\b/.test(s) && !GC.test(s)) return { p: 'Vendor', viaGc: false };
   if (GC.test(s)) return { p: 'APT', viaGc: true };
   if (EC.test(s)) return { p: 'APT', viaGc: false };
   if (/\b(owner|tenant|landlord)\b/.test(s)) return { p: 'Owner', viaGc: false };
@@ -48,7 +49,7 @@ function party(raw: string): { p: AssignedParty; viaGc: boolean; trade?: string 
   return null;
 }
 
-const PARTY_PHRASE = String.raw`((?:the\s+)?(?:owner['’]?s\s+(?:vendor|contractor|supplier)|g\.\s?c\.?|gc|general\s+contractor|e\.\s?c\.?|ec|electrical\s+contractor|owner|tenant|vendor|equipment\s+vendor|manufacturer|others?|hvac|mechanical(?:\s+contractor)?|plumbing(?:\s+contractor)?|fire\s+protection(?:\s+contractor)?|sprinkler(?:\s+contractor)?)(?:\s+contractor)?)`;
+const PARTY_PHRASE = String.raw`((?:the\s+)?(?:g\.?\s?c\.?\s*\/\s*e\.?\s?c\.?|e\.?\s?c\.?\s*\/\s*g\.?\s?c\.?|owner['’]?s\s+(?:[a-z]+\s+)?(?:vendor|contractor|supplier)|[a-z]+\s+vendor|g\.\s?c\.?|gc|general\s+contractor|e\.\s?c\.?|ec|electrical\s+contractor|owner|tenant|vendor|equipment\s+vendor|manufacturer|others?|hvac|mechanical(?:\s+contractor)?|plumbing(?:\s+contractor)?|fire\s+protection(?:\s+contractor)?|sprinkler(?:\s+contractor)?)(?:\s+contractor)?)`;
 
 /** Pure: who furnishes / installs an item, read from its schedule / legend
  *  text ("SIMPLEX RECEPTACLE, G.C. FURNISHED/INSTALLED", "EXHAUST FAN
@@ -68,13 +69,19 @@ export function tradeAssignmentOf(text: string): TradeAssignment | null {
   const i = new RegExp(String.raw`(?:installed|set|mounted)\s+by\s+${PARTY_PHRASE}`).exec(t)
     ?? new RegExp(String.raw`(?<!furnished\s?\/\s?|furnished\sand\s|furnished\s&\s)${PARTY_PHRASE}\s+installed`).exec(t);
   if (i && !install) install = party(i[1]);
-  const wiredByEc = /\b(?:wired|connected|connection|final\s+connection|power(?:ed)?)\s+by\s+(?:the\s+)?(?:e\.\s?c\.?|ec|electrical\s+contractor|electrician)\b|\bec\s+to\s+(?:wire|connect|provide\s+(?:power|connection))/.test(t);
+  const CONNECT_BY_EC = /\b(?:wired|wiring|connected|connection|final\s+connection|power(?:ed)?)\s+by\s+(?:the\s+)?(?:e\.\s?c\.?|ec|electrical\s+contractor|electrician)\b|\bec\s+to\s+(?:wire|connect|provide\s+(?:power|connection))/;
+  const wiredByEc = CONNECT_BY_EC.test(t);
   if (!furnish && !install) {
-    // "…, G.C." / "(BY OWNER)" / "N.I.C." — a bare trailing party covers both.
-    const bare = new RegExp(String.raw`(?:,|\(|\bby)\s*${PARTY_PHRASE}\s*\)?\s*\.?\s*$`).exec(t.trim())
+    // "…, G.C." / "(BY OWNER)" / "N.I.C." — a bare trailing party. N10: the
+    // EC's own connection wording ("power by EC") is not the party.
+    const rest = t.replace(new RegExp(CONNECT_BY_EC.source, 'g'), ' ').replace(/[\s,;.]+$/, '').trim();
+    const bare = new RegExp(String.raw`(?:,|\(|\bby)\s*${PARTY_PHRASE}\s*\)?\s*\.?\s*$`).exec(rest)
       ?? (/\bn\.?\s?i\.?\s?c\.?\b|\bnot\s+in\s+contract\b/.test(t) ? ['', 'others'] : null);
     const p = bare ? party(bare[1]) : null;
-    if (p) { furnish = p; install = p; }
+    // Fix round S9 — a bare Owner / owner's vendor / vendor is who
+    // FURNISHES it: installing it is still APT's (Decision 4). Only others,
+    // another trade or N.I.C. covers both halves.
+    if (p) { furnish = p; install = p.p === 'Owner' || (p.p === 'Vendor' && !wiredByEc) ? null : p; }
   }
   if (!furnish && !install && !wiredByEc) return null;
   trade = furnish?.trade ?? install?.trade;
@@ -109,30 +116,46 @@ export function describeAssignment(a: TradeAssignment): string {
 
 // ── GC-document hygiene ─────────────────────────────────────────────────────
 
-const ELECTRICAL_ITEM = /\b(receptacles?|outlets?|devices?|fixtures?|luminaires?|lights?|lighting|panel(?:board)?s?|disconnects?|safety\s+switch(?:es)?|conduit|wir(?:e|ing)|circuits?|switch(?:es)?|power\s*poles?|breakers?|transformers?|feeders?|junction\s+box(?:es)?|floor\s+boxes|baseflex|exit\s+signs?|emergency\s+lights?)\b/i;
-const BY_GC = /\b(?:by|from)\s+(?:the\s+)?(?:g\.\s?c\.?|gc|general\s+contractor)\b|\b(?:g\.\s?c\.?|gc|general\s+contractor)[\s-]+(?:furnished|provided|supplied|installed)\b/i;
+const ELECTRICAL_ITEM = /\b(receptacles?|outlets?|devices?|device\s+box(?:es)?|fixtures?|luminaires?|lights?|lighting|panel(?:board)?s?|disconnects?|safety\s+switch(?:es)?|conduits?|raceways?|wir(?:e|es|ing)|cabling|cables?|circuits?|switch(?:es)?|power(?:\s*poles?)?|temporary\s+power|temp\s+power|breakers?|transformers?|feeders?|junction\s+box(?:es)?|j-?box(?:es)?|floor\s+box(?:es)?|baseflex|exit\s+signs?|emergency\s+lights?|pull\s+strings?|sleeves?|homeruns?)\b/i;
+const GC_WORD = String.raw`(?:g\.\s?c\.?|gc|general\s+contractor)`;
+/** Fix round S8 — every way a note puts work on the GC: "by GC", "from the
+ *  GC", "GC furnished / provided / installed", "GC to / shall / will
+ *  provide / furnish / install / supply". */
+const BY_GC = new RegExp(String.raw`\b(?:by|from)\s+(?:the\s+)?${GC_WORD}(?![a-z])|\b${GC_WORD}[\s-]+(?:furnished|provided|supplied|installed)\b|\b${GC_WORD}\s+(?:to|shall|will|must)\s+(?:provide|furnish|install|supply)\b`, 'i');
 
 export interface GcScopeFinding { category: string; line: string; detail: string }
 
+/** Fix round S8 — the items a line names, one by one ("Receptacles and
+ *  lighting by GC" -> receptacles, lighting). */
+function itemsOf(line: string): string[] {
+  const head = line.replace(BY_GC, '|').split('|')[0] || line;
+  return head.split(/\s*(?:,|;|\/|&|\band\b|\bor\b|\bplus\b)\s*/i).map(x => x.trim()).filter(x => ELECTRICAL_ITEM.test(x));
+}
+
 /** Pure: GC-facing text that puts electrical items on the GC — an
- *  exclusion ("Receptacles by GC") or a takeoff line furnished by the GC.
- *  `gcTerms`: words of account terms the rule / estimator really assigned to
- *  the GC (then it is not a finding). */
-export function gcScopeFindings(data: Pick<BidData, 'exclusions' | 'takeoff'>, gcTerms: RegExp[] = []): GcScopeFinding[] {
+ *  exclusion or clarification ("Receptacles by GC", "GC to provide
+ *  temporary power"), a scope bullet, or a takeoff line furnished by the GC.
+ *  `gcTerms`: account terms the rule / estimator really assigned to the GC.
+ *  They excuse only the items they cover (S8: per item, not per line). */
+export function gcScopeFindings(data: Pick<BidData, 'exclusions' | 'takeoff'> & Partial<Pick<BidData, 'sections'>>, gcTerms: RegExp[] = []): GcScopeFinding[] {
   const out: GcScopeFinding[] = [];
-  const allowed = (s: string) => gcTerms.some(re => re.test(s));
-  for (const b of data.exclusions ?? []) {
-    const s = typeof b === 'string' ? b : `${(b as { b: string }).b}${(b as { t: string }).t}`;
-    if (BY_GC.test(s) && ELECTRICAL_ITEM.test(s) && !allowed(s)) {
-      out.push({ category: 'exclusions', line: s, detail: `"${s}" puts electrical work on the GC. On electrical drawings "by G.C." is APT scope (the GC subs the electrical to APT) — remove the exclusion and carry it as APT, or keep it with a reason.` });
-    }
-  }
+  const covered = (item: string) => gcTerms.some(re => re.test(item));
+  const text = (b: unknown) => typeof b === 'string' ? b : `${(b as { b: string }).b}${(b as { t: string }).t}`;
+  const scan = (category: string, s: string) => {
+    if (!BY_GC.test(s)) return;
+    const items = itemsOf(s);
+    const open = items.length ? items.filter(i => !covered(i)) : (ELECTRICAL_ITEM.test(s) && !covered(s) ? [s] : []);
+    if (!open.length) return;
+    out.push({ category, line: s, detail: `"${s}" puts electrical work on the GC${items.length > 1 ? ` (${open.join(', ')})` : ''}. On electrical drawings "by G.C." is APT scope (the GC subs the electrical to APT) — carry it as APT, or keep it with a reason.` });
+  };
+  for (const b of data.exclusions ?? []) scan('exclusions', text(b));
+  for (const sec of data.sections ?? []) for (const b of sec.bullets ?? []) scan(sec.title, text(b));
   for (const cat of data.takeoff ?? []) {
     for (const it of cat.items) {
       const fb = String((it as { furnish_by?: string }).furnish_by ?? '').trim();
       const line = `${it.item}${it.description ? ` — ${it.description}` : ''}`;
-      if (!fb || !/^(?:the\s+)?(?:g\.\s?c\.?|gc|general\s+contractor)\b/i.test(fb) || /\bec\s+installs\b/i.test(fb)) continue;
-      if (allowed(`${line} ${fb}`)) continue;
+      if (!fb || !new RegExp(String.raw`^(?:the\s+)?${GC_WORD}\b`, 'i').test(fb) || /\bec\s+installs\b/i.test(fb)) continue;
+      if (covered(line)) continue;
       out.push({ category: cat.name, line: it.item, detail: `${cat.name}: "${line}" is marked furnished by ${fb}. "By G.C." on electrical drawings is APT scope — carry it as APT furnish & install, or keep it with a reason.` });
     }
   }

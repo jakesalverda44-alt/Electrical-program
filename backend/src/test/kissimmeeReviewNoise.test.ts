@@ -70,7 +70,10 @@ function sheetResults(pass: 'first' | 'retry', withPhotometric: boolean): SheetC
     : { placed: marks({ A: 73, B: 52, C: 2, M: 6, G: 11, E: 10, F: 6, K: 6, J: 2, D: 5 }), unreadable: [] };
   const out: SheetCountInput[] = [
     { sheet: sheet('E-1'), status: 'counted', placed: marks({ S1: 2, S2: 1, D: 3 }), unreadable: [] },
-    { sheet: sheet('E-2'), status: 'counted', placed: marks({ A: 70, GFI: 16, 'DUPLEX RECEPTACLE': 11, S: 8, SX: 8, DF: 3, 'RTU-1': 1 }), unreadable: [] },
+    // Fix round S9 — owner-furnished devices (D1 data, CM camera) are
+    // APT-installed, so the counter counts them on the power plan like any
+    // device (a zero would rightly block).
+    { sheet: sheet('E-2'), status: 'counted', placed: marks({ A: 70, GFI: 16, 'DUPLEX RECEPTACLE': 11, S: 8, SX: 8, DF: 3, 'RTU-1': 1, D1: 12, CM: 6 }), unreadable: [] },
     { sheet: sheet('E-2.1'), status: 'counted', placed: marks({ GFI: 4, 'DUPLEX RECEPTACLE': 2 }), unreadable: [] },
     { sheet: sheet('E-3'), status: 'counted', ...e3 },
     { sheet: sheet('E-3.1'), status: 'counted', placed: marks({ M: 6 }), unreadable: [] },
@@ -113,13 +116,15 @@ describe('A7 — Kissimmee-shaped review noise', () => {
 
   it('before (same drawings, old behaviour) was noisy for the causes the plan names', () => {
     const ids = blocking(before).map(i => i.id);
-    for (const id of ['count:W1', 'count:W2', 'count:A', 'count:B', 'count:EF', 'count:D1', 'count:T1', 'count:CM', 'count:FA']) expect(ids).toContain(id);
-    expect(blocking(before).length).toBeGreaterThan(blocking(after).length + 8);
+    for (const id of ['count:W1', 'count:W2', 'count:A', 'count:B', 'count:EF', 'count:T1', 'count:FA']) expect(ids).toContain(id);
+    expect(blocking(before).length).toBeGreaterThanOrEqual(2 * blocking(after).length);
   });
 
-  it('by others / owner / N.I.C. / HVAC-installed types are information, not blocks; G.C. receptacles are counted', () => {
+  it('by others / N.I.C. / HVAC-installed types are information, not blocks; owner-furnished and G.C. items are counted', () => {
     const info = after.filter(i => i.blocking === false).map(i => i.id);
-    expect(info).toEqual(expect.arrayContaining(['count:EF', 'count:D1', 'count:T1', 'count:CM', 'count:FA', 'photo:W1', 'photo:W2']));
+    expect(info).toEqual(expect.arrayContaining(['count:EF', 'count:T1', 'count:FA', 'photo:W1', 'photo:W2']));
+    expect(info).not.toContain('count:D1');
+    expect(info).not.toContain('count:CM');
     expect(after.find(i => i.id === 'count:SX')).toBeUndefined();
     expect(after.find(i => i.id === 'count:DF')).toBeUndefined();
   });
