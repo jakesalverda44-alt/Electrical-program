@@ -552,30 +552,20 @@ export async function applyImportPreview(preview: ImportPreview, opts: ApplyImpo
         // (bomItemCode), so "someone already created this exact row" is
         // never wrong to treat as "update it".
         if ((err as { code?: string }).code !== '23505') throw err;
-        const byCode = await findByCode(plan.code);
-        if (byCode && byCode.source !== 'manual') {
-          await updateItem(byCode.id, { labor_hours: plan.laborHours ?? byCode.labor_hours, ...(plan.materialCost != null ? { material_cost: plan.materialCost, material_price_date: preview.bomDate } : {}) });
-          await markAccubidSource(plan.code);
-          updated++;
-        } else {
-          skipped++;
-        }
+        const ok = await applyAccubidItemUpdate(plan.code, {
+          laborHours: plan.laborHours, ...(plan.materialCost != null ? { materialCost: plan.materialCost, materialPriceDate: preview.bomDate } : {}),
+        });
+        if (ok) updated++; else skipped++;
       }
     } else if (plan.action === 'update' || plan.action === 'propose_update') {
-      // Review round 2 / N17 — re-check the row's CURRENT source, fetched
-      // fresh right now rather than trusting the preview's (possibly
-      // stale-by-now) snapshot: an admin can hand-edit this exact row in the
-      // window between preview and apply, which sets source='manual' — that
-      // edit must never be silently overwritten and relabelled 'accubid'.
-      const byCode = await findByCode(plan.code);
-      if (!byCode) { skipped++; continue; }
-      if (byCode.source === 'manual') { skipped++; continue; }
-      await updateItem(byCode.id, {
-        labor_hours: plan.laborHours ?? byCode.labor_hours,
-        ...(plan.materialCost != null ? { material_cost: plan.materialCost, material_price_date: preview.bomDate } : {}),
+      // Review round 2 / N17 — atomic: applyAccubidItemUpdate's own
+      // `WHERE code=$1 AND source <> 'manual'` is the guard now, checked and
+      // applied in the SAME statement — no separate SELECT that a
+      // concurrent hand-edit could slip in behind.
+      const ok = await applyAccubidItemUpdate(plan.code, {
+        laborHours: plan.laborHours, ...(plan.materialCost != null ? { materialCost: plan.materialCost, materialPriceDate: preview.bomDate } : {}),
       });
-      await markAccubidSource(plan.code); // updateItem sets source='manual' on any field change — restore 'accubid'
-      updated++;
+      if (ok) updated++; else skipped++;
     }
   }
   const unparsed = preview.items.filter(i => i.action === 'skip_unparsed')
@@ -600,15 +590,34 @@ async function markAccubidSource(code: string): Promise<void> {
 async function markAssemblyAccubidSource(code: string): Promise<void> {
   await pool.query(`UPDATE est_assemblies SET source='accubid' WHERE code=$1`, [code]);
 }
-async function findByCode(code: string): Promise<LibraryItem | null> {
-  const { rows } = await pool.query('SELECT * FROM est_items WHERE code=$1', [code]);
-  if (!rows.length) return null;
-  const r = rows[0];
-  return {
-    id: r.id, code: r.code, name: r.name, category: r.category, unit: r.unit,
-    material_cost: Number(r.material_cost), material_price_date: r.material_price_date,
-    labor_hours: Number(r.labor_hours), aliases: r.aliases ?? [], source: r.source, active: r.active,
-  };
+/** Review round 2 / N17 — the accubid-import update path, made ATOMIC. What
+ *  this replaced (a SELECT by code -> check source='manual' in JS -> a
+ *  separate updateItem() call -> a separate markAccubidSource() call) left a
+ *  real
+ *  race window open THREE different ways: an admin's own hand-edit (which
+ *  sets source='manual') landing between the SELECT and the first UPDATE,
+ *  or between the two separate UPDATEs, would still get silently
+ *  overwritten and relabelled 'accubid' — exactly what this guard exists to
+ *  prevent. This does hours/cost/price-date AND the 'accubid' source stamp
+ *  in ONE statement, guarded by `WHERE code=$1 AND source <> 'manual'`, with
+ *  COALESCE keeping the existing DB value for whichever field the plan
+ *  didn't supply — no prior SELECT needed at all. 0 rows affected means
+ *  either the code doesn't exist yet, or a concurrent manual edit won; the
+ *  caller treats both exactly like the old skip_manual path. */
+async function applyAccubidItemUpdate(
+  code: string, patch: { laborHours: number | null; materialCost?: number | null; materialPriceDate?: string | null }
+): Promise<boolean> {
+  const setMaterial = patch.materialCost !== undefined;
+  const { rowCount } = await pool.query(
+    `UPDATE est_items
+        SET labor_hours = COALESCE($1, labor_hours),
+            material_cost = CASE WHEN $2::boolean THEN $3 ELSE material_cost END,
+            material_price_date = CASE WHEN $2::boolean THEN $4 ELSE material_price_date END,
+            source = 'accubid', updated_at = now()
+      WHERE code = $5 AND source <> 'manual'`,
+    [patch.laborHours, setMaterial, patch.materialCost ?? null, patch.materialPriceDate ?? null, code]
+  );
+  return (rowCount ?? 0) > 0;
 }
 
 // ── Pole-base assembly (auger, sono tube, rebar ring, rebar, concrete,
