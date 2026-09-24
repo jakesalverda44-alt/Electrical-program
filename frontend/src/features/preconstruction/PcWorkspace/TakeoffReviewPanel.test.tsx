@@ -271,3 +271,35 @@ describe('evidence round — enlarged-plan, typical, family and schedule groups'
     expect(screen.getByText('Adds devices — 9')).toBeTruthy();
   });
 });
+
+describe('Fix round N8 — the UI groups items in the SAME $-risk order the backend ranks them (riskRank)', () => {
+  it('zero/family/gapfill/reconcile (high $ risk) come before scope questions and spot-checks (low $ risk, informational)', () => {
+    setup({
+      status: 'needs_review',
+      items: [
+        // Listed deliberately out of risk order, so this proves the UI
+        // re-sorts them rather than just preserving array order.
+        { id: 'scope:power_poles', kind: 'scope_question', group: 'scope', title: 'Power poles', detail: 'q', options: ['APT', 'GC'], notes: [] },
+        { id: 'spotcheck:A', kind: 'confirm', group: 'spotcheck', blocking: false, title: 'Spot-check: confirm these 5 marks — Type A (73 auto-counted)', detail: 'd', actions: ['confirm'] },
+        { id: 'count:MB', kind: 'count', group: 'zero', title: 'Type MB — Meter base', detail: 'Counted 0: not found on any counted plan sheet.', aiCount: 0 },
+        { id: 'family:W2', kind: 'area', group: 'family', title: 'Same fixture on two schedules: W2 = L', detail: 'd', options: ['Keep L — 1', "Use W2's count — 4"], actions: ['answer'] },
+        { id: 'gapfill:GFCI', kind: 'count', group: 'gapfill', title: 'Gap-fill found 1 possible GFCI — confirm on plans', detail: 'd', actions: ['markers', 'count', 'not_on_job'] },
+        { id: 'reconcile:BATT CHGR', kind: 'confirm', group: 'reconcile', title: 'BATT CHGR: PANEL B lists 5, the plans account for 3', detail: 'd', actions: ['count', 'not_on_job'] },
+      ],
+    });
+    // Blocking groups render as <h4 class="tr-group-title">; informational
+    // ones (blocking: false — spotcheck here) render as <details><summary>
+    // instead, so both need selecting to see the WHOLE list in DOM order.
+    const titles = Array.from(document.querySelectorAll('.tr-group-title, [data-testid^="review-group-"] > summary')).map(el => el.textContent);
+    const at = (needle: string) => titles.findIndex(t => t?.includes(needle));
+    expect(at('counted 0')).toBeGreaterThanOrEqual(0); // 'zero' group rendered at all
+    // zero, family, gapfill, reconcile all precede scope; scope precedes
+    // the informational spot-check tail — never array/server order, the
+    // UI's own $-risk order (GROUP_ORDER).
+    expect(at('counted 0')).toBeLessThan(at('Same fixture'));
+    expect(at('Same fixture')).toBeLessThan(at('Gap-fill'));
+    expect(at('Gap-fill')).toBeLessThan(at('Reconciliation'));
+    expect(at('Reconciliation')).toBeLessThan(at('Scope question'));
+    expect(at('Scope question')).toBeLessThan(at('Spot-check'));
+  });
+});

@@ -127,8 +127,17 @@ function errorOf(err: unknown, fallback: string): string {
  *  older runs are grouped the same way here). */
 export function groupKey(i: ReviewItem): string {
   if (i.group) return i.group;
-  if (i.blocking === false) return i.id.startsWith('checklist:') ? 'checklist' : 'info';
+  // Fix round N8 — a run from before gapfill:/reconcile:/spotcheck: existed
+  // never carries these ids, so this fallback only ever needs to classify
+  // ids that ARE these prefixes on a current run whose `.group` was
+  // stripped somewhere (defensive; `i.group` above already covers the
+  // normal case).
+  if (i.id.startsWith('checklist:')) return 'checklist';
+  if (i.blocking === false && i.id.startsWith('spotcheck:')) return 'spotcheck';
+  if (i.blocking === false) return 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
+  if (i.id.startsWith('gapfill:')) return 'gapfill';
+  if (i.id.startsWith('reconcile:')) return 'reconcile';
   if (i.id.startsWith('counting:')) return 'counting';
   if (i.id.startsWith('refsheet:')) return 'refsheets';
   if (i.id.startsWith('sheet:') || i.id.startsWith('file:')) return 'sheets';
@@ -157,6 +166,12 @@ export function groupTitle(key: string, n: number): string {
   if (key === 'viewport') return `Enlarged plans — repeat the main plan or add devices? (${n})`;
   if (key === 'typical') return `Typical packages — how many hosts? (${n})`;
   if (key === 'family') return `Same fixture on two schedules (${n})`;
+  // Fix round B2/S13 — a reconciled shortfall against a schedule/typical:
+  // gapfill has a suggested marker to confirm, reconcile has none (or an
+  // over-count, information only). Never a count by itself.
+  if (key === 'gapfill') return `Gap-fill found possible marks — confirm on plans (${n})`;
+  if (key === 'reconcile') return `Reconciliation mismatch${s}: schedule/typical vs. the plans (${n})`;
+  if (key === 'spotcheck') return `Spot-check samples of a high count (${n}) — for information`;
   if (key === 'schedule') return `Schedules not read completely (${n})`;
   if (key === 'heads') return `Pole heads (${n})`;
   if (key === 'sheets') return `Pages not counted (${n})`;
@@ -168,9 +183,17 @@ export function groupTitle(key: string, n: number): string {
   return `Other (${n})`;
 }
 
-// Evidence round 4.5 — grouped, roughly by $ risk: equipment/poles/family/
-// typical mismatches first, then commodity devices, then admin/informational.
-const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'scope', 'area', 'viewport', 'typical', 'family', 'schedule', 'zero', 'unreadable', 'coverage', 'heads', 'legend-zero', 'unscheduled', 'other', 'photometric', 'checklist', 'info'];
+// Evidence round 4.5, fix round N8 — grouped in the SAME $-risk order the
+// backend's riskRank() sorts the underlying list into (equipment/poles/
+// family/reconciliation/typical mismatches first, then commodity devices,
+// then admin/scope/informational): 'zero' comes first (it's where an
+// equipment or pole type at $0 quantity lands — the single highest-$-risk
+// bucket after counting/sheets problems), gapfill/reconcile sit with
+// family/typical (all schedule-vs-plans mismatches), and scope questions —
+// ranked near the BOTTOM server-side (riskRank 40) — no longer jump the
+// queue just because they're a different kind of item. spotcheck (S13) is
+// informational, grouped with photometric/checklist/info at the tail.
+const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'zero', 'family', 'gapfill', 'reconcile', 'schedule', 'typical', 'area', 'viewport', 'unreadable', 'coverage', 'heads', 'legend-zero', 'unscheduled', 'scope', 'other', 'photometric', 'spotcheck', 'checklist', 'info'];
 
 export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement }: Props) {
   const open = review.items.filter(i => !i.resolution);
