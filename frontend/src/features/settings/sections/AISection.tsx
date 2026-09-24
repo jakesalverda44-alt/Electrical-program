@@ -39,7 +39,7 @@ const MODEL_KEYS  = ['ai_model', 'ai_takeoff_agent2_model', 'ai_takeoff_agent3_m
 const TOKEN_KEYS  = ['ai_max_tokens_agent1', 'ai_max_tokens_agent2', 'ai_max_tokens_agent3', 'ai_max_tokens_agent4'] as const;
 const SONNET_FIRST = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-opus-4-8'];
 const MODEL_LISTS = [VISION_MODELS, TEXT_MODELS, TEXT_MODELS, SONNET_FIRST];
-const TOKEN_DEFAULTS = ['16000', '4000', '4000', '8000'];
+const TOKEN_DEFAULTS = ['16000', '32000', '16000', '8000'];
 const AGT = ['agent1', 'agent2', 'agent3', 'agent4'] as const;
 
 type PromptDefaults = { agent1: string; agent2: string; agent3: string; agent4: string };

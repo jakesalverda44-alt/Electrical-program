@@ -129,7 +129,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   email_resend_api_key: '', email_from_address: '', email_from_name: '', email_reply_to: '', email_signature: '', frontend_url: '',
   ai_anthropic_key: '', ai_model: 'claude-sonnet-4-6',
   ai_takeoff_agent2_model: 'claude-haiku-4-5-20251001', ai_takeoff_agent3_model: 'claude-haiku-4-5-20251001',
-  ai_max_tokens: '4096', ai_max_tokens_agent1: '16000', ai_max_tokens_agent2: '4000', ai_max_tokens_agent3: '4000',
+  ai_max_tokens: '4096', ai_max_tokens_agent1: '16000', ai_max_tokens_agent2: '32000', ai_max_tokens_agent3: '16000',
   ai_temperature: '0.3',
   ai_prompt_agent1: '', ai_prompt_agent2: '', ai_prompt_agent3: '',
   ai_takeoff_agent4_model: 'claude-sonnet-4-6', ai_max_tokens_agent4: '8000', ai_prompt_agent4: '',

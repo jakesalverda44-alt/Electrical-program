@@ -95,8 +95,8 @@ export interface AIConfig {
 
 const DEFAULT_AI_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_MAX_TOKENS_A1 = 16000;
-const DEFAULT_MAX_TOKENS_A2 = 4000;
-const DEFAULT_MAX_TOKENS_A3 = 4000;
+const DEFAULT_MAX_TOKENS_A2 = 32000; // Agent 2 hit 16,000 on the AutoZone set; streaming makes this safe
+const DEFAULT_MAX_TOKENS_A3 = 16000;
 const DEFAULT_MAX_TOKENS_A4 = 8000;
 /** Takeoff accuracy Decision 1 — Opus 5.5 counts symbols. Its thinking cannot
  *  be disabled and thinking tokens count against max_tokens, so the budget is
