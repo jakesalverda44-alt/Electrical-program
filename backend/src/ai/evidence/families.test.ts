@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildCountTargets } from '../countTargets';
 import type { TypeCountResult } from '../countMerge';
-import { catalogOf, isTaggedType, applyFamilies, applySymbolDefinitions, applyScheduleLegendEquivalence } from './families';
+import { catalogOf, isTaggedType, applyFamilies, applySymbolDefinitions, applyScheduleLegendEquivalence, scheduleIdOf } from './families';
 import { loadKissimmeeBaseline } from '../../test/fixtures/evidence/kissimmeeBaseline';
 
 const { targets } = buildCountTargets(loadKissimmeeBaseline().agent1);
@@ -86,5 +86,48 @@ describe('symbol definitions and schedule rows for legend symbols', () => {
     const r = applyScheduleLegendEquivalence([ty('EF', 0), ty('EXHAUST FAN RECESSED', 2), ty('DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX ON PHONE BOARD', 0), ty('DUPLEX RECEPTACLE / FLOOR RECEPTACLE', 4)], targets);
     expect(r.types.find(t => t.key === 'EF')).toMatchObject({ status: 'merged', mergedInto: 'Exhaust fan recessed' });
     expect(r.types.find(t => t.key === 'DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX ON PHONE BOARD')!.status).toBe('zero');
+  });
+});
+
+describe('fix round S11 — family edge cases', () => {
+  const fx = (key: string, description: string, sourceSheet: string, category: 'site_lighting' | 'exterior_building' = 'site_lighting', headsPerPole: number | null = 1) =>
+    ({ type: key, key, description, symbolHint: '', wattage: null, category, source: 'fixture_schedule' as const, sourceSheet, headsPerPole, emergency: false });
+  const r = (t: ReturnType<typeof fx>, count: number, status: TypeCountResult['status'] = count > 0 ? 'counted' : 'zero'): TypeCountResult => ({
+    key: t.key, type: t.type, description: t.description, category: t.category, wattage: null, count, heads: count, status, reason: '',
+    sheets: [{ sheetKey: 's', label: `${t.sourceSheet} x`, count, used: count > 0 }], flags: [],
+  });
+  it('catalog numbers normalize: hyphens, voltage and option suffixes', () => {
+    expect(catalogOf('DSX1-LED-P8-40K-T4M-MVOLT-SPA-DDBXD')!.full).toBe('DSX1 LED P8 40K T4M');
+    expect(catalogOf('Lithonia DSX1 LED P8 40K T4M 277 HS')!.full).toBe('DSX1 LED P8 40K T4M');
+    expect(catalogOf('DSX1 LED P8 40K T4M MVOLT HS')!.full).toBe('DSX1 LED P8 40K T4M');
+  });
+  it('a 277 V / hyphenated copy of S1 on another sheet still folds (Kissimmee-style stacking stays gone)', () => {
+    const s1 = fx('S1', 'Lithonia DSX1 LED P8 40K T4M MVOLT HS', 'PH0.1');
+    const u = fx('(UNTAGGED) SITE LIGHT', 'DSX1-LED-P8-40K-T4M-277-HS', 'E-7');
+    const out = applyFamilies([r(s1, 2), r(u, 2)], [s1, u]);
+    expect(out.types.find(t => t.key === u.key)!.status).toBe('merged');
+  });
+  it('an UNREADABLE member is never folded away; its item stays', () => {
+    const s1 = fx('S1', 'Lithonia DSX1 LED P8 40K T4M MVOLT HS', 'PH0.1');
+    const u = fx('SITE LIGHT', 'D-Series Size 1 DSX1 LED 60C 1000 40K T3M MVOLT', 'E-3');
+    const out = applyFamilies([r(s1, 2), r(u, 0, 'unreadable')], [s1, u]);
+    expect(out.types.find(t => t.key === u.key)!.status).toBe('unreadable');
+  });
+  it('"E-7" and "E-7 SITE PLAN" are ONE schedule: two tagged types there are never merged', () => {
+    const a = fx('S1', 'DSX1 LED P8 40K T4M', 'E-7');
+    const b = fx('S3', 'DSX1 LED P8 40K T4M', 'E-7 SITE PLAN');
+    const out = applyFamilies([r(a, 2), r(b, 1)], [a, b]);
+    expect(out.types.every(t => t.status === 'counted')).toBe(true);
+    expect(scheduleIdOf('E-7 SITE PLAN')).toBe('E7');
+  });
+  it('FDS-1 (fused disconnect 200A, counted 0) is never folded into the legend\'s generic "Disconnect switch"', () => {
+    const fds = { ...fx('FDS-1', 'Fused disconnect switch 200A NEMA 3R', 'E-4'), category: 'equipment' as const, source: 'equipment_schedule' as const };
+    const leg = { ...fx('DISCONNECT SWITCH', 'Disconnect switch', 'E-0'), category: 'equipment' as const, source: 'legend' as const };
+    const out = applyScheduleLegendEquivalence([{ ...r(fds as never, 0), category: 'equipment' }, { ...r(leg as never, 2), category: 'equipment' }], [fds as never, leg as never]);
+    expect(out.types.find(t => t.key === 'FDS-1')!.status).toBe('zero');
+  });
+  it('the symbol-definition fold never takes an unreadable entry', () => {
+    const r2 = applySymbolDefinitions([ty('PYLON SIGN', 1), { ...ty('PYLON SIGN RECTANGLE WITH CIRCUIT TAG A-18', 0), status: 'unreadable' }], targets);
+    expect(r2.types.find(t => t.key === 'PYLON SIGN RECTANGLE WITH CIRCUIT TAG A-18')!.status).toBe('unreadable');
   });
 });

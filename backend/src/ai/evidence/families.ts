@@ -28,19 +28,24 @@ import type { CountTarget } from '../countTargets';
 
 const SERIES_RE = /\b(DSXW?\d|DSX\d|RSX\d|WSX\d|TWX\d|WPX\d|OLWX\d|EVO|LDN\d|CPX|ZL\d|LBL\d|XSP\w?\d|KAD|GLEON|VP\d|ARC\d)\b/i;
 
-/** "Lithonia DSX1 LED P8 40K T4M MVOLT HS" -> { series: 'DSX1', full: 'DSX1 LED P8 40K T4M' }. */
+/** "Lithonia DSX1 LED P8 40K T4M MVOLT HS" -> { series: 'DSX1', full: 'DSX1 LED P8 40K T4M' }.
+ *  Fix round S11 — normalized: hyphens and spaces are both separators
+ *  ("DSX1-LED-P8-40K-T4M-MVOLT" = "DSX1 LED P8 40K T4M MVOLT"); voltage and
+ *  option suffixes (120/208/240/277/347/480, MVOLT, HVOLT, HS, finishes,
+ *  mounting / control options) never enter the key; a repeated token ends
+ *  it. */
+const VOLTAGES = new Set(['120', '208', '240', '277', '347', '480', '600']);
+const OPTION = /^(MVOLT|HVOLT|XVOLT|UVOLT|HS|DDBXD|DBLXD|DNAXD|DWHXD|DDBTXD|SPA|RPA|WBA|SPUMBA|RPUMBA|PIR\w*|NLTAIR\w*|PER\d?|SF|DF|DMG|E\d+WC|E\d+|BAA|FAO|SPD\w*|L90|R90|CR\d+)$/;
 export function catalogOf(description: string): { series: string; full: string } | null {
-  const d = description.toUpperCase().replace(/[,;]/g, ' ');
+  const d = description.toUpperCase().replace(/[,;()]/g, ' ');
   const m = SERIES_RE.exec(d);
   if (!m) return null;
-  const tail = d.slice(m.index).split(/\s+/).filter(Boolean);
-  // Series + the ordering tokens that change the fixture (LED, lumen /
-  // package P8 / 60C / 10C, wattage 1000 / 530, CCT 40K, distribution T4M).
+  const tail = d.slice(m.index).split(/[\s-]+/).filter(Boolean);
   const toks = [tail[0]];
-  for (const t of tail.slice(1, 8)) {
+  for (const t of tail.slice(1, 10)) {
     if (toks.includes(t)) break; // a repeated token is the next field ("… HS LED 207W")
-    if (/^(LED|P\d+|\d+C|\d{3,4}|\d{2}K|T\d[A-Z]*|TFTM|FT|AS[YM]|R[0-9]?)$/.test(t)) toks.push(t);
-    else if (/^(MVOLT|HVOLT|120|277|347|480|HS|DDBXD|DBLXD|DNAXD)$/.test(t)) continue;
+    if (VOLTAGES.has(t) || OPTION.test(t)) continue;
+    if (/^(LED|P\d+|\d+C|\d{3,5}|\d{2}K|T\d[A-Z]*|TFTM|FT|AS[YM]|R\d?)$/.test(t)) toks.push(t);
     else break;
   }
   return { series: m[1].toUpperCase(), full: toks.join(' ') };
@@ -66,8 +71,15 @@ type Ty = TypeCountResult;
 
 function photometricOnly(t: Ty): boolean { return !!t.photometricOnly; }
 
+/** Fix round S11 — the SCHEDULE's identity: its sheet number ("E-7 SITE
+ *  PLAN", "E-7", "e7" -> "E7"), not the raw source string. */
+export function scheduleIdOf(sourceSheet: string): string {
+  const m = /\b([A-Z]{1,3})\s*[-.]?\s*(\d{1,3}(?:\.\d{1,2})?[A-Z]?)\b/i.exec(sourceSheet);
+  return m ? `${m[1]}${m[2]}`.toUpperCase() : sourceSheet.trim().toUpperCase();
+}
+
 function sourceOf(t: Ty, targets: Map<string, CountTarget>): string {
-  return targets.get(t.key)?.sourceSheet ?? '';
+  return scheduleIdOf(targets.get(t.key)?.sourceSheet ?? '');
 }
 
 /** Pure: fold family members. Mutates copies of the type results it
@@ -100,6 +112,12 @@ export function applyFamilies(types: Ty[], targetsIn: CountTarget[]): { types: T
     const others = members.filter(m => sourceOf(m, targets) !== primSrc);
     const d: FamilyDecision = { family: series, primary: primaries.map(p => p.key), merged: [], flags: [] };
     for (const m of others) {
+      // Fix round S11 — an unreadable member is not "counted 0": it keeps
+      // its own review item and is never folded away.
+      if (m.status === 'unreadable') {
+        d.flags.push(`${m.type} could not be read — not folded into the ${series} family; its own review item stays.`);
+        continue;
+      }
       const mc = catalogOf(m.description)!;
       const same = primaries.filter(p => catalogOf(p.description)!.full === mc.full);
       const group = same.length ? same : primaries;
@@ -152,7 +170,7 @@ export function applySymbolDefinitions(types: Ty[], targetsIn: CountTarget[]): {
   const merged: Array<{ key: string; into: string }> = [];
   for (const t of out) {
     const tgt = targets.get(t.key);
-    if (!tgt || tgt.source !== 'legend' || t.status === 'counted' || t.status === 'merged' || tgt.role === 'host') continue;
+    if (!tgt || tgt.source !== 'legend' || t.status !== 'zero' || tgt.role === 'host') continue;
     // Only an equipment symbol, never a device that happens to name a tag
     // ("Duplex receptacle at pylon sign base" is a receptacle to count).
     if (tgt.category !== 'equipment' || /RECEPT|OUTLET|SWITCH|SENSOR|\bGFC?I\b|J-?BOX|JUNCTION/i.test(t.description)) continue;
@@ -197,6 +215,9 @@ export function applyScheduleLegendEquivalence(types: Ty[], targetsIn: CountTarg
   for (const t of out) {
     const tgt = targets.get(t.key);
     if (!tgt || tgt.source !== 'equipment_schedule' || tgt.category !== 'equipment' || t.status !== 'zero') continue;
+    // Fix round S11 — a numbered, individually scheduled item (FDS-1, EF-2,
+    // WH-1) is its own piece of equipment, never a generic legend symbol.
+    if (/^[A-Z]{1,6}[\s-]*\d{1,3}[A-Z]?$/i.test(tgt.type.trim())) continue;
     const mine = sigWordsOf(`${tgt.type} ${tgt.description}`);
     const into = out.filter(o => {
       const ot = targets.get(o.key);
