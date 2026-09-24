@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { buildCountTargets } from '../countTargets';
 import {
   parseScheduleReply, tableFromRuns, panelCircuitRows, panelContinuity, scheduleCounts, multiplierOf, circuitRefs,
-  isCircuitCountRow, circuitSummaryRows, rowNamesTarget, tableKindOf, type ScheduleTable,
+  isCircuitCountRow, circuitSummaryRows, rowNamesTarget, tableKindOf, isCompletePanel, isEmptyLoad, panelNameOf, panelsNamedIn, type ScheduleTable,
 } from './schedules';
 import { TABLE_REPLIES } from '../../test/fixtures/evidence/kissimmeeReplies';
 import { loadKissimmeeBaseline } from '../../test/fixtures/evidence/kissimmeeBaseline';
@@ -109,5 +109,112 @@ describe('3.4 — branch-circuit counts belong to the parser', () => {
     expect(rows.every(r => r.row.countedBy === 'schedule' && r.evidence.length === r.row.qty)).toBe(true);
     // An incomplete table never produces rows.
     expect(circuitSummaryRows([{ ...A, warnings: ['PANEL A: circuit(s) 3 missing from the transcription — incomplete'] }])).toEqual([]);
+  });
+});
+
+describe('fix round B7 — equipment tags match whole tokens with their exact suffix; each row belongs to one tag', () => {
+  const eq = (tag: string, description: string) => ({ type: tag, key: tag, description, symbolHint: '', wattage: null, category: 'equipment' as const, source: 'equipment_schedule' as const, sourceSheet: 'M-1', headsPerPole: null, emergency: false });
+  // Both sides present (an odd-only panel is incomplete by fix round B9).
+  const withEven = (rows: string[][]) => (rows.some(r => Number(r[0].split(',')[0]) % 2 === 0) ? rows : [...rows, ['42', '-/1', 'SPACE', '0']]);
+  const panel = (rows: string[][]) => parseScheduleReply(JSON.stringify({ title: 'PANEL LP', columns: ['CKT', 'BREAKER', 'DESCRIPTION', 'A'], rows: withEven(rows).map(cells => ({ cells })) }),
+    { sheetKey: 'k', sheetLabel: 'E-9', viewportId: 'v', viewportTitle: 'PANEL LP' })!;
+  it('EF-1 / EF-2 / EF-3 (same description) -> 1 each, 3 in all (was 9)', () => {
+    const tg = [eq('EF-1', 'Exhaust fan, roof mounted'), eq('EF-2', 'Exhaust fan, roof mounted'), eq('EF-3', 'Exhaust fan, roof mounted')];
+    const t = panel([['1', '20/1', 'EF-1 EXHAUST FAN', '300'], ['3', '20/1', 'EF-2 EXHAUST FAN', '300'], ['5', '20/1', 'EF-3 EXHAUST FAN', '300'], ['7', '20/1', 'EF-12 EXHAUST FAN', '300']]);
+    const sc = scheduleCounts(tg, [t]);
+    expect(['EF-1', 'EF-2', 'EF-3'].map(k => sc.get(k)?.qty)).toEqual([1, 1, 1]);
+  });
+  it('RTU-1 / RTU-2 -> 1 each (was 2 each)', () => {
+    const tg = [eq('RTU-1', 'Rooftop unit, 60/3'), eq('RTU-2', 'Rooftop unit, 60/3')];
+    const t = panel([['1', '60/3', 'RTU-1', '6124'], ['3', '|', '', '6124'], ['5', '|', '', '6124'], ['2', '60/3', 'RTU-2', '6124'], ['4', '|', '', '6124'], ['6', '|', '', '6124']]);
+    const sc = scheduleCounts(tg, [t]);
+    expect([sc.get('RTU-1')?.qty, sc.get('RTU-2')?.qty]).toEqual([1, 1]);
+  });
+  it('a row matching two targets only by description is nobody\'s (the counter keeps them)', () => {
+    const tg = [eq('EF-1', 'Exhaust fan, roof mounted'), eq('EF-2', 'Exhaust fan, roof mounted')];
+    expect(scheduleCounts(tg, [panel([['1', '20/1', 'EXHAUST FAN', '300'], ['3', '20/1', 'EXHAUST FAN', '300'], ['5', '20/1', 'SPACE', '0']])]).size).toBe(0);
+  });
+});
+
+describe('fix round B8 — only explicit quantities', () => {
+  it('reads (5), (5) EA, (QTY 5), QTY 5, QTY: 5, x5 standing alone', () => {
+    for (const s of ['BATT CHGR (5)', 'BATT CHGR (5) EA', 'VACUUM (QTY 5)', 'VACUUM QTY 5', 'VACUUM QTY: 5', 'VACUUM x5 ', 'VACUUM × 5']) expect([s, multiplierOf(s)]).toEqual([s, 5]);
+  });
+  it('never a dimension, a rating, a conductor count or a model number', () => {
+    for (const s of ['WH-1 WATER HEATER 208 1 MAX 30 (2)#10,(1)#10G', 'LTG 2X4 TROFFERS', "2'X4' TROFFER", 'MOTOR 3X460V', 'LSXR-50-HL', 'CABINET 12X12', 'DISCONNECT 30A', '(2)#10, (1)#10G', 'EXHAUST FAN (1/2 HP)']) {
+      expect([s, multiplierOf(s)]).toEqual([s, null]);
+    }
+  });
+  it('a mechanical schedule row: the multiplier comes from the description cell only', () => {
+    const tg = [{ type: 'WH-1', key: 'WH-1', description: 'Water heater', symbolHint: '', wattage: null, category: 'equipment' as const, source: 'equipment_schedule' as const, sourceSheet: 'P-1', headsPerPole: null, emergency: false }];
+    const t = parseScheduleReply(JSON.stringify({ title: 'MECHANICAL EQUIPMENT SCHEDULE', columns: ['TAG', 'DESCRIPTION', 'VOLTS', 'PH', 'MOCP', 'WIRE'], rows: [{ cells: ['WH-1', 'WATER HEATER', '208', '1', 'MAX 30', '(2)#10,(1)#10G'] }] }),
+      { sheetKey: 'k', sheetLabel: 'M-1', viewportId: 'v', viewportTitle: 'MECHANICAL EQUIPMENT SCHEDULE' })!;
+    expect(scheduleCounts(tg, [t]).get('WH-1')!.qty).toBe(1);
+  });
+});
+
+describe('fix round B9 — two-sided panels from the text layer', () => {
+  const run = (str: string, x: number, y: number) => ({ str, x, y, w: str.length * 5, h: 8 });
+  const header = [run('CKT', 10, 10), run('BREAKER', 40, 10), run('DESCRIPTION', 90, 10), run('A', 220, 10), run('B', 240, 10), run('DESCRIPTION', 270, 10), run('BREAKER', 400, 10), run('CKT', 450, 10)];
+  const line = (y: number, l: number, ld: string, r: number, rd: string) => [run(String(l), 10, y), run('20/1', 40, y), run(ld, 90, y), run('500', 220, y), run(rd, 270, y), run('20/1', 400, y), run(String(r), 450, y)];
+  it('each line becomes two rows; circuits 1-8 all read; complete', () => {
+    const runs = [...header, ...line(22, 1, 'LIGHTS', 2, 'RECEPT'), ...line(34, 3, 'LIGHTS', 4, 'RECEPT'), ...line(46, 5, 'SIGN', 6, 'WH'), ...line(58, 7, 'SPARE', 8, 'SPACE')];
+    const t = tableFromRuns(runs, { sheetKey: 'k', sheetLabel: 'E-9', viewportId: 'k@u1', title: 'PANEL LP' })!;
+    expect(panelCircuitRows(t).map(r => `${r.circuit}:${r.description}`)).toEqual(['1:LIGHTS', '2:RECEPT', '3:LIGHTS', '4:RECEPT', '5:SIGN', '6:WH', '7:SPARE', '8:SPACE']);
+    expect(t.warnings).toEqual([]);
+    // SPARE / SPACE are not circuits.
+    expect(circuitSummaryRows([t])[0].row.qty).toBe(6);
+  });
+  it('a panel read on one side only is incomplete: never verified, never replaces Agent 1\'s rows', () => {
+    const t = tableFromRuns([run('CKT', 10, 10), run('BREAKER', 40, 10), run('DESCRIPTION', 90, 10), run('A', 220, 10),
+      ...[1, 3, 5, 7].flatMap((c, i) => [run(String(c), 10, 22 + 12 * i), run('20/1', 40, 22 + 12 * i), run('LIGHTS', 90, 22 + 12 * i), run('500', 220, 22 + 12 * i)])],
+    { sheetKey: 'k', sheetLabel: 'E-9', viewportId: 'k@u1', title: 'PANEL LP' })!;
+    expect(t.warnings.join(' ')).toMatch(/only the odd side was read — incomplete/);
+    expect(isCompletePanel(t)).toBe(false);
+    expect(circuitSummaryRows([t])).toEqual([]);
+  });
+});
+
+describe('fix round S10 — schedule over-counts', () => {
+  const eq = (tag: string, description: string) => ({ type: tag, key: tag, description, symbolHint: '', wattage: null, category: 'equipment' as const, source: 'equipment_schedule' as const, sourceSheet: 'E-4', headsPerPole: null, emergency: false });
+  const withEven = (rows: string[][]) => (rows.some(r => Number(r[0].split(',')[0]) % 2 === 0) ? rows : [...rows, ['42', '-/1', 'SPACE', '0']]);
+  const tbl = (title: string, rows: string[][], sheet = 'E-4') => parseScheduleReply(JSON.stringify({ title, columns: ['CKT', 'BREAKER', 'DESCRIPTION', 'A'], rows: withEven(rows).map(cells => ({ cells })) }),
+    { sheetKey: sheet, sheetLabel: sheet, viewportId: `${sheet}@${title}`, viewportTitle: title })!;
+  const batt = eq('BATT CHGR', 'Battery chargers');
+  const five = [15, 17, 19, 21, 23].map(c => [String(c), '20/1', 'BATT CHGR (5)', '1490']);
+  it('"(5)" repeated on each of five rows -> 5, not 25', () => {
+    expect(scheduleCounts([batt], [tbl('PANEL B', five)]).get('BATT CHGR')!.qty).toBe(5);
+  });
+  it('a multi-pole load whose description repeats on each pole row -> one load', () => {
+    const t = tbl('PANEL B', [['1', '60/3', 'RTU-1', '6124'], ['3', '60/3', 'RTU-1', '6124'], ['5', '60/3', 'RTU-1', '6124']]);
+    expect(scheduleCounts([eq('RTU-1', 'Rooftop unit')], [t]).get('RTU-1')!.qty).toBe(1);
+    expect(circuitSummaryRows([t]).map(r => r.row.qty)).toEqual([1]);
+  });
+  it('the same panel on two sheets -> once', () => {
+    const rows = [15, 17, 19].map(c => [String(c), '20/1', 'BATTERY CHARGER', '1490']);
+    expect(scheduleCounts([batt], [tbl('PANEL B', rows, 'E-4'), tbl('PANEL "B"', rows, 'E-4.1')]).get('BATT CHGR')!.qty).toBe(3);
+  });
+  it('panel names: PANEL SCHEDULE A, PANELBOARD LP-1, PANEL \'B\', A PANEL', () => {
+    expect(['PANEL SCHEDULE A', 'PANELBOARD LP-1', "PANEL 'B'", 'PANEL A', 'MDP PANEL', 'PANEL: LP2'].map(panelNameOf)).toEqual(['A', 'LP-1', 'B', 'A', 'MDP', 'LP2']);
+  });
+  it('"1,3,5" in the circuit cell is a 3-pole load on circuit 1, never circuit 135', () => {
+    const r = panelCircuitRows(tbl('PANEL B', [['1,3,5', '60/3', 'RTU-1', '18372'], ['7', '20/1', 'WH', '1500']]));
+    expect(r.map(x => [x.circuit, x.poles]).slice(0, 2)).toEqual([[1, 3], [7, 1]]);
+  });
+  it('SPARE 20A / (SPARE) / -- are not loads', () => {
+    const t = tbl('PANEL B', [['1', '20/1', 'SPARE 20A', ''], ['3', '20/1', '(SPARE)', ''], ['5', '20/1', '--', ''], ['7', '20/1', 'BATT CHGR', '1490'], ['2', '20/1', 'SPACE', ''], ['4', '20/1', 'WH', '1']]);
+    expect(circuitSummaryRows([t])[0].row.qty).toBe(2);
+    expect(isEmptyLoad('SPARE 20A')).toBe(true);
+  });
+});
+
+describe('fix round S9 — Agent 1 circuit rows', () => {
+  it('recognises "20A/1P breakers", "Dedicated circuits (20/1)", "60/3 RTU circuits"; not a single named breaker', () => {
+    expect(isCircuitCountRow({ item: '20A/1P breakers' })).toBe(true);
+    expect(isCircuitCountRow({ item: 'Dedicated circuits (20/1)' })).toBe(true);
+    expect(isCircuitCountRow({ item: '60/3 RTU circuits 3#6,#10G,3/4"C' })).toBe(true);
+    expect(isCircuitCountRow({ item: '20A high magnetic breaker B-20' })).toBe(false);
+    expect(panelsNamedIn('20/1 branch circuits Panel A (non-lighting)')).toEqual(['A']);
+    expect(panelsNamedIn('Branch circuits Panels A & B')).toEqual(['A', 'B']);
   });
 });
