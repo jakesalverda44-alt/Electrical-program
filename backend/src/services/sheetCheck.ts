@@ -41,7 +41,7 @@ import {
   type SheetRef, type ResolvedRef, type RefInventoryPage, type NoteSentence,
 } from '../ai/sheetRefs';
 import { callWithRetry } from '../ai/retry';
-import { runSignalOf } from '../ai/runControl';
+import { runSignalOf, isCancellationError } from '../ai/runControl';
 import { assertNotTruncated, isAgentTruncatedError } from '../ai/stopReason';
 import { SHEET_REFS_TEXT_SYSTEM, SHEET_REFS_VISION_SYSTEM } from '../ai/prompts';
 import { sanitizeForPrompt } from '../ai/sanitizeForPrompt';
@@ -311,7 +311,7 @@ export async function buildInventory(files: CheckInputFile[], opts: BuildOptions
         for (const c of res.classifications) await writeCache(sha, c, texts[c.page - 1]?.length ?? 0, opts.classifierModel);
         cached = await readCache(sha);
       } catch (err) {
-        if (isAgentTruncatedError(err) || (err as Error)?.name === 'RunCancelledError') throw err;
+        if (isAgentTruncatedError(err) || isCancellationError(err)) throw err;
         logger.warn({ err, file: f.originalname }, '[sheetCheck] classification failed — the analysis falls back to the whole file');
         unclassifiedFiles.push(f.originalname);
         continue;
@@ -357,7 +357,7 @@ export async function buildInventory(files: CheckInputFile[], opts: BuildOptions
           await writeAiRefs(p.sha, p.page, [...p.refs.filter(r => r.source !== 'regex'), ...(mine.length ? [] : [HAIKU_READ_MARKER(p)])]);
         }
       } catch (err) {
-        if (isAgentTruncatedError(err) || (err as Error)?.name === 'RunCancelledError') throw err;
+        if (isAgentTruncatedError(err) || isCancellationError(err)) throw err;
         logger.warn({ err }, '[sheetCheck] Haiku reference reading failed — regex references only');
       }
     }
@@ -372,7 +372,7 @@ export async function buildInventory(files: CheckInputFile[], opts: BuildOptions
           p.refs.push(...found);
           await writeAiRefs(p.sha, p.page, [...p.refs.filter(r => r.source !== 'regex'), ...(found.length ? [] : [VISION_READ_MARKER(p)])]);
         } catch (err) {
-          if (isAgentTruncatedError(err) || (err as Error)?.name === 'RunCancelledError') throw err;
+          if (isAgentTruncatedError(err) || isCancellationError(err)) throw err;
           logger.warn({ err, page: label(p) }, '[sheetCheck] vision reference reading failed for a scanned sheet');
         }
       }
