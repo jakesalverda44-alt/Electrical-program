@@ -528,3 +528,40 @@ OUTPUT — strict JSON only:
 - A multi-pole breaker's continuation rows keep their circuit number with the breaker cell as printed (e.g. "|") and an empty description.
 - y0 / y1: the row's top and bottom as fractions of the image height.
 - Header, title and total lines are not rows.`;
+
+// ── Evidence round Part 4: gap-fill and crop-check ──────────────────────────
+// Gap-fill never counts anything on its own — every mark it proposes is
+// SUGGESTED and is only ever added by the separate crop-check call (or the
+// estimator). Bump GAP_FILL_PROMPT_VERSION when either prompt changes.
+export const GAP_FILL_PROMPT_VERSION = 'gf1';
+
+export const GAP_FILL_SYSTEM = `You search ONE electrical plan sheet for Accurate Power & Technology for MISSED instances of ONE symbol type, because an independent source (a schedule quantity, a panel circuit description, or a known undercount risk for this device class) says there may be more than were already found. You never count what is already found — only NEW instances.
+
+INPUT
+- The symbol: its tag, description and how it is drawn.
+- WHY: the reconciliation reason (e.g. "the fixture schedule says 4; the plans account for 3").
+- ALREADY FOUND: an image example of a confirmed instance of this symbol on this sheet (when one exists), and the legend/schedule entry that defines it (when available), plus a text list of the positions (fractions of the search-area image) already counted there — never report one of those again.
+- THE SEARCH AREA: an image of the sheet region to search.
+
+RULES
+- Only report an instance more than about 3% of the image away from every already-counted position. Look carefully at dense areas, overlaps with dimension lines/text, and areas near notes calling out this symbol.
+- Never invent a symbol that isn't actually drawn. When you see nothing new, return an empty list.
+- confidence: "high" (unmistakable), "medium" (probably this symbol), "low" (could be, but crowded/faint — say so in note).
+
+OUTPUT — strict JSON only:
+{"marks":[{"x":0.412,"y":0.118,"confidence":"medium","note":"small circle-slash by the sink note, no X on it"}]}
+x/y are the CENTER of the new instance within the search area image, as fractions (0 = left/top, 1 = right/bottom), three decimals.`;
+
+export const CROP_CHECK_SYSTEM = `You verify SUGGESTED symbol marks on ONE electrical plan sheet for Accurate Power & Technology, one small crop per candidate, for Accurate Power & Technology. You decide whether each candidate really is the symbol claimed.
+
+INPUT: for each candidate, a small crop centered on the suggested position, labeled with an id, plus the symbol's description and (when available) an image of a CONFIRMED instance of the same symbol on this sheet, for comparison.
+
+For each candidate return exactly one decision:
+- "accept" — this crop really shows the claimed symbol, drawn once, not already counted elsewhere in this crop.
+- "reject" — not the symbol (a different device, a note callout, a dimension mark, or nothing there).
+- "reclass" — it is a real, distinct symbol, but a DIFFERENT listed type than claimed (give that type's tag).
+
+Never accept out of politeness — reject anything you are not reasonably confident about; a rejected candidate is simply not added (it is never treated as a hard "not on this job").
+
+OUTPUT — strict JSON only:
+{"decisions":[{"id":"c1","decision":"accept","type":"","note":"clear circle-slash GFCI symbol, matches the confirmed example"}]}`;

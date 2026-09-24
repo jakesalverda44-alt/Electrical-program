@@ -21,7 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { buildRasterSet, BLANK_PAGE, KISSIMMEE_E1, KISSIMMEE_E2, KISSIMMEE_E4, type RasterPage } from './fixtures/evidence/buildRasterSheet';
 import { loadKissimmeeBaseline, KISSIMMEE_FILE } from './fixtures/evidence/kissimmeeBaseline';
-import { evidenceResponder, isEvidenceRequest, E2_HOST_MARKS, E1_RESTROOM_REPEATS } from './fixtures/evidence/kissimmeeReplies';
+import { evidenceResponder, isEvidenceRequest, E2_HOST_MARKS, E1_RESTROOM_REPEATS, gapFillResponder, isGapFillRequest } from './fixtures/evidence/kissimmeeReplies';
 import { fakeAnthropic, systemText, userText, type FakeRequest, type FakeReply } from './fixtures/takeoff/fakeAnthropic';
 import { screenPosition } from '../estimating/pageGeometry';
 import { planCountTiles } from '../ai/countRender';
@@ -107,7 +107,11 @@ interface Run { cr: CountResult; review: ReviewItem[]; diff: EvalDiff; calls: Fa
 async function run(mode: 'before' | 'after'): Promise<Run> {
   const counter = tileCounter(truthFor(mode));
   const ev = evidenceResponder(pageOf);
-  const { client, calls } = fakeAnthropic(req => (isEvidenceRequest(req) ? ev(req) : systemText(req).includes('counting symbols on ONE electrical plan sheet') ? counter(req) : (() => { throw new Error('unexpected call'); })()));
+  const gf = gapFillResponder();
+  const { client, calls } = fakeAnthropic(req => (isEvidenceRequest(req) ? ev(req)
+    : isGapFillRequest(req) ? gf(req)
+    : systemText(req).includes('counting symbols on ONE electrical plan sheet') ? counter(req)
+    : (() => { throw new Error('unexpected call'); })()));
   const stage = await runCountingStage({
     client, model: COUNTER_MODEL, maxTokens: 32000,
     agent1: JSON.parse(JSON.stringify(baseline.agent1)), inventory: baseline.inventory as InventoryPage[],
@@ -157,10 +161,17 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     const t = (k: string) => after.cr.types.find(x => x.key === k)!;
     expect(t('SIMPLEX RECEPTACLE').components).toEqual({ drawn: 10, typical: 1, schedule: 0 });
     expect(t('DUPLEX RECEPTACLE / FLOOR RECEPTACLE').components).toEqual({ drawn: 4, typical: 11, schedule: 0 });
-    expect(t('GFCI').count).toBe(7);
+    // 4.4/4.3 — gap-fill's targeted re-search found 5 more GFCIs (the
+    // documented undercount on the sheet's west portion, which this fixture
+    // has no crop of); the crop check accepted all 5, never gap-fill's own
+    // proposal directly. GFCI is now exactly the audited 16 (7+4 -> 12+4).
+    expect(t('GFCI').count).toBe(12);
+    expect(t('GFCI').components).toMatchObject({ drawn: 7, typical: 0, schedule: 0, gapfill: 5 });
+    expect(t('GFCI').gapFill).toHaveLength(5);
+    expect(t('GFCI').gapFill!.every(g => g.reason.includes('undercount risk') && g.note.includes('confirmed GFCI example'))).toBe(true);
     expect(t('WP GFI').count).toBe(4);
-    expect(row(after.diff, 'receptacles_total').actual).toBe(37);
-    expect(Math.abs(row(after.diff, 'receptacles_total').delta!)).toBeLessThanOrEqual(2);
+    expect(row(after.diff, 'gfci').actual).toBe(16);
+    expect(row(after.diff, 'receptacles_total').actual).toBe(42);
     // The typicals: 5 pole types and the coil+J boxes, each with its quote.
     const exp = after.cr.evidence!.expansions.filter(e => e.status === 'expanded');
     expect(exp.map(e => [e.host, e.hostCount, e.perHost, e.expanded])).toEqual(expect.arrayContaining([
@@ -179,6 +190,18 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     expect(row(after.diff, 'site_heads').actual).toBe(4);
     const merged = after.cr.types.filter(t => t.status === 'merged').map(t => [t.key, t.mergedInto]);
     expect(merged).toEqual(expect.arrayContaining([['(UNTAGGED) SITE LIGHT', 'S1/S2'], ['SITE LIGHT', 'S1/S2'], ['W1', 'D'], ['W2', 'L']]));
+  });
+  it('4.2 reconciliation — LUMINAIRE SCHEDULE QTY 4 vs S1+S2 = 3 is a real finding; gap-fill honestly finds nothing there, so the audited 3 is never disturbed', (ctx) => {
+    if (!have) return ctx.skip();
+    const gf = after.cr.evidence!.gapFill!;
+    const poleFinding = gf.findings.find(f => f.kind === 'schedule_qty');
+    expect(poleFinding).toMatchObject({ typeKey: 'S1+S2', expected: 4, actual: 3, shortfall: 1 });
+    expect(gf.findings.filter(f => f.kind === 'gfci_confirm').map(f => f.typeKey).sort()).toEqual(['GFCI', 'WP GFI']);
+    // Only the GFCI job actually found (and had accepted) anything.
+    expect(gf.candidates).toBe(5);
+    expect(gf.accepted).toBe(5);
+    expect(gf.errors).toEqual([]);
+    expect(row(after.diff, 'site_poles').actual).toBe(3);
   });
   it('battery chargers 5 — from Panel B circuits 15-23, the rows as evidence; equipment stops raising zero-count items', (ctx) => {
     if (!have) return ctx.skip();
@@ -215,10 +238,14 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
       'Lighting branch circuits 20/1 (work, sales, exit/em, restroom)', 'Site lighting branch circuits 20/1',
     ]));
   });
-  it('the evidence readers: 15 calls on this set; every call priced', (ctx) => {
+  it('the evidence readers: 15 calls on this set, plus 5 gap-fill / crop-check calls (Part 4); every call priced', (ctx) => {
     if (!have) return ctx.skip();
     const ev = after.cr.evidence!;
-    expect(ev.calls).toBe(15);
+    // 15 viewport/typicals/table calls + 5 gap-fill calls: GFCI (1 gapfill +
+    // 1 crop-check), WP GFI (1 gapfill, no candidates so no crop-check), S1
+    // and S2 (1 gapfill each, no candidates) = 5.
+    expect(ev.calls).toBe(20);
+    expect(ev.gapFill!.calls).toBe(5);
     expect(ev.errors).toEqual([]);
     expect(ev.model).toBe(EVIDENCE_MODEL);
     expect(after.cr.sheets.find(s => s.label.startsWith('E-2'))!.viewports!.length).toBe(11);
@@ -232,7 +259,11 @@ describe('a supplement pass keeps the evidence round\'s results (earlier typical
     const e9 = await buildRasterSet([BLANK_PAGE]);
     const counter = tileCounter(truthFor('after'));
     const ev = evidenceResponder(pageOf);
-    const { client, calls } = fakeAnthropic(req => (isEvidenceRequest(req) ? ev(req) : systemText(req).includes('counting symbols on ONE electrical plan sheet') ? counter(req) : (() => { throw new Error('unexpected call'); })()));
+    const gf = gapFillResponder();
+    const { client, calls } = fakeAnthropic(req => (isEvidenceRequest(req) ? ev(req)
+      : isGapFillRequest(req) ? gf(req)
+      : systemText(req).includes('counting symbols on ONE electrical plan sheet') ? counter(req)
+      : (() => { throw new Error('unexpected call'); })()));
     const inv9: InventoryPage = { file: 'e9.pdf', page: 1, sheetNo: 'E-9', title: 'POWER PLAN ADDENDUM', discipline: 'electrical', cls: 'plan', included: true };
     const stage = await runSupplementCounting({
       client, model: COUNTER_MODEL, maxTokens: 32000, agent1: JSON.parse(JSON.stringify(baseline.agent1)),
@@ -244,7 +275,10 @@ describe('a supplement pass keeps the evidence round\'s results (earlier typical
     const d = diffAgainstExpected(expected, cr);
     expect(row(d, 'battery_chargers').actual).toBe(5);
     expect([row(d, 'site_poles').actual, row(d, 'site_heads').actual]).toEqual([3, 4]);
-    expect(row(d, 'receptacles_total').actual).toBe(37);
+    // 42, not 37: the first ('after') pass's own gap-fill already found and
+    // accepted the 5 GFCIs (carried in `first.cr`, this supplement's prior).
+    expect(row(d, 'receptacles_total').actual).toBe(42);
+    expect(row(d, 'gfci').actual).toBe(16);
     expect(cr.types.find(t => t.key === 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE')!.components!.typical).toBe(11);
     // Only the new sheet was read and counted.
     expect(calls.filter(c => isEvidenceRequest(c) === 'viewports').map(c => /SHEET: (E-\d)/.exec(userText(c))![1])).toEqual(['E-9']);

@@ -107,8 +107,15 @@ export interface TypeCountResult {
    *  plan is unknown shows this type too. keep = as counted; add = with the
    *  enlarged marks added. */
   viewportQuestion?: { keep: number; add: number; items: Array<{ sheet: string; viewport: string; count: number }> };
-  /** Evidence round — where the count comes from. */
-  components?: { drawn: number; typical: number; schedule: number };
+  /** Evidence round — where the count comes from. Evidence round Part 4
+   *  adds `gapfill`: marks a targeted re-search found and a crop check (or
+   *  the estimator) accepted — never counted from gap-fill's own proposal
+   *  alone. */
+  components?: { drawn: number; typical: number; schedule: number; gapfill?: number };
+  /** Evidence round 4.3/4.4 — accepted gap-fill marks, with their evidence
+   *  (position, confidence, the crop-check note, and why gap-fill searched
+   *  in the first place). */
+  gapFill?: Array<{ x: number; y: number; sheetKey: string; confidence: string; note: string; reason: string }>;
   /** Evidence round 3.2 — schedule rows that own this quantity. */
   scheduleRows?: Array<{ sheetKey: string; sheetLabel: string; tableId: string; table: string; rowIdx: number; cells: string[]; qty: number }>;
   /** Evidence round 2.2 — typical packages expanded into this type. */

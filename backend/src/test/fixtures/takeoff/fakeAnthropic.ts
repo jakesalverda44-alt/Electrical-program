@@ -93,5 +93,9 @@ export function emptyEvidenceReply(req: FakeRequest): FakeReply | null {
   if (sys.includes('DRAWING VIEWPORTS')) return { text: '{"viewports":[]}' };
   if (sys.includes('TYPICAL DEVICE PACKAGES')) return { text: '{"packages":[]}' };
   if (sys.includes('transcribe ONE table')) return { text: '{"title":"","columns":[],"rows":[]}' };
+  // Evidence round Part 4 — gap-fill / crop-check requests, answered as
+  // "nothing more found" / "reject everything", for tests not about them.
+  if (sys.includes('MISSED instances of ONE symbol type')) return { text: '{"marks":[]}' };
+  if (sys.includes('verify SUGGESTED symbol marks')) return { text: '{"decisions":[]}' };
   return null;
 }
