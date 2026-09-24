@@ -283,6 +283,10 @@ export interface ImportedItemPlan {
    *  admin can see exactly what didn't import (S12/N17: never silently
    *  dropped). */
   rawLine?: string;
+  /** Set only for 'skip_unparsed' — accubidBom.ts's own reason the line
+   *  didn't parse (e.g. "no material condition found"), carried through so
+   *  both the preview AND the apply result show WHY, not just WHICH line. */
+  unparsedReason?: string;
 }
 
 export interface ImportPreview {
@@ -456,6 +460,7 @@ export function buildImportPreview(bomText: string, library: Library, opts: Buil
     items.push({
       action: 'skip_unparsed', code: '', name: w.line.trim().slice(0, 120), category: '', unit: 'EA',
       laborHours: null, materialCost: null, wasLedProxy: false, isDemolition: false, rawLine: w.line,
+      unparsedReason: w.reason,
     });
   }
 
@@ -481,7 +486,15 @@ export function buildImportPreview(bomText: string, library: Library, opts: Buil
   };
 }
 
-export interface ApplyImportResult { created: number; updated: number; skipped: number; proposed: number }
+export interface ApplyImportResult {
+  created: number; updated: number; skipped: number; proposed: number;
+  /** Review round 2 / S12/N17 — every line the BOM parser couldn't read at
+   *  all (BomParseWarning), passed straight through from the preview so the
+   *  APPLY result also lists them, not just the preview — an admin who
+   *  never looked at the preview's own warnings still sees exactly what was
+   *  never imported and why. */
+  unparsed: BomParseWarning[];
+}
 
 export interface ApplyImportOptions {
   /** Review round 2 / S15 — a 'propose_update' row (unit mismatch or a >2x
@@ -565,7 +578,9 @@ export async function applyImportPreview(preview: ImportPreview, opts: ApplyImpo
       updated++;
     }
   }
-  return { created, updated, skipped, proposed };
+  const unparsed = preview.items.filter(i => i.action === 'skip_unparsed')
+    .map(i => ({ line: i.rawLine ?? i.name, reason: i.unparsedReason ?? 'could not be parsed' }));
+  return { created, updated, skipped, proposed, unparsed };
 }
 
 // updateItem/createItem (library.ts) always set source='manual' on a write —

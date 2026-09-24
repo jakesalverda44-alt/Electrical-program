@@ -635,8 +635,23 @@ router.post('/library/accubid-import/apply', requireAuth, requireAdmin, pdfUploa
   if (!resolved.ok) return res.status(400).json({ error: resolved.error });
   const body = (req.body ?? {}) as Record<string, unknown>;
   const updatePrices = body.updatePrices === true || body.updatePrices === 'true';
+  const force = body.force === true || body.force === 'true';
   const library = await getLibrary();
   const preview = buildImportPreview(resolved.text, library, { updatePrices });
+  // Review round 2 / S12 — apply follows the preview's own reconciliation
+  // and warnings exactly: a BOM whose computed totals don't foot to its own
+  // printed footer, or that has ANY unparseable line, is never applied
+  // silently — the admin sees the preview's numbers/warnings and either
+  // fixes the BOM or explicitly passes force:true to apply it anyway.
+  if (!force && (!preview.reconciles || preview.warnings.length > 0)) {
+    return res.status(409).json({
+      error: preview.reconciles
+        ? `This BOM has ${preview.warnings.length} line${preview.warnings.length === 1 ? '' : 's'} that could not be read — review the preview, or pass force:true to apply anyway.`
+        : `This BOM's computed totals don't match its own printed footer — review the preview, or pass force:true to apply anyway.`,
+      reconciles: preview.reconciles,
+      warnings: preview.warnings,
+    });
+  }
   const result = await applyImportPreview(preview);
 
   const rows = parseAccubidBom(resolved.text).rows;

@@ -68,7 +68,7 @@ describe('POST /api/estimating/library/accubid-import/preview', () => {
     const { app } = await import('../index');
     const admin = await makeUser('owner');
     const res = await request(app).post('/api/estimating/library/accubid-import/preview').set(auth(admin.token))
-      .send({ bomText: read('kissimmee-bom.txt'), updatePrices: true }).expect(200);
+      .send({ bomText: read('kissimmee-bom.txt'), updatePrices: true, force: true }).expect(200);
     expect(res.body.rowCount).toBe(89);
     expect(res.body.reconciles).toBe(true);
     expect(res.body.items.length).toBeGreaterThan(50);
@@ -80,7 +80,7 @@ describe('POST /api/estimating/library/accubid-import/preview', () => {
     const admin = await makeUser('owner');
     const tag = randomUUID().slice(0, 8);
     const res = await request(app).post('/api/estimating/library/accubid-import/preview').set(auth(admin.token))
-      .send({ bomText: syntheticBom(tag).text, updatePrices: true }).expect(200);
+      .send({ bomText: syntheticBom(tag).text, updatePrices: true, force: true }).expect(200);
     const codes = res.body.items.filter((i: { action: string }) => i.action === 'create').map((i: { code: string }) => i.code);
     expect(codes.length).toBe(2);
     const { rows } = await pool.query('SELECT count(*)::int AS n FROM est_items WHERE code = ANY($1)', [codes]);
@@ -111,7 +111,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
     // created) threw before cleanupCodes ever ran, leaking a real row into
     // the shared test-catalog table for every later test run to trip over.
     const r1 = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-      .send({ bomText: text, updatePrices: true }).expect(200);
+      .send({ bomText: text, updatePrices: true, force: true }).expect(200);
 
     try {
       expect(r1.body.created).toBe(2);
@@ -124,7 +124,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
       expect(Number(conduit.labor_hours)).toBeCloseTo(3.5, 2);
 
       const r2 = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-        .send({ bomText: text, updatePrices: true }).expect(200);
+        .send({ bomText: text, updatePrices: true, force: true }).expect(200);
       expect(r2.body.created).toBe(0);
       expect(r2.body.updated).toBe(2);
 
@@ -144,7 +144,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
 
     // Import once so there's a real accubid-sourced row to hijack.
     await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-      .send({ bomText: text, updatePrices: true }).expect(200);
+      .send({ bomText: text, updatePrices: true, force: true }).expect(200);
     try {
       const { rows: anyRow } = await pool.query("SELECT id, code FROM est_items WHERE source='accubid' AND name LIKE $1 LIMIT 1", [`TestOnly-${tag}%`]);
       expect(anyRow.length).toBe(1);
@@ -155,7 +155,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
       await pool.query("UPDATE est_items SET source='manual', material_cost=12345, labor_hours=99 WHERE id=$1", [target.id]);
 
       await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-        .send({ bomText: text, updatePrices: true }).expect(200);
+        .send({ bomText: text, updatePrices: true, force: true }).expect(200);
 
       const { rows } = await pool.query('SELECT material_cost, labor_hours, source FROM est_items WHERE id=$1', [target.id]);
       expect(rows[0].source).toBe('manual');
@@ -164,7 +164,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
 
       // And the preview reports it as skipped, not silently absent.
       const preview = await request(app).post('/api/estimating/library/accubid-import/preview').set(auth(admin.token))
-        .send({ bomText: text, updatePrices: true }).expect(200);
+        .send({ bomText: text, updatePrices: true, force: true }).expect(200);
       const planForTarget = preview.body.items.find((i: { code: string }) => i.code === target.code);
       expect(planForTarget.action).toBe('skip_manual');
     } finally {
@@ -196,7 +196,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
     // another concurrently-running instance of this same test, or with the
     // fixed ACB-POLE-BASE-FOUNDATION code a real production import would use.
     const res1 = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-      .send({ bomText: poleBomText, updatePrices: false }).expect(200);
+      .send({ bomText: poleBomText, updatePrices: false, force: true }).expect(200);
     expect(res1.body.poleBase).toBeTruthy();
     expect(res1.body.poleBase.itemsCreated + res1.body.poleBase.itemsUpdated).toBeGreaterThanOrEqual(9);
 
@@ -213,6 +213,78 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
     } finally {
       await pool.query("DELETE FROM est_assembly_components WHERE assembly_id IN (SELECT id FROM est_assemblies WHERE code = $1)", [assemblyCode]);
       await pool.query('DELETE FROM est_assemblies WHERE code = $1', [assemblyCode]);
+      await pool.query('DELETE FROM est_items WHERE name LIKE $1', [`TestOnly-${tag}%`]);
+    }
+  });
+});
+
+describe('Review round 2 / S12 — apply follows the preview\'s own reconciliation and warnings exactly', () => {
+  it('409s when the BOM has an unparseable line, and lists it — never silently drops it', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const admin = await makeUser('owner');
+    const tag = randomUUID().slice(0, 8);
+    // A real row (footer matches it) plus one line that shape-matches a BOM
+    // row (qty + a bare unit column) but is missing its material condition —
+    // accubidBom.ts's own "no material condition found" warning.
+    const goodLine = `TestOnly-${tag}         Widget Conduit - Steel 10' Lengths                                   200.000 C          100.00          50.00                    50.00           100.00 C                      3.500        10.000          7.700 Normal`;
+    const badLine = `TestOnly-${tag} Something Weird BOM Row                                  5.000 C   10.00`;
+    const footer = `$100.00           7.700`; // matches goodLine's own totalMaterial/totalFieldLaborHours exactly (the only real row here)
+    const bomText = [goodLine, badLine, footer].join('\n');
+
+    const res = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
+      .send({ bomText, updatePrices: false }).expect(409);
+    expect(res.body.warnings.length).toBe(1);
+    expect(res.body.warnings[0].line).toContain('Something Weird BOM Row');
+    expect(res.body.reconciles).toBe(true); // the footer itself is fine — warnings are the reason for the 409
+
+    // Nothing was written — the whole point of the gate.
+    const { rows } = await pool.query('SELECT count(*)::int AS n FROM est_items WHERE name LIKE $1', [`TestOnly-${tag}%`]);
+    expect(rows[0].n).toBe(0);
+
+    // force:true applies it anyway, and the RESULT still lists the unparsed line.
+    try {
+      const forced = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
+        .send({ bomText, updatePrices: false, force: true }).expect(200);
+      expect(forced.body.created).toBe(1); // only the good line
+      expect(forced.body.unparsed).toHaveLength(1);
+      expect(forced.body.unparsed[0].line).toContain('Something Weird BOM Row');
+    } finally {
+      await pool.query('DELETE FROM est_items WHERE name LIKE $1', [`TestOnly-${tag}%`]);
+    }
+  });
+
+  it("409s when the BOM's computed totals don't match its own printed footer", async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const admin = await makeUser('owner');
+    const tag = randomUUID().slice(0, 8);
+    const goodLine = `TestOnly-${tag}         Widget Conduit - Steel 10' Lengths                                   200.000 C          100.00          50.00                    50.00           100.00 C                      3.500        10.000          7.700 Normal`;
+    const wrongFooter = `$999.00           11.300`; // material total doesn't match the row's own 100.00
+    const bomText = [goodLine, wrongFooter].join('\n');
+
+    const res = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
+      .send({ bomText, updatePrices: false }).expect(409);
+    expect(res.body.reconciles).toBe(false);
+
+    const { rows } = await pool.query('SELECT count(*)::int AS n FROM est_items WHERE name LIKE $1', [`TestOnly-${tag}%`]);
+    expect(rows[0].n).toBe(0);
+  });
+
+  it('a BOM with no footer at all never reconciles — a missing footer counts as NOT reconciled, so apply needs force:true', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const admin = await makeUser('owner');
+    const tag = randomUUID().slice(0, 8);
+    const goodLine = `TestOnly-${tag}         Widget Conduit - Steel 10' Lengths                                   200.000 C          100.00          50.00                    50.00           100.00 C                      3.500        10.000          7.700 Normal`;
+    const res = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
+      .send({ bomText: goodLine, updatePrices: false }).expect(409);
+    expect(res.body.reconciles).toBe(false);
+    try {
+      const forced = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
+        .send({ bomText: goodLine, updatePrices: false, force: true }).expect(200);
+      expect(forced.body.created).toBe(1);
+    } finally {
       await pool.query('DELETE FROM est_items WHERE name LIKE $1', [`TestOnly-${tag}%`]);
     }
   });
