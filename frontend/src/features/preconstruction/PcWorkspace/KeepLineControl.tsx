@@ -9,6 +9,7 @@ import type { Toast } from '../../../types';
  *  flag ('non_electrical', 'excluded_scope', 'spec', 'count_line:<KEY>'). */
 export default function KeepLineControl({ bidId, category, line, flag = 'non_electrical', showToast }: { bidId: string; category: string; line: string; flag?: string; showToast: (t: Toast) => void }) {
   const isPick = flag.startsWith('count_line:');
+  const isDup = flag.startsWith('dup_keep:');
   const [reason, setReason] = useState('');
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -34,8 +35,36 @@ export default function KeepLineControl({ bidId, category, line, flag = 'non_ele
             setBusy(false);
           }
         }}>
-        {isPick ? 'This is the counted line' : 'Keep this line'}
+        {isPick ? 'This is the counted line' : isDup ? 'Different item — keep' : 'Keep this line'}
       </button>
+    </div>
+  );
+}
+
+/** Pre-merge follow-up — a possible double count: the estimator decides.
+ *  "Same fixture — remove this line" or "Different item — keep" (reason
+ *  required); both bind to this exact line. Never an automatic delete. */
+export function DoubleCountControl({ bidId, category, line, typeKey, showToast }: { bidId: string; category: string; line: string; typeKey: string; showToast: (t: Toast) => void }) {
+  const [removed, setRemoved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (removed) return <div style={{ fontSize: 12, color: 'var(--green)', fontWeight: 700 }}>Removed as the same fixture — generate again.</div>;
+  return (
+    <div data-testid="double-count-control">
+      <button type="button" className="btn ghost sm" disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await api.post(`/preconstruction/${bidId}/non-electrical-overrides`, { category, line, reason: 'Same fixture as the counted type', flag: `dup_remove:${typeKey}` });
+            setRemoved(true);
+          } catch (err) {
+            showToast({ variant: 'error', title: 'Could not remove the line', sub: (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Try again' });
+          } finally {
+            setBusy(false);
+          }
+        }}>
+        Same fixture — remove this line
+      </button>
+      <KeepLineControl bidId={bidId} category={category} line={line} flag={`dup_keep:${typeKey}`} showToast={showToast} />
     </div>
   );
 }

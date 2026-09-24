@@ -158,3 +158,51 @@ describe('N-R2-7 — pre-bid drafts count toward the daily AI limit', () => {
     expect(await hasAIPermission(u as never, 'run_analysis')).toBe(false);
   });
 });
+
+describe('Possible double counts — blocking, resolved by the estimator through the real route + compose', () => {
+  const withStrip = { ...AGENT4, takeoff: [{ name: 'Interior Lighting', items: [
+    ...AGENT4.takeoff[0].items,
+    { item: "4' LED strip", description: 'stock room', unit: 'EA', qty: 12, source: 'E-3' },
+    { item: 'Ceiling fan', description: 'Hunter', unit: 'EA', qty: 3, source: 'E-1' },
+  ] }] };
+  async function bidWithStrip() {
+    const { token, bidId } = await filedProposal();
+    await pool.query('UPDATE takeoff_results SET agent4_output=$2 WHERE bid_id=$1', [bidId, JSON.stringify(withStrip)]);
+    return { token, bidId };
+  }
+  const keepOrRemove = (token: string, bidId: string, flag: string, reason: string) =>
+    request(app).post(`/api/preconstruction/${bidId}/non-electrical-overrides`).set(auth(token))
+      .send({ category: 'Interior Lighting', line: "4' LED strip stock room", reason, flag });
+
+  it('blocks the GC documents with the possible double count (not the ceiling fan)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { bidId } = await bidWithStrip();
+    const r = await composeCurrentBidData(bidId, { persist: false });
+    expect(r.ok).toBe(false);
+    const f = (r as { failures?: Array<{ check: string; detail: string; flag?: string }> }).failures!.filter(x => x.check === 'possible_double_count');
+    expect(f.map(x => x.detail)).toEqual(["Possible double count: '4' LED strip stock room' may be the same as counted Type A (73)."]);
+    expect(f[0].flag).toBe('dup:A');
+  });
+
+  it('"Different item — keep" (reason required) clears it; the line stays', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { token, bidId } = await bidWithStrip();
+    expect((await keepOrRemove(token, bidId, 'dup_keep:A', 'short')).status).toBe(400);
+    await keepOrRemove(token, bidId, 'dup_keep:A', 'Stock-room strips are type C on the addendum').expect(200);
+    const r = await composeCurrentBidData(bidId, { persist: false });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bidData.takeoff[0].items.map(i => i.item)).toContain("4' LED strip");
+  });
+
+  it('"Same fixture — remove this line" removes exactly that line', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { token, bidId } = await bidWithStrip();
+    await keepOrRemove(token, bidId, 'dup_remove:A', 'Same fixture as the counted Type A').expect(200);
+    const r = await composeCurrentBidData(bidId, { persist: false });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.bidData.takeoff[0].items.map(i => i.item)).toEqual(['Type A', 'Ceiling fan']);
+      expect(r.accountCorrections.some(c => /removed by the estimator — the same fixture as counted Type A \(73\)/.test(c))).toBe(true);
+    }
+  });
+});

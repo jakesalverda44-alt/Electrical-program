@@ -7,7 +7,7 @@ import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/re
 
 const post = vi.fn();
 vi.mock('../../../api/client', () => ({ default: { post: (...a: unknown[]) => post(...a) } }));
-import KeepLineControl from './KeepLineControl';
+import KeepLineControl, { DoubleCountControl } from './KeepLineControl';
 
 afterEach(() => { cleanup(); post.mockReset(); });
 
@@ -28,5 +28,24 @@ describe('KeepLineControl', () => {
     fireEvent.change(screen.getByLabelText(/belongs on this job/), { target: { value: 'Trench patch is ours per GC' } });
     fireEvent.click(screen.getByRole('button', { name: 'Keep this line' }));
     await waitFor(() => expect(post.mock.calls[0][1]).toMatchObject({ flag: 'non_electrical' }));
+  });
+});
+
+describe('DoubleCountControl (possible double count)', () => {
+  it('"Same fixture — remove this line" posts dup_remove for that exact line', async () => {
+    post.mockResolvedValue({ data: {} });
+    render(<DoubleCountControl bidId="b1" category="Interior Lighting" line="4' LED strip stock room" typeKey="A" showToast={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Same fixture — remove this line' }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/non-electrical-overrides',
+      { category: 'Interior Lighting', line: "4' LED strip stock room", reason: 'Same fixture as the counted type', flag: 'dup_remove:A' }));
+  });
+  it('"Different item — keep" needs a reason and posts dup_keep', async () => {
+    post.mockResolvedValue({ data: {} });
+    render(<DoubleCountControl bidId="b1" category="Interior Lighting" line="4' LED strip stock room" typeKey="A" showToast={vi.fn()} />);
+    const keep = screen.getByRole('button', { name: 'Different item — keep' }) as HTMLButtonElement;
+    expect(keep.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText(/belongs on this job/), { target: { value: 'Type C on the addendum' } });
+    fireEvent.click(keep);
+    await waitFor(() => expect(post.mock.calls[0][1]).toMatchObject({ flag: 'dup_keep:A', reason: 'Type C on the addendum' }));
   });
 });

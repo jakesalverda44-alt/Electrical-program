@@ -36,6 +36,54 @@ const FIXTURE_CATEGORY = /\blight|\bfixture|\bluminaire/i;
  *  WITH it. Never the counted line, whatever tag or count_type it carries. */
 const OTHER_ITEM = /\b(feeders?|feeds?|disconnects?|safety\s+switch(es)?|bases?|foundations?|piers?|breakers?|junction\s+box(es)?|j-?box(es)?|whips?|conduits?|raceways?|panels?|panelboards?|circuits?|homeruns?|wiring|wire|conductors?|stub[- ]?ups?|sleeves?)\b/i;
 
+/** Categories where a counted fixture / device could be written twice. */
+const DOUBLE_CHECK_CATEGORY = /\blight|\bfixture|\bluminaire|\bdevice|\bcontrol|\bbranch\s+power|\breceptacle/i;
+
+/** Words that say nothing about WHICH fixture it is. */
+const GENERIC = new Set(['led', 'light', 'lights', 'lighting', 'fixture', 'fixtures', 'luminaire', 'luminaires', 'type', 'mounted', 'surface',
+  'new', 'with', 'and', 'the', 'per', 'schedule', 'plan', 'plans', 'interior', 'exterior', 'white', 'black', 'lamp', 'lamps', 'lens', 'lensed',
+  'unit', 'each', 'ea', 'owner', 'furnished', 'installed', 'install', 'furnish', 'provide', 'by', 'for', 'of', 'in', 'on', 'at', 'to', 'a']);
+
+/** Words that mean the same kind of fixture. */
+const SYNONYMS: Array<[string, RegExp]> = [
+  ['LINEAR', /\b(linear|strip|strips|wrap|wraparound|wrap-around|channel)\b/i],
+  ['DOWNLIGHT', /\b(downlights?|down\s*lights?|cans?|recessed\s+round|pot\s*lights?)\b/i],
+  ['TROFFER', /\b(troffers?|2x4|2x2|1x4|flat\s*panels?|lay-?in)\b/i],
+  ['EMERGENCY', /\b(exit|exits|emergency|egress|bug[- ]?eye|battery\s+pack|em\b)\b/i],
+  ['WALLPACK', /\b(wall\s*packs?|wallpacks?)\b/i],
+  ['AREA', /\b(area\s+lights?|pole\s+lights?|site\s+lights?|shoebox)\b/i],
+  ['CANOPY', /\b(canopy)\b/i],
+  ['HIGHBAY', /\b(high\s*bays?|low\s*bays?)\b/i],
+  ['VANITY', /\b(vanity|mirror\s+lights?)\b/i],
+  ['RECEPTACLE', /\b(receptacles?|duplex|outlets?)\b/i],
+  ['GFCI', /\b(gfci|gfi|ground\s+fault)\b/i],
+  ['SENSOR', /\b(occupancy|vacancy|motion|sensors?)\b/i],
+  ['PHOTOCELL', /\b(photo\s*cells?|photocontrols?)\b/i],
+];
+
+function features(text: string): { groups: Set<string>; sizes: Set<string>; words: Set<string> } {
+  const t = text.toLowerCase();
+  const groups = new Set(SYNONYMS.filter(([, re]) => re.test(t)).map(([g]) => g));
+  const sizes = new Set([...t.matchAll(/(\d+(?:\.\d+)?)\s*(?:ft|feet|foot|'|’)(?![a-z])/g)].map(m => `${m[1]}FT`));
+  const words = new Set(t.replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !GENERIC.has(w) && !/^\d/.test(w)));
+  return { groups, sizes, words };
+}
+
+/** Does a free-text line plausibly describe the counted type? The type's
+ *  schedule description and symbol keywords, not its tag: the same kind of
+ *  fixture (synonyms: "strip" = "linear", "exit sign" = an emergency type)
+ *  with a matching size when both give one, or two shared distinctive words. */
+export function plausiblySameFixture(line: string, target: Pick<CountTarget, 'description' | 'symbolHint' | 'emergency'>): boolean {
+  const a = features(line);
+  const b = features(`${target.description} ${target.symbolHint ?? ''}`);
+  if (target.emergency) b.groups.add('EMERGENCY');
+  const sharedGroup = [...a.groups].some(g => b.groups.has(g));
+  const sizeConflict = a.sizes.size > 0 && b.sizes.size > 0 && ![...a.sizes].some(x => b.sizes.has(x));
+  if (sharedGroup && !sizeConflict) return true;
+  const sharedWords = [...a.words].filter(w => b.words.has(w));
+  return sharedWords.length >= 2 && !sizeConflict;
+}
+
 function catKey(name: string): string {
   return name.toLowerCase().replace(/[^a-z]/g, '');
 }
@@ -116,7 +164,16 @@ export interface EnforceCountsResult {
   /** S-R2-7 — an estimator-counted unscheduled line that collides with a
    *  counted type's line: never overwritten, raised for review instead. */
   conflicts: string[];
+  /** Pre-merge follow-up — an untagged EA line in a fixture / device /
+   *  lighting category whose text plausibly refers to a counted type: it may
+   *  be the same fixture counted twice. Blocking until the estimator says
+   *  "Same fixture — remove this line" or "Different item — keep". */
+  possibleDoubles: Array<{ key: string; type: string; count: number; category: string; line: string }>;
 }
+
+/** The estimator's decision on a possible double count, bound to the exact
+ *  line: 'remove' (same fixture) or 'keep' (different item), else null. */
+export type DoubleCountDecision = (key: string, category: string, lineText: string) => 'remove' | 'keep' | null;
 
 /** An estimator's pick of THE counted line for a type (override flag
  *  `count_line:<KEY>`, bound to the exact line key). */
@@ -127,6 +184,7 @@ export function enforceCountsOnTakeoff(
   countResult: CountResult | null,
   enforced: EnforcedCounts,
   picked: CountLinePick = () => false,
+  doubleDecision: DoubleCountDecision = () => null,
 ): EnforceCountsResult {
   const takeoff: TakeoffCategory[] = input.map(c => ({ ...c, items: c.items.map(i => ({ ...i })) }));
   const corrections: string[] = [];
@@ -134,7 +192,8 @@ export function enforceCountsOnTakeoff(
   const conflicts: string[] = [];
   const targets = countResult?.targets ?? [];
   const byKey = new Map(targets.map(t => [t.key, t]));
-  if (!targets.length && !enforced.extraLines.length) return { takeoff, corrections, ambiguous, conflicts };
+  const possibleDoubles: EnforceCountsResult['possibleDoubles'] = [];
+  if (!targets.length && !enforced.extraLines.length) return { takeoff, corrections, ambiguous, conflicts, possibleDoubles };
 
   const located = new Map<string, Array<{ cat: TakeoffCategory; it: TakeoffItem }>>();
   const locatedItems = new Set<TakeoffItem>();
@@ -221,7 +280,33 @@ export function enforceCountsOnTakeoff(
       hit.it.qty = x.qty;
     }
   }
-  return { takeoff: takeoff.filter(c => c.items.length > 0), corrections, ambiguous, conflicts };
+  // Possible double counts: an EA line with no count_type, not the counted
+  // line, in a fixture / device / lighting category, whose words plausibly
+  // describe a counted type. Never removed unless the estimator says so.
+  for (const cat of takeoff) {
+    if (!DOUBLE_CHECK_CATEGORY.test(cat.name)) continue;
+    for (const it of [...cat.items]) {
+      if (locatedItems.has(it) || it.count_type) continue;
+      const unit = String(it.unit ?? '').trim().toUpperCase();
+      if (unit && unit !== 'EA') continue;
+      const line = text(it);
+      if (OTHER_ITEM.test(String(it.item ?? ''))) continue;
+      const hit = [...enforced.byType.entries()]
+        .filter(([key, qty]) => qty !== null && !key.endsWith(':heads'))
+        .map(([key, qty]) => ({ key, qty: qty as number, target: byKey.get(key) }))
+        .find(x => x.target && plausiblySameFixture(line, x.target));
+      if (!hit) continue;
+      const decision = doubleDecision(hit.key, cat.name, line);
+      if (decision === 'keep') continue;
+      if (decision === 'remove') {
+        remove(cat, it);
+        corrections.push(`${cat.name} ${label(it)} removed by the estimator — the same fixture as counted Type ${hit.target!.type} (${hit.qty}).`);
+        continue;
+      }
+      possibleDoubles.push({ key: hit.key, type: hit.target!.type, count: hit.qty, category: cat.name, line });
+    }
+  }
+  return { takeoff: takeoff.filter(c => c.items.length > 0), corrections, ambiguous, conflicts, possibleDoubles };
 }
 
 /** The final check (also run on every GC document path): each enforced type

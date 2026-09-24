@@ -75,7 +75,14 @@ export function composeProposal(input: ComposeProposalInput): ComposeProposalOut
   // (override flag count_line:<KEY> on that exact line) decides.
   const picked = (key: string, category: string, line: string) =>
     overrideFor(normalizeLineKey(category, line), input.overrides, `count_line:${key}`) !== null;
-  const countFix = enforceCountsOnTakeoff(data.takeoff, input.countResult, countSet, picked);
+  // Possible double counts: the estimator's exact-line decision.
+  const doubleDecision = (key: string, category: string, line: string) => {
+    const lk = normalizeLineKey(category, line);
+    if (overrideFor(lk, input.overrides, `dup_remove:${key}`) !== null) return 'remove' as const;
+    if (overrideFor(lk, input.overrides, `dup_keep:${key}`) !== null) return 'keep' as const;
+    return null;
+  };
+  const countFix = enforceCountsOnTakeoff(data.takeoff, input.countResult, countSet, picked, doubleDecision);
   data.takeoff = countFix.takeoff;
   corrections.push(...countFix.corrections);
 
@@ -86,6 +93,11 @@ export function composeProposal(input: ComposeProposalInput): ComposeProposalOut
       category: l.category, line: l.line, flag: `count_line:${a.key}`,
     }))),
     ...countFix.conflicts.map(detail => ({ check: 'count_conflict', detail })),
+    ...countFix.possibleDoubles.map(d => ({
+      check: 'possible_double_count',
+      detail: `Possible double count: '${d.line}' may be the same as counted Type ${d.type} (${d.count}).`,
+      category: d.category, line: d.line, flag: `dup:${d.key}`,
+    })),
     ...(countFix.ambiguous.length ? [] : countMismatchProblems(data.takeoff, input.countResult, countSet, picked).map(detail => ({ check: 'count_mismatch', detail }))),
     ...zeroQuantityProblems(data).map(detail => ({ check: 'zero_quantity', detail })),
     ...excludedScopeFindings(data, input.scopeItems, input.overrides).map(f => ({ check: 'excluded_scope', detail: f.detail, category: f.category, line: f.line })),

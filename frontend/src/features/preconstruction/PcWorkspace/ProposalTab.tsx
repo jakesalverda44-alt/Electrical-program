@@ -3,7 +3,7 @@ import Icon from '../../../components/Icon';
 import { Bid } from '../../../types';
 import SendBidProposalModal from '../SendBidProposalModal';
 import { BidDataPreview, VerifyFailure } from '../bidDataPreview';
-import KeepLineControl from './KeepLineControl';
+import KeepLineControl, { DoubleCountControl } from './KeepLineControl';
 import ProposalPaper from './ProposalPaper';
 import { AiResults } from './shared';
 
@@ -261,6 +261,9 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
                   {f.check.replace(/_/g, ' ')}
                 </div>
                 <div style={{ marginBottom: (f.matches ?? []).length ? 4 : 0 }}>{f.detail}</div>
+                {f.check === 'possible_double_count' && f.category && f.line && f.flag && (
+                  <DoubleCountControl bidId={bid.id} category={f.category} line={f.line} typeKey={f.flag.replace(/^dup:/, '')} showToast={showToast} />
+                )}
                 {(f.check === 'non_electrical' || f.check === 'excluded_scope' || f.check === 'count_line_ambiguous' || f.check === 'irrelevant_spec') && f.category && f.line && (
                   <KeepLineControl bidId={bid.id} category={f.category} line={f.line} flag={f.flag ?? f.check} showToast={showToast} />
                 )}

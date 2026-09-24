@@ -533,3 +533,50 @@ All the round-2 test files pass in both runs: `fixRound2`, `enforceCounts`,
   "possible stacking" warning for untagged EA lines in fixture categories is
   a small follow-up I didn't build.
 - The Kissimmee eval has still not been run against the real API.
+
+## Pre-merge follow-up: possible double counts
+
+This closes the "Not fixed" item from fix round 2. A line can be a **possible
+double count** of a counted type. It qualifies when all of these hold:
+
+- it is in a fixture, device or lighting category;
+- it is counted in EA;
+- it has no `count_type`;
+- it is not the line the enforcement picked for that type;
+- its text plausibly describes that counted type.
+
+"Plausibly describes" means the text matches the type's schedule description
+or symbol keywords, not its tag:
+- the same kind of fixture, through synonyms ("4' LED strip" = linear; "exit
+  sign" = an emergency type), with sizes that don't conflict ("8' strip" is
+  not 4 ft Type A);
+- or two shared distinctive words.
+
+A possible double count blocks the GC documents with "Possible double count:
+'<line>' may be the same as counted Type X (N)". The estimator resolves it in
+the proposal's failure panel with either button. Both are exact-line
+overrides:
+- **Same fixture — remove this line** removes that line and records a
+  correction.
+- **Different item — keep** requires a reason.
+
+Nothing is deleted automatically.
+
+**Tests.** Unit and route + compose tests cover:
+- the free-text "4' LED strip" duplicate of Type A raising the item;
+- the "ceiling fan" line not raising it;
+- both resolutions;
+- the size and emergency rules.
+
+There are UI tests for both buttons.
+
+**Results.** tsc is clean. Affected files: bidstd/ai/utils 632/632,
+fixRound2 + count enforcement + generation + draft workflow 36/36, frontend
+preconstruction 133/133. The frontend count is after one rerun: the first run
+hit the known Takeoff lazy-chunk timing flake, and the next two reruns passed.
+
+**Full backend suite, once:** 1469 passed, 3 failed, 4 not run, of 1476.
+These are the known flakes:
+- `notificationsRetention` lost to the worker crash (the 4 not run);
+- `intakeSimilarCache` ×2;
+- the `integration.test` load timeout.

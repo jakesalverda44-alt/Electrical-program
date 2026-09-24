@@ -74,6 +74,8 @@ describe('enforceCountsOnTakeoff (B1)', () => {
     // hygiene warning about possible stacking is the estimator's cue).
     expect(r.takeoff[0].items.map(i => [i.item, i.qty])).toEqual([['Type A', 73], ['Fixture (A)', 6], ['Type B', 52]]);
     expect(r.ambiguous).toEqual([]);
+    // ...but it IS raised as a possible double count of A (pre-merge follow-up).
+    expect(r.possibleDoubles.map(d => [d.type, d.line])).toEqual([['A', 'Fixture (A) LED linear, restrooms']]);
   });
   it('two lines that both carry type A\'s identity: ambiguous — nothing changed, the estimator picks', () => {
     const takeoff: TakeoffCategory[] = [{ name: 'Interior Lighting', items: [
@@ -218,5 +220,46 @@ describe('N-R2-3 — Section C = 3, deterministically', () => {
     const d = data(['L.', 'a.', 'b.', 'c.', 'd.']);
     fitSectionC(d);
     expect(d.sections[0].bullets).toEqual(['L.', 'a; b; c.', 'd.']);
+  });
+});
+
+// Pre-merge follow-up — an untagged EA line that plausibly IS a counted type
+// is a blocking "possible double count", resolved only by the estimator.
+import { plausiblySameFixture } from './enforceCounts';
+describe('possible double counts (blocking, never auto-deleted)', () => {
+  const cr2 = kissimmeeCountResult(); // A 73 (4 ft LED linear), B 52 (8 ft LED linear), S1 2 poles / 4 heads
+  const takeoff = (): TakeoffCategory[] => [{ name: 'Interior Lighting', items: [
+    { item: 'Type A', description: '4 ft LED linear', unit: 'EA', qty: 73, source: 'E-3', count_type: 'A' },
+    { item: 'Type B', description: '8 ft LED linear', unit: 'EA', qty: 52, source: 'E-3', count_type: 'B' },
+    { item: "4' LED strip", description: 'restrooms and stock room', unit: 'EA', qty: 12, source: 'E-3' },
+    { item: 'Ceiling fan', description: 'Hunter, owner-furnished', unit: 'EA', qty: 3, source: 'E-1' },
+  ] }];
+
+  it('a free-text duplicate of Type A ("4\' LED strip") raises the item; the ceiling fan does not; nothing is deleted', () => {
+    const r = enforceCountsOnTakeoff(takeoff(), cr2, enforcedCounts(cr2, []));
+    expect(r.possibleDoubles).toEqual([{ key: 'A', type: 'A', count: 73, category: 'Interior Lighting', line: "4' LED strip restrooms and stock room" }]);
+    expect(r.takeoff[0].items).toHaveLength(4);
+  });
+
+  it('"Same fixture — remove this line": the estimator\'s decision removes exactly that line, recorded', () => {
+    const decide = (key: string, _c: string, line: string) => (key === 'A' && line.startsWith("4' LED strip") ? 'remove' as const : null);
+    const r = enforceCountsOnTakeoff(takeoff(), cr2, enforcedCounts(cr2, []), undefined, decide);
+    expect(r.possibleDoubles).toEqual([]);
+    expect(r.takeoff[0].items.map(i => i.item)).toEqual(['Type A', 'Type B', 'Ceiling fan']);
+    expect(r.corrections).toContain('Interior Lighting "4\' LED strip — restrooms and stock room" removed by the estimator — the same fixture as counted Type A (73).');
+  });
+
+  it('"Different item — keep": the line stays and nothing is raised', () => {
+    const decide = (key: string) => (key === 'A' ? 'keep' as const : null);
+    const r = enforceCountsOnTakeoff(takeoff(), cr2, enforcedCounts(cr2, []), undefined, decide);
+    expect(r.possibleDoubles).toEqual([]);
+    expect(r.takeoff[0].items).toHaveLength(4);
+  });
+
+  it('plausibly-same rules: synonyms and sizes, emergency types by "exit sign"', () => {
+    expect(plausiblySameFixture("8' LED strip", { description: '4 ft LED linear', symbolHint: '', emergency: false })).toBe(false);
+    expect(plausiblySameFixture("8' LED strip", { description: '8 ft LED linear wraparound', symbolHint: '', emergency: false })).toBe(true);
+    expect(plausiblySameFixture('Exit sign w/ battery', { description: 'LED edge-lit sign, red letters', symbolHint: '', emergency: true })).toBe(true);
+    expect(plausiblySameFixture('Ceiling fan', { description: '4 ft LED linear', symbolHint: '', emergency: false })).toBe(false);
   });
 });
