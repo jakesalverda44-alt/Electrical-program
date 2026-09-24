@@ -237,12 +237,19 @@ function asmWords(s: string): Set<string> {
 }
 
 /** S1 — the package describes the host's OWN assembly: the host is a
- *  counted type and the quote is its own legend / schedule row (2+ of its
- *  description's words, or its host text shares 2+ words with it). */
+ *  counted DEVICE symbol (the display baseflex: J-box, flex and the
+ *  receptacle in the kick plate, priced as one line) and the quote is its
+ *  own legend / schedule row (2+ of its description's words, or its host
+ *  text shares 2+ words with it).
+ *  Real-run fix 3 — an EQUIPMENT host (a power pole, a counter, a kiosk:
+ *  its line is the equipment's own connection) never swallows the devices
+ *  mounted on it: the live Kissimmee run bound every pole package to its
+ *  PP#n equipment type and expanded nothing ("assembly", expanded 0). */
 export function isAssemblyPackage(p: TypicalPackage, targets: CountTarget[]): boolean {
   if (!p.hostTargetKey) return false;
   const t = targets.find(x => x.key === p.hostTargetKey);
   if (!t) return false;
+  if (t.category === 'equipment') return false;
   const tw = asmWords(t.description);
   const qw = asmWords(`${p.quote} ${p.host}`);
   return [...tw].filter(w => qw.has(w)).length >= 2;
@@ -261,7 +268,7 @@ export function circuitsOverlap(a: string, b: string): boolean {
 /** Pure (2.2): expand every package's stated devices by its host count. */
 export function expandTypicals(
   packages: TypicalPackage[],
-  hostCounts: Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string }>,
+  hostCounts: Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[] }>,
   deviceMarks: Array<{ sheetKey: string; typeKey: string; x: number; y: number; fromSheet?: string; circuit?: string }>,
   targets: CountTarget[] = [],
 ): { expansions: TypicalExpansion[]; unmapped: UnmappedTypicalDevice[] } {
@@ -305,7 +312,14 @@ export function expandTypicals(
         continue;
       }
       if (d.qty == null) {
-        const drawn = hc && hc.count ? near(hc, d.targetKey!, HOST_AREA_IN, Number.MAX_SAFE_INTEGER, null) : 0;
+        // Real-run fix 3 — a host whose own tag is not bound (no circuit on
+        // it) is looked for at its family's unbound tags: devices drawn
+        // there are counted where drawn (information), never subtracted.
+        const unbound = !!(hc && !hc.marks.length && hc.possible?.length);
+        const drawn = !hc || !hc.count ? 0
+          : unbound ? new Set(hc.possible!.flatMap(h => deviceMarks.filter(m => m.typeKey === d.targetKey && m.sheetKey === h.sheetKey
+            && Math.hypot(m.x - h.x, m.y - h.y) <= HOST_AREA_IN))).size
+          : near(hc, d.targetKey!, HOST_AREA_IN, Number.MAX_SAFE_INTEGER, null);
         expansions.push({ ...base, hostCount: hc?.count ?? null, drawnAtHosts: drawn, expanded: 0, status: 'qty_unstated',
           reason: drawn ? `${drawn} drawn near the ${p.host.toLowerCase()}${(hc?.count ?? 0) === 1 ? '' : 's'} — counted where drawn` : `how many per ${p.host.toLowerCase()} is not stated and none is drawn near one` });
         continue;

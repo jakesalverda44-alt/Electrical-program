@@ -427,3 +427,37 @@ export function resolveUncertainSynonyms<T extends { key: string; type: string; 
     }
   }
 }
+
+/** Real-run fix 3 — a pole-tag legend's marks ARE the poles: a mark whose
+ *  circuit tag ("B20,24") shares a circuit with exactly ONE member (PP#4:
+ *  "circuits B-20,24"; or the member's own schedule rows) is that member's.
+ *  A mark with no circuit, or one that fits several members, stays with the
+ *  legend (never guessed). Mutates `placed[].typeKey`; returns the bindings. */
+export function bindHostTagMarks(
+  targets: CountTarget[],
+  sheets: Array<{ status: string; sheet: { key: string }; placed: Array<{ typeKey: string; circuit?: string }> }>,
+  scheduleCircuits: Map<string, Set<string>> = new Map(),
+): Array<{ tag: string; member: string; circuit: string; sheetKey: string }> {
+  const out: Array<{ tag: string; member: string; circuit: string; sheetKey: string }> = [];
+  const byKey = new Map(targets.map(t => [t.key, t]));
+  const markCircuits = (c: string) => {
+    const m = /^([A-Z]{1,2})(.*)$/.exec(c.toUpperCase().replace(/[^A-Z0-9,/&]/g, ''));
+    return m ? m[2].split(/[,/&]/).filter(Boolean).map(n => `${m[1]}${Number(n)}`) : [];
+  };
+  for (const tag of targets.filter(t => t.mergeKind === 'tag_legend' && t.mergedInto?.length)) {
+    const members = tag.mergedInto!.map(k => byKey.get(k)).filter((t): t is CountTarget => !!t)
+      .map(t => ({ key: t.key, circuits: new Set([...circuitsOf(t.description, null), ...(scheduleCircuits.get(t.key) ?? [])]) }));
+    for (const s of sheets) {
+      if (s.status !== 'counted') continue;
+      for (const p of s.placed) {
+        if (p.typeKey !== tag.key || !p.circuit) continue;
+        const cs = markCircuits(p.circuit);
+        const hits = members.filter(m => cs.some(c => m.circuits.has(c)));
+        if (hits.length !== 1) continue;
+        p.typeKey = hits[0].key;
+        out.push({ tag: tag.key, member: hits[0].key, circuit: p.circuit, sheetKey: s.sheet.key });
+      }
+    }
+  }
+  return out;
+}

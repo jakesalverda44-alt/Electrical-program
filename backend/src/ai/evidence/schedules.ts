@@ -531,10 +531,16 @@ export function scheduleCounts(targets: CountTarget[], tablesIn: ScheduleTable[]
   const equipment = targets.filter(t => (t.category === 'equipment' || t.source === 'equipment_schedule') && t.role !== 'host' && !t.mergedInto?.length);
   const ev = new Map<string, ScheduleEvidenceRow[]>();
   const push = (k: string, e: ScheduleEvidenceRow) => ev.set(k, [...(ev.get(k) ?? []), e]);
+  // Real-run fix 3 — rows a target owns ONLY because its own description
+  // cites their circuits ("Commercial counter power pole, 2 duplex,
+  // circuits A-40,42") are the circuits that feed ONE item, not one item
+  // per circuit (live Kissimmee: PP#6 = 2 and PP#1 = 3 poles; each is 1).
+  const byName = new Set<string>();
   // (a) panel circuits.
   for (const { r, t } of circuits) {
     if (r.continuation || !r.description || isEmptyLoad(r.description)) continue;
     let tgt = assignRow(r.description, cands, equipment);
+    if (tgt) byName.add(tgt.key);
     if (!tgt) {
       // The circuits a target's own description cites, confirmed by a word.
       const cited = cands.filter(c => circuitRefs(c.description).some(x => x.panel === r.panel && x.circuit === r.circuit)
@@ -553,6 +559,7 @@ export function scheduleCounts(targets: CountTarget[], tablesIn: ScheduleTable[]
     if (descCell && isEmptyLoad(descCell)) continue;
     const tgt = assignRow(text, cands, equipment);
     if (!tgt) continue;
+    byName.add(tgt.key);
     const qi = t.columns.findIndex(c => /^QTY\.?$|QUANTITY/i.test(c));
     const q = qi >= 0 ? Number(r.cells[qi]) : NaN;
     push(tgt.key, { sheetKey: t.sheetKey, sheetLabel: t.sheetLabel, tableId: t.id, table: t.title, rowIdx: r.rowIdx, cells: r.cells, ...(r.boxIn ? { boxIn: r.boxIn } : {}), qty: Number.isInteger(q) && q > 0 ? q : (descCell ? multiplierOf(descCell) : null) ?? 1 });
@@ -573,7 +580,10 @@ export function scheduleCounts(targets: CountTarget[], tablesIn: ScheduleTable[]
     let qty: number;
     let question: ScheduleCount['question'];
     let note = `${rows.length} schedule row${rows.length === 1 ? '' : 's'} (${rows.map(e => `${e.table} ${e.cells.slice(0, 3).filter(Boolean).join(' ')}`).slice(0, 6).join('; ')})`;
-    if (!mults.length) {
+    if (!byName.has(tgt.key) && !mults.length) {
+      qty = 1;
+      if (rows.length > 1) note += ` — the circuits its own description cites feed one ${tgt.type}`;
+    } else if (!mults.length) {
       qty = rows.length;
     } else if (mults.length === 1 && rows.length <= mults[0]) {
       qty = mults[0];

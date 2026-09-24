@@ -156,3 +156,33 @@ export function viewportPromptBlock(vps: Viewport[] | null | undefined, sanitize
   const lines = vps.map(v => `- ${sanitize(viewportLabel(v))} — ${v.kind.replace('_', ' ')}${v.scale ? ` (${sanitize(v.scale)})` : ''}`);
   return `\n\nVIEWPORTS ON THIS SHEET (from the drawing's own titles):\n${lines.join('\n')}\nCount every instance in EVERY plan viewport — the main plan AND each enlarged plan, even where an enlarged plan repeats devices the main plan also shows (the system reconciles them by viewport). Never count symbols inside a legend, schedule or notes block.`;
 }
+
+/** Real-run fix 3 — an EQUIPMENT mark in an enlarged plan that carries the
+ *  same circuit tag as a main-plan mark of the same type on the sheet is the
+ *  same piece of equipment drawn twice (live Kissimmee: checkout pole #2,
+ *  "A29", on the main plan and on the #11 office plan, whose area on the
+ *  main plan the viewport reader placed too small). Moved to `excluded`
+ *  with the reason — never counted twice. Receptacles are never matched
+ *  this way (one circuit feeds many of them). Mutates `res`. */
+export function dropCircuitRepeats(res: SheetMarkResolution, equipmentKeys: Set<string>): number {
+  const set = (c: string) => {
+    const m = /^([A-Z]{1,2})(.*)$/.exec(c.toUpperCase().replace(/[^A-Z0-9,/&]/g, ''));
+    return new Set(m ? m[2].split(/[,/&]/).filter(Boolean).map(n => `${m[1]}${Number(n)}`) : []);
+  };
+  let n = 0;
+  const mains = res.counted.filter(m => m.viewportKind === 'main_plan' && m.circuit && equipmentKeys.has(m.typeKey));
+  res.counted = res.counted.filter(m => {
+    if (m.viewportKind !== 'enlarged_plan' || !m.circuit || !equipmentKeys.has(m.typeKey)) return true;
+    const mine = set(m.circuit);
+    const twin = mains.find(o => o.typeKey === m.typeKey && [...set(o.circuit!)].some(c => mine.has(c)));
+    if (!twin) return true;
+    res.excluded.push({ ...m, reason: `the same ${m.typeKey} as on the main plan (circuit ${twin.circuit}) — drawn again on the enlarged plan, counted once` });
+    n++;
+    return false;
+  });
+  for (const d of res.enlarged) {
+    const dropped = res.excluded.filter(e => e.typeKey === d.typeKey && e.viewportId === d.viewportId && /counted once$/.test(e.reason)).length;
+    if (dropped) { d.enlarged -= dropped; d.note = `${d.note} ${dropped} is the main plan's own (same circuit) — counted once.`; }
+  }
+  return n;
+}

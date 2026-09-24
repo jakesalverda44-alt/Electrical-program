@@ -19,13 +19,13 @@ import { mergeCountsIntoTakeoff, isSiteFixtureCategory, type CountMergeResult, t
 import { logger } from '../utils/logger';
 import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { runEvidenceStage, type EvidenceCache, type EvidencePage, type EvidenceStageOutput, type EvidenceUsage } from './evidence/evidenceStage';
-import { resolveSheetMarks, viewportPromptBlock, type EnlargedDecision, type SheetMarkResolution } from './evidence/viewportResolve';
+import { dropCircuitRepeats, resolveSheetMarks, viewportPromptBlock, type EnlargedDecision, type SheetMarkResolution } from './evidence/viewportResolve';
 import { hostTargets, type TypicalPackage } from './evidence/typicals';
-import { dedupePanels, isCompletePanel, panelChoices, scheduleCounts, type PanelChoice, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
+import { dedupePanels, isCompletePanel, panelChoices, panelNameOf, scheduleCounts, type PanelChoice, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
 import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewports';
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
 import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillStage, sha256Of, type GapFillSheetAsset } from './evidence/gapFillStage';
-import { canonicalKey, consolidateTargets, resolveUncertainSynonyms, type Consolidation, type ConsolidationMerge, type UncertainSynonym } from './evidence/consolidate';
+import { bindHostTagMarks, canonicalKey, consolidateTargets, resolveUncertainSynonyms, type Consolidation, type ConsolidationMerge, type UncertainSynonym } from './evidence/consolidate';
 
 export const COUNT_RESULT_VERSION = 2;
 
@@ -89,7 +89,7 @@ export interface CountResultEvidence {
   /** Real-run fix 2 — one canonical entity per thing: every other name of
    *  it (synonyms, a class name, a combined tag, a pole-tag legend) with the
    *  evidence, and the generic legend symbols decided by their marks. */
-  consolidation?: { merges: ConsolidationMerge[]; uncertain: UncertainSynonym[] };
+  consolidation?: { merges: ConsolidationMerge[]; uncertain: UncertainSynonym[]; hostBindings?: Array<{ tag: string; member: string; circuit: string; sheetKey: string }> };
   /** Panel-schedule viewports the viewport reader identified whose table
    *  could not be read completely — their branch circuits have no source
    *  (3.4: Agent 1 no longer states them). */
@@ -196,6 +196,21 @@ function remapTypicals(packages: TypicalPackage[], aliasOf: Map<string, string> 
   }));
 }
 
+/** Real-run fix 3 — the circuits each schedule-owned type's rows are on
+ *  ("PANEL A" row 30 -> A30). */
+function scheduleCircuitsOf(sc: Map<string, ScheduleCount>): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const [k, c] of sc) {
+    const set = new Set<string>();
+    for (const r of c.rows) {
+      const n = Number(/\d+/.exec(r.cells[0] ?? '')?.[0]);
+      if (Number.isInteger(n) && n > 0) set.add(`${panelNameOf(r.table)}${n}`);
+    }
+    out.set(k, set);
+  }
+  return out;
+}
+
 /** The panels the drawing analysis found (panels[].name), for circuit identity. */
 function panelNamesOf(agent1: Record<string, unknown>): string[] {
   return Array.isArray(agent1.panels) ? (agent1.panels as Array<Record<string, unknown>>).map(p => String(p?.name ?? '')).filter(Boolean) : [];
@@ -239,6 +254,11 @@ function finish(
   if (aliasOf?.size) {
     for (const r of sheetResults) for (const p of r.placed) p.typeKey = canonicalKey(p.typeKey, aliasOf);
   }
+  // Real-run fix 3 — a pole-tag legend's marks are its members' (bound by
+  // the circuit tag each mark carries), BEFORE any viewport / sheet rule, so
+  // an enlarged plan's pole #2 is compared with the main plan's pole #2.
+  const hostBindings = evidence ? bindHostTagMarks(targets, sheetResults, scheduleCircuitsOf(evidence.schedCounts)) : [];
+  const equipmentKeys = new Set(targets.filter(t => t.category === 'equipment').map(t => t.key));
   const mergeInputs: SheetCountInput[] = sheetResults.map(r => {
     const page = vpBy.get(r.sheet.key);
     if (!evidence || r.status !== 'counted' || !page) {
@@ -255,6 +275,7 @@ function finish(
       return { ...r, placed, ...(c.viewports ? { viewports: c.viewports } : {}), ...(c.pending ? { pendingEnlarged: c.pending } : {}) };
     }
     const res = resolveSheetMarks(r.placed, page.viewports.viewports, r.geometry ?? page.geometry);
+    dropCircuitRepeats(res, equipmentKeys);
     const exBy = new Map<string, { count: number; reasons: Set<string>; marks: Array<{ x: number; y: number }> }>();
     for (const m of res.excluded) {
       const e = exBy.get(m.typeKey) ?? { count: 0, reasons: new Set<string>(), marks: [] };
@@ -335,7 +356,7 @@ function finish(
         panelsExpected: Array.isArray(input.agent1.panels) ? input.agent1.panels.length : 0,
         // Fix round 4 / S20 — what each answer to a panel conflict changes.
         panelChoices: panelChoices(targets, evidence.ev.tables),
-        ...(evidence.cons ? { consolidation: { merges: evidence.cons.merges, uncertain: evidence.cons.uncertain } } : {}),
+        ...(evidence.cons ? { consolidation: { merges: evidence.cons.merges, uncertain: evidence.cons.uncertain, hostBindings } } : {}),
         panelsUnread: evidence.ev.pages.flatMap(p => p.viewports.viewports
           .filter(v => v.kind === 'schedule' && /\bPANEL(BOARD)?\b/i.test(v.title) && !/\bLOAD\b/i.test(v.title))
           .filter(v => !evidence.ev.tables.some(t => t.viewportId === v.id && isCompletePanel(t)))

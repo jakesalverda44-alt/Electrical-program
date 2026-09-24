@@ -698,13 +698,25 @@ export function mergeCountsIntoTakeoff(
     evidenceOut = { expansions: [], unmappedTypical: [], families: [], symbolDefinitions: [], circuitRows: 0 };
     const packages = opts.evidence.typicals ?? [];
     if (packages.length) {
-      const hostCounts = new Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string }>();
+      const hostCounts = new Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[] }>();
+      // Real-run fix 3 — a pole-tag legend's marks no circuit bound to one
+      // member: where the members without a bound tag may stand.
+      const tagOf = new Map<string, string>();
+      for (const t of targets) if (t.mergeKind === 'tag_legend') for (const k of t.mergedInto ?? []) tagOf.set(k, t.key);
       for (const p of packages) {
         const hk = hostKeyOf(p);
         if (hostCounts.has(hk)) continue;
         const ty = types.find(x => x.key === hk);
         if (!ty) { hostCounts.set(hk, { count: null, sheets: [], marks: [], reason: `the host "${p.host}" was not counted` }); continue; }
-        const usedSheets = ty.sheets.filter(x => x.used).map(x => x.sheetKey);
+        // A schedule-owned host (PP#3 "parts pod power poles (2)") has no
+        // used sheet: its bound tag marks are on the counted plans.
+        const usedSheets = (ty.scheduleRows?.length ? sheets.filter(s => s.status === 'counted' && !s.sheet.photometric).map(s => s.sheet.key) : ty.sheets.filter(x => x.used).map(x => x.sheetKey));
+        const tagKey = tagOf.get(hk);
+        const possible = tagKey ? sheets.filter(s => s.status === 'counted' && !s.sheet.photometric)
+          .flatMap(s => s.placed.filter(m => m.typeKey === tagKey && Number.isFinite(m.x)).flatMap(m => {
+            const pos = mainPos(s, m);
+            return pos ? [{ sheetKey: s.sheet.key, x: pos.x, y: pos.y }] : [];
+          })) : [];
         const marks = sheets.filter(s => usedSheets.includes(s.sheet.key))
           .flatMap(s => s.placed.filter(m => m.typeKey === hk && Number.isFinite(m.x)).flatMap(m => {
             const p = mainPos(s, m);
@@ -712,8 +724,9 @@ export function mergeCountsIntoTakeoff(
           }));
         hostCounts.set(hk, {
           count: ty.status === 'counted' && ty.count > 0 ? ty.count : null,
-          sheets: ty.sheets.filter(x => x.used).map(x => x.label),
+          sheets: ty.scheduleRows?.length ? [...new Set(ty.scheduleRows.map(r => r.sheetLabel))] : ty.sheets.filter(x => x.used).map(x => x.label),
           marks,
+          ...(possible.length ? { possible } : {}),
           ...(ty.status !== 'counted' || ty.count === 0 ? { reason: ty.status === 'unreadable' ? `the ${p.host.toLowerCase()} markers could not be read (${ty.reason})` : `no ${p.host.toLowerCase()} was found on the plans${p.hostTag ? ` (tag ${p.hostTag})` : ''}` } : {}),
         });
       }
