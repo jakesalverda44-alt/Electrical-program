@@ -252,9 +252,9 @@ export function relateGroup(
   t: CountTarget,
   group: SheetCountInput[],
   opts: CombineOptions = {},
-): { kind: SheetRelation['kind']; pairs: Array<{ sheets: [string, string]; kind: SheetRelation['kind']; reason: string }> } {
+): { kind: SheetRelation['kind']; paired: number; pairs: Array<{ sheets: [string, string]; kind: SheetRelation['kind']; reason: string; paired?: number }> } {
   const withPos = (s: SheetCountInput) => !!s.geometry && s.placed.every(p => Number.isFinite(p.x) && Number.isFinite(p.y));
-  const pairs: Array<{ sheets: [string, string]; kind: SheetRelation['kind']; reason: string }> = [];
+  const pairs: Array<{ sheets: [string, string]; kind: SheetRelation['kind']; reason: string; paired?: number }> = [];
   for (let i = 0; i < group.length; i++) {
     for (let j = i + 1; j < group.length; j++) {
       const a = group[i], b = group[j];
@@ -266,12 +266,14 @@ export function relateGroup(
         { key: a.sheet.key, label: a.sheet.label, geometry: a.geometry ?? null, viewports: a.viewports ?? null, marks: a.placed.map(p => ({ typeKey: p.typeKey, x: p.x!, y: p.y!, viewportId: p.viewportId ?? null })) },
         { key: b.sheet.key, label: b.sheet.label, geometry: b.geometry ?? null, viewports: b.viewports ?? null, marks: b.placed.map(p => ({ typeKey: p.typeKey, x: p.x!, y: p.y!, viewportId: p.viewportId ?? null })) },
         opts.isHost);
-      pairs.push({ sheets: [a.sheet.label, b.sheet.label], kind: rel.kind, reason: rel.reason });
+      pairs.push({ sheets: [a.sheet.label, b.sheet.label], kind: rel.kind, reason: rel.reason, paired: rel.paired });
     }
   }
   const kinds = new Set(pairs.map(p => p.kind));
   const kind = kinds.size === 1 ? pairs[0].kind : 'unclear';
-  return { kind, pairs };
+  // Fix round B4 — marks of the type in the same place on two sheets are ONE
+  // object: a complementary sum counts each pair once.
+  return { kind, paired: pairs.reduce((s, p) => s + (p.paired ?? 0), 0), pairs };
 }
 
 /** Next round A3 — site and building-exterior fixture types only. */
@@ -407,11 +409,12 @@ function combineCore(
     // Evidence round 1.4 — the sheets' own content and mark placement decide
     // complementary layers (sum) vs the same devices drawn twice (keep the
     // larger); only an unclear relationship goes to the estimator.
-    const rel = opts.relations ? relateGroup(t, nonzero.map(g => g.s), opts) : { kind: 'unclear' as const, pairs: [] };
-    relations.push(...rel.pairs);
+    const rel = opts.relations ? relateGroup(t, nonzero.map(g => g.s), opts) : { kind: 'unclear' as const, paired: 0, pairs: [] };
+    relations.push(...rel.pairs.map(({ sheets, kind, reason }) => ({ sheets, kind, reason })));
     if (rel.kind === 'complementary') {
       for (const g of nonzero) { g.c.used = true; mainTotal += g.c.count; }
-      flags.push(`${t.type}: ${nonzero.map(g => `${g.s.sheet.label} (${g.c.count})`).join(' + ')} summed — ${rel.pairs[0].reason}.`);
+      mainTotal -= rel.paired;
+      flags.push(`${t.type}: ${nonzero.map(g => `${g.s.sheet.label} (${g.c.count})`).join(' + ')}${rel.paired ? ` − ${rel.paired} drawn on both` : ''} — ${rel.pairs.map(p => p.reason).join('; ')}.`);
       continue;
     }
     if (rel.kind === 'duplicate') {

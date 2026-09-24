@@ -42,14 +42,15 @@ const cr = (m: ReturnType<typeof mergeCountsIntoTakeoff>, ts: CountTarget[], ev?
 const answer = (item: ReviewItem, idx: number) => ({ ...validateResolution(item, { action: 'answer', answer: item.options![idx] }, null) as { ok: true; resolution: NonNullable<ReviewItem['resolution']> }, by: 'e', at: 't' });
 
 describe('1.4 is part of the evidence round (off = the title-only question, exactly as before)', () => {
-  it('evidence off: E-1 / E-2 raise "same area?"; on: summed as complementary layers', () => {
+  it('evidence off: E-1 / E-2 raise "same area?"; on: complementary layers, B-32 (on both) counted once -> 9', () => {
     const sheets = [input(49, { viewports: false }), input(50, { viewports: false }), ...others()];
     const off = mergeCountsIntoTakeoff(base.agent1, targets, sheets, { countingRan: true });
     expect(off.types.find(t => t.key === 'SIMPLEX RECEPTACLE')).toMatchObject({ count: 5, areaQuestion: { keep: 5, sum: 10 } });
     const on = mergeCountsIntoTakeoff(base.agent1, targets, [input(49), input(50), ...others()], { countingRan: true, evidence: {} });
     const s = on.types.find(t => t.key === 'SIMPLEX RECEPTACLE')!;
-    expect(s.count).toBe(10);
+    expect(s.count).toBe(9);
     expect(s.areaQuestion).toBeUndefined();
+    expect(s.flags.join(' ')).toMatch(/− 1 drawn on both/);
     expect(s.relations![0]).toMatchObject({ kind: 'complementary' });
   });
 });
@@ -152,5 +153,28 @@ describe('3.3 — merged types carry no line, no review item, no enforced count'
     expect(q).toMatchObject({ kind: 'area', keepQty: 1, sumQty: 4, group: 'family' });
     const res = items.map(i => (i.id === q.id ? { ...i, resolution: answer(i, 1).resolution } : i));
     expect(enforcedCounts(fake, res).byType.get('L')).toBe(4);
+  });
+});
+
+describe('fix round B4 — named partitions still sum; an enlarged same-area sheet is never summed', () => {
+  const t = targets.find(x => x.key === 'SIMPLEX RECEPTACLE')!;
+  const mk = (no: string, title: string, role: 'building' | 'enlarged', area: string, n: number, dx: number): SheetCountInput => ({
+    sheet: { ...sheetOf(49), key: `k#${no}`, sheetNo: no, title, label: `${no} "${title}"`, role, area, level: '', focus: 'power' },
+    status: 'counted', unreadable: [], geometry: G, viewports: null,
+    placed: Array.from({ length: n }, (_, i) => ({ typeKey: t.key, x: 300 + i * 40, y: 600 + dx })),
+  });
+  it('AREA A / AREA B: summed (named-area path)', () => {
+    const m = mergeCountsIntoTakeoff(base.agent1, [t], [mk('E-2.1', 'POWER PLAN AREA A', 'building', 'AREA A', 4, 0), mk('E-2.2', 'POWER PLAN AREA B', 'building', 'AREA B', 3, 0)], { countingRan: true, evidence: {} });
+    expect(m.types[0].count).toBe(7);
+  });
+  it('an ENLARGED plan sheet of the same area: the larger is kept, never summed', () => {
+    const m = mergeCountsIntoTakeoff(base.agent1, [t], [mk('E-2', 'POWER PLAN', 'building', '', 4, 0), mk('E-5', 'ENLARGED OFFICE POWER PLAN', 'enlarged', '', 3, 0)], { countingRan: true, evidence: {} });
+    expect(m.types[0].count).toBe(4);
+  });
+  it('two same-level plans with the SAME marks and no building box: kept once (the reviewer\'s 10-duplex shape) -> 10', () => {
+    const a = { ...mk('E-2', 'POWER PLAN', 'building', '', 10, 0), placed: [...mk('E-2', 'x', 'building', '', 10, 0).placed, ...Array.from({ length: 5 }, (_, i) => ({ typeKey: 'COIL + J', x: 900 + i * 30, y: 900 }))] };
+    const b = { ...mk('E-3', 'SYSTEMS PLAN', 'building', '', 10, 0), placed: [...mk('E-3', 'x', 'building', '', 10, 0).placed, ...Array.from({ length: 8 }, (_, i) => ({ typeKey: 'P', x: 1200 + i * 30, y: 1500 }))] };
+    const m = mergeCountsIntoTakeoff(base.agent1, targets, [a, b], { countingRan: true, evidence: {} });
+    expect(m.types.find(x => x.key === t.key)!.count).toBe(10);
   });
 });

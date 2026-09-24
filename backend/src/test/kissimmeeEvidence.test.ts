@@ -160,7 +160,7 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
   it('receptacles: every one traceable — drawn marks (E-1, E-2 #11 office), E-1 restroom plan, typicals at the power poles and coil+J boxes', (ctx) => {
     if (!have) return ctx.skip();
     const t = (k: string) => after.cr.types.find(x => x.key === k)!;
-    expect(t('SIMPLEX RECEPTACLE').components).toEqual({ drawn: 10, typical: 1, schedule: 0 });
+    expect(t('SIMPLEX RECEPTACLE').components).toEqual({ drawn: 9, typical: 1, schedule: 0 }); // fix round B4: B-32 once
     expect(t('DUPLEX RECEPTACLE / FLOOR RECEPTACLE').components).toEqual({ drawn: 4, typical: 11, schedule: 0 });
     // 4.4/4.3 — gap-fill's targeted re-search found 5 more GFCIs (the
     // documented undercount on the sheet's west portion, which this fixture
@@ -172,7 +172,7 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     expect(t('GFCI').gapFill!.every(g => g.reason.includes('undercount risk') && g.note.includes('confirmed GFCI example'))).toBe(true);
     expect(t('WP GFI').count).toBe(4);
     expect(row(after.diff, 'gfci').actual).toBe(16);
-    expect(row(after.diff, 'receptacles_total').actual).toBe(42);
+    expect(row(after.diff, 'receptacles_total').actual).toBe(41);
     // The typicals: 5 pole types and the coil+J boxes, each with its quote.
     const exp = after.cr.evidence!.expansions.filter(e => e.status === 'expanded');
     expect(exp.map(e => [e.host, e.hostCount, e.perHost, e.expanded])).toEqual(expect.arrayContaining([
@@ -288,7 +288,7 @@ describe('a supplement pass keeps the evidence round\'s results (earlier typical
     expect([row(d, 'site_poles').actual, row(d, 'site_heads').actual]).toEqual([3, 4]);
     // 42, not 37: the first ('after') pass's own gap-fill already found and
     // accepted the 5 GFCIs (carried in `first.cr`, this supplement's prior).
-    expect(row(d, 'receptacles_total').actual).toBe(42);
+    expect(row(d, 'receptacles_total').actual).toBe(41);
     expect(row(d, 'gfci').actual).toBe(16);
     expect(cr.types.find(t => t.key === 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE')!.components!.typical).toBe(11);
     // Only the new sheet was read and counted.

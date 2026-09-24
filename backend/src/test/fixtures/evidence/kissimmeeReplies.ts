@@ -24,7 +24,9 @@ const S8 = '1/8" = 1\'-0"';
 /** Page number in the real set -> the viewport reader's reply. */
 export const VIEWPORT_REPLIES: Record<number, string> = {
   49: vpJson([
-    { number: '1', title: 'POWER PLAN', scale: S8, kind: 'main_plan', box: [58, 18, 895, 632], building: [172, 150, 750, 485] },
+    // Building = the exterior wall lines, measured on a 100 DPI render
+    // (x 440-1873, y 374-1174 px) -> 40 DPI overview px.
+    { number: '1', title: 'POWER PLAN', scale: S8, kind: 'main_plan', box: [58, 18, 895, 632], building: [176, 150, 749, 470] },
     { number: '2', title: 'ELECTRONIC SECURITY DETAIL', scale: S8, kind: 'detail', box: [58, 634, 478, 940] },
     // The main plan marks this area with the dashed "3/E1" boundary.
     { number: '3', title: 'RESTROOM POWER AND LIGHTING', scale: '1/4" = 1\'-0"', kind: 'enlarged_plan', box: [480, 634, 690, 940], area_on_main: [678, 134, 764, 254] },
@@ -34,7 +36,9 @@ export const VIEWPORT_REPLIES: Record<number, string> = {
     { number: '7', title: 'RECEPTACLE DETAIL / SUPPLY FIXTURES', scale: '1" = 1\'-0"', kind: 'detail', box: [1117, 627, 1330, 940] },
   ]),
   50: vpJson([
-    { number: '1', title: 'POWER POLE & JUNCTION BOX LOCATIONS', scale: S8, kind: 'main_plan', box: [58, 18, 895, 632], building: [190, 125, 775, 490] },
+    // Same building, drawn 0.53" right and 0.73" up of E-1's (walls at
+    // x 493-1926, y 301-1101 px at 100 DPI).
+    { number: '1', title: 'POWER POLE & JUNCTION BOX LOCATIONS', scale: S8, kind: 'main_plan', box: [58, 18, 895, 632], building: [197, 120, 770, 440] },
     { number: '2', title: 'CHECK OUT POWER POLE #2', scale: S8, kind: 'detail', box: [58, 634, 272, 940] },
     { number: '3', title: 'PARTS POD POWER POLE #3', scale: S8, kind: 'detail', box: [272, 634, 483, 940] },
     { number: '4', title: 'TESTER POWER POLE #4', scale: S8, kind: 'detail', box: [483, 634, 693, 940] },
@@ -44,8 +48,12 @@ export const VIEWPORT_REPLIES: Record<number, string> = {
     { number: '8', title: 'GENERAL WIRING AND POWER NOTES', scale: S8, kind: 'notes', box: [903, 165, 1330, 320] },
     { number: '9', title: 'POWER POLE LEGEND', scale: S8, kind: 'legend', box: [903, 320, 1330, 478] },
     { number: '10', title: 'POWER POLE NOTES', scale: S8, kind: 'notes', box: [903, 478, 1330, 632] },
-    // Same scale as the main plan, but a zoom of the office area near pole 1/5.
-    { number: '11', title: 'OFFICE AREA POWER PLAN', scale: S8, kind: 'enlarged_plan', box: [903, 634, 1330, 940], area_on_main: [195, 248, 272, 323] },
+    // Labelled 1/8" but drawn at 1/4" (its 18'-9" dimension is 4.5"): a
+    // 2x zoom of the office area. Its box maps onto the main plan through
+    // the office J-box, pole #2 and the FDCOKE cooler (fix round B4: the
+    // first transcription's area was a quarter of this, which put B32 1.2"
+    // from where the main plan has it).
+    { number: '11', title: 'OFFICE AREA POWER PLAN', scale: S8, kind: 'enlarged_plan', box: [903, 634, 1330, 940], area_on_main: [127, 227, 340, 380] },
   ]),
   51: vpJson([
     { number: '1', title: 'LIGHTING PLAN', scale: S8, kind: 'main_plan', box: [58, 18, 895, 632], building: [185, 128, 790, 450] },
