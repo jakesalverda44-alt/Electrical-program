@@ -1014,3 +1014,135 @@ clean in both packages.
 - **Targeted runs:** `src/ai/**`, `kissimmeeEvidence`, `takeoffCountingPipeline`, `aiCountMarkers`, `supplementPass` and `evalCasesMigration139` — **569/569 passed** after the supplement-test title change.
 - **One full backend run:** **2050 passed, 3 failed, 4 not run of 2057** (190 files: 187 passed, 2 failed, 1 lost to "Worker exited unexpectedly"). The failures are the known flakes: `intakeSimilarCache` ×2 and the `integration` lead follow-up backfill timeout. The crashed worker's 4 tests are the 4 not run.
 - The frontend was not touched this round, so it was not re-run.
+
+## Fix round 3 — Parts 4–5 (review "Round 2", 3c66503)
+
+**Executor:** Sonnet 5. **Scope:** B10, B11, S16, S18, and the S6 nit (a copied line must not carry the
+placeholder reason). Opus's Fix round 3 / Parts 1–3 (B12, S15, S17, S19, the migration-138 nit) is committed
+through 063a1ba; this round starts from there. Same rules: worktree only, no Agent tool, no real API calls,
+migrations from **140** (none were needed — every fix here is logic-only, no schema change). Every
+reproduced finding's repro is a test.
+
+| Commit | Findings |
+|---|---|
+| ae5ef2a | B10, B11 — gap-fill/reconcile never zero a type; a multi-type finding answers per type |
+| aa42832 | S18 — gap-fill's suggested markers cleared on re-run/reset, can't be confirmed twice |
+| ba74056 | S6 nit — a copied line never keeps the placeholder reason |
+| af1aed3 | S16 (backend) — equipment never resolved in bulk |
+| 5e151df | B10, B11, S16 (frontend) — per-type UI rows; equipment excluded from every bulk path |
+
+### B10 — gap-fill/reconcile never offer "not on this job"
+The Round 2 repro: a GFCI type has 7 counted; gap-fill suggests 2 more that turn out to be dimension ticks;
+answering the old `gapfill:` item's "Not on this job" nulled the WHOLE type (7 → 0), because
+`enforcedCounts` mapped `action:'not_on_job'` straight to `null` for these items exactly like a real
+"not on this job" count item.
+
+- `gapfill:`/`reconcile:` items never carry `not_on_job` in their `actions` any more. Their three actions
+  are exactly:
+  - `'markers'` — **"Confirm the found marks on the plans"** (gap-fill only — a jump to its own SUGGESTED
+    markers in the Plans view, then "Use confirmed markers" resolves it);
+  - `'confirm'` — **"No more on this job — keep current count N"** — rejects the suggestion/mismatch,
+    keeps the type's CURRENT count exactly (never `null`), and — for a gap-fill item — deletes that type's
+    own SUGGESTED `source:'gap_fill'` markers so a rejected suggestion never lingers to be confirmed later
+    (this is also half of S18);
+  - `'count'` — **"Enter correct count"**.
+- They're structurally excluded from the cross-item multi-select (its checkbox is gated on
+  `actionsOf(item).includes('not_on_job')`, which is no longer true) and the group "mark all N not on this
+  job" bulk button (same gate) — there's no code path left that could broadcast a `not_on_job` to one of
+  these items at all.
+- **Test:** the reviewer's exact repro (GFCI 7, 2 suggested marks rejected) — `enforcedCounts` stays at
+  **7**, never `null`, never 0.
+
+### B11 — a multi-type finding answers per type, in the type's OWN unit
+The Round 2 repro: S1 (2 poles × 1 head) + S2 (1 pole × 2 heads) = 4 heads. A schedule reconciliation for
+"S1+S2" resolved with "count 5" turned **3 poles into 5 poles** while heads stayed untouched — the old
+`byMemberKey` map pointed every key in "S1+S2" at the SAME item, and always wrote to the type's plain
+`count`, never `:heads`, even though the finding's own basis (2.2/B2's `actualUnitsOf`) is heads for a
+site_lighting type.
+
+- `ReviewItem.reconcileMembers` — one entry per type a finding covers (`{key, type, description, unit,
+  currentQty, headsPerPole, resolution}`), always present, even for a single-type finding (n=1). Each
+  answers separately via `applyReconcileMemberResolution` (the same per-member pattern B6 already
+  established for legend-zero groups): the item's own `resolution` mirrors the ONE member directly when
+  there's no ambiguity (n=1); with 2+, it only appears once every member has answered.
+- **The unit an answer is IN follows the finding's own basis**: `'heads'` for a site_lighting type,
+  `'count'` otherwise. A heads answer re-derives poles ONLY when the fixture schedule states
+  heads-per-pole, and only as an EXACT multiple (validated: a non-multiple leaves poles untouched rather
+  than silently rounding); when heads-per-pole is unknown, poles stay exactly as directly counted from
+  the plans — never guessed either way.
+- **A broadcast is refused, not guessed at:** `'count'`/`'markers'` on a 2+-type finding REQUIRE
+  `memberKey` — omitting it 400s ("This covers N types — answer each one separately"). Only `'confirm'`
+  (no shared number — each type just keeps its own current value) may still apply to every unanswered type
+  at once, matching B6's "apply to all unanswered" shortcut.
+- The marker tally for a `'markers'` resolution is now tallied on the ONE requested key
+  (`confirmedMarkersForType(bidId, memberKey)`), never summed across every type the finding names and
+  handed to each (`takeoffReview.ts`'s own half of the B11 bug).
+- **Tests:** S1+S2 answered per type gives the correct total (heads set directly, poles re-derived when
+  known: 3 heads / 1 per pole → 3 poles; 4 heads / 2 per pole → 2 poles); a non-multiple heads answer
+  leaves poles untouched; a headsPerPole-unknown type leaves poles untouched; the all-reject path keeps
+  each type at its OWN current value; a broadcast attempt on a 2+-type finding → 400; a single-type
+  finding needs no `memberKey` and its `item.resolution` still mirrors directly (no behavior change for
+  the common case).
+
+### S16 — equipment can never be zeroed by a bulk action
+- **Backend:** a multi-item `/review/resolve` call 400s outright — **"Equipment is never resolved in
+  bulk — answer each one on its own"**, naming them — the instant ANY picked item is `category:'equipment'`,
+  whether or not the rest of the batch would otherwise be a legal one-group bulk action. The exact same
+  item resolved alone (`itemIds` of one) is unaffected.
+- **Frontend:** equipment items are excluded from BOTH bulk paths entirely — the zero-count group's
+  "mark all N not on this job" pool (`nojIds`/`confirmIds`), and the cross-item multi-select (no checkbox
+  at all, same treatment B6 already gives a legend-zero group). Whatever bulk action remains (2+
+  non-equipment items) now goes through the SAME confirm-dialog-listing-every-member gate B6 put on
+  legend-zero's "mark all remaining" shortcut — extended here to the ordinary zero-count group bulk and
+  the cross-item multi-select bar too, not just legend-zero groups.
+- **Tests:** backend — a mixed batch (2 equipment + 1 non-equipment) 400s and resolves nothing; two
+  equipment items alone still 400; an equipment item alone still works; a non-equipment-only bulk is
+  unaffected. Frontend — no checkbox on an equipment item; the group bulk button disappears when only 1
+  non-equipment item remains eligible; a mixed group's confirm dialog names only the non-equipment
+  members; an equipment item still resolves fine on its own row.
+
+### S18 — gap-fill's suggested markers are cleared on re-run/reset, never confirmed twice
+The three places that clear a stale SUGGESTED marker before writing a fresh set
+(`writeAiCountMarkers`'s full and scoped/supplement passes, `assignAiMarkersToLines`) and the rerun-reset
+service only ever matched `source = 'ai_count'` — a `gap_fill` suggestion from an earlier run was never
+cleared, so a stale one from a prior run could sit in the Plans view next to the current run's, and an
+estimator confirming both would double it.
+
+- All four now match `source IN ('ai_count', 'gap_fill')`, exactly like the counter's own suggestions.
+- **Test:** two runs each write one gap-fill suggestion for the same finding; the second run's write
+  clears the first's (soft-deleted, gone from every live query, and never returned by
+  `assignAiMarkersToLines`); confirming everything still live and resolving the item ends at the type's
+  own 4 marks plus exactly the ONE remaining suggestion (**5**, never 6) — proven end to end through the
+  real `/review/resolve` route.
+
+### S6 nit — a copied line never keeps the placeholder reason
+The placeholder was cleared only when a line's qty moved AND a prior row with that `line_key` existed. A
+line with NO prior row at all (a fresh `line_key`, never saved before — exactly what a line
+duplicated/copied in the UI produces) fell through untouched, keeping the placeholder — and so kept
+passing the evidence gate — even though it never legitimately earned the migration-134 grandfather clause.
+
+- The placeholder is now legitimate ONLY when a real prior row with this exact `line_key` already exists
+  AND its qty matches; a fresh `line_key` with no prior row clears it immediately, same as a changed qty.
+- Updated the existing S6 test to actually simulate a genuine prior row (written directly, the way
+  migration 134's own raw UPDATE would, never through `saveBidEstimate`) — matched by the same `line_key`
+  and qty, it still passes. Added the nit's own repro: a brand-new `line_key` sent with the placeholder on
+  its very first save, even with a "matching" qty, clears it immediately.
+
+### Kissimmee fixture after fix round 3 (Parts 4–5)
+Unchanged from Opus's Parts 1–3 numbers — Kissimmee currently has zero reconciliation findings (B2's
+heads-fix) and no equipment-bulk scenario exercised, so none of B10/B11/S16/S18 touch its own counts:
+**receptacles 33, GFCI 11 (7+4), site poles/heads 3/4, battery chargers 5, review items 22 (16 blocking)**.
+
+### Test suites (targeted, plus one full run each at the end)
+`tsc --noEmit` is clean in both packages.
+
+| Suite | Fix round 3 / Parts 1–3 baseline | This round (Parts 4–5) |
+|---|---|---|
+| Backend `npm test` | 2050 passed, 3 failed, 4 not run of 2057 (190 files) | **2062 passed, 3 failed, 4 not run of 2069** (190 files: 187 passed, 2 failed, 1 lost to "Worker exited unexpectedly") |
+| Frontend `npx vitest run` | not touched, not re-run | **1315 / 1315** |
+
+The 3 backend failures are the same known flakes carried since the original review baseline:
+`intakeSimilarCache` ×2 (a global cache-signature race under full-suite contention against this worktree's
+long-lived, heavily-populated test database) and the `integration` lead follow-up backfill timeout — none
+of the touched files (`reviewItems.ts`, `takeoffReview.ts`, `aiMarkers.ts`, `rerunReset.ts`,
+`bidEstimate.ts`, `TakeoffReviewPanel.tsx`) are anywhere near intake or lead code.
