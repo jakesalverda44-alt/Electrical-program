@@ -154,7 +154,8 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     if (!have) return ctx.skip();
     const ev = after.cr.evidence!;
     // eslint-disable-next-line no-console
-    console.log(`[after]\n${formatDiffTable(after.diff)}\nreview items: ${after.review.length} (${after.review.filter(reviewItemIsOpen).length} blocking)\n${after.review.map(i => `  ${reviewItemIsOpen(i) ? 'B' : 'i'} ${i.id} — ${i.title}`).join('\n')}\nevidence calls ${ev.calls}, usage ${JSON.stringify(ev.usage)}, est $${usageCost(ev.usage, EVIDENCE_MODEL)?.toFixed(3)}`);
+    const gf = ev.gapFill;
+    console.log(`[after]\n${formatDiffTable(after.diff)}\nreview items: ${after.review.length} (${after.review.filter(reviewItemIsOpen).length} blocking)\n${after.review.map(i => `  ${reviewItemIsOpen(i) ? 'B' : 'i'} ${i.id} — ${i.title}`).join('\n')}\nevidence calls ${ev.calls} (of which gap-fill/crop-check: ${gf?.calls ?? 0}), usage ${JSON.stringify(ev.usage)}, est $${usageCost(ev.usage, EVIDENCE_MODEL)?.toFixed(3)} total; gap-fill/crop-check alone: usage ${JSON.stringify(gf?.usage)}, est $${usageCost(gf?.usage, EVIDENCE_MODEL)?.toFixed(4)}`);
   });
   it('receptacles: every one traceable — drawn marks (E-1, E-2 #11 office), E-1 restroom plan, typicals at the power poles and coil+J boxes', (ctx) => {
     if (!have) return ctx.skip();
