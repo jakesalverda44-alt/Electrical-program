@@ -545,3 +545,45 @@ once in the first run and passed alone and in the second run.
 - updated: `consolidate`, `realRunPoles`, the replay acceptance test, `reviewItems` (A6),
   `kissimmeeReviewNoise`, `kissimmeeEvidence` (its fake answers the retry-size shifted tiles);
 - frontend: +1 group.
+
+## Round 2 fixes (review 5e2b496 — MERGE, with S13–S15 before the live re-run)
+
+**Commit:** 1921466. No migrations needed.
+
+**S15 — confirmed consistency markers are never added twice.** "Confirm the found marks" now adds only
+the confirmed markers that the **current** first pass does not already count. It uses the same matching
+radius, on the same sheet. Tested against the DB: 70 + 3 confirmed = 73; a re-run that finds 72 gives
+**73, not 75**.
+
+**S14 — the class-conflict question can say "two receptacles".** It now has a third answer, "Two
+different receptacles — count both", which restores the dropped mark. The answer is enforced and
+tested.
+
+**S13 — schedule rows follow the distinct-load rules.**
+- A row belongs to a target only when the target explains every word of the row. Matching is
+  prefix-tolerant (INSTANT = INSTANTANEOUS) and ignores neutral words.
+- "INSTANT WATER HEATER" is IWH, not WH. Each unit is owned by its own row and is never counted again
+  from the plans: **IWH + WH = 2**.
+- A row with words that neither target has goes to nobody.
+
+**Nits:**
+- **N6:** a second-pass mark within the match radius of a counted mark is a double report, never a
+  suggestion.
+- **N7:** the consistency cache key carries the shifted tiles and a hash of the first pass's marks.
+- **N8:** the circuit is part of the class-conflict fingerprint.
+- **N9:** "A-2, 4-#12" gives A-2 only, and "E-8 thru E-10" includes E-9.
+- **N10:** the pole-spec rules apply to area / site light poles only. They never apply to a bollard,
+  pedestrian or walkway pole, and a stated pole height must be within 5 ft of the site fixtures'
+  mounting height.
+
+**The replayed live run:**
+- 17 blocking / 25 items, unchanged.
+- Receptacles 33, RTU 2, pole outlets 8 duplex + 1 simplex, unchanged.
+- A / B 70 / 45 kept.
+- The second pass's suggestions go from 3 + 7 to **3 + 4**. The other 3 B marks were double reports
+  of counted marks (N6).
+
+**Suites** (one full run each; `tsc` clean in both packages):
+- **Backend:** 2158 passed, 3 failed, 4 not run, of 2165. The failures are the known flakes:
+  `intakeSimilarCache` ×2 and the `integration` backfill timeout.
+- **Frontend:** 1317 / 1317.
