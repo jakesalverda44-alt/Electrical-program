@@ -100,8 +100,8 @@ describe('PcWorkspace RFI tab — Import from AI analysis (Task 5.2)', () => {
 
     fireEvent.click(screen.getByText('Import from AI analysis'));
 
-    expect(await screen.findByText('What is the available fault current at the utility service point?')).toBeTruthy();
-    expect(screen.getByText('Are lighting fixture submittals required prior to rough-in?')).toBeTruthy();
+    expect(await screen.findByDisplayValue('What is the available fault current at the utility service point?')).toBeTruthy();
+    expect(screen.getByDisplayValue('Are lighting fixture submittals required prior to rough-in?')).toBeTruthy();
   });
 
   it('dedupes against an existing RFI with the same question text (case/whitespace-insensitive)', async () => {
@@ -117,8 +117,8 @@ describe('PcWorkspace RFI tab — Import from AI analysis (Task 5.2)', () => {
     fireEvent.click(screen.getByText('Import from AI analysis'));
 
     // Only the genuinely-new one is imported; the duplicate isn't added a second time.
-    expect(await screen.findByText('Are lighting fixture submittals required prior to rough-in?')).toBeTruthy();
-    expect(screen.getAllByText(/available fault current/).length).toBe(1);
+    expect(await screen.findByDisplayValue('Are lighting fixture submittals required prior to rough-in?')).toBeTruthy();
+    expect(screen.getAllByDisplayValue(/available fault current/).length).toBe(1);
   });
 });
 

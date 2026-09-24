@@ -183,6 +183,7 @@ export default function App() {
             activeTab:         (persistedTab && validTabs.has(persistedTab) ? persistedTab : 'overview') as PcWorkspace['activeTab'],
             notes:             (row.notes as string) || '',
             scope:             (row.scope as Record<string, string>) || {},
+            scopeMeta:         (row.scope_meta as PcWorkspace['scopeMeta']) || {},
             rfis:              (row.rfis as PcWorkspace['rfis']) || [],
             files:             (row.files as PcWorkspace['files']) || [],
             aiDone:            !!(row.ai_done),

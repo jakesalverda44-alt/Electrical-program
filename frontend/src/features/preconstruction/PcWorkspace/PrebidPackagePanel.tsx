@@ -22,11 +22,14 @@ interface Props {
   chrisDraftBusy: boolean;
   chrisDraftLink: string | null;
   showToast: (t: Toast) => void;
+  /** Stop analysis — stop a draft that is composing. */
+  stopDraft?: () => void;
+  stoppingDraft?: boolean;
 }
 
 export default function PrebidPackagePanel({
   bid, aiResults, setAiResults, generatePrebidPackage, prebidBusy, prebidResult, downloadFiledDocument,
-  emailPrebidToChris, chrisDraftBusy, chrisDraftLink, showToast,
+  emailPrebidToChris, chrisDraftBusy, chrisDraftLink, showToast, stopDraft, stoppingDraft,
 }: Props) {
   const draftStatus = aiResults?.draft_status as string | null | undefined;
   const reviewBlocked = aiResults?.review_status === 'needs_review' || aiResults?.review_status === 'pending';
@@ -89,7 +92,21 @@ export default function PrebidPackagePanel({
           </div>
         )}
         {!reviewBlocked && draftStatus === 'running' && (
-          <div data-testid="prebid-composing" style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 10 }}>Composing the pre-bid draft…</div>
+          <div data-testid="prebid-composing" style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+            Composing the pre-bid draft…
+            {stopDraft && (
+              <button className="btn ghost" onClick={stopDraft} disabled={stoppingDraft} data-testid="stop-draft"
+                style={{ fontSize: 12, height: 26, color: 'var(--red)', borderColor: 'rgba(224,106,106,.45)' }}
+                title="Stops the AI run; you'll need to re-run. Tokens already used are still billed.">
+                {stoppingDraft ? 'Stopping…' : 'Stop'}
+              </button>
+            )}
+          </div>
+        )}
+        {!reviewBlocked && draftStatus === 'cancelled' && (
+          <div data-testid="prebid-draft-stopped" style={{ fontSize: 12.5, color: 'var(--amber)', fontWeight: 700, marginBottom: 10 }}>
+            The pre-bid draft was stopped{aiResults?.draft_error ? ` — ${String(aiResults.draft_error)}` : ''}. Compose it again when ready.
+          </div>
         )}
         {!reviewBlocked && draftStatus === 'error' && (
           <div data-testid="prebid-draft-error" style={{ fontSize: 12.5, color: 'var(--red)', marginBottom: 10 }}>
@@ -107,7 +124,7 @@ export default function PrebidPackagePanel({
           </button>
           {!reviewBlocked && !legacy && draftStatus !== 'running' && (draftStatus !== 'complete' || stale) && (
             <button className="btn ghost" onClick={() => void compose()} disabled={starting} style={{ fontSize: 13 }}>
-              {starting ? 'Starting…' : draftStatus === 'error' || stale ? 'Compose the draft again' : 'Compose pre-bid draft'}
+              {starting ? 'Starting…' : draftStatus === 'error' || draftStatus === 'cancelled' || stale ? 'Compose the draft again' : 'Compose pre-bid draft'}
             </button>
           )}
         </div>

@@ -12,9 +12,12 @@ interface RfisTabProps {
   addRfi: () => void;
   importRfisFromAnalysis: () => void;
   submitOpenRfis: () => void;
+  /** Fix round S5 — edit an RFI still in draft. Editing makes it the
+   *  estimator's own (origin 'manual'), so a re-run keeps it. */
+  editRfi?: (id: string, question: string) => void;
 }
 
-function RfisTab({ ws, aiResults, newRfi, setNewRfi, rfiSubmitting, addRfi, importRfisFromAnalysis, submitOpenRfis }: RfisTabProps) {
+function RfisTab({ ws, aiResults, newRfi, setNewRfi, rfiSubmitting, addRfi, importRfisFromAnalysis, submitOpenRfis, editRfi }: RfisTabProps) {
   const openCount = ws.rfis.filter(r => !r.submitted).length;
   const hasAnalysis = !!aiResults?.agent2_output;
   return (
@@ -53,7 +56,16 @@ function RfisTab({ ws, aiResults, newRfi, setNewRfi, rfiSubmitting, addRfi, impo
               {ws.rfis.map((r, i) => (
                 <tr key={r.id}>
                   <td className="sub">{i + 1}</td>
-                  <td style={{ fontSize: 13 }}>{r.question}</td>
+                  <td style={{ fontSize: 13 }}>
+                    {editRfi && !r.submitted ? (
+                      <input value={r.question} onChange={e => editRfi(r.id, e.target.value)} data-testid={`rfi-question-${r.id}`}
+                        aria-label={`RFI ${i + 1} question`}
+                        style={{ width: '100%', font: 'inherit', fontSize: 13, color: 'var(--text)', background: 'transparent', border: '1px solid transparent', borderRadius: 6, padding: '3px 6px', outline: 'none', boxSizing: 'border-box' }}/>
+                    ) : r.question}
+                    {r.origin === 'ai' && (
+                      <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: 'var(--text3)' }} title="Imported from the AI analysis — cleared by a re-run unless sent, answered or edited">AI</span>
+                    )}
+                  </td>
                   <td>
                     <span style={{ fontSize: 10.5, fontWeight: 800, padding: '2px 7px', borderRadius: 5,
                       background: r.submitted ? 'var(--blue-soft)' : 'var(--amber-soft)',

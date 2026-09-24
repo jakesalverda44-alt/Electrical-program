@@ -57,6 +57,12 @@ export interface EstimateLine {
    *  'takeoff' (default), 'manual' (an estimator hand-typed it), or
    *  'markup' (a confirmed Plan Viewer rollup, set only by apply-markups). */
   qty_source?: 'takeoff' | 'manual' | 'markup';
+  /** Re-run reset — set on a takeoff line the estimator had touched when the
+   *  analysis was re-run: "From previous run — re-check". Sync from takeoff
+   *  re-binds it; the estimator clears it (null) once checked. */
+  recheck_run_id?: string | null;
+  /** Fix round B1 — why Sync from takeoff could not re-bind this kept line. */
+  recheck_reason?: 'no_confident_match' | 'ambiguous_match' | null;
   source: 'takeoff' | 'manual';
   sort?: number;
 }
@@ -127,6 +133,8 @@ export interface EstimatingBidResponse {
 
 export interface SyncTakeoffResponse {
   added: number; updated: number; vanished: number; lines: EstimateLine[]; recap: PricingRecap;
+  /** Re-run reset — carried-over lines re-bound / left unmatched. */
+  rebound?: number; unbound?: number;
 }
 
 /** Phase B, Task 1 — PUT /estimating/:bidId's response now also returns the

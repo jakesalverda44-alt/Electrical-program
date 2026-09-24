@@ -28,6 +28,7 @@ import {
   // through commit() via mutate(), which is what replacePresent exists to
   // bypass (syncing a server-confirmed value without a spurious undo step).
 } from './markupHistory';
+import { useMarkupFlush } from './useMarkupFlush';
 import { useMarkupAutosave } from './useMarkupAutosave';
 import { PageGeometry } from './overlay';
 import { suggestTagMarkers, candidateTagsFromDescription, buildLineTagIndex } from './tagSuggest';
@@ -130,6 +131,11 @@ export interface PlansWorkspaceProps {
    *  called with `false` on unmount, so a stale `true` never outlives
    *  this component. */
   onMarkupUnsavedChange?: (hasUnsaved: boolean) => void;
+  /** Re-run reset fix round S6 — hands the parent a function that saves any
+   *  pending plan markup now and resolves true once saved (false on a
+   *  failed save), so a re-run never starts over unsaved markup. Called
+   *  with null on unmount. */
+  registerMarkupFlush?: (flush: (() => Promise<boolean>) | null) => void;
   /** Fix round 1 / B1 — replaces PlansWorkspace's own direct `api.put` of a
    *  `[...lines, newLine]` snapshot (built from the `lines` PROP, which
    *  useEstimatingBid.reload() never actually refreshed — B1's other
@@ -158,7 +164,7 @@ export interface PlansWorkspaceProps {
 
 export default function PlansWorkspace({
   bidId, lines, settings, initialSheetKey, initialLineKey, onSheetKeyChange, onLineKeyChange, onApplied,
-  dirty, onSaveDirtyLinesFirst, onCreateLine, proposed, onMarkupUnsavedChange, defaultDropFt = 10, defaultSlackPct = 10,
+  dirty, onSaveDirtyLinesFirst, onCreateLine, proposed, onMarkupUnsavedChange, registerMarkupFlush, defaultDropFt = 10, defaultSlackPct = 10,
   viewOnly: viewOnlyProp, showToast,
 }: PlansWorkspaceProps) {
   const confirm = useConfirm();
@@ -330,6 +336,9 @@ export default function PlansWorkspace({
   // status==='error' would leave markupUnsavedRef stuck true forever,
   // warning on every LATER navigation even after nothing is left to lose.
   useEffect(() => () => onMarkupUnsavedChange?.(false), [onMarkupUnsavedChange]);
+
+  // Re-run reset fix round S6 — save pending markup on demand.
+  useMarkupFlush(autosave.status, autosave.retryNow, registerMarkupFlush);
 
   // Fix round 2 / R2-N4 — hydratedMarkupsRef itself stays here (no
   // temporal-dead-zone issue, unlike the effect body below); the actual

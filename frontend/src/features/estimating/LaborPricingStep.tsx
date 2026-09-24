@@ -53,7 +53,7 @@ export interface LaborPricingStepProps {
   // EstimatingWorkspace.tsx's own save prop comment. This component's own
   // Save button already discards the result explicitly (`void save()`).
   save: () => Promise<unknown>;
-  syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number } | null>;
+  syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number; rebound?: number; unbound?: number } | null>;
   showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
 }
 
@@ -121,6 +121,8 @@ export function LaborPricingStep({
 
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
+  const recheckCount = lines.filter(l => !!l.recheck_run_id).length;
+
   const updateLine = (idx: number, patch: Partial<EstimateLine>) => {
     setLines(prev => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
   };
@@ -174,7 +176,8 @@ export function LaborPricingStep({
     try {
       const res = await syncTakeoff();
       if (res && showToast) {
-        showToast({ title: 'Synced from takeoff', sub: `${res.added} added · ${res.updated} updated · ${res.vanished} removed` });
+        const carried = (res.unbound ?? 0) > 0 ? ` · ${res.unbound} kept line${res.unbound === 1 ? '' : 's'} not found in the new takeoff` : '';
+        showToast({ title: 'Synced from takeoff', sub: `${res.added} added · ${res.updated} updated · ${res.vanished} removed${carried}` });
       }
     } catch (err) {
       // N8: a failed sync used to fail silently from the estimator's POV
@@ -296,6 +299,13 @@ export function LaborPricingStep({
         </div>
       )}
 
+      {recheckCount > 0 && (
+        <div className="lp-banner" data-testid="lp-recheck-banner">
+          {recheckCount} line{recheckCount === 1 ? '' : 's'} kept from the previous analysis run (you had edited {recheckCount === 1 ? 'it' : 'them'}) — re-check {recheckCount === 1 ? 'it' : 'them'} against the new takeoff.
+          {' '}Sync from takeoff re-binds {recheckCount === 1 ? 'it' : 'them'} to the new run only on the same category, unit and description; a line it can&apos;t match is left as is (it may duplicate a new takeoff line) — mark each one checked when done.
+        </div>
+      )}
+
       {unmatchedIndices.length > 0 && (
         <div className="lp-banner" data-testid="lp-unmatched-banner">
           {unmatchedIndices.length} unmatched line{unmatchedIndices.length === 1 ? '' : 's'} need resolving.
@@ -400,6 +410,22 @@ export function LaborPricingStep({
                             comparison against a live takeoff value (that
                             would need another sync round-trip this UI
                             doesn't have on hand). */}
+                        {line.recheck_run_id && (
+                          <span
+                            data-testid={`lp-recheck-badge-${idx}`}
+                            title="You had edited this line before the analysis was re-run, so it was kept. Check it against the new takeoff."
+                            style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: 'var(--amber)', border: '1px solid var(--amber)', borderRadius: 4, padding: '1px 4px' }}
+                          >
+                            {line.recheck_reason === 'no_confident_match'
+                              ? 're-check: no confident match in the new takeoff'
+                              : line.recheck_reason === 'ambiguous_match'
+                                ? 're-check: more than one new takeoff line matches'
+                                : 'From previous run — re-check'}
+                            <button type="button" className="lp-reset-btn" style={{ display: 'inline', marginLeft: 4, color: 'var(--amber)' }}
+                              data-testid={`lp-recheck-done-${idx}`}
+                              onClick={() => updateLine(idx, { recheck_run_id: null, recheck_reason: null })}>checked</button>
+                          </span>
+                        )}
                         {line.qty_overridden && (
                           <span
                             data-testid={`lp-qty-locked-hint-${idx}`}

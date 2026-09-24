@@ -18,6 +18,9 @@ interface Doc {
   uploaded_by: string;
   created_at: string;
   storage_url?: string;
+  /** Re-run reset — a generated proposal / pre-bid file from an earlier
+   *  analysis run: kept (never deleted), never sent. */
+  superseded_at?: string | null;
 }
 
 const CATEGORIES: { value: string; label: string }[] = [
@@ -173,6 +176,10 @@ export default function RecordFiles({ linkedId, linkedName, div, emptyHint, came
                 <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.display_name}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>
                   {CAT_LABEL[d.category] || d.category}{d.file_size ? ` · ${fmtSize(d.file_size)}` : ''} · {fmtDate(d.created_at, { year: 'always' })}
+                  {d.superseded_at && (
+                    <span data-testid={`doc-superseded-${d.id}`} title="From an earlier analysis run — kept for the record, never sent"
+                      style={{ marginLeft: 6, fontWeight: 800, color: 'var(--amber)' }}>· Superseded by a re-run</span>
+                  )}
                 </div>
               </div>
               <button title="View" onClick={() => view(d)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--blue)', padding: 4, flexShrink: 0 }}>

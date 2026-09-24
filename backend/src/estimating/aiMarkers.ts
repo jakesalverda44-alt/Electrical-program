@@ -136,12 +136,26 @@ export async function writeAiCountMarkers(
   bidId: string,
   countResult: CountResult,
   files: PipelineFileRef[],
+  /** Re-run reset — the analysis run these marks belong to. When given, the
+   *  write happens only while that run is still the bid's current one: a
+   *  run superseded by a re-run never puts markers back after the reset. */
+  runId?: string | null,
 ): Promise<AiMarkerWriteSummary> {
   const docByFile = await resolveDocumentsForFiles(bidId, files);
   const lines = await getBidLines(bidId);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    if (runId !== undefined) {
+      const { rows } = await client.query('SELECT run_id, status FROM takeoff_results WHERE bid_id = $1 FOR SHARE', [bidId]);
+      if ((rows[0]?.run_id ?? null) !== runId || rows[0]?.status === 'cancelled') {
+        await client.query('ROLLBACK');
+        return {
+          written: 0, skippedAlreadyMarked: 0, replacedSuggestions: 0, assigned: 0, unassigned: 0,
+          sheetsWithoutMarkers: [{ label: 'all sheets', reason: 'a newer analysis run started' }], sheetDocuments: [],
+        };
+      }
+    }
     const summary = await writeWithClient(client, bidId, countResult, docByFile, lines);
     await client.query('COMMIT');
     return summary;

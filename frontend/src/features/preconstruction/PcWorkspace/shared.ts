@@ -20,6 +20,19 @@ export interface TakeoffOnFile {
   source_file: string | null;
 }
 
-export interface ProjectDoc { id: string; name: string; display_name: string; category: string; file_type: string; }
+export interface ProjectDoc {
+  id: string; name: string; display_name: string; category: string; file_type: string;
+  /** Re-run reset — the CRM generated this file (never an analysis input). */
+  generated?: boolean;
+  /** Re-run reset — a later analysis run superseded this generated file. */
+  superseded_at?: string | null;
+}
+
+/** A CRM-generated file (never an analysis input; the server refuses it
+ *  too). Fix round S1 — by the flag only, never the category: a person can
+ *  file a real drawing under Proposal / Takeoff / Pre-Bid. */
+export function isGeneratedDoc(d: ProjectDoc): boolean {
+  return !!d.generated;
+}
 
 export type { PcStepKey };
