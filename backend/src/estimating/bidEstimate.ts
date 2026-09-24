@@ -128,6 +128,12 @@ export interface ClientLineInput {
   dup_ok?: { with: string[]; reason: string; by?: string; at?: string } | null;
   source: 'takeoff' | 'manual';
   sort?: number;
+  /** Evidence round 4.1 — why a manual line, or a manually-overridden qty,
+   *  is what it is. The GC-facing evidence gate (ai/evidence/evidenceGate.ts)
+   *  requires this on a manual/allowance line before it will let a GC
+   *  document be generated; it is never required on a takeoff-sourced,
+   *  AI-evidenced line. */
+  evidence_note?: string | null;
 }
 
 export interface BidLineRow extends ClientLineInput {
@@ -159,6 +165,11 @@ function round2(n: number): number {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Fix round (S6) — must match migration 134's backfill text exactly (a raw
+ *  SQL literal, so it can't import this constant). Kept here as the one
+ *  place the SAVE path checks for it. */
+export const EVIDENCE_NOTE_PLACEHOLDER = 'Carried over from before the evidence gate (2026-09) — add a real reason next time this line is touched.';
 
 /** Phase B, Task 1 — the value saveBidEstimate() writes for a line's
  *  line_key: the client's own value when it's a real UUID (an existing line
@@ -219,6 +230,7 @@ function rowToBidLine(r: Record<string, unknown>): BidLineRow {
     dup_ok: (r.dup_ok as BidLineRow['dup_ok']) ?? null,
     source: r.source as 'takeoff' | 'manual',
     sort: Number(r.sort),
+    evidence_note: (r.evidence_note as string | null) ?? null,
   };
 }
 
@@ -1000,17 +1012,39 @@ export async function saveBidEstimate(
   try {
     await client.query('BEGIN');
 
+    // Fix round (S6) — migration 134's grandfather placeholder is good only
+    // until the line changes: read the PRIOR qty for every line before the
+    // full delete-and-reinsert below, so a line whose qty moved while its
+    // note is still exactly the placeholder loses that note (never silently
+    // keeps passing the gate on a number nobody actually gave a reason for).
+    const { rows: priorRows } = await client.query('SELECT line_key, qty, evidence_note FROM est_bid_lines WHERE bid_id = $1', [bidId]);
+    const priorByKey = new Map(priorRows.map(r => [r.line_key as string, { qty: Number(r.qty), evidence_note: r.evidence_note as string | null }]));
+
     await client.query('DELETE FROM est_bid_lines WHERE bid_id = $1', [bidId]);
     for (let i = 0; i < rows.length; i++) {
       const l = rows[i];
       const resolvedLineKey = resolveLineKey(l.line_key);
       if (l.line_key_as_sent && l.line_key_as_sent !== resolvedLineKey) remappedLineKeys[l.line_key_as_sent] = resolvedLineKey;
+      // Fix round (S6) — the migration-134 placeholder is a grandfather
+      // clause, not a permanent pass: if this line's qty moved since the
+      // note was last whatever it is now, and the note is STILL exactly the
+      // placeholder, it is cleared (never silently kept while the number
+      // changed under it).
+      // Fix round 3 / S6 nit — the placeholder is legitimate ONLY on a line
+      // that actually carried it forward from BEFORE migration 134 (a real
+      // prior row with this exact line_key, same qty). A line with NO prior
+      // row at all can never have earned it honestly — it only got there by
+      // being copied/duplicated in the UI from a line that did, which is
+      // exactly the case that must clear it too, not just a changed qty.
+      const priorForThis = priorByKey.get(resolvedLineKey);
+      const sentNote = typeof l.evidence_note === 'string' && l.evidence_note.trim() ? l.evidence_note.trim() : null;
+      const evidenceNote = (sentNote === EVIDENCE_NOTE_PLACEHOLDER && (!priorForThis || priorForThis.qty !== l.qty)) ? null : sentNote;
       await client.query(
         `INSERT INTO est_bid_lines
            (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id,
             material_unit_override, labor_hours_override, confidence, excluded, source, qty_overridden, sync_excluded,
-            match_confidence, match_source, synced_description, line_key, qty_source, recheck_run_id, recheck_reason, dup_ok)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
+            match_confidence, match_source, synced_description, line_key, qty_source, recheck_run_id, recheck_reason, dup_ok, evidence_note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
         [bidId, l.sort, l.category, l.description, l.qty, l.unit,
          l.assembly_id ?? null, l.item_id ?? null, l.takeoff_key ?? null, l.takeoff_item_id ?? null,
          l.material_unit_override ?? null, l.labor_hours_override ?? null,
@@ -1040,7 +1074,11 @@ export async function saveBidEstimate(
          l.source === 'takeoff' ? (l.recheck_run_id ?? null) : null,
          l.source === 'takeoff' && l.recheck_run_id ? (l.recheck_reason ?? null) : null,
          // Next round A7 — "different items — keep both" (a kept line only).
-         l.source === 'takeoff' && l.dup_ok ? JSON.stringify(l.dup_ok) : null]
+         l.source === 'takeoff' && l.dup_ok ? JSON.stringify(l.dup_ok) : null,
+         // Evidence round 4.1 — round-tripped like sync_excluded/qty_source:
+         // the client sends back whatever it received, trimmed to null when
+         // blank so an empty string never counts as "has a reason".
+         evidenceNote]
       );
     }
 

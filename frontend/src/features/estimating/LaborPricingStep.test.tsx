@@ -578,3 +578,66 @@ describe('next round B2/B3 — pricing_mode switches Phase A settings for the Ac
     expect(screen.queryByTestId('accubid-pricing-panel')).toBeNull();
   });
 });
+
+describe('Fix round B5 — "Evidence / reason" field on manual/overridden lines', () => {
+  it('shows the field for a manual line, flags it "needed" until it reads as a real reason, and saves it on the line', async () => {
+    const { setLines } = renderStep({
+      lines: [{ id: 'l1', line_key: 'lk1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'manual' }],
+    });
+    expect(screen.getByTestId('lp-evidence-note-missing-0')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Evidence / reason for Duplex receptacle'), { target: { value: 'Owner allowance — priced from the spec sheet' } });
+    expect(setLines).toHaveBeenCalled();
+    const updater = setLines.mock.calls[0][0] as (prev: EstimateLine[]) => EstimateLine[];
+    const next = updater([{ id: 'l1', line_key: 'lk1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'manual' }]);
+    expect(next[0].evidence_note).toBe('Owner allowance — priced from the spec sheet');
+  });
+
+  it('never shows the field for an ordinary takeoff line', () => {
+    renderStep({
+      lines: [{ id: 'l1', line_key: 'lk1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'takeoff' }],
+    });
+    expect(screen.queryByTestId('lp-evidence-note-0')).toBeNull();
+  });
+
+  it('shows the field for a takeoff line the estimator hand-overrode the qty on (qty_source: manual), even though source stays "takeoff"', () => {
+    renderStep({
+      lines: [{ id: 'l1', line_key: 'lk1', category: 'Branch Power', description: 'Duplex receptacle', qty: 12, unit: 'EA', item_id: 'i1', source: 'takeoff', qty_overridden: true, qty_source: 'manual' }],
+    });
+    expect(screen.getByTestId('lp-evidence-note-0')).toBeTruthy();
+  });
+
+  it('a placeholder like ".........." still reads as missing (mirrors the backend\'s isRealReason)', () => {
+    renderStep({
+      lines: [{ id: 'l1', line_key: 'lk1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'manual', evidence_note: '..........' }],
+    });
+    expect(screen.getByTestId('lp-evidence-note-missing-0')).toBeTruthy();
+  });
+
+  it('once a real reason is on the line, the "needed" flag is gone', () => {
+    renderStep({
+      lines: [{ id: 'l1', line_key: 'lk1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'manual', evidence_note: 'Owner allowance per spec sheet 4.2' }],
+    });
+    expect(screen.queryByTestId('lp-evidence-note-missing-0')).toBeNull();
+  });
+
+  it('an excluded line never shows the field (it never reaches a GC document, so it is never gated)', () => {
+    renderStep({
+      lines: [{ id: 'l1', line_key: 'lk1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'manual', excluded: true }],
+    });
+    expect(screen.queryByTestId('lp-evidence-note-0')).toBeNull();
+  });
+
+  it('focusLineKey scrolls to and focuses the named line\'s reason field, then calls onFocusedLine', async () => {
+    const onFocusedLine = vi.fn();
+    renderStep({
+      lines: [
+        { id: 'l1', line_key: 'lk1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'manual' },
+        { id: 'l2', line_key: 'lk2', category: 'Branch Power', description: 'Weatherproof GFCI', qty: 4, unit: 'EA', source: 'manual' },
+      ],
+      focusLineKey: 'lk2',
+      onFocusedLine,
+    });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Evidence / reason for Weatherproof GFCI')));
+    await waitFor(() => expect(onFocusedLine).toHaveBeenCalled());
+  });
+});

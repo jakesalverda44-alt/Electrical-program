@@ -55,6 +55,9 @@ export interface EstimatingWorkspaceProps {
   insights: React.ReactNode;
   /** Fix round 1 / N7 — see BidSummaryProps.initialInsightsOpen. */
   initialInsightsOpen?: boolean;
+  /** Fix round B5 — see LaborPricingStepProps.focusLineKey/onFocusedLine. */
+  focusLineKey?: string | null;
+  onFocusedLine?: () => void;
 
   /** The other four steps' (already re-homed, unchanged) content — Labor &
    *  Pricing is the only step this module itself renders. */
@@ -70,7 +73,7 @@ export default function EstimatingWorkspace({
   currentStep, onSelectStep, doneByStep, saveState, nextAction, bidId,
   lines, settings, recap, proposed, dirty, savedGrandTotal, saving, syncing, saveError, duplicates, setLines, setSettings, save, syncTakeoff, showToast,
   comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary,
-  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys,
+  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, focusLineKey, onFocusedLine,
 }: EstimatingWorkspaceProps) {
   return (
     <EstimateShell
@@ -113,6 +116,8 @@ export default function EstimatingWorkspace({
           save={save}
           syncTakeoff={syncTakeoff}
           showToast={showToast}
+          focusLineKey={focusLineKey}
+          onFocusedLine={onFocusedLine}
         />
       ) : otherStepContent}
     </EstimateShell>

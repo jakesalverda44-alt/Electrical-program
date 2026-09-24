@@ -107,5 +107,13 @@ export async function purgeExpired(retentionMonths: number): Promise<Record<stri
   // 'pending' items are never purged here regardless of age — an unresolved
   // invitation sitting for 180+ days is exactly what the inbox should keep showing.
   await runFixed('intake_items', `DELETE FROM intake_items WHERE status IN ('accepted','declined') AND created_at < now() - interval '180 days'`);
+  // Fix round N7 — migration 133's sheet_evidence_cache (evidence round
+  // Parts 1-3's viewport/typical/schedule reader cache, keyed by content
+  // hash + page + kind + prompt version) had no retention at all: a large
+  // enough set of bids/re-uploads would grow it forever. A fixed 180-day
+  // window, not the caller's retentionMonths — a re-analysis past that age
+  // just re-reads the sheet (the same as a changed file or a new prompt
+  // version already does); nothing downstream needs a cache entry that old.
+  await runFixed('sheet_evidence_cache', `DELETE FROM sheet_evidence_cache WHERE created_at < now() - interval '180 days'`);
   return counts;
 }

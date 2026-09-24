@@ -34,6 +34,8 @@ interface ProposalTabProps {
   xlsxBusy: boolean;
   sendProposalOpen: boolean;
   setSendProposalOpen: (v: boolean) => void;
+  /** Fix round B5/gap 2 — see SendBidProposalModal's own prop comment. */
+  onJumpToEvidenceLine?: (lineKey: string) => void;
   onBidUpdated: (bid: Bid) => void;
   showToast: (t: import('../../../types').Toast) => void;
   generatePrebidPackage: () => void;
@@ -52,7 +54,7 @@ interface ProposalTabProps {
 
 function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, engineTotal, onUseEngineTotal, propNotes, setPropNotes,
   agent4StartError, setAgent4StartError, agent4Running, stopAgent4, stoppingAgent4, runAgent4Proposal, downloadDocx, docxBusy,
-  downloadTakeoffXlsx, xlsxBusy, sendProposalOpen, setSendProposalOpen, onBidUpdated, showToast,
+  downloadTakeoffXlsx, xlsxBusy, sendProposalOpen, setSendProposalOpen, onJumpToEvidenceLine, onBidUpdated, showToast,
   generatePrebidPackage, prebidBusy, prebidResult, downloadFiledDocument, emailPrebidToChris,
   chrisDraftBusy, chrisDraftLink, verifyFailures, proposalPreview, convertOpen, setConvertOpen,
   handleConvert }: ProposalTabProps) {
@@ -224,6 +226,7 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
         <SendBidProposalModal
           bid={bid}
           onClose={() => setSendProposalOpen(false)}
+          onJumpToEvidenceLine={onJumpToEvidenceLine}
           onSent={({ bid: updatedBid, stageAdvanced, attached }) => {
             onBidUpdated(updatedBid);
             showToast({

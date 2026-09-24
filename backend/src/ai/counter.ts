@@ -44,7 +44,15 @@ const PAIR_TILE_PAD_IN = 0.25;
  *  is rejected rather than clamped. */
 const EDGE_TOLERANCE = 0.02;
 
-export interface RawMark { typeKey: string; tileId: string; nx: number; ny: number }
+export interface RawMark { typeKey: string; tileId: string; nx: number; ny: number;
+  /** Fix round 3 / S19 — the circuit tag printed at the symbol ("A-31"), when the counter read one. */
+  circuit?: string }
+
+/** "A-31" / "A31" / "a 31" -> "A31"; anything that is not a circuit tag -> undefined. */
+export function normalizeCircuit(v: unknown): string | undefined {
+  const t = String(v ?? '').toUpperCase().replace(/[\s-]+/g, '');
+  return /^[A-Z]{0,4}\d{1,3}(?:[,/&]\d{1,3})*$/.test(t) && /\d/.test(t) ? t : undefined;
+}
 export interface ParsedCounterResponse {
   marks: RawMark[];
   unreadable: Array<{ typeKey: string; tileId: string | null; note: string }>;
@@ -62,6 +70,7 @@ function targetLine(t: CountTarget): string {
   ];
   if (t.symbolHint) parts.push(`drawn as: ${sanitizeForPrompt(t.symbolHint)}`);
   if (t.category === 'site_lighting') parts.push('POLE-MOUNTED — mark each pole once');
+  if (t.role === 'host') parts.push('HOST MARKER — mark each drawn instance of this tag/symbol on the plans once (it multiplies a typical)');
   return `- ${parts.join(' | ')}`;
 }
 
@@ -82,6 +91,7 @@ export function buildCounterContent(
   targets: CountTarget[],
   tiles: CountTile[],
   group: { index: number; of: number },
+  sheetNote = '',
 ): Anthropic.ContentBlockParam[] {
   const blocks: Anthropic.ContentBlockParam[] = [];
   const scope = group.of > 1
@@ -89,7 +99,7 @@ export function buildCounterContent(
     : '';
   blocks.push({
     type: 'text',
-    text: `SHEET: ${sanitizeForPrompt(sheet.label)}${scope}\n\nCOUNT TARGETS (tag | kind | description | how drawn):\n${targets.map(targetLine).join('\n')}`,
+    text: `SHEET: ${sanitizeForPrompt(sheet.label)}${scope}\n\nCOUNT TARGETS (tag | kind | description | how drawn):\n${targets.map(targetLine).join('\n')}${sheetNote}`,
   });
   for (const t of tiles) {
     blocks.push({ type: 'text', text: `Tile ${t.id} (row ${t.row}, column ${t.col})` });
@@ -143,9 +153,9 @@ export function parseCounterResponse(
   const out: ParsedCounterResponse = { marks: [], unreadable: [], rejected: [], notes: [] };
   const rawMarks = parsed.marks;
   for (const m of rawMarks) {
-    let type: unknown, tile: unknown, x: unknown, y: unknown;
-    if (Array.isArray(m)) [type, tile, x, y] = m;
-    else if (m && typeof m === 'object') ({ type, tile, x, y } = m as Record<string, unknown>);
+    let type: unknown, tile: unknown, x: unknown, y: unknown, circuit: unknown;
+    if (Array.isArray(m)) [type, tile, x, y, circuit] = m;
+    else if (m && typeof m === 'object') ({ type, tile, x, y, circuit } = m as Record<string, unknown>);
     const raw = JSON.stringify(m).slice(0, 120);
     const typeKey = normalizeTypeKey(String(type ?? ''));
     const tileId = String(tile ?? '').trim().toUpperCase().replace(/^TILE\s+/, '');
@@ -158,7 +168,8 @@ export function parseCounterResponse(
       out.rejected.push({ raw, reason: 'position is outside the tile' });
       continue;
     }
-    out.marks.push({ typeKey, tileId, nx: Math.min(1, Math.max(0, nx)), ny: Math.min(1, Math.max(0, ny)) });
+    const ckt = normalizeCircuit(circuit);
+    out.marks.push({ typeKey, tileId, nx: Math.min(1, Math.max(0, nx)), ny: Math.min(1, Math.max(0, ny)), ...(ckt ? { circuit: ckt } : {}) });
   }
   for (const u of parsed.unreadable) {
     if (!u || typeof u !== 'object') continue;
@@ -179,6 +190,8 @@ export function parseCounterResponse(
 
 export interface PlacedMark {
   typeKey: string;
+  /** Fix round 3 / S19 — the circuit tag read at the symbol, if any. */
+  circuit?: string;
   /** Every tile that reported this symbol (>1 after an overlap merge). */
   tileIds: string[];
   x: number;
@@ -286,7 +299,8 @@ export function placeAndDedupe(
     const dx = members.reduce((s, i) => s + pts[i].dx, 0) / members.length;
     const dy = members.reduce((s, i) => s + pts[i].dy, 0) / members.length;
     const p = displayedInToPdf(dx, dy, geom);
-    placed.push({ typeKey: first.m.typeKey, tileIds: members.map(i => pts[i].m.tileId), x: p.x, y: p.y });
+    const circuit = members.map(i => pts[i].m.circuit).find(Boolean);
+    placed.push({ typeKey: first.m.typeKey, tileIds: members.map(i => pts[i].m.tileId), x: p.x, y: p.y, ...(circuit ? { circuit } : {}) });
   }
   return { placed, mergedDuplicates, outsideCore };
 }
@@ -341,6 +355,9 @@ export interface CounterRunInput {
   shouldStop?: () => boolean;
   /** Live progress: sheets whose every call has finished, of all sheets. */
   onProgress?: (done: number, total: number) => void;
+  /** Evidence round 1.2 — per sheet key, extra instructions appended to the
+   *  target list (the sheet's viewports). */
+  sheetNotes?: Map<string, string>;
 }
 
 export interface CounterRunResult {
@@ -424,7 +441,7 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
     const r = results[w.si];
     if (r.status === 'failed') return;
     const targets = targetsForSheet(r.sheet, input.targets);
-    const content = buildCounterContent(r.sheet, targets, w.tiles, { index: w.index, of: w.of });
+    const content = buildCounterContent(r.sheet, targets, w.tiles, { index: w.index, of: w.of }, input.sheetNotes?.get(r.sheet.key) ?? '');
     try {
       const resp = await callWithRetry(() => input.client.messages.stream({
         model: input.model,

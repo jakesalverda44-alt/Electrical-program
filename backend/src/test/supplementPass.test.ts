@@ -19,7 +19,10 @@ const filler = Array.from({ length: 30 }, (_, i) => ({ x: 72, y: 1200 - i * 14, 
 
 const CLASS: Record<string, { sheetNo: string; title: string; cls: string }> = {
   'E-0.1': { sheetNo: 'E-0.1', title: 'FIXTURE SCHEDULE', cls: 'schedule' },
-  'E-3': { sheetNo: 'E-3', title: 'LIGHTING PLAN', cls: 'plan' },
+  // Fix round 3 / S15 — the first floor names its level: an unnamed-level
+  // plan whose marks coincide with a LEVEL 2 plan is now asked about (the
+  // same floor twice?), which is not what this supplement test is about.
+  'E-3': { sheetNo: 'E-3', title: 'FIRST FLOOR LIGHTING PLAN', cls: 'plan' },
   'E-9': { sheetNo: 'E-9', title: 'LEVEL 2 LIGHTING PLAN', cls: 'plan' },
 };
 
@@ -104,14 +107,14 @@ import type { ReviewItem } from '../ai/reviewItems';
 
 const MAIN = buildSymbolPdf([
   { mediaBox: [0, 0, W, H], symbols: [], texts: [...filler, ...tb('E-0.1', 'FIXTURE SCHEDULE')] },
-  { mediaBox: [0, 0, W, H], symbols: [{ type: 'A', x: 200, y: 900 }], texts: [...filler, { x: 72, y: 700, size: 9, text: '5. SEE E-9 FOR THE MEZZANINE.' }, ...tb('E-3', 'LIGHTING PLAN')] },
+  { mediaBox: [0, 0, W, H], symbols: [{ type: 'A', x: 200, y: 900 }], texts: [...filler, { x: 72, y: 700, size: 9, text: '5. SEE E-9 FOR THE MEZZANINE.' }, ...tb('E-3', 'FIRST FLOOR LIGHTING PLAN')] },
 ]);
 const MECH = buildSymbolPdf([
   { mediaBox: [0, 0, W, H], symbols: [], texts: [...filler.map(t => ({ ...t, text: t.text.replace('GENERAL NOTE', 'MECH NOTE') })), { x: 72, y: 700, size: 9, text: 'RTU-1 208V 3PH MCA 42 MOCP 60' }, ...tb('M-1', 'MECHANICAL SCHEDULES')] },
 ]);
 // E-3 revised (addendum): same sheet number, different content.
 const REVISED = buildSymbolPdf([
-  { mediaBox: [0, 0, W, H], symbols: [{ type: 'A', x: 200, y: 900 }, { type: 'A', x: 400, y: 900 }], texts: [...filler, { x: 72, y: 700, size: 9, text: 'ADDENDUM 1: TWO FIXTURES ADDED IN SALES.' }, ...tb('E-3', 'LIGHTING PLAN')] },
+  { mediaBox: [0, 0, W, H], symbols: [{ type: 'A', x: 200, y: 900 }, { type: 'A', x: 400, y: 900 }], texts: [...filler, { x: 72, y: 700, size: 9, text: 'ADDENDUM 1: TWO FIXTURES ADDED IN SALES.' }, ...tb('E-3', 'FIRST FLOOR LIGHTING PLAN')] },
 ]);
 const SUPP = buildSymbolPdf([
   { mediaBox: [0, 0, W, H], symbols: [{ type: 'Z', x: 300, y: 900 }], texts: [...filler, ...tb('E-9', 'LEVEL 2 LIGHTING PLAN')] },

@@ -45,11 +45,14 @@ import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
 import { runCountingStage, runSupplementCounting, type CountResult } from '../ai/countingStage';
+import { dbEvidenceCache } from '../services/evidenceCache';
 import { normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
-import { writeAiCountMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
+import { writeAiCountMarkers, writeGapFillMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
 import { buildReviewItems, referencedSheetItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
-import { takeoffGate, budgetPendingGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
+import { takeoffGate, budgetPendingGate, evidenceGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
+import { logLabeledEvents } from '../estimating/labeledEvents';
+import { deriveExpectedFromConfirmedCounts } from '../estimating/finishedBidEval';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
 import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
 import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey, overrideFor } from '../bidstd/scopeList';
@@ -86,6 +89,10 @@ export interface AIConfig {
   /** Next round A2 — Sonnet vision reads a scanned sheet's notes region for
    *  references (setting ai_sheet_refs_vision_model). */
   modelRefVision: string;
+  /** Evidence round — the narrow readers (viewports, typicals, schedule
+   *  rows): setting ai_takeoff_evidence_model / ai_max_tokens_evidence. */
+  modelEvidence: string;
+  maxTokensEvidence: number;
   maxTokensCounter: number;
   maxTokensA1: number;
   maxTokensA2: number;
@@ -110,9 +117,20 @@ const DEFAULT_MAX_TOKENS_A4 = 8000;
  *  sized for thinking plus ~200-400 compact marks per sheet (see counter.ts). */
 export const DEFAULT_COUNTER_MODEL = 'claude-opus-5-5';
 export const DEFAULT_MAX_TOKENS_COUNTER = 32000;
+/** Evidence round — the readers read one sheet overview / one crop / one
+ *  table per call. Opus 5.5 by default: its high-resolution image limit
+ *  (3.75 MP) sees a 36x24 sheet overview at ~64 px/in and a panel schedule
+ *  crop at ~180 px/in; the standard tier (Sonnet 4.6, 1.2 MP) gets ~37 and
+ *  ~105 px/in — small print. Changeable in Settings -> AI. */
+export const DEFAULT_EVIDENCE_MODEL = 'claude-opus-5-5';
+export const DEFAULT_MAX_TOKENS_EVIDENCE = 16000;
 const DEFAULT_TEMPERATURE = 0.3;
 
 function parseNumberSetting(value: string, fallback: number, min: number, max: number): number {
+  // Evidence round (found by its settings test): an emptied field is stored
+  // as '' and Number('') is 0, which clamped to the MINIMUM (1,024 tokens —
+  // a truncated run) instead of meaning "use the default".
+  if (!String(value ?? '').trim()) return fallback;
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
@@ -126,6 +144,7 @@ export async function loadAIConfig(): Promise<AIConfig> {
     promptA1Setting, promptA2Setting, promptA3Setting, promptA4Setting,
     dpiScheduleSetting, dpiPlanSetting, tilesScheduleSetting, tilesPlanSetting,
     modelCounterSetting, maxCounterSetting, modelRefVisionSetting,
+    modelEvidenceSetting, maxEvidenceSetting,
   ] = await Promise.all([
     getSetting('ai_model'),
     getSetting('ai_takeoff_agent2_model'),
@@ -148,6 +167,8 @@ export async function loadAIConfig(): Promise<AIConfig> {
     getSetting('ai_takeoff_counter_model'),
     getSetting('ai_max_tokens_counter'),
     getSetting('ai_sheet_refs_vision_model'),
+    getSetting('ai_takeoff_evidence_model'),
+    getSetting('ai_max_tokens_evidence'),
   ]);
   const defaultModel = (process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim();
   return {
@@ -158,6 +179,8 @@ export async function loadAIConfig(): Promise<AIConfig> {
     modelClassifier: (modelClassifierSetting || 'claude-haiku-4-5-20251001'),
     modelCounter: ((modelCounterSetting || '').trim() || DEFAULT_COUNTER_MODEL),
     modelRefVision: ((modelRefVisionSetting || '').trim() || 'claude-sonnet-4-6'),
+    modelEvidence: ((modelEvidenceSetting || '').trim() || DEFAULT_EVIDENCE_MODEL),
+    maxTokensEvidence: parseNumberSetting(maxEvidenceSetting || '', DEFAULT_MAX_TOKENS_EVIDENCE, 1024, 64000),
     maxTokensCounter: parseNumberSetting(maxCounterSetting || '', DEFAULT_MAX_TOKENS_COUNTER, 1024, 128000),
     maxTokensA1: parseNumberSetting(maxA1Setting || '', DEFAULT_MAX_TOKENS_A1, 256, 64000),
     maxTokensA2: parseNumberSetting(maxA2Setting || '', DEFAULT_MAX_TOKENS_A2, 256, 64000),
@@ -1182,6 +1205,8 @@ async function runPipelineStages(
     const countingInput = {
       client, model: config.modelCounter, maxTokens: config.maxTokensCounter,
       agent1: agent1ForCounting, inventory: countingInventory, pdfs,
+      // Evidence round Parts 1-3 — viewports, typicals, schedule rows.
+      evidence: { model: config.modelEvidence, maxTokens: config.maxTokensEvidence, cache: dbEvidenceCache },
       // Fix round S2 — also once a newer run took over (the progress write
       // below sets `superseded`): a superseded run launches no more sheets.
       shouldStop: () => signal.aborted || superseded,
@@ -1221,6 +1246,18 @@ async function runPipelineStages(
           [JSON.stringify({ replacedIds: replacedIds ?? [], writtenIds: writtenIds ?? [] }), bidId]).catch(() => {});
       }
       (stage.countResult as unknown as Record<string, unknown>).markers = markerSummary;
+      // Fix round (B2) — gap-fill's suggested marks, same source files, same
+      // "never a count until confirmed" rule. Non-fatal, like the counter's
+      // own write above: a failure here loses the suggestions, never a count.
+      const gfSuggested = stage.countResult.evidence?.gapFill?.suggested ?? [];
+      if (gfSuggested.length) {
+        try {
+          await writeGapFillMarkers(bidId, stage.countResult, gfSuggested,
+            markerFiles.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })), runId);
+        } catch (err) {
+          logger.warn({ err, bidId }, '[takeoff] writing gap-fill suggested markers failed');
+        }
+      }
     } catch (err) {
       logger.warn({ err, bidId }, '[takeoff] writing AI count markers failed');
       (stage.countResult as unknown as Record<string, unknown>).markers = { error: 'suggested markers could not be written' };
@@ -1261,6 +1298,21 @@ async function runPipelineStages(
       throw err;
     } finally {
       tx.release();
+    }
+    // Evidence round 5.1 — one labeled event per gap-fill SUGGESTION (B2:
+    // never an accepted count — only the estimator's own later confirmation,
+    // logged separately at that point, ever is): a crop reference (sheet +
+    // position, never image bytes), the type, confidence and note.
+    // Fire-and-forget, after the transaction, never delays the response.
+    if (!superseded) {
+      const suggested = stage.countResult.evidence?.gapFill?.suggested ?? [];
+      const gapFillEvents = suggested.map(g => ({
+        bidId, runId, kind: 'gapfill_suggested' as const, typeKey: g.typeKey, sheetKey: g.sheetKey,
+        client: bidRows[0]?.brand ?? null, projectType: bidRows[0]?.project_type ?? null,
+        cropRef: { sheetKey: g.sheetKey },
+        detail: { x: g.x, y: g.y, confidence: g.confidence, note: g.note.slice(0, 500) },
+      }));
+      if (gapFillEvents.length) void logLabeledEvents(gapFillEvents);
     }
   } catch (err) {
     if (stoppedBy(err)) return;
@@ -2092,14 +2144,17 @@ router.get('/:bidId/review', requireAuth, asyncHandler(async (req: AuthRequest, 
 router.post('/:bidId/review/resolve', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const body = req.body as { itemIds?: unknown; action?: unknown; qty?: unknown; reason?: unknown; answer?: unknown; answerIndex?: unknown; useSuggested?: unknown };
+  const body = req.body as { itemIds?: unknown; action?: unknown; qty?: unknown; reason?: unknown; answer?: unknown; answerIndex?: unknown; useSuggested?: unknown; memberKey?: unknown };
   const itemIds = Array.isArray(body.itemIds) ? body.itemIds.filter((x): x is string => typeof x === 'string') : [];
   const action = body.action;
   if (!itemIds.length) return res.status(400).json({ error: 'itemIds required' });
   if (action !== 'count' && action !== 'markers' && action !== 'not_on_job' && action !== 'answer' && action !== 'confirm') {
     return res.status(400).json({ error: 'action must be count, markers, not_on_job, answer or confirm' });
   }
-  const out = await resolveReviewItems(bidId, itemIds, { action, qty: body.qty, reason: body.reason, answer: body.answer, answerIndex: body.answerIndex, useSuggested: body.useSuggested }, req.user!.name);
+  // B6 — a legend-zero GROUP resolves member by member: memberKey names
+  // which member of the group this call answers (omitted = every member
+  // still unanswered, each recorded with its own resolution).
+  const out = await resolveReviewItems(bidId, itemIds, { action, qty: body.qty, reason: body.reason, answer: body.answer, answerIndex: body.answerIndex, useSuggested: body.useSuggested, memberKey: body.memberKey }, req.user!.name);
   if (!out.ok) return res.status(out.status).json({ error: out.error });
   // Task 12 — the last open item just cleared: compose the pre-bid draft.
   let draftStarted = false;
@@ -2121,6 +2176,73 @@ router.post('/:bidId/review/reopen', requireAuth, asyncHandler(async (req: AuthR
   const out = await reopenReviewItem(bidId, itemId);
   if (!out.ok) return res.status(out.status).json({ error: out.error });
   res.json(out.review);
+}));
+
+// Evidence round 5.2 — "Finished bid": attach an answer key and store it as
+// an eval case (scripts/evalTakeoff.ts's shape). Two sources:
+//   * the bid's own CONFIRMED counts (default — always available once the
+//     analysis has run; never an unresolved AI guess, see
+//     deriveExpectedFromConfirmedCounts);
+//   * a Chris BOM/breakdown import reference, when the estimator names one
+//     (bomImportDocumentId) — recorded as the input the case is FROM (fix
+//     round S8: validated as THIS bid's OWN cost_breakdown document, never
+//     someone else's or a plans/photo upload). Nothing here actually parses
+//     that document into `expected` yet, so the case's `source` stays the
+//     honest 'confirmed_counts' until that parse exists — S8, never
+//     mislabeled just because a reference was named.
+// Fix round S7 — an eval case is an ANSWER KEY: it needs the same "every
+// count resolved" guarantee a proposal send has, so it shares the
+// proposal's own gate (open items block it here too, listed, never
+// silently excluded from the answer key). Fix round N4 — idempotent per
+// (bid, run, source): a second call for the same run updates that one eval
+// case instead of duplicating it in the eval set; view_results is the
+// weakest AI permission that already gates reading a bid's takeoff.
+router.post('/:bidId/finish-bid', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const gate = await takeoffGate(bidId);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+  const { rows: trRows } = await pool.query('SELECT count_result, review_items, run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const countResult = trRows[0]?.count_result as CountResult | null;
+  if (!countResult) return res.status(400).json({ error: 'No takeoff analysis on this bid yet — run the analysis first.' });
+  const reviewItems = (trRows[0]?.review_items as ReviewItem[] | null) ?? [];
+  const runId = (trRows[0]?.run_id as string | null) ?? null;
+  const { rows: bidRows } = await pool.query('SELECT brand, project_type FROM bids WHERE id=$1', [bidId]);
+  const bomImportDocumentId = typeof req.body?.bomImportDocumentId === 'string' ? req.body.bomImportDocumentId : null;
+  let bomImportLabel: string | null = null;
+  if (bomImportDocumentId) {
+    const { rows: docRows } = await pool.query(
+      `SELECT category, display_name, name FROM documents WHERE id = $1 AND linked_id = $2 AND deleted_at IS NULL`,
+      [bomImportDocumentId, bidId]
+    );
+    if (!docRows.length) return res.status(400).json({ error: 'bomImportDocumentId does not belong to this bid.' });
+    if (docRows[0].category !== 'cost_breakdown') {
+      return res.status(400).json({ error: 'bomImportDocumentId is not a BOM / cost breakdown document on this bid.' });
+    }
+    bomImportLabel = (docRows[0].display_name as string | null) ?? (docRows[0].name as string | null);
+  }
+
+  const expected = deriveExpectedFromConfirmedCounts(countResult, reviewItems);
+  if (!expected.length) {
+    return res.status(400).json({ error: 'No confirmed counts to build an eval case from yet — resolve the takeoff review first.' });
+  }
+  const loaded = await composeCurrentBidData(bidId, { validate: false, persist: false }).catch(() => null);
+  const inputsHash = loaded && loaded.ok ? loaded.inputsHash : null;
+  const source = 'confirmed_counts'; // S8 — honest until a BOM parse actually feeds `expected`
+  const { rows } = await pool.query(
+    `INSERT INTO takeoff_eval_cases (bid_id, run_id, client, project_type, source, expected, inputs_ref, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (bid_id, (COALESCE(run_id::text, 'no-run')), source) DO UPDATE SET
+       client = EXCLUDED.client, project_type = EXCLUDED.project_type, expected = EXCLUDED.expected,
+       inputs_ref = EXCLUDED.inputs_ref, created_by = EXCLUDED.created_by, created_at = now()
+     RETURNING id, created_at`,
+    [
+      bidId, runId, bidRows[0]?.brand ?? null, bidRows[0]?.project_type ?? null,
+      source, JSON.stringify(expected),
+      JSON.stringify({ runId, inputsHash, ...(bomImportDocumentId ? { bomImportDocumentId, bomImportLabel } : {}) }), req.user!.name,
+    ]
+  );
+  res.json({ id: rows[0].id, createdAt: rows[0].created_at, itemCount: expected.length, expected });
 }));
 
 // Fix round 1 / B2 — the estimator enters the fixture types (when the
@@ -2825,6 +2947,10 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   // number CES/the vendor hasn't confirmed).
   const budgetGate = await budgetPendingGate(bidId);
   if (budgetGate) return res.status(409).json({ error: budgetGate.error });
+  // Evidence round 4.1 — every GC-facing quantity needs evidence (or, for a
+  // manual/hand-typed line, a reason). Never applied to the pre-bid package.
+  const evGate = await evidenceGate(bidId);
+  if (evGate) return res.status(409).json({ error: evGate.error, reviewItems: evGate.openItems });
 
   const { rows: trRows } = await pool.query(
     'SELECT agent1_output, agent2_output, review_items, account_terms, run_id FROM takeoff_results WHERE bid_id=$1',
@@ -3325,6 +3451,10 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
   // proposal docx/PDF (soffice-converted from this same buffer below).
   const budgetGate = await budgetPendingGate(bidId);
   if (budgetGate) return res.status(409).json({ error: budgetGate.error });
+  // Evidence round 4.1 — every GC-facing quantity needs evidence (or, for a
+  // manual/hand-typed line, a reason). Never applied to the pre-bid package.
+  const evGate = await evidenceGate(bidId);
+  if (evGate) return res.status(409).json({ error: evGate.error, reviewItems: evGate.openItems });
 
   const loaded = await composeCurrentBidData(bidId);
   if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error, ...(loaded.failures ? { failures: loaded.failures } : {}) });
@@ -3463,6 +3593,10 @@ router.get('/:bidId/generate-takeoff-xlsx', requireAuth, requireAIPermission('vi
   // Fix round 2 / B5 — a budget-pending vendor quote blocks the GC takeoff xlsx too.
   const budgetGate = await budgetPendingGate(bidId);
   if (budgetGate) return res.status(409).json({ error: budgetGate.error });
+  // Evidence round 4.1 — every GC-facing quantity needs evidence (or, for a
+  // manual/hand-typed line, a reason). Never applied to the pre-bid package.
+  const evGate = await evidenceGate(bidId);
+  if (evGate) return res.status(409).json({ error: evGate.error, reviewItems: evGate.openItems });
 
   const loaded = await composeCurrentBidData(bidId);
   if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error, ...(loaded.failures ? { failures: loaded.failures } : {}) });

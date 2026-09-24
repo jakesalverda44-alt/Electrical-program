@@ -115,6 +115,8 @@ async function main(): Promise<number> {
     const stages: Array<[string, UsageLike | null, string | null]> = [
       ['Classifier + Agent 1', r.usage_agent1, r.model_agent1],
       ['Counter (Agent 1C)', r.usage_counter, r.model_counter],
+      // Evidence round — viewports / typicals / schedule rows (count_result.evidence).
+      ['Evidence readers', cr?.evidence?.usage ?? null, cr?.evidence?.model ?? null],
       ['Agent 2', r.usage_agent2, r.model_agent2],
       ['Agent 3', r.usage_agent3, r.model_agent3],
       ['Pre-bid draft (Agent 4)', r.usage_draft, r.draft_model],

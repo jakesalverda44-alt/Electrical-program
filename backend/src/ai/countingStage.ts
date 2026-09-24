@@ -15,8 +15,16 @@ import { counterTileSpec, retryTileIn, type ModelImageLimits } from './modelLimi
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
 import { readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry } from './countRender';
 import { runCounter, type SheetCountResult } from './counter';
-import { mergeCountsIntoTakeoff, isSiteFixtureCategory, type CountMergeResult } from './countMerge';
+import { mergeCountsIntoTakeoff, isSiteFixtureCategory, type CountMergeResult, type CountMergeEvidenceResult, type SheetCountInput } from './countMerge';
 import { logger } from '../utils/logger';
+import { sanitizeForPrompt } from './sanitizeForPrompt';
+import { runEvidenceStage, type EvidenceCache, type EvidencePage, type EvidenceStageOutput, type EvidenceUsage } from './evidence/evidenceStage';
+import { resolveSheetMarks, viewportPromptBlock, type EnlargedDecision, type SheetMarkResolution } from './evidence/viewportResolve';
+import { hostTargets, type TypicalPackage } from './evidence/typicals';
+import { dedupePanels, isCompletePanel, panelChoices, scheduleCounts, type PanelChoice, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
+import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewports';
+import { reconcile, type ReconcileFinding } from './evidence/reconcile';
+import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillStage, sha256Of, type GapFillSheetAsset } from './evidence/gapFillStage';
 
 export const COUNT_RESULT_VERSION = 2;
 
@@ -40,10 +48,81 @@ export interface CountResultSheet {
   unreadable: SheetCountResult['unreadable'];
   /** Next round A5 — the dense-area retry, both passes. */
   retry?: SheetCountResult['retry'];
+  /** Evidence round 1.1 — the sheet's viewports and where they came from. */
+  viewports?: Viewport[];
+  viewportSource?: 'text' | 'vision' | 'none';
+  viewportNote?: string;
+  /** Evidence round 1.2 — marks not counted as devices, per type, with why.
+   *  Fix round (B1) — `marks` (PDF points) lets gap-fill treat these as
+   *  "already known" too: a real GFCI a main-plan area's replacement
+   *  excluded must never come back as a gap-fill "new" one. */
+  excluded?: Array<{ typeKey: string; count: number; reasons: string[]; marks: Array<{ x: number; y: number }> }>;
+  /** Evidence round 1.3 — enlarged plan vs main plan, per type. */
+  enlarged?: EnlargedDecision[];
+  /** Evidence round 1.3 — enlarged-plan marks held while the estimator's
+   *  "repeats or adds?" is open (kept so a supplement pass re-merges them). */
+  pending?: SheetMarkResolution['pending'];
+}
+
+/** Evidence round Parts 1-3 — what the evidence readers found and cost. */
+export interface CountResultEvidence {
+  model: string;
+  usage: EvidenceUsage;
+  calls: number;
+  cached: number;
+  errors: string[];
+  pages: Array<{ key: string; label: string; source: 'text' | 'vision' | 'none'; viewports: number; hasTextLayer: boolean; note?: string }>;
+  typicals: TypicalPackage[];
+  expansions: CountMergeEvidenceResult['expansions'];
+  unmappedTypical: CountMergeEvidenceResult['unmappedTypical'];
+  tables: ScheduleTable[];
+  families: CountMergeEvidenceResult['families'];
+  symbolDefinitions: CountMergeEvidenceResult['symbolDefinitions'];
+  circuitRows: number;
+  /** Types whose quantity the schedule parser owns (never sent to the counter). */
+  scheduleOwned: string[];
+  /** Panels the drawing analysis found (panels[]). */
+  panelsExpected: number;
+  /** Fix round 4 / S20 — same-name panel conflicts with their enforced answers. */
+  panelChoices?: PanelChoice[];
+  /** Panel-schedule viewports the viewport reader identified whose table
+   *  could not be read completely — their branch circuits have no source
+   *  (3.4: Agent 1 no longer states them). */
+  panelsUnread: string[];
+  /** Evidence round 4.2 / 4.3 / 4.4 — reconciliation against independent
+   *  second sources, and the targeted gap-fill search + crop check that
+   *  ran for every UNDER shortfall it found. Absent only when reconciliation
+   *  itself never ran (no evidence input).
+   *
+   *  Fix round (B2) — gap-fill NEVER changes a GC-facing quantity: `count`
+   *  and `agent1.quantities` are untouched by this. `suggested` is written
+   *  to the Plans view as SUGGESTED markers (never confirmed), and each
+   *  type with one or more gets a `gapfill:<key>` review item; a finding
+   *  with no candidates (or an OVER finding) gets a `reconcile:<key>`
+   *  review item instead — every reconciliation finding reaches the
+   *  estimator one way or the other. */
+  gapFill?: {
+    /** Every reconciliation finding, both directions — not just the ones
+     *  that got a gap-fill job. */
+    findings: ReconcileFinding[];
+    /** S4 — jobs actually run vs. how many the cap (MAX_GAPFILL_JOBS) left
+     *  out, disclosed rather than silently dropped. */
+    jobs: number;
+    jobsSkipped: number;
+    cachedJobs: number;
+    /** Candidates the gap-fill call proposed, across every job. */
+    candidates: number;
+    /** Accept, or a valid reclass — the count SUGGESTED to the estimator,
+     *  never counted automatically. */
+    suggested: Array<{ typeKey: string; sheetKey: string; x: number; y: number; confidence: string; note: string }>;
+    calls: number;
+    usage: EvidenceUsage;
+    errors: string[];
+  };
 }
 
 /** One counted symbol, in PDF points on its page (est_markups space). */
-export interface CountMark { sheetKey: string; typeKey: string; x: number; y: number }
+export interface CountMark { sheetKey: string; typeKey: string; x: number; y: number; circuit?: string }
 
 /** Persisted as takeoff_results.count_result. */
 export interface CountResult {
@@ -66,6 +145,8 @@ export interface CountResult {
   /** S3 — PDFs the page classifier returned nothing for (whole file never
    *  looked at by the counter). */
   unclassifiedFiles?: string[];
+  /** Evidence round Parts 1-3. */
+  evidence?: CountResultEvidence;
 }
 
 export interface CountingStageInput {
@@ -79,6 +160,9 @@ export interface CountingStageInput {
   /** Stop analysis — see CounterRunInput. */
   shouldStop?: () => boolean;
   onProgress?: (done: number, total: number, phase?: 'retry') => void;
+  /** Evidence round Parts 1-3 — the narrow readers (viewports, typicals,
+   *  schedules). Absent = the counting stage runs exactly as before. */
+  evidence?: { model: string; maxTokens: number; cache?: EvidenceCache };
 }
 
 export interface CountingStageOutput {
@@ -89,6 +173,11 @@ export interface CountingStageOutput {
 
 const ZERO_USAGE = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
 
+interface FinishEvidence {
+  ev: EvidenceStageOutput;
+  schedCounts: Map<string, ScheduleCount>;
+}
+
 function finish(
   input: CountingStageInput,
   targets: CountTarget[],
@@ -97,10 +186,74 @@ function finish(
   skippedSheets: CountResult['skippedSheets'],
   ran: boolean,
   notRunReason: string | undefined,
+  evidence?: FinishEvidence,
+  carry?: CountResultSheet[],
 ): { agent1: Record<string, unknown>; countResult: CountResult } {
-  const merged = mergeCountsIntoTakeoff(input.agent1, targets, sheetResults, { countingRan: ran, notRunReason });
-  const marks: CountMark[] = sheetResults.flatMap(r => r.status === 'counted'
-    ? r.placed.map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100 }))
+  // Evidence round 1.2 / 1.3 — attribute every mark to its viewport and
+  // reconcile enlarged plans with the main plan, before any cross-sheet rule.
+  const vpBy = new Map((evidence?.ev.pages ?? []).map(p => [p.key, p]));
+  const extra = new Map<string, Pick<CountResultSheet, 'viewports' | 'viewportSource' | 'viewportNote' | 'excluded' | 'enlarged' | 'pending'>>();
+  // A supplement pass: earlier sheets were resolved in the earlier pass —
+  // their stored viewports / exclusions / held enlarged marks carry over.
+  for (const c of carry ?? []) {
+    if (!c.viewports && !c.excluded && !c.enlarged && !c.pending) continue;
+    extra.set(c.key, {
+      ...(c.viewports ? { viewports: c.viewports } : {}), ...(c.viewportSource ? { viewportSource: c.viewportSource } : {}),
+      ...(c.viewportNote ? { viewportNote: c.viewportNote } : {}), ...(c.excluded ? { excluded: c.excluded } : {}),
+      ...(c.enlarged ? { enlarged: c.enlarged } : {}), ...(c.pending?.length ? { pending: c.pending } : {}),
+    });
+  }
+  const mergeInputs: SheetCountInput[] = sheetResults.map(r => {
+    const page = vpBy.get(r.sheet.key);
+    if (!evidence || r.status !== 'counted' || !page) {
+      const c = extra.get(r.sheet.key);
+      if (!c) return r;
+      // Fix round B4 — a carried sheet's stored marks lost their viewport:
+      // re-attribute them (they were counted marks already) so the sheet-pair
+      // relation maps enlarged-plan marks onto the main plan again.
+      const g = r.geometry;
+      const placed = c.viewports && g ? r.placed.map(m => {
+        const p = pdfToDisplayedIn(m.x, m.y, g);
+        return { ...m, viewportId: viewportAt(c.viewports!, p.x, p.y)?.id ?? null };
+      }) : r.placed;
+      return { ...r, placed, ...(c.viewports ? { viewports: c.viewports } : {}), ...(c.pending ? { pendingEnlarged: c.pending } : {}) };
+    }
+    const res = resolveSheetMarks(r.placed, page.viewports.viewports, r.geometry ?? page.geometry);
+    const exBy = new Map<string, { count: number; reasons: Set<string>; marks: Array<{ x: number; y: number }> }>();
+    for (const m of res.excluded) {
+      const e = exBy.get(m.typeKey) ?? { count: 0, reasons: new Set<string>(), marks: [] };
+      e.count++; e.reasons.add(m.reason);
+      if (Number.isFinite(m.x) && Number.isFinite(m.y)) e.marks.push({ x: m.x, y: m.y });
+      exBy.set(m.typeKey, e);
+    }
+    extra.set(r.sheet.key, {
+      viewports: page.viewports.viewports, viewportSource: page.viewports.source,
+      ...(page.viewports.note ? { viewportNote: page.viewports.note } : {}),
+      ...(exBy.size ? { excluded: [...exBy.entries()].map(([typeKey, e]) => ({ typeKey, count: e.count, reasons: [...e.reasons], marks: e.marks })) } : {}),
+      ...(res.enlarged.length ? { enlarged: res.enlarged } : {}),
+      ...(res.pending.length ? { pending: res.pending } : {}),
+    });
+    if (res.notes.length) r.notes.push(...res.notes);
+    return {
+      ...r,
+      placed: res.counted.map(m => ({ ...m, tileIds: m.tileIds ?? [] })),
+      geometry: r.geometry ?? page.geometry,
+      viewports: page.viewports.viewports,
+      pendingEnlarged: res.pending,
+    } as SheetCountInput & SheetCountResult;
+  });
+  if (evidence?.ev.errors.length) logger.warn({ errors: evidence.ev.errors }, '[counting] evidence readers: some pieces could not be read');
+  const merged = mergeCountsIntoTakeoff(input.agent1, targets, mergeInputs, {
+    countingRan: ran, notRunReason,
+    ...(evidence ? { evidence: { scheduleCounts: evidence.schedCounts, typicals: evidence.ev.typicals, tables: evidence.ev.tables } } : {}),
+  });
+  // Excluded marks per type, for the review detail and the evidence.
+  for (const t of merged.types) {
+    const n = [...extra.values()].reduce((s, e) => s + (e.excluded?.find(x => x.typeKey === t.key)?.count ?? 0), 0);
+    if (n) t.excludedMarks = n;
+  }
+  const marks: CountMark[] = mergeInputs.flatMap(r => r.status === 'counted'
+    ? r.placed.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x! * 100) / 100, y: Math.round(p.y! * 100) / 100, ...(p.circuit ? { circuit: p.circuit } : {}) }))
     : []);
   const classified = new Set(input.inventory.map(p => p.file));
   const unclassifiedFiles = input.inventory.length ? [...input.pdfs.keys()].filter(f => !classified.has(f)) : [];
@@ -120,17 +273,39 @@ function finish(
       calls: r.calls, tiles: r.tiles, geometryOk: r.geometryOk, geometry: r.geometry,
       mergedDuplicates: r.mergedDuplicates, rejected: r.rejected.length, notes: r.notes, unreadable: r.unreadable,
       ...(r.retry ? { retry: r.retry } : {}),
+      ...(extra.get(r.sheet.key) ?? {}),
     })),
     skippedSheets,
     types: merged.types,
     loadCheck: merged.loadCheck,
     removedRows: merged.removedRows,
-    flags: merged.flags,
+    flags: [...merged.flags, ...(evidence?.ev.errors ?? []).map(e => `Evidence not read — ${e}.`)],
     marks,
+    ...(evidence ? {
+      evidence: {
+        model: evidence.ev.model, usage: evidence.ev.usage, calls: evidence.ev.calls, cached: evidence.ev.cached, errors: evidence.ev.errors,
+        pages: evidence.ev.pages.map(p => ({ key: p.key, label: p.label, source: p.viewports.source, viewports: p.viewports.viewports.length, hasTextLayer: p.hasTextLayer, ...(p.viewports.note ? { note: p.viewports.note } : {}) })),
+        typicals: evidence.ev.typicals,
+        expansions: merged.evidence?.expansions ?? [],
+        unmappedTypical: merged.evidence?.unmappedTypical ?? [],
+        tables: evidence.ev.tables,
+        families: merged.evidence?.families ?? [],
+        symbolDefinitions: merged.evidence?.symbolDefinitions ?? [],
+        circuitRows: merged.evidence?.circuitRows ?? 0,
+        scheduleOwned: [...evidence.schedCounts.keys()],
+        panelsExpected: Array.isArray(input.agent1.panels) ? input.agent1.panels.length : 0,
+        // Fix round 4 / S20 — what each answer to a panel conflict changes.
+        panelChoices: panelChoices(targets, evidence.ev.tables),
+        panelsUnread: evidence.ev.pages.flatMap(p => p.viewports.viewports
+          .filter(v => v.kind === 'schedule' && /\bPANEL(BOARD)?\b/i.test(v.title) && !/\bLOAD\b/i.test(v.title))
+          .filter(v => !evidence.ev.tables.some(t => t.viewportId === v.id && isCompletePanel(t)))
+          .map(v => `${v.title} (${p.label})`)),
+      },
+    } : {}),
   };
   // Agent 2/3/4 read agent1_output: counted rows replace Agent 1's, and a
   // short summary rides along so QC sees what was counted and what is held.
-  const pending = merged.types.filter(t => t.status !== 'counted').map(t => `${t.type} (${t.reason})`);
+  const pending = merged.types.filter(t => t.status !== 'counted' && t.status !== 'merged' && !t.host).map(t => `${t.type} (${t.reason})`);
   const agent1 = {
     ...input.agent1,
     quantities: merged.quantities,
@@ -144,6 +319,77 @@ function finish(
     },
   };
   return { agent1, countResult };
+}
+
+/** Evidence round 4.2 / 4.3 / 4.4 — after the merge, check every independent
+ *  second source against it (reconcile) and, for a real UNDER shortfall,
+ *  run one targeted gap-fill + crop-check job per (type, sheet it is
+ *  counted from). Fix round (B2) — this NEVER touches `countResult.types`
+ *  or `agent1.quantities`: the crop check's "accept" only ever produces a
+ *  SUGGESTED marker (written to the Plans view by the caller, same as the
+ *  counter's own marks) plus a review item. A run with no evidence input
+ *  never calls this (Part 4 is switched by the same `evidence` input as
+ *  Parts 1-3). */
+async function runGapFillPass(
+  input: Pick<CountingStageInput, 'client' | 'pdfs' | 'shouldStop'>,
+  evidenceCfg: { model: string; maxTokens: number; cache?: EvidenceCache },
+  countResult: CountResult,
+  allTargets: CountTarget[],
+  tables: ScheduleTable[],
+): Promise<void> {
+  const findings = reconcile(countResult.types, allTargets, tables);
+  const { jobs, jobsSkipped } = buildGapFillJobs(findings, countResult.types);
+  const empty = { findings, jobs: 0, jobsSkipped, cachedJobs: 0, candidates: 0, suggested: [] as NonNullable<CountResultEvidence['gapFill']>['suggested'], calls: 0, usage: { ...ZERO_USAGE }, errors: [] as string[] };
+  if (!jobs.length) {
+    if (countResult.evidence) countResult.evidence.gapFill = empty;
+    return;
+  }
+  const assets = new Map<string, GapFillSheetAsset>();
+  const unusable: string[] = [];
+  for (const job of jobs) {
+    if (assets.has(job.sheetKey)) continue;
+    const sheet = countResult.sheets.find(s => s.key === job.sheetKey);
+    const pdf = sheet ? input.pdfs.get(sheet.file) : undefined;
+    if (!sheet?.geometry || !pdf) { unusable.push(job.sheetKey); continue; }
+    const excludedMarks = (sheet.excluded ?? []).flatMap(e => e.marks.map(m => ({ typeKey: e.typeKey, x: m.x, y: m.y })));
+    assets.set(job.sheetKey, {
+      page: sheet.page, pdf, geometry: sheet.geometry,
+      existingMarks: countResult.marks.filter(m => m.sheetKey === job.sheetKey),
+      excludedMarks,
+      searchRect: planSearchRect(sheet.viewports),
+      viewports: sheet.viewports ?? null,
+      sha: sha256Of(pdf),
+    });
+  }
+  const usableJobs = jobs.filter(j => assets.has(j.sheetKey));
+  if (!usableJobs.length) {
+    if (countResult.evidence) countResult.evidence.gapFill = { ...empty, jobs: 0, errors: [...new Set(unusable)].map(k => `${k}: no sheet PDF or geometry was available for gap-fill`) };
+    return;
+  }
+  const gf = await runGapFillStage({
+    client: input.client, model: evidenceCfg.model, maxTokens: evidenceCfg.maxTokens,
+    jobs: usableJobs, targets: allTargets, assets, shouldStop: input.shouldStop, cache: evidenceCfg.cache,
+  });
+  // B1 — a reclass is deduped against the RECLASSIFIED type's own marks
+  // (counted + excluded) too, not just the type gap-fill originally asked
+  // about.
+  const existingByTypeAndSheet = new Map<string, Array<{ x: number; y: number }>>();
+  for (const [sheetKey, asset] of assets) {
+    for (const m of [...asset.existingMarks, ...(asset.excludedMarks ?? [])]) {
+      const k = `${m.typeKey}@${sheetKey}`;
+      if (!existingByTypeAndSheet.has(k)) existingByTypeAndSheet.set(k, []);
+      existingByTypeAndSheet.get(k)!.push({ x: m.x, y: m.y });
+    }
+  }
+  const { suggested } = resolveGapFillCandidates(gf.candidates, existingByTypeAndSheet);
+  if (countResult.evidence) {
+    countResult.evidence.gapFill = {
+      findings, jobs: usableJobs.length, jobsSkipped, cachedJobs: gf.cachedJobs,
+      candidates: gf.candidates.length, suggested, calls: gf.calls, usage: gf.usage, errors: gf.errors,
+    };
+    for (const k of Object.keys(countResult.evidence.usage) as Array<keyof EvidenceUsage>) countResult.evidence.usage[k] += gf.usage[k];
+    countResult.evidence.calls += gf.calls;
+  }
 }
 
 export async function runCountingStage(input: CountingStageInput): Promise<CountingStageOutput> {
@@ -173,11 +419,54 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     return { agent1, countResult, usage: { ...ZERO_USAGE } };
   }
 
+  // Evidence round Parts 1-3 — viewports, typicals and schedules first: the
+  // counter then counts host markers, skips schedule-owned types, and is
+  // told each sheet's viewports.
+  let evidence: FinishEvidence | undefined;
+  let counterTargets = targets;
+  let allTargets = targets;
+  let sheetNotes: Map<string, string> | undefined;
+  if (input.evidence) {
+    const counted = selection.counted.filter(c => !c.photometric);
+    const countedKeys = new Set(counted.map(c => c.key));
+    const pages: EvidencePage[] = [
+      ...counted.map(c => ({ key: c.key, file: c.file, page: c.page, label: c.label, counted: true })),
+      ...input.inventory
+        .filter(p => p.included && p.discipline === 'electrical' && p.role !== 'reference' && (p.cls === 'schedule' || p.cls === 'detail')
+          && !countedKeys.has(`${p.file}#${p.page}`) && !/^PH/i.test(p.sheetNo.trim()))
+        .map(p => ({ key: `${p.file}#${p.page}`, file: p.file, page: p.page, label: sheetLabelOf(p), counted: false })),
+    ];
+    const ev = await runEvidenceStage({
+      client: input.client, model: input.evidence.model, maxTokens: input.evidence.maxTokens,
+      pages, pdfs: input.pdfs, targets, cache: input.evidence.cache, shouldStop: input.shouldStop,
+    });
+    // Fix round 3 / B12 — one table per panel identity and content, the
+    // same-name conflicts flagged ON THE STORED TABLES (the review list reads them).
+    ev.tables = dedupePanels(ev.tables);
+    const hosts = hostTargets(ev.typicals, targets);
+    const schedCounts = scheduleCounts(targets, ev.tables);
+    allTargets = [...targets, ...hosts];
+    counterTargets = allTargets.filter(t => !schedCounts.has(t.key));
+    sheetNotes = new Map(ev.pages.filter(p => p.viewports.viewports.length).map(p => [p.key, viewportPromptBlock(p.viewports.viewports, sanitizeForPrompt)]));
+    evidence = { ev, schedCounts };
+    logger.info({ pages: ev.pages.length, calls: ev.calls, cached: ev.cached, typicals: ev.typicals.length, tables: ev.tables.length, hosts: hosts.length, scheduleOwned: schedCounts.size, errors: ev.errors }, '[counting] evidence readers done');
+  }
+
   // A truncated call throws AgentTruncatedError out of here (the run fails);
   // every other per-sheet failure is recorded on that sheet by runCounter.
-  const run = await countSheets(input, targets, selection.counted, input.onProgress);
-  const { agent1, countResult } = finish(input, targets, targetNotes, run.sheets, selection.skipped, true, undefined);
+  const run = counterTargets.length
+    ? await countSheets(input, counterTargets, selection.counted, input.onProgress, sheetNotes)
+    : { sheets: selection.counted.map(sheet => ({ sheet, status: 'counted' as const, geometryOk: false, geometry: null, placed: [], mergedDuplicates: 0, unreadable: [], rejected: [], notes: ['every type on this job is owned by the schedules — nothing to count'], calls: 0, tiles: 0 })), usage: { ...ZERO_USAGE } };
+  const { agent1, countResult } = finish(input, allTargets, targetNotes, run.sheets, selection.skipped, true, undefined, evidence);
+  if (input.evidence && evidence) {
+    await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
+  }
   return { agent1, countResult, usage: run.usage };
+}
+
+function sheetLabelOf(p: InventoryPage): string {
+  const no = p.sheetNo.trim(), t = p.title.trim();
+  return no && t ? `${no} "${t}"` : no || (t ? `"${t}"` : `${p.file} p${p.page}`);
 }
 
 type RenderedSheet = { sheet: CountSheet; rendered: RenderedCountPage | null; renderError?: string };
@@ -198,12 +487,13 @@ export async function countSheets(
   targets: CountTarget[],
   sheets: CountSheet[],
   onProgress?: (done: number, total: number, phase?: 'retry') => void,
+  sheetNotes?: Map<string, string>,
 ): Promise<{ sheets: SheetCountResult[]; usage: CountingStageOutput['usage'] }> {
   const spec = counterTileSpec(input.model);
   const run = await runCounter({
     client: input.client, model: input.model, maxTokens: input.maxTokens, targets,
     sheets: await renderSheets(sheets, input.pdfs, { limits: spec.limits, tileIn: spec.tileIn }),
-    shouldStop: input.shouldStop, onProgress,
+    shouldStop: input.shouldStop, onProgress, sheetNotes,
   });
   const dense = run.sheets.filter(r => r.status === 'counted' && r.unreadable.length > 0);
   if (!dense.length || input.shouldStop?.()) return run;
@@ -217,7 +507,7 @@ export async function countSheets(
   const again = await runCounter({
     client: input.client, model: input.model, maxTokens: input.maxTokens, targets: targets.filter(t => flaggedAll.has(t.key)),
     sheets: await renderSheets(dense.map(d => d.sheet), input.pdfs, { limits: spec.limits, tileIn }),
-    shouldStop: input.shouldStop,
+    shouldStop: input.shouldStop, sheetNotes,
     onProgress: onProgress ? (d, t) => onProgress(d, t, 'retry') : undefined,
   });
   for (const k of Object.keys(run.usage) as Array<keyof typeof run.usage>) run.usage[k] += again.usage[k];
@@ -301,7 +591,7 @@ export interface SupplementCountingInput extends CountingStageInput {
  *  (status, the placed marks and what was unreadable) — never re-counted. */
 export function priorSheetResult(sheet: CountSheet, prior: CountResult): SheetCountResult {
   const stored = prior.sheets.find(x => x.key === sheet.key);
-  const placed = prior.marks.filter(m => m.sheetKey === sheet.key).map(m => ({ typeKey: m.typeKey, tileIds: [], x: m.x, y: m.y }));
+  const placed = prior.marks.filter(m => m.sheetKey === sheet.key).map(m => ({ typeKey: m.typeKey, tileIds: [], x: m.x, y: m.y, ...(m.circuit ? { circuit: m.circuit } : {}) }));
   return {
     sheet,
     status: stored?.status ?? 'failed',
@@ -330,7 +620,6 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
   const { targets, notes: targetNotes } = buildCountTargets(input.agent1);
   if (targets.length === 0) return runCountingStage(input);
   const priorKeys = new Set(input.prior.targets.map(t => t.key));
-  const newTargets = targets.filter(t => !priorKeys.has(t.key));
   const selection = selectCountSheets([...input.priorInventory.filter(p => !input.newFiles.has(p.file)), ...input.inventory.filter(p => input.newFiles.has(p.file))]);
   const isNew = (s: CountSheet) => input.newFiles.has(s.file);
   const newSheets = selection.counted.filter(isNew);
@@ -338,16 +627,44 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
   const usage = { ...ZERO_USAGE };
   const add = (u: typeof usage) => { for (const k of Object.keys(usage) as Array<keyof typeof usage>) usage[k] += u[k]; };
 
+  // Evidence round — the new pages are read like a full run; the earlier
+  // pass's typicals and schedule tables are carried over (never re-read,
+  // never dropped), so schedule-owned types, typical expansions and fixture
+  // families survive the re-merge.
+  let evidence: FinishEvidence | undefined;
+  let allTargets = targets;
+  let counterTargets = targets;
+  let sheetNotes: Map<string, string> | undefined;
+  if (input.evidence) {
+    const pages: EvidencePage[] = [
+      ...newSheets.filter(c => !c.photometric).map(c => ({ key: c.key, file: c.file, page: c.page, label: c.label, counted: true })),
+      ...input.inventory.filter(p => input.newFiles.has(p.file) && p.included && p.discipline === 'electrical' && p.role !== 'reference'
+        && (p.cls === 'schedule' || p.cls === 'detail') && !/^PH/i.test(p.sheetNo.trim()))
+        .map(p => ({ key: `${p.file}#${p.page}`, file: p.file, page: p.page, label: sheetLabelOf(p), counted: false })),
+    ];
+    const ev: EvidenceStageOutput = pages.length
+      ? await runEvidenceStage({ client: input.client, model: input.evidence.model, maxTokens: input.evidence.maxTokens, pages, pdfs: input.pdfs, targets, cache: input.evidence.cache, shouldStop: input.shouldStop })
+      : { pages: [], typicals: [], tables: [], usage: { ...ZERO_USAGE }, calls: 0, cached: 0, errors: [], model: input.evidence.model };
+    ev.typicals = [...(input.prior.evidence?.typicals ?? []), ...ev.typicals];
+    ev.tables = dedupePanels([...(input.prior.evidence?.tables ?? []), ...ev.tables]);
+    const schedCounts = scheduleCounts(targets, ev.tables);
+    allTargets = [...targets, ...hostTargets(ev.typicals, targets)];
+    counterTargets = allTargets.filter(t => !schedCounts.has(t.key));
+    sheetNotes = new Map(ev.pages.filter(p => p.viewports.viewports.length).map(p => [p.key, viewportPromptBlock(p.viewports.viewports, sanitizeForPrompt)]));
+    evidence = { ev, schedCounts };
+  }
+  const newCounterTargets = counterTargets.filter(t => !priorKeys.has(t.key));
+
   const results: SheetCountResult[] = oldSheets.map(s => priorSheetResult(s, input.prior));
-  if (newSheets.length) {
-    const run = await countSheets(input, targets, newSheets, input.onProgress);
+  if (newSheets.length && counterTargets.length) {
+    const run = await countSheets(input, counterTargets, newSheets, input.onProgress, sheetNotes);
     add(run.usage);
     results.push(...run.sheets);
   }
-  if (newTargets.length && oldSheets.length) {
+  if (newCounterTargets.length && oldSheets.length) {
     const available = oldSheets.filter(s => input.pdfs.has(s.file));
     const run = available.length
-      ? await countSheets(input, newTargets, available)
+      ? await countSheets(input, newCounterTargets, available)
       : { sheets: [] as SheetCountResult[], usage: { ...ZERO_USAGE } };
     add(run.usage);
     for (const r of results.filter(x => !isNew(x.sheet))) {
@@ -357,15 +674,18 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
         r.unreadable.push(...again.unreadable);
       } else if (r.status === 'counted') {
         const why = again?.error ?? 'its PDF was not available to the supplement pass';
-        r.unreadable.push(...newTargets.map(t => ({ typeKey: t.key, tileId: null, note: `new type not re-read on this sheet: ${why}` })));
+        r.unreadable.push(...newCounterTargets.map(t => ({ typeKey: t.key, tileId: null, note: `new type not re-read on this sheet: ${why}` })));
       }
     }
   }
-  const { agent1, countResult } = finish(input, targets, targetNotes, results, selection.skipped, true, undefined);
+  const { agent1, countResult } = finish(input, allTargets, targetNotes, results, selection.skipped, true, undefined, evidence, input.prior.sheets.filter(s => !input.newFiles.has(s.file)));
   // Rows the earlier merge held as unscheduled are gone from the takeoff
   // already — keep them held (review items), never dropped by a re-merge.
   const seen = new Set(countResult.removedRows.map(r => JSON.stringify(r.row)));
   countResult.removedRows = [...countResult.removedRows, ...input.prior.removedRows.filter(r => !seen.has(JSON.stringify(r.row)))];
+  if (input.evidence && evidence) {
+    await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
+  }
   return { agent1, countResult, usage };
 }
 

@@ -30,7 +30,7 @@
     { "id": "gfci", "label": "GFCI receptacles", "match": "GFCI|GFI", "expected": 16 },
     { "id": "rtu_connections", "label": "RTU connections", "match": "\\bRTU\\b|rooftop", "expected": 2 },
     { "id": "battery_chargers", "label": "Battery charger connections", "match": "battery\\s*charger", "expected": 5 },
-    { "id": "baseflex", "label": "Display baseflex floor connections", "match": "baseflex|floor\\s*(box|connection|outlet)", "expected": 8 },
+    { "id": "baseflex", "label": "Display baseflex floor connections", "match": "baseflex|floor\\s*(box|connection|outlet)|flex\\s+(conduit\\s+)?at\\s+wall", "expected": 8, "note": "On this set the display baseflex is the E-1 #5 legend's coil+J symbol ('J-box with 6' flex at wall & H.P. counters ... receptacle mounted to base plate'); its receptacle is part of that assembly, never a separate duplex (evidence fix round S1)." },
     { "id": "feeder_3_0", "label": "#3/0 Cu feeder", "unit": "LF", "expected": 872, "not_counted": true, "note": "feeder footage is measured in the Plans view (Phase B), not counted" }
   ],
   "reference_estimate": {

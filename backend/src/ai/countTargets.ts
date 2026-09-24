@@ -47,6 +47,10 @@ export interface CountTarget {
    *  legend text says ("G.C. furnished/installed" = APT; "installed by HVAC,
    *  wired by EC" = another trade, APT connects). Absent = APT F&I. */
   assignment?: TradeAssignment;
+  /** Evidence round 2.2 — a HOST marker (a power-pole tag, a detail
+   *  callout): counted as the multiplier of a typical package, never a
+   *  takeoff line or a zero-count review item of its own. */
+  role?: 'host';
 }
 
 export interface TargetBuildResult {

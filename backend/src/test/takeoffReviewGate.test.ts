@@ -29,6 +29,7 @@ import { mergeCountsIntoTakeoff } from '../ai/countMerge';
 import { buildCountTargets } from '../ai/countTargets';
 import type { CountResult } from '../ai/countingStage';
 import type { CountSheet } from '../ai/countSheets';
+import { saveBidEstimate } from '../estimating/bidEstimate';
 
 let ok = false;
 beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
@@ -244,5 +245,149 @@ describe('Task 9 — zero-quantity lines never reach a GC document', () => {
     expect(x.body.failures[0]).toEqual({ check: 'zero_quantity', detail: 'Site / Underground / Allowances: "Site underground — Allowance" has quantity 0' });
     const d = await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(user.token)).expect(422);
     expect(d.body.failures[0].check).toBe('zero_quantity');
+  });
+});
+
+// Coordinator gap 2 (re-review) — the evidence gate (4.1) is not special to
+// generate-docx: it applies to EVERY GC-facing output (generate-docx,
+// generate-takeoff-xlsx, draft-proposal/send, run-agent4) the same way the
+// review-items gate above and the budget-pending gate do — only the
+// internal pre-bid package for Chris is exempt. This mirrors the two
+// describe blocks above (same 4 routes, same shape) but isolates the
+// EVIDENCE gate specifically: review_status is 'clear' and there is no
+// budget-pending quote, so a 409 here can only be evidenceGate's.
+describe('Fix round B5/gap 2 — the evidence gate (409) on every GC-facing path', () => {
+  const SETTINGS = { labor_rate: 65, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 10, profit_pct: 10, crew_size: 1, floors_above_2: 0 };
+
+  async function evidenceSetup(): Promise<{ user: TestUser; bidId: string }> {
+    const user = await makeUser('owner');
+    const { rows } = await pool.query(
+      `INSERT INTO bids (name, gc, loc, salesperson_id) VALUES ($1, 'Summit General Contractors', 'Kissimmee, FL', $2) RETURNING id`,
+      [`Evidence ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, user.id]
+    );
+    const bidId = rows[0].id as string;
+    // 'clear', no zero/unreadable types — the review-items gate above is
+    // satisfied, isolating this block's 409s to the evidence gate alone.
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, status, review_items, review_status) VALUES ($1,'complete','[]','clear')`,
+      [bidId]
+    );
+    // A manual line with NO evidence/reason — exactly what the evidence
+    // gate exists to catch.
+    await saveBidEstimate(bidId, [
+      { category: 'Allowance', description: 'Owner-furnished panel', qty: 1, unit: 'EA' as const, source: 'manual' as const },
+    ], SETTINGS);
+    return { user, bidId };
+  }
+
+  it('run-agent4, generate-docx, generate-takeoff-xlsx and draft-proposal all 409 with the line named by its lineKey', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId } = await evidenceSetup();
+
+    const a4 = await request(app).post(`/api/preconstruction/${bidId}/run-agent4`).set(auth(user.token)).send({ price: '79112.23' }).expect(409);
+    expect(a4.body.reviewItems.some((i: { id: string; lineKey?: string }) => i.id.startsWith('evidence:line:') && !!i.lineKey)).toBe(true);
+
+    const docx = await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(user.token)).expect(409);
+    expect(docx.body.reviewItems.some((i: { id: string; lineKey?: string }) => i.id.startsWith('evidence:line:') && !!i.lineKey)).toBe(true);
+
+    const xlsx = await request(app).get(`/api/preconstruction/${bidId}/generate-takeoff-xlsx`).set(auth(user.token)).expect(409);
+    expect(xlsx.body.reviewItems.some((i: { id: string; lineKey?: string }) => i.id.startsWith('evidence:line:') && !!i.lineKey)).toBe(true);
+
+    const send = await request(app).post(`/api/bids/${bidId}/draft-proposal`).set(auth(user.token)).send({ to: ['gc@example.com'] }).expect(409);
+    expect(send.body.reviewItems.some((i: { id: string; lineKey?: string }) => i.id.startsWith('evidence:line:') && !!i.lineKey)).toBe(true);
+    // Nothing was stamped as sent.
+    const { rows } = await pool.query('SELECT proposal_sent_at FROM bids WHERE id=$1', [bidId]);
+    expect(rows[0].proposal_sent_at).toBeNull();
+
+    // Giving the line a real reason lifts the gate on every path (each now
+    // fails further along, on missing Agent 2/4 output, never on evidence).
+    const { rows: lineRows } = await pool.query('SELECT line_key FROM est_bid_lines WHERE bid_id=$1', [bidId]);
+    await saveBidEstimate(bidId, [
+      { category: 'Allowance', description: 'Owner-furnished panel', qty: 1, unit: 'EA' as const, source: 'manual' as const, line_key: lineRows[0].line_key, evidence_note: 'Owner supplies this panel per spec section 26 05 00' },
+    ], SETTINGS);
+    const a4After = await request(app).post(`/api/preconstruction/${bidId}/run-agent4`).set(auth(user.token)).send({ price: '1000' });
+    expect(a4After.status).toBe(400); // no scope data yet — never the evidence gate
+    expect(a4After.body.reviewItems ?? null).toBeNull();
+  });
+
+  it('the internal pre-bid package (generate-prebid-package / email-prebid-chris) stays allowed with no evidence at all', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId } = await evidenceSetup();
+    const pkg = await request(app).post(`/api/preconstruction/${bidId}/generate-prebid-package`).set(auth(user.token)).send({});
+    expect(pkg.body.error ?? '').not.toMatch(/needs? evidence/);
+    const email = await request(app).post(`/api/bids/${bidId}/email-prebid-chris`).set(auth(user.token)).send({});
+    expect(email.body.error ?? '').not.toMatch(/needs? evidence/);
+  });
+});
+
+describe('Fix round 3 / S16 — equipment can never be zeroed by a bulk action', () => {
+  async function equipmentSetup(): Promise<{ user: TestUser; bidId: string }> {
+    const user = await makeUser('owner');
+    const { rows } = await pool.query(
+      `INSERT INTO bids (name, gc, loc, salesperson_id) VALUES ($1, 'Summit General Contractors', 'Kissimmee, FL', $2) RETURNING id`,
+      [`Equipment ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, user.id]
+    );
+    const bidId = rows[0].id as string;
+    const items = [
+      { id: 'count:MB', kind: 'count' as const, title: 'Type MB — Meter base', detail: 'Counted 0: not found on any counted plan sheet.', typeKey: 'MB', category: 'equipment', group: 'zero' },
+      { id: 'count:WIREWAY', kind: 'count' as const, title: 'Type WIREWAY — Wireway', detail: 'Counted 0: not found on any counted plan sheet.', typeKey: 'WIREWAY', category: 'equipment', group: 'zero' },
+      { id: 'count:OS', kind: 'count' as const, title: 'Type OS — Occupancy sensor', detail: 'Counted 0: not found on any counted plan sheet.', typeKey: 'OS', category: 'lighting_control', group: 'zero' },
+    ];
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, status, review_items, review_status) VALUES ($1,'complete',$2,'needs_review')`,
+      [bidId, JSON.stringify(items)]
+    );
+    return { user, bidId };
+  }
+
+  it('a bulk "not on this job" naming an equipment item 400s, even mixed with non-equipment items', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId } = await equipmentSetup();
+    // The whole "zero" group at once (2 equipment + 1 non-equipment).
+    const res = await request(app).post(`/api/preconstruction/${bidId}/review/resolve`).set(auth(user.token))
+      .send({ itemIds: ['count:MB', 'count:WIREWAY', 'count:OS'], action: 'not_on_job', reason: 'Design-build scope, not this job' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/never resolved in bulk/);
+    expect(res.body.error).toContain('Meter base');
+    expect(res.body.error).toContain('Wireway');
+    // Nothing was resolved — not even the non-equipment item in the batch.
+    const { rows } = await pool.query('SELECT review_items FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    expect((rows[0].review_items as Array<{ resolution?: unknown }>).every(i => !i.resolution)).toBe(true);
+  });
+
+  it('two equipment items alone (no non-equipment mixed in) still 400 in bulk', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId } = await equipmentSetup();
+    const res = await request(app).post(`/api/preconstruction/${bidId}/review/resolve`).set(auth(user.token))
+      .send({ itemIds: ['count:MB', 'count:WIREWAY'], action: 'not_on_job', reason: 'Design-build scope, not this job' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/never resolved in bulk/);
+  });
+
+  it('each equipment item answered on its OWN (itemIds of one) still works normally', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId } = await equipmentSetup();
+    const res = await request(app).post(`/api/preconstruction/${bidId}/review/resolve`).set(auth(user.token))
+      .send({ itemIds: ['count:MB'], action: 'not_on_job', reason: 'Design-build scope, not this job' }).expect(200);
+    const mb = (res.body.items as Array<{ id: string; resolution?: { action: string } }>).find(i => i.id === 'count:MB');
+    expect(mb?.resolution?.action).toBe('not_on_job');
+  });
+
+  it('a non-equipment bulk (no equipment in the batch) is unaffected', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const user = await makeUser('owner');
+    const { rows } = await pool.query(
+      `INSERT INTO bids (name, gc, loc, salesperson_id) VALUES ($1, 'Summit General Contractors', 'Kissimmee, FL', $2) RETURNING id`,
+      [`EquipmentOK ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, user.id]
+    );
+    const bidId = rows[0].id as string;
+    const items = [
+      { id: 'count:OS', kind: 'count' as const, title: 'Type OS — Occupancy sensor', detail: 'Counted 0: not found on any counted plan sheet.', typeKey: 'OS', category: 'lighting_control', group: 'zero' },
+      { id: 'count:PC', kind: 'count' as const, title: 'Type PC — Photocell', detail: 'Counted 0: not found on any counted plan sheet.', typeKey: 'PC', category: 'lighting_control', group: 'zero' },
+    ];
+    await pool.query(`INSERT INTO takeoff_results (bid_id, status, review_items, review_status) VALUES ($1,'complete',$2,'needs_review')`, [bidId, JSON.stringify(items)]);
+    const res = await request(app).post(`/api/preconstruction/${bidId}/review/resolve`).set(auth(user.token))
+      .send({ itemIds: ['count:OS', 'count:PC'], action: 'not_on_job', reason: 'Design-build scope, not this job' }).expect(200);
+    expect((res.body.items as Array<{ id: string; resolution?: unknown }>).every(i => !!i.resolution)).toBe(true);
   });
 });

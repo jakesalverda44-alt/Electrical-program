@@ -111,24 +111,24 @@ async function analyzedBid(): Promise<Fixture> {
   const lineDefs: Array<[string, string, Record<string, unknown>]> = [
     ['untouched', 'takeoff', { takeoff_key: 'Lighting||5.2', description: 'Type B downlight', qty: 12 }],
     ['vanished', 'takeoff', { takeoff_key: 'Power||9.9', description: '[No longer in takeoff] Old item', excluded: true, sync_excluded: true }],
-    ['qtyOverride', 'takeoff', { takeoff_key: 'Power||6.1', description: 'Duplex receptacle', qty: 34, qty_overridden: true, qty_source: 'manual' }],
+    ['qtyOverride', 'takeoff', { takeoff_key: 'Power||6.1', description: 'Duplex receptacle', qty: 34, qty_overridden: true, qty_source: 'manual', evidence_note: 'Counted on the plans by hand, 34 not 30' }],
     ['materialOverride', 'takeoff', { takeoff_key: 'Power||6.2', description: 'GFCI receptacle', material_unit_override: 21.5 }],
     ['laborOverride', 'takeoff', { takeoff_key: 'Power||6.3', description: 'Floor box', labor_hours_override: 1.25 }],
     ['markup', 'takeoff', { takeoff_key: 'Lighting||5.1', description: 'Type A 2x4 LED troffer', synced_description: 'Type A 2x4 LED troffer', qty: 43, qty_overridden: true, qty_source: 'markup' }],
     ['userExcluded', 'takeoff', { takeoff_key: 'Site||7.1', description: 'Pole base', excluded: true, sync_excluded: false }],
     ['manualMatch', 'takeoff', { takeoff_key: 'Site||7.2', description: 'Site light pole', match_source: 'manual' }],
-    ['manual', 'manual', { takeoff_key: null, description: 'Generator hookup allowance', material_unit_override: 1500 }],
+    ['manual', 'manual', { takeoff_key: null, description: 'Generator hookup allowance', material_unit_override: 1500, evidence_note: 'Verbal allowance per GC, no spec section on this job' }],
   ];
   const keys: Record<string, string> = {};
   let sort = 0;
   for (const [name, source, o] of lineDefs) {
     const { rows: l } = await pool.query(
       `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, takeoff_key, source, excluded, sync_excluded,
-         qty_overridden, qty_source, material_unit_override, labor_hours_override, match_source, synced_description)
-       VALUES ($1,$2,$3,$4,$5,'EA',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING line_key`,
+         qty_overridden, qty_source, material_unit_override, labor_hours_override, match_source, synced_description, evidence_note)
+       VALUES ($1,$2,$3,$4,$5,'EA',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING line_key`,
       [bidId, sort++, String(o.takeoff_key ?? 'Misc||').split('||')[0] || 'Misc', o.description, o.qty ?? 1, o.takeoff_key ?? null, source,
        !!o.excluded, !!o.sync_excluded, !!o.qty_overridden, o.qty_source ?? 'takeoff',
-       o.material_unit_override ?? null, o.labor_hours_override ?? null, o.match_source ?? null, o.synced_description ?? null]
+       o.material_unit_override ?? null, o.labor_hours_override ?? null, o.match_source ?? null, o.synced_description ?? null, o.evidence_note ?? null]
     );
     keys[name] = l[0].line_key as string;
   }

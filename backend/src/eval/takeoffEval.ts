@@ -74,7 +74,9 @@ export function validateExpectedFile(raw: unknown): ExpectedFile {
 }
 
 export function diffAgainstExpected(expected: ExpectedFile, countResult: CountResult | null): EvalDiff {
-  const types = countResult?.types ?? [];
+  // Evidence round 2.2 — host markers (power-pole tags) are multipliers, not
+  // takeoff lines: never matched to an expected item.
+  const types = (countResult?.types ?? []).filter(t => !t.host);
   const covered = new Set<string>();
   const rows: DiffRow[] = expected.items.map(item => {
     const base = { id: item.id, label: item.label, expected: item.expected, ...(item.note ? { note: item.note } : {}) };

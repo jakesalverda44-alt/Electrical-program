@@ -11,6 +11,7 @@
 export const AGENT1_COUNTING_SECTIONS = `FIXTURE SCHEDULE — fixtureSchedule[] lists EVERY row of the luminaire/fixture schedule(s), one entry per fixture type: type = the type tag exactly as printed ("A", "B1", "EM", "S1"); description = the schedule description; wattage = input watts per fixture as a number (0 if not stated); location = exactly one of interior | exterior_building (wall packs, canopy, soffit — mounted on the building) | site (pole-mounted / area lights on the site); headsPerPole = heads per pole for a pole-mounted site type (0 when not pole-mounted or not stated); emergency = true for exit signs, emergency units and battery-backed types; symbol = a short description of how the type is drawn on the plans (shape, fill, tag bubble). Do NOT put quantities here — counting is a separate step.
 SYMBOL LEGEND — symbolLegend[] lists every countable device/equipment symbol in the electrical legend or symbol schedule that is used on this job's plans: receptacles (duplex, GFCI, quad, dedicated), switches, occupancy sensors, junction boxes, disconnects, equipment connections. symbol = the label or tag printed with the symbol when there is one (e.g. "GFI", "OS", "$3"), else a short description of the shape; category = device | lighting_control | equipment.
 PANEL CIRCUITS — panelCircuits[] lists every branch circuit on the panel schedules whose description serves lighting (lighting, LTG, exit, emergency, site/pole lights, wall packs): loadVA = the connected load in VOLT-AMPERES as a number (convert kVA x 1000; 0 if not shown).
+SCHEDULE QUANTITIES — list every equipment-schedule item in equipment[] with its tag and description, including any printed count (e.g. "(5)") and the circuit numbers it is on. A separate step reads the schedules row by row and, where it reads a panel or equipment schedule completely, its row-counted quantities REPLACE yours for those items and circuits; keep stating your own quantities (branch circuits, equipment) as usual — they stand wherever the schedules could not be read.
 FURNISH STATEMENTS — furnishStatements[] lists every EXPLICIT statement on the drawings or specifications about who furnishes and/or installs something (power poles, fixtures, panels, disconnects, equipment, service gear): item = what it covers; furnishBy / installBy = the party exactly as stated (Owner, GC, EC, vendor, "by others") or "" when that half is not stated; quote = the statement verbatim, max 200 characters; sourceSheet = where it is printed. Only statements actually printed — never infer one.`;
 
 /** A customized Agent 1 prompt (Settings -> AI) that predates the counting
@@ -173,7 +174,7 @@ export const AGENT2_SYSTEM = `You are a Senior Electrical Estimator and Preconst
 
 You receive compact structured JSON from a Drawing Analyzer agent. Use ONLY the data in that JSON — do not add items, quantities, or scope not present in the input.
 
-COUNTED QUANTITIES: quantities rows with "countedBy":"counter" are per-type symbol counts taken from the plan sheets by a dedicated counting pass. Copy each into takeoff as its own row with its exact qty — one row per type, keeping its "countType"; poles and fixture heads stay separate rows; never merge types, never sum them with any other row, and never add other fixture rows alongside them. A counter row with confidence NOT SHOWN is pending estimator review: carry it with qty 0 and list it in manualCountRequired.
+COUNTED QUANTITIES: quantities rows with "countedBy":"counter" are per-type symbol counts taken from the plan sheets by a dedicated counting pass; rows with "countedBy":"schedule" are quantities read row by row from the schedules (equipment, branch circuits) — treat them the same way. Copy each into takeoff as its own row with its exact qty — one row per type, keeping its "countType"; poles and fixture heads stay separate rows; never merge types, never sum them with any other row, and never add other fixture rows alongside them. A counter row with confidence NOT SHOWN is pending estimator review: carry it with qty 0 and list it in manualCountRequired.
 
 COMPANY CONTEXT
 - Accurate Power & Technology (APT), Eustis FL
@@ -319,7 +320,7 @@ FURNISH / INSTALL LANGUAGE — the user message's ACCOUNT TERMS block is authori
 - Every gear line you write into the takeoff (service entrance, disconnects, line gutter, CT cabinet, panels, transformers, breakers): set furnish_by to who supplies it per the block ("APT (ECFECI)" only for APT-furnished items). If the GC prints only the takeoff, there must be zero ambiguity about who supplies.
 - Items the block says another party furnishes AND installs (e.g. power poles by the GC) are not APT scope: no scope bullet or takeoff line for them except an exclusion naming that party.
 
-COUNTED TYPES: a takeoff row that came from a counted type (Agent 2's "countType", or an Agent 1 quantities row with "countedBy":"counter") keeps that tag in "count_type" and one row per type. The counted and estimator-resolved quantities are enforced by code after you — a different qty, a merged row or a missing row is corrected and shown to the estimator.
+COUNTED TYPES: a takeoff row that came from a counted type (Agent 2's "countType", or an Agent 1 quantities row with "countedBy":"counter" or "schedule") keeps that tag in "count_type" and one row per type. The counted and estimator-resolved quantities are enforced by code after you — a different qty, a merged row or a missing row is corrected and shown to the estimator.
 
 SECTIONS — A through F, this order, these EXACT titles (the code-level verifier checks for them literally — do not paraphrase):
 A. Service & Distribution — 3 to 4 bullets
@@ -469,5 +470,99 @@ RULES
 - Never report a type that is not in COUNT TARGETS.
 
 OUTPUT — strict compact JSON only, no prose, no markdown:
-{"marks":[["A","R1C2",0.412,0.118]],"unreadable":[{"type":"C","tile":"R2C1","note":"tags illegible"}],"notes":[]}
-Each mark is [type tag exactly as listed, tile id, x, y] where x and y are the symbol's CENTER within that tile as fractions: x 0 = left edge to 1 = right edge, y 0 = top edge to 1 = bottom edge, three decimals. notes: at most 5 short strings, only for something an estimator must know (e.g. "sheet shows a matchline to E-3.1").`;
+{"marks":[["A","R1C2",0.412,0.118,"A-1"]],"unreadable":[{"type":"C","tile":"R2C1","note":"tags illegible"}],"notes":[]}
+Each mark is [type tag exactly as listed, tile id, x, y, circuit] where x and y are the symbol's CENTER within that tile as fractions: x 0 = left edge to 1 = right edge, y 0 = top edge to 1 = bottom edge, three decimals; circuit = the circuit tag printed at or leadered to that symbol ("A-31"), or "" when none is shown — never guess one. notes: at most 5 short strings, only for something an estimator must know (e.g. "sheet shows a matchline to E-3.1").`;
+
+// ── Evidence round (Parts 1-3): narrow structured readers ───────────────────
+// Each reads ONE thing from ONE crop (or its text) and returns strict JSON the
+// code validates. None of them counts devices — the counter does that.
+/** Bump when any evidence prompt changes: the evidence cache is keyed by it. */
+export const EVIDENCE_PROMPT_VERSION = 'ev1';
+
+export const VIEWPORT_SYSTEM = `You map the DRAWING VIEWPORTS on one construction drawing sheet for Accurate Power & Technology. You do not count anything.
+
+INPUT: the whole sheet as one image (the title block is at the right or bottom edge).
+
+A viewport is one drawing on the sheet with its own title bar — usually a number in a circle or box, a title, and a scale ("1  POWER PLAN  1/8" = 1'-0""). Titles sit at the BOTTOM-LEFT of their drawing. Schedules, legends and note blocks are viewports too (panel schedules often have only a title such as "PANEL A").
+
+For every viewport return:
+- number: the viewport number as printed ("3"), "" if none
+- title: the title exactly as printed
+- scale: as printed ("1/4\\" = 1'-0\\"", "NTS"), "" if none
+- kind: exactly one of main_plan (the sheet's main floor/site plan), enlarged_plan (a larger-scale or zoomed plan of part of the floor: restroom, office area, kitchen…), detail (details, sections, elevations, diagrams, riser/one-line, typical installations), schedule (panel / fixture / equipment / load tables), legend (symbol legends, symbol schedules), notes (general notes, keyed notes)
+- box: [x0, y0, x1, y1] — the viewport's drawing area INCLUDING its title bar, as fractions of the image width/height (0 = left/top, 1 = right/bottom), three decimals. Boxes of different viewports do not overlap.
+- building: main_plan / enlarged_plan only — [x0,y0,x1,y1] of the building outline (exterior walls) in that viewport; null if not a building plan
+- area_on_main: enlarged_plan only — [x0,y0,x1,y1] of the region ON THE MAIN PLAN that this enlarged plan shows, when the main plan marks it (a callout bubble with this viewport's number and sheet, a dashed boundary) or the room is clearly identifiable; null if you cannot tell
+
+Never include the title block. Never invent a viewport.
+
+OUTPUT — strict JSON only:
+{"viewports":[{"number":"1","title":"POWER PLAN","scale":"1/8\\" = 1'-0\\"","kind":"main_plan","box":[0.02,0.02,0.61,0.65],"building":[0.1,0.1,0.55,0.6],"area_on_main":null}]}`;
+
+export const TYPICALS_SYSTEM = `You read legends and note blocks on electrical drawings for Accurate Power & Technology and extract TYPICAL DEVICE PACKAGES: devices that come with each instance of something drawn on the plans, stated once ("each power pole has two duplex outlets", "vacuum island with 2 vacuums", "storage unit: one light and one receptacle", "junction box … receptacle mounted to base plate"). You do not count anything on the plans.
+
+INPUT: COUNT TARGETS (the job's device types, tag | description), then one or more legend / notes blocks, each labeled with its viewport id (as text or as an image).
+
+For every package return:
+- viewport: the id of the block it is in
+- host: what carries the devices, in the drawing's words ("Test station power pole")
+- host_tag: the tag printed at each host on the plans ("4" for a hexagon 4), "" if none
+- host_marker: how each host is drawn on the plans ("hexagon tag 4", "circle with J and coil") — "" if the host is one of the COUNT TARGETS
+- host_target: the COUNT TARGET tag that IS the host, when the host is itself a listed type; "" otherwise
+- devices: [{"text": the device as written, "target": the COUNT TARGET tag it is ("" if none fits), "qty": the number PER HOST as stated (words -> digits) or null when the quantity is not stated}]
+- quote: the sentence(s) verbatim (max 400 characters)
+
+Only packages the text actually states. A device whose number per host is not stated gets qty null — never guess. A note that only says where to run conduit, or who furnishes something, is not a package. Return {"packages":[]} when there are none.
+
+OUTPUT — strict JSON only:
+{"packages":[{"viewport":"<id>","host":"","host_tag":"","host_marker":"","host_target":"","devices":[{"text":"","target":"","qty":1}],"quote":""}]}`;
+
+export const SCHEDULE_ROWS_SYSTEM = `You transcribe ONE table (a panel schedule, fixture schedule, equipment schedule or load table) from a construction drawing for Accurate Power & Technology, ROW BY ROW. Never summarize, merge or skip rows; copy every cell as printed.
+
+INPUT: an image of one table.
+
+OUTPUT — strict JSON only:
+{"title":"PANEL A","columns":["CKT #","BREAKER TRIP/POLES","CIRCUIT DESCRIPTION","A","B","C","FEEDER"],"rows":[{"cells":["1","20/1","WORK LIGHTING","1,250","","","2#12,#12G,1/2\\"C"],"y0":0.212,"y1":0.228}]}
+- columns: the header cells, left to right (for a two-sided panel schedule, the columns of ONE side)
+- rows: one per printed row, top to bottom, in the columns' order ("" for an empty cell). A two-sided panel schedule (odd circuits left, even right, on one line) becomes TWO rows per line: the left side's row, then the right side's.
+- A multi-pole breaker's continuation rows keep their circuit number with the breaker cell as printed (e.g. "|") and an empty description.
+- y0 / y1: the row's top and bottom as fractions of the image height.
+- Header, title and total lines are not rows.`;
+
+// ── Evidence round Part 4: gap-fill and crop-check ──────────────────────────
+// Gap-fill never counts anything on its own — every mark it proposes is
+// SUGGESTED and is only ever added by the separate crop-check call (or the
+// estimator). Bump GAP_FILL_PROMPT_VERSION when either prompt changes.
+export const GAP_FILL_PROMPT_VERSION = 'gf1';
+
+export const GAP_FILL_SYSTEM = `You search ONE electrical plan sheet for Accurate Power & Technology for MISSED instances of ONE symbol type, because an independent source (a schedule quantity or a panel circuit description) says there may be more than were already found. You never count what is already found — only NEW instances, and never more than the stated shortfall.
+
+INPUT
+- The symbol: its tag, description and how it is drawn.
+- WHY: the reconciliation reason (e.g. "the fixture schedule says 4; the plans account for 3").
+- ALREADY FOUND: an image example of a confirmed instance of this symbol on this sheet (when one exists), and the legend/schedule entry that defines it (when available), plus a text list of the positions (fractions of the search-area image) already counted there — never report one of those again.
+- THE SEARCH AREA: an image of the sheet region to search.
+
+RULES
+- Only report an instance more than about 3% of the image away from every already-counted position. Look carefully at dense areas, overlaps with dimension lines/text, and areas near notes calling out this symbol.
+- Never invent a symbol that isn't actually drawn. When you see nothing new, return an empty list.
+- The search area is already cropped to the drawing's plan area, never a legend, schedule or notes block — but if you can still see one at the edge of the image, a symbol printed there (a legend's own definition of the tag) is never a new instance.
+- confidence: "high" (unmistakable), "medium" (probably this symbol), "low" (could be, but crowded/faint — say so in note).
+
+OUTPUT — strict JSON only:
+{"marks":[{"x":0.412,"y":0.118,"confidence":"medium","note":"small circle-slash by the sink note, no X on it"}]}
+x/y are the CENTER of the new instance within the search area image, as fractions (0 = left/top, 1 = right/bottom), three decimals.`;
+
+export const CROP_CHECK_SYSTEM = `You verify SUGGESTED symbol marks on ONE electrical plan sheet for Accurate Power & Technology, one small crop per candidate, for Accurate Power & Technology. You decide whether each candidate really is the symbol claimed.
+
+INPUT: for each candidate, a small crop centered on the suggested position, labeled with an id, plus the symbol's description and (when available) an image of a CONFIRMED instance of the same symbol on this sheet, for comparison.
+
+For each candidate return exactly one decision:
+- "accept" — this crop really shows the claimed symbol, drawn once, not already counted elsewhere in this crop.
+- "reject" — not the symbol (a different device, a note callout, a dimension mark, or nothing there).
+- "reclass" — it is a real, distinct symbol, but a DIFFERENT listed type than claimed (give that type's tag).
+
+Never accept out of politeness — reject anything you are not reasonably confident about; a rejected candidate is simply not added (it is never treated as a hard "not on this job").
+
+OUTPUT — strict JSON only:
+{"decisions":[{"id":"c1","decision":"accept","type":"","note":"clear circle-slash GFCI symbol, matches the confirmed example"}]}`;

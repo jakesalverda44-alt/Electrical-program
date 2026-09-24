@@ -1,0 +1,323 @@
+// Evidence round — the merge and the review list with evidence: the enlarged-
+// plan question (1.3), the sheet-pair relationship being gated with the
+// evidence round (1.4), typical host counts that are missing (2.2), family
+// questions (3.3), schedule-owned lines and the parser's circuit rows (3.2 /
+// 3.4), and what the estimator's answers enforce. Real Kissimmee types.
+import { describe, it, expect } from 'vitest';
+import { buildCountTargets, type CountTarget } from '../countTargets';
+import { mergeCountsIntoTakeoff, type SheetCountInput } from '../countMerge';
+import { buildReviewItems, enforcedCounts, validateResolution, reviewItemIsOpen, type ReviewItem } from '../reviewItems';
+import type { CountResult } from '../countingStage';
+import { parseViewportReply, type SheetGeom } from './viewports';
+import { resolveSheetMarks } from './viewportResolve';
+import { parseTypicalsReply, hostTargets } from './typicals';
+import { parseScheduleReply, scheduleCounts, dedupePanels, panelChoices, circuitSummaryRows } from './schedules';
+import { selectCountSheets, levelOf } from '../countSheets';
+import { VIEWPORT_REPLIES, TYPICALS_REPLIES, TABLE_REPLIES, E1_RESTROOM_REPEATS } from '../../test/fixtures/evidence/kissimmeeReplies';
+import { loadKissimmeeBaseline, KISSIMMEE_FILE } from '../../test/fixtures/evidence/kissimmeeBaseline';
+
+const base = loadKissimmeeBaseline();
+const { targets } = buildCountTargets(base.agent1);
+const G: SheetGeom = { widthPt: 1728, heightPt: 2592, originX: 0, originY: 0, rotation: 270 };
+const key = (p: number) => `${KISSIMMEE_FILE}#${p}`;
+const sel = selectCountSheets(base.inventory);
+const sheetOf = (p: number) => sel.counted.find(s => s.page === p)!;
+
+function input(page: number, opts: { viewports?: boolean; areaUnknown?: boolean; extra?: Array<{ type: string; x: number; y: number }> } = {}): SheetCountInput {
+  let vps = opts.viewports === false ? null : parseViewportReply(VIEWPORT_REPLIES[page], key(page), G)!.viewports;
+  if (vps && opts.areaUnknown) vps = vps.map(v => ({ ...v, areaOnMain: undefined }));
+  const marks = [...base.marks.filter(m => m.sheetKey === key(page)).map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y })), ...(opts.extra ?? []).map(e => ({ typeKey: e.type, x: e.x, y: e.y }))];
+  const res = resolveSheetMarks(marks, vps, G);
+  return { sheet: sheetOf(page), status: 'counted', placed: res.counted, unreadable: [], geometry: G, viewports: vps, pendingEnlarged: res.pending };
+}
+const others = () => [19, 51, 55].map(p => {
+  const marks = base.marks.filter(m => m.sheetKey === key(p));
+  return { sheet: sheetOf(p), status: 'counted' as const, placed: marks.map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y })), unreadable: [], geometry: base.sheets.find(s => s.page === p)!.geometry };
+});
+const cr = (m: ReturnType<typeof mergeCountsIntoTakeoff>, ts: CountTarget[], ev?: Partial<NonNullable<CountResult['evidence']>>): CountResult => ({
+  version: 2, ran: true, model: 'm', targets: ts, targetNotes: [], sheets: [], skippedSheets: [], types: m.types, loadCheck: m.loadCheck,
+  removedRows: m.removedRows, flags: m.flags, marks: [],
+  ...(ev ? { evidence: { model: 'e', usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, calls: 0, cached: 0, errors: [], pages: [], typicals: [], expansions: m.evidence?.expansions ?? [], unmappedTypical: m.evidence?.unmappedTypical ?? [], tables: [], families: m.evidence?.families ?? [], symbolDefinitions: [], circuitRows: 0, scheduleOwned: [], panelsExpected: 0, panelsUnread: [], ...ev } } : {}),
+});
+const answer = (item: ReviewItem, idx: number) => ({ ...validateResolution(item, { action: 'answer', answer: item.options![idx] }, null) as { ok: true; resolution: NonNullable<ReviewItem['resolution']> }, by: 'e', at: 't' });
+
+describe('1.4 is part of the evidence round (off = the title-only question, exactly as before)', () => {
+  it('evidence off: E-1 / E-2 raise "same area?"; on: complementary layers, B-32 (on both) counted once -> 9', () => {
+    const sheets = [input(49, { viewports: false }), input(50, { viewports: false }), ...others()];
+    const off = mergeCountsIntoTakeoff(base.agent1, targets, sheets, { countingRan: true });
+    expect(off.types.find(t => t.key === 'SIMPLEX RECEPTACLE')).toMatchObject({ count: 5, areaQuestion: { keep: 5, sum: 10 } });
+    const on = mergeCountsIntoTakeoff(base.agent1, targets, [input(49), input(50), ...others()], { countingRan: true, evidence: {} });
+    const s = on.types.find(t => t.key === 'SIMPLEX RECEPTACLE')!;
+    expect(s.count).toBe(9);
+    expect(s.areaQuestion).toBeUndefined();
+    expect(s.flags.join(' ')).toMatch(/− 1 drawn on both/);
+    expect(s.relations![0]).toMatchObject({ kind: 'complementary' });
+  });
+});
+
+describe('1.3 — an enlarged plan whose place on the main plan is unknown', () => {
+  const m = mergeCountsIntoTakeoff(base.agent1, targets, [input(49, { areaUnknown: true, extra: E1_RESTROOM_REPEATS }), input(50), ...others()], { countingRan: true, evidence: {} });
+  const items = buildReviewItems(cr(m, targets));
+  const q = items.find(i => i.id === 'viewport:GFCI')!;
+  it('raises one question with both totals: repeats (keep 3) or adds (9)', () => {
+    expect(q).toMatchObject({ kind: 'area', keepQty: 3, sumQty: 9, group: 'viewport' });
+    expect(q.detail).toMatch(/#3 RESTROOM POWER AND LIGHTING: 6/);
+  });
+  it('the answer is enforced', () => {
+    const resolved = items.map(i => (i.id === q.id ? { ...i, resolution: answer(i, 1).resolution } : i));
+    expect(enforcedCounts(cr(m, targets), resolved).byType.get('GFCI')).toBe(9);
+    const kept = items.map(i => (i.id === q.id ? { ...i, resolution: answer(i, 0).resolution } : i));
+    expect(enforcedCounts(cr(m, targets), kept).byType.get('GFCI')).toBe(3);
+  });
+});
+
+describe('2.2 — a typical whose hosts were not counted', () => {
+  const pk = parseTypicalsReply(TYPICALS_REPLIES[50], { sheetKey: key(50), source: 'vision', viewports: [{ id: `${key(50)}@9`, label: '#9 POWER POLE LEGEND' }], targets })!.packages;
+  const all = [...targets, ...hostTargets(pk, targets)];
+  // No host marks at all (the counter found none of the pole tags).
+  const m = mergeCountsIntoTakeoff(base.agent1, all, [input(49), input(50), ...others()], { countingRan: true, evidence: { typicals: pk } });
+  const c = cr(m, all, {});
+  const items = buildReviewItems(c);
+  it('no expansion; one blocking item per pole type naming its devices and the legend quote; hosts never lines or zero items', () => {
+    const typ = items.filter(i => i.id.startsWith('typical:'));
+    expect(typ).toHaveLength(5);
+    expect(typ[3]).toMatchObject({ kind: 'count', group: 'typical', typicalDevices: [{ key: 'SIMPLEX RECEPTACLE', perHost: 1 }, { key: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', perHost: 1 }] });
+    expect(typ[3].detail).toMatch(/TEST STATION POWER POLE WITH ONE SIMPLEX OUTLET/);
+    expect(items.some(i => i.id.startsWith('count:HOST'))).toBe(false);
+    expect(m.quantities.some(q => /HOST TAG/.test(String(q.item)))).toBe(false);
+    expect(m.types.find(t => t.key === 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE')!.components!.typical).toBe(0);
+  });
+  it('the estimator\'s host count expands it: 2 parts-pod poles -> +2 duplex', () => {
+    const it2 = items.find(i => i.id === `typical:${pk[2].id}`)!;
+    const r = validateResolution(it2, { action: 'count', qty: 2 }, null);
+    expect(r.ok).toBe(true);
+    const before = enforcedCounts(c, items).byType.get('DUPLEX RECEPTACLE / FLOOR RECEPTACLE')!;
+    const after = enforcedCounts(c, items.map(i => (i.id === it2.id ? { ...i, resolution: { ...(r as { ok: true; resolution: NonNullable<ReviewItem['resolution']> }).resolution, by: 'e', at: 't' } } : i))).byType.get('DUPLEX RECEPTACLE / FLOOR RECEPTACLE')!;
+    expect(after - before).toBe(2);
+  });
+});
+
+describe('3.2 / 3.4 — schedule-owned lines and the parser\'s circuit rows', () => {
+  const ctx = (t: string) => ({ sheetKey: key(52), sheetLabel: 'E-4 "Lighting Control Panel Details"', viewportId: `${key(52)}@${t}`, viewportTitle: t });
+  const tables = ['PANEL A', 'PANEL B', 'LOAD TOTALS'].map(t => parseScheduleReply(TABLE_REPLIES[t], ctx(t))!);
+  const sc = scheduleCounts(targets, tables);
+  const m = mergeCountsIntoTakeoff(base.agent1, targets, [input(49), input(50), ...others()], { countingRan: true, evidence: { scheduleCounts: sc, tables } });
+  it('a schedule-owned line is VERIFIED, countedBy schedule, sourced from the schedule sheet', () => {
+    const line = m.quantities.find(q => q.countType === 'BATT CHGR')!;
+    expect(line).toMatchObject({ qty: 5, countedBy: 'schedule', confidence: 'VERIFIED', sourceSheet: 'E-4' });
+  });
+  it('Agent 1\'s circuit-count rows are replaced by the parser\'s (with the rows); nothing is held as an "unscheduled fixture"', () => {
+    const items = buildReviewItems(cr(m, targets, { tables }));
+    expect(items.some(i => /UNSCHEDULED:.*CIRCUITS/i.test(i.id))).toBe(false);
+    expect(m.quantities.filter(q => q.countedBy === 'schedule' && /Branch circuit/.test(String(q.item))).map(q => [q.item, q.qty])).toEqual([
+      ['Branch circuit 20/1 — Panel A', 31], ['Branch circuit 60/3 — Panel B', 2], ['Branch circuit 20/1 — Panel B', 14],
+    ]);
+  });
+  it('a panel schedule found but not read -> a blocking item (its circuits would have no source); Agent 1\'s circuit rows stay when nothing was parsed', () => {
+    const m2 = mergeCountsIntoTakeoff(base.agent1, targets, [input(49), input(50), ...others()], { countingRan: true, evidence: {} });
+    const items = buildReviewItems(cr(m2, targets, { panelsExpected: 2, panelsUnread: ['PANEL B (E-4)'] }));
+    expect(items.find(i => i.id === 'schedule:panels-unread')).toMatchObject({ kind: 'confirm', group: 'schedule' });
+    expect(buildReviewItems(cr(m2, targets, { panelsExpected: 2 })).some(i => i.id === 'schedule:panels-unread')).toBe(false);
+    expect(m2.quantities.some(q => q.category === 'Branch Power' && /Lighting branch circuits/.test(String(q.item)))).toBe(true);
+  });
+});
+
+describe('3.3 — merged types carry no line, no review item, no enforced count', () => {
+  const m = mergeCountsIntoTakeoff(base.agent1, targets, [input(49), input(50), ...others()], { countingRan: true, evidence: {} });
+  const c = cr(m, targets);
+  it('the untagged E-7 site light and SITE LIGHT are merged; S1/S2 lines carry 3 poles / 4 heads', () => {
+    expect(m.types.filter(t => t.status === 'merged').map(t => t.key)).toEqual(expect.arrayContaining(['SITE LIGHT', '(UNTAGGED) SITE LIGHT', 'W1', 'W2']));
+    expect(m.quantities.some(q => q.countType === '(untagged) SITE LIGHT' || q.countType === 'SITE LIGHT')).toBe(false);
+    const poles = m.quantities.filter(q => /— pole/.test(String(q.item))).reduce((s, q) => s + Number(q.qty), 0);
+    const heads = m.quantities.filter(q => /fixture heads/.test(String(q.item))).reduce((s, q) => s + Number(q.qty), 0);
+    expect([poles, heads]).toEqual([3, 4]);
+    const items = buildReviewItems(c);
+    expect(items.some(i => /SITE LIGHT/.test(i.id))).toBe(false);
+    expect(enforcedCounts(c, items).byType.has('SITE LIGHT')).toBe(false);
+  });
+  it('Agent 1 rows that ARE the site poles are the family\'s lines; a receptacle or base at a pole is not', () => {
+    const a1 = { ...base.agent1, quantities: [
+      { category: 'Exterior Site Lighting', item: 'Site light pole locations (A-15 single, A-17 two heads @90 deg, A-19 single)', qty: 3, unit: 'EA' },
+      { category: 'Exterior Site Lighting', item: 'GFCI receptacle at light pole base', qty: 3, unit: 'EA' },
+      { category: 'Exterior Site Lighting', item: 'Light pole concrete base', qty: 3, unit: 'EA' },
+    ] };
+    const m2 = mergeCountsIntoTakeoff(a1, targets, [input(49), input(50), ...others()], { countingRan: true, evidence: {} });
+    expect(m2.removedRows.map(r => [String(r.row.item).slice(0, 20), !!r.unscheduled])).toEqual([
+      ['Site light pole loca', false], ['GFCI receptacle at l', true], ['Light pole concrete ', true],
+    ]);
+  });
+  it('a family question\'s answer replaces the primary\'s count', () => {
+    const fake: CountResult = { ...c, evidence: { ...cr(m, targets, {}).evidence!, families: [{ family: 'DSXW1', primary: ['L'], merged: [], question: { key: 'W2', memberCount: 4, primaryCount: 1, into: 'L', intoKeys: ['L'] }, flags: [] }] } };
+    const items = buildReviewItems(fake);
+    const q = items.find(i => i.id === 'family:W2')!;
+    expect(q).toMatchObject({ kind: 'area', keepQty: 1, sumQty: 4, group: 'family' });
+    const res = items.map(i => (i.id === q.id ? { ...i, resolution: answer(i, 1).resolution } : i));
+    expect(enforcedCounts(fake, res).byType.get('L')).toBe(4);
+  });
+});
+
+describe('fix round B4 — named partitions still sum; an enlarged same-area sheet is never summed', () => {
+  const t = targets.find(x => x.key === 'SIMPLEX RECEPTACLE')!;
+  const mk = (no: string, title: string, role: 'building' | 'enlarged', area: string, n: number, dx: number): SheetCountInput => ({
+    sheet: { ...sheetOf(49), key: `k#${no}`, sheetNo: no, title, label: `${no} "${title}"`, role, area, level: '', focus: 'power' },
+    status: 'counted', unreadable: [], geometry: G, viewports: null,
+    placed: Array.from({ length: n }, (_, i) => ({ typeKey: t.key, x: 300 + i * 40, y: 600 + dx })),
+  });
+  it('AREA A / AREA B: summed (named-area path)', () => {
+    const m = mergeCountsIntoTakeoff(base.agent1, [t], [mk('E-2.1', 'POWER PLAN AREA A', 'building', 'AREA A', 4, 0), mk('E-2.2', 'POWER PLAN AREA B', 'building', 'AREA B', 3, 0)], { countingRan: true, evidence: {} });
+    expect(m.types[0].count).toBe(7);
+  });
+  it('an ENLARGED plan sheet of the same area: the larger is kept, never summed', () => {
+    const m = mergeCountsIntoTakeoff(base.agent1, [t], [mk('E-2', 'POWER PLAN', 'building', '', 4, 0), mk('E-5', 'ENLARGED OFFICE POWER PLAN', 'enlarged', '', 3, 0)], { countingRan: true, evidence: {} });
+    expect(m.types[0].count).toBe(4);
+  });
+  it('two same-level plans with the SAME marks and no building box: kept once (the reviewer\'s 10-duplex shape) -> 10', () => {
+    const a = { ...mk('E-2', 'POWER PLAN', 'building', '', 10, 0), placed: [...mk('E-2', 'x', 'building', '', 10, 0).placed, ...Array.from({ length: 5 }, (_, i) => ({ typeKey: 'COIL + J', x: 900 + i * 30, y: 900 }))] };
+    const b = { ...mk('E-3', 'SYSTEMS PLAN', 'building', '', 10, 0), placed: [...mk('E-3', 'x', 'building', '', 10, 0).placed, ...Array.from({ length: 8 }, (_, i) => ({ typeKey: 'P', x: 1200 + i * 30, y: 1500 }))] };
+    const m = mergeCountsIntoTakeoff(base.agent1, targets, [a, b], { countingRan: true, evidence: {} });
+    expect(m.types.find(x => x.key === t.key)!.count).toBe(10);
+  });
+});
+
+describe('fix round S9 — Agent 1 circuit rows are replaced per panel, only where the parser read it completely', () => {
+  const ctx = (t: string) => ({ sheetKey: key(52), sheetLabel: 'E-4 "Lighting Control Panel Details"', viewportId: `${key(52)}@${t}`, viewportTitle: t });
+  const A = parseScheduleReply(TABLE_REPLIES['PANEL A'], ctx('PANEL A'))!;
+  const halfB = (() => { const j = JSON.parse(TABLE_REPLIES['PANEL B']); j.rows = j.rows.filter((r: { cells: string[] }) => Number(r.cells[0]) % 2 === 1); return parseScheduleReply(JSON.stringify(j), ctx('PANEL B'))!; })();
+  const rows = (items: string[]) => ({ ...base.agent1, quantities: items.map(item => ({ category: 'Branch Power', item, qty: 9, unit: 'EA' })) });
+  it('Panel B half read: its row stays; Panel A\'s is replaced by the parser\'s rows', () => {
+    expect(halfB.warnings.join(' ')).toMatch(/only the odd side was read/);
+    const m = mergeCountsIntoTakeoff(rows(['20/1 branch circuits Panel A (non-lighting, non-sign)', '20/1 branch circuits Panel B']), targets, [input(49), input(50), ...others()],
+      { countingRan: true, evidence: { tables: [A, halfB], scheduleCounts: scheduleCounts(targets, [A, halfB]) } });
+    expect(m.removedRows.map(r => String(r.row.item))).toContain('20/1 branch circuits Panel A (non-lighting, non-sign)');
+    expect(m.quantities.some(q => q.item === '20/1 branch circuits Panel B')).toBe(true);
+    expect(m.quantities.filter(q => /Branch circuit .* Panel /.test(String(q.item))).every(q => /Panel A/.test(String(q.item)))).toBe(true);
+    // No equipment quantity from a half-read panel: the battery chargers stay with the counter.
+    expect(scheduleCounts(targets, [A, halfB]).has('BATT CHGR')).toBe(false);
+  });
+  it('an unnamed Agent 1 circuit row covering an unread panel stays, and the parser\'s rows are NOT added beside it', () => {
+    const m = mergeCountsIntoTakeoff(rows(['Lighting branch circuits 20/1 (work, sales)']), targets, [input(49), input(50), ...others()],
+      { countingRan: true, evidence: { tables: [A, halfB] } });
+    expect(m.quantities.some(q => q.item === 'Lighting branch circuits 20/1 (work, sales)')).toBe(true);
+    expect(m.quantities.some(q => /^Branch circuit /.test(String(q.item)))).toBe(false);
+    expect(m.flags.join(' ')).toMatch(/not every panel \(B\)/);
+  });
+});
+
+describe('fix round 3 / B12 — the conflict reaches the REAL review list', () => {
+  it('two different "PANEL A" tables stored on count_result.evidence.tables raise one blocking panel-dup item', () => {
+    const mk = (label: string, desc: string) => parseScheduleReply(JSON.stringify({ title: 'PANEL A', columns: ['CKT', 'BREAKER', 'DESCRIPTION', 'A'], rows: [['1', '20/1', desc, '900'], ['2', '-/1', 'SPACE', '0'], ['3', '20/1', 'WH', '1500']].map(cells => ({ cells })) }),
+      { sheetKey: label, sheetLabel: label, viewportId: `${label}@A`, viewportTitle: 'PANEL A' })!;
+    const tables = dedupePanels([mk('E-101', 'LIGHTING'), mk('E-201', 'RECEPTACLES')]);
+    const m = mergeCountsIntoTakeoff(base.agent1, targets, [input(49), input(50), ...others()], { countingRan: true, evidence: { tables } });
+    const items = buildReviewItems(cr(m, targets, { tables }));
+    const dup = items.filter(i => i.id.startsWith('panel-dup:'));
+    expect(dup).toHaveLength(1);
+    expect(dup[0]).toMatchObject({ id: 'panel-dup:A', kind: 'confirm', group: 'schedule' });
+    expect(dup[0].blocking).not.toBe(false);
+  });
+});
+
+describe('fix round 3 / S17 — the schedule question reaches the review list and is enforced', () => {
+  it('two "EF (2)" circuits: schedqty item, 2 for now, "4 in all" enforced', () => {
+    const t = { ...targets.find(x => x.key === 'EF')! };
+    const tb = parseScheduleReply(JSON.stringify({ title: 'PANEL B', columns: ['CKT', 'BREAKER', 'DESCRIPTION', 'A'], rows: [['7', '20/1', 'EF (2)', '300'], ['9', '20/1', 'EF (2)', '300'], ['2', '-/1', 'SPACE', '0']].map(cells => ({ cells })) }),
+      { sheetKey: 'E-4', sheetLabel: 'E-4', viewportId: 'E-4@B', viewportTitle: 'PANEL B' })!;
+    const m = mergeCountsIntoTakeoff(base.agent1, [t], [input(49)], { countingRan: true, evidence: { tables: [tb], scheduleCounts: scheduleCounts([t], [tb]) } });
+    expect(m.types[0].count).toBe(2);
+    const items = buildReviewItems(cr(m, [t], {}));
+    const q = items.find(i => i.id === 'schedqty:EF')!;
+    expect(q).toMatchObject({ kind: 'area', keepQty: 2, sumQty: 4, group: 'schedule' });
+    expect(enforcedCounts(cr(m, [t], {}), items.map(i => (i.id === q.id ? { ...i, resolution: answer(i, 1).resolution } : i))).byType.get('EF')).toBe(4);
+  });
+});
+
+describe('fix round 3 / S15 — stacked floors are never dropped as "duplicates"', () => {
+  const t = targets.find(x => x.key === 'SIMPLEX RECEPTACLE')!;
+  const typical = Array.from({ length: 10 }, (_, i) => ({ typeKey: t.key, x: 300 + i * 40, y: 600 }));
+  const others2 = (n: number, y: number) => Array.from({ length: n }, (_, i) => ({ typeKey: 'COIL + J', x: 900 + i * 30, y }));
+  const sh = (no: string, title: string, level: string): SheetCountInput => ({
+    sheet: { ...sheetOf(49), key: `k#${no}`, sheetNo: no, title, label: `${no} "${title}"`, role: 'building', area: '', level, focus: 'power' },
+    status: 'counted', unreadable: [], geometry: G, viewports: null, placed: [...typical, ...others2(5, 900)],
+  });
+  it('levelOf reads L1/L2, LEVEL TWO, 2ND LEVEL, UPPER/LOWER, BASEMENT/CELLAR, MEZZANINE, ROOF, FLOORS 2-4', () => {
+    expect(['L1 POWER PLAN', 'L2 POWER PLAN', 'LEVEL TWO POWER PLAN', '2ND LEVEL POWER', 'SECOND LEVEL LIGHTING', 'UPPER LEVEL POWER PLAN', 'LOWER FLOOR PLAN',
+      'BASEMENT POWER PLAN', 'CELLAR LIGHTING', 'MEZZANINE PLAN', 'ROOF POWER PLAN', 'POWER PLAN - FLOORS 2-4', 'POWER PLAN'].map(levelOf))
+      .toEqual(['1', '2', '2', '2', '2', 'UPPER', 'LOWER', 'BASEMENT', 'BASEMENT', 'MEZZANINE', 'ROOF', '2-4', '']);
+  });
+  it('the reviewer\'s repro, titles now parsed: "L1 …" and "L2 …" with the same typical layout -> 20, summed', () => {
+    const a = sh('E-101', 'L1 POWER PLAN', levelOf('L1 POWER PLAN')), b = sh('E-102', 'L2 POWER PLAN', levelOf('L2 POWER PLAN'));
+    const m = mergeCountsIntoTakeoff(base.agent1, [t], [a, b], { countingRan: true, evidence: {} });
+    expect(m.types[0].count).toBe(20);
+    expect(m.types[0].areaQuestion).toBeUndefined();
+  });
+  it('two same-layout sheets whose titles name NO level -> a blocking question (keep 10 / sum 20), never a silent duplicate', () => {
+    const m = mergeCountsIntoTakeoff(base.agent1, [t], [sh('E-101', 'POWER PLAN', ''), sh('E-102', 'TYPICAL FLOOR POWER PLAN', '')], { countingRan: true, evidence: {} });
+    expect(m.types[0].areaQuestion).toMatchObject({ keep: 10, sum: 20 });
+    expect(buildReviewItems(cr(m, [t])).some(i => i.id === `area:${t.key}`)).toBe(true);
+  });
+  it('an unnamed-level sheet with the same layout as a LEVEL 2 sheet -> asked, not summed or dropped silently', () => {
+    const m = mergeCountsIntoTakeoff(base.agent1, [t], [sh('E-101', 'POWER PLAN', ''), sh('E-102', 'LEVEL 2 POWER PLAN', '2')], { countingRan: true, evidence: {} });
+    expect(m.types[0].areaQuestion).toMatchObject({ keep: 10, sum: 20 });
+  });
+});
+
+describe('fix round 4 / S20 — the same panel read on two sheets', () => {
+  const batt = targets.find(t => t.key === 'BATT CHGR')!;
+  const ctx = (sheet: string) => ({ sheetKey: sheet, sheetLabel: sheet, viewportId: `${sheet}@B`, viewportTitle: 'PANEL B' });
+  const panelB = (sheet: string, load15: string, extra: string[][] = []) => {
+    const j = JSON.parse(TABLE_REPLIES['PANEL B']);
+    j.rows = j.rows.map((r: { cells: string[] }) => (r.cells[0] === '15' ? { ...r, cells: [r.cells[0], r.cells[1], r.cells[2], r.cells[3], load15, r.cells[5], r.cells[6]] } : r));
+    j.rows = [...j.rows, ...extra.map(cells => ({ cells }))];
+    return parseScheduleReply(JSON.stringify(j), ctx(sheet))!;
+  };
+  it('the reviewer\'s repro: E-4 / E-4.1 differ only in one load ("1,490" vs "1,940") -> ONE panel: chargers 5 (not 10), a non-blocking load note', () => {
+    const tables = dedupePanels([panelB('E-4', '1,490'), panelB('E-4.1', '1,940')]);
+    expect(tables).toHaveLength(1);
+    expect(tables[0].warnings.join(' ')).toMatch(/load differs on E-4 vs E-4.1 \(circuit 15\)/);
+    expect(scheduleCounts([batt], tables).get('BATT CHGR')!.qty).toBe(5);
+    const m = mergeCountsIntoTakeoff(base.agent1, targets, [input(49)], { countingRan: true, evidence: { tables, scheduleCounts: scheduleCounts(targets, tables) } });
+    const items = buildReviewItems(cr(m, targets, { tables, panelChoices: panelChoices(targets, tables) }));
+    expect(items.find(i => i.id.startsWith('panel-load:'))).toMatchObject({ blocking: false, group: 'schedule' });
+    expect(items.some(i => i.id.startsWith('panel-dup:'))).toBe(false);
+  });
+  it('the review\'s three-charger shape: two reads of a 3-charger panel with one load differing -> 3', () => {
+    const three = (sheet: string, l: string) => parseScheduleReply(JSON.stringify({ title: 'PANEL B', columns: ['CKT', 'BREAKER', 'DESCRIPTION', 'A'],
+      rows: [['15', '20/1', 'BATTERY CHARGER', l], ['17', '20/1', 'BATTERY CHARGER', '1,490'], ['19', '20/1', 'BATTERY CHARGER', '1,490'], ['2', '-/1', 'SPACE', '0']].map(cells => ({ cells })) }), ctx(sheet))!;
+    const tables = dedupePanels([three('E-4', '1,490'), three('E-4.1', '1,940')]);
+    expect(scheduleCounts([batt], tables).get('BATT CHGR')!.qty).toBe(3);
+    expect(circuitSummaryRows(tables).reduce((s, r) => s + Number(r.row.qty), 0)).toBe(3);
+  });
+  it('a TRUE conflict (different circuits): both kept, a blocking item with ENFORCED answers', () => {
+    const tables = dedupePanels([panelB('E-4', '1,490'), panelB('E-4.1', '1,490', [['43', '20/1', 'BATTERY CHARGER', '1,490']])]);
+    expect(tables).toHaveLength(2);
+    const choices = panelChoices(targets, tables);
+    expect(scheduleCounts(targets, tables).get('BATT CHGR')!.qty).toBe(11);
+    const m = mergeCountsIntoTakeoff(base.agent1, targets, [input(49)], { countingRan: true, evidence: { tables, scheduleCounts: scheduleCounts(targets, tables) } });
+    const c = cr(m, targets, { tables, panelChoices: choices });
+    const items = buildReviewItems(c);
+    const q = items.find(i => i.id.startsWith('panel-dup:'))!;
+    expect(q.options).toEqual(['Two panels — keep both', 'Same panel — use E-4\'s copy', 'Same panel — use E-4.1\'s copy']);
+    expect(reviewItemIsOpen(q)).toBe(true);
+    const pick = (idx: number) => items.map(i => (i.id === q.id ? { ...i, resolution: { ...(validateResolution(i, { action: 'answer', answer: q.options![idx] }, null) as { ok: true; resolution: NonNullable<ReviewItem['resolution']> }).resolution, by: 'e', at: 't' } } : i));
+    const useE4 = enforcedCounts(c, pick(1));
+    expect(useE4.byType.get('BATT CHGR')).toBe(5);
+    expect(useE4.removeLines).toEqual(expect.arrayContaining(['Branch circuit 20/1 — Panel B — E-4.1']));
+    expect(enforcedCounts(c, pick(2)).byType.get('BATT CHGR')).toBe(6);
+    const keepBoth = enforcedCounts(c, pick(0));
+    expect(keepBoth.byType.get('BATT CHGR')).toBe(11);
+    expect(keepBoth.removeLines).toBeUndefined();
+  });
+});
+
+describe('fix round 4 / S20 — enforceCounts removes a dropped panel copy\'s circuit lines by exact name', () => {
+  it('removes "… Panel B — E-4.1", keeps "… Panel B — E-4"; a missing line is reported, never guessed', async () => {
+    const { enforceCountsOnTakeoff: enforceCounts } = await import('../../bidstd/enforceCounts');
+    const takeoff = [{ name: 'Branch Power', items: [
+      { item: 'Branch circuit 20/1 — Panel B — E-4', description: '', unit: 'EA', qty: 15 },
+      { item: 'Branch circuit 20/1 — Panel B — E-4.1', description: '', unit: 'EA', qty: 16 },
+    ] }];
+    const r = enforceCounts(takeoff as never, null, { byType: new Map(), extraLines: [], removeLines: ['Branch circuit 20/1 — Panel B — E-4.1', 'Branch circuit 60/3 — Panel B — E-4.1'] });
+    expect(r.takeoff[0].items.map(i => i.item)).toEqual(['Branch circuit 20/1 — Panel B — E-4']);
+    expect(r.corrections.join(' ')).toMatch(/60\/3 — Panel B — E-4.1" \(a dropped panel copy's circuits\) is not in the takeoff/);
+  });
+});

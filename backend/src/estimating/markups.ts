@@ -24,7 +24,7 @@ export interface MarkupRow {
   createdBy: string | null;
   /** Takeoff accuracy Task 6 — 'ai_count' for a marker the counting stage
    *  suggested; null otherwise. Server-set only (never from a client batch). */
-  source: 'ai_count' | null;
+  source: 'ai_count' | 'gap_fill' | null;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
@@ -45,7 +45,7 @@ function rowToMarkup(r: Record<string, unknown>): MarkupRow {
     status: r.status as MarkupStatus,
     label: (r.label as string | null) ?? null,
     createdBy: (r.created_by as string | null) ?? null,
-    source: (r.source as 'ai_count' | null) ?? null,
+    source: (r.source as 'ai_count' | 'gap_fill' | null) ?? null,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
     deletedAt: (r.deleted_at as string | null) ?? null,

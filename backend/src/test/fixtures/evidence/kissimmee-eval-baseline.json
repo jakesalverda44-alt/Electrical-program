@@ -1,0 +1,4516 @@
+{
+"_note": "Evidence round fixture \u2014 the Opus baseline eval of AutoZone #10077 Kissimmee (2026-09-24, bid d9abdb87 in electrical_crm_test): Agent 1 output before the counting merge (kept rows + the rows the merge replaced), the page inventory, the counted sheets and every mark the Opus counter placed (PDF points). Real run output, not hand-built.",
+"agent1": {
+"project": {
+"name": "AutoZone Store No. 10077 (Prototype 7N2-L)",
+"address": "2860 N Old Lake Wilson Rd., Kissimmee, FL 34747",
+"gcName": "Summit General Contractors",
+"gcContact": "",
+"gcEmail": "",
+"owner": "AutoZone Stores LLC (Contact: Wade Davis, 901-495-8701)",
+"drawingDate": "09/22/25 (Rev 1 10/14/25)",
+"sheets": [
+"A-0",
+"E-4"
+],
+"projectType": "retail",
+"sqFt": 7381,
+"sqFtSource": "A-0 Building Code Analysis: BUILDING AREA (PERIMETER) 7,381 SHOWN (interior 7,147)",
+"parcel": "11-25-27-3741-0001-0020",
+"gc_extracted": ""
+},
+"service": {
+"voltage": "208Y/120V 3P 4W",
+"mainAmps": 400,
+"phase": 3,
+"utilityCompany": "Duke Energy",
+"transformerKVA": "",
+"confidence": "ASSUMED"
+},
+"panels": [
+{
+"name": "A",
+"amps": 225,
+"voltage": "208Y/120V 3P 4W",
+"phase": 3,
+"circuits": 42,
+"location": "Flush mounted (room not stated)",
+"fedFrom": "DISCON A (200A fused switch) via 4#3/0, #6G, 2\"C",
+"nemaRating": "",
+"confidence": "VERIFIED"
+},
+{
+"name": "B",
+"amps": 225,
+"voltage": "208Y/120V 3P 4W",
+"phase": 3,
+"circuits": 42,
+"location": "Flush mounted (room not stated)",
+"fedFrom": "DISCON B (200A fused switch) via 4#3/0, #6G, 2\"C",
+"nemaRating": "",
+"confidence": "VERIFIED"
+},
+{
+"name": "A",
+"amps": 0,
+"voltage": "",
+"phase": 3,
+"circuits": 0,
+"location": "Wall above/near lighting contactor enclosure (E-5 detail 2)",
+"fedFrom": "",
+"nemaRating": "",
+"confidence": "ASSUMED"
+},
+{
+"name": "B",
+"amps": 0,
+"voltage": "",
+"phase": 3,
+"circuits": 0,
+"location": "Adjacent to Panel A (E-5 detail 2)",
+"fedFrom": "",
+"nemaRating": "",
+"confidence": "ASSUMED"
+},
+{
+"name": "A",
+"amps": 0,
+"voltage": "",
+"phase": 3,
+"circuits": 0,
+"location": "Restroom/service equipment wall, NE corner",
+"fedFrom": "See E-4 one line (not provided)",
+"nemaRating": "",
+"confidence": "ASSUMED"
+},
+{
+"name": "B",
+"amps": 0,
+"voltage": "",
+"phase": 3,
+"circuits": 0,
+"location": "Restroom/service equipment wall, NE corner",
+"fedFrom": "See E-4 one line (not provided)",
+"nemaRating": "",
+"confidence": "ASSUMED"
+},
+{
+"name": "A",
+"amps": 0,
+"voltage": "",
+"phase": 3,
+"circuits": 0,
+"location": "",
+"fedFrom": "",
+"nemaRating": "",
+"confidence": "ASSUMED"
+}
+],
+"equipment": [
+{
+"tag": "DISCON A",
+"description": "200A fused switch, fused at 200A, NEMA 3R, AutoZone provided",
+"amps": 200,
+"voltage": "208Y/120V",
+"phase": 3,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "DISCON B",
+"description": "200A fused switch, fused at 200A, NEMA 3R, AutoZone provided",
+"amps": 200,
+"voltage": "208Y/120V",
+"phase": 3,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "MB",
+"description": "Meter base NEMA 3R, parallel (2)4#3/0, 2\"C",
+"amps": 0,
+"voltage": "208Y/120V",
+"phase": 3,
+"ecfeci": true,
+"confidence": "ASSUMED"
+},
+{
+"tag": "WIREWAY",
+"description": "Wireway NEMA 3R 12x12, length as required, contractor provided",
+"amps": 0,
+"voltage": "208Y/120V",
+"phase": 3,
+"ecfeci": true,
+"confidence": "VERIFIED"
+},
+{
+"tag": "RTU-1",
+"description": "Rooftop unit, 60/3 breaker B-1,3,5, 3#6,#10G,3/4\"C",
+"amps": 60,
+"voltage": "208V",
+"phase": 3,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "RTU-2",
+"description": "Rooftop unit, 60/3 breaker B-2,4,6, 3#6,#10G,3/4\"C",
+"amps": 60,
+"voltage": "208V",
+"phase": 3,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "WH",
+"description": "Water heater, 1,500VA, A-27",
+"amps": 20,
+"voltage": "120V",
+"phase": 1,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "ALC",
+"description": "Automatic lighting control panel, 480VA, B-25",
+"amps": 20,
+"voltage": "120V",
+"phase": 1,
+"ecfeci": true,
+"confidence": "VERIFIED"
+},
+{
+"tag": "BATT CHGR",
+"description": "Battery chargers (5), 1,490VA each, B-15/17/19/21/23",
+"amps": 20,
+"voltage": "120V",
+"phase": 1,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "MINI-TUNE",
+"description": "Mini-tune, 1,500VA, B-20 20A high magnetic breaker",
+"amps": 20,
+"voltage": "120V",
+"phase": 1,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "DRINK MACH",
+"description": "Drink machine 1,200VA, B-32",
+"amps": 20,
+"voltage": "120V",
+"phase": 1,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "DF",
+"description": "Drinking fountain 480VA, B-26",
+"amps": 20,
+"voltage": "120V",
+"phase": 1,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "LCP",
+"description": "Venstar lighting contactor enclosure 19.5\"W x 23.5\"H x 8\"D semi-recessed, 6 contactors (Work, Sales, Sign, Sign, Site, Site), fed from circuit B-25",
+"amps": 0,
+"voltage": "",
+"phase": 1,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "DATA CONCENTRATOR",
+"description": "Venstar data concentrator mounted on phone board in telephone closet",
+"amps": 0,
+"voltage": "",
+"phase": 1,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "RTU-1",
+"description": "10-ton rooftop unit, ckt B-1,3,5, disconnect with unit",
+"amps": 0,
+"voltage": "",
+"phase": 3,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "RTU-2",
+"description": "10-ton rooftop unit, ckt B-2,4,6, disconnect with unit",
+"amps": 0,
+"voltage": "",
+"phase": 3,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "WH",
+"description": "Bosch Tronic ES4 minitank water heater (AutoZone furnished, EC final hookup)",
+"amps": 0,
+"voltage": "",
+"phase": 1,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "EF",
+"description": "Restroom recessed exhaust fans, wired via CMR-9 sensor/light",
+"amps": 0,
+"voltage": "",
+"phase": 1,
+"ecfeci": false,
+"confidence": "ASSUMED"
+},
+{
+"tag": "CF1-CF3",
+"description": "Hunter #28692 ceiling fans w/ #27180 wall speed controller, on sales floor light ckt",
+"amps": 0,
+"voltage": "120V",
+"phase": 1,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "PNL-A/B",
+"description": "Panelboards & breakers (AutoZone furnished)",
+"amps": 0,
+"voltage": "",
+"phase": 3,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "ALC",
+"description": "Automatic lighting control panel & acc. (AutoZone furnished)",
+"amps": 0,
+"voltage": "",
+"phase": 1,
+"ecfeci": false,
+"confidence": "VERIFIED"
+},
+{
+"tag": "PYLON SIGN",
+"description": "Pylon sign power connection, circuit A-18",
+"amps": 0,
+"voltage": "",
+"phase": 1,
+"ecfeci": false,
+"confidence": "ASSUMED"
+}
+],
+"fixtureSchedule": [
+{
+"type": "W1",
+"description": "Lithonia DSXW1 LED 10C 1000 40K T3M MVOLT wallpack, IESNA full cutoff, 0 deg down, MH 12'-0\"",
+"wattage": 40,
+"voltage": "MVOLT",
+"mounting": "Wall 12'-0\"",
+"location": "exterior_building",
+"headsPerPole": 0,
+"emergency": false,
+"symbol": "Wall-mounted half-rectangle with triangle arrow, tag W1",
+"sourceSheet": "PH0.1"
+},
+{
+"type": "W2",
+"description": "Lithonia DSXW1 LED 10C 530 40K T3M MVOLT wallpack, IESNA full cutoff, 0 deg down, MH 12'-0\"",
+"wattage": 20,
+"voltage": "MVOLT",
+"mounting": "Wall 12'-0\"",
+"location": "exterior_building",
+"headsPerPole": 0,
+"emergency": false,
+"symbol": "Wall-mounted half-rectangle with triangle arrow, tag W2",
+"sourceSheet": "PH0.1"
+},
+{
+"type": "S1",
+"description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS area light, IES full cutoff, 0 deg down, MH 28'-0\"",
+"wattage": 207,
+"voltage": "MVOLT",
+"mounting": "Pole 28'-0\"",
+"location": "site",
+"headsPerPole": 1,
+"emergency": false,
+"symbol": "Circle pole with single square head and arrow, tag S1",
+"sourceSheet": "PH0.1"
+},
+{
+"type": "S2",
+"description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS area light, dual head, IES full cutoff, 0 deg down, MH 28'-0\"",
+"wattage": 414,
+"voltage": "MVOLT",
+"mounting": "Pole 28'-0\"",
+"location": "site",
+"headsPerPole": 2,
+"emergency": false,
+"symbol": "Circle pole with two square heads, tag S2",
+"sourceSheet": "PH0.1"
+},
+{
+"type": "A",
+"description": "8' LED strip 42W input, 4-8.5W T8 4' LED tube",
+"wattage": 42,
+"voltage": "",
+"mounting": "Bottom of joist/unistrut",
+"location": "interior",
+"headsPerPole": 0,
+"emergency": false,
+"symbol": "Long bar with circle, tag A above, circuit # below",
+"sourceSheet": "E-3"
+},
+{
+"type": "B",
+"description": "8' LED strip 21W input, 2-8.5W T8 4' LED tube",
+"wattage": 21,
+"voltage": "",
+"mounting": "Bottom of joist/unistrut",
+"location": "interior",
+"headsPerPole": 0,
+"emergency": false,
+"symbol": "Long bar with circle, tag B",
+"sourceSheet": "E-3"
+},
+{
+"type": "C",
+"description": "4' LED strip 10.5W wall light, 1-8.5W T8 LED tube",
+"wattage": 10.5,
+"voltage": "",
+"mounting": "Surface wall @ 6'-8\" AFF",
+"location": "interior",
+"headsPerPole": 0,
+"emergency": false,
+"symbol": "Bar with circle, tag C",
+"sourceSheet": "E-3"
+},
+{
+"type": "D",
+"description": "D-Series Size 1 DSXW1 LED 10C 1000 40K T3M MVOLT wall pack",
+"wattage": 40,
+"voltage": "MVOLT",
+"mounting": "Wall, top aligned w/ storefront",
+"location": "exterior_building",
+"headsPerPole": 0,
+"emergency": false,
+"symbol": "Circle with wall bracket, tag D",
+"sourceSheet": "E-3"
+},
+{
+"type": "E",
+"description": "Emergency light with battery backup ELM6LED",
+"wattage": 0,
+"voltage": "",
+"mounting": "Bottom of bar joist or unistrut",
+"location": "interior",
+"headsPerPole": 0,
+"emergency": true,
+"symbol": "Box with two triangle heads, tag E",
+"sourceSheet": "E-3"
+},
+{
+"type": "F",
+"description": "Exit sign with battery backup for remote exit emergency head",
+"wattage": 0,
+"voltage": "",
+"mounting": "Wall per plan",
+"location": "interior",
+"headsPerPole": 0,
+"emergency": true,
+"symbol": "Circle with X, stem, tag F",
+"sourceSheet": "E-3"
+},
+{
+"type": "G",
+"description": "Gotham 8\" LED downlight EVO R 40/30 8AR 120 TRW",
+"wattage": 49,
+"voltage": "120V",
+"mounting": "Soffit",
+"location": "exterior_building",
+"headsPerPole": 0,
+"emergency": false,
+"symbol": "Circle with cross ticks, tag G",
+"sourceSheet": "E-3"
+},
+{
+"type": "J",
+"description": "Exterior emergency light with two heads",
+"wattage": 0,
+"voltage": "",
+"mounting": "Remote head outside above door, wired to exit",
+"location": "exterior_building",
+"headsPerPole": 0,
+"emergency": true,
+"symbol": "Box with two triangle heads below, tag J",
+"sourceSheet": "E-3"
+},
+{
+"type": "K",
+"description": "Exit sign with battery backup",
+"wattage": 0,
+"voltage": "",
+"mounting": "Bottom of bar joist or unistrut",
+"location": "interior",
+"headsPerPole": 0,
+"emergency": true,
+"symbol": "Circle with X, tag K",
+"sourceSheet": "E-3"
+},
+{
+"type": "L",
+"description": "D-Series Size 1 DSXW1 LED 10C 530 40K T3M MVOLT",
+"wattage": 20,
+"voltage": "MVOLT",
+"mounting": "Wall, top aligned w/ storefront",
+"location": "exterior_building",
+"headsPerPole": 0,
+"emergency": false,
+"symbol": "Circle with wall bracket, tag L",
+"sourceSheet": "E-3"
+},
+{
+"type": "M",
+"description": "4' LED strip 21W input, 2-8.5W T8 LED tube",
+"wattage": 21,
+"voltage": "",
+"mounting": "See plan",
+"location": "interior",
+"headsPerPole": 0,
+"emergency": false,
+"symbol": "Bar with circle, tag M",
+"sourceSheet": "E-3"
+},
+{
+"type": "N",
+"description": "4' LED strip 10.5W input, 1-8.5W T8 LED tube",
+"wattage": 10.5,
+"voltage": "",
+"mounting": "See plan",
+"location": "interior",
+"headsPerPole": 0,
+"emergency": false,
+"symbol": "Bar with circle, tag N",
+"sourceSheet": "E-3"
+},
+{
+"type": "SITE LIGHT",
+"description": "D-Series Size 1 DSX1 LED 60C 1000 40K T3M MVOLT",
+"wattage": 209,
+"voltage": "MVOLT",
+"mounting": "Pole per civil",
+"location": "site",
+"headsPerPole": 2,
+"emergency": false,
+"symbol": "Per civil sheets",
+"sourceSheet": "E-3"
+},
+{
+"type": "(untagged) SITE LIGHT",
+"description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS, IES full cutoff, mounted 0 deg down, MH 28'-0\"",
+"wattage": 207,
+"voltage": "MVOLT",
+"mounting": "Pole, 28'-0\"",
+"location": "site",
+"headsPerPole": 1,
+"emergency": false,
+"symbol": "Small square pole base with circle head, arrow showing aim, labeled SITE LIGHT A-xx",
+"sourceSheet": "E-7"
+}
+],
+"symbolLegend": [
+{
+"symbol": "Duplex receptacle (circle with two slots)",
+"description": "Duplex receptacle, shallow 2x4 handy box on phone board",
+"category": "device",
+"sourceSheet": "E-4"
+},
+{
+"symbol": "J-box on conduit",
+"description": "1\" empty conduit and J-box to deck",
+"category": "equipment",
+"sourceSheet": "E-4"
+},
+{
+"symbol": "Fused switch",
+"description": "200A fused disconnect NEMA 3R",
+"category": "equipment",
+"sourceSheet": "E-4"
+},
+{
+"symbol": "Circle with dot",
+"description": "Motion sensor",
+"category": "lighting_control",
+"sourceSheet": "E-5"
+},
+{
+"symbol": "Push button (filled rectangle)",
+"description": "Store open/close pushbutton",
+"category": "lighting_control",
+"sourceSheet": "E-5"
+},
+{
+"symbol": "Exhaust fan symbol",
+"description": "Exhaust fan recessed",
+"category": "equipment",
+"sourceSheet": "E-1"
+},
+{
+"symbol": "J",
+"description": "Junction box",
+"category": "device",
+"sourceSheet": "E-1"
+},
+{
+"symbol": "T",
+"description": "Thermostat",
+"category": "equipment",
+"sourceSheet": "E-1"
+},
+{
+"symbol": "M (square)",
+"description": "HVAC disconnect with unit",
+"category": "equipment",
+"sourceSheet": "E-1"
+},
+{
+"symbol": "P",
+"description": "Power pole",
+"category": "device",
+"sourceSheet": "E-1"
+},
+{
+"symbol": "Circle single line",
+"description": "Simplex receptacle",
+"category": "device",
+"sourceSheet": "E-1"
+},
+{
+"symbol": "Circle double line / square",
+"description": "Duplex receptacle / floor receptacle",
+"category": "device",
+"sourceSheet": "E-1"
+},
+{
+"symbol": "Circle cross",
+"description": "Quadplex receptacle",
+"category": "device",
+"sourceSheet": "E-1"
+},
+{
+"symbol": "WP GFI",
+"description": "Weatherproof duplex receptacle GFI",
+"category": "device",
+"sourceSheet": "E-1"
+},
+{
+"symbol": "GFCI",
+"description": "GFCI duplex receptacle",
+"category": "device",
+"sourceSheet": "E-1"
+},
+{
+"symbol": "Coil + J",
+"description": "J-box with 6' flex at wall & HP counters",
+"category": "device",
+"sourceSheet": "E-1"
+},
+{
+"symbol": "M",
+"description": "Motion sensor for ALC panel",
+"category": "lighting_control",
+"sourceSheet": "E-3"
+},
+{
+"symbol": "M1",
+"description": "Occupancy sensor CMR-9",
+"category": "lighting_control",
+"sourceSheet": "E-3"
+},
+{
+"symbol": "M2",
+"description": "Motion sensor LSXR-50-HL (hub stores only)",
+"category": "lighting_control",
+"sourceSheet": "E-3"
+},
+{
+"symbol": "SITE LIGHT",
+"description": "Pole-mounted site light with aiming arrow and circuit tag",
+"category": "equipment",
+"sourceSheet": "E-7"
+},
+{
+"symbol": "PYLON SIGN",
+"description": "Pylon sign rectangle with circuit tag A-18",
+"category": "equipment",
+"sourceSheet": "E-7"
+}
+],
+"panelCircuits": [
+{
+"panel": "A",
+"circuit": "1",
+"description": "WORK LIGHTING",
+"loadVA": 1250,
+"sourceSheet": "E-4"
+},
+{
+"panel": "A",
+"circuit": "3",
+"description": "WORK LIGHTING",
+"loadVA": 984,
+"sourceSheet": "E-4"
+},
+{
+"panel": "A",
+"circuit": "5",
+"description": "WORK LIGHTING",
+"loadVA": 816,
+"sourceSheet": "E-4"
+},
+{
+"panel": "A",
+"circuit": "9",
+"description": "EXIT / EMERGENCY LIGHTING",
+"loadVA": 51,
+"sourceSheet": "E-4"
+},
+{
+"panel": "A",
+"circuit": "13",
+"description": "EXTERIOR BUILDING LIGHTING",
+"loadVA": 233,
+"sourceSheet": "E-4"
+},
+{
+"panel": "A",
+"circuit": "15",
+"description": "SITE LIGHTING",
+"loadVA": 209,
+"sourceSheet": "E-4"
+},
+{
+"panel": "A",
+"circuit": "17",
+"description": "SITE LIGHTING",
+"loadVA": 418,
+"sourceSheet": "E-4"
+},
+{
+"panel": "A",
+"circuit": "19",
+"description": "SITE LIGHTING",
+"loadVA": 209,
+"sourceSheet": "E-4"
+},
+{
+"panel": "A",
+"circuit": "2",
+"description": "SALES LIGHTING",
+"loadVA": 1100,
+"sourceSheet": "E-4"
+},
+{
+"panel": "A",
+"circuit": "4",
+"description": "SALES LIGHTING",
+"loadVA": 744,
+"sourceSheet": "E-4"
+},
+{
+"panel": "A",
+"circuit": "12",
+"description": "EXTERIOR SOFFIT LIGHTING",
+"loadVA": 637,
+"sourceSheet": "E-4"
+},
+{
+"panel": "A",
+"circuit": "22",
+"description": "RESTROOM LTS/FANS",
+"loadVA": 400,
+"sourceSheet": "E-4"
+},
+{
+"panel": "A",
+"circuit": "A-1,3,5",
+"description": "Work lighting (contactor)",
+"loadVA": 0,
+"sourceSheet": "E-5"
+},
+{
+"panel": "A",
+"circuit": "A-2,4",
+"description": "Sales lighting (contactor)",
+"loadVA": 0,
+"sourceSheet": "E-5"
+},
+{
+"panel": "A",
+"circuit": "A-6,14,16,18",
+"description": "Sign lighting (contactor)",
+"loadVA": 0,
+"sourceSheet": "E-5"
+},
+{
+"panel": "A",
+"circuit": "A-15,17,19",
+"description": "Site lighting (contactor)",
+"loadVA": 0,
+"sourceSheet": "E-5"
+},
+{
+"panel": "A",
+"circuit": "A-12,13",
+"description": "Site lighting (contactor)",
+"loadVA": 0,
+"sourceSheet": "E-5"
+},
+{
+"panel": "B",
+"circuit": "B-25",
+"description": "Lighting contactor enclosure power",
+"loadVA": 0,
+"sourceSheet": "E-5"
+},
+{
+"panel": "A",
+"circuit": "A-9",
+"description": "Exit/emergency light at man door",
+"loadVA": 0,
+"sourceSheet": "E-3"
+},
+{
+"panel": "A",
+"circuit": "A-12",
+"description": "Soffit downlights type G",
+"loadVA": 0,
+"sourceSheet": "E-3"
+},
+{
+"panel": "A",
+"circuit": "A-13",
+"description": "Wall packs type D",
+"loadVA": 0,
+"sourceSheet": "E-3"
+},
+{
+"panel": "A",
+"circuit": "A-22",
+"description": "Restroom lights/fans via M1",
+"loadVA": 0,
+"sourceSheet": "E-3"
+},
+{
+"panel": "A",
+"circuit": "15",
+"description": "Site light (plan tag, panel schedule not in batch)",
+"loadVA": 0,
+"sourceSheet": "E-7"
+},
+{
+"panel": "A",
+"circuit": "17",
+"description": "Site light, 2 heads (plan tag)",
+"loadVA": 0,
+"sourceSheet": "E-7"
+},
+{
+"panel": "A",
+"circuit": "19",
+"description": "Site light (plan tag)",
+"loadVA": 0,
+"sourceSheet": "E-7"
+},
+{
+"panel": "A",
+"circuit": "18",
+"description": "Pylon sign (plan tag)",
+"loadVA": 0,
+"sourceSheet": "E-7"
+}
+],
+"furnishStatements": [
+{
+"item": "200A fused switches (2)",
+"furnishBy": "AutoZone",
+"installBy": "",
+"sourceSheet": "E-4",
+"quote": "200A FUSED SWITCH FUSED AT 200A NEMA 3R AUTOZONE PROVIDED (TYP OF 2)"
+},
+{
+"item": "Panel A",
+"furnishBy": "AutoZone",
+"installBy": "",
+"sourceSheet": "E-4",
+"quote": "PANEL A AUTOZONE PROVIDED"
+},
+{
+"item": "Panel B",
+"furnishBy": "AutoZone",
+"installBy": "",
+"sourceSheet": "E-4",
+"quote": "PANEL B AUTOZONE PROVIDED"
+},
+{
+"item": "Wireway",
+"furnishBy": "Contractor",
+"installBy": "",
+"sourceSheet": "E-4",
+"quote": "WIREWAY NEMA 3R 12x12x LENGTH REQUIRED CONTRACTOR PROVIDED"
+},
+{
+"item": "1\" empty conduit and J-box",
+"furnishBy": "EC",
+"installBy": "EC",
+"sourceSheet": "E-4",
+"quote": "1\" EMPTY CONDUIT AND J-BOX TURN OUT CONDUIT AT DECK. PROVIDE PULL WIRE FOR EACH CONDUIT. (BY ELECTIRCAL CONTRACTOR)."
+},
+{
+"item": "66 block (owner phone)",
+"furnishBy": "Owner phone contractor",
+"installBy": "Owner phone contractor",
+"sourceSheet": "E-4",
+"quote": "66 BLOCK BY OWNER PHONE CONTRACTOR."
+},
+{
+"item": "66 block (alarm phone)",
+"furnishBy": "Alarm phone contractor",
+"installBy": "Alarm phone contractor",
+"sourceSheet": "E-4",
+"quote": "66 BLOCK BY ALARM PHONE CONTRACTOR. CONNECT TO TELCO R121X WITH AMPHENOL CONNECTOR."
+},
+{
+"item": "R121X block",
+"furnishBy": "Local phone co.",
+"installBy": "Local phone co.",
+"sourceSheet": "E-4",
+"quote": "R121X BLOCK BY LOCAL PHONE CO."
+},
+{
+"item": "Alarm control box, aux power, flex conduit",
+"furnishBy": "Alarm contractor",
+"installBy": "Alarm contractor",
+"sourceSheet": "E-4",
+"quote": "ALARM CONTROL BOX AND AUXILLARY POWER BY ALARM CONTRACTOR. FLEX CONDUIT BY ALARM CONTRACTOR."
+},
+{
+"item": "Knox box",
+"furnishBy": "",
+"installBy": "GC coordinate",
+"sourceSheet": "A-0",
+"quote": "A KNOX BOX 3200 WILL BE REQUIRED. GENERAL CONTRACTOR TO COORDINATE WITH OSCEOLA COUNTY FIRE DEPARTMENT FOR ORDERING MATERIALS AND LOCATION OF KNOX BOX."
+},
+{
+"item": "Water meters and reclaimed water meters",
+"furnishBy": "Utility company",
+"installBy": "Utility company",
+"sourceSheet": "C0.2",
+"quote": "UNLESS OTHERWISE NOTED IN THE PLANS, THE UTILITY COMPANY SHALL PROVIDE AND INSTALL WATER METERS AND RECLAIMED WATER METERS."
+},
+{
+"item": "Materials and work to provide utility services",
+"furnishBy": "Contractor",
+"installBy": "Contractor",
+"sourceSheet": "C0.2",
+"quote": "CONTRACTORS, AS PART OF THE BASE BID, SHALL PROVIDE ALL COORDINATION WITH UTILITY PROVIDERS TO PROVIDE FOR THE MATERIALS AND WORK NEEDED TO PROVIDE SERVICES TO THE PROJECT."
+},
+{
+"item": "Test pumping equipment, water meters, gauges for testing",
+"furnishBy": "Contractor",
+"installBy": "Contractor",
+"sourceSheet": "C0.2",
+"quote": "THE CONTRACTOR SHALL PROVIDE AT HIS OWN EXPENSE ALL NECESSARY TEST PUMPING EQUIPMENT, WATER, WATER METERS, PRESSURE GAUGES, AND OTHER EQUIPMENT, MATERIAL AND FACILITIES REQUIRED"
+},
+{
+"item": "Venstar lighting and HVAC control devices",
+"furnishBy": "Owner",
+"installBy": "Contractor",
+"sourceSheet": "E-6",
+"quote": "AUTOZONE WILL FURNISH VENSTAR LIGHTING AND HVAC CONTROL DEVICES AS INDICATED ON THIS SHEET, CONTRACTOR WILL FURNISH ALL OTHER MATERIAL AND LABOR REQUIRED TO COMPLETE THE INSTALLATION."
+},
+{
+"item": "Lighting control panel, accessories, data concentrator, data cable",
+"furnishBy": "",
+"installBy": "EC",
+"sourceSheet": "E-6",
+"quote": "THE ELECTRICAL CONTRACTOR WILL INSTALL LIGHTING CONTROL PANEL, ALL ACCESSORIES, DATA CONCENTRATOR AND DATA CABLE."
+},
+{
+"item": "HVAC sensors and wiring",
+"furnishBy": "",
+"installBy": "HVAC contractor",
+"sourceSheet": "E-6",
+"quote": "NORMALLY THE HVAC CONTRACTOR WILL INSTALL ALL HVAC SENSORS AND WIRING FOR SAME"
+},
+{
+"item": "Cat 5 data cable to 8 port hub",
+"furnishBy": "",
+"installBy": "AutoZone vendor",
+"sourceSheet": "E-5",
+"quote": "CAT 5 DATA CABLE CONNECTING THE SURVEYOR UNIT THROUGH THE MANAGER'S POWER POLE TO THE 8 PORT HUB TO BE INSTALLED BY AUTOZONE VENDOR."
+},
+{
+"item": "Conduit for control wiring",
+"furnishBy": "GC",
+"installBy": "GC",
+"sourceSheet": "E-5",
+"quote": "ALL OTHER WIRING TO BE INSTALLED IN CONDUIT FURNISHED AND INSTALLED BY GENERAL CONTRACTOR."
+},
+{
+"item": "Cat 5 data cable from data concentrator",
+"furnishBy": "",
+"installBy": "AutoZone vendor",
+"sourceSheet": "E-6",
+"quote": "AUTOZONE'S VENDOR WILL RUN ONE CATEGORY 5 DATA CABLE FROM THE DATA CONCENTRATOR IN THE TELEPHONE CLOSET DOWN THROUGH THE POWER POLE IN THE MANAGER'S OFFICE AREA"
+},
+{
+"item": "Light pole anchor bolts",
+"furnishBy": "Light pole manufacturer",
+"installBy": "",
+"sourceSheet": "PH0.1",
+"quote": "4 anchor bolts furnished by light pole manufacturer."
+},
+{
+"item": "Ceiling fans",
+"furnishBy": "AutoZone",
+"installBy": "Contractor",
+"sourceSheet": "E-1",
+"quote": "CEILING FANS ARE FURNISHED BY AUTOZONE AND INSTALLED BY CONTRACTOR."
+},
+{
+"item": "Fused disconnects, panelboards, breakers, light fixtures, lamps, LCP, occ sensors, photocells, relays, ballasts, site poles",
+"furnishBy": "AutoZone",
+"installBy": "",
+"sourceSheet": "E-1",
+"quote": "ITEMS FURNISHED BY AUTOZONE: A. FUSED DISCONNECTS B. PANELBOARDS C. CIRCUIT BREAKERS D. ALL LIGHT FIXTURES ... K. SITE LIGHT POLES AND BRACKETS"
+},
+{
+"item": "Exhaust fan",
+"furnishBy": "AutoZone",
+"installBy": "HVAC contractor",
+"sourceSheet": "E-1",
+"quote": "EXHAUST FAN RECESSED - AUTOZONE - INSTALLED BY HVAC CONTRACTOR, WIRED BY ELECTRICAL CONTRACTOR."
+},
+{
+"item": "Power poles",
+"furnishBy": "AutoZone",
+"installBy": "",
+"sourceSheet": "E-1",
+"quote": "POWER POLES - AUTOZONE - REFER TO PLAN FOR LOCATION"
+},
+{
+"item": "Power poles",
+"furnishBy": "General Contractor",
+"installBy": "General Contractor",
+"sourceSheet": "E-2",
+"quote": "GENERAL CONTRACTOR TO FURNISH ALL POWER POLES. POWER POLES ARE AVAILABLE AT GRAYBAR ELECTRIC 314-573-2080"
+},
+{
+"item": "Occupancy sensor CMR-9",
+"furnishBy": "AutoZone",
+"installBy": "Contractor",
+"sourceSheet": "E-1",
+"quote": "MOTION SENSOR CMR-9 FURNISHED BY AUTOZONE INSTALLED BY CONTRACTOR."
+},
+{
+"item": "Water heater",
+"furnishBy": "AutoZone",
+"installBy": "",
+"sourceSheet": "E-1",
+"quote": "WATER HEATER WILL BE A MINITANK BOSCH TRONIC ES4, PROVIDED BY AUTOZONE. ELECTRICAL CONTRACTOR TO PROVIDE FINAL HOOKUP OF WATER HEATER."
+},
+{
+"item": "Security alarm equipment",
+"furnishBy": "AutoZone's equipment installer",
+"installBy": "AutoZone's equipment installer",
+"sourceSheet": "E-1",
+"quote": "AUTOZONE'S EQUIPMENT INSTALLER WILL FURNISH & INSTALL ALL REQUIRED SECURITY ALARM EQUIPMENT INCLUDING FLOOR POSTS, TRANSFORMER CABINET"
+},
+{
+"item": "Fixture kick plate",
+"furnishBy": "Owner",
+"installBy": "",
+"sourceSheet": "E-1",
+"quote": "G.C. (FIXTURE KICK PLATE BY OWNER)"
+},
+{
+"item": "Wall signs",
+"furnishBy": "AutoZone's sign vendor",
+"installBy": "AutoZone's sign vendor",
+"sourceSheet": "E-3",
+"quote": "ALL WALL SIGNS SHALL BE INSTALLED BY AUTOZONE'S SIGN VENDOR... CONNECTIONS OF SIGN WIRING TO HOME RUN CIRCUITRY WILL BE BY GENERAL CONTRACTOR."
+},
+{
+"item": "LED strip fixtures and motion sensors",
+"furnishBy": "AutoZone",
+"installBy": "",
+"sourceSheet": "E-3",
+"quote": "AUTOZONE WILL FURNISHED LED STRIP FIXTURES AND MOTION SENSORS SHOWN IN SCHEDULE ABOVE AND CALLED FOR ON THE PLAN."
+},
+{
+"item": "Flexible quick connectors",
+"furnishBy": "AutoZone",
+"installBy": "",
+"sourceSheet": "E-2",
+"quote": "INSTALL AUTOZONE FURNISHED FLEXIBLE QUICK CONNECTORS TO EACH BOX INDICATED POWER POLE SCHEDULE."
+},
+{
+"item": "Cat 5 data/phone cable",
+"furnishBy": "",
+"installBy": "Crosscom (AutoZone's contractor)",
+"sourceSheet": "E-2",
+"quote": "AUTOZONE'S CONTRACTOR CROSSCOM WILL INSTALL CAT. 5 CABLE FOR DATA AND PHONE LINES."
+},
+{
+"item": "Fire extinguishers",
+"furnishBy": "",
+"installBy": "GC",
+"sourceSheet": "A-1.1",
+"quote": "2A 10BC FIRE EXTINGUISHER. G.C. INSTALL EITHER ON WALL SURFACE, COLUMN, OR ALUMINUM MULLION."
+},
+{
+"item": "Demolition materials, labor, equipment",
+"furnishBy": "Contractor",
+"installBy": "Contractor",
+"sourceSheet": "D0.1",
+"quote": "THE CONTRACTOR SHALL FURNISH ALL MATERIALS, LABOR, SUPERVISION, AND EQUIPMENT REQUIRED FOR THE ORDERLY DEMOLITION AND REMOVAL OF EXISTING STRUCTURES, PAVEMENT AND UTILITIES"
+},
+{
+"item": "Water meters 3/4\" to 2\"",
+"furnishBy": "Developer",
+"installBy": "TOHO",
+"sourceSheet": "C6.1",
+"quote": "METERS 3/4\" TO 2\" ARE PAID FOR BY THE DEVELOPER AND INSTALLED BY TOHO."
+}
+],
+"missingSheets": [
+"Civil drawings (phone conduit size)",
+"SGN101",
+"Cover Sheet (utility providers list)",
+"Architectural Plans",
+"Project Specifications",
+"Geotechnical Report",
+"Electrical Sheets",
+"Structural drawings (site light foundations)",
+"Electrical drawings (E-series) not in index",
+"Architectural drawings",
+"Civil site plan",
+"Sign drawings",
+"Structural drawings"
+],
+"quantities": [
+{
+"category": "Service & Distribution",
+"item": "Panelboard 225A MLO 208Y/120V 42ckt (AutoZone furnished, EC install)",
+"qty": 2,
+"unit": "EA",
+"spec": "Panels A & B, 10kAIC, flush",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Service & Distribution",
+"item": "200A fused switch NEMA 3R (AutoZone furnished)",
+"qty": 2,
+"unit": "EA",
+"spec": "Fused at 200A",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Service & Distribution",
+"item": "Service conductors parallel (2)4#3/0 CU, 2\"C",
+"qty": 2,
+"unit": "SETS",
+"spec": "Utility-meter-wireway",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Service & Distribution",
+"item": "Feeder 4#3/0, #6G, 2\"C disconnect to panel",
+"qty": 2,
+"unit": "EA",
+"spec": "DISCON A-Panel A, DISCON B-Panel B",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Service & Distribution",
+"item": "Tap 4#3/0, 2\"C wireway to disconnect",
+"qty": 2,
+"unit": "EA",
+"spec": "Copper",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Branch Power",
+"item": "Sign circuits 20/1 (front wall, 2 side wall, pylon)",
+"qty": 4,
+"unit": "EA",
+"spec": "A-6,14,16,18 2#10,#10G,1/2\"C",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Branch Power",
+"item": "20/1 branch circuits Panel A (non-lighting, non-sign)",
+"qty": 14,
+"unit": "EA",
+"spec": "#12/#10 per schedule",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Branch Power",
+"item": "20/1 branch circuits Panel B",
+"qty": 12,
+"unit": "EA",
+"spec": "#12/#10 per schedule",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Branch Power",
+"item": "Duplex receptacle, phone/alarm board (shallow 2x4 handy box)",
+"qty": 6,
+"unit": "EA",
+"spec": "4 on A-37, 1 on A-39, 1 on B-28",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Branch Power",
+"item": "20A high magnetic breaker B-20",
+"qty": 1,
+"unit": "EA",
+"spec": "Leave yellow sticker in place",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Low Voltage",
+"item": "2\" empty conduit w/ pull wire to roof deck (Venstar/telephone)",
+"qty": 1,
+"unit": "EA",
+"spec": "Phone board",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Low Voltage",
+"item": "1\" empty conduit & J-box to deck w/ pull wire, 90 deg flex coupling",
+"qty": 2,
+"unit": "EA",
+"spec": "By EC",
+"sourceSheet": "E-4",
+"confidence": "ASSUMED"
+},
+{
+"category": "Low Voltage",
+"item": "3/4\" conduit stub out for landscape controls",
+"qty": 1,
+"unit": "EA",
+"spec": "",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Low Voltage",
+"item": "PVC phone service entrance stub up 8\"",
+"qty": 1,
+"unit": "EA",
+"spec": "Size per civil",
+"sourceSheet": "E-4",
+"confidence": "ASSUMED"
+},
+{
+"category": "Lighting Controls",
+"item": "Automatic lighting control alarm interface module",
+"qty": 1,
+"unit": "EA",
+"spec": "Detail 6/E6",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Grounding",
+"item": "Ground rod system per NEC 250, 25 ohm max, #2 CU",
+"qty": 1,
+"unit": "LOT",
+"spec": "",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Grounding",
+"item": "Concrete-encased electrode #2 CU, 20'-0\" at footing",
+"qty": 20,
+"unit": "LF",
+"spec": "2\" min coverage",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Grounding",
+"item": "GEC #2 CU to building steel and water pipe",
+"qty": 2,
+"unit": "EA",
+"spec": "",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Grounding",
+"item": "Bonding jumpers #2 CU (wireway, supply side, equipment, main)",
+"qty": 4,
+"unit": "EA",
+"spec": "",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Grounding",
+"item": "#6 CU communications bonding jumper to phone ground bus",
+"qty": 1,
+"unit": "EA",
+"spec": "",
+"sourceSheet": "E-4",
+"confidence": "VERIFIED"
+},
+{
+"category": "Lighting Controls",
+"item": "Lighting contactor enclosure (Venstar LCP) - install/connect",
+"qty": 1,
+"unit": "EA",
+"spec": "19.5x23.5x8 semi-recessed, circuit B-25, Owner furnished",
+"sourceSheet": "E-5",
+"confidence": "VERIFIED"
+},
+{
+"category": "Lighting Controls",
+"item": "Lighting contactors",
+"qty": 6,
+"unit": "EA",
+"spec": "Work (A-1,3,5), Sales (A-2,4), Sign (A-6,14,16,18), Sign (spare), Site (A-15,17,19), Site (A-12,13)",
+"sourceSheet": "E-5",
+"confidence": "VERIFIED"
+},
+{
+"category": "Lighting Controls",
+"item": "Photocell sensor on RTU roof, facing north",
+"qty": 1,
+"unit": "EA",
+"spec": "3-wire to LCP, 24V",
+"sourceSheet": "E-5",
+"confidence": "VERIFIED"
+},
+{
+"category": "Lighting Controls",
+"item": "Alarm interface module",
+"qty": 1,
+"unit": "EA",
+"spec": "Mounted on phone board, to security system",
+"sourceSheet": "E-6",
+"confidence": "VERIFIED"
+},
+{
+"category": "Low Voltage",
+"item": "Data concentrator install",
+"qty": 1,
+"unit": "EA",
+"spec": "Phone board upper left side",
+"sourceSheet": "E-6",
+"confidence": "VERIFIED"
+},
+{
+"category": "Low Voltage",
+"item": "Thermostats (Venstar) wall mounted above panels",
+"qty": 2,
+"unit": "EA",
+"spec": "18 ga to ECP",
+"sourceSheet": "E-5",
+"confidence": "VERIFIED"
+},
+{
+"category": "Low Voltage",
+"item": "Ceiling fan speed controls above panels",
+"qty": 1,
+"unit": "EA",
+"spec": "3-gang shown",
+"sourceSheet": "E-5",
+"confidence": "ASSUMED"
+},
+{
+"category": "Low Voltage",
+"item": "Control wiring conduit",
+"qty": 0,
+"unit": "LF",
+"spec": "All Venstar wiring in 1/2\" conduit",
+"sourceSheet": "E-6",
+"confidence": "ASSUMED"
+},
+{
+"category": "Lighting Controls",
+"item": "Site lighting control via Venstar EMS (AutoZone corporate)",
+"qty": 1,
+"unit": "LS",
+"spec": "Dusk on, 50% dim after close",
+"sourceSheet": "PH0.1",
+"confidence": "ASSUMED"
+},
+{
+"category": "Branch Power",
+"item": "Fan wall speed controller",
+"qty": 1,
+"unit": "EA",
+"spec": "Hunter 27180 next to thermostats",
+"sourceSheet": "E-1",
+"confidence": "ASSUMED"
+},
+{
+"category": "Branch Power",
+"item": "3\" PVC data/security pipes at pole #1",
+"qty": 2,
+"unit": "EA",
+"spec": "Deck to 4\" AFF",
+"sourceSheet": "E-2",
+"confidence": "VERIFIED"
+},
+{
+"category": "Branch Power",
+"item": "Recessed WP/GFCI outlet +24\" AFF",
+"qty": 2,
+"unit": "EA",
+"spec": "Ckt B-13",
+"sourceSheet": "E-1",
+"confidence": "VERIFIED"
+},
+{
+"category": "Branch Power",
+"item": "WP GFCI RTU convenience outlet",
+"qty": 2,
+"unit": "EA",
+"spec": "Ckt B-13",
+"sourceSheet": "E-1",
+"confidence": "VERIFIED"
+},
+{
+"category": "Branch Power",
+"item": "Restroom/closet GFCI receptacles",
+"qty": 6,
+"unit": "EA",
+"spec": "B-26,B-13,GFCI typ of 3 B-25",
+"sourceSheet": "E-1",
+"confidence": "ASSUMED"
+},
+{
+"category": "Branch Power",
+"item": "Display baseflex J-box w/ 6' flex",
+"qty": 3,
+"unit": "EA",
+"spec": "Detail 7/E1, ckt B-30",
+"sourceSheet": "E-1",
+"confidence": "ASSUMED"
+},
+{
+"category": "Branch Power",
+"item": "Storefront dual surface wireway (120V + LV)",
+"qty": 1,
+"unit": "LOT",
+"spec": "Detail 2/E1",
+"sourceSheet": "E-1",
+"confidence": "VERIFIED"
+},
+{
+"category": "Branch Power",
+"item": "Wall sign J-boxes",
+"qty": 3,
+"unit": "EA",
+"spec": "Ckts A-6, A-14, A-16",
+"sourceSheet": "E-3",
+"confidence": "VERIFIED"
+},
+{
+"category": "Low Voltage",
+"item": "Man door alarm J-boxes (contact, pull station, horn/strobe, access ctrl)",
+"qty": 1,
+"unit": "LOT",
+"spec": "Detail 7/E2",
+"sourceSheet": "E-2",
+"confidence": "ASSUMED"
+},
+{
+"category": "Low Voltage",
+"item": "Overhead door alarm contact conduit & J-box",
+"qty": 1,
+"unit": "LOT",
+"spec": "Detail 6/E2, 1/2\" conduit",
+"sourceSheet": "E-2",
+"confidence": "ASSUMED"
+},
+{
+"category": "Low Voltage",
+"item": "Empty conduit RTU to thermostat w/ 2 pull wires",
+"qty": 2,
+"unit": "EA",
+"spec": "Note A, E-1",
+"sourceSheet": "E-1",
+"confidence": "ASSUMED"
+},
+{
+"category": "Branch Power",
+"item": "Pylon sign electrical connection (circuit A-18)",
+"qty": 1,
+"unit": "EA",
+"spec": "",
+"sourceSheet": "E-7",
+"confidence": "ASSUMED"
+},
+{
+"category": "Site Underground Allowances",
+"item": "Site lighting / sign branch circuit underground conduit & wire",
+"qty": 1,
+"unit": "LOT",
+"spec": "Plan NTS; routing not shown",
+"sourceSheet": "E-7",
+"confidence": "ASSUMED"
+},
+{
+"qty": 1,
+"item": "Meter base NEMA 3R",
+"spec": "Parallel (2)4#3/0",
+"unit": "EA",
+"category": "Service & Distribution",
+"confidence": "VERIFIED",
+"sourceSheet": "E-4"
+},
+{
+"qty": 1,
+"item": "Wireway NEMA 3R 12x12",
+"spec": "Length as required, contractor provided",
+"unit": "EA",
+"category": "Service & Distribution",
+"confidence": "VERIFIED",
+"sourceSheet": "E-4"
+},
+{
+"qty": 7,
+"item": "Lighting branch circuits 20/1 (work, sales, exit/em, restroom)",
+"spec": "A-1,3,5,9,2,4,22 2#12,#12G,1/2\"C",
+"unit": "EA",
+"category": "Interior Lighting",
+"confidence": "VERIFIED",
+"sourceSheet": "E-4"
+},
+{
+"qty": 3,
+"item": "Site lighting branch circuits 20/1",
+"spec": "A-15,17,19 2#10,#10G,1/2\"C",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-4"
+},
+{
+"qty": 2,
+"item": "Exterior building/soffit lighting circuits 20/1",
+"spec": "A-13 (#12), A-12 (#10)",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-4"
+},
+{
+"qty": 2,
+"item": "60/3 RTU circuits 3#6,#10G,3/4\"C",
+"spec": "RTU-1, RTU-2",
+"unit": "EA",
+"category": "Branch Power",
+"confidence": "VERIFIED",
+"sourceSheet": "E-4"
+},
+{
+"qty": 1,
+"item": "Motion sensor",
+"spec": "Venstar motion sensor, locations per lighting plan",
+"unit": "EA",
+"category": "Lighting Controls",
+"confidence": "ASSUMED",
+"sourceSheet": "E-5"
+},
+{
+"qty": 1,
+"item": "Store open/close pushbutton in 2x4 box (Manager's office)",
+"spec": "Wired to LCP control board",
+"unit": "EA",
+"category": "Lighting Controls",
+"confidence": "VERIFIED",
+"sourceSheet": "E-5"
+},
+{
+"qty": 3,
+"item": "W1 Lithonia DSXW1 LED 10C 1000 40K T3M MVOLT wallpack, 12' MH",
+"spec": "LED 40W, full cutoff",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "PH0.1"
+},
+{
+"qty": 1,
+"item": "W2 Lithonia DSXW1 LED 10C 530 40K T3M MVOLT wallpack, 12' MH",
+"spec": "LED 20W, full cutoff",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "PH0.1"
+},
+{
+"qty": 2,
+"item": "S1 Lithonia DSX1 LED P8 40K T4M MVOLT HS single head pole light, 28' MH",
+"spec": "LED 207W",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "PH0.1"
+},
+{
+"qty": 1,
+"item": "S2 Lithonia DSX1 LED P8 40K T4M MVOLT HS dual head pole light, 28' MH",
+"spec": "LED 414W (2 heads)",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "PH0.1"
+},
+{
+"qty": 3,
+"item": "Light pole, 25' 5\" square steel, dark bronze, with base cover",
+"spec": "SEC-C13 typical light pole detail",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "PH0.1"
+},
+{
+"qty": 3,
+"item": "Pole concrete base / foundation (3'-0\" above grade)",
+"spec": "Per structural drawings",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "PH0.1"
+},
+{
+"qty": 3,
+"item": "Ceiling fan install on unistrut J-box",
+"spec": "Hunter 28692, CF1-CF3",
+"unit": "EA",
+"category": "Branch Power",
+"confidence": "VERIFIED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 6,
+"item": "Power poles #1-#6 (office, checkout, parts pod x2, tester, commercial counter)",
+"spec": "10'-6\" poles, NEMA 5-20R, hard wired to deck J-box",
+"unit": "EA",
+"category": "Branch Power",
+"confidence": "ASSUMED",
+"sourceSheet": "E-2"
+},
+{
+"qty": 11,
+"item": "Type G soffit/canopy downlight",
+"spec": "Gotham EVO R 40/30 8AR 120 TRW 49W, ckt A-12",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 5,
+"item": "Type D wall pack",
+"spec": "DSXW1 LED 10C 1000 40K T3M MVOLT 40W, ckt A-13",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 4,
+"item": "Type J exterior emergency remote 2-head",
+"spec": "Above doors, wired to exit fixture",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 12,
+"item": "Type E emergency light w/ battery",
+"spec": "ELM6LED",
+"unit": "EA",
+"category": "Interior Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 5,
+"item": "Type F exit sign w/ battery for remote head",
+"spec": "Battery backup",
+"unit": "EA",
+"category": "Interior Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 1,
+"item": "Type K exit sign w/ battery",
+"spec": "Joist/unistrut mount",
+"unit": "EA",
+"category": "Interior Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 8,
+"item": "Type M 4' LED strip 21W",
+"spec": "2-8.5W T8 LED tube",
+"unit": "EA",
+"category": "Interior Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 2,
+"item": "Type C 4' LED wall light 10.5W",
+"spec": "Restrooms @ 6'-8\" AFF",
+"unit": "EA",
+"category": "Interior Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 1,
+"item": "Type A/B 8' LED strips on unistrut/joists",
+"spec": "A 42W, B 21W; count from E-3 plan",
+"unit": "LOT",
+"category": "Interior Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 1,
+"item": "Galvanized unistrut 14ga fixture support",
+"spec": "Details 5 & 6/E3",
+"unit": "LOT",
+"category": "Interior Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 1,
+"item": "Motion sensor M for ALC panel",
+"spec": "J-box horizontal at joist",
+"unit": "EA",
+"category": "Lighting Controls",
+"confidence": "ASSUMED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 2,
+"item": "Occupancy sensor M1 CMR-9",
+"spec": "Restroom ceiling, fan & light, A-22",
+"unit": "EA",
+"category": "Lighting Controls",
+"confidence": "VERIFIED",
+"sourceSheet": "E-3"
+},
+{
+"qty": 4,
+"item": "Site light LED area luminaire head, Lithonia DSX1 LED P8 40K T4M MVOLT HS",
+"spec": "LED 207W, IES full cutoff, 0 deg down, 28'-0\" MH, LLF 0.95",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-7"
+},
+{
+"qty": 3,
+"item": "Site light pole locations (A-15 single, A-17 two heads @90 deg, A-19 single)",
+"spec": "28'-0\" mounting height; pole spec not shown",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-7"
+},
+{
+"qty": 3,
+"item": "Light pole concrete base",
+"spec": "Base detail not shown",
+"unit": "EA",
+"category": "Exterior Site Lighting",
+"confidence": "ASSUMED",
+"sourceSheet": "E-7"
+}
+],
+"allowances": [],
+"ecfeciItems": [],
+"flags": [],
+"scopeNotes": []
+},
+"inventory": [
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 1,
+"sheetNo": "C0.1",
+"title": "Cover Sheet",
+"discipline": "cover",
+"cls": "plan",
+"included": true,
+"role": "analysis"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 2,
+"sheetNo": "V0.1",
+"title": "Survey Sheet 1",
+"discipline": "other",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 3,
+"sheetNo": "V1.1",
+"title": "Survey Sheet 2",
+"discipline": "other",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 4,
+"sheetNo": "V1.2",
+"title": "Survey Sheet 3",
+"discipline": "other",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 5,
+"sheetNo": "C0.2",
+"title": "General Notes Sheet",
+"discipline": "cover",
+"cls": "detail",
+"included": true,
+"role": "analysis"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 6,
+"sheetNo": "C0.3",
+"title": "General Notes Sheet",
+"discipline": "cover",
+"cls": "detail",
+"included": true,
+"role": "analysis"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 7,
+"sheetNo": "D0.1",
+"title": "Demolition Plan",
+"discipline": "architectural",
+"cls": "plan",
+"included": true,
+"role": "reference"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 8,
+"sheetNo": "C1.1",
+"title": "Stormwater Pollution Prevention Plan",
+"discipline": "civil",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 9,
+"sheetNo": "C1.2",
+"title": "Stormwater Pollution Prevention Plan",
+"discipline": "civil",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 10,
+"sheetNo": "C2.1",
+"title": "Site Erosion Plan",
+"discipline": "civil",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 11,
+"sheetNo": "C2.2",
+"title": "Tracking Envelope",
+"discipline": "civil",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 12,
+"sheetNo": "C3.1",
+"title": "Grading and Stormwater Drainage Plan",
+"discipline": "civil",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 13,
+"sheetNo": "C3.2",
+"title": "Site Cross Sections",
+"discipline": "civil",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 14,
+"sheetNo": "C3.3",
+"title": "Sanitary Sewer and Profile",
+"discipline": "civil",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 15,
+"sheetNo": "C4.1",
+"title": "Composite Utility Plan",
+"discipline": "civil",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 16,
+"sheetNo": "C5.1",
+"title": "Automobile Details Sheet",
+"discipline": "civil",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 17,
+"sheetNo": "C6.1",
+"title": "Arch Details Sheet",
+"discipline": "architectural",
+"cls": "detail",
+"included": true,
+"role": "reference"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 18,
+"sheetNo": "C6.2",
+"title": "Arch Details Sheet",
+"discipline": "architectural",
+"cls": "detail",
+"included": true,
+"role": "reference"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 19,
+"sheetNo": "PH0.1",
+"title": "Photometric Plan",
+"discipline": "electrical",
+"cls": "plan",
+"included": true,
+"role": "analysis"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 20,
+"sheetNo": "L1.0",
+"title": "Landscape Plan",
+"discipline": "other",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 21,
+"sheetNo": "L5.0",
+"title": "Shrub/Ground/Cover Spacing Plan",
+"discipline": "unknown",
+"cls": "plan",
+"included": true,
+"role": "analysis"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 22,
+"sheetNo": "IR1.0",
+"title": "Irrigation Plan",
+"discipline": "other",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 23,
+"sheetNo": "IR5.0",
+"title": "Irrigation Details",
+"discipline": "other",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 24,
+"sheetNo": "IR5.1",
+"title": "Irrigation Specifications",
+"discipline": "other",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 25,
+"sheetNo": "A-0",
+"title": "Cover Sheet",
+"discipline": "cover",
+"cls": "schedule",
+"included": true,
+"role": "analysis"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 26,
+"sheetNo": "A-1",
+"title": "Floor Plan/Schedules",
+"discipline": "architectural",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 27,
+"sheetNo": "A-1.1",
+"title": "Life Safety Plan",
+"discipline": "architectural",
+"cls": "plan",
+"included": true,
+"role": "reference"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 28,
+"sheetNo": "A-1.2",
+"title": "Door Details",
+"discipline": "architectural",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 29,
+"sheetNo": "A-2",
+"title": "Exterior Elevations",
+"discipline": "architectural",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 30,
+"sheetNo": "A-3",
+"title": "Exterior Sections",
+"discipline": "architectural",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 31,
+"sheetNo": "A-3.1",
+"title": "Exterior Sections",
+"discipline": "architectural",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 32,
+"sheetNo": "A-3.2",
+"title": "Exterior Sections",
+"discipline": "architectural",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 33,
+"sheetNo": "A-4",
+"title": "Interior Elevations & Elevations",
+"discipline": "architectural",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 34,
+"sheetNo": "A-5",
+"title": "Storefront Plans & Details",
+"discipline": "architectural",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 35,
+"sheetNo": "A-6",
+"title": "Roof Plan",
+"discipline": "architectural",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 36,
+"sheetNo": "A-6.1",
+"title": "Roof Plan",
+"discipline": "architectural",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 37,
+"sheetNo": "DN1",
+"title": "Sign Detail",
+"discipline": "architectural",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 38,
+"sheetNo": "S0",
+"title": "General Notes",
+"discipline": "structural",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 39,
+"sheetNo": "S0.1",
+"title": "Typical Light Pole Foundation",
+"discipline": "structural",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 40,
+"sheetNo": "S0.2",
+"title": "Typical RTU Framing Plan",
+"discipline": "structural",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 41,
+"sheetNo": "S1.0",
+"title": "Foundation Plan & Sections",
+"discipline": "structural",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 42,
+"sheetNo": "S2.0",
+"title": "Framing Plan & Sections",
+"discipline": "structural",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 43,
+"sheetNo": "S2.1",
+"title": "Framing Plan & Sections",
+"discipline": "structural",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 44,
+"sheetNo": "S3.0",
+"title": "Diaphragm Plan & Sections",
+"discipline": "structural",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 45,
+"sheetNo": "M-1",
+"title": "Heating & Cooling Plan Notes",
+"discipline": "mechanical",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 46,
+"sheetNo": "M-1.1",
+"title": "Heating & Cooling Plan",
+"discipline": "mechanical",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 47,
+"sheetNo": "P-1",
+"title": "Plumbing Plans",
+"discipline": "plumbing",
+"cls": "plan",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 48,
+"sheetNo": "P-2",
+"title": "Plumbing Plan",
+"discipline": "plumbing",
+"cls": "detail",
+"included": false,
+"role": "excluded"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 49,
+"sheetNo": "E-1",
+"title": "Power Plan & General Notes",
+"discipline": "electrical",
+"cls": "plan",
+"included": true,
+"role": "analysis"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 50,
+"sheetNo": "E-2",
+"title": "Power Plan & Details",
+"discipline": "electrical",
+"cls": "plan",
+"included": true,
+"role": "analysis"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 51,
+"sheetNo": "E-3",
+"title": "Lighting Plan & Details",
+"discipline": "electrical",
+"cls": "plan",
+"included": true,
+"role": "analysis"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 52,
+"sheetNo": "E-4",
+"title": "Lighting Control Panel Details",
+"discipline": "electrical",
+"cls": "schedule",
+"included": true,
+"role": "analysis"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 53,
+"sheetNo": "E-5",
+"title": "Lighting Control Panel Details",
+"discipline": "electrical",
+"cls": "detail",
+"included": true,
+"role": "analysis"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 54,
+"sheetNo": "E-6",
+"title": "Fire Alarm & Lighting Control",
+"discipline": "lowvoltage",
+"cls": "detail",
+"included": true,
+"role": "analysis"
+},
+{
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 55,
+"sheetNo": "E-7",
+"title": "Lighting Plan",
+"discipline": "electrical",
+"cls": "plan",
+"included": true,
+"role": "analysis"
+}
+],
+"sheets": [
+{
+"key": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#19",
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 19,
+"label": "PH0.1 \"Photometric Plan\"",
+"role": "site",
+"focus": "lighting",
+"level": "",
+"geometry": {
+"originX": 0,
+"originY": 0,
+"widthPt": 2592,
+"heightPt": 1728,
+"rotation": 0
+}
+},
+{
+"key": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49",
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 49,
+"label": "E-1 \"Power Plan & General Notes\"",
+"role": "building",
+"focus": "power",
+"level": "",
+"geometry": {
+"originX": 0,
+"originY": 0,
+"widthPt": 1728,
+"heightPt": 2592,
+"rotation": 270
+}
+},
+{
+"key": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50",
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 50,
+"label": "E-2 \"Power Plan & Details\"",
+"role": "building",
+"focus": "power",
+"level": "",
+"geometry": {
+"originX": 0,
+"originY": 0,
+"widthPt": 1728,
+"heightPt": 2592,
+"rotation": 270
+}
+},
+{
+"key": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51",
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 51,
+"label": "E-3 \"Lighting Plan & Details\"",
+"role": "building",
+"focus": "lighting",
+"level": "",
+"geometry": {
+"originX": 0,
+"originY": 0,
+"widthPt": 1728,
+"heightPt": 2592,
+"rotation": 270
+}
+},
+{
+"key": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#55",
+"file": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf",
+"page": 55,
+"label": "E-7 \"Lighting Plan\"",
+"role": "building",
+"focus": "lighting",
+"level": "",
+"geometry": {
+"originX": 0,
+"originY": 0,
+"widthPt": 1728,
+"heightPt": 2592,
+"rotation": 270
+}
+}
+],
+"marks": [
+{
+"x": 388.05,
+"y": 592.37,
+"typeKey": "W1",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#19"
+},
+{
+"x": 519.96,
+"y": 592.06,
+"typeKey": "W1",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#19"
+},
+{
+"x": 611.4,
+"y": 592.68,
+"typeKey": "W1",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#19"
+},
+{
+"x": 314.14,
+"y": 525.41,
+"typeKey": "W2",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#19"
+},
+{
+"x": 462.61,
+"y": 1093.63,
+"typeKey": "S1",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#19"
+},
+{
+"x": 759.55,
+"y": 860.26,
+"typeKey": "S1",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#19"
+},
+{
+"x": 500.2,
+"y": 857.76,
+"typeKey": "S2",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#19"
+},
+{
+"x": 1399.78,
+"y": 1661.68,
+"typeKey": "SIMPLEX RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1399.78,
+"y": 1631.74,
+"typeKey": "SIMPLEX RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1399.78,
+"y": 1584.58,
+"typeKey": "SIMPLEX RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1392.29,
+"y": 1480.72,
+"typeKey": "GFCI",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1359.22,
+"y": 1522.14,
+"typeKey": "COIL + J",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1263.74,
+"y": 1887.89,
+"typeKey": "CF1-CF3",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1140.62,
+"y": 1950.34,
+"typeKey": "RTU-2",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1140.62,
+"y": 1574.39,
+"typeKey": "RTU-1",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1103.62,
+"y": 1934.41,
+"typeKey": "HVAC DISCONNECT WITH UNIT",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1104.24,
+"y": 1560.37,
+"typeKey": "HVAC DISCONNECT WITH UNIT",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1106.11,
+"y": 1947.15,
+"typeKey": "WP GFI",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1106.11,
+"y": 1571.84,
+"typeKey": "WP GFI",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 915.79,
+"y": 1961.49,
+"typeKey": "COIL + J",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 918.91,
+"y": 1600.51,
+"typeKey": "COIL + J",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1082.09,
+"y": 2018.84,
+"typeKey": "CF1-CF3",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1050.58,
+"y": 2265.12,
+"typeKey": "SIMPLEX RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1012.51,
+"y": 2136.4,
+"typeKey": "DUPLEX RECEPTACLE / FLOOR RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 934.51,
+"y": 2240.27,
+"typeKey": "DUPLEX RECEPTACLE / FLOOR RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 905.81,
+"y": 2202.67,
+"typeKey": "DUPLEX RECEPTACLE / FLOOR RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 908.93,
+"y": 2249.82,
+"typeKey": "SIMPLEX RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1031.86,
+"y": 2076.51,
+"typeKey": "CF1-CF3",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1359.22,
+"y": 1328.43,
+"typeKey": "GFCI",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1303.68,
+"y": 1326.51,
+"typeKey": "GFCI",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1359.22,
+"y": 1237.94,
+"typeKey": "WP GFI",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1278.72,
+"y": 1287.01,
+"typeKey": "PNL-A/B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1278.72,
+"y": 1265.98,
+"typeKey": "PNL-A/B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 876.48,
+"y": 1271.08,
+"typeKey": "WP GFI",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 346.32,
+"y": 1467.34,
+"typeKey": "C",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 314.5,
+"y": 1467.34,
+"typeKey": "C",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 419.33,
+"y": 1410.31,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 245.23,
+"y": 1410.94,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 424.94,
+"y": 1468.61,
+"typeKey": "M1",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 253.97,
+"y": 1466.06,
+"typeKey": "M1",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 366.29,
+"y": 1432.61,
+"typeKey": "EXHAUST FAN RECESSED",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 295.46,
+"y": 1431.02,
+"typeKey": "EXHAUST FAN RECESSED",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 478.61,
+"y": 1532.33,
+"typeKey": "GFCI",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 175.34,
+"y": 1474.35,
+"typeKey": "GFCI",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 175.34,
+"y": 1460.33,
+"typeKey": "GFCI",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 175.34,
+"y": 1447.26,
+"typeKey": "GFCI",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49"
+},
+{
+"x": 1175.14,
+"y": 2228.16,
+"typeKey": "P",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50"
+},
+{
+"x": 1086.77,
+"y": 2133.85,
+"typeKey": "P",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50"
+},
+{
+"x": 1115.51,
+"y": 2010.39,
+"typeKey": "P",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50"
+},
+{
+"x": 1178.88,
+"y": 1922.3,
+"typeKey": "P",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50"
+},
+{
+"x": 1260.62,
+"y": 1965.63,
+"typeKey": "P",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50"
+},
+{
+"x": 1306.8,
+"y": 1863.04,
+"typeKey": "P",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50"
+},
+{
+"x": 328.22,
+"y": 642.16,
+"typeKey": "SIMPLEX RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50"
+},
+{
+"x": 321.98,
+"y": 607.11,
+"typeKey": "SIMPLEX RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50"
+},
+{
+"x": 320.74,
+"y": 528.74,
+"typeKey": "SIMPLEX RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50"
+},
+{
+"x": 319.49,
+"y": 495.6,
+"typeKey": "SIMPLEX RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50"
+},
+{
+"x": 243.36,
+"y": 553.59,
+"typeKey": "DUPLEX RECEPTACLE / FLOOR RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50"
+},
+{
+"x": 153.5,
+"y": 688.67,
+"typeKey": "SIMPLEX RECEPTACLE",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50"
+},
+{
+"x": 1452.82,
+"y": 2137.04,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1452.82,
+"y": 2065.04,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1452.82,
+"y": 1992.71,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1403.52,
+"y": 2170.17,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1331.14,
+"y": 2170.17,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1259.38,
+"y": 2170.17,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1404.77,
+"y": 2124.93,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1332.38,
+"y": 2124.93,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1260,
+"y": 2124.93,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1404.77,
+"y": 2074.59,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1332.38,
+"y": 2074.59,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1260,
+"y": 2074.59,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1187.62,
+"y": 2074.59,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1404.77,
+"y": 2025.85,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1333.32,
+"y": 2025.85,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1261.25,
+"y": 2025.85,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1189.18,
+"y": 2025.85,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1404.77,
+"y": 1977.42,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1333.32,
+"y": 1977.42,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1261.25,
+"y": 1977.42,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1192.61,
+"y": 2137.04,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1125.02,
+"y": 2160.62,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1125.02,
+"y": 2088.61,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1187.62,
+"y": 1962.13,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1144.37,
+"y": 2019.79,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1106.93,
+"y": 1981.24,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1444.7,
+"y": 2170.17,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1108.49,
+"y": 2048.47,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1375.44,
+"y": 2226.88,
+"typeKey": "D",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1117.85,
+"y": 2252.69,
+"typeKey": "G",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1452.82,
+"y": 1921.02,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1452.82,
+"y": 1849.02,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1452.82,
+"y": 1777.02,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1452.82,
+"y": 1705.01,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1452.82,
+"y": 1633.01,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1452.82,
+"y": 1561.01,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1452.82,
+"y": 1489,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1404.77,
+"y": 1931.86,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1334.26,
+"y": 1931.86,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1262.5,
+"y": 1931.86,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1404.77,
+"y": 1876.42,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1334.26,
+"y": 1876.42,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1231.92,
+"y": 1905.09,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1246.9,
+"y": 1856.03,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1178.26,
+"y": 1856.03,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1107.86,
+"y": 1856.03,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1178.26,
+"y": 1918.48,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1106.93,
+"y": 1918.48,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1340.5,
+"y": 1792.95,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1269.36,
+"y": 1792.95,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1196.98,
+"y": 1792.95,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1125.02,
+"y": 1792.95,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1340.5,
+"y": 1728.59,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1269.36,
+"y": 1728.59,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1196.98,
+"y": 1728.59,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1125.02,
+"y": 1728.59,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1340.5,
+"y": 1666.78,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1269.36,
+"y": 1666.78,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1196.98,
+"y": 1666.78,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1125.02,
+"y": 1666.78,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1340.5,
+"y": 1604.34,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1269.36,
+"y": 1604.34,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1196.98,
+"y": 1604.34,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1125.02,
+"y": 1604.34,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1340.5,
+"y": 1540.62,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1269.36,
+"y": 1540.62,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1196.98,
+"y": 1540.62,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1125.02,
+"y": 1540.62,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1340.5,
+"y": 1478.81,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1269.36,
+"y": 1478.81,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1196.98,
+"y": 1478.81,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1125.02,
+"y": 1478.81,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1321.15,
+"y": 1414.13,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1249.08,
+"y": 1414.13,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1178.26,
+"y": 1414.13,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1107.4,
+"y": 1414.13,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1386.05,
+"y": 1778.93,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1386.05,
+"y": 1707.56,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1386.05,
+"y": 1635.56,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1386.05,
+"y": 1563.56,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1386.05,
+"y": 1491.55,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1466.54,
+"y": 1604.34,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1400.4,
+"y": 1729.23,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1402.27,
+"y": 1478.81,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1531.44,
+"y": 1841.37,
+"typeKey": "G",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1531.44,
+"y": 1698,
+"typeKey": "G",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1531.44,
+"y": 1554,
+"typeKey": "G",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1308.05,
+"y": 1447.26,
+"typeKey": "K",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1295.57,
+"y": 1823.53,
+"typeKey": "CF1-CF3",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1117.85,
+"y": 1945.24,
+"typeKey": "CF1-CF3",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1452.82,
+"y": 1380.68,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1452.82,
+"y": 1308.67,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1405.39,
+"y": 1383.86,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1333.63,
+"y": 1383.86,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1405.39,
+"y": 1336.71,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1333.63,
+"y": 1336.71,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1405.39,
+"y": 1288.28,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1333.63,
+"y": 1288.28,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1239.41,
+"y": 1378.76,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1167.14,
+"y": 1378.76,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1239.41,
+"y": 1327.15,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1167.14,
+"y": 1327.15,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1238.78,
+"y": 1248.14,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1166.83,
+"y": 1248.14,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1410.38,
+"y": 1223.29,
+"typeKey": "C",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1395.41,
+"y": 1222.65,
+"typeKey": "C",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1447.82,
+"y": 1206.72,
+"typeKey": "M1",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1363.58,
+"y": 1209.27,
+"typeKey": "M1",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1459.06,
+"y": 1288.28,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1430.35,
+"y": 1196.52,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1371.07,
+"y": 1197.8,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1282.46,
+"y": 1224.56,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1291.2,
+"y": 1200.35,
+"typeKey": "F",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1262.5,
+"y": 1164.03,
+"typeKey": "J",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1075.54,
+"y": 2150.42,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1075.54,
+"y": 2078.42,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1033.73,
+"y": 2170.17,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1033.73,
+"y": 2107.09,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1033.73,
+"y": 2045.28,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1033.73,
+"y": 1981.24,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 2150.42,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 2078.42,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 2007.05,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 981.94,
+"y": 2167.62,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1094.26,
+"y": 2045.28,
+"typeKey": "MOTION SENSOR",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 971.33,
+"y": 2194.39,
+"typeKey": "F",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 933.26,
+"y": 2142.14,
+"typeKey": "F",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 975.07,
+"y": 2230.07,
+"typeKey": "J",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 899.57,
+"y": 2134.49,
+"typeKey": "J",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1046.21,
+"y": 2252.37,
+"typeKey": "G",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 974.45,
+"y": 2252.37,
+"typeKey": "G",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 902.06,
+"y": 2253.01,
+"typeKey": "G",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 883.34,
+"y": 2233.26,
+"typeKey": "G",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 883.34,
+"y": 2161.89,
+"typeKey": "G",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 883.34,
+"y": 2089.89,
+"typeKey": "G",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 883.34,
+"y": 2018.2,
+"typeKey": "G",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1069.3,
+"y": 2012.15,
+"typeKey": "CF1-CF3",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1033.73,
+"y": 1918.48,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1033.73,
+"y": 1856.03,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1053.07,
+"y": 1792.95,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1053.07,
+"y": 1728.59,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1053.07,
+"y": 1666.78,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1053.07,
+"y": 1604.34,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1053.07,
+"y": 1540.62,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1053.07,
+"y": 1478.81,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1033.73,
+"y": 1414.13,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 1935.04,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 1863.04,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 1791.04,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 1719.03,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 1647.03,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 1575.03,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 1503.02,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 1431.02,
+"typeKey": "A",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 998.78,
+"y": 1792.95,
+"typeKey": "M",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 998.78,
+"y": 1728.59,
+"typeKey": "M",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 998.78,
+"y": 1666.78,
+"typeKey": "M",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 998.78,
+"y": 1604.34,
+"typeKey": "M",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 998.78,
+"y": 1540.62,
+"typeKey": "M",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 998.78,
+"y": 1478.81,
+"typeKey": "M",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 948.86,
+"y": 1791.67,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 948.86,
+"y": 1477.53,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 935.76,
+"y": 1459.37,
+"typeKey": "F",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 902.69,
+"y": 1471.16,
+"typeKey": "J",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 910.18,
+"y": 1903.82,
+"typeKey": "D",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 910.18,
+"y": 1673.79,
+"typeKey": "D",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1094.88,
+"y": 1378.76,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1023.12,
+"y": 1378.76,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1094.88,
+"y": 1327.15,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1023.12,
+"y": 1327.15,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1094.88,
+"y": 1248.14,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1023.12,
+"y": 1248.14,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 1325.24,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 965.09,
+"y": 1253.24,
+"typeKey": "B",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 943.87,
+"y": 1288.28,
+"typeKey": "E",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 937.63,
+"y": 1373.03,
+"typeKey": "F",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 901.44,
+"y": 1392.78,
+"typeKey": "J",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1048.7,
+"y": 1169.76,
+"typeKey": "D",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 904.56,
+"y": 1342.44,
+"typeKey": "D",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51"
+},
+{
+"x": 1489.01,
+"y": 1394.7,
+"typeKey": "(UNTAGGED) SITE LIGHT",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#55"
+},
+{
+"x": 1122.84,
+"y": 1349.45,
+"typeKey": "(UNTAGGED) SITE LIGHT",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#55"
+},
+{
+"x": 1129.08,
+"y": 937.18,
+"typeKey": "(UNTAGGED) SITE LIGHT",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#55"
+},
+{
+"x": 280.18,
+"y": 927.63,
+"typeKey": "PYLON SIGN",
+"sheetKey": "1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#55"
+}
+],
+"targets": [
+{
+"key": "W1",
+"type": "W1",
+"source": "fixture_schedule",
+"wattage": 40,
+"category": "exterior_building",
+"emergency": false,
+"symbolHint": "Wall-mounted half-rectangle with triangle arrow, tag W1",
+"description": "Lithonia DSXW1 LED 10C 1000 40K T3M MVOLT wallpack, IESNA full cutoff, 0 deg down, MH 12'-0\"",
+"sourceSheet": "PH0.1",
+"headsPerPole": null
+},
+{
+"key": "W2",
+"type": "W2",
+"source": "fixture_schedule",
+"wattage": 20,
+"category": "exterior_building",
+"emergency": false,
+"symbolHint": "Wall-mounted half-rectangle with triangle arrow, tag W2",
+"description": "Lithonia DSXW1 LED 10C 530 40K T3M MVOLT wallpack, IESNA full cutoff, 0 deg down, MH 12'-0\"",
+"sourceSheet": "PH0.1",
+"headsPerPole": null
+},
+{
+"key": "S1",
+"type": "S1",
+"source": "fixture_schedule",
+"wattage": 207,
+"category": "site_lighting",
+"emergency": false,
+"symbolHint": "Circle pole with single square head and arrow, tag S1",
+"description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS area light, IES full cutoff, 0 deg down, MH 28'-0\"",
+"sourceSheet": "PH0.1",
+"headsPerPole": 1
+},
+{
+"key": "S2",
+"type": "S2",
+"source": "fixture_schedule",
+"wattage": 414,
+"category": "site_lighting",
+"emergency": false,
+"symbolHint": "Circle pole with two square heads, tag S2",
+"description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS area light, dual head, IES full cutoff, 0 deg down, MH 28'-0\"",
+"sourceSheet": "PH0.1",
+"headsPerPole": 2
+},
+{
+"key": "A",
+"type": "A",
+"source": "fixture_schedule",
+"wattage": 42,
+"category": "interior_lighting",
+"emergency": false,
+"symbolHint": "Long bar with circle, tag A above, circuit # below",
+"description": "8' LED strip 42W input, 4-8.5W T8 4' LED tube",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "B",
+"type": "B",
+"source": "fixture_schedule",
+"wattage": 21,
+"category": "interior_lighting",
+"emergency": false,
+"symbolHint": "Long bar with circle, tag B",
+"description": "8' LED strip 21W input, 2-8.5W T8 4' LED tube",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "C",
+"type": "C",
+"source": "fixture_schedule",
+"wattage": 10.5,
+"category": "interior_lighting",
+"emergency": false,
+"symbolHint": "Bar with circle, tag C",
+"description": "4' LED strip 10.5W wall light, 1-8.5W T8 LED tube",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "D",
+"type": "D",
+"source": "fixture_schedule",
+"wattage": 40,
+"category": "exterior_building",
+"emergency": false,
+"symbolHint": "Circle with wall bracket, tag D",
+"description": "D-Series Size 1 DSXW1 LED 10C 1000 40K T3M MVOLT wall pack",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "E",
+"type": "E",
+"source": "fixture_schedule",
+"wattage": null,
+"category": "interior_lighting",
+"emergency": true,
+"symbolHint": "Box with two triangle heads, tag E",
+"description": "Emergency light with battery backup ELM6LED",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "F",
+"type": "F",
+"source": "fixture_schedule",
+"wattage": null,
+"category": "interior_lighting",
+"emergency": true,
+"symbolHint": "Circle with X, stem, tag F",
+"description": "Exit sign with battery backup for remote exit emergency head",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "G",
+"type": "G",
+"source": "fixture_schedule",
+"wattage": 49,
+"category": "exterior_building",
+"emergency": false,
+"symbolHint": "Circle with cross ticks, tag G",
+"description": "Gotham 8\" LED downlight EVO R 40/30 8AR 120 TRW",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "J",
+"type": "J",
+"source": "fixture_schedule",
+"wattage": null,
+"category": "exterior_building",
+"emergency": true,
+"symbolHint": "Box with two triangle heads below, tag J",
+"description": "Exterior emergency light with two heads",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "K",
+"type": "K",
+"source": "fixture_schedule",
+"wattage": null,
+"category": "interior_lighting",
+"emergency": true,
+"symbolHint": "Circle with X, tag K",
+"description": "Exit sign with battery backup",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "L",
+"type": "L",
+"source": "fixture_schedule",
+"wattage": 20,
+"category": "exterior_building",
+"emergency": false,
+"symbolHint": "Circle with wall bracket, tag L",
+"description": "D-Series Size 1 DSXW1 LED 10C 530 40K T3M MVOLT",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "M",
+"type": "M",
+"source": "fixture_schedule",
+"wattage": 21,
+"category": "interior_lighting",
+"emergency": false,
+"symbolHint": "Bar with circle, tag M",
+"description": "4' LED strip 21W input, 2-8.5W T8 LED tube",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "N",
+"type": "N",
+"source": "fixture_schedule",
+"wattage": 10.5,
+"category": "interior_lighting",
+"emergency": false,
+"symbolHint": "Bar with circle, tag N",
+"description": "4' LED strip 10.5W input, 1-8.5W T8 LED tube",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "SITE LIGHT",
+"type": "SITE LIGHT",
+"source": "fixture_schedule",
+"wattage": 209,
+"category": "site_lighting",
+"emergency": false,
+"symbolHint": "Per civil sheets",
+"description": "D-Series Size 1 DSX1 LED 60C 1000 40K T3M MVOLT",
+"sourceSheet": "E-3",
+"headsPerPole": 2
+},
+{
+"key": "(UNTAGGED) SITE LIGHT",
+"type": "(untagged) SITE LIGHT",
+"source": "fixture_schedule",
+"wattage": 207,
+"category": "site_lighting",
+"emergency": false,
+"symbolHint": "Small square pole base with circle head, arrow showing aim, labeled SITE LIGHT A-xx",
+"description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS, IES full cutoff, mounted 0 deg down, MH 28'-0\"",
+"sourceSheet": "E-7",
+"headsPerPole": 1
+},
+{
+"key": "DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX ON PHONE BOARD",
+"type": "Duplex receptacle, shallow 2x4 handy box on phone board",
+"source": "legend",
+"wattage": null,
+"category": "device",
+"emergency": false,
+"symbolHint": "Duplex receptacle (circle with two slots)",
+"description": "Duplex receptacle, shallow 2x4 handy box on phone board",
+"sourceSheet": "E-4",
+"headsPerPole": null
+},
+{
+"key": "1 EMPTY CONDUIT AND J-BOX TO DECK",
+"type": "1\" empty conduit and J-box to deck",
+"source": "legend",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "J-box on conduit",
+"description": "1\" empty conduit and J-box to deck",
+"sourceSheet": "E-4",
+"headsPerPole": null
+},
+{
+"key": "200A FUSED DISCONNECT NEMA 3R",
+"type": "200A fused disconnect NEMA 3R",
+"source": "legend",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "Fused switch",
+"description": "200A fused disconnect NEMA 3R",
+"sourceSheet": "E-4",
+"headsPerPole": null
+},
+{
+"key": "MOTION SENSOR",
+"type": "Motion sensor",
+"source": "legend",
+"wattage": null,
+"category": "lighting_control",
+"emergency": false,
+"symbolHint": "Circle with dot",
+"description": "Motion sensor",
+"sourceSheet": "E-5",
+"headsPerPole": null
+},
+{
+"key": "STORE OPEN/CLOSE PUSHBUTTON",
+"type": "Store open/close pushbutton",
+"source": "legend",
+"wattage": null,
+"category": "lighting_control",
+"emergency": false,
+"symbolHint": "Push button (filled rectangle)",
+"description": "Store open/close pushbutton",
+"sourceSheet": "E-5",
+"headsPerPole": null
+},
+{
+"key": "EXHAUST FAN RECESSED",
+"type": "Exhaust fan recessed",
+"source": "legend",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "Exhaust fan symbol",
+"description": "Exhaust fan recessed",
+"sourceSheet": "E-1",
+"headsPerPole": null
+},
+{
+"key": "T",
+"type": "T",
+"source": "legend",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "T",
+"description": "Thermostat",
+"sourceSheet": "E-1",
+"headsPerPole": null
+},
+{
+"key": "HVAC DISCONNECT WITH UNIT",
+"type": "HVAC disconnect with unit",
+"source": "legend",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "M (square)",
+"description": "HVAC disconnect with unit",
+"sourceSheet": "E-1",
+"headsPerPole": null
+},
+{
+"key": "P",
+"type": "P",
+"source": "legend",
+"wattage": null,
+"category": "device",
+"emergency": false,
+"symbolHint": "P",
+"description": "Power pole",
+"sourceSheet": "E-1",
+"headsPerPole": null
+},
+{
+"key": "SIMPLEX RECEPTACLE",
+"type": "Simplex receptacle",
+"source": "legend",
+"wattage": null,
+"category": "device",
+"emergency": false,
+"symbolHint": "Circle single line",
+"description": "Simplex receptacle",
+"sourceSheet": "E-1",
+"headsPerPole": null
+},
+{
+"key": "DUPLEX RECEPTACLE / FLOOR RECEPTACLE",
+"type": "Duplex receptacle / floor receptacle",
+"source": "legend",
+"wattage": null,
+"category": "device",
+"emergency": false,
+"symbolHint": "Circle double line / square",
+"description": "Duplex receptacle / floor receptacle",
+"sourceSheet": "E-1",
+"headsPerPole": null
+},
+{
+"key": "QUADPLEX RECEPTACLE",
+"type": "Quadplex receptacle",
+"source": "legend",
+"wattage": null,
+"category": "device",
+"emergency": false,
+"symbolHint": "Circle cross",
+"description": "Quadplex receptacle",
+"sourceSheet": "E-1",
+"headsPerPole": null
+},
+{
+"key": "WP GFI",
+"type": "WP GFI",
+"source": "legend",
+"wattage": null,
+"category": "device",
+"emergency": false,
+"symbolHint": "WP GFI",
+"description": "Weatherproof duplex receptacle GFI",
+"sourceSheet": "E-1",
+"headsPerPole": null
+},
+{
+"key": "GFCI",
+"type": "GFCI",
+"source": "legend",
+"wattage": null,
+"category": "device",
+"emergency": false,
+"symbolHint": "GFCI",
+"description": "GFCI duplex receptacle",
+"sourceSheet": "E-1",
+"headsPerPole": null
+},
+{
+"key": "COIL + J",
+"type": "Coil + J",
+"source": "legend",
+"wattage": null,
+"category": "device",
+"emergency": false,
+"symbolHint": "Coil + J",
+"description": "J-box with 6' flex at wall & HP counters",
+"sourceSheet": "E-1",
+"headsPerPole": null
+},
+{
+"key": "M1",
+"type": "M1",
+"source": "legend",
+"wattage": null,
+"category": "lighting_control",
+"emergency": false,
+"symbolHint": "M1",
+"description": "Occupancy sensor CMR-9",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "M2",
+"type": "M2",
+"source": "legend",
+"wattage": null,
+"category": "lighting_control",
+"emergency": false,
+"symbolHint": "M2",
+"description": "Motion sensor LSXR-50-HL (hub stores only)",
+"sourceSheet": "E-3",
+"headsPerPole": null
+},
+{
+"key": "POLE-MOUNTED SITE LIGHT WITH AIMING ARROW AND CIRCUIT TAG",
+"type": "Pole-mounted site light with aiming arrow and circuit tag",
+"source": "legend",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "SITE LIGHT",
+"description": "Pole-mounted site light with aiming arrow and circuit tag",
+"sourceSheet": "E-7",
+"headsPerPole": null
+},
+{
+"key": "PYLON SIGN RECTANGLE WITH CIRCUIT TAG A-18",
+"type": "Pylon sign rectangle with circuit tag A-18",
+"source": "legend",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "PYLON SIGN",
+"description": "Pylon sign rectangle with circuit tag A-18",
+"sourceSheet": "E-7",
+"headsPerPole": null
+},
+{
+"key": "DISCON A",
+"type": "DISCON A",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"DISCON A\"",
+"description": "200A fused switch, fused at 200A, NEMA 3R, AutoZone provided",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "DISCON B",
+"type": "DISCON B",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"DISCON B\"",
+"description": "200A fused switch, fused at 200A, NEMA 3R, AutoZone provided",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "MB",
+"type": "MB",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"MB\"",
+"description": "Meter base NEMA 3R, parallel (2)4#3/0, 2\"C",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "WIREWAY",
+"type": "WIREWAY",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"WIREWAY\"",
+"description": "Wireway NEMA 3R 12x12, length as required, contractor provided",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "RTU-1",
+"type": "RTU-1",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"RTU-1\"",
+"description": "Rooftop unit, 60/3 breaker B-1,3,5, 3#6,#10G,3/4\"C",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "RTU-2",
+"type": "RTU-2",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"RTU-2\"",
+"description": "Rooftop unit, 60/3 breaker B-2,4,6, 3#6,#10G,3/4\"C",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "WH",
+"type": "WH",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"WH\"",
+"description": "Water heater, 1,500VA, A-27",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "ALC",
+"type": "ALC",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"ALC\"",
+"description": "Automatic lighting control panel, 480VA, B-25",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "BATT CHGR",
+"type": "BATT CHGR",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"BATT CHGR\"",
+"description": "Battery chargers (5), 1,490VA each, B-15/17/19/21/23",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "MINI-TUNE",
+"type": "MINI-TUNE",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"MINI-TUNE\"",
+"description": "Mini-tune, 1,500VA, B-20 20A high magnetic breaker",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "DRINK MACH",
+"type": "DRINK MACH",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"DRINK MACH\"",
+"description": "Drink machine 1,200VA, B-32",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "DF",
+"type": "DF",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"DF\"",
+"description": "Drinking fountain 480VA, B-26",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "LCP",
+"type": "LCP",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"LCP\"",
+"description": "Venstar lighting contactor enclosure 19.5\"W x 23.5\"H x 8\"D semi-recessed, 6 contactors (Work, Sales, Sign, Sign, Site, Site), fed from circuit B-25",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "DATA CONCENTRATOR",
+"type": "DATA CONCENTRATOR",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"DATA CONCENTRATOR\"",
+"description": "Venstar data concentrator mounted on phone board in telephone closet",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "EF",
+"type": "EF",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"EF\"",
+"description": "Restroom recessed exhaust fans, wired via CMR-9 sensor/light",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "CF1-CF3",
+"type": "CF1-CF3",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"CF1-CF3\"",
+"description": "Hunter #28692 ceiling fans w/ #27180 wall speed controller, on sales floor light ckt",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "PNL-A/B",
+"type": "PNL-A/B",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"PNL-A/B\"",
+"description": "Panelboards & breakers (AutoZone furnished)",
+"sourceSheet": "",
+"headsPerPole": null
+},
+{
+"key": "PYLON SIGN",
+"type": "PYLON SIGN",
+"source": "equipment_schedule",
+"wattage": null,
+"category": "equipment",
+"emergency": false,
+"symbolHint": "equipment tag \"PYLON SIGN\"",
+"description": "Pylon sign power connection, circuit A-18",
+"sourceSheet": "",
+"headsPerPole": null
+}
+]
+}
