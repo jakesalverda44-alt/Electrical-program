@@ -1146,3 +1146,72 @@ The 3 backend failures are the same known flakes carried since the original revi
 long-lived, heavily-populated test database) and the `integration` lead follow-up backfill timeout — none
 of the touched files (`reviewItems.ts`, `takeoffReview.ts`, `aiMarkers.ts`, `rerunReset.ts`,
 `bidEstimate.ts`, `TakeoffReviewPanel.tsx`) are anywhere near intake or lead code.
+
+---
+
+## Fix round 4 (review "Round 3", ecf8c87)
+
+**Executor:** Opus 5. **Scope:** B13, S20, S21 and N9. This includes the small changes in `takeoffReview.ts` and `reviewItems.ts`, which Sonnet owned in earlier rounds. Same rules: worktree only, no Agent tool, no real API calls. No migrations were added, so **140** is still the next free number. Each repro is now a test.
+
+| Commit | Finding |
+|---|---|
+| 2e3f22f | B13 + N9: a site-light member's marker tally is POLES; half-done answers stay blocking; UI follow-up input |
+| 0b6492d | B13 + N9 follow-up: the conversion lives in `applyReconcileMemberResolution` |
+| 0a22b4d | S21: the "same outlet?" question is skipped only when both marks carry circuit tags and the tags differ |
+| 3468c6c | S20: panel identity ignores loads; a true conflict has enforced answers |
+
+**2e3f22f needed a follow-up.** It changed the route only, and it went in with one existing B11 unit test failing. 0b6492d moves the conversion into `applyReconcileMemberResolution` itself, which fixes that test.
+
+### B13 and N9: site-light members (poles vs heads)
+- **"Use confirmed markers" on a heads member** tallies POLE symbols:
+  - poles = the tally;
+  - heads = tally × heads-per-pole when the schedule states it;
+  - when heads-per-pole is unknown, the tally sets the poles and the member stays **open (blocking)**, asking for the heads.
+- **A heads answer whose poles can't be derived** (heads-per-pole unknown, or not an exact multiple) stays open asking for the pole count. Before, it silently left the counted poles (N9).
+- The next number entered on a half-done member completes it, as heads or poles as asked.
+- The UI shows what is missing on that member, with its own input.
+- **Tests** (through the real `/review/resolve` route):
+  - the twin-head S2 repro: 2 confirmed markers → **2 poles, 4 heads**;
+  - heads-per-pole unknown: 2 poles plus "enter heads", then 3 heads completes it;
+  - N9: 3 heads gives "enter pole count", then 2 poles completes it;
+  - the B11 tests now also assert the N9 question;
+  - the frontend follow-up input.
+
+### S21: circuit tags on the "same outlet?" question
+- The question is skipped **only** when both marks carry circuit tags that share no circuit. "A40,42" and "A42" share one.
+- The question is asked when:
+  - the circuits match;
+  - neither mark is tagged;
+  - only one side is tagged.
+- Kissimmee is unchanged: A-31 vs A-29 still raises no question.
+
+### S20: the same panel read on two sheets
+- **Panel identity** now compares circuit numbers and normalized descriptions only, never loads.
+- **Same circuits, different loads** → one panel:
+  - the first copy is used;
+  - a non-blocking `panel-load:` note says "load differs on E-4 vs E-4.1 (circuit 15)".
+  - The review's repro gives chargers **3** (was 6), with its circuits counted once.
+- **A true conflict** (different circuits) → both copies kept, plus a blocking `panel-dup:` item with **enforced** answers:
+  - "Two panels — keep both";
+  - "Same panel — use <sheet>'s copy". This applies that copy's schedule quantities (precomputed on `count_result.evidence.panelChoices`) and removes the other copy's circuit lines. The lines are removed by exact item text via `EnforcedCounts.removeLines` in `enforceCountsOnTakeoff`; a line that isn't found is reported, never guessed.
+- Circuit lines of copies with the same identity now carry their sheet number, so the two copies can be told apart.
+
+### Kissimmee fixture after fix round 4
+These numbers are unchanged from fix round 3:
+- receptacles **33** traceable: simplex 9 drawn + 1 typical, duplex 4 drawn + 8 typical, GFCI 7, WP GFI 4;
+- site poles / heads **3 / 4**;
+- battery chargers **5**, and the other equipment 1 each;
+- baseflex **3** (expected 8);
+- review items **22 (16 blocking)**.
+
+### Test suites (one full run each, at the end)
+`tsc --noEmit` is clean in both packages.
+
+| Suite | Result |
+|---|---|
+| Backend | **2070 passed, 3 failed, 4 not run of 2077** (191 files: 188 passed, 2 failed, 1 lost to "Worker exited unexpectedly") |
+| Frontend | **1315 passed, 1 failed of 1316** (128 files) |
+
+- **Backend failures:** the known flakes, `intakeSimilarCache` ×2 and the `integration` backfill timeout.
+- **Frontend failure:** the known `SurveyMarkupEditor` flake. It passed 1/1 when run alone.
+- **During the targeted runs**, `fixRound2`'s R2-B1 test failed once while other test files were loading the database, then passed 10/10 when run alone.
