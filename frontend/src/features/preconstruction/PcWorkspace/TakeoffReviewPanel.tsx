@@ -60,6 +60,15 @@ export interface ReviewItem {
    *  B6 — each member carries its OWN resolution now; the group itself
    *  resolves only once every member has one. */
   groupedTypes?: Array<{ key: string; type: string; description: string; resolution?: ReviewResolution }>;
+  /** Fix round 3 / B10, B11 — a gap-fill/reconcile finding's own types, one
+   *  per type it covers; each answers separately, in its OWN unit. */
+  reconcileMembers?: Array<{
+    key: string; type: string; description: string;
+    unit: 'heads' | 'count';
+    currentQty: number;
+    headsPerPole: number | null;
+    resolution?: ReviewResolution;
+  }>;
 }
 
 export interface TakeoffReview {
@@ -219,7 +228,9 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
   // dialog that lists every member it would touch.
   const confirm = useConfirm();
   const [groupAllReason, setGroupAllReason] = useState<Record<string, string>>({});
-  const openCountIds = useMemo(() => open.filter(i => actionsOf(i).includes('not_on_job')).map(i => i.id), [open]);
+  // Fix round 3 / S16 — equipment is never in the cross-item multi-select's
+  // "not on this job" pool: it can only ever be answered on its own.
+  const openCountIds = useMemo(() => open.filter(i => actionsOf(i).includes('not_on_job') && i.category !== 'equipment').map(i => i.id), [open]);
 
   // Fix round 1 / S5, S8 — the matched account rule, and for a bid analysed
   // before the accuracy checks, a (non-blocking) note with its questions.
@@ -334,8 +345,10 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                     cross-item multi-select: that bar's "Mark selected not on
                     this job" would otherwise resolve the WHOLE group with
                     one bulk action and no memberKey, no per-member answers,
-                    no confirm listing — exactly what B6 removed. */}
-                {actionsOf(item).includes('not_on_job') && !item.groupedTypes?.length && (
+                    no confirm listing — exactly what B6 removed. Fix round
+                    3 / S16 — neither is equipment: it's only ever answered
+                    on its own. */}
+                {actionsOf(item).includes('not_on_job') && !item.groupedTypes?.length && item.category !== 'equipment' && (
                   <input
                     type="checkbox"
                     aria-label={`Select ${item.title}`}
@@ -447,6 +460,71 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                     );
                   })()}
                 </div>
+              ) : item.reconcileMembers && item.reconcileMembers.length > 0 ? (
+                // Fix round 3 / B10, B11 — a gap-fill/reconcile finding: EACH
+                // type it covers gets its own row, in its OWN unit (heads for
+                // a site_lighting type, count otherwise) — never a number
+                // broadcast to a sibling type. Never "not on this job": the
+                // finding is about a second source disagreeing with the
+                // plans, so the three actions are exactly "Confirm the found
+                // marks on the plans" (gap-fill only), "No more on this job —
+                // keep current count N" (rejects the suggestion/mismatch,
+                // keeps the type's current value) and "Enter correct count".
+                <div className="tr-group-members" data-testid={`review-reconcile-members-${item.id}`}>
+                  <ul className="tr-list">
+                    {item.reconcileMembers.map(m => {
+                      const mid = `${item.id}::${m.key}`;
+                      const canMarkers = (item.actions ?? []).includes('markers');
+                      return (
+                        <li key={m.key} className="tr-item" data-testid={`review-reconcilemember-${mid}`}>
+                          <div className="tr-item-head">
+                            <strong>{m.type}</strong>{m.description ? ` — ${m.description}` : ''}
+                            <span className="tr-sub"> — currently {m.currentQty} {m.unit}</span>
+                          </div>
+                          {m.resolution ? (
+                            <div className="tr-sub" data-testid={`review-reconcilemember-done-${mid}`}>{resolutionText(m.resolution)}</div>
+                          ) : (
+                            <div className="tr-actions">
+                              {canMarkers && (
+                                <button type="button" className="btn ghost sm" disabled={busy !== null}
+                                  data-testid={`reconcilemember-markers-${mid}`}
+                                  onClick={() => void resolve([item.id], { action: 'markers', memberKey: m.key }, `rcmember:${mid}`)}>
+                                  Confirm the found marks on the plans
+                                </button>
+                              )}
+                              <input
+                                type="number" min={1} step={1} inputMode="numeric"
+                                aria-label={`Correct count for ${m.type} (${m.unit})`}
+                                placeholder={m.unit === 'heads' ? 'Correct heads' : 'Correct count'}
+                                value={qty[mid] ?? ''}
+                                data-testid={`reconcilemember-qty-${mid}`}
+                                onChange={e => setQty(q => ({ ...q, [mid]: e.target.value }))}
+                              />
+                              <button type="button" className="btn primary sm" disabled={!qty[mid] || busy !== null}
+                                data-testid={`reconcilemember-count-${mid}`}
+                                onClick={() => void resolve([item.id], { action: 'count', qty: Number(qty[mid]), memberKey: m.key }, `rcmember:${mid}`)}>
+                                Enter correct count
+                              </button>
+                              <input
+                                type="text"
+                                aria-label={`Why no more ${m.type} on this job`}
+                                placeholder="Reason (at least 10 characters)"
+                                value={reason[mid] ?? ''}
+                                data-testid={`reconcilemember-reason-input-${mid}`}
+                                onChange={e => setReason(rr => ({ ...rr, [mid]: e.target.value }))}
+                              />
+                              <button type="button" className="btn ghost sm" disabled={(reason[mid] ?? '').trim().length < 10 || busy !== null}
+                                data-testid={`reconcilemember-reject-${mid}`}
+                                onClick={() => void resolve([item.id], { action: 'confirm', reason: reason[mid], memberKey: m.key }, `rcmember:${mid}`)}>
+                                No more on this job — keep current count {m.currentQty}
+                              </button>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
               ) : (() => {
                 const acts = actionsOf(item);
                 return (
@@ -544,8 +622,13 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
         return [...groups.entries()].sort((a, b) => order(a[0]) - order(b[0])).map(([key, items]) => {
           const info = items.every(i => i.blocking === false);
           const ids = items.map(i => i.id);
-          const nojIds = items.filter(i => actionsOf(i).includes('not_on_job')).map(i => i.id);
-          const confirmIds = items.filter(i => actionsOf(i).includes('confirm')).map(i => i.id);
+          // Fix round 3 / S16 — equipment can't be zeroed by ANY bulk
+          // action, this group's "mark all" included: each equipment item
+          // is left out, answered only on its own row below.
+          const nojItems = items.filter(i => actionsOf(i).includes('not_on_job') && i.category !== 'equipment');
+          const confirmItems = items.filter(i => actionsOf(i).includes('confirm') && i.category !== 'equipment');
+          const nojIds = nojItems.map(i => i.id);
+          const confirmIds = confirmItems.map(i => i.id);
           const suggestedIds = items.filter(i => i.suggested).map(i => i.id);
           const r = groupReason[key] ?? '';
           const reasonOk = r.trim().length >= 10;
@@ -571,11 +654,29 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                     value={r} onChange={e => setGroupReason(g => ({ ...g, [key]: e.target.value }))} data-testid={`group-reason-${key}`} />
                   {nojIds.length > 1 && (
                     <button type="button" className="btn ghost sm" disabled={!reasonOk || busy !== null} data-testid={`group-noj-${key}`}
-                      onClick={() => void resolve(nojIds, { action: 'not_on_job', reason: r }, `grp:${key}`)}>Mark all {nojIds.length} not on this job</button>
+                      onClick={async () => {
+                        // Fix round 3 / S16 — any remaining bulk action goes
+                        // behind a confirm dialog listing every member it
+                        // would touch (the same gate B6 already put on
+                        // legend-zero's own "mark all remaining").
+                        const ok = await confirm({
+                          title: `Mark all ${nojIds.length} not on this job?`,
+                          body: <ul>{nojItems.map(i => <li key={i.id}>{i.title}</li>)}</ul>,
+                          confirmLabel: 'Confirm',
+                        });
+                        if (ok) void resolve(nojIds, { action: 'not_on_job', reason: r }, `grp:${key}`);
+                      }}>Mark all {nojIds.length} not on this job</button>
                   )}
                   {confirmIds.length > 1 && nojIds.length <= 1 && (
                     <button type="button" className="btn ghost sm" disabled={!reasonOk || busy !== null} data-testid={`group-confirm-${key}`}
-                      onClick={() => void resolve(confirmIds, { action: 'confirm', reason: r }, `grp:${key}`)}>Confirm all {confirmIds.length}</button>
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: `Confirm all ${confirmIds.length}?`,
+                          body: <ul>{confirmItems.map(i => <li key={i.id}>{i.title}</li>)}</ul>,
+                          confirmLabel: 'Confirm',
+                        });
+                        if (ok) void resolve(confirmIds, { action: 'confirm', reason: r }, `grp:${key}`);
+                      }}>Confirm all {confirmIds.length}</button>
                   )}
                 </>
               )}
@@ -607,7 +708,17 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
           <input type="text" aria-label="Why the selected types are not on this job" placeholder="Why they’re not on this job"
             value={bulkReason} onChange={e => setBulkReason(e.target.value)} />
           <button type="button" className="btn ghost sm" disabled={bulkReason.trim().length < 10 || busy !== null}
-            onClick={() => void resolve(selected.filter(id => openCountIds.includes(id)), { action: 'not_on_job', reason: bulkReason }, 'bulk')}>
+            onClick={async () => {
+              // Fix round 3 / S16 — same confirm-dialog gate as any other
+              // bulk action; openCountIds already excludes equipment.
+              const ids = selected.filter(id => openCountIds.includes(id));
+              const ok = await confirm({
+                title: `Mark ${ids.length} selected not on this job?`,
+                body: <ul>{open.filter(i => ids.includes(i.id)).map(i => <li key={i.id}>{i.title}</li>)}</ul>,
+                confirmLabel: 'Confirm',
+              });
+              if (ok) void resolve(ids, { action: 'not_on_job', reason: bulkReason }, 'bulk');
+            }}>
             Mark selected not on this job
           </button>
         </div>

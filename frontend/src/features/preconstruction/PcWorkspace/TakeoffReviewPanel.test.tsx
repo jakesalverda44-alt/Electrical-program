@@ -2,7 +2,7 @@
 // Takeoff accuracy Task 7 — the Needs-review list in the Takeoff step.
 import React from 'react';
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
 import { ConfirmProvider } from '../../../components/ConfirmDialog';
 
 const post = vi.fn();
@@ -28,10 +28,11 @@ const REVIEW: TakeoffReview = {
   ],
 };
 
-function setup(review: TakeoffReview = REVIEW, countResult: React.ComponentProps<typeof TakeoffReviewPanel>['countResult'] = null) {
+function setup(review: TakeoffReview = REVIEW, countResult: React.ComponentProps<typeof TakeoffReviewPanel>['countResult'] = null, wrapper?: (children: React.ReactNode) => React.ReactElement) {
   const onReviewChange = vi.fn();
   const showToast = vi.fn();
-  render(<TakeoffReviewPanel bidId="b1" review={review} countResult={countResult} onReviewChange={onReviewChange} showToast={showToast} />);
+  const el = <TakeoffReviewPanel bidId="b1" review={review} countResult={countResult} onReviewChange={onReviewChange} showToast={showToast} />;
+  render(wrapper ? wrapper(el) : el);
   return { onReviewChange, showToast };
 }
 
@@ -74,13 +75,15 @@ describe('TakeoffReviewPanel', () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['scope:power_poles'], action: 'answer', answer: 'GC' }));
   });
 
-  it('bulk "Not on this job" across selected count items with one reason', async () => {
+  it('bulk "Not on this job" across selected count items with one reason — behind a confirm dialog (S16)', async () => {
     post.mockResolvedValue({ data: REVIEW });
-    setup();
+    setup(REVIEW, null, (children) => <ConfirmProvider>{children}</ConfirmProvider>);
     fireEvent.click(screen.getByLabelText('Select Type G — 6 in LED downlight'));
     fireEvent.click(screen.getByLabelText('Select Type OS — Ceiling occupancy sensor'));
     fireEvent.change(screen.getByLabelText('Why the selected types are not on this job'), { target: { value: 'Generic legend' } });
     fireEvent.click(screen.getByText('Mark selected not on this job'));
+    await waitFor(() => expect(screen.getByText('Mark 2 selected not on this job?')).toBeTruthy());
+    fireEvent.click(screen.getByText('Confirm'));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['count:G', 'count:OS'], action: 'not_on_job', reason: 'Generic legend' }));
   });
 
@@ -223,8 +226,9 @@ describe('next round A7 — grouped by cause, bulk actions, info never blocks', 
     { id: 'scope:power_poles:install', kind: 'scope_question' as const, title: 'Power poles — installed by', detail: 'Who INSTALLS the power poles?', options: ['APT', 'GC', 'Owner', 'Vendor'], suggested: 'APT', group: 'scope' },
     { id: 'count:EF', kind: 'count' as const, title: 'Type EF — Exhaust fan', detail: 'Counted 0 … listed for information, not blocking.', blocking: false, group: 'info' },
   ];
-  function renderGroups() {
-    render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} review={{ status: 'needs_review', items: ITEMS }} />);
+  function renderGroups(wrapper?: (children: React.ReactNode) => React.ReactElement) {
+    const el = <TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} review={{ status: 'needs_review', items: ITEMS }} />;
+    render(wrapper ? wrapper(el) : el);
   }
   it('the status counts blocking items only; info is a collapsed group', () => {
     renderGroups();
@@ -245,12 +249,28 @@ describe('next round A7 — grouped by cause, bulk actions, info never blocks', 
     fireEvent.click(screen.getByTestId('group-scope-accept'));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['scope:power_poles:furnish', 'scope:power_poles:install'], action: 'answer', useSuggested: true }));
   });
-  it('mark a whole zero group not on this job with one reason', async () => {
+  it('mark a whole zero group not on this job with one reason — behind a confirm dialog (S16)', async () => {
     post.mockResolvedValueOnce({ data: { status: 'needs_review', items: ITEMS } });
+    renderGroups((children) => <ConfirmProvider>{children}</ConfirmProvider>);
+    fireEvent.change(screen.getByTestId('group-reason-zero'), { target: { value: 'Not in this remodel scope' } });
+    fireEvent.click(screen.getByTestId('group-noj-zero'));
+    // Fix round 3 / S16 — a bulk action now shows a confirm dialog listing
+    // every member before anything is sent.
+    await waitFor(() => expect(screen.getByText('Mark all 2 not on this job?')).toBeTruthy());
+    const dialog = within(screen.getByRole('alertdialog'));
+    expect(dialog.getByText('Type L — LED wall sconce')).toBeTruthy();
+    expect(dialog.getByText('Type OS — Ceiling occupancy sensor')).toBeTruthy();
+    expect(post).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Confirm'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['count:L', 'count:OS'], action: 'not_on_job', reason: 'Not in this remodel scope' }));
+  });
+
+  it('declining the confirm dialog (no ConfirmProvider = auto-decline) never posts', async () => {
     renderGroups();
     fireEvent.change(screen.getByTestId('group-reason-zero'), { target: { value: 'Not in this remodel scope' } });
     fireEvent.click(screen.getByTestId('group-noj-zero'));
-    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['count:L', 'count:OS'], action: 'not_on_job', reason: 'Not in this remodel scope' }));
+    await waitFor(() => {}); // let the auto-declined promise settle
+    expect(post).not.toHaveBeenCalled();
   });
 });
 
@@ -416,5 +436,123 @@ describe('Fix round B6 — a legend-zero group answers member by member, never o
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', {
       itemIds: [GROUP_ID], action: 'not_on_job', reason: 'Design-build scope, not this job',
     }));
+  });
+});
+
+describe('Fix round 3 / S16 (frontend) — equipment is never in a bulk action', () => {
+  const EQUIP_ITEMS: ReviewItem[] = [
+    { id: 'count:MB', kind: 'count', title: 'Type MB — Meter base', detail: 'Counted 0: not found on any counted plan sheet.', category: 'equipment', group: 'zero' },
+    { id: 'count:WIREWAY', kind: 'count', title: 'Type WIREWAY — Wireway', detail: 'Counted 0: not found on any counted plan sheet.', category: 'equipment', group: 'zero' },
+    { id: 'count:OS', kind: 'count', title: 'Type OS — Occupancy sensor', detail: 'Counted 0: not found on any counted plan sheet.', category: 'lighting_control', group: 'zero' },
+  ];
+  function renderEquip(wrapper?: (children: React.ReactNode) => React.ReactElement) {
+    const el = <TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} review={{ status: 'needs_review', items: EQUIP_ITEMS }} />;
+    render(wrapper ? wrapper(el) : el);
+  }
+
+  it('an equipment item never gets a cross-item multi-select checkbox', () => {
+    renderEquip();
+    expect(screen.queryByLabelText('Select Type MB — Meter base')).toBeNull();
+    expect(screen.queryByLabelText('Select Type WIREWAY — Wireway')).toBeNull();
+    expect(screen.getByLabelText('Select Type OS — Occupancy sensor')).toBeTruthy();
+  });
+
+  it('the group "mark all" bulk excludes equipment: only the 1 non-equipment item counts, so no bulk button renders for 1', () => {
+    renderEquip();
+    // nojIds excludes MB/WIREWAY, leaving just OS (1) — the bulk button
+    // only renders for 2+, so it's gone entirely even though the group
+    // has 3 items total.
+    expect(screen.queryByTestId('group-noj-zero')).toBeNull();
+    // Each equipment item still has its OWN individual "Not on this job".
+    expect(screen.getByLabelText('Why Type MB — Meter base is not on this job')).toBeTruthy();
+    expect(screen.getByLabelText('Why Type WIREWAY — Wireway is not on this job')).toBeTruthy();
+  });
+
+  it('the group bulk (2+ non-equipment) still shows a confirm dialog that lists only the non-equipment members', async () => {
+    const items: ReviewItem[] = [
+      ...EQUIP_ITEMS,
+      { id: 'count:PC', kind: 'count', title: 'Type PC — Photocell', detail: 'Counted 0: not found on any counted plan sheet.', category: 'lighting_control', group: 'zero' },
+    ];
+    post.mockResolvedValueOnce({ data: { status: 'needs_review', items } });
+    render(<ConfirmProvider><TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} review={{ status: 'needs_review', items }} /></ConfirmProvider>);
+    fireEvent.change(screen.getByTestId('group-reason-zero'), { target: { value: 'Design-build scope, not this job' } });
+    fireEvent.click(screen.getByTestId('group-noj-zero'));
+    await waitFor(() => expect(screen.getByText('Mark all 2 not on this job?')).toBeTruthy());
+    const dialog = within(screen.getByRole('alertdialog'));
+    expect(dialog.getByText('Type OS — Occupancy sensor')).toBeTruthy();
+    expect(dialog.getByText('Type PC — Photocell')).toBeTruthy();
+    expect(dialog.queryByText('Type MB — Meter base')).toBeNull();
+    fireEvent.click(screen.getByText('Confirm'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', {
+      itemIds: ['count:OS', 'count:PC'], action: 'not_on_job', reason: 'Design-build scope, not this job',
+    }));
+  });
+
+  it('an equipment item still resolves fine entirely on its own', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'needs_review', items: EQUIP_ITEMS } });
+    renderEquip();
+    fireEvent.change(screen.getByLabelText('Why Type MB — Meter base is not on this job'), { target: { value: 'Design-build scope, not this job' } });
+    fireEvent.click(screen.getByLabelText('Why Type MB — Meter base is not on this job').closest('.tr-actions')!.querySelector('button:last-child')!);
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['count:MB'], action: 'not_on_job', reason: 'Design-build scope, not this job' }));
+  });
+});
+
+describe('Fix round 3 / B10, B11 (frontend) — gap-fill/reconcile items answer per type, never "not on this job"', () => {
+  const GFCI_ITEM: ReviewItem = {
+    id: 'gapfill:GFCI', kind: 'count', title: 'Gap-fill found 2 possible GFCI — confirm on plans', detail: 'd',
+    actions: ['markers', 'confirm', 'count'],
+    reconcileMembers: [{ key: 'GFCI', type: 'GFCI', description: 'GFCI duplex receptacle', unit: 'count', currentQty: 7, headsPerPole: null }],
+  };
+  const S1S2_ITEM: ReviewItem = {
+    id: 'reconcile:S1+S2', kind: 'confirm', title: 'Possible shortfall: S1/S2 vs LUMINAIRE SCHEDULE', detail: 'd',
+    actions: ['confirm', 'count'],
+    reconcileMembers: [
+      { key: 'S1', type: 'S1', description: 'Pole light', unit: 'heads', currentQty: 2, headsPerPole: 1 },
+      { key: 'S2', type: 'S2', description: 'Dual-head pole light', unit: 'heads', currentQty: 2, headsPerPole: 2 },
+    ],
+  };
+
+  it('never renders "Not on this job" anywhere for a gap-fill/reconcile item', () => {
+    render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} review={{ status: 'needs_review', items: [GFCI_ITEM, S1S2_ITEM] }} />);
+    expect(screen.queryByText('Not on this job')).toBeNull();
+    expect(screen.queryByLabelText(/is not on this job/)).toBeNull();
+  });
+
+  it('B10 — "No more on this job" rejects only, showing the CURRENT count; "Confirm the found marks" and "Enter correct count" are the other two', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'needs_review', items: [GFCI_ITEM] } });
+    render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} review={{ status: 'needs_review', items: [GFCI_ITEM] }} />);
+    expect(screen.getByText('Confirm the found marks on the plans')).toBeTruthy();
+    expect(screen.getByText('No more on this job — keep current count 7')).toBeTruthy();
+    expect(screen.getByText('Enter correct count')).toBeTruthy();
+    fireEvent.change(screen.getByTestId('reconcilemember-reason-input-gapfill:GFCI::GFCI'), { target: { value: 'Suggested marks are dimension ticks, not GFCI receptacles' } });
+    fireEvent.click(screen.getByText('No more on this job — keep current count 7'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', {
+      itemIds: ['gapfill:GFCI'], action: 'confirm', memberKey: 'GFCI', reason: 'Suggested marks are dimension ticks, not GFCI receptacles',
+    }));
+  });
+
+  it('B11 — S1 and S2 each answer their OWN count field, in heads, with memberKey — never one broadcast field', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'needs_review', items: [S1S2_ITEM] } });
+    render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} review={{ status: 'needs_review', items: [S1S2_ITEM] }} />);
+    // Two independent rows, each its own "currently N heads".
+    expect(screen.getByTestId('review-reconcilemember-reconcile:S1+S2::S1').textContent).toContain('currently 2 heads');
+    expect(screen.getByTestId('review-reconcilemember-reconcile:S1+S2::S2').textContent).toContain('currently 2 heads');
+    fireEvent.change(screen.getByTestId('reconcilemember-qty-reconcile:S1+S2::S1'), { target: { value: '3' } });
+    fireEvent.click(screen.getByTestId('reconcilemember-count-reconcile:S1+S2::S1'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', {
+      itemIds: ['reconcile:S1+S2'], action: 'count', qty: 3, memberKey: 'S1',
+    }));
+    // S2's own field is untouched by S1's answer.
+    expect((screen.getByTestId('reconcilemember-qty-reconcile:S1+S2::S2') as HTMLInputElement).value).toBe('');
+  });
+
+  it('a resolved member shows its resolution text instead of controls', () => {
+    const resolved: ReviewItem = {
+      ...GFCI_ITEM,
+      reconcileMembers: [{ ...GFCI_ITEM.reconcileMembers![0], resolution: { action: 'confirm', qty: 7, reason: 'Dimension ticks', by: 'Jake', at: 't' } }],
+    };
+    render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} review={{ status: 'needs_review', items: [resolved] }} />);
+    expect(screen.getByTestId('review-reconcilemember-done-gapfill:GFCI::GFCI').textContent).toContain('Dimension ticks');
+    expect(screen.queryByTestId('reconcilemember-reject-gapfill:GFCI::GFCI')).toBeNull();
   });
 });
