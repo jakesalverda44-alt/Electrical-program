@@ -275,14 +275,19 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     if (t.status === 'counted' && t.synonymQuestion) {
       const q = t.synonymQuestion;
       const names = q.candidates.map(k => (countResult?.types ?? []).find(x => x.key === k)?.type ?? k).join(' / ');
+      // Review fix S7 — "the same device" drops only the marks that ARE the
+      // other type's; the rest keep their own count.
+      const keep = Math.max(0, t.count - q.coincident);
       items.push({
         id: `synonym:${t.key}`,
         kind: 'area',
         title: `${title}: the same device as ${names}?`,
-        detail: `${q.coincident} of the ${q.count} ${t.type} marks sit where ${names} marks are. Different devices (keep ${t.count} ${t.type}), or ${t.type} is another name for ${names} (drop the ${t.type} line — ${names} keep their own counts)?`,
-        options: [`Different devices — keep ${t.count}`, `The same device — drop ${t.type}`],
+        detail: q.why
+          ? `${t.type} is a general name for ${names} and ${t.count} ${t.type} ${t.count === 1 ? 'is' : 'are'} drawn, but ${q.why}. Different items (keep ${t.count} ${t.type}), or the same items under a general name (no ${t.type} line — ${names} keep their own counts)?`
+          : `${q.coincident} of the ${q.count} ${t.type} marks sit where ${names} marks are. Different devices (keep ${t.count} ${t.type}), or those ${q.coincident} are ${names} under another name (keep ${keep} ${t.type} — the marks elsewhere)?`,
+        options: [`Different devices — keep ${t.count}`, keep ? `The same device — keep ${keep}` : `The same device — drop ${t.type}`],
         keepQty: t.count,
-        sumQty: 0,
+        sumQty: keep,
         actions: ['answer'],
         ...base,
         fingerprint: `synonym|${q.coincident}|${t.count}`,
@@ -605,6 +610,19 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       actions: ['markers', 'confirm', 'count'],
       reconcileMembers: per.map(p => ({ key: p.k, type: p.t?.type ?? p.k, description: p.t?.description ?? '', unit: 'count' as const, currentQty: p.t?.count ?? 0, headsPerPole: null })),
       fingerprint: `consistency|${per.map(p => `${p.k}:${p.first}/${p.agreed}/${p.suggested}`).join(';')}`,
+    });
+  }
+  // Review fix S3 — a combined tag whose own quantity disagrees with the
+  // members it names: the estimator decides (confirm with a reason, or
+  // correct the member lines).
+  for (const q of ev?.consolidation?.questions ?? []) {
+    items.push({
+      id: `combined:${q.key}`,
+      kind: 'confirm',
+      title: `${q.type}: how many does the combined tag mean?`,
+      detail: `${q.reason}. Each member is counted on its own line now — confirm (with a reason), or correct the member counts.`,
+      actions: ['confirm'],
+      fingerprint: `combined|${q.reason}`,
     });
   }
   // Review fix S8 — a consistency pass that was skipped (cap, failure,
@@ -980,7 +998,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('viewport:')) return 'viewport';
   if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalheads:')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';
-  if (i.id.startsWith('synonym:')) return 'synonym';
+  if (i.id.startsWith('synonym:') || i.id.startsWith('combined:')) return 'synonym';
   if (i.id.startsWith('counting:')) return 'counting';
   if (i.id.startsWith('refsheet:')) return 'refsheets';
   if (i.id.startsWith('sheet:') || i.id.startsWith('file:')) return 'sheets';
@@ -1227,7 +1245,7 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (rec) qty = rec.qty ?? qty;
     // Real-run fix 2 — "the same device under another name": no line.
     const syn = res(`synonym:${t.key}`);
-    if (syn?.action === 'answer' && syn.qty === 0) qty = null;
+    if (syn?.action === 'answer' && syn.qty != null) qty = syn.qty > 0 ? syn.qty : null;
     if (qty !== undefined && (qty === null || qty > 0)) byType.set(t.key, qty);
     if (t.category === 'site_lighting') {
       const heads = res(`count:${t.key}:heads`);

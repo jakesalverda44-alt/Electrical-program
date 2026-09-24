@@ -13,7 +13,7 @@ const live = loadKissimmeeLive();
 const realTargets = () => buildCountTargets(live.agent1).targets;
 
 describe('real-run fix 2 — the real Kissimmee type list', () => {
-  const cons = consolidateTargets(realTargets());
+  const cons = consolidateTargets(realTargets(), { panels: ['A', 'B'] });
   const into = (k: string) => cons.merges.find(m => m.key === k);
 
   it('synonyms fold into one canonical entity, each with its evidence', () => {
@@ -24,10 +24,8 @@ describe('real-run fix 2 — the real Kissimmee type list', () => {
       LCP: ['synonym', 'ALC PANEL'],
       'LIGHTING CONTACTOR ENCLOSURE': ['synonym', 'ALC PANEL'],
       PYLON: ['synonym', 'PYLON SIGN'],
-      SIGN: ['restates', 'FRONT WALL SIGN + SIDE WALL SIGN + PYLON SIGN'],
       'SIGN-JB': ['combined', 'FRONT WALL SIGN + SIDE WALL SIGN'],
-      'POWER POLES': ['synonym', 'P'],
-      PP: ['synonym', 'P'],
+      PP: ['class', 'PP#1 + PP#2 + PP#3 + PP#4 + PP#5 + PP#6'],
       'POWER POLE TAG 1-6': ['tag_legend', 'PP#1 + PP#2 + PP#3 + PP#4 + PP#5 + PP#6'],
       DUPLEX: ['synonym', 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE'],
       EWH: ['synonym', 'WH'],
@@ -36,6 +34,7 @@ describe('real-run fix 2 — the real Kissimmee type list', () => {
     expect(into('PYLON')!.basis).toContain('the same circuit A18');
     expect(into('SIGN-JB')!.basis).toContain('FRONT WALL SIGN (A6) + SIDE WALL SIGN (A14, A16)');
     expect(into('EWH')!.basis).toContain('water heater');
+    expect(into('LCP')!.basis).toBe('another name for ALC PANEL — LCP abbreviates "lighting control panel" on the same circuit B25');
     // Every alias is still on the list (never dropped), pointing at its entity.
     for (const m of cons.merges) expect(cons.targets.find(t => t.key === m.key)!.mergedInto).toEqual(m.into);
     // The pole-tag legend is a host marker (its marks are the poles).
@@ -54,8 +53,12 @@ describe('real-run fix 2 — the real Kissimmee type list', () => {
     // M2?), T "Thermostat" (T-1/T-2), P "Power poles" (PP#1-#6) — are
     // uncertain: counted, then folded when none is drawn, asked about when
     // drawn on a member's marks, kept when drawn elsewhere.
+    // Review fix B2 / N4 — generic names are never folded blind: SIGN (a
+    // word of three sign tags) and POWER POLES (it only abbreviates to PP)
+    // are counted and decided by their marks too.
     expect(cons.uncertain.map(u => [u.key, u.candidates.join(' + ')])).toEqual([
-      ['T', 'T-1/T-2'], ['P', 'PP#1 + PP#2 + PP#3 + PP#4 + PP#5 + PP#6'], ['MOTION SENSOR', 'M1 + M2'],
+      ['T', 'T-1/T-2'], ['POWER POLES', 'PP#1 + PP#2 + PP#3 + PP#4 + PP#5 + PP#6'], ['MOTION SENSOR', 'M1 + M2'],
+      ['P', 'PP#1 + PP#2 + PP#3 + PP#4 + PP#5 + PP#6'], ['SIGN', 'FRONT WALL SIGN + SIDE WALL SIGN + PYLON SIGN'],
     ]);
   });
 
@@ -71,14 +74,14 @@ describe('real-run fix 2 — the real Kissimmee type list', () => {
     expect([live0.has('ALC PANEL'), live0.has('WH'), live0.has('PYLON SIGN'), live0.has('FRONT WALL SIGN')]).toEqual([false, false, false, false]);
   });
 
-  it('the live run\'s 24 blocking zero-count items: 9 were another name (8 folded now, T after the count), 5 had rows a synonym made ambiguous (now owned)', () => {
+  it('the live run\'s 24 blocking zero-count items: 9 were another name (7 folded now, T and POWER POLES after the count), 5 had rows a synonym made ambiguous (now owned)', () => {
     const zeroKeys = liveBlocking(live).filter(i => i.id.startsWith('count:') && i.group === 'zero').map(i => i.typeKey!);
     expect(zeroKeys.length).toBe(24);
     const folded = zeroKeys.filter(k => cons.merges.some(m => m.key === k)).sort();
-    expect(folded).toEqual(['ALC', 'EF', 'LCP', 'POWER POLES', 'PP', 'PYLON', 'RTU', 'SIGN-JB']);
-    // T (the legend's thermostat symbol) is uncertain: none drawn -> folded
-    // after the count (resolveUncertainSynonyms), never its own zero item.
-    expect(cons.uncertain.some(u => u.key === 'T')).toBe(true);
+    expect(folded).toEqual(['ALC', 'EF', 'LCP', 'PP', 'PYLON', 'RTU', 'SIGN-JB']);
+    // T and POWER POLES are uncertain: none drawn -> folded after the count
+    // (resolveUncertainSynonyms), never their own zero item.
+    expect(cons.uncertain.filter(u => ['T', 'POWER POLES'].includes(u.key)).length).toBe(2);
     const sc = scheduleCounts(cons.targets, live.countResult.evidence.tables);
     const owned = zeroKeys.filter(k => sc.has(k)).sort();
     expect(owned).toEqual(['ALC PANEL', 'FRONT WALL SIGN', 'PYLON SIGN', 'SIDE WALL SIGN', 'WH']);
@@ -133,10 +136,11 @@ describe('real-run fix 2 — tags and the uncertain generic symbol', () => {
     const cr = { version: 2, ran: true, model: 'm', targets: [], targetNotes: [], sheets: [], skippedSheets: [], types, loadCheck: null, removedRows: [], flags: [], marks: [], evidence: { tables: [], expansions: [], families: [], typicals: [] } } as unknown as CountResult;
     const items = buildReviewItems(cr);
     const q = items.find(i => i.id === 'synonym:OCCUPANCY SENSOR')!;
-    expect(q).toMatchObject({ kind: 'area', options: ['Different devices — keep 2', 'The same device — drop Occupancy sensor'] });
+    // Review fix S7 — "the same device" drops only the ONE coinciding mark.
+    expect(q).toMatchObject({ kind: 'area', options: ['Different devices — keep 2', 'The same device — keep 1'] });
     expect(reviewItemIsOpen(q)).toBe(true);
-    const same = enforcedCounts(cr, [{ ...q, resolution: { action: 'answer', answer: q.options![1], qty: 0, by: 'x', at: 'y' } }]);
-    expect(same.byType.get('OCCUPANCY SENSOR')).toBeNull();
+    const same = enforcedCounts(cr, [{ ...q, resolution: { action: 'answer', answer: q.options![1], qty: q.sumQty, by: 'x', at: 'y' } }]);
+    expect(same.byType.get('OCCUPANCY SENSOR')).toBe(1);
     expect(same.byType.get('OS1')).toBe(2);
   });
 });

@@ -27,7 +27,7 @@ import { dedupePanels, isCompletePanel, panelChoices, panelNameOf, scheduleCount
 import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewports';
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
 import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillStage, sha256Of, type GapFillSheetAsset } from './evidence/gapFillStage';
-import { bindHostTagMarks, canonicalKey, consolidateTargets, resolveUncertainSynonyms, type Consolidation, type ConsolidationMerge, type UncertainSynonym } from './evidence/consolidate';
+import { bindHostTagMarks, canonicalKey, consolidateTargets, resolveUncertainSynonyms, type Consolidation, type ConsolidationMerge, type ConsolidationQuestion, type UncertainSynonym } from './evidence/consolidate';
 
 export const COUNT_RESULT_VERSION = 2;
 
@@ -96,7 +96,7 @@ export interface CountResultEvidence {
   /** Real-run fix 2 — one canonical entity per thing: every other name of
    *  it (synonyms, a class name, a combined tag, a pole-tag legend) with the
    *  evidence, and the generic legend symbols decided by their marks. */
-  consolidation?: { merges: ConsolidationMerge[]; uncertain: UncertainSynonym[]; hostBindings?: Array<{ tag: string; member: string; circuit: string; sheetKey: string }> };
+  consolidation?: { merges: ConsolidationMerge[]; uncertain: UncertainSynonym[]; hostBindings?: Array<{ tag: string; member: string; circuit: string; sheetKey: string }>; questions?: ConsolidationQuestion[] };
   /** Panel-schedule viewports the viewport reader identified whose table
    *  could not be read completely — their branch circuits have no source
    *  (3.4: Agent 1 no longer states them). */
@@ -292,7 +292,7 @@ function finish(
   // Real-run fix 3 — a pole-tag legend's marks are its members' (bound by
   // the circuit tag each mark carries), BEFORE any viewport / sheet rule, so
   // an enlarged plan's pole #2 is compared with the main plan's pole #2.
-  const hostBindings = evidence ? bindHostTagMarks(targets, sheetResults, scheduleCircuitsOf(evidence.schedCounts)) : [];
+  const hostBindings = evidence ? bindHostTagMarks(targets, sheetResults, scheduleCircuitsOf(evidence.schedCounts), panelNamesOf(input.agent1)) : [];
   const equipmentKeys = new Set(targets.filter(t => t.category === 'equipment').map(t => t.key));
   const mergeInputs: SheetCountInput[] = sheetResults.map(r => {
     const page = vpBy.get(r.sheet.key);
@@ -349,7 +349,7 @@ function finish(
     : []);
   // Real-run fix 2 — generic legend symbols: folded when zero, a question
   // when their marks sit on a candidate's, a different device otherwise.
-  if (evidence?.cons?.uncertain.length) resolveUncertainSynonyms(merged.types, evidence.cons.uncertain, marks);
+  if (evidence?.cons?.uncertain.length) resolveUncertainSynonyms(merged.types, evidence.cons.uncertain, marks, undefined, { scheduleOwned: new Set(evidence.schedCounts.keys()) });
   const classified = new Set(input.inventory.map(p => p.file));
   const unclassifiedFiles = input.inventory.length ? [...input.pdfs.keys()].filter(f => !classified.has(f)) : [];
   const countResult: CountResult = {
@@ -391,7 +391,7 @@ function finish(
         panelsExpected: Array.isArray(input.agent1.panels) ? input.agent1.panels.length : 0,
         // Fix round 4 / S20 — what each answer to a panel conflict changes.
         panelChoices: panelChoices(targets, evidence.ev.tables),
-        ...(evidence.cons ? { consolidation: { merges: evidence.cons.merges, uncertain: evidence.cons.uncertain, hostBindings } } : {}),
+        ...(evidence.cons ? { consolidation: { merges: evidence.cons.merges, uncertain: evidence.cons.uncertain, hostBindings, questions: evidence.cons.questions } } : {}),
         ...(sheetResults.some(r => r.consistency?.length) || evidence.consistencyRun?.warnings.length ? { consistency: {
           entries: sheetResults.flatMap(r => r.consistency ?? []),
           // Review fix S8 — a suggestion obeys the viewport rules: only on a

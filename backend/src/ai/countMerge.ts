@@ -135,7 +135,7 @@ export interface TypeCountResult {
   aliases?: Array<{ key: string; type: string; kind: string; basis: string }>;
   /** Real-run fix 2 — a generic legend symbol whose marks sit on another
    *  entity's marks: the same device under two names? (blocking). */
-  synonymQuestion?: { candidates: string[]; coincident: number; count: number };
+  synonymQuestion?: { candidates: string[]; coincident: number; count: number; why?: string };
 }
 
 export interface LoadCheck {

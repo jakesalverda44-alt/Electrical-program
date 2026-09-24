@@ -55,7 +55,10 @@ export interface CountTarget {
    *  never counted, never a line or a zero item of its own; kept on the
    *  list (status 'merged') with the reason, as evidence. */
   mergedInto?: string[];
-  mergeKind?: 'synonym' | 'class' | 'combined' | 'restates' | 'tag_legend';
+  mergeKind?: 'synonym' | 'class' | 'combined' | 'tag_legend';
+  /** Review fix B2 — a GENERIC name that could be any of these entities:
+   *  counted on its own and decided by its marks; never owns a schedule row. */
+  uncertainOf?: string[];
   mergeReason?: string;
   /** Real-run fix 2 — on a canonical entity: the keys of its other names. */
   aliases?: string[];

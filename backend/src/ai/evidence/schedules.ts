@@ -19,6 +19,7 @@ import { parseAIJSON } from '../json';
 import { normalizeTypeKey, type CountTarget } from '../countTargets';
 import type { RectIn, TextRun } from './viewports';
 import { areaOf } from '../countSheets';
+import { tagInfoOf } from './tags';
 
 export type TableKind = 'panel' | 'fixture' | 'equipment' | 'load' | 'other';
 
@@ -495,11 +496,16 @@ export function circuitRefs(s: string): Array<{ panel: string; circuit: number }
   const out: Array<{ panel: string; circuit: number }> = [];
   // Real-run fix 2 — "ckt A-6, 1,220VA" is circuit A-6 (never A-1 and
   // A-220): a continuation number is never the head of a thousands group.
-  const re = /\b([A-Z]{1,3})\s*-\s*(\d{1,3}(?:\s*[,/&]\s*\d{1,3}(?![0-9#]|,\d{3}))*)\b/g;
+  // Review fix S5 — a continuation number is a circuit only when a unit or
+  // count word does not follow it ("A-6, 180 VA" is A-6; "A-1, 3 phase"
+  // and "A-12, 3 fixtures" are A-1 / A-12); no circuit is over 84.
+  const UNIT = String.raw`\s*(?:VA|KVA|W|KW|WATTS?|PHASE|PH|FIXTURES?|AMPS?|A|HP|V|VOLTS?|LAMPS?|HEADS?|RECEPTACLES?|OUTLETS?|UNITS?|EA|POLES?|WIRES?)\b|\s*#`;
+  const re = new RegExp(String.raw`\b([A-Z]{1,3})\s*-\s*(\d{1,3}(?:\s*[,/&]\s*\d{1,3}(?![0-9#]|,\d{3}|${UNIT}))*)\b`, 'g');
   let m: RegExpExecArray | null;
-  while ((m = re.exec(s.toUpperCase()))) {
+  const up = s.toUpperCase();
+  while ((m = re.exec(up))) {
     if (/^(RTU|EF|CF|AHU|WH|DF|MB|NEMA|UL|IES|MH|HP|TYPE)$/.test(m[1])) continue;
-    for (const n of m[2].split(/[,/&]/).map(x => Number(x.trim()))) if (Number.isInteger(n) && n > 0) out.push({ panel: m[1], circuit: n });
+    for (const n of m[2].split(/[,/&]/).map(x => Number(x.trim()))) if (Number.isInteger(n) && n > 0 && n <= 84) out.push({ panel: m[1], circuit: n });
   }
   return out;
 }
@@ -563,8 +569,9 @@ export function scheduleCounts(targets: CountTarget[], tablesIn: ScheduleTable[]
   const otherRows = tables.filter(t => t.kind === 'equipment' || t.kind === 'load').flatMap(t => t.rows.map(r => ({ r, t })));
   // Real-run fix 2 — another name of an entity never owns (or blocks) a
   // row: its canonical target does.
-  const cands = targets.filter(t => t.source === 'equipment_schedule' && t.role !== 'host' && !t.mergedInto?.length);
-  const equipment = targets.filter(t => (t.category === 'equipment' || t.source === 'equipment_schedule') && t.role !== 'host' && !t.mergedInto?.length);
+  // Review fix B2 — a generic name (uncertainOf) never owns or blocks a row.
+  const cands = targets.filter(t => t.source === 'equipment_schedule' && t.role !== 'host' && !t.mergedInto?.length && !t.uncertainOf?.length);
+  const equipment = targets.filter(t => (t.category === 'equipment' || t.source === 'equipment_schedule') && t.role !== 'host' && !t.mergedInto?.length && !t.uncertainOf?.length);
   const ev = new Map<string, ScheduleEvidenceRow[]>();
   const push = (k: string, e: ScheduleEvidenceRow) => ev.set(k, [...(ev.get(k) ?? []), e]);
   // Real-run fix 3 — rows a target owns ONLY because its own description
@@ -616,9 +623,11 @@ export function scheduleCounts(targets: CountTarget[], tablesIn: ScheduleTable[]
     let qty: number;
     let question: ScheduleCount['question'];
     let note = `${rows.length} schedule row${rows.length === 1 ? '' : 's'} (${rows.map(e => `${e.table} ${e.cells.slice(0, 3).filter(Boolean).join(' ')}`).slice(0, 6).join('; ')})`;
+    // Review fix S2 — a combined tag ("RTU-1/RTU-2") is one per member.
+    const members = tagInfoOf(tgt.type).members?.length ?? 0;
     if (!byName.has(tgt.key) && !mults.length) {
-      qty = 1;
-      if (rows.length > 1) note += ` — the circuits its own description cites feed one ${tgt.type}`;
+      qty = Math.max(1, members);
+      if (rows.length > 1) note += members > 1 ? ` — ${tgt.type} names ${members} units` : ` — the circuits its own description cites feed one ${tgt.type}`;
     } else if (!mults.length) {
       qty = rows.length;
     } else if (mults.length === 1 && rows.length <= mults[0]) {

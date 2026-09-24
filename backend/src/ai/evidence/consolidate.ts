@@ -36,8 +36,11 @@
 // review question, and marks elsewhere prove a different device.
 import { isFixtureCategory, normalizeTypeKey, type CountTarget } from '../countTargets';
 import { circuitRefs, normDesc } from './schedules';
+import { tagInfoOf, type TagInfo } from './tags';
 
-export type MergeKind = 'synonym' | 'class' | 'combined' | 'restates' | 'tag_legend';
+export { tagInfoOf } from './tags';
+
+export type MergeKind = 'synonym' | 'class' | 'combined' | 'tag_legend';
 
 export interface ConsolidationMerge {
   key: string;
@@ -61,6 +64,8 @@ export interface Consolidation {
   uncertain: UncertainSynonym[];
   /** alias key -> its ONE canonical key (synonyms only). */
   aliasOf: Map<string, string>;
+  /** Review fix S3 — questions the consolidation cannot settle. */
+  questions: ConsolidationQuestion[];
 }
 
 // ── Tokens ─────────────────────────────────────────────────────────────────
@@ -99,54 +104,40 @@ function containsRun(hay: string[], run: string[]): boolean {
   return false;
 }
 
-interface TagInfo {
-  /** "RTU-1" -> RTU; "PP#4" -> PP; "DISCON A" -> DISCON; "SIGN" -> SIGN. */
-  base: string;
-  /** "1", "4", "A" — null for an un-numbered tag. */
-  num: string | null;
-  /** A combined tag's members, as target keys ("RTU-1/RTU-2"). */
-  members: string[] | null;
-  /** A tag range legend ("POWER POLE TAG 1-6"). */
-  range: [number, number] | null;
-}
-
-export function tagInfoOf(tagRaw: string): TagInfo {
-  const tag = normalizeTypeKey(tagRaw);
-  const combined = /^([A-Z][A-Z ]*?)\s*[-#]?\s*([0-9]+[A-Z]?|[A-Z])\s*\/\s*([A-Z][A-Z ]*?)?\s*[-#]?\s*([0-9]+[A-Z]?|[A-Z])$/.exec(tag);
-  if (combined && (combined[3] === undefined || combined[3].trim() === combined[1].trim())) {
-    const base = combined[1].trim();
-    const sep = /-/.test(tag) ? '-' : /#/.test(tag) ? '#' : /\d/.test(combined[2]) ? '' : ' ';
-    return { base, num: null, members: [`${base}${sep}${combined[2]}`, `${base}${sep}${combined[4]}`].map(normalizeTypeKey), range: null };
-  }
-  const range = /^([A-Z][A-Z #]*?)\s*#?\s*(\d{1,2})\s*-\s*(\d{1,2})$/.exec(tag);
-  if (range && Number(range[3]) > Number(range[2])) return { base: range[1].replace(/#/g, '').trim(), num: null, members: null, range: [Number(range[2]), Number(range[3])] };
-  const numbered = /^([A-Z]{1,8})\s*[-#]?\s*(\d{1,3}[A-Z]?)$/.exec(tag) ?? /^([A-Z]{3,}(?: [A-Z]{3,})*) ([A-Z])$/.exec(tag);
-  if (numbered) return { base: numbered[1].trim(), num: numbered[2], members: null, range: null };
-  return { base: tag, num: null, members: null, range: null };
-}
-
-/** The circuits a description cites, normalized ("ckts B-1,3,5" -> B1 B3
- *  B5) — on a known panel only ("CMR-9" is a sensor model, not circuit 9 of
- *  panel CMR); with no panel list, a 1-2 letter panel name. */
-function circuitsOf(desc: string, panels: Set<string> | null): Set<string> {
-  return new Set(circuitRefs(desc).filter(c => (panels?.size ? panels.has(c.panel) : c.panel.length <= 2)).map(c => `${c.panel}${c.circuit}`));
+/** The circuits a description cites as its OWN (review fix S4: never one it
+ *  "controls", "serves", "feeds" or is "for": "time clock, controls sign
+ *  circuits A-6, A-14" cites none of its own), normalized ("ckts B-1,3,5"
+ *  -> B1 B3 B5) — on a known panel only (review fix S5: without the
+ *  drawing's panel list, nothing is a circuit — "T-1", "SP-1", "CMR-9"). */
+export function circuitsOf(desc: string, panels: Set<string> | null): Set<string> {
+  if (!panels?.size) return new Set();
+  const own = desc.toUpperCase().replace(/\b(?:CONTROLS|CONTROLLING|CONTROLLED|SERVES|SERVING|FEEDS|FEEDING|FOR)\b[^,;()]*/g, ' ');
+  return new Set(circuitRefs(own).filter(c => panels.has(c.panel)).map(c => `${c.panel}${c.circuit}`));
 }
 
 /** Receptacle qualifiers that must agree both ways (the typicals' rule). */
 const QUALS: Array<[RegExp, string]> = [[/\bGFC?I\b/, 'GFCI'], [/\bWP\b|\bWEATHERPROOF\b/, 'WP'], [/\bSIMPLEX\b|\bSINGLE\b/, 'SIMPLEX'],
   [/\bQUAD(?:PLEX)?\b/, 'QUAD'], [/\bHANDY\b|\bPHONE\b|\bSHALLOW\b/, 'HANDY'], [/\bUSB\b/, 'USB'], [/\bISOLATED\b|\bIG\b/, 'IG'], [/\bTWIST\b|\bLOCKING\b/, 'LOCK'], [/\bDEDICATED\b/, 'DED']];
-function qualifiers(s: string): Set<string> {
+export function qualifiers(s: string): Set<string> {
   const t = ` ${s.toUpperCase().replace(/[^A-Z0-9]+/g, ' ')} `;
   return new Set(QUALS.filter(([re]) => re.test(t)).map(([, q]) => q));
 }
 const RECEPT_RE = /\bRECEPT|\bOUTLET|\bDUPLEX\b|\bSIMPLEX\b|\bGFC?I\b|\bQUADPLEX\b/i;
+
+/** Review fix S1 — a plain receptacle (simplex / duplex / floor): the family
+ *  whose marks a second sheet may draw under another class name. Never a
+ *  GFCI, WP, quad, handy-box … type. */
+export function isPlainReceptacle(t: Pick<CountTarget, 'type' | 'description' | 'category'>): boolean {
+  if (t.category !== 'device' || !RECEPT_RE.test(`${t.type} ${t.description}`)) return false;
+  const q = qualifiers(`${t.type} ${t.description}`);
+  return [...q].every(x => x === 'SIMPLEX');
+}
 
 interface Info {
   t: CountTarget;
   idx: number;
   tag: TagInfo;
   circuits: Set<string>;
-  words: string[];
   head: string[];
   expansion: string[] | null;
   recept: boolean;
@@ -155,35 +146,85 @@ interface Info {
 function infoOf(t: CountTarget, idx: number, panels: Set<string> | null): Info {
   const tag = tagInfoOf(t.type);
   return {
-    t, idx, tag, circuits: circuitsOf(t.description, panels), words: sig(`${t.type} ${t.description}`), head: headOf(t.description),
+    t, idx, tag, circuits: circuitsOf(t.description, panels), head: headOf(t.description),
     expansion: tagExpansion(tag.base, t.description), recept: RECEPT_RE.test(`${t.type} ${t.description}`),
   };
 }
 
 const FAMILY = (c: CountTarget['category']) => (c === 'equipment' || c === 'lighting_control' || c === 'device' || c === 'panel_circuit');
 
-/** Priority of the canonical name: an equipment-schedule type whose
- *  description cites its circuits (a schedule row owns its quantity), then
- *  any type citing circuits, then the drawn legend symbol; ties keep the
- *  earlier one. */
+/** Priority of the canonical name: an equipment-schedule type that cites its
+ *  circuits (a schedule row owns its quantity), then any type citing
+ *  circuits, then the drawn legend symbol; ties keep the earlier one. */
 function rank(i: Info): number {
   return (i.circuits.size ? 4 : 0) + (i.circuits.size && i.t.source === 'equipment_schedule' ? 2 : 0) + (i.t.source === 'legend' ? 1 : 0);
 }
 
 const eqSet = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every(x => b.has(x));
 
-/** Does `a`'s identity phrase appear in `b`'s description (a restatement)? */
-function phraseIn(a: Info, b: Info): string | null {
-  const bw = sig(b.t.description);
-  if (a.expansion && containsRun(bw, a.expansion)) return a.expansion.join(' ');
-  if (a.head.length >= 2 && containsRun(bw, a.head)) return a.head.join(' ');
-  if (a.head.length === 1 && b.head.length >= 1 && b.head[0] === a.head[0] && a.head[0].length >= 5) return a.head[0];
+/** Modifiers that never make a different item ("electric water heater" =
+ *  "water heater"); a legend symbol's own trailing mounting words
+ *  ("exhaust fan recessed"). Anything else ("instantaneous", "kitchen",
+ *  "circulating pump") is a different item. */
+const NEUTRAL = new Set(['ELECTRIC', 'ELECTRICAL', 'NEW', 'EXISTING']);
+const MOUNTING = new Set(['RECESSED', 'SURFACE', 'CEILING', 'WALL', 'ROOF', 'MOUNTED', 'BATHROOM', 'RESTROOM', 'TYPICAL', 'PENDANT']);
+const core = (i: Info) => (i.expansion ?? i.head).filter(w => !NEUTRAL.has(w));
+const same = (a: string[], b: string[]) => a.length > 0 && a.length === b.length && a.every((w, k) => w === b[k]);
+
+/** Review fix B2 / S4 — DIRECT evidence that two names are one item:
+ *   * a shared tag: one tag's words are all of the other's leading words
+ *     (PYLON / PYLON SIGN, ALC / ALC PANEL), the two tags expand to the same
+ *     words (EWH / WH -> WATER HEATER), or one tag abbreviates a run of the
+ *     other's description (LCP -> "LIGHTING CONTROL PANEL");
+ *   * the same core words (neutral modifiers aside);
+ *   * a legend symbol restating it: the symbol's core (mounting words
+ *     aside) is a run of the other's description.
+ *  Equal circuits are necessary when both cite circuits, never enough: an
+ *  ice machine and a drink machine on A-6 are two machines. */
+function directEvidence(a: Info, b: Info): string | null {
+  if (!compatible(a, b) || distinctSiblings(a, b)) return null;
+  if (a.circuits.size && b.circuits.size && !eqSet(a.circuits, b.circuits)) return null;
+  const circ = a.circuits.size && b.circuits.size ? ` on the same circuit${a.circuits.size > 1 ? 's' : ''} ${[...a.circuits].join(', ')}` : '';
+  // A numbered member is its own item; only a shared circuit AND a shared
+  // tag could make another name of it.
+  const tagA = normalizeTypeKey(a.t.type).split(/[\s/-]+/), tagB = normalizeTypeKey(b.t.type).split(/[\s/-]+/);
+  const leading = (x: string[], y: string[]) => x.length < y.length && x.every((w, k) => w === y[k]);
+  if ((a.tag.num || b.tag.num) && !(circ && (leading(tagA, tagB) || leading(tagB, tagA)))) return null;
+  if (leading(tagA, tagB) || leading(tagB, tagA)) return `a shared tag (${a.t.type} / ${b.t.type})${circ}`;
+  const nd = (x: string) => normDesc(x).split(' ').filter(w => !NEUTRAL.has(w)).join(' ');
+  if (!a.tag.num && !b.tag.num && a.t.type.length <= 5 && b.t.type.length <= 5 && nd(a.t.type) === nd(b.t.type) && nd(a.t.type) !== normalizeTypeKey(a.t.type)) return `the same tag (${a.t.type} = ${b.t.type} = ${nd(a.t.type).toLowerCase()})${circ}`;
+  // An abbreviation of the OTHER's whole item (its core, a legend's mounting
+  // words aside) — or, when both cite the same circuits, of any run of its
+  // description ("LCP" = the "lighting control panel" on B-25). "EF" is
+  // never "kitchen exhaust fan".
+  const coreOf = (y: Info) => (y.t.source === 'legend' ? core(y).filter(w => !MOUNTING.has(w)) : core(y));
+  const abbrevOf = (x: Info, y: Info): string[] | null => {
+    if (!/^[A-Z]{2,5}$/.test(x.tag.base) || x.tag.num) return null;
+    const run = initialsRun(x.tag.base, y.t.description);
+    if (!run) return null;
+    return circ || same(run.filter(w => !NEUTRAL.has(w)), coreOf(y)) ? run : null;
+  };
+  const ab = abbrevOf(a, b), ba = abbrevOf(b, a);
+  if (ab || ba) return `${ab ? a.t.type : b.t.type} abbreviates "${(ab ?? ba)!.join(' ').toLowerCase()}"${circ}`;
+  if (same(core(a), core(b))) return `the same item — "${core(a).join(' ').toLowerCase()}"${circ}`;
+  const legendIn = (x: Info, y: Info) => {
+    if (x.t.source !== 'legend') return null;
+    const c = core(x).filter(w => !MOUNTING.has(w));
+    return c.length >= 2 && containsRun(sig(y.t.description), c) ? c : null;
+  };
+  const lr = legendIn(a, b) ?? legendIn(b, a);
+  if (lr) return `the legend symbol restates it — "${lr.join(' ').toLowerCase()}"${circ}`;
   return null;
+}
+
+/** The run of a description's words whose initials are the tag. */
+function initialsRun(tagBase: string, desc: string): string[] | null {
+  return tagExpansion(tagBase, desc);
 }
 
 /** Receptacle types match only with the same qualifiers ("DUPLEX" never is
  *  the handy-box or GFCI duplex); a device never matches a non-device
- *  receptacle; slash alternatives ("duplex / floor") are one entity. */
+ *  receptacle. */
 function compatible(a: Info, b: Info): boolean {
   if (!FAMILY(a.t.category) || !FAMILY(b.t.category)) return false;
   if (a.recept !== b.recept) return false;
@@ -194,7 +235,8 @@ function compatible(a: Info, b: Info): boolean {
   return true;
 }
 
-/** Numbered siblings (PP#1 / PP#2, DISCON A / B, M1 / M2) are distinct. */
+/** Numbered siblings (PP#1 / PP#2, DISCON A / B, EF-A / EF-B, M1 / M2) are
+ *  always distinct — even with identical descriptions (review fix B3). */
 function distinctSiblings(a: Info, b: Info): boolean {
   return !!(a.tag.num && b.tag.num && a.tag.base === b.tag.base && a.tag.num !== b.tag.num);
 }
@@ -207,126 +249,186 @@ function sameBase(a: string, b: string): boolean {
   return (a.length >= 2 && /^[A-Z]+$/.test(a) && init(b) === a) || (b.length >= 2 && /^[A-Z]+$/.test(b) && init(a) === b);
 }
 
+/** Review fix S3 — a questionable combined tag or class ("(3) rooftop
+ *  units" listed as RTU-1/RTU-2): one blocking question. */
+export interface ConsolidationQuestion { key: string; type: string; reason: string }
+
 export function consolidateTargets(targetsIn: CountTarget[], opts: { panels?: string[] } = {}): Consolidation {
   const targets = targetsIn.map(t => ({ ...t }));
   const panels = opts.panels?.length ? new Set(opts.panels.map(p => p.toUpperCase().replace(/^PANEL(BOARD)?\s*/, '').replace(/["'\s]/g, ''))) : null;
-  const infos = targets.map((t, i) => infoOf(t, i, panels));
-  const candidates = infos.filter(i => !isFixtureCategory(i.t.category) && i.t.role !== 'host' && FAMILY(i.t.category));
+  let infos = targets.map((t, i) => infoOf(t, i, panels));
   const merges: ConsolidationMerge[] = [];
   const uncertain: UncertainSynonym[] = [];
+  const questions: ConsolidationQuestion[] = [];
   const merged = new Set<string>();
-  const byKey = new Map(infos.map(i => [i.t.key, i]));
+  const byKey = () => new Map(infos.map(i => [i.t.key, i]));
   const mark = (i: Info, into: string[], kind: MergeKind, basis: string) => {
     if (merged.has(i.t.key) || !into.length) return;
     merged.add(i.t.key);
     merges.push({ key: i.t.key, type: i.t.type, description: i.t.description, into, kind, basis });
   };
+  const isCand = (i: Info) => !isFixtureCategory(i.t.category) && i.t.role !== 'host' && FAMILY(i.t.category);
 
-  // 1. Combined tags: "RTU-1/RTU-2" = its members, never a type of its own.
-  for (const i of candidates) {
+  // 1. Combined tags: "RTU-1/RTU-2", "RTU-1/2/3" = their members, never a
+  //    type of their own. Review fix S3 — a member that is not on the list
+  //    is created (so it is counted, or asked about when nothing shows it):
+  //    a combined tag never stacks on the members that are there.
+  for (const i of infos.filter(isCand)) {
     const m = i.tag.members;
     if (!m) continue;
-    const present = m.filter(k => byKey.has(k) && k !== i.t.key);
-    if (present.length === m.length) mark(i, present, 'combined', `the combined tag ${i.t.type} names ${present.join(' + ')} — counted once, on each member`);
+    const keys = byKey();
+    const present = m.filter(k => keys.has(k) && k !== i.t.key);
+    const mult = /\(\s*(\d{1,2})\s*\)/.exec(i.t.description);
+    if (mult && Number(mult[1]) !== m.length) {
+      questions.push({ key: i.t.key, type: i.t.type, reason: `"${i.t.type}" names ${m.length} (${m.join(', ')}) but its description says (${mult[1]})` });
+    }
+    if (!present.length) continue; // none listed on their own: the combined tag is the entity (S2 counts one per member)
+    for (const k of m.filter(x => !present.includes(x))) {
+      const t: CountTarget = {
+        ...i.t, type: k, key: k,
+        description: `${k}: listed with ${i.t.type} — ${i.t.description.replace(/\(\s*\d+\s*\)\s*/g, '').replace(/\b(?:ckts?|circuits?)\b[^;)]*/gi, '').replace(/[,;\s]+$/, '').trim()}`,
+        symbolHint: `equipment tag "${k}"`,
+      };
+      delete t.mergedInto; delete t.aliases;
+      targets.push(t);
+      infos.push(infoOf(t, targets.length - 1, panels));
+    }
+    mark(i, m, 'combined', `the combined tag ${i.t.type} names ${m.join(' + ')} — counted once, on each member${present.length < m.length ? ` (${m.filter(x => !present.includes(x)).join(', ')} not listed on its own — added, to be counted or asked about)` : ''}`);
   }
+  infos = targets.map((t, i) => infoOf(t, i, panels));
+  const candidates = infos.filter(isCand);
+  const keyed = byKey();
 
-  // 2. A circuit set that is exactly the union of other types' circuits:
-  //    those types combined ("Wall sign J-boxes, A-6, A-14, A-16").
+  // 2. A circuit set that is exactly the union of other types' circuits,
+  //    whose words name what each part is (review fix S4: "Wall sign
+  //    J-boxes, A-6, A-14, A-16" = FRONT + SIDE WALL SIGN; a time clock that
+  //    CONTROLS those circuits cites none of its own).
   for (const i of candidates) {
     if (merged.has(i.t.key) || i.circuits.size < 2) continue;
     const parts = candidates.filter(o => o !== i && !merged.has(o.t.key) && o.circuits.size && [...o.circuits].every(c => i.circuits.has(c)) && !eqSet(o.circuits, i.circuits));
     const union = new Set(parts.flatMap(p => [...p.circuits]));
     const disjoint = parts.reduce((s, p) => s + p.circuits.size, 0) === union.size;
-    if (parts.length >= 2 && disjoint && eqSet(union, i.circuits)) {
+    const words = new Set(sig(`${i.t.type} ${i.t.description}`));
+    const named = parts.every(p => { const c = core(p); return c.length > 0 && words.has(c[c.length - 1]); });
+    if (parts.length >= 2 && disjoint && named && eqSet(union, i.circuits)) {
       mark(i, parts.map(p => p.t.key), 'combined', `its circuits ${[...i.circuits].join(', ')} are exactly ${parts.map(p => `${p.t.type} (${[...p.circuits].join(', ')})`).join(' + ')}`);
     }
   }
 
-  // 3. Synonym clusters (union-find): the same circuits, or one's identity
-  //    phrase restating the other's.
-  const parent = new Map<string, string>();
-  const find = (k: string): string => { const p = parent.get(k) ?? k; if (p === k) return k; const r = find(p); parent.set(k, r); return r; };
-  const basisOf = new Map<string, string>();
-  const union = (a: Info, b: Info, why: string) => {
-    const ra = find(a.t.key), rb = find(b.t.key);
-    if (ra === rb) return;
-    parent.set(ra, rb);
-    basisOf.set(`${a.t.key}|${b.t.key}`, why);
-  };
-  const open = () => candidates.filter(i => !merged.has(i.t.key) && !i.tag.range && !i.tag.members);
-  const live = open();
+  // 3. Direct pairwise evidence only (review fix B2). Specific items (those
+  //    citing their own circuits) merge only with direct evidence between
+  //    them. A name with no circuits of its own that directly matches ONE
+  //    entity is another name of it; one that matches two or more distinct
+  //    entities is GENERIC — never a bridge between them — and is decided
+  //    by its marks (uncertain) instead.
+  const live = candidates.filter(i => !merged.has(i.t.key) && !i.tag.range && !i.tag.members);
+  const edge = new Map<string, Map<string, string>>();
+  for (const i of live) edge.set(i.t.key, new Map());
   for (let x = 0; x < live.length; x++) {
     for (let y = x + 1; y < live.length; y++) {
-      const a = live[x], b = live[y];
-      if (distinctSiblings(a, b) || !compatible(a, b)) continue;
-      if (a.circuits.size && eqSet(a.circuits, b.circuits)) { union(a, b, `the same circuit${a.circuits.size > 1 ? 's' : ''} ${[...a.circuits].join(', ')}`); continue; }
-      // A numbered member is never a synonym of another name by words alone.
-      if (a.tag.num || b.tag.num) continue;
-      // Two types that each cite DIFFERENT circuits are different loads.
-      if (a.circuits.size && b.circuits.size) continue;
-      const pa = phraseIn(a, b), pb = phraseIn(b, a);
-      if (pa || pb) union(a, b, `the same item — "${(pa ?? pb)!.toLowerCase()}"`);
+      const why = directEvidence(live[x], live[y]);
+      if (!why) continue;
+      edge.get(live[x].t.key)!.set(live[y].t.key, why);
+      edge.get(live[y].t.key)!.set(live[x].t.key, why);
     }
   }
-  // A cluster member whose phrase ALSO restates an entity outside its
-  // cluster is ambiguous: take it out (it is handled as generic below).
-  const clusters = new Map<string, Info[]>();
-  for (const i of live) { const r = find(i.t.key); clusters.set(r, [...(clusters.get(r) ?? []), i]); }
-  for (const members of clusters.values()) {
-    if (members.length < 2) continue;
-    const canon = members.slice().sort((p, q) => rank(q) - rank(p) || p.idx - q.idx)[0];
-    for (const m of members) {
+  const adj = (a: string, b: string) => edge.get(a)?.has(b) ?? false;
+  // Entities: specific items grouped by direct evidence, as cliques only.
+  const entityOf = new Map<string, string>();
+  const specific = live.filter(i => i.circuits.size).sort((p, q) => rank(q) - rank(p) || p.idx - q.idx);
+  for (const i of specific) {
+    if (entityOf.has(i.t.key)) continue;
+    const group = [i];
+    for (const o of specific) if (!entityOf.has(o.t.key) && o !== i && group.every(g => adj(g.t.key, o.t.key))) group.push(o);
+    for (const g of group) entityOf.set(g.t.key, i.t.key);
+  }
+  // Names without circuits: which entities / other plain names they match.
+  const plain = live.filter(i => !i.circuits.size);
+  const generic = new Set<string>();
+  for (const i of plain) {
+    const ents = new Set([...edge.get(i.t.key)!.keys()].filter(k => entityOf.has(k)).map(k => entityOf.get(k)!));
+    if (ents.size >= 2) generic.add(i.t.key);
+  }
+  // Plain names that bridge two plain names which do not match each other
+  // are generic too ("Wall sign" between FRONT and SIDE wall sign).
+  for (const i of plain) {
+    if (generic.has(i.t.key)) continue;
+    const nb = [...edge.get(i.t.key)!.keys()].filter(k => !generic.has(k));
+    const distinct = nb.some((a, k) => nb.slice(k + 1).some(b => !adj(a, b) && (entityOf.get(a) ?? a) !== (entityOf.get(b) ?? b)));
+    if (distinct) generic.add(i.t.key);
+  }
+  for (const i of plain) {
+    if (generic.has(i.t.key)) continue;
+    const ents = new Set([...edge.get(i.t.key)!.keys()].filter(k => entityOf.has(k)).map(k => entityOf.get(k)!));
+    if (ents.size === 1) entityOf.set(i.t.key, [...ents][0]);
+  }
+  // Plain names matching only other plain names: cliques.
+  const rest = plain.filter(i => !generic.has(i.t.key) && !entityOf.has(i.t.key)).sort((p, q) => rank(q) - rank(p) || p.idx - q.idx);
+  for (const i of rest) {
+    if (entityOf.has(i.t.key)) continue;
+    const group = [i];
+    for (const o of rest) if (!entityOf.has(o.t.key) && o !== i && group.every(g => adj(g.t.key, o.t.key))) group.push(o);
+    for (const g of group) entityOf.set(g.t.key, i.t.key);
+  }
+  // Fold every member of an entity into its canonical (the best-ranked).
+  const members = new Map<string, Info[]>();
+  for (const i of live) { const e = entityOf.get(i.t.key); if (e) members.set(e, [...(members.get(e) ?? []), i]); }
+  for (const group of members.values()) {
+    if (group.length < 2) continue;
+    const canon = group.slice().sort((p, q) => rank(q) - rank(p) || p.idx - q.idx)[0];
+    for (const m of group) {
       if (m === canon) continue;
-      const why = [...basisOf.entries()].filter(([k]) => k.split('|').includes(m.t.key)).map(([, v]) => v)[0] ?? 'the same item';
+      const why = edge.get(m.t.key)!.get(canon.t.key) ?? [...edge.get(m.t.key)!.entries()].find(([k]) => entityOf.get(k) === entityOf.get(canon.t.key))?.[1] ?? 'the same item';
       mark(m, [canon.t.key], 'synonym', `another name for ${canon.t.type} — ${why}`);
     }
   }
 
   // 4. Classes: an un-numbered name that is a numbered family's base (RTU,
-  //    PP, "POWER POLES", P "power poles") — or a combined tag's base whose
-  //    members are not listed (T = "T-1/T-2") — is that family.
+  //    PP) — or a combined tag's base whose members are not listed (T =
+  //    "T-1/T-2") — is that family. Review fix N4 — only the SAME tag
+  //    letters fold without a count; a drawn legend symbol, or a name that
+  //    only abbreviates to the family ("DISCONNECT" / DS-n), is counted and
+  //    decided by its marks (it may stand for items the family doesn't list).
   const families = new Map<string, Info[]>();
   for (const i of candidates) {
     if (merged.has(i.t.key)) continue;
-    if (i.tag.num) families.set(i.tag.base, [...(families.get(i.tag.base) ?? []), i]);
-    else if (i.tag.members) families.set(i.tag.base, [...(families.get(i.tag.base) ?? []), i]);
+    if (i.tag.num || i.tag.members) families.set(i.tag.base, [...(families.get(i.tag.base) ?? []), i]);
   }
   for (const i of candidates) {
-    if (merged.has(i.t.key) || i.tag.num || i.tag.members) continue;
+    if (merged.has(i.t.key) || i.tag.num || i.tag.members || generic.has(i.t.key)) continue;
     for (const [base, fam] of families) {
-      // The same tag letters, or the name's / head phrase's initials are
-      // the family's letters ("POWER POLES" and P "Power poles" -> PP).
       const headInit = i.head.length >= 2 ? i.head.map(w => w[0]).join('') : '';
-      const baseHit = i.tag.base === base || (i.tag.range ? sameBase(i.tag.base.replace(/\bTAG\b/g, '').trim(), base) : false)
+      const exact = i.tag.base === base;
+      const baseHit = exact || (i.tag.range ? sameBase(i.tag.base.replace(/\bTAG\b/g, '').trim(), base) : false)
         || (!i.tag.range && base.length >= 2 && (sameBase(normDesc(i.t.type), base) || headInit === base));
       if (!baseHit) continue;
       if (i.circuits.size) continue; // a specific load, not the class
-      const members = fam.filter(f => !merged.has(f.t.key));
-      if (!members.length) continue;
+      const fm = fam.filter(f => !merged.has(f.t.key));
+      if (!fm.length) continue;
       if (i.tag.range) {
         const [lo, hi] = i.tag.range;
-        const inRange = members.filter(m => m.tag.num && Number(m.tag.num) >= lo && Number(m.tag.num) <= hi);
+        const inRange = fm.filter(m => m.tag.num && Number(m.tag.num) >= lo && Number(m.tag.num) <= hi);
         if (!inRange.length) continue;
         mark(i, inRange.map(m => m.t.key), 'tag_legend', `the legend's tag marker for ${inRange.map(m => m.t.type).join(', ')} — each mark is one of them (bound by its circuit)`);
         targets[i.idx].role = 'host';
         break;
       }
-      const into = members.map(m => m.t.key);
-      // A drawn legend symbol of the class is counted and decided by its
-      // marks (it may be drawn where no member tag is): never folded blind.
-      if (i.t.source === 'legend') {
-        uncertain.push({ key: i.t.key, type: i.t.type, candidates: into, basis: `"${i.t.type}" is the general symbol for ${members.map(m => m.t.type).join(', ')}` });
+      const into = fm.map(m => m.t.key);
+      if (i.t.source === 'legend' || !exact) {
+        uncertain.push({ key: i.t.key, type: i.t.type, candidates: into, basis: `"${i.t.type}" is the general ${i.t.source === 'legend' ? 'symbol' : 'name'} for ${fm.map(m => m.t.type).join(', ')}` });
+        generic.add(i.t.key);
         break;
       }
-      mark(i, into, 'class', `the general name for ${members.map(m => m.t.type).join(', ')} — they are counted one by one`);
+      mark(i, into, 'class', `the general name for ${fm.map(m => m.t.type).join(', ')} — they are counted one by one`);
       break;
     }
   }
 
-  // 5. Generic names that restate two or more entities: a notes / schedule
-  //    restatement ("SIGN — pylon and wall signs by vendor") folds; a drawn
-  //    legend symbol ("Motion sensor" vs M1 / M2) is counted and decided
-  //    by its marks (resolveUncertainSynonyms).
+  // 5. Generic names (step 3's, and a tag word shared by two or more other
+  //    tags: "SIGN" in FRONT WALL SIGN / SIDE WALL SIGN / PYLON SIGN) are
+  //    UNCERTAIN: counted on their own, folded when none is drawn, a
+  //    question when drawn where a candidate is (or when the candidates are
+  //    owned by the schedules), never folded blind and never a bridge.
   const canonicalOf = (k: string) => {
     const m = merges.find(x => x.key === k);
     return m && m.kind === 'synonym' ? m.into[0] : k;
@@ -336,22 +438,28 @@ export function consolidateTargets(targetsIn: CountTarget[], opts: { panels?: st
     const token = i.tag.base.split(' ').length === 1 && i.tag.base.length >= 3 ? i.tag.base : null;
     const hits = new Set<string>();
     for (const o of candidates) {
-      if (o === i || !compatible(i, o) || merged.has(o.t.key) && merges.find(x => x.key === o.t.key)?.kind !== 'synonym') continue;
+      if (o === i || !compatible(i, o) || merges.find(x => x.key === o.t.key)?.kind === 'tag_legend') continue;
       const tokenHit = token && token !== o.tag.base && new RegExp(`(^| )${token}( |$)`).test(normalizeTypeKey(o.t.type).replace(/[^A-Z0-9 ]/g, ' '));
-      const phraseHit = (i.head.length >= 2 && containsRun(sig(o.t.description), i.head)) || (i.expansion && containsRun(sig(o.t.description), i.expansion));
-      if (tokenHit || phraseHit) hits.add(canonicalOf(o.t.key));
+      // A general phrase restating numbered members too ("Motion sensor" vs
+      // M1 "Motion sensor CMR-9" and M2 "Motion sensor LSXR").
+      const phraseHit = i.head.length >= 2 && containsRun(sig(o.t.description), i.head);
+      if (!tokenHit && !phraseHit && !edge.get(i.t.key)?.has(o.t.key)) continue;
+      // Another generic name is no entity to count against; a class or
+      // combined name stands for its members.
+      if (generic.has(o.t.key) || uncertain.some(x => x.key === o.t.key)) continue;
+      const via = merges.find(x => x.key === o.t.key);
+      for (const k of via && via.kind !== 'synonym' ? via.into : [canonicalOf(o.t.key)]) hits.add(k);
     }
     hits.delete(i.t.key);
-    if (hits.size < 2) continue;
+    if (hits.size < 2 && !generic.has(i.t.key)) continue;
     const into = [...hits];
-    const names = into.map(k => byKey.get(k)?.t.type ?? k).join(', ');
-    if (i.t.source === 'legend') uncertain.push({ key: i.t.key, type: i.t.type, candidates: into, basis: `"${i.t.type}" could be any of ${names}` });
-    else mark(i, into, 'restates', `restates ${names} together — each is its own line`);
+    if (!into.length) continue;
+    const names = into.map(k => keyed.get(k)?.t.type ?? k).join(', ');
+    uncertain.push({ key: i.t.key, type: i.t.type, candidates: into, basis: `"${i.t.type}" could be any of ${names}` });
   }
 
-  // A synonym whose canonical name turned out to be a class / combined /
-  // restating name itself ("POWER POLES" = P = the PP#n family) points at
-  // what that name stands for.
+  // A synonym whose canonical name turned out to be a class / combined name
+  // itself points at what that name stands for.
   for (let pass = 0; pass < 3; pass++) {
     for (const m of merges) {
       if (!m.into.some(k => merges.some(x => x.key === k))) continue;
@@ -362,22 +470,23 @@ export function consolidateTargets(targetsIn: CountTarget[], opts: { panels?: st
     }
   }
 
-  // Apply: aliases point at their canonical entities; a canonical entity
-  // names its aliases for the counter and inherits a trade assignment an
-  // alias states (the canonical says nothing).
+  // Apply.
+  const idx = new Map(targets.map((t, k) => [t.key, k]));
   const aliasOf = new Map<string, string>();
   for (const m of merges) {
-    const t = targets[byKey.get(m.key)!.idx];
+    const t = targets[idx.get(m.key)!];
     t.mergedInto = m.into;
     t.mergeKind = m.kind;
     t.mergeReason = m.basis;
     if (m.kind === 'synonym') aliasOf.set(m.key, m.into[0]);
   }
+  for (const u of uncertain) targets[idx.get(u.key)!].uncertainOf = u.candidates;
   for (const m of merges) {
     if (m.kind !== 'synonym' && m.kind !== 'combined' && m.kind !== 'class') continue;
-    const alias = targets[byKey.get(m.key)!.idx];
+    const alias = targets[idx.get(m.key)!];
     for (const k of m.into) {
-      const c = targets[byKey.get(k)!.idx];
+      const c = targets[idx.get(k)!];
+      if (!c) continue;
       c.aliases = [...(c.aliases ?? []), alias.key];
       if (m.kind === 'synonym') {
         c.symbolHint = `${c.symbolHint}${c.symbolHint ? '; ' : ''}also listed as ${alias.type}${alias.description && alias.description !== alias.type ? ` ("${alias.description.slice(0, 60)}")` : ''}`;
@@ -385,7 +494,7 @@ export function consolidateTargets(targetsIn: CountTarget[], opts: { panels?: st
       }
     }
   }
-  return { targets, merges, uncertain, aliasOf };
+  return { targets, merges, uncertain, aliasOf, questions };
 }
 
 /** The live counting / merge inputs name aliases by their own key (a
@@ -399,11 +508,12 @@ export function canonicalKey(key: string, aliasOf: Map<string, string> | undefin
  *  zero folds into its candidates (a restatement, never its own item); one
  *  whose marks sit where a candidate's marks are asks ONE question; one
  *  whose marks are elsewhere is a different device (kept, noted). */
-export function resolveUncertainSynonyms<T extends { key: string; type: string; status: string; count: number; flags: string[]; reason: string; mergedInto?: string; synonymQuestion?: { candidates: string[]; coincident: number; count: number } }>(
+export function resolveUncertainSynonyms<T extends { key: string; type: string; status: string; count: number; flags: string[]; reason: string; mergedInto?: string; synonymQuestion?: { candidates: string[]; coincident: number; count: number; why?: string } }>(
   types: T[],
   uncertain: UncertainSynonym[],
   marks: Array<{ sheetKey: string; typeKey: string; x: number; y: number }>,
   radiusPt = 0.35 * 72,
+  opts: { scheduleOwned?: Set<string> } = {},
 ): void {
   for (const u of uncertain) {
     const t = types.find(x => x.key === u.key);
@@ -418,6 +528,15 @@ export function resolveUncertainSynonyms<T extends { key: string; type: string; 
     if (t.status !== 'counted') continue;
     const mine = marks.filter(m => m.typeKey === u.key);
     const theirs = marks.filter(m => u.candidates.includes(m.typeKey));
+    // Review fix S6 — candidates with no marks to compare (or quantified by
+    // the schedules) can't prove a different device: "P" drawn 6 times while
+    // PP#1-6 come from Panel A rows would stack 6 more poles. Ask.
+    const owned = u.candidates.filter(k => opts.scheduleOwned?.has(k));
+    if (!theirs.length || owned.length) {
+      t.synonymQuestion = { candidates: u.candidates, coincident: t.count, count: t.count, why: owned.length ? `${owned.join(', ')} ${owned.length === 1 ? 'is' : 'are'} counted from the schedules` : 'none of them has marks to compare with' };
+      t.flags.push(`${t.type}: ${u.basis}; ${t.synonymQuestion.why} — the same items under a general name? Needs review.`);
+      continue;
+    }
     const coincident = mine.filter(m => theirs.some(o => o.sheetKey === m.sheetKey && Math.hypot(o.x - m.x, o.y - m.y) <= radiusPt)).length;
     if (coincident) {
       t.synonymQuestion = { candidates: u.candidates, coincident, count: t.count };
@@ -437,6 +556,7 @@ export function bindHostTagMarks(
   targets: CountTarget[],
   sheets: Array<{ status: string; sheet: { key: string }; placed: Array<{ typeKey: string; circuit?: string }> }>,
   scheduleCircuits: Map<string, Set<string>> = new Map(),
+  panelsIn: string[] = [],
 ): Array<{ tag: string; member: string; circuit: string; sheetKey: string }> {
   const out: Array<{ tag: string; member: string; circuit: string; sheetKey: string }> = [];
   const byKey = new Map(targets.map(t => [t.key, t]));
@@ -444,9 +564,13 @@ export function bindHostTagMarks(
     const m = /^([A-Z]{1,2})(.*)$/.exec(c.toUpperCase().replace(/[^A-Z0-9,/&]/g, ''));
     return m ? m[2].split(/[,/&]/).filter(Boolean).map(n => `${m[1]}${Number(n)}`) : [];
   };
+  // The drawing's panels; without a list, the panels the tag marks' own
+  // circuit tags name ("A29" -> A).
+  const panels = new Set(panelsIn.length ? panelsIn.map(p => p.toUpperCase().replace(/^PANEL(BOARD)?\s*/, '').replace(/["'\s]/g, ''))
+    : sheets.flatMap(s => s.placed.map(p => /^([A-Z]{1,2})\d/.exec((p.circuit ?? '').toUpperCase().replace(/[^A-Z0-9]/g, ''))?.[1] ?? '').filter(Boolean)));
   for (const tag of targets.filter(t => t.mergeKind === 'tag_legend' && t.mergedInto?.length)) {
     const members = tag.mergedInto!.map(k => byKey.get(k)).filter((t): t is CountTarget => !!t)
-      .map(t => ({ key: t.key, circuits: new Set([...circuitsOf(t.description, null), ...(scheduleCircuits.get(t.key) ?? [])]) }));
+      .map(t => ({ key: t.key, circuits: new Set([...circuitsOf(t.description, panels), ...(scheduleCircuits.get(t.key) ?? [])]) }));
     for (const s of sheets) {
       if (s.status !== 'counted') continue;
       for (const p of s.placed) {

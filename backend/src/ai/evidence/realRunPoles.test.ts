@@ -13,7 +13,7 @@ import { buildCountTargets } from '../countTargets';
 import { loadKissimmeeLive } from '../../test/fixtures/realrun/kissimmeeLive';
 
 const live = loadKissimmeeLive();
-const cons = consolidateTargets(buildCountTargets(live.agent1).targets);
+const cons = consolidateTargets(buildCountTargets(live.agent1).targets, { panels: ['A', 'B'] });
 const pkg = (id: string) => live.countResult.evidence.typicals.find(t => t.id.endsWith(id))!;
 
 describe('real-run fix 3 — power-pole typicals', () => {
