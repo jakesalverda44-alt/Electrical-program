@@ -27,7 +27,7 @@ describe('real-run fix 1 — references must be sheet numbers of THIS set', () =
     // SGN101 (the sign vendor's foundation drawing) is not a sheet number of
     // this set (E-1, C1.1, PH0.1, A-1.2 …): information only, never dropped.
     expect(items.map(i => [i.id, i.blocking])).toEqual([['refsheet:SGN101', false]]);
-    expect(items[0].title).toBe('Drawing SGN101 named — not a sheet number of this set');
+    expect(items[0].title).toBe("Drawing SGN101 named — a vendor's / third party's drawing");
   });
 
   it('each spec-citation string on its own yields no candidate at all', () => {
@@ -51,5 +51,26 @@ describe('real-run fix 1 — references must be sheet numbers of THIS set', () =
     const items = referencedSheetItems(['E-8 Site Photometrics', 'Spec 16500 Lighting'], { loadedSheetKeys: loaded, checkRefKeys: new Set() }, normalizeSheetId, { pattern });
     expect(items.map(i => [i.id, i.blocking])).toEqual([['refsheet:E8', undefined]]);
     expect(items.filter(reviewItemIsOpen).length).toBe(1);
+  });
+});
+
+describe('review fix S9 — real sheets are never dropped or downgraded', () => {
+  const run = (strings: string[]) => referencedSheetItems(strings, { loadedSheetKeys: loaded, checkRefKeys: new Set() }, normalizeSheetId, { pattern });
+  it('spec words AFTER a real sheet id never drop it', () => {
+    const items = run(['E-9 (Div 16)', 'E-10 Division 26 electrical', 'Sheet E-8 SECTION 2 of plans', 'E-11, E-12 (spec div 16)']);
+    expect(items.map(i => [i.id, i.blocking])).toEqual([
+      ['refsheet:E9', undefined], ['refsheet:E10', undefined], ['refsheet:E8', undefined], ['refsheet:E11', undefined], ['refsheet:E12', undefined],
+    ]);
+  });
+  it('a missing M-101 / P-201 / A-201 / E-101 in a set of 1-digit sheets stays a blocking "missing sheet" (it carries scope)', () => {
+    const items = run(['M-101 Mechanical roof plan', 'P-201 Plumbing', 'A-201 Elevations', 'E-101 Site power', 'E4.1', 'Sheet E 13', 'Refer to sheet E14']);
+    expect(items.map(i => [i.id, i.blocking])).toEqual([
+      ['refsheet:M101', undefined], ['refsheet:P201', undefined], ['refsheet:A201', undefined], ['refsheet:E101', undefined],
+      ['refsheet:E4.1', undefined], ['refsheet:E13', undefined], ['refsheet:E14', undefined],
+    ]);
+  });
+  it('only an explicit vendor / third-party drawing is information; spec sections before the number are still no sheet', () => {
+    expect(run(['SGN101 Sign Vendor Foundation Drawing']).map(i => [i.id, i.blocking])).toEqual([['refsheet:SGN101', false]]);
+    expect(run(['Section 16400 Fused Main Disconnects', 'Div 16', 'Spec Section 01410 Testing'])).toEqual([]);
   });
 });

@@ -1055,12 +1055,18 @@ export function referencedSheetItems(
     for (const cand of sheetIdCandidates(text)) {
       const key = normalize(cand.id);
       if (!key || seen.has(key) || known.loadedSheetKeys.has(key) || known.checkRefKeys.has(key)) continue;
-      // The same rule as the sheet check (B1): a missing id must have the
-      // shape of THIS set's sheet numbers. One that doesn't ("SGN101 Sign
-      // Vendor Foundation Drawing" in a set numbered E-1 / C1.1 / PH0.1) is
-      // a vendor's or another party's drawing: listed for information,
-      // never blocking.
-      const ofThisSet = !opts.pattern || matchesSheetPattern(cand.id, opts.pattern);
+      // Review fix S9 — a known discipline prefix (A, C, E, M, P, S, T …)
+      // is a sheet of this job whatever its digit count (a missing M-101
+      // carries RTU / EF connection scope): a real "needed but missing"
+      // item. Only an unknown prefix that the text names as a vendor's /
+      // third party's drawing ("SGN101 Sign Vendor Foundation Drawing") is
+      // information; any other unknown prefix still has to match this
+      // set's sheet-number pattern to count at all.
+      const prefix = /^[A-Za-z]+/.exec(cand.id)?.[0].toUpperCase() ?? '';
+      const knownPrefix = KNOWN_SHEET_PREFIXES.has(prefix) || !!opts.pattern?.prefixes.has(prefix);
+      const thirdParty = /\b(VENDOR|SIGN|MANUFACTURER|SUPPLIER|FABRICATOR|SHOP\s+DRAWING|BY\s+OTHERS|OWNER'?S?\s+CONSULTANT)\b/i.test(text);
+      const ofThisSet = knownPrefix || !opts.pattern || (!thirdParty && matchesSheetPattern(cand.id, opts.pattern));
+      if (!ofThisSet && !thirdParty) continue;
       seen.add(key);
       out.push(ofThisSet ? {
         id: `refsheet:${key}`,
@@ -1073,8 +1079,8 @@ export function referencedSheetItems(
         id: `refsheet:${key}`,
         kind: 'confirm',
         blocking: false,
-        title: `Drawing ${cand.id.replace(/\s+/g, '')} named — not a sheet number of this set`,
-        detail: `The drawing analysis found a reference to ${text.trim().slice(0, 160)}. "${cand.id}" does not have the shape of this set's sheet numbers (${[...opts.pattern!.prefixes].sort().slice(0, 12).join(', ')}…), so it is read as another party's drawing (a vendor, sign or civil drawing), not a missing sheet of this set. Listed for information — upload it if it carries electrical scope.`,
+        title: `Drawing ${cand.id.replace(/\s+/g, '')} named — a vendor's / third party's drawing`,
+        detail: `The drawing analysis found a reference to ${text.trim().slice(0, 160)}. "${cand.id}" is not a sheet number of this set and the text names it as another party's drawing, so it is listed for information — upload it if it carries electrical scope.`,
         actions: ['confirm'],
         fingerprint: `refsheet-other|${key}`,
       });
@@ -1086,8 +1092,6 @@ export function referencedSheetItems(
 /** A CSI / MasterFormat spec-section number: 5-6 digits ("16050",
  *  "015000") or "xx xx xx" ("26 05 19"), optionally after SECTION / SEC /
  *  SPEC / DIVISION. Never a sheet. */
-const SPEC_SECTION_RE = /\b(?:SPEC(?:IFICATION)?S?|SECTIONS?|SECT?\.?|DIV(?:ISION)?|CSI)\b\.?\s*(?:SECTION\s*)?#?\s*\d/i;
-const SPEC_NUMBER_RE = /(?<![A-Za-z0-9])\d{2}\s\d{2}\s\d{2}(?![0-9])|(?<![A-Za-z0-9.])\d{5,6}(?![0-9])/;
 
 /** Real-run fix 1 — the sheet-id candidates in one "missing sheet" string:
  *  whole tokens only (bounded by a non-letter / non-digit on both sides:
@@ -1105,9 +1109,10 @@ export function sheetIdCandidates(text: string): Array<{ id: string; index: numb
     // A 5-6 digit run is a specification section; "SEC 014" / "ION 164"
     // never reach here (not whole tokens: the digits run on).
     if (digits.length >= 5) continue;
-    // The id is the section word of a spec citation ("SECTION 1", "DIV 16").
-    if (SPEC_SECTION_RE.test(text.slice(m.index, m.index + id.length + 12))) continue;
-    if (SPEC_NUMBER_RE.test(text.slice(m.index, m.index + id.length + 8))) continue;
+    // Review fix S9 — only the text BEFORE / AT the id decides it is a spec
+    // citation ("Section 1", "Div 16"); spec words AFTER a real sheet id
+    // ("E-9 (Div 16)", "Sheet E-8 SECTION 2") never drop the sheet.
+    if (/\b(?:SPEC(?:IFICATION)?S?|SECTIONS?|SECT?|DIV(?:ISION)?|CSI)\.?\s*#?\s*$/i.test(text.slice(Math.max(0, m.index - 16), m.index))) continue;
     // A bare word followed by a space and a number ("Sheet 3", "Sec 3") is
     // only a sheet id when the letters are a real sheet prefix — the
     // pattern check (the caller) decides the rest.
