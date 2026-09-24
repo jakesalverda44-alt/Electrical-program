@@ -76,9 +76,14 @@ export function plausiblySameText(a: string, b: string): boolean {
   const y = features(b);
   const sizeConflict = x.sizes.size > 0 && y.sizes.size > 0 && ![...x.sizes].some(s => y.sizes.has(s));
   if (sizeConflict) return false;
+  // A specific kind on one side only is a different item: a GFCI is not a
+  // plain duplex (the re-run review's own repro), an exit is not a strip.
+  if (SPECIFIC_GROUPS.some(g => x.groups.has(g) !== y.groups.has(g))) return false;
   if ([...x.groups].some(g => y.groups.has(g))) return true;
   return [...x.words].filter(w => y.words.has(w)).length >= 2;
 }
+
+const SPECIFIC_GROUPS = ['GFCI', 'EMERGENCY', 'SENSOR', 'PHOTOCELL'];
 
 /** Does a free-text line plausibly describe the counted type? The type's
  *  schedule description and symbol keywords, not its tag: the same kind of

@@ -28,6 +28,8 @@ describe('laborDuplicatePairs (pure)', () => {
       { ...fresh, category: 'Interior Lighting', description: "4' LED strip" },
     ])).toEqual([]);
     expect(laborDuplicatePairs([{ ...kept, dup_ok: { with: ['n1'], reason: 'Different rooms — both are real' } }, fresh])).toEqual([]);
+    // The re-run review's repro: a GFCI is not the kept plain duplex.
+    expect(laborDuplicatePairs([kept, { ...fresh, description: 'GFCI receptacle, weather-resistant' }])).toEqual([]);
   });
 });
 
