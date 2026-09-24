@@ -56,7 +56,7 @@ import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nea
 import { getBidScopeList } from '../bidstd/scopeListDb';
 import { ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
 import { composeProposal } from '../bidstd/composeProposal';
-import { getAlternates } from '../estimating/accubidBidData';
+import { getAlternates, getQuotes } from '../estimating/accubidBidData';
 import { resolveUniqueJobNumber } from '../bidstd/boilerplate';
 import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
 import { renderPrebidScopeDocx, prebidScopeFilename } from '../bidstd/prebidScopeDocx';
@@ -3559,6 +3559,24 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
 
   if (!bidData.sections.length) {
     return res.status(400).json({ error: 'No scope data to build a pre-bid package from. Run Agent 4 first.' });
+  }
+
+  // Review round 2 / N-R2-5 — the pre-bid package carries no price (it's
+  // composed from the pre-bid draft, before Agent 4 ever runs), so a
+  // budget-pending vendor quote can't silently ship a wrong number the way
+  // it could on a GC document (B5's own gate covers those). But Chris still
+  // needs to know a quote is outstanding when he's pricing off this
+  // package — flagged in "INTERNAL NOTES & DISCREPANCIES", the one section
+  // that exists only on this internal document, never the GC-facing bid.
+  const budgetPendingQuotes = (await getQuotes(bidId).catch(() => [])).filter(q => q.status === 'budget_pending');
+  if (budgetPendingQuotes.length) {
+    bidData.prebid = {
+      ...bidData.prebid,
+      flags: [
+        ...(bidData.prebid?.flags ?? []),
+        ...budgetPendingQuotes.map(q => `BUDGET — pending vendor quote: ${q.description}.`),
+      ],
+    };
   }
 
   let scopeDocx: Buffer;

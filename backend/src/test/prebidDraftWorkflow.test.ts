@@ -188,4 +188,23 @@ describe('pre-bid draft workflow', () => {
     const r = await request(app).post(`/api/preconstruction/${rows[0].id}/generate-prebid-package`).set(auth(user.token)).expect(200);
     expect(r.body.scopeDocumentId).toBeTruthy();
   });
+
+  // Review round 2 / N-R2-5
+  it('marks a budget-pending vendor quote as "BUDGET — pending vendor quote" in the pre-bid package\'s internal notes', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const user = await makeUser('owner');
+    const { rows } = await pool.query(`INSERT INTO bids (name, gc, loc, salesperson_id) VALUES ($1,'GC','Ocala, FL',$2) RETURNING id`, [`Budget-pending ${Date.now()}`, user.id]);
+    const bidId = rows[0].id as string;
+    await pool.query(`INSERT INTO takeoff_results (bid_id, status, agent4_output, agent4_price) VALUES ($1,'complete',$2,100000)`, [bidId, JSON.stringify(DRAFT)]);
+    await pool.query(
+      `INSERT INTO est_bid_quotes (bid_id, description, amount, tax_pct, markup_pct, status) VALUES ($1,'Switchgear (CES)',45000,0,0,'budget_pending')`,
+      [bidId]
+    );
+    const r = await request(app).post(`/api/preconstruction/${bidId}/generate-prebid-package`).set(auth(user.token)).expect(200);
+    expect(r.body.scopeDocumentId).toBeTruthy();
+    const { rows: docRows } = await pool.query('SELECT category, file_data FROM documents WHERE id = $1', [r.body.scopeDocumentId]);
+    const scopeText = extractDocxText(Buffer.from(docRows[0].file_data, 'base64'));
+    expect(scopeText).toContain('BUDGET — pending vendor quote: Switchgear (CES)');
+    expect(scopeText).toContain('INTERNAL NOTES');
+  });
 });
