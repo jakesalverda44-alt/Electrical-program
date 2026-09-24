@@ -333,3 +333,25 @@ describe('rotation normalization', () => {
     expect(pdfToScreen(skewed, 1, { x: 400, y: 300 })).toEqual(pdfToScreen(zero, 1, { x: 400, y: 300 }));
   });
 });
+
+describe('uprightTextTransform (takeoff accuracy Task 6 — the "AI" badge)', () => {
+  it('group matrix x badge transform maps a local pixel offset to screen(p) + offset, upright, at every rotation and an offset origin', async () => {
+    const { uprightTextTransform, pdfToRenderMatrixWithOrigin } = await import('./overlay');
+    for (const rotation of [0, 90, 180, 270]) {
+      for (const scale of [0.5, 1, 2.75]) {
+        const geom = { widthPt: 612, heightPt: 792, rotation, originXPt: 100, originYPt: 200 };
+        const M = pdfToRenderMatrixWithOrigin(geom as never, scale);
+        const p = { x: 150, y: 250 };
+        const T = uprightTextTransform(M, p);
+        const screenP = applyMatrixForTest(M, p);
+        for (const [u, v] of [[0, 0], [7, -7], [20, 3]]) {
+          // screen = M(T(u, v))
+          const local = applyMatrixForTest(T, { x: u, y: v });
+          const screen = applyMatrixForTest(M, local);
+          expect(screen.x).toBeCloseTo(screenP.x + u, 9);
+          expect(screen.y).toBeCloseTo(screenP.y + v, 9);
+        }
+      }
+    }
+  });
+});

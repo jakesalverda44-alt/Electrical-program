@@ -1,0 +1,30 @@
+/* Takeoff accuracy Task 13 — the in-app proposal preview looks like the
+   printed Cowork proposal: a white Letter page, Arial, navy bands. The colors
+   are literal on purpose — the page stays white in dark mode, like paper. */
+.pp-sheet { background: #ffffff; color: #000000; color-scheme: light; font-family: Arial, Helvetica, sans-serif; font-size: 12px; line-height: 1.35;
+  max-width: 816px; margin: 0 auto; padding: 56px 72px; box-shadow: 0 1px 4px rgba(0,0,0,.25); border-radius: 2px; }
+.pp-wrap { padding: 16px; background: var(--surface2); }
+.pp-hdr p { margin: 0 0 3px; }
+.pp-bold { font-weight: 700; }
+.pp-intro { font-weight: 700; margin: 14px 0 10px; }
+.pp-band { background: #1F3864; color: #ffffff; font-weight: 700; font-size: 12px; padding: 4px 8px; margin: 14px 0 6px; letter-spacing: .02em; text-align: center; }
+.pp-bullets { list-style: none; margin: 0; padding: 0; }
+.pp-bullets li { position: relative; padding-left: 14px; margin: 0 0 4px; }
+.pp-bullets li::before { content: '•'; position: absolute; left: 2px; top: 0; font-size: 10px; line-height: 16px; }
+.pp-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; margin-top: 4px; }
+.pp-table th { background: #1F3864; color: #ffffff; font-weight: 700; text-align: left; padding: 4px 6px; }
+.pp-table td { padding: 3px 6px; vertical-align: top; border: none; }
+.pp-table .pp-sec td { background: #DCE6F2; font-weight: 700; color: #000000; }
+.pp-table .pp-c { text-align: center; }
+.pp-price-h { font-weight: 700; margin: 20px 0 4px; }
+.pp-price { font-weight: 700; color: #1F3864; font-size: 13px; margin: 0 0 16px; }
+.pp-close p { margin: 0 0 10px; }
+.pp-muted { color: #555555; }
+.pp-notes { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; font-size: 12.5px; border: 1px solid var(--border2); background: var(--surface); color: var(--text2); }
+.pp-notes b { color: var(--text); }
+.pp-notes ul { margin: 6px 0 0; padding-left: 18px; }
+.pp-notes-warn { border-color: var(--amber); }
+@media (max-width: 700px) {
+  .pp-sheet { padding: 24px 16px; }
+  .pp-wrap { padding: 8px; overflow-x: auto; }
+}

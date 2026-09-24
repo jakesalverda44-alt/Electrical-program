@@ -96,14 +96,58 @@ describe('PcWorkspace Proposal tab — preview (Task 7.1/7.5)', () => {
     expect(screen.getByText('A. Service & Distribution')).toBeTruthy();
     expect(screen.getByText('C. Lighting & Controls')).toBeTruthy();
     expect(screen.getByText('Service entrance assembly and MDP (ECFECI).')).toBeTruthy();
-    // {b,t} mixed-bold bullet flattens into one line of text
-    expect(screen.getByText(/Complete lighting package \(ECFECI\).*Southern Lighting Source\./)).toBeTruthy();
+    // {b,t} mixed-bold bullet: the lead is bold, the rest follows on the same line (Task 13)
+    const lead = screen.getByText('Complete lighting package (ECFECI)');
+    expect(lead.tagName).toBe('B');
+    expect(lead.parentElement!.textContent).toBe('Complete lighting package (ECFECI) — Southern Lighting Source.');
     expect(screen.getByText('Painting and patching are excluded.')).toBeTruthy();
     expect(screen.getByText('VE Option 1 - Aluminum feeders: DEDUCT $6,400.00.')).toBeTruthy();
     expect(screen.getByText('Term 1')).toBeTruthy();
     expect(screen.getByText('Term 10')).toBeTruthy();
-    expect(screen.getByText('JS.09022026')).toBeTruthy();
-    expect(screen.getByText('$248,750')).toBeTruthy();
+    expect(screen.getByText('Job No:  JS.09022026', { normalizer: t => t })).toBeTruthy();
+    expect(screen.getByTestId('pp-price').textContent).toBe('Total Electrical Scope — $248,750');
+  });
+
+  it('Task 13 — a white Cowork-style page: backend header lines, intro, numbered borderless takeoff, price in words; corrections and hygiene warnings above it', async () => {
+    baseMocks();
+    const withPaper = {
+      ...PREVIEW,
+      takeoff: [
+        { name: 'Service & Distribution', items: [{ item: 'Panel', description: '200A panel "A"', unit: 'EA', qty: 1, source: 'E1.0' }, { item: 'Disconnect', description: '60A NF', unit: 'EA', qty: 2, source: 'E2.0' }] },
+        { name: 'Interior Lighting', items: [{ item: 'Type A', description: '2x4 LED troffer', unit: 'EA', qty: 24, source: 'E3.0' }] },
+      ],
+      accountCorrections: ['Disconnects set to APT furnishes and installs (account rule "AutoZone").'],
+      hygieneWarnings: ['Owner-spec text for another region: "Puerto Rico stores only".'],
+      paper: {
+        headerLines: [{ text: 'September 23, 2026' }, { text: 'ABC Construction', bold: true }, { text: 'Attn:  John Smith' }, { text: 'Re:  Circle K #4521' }],
+        introLine: 'Please accept this proposal to complete the electrical work for CIRCLE K #4521 you have out for bid.',
+        priceLine: 'Total Electrical Scope — Two Hundred Forty-Eight Thousand Seven Hundred Fifty and 00/100 Dollars   $248,750.00',
+        takeoffDescriptions: [['Panel — 200A panel "A"', 'Disconnect — 60A NF'], ['Type A — 2x4 LED troffer']],
+      },
+    };
+    get.mockImplementation((url: string) => url === `/preconstruction/${bid.id}/proposal-preview`
+      ? Promise.resolve({ data: withPaper })
+      : url === `/preconstruction/${bid.id}/results` ? Promise.resolve({ data: AI_RESULTS_COMPLETE }) : Promise.resolve({ data: null }));
+    renderProposalTab();
+    const page = await screen.findByTestId('proposal-paper');
+    expect(page.className).toBe('pp-sheet');
+    const p = within(page);
+    expect(p.getByText('ABC Construction').className).toBe('pp-bold');
+    expect(p.getByText(/^Please accept this proposal/)).toBeTruthy();
+    const bands = Array.from(page.querySelectorAll('.pp-band')).map(b => b.textContent);
+    expect(bands).toEqual(['SCOPE OF WORK', 'A. Service & Distribution', 'C. Lighting & Controls', 'EXCLUSIONS & CLARIFICATIONS', 'ELECTRICAL QUANTITY TAKEOFF', 'TERMS, CONDITIONS & SPECIAL REQUIREMENTS']);
+    const rows = Array.from(page.querySelectorAll('.pp-table tbody tr')).map(r => Array.from(r.querySelectorAll('td')).map(td => td.textContent));
+    expect(rows).toEqual([
+      ['Service & Distribution'],
+      ['1', 'Panel — 200A panel "A"', 'EA', '1', 'E1.0'],
+      ['2', 'Disconnect — 60A NF', 'EA', '2', 'E2.0'],
+      ['Interior Lighting'],
+      ['1', 'Type A — 2x4 LED troffer', 'EA', '24', 'E3.0'],
+    ]);
+    expect(Array.from(page.querySelectorAll('.pp-table th')).map(t => t.textContent)).toEqual(['ITEM', 'DESCRIPTION', 'UNIT', 'QTY', 'SOURCE / NOTES']);
+    expect(screen.getByTestId('pp-price').textContent).toBe(withPaper.paper.priceLine);
+    expect(within(screen.getByTestId('pp-corrections')).getByText(withPaper.accountCorrections[0])).toBeTruthy();
+    expect(within(screen.getByTestId('pp-hygiene')).getByText(withPaper.hygieneWarnings[0])).toBeTruthy();
   });
 
   it('the download button is present and never silently fails on success', async () => {
@@ -155,7 +199,24 @@ describe('PcWorkspace Proposal tab — verify-gate 422 panel (Task 7.2)', () => 
   });
 });
 
-describe('PcWorkspace Proposal tab — pre-bid package (Task 7.3)', () => {
+// Takeoff accuracy Task 12 — the pre-bid package moved from Review & Proposal
+// to the END of the Takeoff step (it builds from the pre-bid draft, before
+// any price); these tests now open the Takeoff step.
+function renderTakeoffStep() {
+  const ws = { ...blankWorkspace('b1', 'Circle K #4521', 0), activeTab: 'takeoff' as const };
+  return render(
+    <PcWorkspaceView ws={ws} bid={bid} onUpdate={() => {}} onBack={() => {}} onConverted={() => {}} onBidUpdated={() => {}} showToast={() => {}} embedded />,
+  );
+}
+
+describe('PcWorkspace Takeoff step — pre-bid package (Task 7.3, moved by takeoff accuracy Task 12)', () => {
+  it('is no longer in Review & Proposal', async () => {
+    baseMocks();
+    renderProposalTab();
+    await waitFor(() => expect(screen.getByText('Proposal Preview')).toBeTruthy());
+    expect(screen.queryByText('Generate Pre-Bid Package for Chris')).toBeNull();
+  });
+
   it('the Generate Pre-Bid Package button posts to generate-prebid-package and renders download links', async () => {
     baseMocks();
     post.mockImplementation((url: string) => {
@@ -165,7 +226,7 @@ describe('PcWorkspace Proposal tab — pre-bid package (Task 7.3)', () => {
       return Promise.resolve({ data: {} });
     });
 
-    renderProposalTab();
+    renderTakeoffStep();
     await waitFor(() => expect(screen.getByText('Generate Pre-Bid Package for Chris')).toBeTruthy());
 
     fireEvent.click(screen.getByText('Generate Pre-Bid Package for Chris'));
@@ -175,11 +236,11 @@ describe('PcWorkspace Proposal tab — pre-bid package (Task 7.3)', () => {
     expect(screen.getByText('Download Pre-Bid Takeoff')).toBeTruthy();
   });
 
-  it('is labeled as an internal-only action', async () => {
+  it('is labeled as an internal-only, no-price action', async () => {
     baseMocks();
-    renderProposalTab();
+    renderTakeoffStep();
     await waitFor(() => expect(screen.getByText('Pre-Bid Package for Chris')).toBeTruthy());
-    expect(within(screen.getByText('Pre-Bid Package for Chris').closest('span') as HTMLElement).getByText('Internal only')).toBeTruthy();
+    expect(within(screen.getByText('Pre-Bid Package for Chris').closest('span') as HTMLElement).getByText('Internal only · no price')).toBeTruthy();
   });
 });
 
@@ -256,5 +317,16 @@ describe('PcWorkspace Proposal tab — fix round 2 / S3: propPrice and Agent 4 r
     fireEvent.click(screen.getByTestId('propprice-use-engine-total'));
     await waitFor(() => expect(priceInput.value).toBe('12345.67'));
     expect(screen.queryByTestId('propprice-mismatch-warning')).toBeNull();
+  });
+});
+
+describe('Fix round 2 / N-R2-6 — the legacy note shows in Review & Proposal too', () => {
+  it('a bid analysed before the accuracy checks (no review status, no run id)', async () => {
+    baseMocks();
+    get.mockImplementation((url: string) => url === `/preconstruction/${bid.id}/results`
+      ? Promise.resolve({ data: { ...AI_RESULTS_COMPLETE, agent1_output: '{}', review_status: null, run_id: null } })
+      : url === `/preconstruction/${bid.id}/proposal-preview` ? Promise.resolve({ data: PREVIEW }) : Promise.resolve({ data: null }));
+    renderProposalTab();
+    await waitFor(() => expect(screen.getByTestId('proposal-legacy-note').textContent).toContain('Analyzed before accuracy checks'));
   });
 });

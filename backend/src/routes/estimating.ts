@@ -21,6 +21,7 @@ import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, 
 // nosniff lockdown routes/documents.ts already applies (audit Security #6),
 // instead of the plan-file route rolling its own (looser) header logic.
 import { serveDocument } from './documents';
+import { assignAiMarkersToLines } from '../estimating/aiMarkers';
 import {
   getMarkups, batchMarkups, getRollup, applyMarkups, getMarkupLineKeysByIds,
   MarkupCreateInput, MarkupUpdateInput,
@@ -851,6 +852,15 @@ router.get('/:bidId/markups/rollup', requireAuth, async (req: AuthRequest, res) 
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const rollup = await getRollup(bidId);
   res.json({ rollup });
+});
+
+// Takeoff accuracy Task 6 — assign still-unassigned AI-suggested markers to
+// the one saved line their type maps to (never reassigns, never touches a
+// confirmed marker). The Plans view offers this once the estimate is saved.
+router.post('/:bidId/markups/assign-ai', requireAuth, async (req: AuthRequest, res) => {
+  const bid = await loadAccessibleBid(res, req.user!, req.params.bidId);
+  if (!bid) return;
+  res.json(await assignAiMarkersToLines(bid.id));
 });
 
 router.post('/:bidId/apply-markups', requireAuth, async (req: AuthRequest, res) => {

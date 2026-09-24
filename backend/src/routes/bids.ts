@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { takeoffGate } from '../estimating/takeoffReview';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, canRestore, AuthRequest, ownScopeId } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
@@ -311,15 +312,46 @@ const TAKEOFF_XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreads
 // xlsx/generate-prebid-package routes, and only on the rows they file after
 // their own verify gate passes (see utils/storeDocument.ts) — so this query
 // can only ever return something that's actually been through that gate.
-async function loadMostRecentBidDoc(bidId: string, category: string, mimetype: string): Promise<DocRow | null> {
-  const { rows } = await pool.query<DocRow>(
-    `SELECT id, name, display_name, category, file_type, file_size, file_data, storage_url
+async function loadMostRecentBidDoc(bidId: string, category: string, mimetype: string): Promise<(DocRow & { compose_inputs_hash?: string | null }) | null> {
+  // Takeoff accuracy fix round 1 / B5 — when the bid has an analysis run id,
+  // only a document filed from THAT run qualifies: after a re-analysis the
+  // previous run's proposal / takeoff / pre-bid package can never be
+  // attached. A bid from before run ids (run_id NULL) keeps the old rule.
+  const { rows: tr } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  const runId = (tr[0]?.run_id as string | null) ?? null;
+  const { rows } = await pool.query<DocRow & { compose_inputs_hash?: string | null }>(
+    `SELECT id, name, display_name, category, file_type, file_size, file_data, storage_url, compose_inputs_hash
        FROM documents
       WHERE linked_id = $1 AND category = $2 AND file_type = $3 AND deleted_at IS NULL AND gate_passed = true
+        AND ($4::uuid IS NULL OR takeoff_run_id = $4::uuid)
       ORDER BY created_at DESC LIMIT 1`,
-    [bidId, category, mimetype]
+    [bidId, category, mimetype, runId]
   );
   return rows[0] ?? null;
+}
+
+/** Fix round 2 / R2-B1 — a filed document may be sent only if the inputs it
+ *  was made from (counts, resolutions, answers, price, scope list, account
+ *  rule snapshot, the Agent 4 output / draft) are still the current ones.
+ *  null = OK to send; otherwise the refusal message. A bid from before run
+ *  ids keeps the old behaviour. */
+async function staleFileMessage(bidId: string, docs: Array<{ compose_inputs_hash?: string | null } | null>, source: 'final' | 'draft'): Promise<string | null> {
+  if (!(await currentRunId(bidId))) return null;
+  const { composeCurrentBidData } = await import('./preconstruction');
+  const loaded = await composeCurrentBidData(bidId, { persist: false, validate: false, source });
+  const stale = 'Regenerate — inputs changed since this file was made.';
+  if (!loaded.ok) return `${stale} (${loaded.error})`;
+  for (const d of docs) {
+    if (d && d.compose_inputs_hash !== loaded.inputsHash) {
+      return `${stale} The counts, review answers, price, scope list or proposal text changed after it was generated — ${source === 'draft' ? 'generate the pre-bid package again' : 'download the proposal again (it re-files the PDF)'}, then send.`;
+    }
+  }
+  return null;
+}
+
+async function currentRunId(bidId: string): Promise<string | null> {
+  const { rows } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  return (rows[0]?.run_id as string | null) ?? null;
 }
 
 // `body: {to, cc?, subject, bodyText, includeTakeoff?, markSubmitted?}` —
@@ -338,6 +370,11 @@ router.post('/:id/draft-proposal', requireAuth, async (req: AuthRequest, res) =>
   const bid = await loadOwnedBid(req, res);
   if (!bid) return;
 
+  // Takeoff accuracy Task 7 — a takeoff with open review items (zero or
+  // unreadable counts, unanswered scope questions) can't be sent.
+  const gate = await takeoffGate(bid.id);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+
   const to = Array.isArray(req.body?.to)
     ? (req.body.to as unknown[]).map(e => String(e).trim()).filter(Boolean)
     : [];
@@ -355,8 +392,15 @@ router.post('/:id/draft-proposal', requireAuth, async (req: AuthRequest, res) =>
   // PDF; not everyone has Word), falling back to the docx when no PDF was
   // produced (soffice/LibreOffice unavailable at generate-docx time). 409
   // if neither a gate-passed PDF nor docx exists yet.
+  // Fix round 1 / B5 — a bid analyzed with run ids attaches ONLY the PDF
+  // filed by generate-docx from the CURRENT run (it passed verifyBid), never
+  // an older run's file and never the .docx.
+  const runId = await currentRunId(bid.id);
   let proposalDoc = await loadMostRecentBidDoc(bid.id, 'proposal', PROPOSAL_PDF_MIME);
   let attachedFormat: 'pdf' | 'docx' = 'pdf';
+  if (!proposalDoc && runId) {
+    return res.status(409).json({ error: 'No proposal PDF from the current analysis is on file. Generate the proposal again (Download .docx) — the PDF is produced and filed with it; LibreOffice must be installed on the server for the PDF.' });
+  }
   if (!proposalDoc) {
     proposalDoc = await loadMostRecentBidDoc(bid.id, 'proposal', PROPOSAL_DOCX_MIME);
     attachedFormat = 'docx';
@@ -364,6 +408,10 @@ router.post('/:id/draft-proposal', requireAuth, async (req: AuthRequest, res) =>
   if (!proposalDoc) {
     return res.status(409).json({ error: 'No filed proposal on file yet. Generate/download the proposal .docx first.' });
   }
+  // R2-B1 — never a file whose inputs changed since it was made.
+  const takeoffForSend = includeTakeoff ? await loadMostRecentBidDoc(bid.id, 'takeoff', TAKEOFF_XLSX_MIME) : null;
+  const staleProposal = await staleFileMessage(bid.id, [proposalDoc, takeoffForSend], 'final');
+  if (staleProposal) return res.status(409).json({ error: staleProposal });
   const proposalBytes = await fetchDocBytes(proposalDoc);
   if (!proposalBytes) {
     return res.status(409).json({ error: 'The filed proposal document could not be loaded. Try re-downloading it first.' });
@@ -483,6 +531,9 @@ const DEFAULT_PREBID_CHRIS_EMAIL = 'chrise@accuratepowerandtechnology.com';
 router.post('/:id/email-prebid-chris', requireAuth, async (req: AuthRequest, res) => {
   const bid = await loadOwnedBid(req, res);
   if (!bid) return;
+  // Fix round 1 / B5 — the pre-bid package is gated by the review too.
+  const gate = await takeoffGate(bid.id);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
 
   let to = Array.isArray(req.body?.to)
     ? (req.body.to as unknown[]).map(e => String(e).trim()).filter(Boolean)
@@ -496,8 +547,10 @@ router.post('/:id/email-prebid-chris', requireAuth, async (req: AuthRequest, res
   const scopeDoc = await loadMostRecentBidDoc(bid.id, 'prebid_scope', PROPOSAL_DOCX_MIME);
   const takeoffDoc = await loadMostRecentBidDoc(bid.id, 'prebid_takeoff', TAKEOFF_XLSX_MIME);
   if (!scopeDoc && !takeoffDoc) {
-    return res.status(409).json({ error: 'No pre-bid package on file yet. Generate it first.' });
+    return res.status(409).json({ error: 'No pre-bid package from the current analysis is on file. Generate it first.' });
   }
+  const stalePackage = await staleFileMessage(bid.id, [scopeDoc, takeoffDoc], 'draft');
+  if (stalePackage) return res.status(409).json({ error: stalePackage });
 
   const attachments: GraphAttachment[] = [];
   for (const doc of [scopeDoc, takeoffDoc]) {

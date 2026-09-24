@@ -27,6 +27,10 @@ export interface MarkupDraft {
   slackPct: number | null;
   status: 'confirmed' | 'suggested';
   label: string | null;
+  /** Takeoff accuracy Task 6 — 'ai_count' for an AI-counted suggestion
+   *  (rendered with an "AI" badge). Read-only on the client: never sent to
+   *  the server (useMarkupAutosave's toWireMarkup omits it). */
+  source?: 'ai_count' | null;
 }
 
 export interface HistoryState<T> {

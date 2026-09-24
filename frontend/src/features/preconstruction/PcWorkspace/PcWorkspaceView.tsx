@@ -28,6 +28,9 @@ import { importReducer, initialImportState } from './importReducer';
 import FilesTab from './FilesTab';
 import BidTab from './BidTab';
 import TakeoffTab from './TakeoffTab';
+import TakeoffReviewPanel, { type TakeoffReview } from './TakeoffReviewPanel';
+import ScopeListPanel from './ScopeListPanel';
+import PrebidPackagePanel from './PrebidPackagePanel';
 import ScopeTab from './ScopeTab';
 import RfisTab from './RfisTab';
 import ProposalTab from './ProposalTab';
@@ -620,12 +623,21 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     setVerifyFailures(null);
     setPrebidResult(null);
     try {
-      await api.post(`/preconstruction/${bid.id}/run-agent4`, {
+      const { data } = await api.post(`/preconstruction/${bid.id}/run-agent4`, {
         // Strip $/commas/whitespace before POSTing — the box keeps whatever the
         // estimator typed, the server only ever sees a clean numeric string.
         price: propPrice.replace(/[$,\s]/g, ''),
         internalNotes: propNotes,
       });
+      if (data?.reusedDraft) {
+        // Takeoff accuracy Task 12 — the pre-bid draft was reused with the
+        // price inserted (scope unchanged, no new notes): done, no AI run.
+        const r = await api.get(`/preconstruction/${bid.id}/results`);
+        setAiResults(r.data);
+        setAgent4Running(false);
+        showToast({ title: 'Proposal ready', sub: 'Built from the pre-bid draft with the price inserted' });
+        return;
+      }
       // Backend returns immediately — poll for completion
       pollAgent4();
     } catch (err) {
@@ -1213,8 +1225,26 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             />
           </>
         );
+        // Takeoff accuracy Task 7 — the Needs-review list sits above both the
+        // List and Plans views (resolving a zero type by confirming markers
+        // happens in Plans).
+        const reviewPanel = (
+          <TakeoffReviewPanel
+            bidId={bid.id}
+            review={{
+              status: (aiResults?.review_status as TakeoffReview['status']) ?? null,
+              items: (aiResults?.review_items as TakeoffReview['items'] | null) ?? [],
+            }}
+            countResult={(aiResults?.count_result as React.ComponentProps<typeof TakeoffReviewPanel>['countResult']) ?? null}
+            onReviewChange={r => setAiResults(prev => (prev ? { ...prev, review_status: r.status, review_items: r.items } : prev))}
+            showToast={showToast}
+          />
+        );
         return (
           <>
+            {reviewPanel}
+            {/* Takeoff accuracy Task 11 — the estimator's scope list. */}
+            <ScopeListPanel bidId={bid.id} showToast={showToast} />
             <div className="est-view-toggle" role="tablist" aria-label="Takeoff view">
               <button
                 type="button"
@@ -1235,6 +1265,21 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                 Plans
               </button>
             </div>
+            {/* Takeoff accuracy Task 12 — the pre-bid package at the end of
+                the Takeoff step (moved from Review & Proposal). */}
+            <PrebidPackagePanel
+              bid={bid}
+              aiResults={aiResults}
+              setAiResults={setAiResults}
+              generatePrebidPackage={onGeneratePrebidPackage}
+              prebidBusy={prebidBusy}
+              prebidResult={prebidResult}
+              downloadFiledDocument={downloadFiledDocument}
+              emailPrebidToChris={onEmailPrebidToChris}
+              chrisDraftBusy={chrisDraftBusy}
+              chrisDraftLink={chrisDraftLink}
+              showToast={showToast}
+            />
             {planView.view === 'plans' ? (
               <Suspense fallback={<div style={{ padding: 32, color: 'var(--text3)' }}>Loading plan viewer…</div>}>
                 <PlansWorkspace

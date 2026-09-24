@@ -6,6 +6,8 @@ import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, inputStyle } from '../shared';
 
 const VISION_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'];
+// Takeoff accuracy Task 1 — the counting stage defaults to Opus 5.5 (Decision 1).
+const COUNTER_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-4-6'];
 const TEXT_MODELS   = ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8'];
 
 const ALL_KEYS = [
@@ -16,6 +18,7 @@ const ALL_KEYS = [
   'ai_prompt_agent1', 'ai_prompt_agent2', 'ai_prompt_agent3', 'ai_prompt_agent4',
   'ai_reply_draft_model', 'ai_build_from_notes_model',
   'ai_prep_classifier_model',
+  'ai_takeoff_counter_model', 'ai_max_tokens_counter',
   'ai_prep_dpi_schedule', 'ai_prep_dpi_plan', 'ai_prep_tiles_schedule', 'ai_prep_tiles_plan',
 ];
 
@@ -166,6 +169,30 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
               <Field label={`Max Tokens (default: ${TOKEN_DEFAULTS[i]})`}>
                 <input type="number" style={inputStyle} value={vals[tKey]} onChange={set(tKey)} min={256} max={64000}
                   placeholder={TOKEN_DEFAULTS[i]}/>
+              </Field>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Takeoff accuracy Task 1 — Agent 1C, the dedicated symbol-counting stage. */}
+      {(() => {
+        const cur = vals.ai_takeoff_counter_model;
+        const models = cur && !COUNTER_MODELS.includes(cur) ? [cur, ...COUNTER_MODELS] : COUNTER_MODELS;
+        return (
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 4 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8, marginTop: 12 }}>
+              Agent 1C — Symbol Counter
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 20px', maxWidth: 480 }}>
+              <Field label="Model" desc="Counts every fixture, device and equipment symbol on each electrical plan sheet.">
+                <select aria-label="Counter model" style={{ ...inputStyle, appearance: 'none' }} value={cur} onChange={set('ai_takeoff_counter_model')}>
+                  {models.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </Field>
+              <Field label="Max Tokens (default: 32000)" desc="Includes the model's thinking. A sheet that runs out fails the run with a message.">
+                <input aria-label="Counter max tokens" type="number" style={inputStyle} value={vals.ai_max_tokens_counter} onChange={set('ai_max_tokens_counter')} min={1024} max={128000}
+                  placeholder="32000"/>
               </Field>
             </div>
           </div>

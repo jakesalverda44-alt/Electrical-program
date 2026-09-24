@@ -22,7 +22,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api from '../../../api/client';
 import { isAbortError } from '../../../api/errors';
 import { openPdfDocument, PdfJsDocument, PdfJsRenderTask } from './pdfjsClient';
-import { PageGeometry, pdfToRenderMatrixWithOrigin, screenToPdf, fitScale, clampRenderScale, renderedSize } from './overlay';
+import { PageGeometry, pdfToRenderMatrixWithOrigin, screenToPdf, fitScale, clampRenderScale, renderedSize, uprightTextTransform } from './overlay';
 import { needsTiledRender, planTileRender, tilePlansRoughlyEqual, TileRenderPlan, VisibleRect } from './regionRender';
 import { SheetRow } from '../types';
 import { ToolState, ToolEvent } from './toolMachine';
@@ -719,6 +719,9 @@ export default function PlanViewer({
                         onSelect={additive => onSelectMarker(m.id, additive)}
                         onStartDrag={e => onStartMarkerDrag(m.id, m.points, e)}
                         onConfirm={onConfirmMarker ? () => onConfirmMarker(m.id) : undefined}
+                        badgeTransform={m.source === 'ai_count' && matrix && m.points[0]
+                          ? `matrix(${uprightTextTransform(matrix, m.points[0]).join(',')})`
+                          : undefined}
                       />
                     ))}
                     {toolState.tool === 'linear' && toolState.drawPoints.length > 0 && (
@@ -785,9 +788,12 @@ interface MarkerShapeProps {
    *  starting a drag — a suggested marker isn't draggable/selectable until
    *  it's confirmed. */
   onConfirm?: () => void;
+  /** Takeoff accuracy Task 6 — present for an AI-counted marker: the upright
+   *  transform for its "AI" badge (overlay.ts's uprightTextTransform). */
+  badgeTransform?: string;
 }
 
-function MarkerShape({ markup, color, selected, strokeWidth, radius, onSelect, onStartDrag, onConfirm }: MarkerShapeProps) {
+function MarkerShape({ markup, color, selected, strokeWidth, radius, onSelect, onStartDrag, onConfirm, badgeTransform }: MarkerShapeProps) {
   const onPointerDown = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (markup.status === 'suggested' && onConfirm) {
@@ -803,7 +809,10 @@ function MarkerShape({ markup, color, selected, strokeWidth, radius, onSelect, o
   if (markup.kind === 'count') {
     const p = markup.points[0];
     if (!p) return null;
-    return (
+    const title = markup.status === 'suggested'
+      ? `${markup.source === 'ai_count' ? 'AI-counted — ' : ''}Click to confirm${markup.label ? `: ${markup.label}` : ''}`
+      : (markup.source === 'ai_count' ? `AI-counted${markup.label ? `: ${markup.label}` : ''} (confirmed)` : null);
+    const circle = (
       <circle
         data-marker
         data-status={markup.status}
@@ -814,8 +823,27 @@ function MarkerShape({ markup, color, selected, strokeWidth, radius, onSelect, o
         strokeDasharray={dashArray}
         onMouseDown={onPointerDown}
       >
-        {markup.status === 'suggested' && <title>Click to confirm{markup.label ? `: ${markup.label}` : ''}</title>}
+        {title && <title>{title}</title>}
       </circle>
+    );
+    if (!badgeTransform) return circle;
+    return (
+      <g data-ai-marker={markup.id}>
+        {circle}
+        <text
+          className="plan-ai-badge"
+          data-testid="plan-ai-badge"
+          transform={badgeTransform}
+          x={7} y={-7}
+          fontSize={9}
+          fontWeight={800}
+          fill={color}
+          stroke="#fff"
+          strokeWidth={2.5}
+          paintOrder="stroke"
+          pointerEvents="none"
+        >AI</text>
+      </g>
     );
   }
   return (

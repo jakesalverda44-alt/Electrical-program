@@ -222,7 +222,9 @@ async function checkDailyLimit(userId: string, next: NextFunction, res: Response
     const limit = parseInt(limitStr || '10');
     const today = new Date().toISOString().split('T')[0];
     const { rows } = await pool.query(
-      `SELECT COUNT(*) FROM activity WHERE kind='ai_analysis' AND user_id=$1 AND created_at::date=$2::date`,
+      // Fix round 2 / N-R2-7 — a pre-bid draft the estimator starts (or that a
+      // resolve starts for them) is paid AI work too.
+      `SELECT COUNT(*) FROM activity WHERE kind IN ('ai_analysis', 'ai_draft') AND user_id=$1 AND created_at::date=$2::date`,
       [userId, today]
     );
     const count = parseInt(rows[0]?.count ?? '0');
@@ -237,4 +239,14 @@ async function checkDailyLimit(userId: string, next: NextFunction, res: Response
     logger.warn({ err }, '[ai-permission] daily limit check failed; allowing this request');
     next();
   }
+}
+
+/** Fix round 1 / S13 — the same decision requireAIPermission makes (kill
+ *  switches, per-user override, role, daily limit for run_analysis), as a
+ *  boolean for code paths that start paid AI work as a side effect. */
+export function hasAIPermission(user: AuthRequest['user'], permission: AIPermission): Promise<boolean> {
+  return new Promise(resolve => {
+    const res = { status: () => ({ json: () => resolve(false) }) } as unknown as Response;
+    void requireAIPermission(permission)({ user } as AuthRequest, res, () => resolve(true));
+  });
 }

@@ -1,0 +1,357 @@
+{
+ "project_slug": "AutoZoneStore10077",
+ "location_slug": "Kissimmee",
+ "date": "June 18, 2026",
+ "client": "Summit General Contractors",
+ "email": "estimating@summitgc.net",
+ "project_name": "AutoZone #10077 Kissimmee",
+ "re_line": "AutoZone Store #10077",
+ "project_address": "2860 N Old Lake Wilson Rd, Kissimmee, FL 34747",
+ "job_number": "JS.06182026",
+ "plan_date": "09/22/2025",
+ "total_price": "$81,485.60",
+ "scope": [],
+ "sections": [
+  {
+   "title": "A. Service & Distribution",
+   "bullets": [
+    {
+     "b": "Furnish and install",
+     "t": " the complete service entrance: utility metering provisions, meter base (NEMA 3R), and service gutter/wireway (NEMA 3R), fed by parallel (2) sets of 4#3/0 & #6 ground in 2\" conduit from the meter to the wireway."
+    },
+    {
+     "b": "Distribution gear (Owner-furnished, EC-installed):",
+     "t": " two (2) 225A MLO panelboards \u2014 Panel A and Panel B (208Y/120V, 3-phase, 4-wire, 42-circuit), furnished by AutoZone and installed by the Electrical Contractor. EC to receive, set, and connect with feeders and grounding throughout."
+    },
+    {
+     "b": "Disconnects (ECFECI):",
+     "t": " two (2) 200A NEMA 3R fused disconnects and the 60A non-fused RTU disconnects, furnished and installed by APT."
+    },
+    "Provide all feeders, branch raceways, and conductors per the one-line and panel schedules."
+   ]
+  },
+  {
+   "title": "B. Branch Power",
+   "bullets": [
+    {
+     "b": "Furnish and install",
+     "t": " branch power and final connections for all equipment, including two (2) 10-ton rooftop units (60A/3P), water heater, five (5) battery chargers, and miscellaneous equipment per the panel schedules."
+    },
+    "Provide all receptacles, retail power poles, and display baseflex floor connections per the power plans."
+   ]
+  },
+  {
+   "title": "C. Lighting & Controls",
+   "bullets": [
+    "Lighting fixtures furnished by the Owner through the Graybar national account. EC to receive, inventory, and install all fixtures per schedule.",
+    {
+     "b": "Controls & testing:",
+     "t": " Venstar lighting control panel / contactor enclosure, roof-mounted photocell, occupancy/motion sensors, and data concentrator (Owner-furnished, EC-installed and wired); functional testing prior to final inspection."
+    }
+   ]
+  },
+  {
+   "title": "D. Site Lighting, Underground Work & Allowances",
+   "bullets": [
+    "Install four (4) AutoZone-furnished pole-top area lights on three (3) site poles. Site pole light bases (3 total) to be formed and poured by others; EC to set anchor bolts and conduit stub-ups as required.",
+    "120' allowance - 2\" network conduit from the building.",
+    "120' allowance - conduit from the utility transformer to the traffic box per civil plans (no wiring shown).",
+    "25' allowance - secondary feeders from the utility transformer.",
+    "120' allowance - primary conduit."
+   ]
+  },
+  {
+   "title": "E. Low Voltage Infrastructure (Conduit & Boxes Only)",
+   "bullets": [
+    "Provide empty conduit and pull strings only for data/communications and fire alarm systems. No fire alarm devices, wiring, or programming and no data cabling, devices, or programming are included \u2014 conduit and pull strings only."
+   ]
+  },
+  {
+   "title": "F. Project Coordination & Closeout",
+   "bullets": [
+    "Coordinate with Summit General Contractors and other trades for scheduling, tie-ins, and access; provide testing, inspections, and closeout documentation prior to final inspection."
+   ]
+  }
+ ],
+ "exclusions": [
+  "Panelboards and the complete lighting package are furnished by AutoZone; EC to receive, handle, and install. Disconnects are furnished and installed by APT.",
+  "Site pole light bases (3 total) to be formed and poured by others.",
+  "Fire alarm: conduit and pull strings only \u2014 no devices, wiring, or programming.",
+  "Data / communications: conduit and pull strings only \u2014 no cabling, devices, or programming (by Owner's vendor).",
+  "Underground allowances per civil: 120 LF primary conduit, 25 LF secondary feeders, 120 LF transformer-to-traffic-box conduit (no wiring shown), and 120 LF 2\" network conduit from the building. Footage in excess of these allowances will be billed by Change Order.",
+  "Utility company transformer, primary-side work, and utility fees are excluded.",
+  "Painting, patching, concrete cutting, core drilling, and finish restoration are excluded.",
+  "Trenching, backfill, and final grading by others unless noted."
+ ],
+ "takeoff": [
+  {
+   "name": "Service & Distribution",
+   "items": [
+    {
+     "item": "Meter base",
+     "description": "Meter base, NEMA 3R",
+     "unit": "EA",
+     "qty": 1,
+     "source": "E-4"
+    },
+    {
+     "item": "Service gutter",
+     "description": "Service gutter / wireway, NEMA 3R",
+     "unit": "EA",
+     "qty": 1,
+     "source": "E-4"
+    },
+    {
+     "item": "Fused disconnect",
+     "description": "200A NEMA 3R fused disconnect (ECFECI)",
+     "unit": "EA",
+     "qty": 2,
+     "source": "E-4",
+     "furnish_by": "APT (ECFECI)"
+    },
+    {
+     "item": "Panelboard",
+     "description": "225A MLO panelboard, 208Y/120V 42-ckt (Owner-furnished)",
+     "unit": "EA",
+     "qty": 2,
+     "source": "E-4",
+     "furnish_by": "Owner (EC installs)"
+    },
+    {
+     "item": "Service feeder",
+     "description": "Service feeder, parallel (2) 4#3/0 & #6G, 2\"C",
+     "unit": "SET",
+     "qty": 2,
+     "source": "E-4"
+    },
+    {
+     "item": "Feeder conductor",
+     "description": "#3/0 Cu feeder conductor",
+     "unit": "LF",
+     "qty": 872,
+     "source": "E-4"
+    }
+   ]
+  },
+  {
+   "name": "Interior Lighting",
+   "items": [
+    {
+     "item": "Linear LED",
+     "description": "4' linear LED luminaire (Owner-furnished)",
+     "unit": "EA",
+     "qty": 133,
+     "source": "E-3"
+    },
+    {
+     "item": "Downlight",
+     "description": "Recessed LED downlight (Owner-furnished)",
+     "unit": "EA",
+     "qty": 11,
+     "source": "E-3"
+    },
+    {
+     "item": "Exit / emergency",
+     "description": "Exit / emergency unit (Owner-furnished)",
+     "unit": "EA",
+     "qty": 22,
+     "source": "E-3"
+    },
+    {
+     "item": "Ceiling fan",
+     "description": "Ceiling fan, Hunter (Owner-furnished, EC hang)",
+     "unit": "EA",
+     "qty": 3,
+     "source": "E-1"
+    }
+   ]
+  },
+  {
+   "name": "Exterior / Site Lighting",
+   "items": [
+    {
+     "item": "Area light",
+     "description": "Pole-top area light, LED (Owner-furnished)",
+     "unit": "EA",
+     "qty": 4,
+     "source": "E-7"
+    },
+    {
+     "item": "Site pole",
+     "description": "Site pole, steel (bases by others)",
+     "unit": "EA",
+     "qty": 3,
+     "source": "E-7 / PH0.1"
+    },
+    {
+     "item": "Wall pack",
+     "description": "Wall pack, LED (Owner-furnished)",
+     "unit": "EA",
+     "qty": 9,
+     "source": "E-3 / PH0.1"
+    },
+    {
+     "item": "Sign power",
+     "description": "Building / pylon sign power connection",
+     "unit": "EA",
+     "qty": 4,
+     "source": "E-3"
+    }
+   ]
+  },
+  {
+   "name": "Lighting Controls",
+   "items": [
+    {
+     "item": "Lighting control",
+     "description": "Venstar lighting control / contactor panel (Owner-furnished)",
+     "unit": "EA",
+     "qty": 1,
+     "source": "E-5"
+    },
+    {
+     "item": "Photocell",
+     "description": "Roof photocell (Owner-furnished)",
+     "unit": "EA",
+     "qty": 1,
+     "source": "E-5"
+    },
+    {
+     "item": "Occupancy sensor",
+     "description": "Occupancy / motion sensor (Owner-furnished)",
+     "unit": "EA",
+     "qty": 5,
+     "source": "E-3"
+    },
+    {
+     "item": "Data concentrator",
+     "description": "Data concentrator (Owner-furnished)",
+     "unit": "EA",
+     "qty": 1,
+     "source": "E-6"
+    }
+   ]
+  },
+  {
+   "name": "Branch Power",
+   "items": [
+    {
+     "item": "RTU connection",
+     "description": "RTU final connection, 10-ton 60A/3P",
+     "unit": "EA",
+     "qty": 2,
+     "source": "E-1 / E-4"
+    },
+    {
+     "item": "HVAC disconnect",
+     "description": "HVAC disconnect at RTU (60A NEMA 3R) (ECFECI)",
+     "unit": "EA",
+     "qty": 2,
+     "source": "E-1"
+    },
+    {
+     "item": "Water heater",
+     "description": "Water heater connection",
+     "unit": "EA",
+     "qty": 1,
+     "source": "E-4"
+    },
+    {
+     "item": "Battery charger",
+     "description": "Battery charger circuit / connection",
+     "unit": "EA",
+     "qty": 5,
+     "source": "E-4"
+    },
+    {
+     "item": "Power pole",
+     "description": "Retail power pole",
+     "unit": "EA",
+     "qty": 8,
+     "source": "E-2"
+    },
+    {
+     "item": "Receptacles",
+     "description": "Receptacles (incl. 16 GFCI)",
+     "unit": "EA",
+     "qty": 38,
+     "source": "E-1 / E-2"
+    },
+    {
+     "item": "Baseflex",
+     "description": "Display baseflex floor connection",
+     "unit": "EA",
+     "qty": 8,
+     "source": "E-2"
+    }
+   ]
+  },
+  {
+   "name": "Site / Underground / Allowances",
+   "items": [
+    {
+     "item": "Primary conduit",
+     "description": "Primary conduit (allowance)",
+     "unit": "LF",
+     "qty": 120,
+     "source": "Allowance"
+    },
+    {
+     "item": "Secondary feeders",
+     "description": "Secondary feeders from transformer (allowance)",
+     "unit": "LF",
+     "qty": 25,
+     "source": "Allowance"
+    },
+    {
+     "item": "Traffic box conduit",
+     "description": "Transformer-to-traffic-box conduit, no wiring (allowance)",
+     "unit": "LF",
+     "qty": 120,
+     "source": "Allowance"
+    },
+    {
+     "item": "Network conduit",
+     "description": "2\" network conduit from building (allowance)",
+     "unit": "LF",
+     "qty": 120,
+     "source": "Allowance"
+    }
+   ]
+  },
+  {
+   "name": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+   "items": [
+    {
+     "item": "Data conduit",
+     "description": "Data conduit & pull strings (no cabling)",
+     "unit": "LOT",
+     "qty": 1,
+     "source": "E-2"
+    },
+    {
+     "item": "Fire alarm conduit",
+     "description": "Fire alarm conduit & pull strings (no devices)",
+     "unit": "LOT",
+     "qty": 1,
+     "source": "APT scope"
+    }
+   ]
+  },
+  {
+   "name": "Grounding",
+   "items": [
+    {
+     "item": "Grounding",
+     "description": "Grounding electrode system (rods, Ufer, bonding)",
+     "unit": "LOT",
+     "qty": 1,
+     "source": "E-4"
+    }
+   ]
+  }
+ ],
+ "terms": [],
+ "alternates": [],
+ "takeoff_notes": []
+}

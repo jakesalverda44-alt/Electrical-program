@@ -1,0 +1,33 @@
+{
+  "source": "APT_Bid_AutoZone_10077_Kissimmee.pdf (Cowork, apt-electrical-bid skill), read with pdftotext 2026-09-23 — structure only, no client content beyond what the fixture already carries",
+  "pages": 6,
+  "header_lines": [
+    "^[A-Z][a-z]+ \\d{1,2}, \\d{4}$",
+    "^Summit General Contractors$",
+    "^Attn:  Estimating Department$",
+    "^estimating@summitgc\\.net$",
+    "^Re:  AutoZone Store #10077$",
+    "^2860 N Old Lake Wilson Rd, Kissimmee, FL 34747$",
+    "^Job No:  JS\\.\\d{8}$"
+  ],
+  "intro": "Please accept this proposal to complete the electrical work for AUTOZONE STORE #10077 you have out for bid.",
+  "bands": [
+    "SCOPE OF WORK",
+    "A. Service & Distribution",
+    "B. Branch Power",
+    "C. Lighting & Controls",
+    "D. Site Lighting, Underground Work & Allowances",
+    "E. Low Voltage Infrastructure (Conduit & Boxes Only)",
+    "F. Project Coordination & Closeout",
+    "EXCLUSIONS & CLARIFICATIONS",
+    "ELECTRICAL QUANTITY TAKEOFF",
+    "TERMS, CONDITIONS & SPECIAL REQUIREMENTS"
+  ],
+  "table_columns": ["ITEM", "DESCRIPTION", "UNIT", "QTY", "SOURCE / NOTES"],
+  "table_sections": [
+    "Service & Distribution", "Interior Lighting", "Exterior / Site Lighting", "Lighting Controls", "Branch Power",
+    "Site / Underground / Allowances", "Low Voltage Infrastructure (Conduit & Boxes Only)", "Grounding"
+  ],
+  "price_block": ["Proposal Price Summary", "^Total Electrical Scope — Eighty-One Thousand Four Hundred Eighty-Five and 60/100 Dollars\\s+\\$81,485\\.60$"],
+  "closing_after_price": ["Respectfully,", "(Cost based on Terms Above — Due Upon Acceptance to Secure Order)"]
+}

@@ -1,13 +1,15 @@
 import { Router, Response } from 'express';
 import { pool } from '../db/pool';
-import { requireAuth, requireAIPermission, AuthRequest, ownScopeId } from '../middleware/auth';
+import { requireAuth, requireAIPermission, hasAIPermission, AuthRequest, ownScopeId } from '../middleware/auth';
 import { loadAccessibleBid } from '../utils/ownership';
 import { getSetting } from '../db/getSetting';
 import Anthropic from '@anthropic-ai/sdk';
 import AdmZip from 'adm-zip';
-import { AGENT1_SYSTEM, AGENT2_SYSTEM, AGENT3_SYSTEM, AGENT4_SYSTEM, PREBID_COMPARE_SYSTEM } from '../ai/prompts';
-import { buildProposalDocx, ProposalJSON, renderBidDocx, legacyProposalWithBidMeta, bidDocxFilename } from '../utils/proposalDocx';
+import crypto from 'crypto';
+import { AGENT1_SYSTEM, agent1PromptWithCountingSections, AGENT2_SYSTEM, AGENT3_SYSTEM, AGENT4_SYSTEM, PREBID_COMPARE_SYSTEM } from '../ai/prompts';
+import { buildProposalDocx, ProposalJSON, renderBidDocx, legacyProposalWithBidMeta, bidDocxFilename, headerLines, introLine, priceLine, takeoffDescription } from '../utils/proposalDocx';
 import { callWithRetry } from '../ai/retry';
+import { assertNotTruncated, isAgentTruncatedError } from '../ai/stopReason';
 import { parseAIJSON, extractJSONText } from '../ai/json';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
@@ -41,12 +43,22 @@ import { parseMoney } from '../utils/money';
 import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
-import { composeBidData, ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
+import { runCountingStage, type CountResult } from '../ai/countingStage';
+import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
+import { writeAiCountMarkers } from '../estimating/aiMarkers';
+import { buildReviewItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
+import { takeoffGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
+import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
+import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
+import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey, overrideFor } from '../bidstd/scopeList';
+import { getBidScopeList } from '../bidstd/scopeListDb';
+import { ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
+import { composeProposal } from '../bidstd/composeProposal';
 import { resolveUniqueJobNumber } from '../bidstd/boilerplate';
 import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
 import { renderPrebidScopeDocx, prebidScopeFilename } from '../bidstd/prebidScopeDocx';
-import { verifyBidDocx, verifyBidText } from '../bidstd/verifyBid';
-import { BidData, validateBidData } from '../bidstd/bidData';
+import { verifyBidDocx, verifyBidText, type VerifyOptions } from '../bidstd/verifyBid';
+import { BidData } from '../bidstd/bidData';
 import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
 import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
 
@@ -56,13 +68,16 @@ const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'war
 const router = Router();
 const upload = drawingUpload;
 
-interface AIConfig {
+export interface AIConfig {
   model: string;
   modelA2: string;
   modelA3: string;
   modelA4: string;
   /** Task 2 — cheap model used to classify pages by title block before tiling. */
   modelClassifier: string;
+  /** Takeoff accuracy — the dedicated counting stage (Agent 1C). */
+  modelCounter: string;
+  maxTokensCounter: number;
   maxTokensA1: number;
   maxTokensA2: number;
   maxTokensA3: number;
@@ -81,6 +96,11 @@ const DEFAULT_MAX_TOKENS_A1 = 16000;
 const DEFAULT_MAX_TOKENS_A2 = 4000;
 const DEFAULT_MAX_TOKENS_A3 = 4000;
 const DEFAULT_MAX_TOKENS_A4 = 8000;
+/** Takeoff accuracy Decision 1 — Opus 5.5 counts symbols. Its thinking cannot
+ *  be disabled and thinking tokens count against max_tokens, so the budget is
+ *  sized for thinking plus ~200-400 compact marks per sheet (see counter.ts). */
+export const DEFAULT_COUNTER_MODEL = 'claude-opus-5-5';
+export const DEFAULT_MAX_TOKENS_COUNTER = 32000;
 const DEFAULT_TEMPERATURE = 0.3;
 
 function parseNumberSetting(value: string, fallback: number, min: number, max: number): number {
@@ -89,13 +109,14 @@ function parseNumberSetting(value: string, fallback: number, min: number, max: n
   return Math.min(max, Math.max(min, n));
 }
 
-async function loadAIConfig(): Promise<AIConfig> {
+export async function loadAIConfig(): Promise<AIConfig> {
   const [
     modelSetting, modelA2Setting, modelA3Setting, modelA4Setting, modelClassifierSetting,
     maxA1Setting, maxA2Setting, maxA3Setting, maxA4Setting,
     temperatureSetting,
     promptA1Setting, promptA2Setting, promptA3Setting, promptA4Setting,
     dpiScheduleSetting, dpiPlanSetting, tilesScheduleSetting, tilesPlanSetting,
+    modelCounterSetting, maxCounterSetting,
   ] = await Promise.all([
     getSetting('ai_model'),
     getSetting('ai_takeoff_agent2_model'),
@@ -115,6 +136,8 @@ async function loadAIConfig(): Promise<AIConfig> {
     getSetting('ai_prep_dpi_plan'),
     getSetting('ai_prep_tiles_schedule'),
     getSetting('ai_prep_tiles_plan'),
+    getSetting('ai_takeoff_counter_model'),
+    getSetting('ai_max_tokens_counter'),
   ]);
   const defaultModel = (process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim();
   return {
@@ -123,6 +146,8 @@ async function loadAIConfig(): Promise<AIConfig> {
     modelA3: (modelA3Setting || 'claude-haiku-4-5-20251001'),
     modelA4: (modelA4Setting || 'claude-sonnet-4-6'),
     modelClassifier: (modelClassifierSetting || 'claude-haiku-4-5-20251001'),
+    modelCounter: ((modelCounterSetting || '').trim() || DEFAULT_COUNTER_MODEL),
+    maxTokensCounter: parseNumberSetting(maxCounterSetting || '', DEFAULT_MAX_TOKENS_COUNTER, 1024, 128000),
     maxTokensA1: parseNumberSetting(maxA1Setting || '', DEFAULT_MAX_TOKENS_A1, 256, 64000),
     maxTokensA2: parseNumberSetting(maxA2Setting || '', DEFAULT_MAX_TOKENS_A2, 256, 64000),
     maxTokensA3: parseNumberSetting(maxA3Setting || '', DEFAULT_MAX_TOKENS_A3, 256, 64000),
@@ -146,6 +171,11 @@ async function loadAIConfig(): Promise<AIConfig> {
 }
 
 function describeAIError(err: unknown): string {
+  // Takeoff accuracy Task 1 — a truncation carries its own estimator-facing
+  // message ("Agent N ran out of room — raise its Max Tokens"); never bury it
+  // under a generic "AI request failed:" prefix.
+  if (isAgentTruncatedError(err)) return (err as Error).message;
+  if ((err as { name?: string })?.name === 'AgentRefusedError') return (err as Error).message;
   const e = err as { message?: string; status?: number; error?: { message?: string }; response?: { data?: { error?: string; message?: string } } };
   const status = e.status ? `Anthropic ${e.status}` : 'AI request failed';
   const detail = e.error?.message || e.response?.data?.error || e.response?.data?.message || e.message || 'Unknown error';
@@ -347,6 +377,9 @@ async function prepOnePdf(
   try {
     classified = await classifyPages(client, classifierModel, crops, filename);
   } catch (err) {
+    // Takeoff accuracy Task 1 — a truncated classifier response fails the run
+    // (Decision 9) instead of degrading silently to the whole-file fallback.
+    if (isAgentTruncatedError(err)) throw err;
     logger.warn({ err, filename }, '[takeoff] page classification AI call failed — whole-file fallback');
     return fallback();
   }
@@ -502,8 +535,203 @@ function compactOutput(text: string, max = 500): string {
   return `${oneLine.slice(0, max)}...`;
 }
 
+/** A pipeline input file; `documentId` is set when it was loaded from a bid
+ *  document (document_ids), so counted locations can be placed on it. */
+type PipelineFile = Express.Multer.File & { documentId?: string };
+
+// ── Takeoff accuracy Task 12: the pre-bid draft ───────────────────────────
+// After the analysis (and once the Needs-review list is clear) Agent 4 runs
+// in DRAFT mode — the same output contract, the same account-terms /
+// scope-list / review blocks, no price — and the result is stored as
+// draft_output. Choice: re-using Agent 4 with an explicit mode (rather than a
+// separate composer prompt) keeps ONE contract for sections + takeoff, so the
+// pre-bid package and the GC proposal render the same composed data through
+// the same enforcement and verification; the price was never part of Agent
+// 4's output (code applies it), so "no price" is just a different request
+// header plus no saved-estimate figures.
+
+/** Fix round 1 / S12 — every input that shapes the scope, read in ONE
+ *  repeatable-read snapshot: the draft prompt is built from exactly this, and
+ *  its hash is taken from exactly this (a scope edit that lands mid-call can
+ *  no longer be folded into a hash it wasn't in). */
+export interface ScopeSnapshot {
+  runId: string | null;
+  agent1Output: string;
+  agent2Output: string;
+  reviewItems: ReviewItem[] | null;
+  accountTerms: AccountTermsSnapshot | null;
+  workspaceScope: Record<string, string> | null;
+  scopeList: Awaited<ReturnType<typeof getBidScopeList>>;
+}
+
+export async function loadScopeSnapshot(bidId: string): Promise<ScopeSnapshot | null> {
+  const c = await pool.connect();
+  try {
+    await c.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const { rows: tr } = await c.query('SELECT run_id, agent1_output, agent2_output, review_items, account_terms FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    const { rows: ws } = await c.query('SELECT scope FROM bid_workspaces WHERE bid_id=$1', [bidId]);
+    const scopeList = await getBidScopeList(bidId, c);
+    await c.query('COMMIT');
+    if (!tr.length) return null;
+    return {
+      runId: (tr[0].run_id as string | null) ?? null,
+      agent1Output: (tr[0].agent1_output as string) || '',
+      agent2Output: (tr[0].agent2_output as string) || '',
+      reviewItems: (tr[0].review_items as ReviewItem[] | null) ?? null,
+      accountTerms: (tr[0].account_terms as AccountTermsSnapshot | null) ?? null,
+      workspaceScope: (ws[0]?.scope as Record<string, string> | undefined) ?? null,
+      scopeList,
+    };
+  } catch (err) {
+    await c.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    c.release();
+  }
+}
+
+export function hashScopeSnapshot(snap: ScopeSnapshot | null): string {
+  const resolutions = (snap?.reviewItems ?? []).map(i => [i.id, i.resolution?.action ?? null, i.resolution?.qty ?? null, i.resolution?.answer ?? null, i.resolution?.reason ?? null]);
+  const payload = JSON.stringify([
+    snap?.runId ?? null, snap?.agent2Output ?? '', snap?.accountTerms ?? null, resolutions,
+    (snap?.scopeList.items ?? []).map(i => [i.kind, i.text]), (snap?.scopeList.overrides ?? []).map(o => [o.lineKey, o.reason]),
+    snap?.workspaceScope ?? {},
+  ]);
+  return crypto.createHash('sha256').update(payload).digest('hex');
+}
+
+/** sha256 of every input that shapes the scope: equal at proposal time means
+ *  the draft can be reused with just the price inserted. */
+export async function scopeInputsHash(bidId: string): Promise<string> {
+  return hashScopeSnapshot(await loadScopeSnapshot(bidId));
+}
+
+/** Fix round 1 / B5 — begin a new analysis run for a bid (see /analyze).
+ *  Returns the new run id. */
+export async function startAnalysisRun(bidId: string): Promise<string> {
+  const runId = crypto.randomUUID();
+  await pool.query(`
+    INSERT INTO takeoff_results (bid_id, status, run_id, review_status) VALUES ($1, 'running', $2, 'pending')
+    ON CONFLICT (bid_id) DO UPDATE SET status='running', created_at=now(), run_id=$2,
+      agent1_output=NULL, agent2_output=NULL, agent3_output=NULL, count_result=NULL,
+      agent4_output=NULL, agent4_price=NULL, agent4_status=NULL, agent4_error=NULL, agent4_run_id=NULL, agent4_source=NULL,
+      draft_output=NULL, draft_status=NULL, draft_error=NULL, draft_inputs_hash=NULL, draft_run_id=NULL,
+      review_status='pending'
+  `, [bidId, runId]);
+  return runId;
+}
+
+/** Compose the pre-bid draft. Never throws: failures land in draft_status /
+ *  draft_error. Refuses (records why) while the takeoff still needs review. */
+export async function runDraftComposition(bidId: string, client: Anthropic, config: AIConfig, opts: { claimed?: boolean } = {}): Promise<void> {
+  let claimedHere = false;
+  // N-R2-1 — every write below is bound to the run this draft belongs to; a
+  // superseded draft can't mark the new run's draft as error or release its claim.
+  const { rows: runRows } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const draftRun = (runRows[0]?.run_id as string | null) ?? null;
+  try {
+    const gate = await takeoffGate(bidId);
+    if (gate) {
+      if (opts.claimed) await pool.query(`UPDATE takeoff_results SET draft_status=NULL WHERE bid_id=$1 AND draft_status='running' AND run_id IS NOT DISTINCT FROM $2`, [bidId, draftRun]);
+      await pool.query(`UPDATE takeoff_results SET draft_error=$2 WHERE bid_id=$1`, [bidId, 'Waiting on the takeoff review.']);
+      return;
+    }
+    // S13 — one draft in flight per bid: claim the running state atomically.
+    if (!opts.claimed) {
+      const claim = await pool.query(
+        `UPDATE takeoff_results SET draft_status='running', draft_error=NULL
+          WHERE bid_id=$1 AND agent2_output IS NOT NULL AND draft_status IS DISTINCT FROM 'running' RETURNING 1`, [bidId]);
+      if (!claim.rowCount) return;
+      claimedHere = true;
+    }
+    const snap = await loadScopeSnapshot(bidId);
+    if (!snap?.agent2Output) {
+      await pool.query(`UPDATE takeoff_results SET draft_status=NULL WHERE bid_id=$1 AND draft_status='running' AND run_id IS NOT DISTINCT FROM $2`, [bidId, draftRun]);
+      return;
+    }
+    const inputsHash = hashScopeSnapshot(snap);
+    const userMsg = buildAgent4UserMessage({
+      mode: 'draft',
+      price: '',
+      agent1Output: snap.agent1Output,
+      agent2Output: snap.agent2Output,
+      workspaceScope: snap.workspaceScope,
+      savedEstimate: null,
+      reviewResolutions: reviewResolutionsForAgent4(snap.reviewItems),
+      accountTerms: await accountTermsBlockFor(bidId, snap.accountTerms, snap.reviewItems, snap.agent1Output),
+      scopeList: renderScopeListBlock(snap.scopeList.items),
+    });
+    const resp = await callWithRetry(() => client.messages.stream({
+      model: config.modelA4,
+      max_tokens: config.maxTokensA4,
+      system: [{ type: 'text', text: config.promptA4 || AGENT4_SYSTEM, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: userMsg }],
+    }).finalMessage(), { onRetry: (a, _e, d) => logger.warn(`[draft] retry ${a} in ${d}ms`) });
+    assertNotTruncated(resp, 'Agent 4 (pre-bid draft)', config.maxTokensA4);
+    const parsed = parseAIJSON(extractText(resp));
+    if (!parsed || !isAgent4Shape(parsed)) {
+      throw new Error(`The pre-bid draft could not be parsed (stop_reason: ${resp.stop_reason ?? 'unknown'}). Compose it again.`);
+    }
+    // B5 — written only if no new analysis started meanwhile.
+    const w = await pool.query(
+      `UPDATE takeoff_results SET draft_output=$2, draft_status='complete', draft_error=NULL, draft_model=$3,
+         usage_draft=$4, draft_inputs_hash=$5, draft_at=now(), draft_run_id=run_id
+        WHERE bid_id=$1 AND run_id IS NOT DISTINCT FROM $6`,
+      [bidId, JSON.stringify(parsed), config.modelA4, JSON.stringify(resp.usage), inputsHash, snap.runId]
+    );
+    if (!w.rowCount) logger.warn({ bidId }, '[draft] a new analysis started while the draft was composing — result discarded');
+  } catch (err) {
+    logger.error({ err, bidId }, '[draft] pre-bid draft composition failed');
+    await pool.query(`UPDATE takeoff_results SET draft_status='error', draft_error=$2 WHERE bid_id=$1 AND run_id IS NOT DISTINCT FROM $3`,
+      [bidId, isAgentTruncatedError(err) ? (err as Error).message : describeAIError(err), draftRun]).catch(() => {});
+  } finally {
+    if (claimedHere || opts.claimed) {
+      await pool.query(`UPDATE takeoff_results SET draft_status=NULL WHERE bid_id=$1 AND draft_status='running' AND run_id IS NOT DISTINCT FROM $2`, [bidId, draftRun]).catch(() => {});
+    }
+  }
+}
+
+/** S13 — starts a draft only when none is in flight for the bid (claimed
+ *  atomically), logs who started it. false = not started. */
+async function startDraftInBackground(bidId: string, startedBy?: { id: string; name: string }): Promise<boolean> {
+  const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!apiKey) return false;
+  let client: Anthropic;
+  try { client = new Anthropic({ apiKey }); } catch (err) { logger.warn({ err, bidId }, '[draft] client could not be created'); return false; }
+  const claim = await pool.query(
+    `UPDATE takeoff_results SET draft_status='running', draft_error=NULL
+      WHERE bid_id=$1 AND agent2_output IS NOT NULL AND draft_status IS DISTINCT FROM 'running' RETURNING 1`, [bidId]);
+  if (!claim.rowCount) return false;
+  if (startedBy) {
+    await pool.query(`INSERT INTO activity (kind, div, text, user_id) VALUES ('ai_draft','preconstruction',$1,$2)`,
+      [`Pre-bid draft composition started by ${startedBy.name}`, startedBy.id]).catch(() => {});
+  }
+  const config = await loadAIConfig();
+  void runDraftComposition(bidId, client, config, { claimed: true });
+  return true;
+}
+
+/** Takeoff accuracy Task 8 — the account terms for a bid: the snapshot taken
+ *  at analysis time, or (a run from before account rules existed) one built
+ *  now from the current rules and the stored drawing analysis, never
+ *  persisted from here. */
+async function accountTermsFor(bidId: string, stored: AccountTermsSnapshot | null, agent1Output: string): Promise<AccountTermsSnapshot | null> {
+  if (stored) return stored;
+  const agent1 = parseAIJSON(agent1Output || '') ?? {};
+  const { rows } = await pool.query('SELECT name, brand, project_type FROM bids WHERE id=$1', [bidId]);
+  if (!rows.length) return null;
+  return buildAccountTermsSnapshot(rows[0], agent1);
+}
+
+async function accountTermsBlockFor(bidId: string, stored: AccountTermsSnapshot | null, reviewItems: ReviewItem[] | null, agent1Output: string): Promise<string | null> {
+  const snap = await accountTermsFor(bidId, stored, agent1Output);
+  return renderAccountTermsBlock(snap, effectiveAccountTerms(snap, reviewItems));
+}
+
 // ── Background pipeline ───────────────────────────────────────────────────────
-async function runPipeline(
+// Exported (takeoff accuracy) so integration tests can drive the real pipeline
+// with an injected fake Anthropic client — never a real API call from tests.
+export async function runPipeline(
   bidId: string,
   files: Express.Multer.File[],
   client: Anthropic,
@@ -512,9 +740,34 @@ async function runPipeline(
   let agent1Output = '';
   let agent2Output = '';
   let agent3Output = '';
+  // Takeoff accuracy Task 5 — the counting stage needs the page inventory and
+  // the PDF bytes Agent 1 was built from.
+  let countingInventory: PrepInventoryEntry[] = [];
+  // Task 8 — set by the counting stage, read by Agent 2's message.
+  let accountTerms: AccountTermsSnapshot | null = null;
+  let reviewItemsNow: ReviewItem[] = [];
+  // Task 9 — what the deterministic clean-up changed (takeoff_results.hygiene).
+  const hygiene: HygieneReport = emptyHygiene();
+  let agent1BatchResults: Record<string, unknown>[] = [];
+  const { rows: bidGcRows } = await pool.query('SELECT gc FROM bids WHERE id=$1', [bidId]);
+  const bidGc = String(bidGcRows[0]?.gc ?? '');
 
+  // Fix round 2 / S-R2-1 — every write of this run is guarded by its run id:
+  // once a newer /analyze starts, nothing this run does can change status,
+  // outputs or the review (not even an error write). The run then stops.
+  const { rows: runRows } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const runId = (runRows[0]?.run_id as string | null) ?? null;
+  let superseded = false;
+  const guarded = async (sql: string, params: unknown[]) => {
+    const r = await pool.query(`${sql.trimEnd()} AND run_id IS NOT DISTINCT FROM $${params.length + 1}`, [...params, runId]);
+    if (!r.rowCount) {
+      if (!superseded) logger.warn({ bidId, runId }, '[takeoff] a newer analysis run started — this run stops writing');
+      superseded = true;
+    }
+    return r;
+  };
   const updateStatus = (status: string) =>
-    pool.query(`UPDATE takeoff_results SET status=$1 WHERE bid_id=$2`, [status, bidId]);
+    guarded(`UPDATE takeoff_results SET status=$1 WHERE bid_id=$2`, [status, bidId]);
 
   // ── Agent 1 ─────────────────────────────────────────────────────────────────
   try {
@@ -552,10 +805,12 @@ async function runPipeline(
     try {
       uploadPrep = await prepareAgent1Upload(filesToSend, client, config.modelClassifier, config.tileOverrides);
     } catch (err) {
+      if (isAgentTruncatedError(err)) throw err;
       logger.warn({ err, bidId }, '[takeoff] Stage 0 document prep failed for the whole upload — falling back to one legacy document-block call');
       uploadPrep = { batches: [legacyContentBlocks(filesToSend)], inventory: [], classifierUsage: { ...NO_USAGE } };
     }
     const { batches: agent1Batches, inventory: prepInventory, classifierUsage } = uploadPrep;
+    countingInventory = prepInventory;
     let agent1JSON: Record<string, unknown> = {};
 
     if (agent1Batches.length <= 1) {
@@ -572,7 +827,7 @@ async function runPipeline(
         client.messages.stream({
           model: config.model,
           max_tokens: config.maxTokensA1,
-          system: [{ type: 'text', text: config.promptA1 || AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
+          system: [{ type: 'text', text: agent1PromptWithCountingSections(config.promptA1), cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: contentBlocks }],
         }).finalMessage()
       , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
@@ -587,10 +842,12 @@ async function runPipeline(
         input_tokens: (resp.usage?.input_tokens ?? 0) + classifierUsage.input_tokens,
         output_tokens: (resp.usage?.output_tokens ?? 0) + classifierUsage.output_tokens,
       };
-      await pool.query(
-        `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
+      await guarded(`UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
         [JSON.stringify(mergedUsage), config.model, JSON.stringify(prepInventory), prepFidelity, bidId]
       ).catch(() => {});
+      // Takeoff accuracy Task 1 — after the usage write, so a truncated (but
+      // still billed) call's cost is recorded before the run fails.
+      assertNotTruncated(resp, 'Agent 1', config.maxTokensA1);
 
     } else {
       // Batched: N token-budgeted calls (mergeAgent1Batches already merges results).
@@ -610,12 +867,16 @@ async function runPipeline(
           client.messages.stream({
             model: config.model,
             max_tokens: config.maxTokensA1,
-              system: [{ type: 'text', text: config.promptA1 || AGENT1_SYSTEM, cache_control: { type: 'ephemeral' } }],
+              system: [{ type: 'text', text: agent1PromptWithCountingSections(config.promptA1), cache_control: { type: 'ephemeral' } }],
             messages: [{ role: 'user', content: contentBlocks }],
           }).finalMessage()
         , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
         logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${agent1Batches.length}`, prep);
+        // Takeoff accuracy Task 1 — a truncated batch used to fall through to
+        // parseAIJSON, fail, and be silently skipped by the merge below: the
+        // takeoff just lost every sheet that batch carried.
+        assertNotTruncated(bResp, `Agent 1 (batch ${bi + 1} of ${agent1Batches.length})`, config.maxTokensA1);
         if (!bText.trim()) {
           logger.warn({ bidId, batch: `${bi + 1}/${agent1Batches.length}` },
             '[takeoff] Agent 1 batch returned empty output — skipping');
@@ -626,8 +887,7 @@ async function runPipeline(
         if (bResp.usage) batchUsage = mergeUsage(batchUsage, bResp.usage as unknown as Record<string, unknown>);
       }
       batchUsage = mergeUsage(batchUsage, classifierUsage);
-      await pool.query(
-        `UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
+      await guarded(`UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
         [JSON.stringify(batchUsage), config.model, JSON.stringify(prepInventory), prepFidelity, bidId]
       ).catch(() => {});
 
@@ -635,6 +895,7 @@ async function runPipeline(
       // (project, service, panels, equipment, quantities, allowances, ecfeciItems,
       // flags, scopeNotes, missingSheets), not a hardcoded legacy key list.
       // See backend/src/ai/mergeAgent1.ts for the merge rules.
+      agent1BatchResults = batchResults;
       agent1JSON = mergeAgent1Batches(batchResults);
       agent1Output = JSON.stringify(agent1JSON, null, 2);
     }
@@ -645,8 +906,7 @@ async function runPipeline(
       const stopHint = agent1Output.trim().startsWith('```') || agent1Output.trim().startsWith('{')
         ? 'Agent 1 returned JSON that could not be parsed. The response may have been cut off. Try fewer sheets or increase AI Max Tokens in Settings > AI.'
         : 'Agent 1 did not return JSON.';
-      await pool.query(
-        `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
+      await guarded(`UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
         [`${stopHint}\n\nRaw preview: ${compactOutput(agent1Output)}`, bidId]
       );
       console.error('[takeoff] Agent 1 JSON parse failed');
@@ -658,8 +918,7 @@ async function runPipeline(
     // mergeAgent1Batches still returns a valid-looking {} that would otherwise
     // flow straight into Agents 2-3, billing two more paid calls for nothing.
     if (analysisIsEmpty(agent1JSON)) {
-      await pool.query(
-        `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
+      await guarded(`UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
         [
           'Drawing analysis found no electrical content. Check that the right sheets were uploaded (see the prep inventory) — the run was stopped before Agents 2–3 to avoid billing for an empty takeoff.',
           bidId,
@@ -669,24 +928,111 @@ async function runPipeline(
       return;
     }
 
-    await pool.query(
-      `UPDATE takeoff_results SET status='agent1_complete', agent1_output=$1 WHERE bid_id=$2`,
-      [agent1Output, bidId]
+    // Task 9 — output hygiene on the drawing analysis, before anything reads it.
+    collectSqFt(agent1BatchResults.length ? agent1BatchResults : [agent1JSON], hygiene);
+    let cleaned = applyGcHygiene(agent1JSON, bidGc, hygiene);
+    const loadedSheetNos = [
+      ...countingInventory.map(p => p.sheetNo),
+      ...(Array.isArray((cleaned.project as Record<string, unknown> | undefined)?.sheets) ? ((cleaned.project as Record<string, unknown>).sheets as unknown[]).map(String) : []),
+    ];
+    cleaned = filterMissingSheets(cleaned, loadedSheetNos, hygiene);
+    cleaned = downgradeNotFound(cleaned, hygiene);
+    agent1JSON = cleaned;
+    agent1Output = JSON.stringify(agent1JSON, null, 2);
+
+    await guarded(`UPDATE takeoff_results SET status='agent1_complete', agent1_output=$1, hygiene=$2 WHERE bid_id=$3`,
+      [agent1Output, JSON.stringify(hygiene), bidId]
     );
   } catch (err) {
-    const message = `Agent 1 failed: ${describeAIError(err)}`;
+    const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 1 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 1 failed');
-    await pool.query(
-      `UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
+    await guarded(`UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`,
       [message, bidId]
     );
     return;
   }
 
+  if (superseded) return;
+  // ── Agent 1C: counting stage (takeoff accuracy, Decisions 1-7) ─────────────
+  // Every fixture/device/equipment type from the schedules and legend is
+  // counted on each electrical plan sheet at 300 DPI; the counts REPLACE
+  // Agent 1's own for those types before Agent 2 ever sees them.
+  try {
+    await updateStatus('counting');
+    const pdfs = new Map<string, Buffer>();
+    for (const f of files) {
+      if ((f.originalname.split('.').pop() || '').toLowerCase() === 'pdf') pdfs.set(f.originalname, f.buffer);
+    }
+    // Fix round 1 / B2 — fixture types the estimator entered (when an earlier
+    // run found no schedule/legend) are counted like schedule rows.
+    const agent1ForCounting = parseAIJSON(agent1Output) ?? {};
+    const { rows: manualRows } = await pool.query('SELECT manual_count_targets FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    const manual = (manualRows[0]?.manual_count_targets as Array<Record<string, unknown>> | null) ?? [];
+    if (manual.length) {
+      const have = new Set(((agent1ForCounting.fixtureSchedule as Array<{ type?: string }> | undefined) ?? []).map(f => String(f.type ?? '').toUpperCase()));
+      agent1ForCounting.fixtureSchedule = [
+        ...((agent1ForCounting.fixtureSchedule as unknown[] | undefined) ?? []),
+        ...manual.filter(m => !have.has(String(m.type ?? '').toUpperCase())).map(m => ({ ...m, sourceSheet: 'Entered by the estimator' })),
+      ];
+    }
+    const stage = await runCountingStage({
+      client, model: config.modelCounter, maxTokens: config.maxTokensCounter,
+      agent1: agent1ForCounting, inventory: countingInventory, pdfs,
+    });
+    agent1Output = JSON.stringify(stage.agent1, null, 2);
+    if (superseded) return;
+    // Task 6 — counted locations become suggested markers in the Plans view.
+    // Non-fatal: a failure here loses the markers, never the counts.
+    try {
+      const markers = await writeAiCountMarkers(bidId, stage.countResult,
+        files.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })));
+      (stage.countResult as unknown as Record<string, unknown>).markers = markers;
+    } catch (err) {
+      logger.warn({ err, bidId }, '[takeoff] writing AI count markers failed');
+      (stage.countResult as unknown as Record<string, unknown>).markers = { error: 'suggested markers could not be written' };
+    }
+    // Task 8 — the account rule for this bid, resolved against the drawings'
+    // explicit furnish/install statements; open terms become scope questions.
+    const { rows: bidRows } = await pool.query('SELECT name, brand, project_type FROM bids WHERE id=$1', [bidId]);
+    accountTerms = await buildAccountTermsSnapshot(bidRows[0] ?? {}, stage.agent1);
+    // Task 7 — the Needs-review list. A re-run keeps the estimator's earlier
+    // resolutions for the same items (their work is never discarded).
+    // N5 — the carry-over reads and writes review_items in ONE transaction
+    // under a row lock, so a resolve that commits meanwhile is never lost.
+    const freshItems = buildReviewItems(stage.countResult, scopeQuestionsFor(accountTerms));
+    const tx = await pool.connect();
+    try {
+      await tx.query('BEGIN');
+      const { rows: prevRows } = await tx.query('SELECT review_items FROM takeoff_results WHERE bid_id=$1 FOR UPDATE', [bidId]);
+      reviewItemsNow = carryOverResolutions(freshItems, (prevRows[0]?.review_items as ReviewItem[] | null) ?? null);
+      const w = await tx.query(
+        `UPDATE takeoff_results SET agent1_output=$1, count_result=$2, usage_counter=$3, model_counter=$4,
+           review_items=$5, review_status=$6, account_terms=$7 WHERE bid_id=$8 AND run_id IS NOT DISTINCT FROM $9`,
+        [agent1Output, JSON.stringify(stage.countResult), JSON.stringify(stage.usage), config.modelCounter,
+         JSON.stringify(reviewItemsNow), reviewStatus(reviewItemsNow), JSON.stringify(accountTerms), bidId, runId]
+      );
+      if (!w.rowCount) superseded = true;
+      await tx.query('COMMIT');
+    } catch (err) {
+      await tx.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      tx.release();
+    }
+  } catch (err) {
+    const message = isAgentTruncatedError(err) ? (err as Error).message : `Counting stage failed: ${describeAIError(err)}`;
+    logger.error({ err, bidId }, 'Takeoff counting stage failed');
+    await guarded(`UPDATE takeoff_results SET status='error', agent1_output=$1 WHERE bid_id=$2`, [message, bidId]);
+    return;
+  }
+
+  if (superseded) return;
   // ── Agent 2 ─────────────────────────────────────────────────────────────────
   try {
     await updateStatus('agent2_running');
-    const resp = await callWithRetry(() => client.messages.create({
+    // Task 11 — the estimator's scope list, binding for Agent 2.
+    const agent2ScopeBlock = renderScopeListBlock((await getBidScopeList(bidId)).items);
+    const resp = await callWithRetry(() => client.messages.stream({
       model: config.modelA2,
       max_tokens: config.maxTokensA2,
       system: [{ type: 'text', text: config.promptA2 || AGENT2_SYSTEM, cache_control: { type: 'ephemeral' } }],
@@ -694,26 +1040,38 @@ async function runPipeline(
         role: 'user',
         // Task 4.1 — compact (no 2-space indent) in the request body; storage
         // and the UI keep the pretty agent1Output exactly as today.
-        content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}`,
+        content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\n${renderAccountTermsBlock(accountTerms, effectiveAccountTerms(accountTerms, reviewItemsNow)) ?? ''}\n\n${agent2ScopeBlock ?? ''}\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}`,
       }],
-    }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
+    }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
+    assertNotTruncated(resp, 'Agent 2', config.maxTokensA2);
     agent2Output = extractText(resp);
+    // Task 9 — the same hygiene on Agent 2's JSON: the bid's GC, no
+    // not-found value left VERIFIED.
+    const agent2Parsed = parseAIJSON(agent2Output);
+    if (agent2Parsed) {
+      const a2Report = emptyHygiene();
+      agent2Output = JSON.stringify(downgradeNotFound(applyGcHygiene(agent2Parsed, bidGc, a2Report), a2Report));
+      if (a2Report.downgraded.length) {
+        hygiene.downgraded.push(...a2Report.downgraded.map(d => ({ ...d, path: `agent2.${d.path}` })));
+        hygiene.flags.push(...a2Report.downgraded.map(d => `Agent 2 ${d.path}: "${d.value}" can't be ${d.from} — downgraded to ${d.to}.`));
+        await guarded('UPDATE takeoff_results SET hygiene=$1 WHERE bid_id=$2', [JSON.stringify(hygiene), bidId]);
+      }
+    }
     const agent2ToStore = extractJSONText(agent2Output) ?? agent2Output;
 
-    await pool.query(
-      `UPDATE takeoff_results SET status='agent2_complete', agent2_output=$1, usage_agent2=$2, model_agent2=$3 WHERE bid_id=$4`,
+    await guarded(`UPDATE takeoff_results SET status='agent2_complete', agent2_output=$1, usage_agent2=$2, model_agent2=$3 WHERE bid_id=$4`,
       [agent2ToStore, JSON.stringify(resp.usage), config.modelA2, bidId]
     );
   } catch (err) {
-    const message = `Agent 2 failed: ${describeAIError(err)}`;
+    const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 2 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 2 failed');
-    await pool.query(
-      `UPDATE takeoff_results SET status='error', agent2_output=$1 WHERE bid_id=$2`,
+    await guarded(`UPDATE takeoff_results SET status='error', agent2_output=$1 WHERE bid_id=$2`,
       [message, bidId]
     );
     return;
   }
 
+  if (superseded) return;
   // ── Agent 3 ─────────────────────────────────────────────────────────────────
   try {
     await updateStatus('agent3_running');
@@ -734,7 +1092,7 @@ async function runPipeline(
       logger.warn({ err, bidId }, '[takeoff] pre-bid cross-check load failed — continuing without it');
     }
 
-    const resp = await callWithRetry(() => client.messages.create({
+    const resp = await callWithRetry(() => client.messages.stream({
       model: config.modelA3,
       max_tokens: config.maxTokensA3,
       system: [{ type: 'text', text: config.promptA3 || AGENT3_SYSTEM, cache_control: { type: 'ephemeral' } }],
@@ -743,12 +1101,13 @@ async function runPipeline(
         // Task 4.1 — compact in the request body (both prior agents' outputs).
         content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}\n\n---\n\nESTIMATOR OUTPUT:\n\n${compactForHandoff(agent2Output)}${prebidCrossCheck ? `\n\n---\n\n${prebidCrossCheck}` : ''}`,
       }],
-    }), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
+    }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
+    assertNotTruncated(resp, 'Agent 3', config.maxTokensA3);
     agent3Output = extractText(resp);
     const agent3ToStore = extractJSONText(agent3Output) ?? agent3Output;
 
     // Final write — all three complete
-    await pool.query(`
+    await guarded(`
       UPDATE takeoff_results SET
         status='complete',
         agent3_output=$1,
@@ -758,9 +1117,15 @@ async function runPipeline(
       WHERE bid_id=$5
     `, [agent3ToStore, agent1Output, JSON.stringify(resp.usage), config.modelA3, bidId]);
 
+    // Takeoff accuracy Task 12 — the pre-bid draft, right after the analysis,
+    // when nothing is waiting on the estimator (otherwise it's composed the
+    // moment the Needs-review list clears).
+    if (superseded) return;
+    await runDraftComposition(bidId, client, config);
+
     // Also persist structured fields from agent1 JSON for backward compatibility
     const a1 = parseAIJSON(agent1Output) ?? {};
-    await pool.query(`
+    await guarded(`
       UPDATE takeoff_results SET
         scope=$1, materials=$2
       WHERE bid_id=$3
@@ -773,7 +1138,8 @@ async function runPipeline(
     // Auto-fill project_type/sq_ft from the takeoff extraction — never overwrite a manually-set value
     const a1Project = (a1.project ?? {}) as Record<string, unknown>;
     const extractedType = String(a1Project.projectType ?? '');
-    const extractedSqFt = Number(a1Project.sqFt) || null;
+    // Task 9 — two different SF values on the drawings: never auto-fill.
+    const extractedSqFt = hygiene.sqFt?.conflict ? null : (Number(a1Project.sqFt) || null);
     const validType = PROJECT_TYPES.includes(extractedType) ? extractedType : null;
     if (validType || extractedSqFt) {
       await pool.query(
@@ -813,10 +1179,9 @@ async function runPipeline(
       }
     })();
   } catch (err) {
-    const message = `Agent 3 failed: ${describeAIError(err)}`;
+    const message = isAgentTruncatedError(err) ? (err as Error).message : `Agent 3 failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff Agent 3 failed');
-    await pool.query(
-      `UPDATE takeoff_results SET status='error', agent3_output=$1 WHERE bid_id=$2`,
+    await guarded(`UPDATE takeoff_results SET status='error', agent3_output=$1 WHERE bid_id=$2`,
       [message, bidId]
     );
   }
@@ -1242,13 +1607,14 @@ router.post('/:bidId/prebid-analyze', requireAuth, requireAIPermission('run_anal
           comparable: { name: comp.name, sqFt: comp.sq_ft, furnishModel: comp.furnish_model,
                         sections: comp.sections, categories: comp.categories ?? [] },
         });
-        const resp = await callWithRetry(() => client.messages.create({
+        const resp = await callWithRetry(() => client.messages.stream({
           model: config.modelA2,
           max_tokens: config.maxTokensA2,
           system: [{ type: 'text', text: PREBID_COMPARE_SYSTEM, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: `Compare these two pre-bid packages.\n\n${payload}` }],
-        }), { onRetry: (a, _e, d) => console.warn(`[prebid-analyze] transient error, retry ${a} in ${d}ms`) });
+        }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[prebid-analyze] transient error, retry ${a} in ${d}ms`) });
 
+        assertNotTruncated(resp, 'Pre-bid comparison', config.maxTokensA2, 'it uses Agent 2\'s Max Tokens in Settings → AI');
         const parsed = parseAIJSON(extractText(resp));
         if (!parsed) throw new Error('model did not return parseable JSON');
         await pool.query(
@@ -1430,6 +1796,158 @@ router.post('/:bidId/rfi-draft', requireAuth, asyncHandler(async (req: AuthReque
   res.json({ draftWebLink: draft.webLink, submittedCount: open.length, submittedIds: openIds, rfis: updatedRfis });
 }));
 
+// ── Takeoff accuracy Task 7: the Needs-review list ─────────────────────────
+router.get('/:bidId/review', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const review = await getTakeoffReview(bidId);
+  // Fix round 1 / S5 — a bid analysed before the accuracy checks (no counting
+  // stage ever ran: review_status NULL) is NOT blocked — its existing flow
+  // keeps working — but the Takeoff step says so, and shows the questions its
+  // account rule would ask (built now from the stored analysis; nothing is
+  // written).
+  if (review.status === null) {
+    const { rows } = await pool.query('SELECT agent1_output, account_terms FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    if (rows[0]?.agent1_output) {
+      const snap = await accountTermsFor(bidId, rows[0].account_terms as AccountTermsSnapshot | null, rows[0].agent1_output as string).catch(() => null);
+      return res.json({
+        ...review,
+        legacy: {
+          message: 'Analyzed before accuracy checks — re-run analysis to enable counting and account rules.',
+          accountRule: snap ? `${snap.ruleName} (${snap.matchedBy})` : null,
+          questions: (snap?.questions ?? []).map(q => ({ label: q.label, question: q.question, notes: q.notes })),
+        },
+      });
+    }
+  }
+  // S8 — the matched account rule (and its warning) shown in the Takeoff step.
+  const { rows: tr } = await pool.query('SELECT account_terms FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const snap = (tr[0]?.account_terms as AccountTermsSnapshot | null) ?? null;
+  res.json({ ...review, ...(snap ? { accountRule: { name: snap.ruleName, matchedBy: snap.matchedBy, ...(snap.warning ? { warning: snap.warning } : {}) } } : {}) });
+}));
+
+// Resolve one or more items the same way: {itemIds, action:'count'|'markers'|
+// 'not_on_job'|'answer', qty?, reason?, answer?}. Every item is validated;
+// nothing is saved unless all of them pass.
+router.post('/:bidId/review/resolve', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const body = req.body as { itemIds?: unknown; action?: unknown; qty?: unknown; reason?: unknown; answer?: unknown };
+  const itemIds = Array.isArray(body.itemIds) ? body.itemIds.filter((x): x is string => typeof x === 'string') : [];
+  const action = body.action;
+  if (!itemIds.length) return res.status(400).json({ error: 'itemIds required' });
+  if (action !== 'count' && action !== 'markers' && action !== 'not_on_job' && action !== 'answer' && action !== 'confirm') {
+    return res.status(400).json({ error: 'action must be count, markers, not_on_job, answer or confirm' });
+  }
+  const out = await resolveReviewItems(bidId, itemIds, { action, qty: body.qty, reason: body.reason, answer: body.answer }, req.user!.name);
+  if (!out.ok) return res.status(out.status).json({ error: out.error });
+  // Task 12 — the last open item just cleared: compose the pre-bid draft.
+  let draftStarted = false;
+  // S13 — only for a user who may run paid analysis, and never a second
+  // draft while one is in flight (startDraftInBackground claims atomically).
+  if (out.review.status === 'clear' && await hasAIPermission(req.user!, 'run_analysis')) {
+    const { rows } = await pool.query('SELECT draft_status, draft_inputs_hash FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    const upToDate = rows[0]?.draft_status === 'complete' && rows[0]?.draft_inputs_hash === await scopeInputsHash(bidId);
+    if (!upToDate) draftStarted = await startDraftInBackground(bidId, { id: req.user!.id, name: req.user!.name });
+  }
+  res.json({ ...out.review, draftStarted });
+}));
+
+router.post('/:bidId/review/reopen', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const itemId = typeof req.body?.itemId === 'string' ? req.body.itemId : '';
+  if (!itemId) return res.status(400).json({ error: 'itemId required' });
+  const out = await reopenReviewItem(bidId, itemId);
+  if (!out.ok) return res.status(out.status).json({ error: out.error });
+  res.json(out.review);
+}));
+
+// Fix round 1 / B2 — the estimator enters the fixture types (when the
+// analysis found no schedule or legend); the next analysis run counts them.
+// body: {types: [{type, description, location?: interior|exterior_building|site, wattage?}]}
+router.put('/:bidId/count-types', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const raw = Array.isArray(req.body?.types) ? req.body.types as unknown[] : null;
+  if (!raw) return res.status(400).json({ error: 'types must be an array' });
+  const types: Array<Record<string, unknown>> = [];
+  for (const t of raw) {
+    const r = (t ?? {}) as Record<string, unknown>;
+    const type = String(r.type ?? '').trim().slice(0, 20);
+    const description = String(r.description ?? '').trim().slice(0, 200);
+    const location = ['interior', 'exterior_building', 'site'].includes(String(r.location)) ? String(r.location) : 'interior';
+    const wattage = Number(r.wattage);
+    if (!type || !description) return res.status(400).json({ error: 'Each type needs a tag (e.g. "A") and a description.' });
+    types.push({ type, description, location, ...(Number.isFinite(wattage) && wattage > 0 ? { wattage } : {}) });
+  }
+  const { rowCount } = await pool.query('UPDATE takeoff_results SET manual_count_targets=$2 WHERE bid_id=$1', [bidId, JSON.stringify(types)]);
+  if (!rowCount) return res.status(404).json({ error: 'Run the AI analysis first.' });
+  res.json({ types, note: 'Saved. Re-run the analysis — these types are counted on the plan sheets like schedule rows.' });
+}));
+
+// Task 12 — compose (or re-compose) the pre-bid draft on demand.
+router.post('/:bidId/compose-draft', requireAuth, requireAIPermission('run_analysis'), asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const gate = await takeoffGate(bidId);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+  const { rows } = await pool.query('SELECT agent2_output, draft_status FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  if (!rows[0]?.agent2_output) return res.status(400).json({ error: 'Run the AI analysis first.' });
+  if (rows[0].draft_status === 'running') return res.json({ status: 'running' });
+  const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!apiKey) return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI.' });
+  await startDraftInBackground(bidId, { id: req.user!.id, name: req.user!.name });
+  res.json({ status: 'running' });
+}));
+
+// ── Takeoff accuracy Task 11: the estimator's scope list ────────────────────
+router.get('/:bidId/scope-items', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
+  res.json(await getBidScopeList(req.params.bidId));
+}));
+
+router.post('/:bidId/scope-items', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const kind = req.body?.kind;
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  if (kind !== 'include' && kind !== 'exclude') return res.status(400).json({ error: 'kind must be include or exclude' });
+  if (text.length < 2 || text.length > 300) return res.status(400).json({ error: 'Describe the item (2-300 characters).' });
+  await pool.query('INSERT INTO bid_scope_items (bid_id, kind, text, created_by) VALUES ($1,$2,$3,$4)', [bidId, kind, text, req.user!.name]);
+  res.json(await getBidScopeList(bidId));
+}));
+
+// Keep a line the non-electrical gate flagged: {category, line, reason}.
+router.post('/:bidId/non-electrical-overrides', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const category = typeof req.body?.category === 'string' ? req.body.category : '';
+  const line = typeof req.body?.line === 'string' ? req.body.line.trim() : '';
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  // S-R2-5 — bound to this exact line AND this flag.
+  const flag = typeof req.body?.flag === 'string' ? req.body.flag : 'non_electrical';
+  if (!/^(non_electrical|excluded_scope|spec|(count_line|dup_keep|dup_remove):[A-Z0-9 .:-]{1,40})$/.test(flag)) return res.status(400).json({ error: 'unknown flag' });
+  if (!category || !line) return res.status(400).json({ error: 'category and line required' });
+  // Fix round 1 — one override mechanism for every "keep this" decision: a
+  // non-electrical line (S9), a line on the Not-included list (N7), or an
+  // other-region spec sentence (S10, category 'spec'). A real reason (N6).
+  if (!isRealReason(reason)) return res.status(400).json({ error: 'Say why this belongs on this job (at least 10 characters).' });
+  await pool.query(
+    `INSERT INTO bid_scope_items (bid_id, kind, text, line_key, reason, created_by, flag_code) VALUES ($1,'override_non_electrical',$2,$3,$4,$5,$6)`,
+    [bidId, line, normalizeLineKey(category, line), reason, req.user!.name, flag]
+  );
+  res.json(await getBidScopeList(bidId));
+}));
+
+router.delete('/:bidId/scope-items/:itemId', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId, itemId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  if (!/^[0-9a-f-]{36}$/i.test(itemId)) return res.status(404).json({ error: 'Not found' });
+  await pool.query('DELETE FROM bid_scope_items WHERE id=$1 AND bid_id=$2', [itemId, bidId]);
+  res.json(await getBidScopeList(bidId));
+}));
+
 // GET results for a bid
 router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), async (req: AuthRequest, res) => {
   if (!(await loadAccessibleBid(res, req.user!, req.params.bidId))) return;
@@ -1437,7 +1955,14 @@ router.get('/:bidId/results', requireAuth, requireAIPermission('view_results'), 
     'SELECT * FROM takeoff_results WHERE bid_id=$1',
     [req.params.bidId]
   );
-  res.json(rows[0] || null);
+  if (!rows[0]) return res.json(null);
+  // Fix round 1 / S12 — tell the UI when the pre-bid draft no longer matches
+  // its scope inputs (or came from an earlier analysis run) so it offers
+  // "Compose again"; generate-prebid-package refuses a stale draft.
+  const r = rows[0];
+  const draftStale = r.draft_status === 'complete' && !!r.draft_output
+    && ((r.run_id && r.draft_run_id !== r.run_id) || (r.draft_inputs_hash && r.draft_inputs_hash !== await scopeInputsHash(req.params.bidId)));
+  res.json({ ...r, draft_stale: !!draftStale });
 });
 
 // GET historical cost comps from real won jobs data. Scoped like /comparables — a
@@ -1574,6 +2099,7 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
 
       if (!buf) continue;
       files.push({
+        documentId: docId,
         fieldname: 'files',
         originalname: fname,
         encoding: '7bit',
@@ -1602,11 +2128,12 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   const aiConfig = await loadAIConfig();
 
   // Mark as running
-  await pool.query(`
-    INSERT INTO takeoff_results (bid_id, status) VALUES ($1, 'running')
-    ON CONFLICT (bid_id) DO UPDATE SET status='running', created_at=now(),
-      agent1_output=NULL, agent2_output=NULL, agent3_output=NULL
-  `, [bidId]);
+  // Fix round 1 / B5 — a new run: everything composed from the previous run
+  // (Agent 4's output and price, the pre-bid draft, the counts) is cleared,
+  // and the review is 'pending' — every GC document and send is blocked —
+  // until the counting stage writes this run's review. The estimator's
+  // earlier resolutions stay in review_items for the carry-over (N4).
+  const analysisRunId = await startAnalysisRun(bidId);
 
   // Log AI usage for rate limiting and audit
   await pool.query(
@@ -1631,8 +2158,8 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
     const message = `Pipeline failed: ${describeAIError(err)}`;
     logger.error({ err, bidId }, 'Takeoff pipeline failed');
     await pool.query(
-      `UPDATE takeoff_results SET status='error', raw_response=$1 WHERE bid_id=$2`,
-      [message, bidId]
+      `UPDATE takeoff_results SET status='error', raw_response=$1 WHERE bid_id=$2 AND run_id = $3`,
+      [message, bidId, analysisRunId]
     ).catch(dbErr => logger.error({ err: dbErr, bidId }, 'Could not persist takeoff pipeline failure'));
   });
 }));
@@ -1654,12 +2181,38 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   }
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
 
+  // Takeoff accuracy Task 7 — zero/unreadable counts and unanswered scope
+  // questions block the proposal until the estimator resolves them.
+  const gate = await takeoffGate(bidId);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+
   const { rows: trRows } = await pool.query(
-    'SELECT agent1_output, agent2_output FROM takeoff_results WHERE bid_id=$1',
+    'SELECT agent1_output, agent2_output, review_items, account_terms, run_id FROM takeoff_results WHERE bid_id=$1',
     [bidId]
   );
   if (!trRows.length || !trRows[0].agent2_output) {
     return res.status(400).json({ error: 'No scope data found. Run the 3-agent analysis first.' });
+  }
+  // B5 — Agent 4's output belongs to this run; it is written only if no new
+  // analysis started meanwhile.
+  const runId = (trRows[0].run_id as string | null) ?? null;
+
+  // Takeoff accuracy Task 12 — the proposal reuses the pre-bid draft when the
+  // scope inputs haven't changed since it was composed and there are no new
+  // notes: the price goes in, no model call. Otherwise Agent 4 re-composes.
+  const { rows: draftRows } = await pool.query('SELECT draft_output, draft_status, draft_inputs_hash, draft_model, draft_run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const draft = draftRows[0];
+  if (draft?.draft_status === 'complete' && draft.draft_output && !internalNotes?.trim()
+      && (draft.draft_run_id ?? null) === runId
+      && draft.draft_inputs_hash === await scopeInputsHash(bidId)) {
+    await pool.query(
+      `UPDATE takeoff_results SET agent4_output=$2, agent4_price=$3, agent4_notes=NULL, agent4_model=$4, usage_agent4=NULL,
+         agent4_status='complete', agent4_error=NULL, agent4_source='draft', agent4_run_id=run_id
+        WHERE bid_id=$1 AND run_id IS NOT DISTINCT FROM $5`,
+      [bidId, draft.draft_output, parsedPrice, draft.draft_model, runId]
+    );
+    await pool.query('UPDATE bids SET amount=$1 WHERE id=$2 AND deleted_at IS NULL', [parsedPrice, bidId]);
+    return res.json({ status: 'complete', reusedDraft: true });
   }
 
   const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
@@ -1684,8 +2237,8 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
 
   // Mark as running and respond immediately — don't wait for AI
   await pool.query(
-    `UPDATE takeoff_results SET agent4_status='running', agent4_error=NULL, agent4_output=NULL WHERE bid_id=$1`,
-    [bidId]
+    `UPDATE takeoff_results SET agent4_status='running', agent4_error=NULL, agent4_output=NULL WHERE bid_id=$1 AND run_id IS NOT DISTINCT FROM $2`,
+    [bidId, runId]
   );
   res.json({ status: 'running' });
 
@@ -1697,24 +2250,35 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
     agent2Output,
     workspaceScope,
     savedEstimate,
+    reviewResolutions: reviewResolutionsForAgent4(trRows[0].review_items as ReviewItem[] | null),
+    accountTerms: await accountTermsBlockFor(bidId, trRows[0].account_terms as AccountTermsSnapshot | null, trRows[0].review_items as ReviewItem[] | null, agent1Output),
+    scopeList: renderScopeListBlock((await getBidScopeList(bidId)).items),
   });
 
   (async () => {
     try {
-      const resp = await callWithRetry(() => client.messages.create({
+      const resp = await callWithRetry(() => client.messages.stream({
         model: config.modelA4,
         max_tokens: config.maxTokensA4,
           system: [{ type: 'text', text: config.promptA4 || AGENT4_SYSTEM, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: userMsg }],
-      }), { onRetry: (a, _e, d) => logger.warn(`[agent4] retry ${a} in ${d}ms`) });
+      }).finalMessage(), { onRetry: (a, _e, d) => logger.warn(`[agent4] retry ${a} in ${d}ms`) });
 
+      assertNotTruncated(resp, 'Agent 4', config.maxTokensA4);
       const rawText = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');
       const parsed = parseAIJSON(rawText);
       if (!parsed) {
-        logger.warn({ bidId, preview: rawText.slice(0, 300) }, '[agent4] Could not parse JSON from response');
+        // Takeoff accuracy Task 1 follow-up (a live AutoZone failure that only
+        // logged a 300-char preview): log AND report why — stop_reason, output
+        // tokens and the TAIL of the raw text (a cut-off reply is visible at
+        // the end, never at the start). A max_tokens stop never gets here:
+        // assertNotTruncated above already failed it with "raise Max Tokens".
+        const outTokens = resp.usage?.output_tokens ?? null;
+        const tail = rawText.slice(-300);
+        logger.warn({ bidId, stop_reason: resp.stop_reason, output_tokens: outTokens, max_tokens: config.maxTokensA4, text_length: rawText.length, preview: rawText.slice(0, 200), tail }, '[agent4] Could not parse JSON from response');
         await pool.query(
-          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2`,
-          ['AI response could not be parsed as valid JSON — the output may have been cut off. Try re-running Agent 4.', bidId]
+          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2 AND run_id IS NOT DISTINCT FROM $3`,
+          [`AI response could not be parsed as valid JSON (stop_reason: ${resp.stop_reason ?? 'unknown'}, ${outTokens ?? '?'} of ${config.maxTokensA4} output tokens, ${rawText.length} characters). Try re-running Agent 4. End of the response: …${tail.replace(/\s+/g, ' ').slice(-200)}`, bidId, runId]
         );
         return;
       }
@@ -1729,8 +2293,8 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
       if (!isAgent4Shape(parsed)) {
         logger.warn({ bidId, preview: rawText.slice(0, 300) }, '[agent4] Response parsed as JSON but is not the expected shape (sections[]/takeoff[] missing)');
         await pool.query(
-          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2`,
-          ['AI response was valid JSON but missing the expected sections/takeoff arrays. Try re-running Agent 4.', bidId]
+          `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2 AND run_id IS NOT DISTINCT FROM $3`,
+          ['AI response was valid JSON but missing the expected sections/takeoff arrays. Try re-running Agent 4.', bidId, runId]
         );
         return;
       }
@@ -1738,9 +2302,9 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
         `UPDATE takeoff_results SET
           agent4_output=$1, agent4_price=$2, agent4_notes=$3,
           agent4_model=$4, usage_agent4=$5,
-          agent4_status='complete', agent4_error=NULL
-        WHERE bid_id=$6`,
-        [JSON.stringify(parsed), parsedPrice, internalNotes?.trim() || null, config.modelA4, JSON.stringify(resp.usage), bidId]
+          agent4_status='complete', agent4_error=NULL, agent4_source='model', agent4_run_id=run_id
+        WHERE bid_id=$6 AND run_id IS NOT DISTINCT FROM $7`,
+        [JSON.stringify(parsed), parsedPrice, internalNotes?.trim() || null, config.modelA4, JSON.stringify(resp.usage), bidId, runId]
       );
       // The proposal price is the later, more authoritative number — sync it into
       // the pipeline the same way the estimate save already does.
@@ -1753,8 +2317,8 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
       logger.error({ err, bidId }, '[agent4] Background run failed');
       const message = err instanceof Error ? err.message : 'Unknown error during proposal generation';
       await pool.query(
-        `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2`,
-        [message, bidId]
+        `UPDATE takeoff_results SET agent4_status='error', agent4_error=$1 WHERE bid_id=$2 AND run_id IS NOT DISTINCT FROM $3`,
+        [message, bidId, runId]
       );
     }
   })().catch(err => logger.error({ err, bidId }, '[agent4] Uncaught background error'));
@@ -1774,7 +2338,23 @@ export type ComposeCurrentBidDataResult =
   // way out here so a caller (the proposal-preview route) can surface it
   // to the estimator instead of it only ever reaching server logs. Always
   // present, empty for a legacy-shape row (composeBidData never runs).
-  | { ok: true; bidData: BidData; bidName: string; asciiName: string; ambiguousQtyKeys: string[] }
+  | { ok: true; bidData: BidData; bidName: string; asciiName: string; ambiguousQtyKeys: string[];
+      /** Takeoff accuracy Task 8 — every deterministic change the account
+       *  terms made to Agent 4's output (shown in the preview). */
+      accountCorrections: string[];
+      /** verifyBid options from the account terms (forbidden phrases, ECFECI
+       *  checks sized to what APT furnishes). */
+      verifyOptions: VerifyOptions;
+      /** Takeoff accuracy Task 9 — GC-facing problems to show before
+       *  generating: zero-quantity lines, other-region spec text. */
+      hygieneWarnings: string[];
+      /** Fix round 1 / B5 — the analysis run this was composed from (NULL for
+       *  a bid from before run ids); filed documents carry it. */
+      runId: string | null;
+      /** Fix round 2 / R2-B1 — sha256 of every input this was composed from;
+       *  each filed document carries it, and a send refuses a file whose
+       *  inputs have changed since. */
+      inputsHash: string }
   | { ok: false; status: number; error: string; failures?: { check: string; detail: string }[] };
 
 export interface ComposeCurrentBidDataOptions {
@@ -1793,6 +2373,10 @@ export interface ComposeCurrentBidDataOptions {
    *  wrong. Defaults true.
    */
   validate?: boolean;
+  /** Takeoff accuracy Task 12 — 'draft' composes from the pre-bid draft
+   *  (no price; the pre-bid package), falling back to agent4_output for a bid
+   *  that predates drafts. Default 'final' (the GC proposal). */
+  source?: 'final' | 'draft';
 }
 
 // Exported (Phase 4 Task 2.2) so the public proposal page (routes/bids.ts's
@@ -1807,34 +2391,59 @@ export async function composeCurrentBidData(
   const validate = opts.validate ?? true;
 
   const { rows: trRows } = await pool.query(
-    'SELECT agent4_output, agent4_price FROM takeoff_results WHERE bid_id=$1',
+    `SELECT agent4_output, agent4_price, agent1_output, account_terms, review_items, draft_output, draft_status, count_result,
+            run_id, agent4_run_id, draft_run_id, draft_inputs_hash FROM takeoff_results WHERE bid_id=$1`,
     [bidId]
   );
-  if (!trRows.length || !trRows[0].agent4_output) {
-    return { ok: false, status: 404, error: 'No proposal data found. Run Agent 4 first.' };
+  // Fix round 1 / B5 — only output composed from the CURRENT analysis run is
+  // ever used (a bid from before run ids — run_id NULL — is unaffected).
+  const runId = (trRows[0]?.run_id as string | null) ?? null;
+  const agent4Current = !!trRows[0]?.agent4_output && (!runId || trRows[0].agent4_run_id === runId);
+  const draftCurrent = !!trRows[0]?.draft_output && trRows[0]?.draft_status === 'complete' && (!runId || trRows[0].draft_run_id === runId);
+  const useDraft = opts.source === 'draft' && draftCurrent;
+  if (useDraft && trRows[0].draft_inputs_hash && trRows[0].draft_inputs_hash !== await scopeInputsHash(bidId)) {
+    // S12 — a stale draft is never used.
+    return { ok: false, status: 409, error: 'The pre-bid draft is out of date — the scope inputs changed after it was composed. Compose it again.' };
   }
+  const draftMissing = opts.source === 'draft' && !useDraft && !(agent4Current && !runId);
+  if (!trRows.length || draftMissing || (!agent4Current && !useDraft)) {
+    return {
+      ok: false, status: 404,
+      error: opts.source === 'draft'
+        ? 'The pre-bid draft is not ready yet — it is composed right after the analysis once the takeoff review is clear.'
+        : 'No proposal data found for the current analysis. Run Agent 4 first.',
+    };
+  }
+  // Takeoff accuracy Task 8 — the job's account terms (+ the estimator's
+  // scope answers), enforced on Agent 4's output below.
+  const accountSnap = await accountTermsFor(bidId, trRows[0].account_terms as AccountTermsSnapshot | null, (trRows[0].agent1_output as string) || '');
+  const accountResolved = effectiveAccountTerms(accountSnap, trRows[0].review_items as ReviewItem[] | null);
+  const scopeList = await getBidScopeList(bidId);
+  const verifyOptions: VerifyOptions = accountSnap ? verifyOptionsFor(accountSnap, accountResolved) : {};
+  let accountCorrections: string[] = [];
 
   // agent4_price NUMERIC(12,2) is the authoritative, DB-validated price (see
   // run-agent4's parseMoney gate) — format it here rather than trusting whatever
   // string the LLM echoed back into the data blob.
-  const rawPrice = trRows[0].agent4_price as string | number | null;
+  // A pre-bid draft has no price — ever.
+  const rawPrice = useDraft ? null : (trRows[0].agent4_price as string | number | null);
   const priceNum = rawPrice === null || rawPrice === undefined ? null : Number(rawPrice);
   const formattedPrice = priceNum !== null && Number.isFinite(priceNum)
     ? `$${priceNum.toLocaleString('en-US', { minimumFractionDigits: Number.isInteger(priceNum) ? 0 : 2, maximumFractionDigits: 2 })}`
     : undefined;
 
-  const raw = trRows[0].agent4_output as string;
+  const raw = (useDraft ? trRows[0].draft_output : trRows[0].agent4_output) as string;
   const parsed = parseAIJSON(raw);
   if (!parsed) return { ok: false, status: 422, error: 'Proposal data could not be parsed. Re-run Agent 4 to regenerate.' };
 
   const [{ rows: bidRows }, { rows: estRows }] = await Promise.all([
     pool.query(
-      'SELECT name, loc, gc, contact, sq_ft, job_number FROM bids WHERE id=$1 AND deleted_at IS NULL',
+      'SELECT name, loc, gc, contact, sq_ft, job_number, brand FROM bids WHERE id=$1 AND deleted_at IS NULL',
       [bidId]
     ),
     pool.query('SELECT line_items FROM bid_estimates WHERE bid_id=$1', [bidId]),
   ]);
-  const bid = bidRows[0] as { name?: string; loc?: string; gc?: string; contact?: string; sq_ft?: number | string | null; job_number?: string | null } | undefined;
+  const bid = bidRows[0] as { name?: string; loc?: string; gc?: string; contact?: string; sq_ft?: number | string | null; job_number?: string | null; brand?: string | null } | undefined;
   const bidName = bid?.name ?? bidId;
   // HTTP headers must be Latin-1. Strip any non-ASCII (em dashes, accents, etc.)
   // from the filename or res.setHeader throws ERR_INVALID_CHAR.
@@ -1850,15 +2459,24 @@ export async function composeCurrentBidData(
   // (composeBidData never runs there, so there's nothing to flag).
   let ambiguousQtyKeys: string[] = [];
   if (isAgent4Shape(parsed)) {
-    if (!formattedPrice) {
+    if (!formattedPrice && !useDraft) {
       return { ok: false, status: 422, error: 'No validated price on file for this proposal. Re-run Agent 4.' };
     }
     const bidRow: ComposeBidRow = {
       name: bid?.name, loc: bid?.loc, gc: bid?.gc, contact: bid?.contact,
-      sq_ft: bid?.sq_ft ?? null, job_number: bid?.job_number ?? null,
+      sq_ft: bid?.sq_ft ?? null, job_number: bid?.job_number ?? null, brand: bid?.brand ?? null,
     };
-    const { data, jobNumberGenerated, ambiguousQtyKeys: keys } = composeBidData(bidRow, parsed as Agent4Output, formattedPrice, { savedLineItems });
-    ambiguousQtyKeys = keys;
+    // Fix round 1 — the one pure composition path (bidstd/composeProposal.ts):
+    // account terms, scope-list exclusions, composeBidData, CKT rows out,
+    // counted quantities enforced (B1), and the checks that block GC documents.
+    const composed = composeProposal({
+      agent4: parsed as Agent4Output, bidRow, price: formattedPrice ?? '', savedLineItems,
+      accountSnap, accountResolved, scopeItems: scopeList.items, overrides: scopeList.overrides,
+      countResult: trRows[0].count_result as CountResult | null, reviewItems: trRows[0].review_items as ReviewItem[] | null,
+    });
+    const { data, jobNumberGenerated } = composed;
+    ambiguousQtyKeys = composed.ambiguousQtyKeys;
+    accountCorrections = composed.corrections;
     if (jobNumberGenerated && persist) {
       // Task 6.2 — two bids generated the same day compute the identical
       // JS.MMDDYYYY (jobNumber() is a pure function of today's date only),
@@ -1890,16 +2508,15 @@ export async function composeCurrentBidData(
     // FIX-7 — validateBidData actually runs now (it was dead code: wired
     // into nothing, despite a stale comment below claiming otherwise).
     // New-shape only, per opts.validate above.
-    if (validate) {
-      const problems = validateBidData(bidData);
-      if (problems.length) {
-        return {
-          ok: false,
-          status: 422,
-          error: 'This proposal did not pass data validation — fix the composed data before generating documents.',
-          failures: problems.map(detail => ({ check: 'data', detail })),
-        };
-      }
+    if (validate && (composed.dataProblems.length || composed.lineFailures.length)) {
+      return {
+        ok: false,
+        status: 422,
+        error: composed.dataProblems.length
+          ? 'This proposal did not pass data validation — fix the composed data before generating documents.'
+          : 'This proposal has lines that can\'t go to the GC — fix or override them before generating.',
+        failures: [...composed.lineFailures, ...composed.dataProblems.map(detail => ({ check: 'data', detail }))],
+      };
     }
   } else {
     // The bid record is the authoritative source for the project name — the
@@ -1923,7 +2540,52 @@ export async function composeCurrentBidData(
     bidData = legacyData;
   }
 
-  return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys };
+  verifyOptions.projectAddress = bid?.loc ?? '';
+  // S8 / S3 — shown before generating: the account rule warning, and the
+  // counting stage's non-blocking flags stay in the Takeoff step.
+  const countWarnings = accountSnap?.warning ? [accountSnap.warning] : [];
+  const gcText = [
+    ...bidData.sections.flatMap(s => s.bullets.map(b => (typeof b === 'string' ? b : `${b.b} ${b.t}`))),
+    ...bidData.exclusions.map(b => (typeof b === 'string' ? b : `${b.b} ${b.t}`)),
+  ].join('\n');
+  const spec = irrelevantSpecSentences(gcText, bid?.loc ?? '');
+  const specKept = (sentence: string) => overrideFor(normalizeLineKey('spec', sentence), scopeList.overrides, 'spec') !== null;
+  const hygieneWarnings = [
+    ...zeroQuantityProblems(bidData),
+    ...excludedScopeProblems(bidData, scopeList.items, scopeList.overrides),
+    ...nonElectricalFindings(bidData, scopeList.overrides).map(f => f.overridden
+      ? `Kept by the estimator: ${f.category} "${f.line}" (${f.reason}) — ${f.overridden}`
+      : `${f.category}: "${f.line}" (${f.unit}) looks like ${f.reason} — ${f.block ? 'not electrical scope (blocks the GC documents until kept with a reason)' : 'check it is electrical scope (keep it with a reason to clear this)'}`),
+    ...nearDuplicateLines(bidData).map(d => `Possible duplicate lines in ${d.category}: ${d.lines.map(l => `"${l}"`).join(' / ')}`),
+    // S10 — other-region / store-type spec text: a warning with an override.
+    ...spec.block.filter(x => specKept(x)).map(x => `Kept by the estimator: "${x}"`),
+    ...spec.warn.filter(x => !specKept(x)).map(x => `Owner-spec text for another store type — check it applies to this project: "${x}"`),
+    ...countWarnings,
+  ];
+  // R2-B1 — the inputs the document was made from: the analysis run, which
+  // Agent 4 output / draft, the price, the counts and every estimator
+  // resolution and answer, the account-rule snapshot, the scope list and
+  // overrides, and the bid fields printed on the page.
+  const inputsHash = composeInputsHash({
+    runId, source: useDraft ? 'draft' : 'final', composed: raw, price: rawPrice,
+    countResult: trRows[0].count_result, reviewItems: trRows[0].review_items, accountTerms: accountSnap,
+    scopeList, bid: bid ?? null,
+  });
+  return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys, accountCorrections, verifyOptions, hygieneWarnings, runId, inputsHash };
+}
+
+/** Fix round 2 / R2-B1 — the compose-inputs hash (see composeCurrentBidData). */
+export function composeInputsHash(x: {
+  runId: string | null; source: 'draft' | 'final'; composed: string; price: unknown; countResult: unknown; reviewItems: unknown;
+  accountTerms: unknown; scopeList: { items: unknown[]; overrides: unknown[] }; bid: Record<string, unknown> | null;
+}): string {
+  const sha = (v: unknown) => crypto.createHash('sha256').update(typeof v === 'string' ? v : JSON.stringify(v ?? null)).digest('hex');
+  const resolutions = ((x.reviewItems ?? []) as ReviewItem[]).map(i => [i.id, i.resolution ? [i.resolution.action, i.resolution.qty ?? null, i.resolution.answer ?? null, i.resolution.furnishBy ?? null, i.resolution.installBy ?? null] : null]);
+  return sha([
+    x.runId, x.source, sha(x.composed ?? ''), x.price == null ? null : Number(x.price), sha(x.countResult ?? null), resolutions,
+    sha(x.accountTerms ?? null), sha(x.scopeList.items), sha(x.scopeList.overrides),
+    x.bid ? [x.bid.name, x.bid.loc, x.bid.gc, x.bid.contact, x.bid.job_number, x.bid.brand, x.bid.sq_ft ?? null] : null,
+  ]);
 }
 
 /** Flatten every takeoff item's text fields — the pre-bid scope docx never
@@ -1960,13 +2622,25 @@ router.get('/:bidId/proposal-preview', requireAuth, requireAIPermission('view_re
   // fields (rather than a separate round trip) is what lets the frontend
   // show it as a real pre-send warning instead of it only ever reaching
   // server logs (see composeBidData.ts's own comment on this).
-  res.json({ ...loaded.bidData, ambiguousQtyKeys: loaded.ambiguousQtyKeys });
+  // Takeoff accuracy Task 13 — `paper` carries the exact strings the .docx
+  // prints (header lines, intro, price in words, takeoff descriptions) so the
+  // white-paper preview never re-implements them client-side.
+  const bd = loaded.bidData;
+  const paper = {
+    headerLines: headerLines(bd),
+    introLine: introLine(bd),
+    priceLine: bd.total_price ? priceLine(bd.total_price) : null,
+    takeoffDescriptions: bd.takeoff.map(c => c.items.map(it => takeoffDescription(it.item, it.description))),
+  };
+  res.json({ ...bd, ambiguousQtyKeys: loaded.ambiguousQtyKeys, accountCorrections: loaded.accountCorrections, hygieneWarnings: loaded.hygieneWarnings, paper });
 }));
 
 // GET generate-docx — build and return the .docx proposal file
 router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const gate = await takeoffGate(bidId);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
 
   const loaded = await composeCurrentBidData(bidId);
   if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error, ...(loaded.failures ? { failures: loaded.failures } : {}) });
@@ -1983,7 +2657,7 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
   // Task 6 — hard verify gate: on failure, file nothing and never send the
   // docx. Mirrors verify.sh v4's "exits non-zero — do not deliver a file
   // that failed it."
-  const verifyResult = await verifyBidDocx(buf, { kind: 'gc' });
+  const verifyResult = await verifyBidDocx(buf, { kind: 'gc', ...loaded.verifyOptions });
   if (!verifyResult.pass) {
     return res.status(422).json({
       error: 'This proposal did not pass the bid-standard verification gate.',
@@ -2028,6 +2702,8 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
       // verifyBidDocx(kind:'gc') passed, above. gate_passed marks it as the
       // only kind of 'proposal' row draft-proposal will ever attach.
       gatePassed: true,
+      takeoffRunId: loaded.runId,
+      composeInputsHash: loaded.inputsHash,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-docx] storeDocument (proposal) failed');
@@ -2054,6 +2730,8 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
       // bid_data.json instead of composing/verifying live; this is the row
       // it reads.
       gatePassed: true,
+      takeoffRunId: loaded.runId,
+      composeInputsHash: loaded.inputsHash,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-docx] storeDocument (bid_data) failed');
@@ -2076,6 +2754,8 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
         displayName: pdfFilename,
         uploadedBy: req.user!.name,
         gatePassed: true,
+        takeoffRunId: loaded.runId,
+        composeInputsHash: loaded.inputsHash,
       });
     } catch (err) {
       logger.error({ err, bidId }, '[generate-docx] storeDocument (pdf) failed');
@@ -2094,6 +2774,8 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
 router.get('/:bidId/generate-takeoff-xlsx', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const gate = await takeoffGate(bidId);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
 
   const loaded = await composeCurrentBidData(bidId);
   if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error, ...(loaded.failures ? { failures: loaded.failures } : {}) });
@@ -2111,7 +2793,7 @@ router.get('/:bidId/generate-takeoff-xlsx', requireAuth, requireAIPermission('vi
   // (the docx path has always had verifyBidDocx(kind:'gc')). Same pure text
   // core (Task 4), same failure shape, applied to the takeoff's own text
   // content — failure blocks both filing and streaming.
-  const verifyResult = verifyBidText(takeoffAsText(bidData), 'gc');
+  const verifyResult = verifyBidText(takeoffAsText(bidData), 'gc', loaded.verifyOptions);
   if (!verifyResult.pass) {
     return res.status(422).json({
       error: 'This takeoff did not pass the bid-standard verification gate.',
@@ -2134,6 +2816,8 @@ router.get('/:bidId/generate-takeoff-xlsx', requireAuth, requireAIPermission('vi
       displayName: xlsx.filename,
       uploadedBy: req.user!.name,
       gatePassed: true,
+      takeoffRunId: loaded.runId,
+      composeInputsHash: loaded.inputsHash,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-takeoff-xlsx] storeDocument failed');
@@ -2165,13 +2849,19 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
   const { bidId } = req.params;
   const bid = await loadAccessibleBid(res, req.user!, bidId);
   if (!bid) return;
+  // Fix round 1 / B5 — the pre-bid package is gated by the review too.
+  const gate = await takeoffGate(bidId);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
 
   // FIX-7 — validate:false here: validateBidData's rules (scope exactly 6,
   // terms exactly 10, Section C exactly 3, etc.) are the GC-facing standard's
   // non-negotiables, not requirements on this internal/rougher pre-bid
   // deliverable — this route already has its own, more specific and
   // friendlier "no scope data" check just below.
-  const loaded = await composeCurrentBidData(bidId, { validate: false });
+  // Takeoff accuracy Task 12 — the pre-bid package builds from the pre-bid
+  // draft (no price), available right after the analysis; a bid from before
+  // drafts falls back to its Agent 4 output.
+  const loaded = await composeCurrentBidData(bidId, { validate: false, source: 'draft' });
   if (!loaded.ok) {
     return res.status(400).json({
       error: `Cannot generate a pre-bid package: ${loaded.error}`,
@@ -2206,7 +2896,7 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
   // (Task 4), reused directly here rather than verifyBidDocx (which is
   // docx/PDF-specific and can't read an xlsx).
   const combinedText = `${extractDocxText(scopeDocx)}\n${takeoffAsText(bidData)}`;
-  const verifyResult = verifyBidText(combinedText, 'internal');
+  const verifyResult = verifyBidText(combinedText, 'internal', { ecfeci: loaded.verifyOptions.ecfeci });
   if (!verifyResult.pass) {
     return res.status(422).json({
       error: 'The pre-bid package did not pass verification.',
@@ -2237,6 +2927,8 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
       displayName: scopeStorageFilename,
       uploadedBy: req.user!.name,
       gatePassed: true,
+      takeoffRunId: loaded.runId,
+      composeInputsHash: loaded.inputsHash,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-prebid-package] storeDocument (scope) failed');
@@ -2259,6 +2951,8 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
       displayName: takeoffStorageFilename,
       uploadedBy: req.user!.name,
       gatePassed: true,
+      takeoffRunId: loaded.runId,
+      composeInputsHash: loaded.inputsHash,
     });
   } catch (err) {
     logger.error({ err, bidId }, '[generate-prebid-package] storeDocument (takeoff) failed');

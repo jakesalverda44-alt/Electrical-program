@@ -24,6 +24,7 @@ import { promisify } from 'util';
 import sharp from 'sharp';
 import Anthropic from '@anthropic-ai/sdk';
 import { callWithRetry } from './retry';
+import { assertNotTruncated } from './stopReason';
 import { PAGE_CLASSIFIER_SYSTEM } from './prompts';
 import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { logger } from '../utils/logger';
@@ -263,6 +264,11 @@ export async function renderTitleBlockCrops(pdfBuffer: Buffer, opts: { dpi?: num
  * so the caller can fall back to today's whole-file behavior for this PDF.
  * ------------------------------------------------------------------------- */
 const CLASSIFY_BATCH_SIZE = 20;
+/** Fixed classifier output budget — ~60 tokens per page x 20 pages is ~1,200,
+ *  so 2,500 leaves 2x headroom. Takeoff accuracy Task 1: a response that still
+ *  hits it throws (AgentTruncatedError) instead of silently degrading every
+ *  missing page to 'unknown'. */
+export const CLASSIFIER_MAX_TOKENS = 2500;
 
 export interface ClassifyPagesResult {
   classifications: PageClassification[];
@@ -299,14 +305,15 @@ export async function classifyPages(
       text: `Classify each of the ${batch.length} title-block crops above from "${safeFilename}", in the order given. Each crop's "Page N" label states its ABSOLUTE page number in the full document — echo that exact number back in the "page" field of your JSON output; do NOT renumber starting from 1 for this batch. Return the STRICT JSON array only.`,
     });
 
-    const resp = await callWithRetry(() => client.messages.create({
+    const resp = await callWithRetry(() => client.messages.stream({
       model,
-      max_tokens: 2500,
+      max_tokens: CLASSIFIER_MAX_TOKENS,
       temperature: 0,
       system: [{ type: 'text', text: PAGE_CLASSIFIER_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content }],
-    }), { onRetry: (a, _e, d) => logger.warn(`[pageClassifier] retry ${a} in ${d}ms`) });
+    }).finalMessage(), { onRetry: (a, _e, d) => logger.warn(`[pageClassifier] retry ${a} in ${d}ms`) });
 
+    assertNotTruncated(resp, 'Page classifier', CLASSIFIER_MAX_TOKENS, 'the classifier budget is fixed in code at 2,500 tokens per 20-page batch, not a Settings field');
     const text = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');
     const expectedPages = batch.map(c => c.page);
     classifications.push(...parseClassifierJSON(text, expectedPages));

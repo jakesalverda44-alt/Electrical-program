@@ -268,7 +268,7 @@ describe('PcWorkspace results poll', () => {
     expect(resultsGets()).toBe(callsAtUnmount);
   });
 
-  it('stops at the 10-minute deadline and says the analysis timed out', async () => {
+  it('stops at the 30-minute deadline (raised for the counting stage) and says the analysis timed out', async () => {
     stuckRunning();
     render(<Harness/>);
     await flush();
@@ -277,7 +277,12 @@ describe('PcWorkspace results poll', () => {
 
     // Jump past the deadline rather than running 200 real ticks: the loop only
     // reschedules once its await settles, so no ticks are skipped.
+    // Takeoff accuracy — 11 minutes is no longer past the deadline (the
+    // counting stage raised it to 30); 31 minutes is.
     vi.setSystemTime(Date.now() + 11 * 60 * 1000);
+    await tick(3100);
+    expect(screen.queryByTestId('pc-poll-timeout')).toBeNull();
+    vi.setSystemTime(Date.now() + 20 * 60 * 1000);
     await tick(3100);
 
     expect(screen.getByTestId('pc-poll-timeout').textContent).toContain('Analysis timed out');

@@ -77,6 +77,11 @@ describe('proposal-preview (Task 7)', () => {
     expect(res.body.total_price).toBe('$248,750');
     // conf is present on the composed data but never rendered by the GC docx/xlsx.
     expect(res.body.takeoff[0].items[0].conf).toBe('FIRM');
+    // Task 13 — the white-paper preview's strings, identical to the .docx's.
+    expect(res.body.paper.priceLine).toBe('Total Electrical Scope — Two Hundred Forty-Eight Thousand Seven Hundred Fifty and 00/100 Dollars   $248,750.00');
+    expect(res.body.paper.introLine).toMatch(/^Please accept this proposal to complete the electrical work for .+ you have out for bid\.$/);
+    expect(res.body.paper.headerLines.map((h: { text: string }) => h.text)).toContain('Attn:  Estimating Department');
+    expect(res.body.paper.takeoffDescriptions).toHaveLength(res.body.takeoff.length);
   });
 
   it('404s when there is no proposal data yet', async (ctx) => {
@@ -466,7 +471,9 @@ describe('generate-prebid-package (Task 6)', () => {
     const res = await request(app)
       .post(`/api/preconstruction/${bid.body.id}/generate-prebid-package`).set(auth(u.token))
       .expect(400);
-    expect(res.body.error).toMatch(/no proposal data|no scope data/i);
+    // Task 12 — the package builds from the pre-bid draft; with neither a
+    // draft nor Agent 4 output the message says the draft isn't ready.
+    expect(res.body.error).toMatch(/pre-bid draft is not ready/i);
   });
 
   it('400s when agent4_output has an empty sections array (parsed but nothing to build from)', async (ctx) => {

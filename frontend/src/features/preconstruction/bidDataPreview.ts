@@ -48,6 +48,20 @@ export interface BidDataPreview {
    *  present (possibly empty) once composeCurrentBidData succeeds — see
    *  GET /:bidId/proposal-preview's own comment on including it here. */
   ambiguousQtyKeys?: string[];
+  /** Takeoff accuracy Task 8 — deterministic changes the account terms made. */
+  accountCorrections?: string[];
+  /** Takeoff accuracy Task 9 — GC-facing problems to fix before generating. */
+  hygieneWarnings?: string[];
+  /** Takeoff accuracy Task 13 — the exact strings the .docx prints. */
+  paper?: PreviewPaper;
+}
+
+export interface PreviewPaper {
+  headerLines: Array<{ text: string; bold?: boolean }>;
+  introLine: string;
+  priceLine: string | null;
+  /** Per takeoff category, per item — "Item — description" as printed. */
+  takeoffDescriptions: string[][];
 }
 
 /** Flatten a bullet (plain string, or a {b,t} mixed-bold run) into display text. */
@@ -59,5 +73,13 @@ export function bulletText(b: PreviewBullet): string {
 export interface VerifyFailure {
   check: string;
   detail: string;
-  matches: string[];
+  /** Absent on compose-level failures (data / zero_quantity / excluded_scope
+   *  / non_electrical) — always read as `matches ?? []`. */
+  matches?: string[];
+  /** Takeoff accuracy Task 11 — a non_electrical failure names its line so
+   *  the estimator can keep it (with a reason). */
+  category?: string;
+  line?: string;
+  /** Fix round 2 — the override flag that keeps / picks this line. */
+  flag?: string;
 }

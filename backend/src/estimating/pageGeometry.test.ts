@@ -53,3 +53,25 @@ describe('displayedSize — swaps width/height at 90/270', () => {
     expect(displayedSize(W, H, 270)).toEqual({ width: H, height: W });
   });
 });
+
+describe('displayedToPdf — exact inverse of screenPosition (takeoff accuracy Task 4)', () => {
+  it('maps the review\'s hand-verified displayed points back to (150,250) at every rotation', async () => {
+    const { displayedToPdf } = await import('./pageGeometry');
+    expect(displayedToPdf(50, 742, X0, Y0, W, H, 0)).toEqual({ x: PX, y: PY });
+    expect(displayedToPdf(50, 50, X0, Y0, W, H, 90)).toEqual({ x: PX, y: PY });
+    expect(displayedToPdf(562, 50, X0, Y0, W, H, 180)).toEqual({ x: PX, y: PY });
+    expect(displayedToPdf(742, 562, X0, Y0, W, H, 270)).toEqual({ x: PX, y: PY });
+  });
+
+  it('round-trips a grid of points at all four rotations with a non-zero origin', async () => {
+    const { displayedToPdf } = await import('./pageGeometry');
+    for (const rot of [0, 90, 180, 270]) {
+      for (const [x, y] of [[100, 200], [712, 992], [333.3, 601.7], [420, 211]]) {
+        const s = screenPosition(x, y, X0, Y0, W, H, rot);
+        const back = displayedToPdf(s.x, s.y, X0, Y0, W, H, rot);
+        expect(back.x).toBeCloseTo(x, 9);
+        expect(back.y).toBeCloseTo(y, 9);
+      }
+    }
+  });
+});

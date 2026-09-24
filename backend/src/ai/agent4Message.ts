@@ -34,12 +34,25 @@ export interface SavedEstimateContext {
 }
 
 export interface Agent4MessageInput {
+  /** Takeoff accuracy Task 12 — 'draft' composes the scope + takeoff for the
+   *  pre-bid package BEFORE any price exists: no price line, and an explicit
+   *  instruction never to write one. */
+  mode?: 'proposal' | 'draft';
   price: string;
   internalNotes?: string | null;
   agent1Output: string;
   agent2Output: string;
   workspaceScope?: Record<string, string> | null;
   savedEstimate?: SavedEstimateContext | null;
+  /** Takeoff accuracy Task 7 — the estimator's resolutions of the Needs-review
+   *  list (reviewResolutionsForAgent4), authoritative over Agents 1/2. */
+  reviewResolutions?: string | null;
+  /** Takeoff accuracy Task 8 — the job's ACCOUNT TERMS block
+   *  (accountRules.ts renderAccountTermsBlock), authoritative. */
+  accountTerms?: string | null;
+  /** Takeoff accuracy Task 11 — the estimator's scope list
+   *  (scopeList.ts renderScopeListBlock), binding. */
+  scopeList?: string | null;
 }
 
 function money(n: number | string | null | undefined): string {
@@ -60,14 +73,23 @@ function truncateWithMarker(text: string, cap: number): string {
 }
 
 export function buildAgent4UserMessage(input: Agent4MessageInput): string {
-  const lines: string[] = [
-    'PROPOSAL REQUEST',
-    '',
-    `Total Bid Price: ${input.price.trim()}`,
-    '',
-    'Internal Notes from Estimator:',
-    input.internalNotes?.trim() || '(none)',
-  ];
+  const lines: string[] = input.mode === 'draft'
+    ? [
+        'PRE-BID DRAFT REQUEST',
+        '',
+        'There is NO price yet: this draft (scope sections + takeoff) goes to the estimator to price. Never write a price, a dollar amount, a total or a price summary anywhere.',
+        '',
+        'Internal Notes from Estimator:',
+        input.internalNotes?.trim() || '(none)',
+      ]
+    : [
+        'PROPOSAL REQUEST',
+        '',
+        `Total Bid Price: ${input.price.trim()}`,
+        '',
+        'Internal Notes from Estimator:',
+        input.internalNotes?.trim() || '(none)',
+      ];
 
   const scopeEntries = SCOPE_SECS_BACKEND
     .map(s => ({ title: s.label, text: (input.workspaceScope?.[s.id] || '').trim() }))
@@ -93,6 +115,16 @@ export function buildAgent4UserMessage(input: Agent4MessageInput): string {
         lines.push(`  ${category}: ${money(amount)}`);
       }
     }
+  }
+
+  if (input.accountTerms) {
+    lines.push('', input.accountTerms);
+  }
+  if (input.scopeList) {
+    lines.push('', input.scopeList);
+  }
+  if (input.reviewResolutions) {
+    lines.push('', input.reviewResolutions);
   }
 
   lines.push(
@@ -130,6 +162,9 @@ export interface Agent4TakeoffItem {
    *  authoritative value over this echo when both are available. */
   conf?: string;
   furnish_by?: string;
+  /** Fix round 1 / B1 — the count type tag this line carries (Agent 1's
+   *  counter row countType), so code can enforce the counted quantity. */
+  count_type?: string;
 }
 
 export interface Agent4TakeoffCategory {

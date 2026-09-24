@@ -28,11 +28,20 @@ export interface SuggestMarkersBarProps {
   findTagResults: FindTagResult[] | null;
   findTagBusy: boolean;
   onJumpToFindTagResult: (sheetKey: string) => void;
+  /** Takeoff accuracy Task 6 — how many of this sheet's suggestions came from
+   *  the AI counting stage (shown with an "AI" badge on the plan). */
+  aiSuggestedCountOnSheet?: number;
+  /** AI suggestions (any sheet) not yet on a line. With onAssignAi, offers a
+   *  one-click assignment to the line each type maps to (unique matches only). */
+  unassignedAiCount?: number;
+  onAssignAi?: () => void;
+  assignAiBusy?: boolean;
 }
 
 export default function SuggestMarkersBar({
   hasTextLayer, busy, suggestedCountOnSheet, onSuggestForSheet, onConfirmAllOnSheet, onRejectAllOnSheet,
   onFindTag, findTagResults, findTagBusy, onJumpToFindTagResult,
+  aiSuggestedCountOnSheet = 0, unassignedAiCount = 0, onAssignAi, assignAiBusy = false,
 }: SuggestMarkersBarProps) {
   const [findOpen, setFindOpen] = useState(false);
   const [tagInput, setTagInput] = useState('');
@@ -50,9 +59,20 @@ export default function SuggestMarkersBar({
       {suggestedCountOnSheet > 0 && (
         <span className="plan-suggest-bar-pending">
           {suggestedCountOnSheet} suggested
+          {aiSuggestedCountOnSheet > 0 && (
+            <span className="plan-ai-chip" data-testid="plan-ai-suggested">
+              <span className="plan-ai-chip-badge">AI</span> {aiSuggestedCountOnSheet} counted by AI — confirm before they count
+            </span>
+          )}
           <button type="button" className="btn ghost sm" onClick={onConfirmAllOnSheet}>Confirm all on this sheet</button>
           <button type="button" className="btn ghost sm" onClick={onRejectAllOnSheet}>Reject all</button>
         </span>
+      )}
+
+      {unassignedAiCount > 0 && onAssignAi && (
+        <button type="button" className="btn ghost sm" disabled={assignAiBusy} onClick={onAssignAi} data-testid="plan-assign-ai">
+          {assignAiBusy ? 'Assigning…' : `Assign ${unassignedAiCount} AI marker${unassignedAiCount === 1 ? '' : 's'} to lines`}
+        </button>
       )}
 
       <button

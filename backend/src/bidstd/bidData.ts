@@ -25,6 +25,8 @@ export interface TakeoffItem {
   /** e.g. "APT (ECFECI)", "GC / Graybar national account". Presence on ANY
    *  item across the whole takeoff is what turns on the FURNISH BY column. */
   furnish_by?: string;
+  /** Fix round 1 / B1 — the count type this line carries (never rendered). */
+  count_type?: string;
 }
 
 export interface TakeoffCategory {
@@ -66,6 +68,10 @@ export interface BidData {
   contact?: string;
   email?: string;
   project_name: string;
+  /** Takeoff accuracy Task 13 — Cowork's "Re:" line, e.g. "AutoZone Store
+   *  #10077" (brand + store number when both are known); falls back to
+   *  project_name. Also capitalized into the opening statement. */
+  re_line?: string;
   project_address: string;
   /** JS.MMDDYYYY — see jobNumber() in boilerplate.ts. */
   job_number: string;

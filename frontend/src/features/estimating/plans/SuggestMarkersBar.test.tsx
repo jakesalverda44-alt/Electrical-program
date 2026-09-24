@@ -112,3 +112,22 @@ describe('SuggestMarkersBar', () => {
     expect(queryByText('No sheets matched.')).toBeNull();
   });
 });
+
+describe('SuggestMarkersBar — AI-counted suggestions (takeoff accuracy Task 6)', () => {
+  it('shows the AI chip with the sheet\'s AI count alongside the normal confirm/reject controls', () => {
+    const { getByTestId, getByText } = render(<SuggestMarkersBar {...baseProps({ suggestedCountOnSheet: 12, aiSuggestedCountOnSheet: 9 })} />);
+    expect(getByTestId('plan-ai-suggested').textContent).toBe('AI 9 counted by AI — confirm before they count');
+    expect(getByText('Confirm all on this sheet')).toBeTruthy();
+  });
+  it('offers "Assign N AI markers to lines" only when there are unassigned ones and a handler', () => {
+    const onAssignAi = vi.fn();
+    const { getByTestId, rerender, queryByTestId } = render(<SuggestMarkersBar {...baseProps({ unassignedAiCount: 5, onAssignAi })} />);
+    fireEvent.click(getByTestId('plan-assign-ai'));
+    expect(onAssignAi).toHaveBeenCalledTimes(1);
+    expect(getByTestId('plan-assign-ai').textContent).toBe('Assign 5 AI markers to lines');
+    rerender(<SuggestMarkersBar {...baseProps({ unassignedAiCount: 5 })} />);
+    expect(queryByTestId('plan-assign-ai')).toBeNull();
+    rerender(<SuggestMarkersBar {...baseProps({ unassignedAiCount: 0, onAssignAi })} />);
+    expect(queryByTestId('plan-assign-ai')).toBeNull();
+  });
+});

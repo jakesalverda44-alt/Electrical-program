@@ -1,0 +1,34 @@
+/* Takeoff accuracy Task 7 — the Needs-review list in the Takeoff step. */
+.tr-panel { margin: 12px 24px 4px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.tr-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.tr-summary { font-size: 12.5px; color: var(--text3); flex: 1; min-width: 0; }
+.tr-chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 800; }
+.tr-chip-warn { color: var(--amber); background: var(--amber-soft); }
+.tr-chip-ok { color: var(--green); background: var(--green-soft, rgba(46,160,67,.12)); }
+.tr-chip-q { color: var(--blue); background: var(--blue-soft); font-size: 11px; }
+.tr-note { margin: 8px 0 0; font-size: 12.5px; color: var(--text2); }
+.tr-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.tr-item { padding: 10px 12px; border: 1px solid var(--border2); border-radius: 8px; background: var(--surface2); }
+.tr-item-done { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.tr-item-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.tr-detail { font-size: 12.5px; color: var(--text2); margin-top: 4px; }
+.tr-sub { font-size: 12px; color: var(--text3); margin-top: 2px; }
+.tr-notes { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--text2); }
+.tr-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tr-actions input[type='number'] { width: 90px; }
+.tr-actions input[type='text'], .tr-bulk input[type='text'] { min-width: 200px; flex: 1; }
+.tr-actions input { padding: 5px 8px; border: 1px solid var(--border2); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 12.5px; }
+.tr-radio { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; margin-right: 6px; }
+.tr-bulk { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 10px; font-size: 12.5px; }
+.tr-bulk input { padding: 5px 8px; border: 1px solid var(--border2); border-radius: 6px; background: var(--surface); color: var(--text); }
+.tr-resolved { margin-top: 10px; font-size: 12.5px; }
+.tr-resolved summary { cursor: pointer; color: var(--text2); font-weight: 700; }
+.tr-legacy { font-size: 13px; color: var(--text2); }
+.tr-warn { margin-top: 4px; color: var(--amber); font-weight: 700; }
+.tr-types { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.tr-types textarea { padding: 6px 8px; border: 1px solid var(--border2); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 12.5px; font-family: inherit; }
+.tr-details { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text2); }
+@media (max-width: 700px) {
+  .tr-panel { margin: 10px 12px 4px; }
+  .tr-actions input[type='text'] { min-width: 0; width: 100%; }
+}

@@ -2,7 +2,9 @@ import React, { memo } from 'react';
 import Icon from '../../../components/Icon';
 import { Bid } from '../../../types';
 import SendBidProposalModal from '../SendBidProposalModal';
-import { BidDataPreview, VerifyFailure, bulletText } from '../bidDataPreview';
+import { BidDataPreview, VerifyFailure } from '../bidDataPreview';
+import KeepLineControl, { DoubleCountControl } from './KeepLineControl';
+import ProposalPaper from './ProposalPaper';
 import { AiResults } from './shared';
 
 interface ProposalTabProps {
@@ -51,6 +53,13 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
   generatePrebidPackage, prebidBusy, prebidResult, downloadFiledDocument, emailPrebidToChris,
   chrisDraftBusy, chrisDraftLink, verifyFailures, proposalPreview, convertOpen, setConvertOpen,
   handleConvert }: ProposalTabProps) {
+  // Takeoff accuracy Task 7 — mirrors the server gate (409 on run-agent4 /
+  // generate-docx / generate-takeoff-xlsx / draft-proposal).
+  const reviewItems = (aiResults?.review_items as Array<{ resolution?: unknown }> | null | undefined) ?? [];
+  const openReviewCount = reviewItems.filter(i => !i.resolution).length;
+  // Fix round 1 / B5 — a run in progress (review 'pending') blocks too.
+  const analysisPending = aiResults?.review_status === 'pending';
+  const reviewBlocked = (aiResults?.review_status === 'needs_review' && openReviewCount > 0) || analysisPending;
   const agent4Raw    = aiResults?.agent4_output as string | undefined;
   const agent4Status = aiResults?.agent4_status as string | undefined;
   const agent4ErrMsg = aiResults?.agent4_error  as string | undefined;
@@ -131,9 +140,30 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
               {agent4StartError}
             </div>
           )}
+          {/* Fix round 2 / N-R2-6 — the legacy note, here as well as in the Takeoff step. */}
+          {!aiResults?.review_status && !!aiResults?.agent1_output && !aiResults?.run_id && (
+            <div data-testid="proposal-legacy-note" style={{
+              marginBottom: 16, padding: '10px 14px', borderRadius: 8, background: 'var(--surface2)',
+              border: '1px solid var(--border2)', color: 'var(--text2)', fontSize: 12.5, fontWeight: 700,
+            }}>
+              Analyzed before accuracy checks — re-run analysis to enable counting and account rules. Its account-rule questions are listed in the Takeoff step.
+            </div>
+          )}
+          {reviewBlocked && (
+            <div data-testid="proposal-review-blocked" style={{
+              marginBottom: 16, padding: '10px 14px', borderRadius: 8,
+              background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.4)',
+              color: 'var(--amber)', fontSize: 12.5, fontWeight: 700,
+            }}>
+              {analysisPending
+                ? 'The takeoff analysis is running (or did not finish). The proposal can’t be generated, downloaded or sent until it completes.'
+                : <>The takeoff needs review first: {openReviewCount} item{openReviewCount === 1 ? '' : 's'} open in the Takeoff step
+                  (counts that came back zero or unreadable, or scope questions). The proposal can’t be generated, downloaded or sent until they’re resolved.</>}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <button className="btn" onClick={runAgent4Proposal}
-              disabled={agent4Running || !propPrice.trim() || !aiResults?.agent2_output}
+              disabled={reviewBlocked || agent4Running || !propPrice.trim() || !aiResults?.agent2_output}
               style={{ fontSize: 13 }}>
               {agent4Running
                 ? 'Generating proposal…'
@@ -204,62 +234,9 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
         />
       )}
 
-      {/* Task 6.3 — internal-only pre-bid package for Chris, from the
-          same composed BidData the GC docx/xlsx render from. */}
-      {hasProposal && (
-        <div className="panel" style={{ marginBottom: 16 }}>
-          <div className="panel-hdr">
-            <span className="panel-title">
-              <span className="pt-ic"><Icon name="users" size={14} stroke={1.9}/></span>
-              Pre-Bid Package for Chris
-              <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 800, color: 'var(--amber)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                Internal only
-              </span>
-            </span>
-          </div>
-          <div style={{ padding: '14px 20px' }}>
-            <div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.6, marginBottom: 12 }}>
-              Generates the internal scope docx (no price, no signature) and a confidence-coded
-              takeoff xlsx for Chris to price against, filed under this bid&apos;s Pre-Bid documents.
-            </div>
-            <button className="btn ghost" onClick={generatePrebidPackage} disabled={prebidBusy} style={{ fontSize: 13 }}>
-              <Icon name="doc" size={14} stroke={1.9}/> {prebidBusy ? 'Generating…' : 'Generate Pre-Bid Package for Chris'}
-            </button>
-            {prebidResult && (
-              <div style={{ marginTop: 12, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-                {prebidResult.scopeDocumentId && (
-                  <button onClick={() => downloadFiledDocument(prebidResult.scopeDocumentId!, `PreBid Scope — ${bid.name}.docx`)}
-                    style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                    <Icon name="doc" size={12} stroke={2}/> Download Pre-Bid Scope
-                  </button>
-                )}
-                {prebidResult.takeoffDocumentId && (
-                  <button onClick={() => downloadFiledDocument(prebidResult.takeoffDocumentId!, `PreBid Takeoff — ${bid.name}.xlsx`)}
-                    style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                    <Icon name="doc" size={12} stroke={2}/> Download Pre-Bid Takeoff
-                  </button>
-                )}
-              </div>
-            )}
-            {/* Phase 4 Task 1.5 — a DRAFT (never a send) to Chris with
-                both filed pre-bid files attached; Jake reviews/sends
-                from Outlook, same as the "Email Bid to Team" pattern. */}
-            {prebidResult && (prebidResult.scopeDocumentId || prebidResult.takeoffDocumentId) && (
-              <div style={{ marginTop: 12 }}>
-                <button className="btn ghost" onClick={emailPrebidToChris} disabled={chrisDraftBusy} style={{ fontSize: 12.5 }}>
-                  <Icon name="mail" size={13} stroke={1.9}/> {chrisDraftBusy ? 'Drafting…' : 'Email to Chris (draft)'}
-                </button>
-                {chrisDraftLink && (
-                  <a href={chrisDraftLink} target="_blank" rel="noreferrer"
-                    style={{ marginLeft: 10, fontSize: 12, fontWeight: 700, color: 'var(--blue)' }}>
-                    Open draft in Outlook →
-                  </a>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Takeoff accuracy Task 12 — the Pre-Bid Package for Chris moved to
+          the end of the Takeoff step (it builds from the pre-bid draft, before
+          any price). */}
 
       {/* Task 6/7 — the verify gate's failures never fail silently: list
           each check + its matched text with re-run guidance. */}
@@ -283,10 +260,16 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
                 <div style={{ fontWeight: 800, color: 'var(--red)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 3 }}>
                   {f.check.replace(/_/g, ' ')}
                 </div>
-                <div style={{ marginBottom: f.matches.length ? 4 : 0 }}>{f.detail}</div>
-                {f.matches.length > 0 && (
+                <div style={{ marginBottom: (f.matches ?? []).length ? 4 : 0 }}>{f.detail}</div>
+                {f.check === 'possible_double_count' && f.category && f.line && f.flag && (
+                  <DoubleCountControl bidId={bid.id} category={f.category} line={f.line} typeKey={f.flag.replace(/^dup:/, '')} showToast={showToast} />
+                )}
+                {(f.check === 'non_electrical' || f.check === 'excluded_scope' || f.check === 'count_line_ambiguous' || f.check === 'irrelevant_spec') && f.category && f.line && (
+                  <KeepLineControl bidId={bid.id} category={f.category} line={f.line} flag={f.flag ?? f.check} showToast={showToast} />
+                )}
+                {(f.matches ?? []).length > 0 && (
                   <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-                    Matched: {f.matches.map((m, mi) => (
+                    Matched: {(f.matches ?? []).map((m, mi) => (
                       <code key={mi} style={{ background: 'var(--surface3)', padding: '1px 5px', borderRadius: 4, marginRight: 5 }}>{m}</code>
                     ))}
                   </div>
@@ -332,76 +315,7 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
           <div className="panel-hdr">
             <span className="panel-title">Proposal Preview</span>
           </div>
-          <div style={{ padding: '16px 20px', fontSize: 13 }}>
-            {/* Header row */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16, padding: '12px 16px', background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border2)' }}>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Prepared For</div>
-                <div style={{ fontWeight: 700, color: 'var(--text)' }}>{proposalPreview.client || '—'}</div>
-                {proposalPreview.contact ? <div style={{ color: 'var(--text3)' }}>{proposalPreview.contact}</div> : null}
-              </div>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Project</div>
-                <div style={{ fontWeight: 700, color: 'var(--text)' }}>{proposalPreview.project_name || bid.name}</div>
-                {proposalPreview.project_address ? <div style={{ color: 'var(--text3)' }}>{proposalPreview.project_address}</div> : null}
-              </div>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Job Number</div>
-                <div style={{ fontWeight: 700, color: 'var(--text)' }}>{proposalPreview.job_number || '—'}</div>
-              </div>
-            </div>
-
-            {/* Price */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'rgba(31,56,100,.06)', border: '1px solid rgba(31,56,100,.2)', borderRadius: 8, marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>Total Proposed Contract Value:</div>
-              <div style={{ fontSize: 20, fontWeight: 900, color: '#1F3864' }}>{proposalPreview.total_price || propPrice}</div>
-            </div>
-
-            {/* Scope sections — real titles, straight off the composed data */}
-            {proposalPreview.sections.length > 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Scope of Work</div>
-                {proposalPreview.sections.map((s, si) => (
-                  <div key={si} style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: '#1F3864', marginBottom: 4 }}>{s.title}</div>
-                    <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
-                      {s.bullets.map((b, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{bulletText(b)}</li>)}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Exclusions */}
-            {proposalPreview.exclusions.length > 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Exclusions</div>
-                <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
-                  {proposalPreview.exclusions.map((e, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{bulletText(e)}</li>)}
-                </ul>
-              </div>
-            )}
-
-            {/* Alternates */}
-            {!!proposalPreview.alternates?.length && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Alternates</div>
-                <ul style={{ margin: 0, paddingLeft: 18, listStyleType: 'disc' }}>
-                  {proposalPreview.alternates.map((a, i) => <li key={i} style={{ color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{bulletText(a)}</li>)}
-                </ul>
-              </div>
-            )}
-
-            {/* Terms */}
-            {proposalPreview.terms.length > 0 && (
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Terms, Conditions &amp; Special Requirements</div>
-                <ol style={{ margin: 0, paddingLeft: 18 }}>
-                  {proposalPreview.terms.map((t, i) => <li key={i} style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 3, lineHeight: 1.5 }}>{bulletText(t)}</li>)}
-                </ol>
-              </div>
-            )}
-          </div>
+          <ProposalPaper data={proposalPreview} fallbackName={bid.name} fallbackPrice={propPrice} />
         </div>
       )}
 

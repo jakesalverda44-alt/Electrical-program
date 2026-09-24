@@ -128,6 +128,17 @@ export function pdfToRenderMatrixWithOrigin(geom: PageGeometry, renderScale: num
   return [a, b, c, d, e - a * ox - c * oy, f - b * ox - d * oy];
 }
 
+/** Takeoff accuracy Task 6 — an SVG transform for drawing UPRIGHT,
+ *  constant-pixel-size text (the "AI" badge) at PDF point `p` inside the
+ *  overlay group whose transform is `groupMatrix` (which flips y and may
+ *  rotate). Composing groupMatrix with the returned matrix maps a local
+ *  pixel offset (u, v) to screen(p) + (u, v): the badge sits next to its
+ *  marker, reads left-to-right, and does not scale with zoom. */
+export function uprightTextTransform(groupMatrix: AffineMatrix, p: Point): AffineMatrix {
+  const [ia, ib, ic, id] = invertMatrix([groupMatrix[0], groupMatrix[1], groupMatrix[2], groupMatrix[3], 0, 0]);
+  return [ia, ib, ic, id, p.x, p.y];
+}
+
 function invertMatrix([a, b, c, d, e, f]: AffineMatrix): AffineMatrix {
   const det = a * d - b * c;
   // Every matrix this module produces is a pure rotation+scale (|det| =
