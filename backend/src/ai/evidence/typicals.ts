@@ -182,8 +182,18 @@ export function isHostTarget(t: Pick<CountTarget, 'key'> & { role?: string }): b
   return t.role === 'host';
 }
 
-export const HOST_RADIUS_PT = 30;
+/** Fix round S3 — a device drawn "at" a host: within 0.75" of the host's
+ *  tag on the host's main plan (a pole tag sits on a leader 0.5-1" from the
+ *  pole), with enlarged-plan marks mapped onto the main plan and marks on
+ *  the other sheets of the level aligned onto it (the caller does both). */
+export const HOST_RADIUS_IN = 0.75;
+/** S2 — an unstated per-host quantity is "drawn" when devices of that type
+ *  are within 2" (16 ft at 1/8") of a host. */
+export const HOST_AREA_IN = 2;
+/** Kept for older callers (points). */
+export const HOST_RADIUS_PT = HOST_RADIUS_IN * 72;
 
+/** Positions in DISPLAYED INCHES on the host sheet's main-plan frame. */
 export interface HostMark { sheetKey: string; x: number; y: number }
 
 export interface TypicalExpansion {
@@ -196,10 +206,22 @@ export interface TypicalExpansion {
   /** null = the host count is not known (blocking review). */
   hostCount: number | null;
   hostSheets: string[];
-  /** Devices of this type drawn individually at a host (subtracted). */
+  /** Devices of this type drawn individually at a host on the host's own
+   *  sheet (subtracted). */
   drawnAtHosts: number;
+  /** Fix round S3 — devices of this type at a host's position on ANOTHER
+   *  sheet of the level (aligned): may be the host's own outlet drawn on the
+   *  other layer, or a different device above / beside it (Kissimmee: E-1's
+   *  "duplex outlet at deck", circuit A-31, sits over the checkout pole,
+   *  circuit A-29). Never subtracted silently — the estimator decides. */
+  possibleAtHosts?: number;
   expanded: number;
-  status: 'expanded' | 'no_multiplier';
+  /** 'assembly' (fix round S1): the device is part of the host's own
+   *  assembly line (the host IS a counted type whose own legend / schedule
+   *  row names the device) — priced with the host, never a second line.
+   *  'qty_unstated' (S2): the legend names the device but not how many per
+   *  host — never guessed; a review item. */
+  status: 'expanded' | 'no_multiplier' | 'assembly' | 'qty_unstated';
   reason: string;
   quote: string;
   sheetKey: string;
@@ -209,38 +231,76 @@ export interface TypicalExpansion {
 
 export interface UnmappedTypicalDevice { packageId: string; host: string; text: string; qty: number; quote: string }
 
+const ASM_STOP = new Set(['THE', 'AND', 'WITH', 'FOR', 'EACH', 'BOX', 'AT', 'OF', 'TO', 'ON', 'IN', 'BY']);
+function asmWords(s: string): Set<string> {
+  return new Set(s.toUpperCase().replace(/[^A-Z0-9 ]+/g, ' ').split(/\s+/).filter(w => w.length >= 3 && !ASM_STOP.has(w)));
+}
+
+/** S1 — the package describes the host's OWN assembly: the host is a
+ *  counted type and the quote is its own legend / schedule row (2+ of its
+ *  description's words, or its host text shares 2+ words with it). */
+export function isAssemblyPackage(p: TypicalPackage, targets: CountTarget[]): boolean {
+  if (!p.hostTargetKey) return false;
+  const t = targets.find(x => x.key === p.hostTargetKey);
+  if (!t) return false;
+  const tw = asmWords(t.description);
+  const qw = asmWords(`${p.quote} ${p.host}`);
+  return [...tw].filter(w => qw.has(w)).length >= 2;
+}
+
 /** Pure (2.2): expand every package's stated devices by its host count. */
 export function expandTypicals(
   packages: TypicalPackage[],
   hostCounts: Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string }>,
-  deviceMarks: Array<{ sheetKey: string; typeKey: string; x: number; y: number }>,
+  deviceMarks: Array<{ sheetKey: string; typeKey: string; x: number; y: number; fromSheet?: string }>,
+  targets: CountTarget[] = [],
 ): { expansions: TypicalExpansion[]; unmapped: UnmappedTypicalDevice[] } {
   const expansions: TypicalExpansion[] = [];
   const unmapped: UnmappedTypicalDevice[] = [];
+  const near = (hc: { marks: HostMark[] }, key: string, r: number, perHost: number, own: boolean | null = true) => {
+    let n = 0;
+    for (const h of hc.marks) {
+      const k = deviceMarks.filter(m => m.typeKey === key && m.sheetKey === h.sheetKey
+        && (own === null || ((m.fromSheet ?? m.sheetKey) === h.sheetKey) === own)
+        && Math.hypot(m.x - h.x, m.y - h.y) <= r).length;
+      n += Math.min(k, perHost);
+    }
+    return n;
+  };
   for (const p of packages) {
     const hostKey = hostKeyOf(p);
     const hc = hostCounts.get(hostKey);
+    const assembly = isAssemblyPackage(p, targets);
     for (const d of p.devices) {
-      if (d.qty == null) continue;
-      if (!d.targetKey) { unmapped.push({ packageId: p.id, host: p.host, text: d.text, qty: d.qty, quote: p.quote }); continue; }
+      if (!d.targetKey && d.qty != null && !assembly) { unmapped.push({ packageId: p.id, host: p.host, text: d.text, qty: d.qty, quote: p.quote }); continue; }
+      if (!d.targetKey && (d.qty == null || assembly)) continue;
       const base = {
-        packageId: p.id, host: p.host, hostKey, deviceKey: d.targetKey, deviceText: d.text, perHost: d.qty,
+        packageId: p.id, host: p.host, hostKey, deviceKey: d.targetKey!, deviceText: d.text, perHost: d.qty ?? 0,
         quote: p.quote, sheetKey: p.sheetKey, viewportId: p.viewportId, viewportLabel: p.viewportLabel,
         hostSheets: hc?.sheets ?? [],
       };
+      if (assembly) {
+        expansions.push({ ...base, hostCount: hc?.count ?? null, drawnAtHosts: 0, expanded: 0, status: 'assembly',
+          reason: `part of the ${p.host.toLowerCase()} assembly (${d.qty ?? 'n'} per ${p.host.toLowerCase()}) — priced with it, not as a separate ${d.text.toLowerCase()}` });
+        continue;
+      }
+      if (d.qty == null) {
+        const drawn = hc && hc.count ? near(hc, d.targetKey!, HOST_AREA_IN, Number.MAX_SAFE_INTEGER, null) : 0;
+        expansions.push({ ...base, hostCount: hc?.count ?? null, drawnAtHosts: drawn, expanded: 0, status: 'qty_unstated',
+          reason: drawn ? `${drawn} drawn near the ${p.host.toLowerCase()}${(hc?.count ?? 0) === 1 ? '' : 's'} — counted where drawn` : `how many per ${p.host.toLowerCase()} is not stated and none is drawn near one` });
+        continue;
+      }
       if (!hc || hc.count == null || hc.count <= 0) {
         expansions.push({ ...base, hostCount: null, drawnAtHosts: 0, expanded: 0, status: 'no_multiplier',
           reason: hc?.reason ?? `no ${p.host.toLowerCase()} was found on the plans${p.hostTag ? ` (tag ${p.hostTag})` : ''}` });
         continue;
       }
-      let drawn = 0;
-      for (const h of hc.marks) {
-        const near = deviceMarks.filter(m => m.typeKey === d.targetKey && m.sheetKey === h.sheetKey && Math.hypot(m.x - h.x, m.y - h.y) <= HOST_RADIUS_PT).length;
-        drawn += Math.min(near, d.qty);
-      }
+      const drawn = near(hc, d.targetKey!, HOST_RADIUS_IN, d.qty, true);
       const expanded = Math.max(0, hc.count * d.qty - drawn);
+      const possible = Math.min(expanded, near(hc, d.targetKey!, HOST_RADIUS_IN, d.qty, false));
       expansions.push({ ...base, hostCount: hc.count, drawnAtHosts: drawn, expanded, status: 'expanded',
-        reason: `${hc.count} × ${d.qty}${drawn ? ` − ${drawn} drawn at the hosts` : ''}` });
+        ...(possible ? { possibleAtHosts: possible } : {}),
+        reason: `${hc.count} × ${d.qty}${drawn ? ` − ${drawn} drawn at the hosts` : ''}${possible ? ` (${possible} more drawn at a host on another sheet — the estimator decides)` : ''}` });
     }
   }
   return { expansions, unmapped };

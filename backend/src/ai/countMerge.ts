@@ -25,7 +25,7 @@
 //    from) and listed so the estimator can see exactly what left the takeoff.
 import { isFixtureCategory, normalizeTypeKey, type CountTarget, type TargetCategory } from './countTargets';
 import type { CountSheet, SheetRole, SheetFocus } from './countSheets';
-import { relateSheets, type SheetRelation } from './evidence/sheetRelation';
+import { alignSheets, mainPlanPosition, relateSheets, type SheetRelation } from './evidence/sheetRelation';
 import type { SheetGeom, Viewport } from './evidence/viewports';
 import type { SheetMarkResolution } from './evidence/viewportResolve';
 import { circuitSummaryRows, isCircuitCountRow, panelNameOf, panelsNamedIn, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
@@ -125,6 +125,9 @@ export interface TypeCountResult {
   mergedCount?: number;
   /** Evidence round 2.2 — a host marker type (multiplier only). */
   host?: boolean;
+  /** Fix round S1 — devices that are part of this type's own assembly
+   *  (per its legend / schedule row): priced with this line. */
+  assembly?: Array<{ device: string; deviceKey: string; perHost: number }>;
   /** Evidence round 1.2 — marks of this type not counted as devices
    *  (legend / schedule / notes / detail / repeated in an enlarged plan). */
   excludedMarks?: number;
@@ -626,6 +629,10 @@ export function mergeCountsIntoTakeoff(
     });
   }
 
+  const relSheet = (s: SheetCountInput) => ({ key: s.sheet.key, label: s.sheet.label, geometry: s.geometry ?? null, viewports: s.viewports ?? null,
+    marks: s.placed.filter(p => Number.isFinite(p.x)).map(p => ({ typeKey: p.typeKey, x: p.x!, y: p.y!, viewportId: p.viewportId ?? null })) });
+  const mainPos = (s: SheetCountInput, m: { typeKey: string; x?: number; y?: number; viewportId?: string | null }) =>
+    s.geometry ? mainPlanPosition({ typeKey: m.typeKey, x: m.x!, y: m.y!, viewportId: m.viewportId ?? null }, relSheet(s)) : null;
   // ── 2.2 Typical expansion ────────────────────────────────────────────────
   let evidenceOut: CountMergeEvidenceResult | undefined;
   if (opts.countingRan && opts.evidence) {
@@ -640,7 +647,10 @@ export function mergeCountsIntoTakeoff(
         if (!ty) { hostCounts.set(hk, { count: null, sheets: [], marks: [], reason: `the host "${p.host}" was not counted` }); continue; }
         const usedSheets = ty.sheets.filter(x => x.used).map(x => x.sheetKey);
         const marks = sheets.filter(s => usedSheets.includes(s.sheet.key))
-          .flatMap(s => s.placed.filter(m => m.typeKey === hk && Number.isFinite(m.x)).map(m => ({ sheetKey: s.sheet.key, x: m.x!, y: m.y! })));
+          .flatMap(s => s.placed.filter(m => m.typeKey === hk && Number.isFinite(m.x)).flatMap(m => {
+            const p = mainPos(s, m);
+            return p ? [{ sheetKey: s.sheet.key, x: p.x, y: p.y }] : [];
+          }));
         hostCounts.set(hk, {
           count: ty.status === 'counted' && ty.count > 0 ? ty.count : null,
           sheets: ty.sheets.filter(x => x.used).map(x => x.label),
@@ -648,11 +658,42 @@ export function mergeCountsIntoTakeoff(
           ...(ty.status !== 'counted' || ty.count === 0 ? { reason: ty.status === 'unreadable' ? `the ${p.host.toLowerCase()} markers could not be read (${ty.reason})` : `no ${p.host.toLowerCase()} was found on the plans${p.hostTag ? ` (tag ${p.hostTag})` : ''}` } : {}),
         });
       }
-      const deviceMarks = sheets.flatMap(s => s.placed.filter(m => Number.isFinite(m.x)).map(m => ({ sheetKey: s.sheet.key, typeKey: m.typeKey, x: m.x!, y: m.y! })));
-      const { expansions, unmapped } = expandTypicals(packages, hostCounts, deviceMarks);
+      // Fix round S3 — device marks in each HOST sheet's main-plan frame
+      // (displayed inches): its own marks (enlarged-plan marks mapped onto
+      // the main plan) and every other sheet's aligned onto it.
+      const hostSheetKeys = new Set([...hostCounts.values()].flatMap(h => h.marks.map(m => m.sheetKey)));
+      const deviceMarks: Array<{ sheetKey: string; typeKey: string; x: number; y: number; fromSheet: string }> = [];
+      for (const hk of hostSheetKeys) {
+        const H = sheets.find(s => s.sheet.key === hk);
+        if (!H) continue;
+        for (const S of sheets) {
+          if (S.status !== 'counted' || S.sheet.photometric) continue;
+          const al = S === H ? null : alignSheets(relSheet(H), relSheet(S), isHost);
+          if (S !== H && !al) continue;
+          for (const m of S.placed) {
+            if (!Number.isFinite(m.x) || isHost(m.typeKey)) continue;
+            const p = mainPos(S, m);
+            if (!p) continue;
+            const q = al ? al.map(p) : p;
+            deviceMarks.push({ sheetKey: hk, typeKey: m.typeKey, x: q.x, y: q.y, fromSheet: S.sheet.key });
+          }
+        }
+      }
+      const { expansions, unmapped } = expandTypicals(packages, hostCounts, deviceMarks, targets);
       evidenceOut.expansions = expansions;
       evidenceOut.unmappedTypical = unmapped;
       for (const e of expansions) {
+        if (e.status === 'assembly') {
+          // S1 — recorded on the HOST's line (priced with it), never added
+          // to the device type.
+          const host = types.find(x => x.key === e.hostKey);
+          if (host) {
+            host.typical = [...(host.typical ?? []), { packageId: e.packageId, host: e.host, hostCount: e.hostCount, perHost: e.perHost, drawnAtHosts: 0, expanded: 0, quote: e.quote }];
+            host.assembly = [...(host.assembly ?? []), { device: e.deviceText, deviceKey: e.deviceKey, perHost: e.perHost }];
+            host.flags.push(`${host.type}: each includes ${e.perHost || ''} ${e.deviceText.toLowerCase()} (${e.viewportLabel || 'the legend'}) — priced with the ${host.type} line, not as a separate device.`.replace('  ', ' '));
+          }
+          continue;
+        }
         const ty = types.find(x => x.key === e.deviceKey);
         if (!ty) continue;
         ty.typical = [...(ty.typical ?? []), { packageId: e.packageId, host: e.host, hostCount: e.hostCount, perHost: e.perHost, drawnAtHosts: e.drawnAtHosts, expanded: e.expanded, quote: e.quote }];
@@ -825,7 +866,8 @@ export function mergeCountsIntoTakeoff(
       continue;
     }
     const typ = r.components?.typical ?? 0;
-    const spec = pending || (typ > 0 ? `${t.description} — incl. ${typ} at ${[...new Set((r.typical ?? []).filter(x => x.expanded > 0).map(x => x.host.toLowerCase()))].join(', ')} (typical)` : t.description);
+    const asm = r.assembly?.length ? ` — each incl. ${r.assembly.map(a => `${a.perHost || ''} ${a.device.toLowerCase()}`.trim()).join(', ')}` : '';
+    const spec = pending ? pending : asm ? `${t.description}${asm}` : (typ > 0 ? `${t.description} — incl. ${typ} at ${[...new Set((r.typical ?? []).filter(x => x.expanded > 0).map(x => x.host.toLowerCase()))].join(', ')} (typical)` : t.description);
     counted.push({ ...base, item: countedRowItem(t), qty: r.status === 'counted' ? r.count : 0, spec });
   }
 

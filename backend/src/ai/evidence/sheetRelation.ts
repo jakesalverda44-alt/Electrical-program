@@ -89,7 +89,7 @@ type Pt = { x: number; y: number };
 /** Displayed-inch position of a mark on its sheet's MAIN plan: enlarged
  *  marks are mapped linearly from the enlarged viewport onto its area of the
  *  main plan; null when that can't be done. */
-function mainPlanPosition(m: RelationMark, s: RelationSheet): Pt | null {
+export function mainPlanPosition(m: RelationMark, s: RelationSheet): Pt | null {
   if (!s.geometry) return null;
   const p = pdfToDisplayedIn(m.x, m.y, s.geometry);
   const vp = m.viewportId ? s.viewports?.find(v => v.id === m.viewportId) : undefined;

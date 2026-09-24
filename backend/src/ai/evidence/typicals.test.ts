@@ -4,7 +4,7 @@
 // expansion). Targets are the REAL Kissimmee Agent 1's.
 import { describe, it, expect } from 'vitest';
 import { buildCountTargets } from '../countTargets';
-import { parseTypicalsReply, matchDeviceToTarget, hostTargets, hostKeyOf, expandTypicals, HOST_RADIUS_PT, type TypicalPackage } from './typicals';
+import { parseTypicalsReply, matchDeviceToTarget, hostTargets, hostKeyOf, expandTypicals, isAssemblyPackage, HOST_RADIUS_IN, type TypicalPackage } from './typicals';
 import { TYPICALS_REPLIES } from '../../test/fixtures/evidence/kissimmeeReplies';
 import { loadKissimmeeBaseline } from '../../test/fixtures/evidence/kissimmeeBaseline';
 
@@ -75,12 +75,14 @@ describe('2.2 — expansion', () => {
   const two = pkg('3', [{ targetKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', text: 'duplex outlet', qty: 1 }]);
   it('hosts x per host; a duplex drawn at a host is subtracted (never counted twice)', () => {
     const k = hostKeyOf(two);
-    const hosts = new Map([[k, { count: 2, sheets: ['E-2'], marks: [{ sheetKey: E2, x: 100, y: 100 }, { sheetKey: E2, x: 500, y: 500 }] }]]);
+    // Positions in displayed inches on the host sheet's main plan.
+    const hosts = new Map([[k, { count: 2, sheets: ['E-2'], marks: [{ sheetKey: E2, x: 5, y: 5 }, { sheetKey: E2, x: 12, y: 9 }] }]]);
     const none = expandTypicals([two], hosts, []);
     expect(none.expansions[0]).toMatchObject({ hostCount: 2, perHost: 1, drawnAtHosts: 0, expanded: 2, status: 'expanded' });
-    const drawn = expandTypicals([two], hosts, [{ sheetKey: E2, typeKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', x: 100 + HOST_RADIUS_PT - 1, y: 100 }]);
+    // Fix round S3: 0.7" from the tag (a pole tag sits on a leader) is AT the host.
+    const drawn = expandTypicals([two], hosts, [{ sheetKey: E2, typeKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', x: 5 + HOST_RADIUS_IN - 0.05, y: 5 }]);
     expect(drawn.expansions[0]).toMatchObject({ drawnAtHosts: 1, expanded: 1 });
-    const far = expandTypicals([two], hosts, [{ sheetKey: E2, typeKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', x: 100 + HOST_RADIUS_PT + 5, y: 100 }]);
+    const far = expandTypicals([two], hosts, [{ sheetKey: E2, typeKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', x: 5 + HOST_RADIUS_IN + 0.1, y: 5 }]);
     expect(far.expansions[0].expanded).toBe(2);
   });
   it('no host count = no expansion and the reason (a blocking review item downstream)', () => {
@@ -93,5 +95,43 @@ describe('2.2 — expansion', () => {
     const r = expandTypicals([u], new Map([[hostKeyOf(u), { count: 3, sheets: [], marks: [] }]]), []);
     expect(r.expansions).toEqual([]);
     expect(r.unmapped).toEqual([{ packageId: u.id, host: 'Pole 9', text: 'vacuum', qty: 2, quote: 'POLE 9 WITH OUTLETS' }]);
+  });
+});
+
+describe('fix round S1 — a device in the host\'s OWN assembly row is priced with the host, never a second line', () => {
+  const e1 = parseTypicalsReply(TYPICALS_REPLIES[49], { sheetKey: 'set.pdf#49', source: 'vision', viewports: [{ id: 'set.pdf#49@5', label: '#5 POWER SCHEDULE' }], targets })!.packages;
+  it('E-1 #5 "J-box with 6\' flex … receptacle mounted to base plate" (the display baseflex): assembly, nothing added to DUPLEX', () => {
+    expect(isAssemblyPackage(e1[0], targets)).toBe(true);
+    const r = expandTypicals(e1, new Map([['COIL + J', { count: 3, sheets: ['E-1'], marks: [] }]]), [], targets);
+    expect(r.expansions.map(x => [x.status, x.expanded, x.hostKey])).toEqual([['assembly', 0, 'COIL + J']]);
+  });
+  it('a pole legend (host marked by a tag, not a target) still expands', () => {
+    const e2 = parseTypicalsReply(TYPICALS_REPLIES[50], { sheetKey: E2, source: 'vision', viewports: vps, targets })!.packages;
+    expect(e2.some(p => isAssemblyPackage(p, targets))).toBe(false);
+  });
+});
+
+describe('fix round S2 — an unstated per-host quantity raises a review item, never silently skipped', () => {
+  const p = parseTypicalsReply(TYPICALS_REPLIES[50], { sheetKey: E2, source: 'vision', viewports: vps, targets })!.packages[0];
+  const hosts = new Map([[hostKeyOf(p), { count: 1, sheets: ['E-2'], marks: [{ sheetKey: E2, x: 5, y: 7 }] }]]);
+  it('none drawn near the office pole -> qty_unstated with nothing drawn', () => {
+    const r = expandTypicals([p], hosts, [], targets).expansions.find(e => e.deviceKey === 'SIMPLEX RECEPTACLE')!;
+    expect(r).toMatchObject({ status: 'qty_unstated', drawnAtHosts: 0, expanded: 0 });
+  });
+  it('simplex outlets drawn within 2" of the pole (the office plan\'s A30-A38) -> counted where drawn, reported', () => {
+    const marks = [0.8, 1.2, 1.5, 1.9].map(dx => ({ sheetKey: E2, typeKey: 'SIMPLEX RECEPTACLE', x: 5 + dx, y: 7 }));
+    expect(expandTypicals([p], hosts, marks, targets).expansions.find(e => e.deviceKey === 'SIMPLEX RECEPTACLE')).toMatchObject({ status: 'qty_unstated', drawnAtHosts: 4 });
+  });
+});
+
+describe('fix round S3 — a device at a host drawn on ANOTHER sheet is asked about, never subtracted silently', () => {
+  it('own sheet within 0.75" -> subtracted; another sheet at the same place -> possibleAtHosts', () => {
+    const p: TypicalPackage = { id: 'e2@9#2', sheetKey: E2, viewportId: null, viewportLabel: '#9', host: 'Checkout counter power pole', hostTag: '2', hostMarker: 'hexagon tag 2', hostTargetKey: null,
+      devices: [{ targetKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', text: 'duplex outlet', qty: 1 }], quote: 'CHECKOUT COUNTER POWER POLE WITH ONE DUPLEX OUTLET', source: 'vision' };
+    const hosts = new Map([[hostKeyOf(p), { count: 1, sheets: ['E-2'], marks: [{ sheetKey: E2, x: 6.8, y: 9.4 }] }]]);
+    const other = [{ sheetKey: E2, fromSheet: 'E-1', typeKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', x: 6.85, y: 9.2 }];
+    expect(expandTypicals([p], hosts, other, targets).expansions[0]).toMatchObject({ drawnAtHosts: 0, expanded: 1, possibleAtHosts: 1 });
+    const own = [{ ...other[0], fromSheet: E2 }];
+    expect(expandTypicals([p], hosts, own, targets).expansions[0]).toMatchObject({ drawnAtHosts: 1, expanded: 0 });
   });
 });

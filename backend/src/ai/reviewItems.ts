@@ -318,6 +318,46 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `typical|${es.map(e => `${e.deviceKey}x${e.perHost}`).join(',')}|${e0.reason}`,
     });
   }
+  // Fix round S3 — a device drawn at a host's position on ANOTHER sheet of
+  // the level: the host's own outlet drawn twice, or a different device
+  // there? Expanded as a separate device for now; the answer is enforced.
+  for (const e of ev?.expansions ?? []) {
+    if (e.status !== 'expanded' || !e.possibleAtHosts) continue;
+    const t = (countResult?.types ?? []).find(x => x.key === e.deviceKey);
+    if (!t || t.status !== 'counted') continue;
+    const k = e.possibleAtHosts;
+    items.push({
+      id: `typicalat:${e.packageId}:${e.deviceKey}`,
+      kind: 'area',
+      title: `${t.type} at the ${e.host.toLowerCase()}: the same outlet on two sheets?`,
+      detail: `${e.viewportLabel || 'The legend'} puts ${e.perHost} ${t.type} on each ${e.host.toLowerCase()}, and another sheet draws ${k} ${t.type} at the same place. The pole's own outlet drawn twice (count ${t.count - k}), or a different device there (${t.count})?`,
+      options: [`Different devices — ${t.count}`, `The same outlet — ${t.count - k}`],
+      keepQty: t.count,
+      sumQty: t.count - k,
+      typicalDevices: [{ key: e.deviceKey, perHost: -k }],
+      actions: ['answer'],
+      fingerprint: `typicalat|${e.deviceKey}|${k}|${t.count}`,
+    });
+  }
+  // Fix round S2 — the legend names a device at each host but not how many:
+  // never guessed. Blocking when none is drawn near a host (the estimator
+  // enters the TOTAL of that device at the hosts); information when some are
+  // drawn there (they are counted where drawn).
+  for (const e of ev?.expansions ?? []) {
+    if (e.status !== 'qty_unstated') continue;
+    const typeName = (countResult?.types ?? []).find(t => t.key === e.deviceKey)?.type ?? e.deviceKey;
+    const drawn = e.drawnAtHosts > 0;
+    items.push({
+      id: `typicalqty:${e.packageId}:${e.deviceKey}`,
+      kind: 'count',
+      ...(drawn ? { blocking: false } : {}),
+      title: `Typical: ${e.host} — how many ${e.deviceText.toLowerCase()}?`,
+      detail: `${e.viewportLabel || 'The legend'} says each ${e.host.toLowerCase()} has ${e.deviceText.toLowerCase()} but not how many ("${e.quote.slice(0, 160)}"). ${drawn ? `${e.drawnAtHosts} ${typeName} are drawn near the ${e.host.toLowerCase()}${(e.hostCount ?? 0) === 1 ? '' : 's'} and are counted where drawn — check none is missing.` : `None is drawn near one. Enter how many ${typeName} there are at the ${e.host.toLowerCase()}s in all (added to ${typeName}), or mark it not on this job.`}`,
+      typicalDevices: [{ key: e.deviceKey, perHost: 1 }],
+      actions: ['count', 'not_on_job'],
+      fingerprint: `typicalqty|${e.deviceKey}|${e.drawnAtHosts}|${e.hostCount ?? ''}`,
+    });
+  }
   for (const [i, u] of (ev?.unmappedTypical ?? []).entries()) {
     items.push({
       id: `unscheduled:TYPICAL-${slug(`${u.host} ${u.text}`)}-${i + 1}`,
@@ -488,7 +528,7 @@ export function riskRank(i: ReviewItem): number {
   if (i.category === 'equipment') return 0;
   if (i.category === 'site_lighting' || i.category === 'exterior_building') return 5;
   if (i.id.startsWith('family:')) return 10;
-  if (i.id.startsWith('typical:')) return 15;
+  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 15;
   if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
   if (i.id.startsWith('legend-zero:')) return 33;
@@ -514,7 +554,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('schedule:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
-  if (i.id.startsWith('typical:')) return 'typical';
+  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';
   if (i.id.startsWith('counting:')) return 'counting';
   if (i.id.startsWith('refsheet:')) return 'refsheets';
@@ -708,11 +748,21 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   // Evidence round 2.2 — a resolved typical host count adds per-host x count
   // of each device type (on top of what was drawn).
   for (const i of list) {
-    if (!i.id.startsWith('typical:') || !i.resolution || i.resolution.action !== 'count') continue;
+    if (!(i.id.startsWith('typical:') || i.id.startsWith('typicalqty:')) || !i.resolution || i.resolution.action !== 'count') continue;
     for (const d of i.typicalDevices ?? []) {
       const cur = byType.get(d.key);
       if (cur === null) continue; // the type itself is not on this job
       byType.set(d.key, (cur ?? 0) + d.perHost * (i.resolution.qty ?? 0));
+    }
+  }
+  // Fix round S3 — "the same outlet on two sheets": subtract.
+  for (const i of list) {
+    if (!i.id.startsWith('typicalat:') || !i.resolution || i.resolution.action !== 'answer') continue;
+    if (i.resolution.answer !== i.options?.[1]) continue;
+    for (const d of i.typicalDevices ?? []) {
+      const cur = byType.get(d.key);
+      if (cur == null) continue;
+      byType.set(d.key, Math.max(0, cur + d.perHost));
     }
   }
   // Evidence round 3.3 — "use the other schedule's count" for a family.

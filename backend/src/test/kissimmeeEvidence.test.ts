@@ -161,7 +161,18 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     if (!have) return ctx.skip();
     const t = (k: string) => after.cr.types.find(x => x.key === k)!;
     expect(t('SIMPLEX RECEPTACLE').components).toEqual({ drawn: 9, typical: 1, schedule: 0 }); // fix round B4: B-32 once
-    expect(t('DUPLEX RECEPTACLE / FLOOR RECEPTACLE').components).toEqual({ drawn: 4, typical: 11, schedule: 0 });
+    // Fix round S1: the coil+J "receptacle mounted to base plate" is part of
+    // the display-baseflex assembly (priced with COIL + J), not 3 more duplexes.
+    expect(t('DUPLEX RECEPTACLE / FLOOR RECEPTACLE').components).toEqual({ drawn: 4, typical: 8, schedule: 0 });
+    expect(t('COIL + J').assembly).toEqual([{ device: 'Receptacle mounted to base plate', deviceKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', perHost: 1 }]);
+    expect(row(after.diff, 'baseflex')).toMatchObject({ actual: 3, expected: 8 });
+    // The HONEST traceable receptacle count (fix round): drawn + typicals,
+    // without anything gap-fill added — SIMPLEX 9+1, DUPLEX 4+8, GFCI 7
+    // (1 main + 6 restroom plan), WP GFI 4 = 33.
+    const gapAdded = ['SIMPLEX RECEPTACLE', 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', 'GFCI', 'WP GFI']
+      .reduce((sum, k) => sum + ((t(k).components as { gapfill?: number } | undefined)?.gapfill ?? 0), 0);
+    expect(row(after.diff, 'receptacles_total').actual! - gapAdded).toBe(33);
+    expect(t('GFCI').count - ((t('GFCI').components as { gapfill?: number }).gapfill ?? 0)).toBe(7);
     // 4.4/4.3 — gap-fill's targeted re-search found 5 more GFCIs (the
     // documented undercount on the sheet's west portion, which this fixture
     // has no crop of); the crop check accepted all 5, never gap-fill's own
@@ -172,14 +183,20 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     expect(t('GFCI').gapFill!.every(g => g.reason.includes('undercount risk') && g.note.includes('confirmed GFCI example'))).toBe(true);
     expect(t('WP GFI').count).toBe(4);
     expect(row(after.diff, 'gfci').actual).toBe(16);
-    expect(row(after.diff, 'receptacles_total').actual).toBe(41);
+    expect(row(after.diff, 'receptacles_total').actual).toBe(33 + gapAdded);
     // The typicals: 5 pole types and the coil+J boxes, each with its quote.
     const exp = after.cr.evidence!.expansions.filter(e => e.status === 'expanded');
     expect(exp.map(e => [e.host, e.hostCount, e.perHost, e.expanded])).toEqual(expect.arrayContaining([
       ['Office area power pole', 1, 2, 2], ['Checkout counter power pole', 1, 1, 1], ['Parts pod power pole', 2, 1, 2],
       ['Test station power pole', 1, 1, 1], ['Test station power pole', 1, 1, 1], ['Commercial counter power pole', 1, 2, 2],
-      ['Junction box with 6\'-0" flex conduit at wall & H.P. counters', 3, 1, 3],
     ]));
+    expect(after.cr.evidence!.expansions.filter(e => e.status === 'assembly').map(e => [e.host, e.hostCount])).toEqual([['Junction box with 6\'-0" flex conduit at wall & H.P. counters', 3]]);
+    // Fix round S3: E-1's "duplex outlet at deck" (A-31) sits over the
+    // checkout pole (A-29) once the sheets are aligned — asked, never
+    // subtracted silently. S2: the office pole's unstated floor simplex
+    // outlets are drawn near it (#11), so that item is information.
+    expect(after.review.find(i => i.id.startsWith('typicalat:') && i.id.includes('@9#2'))).toMatchObject({ kind: 'area', keepQty: 12, sumQty: 11 });
+    expect(after.review.find(i => i.id.startsWith('typicalqty:'))).toMatchObject({ blocking: false });
     expect(exp.every(e => e.quote.length > 20)).toBe(true);
     // The E-1 / E-2 receptacles were summed as complementary layers.
     expect(t('SIMPLEX RECEPTACLE').relations![0].kind).toBe('complementary');
@@ -217,10 +234,10 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     const counterCalls = after.calls.filter(c => systemText(c).includes('counting symbols on ONE electrical plan sheet'));
     expect(counterCalls.every(c => !/^- BATT CHGR \|/m.test(userText(c)))).toBe(true);
   });
-  it('the review list: 46 -> 11 (8 blocking, target <=12); 4.5 groups the 12 legend-only zeros into one item', (ctx) => {
+  it('the review list: 46 -> 13 (9 blocking); 4.5 groups the 12 legend-only zeros into one item', (ctx) => {
     if (!have) return ctx.skip();
-    expect(after.review).toHaveLength(11);
-    expect(after.review.filter(reviewItemIsOpen)).toHaveLength(8);
+    expect(after.review).toHaveLength(13);
+    expect(after.review.filter(reviewItemIsOpen)).toHaveLength(9);
     const group = after.review.find(i => i.id.startsWith('legend-zero:'))!;
     expect(group).toBeTruthy();
     expect(group.title).toBe('12 legend items not found on any counted sheet — confirm none on this job');
@@ -230,7 +247,7 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
       'QUADPLEX RECEPTACLE', 'STORE OPEN/CLOSE PUSHBUTTON', 'T', 'WIREWAY',
     ]);
     expect(after.review.filter(reviewItemIsOpen).map(i => i.id).sort()).toEqual([
-      group.id, 'refsheet:SGN101', 'scope:disconnects', 'scope:power_poles:furnish', 'scope:power_poles:install',
+      group.id, after.review.find(i => i.id.startsWith('typicalat:'))!.id, 'refsheet:SGN101', 'scope:disconnects', 'scope:power_poles:furnish', 'scope:power_poles:install',
       'unscheduled:GALVANIZED-UNISTRUT-14GA-FIXTURE-SUPPORT-E-3', 'unscheduled:LIGHT-POLE-CONCRETE-BASE-E-7',
       'unscheduled:POLE-CONCRETE-BASE-FOUNDATION-3-0-ABOVE-GRADE-PH0-1',
     ].sort());
@@ -288,9 +305,9 @@ describe('a supplement pass keeps the evidence round\'s results (earlier typical
     expect([row(d, 'site_poles').actual, row(d, 'site_heads').actual]).toEqual([3, 4]);
     // 42, not 37: the first ('after') pass's own gap-fill already found and
     // accepted the 5 GFCIs (carried in `first.cr`, this supplement's prior).
-    expect(row(d, 'receptacles_total').actual).toBe(41);
+    expect(row(d, 'receptacles_total').actual).toBe(row(first.diff, 'receptacles_total').actual);
     expect(row(d, 'gfci').actual).toBe(16);
-    expect(cr.types.find(t => t.key === 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE')!.components!.typical).toBe(11);
+    expect(cr.types.find(t => t.key === 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE')!.components!.typical).toBe(8);
     // Only the new sheet was read and counted.
     expect(calls.filter(c => isEvidenceRequest(c) === 'viewports').map(c => /SHEET: (E-\d)/.exec(userText(c))![1])).toEqual(['E-9']);
     expect(cr.sheets.find(s => s.label.startsWith('E-2'))!.viewports!.length).toBe(11);
