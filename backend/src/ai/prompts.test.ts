@@ -68,3 +68,20 @@ describe('agent1PromptWithCountingSections (takeoff accuracy Task 2)', () => {
     expect(agent1PromptWithCountingSections('custom with fixtureSchedule')).toBe('custom with fixtureSchedule');
   });
 });
+
+describe('evidence round 3.4 — Agent 1 no longer states schedule quantities', () => {
+  it('the default prompt and a customized one both carry the SCHEDULE QUANTITIES rule', async () => {
+    const { AGENT1_SYSTEM, AGENT1_COUNTING_SECTIONS, agent1PromptWithCountingSections } = await import('./prompts');
+    expect(AGENT1_COUNTING_SECTIONS).toMatch(/SCHEDULE QUANTITIES — .*never put a quantity in quantities\[\] for panel-schedule circuits or breakers/);
+    expect(AGENT1_COUNTING_SECTIONS).toMatch(/equipment-schedule items \(battery chargers/);
+    expect(AGENT1_SYSTEM).toContain('SCHEDULE QUANTITIES');
+    expect(agent1PromptWithCountingSections('My custom analyzer prompt.')).toContain('SCHEDULE QUANTITIES');
+  });
+  it('the evidence readers are narrow: none of them counts devices', async () => {
+    const { VIEWPORT_SYSTEM, TYPICALS_SYSTEM, SCHEDULE_ROWS_SYSTEM } = await import('./prompts');
+    expect(VIEWPORT_SYSTEM).toMatch(/You do not count anything/);
+    expect(TYPICALS_SYSTEM).toMatch(/You do not count anything on the plans/);
+    expect(TYPICALS_SYSTEM).toMatch(/never guess/);
+    expect(SCHEDULE_ROWS_SYSTEM).toMatch(/ROW BY ROW\. Never summarize, merge or skip rows/);
+  });
+});
