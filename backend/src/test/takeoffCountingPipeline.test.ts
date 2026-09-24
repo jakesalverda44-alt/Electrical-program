@@ -4,6 +4,8 @@
 // the counter (a fake client answering like a perfect counter), the merge,
 // and on to Agents 2 and 3 (fakes). No network, no real Anthropic call.
 import { describe, it, expect, beforeAll } from 'vitest';
+import { counterTileSpec } from '../ai/modelLimits';
+import { DEFAULT_COUNTER_MODEL } from '../routes/preconstruction';
 import fs from 'fs';
 import path from 'path';
 import { pool } from '../db/pool';
@@ -26,7 +28,7 @@ beforeAll(async () => {
   have = await isPdftoppmAvailable();
   if (!have) return;
   const geo = await readPageGeometry(PDF, [2, 3, 4]);
-  for (const p of [2, 3, 4]) rendered[p] = await renderCountTiles(PDF, p, geo.get(p)!);
+  for (const p of [2, 3, 4]) rendered[p] = await renderCountTiles(PDF, p, geo.get(p)!, counterTileSpec(DEFAULT_COUNTER_MODEL)) /* A5: the counter model's tiles */;
 }, 120_000);
 
 async function makeBid(): Promise<string> {

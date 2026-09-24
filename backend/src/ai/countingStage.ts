@@ -11,6 +11,7 @@
 //     and land in Needs review, which blocks the proposal until resolved.
 import type Anthropic from '@anthropic-ai/sdk';
 import { buildCountTargets, type CountTarget } from './countTargets';
+import { counterTileSpec, retryTileIn } from './modelLimits';
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
 import { readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry } from './countRender';
 import { runCounter, type SheetCountResult } from './counter';
@@ -37,6 +38,8 @@ export interface CountResultSheet {
   rejected: number;
   notes: string[];
   unreadable: SheetCountResult['unreadable'];
+  /** Next round A5 — the dense-area retry, both passes. */
+  retry?: SheetCountResult['retry'];
 }
 
 /** One counted symbol, in PDF points on its page (est_markups space). */
@@ -116,6 +119,7 @@ function finish(
       status: r.status, ...(r.error ? { error: r.error } : {}),
       calls: r.calls, tiles: r.tiles, geometryOk: r.geometryOk, geometry: r.geometry,
       mergedDuplicates: r.mergedDuplicates, rejected: r.rejected.length, notes: r.notes, unreadable: r.unreadable,
+      ...(r.retry ? { retry: r.retry } : {}),
     })),
     skippedSheets,
     types: merged.types,
@@ -169,20 +173,75 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     return { agent1, countResult, usage: { ...ZERO_USAGE } };
   }
 
-  const rendered = await renderSheets(selection.counted, input.pdfs);
-
   // A truncated call throws AgentTruncatedError out of here (the run fails);
   // every other per-sheet failure is recorded on that sheet by runCounter.
-  const run = await runCounter({ client: input.client, model: input.model, maxTokens: input.maxTokens, targets, sheets: rendered, shouldStop: input.shouldStop, onProgress: input.onProgress });
+  const run = await countSheets(input, targets, selection.counted, input.onProgress);
   const { agent1, countResult } = finish(input, targets, targetNotes, run.sheets, selection.skipped, true, undefined);
   return { agent1, countResult, usage: run.usage };
 }
 
 type RenderedSheet = { sheet: CountSheet; rendered: RenderedCountPage | null; renderError?: string };
 
+function countsByType(placed: Array<{ typeKey: string }>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const p of placed) out[p.typeKey] = (out[p.typeKey] ?? 0) + 1;
+  return out;
+}
+
+/** Next round A5 — render + count a set of sheets with tiles sized to the
+ *  counter model (modelLimits.ts), then the dense-area retry: a sheet that
+ *  came back with symbols it could not read reliably is counted ONCE more
+ *  at a higher effective resolution (smaller tiles). The retry's counts are
+ *  used when it succeeds; both passes are kept on the sheet. */
+export async function countSheets(
+  input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop'>,
+  targets: CountTarget[],
+  sheets: CountSheet[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<{ sheets: SheetCountResult[]; usage: CountingStageOutput['usage'] }> {
+  const spec = counterTileSpec(input.model);
+  const run = await runCounter({
+    client: input.client, model: input.model, maxTokens: input.maxTokens, targets,
+    sheets: await renderSheets(sheets, input.pdfs, { maxLongEdge: spec.maxLongEdge, tileIn: spec.tileIn }),
+    shouldStop: input.shouldStop, onProgress,
+  });
+  const dense = run.sheets.filter(r => r.status === 'counted' && r.unreadable.length > 0);
+  if (!dense.length || input.shouldStop?.()) return run;
+  const tileIn = retryTileIn(spec.tileIn);
+  logger.info({ sheets: dense.map(d => d.sheet.label), tileIn }, '[counting] dense-area retry at a higher resolution');
+  const again = await runCounter({
+    client: input.client, model: input.model, maxTokens: input.maxTokens, targets,
+    sheets: await renderSheets(dense.map(d => d.sheet), input.pdfs, { maxLongEdge: spec.maxLongEdge, tileIn }),
+    shouldStop: input.shouldStop,
+  });
+  for (const k of Object.keys(run.usage) as Array<keyof typeof run.usage>) run.usage[k] += again.usage[k];
+  run.sheets = run.sheets.map(r => {
+    if (!dense.includes(r)) return r;
+    const a = again.sheets.find(x => x.sheet.key === r.sheet.key);
+    const base = {
+      firstTileIn: spec.tileIn, tileIn,
+      firstCounts: countsByType(r.placed),
+      firstUnreadable: [...new Set(r.unreadable.map(u => u.typeKey))],
+    };
+    if (a && a.status === 'counted') {
+      const retryCounts = countsByType(a.placed);
+      const diff = [...new Set([...Object.keys(base.firstCounts), ...Object.keys(retryCounts)])]
+        .filter(k => (base.firstCounts[k] ?? 0) !== (retryCounts[k] ?? 0))
+        .map(k => `${k} ${base.firstCounts[k] ?? 0}→${retryCounts[k] ?? 0}`);
+      return {
+        ...a,
+        retry: { ...base, retryCounts, used: 'retry' as const },
+        notes: [...a.notes, `Re-counted at a higher resolution (${tileIn}" tiles; first pass ${spec.tileIn}") because some symbols could not be read reliably${diff.length ? ` — ${diff.join(', ')}` : ' — same counts'}.`],
+      };
+    }
+    return { ...r, retry: { ...base, retryCounts: {}, used: 'first' as const, error: a?.error ?? 'the retry could not run' } };
+  });
+  return run;
+}
+
 /** Render sequentially (one 300 DPI raster in memory at a time); keep only
  *  the JPEG tiles for the calls. */
-async function renderSheets(sheetsIn: CountSheet[], pdfs: Map<string, Buffer>): Promise<RenderedSheet[]> {
+async function renderSheets(sheetsIn: CountSheet[], pdfs: Map<string, Buffer>, opts: { maxLongEdge?: number; tileIn?: number } = {}): Promise<RenderedSheet[]> {
   const rendered: RenderedSheet[] = [];
   const byFile = new Map<string, CountSheet[]>();
   for (const s of sheetsIn) {
@@ -203,7 +262,7 @@ async function renderSheets(sheetsIn: CountSheet[], pdfs: Map<string, Buffer>): 
         continue;
       }
       try {
-        rendered.push({ sheet: s, rendered: await renderCountTiles(pdf, s.page, g) });
+        rendered.push({ sheet: s, rendered: await renderCountTiles(pdf, s.page, g, opts) });
       } catch (err) {
         logger.warn({ err, sheet: s.label }, '[counting] render failed');
         rendered.push({ sheet: s, rendered: null, renderError: `could not be rendered for counting: ${err instanceof Error ? err.message : String(err)}` });
@@ -267,14 +326,14 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
 
   const results: SheetCountResult[] = oldSheets.map(s => priorSheetResult(s, input.prior));
   if (newSheets.length) {
-    const run = await runCounter({ client: input.client, model: input.model, maxTokens: input.maxTokens, targets, sheets: await renderSheets(newSheets, input.pdfs), shouldStop: input.shouldStop, onProgress: input.onProgress });
+    const run = await countSheets(input, targets, newSheets, input.onProgress);
     add(run.usage);
     results.push(...run.sheets);
   }
   if (newTargets.length && oldSheets.length) {
     const available = oldSheets.filter(s => input.pdfs.has(s.file));
     const run = available.length
-      ? await runCounter({ client: input.client, model: input.model, maxTokens: input.maxTokens, targets: newTargets, sheets: await renderSheets(available, input.pdfs), shouldStop: input.shouldStop })
+      ? await countSheets(input, newTargets, available)
       : { sheets: [] as SheetCountResult[], usage: { ...ZERO_USAGE } };
     add(run.usage);
     for (const r of results.filter(x => !isNew(x.sheet))) {

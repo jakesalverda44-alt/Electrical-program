@@ -134,3 +134,53 @@ describe('packPagesByBudget (pure)', () => {
     expect(packPagesByBudget([], 100_000)).toEqual([]);
   });
 });
+
+describe('next round A5 — runBatchesInOrder (parallel Agent 1 batches)', () => {
+  it('3 at a time, results in batch order: the merge is identical to the sequential one', async () => {
+    const { runBatchesInOrder } = await import('./agent1Batching');
+    const { mergeAgent1Batches } = await import('./mergeAgent1');
+    const outputs = Array.from({ length: 7 }, (_, i) => ({ panels: [{ name: `P${i}` }], quantities: [{ item: `row ${i}`, qty: i }], project: { name: i === 0 ? '' : `name ${i}` } }));
+    let inFlight = 0; let maxInFlight = 0; const finishOrder: number[] = [];
+    const par = await runBatchesInOrder(7, async (i) => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      // Later batches finish first.
+      await new Promise(r => setTimeout(r, (7 - i) * 5));
+      inFlight--; finishOrder.push(i);
+      return outputs[i];
+    });
+    expect(maxInFlight).toBe(3);
+    expect(finishOrder).not.toEqual([0, 1, 2, 3, 4, 5, 6]);
+    const seq: typeof outputs = [];
+    for (let i = 0; i < 7; i++) seq.push(outputs[i]);
+    expect(JSON.stringify(mergeAgent1Batches(par))).toBe(JSON.stringify(mergeAgent1Batches(seq)));
+  });
+
+  it('a stop starts nothing new and ends in RunCancelledError', async () => {
+    const { runBatchesInOrder } = await import('./agent1Batching');
+    const started: number[] = [];
+    let stop = false;
+    await expect(runBatchesInOrder(6, async (i) => { started.push(i); if (i === 1) stop = true; await new Promise(r => setTimeout(r, 5)); return i; },
+      { shouldStop: () => stop })).rejects.toMatchObject({ name: 'RunCancelledError' });
+    expect(started).toEqual([0, 1, 2]);
+  });
+
+  it('the first failure (a truncated batch) stops new batches and is rethrown', async () => {
+    const { runBatchesInOrder } = await import('./agent1Batching');
+    const started: number[] = [];
+    await expect(runBatchesInOrder(6, async (i) => {
+      started.push(i);
+      if (i === 0) throw new Error('Agent 1 (batch 1 of 6) ran out of room');
+      await new Promise(r => setTimeout(r, 10));
+      return i;
+    })).rejects.toThrow('ran out of room');
+    expect(started).toEqual([0, 1, 2]);
+  });
+
+  it('progress counts settled batches accurately', async () => {
+    const { runBatchesInOrder } = await import('./agent1Batching');
+    const seen: string[] = [];
+    await runBatchesInOrder(4, async (i) => i, { onSettled: (d, n, r) => seen.push(`${d}/${n}:${r}`) });
+    expect(seen.map(x => x.split(':')[0])).toEqual(['1/4', '2/4', '3/4', '4/4']);
+    expect(seen[3]).toBe('4/4:0');
+  });
+});

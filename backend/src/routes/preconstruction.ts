@@ -38,6 +38,7 @@ import { parsePrebidScope } from '../utils/prebidScopeParse';
 import { parseAccubidBreakdown } from '../utils/accubidParse';
 import { storeDocument } from '../utils/storeDocument';
 import { mergeAgent1Batches } from '../ai/mergeAgent1';
+import { runBatchesInOrder, AGENT1_CONCURRENCY } from '../ai/agent1Batching';
 import { buildAgent4UserMessage, isAgent4Shape, Agent4Output } from '../ai/agent4Message';
 import { parseMoney } from '../utils/money';
 import { compactForHandoff } from '../ai/compactPayload';
@@ -1023,44 +1024,50 @@ async function runPipelineStages(
 
     } else {
       // Batched: N token-budgeted calls (mergeAgent1Batches already merges results).
-      const batchResults: Record<string, unknown>[] = [];
+      // Next round A5 — up to AGENT1_CONCURRENCY batches at once; results
+      // are merged in batch order, exactly as the sequential loop did.
       let batchUsage: Record<string, unknown> = { ...NO_USAGE };
-
-      for (let bi = 0; bi < agent1Batches.length; bi++) {
-        // Stop analysis — no further batch starts once the run is stopped.
-        if (await checkpoint()) throw new RunCancelledError();
-        await setProgress('agent1', `Agent 1: batch ${bi + 1} of ${agent1Batches.length}`, bi + 1, agent1Batches.length);
+      const total = agent1Batches.length;
+      await setProgress('agent1', `Agent 1: ${total} batches, ${Math.min(AGENT1_CONCURRENCY, total)} at a time`, 0, total);
+      const parsedByBatch = await runBatchesInOrder(total, async (bi) => {
         const contentBlocks = agent1Batches[bi];
         const prep = summarizePrep(contentBlocks);
         contentBlocks.push({
           type: 'text',
-          text: `Analyze batch ${bi + 1} of ${agent1Batches.length} electrical plan pages and provide Drawing Analyzer JSON output. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if this sheet contains no electrical equipment, you MUST return a valid JSON object with the sheet in sheet_inventory and equipment arrays empty.`,
+          text: `Analyze batch ${bi + 1} of ${total} electrical plan pages and provide Drawing Analyzer JSON output. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if this sheet contains no electrical equipment, you MUST return a valid JSON object with the sheet in sheet_inventory and equipment arrays empty.`,
         });
 
-        logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${agent1Batches.length}`, prep);
+        logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${total}`, prep);
         const bResp = await callWithRetry(() =>
           client.messages.stream({
             model: config.model,
             max_tokens: config.maxTokensA1,
-              system: [{ type: 'text', text: agent1PromptWithCountingSections(config.promptA1), cache_control: { type: 'ephemeral' } }],
+            system: [{ type: 'text', text: agent1PromptWithCountingSections(config.promptA1), cache_control: { type: 'ephemeral' } }],
             messages: [{ role: 'user', content: contentBlocks }],
           }).finalMessage()
         , { signal: runSignalOf(client), onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
-        logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${agent1Batches.length}`, prep);
+        logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${total}`, prep);
+        // FIX-7 — sum the full usage shape across batches (a truncated
+        // batch was still billed).
+        if (bResp.usage) batchUsage = mergeUsage(batchUsage, bResp.usage as unknown as Record<string, unknown>);
         // Takeoff accuracy Task 1 — a truncated batch used to fall through to
         // parseAIJSON, fail, and be silently skipped by the merge below: the
         // takeoff just lost every sheet that batch carried.
-        assertNotTruncated(bResp, `Agent 1 (batch ${bi + 1} of ${agent1Batches.length})`, config.maxTokensA1);
+        assertNotTruncated(bResp, `Agent 1 (batch ${bi + 1} of ${total})`, config.maxTokensA1);
         if (!bText.trim()) {
-          logger.warn({ bidId, batch: `${bi + 1}/${agent1Batches.length}` },
+          logger.warn({ bidId, batch: `${bi + 1}/${total}` },
             '[takeoff] Agent 1 batch returned empty output — skipping');
         }
-        const parsed = parseAIJSON(bText);
-        if (parsed) batchResults.push(parsed);
-        // FIX-7 — sum the full usage shape across batches, not just input/output.
-        if (bResp.usage) batchUsage = mergeUsage(batchUsage, bResp.usage as unknown as Record<string, unknown>);
-      }
+        return parseAIJSON(bText);
+      }, {
+        // Stop analysis — no further batch starts once the run is stopped.
+        shouldStop: () => checkpoint(),
+        onSettled: (done, of, running) => {
+          void setProgress('agent1', `Agent 1: ${done} of ${of} batches done${running ? ` (${running} running)` : ''}`, done, of);
+        },
+      });
+      const batchResults = parsedByBatch.filter((p): p is Record<string, unknown> => !!p);
       batchUsage = mergeUsage(batchUsage, classifierUsage);
       await guarded(`UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
         [JSON.stringify(storedUsage(batchUsage)), config.model, JSON.stringify(storedInventory(prepInventory)), prepFidelity, bidId]

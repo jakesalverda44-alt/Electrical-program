@@ -30,6 +30,8 @@ import {
 import { pageTextBlock, MIN_CHARS_FOR_TEXT_BLOCK, TOTAL_TEXT_CAP } from './pdfText';
 import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { logger } from '../utils/logger';
+import { runWithConcurrencyLimit } from '../utils/concurrencyLimit';
+import { RunCancelledError } from './runControl';
 
 /**
  * Anthropic's vision pricing is approximately (width_px * height_px) / 750
@@ -234,4 +236,47 @@ export async function buildBlocksForBatch(
     if (tiles) blocks.push(...tiles);
   }
   return blocks;
+}
+
+/** Next round A5 — Agent 1 batches run 3 at a time (Kissimmee: 13 batches
+ *  ran one after another for ~12 minutes). */
+export const AGENT1_CONCURRENCY = 3;
+
+/** Run `count` batch calls with bounded concurrency. Results come back in
+ *  BATCH order whatever order the calls finish in, so the merge is exactly
+ *  what the sequential loop produced. Before each batch starts, `shouldStop`
+ *  is asked (a stopped / superseded run starts nothing new); the first
+ *  failure (e.g. a truncated batch) stops new batches too and is rethrown
+ *  once the in-flight ones settle. */
+export async function runBatchesInOrder<T>(
+  count: number,
+  worker: (index: number) => Promise<T>,
+  opts: {
+    concurrency?: number;
+    shouldStop?: () => boolean | Promise<boolean>;
+    onSettled?: (done: number, total: number, running: number) => void;
+  } = {},
+): Promise<T[]> {
+  const results: T[] = new Array(count);
+  let failure: { err: unknown } | null = null;
+  let stopped = false;
+  let done = 0;
+  let running = 0;
+  await runWithConcurrencyLimit(Array.from({ length: count }, (_, i) => i), opts.concurrency ?? AGENT1_CONCURRENCY, async (i) => {
+    if (failure || stopped) return;
+    if (await opts.shouldStop?.()) { stopped = true; return; }
+    running++;
+    try {
+      results[i] = await worker(i);
+    } catch (err) {
+      if (!failure) failure = { err };
+    } finally {
+      running--;
+      done++;
+      opts.onSettled?.(done, count, running);
+    }
+  });
+  if (failure) throw (failure as { err: unknown }).err;
+  if (stopped) throw new RunCancelledError();
+  return results;
 }

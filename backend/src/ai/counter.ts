@@ -312,6 +312,19 @@ export interface SheetCountResult {
   notes: string[];
   calls: number;
   tiles: number;
+  /** Next round A5 — the dense-area retry: the sheet came back with symbols
+   *  that could not be read reliably, so it was counted again at a higher
+   *  effective resolution. Both passes are reported. */
+  retry?: {
+    firstTileIn: number;
+    tileIn: number;
+    firstCounts: Record<string, number>;
+    firstUnreadable: string[];
+    retryCounts: Record<string, number>;
+    /** Which pass the counts come from. */
+    used: 'retry' | 'first';
+    error?: string;
+  };
 }
 
 export interface CounterRunInput {
