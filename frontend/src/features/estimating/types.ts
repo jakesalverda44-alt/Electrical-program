@@ -63,8 +63,23 @@ export interface EstimateLine {
   recheck_run_id?: string | null;
   /** Fix round B1 — why Sync from takeoff could not re-bind this kept line. */
   recheck_reason?: 'no_confident_match' | 'ambiguous_match' | null;
+  /** Next round A7 — "different items — keep both" for a kept line. */
+  dup_ok?: { with: string[]; reason: string; by?: string; at?: string } | null;
   source: 'takeoff' | 'manual';
   sort?: number;
+}
+
+/** Next round A7 — a possible double count: a line kept from the previous
+ *  run (unbound) next to a fresh takeoff line for the same item. */
+export interface DuplicatePair {
+  keptKey: string;
+  keptDescription: string;
+  keptQty: number;
+  newKey: string;
+  newDescription: string;
+  newQty: number;
+  category: string;
+  unit: string;
 }
 
 export interface EstimateSettings {
@@ -79,6 +94,10 @@ export interface EstimateSettings {
   crew_size: number;
   /** Fix round 1 / N3 — multiplies the MULTI-STORY labor factor's pct. */
   floors_above_2: number;
+  /** Next round B2 — which recap engine prices this bid: the new Accubid
+   *  mode (default for a new bid) or the legacy Phase A engine (kept for an
+   *  existing saved estimate unless the estimator switches). */
+  pricing_mode?: 'phase_a' | 'accubid';
 }
 
 export interface PricedLine {
@@ -119,6 +138,8 @@ export interface PricingRecap {
 }
 
 export interface EstimatingBidResponse {
+  /** Next round A7 — possible duplicates (see DuplicatePair). */
+  duplicates?: DuplicatePair[];
   lines: EstimateLine[];
   settings: EstimateSettings;
   recap: PricingRecap;
@@ -135,6 +156,7 @@ export interface SyncTakeoffResponse {
   added: number; updated: number; vanished: number; lines: EstimateLine[]; recap: PricingRecap;
   /** Re-run reset — carried-over lines re-bound / left unmatched. */
   rebound?: number; unbound?: number;
+  duplicates?: DuplicatePair[];
 }
 
 /** Phase B, Task 1 — PUT /estimating/:bidId's response now also returns the
@@ -145,10 +167,101 @@ export interface SaveBidResponse {
   lines: EstimateLine[];
 }
 
+// Next round B2 — pricing_mode is deliberately left OUT of this constant.
+// The server (getBidSettings) is the one place that defaults a bid with no
+// saved settings row to 'accubid'; countless existing tests construct a
+// settings object from ...DEFAULT_SETTINGS as their OWN mocked API response,
+// and giving this constant an opinion here would silently switch every one
+// of them into accubid mode (and crash, since they never mock the Accubid
+// endpoint LaborPricingStep would then call) — see AccubidPricingPanel /
+// useAccubidPricing, only ever mounted when a real response explicitly
+// says pricing_mode === 'accubid'.
 export const DEFAULT_SETTINGS: EstimateSettings = {
   labor_rate: 38, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3,
   supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3,
   floors_above_2: 0,
+};
+
+// ── Next round Part B — Accubid-style recap (crew/quotes/equipment/GE/
+// alternates) wire shapes, mirroring backend/src/estimating/accubidRecap.ts
+// and accubidBidData.ts. ────────────────────────────────────────────────────
+
+export interface AccubidSettings {
+  shift: 'day' | 'night';
+  journeymanCount: number; journeymanRate: number;
+  apprenticeCount: number; apprenticeRate: number;
+  foremanCount: number; foremanRate: number;
+  nightJourneymanRate: number | null;
+  nightApprenticeRate: number | null;
+  nightForemanRate: number | null;
+  burdenPct: number;
+  fringePerHr: number;
+  materialTaxPct: number;
+  laborOverheadPct: number;
+  materialMarkupPct: number;
+  laborMarkupPct: number;
+  quoteMarkupDefaultPct: number;
+  adjustmentMarkupPct: number;
+  salesMarkupPct: number;
+}
+
+export const DEFAULT_ACCUBID_SETTINGS: AccubidSettings = {
+  shift: 'day',
+  journeymanCount: 1, journeymanRate: 37, apprenticeCount: 2, apprenticeRate: 27, foremanCount: 0, foremanRate: 45,
+  nightJourneymanRate: null, nightApprenticeRate: null, nightForemanRate: null,
+  burdenPct: 4, fringePerHr: 1.5, materialTaxPct: 0,
+  laborOverheadPct: 38, materialMarkupPct: 20, laborMarkupPct: 20,
+  quoteMarkupDefaultPct: 18, adjustmentMarkupPct: 0, salesMarkupPct: 0,
+};
+
+export interface AccubidQuote {
+  id: string; description: string; amount: number; taxPct: number; markupPct: number;
+  status: 'firm' | 'budget_pending'; vendor: string | null; sort: number;
+}
+export interface AccubidCostLine {
+  id: string; kind: 'equipment' | 'general_expense'; description: string; amount: number; taxPct: number; sort: number;
+}
+export interface AccubidAlternate {
+  id: string; kind: 'add' | 'deduct'; description: string; amount: number; auto: boolean; sourceRule: string | null; sort: number;
+}
+
+export interface AccubidRecapResult {
+  materialTotal: number; materialTax: number;
+  fieldLaborCost: number;
+  equipmentTotal: number; equipmentTax: number;
+  generalExpensesTotal: number; generalExpensesTax: number;
+  subcontractsTotal: number; subcontractsTax: number;
+  quotesNetTotal: number; quotesTaxTotal: number; quotesMarkupTotal: number;
+  budgetPendingQuotes: AccubidQuote[];
+  primeCost: number;
+  materialOverhead: number; laborOverhead: number; equipmentOverhead: number; generalExpensesOverhead: number;
+  subcontractOverhead: number; quotesOverhead: number; totalOverhead: number;
+  netCost: number;
+  materialMarkup: number; laborMarkup: number; equipmentMarkup: number; generalExpensesMarkup: number;
+  subcontractMarkup: number; adjustmentMarkup: number; totalMarkup: number;
+  salesMarkup: number; sellingPrice: number;
+  blocksSend: boolean;
+}
+
+export interface AccubidBidResponse {
+  recap: AccubidRecapResult;
+  settings: AccubidSettings;
+  totalHours: number;
+  quotes: AccubidQuote[];
+  costLines: AccubidCostLine[];
+  alternates: AccubidAlternate[];
+}
+
+export const EMPTY_ACCUBID_RECAP: AccubidRecapResult = {
+  materialTotal: 0, materialTax: 0, fieldLaborCost: 0,
+  equipmentTotal: 0, equipmentTax: 0, generalExpensesTotal: 0, generalExpensesTax: 0,
+  subcontractsTotal: 0, subcontractsTax: 0, quotesNetTotal: 0, quotesTaxTotal: 0, quotesMarkupTotal: 0,
+  budgetPendingQuotes: [], primeCost: 0,
+  materialOverhead: 0, laborOverhead: 0, equipmentOverhead: 0, generalExpensesOverhead: 0,
+  subcontractOverhead: 0, quotesOverhead: 0, totalOverhead: 0, netCost: 0,
+  materialMarkup: 0, laborMarkup: 0, equipmentMarkup: 0, generalExpensesMarkup: 0,
+  subcontractMarkup: 0, adjustmentMarkup: 0, totalMarkup: 0, salesMarkup: 0, sellingPrice: 0,
+  blocksSend: false,
 };
 
 export const EMPTY_RECAP: PricingRecap = {

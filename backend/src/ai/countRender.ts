@@ -31,6 +31,7 @@ import path from 'path';
 import sharp from 'sharp';
 import { displayedSize, displayedToPdf } from '../estimating/pageGeometry';
 import { openPdfDocument } from '../estimating/pdfjsLoader';
+import { fitImageToLimits, STANDARD_LIMITS, type ModelImageLimits } from './modelLimits';
 
 const execFileP = promisify(execFile);
 
@@ -98,9 +99,15 @@ export function planCountTiles(
 }
 
 /** Pure: effective pixels per inch a tile lands at after the long-edge resize. */
-export function effectivePxPerIn(tile: Pick<TileRectIn, 'widthIn' | 'heightIn'>, maxLongEdge = COUNT_MAX_LONG_EDGE, dpi = COUNT_DPI): number {
-  const longIn = Math.max(tile.widthIn, tile.heightIn);
-  return Math.min(dpi, maxLongEdge / longIn);
+export function effectivePxPerIn(tile: Pick<TileRectIn, 'widthIn' | 'heightIn'>, maxLongEdgeOrLimits: number | ModelImageLimits = COUNT_MAX_LONG_EDGE, dpi = COUNT_DPI): number {
+  // Fix round S1 — both API limits (long edge AND visual tokens), from the
+  // raster at `dpi`: what the model actually sees.
+  const limits: ModelImageLimits = typeof maxLongEdgeOrLimits === 'number'
+    ? { tier: 'standard', maxLongEdge: maxLongEdgeOrLimits, maxTokens: Number.MAX_SAFE_INTEGER } : maxLongEdgeOrLimits;
+  const w = tile.widthIn * dpi;
+  const h = tile.heightIn * dpi;
+  const fit = fitImageToLimits(w, h, limits);
+  return Math.min(dpi, fit.width / tile.widthIn);
 }
 
 /** Pure: a counter-reported position (normalized 0-1 within a tile) to
@@ -195,11 +202,14 @@ export interface RenderedCountPage {
   rasterHeightPx: number;
 }
 
-async function encodeTile(raw: Buffer, width: number, height: number, rect: { left: number; top: number; width: number; height: number }, maxLongEdge: number): Promise<{ jpeg: Buffer; w: number; h: number }> {
+async function encodeTile(raw: Buffer, width: number, height: number, rect: { left: number; top: number; width: number; height: number }, limits: ModelImageLimits): Promise<{ jpeg: Buffer; w: number; h: number }> {
+  // Fix round S1 — sent at exactly the size the server keeps (long edge AND
+  // visual tokens), so no tile is downscaled after it leaves us.
+  const fit = fitImageToLimits(rect.width, rect.height, limits);
   for (const quality of [85, 72, 60, 48]) {
     const { data, info } = await sharp(raw, { raw: { width, height, channels: 1 } })
       .extract(rect)
-      .resize({ width: maxLongEdge, height: maxLongEdge, fit: 'inside', withoutEnlargement: true })
+      .resize({ width: fit.width, height: fit.height, fit: 'fill', withoutEnlargement: true })
       .jpeg({ quality })
       .toBuffer({ resolveWithObject: true });
     if (data.length <= MAX_TILE_BYTES) return { jpeg: data, w: info.width, h: info.height };
@@ -213,10 +223,12 @@ export async function renderCountTiles(
   pdf: Buffer,
   page: number,
   geometry: PageGeometry,
-  opts: { dpi?: number; maxLongEdge?: number; tileIn?: number; overlapIn?: number; titleBlockFrac?: number } = {},
+  opts: { dpi?: number; maxLongEdge?: number; maxTokens?: number; limits?: ModelImageLimits; tileIn?: number; overlapIn?: number; titleBlockFrac?: number } = {},
 ): Promise<RenderedCountPage> {
   const dpi = opts.dpi ?? COUNT_DPI;
-  const maxLongEdge = opts.maxLongEdge ?? COUNT_MAX_LONG_EDGE;
+  const limits: ModelImageLimits = opts.limits ?? {
+    tier: 'standard', maxLongEdge: opts.maxLongEdge ?? COUNT_MAX_LONG_EDGE, maxTokens: opts.maxTokens ?? STANDARD_LIMITS.maxTokens,
+  };
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'apt-count-'));
   try {
     const pdfPath = path.join(tmp, 'in.pdf');
@@ -244,7 +256,7 @@ export async function renderCountTiles(
       const w = Math.min(width - left, Math.round(r.widthIn * pxPerInX));
       const h = Math.min(height - top, Math.round(r.heightIn * pxPerInY));
       if (w <= 0 || h <= 0) continue;
-      const { jpeg, w: iw, h: ih } = await encodeTile(raw, width, height, { left, top, width: w, height: h }, maxLongEdge);
+      const { jpeg, w: iw, h: ih } = await encodeTile(raw, width, height, { left, top, width: w, height: h }, limits);
       // Re-derive the tile's inch rect from the ROUNDED pixel rect so the
       // tile->PDF conversion uses exactly the area the image shows.
       tiles.push({

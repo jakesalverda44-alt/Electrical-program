@@ -7,6 +7,8 @@
 // re-suggested), line assignment only on a unique match, the assign-ai route,
 // and a client batch can never set `source`.
 import { describe, it, expect, beforeAll } from 'vitest';
+import { counterTileSpec } from '../ai/modelLimits';
+import { DEFAULT_COUNTER_MODEL } from '../routes/preconstruction';
 import fs from 'fs';
 import path from 'path';
 import request from 'supertest';
@@ -31,7 +33,7 @@ beforeAll(async () => {
   have = await isPdftoppmAvailable();
   if (!have) return;
   const geo = await readPageGeometry(PDF, [2, 3]);
-  for (const p of [2, 3]) rendered[p] = await renderCountTiles(PDF, p, geo.get(p)!);
+  for (const p of [2, 3]) rendered[p] = await renderCountTiles(PDF, p, geo.get(p)!, counterTileSpec(DEFAULT_COUNTER_MODEL)) /* A5: the counter model's tiles */;
 }, 120_000);
 
 const CLASSIFIED = [

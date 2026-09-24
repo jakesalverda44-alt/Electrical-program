@@ -47,6 +47,14 @@ export interface ReviewItem {
   /** An earlier run's answer, not carried because the drawings changed. */
   previousResolution?: ReviewResolution;
   resolution?: ReviewResolution;
+  /** Next round A6 — the pre-filled answer ("by G.C." on the drawings -> APT). */
+  suggested?: string;
+  /** Next round A6/A7 — false: information only, never blocks. */
+  blocking?: boolean;
+  /** Next round A7 — cause group. */
+  group?: string;
+  typeKey?: string;
+  category?: string;
 }
 
 export interface TakeoffReview {
@@ -77,6 +85,8 @@ interface Props {
   countResult: CountResultLite | null;
   onReviewChange: (review: TakeoffReview) => void;
   showToast: (t: Toast) => void;
+  /** Next round A4 — upload a referenced sheet into this run (supplement pass). */
+  onSupplement?: (files: File[]) => Promise<void>;
 }
 
 function resolutionText(r: ReviewResolution): string {
@@ -111,8 +121,47 @@ function errorOf(err: unknown, fallback: string): string {
   return (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback;
 }
 
-export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast }: Props) {
+/** Next round A7 — the cause an item is listed under (the server tags it;
+ *  older runs are grouped the same way here). */
+export function groupKey(i: ReviewItem): string {
+  if (i.group) return i.group;
+  if (i.blocking === false) return 'info';
+  if (i.id.startsWith('counting:')) return 'counting';
+  if (i.id.startsWith('refsheet:')) return 'refsheets';
+  if (i.id.startsWith('sheet:') || i.id.startsWith('file:')) return 'sheets';
+  if (i.id.startsWith('scope:')) return 'scope';
+  if (i.id.startsWith('unscheduled:')) return 'unscheduled';
+  if (i.id.startsWith('coverage:')) return 'coverage';
+  if (i.id.endsWith(':heads')) return 'heads';
+  if (i.kind === 'area') return 'area';
+  if (i.kind === 'count') return /^Could not be counted/.test(i.detail) ? 'unreadable' : 'zero';
+  return 'other';
+}
+
+export function groupTitle(key: string, n: number): string {
+  const s = n === 1 ? '' : 's';
+  if (key === 'zero') return `${n} type${s} counted 0 — not found on the counted plans`;
+  if (key === 'unreadable') return `${n} type${s} could not be read reliably`;
+  if (key.startsWith('area')) return `Same area? ${key.replace(/^area:?/, '') || 'two plans of one level'} (${n} type${s})`;
+  if (key === 'scope') return `Scope question${s} (${n})`;
+  if (key === 'unscheduled') return `${n} fixture${s} not on the schedule`;
+  if (key === 'coverage') return `Partial coverage (${n})`;
+  if (key === 'heads') return `Pole heads (${n})`;
+  if (key === 'sheets') return `Pages not counted (${n})`;
+  if (key === 'refsheets') return `Referenced sheet${s} not in the analysis (${n})`;
+  if (key === 'counting') return 'Counting';
+  if (key === 'photometric') return `${n} type${s} counted from the photometric sheet only — for information`;
+  if (key === 'info') return `${n} for information — installed by another trade, the Owner or a vendor (not blocking)`;
+  return `Other (${n})`;
+}
+
+const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'scope', 'area', 'zero', 'unreadable', 'coverage', 'heads', 'unscheduled', 'other', 'photometric', 'info'];
+
+export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement }: Props) {
   const open = review.items.filter(i => !i.resolution);
+  // Next round A6/A7 — information items never block.
+  const blockingOpen = open.filter(i => i.blocking !== false);
+  const [groupReason, setGroupReason] = useState<Record<string, string>>({});
   const resolved = review.items.filter(i => i.resolution);
   const [qty, setQty] = useState<Record<string, string>>({});
   const [reason, setReason] = useState<Record<string, string>>({});
@@ -202,7 +251,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
         {review.status === 'pending' ? (
           <span className="tr-chip tr-chip-warn" data-testid="takeoff-review-status">Analysis running — proposal blocked until it finishes</span>
         ) : review.status === 'needs_review' ? (
-          <span className="tr-chip tr-chip-warn" data-testid="takeoff-review-status">Needs review — {open.length} open</span>
+          <span className="tr-chip tr-chip-warn" data-testid="takeoff-review-status">Needs review — {blockingOpen.length} open</span>
         ) : (
           <span className="tr-chip tr-chip-ok" data-testid="takeoff-review-status">Takeoff review clear</span>
         )}
@@ -231,9 +280,8 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
         </p>
       )}
 
-      {open.length > 0 && (
-        <ul className="tr-list">
-          {open.map(item => (
+      {open.length > 0 && (() => {
+        const renderItem = (item: ReviewItem) => (
             <li key={item.id} className="tr-item" data-testid={`review-item-${item.id}`}>
               <div className="tr-item-head">
                 {actionsOf(item).includes('not_on_job') && (
@@ -267,15 +315,16 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                       <>
                         {(item.options ?? []).map(o => (
                           <label key={o} className="tr-radio">
-                            <input type="radio" name={`ans-${item.id}`} value={o} checked={answer[item.id] === o}
+                            <input type="radio" name={`ans-${item.id}`} value={o} checked={(answer[item.id] ?? item.suggested) === o}
                               onChange={() => setAnswer(a => ({ ...a, [item.id]: o }))} />
                             {o}
                           </label>
                         ))}
-                        <button type="button" className="btn primary sm" disabled={!answer[item.id] || busy !== null}
-                          onClick={() => void resolve([item.id], { action: 'answer', answer: answer[item.id] }, `ans:${item.id}`)}>
+                        <button type="button" className="btn primary sm" disabled={!(answer[item.id] ?? item.suggested) || busy !== null}
+                          onClick={() => void resolve([item.id], { action: 'answer', answer: answer[item.id] ?? item.suggested }, `ans:${item.id}`)}>
                           Save answer
                         </button>
+                        {item.suggested && !answer[item.id] && <span className="tr-sub">Pre-filled: {item.suggested} (the drawings say “by G.C.”, which is APT scope)</span>}
                       </>
                     )}
                     {acts.includes('count') && (
@@ -323,6 +372,21 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                   </div>
                 );
               })()}
+              {item.id.startsWith('refsheet:') && onSupplement && (
+                <div className="tr-types" data-testid={`supplement-${item.id}`}>
+                  <label className="btn ghost sm" style={{ cursor: busy ? 'default' : 'pointer' }}>
+                    Upload the sheet
+                    <input type="file" accept=".pdf" multiple style={{ display: 'none' }} data-testid={`supplement-input-${item.id}`}
+                      disabled={busy !== null}
+                      onChange={e => {
+                        const files = Array.from(e.target.files ?? []);
+                        e.target.value = '';
+                        if (files.length) void onSupplement(files);
+                      }}/>
+                  </label>
+                  <span className="tr-sub">It is analysed and counted into this run (only what it can change), then Agents 2–3 run again.</span>
+                </div>
+              )}
               {item.id.startsWith('counting:') && (
                 <div className="tr-types" data-testid="count-types-entry">
                   <label className="tr-sub" htmlFor={`types-${item.id}`}>Or enter the fixture types (one per line, e.g. “A — 2x4 LED troffer”), then re-run the analysis to count them:</label>
@@ -333,9 +397,69 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                 </div>
               )}
             </li>
-          ))}
-        </ul>
-      )}
+        );
+        const groups = new Map<string, ReviewItem[]>();
+        for (const i of open) { const k = groupKey(i); groups.set(k, [...(groups.get(k) ?? []), i]); }
+        const order = (k: string) => { const base = GROUP_ORDER.indexOf(k.startsWith('area') ? 'area' : k); return base < 0 ? 99 : base; };
+        return [...groups.entries()].sort((a, b) => order(a[0]) - order(b[0])).map(([key, items]) => {
+          const info = items.every(i => i.blocking === false);
+          const ids = items.map(i => i.id);
+          const nojIds = items.filter(i => actionsOf(i).includes('not_on_job')).map(i => i.id);
+          const confirmIds = items.filter(i => actionsOf(i).includes('confirm')).map(i => i.id);
+          const suggestedIds = items.filter(i => i.suggested).map(i => i.id);
+          const r = groupReason[key] ?? '';
+          const reasonOk = r.trim().length >= 10;
+          const bulk = items.length > 1 && !info ? (
+            <div className="tr-bulk" data-testid={`review-group-bulk-${key}`}>
+              {key.startsWith('area') && (
+                <>
+                  <button type="button" className="btn ghost sm" disabled={busy !== null} data-testid={`group-area-keep-${key}`}
+                    onClick={() => void resolve(ids, { action: 'answer', answerIndex: 0 }, `grp:${key}`)}>All the same area — keep the larger</button>
+                  <button type="button" className="btn ghost sm" disabled={busy !== null} data-testid={`group-area-sum-${key}`}
+                    onClick={() => void resolve(ids, { action: 'answer', answerIndex: 1 }, `grp:${key}`)}>All different areas — sum</button>
+                </>
+              )}
+              {key === 'scope' && suggestedIds.length > 0 && (
+                <button type="button" className="btn ghost sm" disabled={busy !== null} data-testid="group-scope-accept"
+                  onClick={() => void resolve(suggestedIds, { action: 'answer', useSuggested: true }, `grp:${key}`)}>
+                  Accept the pre-filled answers ({suggestedIds.length})
+                </button>
+              )}
+              {(nojIds.length > 1 || (confirmIds.length > 1 && !key.startsWith('area') && key !== 'scope')) && (
+                <>
+                  <input type="text" aria-label={`Reason for all of ${groupTitle(key, items.length)}`} placeholder="Reason for all of them (at least 10 characters)"
+                    value={r} onChange={e => setGroupReason(g => ({ ...g, [key]: e.target.value }))} data-testid={`group-reason-${key}`} />
+                  {nojIds.length > 1 && (
+                    <button type="button" className="btn ghost sm" disabled={!reasonOk || busy !== null} data-testid={`group-noj-${key}`}
+                      onClick={() => void resolve(nojIds, { action: 'not_on_job', reason: r }, `grp:${key}`)}>Mark all {nojIds.length} not on this job</button>
+                  )}
+                  {confirmIds.length > 1 && nojIds.length <= 1 && (
+                    <button type="button" className="btn ghost sm" disabled={!reasonOk || busy !== null} data-testid={`group-confirm-${key}`}
+                      onClick={() => void resolve(confirmIds, { action: 'confirm', reason: r }, `grp:${key}`)}>Confirm all {confirmIds.length}</button>
+                  )}
+                </>
+              )}
+            </div>
+          ) : null;
+          const body = (
+            <>
+              {bulk}
+              <ul className="tr-list">{items.map(renderItem)}</ul>
+            </>
+          );
+          return info ? (
+            <details key={key} className="tr-group tr-group-info" data-testid={`review-group-${key}`}>
+              <summary>{groupTitle(key, items.length)}</summary>
+              {body}
+            </details>
+          ) : (
+            <section key={key} className="tr-group" data-testid={`review-group-${key}`}>
+              <h4 className="tr-group-title">{groupTitle(key, items.length)}</h4>
+              {body}
+            </section>
+          );
+        });
+      })()}
 
       {selected.length > 1 && (
         <div className="tr-bulk" data-testid="takeoff-review-bulk">

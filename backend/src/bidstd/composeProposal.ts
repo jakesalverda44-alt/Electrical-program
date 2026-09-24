@@ -15,6 +15,13 @@ import { composeBidData, type ComposeBidRow, type SavedConfidenceItem } from './
 import { enforceCountsOnTakeoff, countMismatchProblems } from './enforceCounts';
 import { exclusionBulletsFor, excludedScopeFindings, nonElectricalFindings, overrideFor, normalizeLineKey, type ScopeItem, type NonElectricalOverride } from './scopeList';
 import { validateBidData, type BidData } from './bidData';
+import { gcScopeFindings } from './tradeAssignment';
+import { TERM_PATTERNS } from './accountRules';
+
+/** Terms the account rule / the estimator really assigned to the GC. */
+function gcTermPatterns(resolved: ResolvedTerm[]): RegExp[] {
+  return resolved.filter(t => t.furnishBy === 'GC' || t.installBy === 'GC').map(t => TERM_PATTERNS[t.term]);
+}
 
 export interface ComposeProposalInput {
   agent4: Agent4Output;
@@ -28,6 +35,24 @@ export interface ComposeProposalInput {
   overrides: NonElectricalOverride[];
   countResult: CountResult | null;
   reviewItems: ReviewItem[] | null;
+  /** Next round A3 — referenced sheets the estimator skipped ("Mechanical
+   *  schedules not provided at time of bid."): Exclusions & Clarifications. */
+  clarifications?: string[];
+  /** Next round B3 — the Labor & Pricing screen's Alternates (add/deduct),
+   *  printed as separate lines that never change the base price. */
+  estimatorAlternates?: EstimatorAlternate[];
+}
+
+export interface EstimatorAlternate { kind: 'add' | 'deduct'; description: string; amount: number }
+
+/** "ADD $1,200.00 — EV charger rough-in per owner's alternate request." /
+ *  "DEDUCT $1,830.00 — if existing office fixtures stay (36th Street)." */
+export function formatAlternateBullet(a: EstimatorAlternate): string {
+  const amount = Number.isFinite(a.amount) ? a.amount : 0;
+  const formatted = amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+  const verb = a.kind === 'add' ? 'ADD' : 'DEDUCT';
+  const desc = a.description.trim().replace(/[.;]\s*$/, '');
+  return `${verb} ${formatted} — ${desc}.`;
 }
 
 export interface ComposeFailure { check: string; detail: string; category?: string; line?: string; /** The override flag that keeps/picks this line. */ flag?: string }
@@ -54,10 +79,29 @@ export function composeProposal(input: ComposeProposalInput): ComposeProposalOut
     enforced.output.exclusions = [...(enforced.output.exclusions ?? []), ...addExclusions];
     corrections.push(...addExclusions.map(b => `Exclusion added from the estimator's scope list: "${b}"`));
   }
+  // Next round A3 — skipped (not provided) sheets, deterministically, once.
+  const have = (enforced.output.exclusions ?? []).map(b => (typeof b === 'string' ? b : `${(b as { b: string }).b} ${(b as { t: string }).t}`).toLowerCase());
+  const addClar = (input.clarifications ?? []).filter(c => !have.some(h => h.includes(c.replace(/\.$/, '').toLowerCase())));
+  if (addClar.length) {
+    enforced.output.exclusions = [...(enforced.output.exclusions ?? []), ...addClar];
+    corrections.push(...addClar.map(c => `Clarification added from the sheet check: "${c}"`));
+  }
   const { data, jobNumberGenerated, ambiguousQtyKeys } = composeBidData(input.bidRow, enforced.output, input.price, {
     savedLineItems: input.savedLineItems ?? [],
     lightingTermsBullet: lightingTermsBullet(input.accountResolved.find(t => t.term === 'lighting')),
   });
+  // Next round B3 — the estimator's own Alternates (add/deduct), printed as
+  // separate lines that never change the base price. Deterministic, once
+  // (never duplicated if this bid's alternates already made it into the
+  // AI's own `alternates` output somehow — matched by exact bullet text).
+  const existingAlternateText = (data.alternates ?? []).map(b => (typeof b === 'string' ? b : `${b.b}${b.t}`));
+  const newAlternateBullets = (input.estimatorAlternates ?? [])
+    .map(formatAlternateBullet)
+    .filter(b => !existingAlternateText.includes(b));
+  if (newAlternateBullets.length) {
+    data.alternates = [...(data.alternates ?? []), ...newAlternateBullets];
+    corrections.push(...newAlternateBullets.map(b => `Alternate added from Labor & Pricing: "${b}"`));
+  }
   // Fix round 2 / N-R2-3 — Section C is exactly 3 bullets, deterministically:
   // never a 422 loop that only another Agent 4 run could break.
   corrections.push(...fitSectionC(data));
@@ -105,6 +149,12 @@ export function composeProposal(input: ComposeProposalInput): ComposeProposalOut
     ...irrelevantSpecSentences(gcScopeText(data), input.bidRow.loc ?? '').block
       .filter(x => overrideFor(normalizeLineKey('spec', x), input.overrides, 'spec') === null)
       .map(x => ({ check: 'irrelevant_spec', detail: `Names a region other than the project's location — owner-spec text for other stores/regions? Remove it, or keep it with a reason: "${x}"`, category: 'spec', line: x, flag: 'spec' })),
+    // Next round A6 (Decision 4) — electrical work put on the GC ("Receptacles
+    // by GC", a GC-furnished line) unless the account terms really gave the
+    // GC that term; kept only with an exact-line reason (flag gc_scope).
+    ...gcScopeFindings(data, gcTermPatterns(input.accountResolved))
+      .filter(f => overrideFor(normalizeLineKey(f.category, f.line), input.overrides, 'gc_scope') === null)
+      .map(f => ({ check: 'gc_scope', detail: f.detail, category: f.category, line: f.line, flag: 'gc_scope' })),
     ...nonElectricalFindings(data, input.overrides).filter(f => !f.overridden && f.block)
       .map(f => ({ check: 'non_electrical', detail: `${f.category}: "${f.line}" (${f.unit}) looks like ${f.reason}`, category: f.category, line: f.line })),
   ];

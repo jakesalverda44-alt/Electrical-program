@@ -11,6 +11,7 @@ vi.mock('../../api/client', async () => {
 
 import { LaborPricingStep } from './LaborPricingStep';
 import { DEFAULT_SETTINGS, EstimateLine, EstimateSettings, PricingRecap, EMPTY_RECAP, Library } from './types';
+import { ConfirmProvider } from '../../components/ConfirmDialog';
 
 afterEach(cleanup);
 beforeEach(() => {
@@ -38,13 +39,13 @@ function makeRecap(): PricingRecap {
   };
 }
 
-function renderStep(overrides: Partial<Parameters<typeof LaborPricingStep>[0]> = {}) {
+function renderStep(overrides: Partial<Parameters<typeof LaborPricingStep>[0]> = {}, wrapper?: (children: React.ReactNode) => React.ReactElement) {
   const setLines = vi.fn();
   const setSettings = vi.fn();
   const save = vi.fn().mockResolvedValue(undefined);
   const syncTakeoff = vi.fn().mockResolvedValue({ added: 1, updated: 0, vanished: 0 });
   const lines: EstimateLine[] = [{ id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'manual' }];
-  render(
+  const el = (
     <LaborPricingStep
       lines={lines}
       settings={baseSettings()}
@@ -59,6 +60,7 @@ function renderStep(overrides: Partial<Parameters<typeof LaborPricingStep>[0]> =
       {...overrides}
     />
   );
+  render(wrapper ? wrapper(el) : el);
   return { setLines, setSettings, save, syncTakeoff };
 }
 
@@ -88,6 +90,46 @@ describe('LaborPricingStep — N3: floors above 2', () => {
     fireEvent.change(input, { target: { value: '4' } });
     const updater = setSettings.mock.calls[0][0] as (prev: EstimateSettings) => EstimateSettings;
     expect(updater(baseSettings()).floors_above_2).toBe(4);
+  });
+});
+
+describe('LaborPricingStep — Review round 2 / S17: pricing-mode switch and shared factors', () => {
+  it('floors-above-2 and the factor chips render in ACCUBID mode too — they used to be hidden entirely', async () => {
+    // bidId omitted -> AccubidPricingPanel itself doesn't mount (its own
+    // network calls are out of scope here); this isolates the assertion to
+    // LaborPricingStep's own JSX, which is what used to hide these.
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' } });
+    expect(await screen.findByTestId('lp-floors-above-2')).toBeTruthy();
+    expect(await screen.findByTestId('lp-factor-chips')).toBeTruthy();
+    expect(screen.getByTestId('lp-factor-HEIGHT-10-14')).toBeTruthy();
+  });
+
+  it('shows the current mode and a button to switch to the other one', async () => {
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' } });
+    const row = await screen.findByTestId('lp-pricing-mode-row');
+    expect(row.textContent).toContain('Accubid');
+    expect(screen.getByTestId('lp-switch-pricing-mode').textContent).toContain('Phase A');
+  });
+
+  it('declining the confirm (no ConfirmProvider = auto-decline) never switches mode or saves', async () => {
+    const { setSettings, save } = renderStep({ settings: { ...baseSettings(), pricing_mode: 'phase_a' } });
+    fireEvent.click(await screen.findByTestId('lp-switch-pricing-mode'));
+    await waitFor(() => {}); // let the declined promise settle
+    expect(setSettings).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('confirming the switch flips pricing_mode and saves immediately (B4: re-persists the price right away)', async () => {
+    const { setSettings, save } = renderStep(
+      { settings: { ...baseSettings(), pricing_mode: 'phase_a' } },
+      (children) => <ConfirmProvider>{children}</ConfirmProvider>,
+    );
+    fireEvent.click(await screen.findByTestId('lp-switch-pricing-mode'));
+    fireEvent.click(await screen.findByText('Confirm'));
+    await waitFor(() => expect(setSettings).toHaveBeenCalled());
+    const updater = setSettings.mock.calls[0][0] as (prev: EstimateSettings) => EstimateSettings;
+    expect(updater(baseSettings()).pricing_mode).toBe('accubid');
+    await waitFor(() => expect(save).toHaveBeenCalled());
   });
 });
 
@@ -467,5 +509,72 @@ describe('LaborPricingStep — B5: sync-takeoff confirms when there are unsaved 
     );
     fireEvent.click(screen.getByTestId('lp-sync-button'));
     await waitFor(() => expect(syncTakeoff).toHaveBeenCalled());
+  });
+});
+
+describe('next round A7 — a possible duplicate blocks the save until resolved', () => {
+  const RUN = '11111111-2222-3333-4444-555555555555';
+  const kept: EstimateLine = { id: 'k', line_key: 'K', category: 'Branch Power', description: 'Duplex receptacle', qty: 34, unit: 'EA', item_id: 'i1', source: 'takeoff', recheck_run_id: RUN, recheck_reason: 'no_confident_match' };
+  const fresh: EstimateLine = { id: 'n', line_key: 'N', category: 'Branch Power', description: 'Duplex receptacle, 20A', qty: 30, unit: 'EA', item_id: 'i1', source: 'takeoff' };
+  const dup = { keptKey: 'K', keptDescription: 'Duplex receptacle', keptQty: 34, newKey: 'N', newDescription: 'Duplex receptacle, 20A', newQty: 30, category: 'Branch Power', unit: 'EA' };
+
+  it('shows the pair, disables Save, hides "checked" on the kept line; remove-the-new-line drops it', () => {
+    const { setLines } = renderStep({ lines: [kept, fresh], duplicates: [dup] });
+    expect(screen.getByTestId('lp-duplicates').textContent).toContain('“Duplex receptacle” (34 EA, kept from the previous run) and “Duplex receptacle, 20A” (30 EA, new takeoff line)');
+    expect((screen.getByTestId('lp-save-button') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByTestId('lp-recheck-done-0')).toBeNull();
+    fireEvent.click(screen.getByTestId('lp-dup-remove-new'));
+    const updater = setLines.mock.calls[setLines.mock.calls.length - 1][0] as (p: EstimateLine[]) => EstimateLine[];
+    // Fix round S10 — excluded (a tombstone sync keeps), not deleted.
+    expect(updater([kept, fresh]).map(l => [l.line_key, !!l.excluded])).toEqual([['K', false], ['N', true]]);
+  });
+
+  it('keep both needs a real reason and records it on the kept line', () => {
+    const { setLines } = renderStep({ lines: [kept, fresh], duplicates: [dup] });
+    expect((screen.getByTestId('lp-dup-keep-both') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByTestId('lp-dup-reason'), { target: { value: 'Different rooms — both are real' } });
+    fireEvent.click(screen.getByTestId('lp-dup-keep-both'));
+    const updater = setLines.mock.calls[setLines.mock.calls.length - 1][0] as (p: EstimateLine[]) => EstimateLine[];
+    expect(updater([kept, fresh])[0].dup_ok).toMatchObject({ with: ['N'], reason: 'Different rooms — both are real' });
+  });
+
+  it('a resolved pair (keep both) no longer blocks', () => {
+    renderStep({ lines: [{ ...kept, dup_ok: { with: ['N'], reason: 'Different rooms — both are real' } }, fresh], duplicates: [dup] });
+    expect(screen.queryByTestId('lp-duplicates')).toBeNull();
+    expect((screen.getByTestId('lp-save-button') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe('next round B2/B3 — pricing_mode switches Phase A settings for the Accubid panel', () => {
+  it('renders the Phase A settings row when pricing_mode is phase_a (or unset — every existing test above)', () => {
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'phase_a' } });
+    expect(screen.getByText('Labor rate ($/hr)')).toBeTruthy();
+    expect(screen.queryByTestId('accubid-pricing-panel')).toBeNull();
+  });
+
+  it('renders the Accubid panel instead of the Phase A settings row when pricing_mode is accubid and a bidId is given', async () => {
+    // Next round B2/B3 — AccubidPricingPanel fetches GET /:bidId/accubid
+    // through the SAME mocked api.get this file already uses for the
+    // library; route by URL so both callers get a shape they can render.
+    get.mockImplementation((url: string) =>
+      url.includes('/accubid')
+        ? Promise.resolve({
+            data: {
+              recap: { materialTotal: 0, materialTax: 0, fieldLaborCost: 0, equipmentTotal: 0, equipmentTax: 0, generalExpensesTotal: 0, generalExpensesTax: 0, subcontractsTotal: 0, subcontractsTax: 0, quotesNetTotal: 0, quotesTaxTotal: 0, quotesMarkupTotal: 0, budgetPendingQuotes: [], primeCost: 0, materialOverhead: 0, laborOverhead: 0, equipmentOverhead: 0, generalExpensesOverhead: 0, subcontractOverhead: 0, quotesOverhead: 0, totalOverhead: 0, netCost: 0, materialMarkup: 0, laborMarkup: 0, equipmentMarkup: 0, generalExpensesMarkup: 0, subcontractMarkup: 0, adjustmentMarkup: 0, totalMarkup: 0, salesMarkup: 0, sellingPrice: 0, blocksSend: false },
+              settings: { shift: 'day', journeymanCount: 1, journeymanRate: 37, apprenticeCount: 2, apprenticeRate: 27, foremanCount: 0, foremanRate: 45, nightJourneymanRate: null, nightApprenticeRate: null, nightForemanRate: null, burdenPct: 4, fringePerHr: 1.5, materialTaxPct: 0, laborOverheadPct: 38, materialMarkupPct: 20, laborMarkupPct: 20, quoteMarkupDefaultPct: 18, adjustmentMarkupPct: 0, salesMarkupPct: 0 },
+              totalHours: 0, quotes: [], costLines: [], alternates: [],
+            },
+          })
+        : Promise.resolve({ data: { items: [], assemblies: [], factors: [] } })
+    );
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' }, bidId: 'bid1' });
+    await waitFor(() => expect(screen.getByTestId('accubid-pricing-panel')).toBeTruthy());
+    expect(screen.queryByText('Labor rate ($/hr)')).toBeNull();
+  });
+
+  it('renders neither the Phase A row nor a crash when accubid mode has no bidId yet', () => {
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' } });
+    expect(screen.queryByText('Labor rate ($/hr)')).toBeNull();
+    expect(screen.queryByTestId('accubid-pricing-panel')).toBeNull();
   });
 });

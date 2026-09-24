@@ -62,6 +62,15 @@ export interface LibraryCandidate {
   category: string;
   unit: string;
   aliases: string[];
+  /** Review round 2 / B3 — est_items.source / est_assemblies.source
+   *  ('seed'|'accubid'|'manual'|'calibrated'). Used only as a tie-break
+   *  (below): a curated seed/manual/calibrated row outranks a raw,
+   *  unreconciled Accubid-imported row when both score identically —
+   *  an accubid-imported "3/4" Coupling - EMT Set Screw Steel" must never
+   *  beat the seed's own "3/4" EMT" item on a bare tie. Optional so every
+   *  existing caller that built a LibraryCandidate by hand (tests, mostly)
+   *  keeps compiling; a candidate with no source is treated as neutral. */
+  source?: string;
 }
 
 export interface MappedLine {
@@ -264,6 +273,102 @@ function materialConflict(aTags: Set<string>, bTags: Set<string>): boolean {
   return true;
 }
 
+// Review round 2 / B3 — a raceway line ("3/4 EMT") must never alias/fuzzy-
+// match a FITTING for that same raceway type (a coupling, connector, strap,
+// bushing, locknut, adapter or elbow) just because they share a material tag
+// (both "emt") and a size: {3/4, emt} is a token SUBSET of "3/4 Connector -
+// EMT Set Screw Steel" (real regression: the takeoff mapper priced a 1,200 LF
+// run of 3/4 EMT as if every foot were one $ea EMT connector). A fitting word
+// in the text always wins over the bare-raceway fallback below - a
+// description that explicitly says "EMT coupling" IS a coupling, not
+// conduit. This is a separate dimension from MATERIAL_TAGS (which already
+// correctly keeps EMT from matching a THHN wire item): two names can share
+// the identical material tag and still be a hard conflict here.
+const FITTING_KIND_WORDS: Record<string, string> = {
+  coupling: 'coupling', connector: 'connector', strap: 'strap', clamp: 'strap', clip: 'strap',
+  bushing: 'bushing', locknut: 'locknut', adapter: 'adapter', elbow: 'elbow',
+  // A generic "fitting" word (e.g. "Expansion fitting, conduit") is a
+  // fitting too, even though it names no OTHER specific fitting word —
+  // found in testing alongside accubidImport.ts's own identical fix.
+  fitting: 'fitting', fittings: 'fitting',
+  // "Conduit body (LB/T), EMT or rigid" names no other fitting word and
+  // carries an EMT/rigid material tag, so without this it falls through to
+  // the bare-conduit material-tag inference below and collides with a real
+  // run of EMT conduit on the same raceway kind — same bug shape as
+  // accubidImport.ts's identical "conduit body" fix, mirrored here so the
+  // mapper's alias/fuzzy guard agrees with import reconciliation.
+  body: 'fitting',
+};
+const RACEWAY_MATERIALS = new Set(['emt', 'pvc', 'rmc', 'fmc', 'lfmc']);
+
+/** null = "no raceway/fitting kind named" (never a conflict with anything -
+ *  most items, e.g. a duplex receptacle, don't participate in this guard at
+ *  all). A fitting word (checked first) always wins; otherwise a raceway
+ *  material tag with no fitting word implies bare conduit/raceway. */
+function racewayKind(tokenSet: Set<string>, materialTags: Set<string>): string | null {
+  for (const t of tokenSet) {
+    const kind = FITTING_KIND_WORDS[t];
+    if (kind) return kind;
+  }
+  for (const tag of materialTags) if (RACEWAY_MATERIALS.has(tag)) return 'conduit';
+  return null;
+}
+function racewayKindConflict(a: string | null, b: string | null): boolean {
+  return a != null && b != null && a !== b;
+}
+
+// Review round 2 / N-R2-4 — matching kind NAME alone ("connector" ==
+// "connector") isn't enough for a FITTING: "3/4\" EMT connector" must never
+// match an accubid-imported lighting-track part just because both are
+// tagged "connector" — a real EMT connector's own name says EMT (or another
+// raceway material), and a live-end-feed track connector's doesn't.
+// "Fittings match on size plus raceway type" (the decision's own words) —
+// size is already covered by the existing spec/rating-conflict guard
+// (hasConflictingSpec); this adds the raceway-type half for the FITTING
+// kinds specifically. 'conduit' is excluded here: two bare raceway runs
+// ("3/4\" EMT" vs "3/4\" conduit") disagreeing on named material is already
+// caught by the ordinary materialConflict check above (which requires both
+// sides to actually name a *different* material — not just "one names
+// none"), so re-requiring a shared tag for 'conduit' would wrongly reject a
+// legitimate generic-vs-specific raceway alias.
+function fittingKindNeedsMaterialMatch(kind: string | null): kind is string {
+  return kind != null && kind !== 'conduit';
+}
+function sharesMaterialTag(a: Set<string>, b: Set<string>): boolean {
+  for (const t of a) if (b.has(t)) return true;
+  return false;
+}
+
+// Review round 2 / R2-S1 — an item's kind comes from its PRIMARY (head) noun,
+// not from every word that happens to appear in its name. "3/4\" EMT conduit
+// w/ fittings", "2\" rigid steel conduit (incl. fittings)" and the seed
+// catalog's own all-in raceway items ("3/4\" EMT (incl. couplings/straps)",
+// "…(incl. fittings/glue)") are all RACEWAY — "fittings"/"couplings"/
+// "straps"/"glue" there is a QUALIFIER PHRASE ("incl.", "including", "w/",
+// "with" + the word) noting what the price bundles in, never the head noun.
+// A genuine fitting product ("Expansion fitting, conduit", "Coupling - EMT
+// Set Screw Steel", "Conduit body (LB/T)") never carries that qualifier-
+// phrase shape — "fitting"/"coupling"/"body" is the very first word, not a
+// trailing note — so it's unaffected. Stripping the qualifier phrase before
+// classifying restores every match this over-broad guard (99d9453) took
+// away, without giving back the false match it was added to prevent.
+const RACEWAY_QUALIFIER_WORD = '(?:fittings?|couplings?|straps?|clips?|clamps?|glue)';
+const RACEWAY_QUALIFIER_RE = new RegExp(
+  `\\b(?:incl|including|w/|with)\\s+${RACEWAY_QUALIFIER_WORD}(?:\\s*[/,]\\s*${RACEWAY_QUALIFIER_WORD})*\\b`,
+  'g'
+);
+
+/** racewayKind, but computed from RAW normalized text (post-normalize(), pre-
+ *  tokenize) so the qualifier-phrase strip above can see and remove multi-
+ *  word / slash-joined phrases a Set<string> token bag has already lost the
+ *  adjacency to detect ("couplings/straps" tokenizes as ONE token; "w/" and
+ *  "fittings" are two SEPARATE tokens with no record they were adjacent). */
+function racewayKindFromNormalizedText(normText: string): string | null {
+  const stripped = normText.replace(RACEWAY_QUALIFIER_RE, ' ');
+  const tokenSet = new Set(stripped.split(' ').filter(Boolean));
+  return racewayKind(tokenSet, materialTagsOf(tokenSet));
+}
+
 // "Schedule 40"/"Schedule 80" is a real, common conduit-material qualifier —
 // its number is NOT a size or rating and must never trip the conflict guard
 // below (real seed regression: "4\" PVC" was failing to alias-match its own
@@ -332,6 +437,12 @@ function scoreCandidate(
   }
   const descMaterialTags = materialTagsOf(mergedTokens);
   const descConductorTags = conductorTagsOf(mergedTokens);
+  // Review round 2 / R2-S1 — computed from raw normalized TEXT (merging
+  // descNorm+altNorm the same way mergedTokens merges their token sets), not
+  // from the already-tokenized mergedTokens: the qualifier-phrase strip
+  // needs the adjacency a Set<string> has already discarded (see
+  // racewayKindFromNormalizedText's own comment).
+  const descRacewayKind = racewayKindFromNormalizedText(altNorm ? `${descNorm} ${altNorm}` : descNorm);
   if (confidence !== 'exact') {
     for (const n of names) {
       if (!n) continue;
@@ -341,6 +452,15 @@ function scoreCandidate(
       const nMaterialTags = materialTagsOf(nTokens);
       if (materialConflict(descMaterialTags, nMaterialTags)) continue;
       if (materialConflict(descConductorTags, conductorTagsOf(nTokens))) continue;
+      // Review round 2 / B3 — "3/4 EMT" (kind: conduit) must never alias-
+      // match "3/4 Connector - EMT Set Screw Steel" (kind: connector) even
+      // though neither materialConflict above fires (both are tagged "emt").
+      const nRacewayKindAlias = racewayKindFromNormalizedText(n);
+      if (racewayKindConflict(descRacewayKind, nRacewayKindAlias)) continue;
+      // N-R2-4 — same fitting kind on both sides isn't enough; they must
+      // also share a raceway material tag (see fittingKindNeedsMaterialMatch).
+      if (fittingKindNeedsMaterialMatch(descRacewayKind) && descRacewayKind === nRacewayKindAlias
+        && !sharesMaterialTag(descMaterialTags, nMaterialTags)) continue;
       // R2-SF1 — a candidate that NAMES a raceway/wire type (EMT/PVC/RMC/MC/
       // FMC/LFMC/THHN) can't earn alias-tier confidence off a description
       // that names NO type at all — "3/4\" conduit" sharing only the
@@ -367,6 +487,10 @@ function scoreCandidate(
       const nMaterialTags = materialTagsOf(nTokens);
       if (materialConflict(descMaterialTags, nMaterialTags)) continue;
       if (materialConflict(descConductorTags, conductorTagsOf(nTokens))) continue;
+      const nRacewayKindFuzzy = racewayKindFromNormalizedText(n);
+      if (racewayKindConflict(descRacewayKind, nRacewayKindFuzzy)) continue; // review round 2 / B3, same rationale as the alias tier above
+      if (fittingKindNeedsMaterialMatch(descRacewayKind) && descRacewayKind === nRacewayKindFuzzy
+        && !sharesMaterialTag(descMaterialTags, nMaterialTags)) continue; // N-R2-4, same rationale as the alias tier above
       if (nMaterialTags.size > 0 && descMaterialTags.size === 0) continue; // R2-SF1, same rationale as the alias tier above
       best = Math.max(best, overlapScore(mergedTokens, nTokens, tokenWeight));
     }
@@ -386,6 +510,24 @@ function scoreCandidate(
 }
 
 const TIER_RANK: Record<MapConfidence, number> = { exact: 3, alias: 2, fuzzy: 1, none: 0 };
+
+/** Deterministic tie-break WITHIN one confidence tier, same rankScore: an
+ *  assembly beats a bare item (unchanged); failing that, a curated row
+ *  (seed/manual/calibrated) beats a raw, unreconciled Accubid-imported row —
+ *  review round 2 / B3: library.ts's own `ORDER BY category, name` used to
+ *  let raw import order decide this (an "3/4 Connector..." ACB row sorting
+ *  before the seed "3/4 EMT" item was the exact tie B3 reproduced). Neither
+ *  rule fires, keep whichever the caller already had (the earlier candidate
+ *  in iteration order — unchanged, deterministic default). */
+function preferCandidate(a: LibraryCandidate, b: LibraryCandidate): boolean {
+  if (a.kind === 'assembly' && b.kind !== 'assembly') return true;
+  if (a.kind !== 'assembly' && b.kind === 'assembly') return false;
+  const aAccubid = a.source === 'accubid';
+  const bAccubid = b.source === 'accubid';
+  if (!aAccubid && bAccubid) return true;
+  if (aAccubid && !bAccubid) return false;
+  return false;
+}
 
 function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCandidate[], freq: Map<string, number>): MappedLine {
   const descNorm = normalize(line.description);
@@ -411,9 +553,8 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
     // (which includes those bonuses) only breaks ties WITHIN the same tier.
     if (curTier > bestTier) { best = scored; continue; }
     if (curTier < bestTier) continue;
-    if (scored.rankScore > best.rankScore
-      || (scored.rankScore === best.rankScore && scored.candidate.kind === 'assembly' && best.candidate.kind === 'item')
-    ) {
+    if (scored.rankScore > best.rankScore) { best = scored; continue; }
+    if (scored.rankScore === best.rankScore && preferCandidate(scored.candidate, best.candidate)) {
       best = scored;
     }
   }

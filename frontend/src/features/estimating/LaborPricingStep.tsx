@@ -5,7 +5,8 @@ import React, { useMemo, useState } from 'react';
 import { useApi } from '../../hooks/useApi';
 import Modal from '../../components/Modal';
 import { useConfirm } from '../../components/ConfirmDialog';
-import { DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap } from './types';
+import { type DuplicatePair, DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap } from './types';
+import { AccubidPricingPanel } from './AccubidPricingPanel';
 
 // Fix round 2 / SF2 — the resolver only offers items/assemblies whose unit
 // FAMILY is compatible with the line's own unit: EA is its own family; LF/C/M
@@ -38,6 +39,9 @@ function numberOrDefault(raw: string, fallback: number): number {
 }
 
 export interface LaborPricingStepProps {
+  /** Next round B2/B3 — mounts AccubidPricingPanel in place of the Phase A
+   *  settings row when settings.pricing_mode === 'accubid'. */
+  bidId?: string;
   lines: EstimateLine[];
   settings: EstimateSettings;
   recap: PricingRecap;
@@ -55,6 +59,41 @@ export interface LaborPricingStepProps {
   save: () => Promise<unknown>;
   syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number; rebound?: number; unbound?: number } | null>;
   showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
+  /** Next round A7 — possible duplicates from the server (GET / sync /
+   *  refused save); the open ones block the save until resolved. */
+  duplicates?: DuplicatePair[];
+}
+
+/** Next round A7 — the pairs still open against the CURRENT lines: both
+ *  lines still here, and no "keep both" decision on the kept one. */
+export function openDuplicatePairs(pairs: DuplicatePair[], lines: EstimateLine[]): DuplicatePair[] {
+  const byKey = new Map(lines.filter(l => l.line_key).map(l => [l.line_key as string, l]));
+  return pairs.filter(p => {
+    const k = byKey.get(p.keptKey);
+    const n = byKey.get(p.newKey);
+    return !!k && !!n && !k.excluded && !n.excluded && !(k.dup_ok?.with ?? []).includes(p.newKey);
+  });
+}
+
+function DuplicatePairControl({ pair, onRemove, onKeepBoth }: {
+  pair: DuplicatePair;
+  onRemove: (key: string) => void;
+  onKeepBoth: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+  const ok = reason.trim().length >= 10 && /[A-Za-z]{3,}/.test(reason);
+  return (
+    <div className="lp-banner" data-testid={`lp-dup-${pair.keptKey}-${pair.newKey}`} style={{ borderColor: 'var(--red)' }}>
+      <div><strong>Possible duplicate</strong> ({pair.category}): “{pair.keptDescription}” ({pair.keptQty} {pair.unit}, kept from the previous run) and “{pair.newDescription}” ({pair.newQty} {pair.unit}, new takeoff line).</div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+        <button type="button" className="btn ghost" onClick={() => onRemove(pair.newKey)} data-testid="lp-dup-remove-new">Same item — exclude the new line</button>
+        <button type="button" className="btn ghost" onClick={() => onRemove(pair.keptKey)} data-testid="lp-dup-remove-kept">Same item — exclude my old line</button>
+        <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Different items? Say why (at least 10 characters)" data-testid="lp-dup-reason"
+          style={{ flex: '1 1 220px', font: 'inherit', fontSize: 12.5 }}/>
+        <button type="button" className="btn ghost" disabled={!ok} onClick={() => onKeepBoth(reason.trim())} data-testid="lp-dup-keep-both">Different items — keep both</button>
+      </div>
+    </div>
+  );
 }
 
 /** Fix round 1 / S8 — a brand-new manual line needs a STABLE id the instant
@@ -80,8 +119,10 @@ function lineKey(line: EstimateLine, idx: number): string {
 }
 
 export function LaborPricingStep({
-  lines, settings, recap, saving, syncing, saveError, dirty, setLines, setSettings, save, syncTakeoff, showToast,
+  bidId, lines, settings, recap, saving, syncing, saveError, dirty, setLines, setSettings, save, syncTakeoff, showToast, duplicates = [],
 }: LaborPricingStepProps) {
+  const openDups = useMemo(() => openDuplicatePairs(duplicates, lines), [duplicates, lines]);
+  const dupKeys = useMemo(() => new Set(openDups.flatMap(p => [p.keptKey, p.newKey])), [openDups]);
   const { data: library } = useApi<Library>('/estimating/library');
   const [resolverIndex, setResolverIndex] = useState<number | null>(null);
   const [resolverQuery, setResolverQuery] = useState('');
@@ -252,33 +293,46 @@ export function LaborPricingStep({
     });
   };
 
-  return (
-    <div data-testid="labor-pricing-step">
+  // Review round 2 / S17 — a per-bid pricing-mode switch. Confirms first
+  // (switching immediately changes which number is "the" bid amount — see
+  // B4's persistPriceForBid), then flips settings.pricing_mode and saves
+  // right away so bids.amount/bid_estimates re-persist from the NEW mode's
+  // engine immediately, rather than sitting on a stale number from the old
+  // mode until some unrelated edit happens to trigger a save.
+  const onSwitchPricingMode = async () => {
+    const next = settings.pricing_mode === 'accubid' ? 'phase_a' : 'accubid';
+    const ok = await confirm({
+      title: next === 'accubid' ? 'Switch this bid to Accubid pricing?' : 'Switch this bid to Phase A pricing?',
+      body: next === 'accubid'
+        ? 'The price will come from crew, overhead/markup and vendor quotes (Chris\'s Accubid workflow) instead of the flat labor rate below. Labor factors you\'ve selected still apply, compounding as Accubid\'s own "Labor Factoring." Saves immediately.'
+        : 'The price will come from a flat labor rate, overhead % and profit % (Phase A) instead of crew/Accubid markups. Vendor quotes and Accubid settings stay saved but stop affecting the price until you switch back. Saves immediately.',
+    });
+    if (!ok) return;
+    setSettings(prev => ({ ...prev, pricing_mode: next }));
+    try {
+      await save();
+      showToast?.({ title: `Switched to ${next === 'accubid' ? 'Accubid' : 'Phase A'} pricing`, variant: 'success' });
+    } catch {
+      showToast?.({ title: 'Could not save the pricing-mode switch', variant: 'error' });
+    }
+  };
+
+  // Review round 2 / S17 — factors (and floors above 2, which scales the
+  // MULTI-STORY factor) are a property of the TAKEOFF, not of which pricing
+  // engine is active, so this row renders regardless of mode — it used to
+  // live only in the Phase A branch below, silently hiding it (and every
+  // factor an estimator had already picked) the moment a bid switched to
+  // Accubid mode, even though the backend was ALSO dropping those same
+  // factors from the Accubid hours sum (fixed in accubidBidData.ts).
+  const factorsRow = (
+    <>
       <div className="lp-settings-row">
-        <label className="lp-settings-field">
-          Labor rate ($/hr)
-          <input type="number" value={settings.labor_rate}
-            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.labor_rate); setSettings(prev => ({ ...prev, labor_rate: v })); }} />
-        </label>
-        <label className="lp-settings-field">
-          Crew size
-          <input type="number" value={settings.crew_size}
-            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.crew_size); setSettings(prev => ({ ...prev, crew_size: v })); }} />
-        </label>
         <label className="lp-settings-field" title="Multiplies the MULTI-STORY labor factor below — 0 means no multi-story adjustment even if that factor is selected.">
           Floors above 2
           <input type="number" min={0} value={settings.floors_above_2} data-testid="lp-floors-above-2"
             onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.floors_above_2); setSettings(prev => ({ ...prev, floors_above_2: v })); }} />
         </label>
-        {SETTINGS_PCT_FIELDS.map(f => (
-          <label className="lp-settings-field" key={f.key}>
-            {f.label}
-            <input type="number" value={settings[f.key] as number}
-              onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS[f.key] as number); setSettings(prev => ({ ...prev, [f.key]: v })); }} />
-          </label>
-        ))}
       </div>
-
       {factorsByGroup.length > 0 && (
         <div className="lp-settings-row" data-testid="lp-factor-chips">
           {factorsByGroup.map(([group, factors]) => (
@@ -296,6 +350,64 @@ export function LaborPricingStep({
               ))}
             </div>
           ))}
+        </div>
+      )}
+    </>
+  );
+
+  return (
+    <div data-testid="labor-pricing-step">
+      <div className="lp-settings-row" data-testid="lp-pricing-mode-row">
+        <span style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>
+          Pricing mode: <strong>{settings.pricing_mode === 'accubid' ? 'Accubid' : 'Phase A'}</strong>
+        </span>
+        <button type="button" className="btn ghost" onClick={() => void onSwitchPricingMode()} data-testid="lp-switch-pricing-mode">
+          Switch to {settings.pricing_mode === 'accubid' ? 'Phase A' : 'Accubid'} pricing
+        </button>
+      </div>
+
+      {factorsRow}
+
+      {settings.pricing_mode === 'accubid' ? (
+        bidId ? <AccubidPricingPanel bidId={bidId} showToast={showToast} /> : null
+      ) : (
+      <>
+      <div className="lp-settings-row">
+        <label className="lp-settings-field">
+          Labor rate ($/hr)
+          <input type="number" value={settings.labor_rate}
+            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.labor_rate); setSettings(prev => ({ ...prev, labor_rate: v })); }} />
+        </label>
+        <label className="lp-settings-field">
+          Crew size
+          <input type="number" value={settings.crew_size}
+            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.crew_size); setSettings(prev => ({ ...prev, crew_size: v })); }} />
+        </label>
+        {SETTINGS_PCT_FIELDS.map(f => (
+          <label className="lp-settings-field" key={f.key}>
+            {f.label}
+            <input type="number" value={settings[f.key] as number}
+              onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS[f.key] as number); setSettings(prev => ({ ...prev, [f.key]: v })); }} />
+          </label>
+        ))}
+      </div>
+      </>
+      )}
+
+      {openDups.length > 0 && (
+        <div data-testid="lp-duplicates">
+          {openDups.map(p => (
+            <DuplicatePairControl key={`${p.keptKey}-${p.newKey}`} pair={p}
+              // Fix round S10 — excluded (a tombstone on the takeoff item that
+              // sync keeps), never deleted: a delete came back on the next sync.
+              onRemove={key => setLines(prev => prev.map(l => (l.line_key === key ? { ...l, excluded: true, sync_excluded: false } : l)))}
+              onKeepBoth={reason => setLines(prev => prev.map(l => (l.line_key === p.keptKey
+                ? { ...l, dup_ok: { with: [...(l.dup_ok?.with ?? []), p.newKey], reason, at: new Date().toISOString() } }
+                : l)))}/>
+          ))}
+          <div style={{ fontSize: 12, color: 'var(--text3)', margin: '4px 0 8px' }}>
+            Resolve {openDups.length === 1 ? 'it' : 'each one'} before saving — the proposal is blocked until then too.
+          </div>
         </div>
       )}
 
@@ -320,7 +432,8 @@ export function LaborPricingStep({
         <button type="button" className="btn ghost" onClick={addManualLine} data-testid="lp-add-manual">
           Add manual line
         </button>
-        <button type="button" className="btn primary" onClick={() => void save()} disabled={saving} data-testid="lp-save-button">
+        <button type="button" className="btn primary" onClick={() => void save()} disabled={saving || openDups.length > 0} data-testid="lp-save-button"
+          title={openDups.length ? 'Resolve the possible duplicate first' : undefined}>
           {saving ? 'Saving…' : 'Save'}
         </button>
         {saveError && <span style={{ color: 'var(--red)', fontSize: 12, alignSelf: 'center' }} data-testid="lp-save-error">{saveError}</span>}
@@ -421,9 +534,11 @@ export function LaborPricingStep({
                               : line.recheck_reason === 'ambiguous_match'
                                 ? 're-check: more than one new takeoff line matches'
                                 : 'From previous run — re-check'}
-                            <button type="button" className="lp-reset-btn" style={{ display: 'inline', marginLeft: 4, color: 'var(--amber)' }}
-                              data-testid={`lp-recheck-done-${idx}`}
-                              onClick={() => updateLine(idx, { recheck_run_id: null, recheck_reason: null })}>checked</button>
+                            {!dupKeys.has(line.line_key ?? '') && (
+                              <button type="button" className="lp-reset-btn" style={{ display: 'inline', marginLeft: 4, color: 'var(--amber)' }}
+                                data-testid={`lp-recheck-done-${idx}`}
+                                onClick={() => updateLine(idx, { recheck_run_id: null, recheck_reason: null })}>checked</button>
+                            )}
                           </span>
                         )}
                         {line.qty_overridden && (

@@ -21,6 +21,7 @@ function rowToRule(r: Record<string, unknown>): AccountRule {
     noMdpUnlessOnDrawings: !!r.no_mdp_unless_on_drawings,
     notes: (r.notes as string) ?? '',
     active: r.active !== false,
+    autoDeductAlternate: (r.auto_deduct_alternate as AccountRule['autoDeductAlternate']) ?? null,
   };
 }
 
@@ -172,6 +173,7 @@ export function scopeQuestionsFor(snap: AccountTermsSnapshot | null): ScopeQuest
     term: q.half ? `${q.term}:${q.half}` : q.term,
     label: q.label, question: q.question, options: q.options, notes: q.notes,
     ...(q.optionParties ? { optionParties: q.optionParties } : {}),
+    ...(q.suggested ? { suggested: q.suggested } : {}),
   }));
 }
 

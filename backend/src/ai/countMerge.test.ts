@@ -41,9 +41,10 @@ describe('mergeCountsIntoTakeoff — Kissimmee-shaped', () => {
   const r = mergeCountsIntoTakeoff(a1, targets, KISSIMMEE_SHEETS, { countingRan: true });
   const byKey = Object.fromEntries(r.types.map(t => [t.key, t]));
 
-  it('PH0.1 and the schedule/detail sheets were never counted', () => {
-    expect(selection.counted.map(s => s.sheetNo)).toEqual(['E-1', 'E-2', 'E-3', 'E-3.1']);
-    expect(selection.skipped.map(s => s.label.split(' ')[0])).toEqual(['E-0.1', 'E-7', 'PH0.1']);
+  it('the schedule/detail sheets were never counted; PH0.1 only as a site-types fallback', () => {
+    expect(selection.counted.map(s => s.sheetNo)).toEqual(['E-1', 'E-2', 'E-3', 'E-3.1', 'PH0.1']);
+    expect(selection.counted.find(s => s.sheetNo === 'PH0.1')!.photometric).toBe(true);
+    expect(selection.skipped.map(s => s.label.split(' ')[0])).toEqual(['E-0.1', 'E-7']);
   });
 
   it('interior types come from the lighting plan (the power plan background is ignored, not summed)', () => {
@@ -369,5 +370,47 @@ describe('row matching', () => {
       [{ panel: 'LP', circuit: '1', description: 'LTG', loadVA: 500 }]);
     expect(lc.ran).toBe(false);
     expect(lc.skippedReason).toBe('no wattage on the schedule for type(s) A');
+  });
+});
+
+describe('next round A3 — the photometric sheet is a site-types fallback, never stacked', () => {
+  const T = (key: string, category: CountTarget['category']): CountTarget =>
+    ({ key, type: key, description: `${key} fixture`, category, source: 'fixture_schedule', wattage: null, headsPerPole: category === 'site_lighting' ? 1 : null } as unknown as CountTarget);
+  const ph = sheet('PH0.1');
+
+  it('W1 drawn only on the photometric plan is counted from it (flagged, not blocking)', () => {
+    const r = combineSheetCounts(T('W1', 'exterior_building'), [
+      { sheet: sheet('E-3'), status: 'counted', placed: marks({ A: 73 }), unreadable: [] },
+      { sheet: ph, status: 'counted', placed: marks({ W1: 2, S1: 3 }), unreadable: [] },
+    ]);
+    expect(r.count).toBe(2);
+    expect(r.coverage ?? []).toEqual([]);
+    expect(r.flags.join(' ')).toContain('not shown on the electrical plans — 2 counted on the photometric sheet PH0.1');
+  });
+
+  it('S1 on both the site plan and the photometric plan: the site plan\'s count, never summed', () => {
+    const r = combineSheetCounts(T('S1', 'site_lighting'), [
+      { sheet: sheet('E-1'), status: 'counted', placed: marks({ S1: 2 }), unreadable: [] },
+      { sheet: ph, status: 'counted', placed: marks({ S1: 3 }), unreadable: [] },
+    ]);
+    expect(r.count).toBe(2);
+    expect(r.sheets.find(s => s.label.startsWith('PH0.1'))).toMatchObject({ used: false, count: 3 });
+  });
+
+  it('no fallback when the plan that should show it failed (the failure stays visible)', () => {
+    const r = combineSheetCounts(T('W1', 'exterior_building'), [
+      { sheet: sheet('E-3'), status: 'failed', error: 'x', placed: [], unreadable: [] },
+      { sheet: ph, status: 'counted', placed: marks({ W1: 2 }), unreadable: [] },
+    ]);
+    expect(r.count).toBe(0);
+    expect(r.allowedFailed).toEqual([sheet('E-3').label]);
+  });
+
+  it('interior types never come from a photometric sheet', () => {
+    const r = combineSheetCounts(T('A', 'interior_lighting'), [
+      { sheet: ph, status: 'counted', placed: marks({ A: 9 }), unreadable: [] },
+    ]);
+    expect(r.count).toBe(0);
+    expect(r.sheets[0].ignoredReason).toMatch(/only site fixture types/);
   });
 });

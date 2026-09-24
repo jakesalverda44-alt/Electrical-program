@@ -77,6 +77,8 @@ export interface TypeCountResult {
   wattage: number | null;
   /** B4 — blocking: same area or different areas? */
   areaQuestion?: AreaQuestion;
+  /** Next round A3/A7 — counted only on a photometric sheet (the fallback). */
+  photometricOnly?: boolean;
   /** S3 — blocking: the count covers only part of what should have been
    *  counted (no plan of the right kind, only the power plan for lighting,
    *  only an enlarged or partial plan). */
@@ -184,10 +186,47 @@ export function matchRowToTarget(row: Record<string, unknown>, targets: CountTar
   return best;
 }
 
-export function combineSheetCounts(
+type CombineResult = Pick<TypeCountResult, 'count' | 'sheets' | 'flags' | 'areaQuestion' | 'coverage' | 'photometricOnly'> & { allowedFailed: string[]; unreadableOn: string[] };
+
+/** Next round A3 — site and building-exterior fixture types only. */
+export function isSiteFixtureCategory(c: TargetCategory): boolean {
+  return c === 'site_lighting' || c === 'exterior_building';
+}
+
+/** Photometric sheets (countSheets `photometric`) are a FALLBACK, never
+ *  stacked: a site / exterior type is taken from them only when the
+ *  electrical plans show none of it and none of those plans failed or was
+ *  unreadable for it; every other type ignores them. */
+export function combineSheetCounts(t: CountTarget, sheets: SheetCountInput[]): CombineResult {
+  const photo = sheets.filter(s => s.sheet.photometric);
+  if (!photo.length) return combineCore(t, sheets);
+  const others = sheets.filter(s => !s.sheet.photometric);
+  const photoEntry = (s: SheetCountInput, reason: string): TypeSheetCount => {
+    const count = s.status === 'counted' ? s.placed.filter(p => p.typeKey === t.key).length : 0;
+    return { sheetKey: s.sheet.key, label: s.sheet.label, count, used: false, eligible: false, ...(count > 0 ? { ignoredReason: reason } : {}) };
+  };
+  const base = combineCore(t, others);
+  if (!isSiteFixtureCategory(t.category)) {
+    base.sheets.push(...photo.map(s => photoEntry(s, 'only site fixture types are taken from a photometric sheet')));
+    return base;
+  }
+  const photoHas = photo.some(s => s.status === 'counted' && s.placed.some(p => p.typeKey === t.key));
+  if (base.count > 0 || !photoHas || base.allowedFailed.length || base.unreadableOn.length) {
+    base.sheets.push(...photo.map(s => photoEntry(s, "the electrical plans' count is used — a photometric sheet is never stacked on them")));
+    return base;
+  }
+  const role = preferredRole(t.category);
+  const alt = combineCore(t, photo.map(s => ({ ...s, sheet: { ...s.sheet, role } })));
+  const used = alt.sheets.filter(x => x.used).map(x => x.label);
+  alt.sheets = [...base.sheets, ...alt.sheets];
+  alt.flags.push(`${t.type}: not shown on the electrical plans — ${alt.count} counted on the photometric sheet ${used.join(', ')}.`);
+  return { ...alt, ...(alt.count > 0 ? { photometricOnly: true } : {}) };
+}
+
+function combineCore(
   t: CountTarget,
   sheets: SheetCountInput[],
-): Pick<TypeCountResult, 'count' | 'sheets' | 'flags' | 'areaQuestion' | 'coverage'> & { allowedFailed: string[]; unreadableOn: string[] } {
+): CombineResult {
   const flags: string[] = [];
   const coverage: string[] = [];
   const counted = sheets.filter(s => s.status === 'counted');
@@ -422,6 +461,7 @@ export function mergeCountsIntoTakeoff(
       count: c.count, heads, status, reason, sheets: c.sheets, flags: c.flags,
       ...(c.areaQuestion && status === 'counted' ? { areaQuestion: c.areaQuestion } : {}),
       ...(c.coverage && status === 'counted' ? { coverage: c.coverage } : {}),
+      ...(c.photometricOnly && status === 'counted' ? { photometricOnly: true } : {}),
     });
     flags.push(...c.flags);
   }

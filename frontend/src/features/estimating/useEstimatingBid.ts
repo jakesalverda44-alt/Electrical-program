@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
-import { EstimateLine, EstimateSettings, EstimatingBidResponse, PricingRecap, SyncTakeoffResponse, EMPTY_RECAP, DEFAULT_SETTINGS } from './types';
+import { EstimateLine, EstimateSettings, EstimatingBidResponse, PricingRecap, SyncTakeoffResponse, EMPTY_RECAP, DEFAULT_SETTINGS, type DuplicatePair } from './types';
 
 const PRICE_DEBOUNCE_MS = 400;
 
@@ -23,6 +23,8 @@ export interface UseEstimatingBidResult {
   syncing: boolean;
   pricing: boolean;
   saveError: string | null;
+  /** Next round A7 — possible duplicates from the last GET / sync / refused save. */
+  duplicates: DuplicatePair[];
   /** Fix round 2 / SF3 — what's actually persisted in bid_estimates.grand_total;
    *  compare against recap.totals.grandTotal to detect drift from a library
    *  edit or calibration apply since the last save. null if never saved. */
@@ -80,6 +82,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
   const [syncing, setSyncing] = useState(false);
   const [pricing, setPricing] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [duplicates, setDuplicates] = useState<DuplicatePair[]>([]);
 
   const hydratedRef = useRef(false);
   // The last lines/settings the server actually priced/saved — dirty compares against this.
@@ -107,6 +110,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     setRecap(data.recap ?? EMPTY_RECAP);
     setProposed(!!data.proposed);
     setSavedGrandTotal(data.savedGrandTotal ?? null);
+    setDuplicates(Array.isArray(data.duplicates) ? data.duplicates : []);
     persistedRef.current = { lines, settings: nextSettings };
   }, [data]);
 
@@ -188,7 +192,12 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       // Fix round 2 / R2-S1 — see UseEstimatingBidResult.save's own doc.
       return res.remappedLineKeys ?? {};
     } catch (err) {
-      if (aliveRef.current) setSaveError(err instanceof Error ? err.message : 'Save failed');
+      const body = (err as { response?: { status?: number; data?: { error?: string; duplicates?: DuplicatePair[] } } })?.response;
+      if (aliveRef.current) {
+        // Next round A7 — a refused save names the possible duplicates.
+        if (body?.status === 409 && Array.isArray(body.data?.duplicates)) setDuplicates(body.data!.duplicates!);
+        setSaveError(body?.data?.error ?? (err instanceof Error ? err.message : 'Save failed'));
+      }
       throw err;
     } finally {
       if (aliveRef.current) setSaving(false);
@@ -217,6 +226,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       if (!aliveRef.current) return null;
       setLinesState(res.lines);
       setRecap(res.recap);
+      setDuplicates(Array.isArray(res.duplicates) ? res.duplicates : []);
       // sync-takeoff writes to est_bid_lines directly — the bid now has saved
       // lines regardless of whether it did before.
       setProposed(false);
@@ -239,7 +249,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
 
   return {
     loading: initialLoading && !hydratedRef.current,
-    lines, settings, recap, proposed, dirty, saving, syncing, pricing, saveError, savedGrandTotal,
+    lines, settings, recap, proposed, dirty, saving, syncing, pricing, saveError, savedGrandTotal, duplicates,
     setLines, setSettings, save, syncTakeoff, reload, rehydrate, installSaved,
   };
 }

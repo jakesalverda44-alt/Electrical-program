@@ -34,12 +34,14 @@ describe('selectCountSheets — which pages are counted (Decision 7)', () => {
   ]);
   it('counts only electrical/fuel plan pages', () => {
     expect(sel.counted.map(s => `${s.sheetNo}:${s.role}:${s.focus}`)).toEqual([
-      'E-1:site:combined', 'E-3:building:lighting', 'E-3.1:enlarged:lighting', 'F-1:building:power',
+      'E-1:site:combined', 'E-3:building:lighting', 'PH0.1:site:lighting', 'E-3.1:enlarged:lighting', 'F-1:building:power',
     ]);
+    // Next round A3 — the photometric SITE PLAN is counted, as a site-types-only fallback.
+    expect(sel.counted.find(s => s.sheetNo === 'PH0.1')!.photometric).toBe(true);
   });
-  it('never counts photometric, calculation, schedule or detail sheets — with the reason recorded', () => {
+  it('never counts calculation, schedule or detail sheets — with the reason recorded', () => {
     const reasons = Object.fromEntries(sel.skipped.map(s => [s.label.split(' ')[0], s.reason]));
-    expect(reasons['PH0.1']).toMatch(/photometric/);
+    expect(reasons['PH0.1']).toBeUndefined();
     expect(reasons['E-5']).toMatch(/photometric/);
     expect(reasons['E-0.1']).toMatch(/schedule sheet/);
     expect(reasons['E-7']).toMatch(/detail sheet/);

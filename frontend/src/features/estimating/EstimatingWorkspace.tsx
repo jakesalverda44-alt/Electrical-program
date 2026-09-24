@@ -8,7 +8,7 @@ import { EstimateShell, SaveState } from './EstimateShell';
 import { BidSummary, ComparableForSummary } from './BidSummary';
 import { LaborPricingStep } from './LaborPricingStep';
 import { EstimateStepKey } from './steps';
-import { EstimateLine, EstimateSettings, PricingRecap } from './types';
+import { type DuplicatePair, EstimateLine, EstimateSettings, PricingRecap } from './types';
 
 export interface EstimatingWorkspaceProps {
   currentStep: EstimateStepKey;
@@ -17,6 +17,9 @@ export interface EstimatingWorkspaceProps {
   saveState: SaveState;
   nextAction: { label: string; onClick: () => void } | null;
 
+  /** Next round B2/B3 — mounts the Accubid-mode Crew/Quotes/Equipment/GE/
+   *  Alternates panel when settings.pricing_mode === 'accubid'. */
+  bidId?: string;
   lines: EstimateLine[];
   settings: EstimateSettings;
   recap: PricingRecap;
@@ -29,6 +32,8 @@ export interface EstimatingWorkspaceProps {
   saving: boolean;
   syncing: boolean;
   saveError: string | null;
+  /** Next round A7 — possible duplicates (Labor & Pricing blocks the save). */
+  duplicates?: DuplicatePair[];
   setLines: (updater: EstimateLine[] | ((prev: EstimateLine[]) => EstimateLine[])) => void;
   setSettings: (updater: EstimateSettings | ((prev: EstimateSettings) => EstimateSettings)) => void;
   // Fix round 2 / R2-S1 — widened from Promise<void>: useEstimatingBid's
@@ -62,8 +67,8 @@ export interface EstimatingWorkspaceProps {
 }
 
 export default function EstimatingWorkspace({
-  currentStep, onSelectStep, doneByStep, saveState, nextAction,
-  lines, settings, recap, proposed, dirty, savedGrandTotal, saving, syncing, saveError, setLines, setSettings, save, syncTakeoff, showToast,
+  currentStep, onSelectStep, doneByStep, saveState, nextAction, bidId,
+  lines, settings, recap, proposed, dirty, savedGrandTotal, saving, syncing, saveError, duplicates, setLines, setSettings, save, syncTakeoff, showToast,
   comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary,
   linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys,
 }: EstimatingWorkspaceProps) {
@@ -94,12 +99,14 @@ export default function EstimatingWorkspace({
     >
       {currentStep === 'pricing' ? (
         <LaborPricingStep
+          bidId={bidId}
           lines={lines}
           settings={settings}
           recap={recap}
           saving={saving}
           syncing={syncing}
           saveError={saveError}
+          duplicates={duplicates}
           dirty={dirty}
           setLines={setLines}
           setSettings={setSettings}

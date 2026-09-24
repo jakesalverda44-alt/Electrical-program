@@ -11,10 +11,11 @@
 //     and land in Needs review, which blocks the proposal until resolved.
 import type Anthropic from '@anthropic-ai/sdk';
 import { buildCountTargets, type CountTarget } from './countTargets';
+import { counterTileSpec, retryTileIn, type ModelImageLimits } from './modelLimits';
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
 import { readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry } from './countRender';
 import { runCounter, type SheetCountResult } from './counter';
-import { mergeCountsIntoTakeoff, type CountMergeResult } from './countMerge';
+import { mergeCountsIntoTakeoff, isSiteFixtureCategory, type CountMergeResult } from './countMerge';
 import { logger } from '../utils/logger';
 
 export const COUNT_RESULT_VERSION = 2;
@@ -37,6 +38,8 @@ export interface CountResultSheet {
   rejected: number;
   notes: string[];
   unreadable: SheetCountResult['unreadable'];
+  /** Next round A5 — the dense-area retry, both passes. */
+  retry?: SheetCountResult['retry'];
 }
 
 /** One counted symbol, in PDF points on its page (est_markups space). */
@@ -75,7 +78,7 @@ export interface CountingStageInput {
   pdfs: Map<string, Buffer>;
   /** Stop analysis — see CounterRunInput. */
   shouldStop?: () => boolean;
-  onProgress?: (done: number, total: number) => void;
+  onProgress?: (done: number, total: number, phase?: 'retry') => void;
 }
 
 export interface CountingStageOutput {
@@ -116,6 +119,7 @@ function finish(
       status: r.status, ...(r.error ? { error: r.error } : {}),
       calls: r.calls, tiles: r.tiles, geometryOk: r.geometryOk, geometry: r.geometry,
       mergedDuplicates: r.mergedDuplicates, rejected: r.rejected.length, notes: r.notes, unreadable: r.unreadable,
+      ...(r.retry ? { retry: r.retry } : {}),
     })),
     skippedSheets,
     types: merged.types,
@@ -155,22 +159,111 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
   }
 
   const selection = selectCountSheets(input.inventory);
+  // Next round A3 — a photometric sheet is only worth a counter call when
+  // there are site / exterior fixture types to look for.
+  if (!targets.some(t => isSiteFixtureCategory(t.category))) {
+    for (const s of selection.counted.filter(c => c.photometric)) {
+      selection.skipped.push({ file: s.file, page: s.page, label: s.label, reason: 'photometric sheet — no site fixture types to count' });
+    }
+    selection.counted = selection.counted.filter(c => !c.photometric);
+  }
   if (selection.counted.length === 0) {
     const { agent1, countResult } = finish(input, targets, targetNotes, [], selection.skipped, false,
       'no electrical plan sheets were found in the upload to count on');
     return { agent1, countResult, usage: { ...ZERO_USAGE } };
   }
 
-  // Render sequentially (one 300 DPI raster in memory at a time); keep only
-  // the JPEG tiles for the calls.
-  const rendered: Array<{ sheet: CountSheet; rendered: RenderedCountPage | null; renderError?: string }> = [];
+  // A truncated call throws AgentTruncatedError out of here (the run fails);
+  // every other per-sheet failure is recorded on that sheet by runCounter.
+  const run = await countSheets(input, targets, selection.counted, input.onProgress);
+  const { agent1, countResult } = finish(input, targets, targetNotes, run.sheets, selection.skipped, true, undefined);
+  return { agent1, countResult, usage: run.usage };
+}
+
+type RenderedSheet = { sheet: CountSheet; rendered: RenderedCountPage | null; renderError?: string };
+
+function countsByType(placed: Array<{ typeKey: string }>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const p of placed) out[p.typeKey] = (out[p.typeKey] ?? 0) + 1;
+  return out;
+}
+
+/** Next round A5 — render + count a set of sheets with tiles sized to the
+ *  counter model (modelLimits.ts), then the dense-area retry: a sheet that
+ *  came back with symbols it could not read reliably is counted ONCE more
+ *  at a higher effective resolution (smaller tiles). The retry's counts are
+ *  used when it succeeds; both passes are kept on the sheet. */
+export async function countSheets(
+  input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop'>,
+  targets: CountTarget[],
+  sheets: CountSheet[],
+  onProgress?: (done: number, total: number, phase?: 'retry') => void,
+): Promise<{ sheets: SheetCountResult[]; usage: CountingStageOutput['usage'] }> {
+  const spec = counterTileSpec(input.model);
+  const run = await runCounter({
+    client: input.client, model: input.model, maxTokens: input.maxTokens, targets,
+    sheets: await renderSheets(sheets, input.pdfs, { limits: spec.limits, tileIn: spec.tileIn }),
+    shouldStop: input.shouldStop, onProgress,
+  });
+  const dense = run.sheets.filter(r => r.status === 'counted' && r.unreadable.length > 0);
+  if (!dense.length || input.shouldStop?.()) return run;
+  // Fix round S2 — once per sheet, only for the types it could not read:
+  // every other type keeps the first pass's count (a different tile grid
+  // must not silently change a count that was read fine).
+  const flaggedBy = new Map(dense.map(d => [d.sheet.key, new Set(d.unreadable.map(u => u.typeKey))]));
+  const flaggedAll = new Set([...flaggedBy.values()].flatMap(x => [...x]));
+  const tileIn = retryTileIn(spec.tileIn, spec.limits);
+  logger.info({ sheets: dense.map(d => d.sheet.label), types: [...flaggedAll], tileIn }, '[counting] dense-area retry at a higher resolution');
+  const again = await runCounter({
+    client: input.client, model: input.model, maxTokens: input.maxTokens, targets: targets.filter(t => flaggedAll.has(t.key)),
+    sheets: await renderSheets(dense.map(d => d.sheet), input.pdfs, { limits: spec.limits, tileIn }),
+    shouldStop: input.shouldStop,
+    onProgress: onProgress ? (d, t) => onProgress(d, t, 'retry') : undefined,
+  });
+  for (const k of Object.keys(run.usage) as Array<keyof typeof run.usage>) run.usage[k] += again.usage[k];
+  run.sheets = run.sheets.map(r => {
+    if (!dense.includes(r)) return r;
+    const flagged = flaggedBy.get(r.sheet.key)!;
+    const a = again.sheets.find(x => x.sheet.key === r.sheet.key);
+    const firstCounts = countsByType(r.placed.filter(p => flagged.has(p.typeKey)));
+    const base = {
+      firstTileIn: spec.tileIn, tileIn,
+      firstCounts,
+      firstUnreadable: [...flagged],
+    };
+    if (a && a.status === 'counted') {
+      const retryPlaced = a.placed.filter(p => flagged.has(p.typeKey));
+      const retryCounts = countsByType(retryPlaced);
+      const lower = [...flagged].filter(k => (retryCounts[k] ?? 0) < (firstCounts[k] ?? 0))
+        .map(k => ({ typeKey: k, first: firstCounts[k] ?? 0, retry: retryCounts[k] ?? 0 }));
+      const diff = [...flagged].filter(k => (firstCounts[k] ?? 0) !== (retryCounts[k] ?? 0))
+        .map(k => `${k} ${firstCounts[k] ?? 0}→${retryCounts[k] ?? 0}`);
+      return {
+        ...r,
+        placed: [...r.placed.filter(p => !flagged.has(p.typeKey)), ...retryPlaced],
+        unreadable: a.unreadable.filter(u => flagged.has(u.typeKey)),
+        mergedDuplicates: r.mergedDuplicates + a.mergedDuplicates,
+        calls: r.calls + a.calls,
+        retry: { ...base, retryCounts, used: 'retry' as const, ...(lower.length ? { lower } : {}) },
+        notes: [...r.notes, `Re-counted ${[...flagged].join(', ')} at a higher resolution (${tileIn}" tiles; first pass ${spec.tileIn}") because they could not be read reliably${diff.length ? ` — ${diff.join(', ')}` : ' — same counts'}.`],
+      };
+    }
+    return { ...r, retry: { ...base, retryCounts: {}, used: 'first' as const, error: a?.error ?? 'the retry could not run' } };
+  });
+  return run;
+}
+
+/** Render sequentially (one 300 DPI raster in memory at a time); keep only
+ *  the JPEG tiles for the calls. */
+async function renderSheets(sheetsIn: CountSheet[], pdfs: Map<string, Buffer>, opts: { limits?: ModelImageLimits; tileIn?: number } = {}): Promise<RenderedSheet[]> {
+  const rendered: RenderedSheet[] = [];
   const byFile = new Map<string, CountSheet[]>();
-  for (const s of selection.counted) {
+  for (const s of sheetsIn) {
     if (!byFile.has(s.file)) byFile.set(s.file, []);
     byFile.get(s.file)!.push(s);
   }
   for (const [file, sheets] of byFile) {
-    const pdf = input.pdfs.get(file);
+    const pdf = pdfs.get(file);
     let geo = new Map<number, PageGeometry>();
     let geoError = '';
     if (pdf) {
@@ -183,17 +276,96 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
         continue;
       }
       try {
-        rendered.push({ sheet: s, rendered: await renderCountTiles(pdf, s.page, g) });
+        rendered.push({ sheet: s, rendered: await renderCountTiles(pdf, s.page, g, opts) });
       } catch (err) {
         logger.warn({ err, sheet: s.label }, '[counting] render failed');
         rendered.push({ sheet: s, rendered: null, renderError: `could not be rendered for counting: ${err instanceof Error ? err.message : String(err)}` });
       }
     }
   }
-
-  // A truncated call throws AgentTruncatedError out of here (the run fails);
-  // every other per-sheet failure is recorded on that sheet by runCounter.
-  const run = await runCounter({ client: input.client, model: input.model, maxTokens: input.maxTokens, targets, sheets: rendered, shouldStop: input.shouldStop, onProgress: input.onProgress });
-  const { agent1, countResult } = finish(input, targets, targetNotes, run.sheets, selection.skipped, true, undefined);
-  return { agent1, countResult, usage: run.usage };
+  return rendered;
 }
+
+// ── Next round A4 — the supplement pass ─────────────────────────────────────
+
+export interface SupplementCountingInput extends CountingStageInput {
+  /** The run's count result before the supplement. */
+  prior: CountResult;
+  /** The run's page inventory before the supplement (prep_inventory). */
+  priorInventory: InventoryPage[];
+  /** Files the supplement added (their pages are counted for every type). */
+  newFiles: Set<string>;
+}
+
+/** Pure: an earlier sheet's result, rebuilt from the stored count result
+ *  (status, the placed marks and what was unreadable) — never re-counted. */
+export function priorSheetResult(sheet: CountSheet, prior: CountResult): SheetCountResult {
+  const stored = prior.sheets.find(x => x.key === sheet.key);
+  const placed = prior.marks.filter(m => m.sheetKey === sheet.key).map(m => ({ typeKey: m.typeKey, tileIds: [], x: m.x, y: m.y }));
+  return {
+    sheet,
+    status: stored?.status ?? 'failed',
+    ...(stored?.error ? { error: stored.error } : !stored ? { error: 'not counted in the earlier pass' } : {}),
+    geometryOk: stored?.geometryOk ?? false,
+    geometry: stored?.geometry ?? null,
+    placed,
+    mergedDuplicates: stored?.mergedDuplicates ?? 0,
+    unreadable: [...(stored?.unreadable ?? [])],
+    rejected: [],
+    notes: [...(stored?.notes ?? [])],
+    calls: stored?.calls ?? 0,
+    tiles: stored?.tiles ?? 0,
+  };
+}
+
+/** Counting after a supplement pass (a referenced sheet uploaded after the
+ *  run): only what the new sheets can change is counted —
+ *    * every type on the NEW plan sheets;
+ *    * types that are NEW (the added sheet carried schedule rows the run had
+ *      not seen) on the earlier sheets, when their PDFs are available —
+ *      otherwise those types are marked unreadable there (never assumed 0);
+ *  every other count comes from the earlier pass unchanged. Then the one
+ *  merge runs over all of it. */
+export async function runSupplementCounting(input: SupplementCountingInput): Promise<CountingStageOutput> {
+  const { targets, notes: targetNotes } = buildCountTargets(input.agent1);
+  if (targets.length === 0) return runCountingStage(input);
+  const priorKeys = new Set(input.prior.targets.map(t => t.key));
+  const newTargets = targets.filter(t => !priorKeys.has(t.key));
+  const selection = selectCountSheets([...input.priorInventory.filter(p => !input.newFiles.has(p.file)), ...input.inventory.filter(p => input.newFiles.has(p.file))]);
+  const isNew = (s: CountSheet) => input.newFiles.has(s.file);
+  const newSheets = selection.counted.filter(isNew);
+  const oldSheets = selection.counted.filter(s => !isNew(s));
+  const usage = { ...ZERO_USAGE };
+  const add = (u: typeof usage) => { for (const k of Object.keys(usage) as Array<keyof typeof usage>) usage[k] += u[k]; };
+
+  const results: SheetCountResult[] = oldSheets.map(s => priorSheetResult(s, input.prior));
+  if (newSheets.length) {
+    const run = await countSheets(input, targets, newSheets, input.onProgress);
+    add(run.usage);
+    results.push(...run.sheets);
+  }
+  if (newTargets.length && oldSheets.length) {
+    const available = oldSheets.filter(s => input.pdfs.has(s.file));
+    const run = available.length
+      ? await countSheets(input, newTargets, available)
+      : { sheets: [] as SheetCountResult[], usage: { ...ZERO_USAGE } };
+    add(run.usage);
+    for (const r of results.filter(x => !isNew(x.sheet))) {
+      const again = run.sheets.find(x => x.sheet.key === r.sheet.key);
+      if (again && again.status === 'counted') {
+        r.placed.push(...again.placed);
+        r.unreadable.push(...again.unreadable);
+      } else if (r.status === 'counted') {
+        const why = again?.error ?? 'its PDF was not available to the supplement pass';
+        r.unreadable.push(...newTargets.map(t => ({ typeKey: t.key, tileId: null, note: `new type not re-read on this sheet: ${why}` })));
+      }
+    }
+  }
+  const { agent1, countResult } = finish(input, targets, targetNotes, results, selection.skipped, true, undefined);
+  // Rows the earlier merge held as unscheduled are gone from the takeoff
+  // already — keep them held (review items), never dropped by a re-merge.
+  const seen = new Set(countResult.removedRows.map(r => JSON.stringify(r.row)));
+  countResult.removedRows = [...countResult.removedRows, ...input.prior.removedRows.filter(r => !seen.has(JSON.stringify(r.row)))];
+  return { agent1, countResult, usage };
+}
+

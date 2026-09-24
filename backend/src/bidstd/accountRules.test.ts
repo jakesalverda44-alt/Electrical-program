@@ -76,11 +76,17 @@ describe('normalizeParty', () => {
 
 describe('resolveAccountTerms — power poles (ask) with and without a drawing statement', () => {
   const a1 = kissimmeeAgent1();
-  it('E-2 states GC furnishes, installs and hard-wires: taken from the drawings, cited, no question', () => {
+  it('E-2 says "BY GC": Decision 4 — by G.C. is APT scope; the pole term is still asked (AutoZone asks), with APT pre-filled', () => {
     const snap = resolveAccountTerms(AUTOZONE, 'brand', a1.furnishStatements, false);
-    const poles = snap.resolved.find(t => t.term === 'power_poles')!;
-    expect(poles).toEqual({ term: 'power_poles', furnishBy: 'GC', installBy: 'GC', source: 'drawings', citation: { sheet: 'E-2', quote: 'POWER POLES FURNISHED, INSTALLED AND HARD-WIRED BY GC.' } });
-    expect(snap.questions).toEqual([]);
+    expect(snap.resolved.find(t => t.term === 'power_poles')).toBeUndefined();
+    expect(snap.questions.map(q => [q.half, q.suggested])).toEqual([['furnish', 'APT'], ['install', 'APT']]);
+    expect(snap.questions[0].notes).toEqual([
+      'E-2: "POWER POLES FURNISHED, INSTALLED AND HARD-WIRED BY GC."',
+      'The drawings say "by G.C." — on electrical drawings that is APT scope (the GC subcontracts the electrical to APT), so APT is pre-filled.',
+    ]);
+    // Accepting the pre-fill: APT furnishes and installs.
+    expect(applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'APT', 'scope:power_poles:install': 'APT' }).find(t => t.term === 'power_poles'))
+      .toMatchObject({ furnishBy: 'APT', installBy: 'APT', source: 'estimator' });
   });
   it('no statement: a scope question with the AI\'s notes; the answer then drives the term', () => {
     const snap = resolveAccountTerms(AUTOZONE, 'brand', [], false, () => ['AI count: 8 × Retail power pole (E-2)']);
@@ -170,10 +176,12 @@ describe('enforceAccountTerms — the Kissimmee scope errors are corrected, ever
   it('no MDP on the drawings: the MDP phrase is removed from the service entrance bullet', () => {
     expect(bullets('A.')[0]).toBe('Furnish and install service entrance assembly (ECFECI), fed by the utility pad-mount transformer.');
   });
-  it('power poles (GC furnishes, installs, hard-wires per E-2): the APT install bullet and takeoff line are removed, an exclusion added', () => {
-    expect(bullets('D.')).toEqual(['Site pole bases and underground conduit per E-1.']);
-    expect(r.output.takeoff!.find(c => c.name === 'Branch Power')!.items).toEqual([]);
-    expect(r.output.exclusions).toContain('Power poles furnished and installed by the GC.');
+  it('power poles "BY GC" per E-2 (Decision 4): APT scope — the poles are kept and priced, never excluded', () => {
+    const answered = enforceAccountTerms(kissimmeeAgent4(), snap, applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'APT', 'scope:power_poles:install': 'APT' }));
+    expect(answered.output.takeoff!.find(c => c.name === 'Branch Power')!.items!.map(i => i.item)).toEqual(['Power pole']);
+    expect((answered.output.exclusions ?? []).join(' ')).not.toMatch(/power poles.*by the GC/i);
+    // Until answered, the poles are left exactly as Agent 4 wrote them.
+    expect(r.output.takeoff!.find(c => c.name === 'Branch Power')!.items!.map(i => i.item)).toEqual(['Power pole']);
   });
   it('takeoff furnish_by per term; (ECFECI) stripped from owner-furnished panels; disconnects stay APT', () => {
     const sd = r.output.takeoff!.find(c => c.name === 'Service & Distribution')!.items!;
@@ -189,8 +197,8 @@ describe('enforceAccountTerms — the Kissimmee scope errors are corrected, ever
   it('logs every correction', () => {
     expect(r.corrections.some(c => c.startsWith('Section C lighting bullet replaced'))).toBe(true);
     expect(r.corrections.some(c => c.startsWith('MDP language removed'))).toBe(true);
-    expect(r.corrections.some(c => c.startsWith('Removed from D. Site Lighting'))).toBe(true);
-    expect(r.corrections.some(c => c.startsWith('Removed takeoff line "Power pole"'))).toBe(true);
+    // Decision 4 — nothing about the "by GC" poles is removed.
+    expect(r.corrections.some(c => c.startsWith('Removed takeoff line "Power pole"'))).toBe(false);
   });
   it('the input object is never mutated', () => {
     const input = kissimmeeAgent4();
@@ -235,10 +243,11 @@ describe('rendering', () => {
       '- Lighting fixtures: furnished by the Owner through the Graybar national account; installed by APT. Never tag these (ECFECI).',
       '- Panelboards: furnished by the Owner; installed by APT. Never tag these (ECFECI).',
       '- Disconnects / safety switches: furnished and installed by APT. Tag these (ECFECI).',
-      '- Power poles: furnished and installed by the GC. [per E-2: "POWER POLES FURNISHED, INSTALLED AND HARD-WIRED BY GC."] Never tag these (ECFECI).',
       '- Section C bullet 1 must read exactly: "Lighting fixtures furnished by the Owner through the Graybar national account. EC to receive, inventory, and install all fixtures per schedule."',
+      '- Power poles: NOT YET DECIDED — do not state who furnishes or installs them.',
       '- There is NO MDP on the drawings: never write "MDP" or "main distribution panel".',
       '- Never write: "Southern Lighting Source", "Complete lighting package (ECFECI)", "Distribution gear (ECFECI)", " MDP", "main distribution panel".',
+      `- ${GC_MEANS_APT_RULE}`,
     ]);
   });
 });
@@ -350,9 +359,7 @@ describe('S6 — an answered question is rendered as decided, never also "NOT YE
 
 describe('S7 — drawing statements: furnish and install parsed separately, multi-word parties', () => {
   it.each([
-    ['POWER POLES FURNISHED BY GC, INSTALLED AND WIRED BY EC.', 'GC', 'APT'],
     ['FURNISHED AND INSTALLED BY OWNER', 'Owner', 'Owner'],
-    ['F&I BY GC', 'GC', 'GC'],
     ['BY EQUIPMENT VENDOR', 'Vendor', 'Vendor'],
     ['BY OTHERS', 'Others', 'Others'],
     ['FURNISHED BY THE EQUIPMENT VENDOR, INSTALLED BY EC', 'Vendor', 'APT'],
@@ -360,11 +367,19 @@ describe('S7 — drawing statements: furnish and install parsed separately, mult
   ])('%s', (quote, f, i) => {
     expect(parseStatementParties('', '', quote)).toEqual({ furnish: f, install: i });
   });
-  it('the review repro: "FURNISHED BY GC, INSTALLED AND WIRED BY EC" is GC / APT, not GC / GC', () => {
+  it('Decision 4 — the drawings reader takes "by GC" as APT and remembers which half said GC', () => {
+    expect(parseStatementParties('', '', 'POWER POLES FURNISHED BY GC, INSTALLED AND WIRED BY EC.'))
+      .toEqual({ furnish: 'APT', install: 'APT', viaGc: { furnish: true, install: false } });
+    expect(parseStatementParties('', '', 'F&I BY GC')).toEqual({ furnish: 'APT', install: 'APT', viaGc: { furnish: true, install: true } });
+    expect(parseStatementParties('', '', 'SIMPLEX RECEPTACLE, G.C. FURNISHED/INSTALLED')).toEqual({ furnish: 'APT', install: 'APT', viaGc: { furnish: true, install: true } });
+    // Our own scope text keeps GC as GC (an estimator's GC answer is real).
+    expect(parseStatementPartiesRaw('', '', 'F&I BY GC')).toEqual({ furnish: 'GC', install: 'GC' });
+  });
+  it('the review repro: "FURNISHED BY GC, INSTALLED AND WIRED BY EC" — install APT from the drawings; furnish asked with APT pre-filled', () => {
     const snap = resolveAccountTerms(AUTOZONE, 'brand', [
       { item: 'Power poles', furnishBy: '', installBy: '', sourceSheet: 'E-2', quote: 'POWER POLES FURNISHED BY GC, INSTALLED AND WIRED BY EC.' },
     ], false);
-    expect(snap.resolved.find(t => t.term === 'power_poles')).toMatchObject({ furnishBy: 'GC', installBy: 'APT', source: 'drawings' });
+    expect(snap.questions.map(q => [q.half, q.suggested, q.known?.installBy])).toEqual([['furnish', 'APT', 'APT']]);
   });
   it('a drawing that gives only one half asks only the other', () => {
     const snap = resolveAccountTerms(AUTOZONE, 'brand', [
@@ -427,7 +442,8 @@ describe('N9 — look-alikes are not the term', () => {
 });
 
 // ── Fix round 2 ─────────────────────────────────────────────────────────────
-import { statedParties, scopeStatementFor } from './accountRules';
+import { statedParties, scopeStatementFor, parseStatementPartiesRaw } from './accountRules';
+import { GC_MEANS_APT_RULE } from './tradeAssignment';
 
 describe('S-R2-2 / S-R2-3 / N-R2-4 — pole statements after the answers', () => {
   const snap = resolveAccountTerms(AUTOZONE, 'brand', [], false);

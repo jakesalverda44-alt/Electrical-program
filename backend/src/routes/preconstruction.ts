@@ -38,22 +38,25 @@ import { parsePrebidScope } from '../utils/prebidScopeParse';
 import { parseAccubidBreakdown } from '../utils/accubidParse';
 import { storeDocument } from '../utils/storeDocument';
 import { mergeAgent1Batches } from '../ai/mergeAgent1';
+import { runBatchesInOrder, AGENT1_CONCURRENCY } from '../ai/agent1Batching';
 import { buildAgent4UserMessage, isAgent4Shape, Agent4Output } from '../ai/agent4Message';
 import { parseMoney } from '../utils/money';
 import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
-import { runCountingStage, type CountResult } from '../ai/countingStage';
+import { runCountingStage, runSupplementCounting, type CountResult } from '../ai/countingStage';
+import { normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
-import { writeAiCountMarkers } from '../estimating/aiMarkers';
-import { buildReviewItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
-import { takeoffGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
+import { writeAiCountMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
+import { buildReviewItems, referencedSheetItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
+import { takeoffGate, budgetPendingGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
 import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
 import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey, overrideFor } from '../bidstd/scopeList';
 import { getBidScopeList } from '../bidstd/scopeListDb';
 import { ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
 import { composeProposal } from '../bidstd/composeProposal';
+import { getAlternates, getQuotes } from '../estimating/accubidBidData';
 import { resolveUniqueJobNumber } from '../bidstd/boilerplate';
 import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
 import { renderPrebidScopeDocx, prebidScopeFilename } from '../bidstd/prebidScopeDocx';
@@ -62,6 +65,7 @@ import { BidData } from '../bidstd/bidData';
 import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
 import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
 import { resetForRerun, type RerunResetSummary } from '../services/rerunReset';
+import { planSheetsForRun, loadSheetCheck, skippedClarifications, buildInventory, pageContentHash, resolveRefsAfterSupplement, type FileSheetPlan, type SupplementPlanOptions, type CheckedPage } from '../services/sheetCheck';
 import { registerRun, abortableClient, abortRuns, isCancellationError, RunCancelledError, runSignalOf } from '../ai/runControl';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
@@ -79,6 +83,9 @@ export interface AIConfig {
   modelClassifier: string;
   /** Takeoff accuracy — the dedicated counting stage (Agent 1C). */
   modelCounter: string;
+  /** Next round A2 — Sonnet vision reads a scanned sheet's notes region for
+   *  references (setting ai_sheet_refs_vision_model). */
+  modelRefVision: string;
   maxTokensCounter: number;
   maxTokensA1: number;
   maxTokensA2: number;
@@ -118,7 +125,7 @@ export async function loadAIConfig(): Promise<AIConfig> {
     temperatureSetting,
     promptA1Setting, promptA2Setting, promptA3Setting, promptA4Setting,
     dpiScheduleSetting, dpiPlanSetting, tilesScheduleSetting, tilesPlanSetting,
-    modelCounterSetting, maxCounterSetting,
+    modelCounterSetting, maxCounterSetting, modelRefVisionSetting,
   ] = await Promise.all([
     getSetting('ai_model'),
     getSetting('ai_takeoff_agent2_model'),
@@ -140,6 +147,7 @@ export async function loadAIConfig(): Promise<AIConfig> {
     getSetting('ai_prep_tiles_plan'),
     getSetting('ai_takeoff_counter_model'),
     getSetting('ai_max_tokens_counter'),
+    getSetting('ai_sheet_refs_vision_model'),
   ]);
   const defaultModel = (process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim();
   return {
@@ -149,6 +157,7 @@ export async function loadAIConfig(): Promise<AIConfig> {
     modelA4: (modelA4Setting || 'claude-sonnet-4-6'),
     modelClassifier: (modelClassifierSetting || 'claude-haiku-4-5-20251001'),
     modelCounter: ((modelCounterSetting || '').trim() || DEFAULT_COUNTER_MODEL),
+    modelRefVision: ((modelRefVisionSetting || '').trim() || 'claude-sonnet-4-6'),
     maxTokensCounter: parseNumberSetting(maxCounterSetting || '', DEFAULT_MAX_TOKENS_COUNTER, 1024, 128000),
     maxTokensA1: parseNumberSetting(maxA1Setting || '', DEFAULT_MAX_TOKENS_A1, 256, 64000),
     maxTokensA2: parseNumberSetting(maxA2Setting || '', DEFAULT_MAX_TOKENS_A2, 256, 64000),
@@ -296,6 +305,12 @@ interface PrepInventoryEntry {
    *  non-electrical discipline), so a low-fidelity/zero-content run is visible
    *  in the inventory instead of a silent per-page `included: false`. */
   reason?: string;
+  /** Next round A1/A3 — how the sheet check placed this page: analysed,
+   *  sent as a reference page (context only, not counted — except a
+   *  photometric / site sheet for site fixture types), or left out. */
+  role?: 'analysis' | 'reference' | 'excluded';
+  /** "E-7 note 3" — where a reference page was referenced from. */
+  referencedBy?: string[];
 }
 
 /** FIX-2 (phase 2 post-review) — per-PDF Stage 0 prep result. Classification,
@@ -341,8 +356,28 @@ async function prepOnePdf(
   client: Anthropic,
   classifierModel: string,
   buffer: Buffer,
-  filename: string
+  filename: string,
+  plan?: FileSheetPlan,
 ): Promise<PdfPrepResult> {
+  // Next round A1 — the sheet check already classified this file (cached by
+  // content hash) and decided every page's role: no second classifier call.
+  if (plan && plan.classifications.length) {
+    const pageTexts = plan.pageTexts;
+    const selection: PdfPageSelection[] = [];
+    const inventory: PrepInventoryEntry[] = plan.classifications.map(c => {
+      const r = plan.roles.get(c.page) ?? { role: 'excluded' as const, reason: 'not placed by the sheet check' };
+      if (r.role !== 'excluded') {
+        selection.push({ page: c.page, label: formatSheetLabel(c.sheetNo, c.title, `${filename} p${c.page}`), cls: r.role === 'reference' ? 'reference' : c.cls });
+      }
+      return {
+        file: filename, page: c.page, sheetNo: c.sheetNo, title: c.title, discipline: c.discipline, cls: c.cls,
+        included: r.role !== 'excluded', textChars: pageTexts[c.page - 1]?.length ?? 0, classified: c.discipline !== 'unknown',
+        role: r.role, reason: r.reason, ...(r.referencedBy?.length ? { referencedBy: r.referencedBy } : {}),
+      };
+    });
+    const dropFile = selection.length === 0;
+    return { filename, buffer, pageTexts, pages: selection, revivedPages: selection, dropFile, inventory, usage: NO_USAGE };
+  }
   let pageTexts: string[] = [];
   if (await isPdftotextAvailable()) {
     try {
@@ -441,7 +476,8 @@ async function prepareAgent1Upload(
   filesToSend: Express.Multer.File[],
   client: Anthropic,
   classifierModel: string,
-  tileOverrides: TileSettingsOverrides
+  tileOverrides: TileSettingsOverrides,
+  plans: Map<string, FileSheetPlan> = new Map(),
 ): Promise<AgentUploadPrepResult> {
   const inventory: PrepInventoryEntry[] = [];
   const classifierUsage = { input_tokens: 0, output_tokens: 0 };
@@ -459,7 +495,7 @@ async function prepareAgent1Upload(
       });
       continue;
     }
-    const prep = await prepOnePdf(client, classifierModel, f.buffer, f.originalname);
+    const prep = await prepOnePdf(client, classifierModel, f.buffer, f.originalname, plans.get(crypto.createHash('sha256').update(f.buffer).digest('hex')));
     classifierUsage.input_tokens += prep.usage.input_tokens;
     classifierUsage.output_tokens += prep.usage.output_tokens;
     if (prep.pages === null) opaqueFallbacks.push(prep);
@@ -779,11 +815,26 @@ async function accountTermsBlockFor(bidId: string, stored: AccountTermsSnapshot 
 // ── Background pipeline ───────────────────────────────────────────────────────
 // Exported (takeoff accuracy) so integration tests can drive the real pipeline
 // with an injected fake Anthropic client — never a real API call from tests.
+/** Next round A4 — a supplement pass: the run's earlier state, into which
+ *  the new pages are analysed and counted (same run id). */
+export interface SupplementContext {
+  priorAgent1: Record<string, unknown>;
+  priorCount: CountResult | null;
+  priorInventory: PrepInventoryEntry[];
+  priorUsage: Record<string, unknown>;
+  /** The run's earlier input files, for counting NEW types on old sheets. */
+  oldFiles: Express.Multer.File[];
+  /** Fix round S3 — plan the new pages against the run (and skip pages
+   *  already in it). */
+  plan?: SupplementPlanOptions;
+}
+
 export async function runPipeline(
   bidId: string,
   files: Express.Multer.File[],
   client: Anthropic,
-  config: AIConfig
+  config: AIConfig,
+  opts: { supplement?: SupplementContext } = {},
 ): Promise<void> {
   // Stop analysis — every model call of this run carries the run's abort
   // signal (POST /:bidId/stop-analysis aborts it).
@@ -792,7 +843,7 @@ export async function runPipeline(
   const { rows: runRow } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
   const handle = registerRun(bidId, 'analysis', (runRow[0]?.run_id as string | null) ?? null);
   try {
-    await runPipelineStages(bidId, files, abortableClient(client, handle.signal), config, handle.signal, client);
+    await runPipelineStages(bidId, files, abortableClient(client, handle.signal), config, handle.signal, client, opts.supplement);
   } finally {
     handle.release();
   }
@@ -808,7 +859,14 @@ async function runPipelineStages(
    *  draft is its own job (own stop), so stopping an analysis that has
    *  just finished can never kill it. */
   draftClient: Anthropic,
+  supplement?: SupplementContext,
 ): Promise<void> {
+  const newFileNames = new Set(files.map(f => f.originalname));
+  // A4 — in a supplement pass the stored inventory / usage keep the run's
+  // earlier pages and cost; the new pages are added.
+  const storedInventory = (inv: PrepInventoryEntry[]) => supplement
+    ? [...supplement.priorInventory.filter(p => !newFileNames.has(p.file)), ...inv] : inv;
+  const storedUsage = (u: Record<string, unknown>) => supplement ? mergeUsage(supplement.priorUsage, u) : u;
   let agent1Output = '';
   let agent2Output = '';
   let agent3Output = '';
@@ -865,9 +923,14 @@ async function runPipelineStages(
     return true;
   };
   /** Live progress for the UI (takeoff_results.progress). Best effort. */
-  const setProgress = (stage: string, label: string, step: number | null = null, of: number | null = null) =>
-    guarded('UPDATE takeoff_results SET progress=$1 WHERE bid_id=$2',
-      [JSON.stringify({ stage, label, step, of, at: new Date().toISOString() }), bidId]).catch(() => {});
+  // Fix round N8 — progress writes are chained, so they land in the order
+  // they were made ("3 of 13" never overwritten by a late "2 of 13").
+  let progressChain: Promise<unknown> = Promise.resolve();
+  const setProgress = (stage: string, label: string, step: number | null = null, of: number | null = null) => {
+    const value = JSON.stringify({ stage, label, step, of, at: new Date().toISOString() });
+    progressChain = progressChain.then(() => guarded('UPDATE takeoff_results SET progress=$1 WHERE bid_id=$2', [value, bidId]).catch(() => {}));
+    return progressChain;
+  };
 
   // ── Agent 1 ─────────────────────────────────────────────────────────────────
   try {
@@ -903,9 +966,24 @@ async function runPipelineStages(
     // split, which had no relationship to how much content a call actually
     // carried. If Stage 0 prep fails outright for the whole upload, fall back
     // to a single legacy document-block call rather than losing the run.
+    // Next round A1 — the sheet check's page inventory and selection (cached
+    // by content hash: an unchanged file is not classified again), with the
+    // estimator's overrides and the reference pages it found.
+    let plans = new Map<string, FileSheetPlan>();
+    let planUsage = { ...NO_USAGE };
+    try {
+      const planned = await planSheetsForRun(bidId, filesToSend, client, config.modelClassifier, supplement?.plan);
+      plans = planned.plans;
+      planUsage = planned.usage;
+    } catch (err) {
+      if (isAgentTruncatedError(err) || isCancellationError(err) || signal.aborted) throw err;
+      logger.warn({ err, bidId }, '[takeoff] sheet check plan failed — pages are classified per file as before');
+    }
     let uploadPrep: AgentUploadPrepResult;
     try {
-      uploadPrep = await prepareAgent1Upload(filesToSend, client, config.modelClassifier, config.tileOverrides);
+      uploadPrep = await prepareAgent1Upload(filesToSend, client, config.modelClassifier, config.tileOverrides, plans);
+      uploadPrep.classifierUsage.input_tokens += planUsage.input_tokens;
+      uploadPrep.classifierUsage.output_tokens += planUsage.output_tokens;
     } catch (err) {
       if (isAgentTruncatedError(err) || isCancellationError(err) || signal.aborted) throw err;
       logger.warn({ err, bidId }, '[takeoff] Stage 0 document prep failed for the whole upload — falling back to one legacy document-block call');
@@ -947,7 +1025,7 @@ async function runPipelineStages(
         output_tokens: (resp.usage?.output_tokens ?? 0) + classifierUsage.output_tokens,
       };
       await guarded(`UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
-        [JSON.stringify(mergedUsage), config.model, JSON.stringify(prepInventory), prepFidelity, bidId]
+        [JSON.stringify(storedUsage(mergedUsage as unknown as Record<string, unknown>)), config.model, JSON.stringify(storedInventory(prepInventory)), prepFidelity, bidId]
       ).catch(() => {});
       // Takeoff accuracy Task 1 — after the usage write, so a truncated (but
       // still billed) call's cost is recorded before the run fails.
@@ -955,47 +1033,60 @@ async function runPipelineStages(
 
     } else {
       // Batched: N token-budgeted calls (mergeAgent1Batches already merges results).
-      const batchResults: Record<string, unknown>[] = [];
+      // Next round A5 — up to AGENT1_CONCURRENCY batches at once; results
+      // are merged in batch order, exactly as the sequential loop did.
       let batchUsage: Record<string, unknown> = { ...NO_USAGE };
-
-      for (let bi = 0; bi < agent1Batches.length; bi++) {
-        // Stop analysis — no further batch starts once the run is stopped.
-        if (await checkpoint()) throw new RunCancelledError();
-        await setProgress('agent1', `Agent 1: batch ${bi + 1} of ${agent1Batches.length}`, bi + 1, agent1Batches.length);
+      const total = agent1Batches.length;
+      await setProgress('agent1', `Agent 1: ${total} batches, ${Math.min(AGENT1_CONCURRENCY, total)} at a time`, 0, total);
+      const parsedByBatch = await runBatchesInOrder(total, async (bi, batchSignal) => {
         const contentBlocks = agent1Batches[bi];
         const prep = summarizePrep(contentBlocks);
         contentBlocks.push({
           type: 'text',
-          text: `Analyze batch ${bi + 1} of ${agent1Batches.length} electrical plan pages and provide Drawing Analyzer JSON output. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if this sheet contains no electrical equipment, you MUST return a valid JSON object with the sheet in sheet_inventory and equipment arrays empty.`,
+          text: `Analyze batch ${bi + 1} of ${total} electrical plan pages and provide Drawing Analyzer JSON output. Return JSON only — no prose, no markdown fences.\nIMPORTANT: Even if this sheet contains no electrical equipment, you MUST return a valid JSON object with the sheet in sheet_inventory and equipment arrays empty.`,
         });
 
-        logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${agent1Batches.length}`, prep);
+        logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${total}`, prep);
+        const runSig = runSignalOf(client);
         const bResp = await callWithRetry(() =>
           client.messages.stream({
             model: config.model,
             max_tokens: config.maxTokensA1,
-              system: [{ type: 'text', text: agent1PromptWithCountingSections(config.promptA1), cache_control: { type: 'ephemeral' } }],
+            system: [{ type: 'text', text: agent1PromptWithCountingSections(config.promptA1), cache_control: { type: 'ephemeral' } }],
             messages: [{ role: 'user', content: contentBlocks }],
-          }).finalMessage()
-        , { signal: runSignalOf(client), onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
+          }, { signal: batchSignal }).finalMessage()
+        , { signal: runSig ? AbortSignal.any([runSig, batchSignal]) : batchSignal, onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
-        logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${agent1Batches.length}`, prep);
+        logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${total}`, prep);
+        // FIX-7 — sum the full usage shape across batches (a truncated
+        // batch was still billed).
+        if (bResp.usage) batchUsage = mergeUsage(batchUsage, bResp.usage as unknown as Record<string, unknown>);
         // Takeoff accuracy Task 1 — a truncated batch used to fall through to
         // parseAIJSON, fail, and be silently skipped by the merge below: the
         // takeoff just lost every sheet that batch carried.
-        assertNotTruncated(bResp, `Agent 1 (batch ${bi + 1} of ${agent1Batches.length})`, config.maxTokensA1);
+        assertNotTruncated(bResp, `Agent 1 (batch ${bi + 1} of ${total})`, config.maxTokensA1);
         if (!bText.trim()) {
-          logger.warn({ bidId, batch: `${bi + 1}/${agent1Batches.length}` },
+          logger.warn({ bidId, batch: `${bi + 1}/${total}` },
             '[takeoff] Agent 1 batch returned empty output — skipping');
         }
-        const parsed = parseAIJSON(bText);
-        if (parsed) batchResults.push(parsed);
-        // FIX-7 — sum the full usage shape across batches, not just input/output.
-        if (bResp.usage) batchUsage = mergeUsage(batchUsage, bResp.usage as unknown as Record<string, unknown>);
-      }
+        return parseAIJSON(bText);
+      }, {
+        // Stop analysis — no further batch starts once the run is stopped.
+        shouldStop: () => checkpoint(),
+        onSettled: (done, of, running) => {
+          void setProgress('agent1', `Agent 1: ${done} of ${of} batches done${running ? ` (${running} running)` : ''}`, done, of);
+        },
+      }).catch(async (err) => {
+        // Fix round N8 — batches that ran were billed: record their usage
+        // even when the run fails.
+        await guarded(`UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2 WHERE bid_id=$3`,
+          [JSON.stringify(storedUsage(mergeUsage(batchUsage, classifierUsage))), config.model, bidId]).catch(() => {});
+        throw err;
+      });
+      const batchResults = parsedByBatch.filter((p): p is Record<string, unknown> => !!p);
       batchUsage = mergeUsage(batchUsage, classifierUsage);
       await guarded(`UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
-        [JSON.stringify(batchUsage), config.model, JSON.stringify(prepInventory), prepFidelity, bidId]
+        [JSON.stringify(storedUsage(batchUsage)), config.model, JSON.stringify(storedInventory(prepInventory)), prepFidelity, bidId]
       ).catch(() => {});
 
       // Merge batch results — generic merge over the actual AGENT1_SYSTEM schema
@@ -1020,6 +1111,8 @@ async function runPipelineStages(
       return;
     }
     agent1JSON = parsedAgent1;
+    // A4 — the supplement's pages are merged into the run's analysis.
+    if (supplement) agent1JSON = mergeAgent1Batches([supplement.priorAgent1, parsedAgent1]);
 
     // Task 4.2 — empty-analysis guard: if every batch failed to parse,
     // mergeAgent1Batches still returns a valid-looking {} that would otherwise
@@ -1040,6 +1133,7 @@ async function runPipelineStages(
     let cleaned = applyGcHygiene(agent1JSON, bidGc, hygiene);
     const loadedSheetNos = [
       ...countingInventory.map(p => p.sheetNo),
+      ...(supplement?.priorInventory ?? []).map(p => p.sheetNo),
       ...(Array.isArray((cleaned.project as Record<string, unknown> | undefined)?.sheets) ? ((cleaned.project as Record<string, unknown>).sheets as unknown[]).map(String) : []),
     ];
     cleaned = filterMissingSheets(cleaned, loadedSheetNos, hygiene);
@@ -1085,25 +1179,48 @@ async function runPipelineStages(
         ...manual.filter(m => !have.has(String(m.type ?? '').toUpperCase())).map(m => ({ ...m, sourceSheet: 'Entered by the estimator' })),
       ];
     }
-    const stage = await runCountingStage({
+    const countingInput = {
       client, model: config.modelCounter, maxTokens: config.maxTokensCounter,
       agent1: agent1ForCounting, inventory: countingInventory, pdfs,
       // Fix round S2 — also once a newer run took over (the progress write
       // below sets `superseded`): a superseded run launches no more sheets.
       shouldStop: () => signal.aborted || superseded,
-      onProgress: (done, total) => {
-        if (total) void setProgress('counting', `Counting sheet ${Math.min(done + 1, total)} of ${total}`, Math.min(done + 1, total), total);
+      onProgress: (done: number, total: number, phase?: 'retry') => {
+        if (total) void setProgress('counting', `${phase === 'retry' ? 'Re-counting dense sheet' : 'Counting sheet'} ${Math.min(done + 1, total)} of ${total}`, Math.min(done + 1, total), total);
       },
-    });
+    };
+    // A4 — a supplement pass counts only what the new pages can change.
+    if (supplement) for (const f of supplement.oldFiles) if (!pdfs.has(f.originalname) && (f.originalname.split('.').pop() || '').toLowerCase() === 'pdf') pdfs.set(f.originalname, f.buffer);
+    const stage = supplement?.priorCount
+      ? await runSupplementCounting({ ...countingInput, prior: supplement.priorCount, priorInventory: supplement.priorInventory, newFiles: newFileNames })
+      : await runCountingStage(countingInput);
     agent1Output = JSON.stringify(stage.agent1, null, 2);
     if (superseded) return;
     // Task 6 — counted locations become suggested markers in the Plans view.
     // Non-fatal: a failure here loses the markers, never the counts.
     try {
       if (await checkpoint()) throw new RunCancelledError();
-    const markers = await writeAiCountMarkers(bidId, stage.countResult,
-        files.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })), runId);
-      (stage.countResult as unknown as Record<string, unknown>).markers = markers;
+      // Fix round B2 — a supplement pass rewrites markers only for what it
+      // re-counted (the new sheets; on an earlier sheet only the new types),
+      // resolving documents for the run's earlier files too, and records
+      // exactly what it changed so a failed pass can put them back.
+      const markerFiles = [...(supplement?.oldFiles ?? []), ...files];
+      let scope: MarkerScope | undefined;
+      if (supplement) {
+        const priorKeys = new Set((supplement.priorCount?.targets ?? []).map(t => t.key));
+        const newTypes = stage.countResult.targets.map(t => t.key).filter(k => !priorKeys.has(k));
+        scope = stage.countResult.sheets.flatMap((sh): MarkerScope => newFileNames.has(sh.file)
+          ? [{ sheetKey: sh.key, typeKeys: null }]
+          : newTypes.length ? [{ sheetKey: sh.key, typeKeys: newTypes }] : []);
+      }
+      const markers = await writeAiCountMarkers(bidId, stage.countResult,
+        markerFiles.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })), runId, scope);
+      const { replacedIds, writtenIds, ...markerSummary } = markers;
+      if (supplement) {
+        await guarded(`UPDATE takeoff_results SET supplement = COALESCE(supplement, '{}'::jsonb) || jsonb_build_object('markers', $1::jsonb) WHERE bid_id=$2`,
+          [JSON.stringify({ replacedIds: replacedIds ?? [], writtenIds: writtenIds ?? [] }), bidId]).catch(() => {});
+      }
+      (stage.countResult as unknown as Record<string, unknown>).markers = markerSummary;
     } catch (err) {
       logger.warn({ err, bidId }, '[takeoff] writing AI count markers failed');
       (stage.countResult as unknown as Record<string, unknown>).markers = { error: 'suggested markers could not be written' };
@@ -1116,7 +1233,15 @@ async function runPipelineStages(
     // resolutions for the same items (their work is never discarded).
     // N5 — the carry-over reads and writes review_items in ONE transaction
     // under a row lock, so a resolve that commits meanwhile is never lost.
-    const freshItems = buildReviewItems(stage.countResult, scopeQuestionsFor(accountTerms));
+    // A4 — sheets Agent 1 says are referenced that the sheet check missed.
+    const sheetRow = await loadSheetCheck(bidId).catch(() => null);
+    const inventoryKeys = new Set([...countingInventory, ...(supplement?.priorInventory ?? [])]
+      .map(p => normalizeSheetId(p.sheetNo)).filter((k): k is string => !!k));
+    const checkRefKeys = new Set((sheetRow?.result?.refs ?? []).filter(r => r.kind === 'sheet').map(r => r.key));
+    const freshItems = [
+      ...buildReviewItems(stage.countResult, scopeQuestionsFor(accountTerms)),
+      ...referencedSheetItems((stage.agent1 as Record<string, unknown>).missingSheets, { loadedSheetKeys: inventoryKeys, checkRefKeys }, normalizeSheetId),
+    ];
     const tx = await pool.connect();
     try {
       await tx.query('BEGIN');
@@ -1967,14 +2092,14 @@ router.get('/:bidId/review', requireAuth, asyncHandler(async (req: AuthRequest, 
 router.post('/:bidId/review/resolve', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const body = req.body as { itemIds?: unknown; action?: unknown; qty?: unknown; reason?: unknown; answer?: unknown };
+  const body = req.body as { itemIds?: unknown; action?: unknown; qty?: unknown; reason?: unknown; answer?: unknown; answerIndex?: unknown; useSuggested?: unknown };
   const itemIds = Array.isArray(body.itemIds) ? body.itemIds.filter((x): x is string => typeof x === 'string') : [];
   const action = body.action;
   if (!itemIds.length) return res.status(400).json({ error: 'itemIds required' });
   if (action !== 'count' && action !== 'markers' && action !== 'not_on_job' && action !== 'answer' && action !== 'confirm') {
     return res.status(400).json({ error: 'action must be count, markers, not_on_job, answer or confirm' });
   }
-  const out = await resolveReviewItems(bidId, itemIds, { action, qty: body.qty, reason: body.reason, answer: body.answer }, req.user!.name);
+  const out = await resolveReviewItems(bidId, itemIds, { action, qty: body.qty, reason: body.reason, answer: body.answer, answerIndex: body.answerIndex, useSuggested: body.useSuggested }, req.user!.name);
   if (!out.ok) return res.status(out.status).json({ error: out.error });
   // Task 12 — the last open item just cleared: compose the pre-bid draft.
   let draftStarted = false;
@@ -2062,7 +2187,7 @@ router.post('/:bidId/non-electrical-overrides', requireAuth, asyncHandler(async 
   const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
   // S-R2-5 — bound to this exact line AND this flag.
   const flag = typeof req.body?.flag === 'string' ? req.body.flag : 'non_electrical';
-  if (!/^(non_electrical|excluded_scope|spec|(count_line|dup_keep|dup_remove):[A-Z0-9 .:-]{1,40})$/.test(flag)) return res.status(400).json({ error: 'unknown flag' });
+  if (!/^(non_electrical|excluded_scope|spec|gc_scope|(count_line|dup_keep|dup_remove):[A-Z0-9 .:-]{1,40})$/.test(flag)) return res.status(400).json({ error: 'unknown flag' });
   if (!category || !line) return res.status(400).json({ error: 'category and line required' });
   // Fix round 1 — one override mechanism for every "keep this" decision: a
   // non-electrical line (S9), a line on the Not-included list (N7), or an
@@ -2316,6 +2441,22 @@ export async function gatherAnalysisInputs(
     byHash.set(h, f.originalname);
     files.push(f);
   }
+  // Fix round N5 — two different files with one name (a set and its
+  // addendum, both "Electrical.pdf") get distinct names, so nothing
+  // downstream that keys by name (page texts, tiles, the counter's PDFs,
+  // the inventory) can mix them.
+  const used = new Set<string>();
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    if (!used.has(f.originalname)) { used.add(f.originalname); continue; }
+    const dot = f.originalname.lastIndexOf('.');
+    const [stem, ext] = dot > 0 ? [f.originalname.slice(0, dot), f.originalname.slice(dot)] : [f.originalname, ''];
+    let n = 2;
+    while (used.has(`${stem} (${n})${ext}`)) n++;
+    const name = `${stem} (${n})${ext}`;
+    used.add(name);
+    files[i] = Object.assign(Object.create(Object.getPrototypeOf(f)), f, { originalname: name });
+  }
 
   logger.info({
     bidId,
@@ -2500,6 +2641,166 @@ router.post('/:bidId/stop-analysis', requireAuth, requireAIPermission('run_analy
 
 // POST run-agent4 — kicks off Proposal Formatter in background, returns immediately
 // Frontend polls GET /:bidId/results and watches agent4_status for completion.
+// Next round A4 — the supplement pass. A sheet the drawings reference turned
+// up after the run (a "Referenced sheet X not in analysis" review item, or
+// one skipped in the sheet check): upload it here and it is analysed by
+// Agent 1 on just its pages, merged into THIS run (same run id), counted
+// only for what it can change, and Agents 2-3 run again. The GC documents
+// stay blocked meanwhile (review 'pending'); the run's Agent 4 / draft
+// output stop being current. If the pass fails, the run is put back exactly
+// as it was and the failure is recorded (takeoff_results.supplement).
+router.post('/:bidId/supplement', requireAuth, requireAIPermission('run_analysis'), upload.array('files', 50), asyncHandler(async (req: AuthRequest, res) => {
+  const bidId = req.params.bidId;
+  const bid = await loadAccessibleBid(res, req.user!, bidId);
+  if (!bid) return;
+  const rawDocIds = req.body.document_ids;
+  const docIds: string[] = Array.isArray(rawDocIds) ? (rawDocIds as string[]).filter(Boolean)
+    : (typeof rawDocIds === 'string' && rawDocIds.trim()) ? [rawDocIds.trim()] : [];
+  const { files: incoming } = await gatherAnalysisInputs(bidId, (req.files as Express.Multer.File[]) ?? [], docIds);
+  if (!incoming.length) return res.status(400).json({ error: 'Upload the referenced sheet (PDF) to add it to this analysis.' });
+  const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!apiKey) return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI.' });
+  const config = await loadAIConfig();
+  const client = new Anthropic({ apiKey });
+
+  // Fix round S5 — every rejection happens BEFORE the claim: a rejected
+  // upload never touches the run (nor its Agent 4 proposal / draft).
+  const { rows: pre } = await pool.query('SELECT run_id, status, input_document_ids, prep_inventory FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  if (!pre[0]?.run_id || pre[0].status !== 'complete') {
+    return res.status(409).json({ error: 'A sheet can be added once the analysis has finished (and while no other run is going).' });
+  }
+  const oldIds = (pre[0].input_document_ids as string[] | null) ?? [];
+  const { files: oldFiles } = oldIds.length ? await gatherAnalysisInputs(bidId, [], oldIds) : { files: [] as Express.Multer.File[] };
+  const sha = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
+  const oldHashes = new Set(oldFiles.map(f => sha(f.buffer)));
+  const newFiles = incoming.filter(f => !oldHashes.has(sha(f.buffer)));
+  if (!newFiles.length) return res.status(400).json({ error: 'Those files are already part of this analysis.' });
+
+  // Fix round S3 — page by page: a page identical to one already in the run
+  // is skipped; a page whose sheet number is already in the run but whose
+  // content differs is a REVISION, which needs a full re-run (a supplement
+  // would count the old and the new sheet both).
+  const priorInventory = (pre[0].prep_inventory as PrepInventoryEntry[] | null) ?? [];
+  const oldPageHashes = new Set<string>();
+  for (const f of oldFiles) {
+    if ((f.originalname.split('.').pop() || '').toLowerCase() !== 'pdf') continue;
+    try { for (const t of await extractPdfPageTexts(f.buffer)) { const h = pageContentHash(t); if (h) oldPageHashes.add(h); } } catch { /* no text layer */ }
+  }
+  let built: Awaited<ReturnType<typeof buildInventory>>;
+  try {
+    built = await buildInventory(newFiles.map(f => ({ originalname: f.originalname, buffer: f.buffer })), { client, classifierModel: config.modelClassifier, visionModel: '', aiRefs: false });
+  } catch (err) {
+    return res.status(502).json({ error: `The added sheets could not be read: ${describeAIError(err)}` });
+  }
+  const priorNos = new Set(priorInventory.map(p => normalizeSheetId(p.sheetNo)).filter((k): k is string => !!k));
+  const skipPageKeys: string[] = [];
+  const revised: string[] = [];
+  for (const p of built.pages) {
+    const h = pageContentHash(built.pageTexts.get(p.sha)?.[p.page - 1]);
+    if (h && oldPageHashes.has(h)) { skipPageKeys.push(p.key); continue; }
+    const no = normalizeSheetId(p.sheetNo);
+    if (no && priorNos.has(no)) revised.push(p.sheetNo);
+  }
+  if (revised.length) {
+    return res.status(409).json({
+      error: `This upload has new versions of sheets already in the analysis (${[...new Set(revised)].slice(0, 8).join(', ')}). A revised set needs a full re-run of the analysis, not a supplement — adding them would count the old and the new sheets both.`,
+      fullRerun: true, revisedSheets: [...new Set(revised)],
+    });
+  }
+  if (built.pages.length && skipPageKeys.length === built.pages.length && !built.unclassifiedFiles.length) {
+    return res.status(400).json({ error: 'Every page of those files is already part of this analysis.' });
+  }
+  const checkRow = await loadSheetCheck(bidId);
+  const contextPages: CheckedPage[] = checkRow?.result?.pages?.length
+    ? checkRow.result.pages
+    : priorInventory.map(p => ({
+      key: `${p.file}#${p.page}`, file: p.file, sha: `prior:${p.file}`, page: p.page, sheetNo: p.sheetNo, title: p.title, discipline: p.discipline,
+      cls: p.cls as CheckedPage['cls'], textChars: p.textChars, hasTextLayer: p.textChars >= 50, classified: p.classified, refs: [], role: 'excluded' as const, reason: '',
+    }));
+
+  // Claim: only a finished run takes a supplement (one at a time).
+  const tx = await pool.connect();
+  let snap: Record<string, unknown>;
+  try {
+    await tx.query('BEGIN');
+    const { rows } = await tx.query(
+      `SELECT run_id, status, agent1_output, count_result, prep_inventory, review_items, review_status,
+              usage_agent1, usage_agent2, usage_agent3, usage_counter, model_agent1, model_agent2, model_agent3, model_counter,
+              input_document_ids, agent2_output, agent3_output, hygiene, account_terms, agent4_run_id, draft_run_id
+         FROM takeoff_results WHERE bid_id=$1 FOR UPDATE`, [bidId]);
+    const tr = rows[0];
+    if (!tr?.run_id || tr.status !== 'complete' || tr.run_id !== pre[0].run_id) {
+      await tx.query('ROLLBACK');
+      return res.status(409).json({ error: 'A sheet can be added once the analysis has finished (and while no other run is going).' });
+    }
+    snap = tr;
+    await tx.query(
+      `UPDATE takeoff_results SET status='running', review_status='pending', agent4_run_id=NULL, draft_run_id=NULL,
+         progress=$2, supplement=$3 WHERE bid_id=$1`,
+      [bidId, JSON.stringify({ stage: 'prep', label: 'Adding the referenced sheet to the analysis', step: null, of: null, at: new Date().toISOString() }),
+       JSON.stringify({ status: 'running', files: newFiles.map(f => f.originalname), by: req.user?.name ?? null, at: new Date().toISOString() })]);
+    await tx.query('COMMIT');
+  } catch (err) {
+    await tx.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    tx.release();
+  }
+
+  // Fix round S5 / B2 — exactly as it was: outputs, usage, models, the
+  // Agent 4 / draft run ids, and the Plans-view markers this pass changed.
+  const restore = async (message: string) => {
+    const { rows: cur } = await pool.query('SELECT run_id, supplement FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    if (cur[0]?.run_id !== snap.run_id) return; // a newer run took over: nothing to restore
+    await revertAiMarkerWrite(bidId, (cur[0]?.supplement as { markers?: { replacedIds?: string[]; writtenIds?: string[] } } | null)?.markers).catch(err => logger.warn({ err, bidId }, '[takeoff] supplement: markers not reverted'));
+    const j = (v: unknown) => JSON.stringify(v ?? null);
+    await pool.query(
+      `UPDATE takeoff_results SET status='complete', agent1_output=$2, count_result=$3, prep_inventory=$4, review_items=$5,
+         review_status=$6, usage_agent1=$7, agent2_output=$8, agent3_output=$9, hygiene=$10, account_terms=$11,
+         supplement=$12, progress=NULL, usage_agent2=$14, usage_agent3=$15, usage_counter=$16,
+         model_agent1=$17, model_agent2=$18, model_agent3=$19, model_counter=$20, agent4_run_id=$21, draft_run_id=$22
+       WHERE bid_id=$1 AND run_id=$13`,
+      [bidId, snap.agent1_output, j(snap.count_result), j(snap.prep_inventory), j(snap.review_items), snap.review_status, j(snap.usage_agent1),
+       snap.agent2_output, snap.agent3_output, j(snap.hygiene), j(snap.account_terms),
+       JSON.stringify({ status: 'error', error: message, files: newFiles.map(f => f.originalname), at: new Date().toISOString() }), snap.run_id,
+       j(snap.usage_agent2), j(snap.usage_agent3), j(snap.usage_counter),
+       snap.model_agent1, snap.model_agent2, snap.model_agent3, snap.model_counter, snap.agent4_run_id, snap.draft_run_id]);
+  };
+  res.json({ status: 'running', supplement: true, files: newFiles.map(f => f.originalname), skippedPages: skipPageKeys.length });
+
+  const supplement: SupplementContext = {
+    priorAgent1: parseAIJSON(String(snap.agent1_output ?? '')) ?? {},
+    priorCount: (snap.count_result as CountResult | null) ?? null,
+    priorInventory: (snap.prep_inventory as PrepInventoryEntry[] | null) ?? [],
+    priorUsage: (snap.usage_agent1 as Record<string, unknown> | null) ?? {},
+    oldFiles,
+    plan: { contextPages, skipPageKeys },
+  };
+  const runId = snap.run_id as string;
+  runPipeline(bidId, newFiles, client, config, { supplement }).then(async () => {
+    const { rows } = await pool.query('SELECT status, run_id, agent1_output, raw_response, prep_inventory FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    if (rows[0]?.run_id !== runId) return;
+    if (rows[0]?.status === 'cancelled') { await restore('Stopped — the run is as it was before the sheet was added.'); return; }
+    if (rows[0]?.status === 'error') {
+      await restore(`The added sheet could not be analysed: ${String(rows[0].agent1_output ?? rows[0].raw_response ?? '').slice(0, 300)}`);
+      return;
+    }
+    // The run now reads the new documents too (a re-run pre-ticks them).
+    const ids = [...new Set([...oldIds, ...(await inputDocumentIds(bidId, newFiles))])];
+    await pool.query(`UPDATE takeoff_results SET input_document_ids=$2, supplement=$3 WHERE bid_id=$1 AND run_id=$4`,
+      [bidId, ids, JSON.stringify({ status: 'complete', files: newFiles.map(f => f.originalname), by: req.user?.name ?? null, at: new Date().toISOString() }), runId]);
+    // Fix round S7 — references the added sheets satisfy are present now;
+    // their "not provided" skips go.
+    const newNames = new Set(newFiles.map(f => f.originalname));
+    const added = ((rows[0]?.prep_inventory as PrepInventoryEntry[] | null) ?? []).filter(p => newNames.has(p.file))
+      .map(p => ({ key: `${p.file}#${p.page}`, file: p.file, page: p.page, sheetNo: p.sheetNo, title: p.title, discipline: p.discipline }));
+    await resolveRefsAfterSupplement(bidId, added).catch(err => logger.warn({ err, bidId }, '[takeoff] supplement: sheet-check references not updated'));
+  }).catch(async err => {
+    logger.error({ err, bidId }, '[takeoff] supplement pass failed');
+    await restore(`The added sheet could not be analysed: ${describeAIError(err)}`).catch(() => {});
+  });
+}));
+
 router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis'), asyncHandler(async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   const { price, internalNotes } = req.body as { price?: string; internalNotes?: string };
@@ -2519,6 +2820,11 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   // questions block the proposal until the estimator resolves them.
   const gate = await takeoffGate(bidId);
   if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+  // Fix round 2 / B5 — a budget-pending vendor quote blocks the paid Agent 4
+  // proposal-price run too (it would otherwise price the GC proposal off a
+  // number CES/the vendor hasn't confirmed).
+  const budgetGate = await budgetPendingGate(bidId);
+  if (budgetGate) return res.status(409).json({ error: budgetGate.error });
 
   const { rows: trRows } = await pool.query(
     'SELECT agent1_output, agent2_output, review_items, account_terms, run_id FROM takeoff_results WHERE bid_id=$1',
@@ -2780,6 +3086,13 @@ export async function composeCurrentBidData(
   const scopeList = await getBidScopeList(bidId);
   const verifyOptions: VerifyOptions = accountSnap ? verifyOptionsFor(accountSnap, accountResolved) : {};
   let accountCorrections: string[] = [];
+  // Next round A3 — referenced sheets skipped in the sheet check.
+  const sheetRow = await loadSheetCheck(bidId);
+  const clarifications = sheetRow ? skippedClarifications(sheetRow.result, sheetRow.skips ?? {}, sheetRow.input_key) : [];
+  // Next round B3 — the Labor & Pricing screen's Alternates (add/deduct,
+  // including a system-computed one like the 7-Eleven Graybar-package
+  // deduct), printed as separate proposal lines.
+  const estimatorAlternates = (await getAlternates(bidId).catch(() => [])).map(a => ({ kind: a.kind, description: a.description, amount: a.amount }));
 
   // agent4_price NUMERIC(12,2) is the authoritative, DB-validated price (see
   // run-agent4's parseMoney gate) — format it here rather than trusting whatever
@@ -2832,6 +3145,7 @@ export async function composeCurrentBidData(
       agent4: parsed as Agent4Output, bidRow, price: formattedPrice ?? '', savedLineItems,
       accountSnap, accountResolved, scopeItems: scopeList.items, overrides: scopeList.overrides,
       countResult: trRows[0].count_result as CountResult | null, reviewItems: trRows[0].review_items as ReviewItem[] | null,
+      clarifications, estimatorAlternates,
     });
     const { data, jobNumberGenerated } = composed;
     ambiguousQtyKeys = composed.ambiguousQtyKeys;
@@ -2928,7 +3242,7 @@ export async function composeCurrentBidData(
   const inputsHash = composeInputsHash({
     runId, source: useDraft ? 'draft' : 'final', composed: raw, price: rawPrice,
     countResult: trRows[0].count_result, reviewItems: trRows[0].review_items, accountTerms: accountSnap,
-    scopeList, bid: bid ?? null,
+    scopeList, bid: bid ?? null, clarifications, estimatorAlternates,
   });
   return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys, accountCorrections, verifyOptions, hygieneWarnings, runId, inputsHash };
 }
@@ -2937,6 +3251,11 @@ export async function composeCurrentBidData(
 export function composeInputsHash(x: {
   runId: string | null; source: 'draft' | 'final'; composed: string; price: unknown; countResult: unknown; reviewItems: unknown;
   accountTerms: unknown; scopeList: { items: unknown[]; overrides: unknown[] }; bid: Record<string, unknown> | null;
+  /** Next round A3 — only hashed when present, so documents filed before
+   *  the sheet check existed keep their hash. */
+  clarifications?: string[];
+  /** Next round B3 — only hashed when present, same reason. */
+  estimatorAlternates?: Array<{ kind: string; description: string; amount: number }>;
 }): string {
   const sha = (v: unknown) => crypto.createHash('sha256').update(typeof v === 'string' ? v : JSON.stringify(v ?? null)).digest('hex');
   const resolutions = ((x.reviewItems ?? []) as ReviewItem[]).map(i => [i.id, i.resolution ? [i.resolution.action, i.resolution.qty ?? null, i.resolution.answer ?? null, i.resolution.furnishBy ?? null, i.resolution.installBy ?? null] : null]);
@@ -2944,6 +3263,8 @@ export function composeInputsHash(x: {
     x.runId, x.source, sha(x.composed ?? ''), x.price == null ? null : Number(x.price), sha(x.countResult ?? null), resolutions,
     sha(x.accountTerms ?? null), sha(x.scopeList.items), sha(x.scopeList.overrides),
     x.bid ? [x.bid.name, x.bid.loc, x.bid.gc, x.bid.contact, x.bid.job_number, x.bid.brand, x.bid.sq_ft ?? null] : null,
+    ...(x.clarifications?.length ? [x.clarifications] : []),
+    ...(x.estimatorAlternates?.length ? [x.estimatorAlternates] : []),
   ]);
 }
 
@@ -3000,6 +3321,10 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const gate = await takeoffGate(bidId);
   if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+  // Fix round 2 / B5 — a budget-pending vendor quote blocks the GC-facing
+  // proposal docx/PDF (soffice-converted from this same buffer below).
+  const budgetGate = await budgetPendingGate(bidId);
+  if (budgetGate) return res.status(409).json({ error: budgetGate.error });
 
   const loaded = await composeCurrentBidData(bidId);
   if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error, ...(loaded.failures ? { failures: loaded.failures } : {}) });
@@ -3135,6 +3460,9 @@ router.get('/:bidId/generate-takeoff-xlsx', requireAuth, requireAIPermission('vi
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const gate = await takeoffGate(bidId);
   if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+  // Fix round 2 / B5 — a budget-pending vendor quote blocks the GC takeoff xlsx too.
+  const budgetGate = await budgetPendingGate(bidId);
+  if (budgetGate) return res.status(409).json({ error: budgetGate.error });
 
   const loaded = await composeCurrentBidData(bidId);
   if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error, ...(loaded.failures ? { failures: loaded.failures } : {}) });
@@ -3231,6 +3559,24 @@ router.post('/:bidId/generate-prebid-package', requireAuth, requireAIPermission(
 
   if (!bidData.sections.length) {
     return res.status(400).json({ error: 'No scope data to build a pre-bid package from. Run Agent 4 first.' });
+  }
+
+  // Review round 2 / N-R2-5 — the pre-bid package carries no price (it's
+  // composed from the pre-bid draft, before Agent 4 ever runs), so a
+  // budget-pending vendor quote can't silently ship a wrong number the way
+  // it could on a GC document (B5's own gate covers those). But Chris still
+  // needs to know a quote is outstanding when he's pricing off this
+  // package — flagged in "INTERNAL NOTES & DISCREPANCIES", the one section
+  // that exists only on this internal document, never the GC-facing bid.
+  const budgetPendingQuotes = (await getQuotes(bidId).catch(() => [])).filter(q => q.status === 'budget_pending');
+  if (budgetPendingQuotes.length) {
+    bidData.prebid = {
+      ...bidData.prebid,
+      flags: [
+        ...(bidData.prebid?.flags ?? []),
+        ...budgetPendingQuotes.map(q => `BUDGET — pending vendor quote: ${q.description}.`),
+      ],
+    };
   }
 
   let scopeDocx: Buffer;

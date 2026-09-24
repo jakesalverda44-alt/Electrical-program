@@ -245,7 +245,11 @@ function roundHours(n: number): number {
 // "per floor above 2": its pct is a PER-FLOOR rate, not a flat bump applied
 // once whenever selected. Special-cased by groupKey since it's the only
 // factor with a real per-unit basis (every other factor is a flat pct).
-const PER_FLOOR_GROUP_KEY = 'multistory';
+// Review round 2 / S17 — exported so accubidRecap.ts's own compounding
+// "Labor Factoring" multiplier (Accubid mode's take on the SAME selected
+// factors) special-cases the per-floor group the identical way, from one
+// source of truth, instead of re-declaring the string literal.
+export const PER_FLOOR_GROUP_KEY = 'multistory';
 
 /** Sum of pcts, at most one per group_key (first occurrence per group wins — the UI is
  *  responsible for offering a single radio-style choice per group; this only guards

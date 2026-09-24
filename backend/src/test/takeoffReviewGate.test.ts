@@ -169,6 +169,67 @@ describe('resolving items', () => {
   });
 });
 
+describe('Fix round 2 / B5 — a budget-pending vendor quote blocks every GC path on the server', () => {
+  /** A "clear" review setup (unlike setup() above, which starts needs_review)
+   *  so these tests isolate the NEW budget gate from the existing review gate. */
+  async function clearSetup(): Promise<{ user: TestUser; bidId: string }> {
+    const user = await makeUser('owner');
+    const { rows } = await pool.query(
+      `INSERT INTO bids (name, gc, loc, salesperson_id) VALUES ($1, 'Summit General Contractors', 'Kissimmee, FL', $2) RETURNING id`,
+      [`Budget ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, user.id]
+    );
+    const bidId = rows[0].id as string;
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, status, review_items, review_status) VALUES ($1,'complete','[]','clear')`,
+      [bidId]
+    );
+    return { user, bidId };
+  }
+
+  it('run-agent4, generate-docx, generate-takeoff-xlsx and draft-proposal are all blocked while a quote is budget-pending', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId } = await clearSetup();
+    const quote = await request(app).post(`/api/estimating/${bidId}/accubid/quotes`).set(auth(user.token)).send({
+      description: 'Switchgear (CES)', amount: 45000, markupPct: 0, status: 'budget_pending',
+    }).expect(200);
+
+    const a4 = await request(app).post(`/api/preconstruction/${bidId}/run-agent4`).set(auth(user.token)).send({ price: '79112.23' }).expect(409);
+    expect(a4.body.error).toMatch(/budget-pending/);
+    expect(a4.body.error).toMatch(/Switchgear \(CES\)/);
+    await request(app).get(`/api/preconstruction/${bidId}/generate-docx`).set(auth(user.token)).expect(409);
+    await request(app).get(`/api/preconstruction/${bidId}/generate-takeoff-xlsx`).set(auth(user.token)).expect(409);
+    const send = await request(app).post(`/api/bids/${bidId}/draft-proposal`).set(auth(user.token)).send({ to: ['gc@example.com'] }).expect(409);
+    expect(send.body.error).toMatch(/budget-pending/);
+    // Nothing was stamped as sent.
+    const { rows } = await pool.query('SELECT proposal_sent_at FROM bids WHERE id=$1', [bidId]);
+    expect(rows[0].proposal_sent_at).toBeNull();
+
+    // Firming the quote up lifts the gate (each path now fails further along,
+    // on missing Agent 2/4 output rather than the budget check).
+    await request(app).put(`/api/estimating/${bidId}/accubid/quotes/${quote.body.id}`).set(auth(user.token))
+      .send({ status: 'firm' }).expect(200);
+    const a4After = await request(app).post(`/api/preconstruction/${bidId}/run-agent4`).set(auth(user.token)).send({ price: '1000' });
+    expect(a4After.status).toBe(400);
+    expect(a4After.body.error).not.toMatch(/budget-pending/);
+  });
+
+  it('the internal pre-bid package (generate-prebid-package / email-prebid-chris) stays allowed while a quote is budget-pending', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId } = await clearSetup();
+    await request(app).post(`/api/estimating/${bidId}/accubid/quotes`).set(auth(user.token)).send({
+      description: 'Switchgear (CES)', amount: 45000, markupPct: 0, status: 'budget_pending',
+    }).expect(200);
+
+    // Neither route's failure ever mentions the budget-pending quote — both
+    // still fail for their own ordinary reasons ("no draft composed yet" /
+    // "nothing on file"), never on pricing.
+    const pkg = await request(app).post(`/api/preconstruction/${bidId}/generate-prebid-package`).set(auth(user.token)).send({});
+    expect(pkg.body.error).not.toMatch(/budget-pending/);
+    const email = await request(app).post(`/api/bids/${bidId}/email-prebid-chris`).set(auth(user.token)).send({});
+    expect(email.body.error).not.toMatch(/budget-pending/);
+  });
+});
+
 describe('Task 9 — zero-quantity lines never reach a GC document', () => {
   it('generate-takeoff-xlsx and generate-docx 422 with the zero lines listed', async (ctx) => {
     if (!ok) return ctx.skip();

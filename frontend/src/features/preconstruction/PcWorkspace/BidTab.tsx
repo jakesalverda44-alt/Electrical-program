@@ -4,6 +4,7 @@ import { PcWorkspace } from '../constants';
 import { AppSettings, checkAIPermission } from '../../../hooks/useAppSettings';
 import { AiResults, SetWorkspace } from './shared';
 import type { AnalysisProgress } from './useAiPoller';
+import { runButtonLabel } from './useSheetCheck';
 
 interface BidTabProps {
   ws: PcWorkspace;
@@ -18,9 +19,11 @@ interface BidTabProps {
   progress?: AnalysisProgress | null;
   stopAnalysis?: () => void;
   stopping?: boolean;
+  /** Next round A3 — referenced sheets missing and not skipped (sheet check). */
+  missingSheets?: number;
 }
 
-function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRole, progress, stopAnalysis, stopping }: BidTabProps) {
+function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRole, progress, stopAnalysis, stopping, missingSheets = 0 }: BidTabProps) {
   const status = aiResults?.status as string | undefined;
   const stopped = !ws.aiRunning && status === 'cancelled';
   const failed = !ws.aiRunning && status === 'error';
@@ -49,7 +52,7 @@ function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRo
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: ws.aiLog.length ? 16 : 0 }}>
               <button className="btn" onClick={() => runAI()} disabled={ws.aiRunning || ws.aiDone || stopped || failed} style={{ fontSize: 13 }} data-testid="run-ai-takeoff">
                 <Icon name="spark" size={14} stroke={1.9}/>
-                {ws.aiDone ? 'Takeoff Complete' : ws.aiRunning ? 'Running…' : stopped ? 'Stopped' : 'Run AI Takeoff'}
+                {ws.aiDone ? 'Takeoff Complete' : ws.aiRunning ? 'Running…' : stopped ? 'Stopped' : runButtonLabel(missingSheets)}
               </button>
               {!ws.aiRunning && !ws.aiDone && !!aiResults?.agent1_output && (
                 <button className="btn ghost" onClick={resumeAI} style={{ fontSize: 13, color: 'var(--blue)' }}
@@ -108,7 +111,7 @@ function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRo
               <button className="btn ghost" onClick={rerunAI} data-testid="rerun-analysis"
                 style={{ fontSize: 13, color: 'var(--red)', borderColor: 'rgba(224,106,106,.35)' }}
                 title="Clear the previous run's outputs (your own work is kept) and run a fresh AI analysis">
-                Re-run Analysis
+                {missingSheets > 0 ? runButtonLabel(missingSheets).replace(/^Run/, 'Re-run') : 'Re-run Analysis'}
               </button>
             </div>
           )}

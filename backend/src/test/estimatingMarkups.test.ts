@@ -664,7 +664,6 @@ describe('POST /api/estimating/:bidId/apply-markups', () => {
     const applyRes = await request(app).post(`/api/estimating/${bidId}/apply-markups`).set(auth(u.token)).send({ line_keys: [lineKey] }).expect(200);
     expect(applyRes.body.applied).toEqual([lineKey]);
     expect(applyRes.body.skipped).toEqual([]);
-    const grandTotal = applyRes.body.save.recap.totals.grandTotal;
 
     // est_bid_lines reflects the confirmed qty and its provenance.
     const { rows: lineRows } = await pool.query('SELECT qty, qty_source, qty_overridden, confidence FROM est_bid_lines WHERE line_key=$1', [lineKey]);
@@ -673,17 +672,22 @@ describe('POST /api/estimating/:bidId/apply-markups', () => {
     expect(lineRows[0].qty_overridden).toBe(true);
     expect(lineRows[0].confidence).toBe('FIRM');
 
-    // bid_estimates.line_items carries qty_source through, and bids.amount
-    // agrees with the recap the apply call returned (Decision 4: the two
-    // can never drift, same as every other save).
+    // bid_estimates.line_items carries qty_source through regardless of
+    // pricing mode. Review round 2 / B4 — a new bid defaults to Accubid
+    // mode, so bids.amount/bid_estimates.grand_total now agree with the
+    // ACCUBID recap (persisted by saveBidEstimate's own B4 branch), not the
+    // Phase A recap this endpoint's own response still carries for display —
+    // the two are allowed to differ once a bid is in Accubid mode; only the
+    // PERSISTED total is the one source of truth (Decision 4/B4).
     const { rows: beRows } = await pool.query('SELECT line_items, grand_total FROM bid_estimates WHERE bid_id=$1', [bidId]);
     const savedLineItems = beRows[0].line_items as SavedConfidenceItem[];
     const savedLine = savedLineItems.find(li => li.item === takeoffItemId)!;
     expect(savedLine.qty_source).toBe('markup');
     expect(savedLine.qty).toBe(24);
-    expect(Number(beRows[0].grand_total)).toBeCloseTo(grandTotal, 2);
+    const accubidRecap = (await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200)).body;
+    expect(Number(beRows[0].grand_total)).toBeCloseTo(accubidRecap.recap.sellingPrice, 2);
     const { rows: bidRows } = await pool.query('SELECT amount FROM bids WHERE id=$1', [bidId]);
-    expect(Number(bidRows[0].amount)).toBeCloseTo(grandTotal, 2);
+    expect(Number(bidRows[0].amount)).toBeCloseTo(accubidRecap.recap.sellingPrice, 2);
 
     // composeBidData (pure) picks the confirmed qty up for the takeoff
     // outputs (takeoff xlsx / pre-bid package / the proposal's own takeoff

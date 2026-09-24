@@ -17,6 +17,7 @@
 // resolutions — their work is never silently discarded) and validating a
 // resolution. The DB/route half lives in routes/preconstruction.ts.
 import type { CountResult } from './countingStage';
+import { outsideAptInstall, describeAssignment } from '../bidstd/tradeAssignment';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -71,6 +72,14 @@ export interface ReviewItem {
   /** N4 — what the item was built from; a resolution is carried to a new
    *  run only when this is unchanged. */
   fingerprint?: string;
+  /** Next round A6/A7 — false for information only (e.g. a zero count for
+   *  a type another trade / the Owner / a vendor installs): shown, never
+   *  blocking. Absent = blocking. */
+  blocking?: boolean;
+  /** Next round A7 — the cause group the UI lists it under. */
+  group?: string;
+  /** Next round A6 — a pre-filled scope answer ("by G.C." -> APT). */
+  suggested?: string;
   /** N4 — an earlier run's resolution for this item that was NOT carried
    *  over because the drawings/counts changed; shown for re-confirmation. */
   previousResolution?: ReviewResolution;
@@ -84,10 +93,14 @@ export interface ScopeQuestionInput {
   options: string[];
   optionParties?: Array<{ furnishBy: string; installBy: string }>;
   notes: string[];
+  /** Next round A6 — the pre-filled answer. */
+  suggested?: string;
 }
 
+/** Open AND blocking (an information item — `blocking: false` — never
+ *  holds the proposal). */
 export function reviewItemIsOpen(i: ReviewItem): boolean {
-  return !i.resolution;
+  return !i.resolution && i.blocking !== false;
 }
 
 export function reviewStatus(items: ReviewItem[]): 'clear' | 'needs_review' {
@@ -155,12 +168,17 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     const base = { typeKey: t.key, type: t.type, description: t.description, category: t.category, aiCount: t.count, sheets, fingerprint: fp };
     const title = `Type ${t.type}${t.description ? ` — ${t.description}` : ''}`;
     if (t.status !== 'counted') {
+      const tgt = targetByKey.get(t.key);
+      // Decision 4 — a type another trade / the Owner / a vendor installs:
+      // a zero count is information, not a block.
+      const info = outsideAptInstall(tgt?.assignment);
       items.push({
         id: `count:${t.key}`,
         kind: 'count',
         title,
-        detail: t.status === 'zero' ? `Counted 0: ${t.reason}.` : `Could not be counted: ${t.reason}.`,
+        detail: `${t.status === 'zero' ? `Counted 0: ${t.reason}.` : `Could not be counted: ${t.reason}.`}${info ? ` Its schedule says ${describeAssignment(tgt!.assignment!)} — listed for information, not blocking.` : ''}`,
         actions: ['count', 'markers', 'not_on_job'],
+        ...(info ? { blocking: false } : {}),
         ...base,
       });
     }
@@ -200,6 +218,26 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       });
     }
   }
+  // Fix round S2 — the dense-area recount found FEWER of a type than the
+  // first pass: the estimator decides (never silently accepted).
+  const lowerByType = new Map<string, string[]>();
+  for (const sh of countResult?.sheets ?? []) {
+    for (const l of sh.retry?.lower ?? []) {
+      lowerByType.set(l.typeKey, [...(lowerByType.get(l.typeKey) ?? []), `${sh.label}: first pass ${l.first}, recount ${l.retry}`]);
+    }
+  }
+  for (const [key, notes] of lowerByType) {
+    const t = (countResult?.types ?? []).find(x => x.key === key);
+    if (!t || t.status !== 'counted') continue;
+    items.push({
+      id: `recount:${key}`,
+      kind: 'count',
+      title: `Type ${t.type}${t.description ? ` — ${t.description}` : ''}: the recount found fewer`,
+      detail: `The sheet was re-counted at a higher resolution because some symbols could not be read, and the recount found fewer (${notes.join('; ')}). The takeoff has ${t.count}. Enter the right count, or confirm ${t.count} (with a reason).`,
+      typeKey: t.key, type: t.type, description: t.description, category: t.category, aiCount: t.count,
+      sheets: notes, actions: ['count', 'confirm'], fingerprint: `recount|${t.count}|${notes.join(';')}`,
+    });
+  }
   // B3 — Agent 1 rows that match no scheduled type: held, never dropped.
   for (const r of countResult?.removedRows ?? []) {
     if (!r.unscheduled) continue;
@@ -220,8 +258,22 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `unscheduled|${qty}|${sheet}`,
     });
   }
+  // Next round A7 — a type counted only on the photometric sheet (the
+  // fallback, A3): shown for information, never blocking.
+  for (const t of countResult?.types ?? []) {
+    if (t.status === 'counted' && t.photometricOnly) {
+      items.push({
+        id: `photo:${t.key}`, kind: 'count', blocking: false,
+        title: `Type ${t.type}${t.description ? ` — ${t.description}` : ''}: counted from the photometric sheet`,
+        detail: `Not shown on the electrical plans; ${t.count} counted on ${t.sheets.filter(x => x.used).map(x => x.label).join(', ')}. Check it if the site plan should show it.`,
+        typeKey: t.key, type: t.type, category: t.category, aiCount: t.count, actions: ['count', 'not_on_job'],
+        fingerprint: `photo|${t.count}`,
+      });
+    }
+  }
   for (const q of scopeQuestions) {
     items.push({
+      ...(q.suggested ? { suggested: q.suggested } : {}),
       id: `scope:${q.term}`,
       kind: 'scope_question',
       title: q.label,
@@ -235,7 +287,58 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `scope|${q.options.join('|')}|${q.notes.join('|')}`,
     });
   }
-  return items;
+  return items.map(i => ({ ...i, group: groupOf(i) }));
+}
+
+/** Next round A7 — the cause an item is listed under (one group, one bulk
+ *  action): 'zero', 'unreadable', 'area:<sheets>', 'coverage', 'heads',
+ *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
+export function groupOf(i: ReviewItem): string {
+  if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : 'info';
+  if (i.id.startsWith('counting:')) return 'counting';
+  if (i.id.startsWith('refsheet:')) return 'refsheets';
+  if (i.id.startsWith('sheet:') || i.id.startsWith('file:')) return 'sheets';
+  if (i.id.startsWith('scope:')) return 'scope';
+  if (i.id.startsWith('unscheduled:')) return 'unscheduled';
+  if (i.id.startsWith('coverage:')) return 'coverage';
+  if (i.id.startsWith('recount:')) return 'recount';
+  if (i.id.endsWith(':heads')) return 'heads';
+  if (i.kind === 'area') {
+    const labels = (i.detail.split(' — ')[0] ?? '').split(' / ').map(x => x.replace(/\s+\d+$/, '').split(' ')[0]).filter(Boolean).sort();
+    return `area:${labels.join(' / ')}`;
+  }
+  if (i.kind === 'count') return /^Could not be counted/.test(i.detail) ? 'unreadable' : 'zero';
+  return 'other';
+}
+
+/** Next round A4 — the post-Agent-1 safety net: a sheet Agent 1 says the
+ *  drawings reference (its `missingSheets`, after the hygiene dropped the
+ *  ones actually loaded) that the sheet check did not already know about
+ *  (as present, missing or skipped). One blocking item per sheet: upload it
+ *  (the supplement pass), or confirm the takeoff doesn't need it (reason). */
+export function referencedSheetItems(
+  missingSheets: unknown,
+  known: { loadedSheetKeys: Set<string>; checkRefKeys: Set<string> },
+  normalize: (raw: string) => string | null,
+): ReviewItem[] {
+  const out: ReviewItem[] = [];
+  const seen = new Set<string>();
+  for (const raw of Array.isArray(missingSheets) ? missingSheets : []) {
+    const text = typeof raw === 'string' ? raw : typeof (raw as { sheet?: unknown })?.sheet === 'string' ? String((raw as { sheet: string }).sheet) : '';
+    const id = /([A-Za-z]{1,3}\s?[-.]?\s?\d{1,3}(?:\.\d{1,2})?[A-Za-z]?)/.exec(text)?.[1] ?? '';
+    const key = id ? normalize(id) : null;
+    if (!key || seen.has(key) || known.loadedSheetKeys.has(key) || known.checkRefKeys.has(key)) continue;
+    seen.add(key);
+    out.push({
+      id: `refsheet:${key}`,
+      kind: 'confirm',
+      title: `Referenced sheet ${id.replace(/\s+/g, '')} not in analysis`,
+      detail: `The drawing analysis found a reference to ${text.trim().slice(0, 160)}, which is not in the uploaded set and the sheet check did not flag. Upload it (it is analysed and counted into this run), or confirm the takeoff doesn't need it (with a reason).`,
+      actions: ['confirm'],
+      fingerprint: `refsheet|${key}`,
+    });
+  }
+  return out;
 }
 
 /** A re-run rebuilds the list; any item with the same id that the estimator
@@ -266,6 +369,27 @@ export interface ResolveInput {
   qty?: unknown;
   reason?: unknown;
   answer?: unknown;
+  /** Next round A7 — bulk 'answer': each item's own option at this index
+   *  (e.g. every "same area?" question in a group: 0 = keep, 1 = sum). */
+  answerIndex?: unknown;
+  /** Next round A7 — bulk 'answer': each item's pre-filled answer. */
+  useSuggested?: unknown;
+}
+
+/** Next round A7 — the per-item input of a bulk resolution. */
+export function perItemInput(item: ReviewItem, input: ResolveInput): ResolveInput | { error: string } {
+  if (input.action !== 'answer') return input;
+  if (input.useSuggested === true) {
+    if (!item.suggested) return { error: `${item.title} has no pre-filled answer.` };
+    return { ...input, answer: item.suggested };
+  }
+  if (input.answerIndex !== undefined && input.answerIndex !== null) {
+    const idx = Number(input.answerIndex);
+    const opt = Number.isInteger(idx) ? item.options?.[idx] : undefined;
+    if (opt === undefined) return { error: `${item.title}: no option ${String(input.answerIndex)}.` };
+    return { ...input, answer: opt };
+  }
+  return input;
 }
 
 export type ResolveCheck =
@@ -348,6 +472,8 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (area) qty = area.qty ?? qty;
     const cov = res(`coverage:${t.key}`);
     if (cov) qty = cov.action === 'not_on_job' ? null : (cov.qty ?? qty);
+    const rec = res(`recount:${t.key}`);
+    if (rec) qty = rec.qty ?? qty;
     if (qty !== undefined && (qty === null || qty > 0)) byType.set(t.key, qty);
     if (t.category === 'site_lighting') {
       const heads = res(`count:${t.key}:heads`);

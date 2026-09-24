@@ -14,6 +14,8 @@
 // Every project type (car wash, self-storage, office, ...) flows through the
 // same function — nothing here is national-account specific.
 
+import { tradeAssignmentOf, type TradeAssignment } from '../bidstd/tradeAssignment';
+
 export type TargetCategory =
   | 'interior_lighting'
   | 'exterior_building'
@@ -41,6 +43,10 @@ export interface CountTarget {
   /** Pole-mounted site types only: heads per pole from the schedule. */
   headsPerPole: number | null;
   emergency: boolean;
+  /** Next round A6 — who furnishes / installs it, when its schedule or
+   *  legend text says ("G.C. furnished/installed" = APT; "installed by HVAC,
+   *  wired by EC" = another trade, APT connects). Absent = APT F&I. */
+  assignment?: TradeAssignment;
 }
 
 export interface TargetBuildResult {
@@ -112,6 +118,10 @@ export function buildCountTargets(agent1: Record<string, unknown> | null | undef
 
   const add = (t: CountTarget) => {
     if (!t.key) return;
+    if (t.assignment === undefined) {
+      const a = tradeAssignmentOf(t.description);
+      if (a) t.assignment = a;
+    }
     const existing = byKey.get(t.key);
     if (existing) {
       // Same type seen twice (a schedule split across two sheets, a batch

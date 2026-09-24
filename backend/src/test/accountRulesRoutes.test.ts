@@ -30,7 +30,19 @@ describe('account_rules seed (migration 114)', () => {
         power_poles: { mode: 'ask' },
       },
     });
-    expect(byName['7-Eleven']).toMatchObject({ terms: { lighting: { furnishBy: 'GC', installBy: 'APT', vendor: 'Graybar national account', contact: 'Anson Sauce, 817-475-0178, 7-eleven.national@graybar.com' } } });
+    // Next round Part B (coordinator follow-up, migration 129) — fixtures,
+    // panels, switchgear/SPD/receptacles (other_equipment) and disconnects
+    // are now APT furnish & install via the Graybar 7-Eleven national
+    // account; the prior "furnished by GC" reading is gone.
+    expect(byName['7-Eleven']).toMatchObject({
+      terms: {
+        lighting: { furnishBy: 'APT', installBy: 'APT', vendor: 'Graybar 7-Eleven national account', contact: 'Anson Sauce, 817-475-0178, 7-eleven.national@graybar.com' },
+        panels: { furnishBy: 'APT', installBy: 'APT' },
+        disconnects: { furnishBy: 'APT', installBy: 'APT' },
+        other_equipment: { furnishBy: 'APT', installBy: 'APT' },
+      },
+      autoDeductAlternate: { enabled: true, termKeys: ['lighting', 'panels', 'disconnects', 'other_equipment'] },
+    });
   });
 });
 
@@ -58,13 +70,13 @@ describe('account rule edits', () => {
 });
 
 describe('buildAccountTermsSnapshot on the seeded rules', () => {
-  it('Kissimmee (E-2 power pole statement): AutoZone matched by the owner on the drawings, poles from the drawings, no question', async (ctx) => {
+  it('Kissimmee (E-2 "BY GC" power pole statement): AutoZone matched by the owner on the drawings; Decision 4 — still asked, APT pre-filled', async (ctx) => {
     if (!ok) return ctx.skip();
     const snap = await buildAccountTermsSnapshot({ name: 'Kissimmee FL 10077', brand: null, project_type: 'retail' }, kissimmeeAgent1());
     expect(snap.ruleName).toBe('AutoZone');
     expect(snap.matchedBy).toBe('"AutoZone" in the drawings');
-    expect(snap.resolved.find(t => t.term === 'power_poles')).toMatchObject({ furnishBy: 'GC', installBy: 'GC', source: 'drawings' });
-    expect(snap.questions).toEqual([]);
+    expect(snap.resolved.find(t => t.term === 'power_poles')).toBeUndefined();
+    expect(snap.questions.map(q => `${q.term}:${q.half}:${q.suggested}`)).toEqual(['power_poles:furnish:APT', 'power_poles:install:APT']);
     expect(snap.mdpOnDrawings).toBe(false);
   });
   it('no statement on the drawings -> a power poles scope question', async (ctx) => {

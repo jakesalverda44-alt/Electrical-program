@@ -187,3 +187,68 @@ describe('TakeoffReviewPanel — fix round 1', () => {
     ]);
   });
 });
+
+describe('next round A4 — Referenced sheet not in analysis', () => {
+  it('offers Upload the sheet (supplement pass) and Confirm with a reason', async () => {
+    const onSupplement = vi.fn(async () => {});
+    render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} onSupplement={onSupplement}
+      review={{ status: 'needs_review', items: [{ id: 'refsheet:E9', kind: 'confirm', title: 'Referenced sheet E-9 not in analysis', detail: 'The drawing analysis found a reference to E-9 (see note 5 on E-3)…', actions: ['confirm'] }] }} />);
+    expect(screen.getByTestId('review-item-refsheet:E9').textContent).toContain('Referenced sheet E-9 not in analysis');
+    const file = new File([new Uint8Array(5000)], 'E-9.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByTestId('supplement-input-refsheet:E9'), { target: { files: [file] } });
+    await waitFor(() => expect(onSupplement).toHaveBeenCalledWith([file]));
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeTruthy();
+  });
+});
+
+describe('next round A6 — a "by G.C." note pre-fills APT', () => {
+  it('APT is selected and saving sends it', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'clear', items: [] } });
+    render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null}
+      review={{ status: 'needs_review', items: [{ id: 'scope:power_poles:furnish', kind: 'scope_question', title: 'Power poles — furnished by', detail: 'Who FURNISHES the power poles?', question: 'Who FURNISHES the power poles?', options: ['APT', 'GC', 'Owner', 'Vendor'], suggested: 'APT', notes: [] }] }} />);
+    expect((screen.getByRole('radio', { name: 'APT' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['scope:power_poles:furnish'], action: 'answer', answer: 'APT' }));
+  });
+});
+
+describe('next round A7 — grouped by cause, bulk actions, info never blocks', () => {
+  const ITEMS = [
+    { id: 'count:L', kind: 'count' as const, title: 'Type L — LED wall sconce', detail: 'Counted 0: not found on any counted plan sheet.', group: 'zero' },
+    { id: 'count:OS', kind: 'count' as const, title: 'Type OS — Ceiling occupancy sensor', detail: 'Counted 0: not found on any counted plan sheet.', group: 'zero' },
+    { id: 'area:GFI', kind: 'area' as const, title: 'Type GFI: same area or different areas?', detail: 'E-2 "POWER PLAN" 16 / E-2.1 "SYSTEMS PLAN" 4 — same area (keep 16) or different areas (sum 20)?', options: ['Same area — keep 16', 'Different areas — sum 20'], actions: ['answer' as const, 'count' as const], group: 'area:E-2 / E-2.1' },
+    { id: 'area:DUPLEX', kind: 'area' as const, title: 'Type DUPLEX: same area or different areas?', detail: 'E-2 11 / E-2.1 2', options: ['Same area — keep 11', 'Different areas — sum 13'], actions: ['answer' as const, 'count' as const], group: 'area:E-2 / E-2.1' },
+    { id: 'scope:power_poles:furnish', kind: 'scope_question' as const, title: 'Power poles — furnished by', detail: 'Who FURNISHES the power poles?', options: ['APT', 'GC', 'Owner', 'Vendor'], suggested: 'APT', group: 'scope' },
+    { id: 'scope:power_poles:install', kind: 'scope_question' as const, title: 'Power poles — installed by', detail: 'Who INSTALLS the power poles?', options: ['APT', 'GC', 'Owner', 'Vendor'], suggested: 'APT', group: 'scope' },
+    { id: 'count:EF', kind: 'count' as const, title: 'Type EF — Exhaust fan', detail: 'Counted 0 … listed for information, not blocking.', blocking: false, group: 'info' },
+  ];
+  function renderGroups() {
+    render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} review={{ status: 'needs_review', items: ITEMS }} />);
+  }
+  it('the status counts blocking items only; info is a collapsed group', () => {
+    renderGroups();
+    expect(screen.getByTestId('takeoff-review-status').textContent).toBe('Needs review — 6 open');
+    expect(screen.getByTestId('review-group-info').tagName).toBe('DETAILS');
+    expect(screen.getByTestId('review-group-info').textContent).toContain('1 for information');
+    expect(screen.getByTestId('review-group-area:E-2 / E-2.1').textContent).toContain('Same area? E-2 / E-2.1 (2 types)');
+  });
+  it('one click answers the whole "same area?" group (each item its own option)', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'needs_review', items: ITEMS } });
+    renderGroups();
+    fireEvent.click(screen.getByTestId('group-area-sum-area:E-2 / E-2.1'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['area:GFI', 'area:DUPLEX'], action: 'answer', answerIndex: 1 }));
+  });
+  it('accept the pre-filled scope answers in one click', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'needs_review', items: ITEMS } });
+    renderGroups();
+    fireEvent.click(screen.getByTestId('group-scope-accept'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['scope:power_poles:furnish', 'scope:power_poles:install'], action: 'answer', useSuggested: true }));
+  });
+  it('mark a whole zero group not on this job with one reason', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'needs_review', items: ITEMS } });
+    renderGroups();
+    fireEvent.change(screen.getByTestId('group-reason-zero'), { target: { value: 'Not in this remodel scope' } });
+    fireEvent.click(screen.getByTestId('group-noj-zero'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['count:L', 'count:OS'], action: 'not_on_job', reason: 'Not in this remodel scope' }));
+  });
+});

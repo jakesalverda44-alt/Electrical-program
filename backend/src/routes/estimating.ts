@@ -1,6 +1,8 @@
 // Estimating labor engine — Task 5 routes, mounted at /api/estimating.
 // Library reads are requireAuth; library writes are requireAdmin. Bid-level
 // routes use the same loadAccessibleBid ownership check as routes/estimates.ts.
+import { laborDuplicatePairs, describePair, type DupLine } from '../estimating/duplicateLines';
+import { isRealReason } from '../ai/reviewItems';
 import { Router } from 'express';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
 import { loadAccessibleBid } from '../utils/ownership';
@@ -16,7 +18,20 @@ import {
 import { normalizeUnit, MapConfidence } from '../estimating/mapper';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
 import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
+import { computeBomCalibrationForJobs } from '../estimating/bomCalibration';
+import { pool } from '../db/pool';
 import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, setHalfSize, getPlanPdfDocuments } from '../estimating/sheets';
+import { parseAccubidBom } from '../estimating/accubidBom';
+import { buildImportPreview, applyImportPreview, derivePoleBaseAssembly, applyPoleBaseAssembly } from '../estimating/accubidImport';
+import { extractPdfPageTexts } from '../ai/pdfText';
+import { pdfUpload } from '../utils/upload';
+import {
+  computeAccubidRecapForBid, saveAccubidRecapForBid, getAccubidSettings, saveAccubidSettings, AccubidSettings,
+  createQuote, updateQuote, deleteQuote, QuoteInput,
+  createCostLine, updateCostLine, deleteCostLine, CostLineInput,
+  createAlternate, updateAlternate, deleteAlternate, AlternateInput,
+  listGcOverheadDefaults, setGcOverheadDefault, persistPriceForBid,
+} from '../estimating/accubidBidData';
 // Fix round 1 / S4 — reuse the exact same Content-Type/Content-Disposition/
 // nosniff lockdown routes/documents.ts already applies (audit Security #6),
 // instead of the plan-file route rolling its own (looser) header logic.
@@ -94,6 +109,10 @@ function validateSettings(body: unknown): ValidationResult<ClientSettingsInput> 
     pcts[field] = v;
   }
   const factorIds = Array.isArray(s.factor_ids) ? s.factor_ids.filter((x): x is string => typeof x === 'string') : [];
+  // Next round B2 — omitted (undefined) means "leave whatever pricing mode
+  // this bid already has" (saveBidEstimate's own COALESCE handles that); an
+  // explicit, recognized value switches it.
+  const pricingMode = s.pricing_mode === 'phase_a' || s.pricing_mode === 'accubid' ? s.pricing_mode : undefined;
   return {
     ok: true,
     value: {
@@ -107,6 +126,7 @@ function validateSettings(body: unknown): ValidationResult<ClientSettingsInput> 
       profit_pct: pcts.profit_pct,
       crew_size: crewSize,
       floors_above_2: floorsAbove2,
+      pricing_mode: pricingMode,
     },
   };
 }
@@ -191,11 +211,22 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
         ? raw.recheck_run_id : null,
       recheck_reason: raw.recheck_reason === 'no_confident_match' || raw.recheck_reason === 'ambiguous_match'
         ? raw.recheck_reason : null,
+      // Next round A7 — "different items — keep both", with a real reason.
+      dup_ok: validDupOk(raw.dup_ok),
       source: raw.source as 'takeoff' | 'manual',
       sort: typeof raw.sort === 'number' ? raw.sort : undefined,
     });
   }
   return { ok: true, value: out };
+}
+
+function validDupOk(v: unknown): ClientLineInput['dup_ok'] {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  const withKeys = Array.isArray(o.with) ? o.with.filter((k): k is string => typeof k === 'string' && k.length <= 80).slice(0, 20) : [];
+  const reason = typeof o.reason === 'string' ? o.reason.trim().slice(0, 500) : '';
+  if (!withKeys.length || !isRealReason(reason)) return null;
+  return { with: withKeys, reason, ...(typeof o.by === 'string' ? { by: o.by.slice(0, 120) } : {}), ...(typeof o.at === 'string' ? { at: o.at.slice(0, 40) } : {}) };
 }
 
 // ── Markups validation (Phase B, Task 3) ────────────────────────────────────
@@ -566,6 +597,99 @@ router.put('/library/factors/:id', requireAuth, requireAdmin, async (req, res) =
   res.json(updated);
 });
 
+// ── Accubid BOM import (Next round Part B, Task 1) ──────────────────────────
+// Settings > Labor Library > "Import Accubid BOM": upload a BOM PDF -> preview
+// diff -> apply. Declared before /:bidId so these paths are never captured as
+// a bid id.
+
+async function resolveBomText(req: AuthRequest & { file?: Express.Multer.File }): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  if (req.file?.buffer) {
+    try {
+      const pages = await extractPdfPageTexts(req.file.buffer);
+      return { ok: true, text: pages.join('\n') };
+    } catch {
+      return { ok: false, error: 'Could not extract text from the uploaded PDF (pdftotext failed or is unavailable).' };
+    }
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (typeof body.bomText === 'string' && body.bomText.trim()) return { ok: true, text: body.bomText };
+  return { ok: false, error: 'Upload a BOM PDF, or pass bomText (pdftotext -layout output).' };
+}
+
+// Review round 2 / S11 — "update prices" is the admin's own checkbox intent;
+// the BOM's own header date (never a caller-supplied bomDate, never a
+// hardcoded one) is what buildImportPreview actually gates prices on.
+router.post('/library/accubid-import/preview', requireAuth, requireAdmin, pdfUpload.single('file'), async (req: AuthRequest, res) => {
+  const resolved = await resolveBomText(req as AuthRequest & { file?: Express.Multer.File });
+  if (!resolved.ok) return res.status(400).json({ error: resolved.error });
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const updatePrices = body.updatePrices === true || body.updatePrices === 'true';
+  const library = await getLibrary();
+  const preview = buildImportPreview(resolved.text, library, { updatePrices });
+  const poleBase = derivePoleBaseAssembly(parseAccubidBom(resolved.text).rows);
+  res.json({ ...preview, poleBase });
+});
+
+router.post('/library/accubid-import/apply', requireAuth, requireAdmin, pdfUpload.single('file'), async (req: AuthRequest, res) => {
+  const resolved = await resolveBomText(req as AuthRequest & { file?: Express.Multer.File });
+  if (!resolved.ok) return res.status(400).json({ error: resolved.error });
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const updatePrices = body.updatePrices === true || body.updatePrices === 'true';
+  const force = body.force === true || body.force === 'true';
+  const library = await getLibrary();
+  const preview = buildImportPreview(resolved.text, library, { updatePrices });
+  // Review round 2 / S12 — apply follows the preview's own reconciliation
+  // and warnings exactly: a BOM whose computed totals don't foot to its own
+  // printed footer, or that has ANY unparseable line, is never applied
+  // silently — the admin sees the preview's numbers/warnings and either
+  // fixes the BOM or explicitly passes force:true to apply it anyway.
+  if (!force && (!preview.reconciles || preview.warnings.length > 0)) {
+    return res.status(409).json({
+      error: preview.reconciles
+        ? `This BOM has ${preview.warnings.length} line${preview.warnings.length === 1 ? '' : 's'} that could not be read — review the preview, or pass force:true to apply anyway.`
+        : `This BOM's computed totals don't match its own printed footer — review the preview, or pass force:true to apply anyway.`,
+      reconciles: preview.reconciles,
+      warnings: preview.warnings,
+    });
+  }
+  // Review round 2 / N-R2-1 — wire the admin's accepted proposal codes
+  // through to the apply step. Without this, a propose_update row (S15's
+  // unit-mismatch/big-delta guard) could never actually be accepted — the
+  // route never passed acceptProposals at all, so every proposal was a dead
+  // end regardless of what the estimator picked in the preview UI.
+  const acceptProposalsRaw = body.acceptProposals;
+  const acceptProposals = new Set(
+    Array.isArray(acceptProposalsRaw) ? acceptProposalsRaw.filter((c): c is string => typeof c === 'string') : []
+  );
+  const result = await applyImportPreview(preview, { acceptProposals });
+
+  const rows = parseAccubidBom(resolved.text).rows;
+  const poleBasePlan = derivePoleBaseAssembly(rows);
+  let poleBase: { itemsCreated: number; itemsUpdated: number } | null = null;
+  if (poleBasePlan) {
+    // Re-read the library — applyImportPreview may have just created some of
+    // these same component items as plain BOM rows.
+    const libraryAfter = await getLibrary();
+    poleBase = await applyPoleBaseAssembly(poleBasePlan, libraryAfter);
+  }
+
+  res.json({ ...result, poleBase });
+});
+
+// ── Settings: per-GC overhead default table (Decision 5) ────────────────────
+// Declared before /:bidId so "gc-overhead-defaults" is never captured as a bid id.
+
+router.get('/gc-overhead-defaults', requireAuth, async (_req, res) => {
+  res.json(await listGcOverheadDefaults());
+});
+
+router.put('/gc-overhead-defaults/:gcName', requireAuth, requireAdmin, async (req, res) => {
+  const overheadPct = Number((req.body ?? {}).overheadPct);
+  if (!Number.isFinite(overheadPct) || overheadPct < 0) return res.status(400).json({ error: 'overheadPct must be a non-negative number' });
+  await setGcOverheadDefault(req.params.gcName, overheadPct);
+  res.json({ gcName: req.params.gcName, overheadPct });
+});
+
 // ── Calibration (Task 6) ─────────────────────────────────────────────────────
 // Declared before /:bidId so "calibration" is never captured as a bid id.
 
@@ -592,6 +716,39 @@ router.post('/calibration/apply', requireAuth, requireAdmin, async (req, res) =>
   }
 });
 
+// Next round Part B, Task 4 — calibration against Chris's real BOMs
+// (per-category hours, using HIS quantities, against the CURRENT library).
+// Read-only, same as GET /calibration — never writes anything (a suggestion
+// only; applyCalibrationAdjustment above is the one write path, and it's
+// always an explicit, separate action).
+router.post('/calibration/bom', requireAuth, requireAdmin, pdfUpload.array('files', 10), async (req: AuthRequest, res) => {
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const bomTextsRaw = Array.isArray(body.bomTexts) ? body.bomTexts : (typeof body.bomTexts === 'string' ? [body.bomTexts] : []);
+  const bomTexts: string[] = [...bomTextsRaw.filter((t): t is string => typeof t === 'string' && t.trim().length > 0)];
+  for (const f of files) {
+    try {
+      bomTexts.push((await extractPdfPageTexts(f.buffer)).join('\n'));
+    } catch {
+      return res.status(400).json({ error: `Could not extract text from "${f.originalname}" (pdftotext failed or is unavailable).` });
+    }
+  }
+  if (!bomTexts.length) return res.status(400).json({ error: 'Upload at least one BOM PDF, or pass bomTexts.' });
+
+  // Review round 2 / N16 — fetch full item data (name/category/aliases/
+  // source), not just code+unit+hours: the calibration comparison now
+  // resolves each BOM row through the SAME mapper a real takeoff line uses,
+  // never by the row's own deterministic import code (which finds nothing,
+  // or the wrong thing, once an import has reconciled the row onto an
+  // EXISTING seed item rather than minting its own).
+  const { rows } = await pool.query("SELECT code, name, category, unit, aliases, source, labor_hours FROM est_items WHERE active = true");
+  const items = rows.map(r => ({
+    code: r.code as string, name: r.name as string, category: r.category as string, unit: r.unit as EstUnit,
+    aliases: (r.aliases as string[]) ?? [], source: r.source as string, laborHours: Number(r.labor_hours),
+  }));
+  res.json(computeBomCalibrationForJobs(bomTexts, items));
+});
+
 // ── Per-bid ──────────────────────────────────────────────────────────────────
 
 router.get('/:bidId', requireAuth, async (req: AuthRequest, res) => {
@@ -616,7 +773,7 @@ router.get('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   // edit or calibration apply since the last save) — the frontend surfaces
   // that drift as "Estimate changed since last save" rather than silently
   // showing a number that no longer matches bids.amount.
-  res.json({ lines: existingLines, settings, recap, proposed: false, savedGrandTotal });
+  res.json({ lines: existingLines, settings, recap, proposed: false, savedGrandTotal, duplicates: laborDuplicatePairs(existingLines) });
 });
 
 router.post('/:bidId/sync-takeoff', requireAuth, async (req: AuthRequest, res) => {
@@ -629,7 +786,7 @@ router.post('/:bidId/sync-takeoff', requireAuth, async (req: AuthRequest, res) =
   const result = await catchNonFiniteTotal(syncTakeoff(bidId));
   if (!result.ok) return res.status(400).json({ error: 'Computed totals are not finite — refusing to sync' });
   const recap = await computeRecapForBid(bidId);
-  res.json({ ...result.value, recap });
+  res.json({ ...result.value, recap, duplicates: laborDuplicatePairs(await getBidLines(bidId)) });
 });
 
 router.post('/:bidId/price', requireAuth, async (req: AuthRequest, res) => {
@@ -654,9 +811,296 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const settingsV = validateSettings(req.body?.settings);
   if (!settingsV.ok) return res.status(400).json({ error: settingsV.error });
 
+  // Next round A7 — a possible double count (a kept line from the previous
+  // run next to a fresh takeoff line for the same item) blocks the save
+  // until the estimator resolves it.
+  const dups = laborDuplicatePairs(linesV.value.map(l => ({ ...l, line_key: l.line_key ?? l.line_key_as_sent ?? '' })) as DupLine[]);
+  if (dups.length) {
+    return res.status(409).json({
+      error: `Possible duplicate: ${describePair(dups[0])}${dups.length > 1 ? ` (and ${dups.length - 1} more)` : ''}. Remove one of the two, or keep both with a reason, before saving.`,
+      duplicates: dups,
+    });
+  }
   const result = await catchNonFiniteTotal(saveBidEstimate(bidId, linesV.value, settingsV.value));
   if (!result.ok) return res.status(400).json({ error: 'Computed totals are not finite — refusing to save' });
   res.json(result.value);
+});
+
+// ── Accubid-style recap (Next round Part B, Task 2/3) ───────────────────────
+
+function validateAccubidSettings(body: unknown): ValidationResult<AccubidSettings> {
+  const s = (body ?? {}) as Record<string, unknown>;
+  const num = (v: unknown, field: string, opts: { min?: number } = {}): number | { error: string } => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || (opts.min != null && n < opts.min)) return { error: `${field} must be a number${opts.min != null ? ` >= ${opts.min}` : ''}` };
+    return n;
+  };
+  const fields: Record<string, number> = {};
+  const numericFields: Array<[keyof AccubidSettings, string]> = [
+    ['journeymanCount', 'journeymanCount'], ['journeymanRate', 'journeymanRate'],
+    ['apprenticeCount', 'apprenticeCount'], ['apprenticeRate', 'apprenticeRate'],
+    ['foremanCount', 'foremanCount'], ['foremanRate', 'foremanRate'],
+    ['burdenPct', 'burdenPct'], ['fringePerHr', 'fringePerHr'], ['materialTaxPct', 'materialTaxPct'],
+    ['laborOverheadPct', 'laborOverheadPct'], ['materialMarkupPct', 'materialMarkupPct'], ['laborMarkupPct', 'laborMarkupPct'],
+    ['quoteMarkupDefaultPct', 'quoteMarkupDefaultPct'], ['adjustmentMarkupPct', 'adjustmentMarkupPct'], ['salesMarkupPct', 'salesMarkupPct'],
+  ];
+  for (const [key, field] of numericFields) {
+    const r = num(s[key], field, { min: 0 });
+    if (typeof r !== 'number') return { ok: false, error: r.error };
+    fields[key] = r;
+  }
+  const shift = s.shift === 'night' ? 'night' : 'day';
+  // Review round 2 / N15 — a night rate is OPTIONAL (null = "use the day
+  // rate at night too"), but when the client DOES send one it must be a
+  // real, non-negative number: the old version did `Number(v)` unchecked,
+  // so a bad value (NaN, e.g. from a stray non-numeric string) sailed
+  // straight through to a NUMERIC(10,2) column and 500'd instead of 400ing.
+  const nightFieldNames: Array<[keyof AccubidSettings, string]> = [
+    ['nightJourneymanRate', 'nightJourneymanRate'], ['nightApprenticeRate', 'nightApprenticeRate'], ['nightForemanRate', 'nightForemanRate'],
+  ];
+  const nightFields: Record<string, number | null> = {};
+  for (const [key, field] of nightFieldNames) {
+    const v = s[key];
+    if (v == null || v === '') { nightFields[key] = null; continue; }
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) return { ok: false, error: `${field} must be a non-negative number, or left blank` };
+    nightFields[key] = n;
+  }
+  return {
+    ok: true,
+    value: {
+      shift,
+      journeymanCount: fields.journeymanCount, journeymanRate: fields.journeymanRate,
+      apprenticeCount: fields.apprenticeCount, apprenticeRate: fields.apprenticeRate,
+      foremanCount: fields.foremanCount, foremanRate: fields.foremanRate,
+      nightJourneymanRate: nightFields.nightJourneymanRate, nightApprenticeRate: nightFields.nightApprenticeRate, nightForemanRate: nightFields.nightForemanRate,
+      burdenPct: fields.burdenPct, fringePerHr: fields.fringePerHr, materialTaxPct: fields.materialTaxPct,
+      laborOverheadPct: fields.laborOverheadPct, materialMarkupPct: fields.materialMarkupPct, laborMarkupPct: fields.laborMarkupPct,
+      quoteMarkupDefaultPct: fields.quoteMarkupDefaultPct, adjustmentMarkupPct: fields.adjustmentMarkupPct, salesMarkupPct: fields.salesMarkupPct,
+    },
+  };
+}
+
+router.get('/:bidId/accubid', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const data = await computeAccubidRecapForBid(bidId);
+  res.json(data);
+});
+
+router.put('/:bidId/accubid/settings', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const v = validateAccubidSettings(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  await saveAccubidSettings(bidId, v.value);
+  const data = await saveAccubidRecapForBid(bidId);
+  res.json(data);
+});
+
+function validateQuoteInput(body: unknown): ValidationResult<QuoteInput> {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const description = typeof b.description === 'string' ? b.description.trim() : '';
+  if (!description) return { ok: false, error: 'description is required' };
+  const amount = Number(b.amount);
+  if (!Number.isFinite(amount) || amount < 0) return { ok: false, error: 'amount must be a non-negative number' };
+  const markupPct = Number(b.markupPct);
+  if (!Number.isFinite(markupPct) || markupPct < 0) return { ok: false, error: 'markupPct must be a non-negative number' };
+  const taxPct = b.taxPct != null ? Number(b.taxPct) : 0;
+  if (!Number.isFinite(taxPct) || taxPct < 0) return { ok: false, error: 'taxPct must be a non-negative number' };
+  const status = b.status === 'firm' ? 'firm' : 'budget_pending';
+  return { ok: true, value: { description, amount, taxPct, markupPct, status, vendor: typeof b.vendor === 'string' ? b.vendor : null, sort: b.sort != null ? Number(b.sort) : 0 } };
+}
+
+// Fix round 2 / B6 — a PATCH-style PUT only sends the fields it's changing,
+// but every field it DOES send must still be well-formed: the reviewer's
+// repro sent `{amount:'abc'}` straight through to a numeric SQL column and
+// got a 500. Each field here is validated only when present; an absent
+// field is left for accubidBidData.ts's own `patch.field ?? existing`
+// fallback to carry forward untouched.
+function validatePartial<T extends object>(
+  body: unknown,
+  checks: Record<string, (v: unknown) => string | null>
+): ValidationResult<Partial<T>> {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const value: Record<string, unknown> = {};
+  for (const [key, check] of Object.entries(checks)) {
+    if (!(key in b) || b[key] === undefined) continue;
+    const err = check(b[key]);
+    if (err) return { ok: false, error: err };
+    value[key] = b[key];
+  }
+  return { ok: true, value: value as Partial<T> };
+}
+
+const nonNegNumber = (field: string) => (v: unknown): string | null => {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? null : `${field} must be a non-negative number`;
+};
+const nonEmptyString = (field: string) => (v: unknown): string | null =>
+  (typeof v === 'string' && v.trim().length > 0) ? null : `${field} must be a non-empty string`;
+
+function validateQuotePatch(body: unknown): ValidationResult<Partial<QuoteInput>> {
+  const r = validatePartial<QuoteInput>(body, {
+    description: nonEmptyString('description'),
+    amount: nonNegNumber('amount'),
+    taxPct: nonNegNumber('taxPct'),
+    markupPct: nonNegNumber('markupPct'),
+    status: (v) => (v === 'firm' || v === 'budget_pending') ? null : 'status must be "firm" or "budget_pending"',
+    vendor: (v) => (v === null || typeof v === 'string') ? null : 'vendor must be a string or null',
+    sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
+  });
+  if (!r.ok) return r;
+  const value = { ...r.value } as Partial<QuoteInput>;
+  if (value.amount != null) value.amount = Number(value.amount);
+  if (value.taxPct != null) value.taxPct = Number(value.taxPct);
+  if (value.markupPct != null) value.markupPct = Number(value.markupPct);
+  if (value.sort != null) value.sort = Number(value.sort);
+  return { ok: true, value };
+}
+
+router.post('/:bidId/accubid/quotes', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const v = validateQuoteInput(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const created = await createQuote(bidId, v.value);
+  await persistPriceForBid(bidId);
+  res.json(created);
+});
+
+router.put('/:bidId/accubid/quotes/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const v = validateQuotePatch(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const updated = await updateQuote(req.params.id, bidId, v.value);
+  if (!updated) return res.status(404).json({ error: 'Quote not found' });
+  await persistPriceForBid(bidId);
+  res.json(updated);
+});
+
+router.delete('/:bidId/accubid/quotes/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const ok = await deleteQuote(req.params.id, bidId);
+  if (!ok) return res.status(404).json({ error: 'Quote not found' });
+  await persistPriceForBid(bidId);
+  res.status(204).end();
+});
+
+function validateCostLineInput(body: unknown): ValidationResult<CostLineInput> {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const kind = b.kind === 'general_expense' ? 'general_expense' : b.kind === 'equipment' ? 'equipment' : null;
+  if (!kind) return { ok: false, error: 'kind must be "equipment" or "general_expense"' };
+  const description = typeof b.description === 'string' ? b.description.trim() : '';
+  if (!description) return { ok: false, error: 'description is required' };
+  const amount = Number(b.amount);
+  if (!Number.isFinite(amount) || amount < 0) return { ok: false, error: 'amount must be a non-negative number' };
+  const taxPct = b.taxPct != null ? Number(b.taxPct) : 0;
+  if (!Number.isFinite(taxPct) || taxPct < 0) return { ok: false, error: 'taxPct must be a non-negative number' };
+  return { ok: true, value: { kind, description, amount, taxPct, sort: b.sort != null ? Number(b.sort) : 0 } };
+}
+
+function validateCostLinePatch(body: unknown): ValidationResult<Partial<CostLineInput>> {
+  const r = validatePartial<CostLineInput>(body, {
+    kind: (v) => (v === 'equipment' || v === 'general_expense') ? null : 'kind must be "equipment" or "general_expense"',
+    description: nonEmptyString('description'),
+    amount: nonNegNumber('amount'),
+    taxPct: nonNegNumber('taxPct'),
+    sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
+  });
+  if (!r.ok) return r;
+  const value = { ...r.value } as Partial<CostLineInput>;
+  if (value.amount != null) value.amount = Number(value.amount);
+  if (value.taxPct != null) value.taxPct = Number(value.taxPct);
+  if (value.sort != null) value.sort = Number(value.sort);
+  return { ok: true, value };
+}
+
+router.post('/:bidId/accubid/cost-lines', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const v = validateCostLineInput(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const created = await createCostLine(bidId, v.value);
+  await persistPriceForBid(bidId);
+  res.json(created);
+});
+
+router.put('/:bidId/accubid/cost-lines/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const v = validateCostLinePatch(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const updated = await updateCostLine(req.params.id, bidId, v.value);
+  if (!updated) return res.status(404).json({ error: 'Cost line not found' });
+  await persistPriceForBid(bidId);
+  res.json(updated);
+});
+
+router.delete('/:bidId/accubid/cost-lines/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const ok = await deleteCostLine(req.params.id, bidId);
+  if (!ok) return res.status(404).json({ error: 'Cost line not found' });
+  await persistPriceForBid(bidId);
+  res.status(204).end();
+});
+
+function validateAlternateInput(body: unknown): ValidationResult<AlternateInput> {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const kind = b.kind === 'deduct' ? 'deduct' : b.kind === 'add' ? 'add' : null;
+  if (!kind) return { ok: false, error: 'kind must be "add" or "deduct"' };
+  const description = typeof b.description === 'string' ? b.description.trim() : '';
+  if (!description) return { ok: false, error: 'description is required' };
+  const amount = Number(b.amount);
+  if (!Number.isFinite(amount) || amount < 0) return { ok: false, error: 'amount must be a non-negative number' };
+  return { ok: true, value: { kind, description, amount, sort: b.sort != null ? Number(b.sort) : 0 } };
+}
+
+function validateAlternatePatch(body: unknown): ValidationResult<Partial<AlternateInput>> {
+  const r = validatePartial<AlternateInput>(body, {
+    kind: (v) => (v === 'add' || v === 'deduct') ? null : 'kind must be "add" or "deduct"',
+    description: nonEmptyString('description'),
+    amount: nonNegNumber('amount'),
+    sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
+  });
+  if (!r.ok) return r;
+  const value = { ...r.value } as Partial<AlternateInput>;
+  if (value.amount != null) value.amount = Number(value.amount);
+  if (value.sort != null) value.sort = Number(value.sort);
+  return { ok: true, value };
+}
+
+router.post('/:bidId/accubid/alternates', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const v = validateAlternateInput(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const created = await createAlternate(bidId, v.value);
+  await persistPriceForBid(bidId);
+  res.json(created);
+});
+
+router.put('/:bidId/accubid/alternates/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const v = validateAlternatePatch(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const updated = await updateAlternate(req.params.id, bidId, v.value);
+  if (!updated) return res.status(404).json({ error: 'Alternate not found (or it is a system-computed one — those cannot be hand-edited)' });
+  await persistPriceForBid(bidId);
+  res.json(updated);
+});
+
+router.delete('/:bidId/accubid/alternates/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const ok = await deleteAlternate(req.params.id, bidId);
+  if (!ok) return res.status(404).json({ error: 'Alternate not found (or it is a system-computed one)' });
+  await persistPriceForBid(bidId);
+  res.status(204).end();
 });
 
 // ── Sheets (Phase B, Task 2) ─────────────────────────────────────────────────

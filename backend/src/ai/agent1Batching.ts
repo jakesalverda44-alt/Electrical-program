@@ -30,6 +30,8 @@ import {
 import { pageTextBlock, MIN_CHARS_FOR_TEXT_BLOCK, TOTAL_TEXT_CAP } from './pdfText';
 import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { logger } from '../utils/logger';
+import { runWithConcurrencyLimit } from '../utils/concurrencyLimit';
+import { RunCancelledError } from './runControl';
 
 /**
  * Anthropic's vision pricing is approximately (width_px * height_px) / 750
@@ -109,10 +111,13 @@ export type Agent1WorkUnit =
       estTokens: number;
     };
 
+/** Next round A3 — what Agent 1 is told about a reference sheet. */
+export const REFERENCE_SHEET_NOTE = 'context only: another discipline\'s sheet that the electrical drawings reference or that carries equipment data; read its schedules and notes, but do not count fixtures or devices from it and do not list it as a missing sheet';
+
 /** Class ordering used both for the old whole-file sort and this page-level
  *  one: schedules first (read best when Agent 1 sees them first), then
  *  details, then plans. */
-const CLASS_ORDER: Record<SheetClass, number> = { schedule: 0, detail: 1, plan: 2 };
+const CLASS_ORDER: Record<SheetClass, number> = { schedule: 0, detail: 1, plan: 2, reference: 3 };
 
 /** Pure — schedule-first ordering across the WHOLE upload (not just within one
  *  file): a stable sort so pages within the same class keep their original
@@ -223,10 +228,62 @@ export async function buildBlocksForBatch(
     }
     // 'pdf-page' — u.label is built from the vision classifier's echoed sheet
     // number/title, also attacker-influenceable via a hostile title block.
-    blocks.push({ type: 'text', text: `--- Sheet: ${sanitizeForPrompt(u.label)} (${sanitizeForPrompt(u.cls)}) ---` });
+    blocks.push({ type: 'text', text: u.cls === 'reference'
+      ? `--- Sheet: ${sanitizeForPrompt(u.label)} (reference — ${REFERENCE_SHEET_NOTE}) ---`
+      : `--- Sheet: ${sanitizeForPrompt(u.label)} (${sanitizeForPrompt(u.cls)}) ---` });
     addText(u.label, u.page, u.pageText);
     const tiles = tilesByKey.get(`${u.filename}#${u.page}`);
     if (tiles) blocks.push(...tiles);
   }
   return blocks;
+}
+
+/** Next round A5 — Agent 1 batches run 3 at a time (Kissimmee: 13 batches
+ *  ran one after another for ~12 minutes). */
+export const AGENT1_CONCURRENCY = 3;
+
+/** Run `count` batch calls with bounded concurrency. Results come back in
+ *  BATCH order whatever order the calls finish in, so the merge is exactly
+ *  what the sequential loop produced. Before each batch starts, `shouldStop`
+ *  is asked (a stopped / superseded run starts nothing new); the first
+ *  failure (e.g. a truncated batch) stops new batches too and is rethrown
+ *  once the in-flight ones settle. */
+export async function runBatchesInOrder<T>(
+  count: number,
+  /** `signal` aborts when a sibling batch failed (N8): an in-flight batch
+   *  stops billing instead of finishing for nothing. */
+  worker: (index: number, signal: AbortSignal) => Promise<T>,
+  opts: {
+    concurrency?: number;
+    shouldStop?: () => boolean | Promise<boolean>;
+    onSettled?: (done: number, total: number, running: number) => void;
+  } = {},
+): Promise<T[]> {
+  const results: T[] = new Array(count);
+  let failure: { err: unknown } | null = null;
+  let stopped = false;
+  let done = 0;
+  let running = 0;
+  const siblings = new AbortController();
+  await runWithConcurrencyLimit(Array.from({ length: count }, (_, i) => i), opts.concurrency ?? AGENT1_CONCURRENCY, async (i) => {
+    if (failure || stopped) return;
+    if (await opts.shouldStop?.()) { stopped = true; return; }
+    running++;
+    try {
+      results[i] = await worker(i, siblings.signal);
+    } catch (err) {
+      if (!failure) {
+        failure = { err };
+        // Fix round N8 — the run fails: abort the batches still in flight.
+        siblings.abort(new RunCancelledError('a sibling Agent 1 batch failed'));
+      }
+    } finally {
+      running--;
+      done++;
+      opts.onSettled?.(done, count, running);
+    }
+  });
+  if (failure) throw (failure as { err: unknown }).err;
+  if (stopped) throw new RunCancelledError();
+  return results;
 }

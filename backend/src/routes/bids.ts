@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { takeoffGate } from '../estimating/takeoffReview';
+import { takeoffGate, budgetPendingGate } from '../estimating/takeoffReview';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, canRestore, AuthRequest, ownScopeId } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
@@ -375,6 +375,12 @@ router.post('/:id/draft-proposal', requireAuth, async (req: AuthRequest, res) =>
   // unreadable counts, unanswered scope questions) can't be sent.
   const gate = await takeoffGate(bid.id);
   if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+  // Fix round 2 / B5 — a budget-pending vendor quote blocks the GC send too
+  // (a "budget number" going out the door as though it were firm is exactly
+  // the mistake this closes). Never applied to email-prebid-chris below —
+  // that internal package carries no pricing at all.
+  const budgetGate = await budgetPendingGate(bid.id);
+  if (budgetGate) return res.status(409).json({ error: budgetGate.error });
 
   const to = Array.isArray(req.body?.to)
     ? (req.body.to as unknown[]).map(e => String(e).trim()).filter(Boolean)
