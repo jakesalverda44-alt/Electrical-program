@@ -24,7 +24,12 @@ export async function getTakeoffReview(bidId: string): Promise<TakeoffReview> {
 
 export interface GateBlock {
   error: string;
-  openItems: Array<Pick<ReviewItem, 'id' | 'title' | 'detail'> & { kind: ReviewItem['kind'] | 'duplicate' }>;
+  openItems: Array<Pick<ReviewItem, 'id' | 'title' | 'detail'> & {
+    kind: ReviewItem['kind'] | 'duplicate';
+    /** B5 — for a Labor & Pricing line missing its evidence reason: its
+     *  line_key, so the frontend can jump to that row and focus the field. */
+    lineKey?: string;
+  }>;
 }
 
 /** null = not blocked. A takeoff with open review items blocks Agent 4, the
@@ -87,21 +92,31 @@ export async function budgetPendingGate(bidId: string): Promise<GateBlock | null
  *  plan), and composed before pricing exists at all. A GC-facing generate/
  *  send route calls this the same way it calls takeoffGate / budgetPendingGate. */
 export async function evidenceGate(bidId: string): Promise<GateBlock | null> {
-  const { rows } = await pool.query('SELECT count_result FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  const { rows } = await pool.query('SELECT count_result, review_items FROM takeoff_results WHERE bid_id = $1', [bidId]);
   const cr = (rows[0]?.count_result as CountResult | null) ?? null;
-  const missingTypes = missingEvidenceTypes(cr?.types ?? []);
-  const missingLines = manualLinesMissingReason(await getBidLines(bidId));
+  // S14 — a type the estimator resolved (any action: not on job, a typed
+  // count, confirmed markers) has its own evidence already; never re-gated.
+  const reviewItems = (rows[0]?.review_items as ReviewItem[] | null) ?? [];
+  const resolvedKeys = new Set(reviewItems.filter(i => i.resolution && i.typeKey).map(i => i.typeKey!));
+  const missingTypes = missingEvidenceTypes(cr?.types ?? [], resolvedKeys);
+  const missingLines = manualLinesMissingReason((await getBidLines(bidId)).map(l => ({ ...l, lineKey: l.line_key })));
   if (!missingTypes.length && !missingLines.length) return null;
-  const openItems = [
+  const openItems: GateBlock['openItems'] = [
     ...missingTypes.map(t => ({
+      // N5 — the type's own key is already stable (unlike a line's
+      // description); this half never needed a fix, but is kept explicit.
       id: `evidence:${t.key}`, kind: 'count' as const,
       title: `Type ${t.type}${t.description ? ` — ${t.description}` : ''}`,
-      detail: 'This counted quantity carries no evidence (no marker, schedule row, typical expansion, or accepted gap-fill mark) — check the Plans view or the Takeoff review.',
+      detail: 'This counted quantity carries no evidence (no marker, schedule row or typical expansion) — check the Plans view or the Takeoff review.',
     })),
+    // B5 / N5 — keyed by line_key (stable, never collides on a shared
+    // description) so the frontend can jump straight to the row and focus
+    // its reason field.
     ...missingLines.map(l => ({
-      id: `evidence:manual:${l.description || '(untitled line)'}`, kind: 'confirm' as const,
+      id: `evidence:line:${l.lineKey}`, kind: 'confirm' as const,
       title: l.description || '(untitled line)',
-      detail: 'A manual line (or a hand-typed quantity) needs a reason in Labor & Pricing before it can go on a GC document.',
+      detail: 'A manual line (or a hand-typed quantity) needs a reason before it can go on a GC document — add one in Labor & Pricing.',
+      lineKey: l.lineKey,
     })),
   ];
   const names = openItems.map(i => i.title);
@@ -171,9 +186,14 @@ async function applyResolution(
   const markerCounts = new Map<string, MarkerTally>();
   if (input?.action === 'markers') {
     for (const id of itemIds) {
-      const m = /^(?:count|coverage):(.+)$/.exec(id);
+      // Fix round (B2) — a `gapfill:`/`reconcile:` id can name several
+      // types at once ("S1+S2"); its marker tally is the sum across them.
+      const m = /^(?:count|coverage|gapfill|reconcile):(.+)$/.exec(id);
       const isTypeItem = !!m && !id.endsWith(':heads');
-      markerCounts.set(id, isTypeItem ? await confirmedMarkersForType(bidId, m![1]) : { counted: 0, excluded: [] });
+      if (!isTypeItem) { markerCounts.set(id, { counted: 0, excluded: [] }); continue; }
+      const keys = m![1].split('+');
+      const tallies = await Promise.all(keys.map(k => confirmedMarkersForType(bidId, k)));
+      markerCounts.set(id, { counted: tallies.reduce((s, t) => s + t.counted, 0), excluded: tallies.flatMap(t => t.excluded) });
     }
   }
   const client = await pool.connect();

@@ -41,7 +41,7 @@ import {
   getMarkups, batchMarkups, getRollup, applyMarkups, getMarkupLineKeysByIds,
   MarkupCreateInput, MarkupUpdateInput, type MarkupRow,
 } from '../estimating/markups';
-import { logLabeledEvents } from '../estimating/labeledEvents';
+import { logLabeledEvents, type LabeledEventInput } from '../estimating/labeledEvents';
 import { MarkupKind, MarkupStatus, MarkupPoint } from '../estimating/markupMath';
 
 // Fix round 1 / B2 — a route handler awaiting saveBidEstimate/syncTakeoff
@@ -1230,17 +1230,17 @@ router.get('/:bidId/markups', requireAuth, async (req: AuthRequest, res) => {
  *  suggestion or a fresh manual placement, not a correction of one — never
  *  logged here). Best-effort: a lookup or insert failure here is swallowed
  *  by logLabeledEvent itself, never surfaced to the caller. */
-async function logMarkerLabeledEvents(bidId: string, updates: MarkupUpdateInput[], updatedRows: MarkupRow[]): Promise<void> {
+async function logMarkerLabeledEvents(bidId: string, updates: MarkupUpdateInput[], updatedRows: MarkupRow[], by: string | null): Promise<void> {
   const changed = updates.filter(u => u.status !== undefined || u.points !== undefined || u.label !== undefined);
   if (!changed.length) return;
   const byId = new Map(updatedRows.map(r => [r.id, r]));
   const { rows: b } = await pool.query('SELECT brand, project_type FROM bids WHERE id = $1', [bidId]).catch(() => ({ rows: [] as Array<{ brand: string | null; project_type: string | null }> }));
   const client = b[0]?.brand ?? null;
   const projectType = b[0]?.project_type ?? null;
-  await logLabeledEvents(changed.map(u => {
+  const events: LabeledEventInput[] = changed.map(u => {
     const row = byId.get(u.id);
     return {
-      bidId, kind: 'marker_update' as const, typeKey: row?.label ?? null, sheetKey: row?.documentId ? `${row.documentId}#${row.pageIndex}` : null,
+      bidId, kind: 'marker_update', typeKey: row?.label ?? null, sheetKey: row?.documentId ? `${row.documentId}#${row.pageIndex}` : null,
       client, projectType,
       detail: {
         markupId: u.id,
@@ -1249,7 +1249,21 @@ async function logMarkerLabeledEvents(bidId: string, updates: MarkupUpdateInput[
         ...(u.label !== undefined ? { reclassTo: u.label } : {}),
       },
     };
-  }));
+  });
+  // Fix round (B2 / N6) — the estimator's OWN confirmation of a gap-fill
+  // SUGGESTED marker is the one moment a gap-fill candidate ever becomes
+  // real: a human decision, `by` the estimator's name, told apart from the
+  // model's own 'gapfill_suggested' event by kind AND by created_by.
+  for (const u of changed) {
+    const row = byId.get(u.id);
+    if (u.status === 'confirmed' && row?.source === 'gap_fill') {
+      events.push({
+        bidId, kind: 'gapfill_accept', typeKey: row.label ?? null, sheetKey: row.documentId ? `${row.documentId}#${row.pageIndex}` : null,
+        client, projectType, detail: { markupId: u.id },
+      });
+    }
+  }
+  await logLabeledEvents(events.map(e => ({ ...e, by })));
 }
 
 router.post('/:bidId/markups/batch', requireAuth, async (req: AuthRequest, res) => {
@@ -1322,7 +1336,7 @@ router.post('/:bidId/markups/batch', requireAuth, async (req: AuthRequest, res) 
   // (status), move (points) or reclass (label) is exactly the estimator's
   // own correction of what the AI proposed. Fire-and-forget: never adds
   // latency to the (very interactive) markup save, never fails it.
-  void logMarkerLabeledEvents(bidId, updates, result.updated);
+  void logMarkerLabeledEvents(bidId, updates, result.updated, req.user!.name ?? null);
   // One uniform shape for "this item didn't make it, and here's why" —
   // format/scope rejections (computed above, never reach the DB) and
   // batchMarkups' own DB-level skips (an id already claimed by another

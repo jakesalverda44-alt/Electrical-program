@@ -166,6 +166,11 @@ function round2(n: number): number {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Fix round (S6) — must match migration 134's backfill text exactly (a raw
+ *  SQL literal, so it can't import this constant). Kept here as the one
+ *  place the SAVE path checks for it. */
+export const EVIDENCE_NOTE_PLACEHOLDER = 'Carried over from before the evidence gate (2026-09) — add a real reason next time this line is touched.';
+
 /** Phase B, Task 1 — the value saveBidEstimate() writes for a line's
  *  line_key: the client's own value when it's a real UUID (an existing line
  *  round-tripping what it was given), a fresh one otherwise (a brand-new
@@ -1007,11 +1012,27 @@ export async function saveBidEstimate(
   try {
     await client.query('BEGIN');
 
+    // Fix round (S6) — migration 134's grandfather placeholder is good only
+    // until the line changes: read the PRIOR qty for every line before the
+    // full delete-and-reinsert below, so a line whose qty moved while its
+    // note is still exactly the placeholder loses that note (never silently
+    // keeps passing the gate on a number nobody actually gave a reason for).
+    const { rows: priorRows } = await client.query('SELECT line_key, qty, evidence_note FROM est_bid_lines WHERE bid_id = $1', [bidId]);
+    const priorByKey = new Map(priorRows.map(r => [r.line_key as string, { qty: Number(r.qty), evidence_note: r.evidence_note as string | null }]));
+
     await client.query('DELETE FROM est_bid_lines WHERE bid_id = $1', [bidId]);
     for (let i = 0; i < rows.length; i++) {
       const l = rows[i];
       const resolvedLineKey = resolveLineKey(l.line_key);
       if (l.line_key_as_sent && l.line_key_as_sent !== resolvedLineKey) remappedLineKeys[l.line_key_as_sent] = resolvedLineKey;
+      // Fix round (S6) — the migration-134 placeholder is a grandfather
+      // clause, not a permanent pass: if this line's qty moved since the
+      // note was last whatever it is now, and the note is STILL exactly the
+      // placeholder, it is cleared (never silently kept while the number
+      // changed under it).
+      const priorForThis = priorByKey.get(resolvedLineKey);
+      const sentNote = typeof l.evidence_note === 'string' && l.evidence_note.trim() ? l.evidence_note.trim() : null;
+      const evidenceNote = (sentNote === EVIDENCE_NOTE_PLACEHOLDER && priorForThis && priorForThis.qty !== l.qty) ? null : sentNote;
       await client.query(
         `INSERT INTO est_bid_lines
            (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id,
@@ -1051,7 +1072,7 @@ export async function saveBidEstimate(
          // Evidence round 4.1 — round-tripped like sync_excluded/qty_source:
          // the client sends back whatever it received, trimmed to null when
          // blank so an empty string never counts as "has a reason".
-         (typeof l.evidence_note === 'string' && l.evidence_note.trim()) ? l.evidence_note.trim() : null]
+         evidenceNote]
       );
     }
 

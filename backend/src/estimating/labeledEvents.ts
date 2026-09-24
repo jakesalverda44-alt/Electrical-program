@@ -8,7 +8,23 @@
 import { pool } from '../db/pool';
 import { logger } from '../utils/logger';
 
-export type LabeledEventKind = 'marker_update' | 'review_resolution' | 'crop_check' | 'gapfill_accept';
+// Fix round (N6) — 'gapfill_suggested' is the MODEL's own decision (crop
+// check accept/reclass, logged at counting-stage time, `by` always null);
+// 'gapfill_accept' is the ESTIMATOR's later confirmation of that suggested
+// marker (logged from the markup-confirm path, `by` the estimator's name)
+// — the two are never conflated, so a labeled-data consumer can always tell
+// a human label from a model one by `created_by`, not just by kind.
+export type LabeledEventKind = 'marker_update' | 'review_resolution' | 'crop_check' | 'gapfill_suggested' | 'gapfill_accept';
+
+const MAX_DETAIL_STRING = 500;
+
+/** N6 — cap every string value a caller puts in `detail`, so a runaway
+ *  model note or answer text never grows the table unbounded. */
+function capDetail(detail: Record<string, unknown> | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(detail ?? {})) out[k] = typeof v === 'string' ? v.slice(0, MAX_DETAIL_STRING) : v;
+  return out;
+}
 
 export interface LabeledEventInput {
   bidId: string;
@@ -34,7 +50,7 @@ export async function logLabeledEvent(input: LabeledEventInput): Promise<void> {
         input.bidId, input.runId ?? null, input.kind, input.typeKey ?? null, input.sheetKey ?? null,
         input.client ?? null, input.projectType ?? null,
         input.cropRef ? JSON.stringify(input.cropRef) : null,
-        JSON.stringify(input.detail ?? {}), input.by ?? null,
+        JSON.stringify(capDetail(input.detail)), input.by ?? null,
       ]
     );
   } catch (err) {
