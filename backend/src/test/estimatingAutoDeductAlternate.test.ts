@@ -79,7 +79,14 @@ describe('syncAutoDeductAlternateForBid — a 7-Eleven-shaped bid', () => {
     expect(auto!.kind).toBe('deduct');
     // matched material: lighting 5000 + panel 3000 = 8000 (conduit/branch power line excluded); +20% markup = 9600
     expect(auto!.amount).toBeCloseTo(9600, 2);
-    expect(auto!.description).toContain('$9,600.00');
+    // Fix round 2 / S16 — the label (migration 131) no longer states the
+    // dollar amount itself: composeProposal.ts's formatAlternateBullet
+    // already prefixes every deduct-kind alternate with "DEDUCT $X.XX — ",
+    // so a label that ALSO said "...deduct %AMOUNT%..." printed the figure
+    // twice on the proposal. The raw description here is just the scenario
+    // text; the amount lives only in `auto!.amount` and in the rendered
+    // bullet (composeProposal.test.ts covers that render).
+    expect(auto!.description).not.toMatch(/\$[\d,]+\.\d{2}/);
     expect(auto!.description).toContain('installation remains in APT scope');
   });
 

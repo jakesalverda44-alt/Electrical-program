@@ -106,12 +106,20 @@ describe('next round B3 — Labor & Pricing Alternates print as separate proposa
   it('an add alternate prints too, and a system-computed one (auto deduct) prints the same way', () => {
     const r = run([
       { kind: 'add', description: 'EV charger rough-in per owner request', amount: 1200 },
-      { kind: 'deduct', description: 'If the Graybar package is furnished by others through the Graybar 7-Eleven national account, deduct $9,600.00 — installation remains in APT scope', amount: 9600 },
+      // Review round 2 / S16 (migration 131) — the auto-deduct's own label
+      // never states the amount itself any more (formatAlternateBullet
+      // below is the ONLY place "DEDUCT $X.XX" gets printed); a label that
+      // ALSO said the amount used to print it twice.
+      { kind: 'deduct', description: 'If the Graybar package is furnished by others through the Graybar 7-Eleven national account instead of APT — installation remains in APT scope', amount: 9600 },
     ]);
     expect(r.data.alternates).toEqual(expect.arrayContaining([
       'ADD $1,200.00 — EV charger rough-in per owner request.',
       expect.stringContaining('DEDUCT $9,600.00'),
     ]));
+    const deductBullet = r.data.alternates!.find((b): b is string => typeof b === 'string' && b.startsWith('DEDUCT'))!;
+    // The dollar figure appears exactly once — the whole point of S16's fix.
+    expect((deductBullet.match(/\$9,600\.00/g) ?? []).length).toBe(1);
+    expect(deductBullet).not.toMatch(/\bdeduct\b.*\bdeduct\b/i);
   });
 
   it('never duplicates a bullet already present', () => {

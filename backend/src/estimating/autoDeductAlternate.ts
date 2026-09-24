@@ -27,31 +27,40 @@ export interface AutoDeductResult {
   matchedMaterial: number;
 }
 
-// Term -> which takeoff categories / description patterns it covers, for
-// matching a PRICED LINE to the term (est_bid_lines.category is always one
-// of boilerplate.ts's TAKEOFF_CATEGORIES — see accubidImport.ts's
-// classifyBomCategory for the same category set used elsewhere in Part B).
-const TERM_CATEGORY_MATCH: Partial<Record<TermKey, (category: string, description: string) => boolean>> = {
-  lighting: (category) => /lighting/i.test(category),
-  panels: (category) => category === 'Service & Distribution',
-  disconnects: (category) => category === 'Service & Distribution',
-  // Switchgear/SPD have no dedicated category — they live in Service &
-  // Distribution alongside panels/disconnects, so `other_equipment` on the
-  // 7-Eleven rule already covers them via the same category match. A
-  // Branch-Power receptacle line ALSO counts (7-Eleven's Graybar package
-  // includes receptacles) but only the receptacle rows, never the whole
-  // branch-power circuit — matched by description, not category, so
-  // wiring/conduit in Branch Power is never swept in by mistake.
-  other_equipment: (category, description) => category === 'Service & Distribution' || (category === 'Branch Power' && /receptacle/i.test(description)),
+// Review round 2 / S16 — matched by DESCRIPTION, term by term, never by
+// sweeping in a whole takeoff category: "Service & Distribution" also holds
+// APT's own feeder wire and conduit (which stay in APT's scope), and
+// "lighting" categories hold site/area lighting that isn't necessarily a
+// Graybar-package fixture either way — the description is what actually
+// says "this line IS a fixture/panel/switchgear/SPD/disconnect/receptacle".
+const TERM_DESCRIPTION_MATCH: Partial<Record<TermKey, RegExp>> = {
+  lighting: /\b(luminaires?|light(ing)?\s+fixtures?|wall\s*packs?|troffers?|high[\s-]?bays?|down\s*lights?|exit\s+signs?|emergency\s+(light|fixture)s?|flood\s*lights?|canopy\s+fixtures?)\b/i,
+  panels: /\b(panel\s*boards?|panels?|load\s*centers?)\b(?!\s*schedule)/i,
+  disconnects: /\b(disconnects?|safety\s+switch(es)?)\b/i,
+  // Switchgear/SPD/receptacles have no dedicated term key — the 7-Eleven
+  // rule carries them on `other_equipment` (migration 129's own note).
+  other_equipment: /\b(switchgear|surge\s*protect(ive|or|ion)?\s*devices?|\bspd\b|receptacles?)\b/i,
 };
+
+// Never part of the Graybar package regardless of which term matched: raw
+// raceway/wire/feeder text (APT's own scope, even inside a Service &
+// Distribution or Lighting Controls category), lighting CONTROLS (sensors,
+// photocells, contactors, time clocks — never the fixtures themselves), and
+// a panel SCHEDULE reference (paperwork, not a physical panel).
+const NEVER_DEDUCT_RE = /\b(conduit|raceway|\bwire\b|wiring|cables?|feeders?|thhn|thwn|\bemt\b|\bpvc\b|\brmc\b|\brigid\b|\bmc\b|\bfmc\b|\blfmc\b|liquidtight|occupancy\s+sensors?|photo\s*cells?|contactors?|time\s*clocks?|lighting\s+relays?|panel\s*schedules?)\b/i;
 
 function toCents(n: number): number { return Math.round((n + Number.EPSILON) * 100); }
 function fromCents(c: number): number { return c / 100; }
 function roundMoney(n: number): number { return fromCents(toCents(n)); }
 
-/** True when a priced line falls under one of the config's term keys. */
+/** True when a priced line is one of the EXACT Graybar-package item types
+ *  named by the config's term keys — never a whole category. The
+ *  "Lighting Controls" category and any raceway/wire/feeder/controls text
+ *  are excluded no matter which term would otherwise have matched. */
 export function lineMatchesAutoDeduct(line: Pick<DeductLineInput, 'category' | 'description'>, termKeys: TermKey[]): boolean {
-  return termKeys.some(key => TERM_CATEGORY_MATCH[key]?.(line.category, line.description) ?? false);
+  if (line.category === 'Lighting Controls') return false;
+  if (NEVER_DEDUCT_RE.test(line.description)) return false;
+  return termKeys.some(key => TERM_DESCRIPTION_MATCH[key]?.test(line.description) ?? false);
 }
 
 /** amount = Σ material $ of matched, non-excluded lines, plus that sum's

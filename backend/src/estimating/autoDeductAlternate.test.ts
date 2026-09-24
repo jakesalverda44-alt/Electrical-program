@@ -20,6 +20,25 @@ describe('lineMatchesAutoDeduct', () => {
     expect(lineMatchesAutoDeduct({ category: 'Grounding', description: 'Ground rod' }, [...SEVEN_ELEVEN_TERM_KEYS])).toBe(false);
     expect(lineMatchesAutoDeduct({ category: 'Low Voltage Infrastructure (Conduit & Boxes Only)', description: 'Data box' }, [...SEVEN_ELEVEN_TERM_KEYS])).toBe(false);
   });
+
+  // Review round 2 / S16 — the old category-based match swept in APT's own
+  // feeder wire/conduit and lighting controls just because they share a
+  // category with a real Graybar item; the fix matches by description AND
+  // excludes these regardless of category.
+  it("never matches feeder wire or conduit, even in Service & Distribution (APT's own scope, not Graybar's)", () => {
+    expect(lineMatchesAutoDeduct({ category: 'Service & Distribution', description: 'Service feeder - 4/0 THHN copper' }, [...SEVEN_ELEVEN_TERM_KEYS])).toBe(false);
+    expect(lineMatchesAutoDeduct({ category: 'Service & Distribution', description: '4" PVC conduit, underground service' }, [...SEVEN_ELEVEN_TERM_KEYS])).toBe(false);
+    expect(lineMatchesAutoDeduct({ category: 'Service & Distribution', description: 'Main disconnect switch, 400A' }, [...SEVEN_ELEVEN_TERM_KEYS])).toBe(true); // the disconnect ITSELF still matches
+  });
+
+  it('never matches the "Lighting Controls" category, even with fixture-sounding words in the description', () => {
+    expect(lineMatchesAutoDeduct({ category: 'Lighting Controls', description: 'Occupancy sensor for troffer fixtures' }, [...SEVEN_ELEVEN_TERM_KEYS])).toBe(false);
+    expect(lineMatchesAutoDeduct({ category: 'Lighting Controls', description: 'Lighting contactor panel' }, [...SEVEN_ELEVEN_TERM_KEYS])).toBe(false);
+  });
+
+  it('never matches a lighting CONTROL device even outside the Lighting Controls category (a mis-filed row)', () => {
+    expect(lineMatchesAutoDeduct({ category: 'Interior Lighting', description: 'Photocell for exterior fixtures' }, [...SEVEN_ELEVEN_TERM_KEYS])).toBe(false);
+  });
 });
 
 describe('computeAutoDeductAmount', () => {
