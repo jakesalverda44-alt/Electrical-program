@@ -69,6 +69,17 @@ function features(text: string): { groups: Set<string>; sizes: Set<string>; word
   return { groups, sizes, words };
 }
 
+/** Next round A7 — two free-text lines plausibly name the same fixture /
+ *  device (same rules as plausiblySameFixture, symmetric). */
+export function plausiblySameText(a: string, b: string): boolean {
+  const x = features(a);
+  const y = features(b);
+  const sizeConflict = x.sizes.size > 0 && y.sizes.size > 0 && ![...x.sizes].some(s => y.sizes.has(s));
+  if (sizeConflict) return false;
+  if ([...x.groups].some(g => y.groups.has(g))) return true;
+  return [...x.words].filter(w => y.words.has(w)).length >= 2;
+}
+
 /** Does a free-text line plausibly describe the counted type? The type's
  *  schedule description and symbol keywords, not its tag: the same kind of
  *  fixture (synonyms: "strip" = "linear", "exit sign" = an emergency type)

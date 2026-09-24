@@ -22,6 +22,7 @@ describe('tradeAssignmentOf — the Kissimmee legend strings (Decision 4: by G.C
     expect(outsideAptInstall(tradeAssignmentOf('Retail power pole, furnished by owner'))).toBe(false);
     expect(tradeAssignmentOf('Security camera (by others)')).toMatchObject({ aptScope: 'none' });
     expect(tradeAssignmentOf('Kitchen hood, N.I.C.')).toMatchObject({ aptScope: 'none' });
+    expect(tradeAssignmentOf("Data outlet (by owner's vendor)")).toMatchObject({ furnish: 'Vendor', install: 'Vendor', aptScope: 'none' });
     expect(tradeAssignmentOf('Wash equipment furnished and installed by equipment vendor')).toMatchObject({ furnish: 'Vendor', install: 'Vendor', aptScope: 'none' });
     expect(tradeAssignmentOf('Water heater, furnished and installed by plumbing contractor, EC to connect')).toMatchObject({ aptScope: 'connection', otherTrade: 'plumbing' });
   });

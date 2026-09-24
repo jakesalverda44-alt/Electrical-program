@@ -1,6 +1,8 @@
 // Estimating labor engine — Task 5 routes, mounted at /api/estimating.
 // Library reads are requireAuth; library writes are requireAdmin. Bid-level
 // routes use the same loadAccessibleBid ownership check as routes/estimates.ts.
+import { laborDuplicatePairs, describePair, type DupLine } from '../estimating/duplicateLines';
+import { isRealReason } from '../ai/reviewItems';
 import { Router } from 'express';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
 import { loadAccessibleBid } from '../utils/ownership';
@@ -191,11 +193,22 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
         ? raw.recheck_run_id : null,
       recheck_reason: raw.recheck_reason === 'no_confident_match' || raw.recheck_reason === 'ambiguous_match'
         ? raw.recheck_reason : null,
+      // Next round A7 — "different items — keep both", with a real reason.
+      dup_ok: validDupOk(raw.dup_ok),
       source: raw.source as 'takeoff' | 'manual',
       sort: typeof raw.sort === 'number' ? raw.sort : undefined,
     });
   }
   return { ok: true, value: out };
+}
+
+function validDupOk(v: unknown): ClientLineInput['dup_ok'] {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  const withKeys = Array.isArray(o.with) ? o.with.filter((k): k is string => typeof k === 'string' && k.length <= 80).slice(0, 20) : [];
+  const reason = typeof o.reason === 'string' ? o.reason.trim().slice(0, 500) : '';
+  if (!withKeys.length || !isRealReason(reason)) return null;
+  return { with: withKeys, reason, ...(typeof o.by === 'string' ? { by: o.by.slice(0, 120) } : {}), ...(typeof o.at === 'string' ? { at: o.at.slice(0, 40) } : {}) };
 }
 
 // ── Markups validation (Phase B, Task 3) ────────────────────────────────────
@@ -616,7 +629,7 @@ router.get('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   // edit or calibration apply since the last save) — the frontend surfaces
   // that drift as "Estimate changed since last save" rather than silently
   // showing a number that no longer matches bids.amount.
-  res.json({ lines: existingLines, settings, recap, proposed: false, savedGrandTotal });
+  res.json({ lines: existingLines, settings, recap, proposed: false, savedGrandTotal, duplicates: laborDuplicatePairs(existingLines) });
 });
 
 router.post('/:bidId/sync-takeoff', requireAuth, async (req: AuthRequest, res) => {
@@ -629,7 +642,7 @@ router.post('/:bidId/sync-takeoff', requireAuth, async (req: AuthRequest, res) =
   const result = await catchNonFiniteTotal(syncTakeoff(bidId));
   if (!result.ok) return res.status(400).json({ error: 'Computed totals are not finite — refusing to sync' });
   const recap = await computeRecapForBid(bidId);
-  res.json({ ...result.value, recap });
+  res.json({ ...result.value, recap, duplicates: laborDuplicatePairs(await getBidLines(bidId)) });
 });
 
 router.post('/:bidId/price', requireAuth, async (req: AuthRequest, res) => {
@@ -654,6 +667,16 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const settingsV = validateSettings(req.body?.settings);
   if (!settingsV.ok) return res.status(400).json({ error: settingsV.error });
 
+  // Next round A7 — a possible double count (a kept line from the previous
+  // run next to a fresh takeoff line for the same item) blocks the save
+  // until the estimator resolves it.
+  const dups = laborDuplicatePairs(linesV.value.map(l => ({ ...l, line_key: l.line_key ?? l.line_key_as_sent ?? '' })) as DupLine[]);
+  if (dups.length) {
+    return res.status(409).json({
+      error: `Possible duplicate: ${describePair(dups[0])}${dups.length > 1 ? ` (and ${dups.length - 1} more)` : ''}. Remove one of the two, or keep both with a reason, before saving.`,
+      duplicates: dups,
+    });
+  }
   const result = await catchNonFiniteTotal(saveBidEstimate(bidId, linesV.value, settingsV.value));
   if (!result.ok) return res.status(400).json({ error: 'Computed totals are not finite — refusing to save' });
   res.json(result.value);

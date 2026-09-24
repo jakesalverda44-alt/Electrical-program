@@ -238,6 +238,19 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `unscheduled|${qty}|${sheet}`,
     });
   }
+  // Next round A7 — a type counted only on the photometric sheet (the
+  // fallback, A3): shown for information, never blocking.
+  for (const t of countResult?.types ?? []) {
+    if (t.status === 'counted' && t.photometricOnly) {
+      items.push({
+        id: `photo:${t.key}`, kind: 'count', blocking: false,
+        title: `Type ${t.type}${t.description ? ` — ${t.description}` : ''}: counted from the photometric sheet`,
+        detail: `Not shown on the electrical plans; ${t.count} counted on ${t.sheets.filter(x => x.used).map(x => x.label).join(', ')}. Check it if the site plan should show it.`,
+        typeKey: t.key, type: t.type, category: t.category, aiCount: t.count, actions: ['count', 'not_on_job'],
+        fingerprint: `photo|${t.count}`,
+      });
+    }
+  }
   for (const q of scopeQuestions) {
     items.push({
       ...(q.suggested ? { suggested: q.suggested } : {}),
@@ -254,7 +267,27 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `scope|${q.options.join('|')}|${q.notes.join('|')}`,
     });
   }
-  return items;
+  return items.map(i => ({ ...i, group: groupOf(i) }));
+}
+
+/** Next round A7 — the cause an item is listed under (one group, one bulk
+ *  action): 'zero', 'unreadable', 'area:<sheets>', 'coverage', 'heads',
+ *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
+export function groupOf(i: ReviewItem): string {
+  if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : 'info';
+  if (i.id.startsWith('counting:')) return 'counting';
+  if (i.id.startsWith('refsheet:')) return 'refsheets';
+  if (i.id.startsWith('sheet:') || i.id.startsWith('file:')) return 'sheets';
+  if (i.id.startsWith('scope:')) return 'scope';
+  if (i.id.startsWith('unscheduled:')) return 'unscheduled';
+  if (i.id.startsWith('coverage:')) return 'coverage';
+  if (i.id.endsWith(':heads')) return 'heads';
+  if (i.kind === 'area') {
+    const labels = (i.detail.split(' — ')[0] ?? '').split(' / ').map(x => x.replace(/\s+\d+$/, '').split(' ')[0]).filter(Boolean).sort();
+    return `area:${labels.join(' / ')}`;
+  }
+  if (i.kind === 'count') return /^Could not be counted/.test(i.detail) ? 'unreadable' : 'zero';
+  return 'other';
 }
 
 /** Next round A4 — the post-Agent-1 safety net: a sheet Agent 1 says the
@@ -315,6 +348,27 @@ export interface ResolveInput {
   qty?: unknown;
   reason?: unknown;
   answer?: unknown;
+  /** Next round A7 — bulk 'answer': each item's own option at this index
+   *  (e.g. every "same area?" question in a group: 0 = keep, 1 = sum). */
+  answerIndex?: unknown;
+  /** Next round A7 — bulk 'answer': each item's pre-filled answer. */
+  useSuggested?: unknown;
+}
+
+/** Next round A7 — the per-item input of a bulk resolution. */
+export function perItemInput(item: ReviewItem, input: ResolveInput): ResolveInput | { error: string } {
+  if (input.action !== 'answer') return input;
+  if (input.useSuggested === true) {
+    if (!item.suggested) return { error: `${item.title} has no pre-filled answer.` };
+    return { ...input, answer: item.suggested };
+  }
+  if (input.answerIndex !== undefined && input.answerIndex !== null) {
+    const idx = Number(input.answerIndex);
+    const opt = Number.isInteger(idx) ? item.options?.[idx] : undefined;
+    if (opt === undefined) return { error: `${item.title}: no option ${String(input.answerIndex)}.` };
+    return { ...input, answer: opt };
+  }
+  return input;
 }
 
 export type ResolveCheck =

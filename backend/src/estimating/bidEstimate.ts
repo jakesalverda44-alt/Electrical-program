@@ -123,6 +123,9 @@ export interface ClientLineInput {
   /** Fix round B1 — why sync-takeoff could not re-bind a kept line:
    *  'no_confident_match' | 'ambiguous_match'; null once bound. */
   recheck_reason?: 'no_confident_match' | 'ambiguous_match' | null;
+  /** Next round A7 — the estimator said this kept line and these new
+   *  takeoff lines (line_keys) are different items. */
+  dup_ok?: { with: string[]; reason: string; by?: string; at?: string } | null;
   source: 'takeoff' | 'manual';
   sort?: number;
 }
@@ -209,6 +212,7 @@ function rowToBidLine(r: Record<string, unknown>): BidLineRow {
     qty_source: (r.qty_source as 'takeoff' | 'manual' | 'markup' | undefined) ?? 'takeoff',
     recheck_run_id: (r.recheck_run_id as string | null) ?? null,
     recheck_reason: (r.recheck_reason as BidLineRow['recheck_reason']) ?? null,
+    dup_ok: (r.dup_ok as BidLineRow['dup_ok']) ?? null,
     source: r.source as 'takeoff' | 'manual',
     sort: Number(r.sort),
   };
@@ -936,8 +940,8 @@ export async function saveBidEstimate(
         `INSERT INTO est_bid_lines
            (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id,
             material_unit_override, labor_hours_override, confidence, excluded, source, qty_overridden, sync_excluded,
-            match_confidence, match_source, synced_description, line_key, qty_source, recheck_run_id, recheck_reason)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+            match_confidence, match_source, synced_description, line_key, qty_source, recheck_run_id, recheck_reason, dup_ok)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
         [bidId, l.sort, l.category, l.description, l.qty, l.unit,
          l.assembly_id ?? null, l.item_id ?? null, l.takeoff_key ?? null, l.takeoff_item_id ?? null,
          l.material_unit_override ?? null, l.labor_hours_override ?? null,
@@ -965,7 +969,9 @@ export async function saveBidEstimate(
          resolvedLineKey, resolveQtySource(l),
          // Re-run reset — round-tripped; a manual line never carries it.
          l.source === 'takeoff' ? (l.recheck_run_id ?? null) : null,
-         l.source === 'takeoff' && l.recheck_run_id ? (l.recheck_reason ?? null) : null]
+         l.source === 'takeoff' && l.recheck_run_id ? (l.recheck_reason ?? null) : null,
+         // Next round A7 — "different items — keep both" (a kept line only).
+         l.source === 'takeoff' && l.dup_ok ? JSON.stringify(l.dup_ok) : null]
       );
     }
 

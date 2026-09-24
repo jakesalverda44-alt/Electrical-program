@@ -63,8 +63,23 @@ export interface EstimateLine {
   recheck_run_id?: string | null;
   /** Fix round B1 — why Sync from takeoff could not re-bind this kept line. */
   recheck_reason?: 'no_confident_match' | 'ambiguous_match' | null;
+  /** Next round A7 — "different items — keep both" for a kept line. */
+  dup_ok?: { with: string[]; reason: string; by?: string; at?: string } | null;
   source: 'takeoff' | 'manual';
   sort?: number;
+}
+
+/** Next round A7 — a possible double count: a line kept from the previous
+ *  run (unbound) next to a fresh takeoff line for the same item. */
+export interface DuplicatePair {
+  keptKey: string;
+  keptDescription: string;
+  keptQty: number;
+  newKey: string;
+  newDescription: string;
+  newQty: number;
+  category: string;
+  unit: string;
 }
 
 export interface EstimateSettings {
@@ -119,6 +134,8 @@ export interface PricingRecap {
 }
 
 export interface EstimatingBidResponse {
+  /** Next round A7 — possible duplicates (see DuplicatePair). */
+  duplicates?: DuplicatePair[];
   lines: EstimateLine[];
   settings: EstimateSettings;
   recap: PricingRecap;
@@ -135,6 +152,7 @@ export interface SyncTakeoffResponse {
   added: number; updated: number; vanished: number; lines: EstimateLine[]; recap: PricingRecap;
   /** Re-run reset — carried-over lines re-bound / left unmatched. */
   rebound?: number; unbound?: number;
+  duplicates?: DuplicatePair[];
 }
 
 /** Phase B, Task 1 — PUT /estimating/:bidId's response now also returns the

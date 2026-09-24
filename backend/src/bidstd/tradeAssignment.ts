@@ -39,6 +39,7 @@ function party(raw: string): { p: AssignedParty; viaGc: boolean; trade?: string 
   if (!s) return null;
   const trade = OTHER_TRADE.exec(s);
   if (trade) return { p: 'OtherTrade', viaGc: false, trade: trade[1].replace(/\.$/, '').toUpperCase() === 'HVAC' ? 'HVAC' : trade[1].toLowerCase() };
+  if (/\bowner['’]?s\s+(vendor|contractor|supplier)\b/.test(s)) return { p: 'Vendor', viaGc: false };
   if (GC.test(s)) return { p: 'APT', viaGc: true };
   if (EC.test(s)) return { p: 'APT', viaGc: false };
   if (/\b(owner|tenant|landlord)\b/.test(s)) return { p: 'Owner', viaGc: false };
@@ -47,7 +48,7 @@ function party(raw: string): { p: AssignedParty; viaGc: boolean; trade?: string 
   return null;
 }
 
-const PARTY_PHRASE = String.raw`((?:the\s+)?(?:g\.\s?c\.?|gc|general\s+contractor|e\.\s?c\.?|ec|electrical\s+contractor|owner|tenant|vendor|equipment\s+vendor|manufacturer|others?|hvac|mechanical(?:\s+contractor)?|plumbing(?:\s+contractor)?|fire\s+protection(?:\s+contractor)?|sprinkler(?:\s+contractor)?)(?:\s+contractor)?)`;
+const PARTY_PHRASE = String.raw`((?:the\s+)?(?:owner['’]?s\s+(?:vendor|contractor|supplier)|g\.\s?c\.?|gc|general\s+contractor|e\.\s?c\.?|ec|electrical\s+contractor|owner|tenant|vendor|equipment\s+vendor|manufacturer|others?|hvac|mechanical(?:\s+contractor)?|plumbing(?:\s+contractor)?|fire\s+protection(?:\s+contractor)?|sprinkler(?:\s+contractor)?)(?:\s+contractor)?)`;
 
 /** Pure: who furnishes / installs an item, read from its schedule / legend
  *  text ("SIMPLEX RECEPTACLE, G.C. FURNISHED/INSTALLED", "EXHAUST FAN

@@ -1,10 +1,11 @@
 // Takeoff accuracy, Task 7 — DB half of the Needs-review list and its gate.
 // See ai/reviewItems.ts for the pure rules.
+import { laborDuplicatePairs, describePair } from './duplicateLines';
 import { pool } from '../db/pool';
 import { getBidLines } from './bidEstimate';
 import { lineForType } from './aiMarkers';
 import {
-  reviewStatus, validateResolution, reviewItemIsOpen,
+  reviewStatus, validateResolution, reviewItemIsOpen, perItemInput,
   type ReviewItem, type ResolveInput,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
@@ -21,7 +22,7 @@ export async function getTakeoffReview(bidId: string): Promise<TakeoffReview> {
 
 export interface GateBlock {
   error: string;
-  openItems: Array<Pick<ReviewItem, 'id' | 'kind' | 'title' | 'detail'>>;
+  openItems: Array<Pick<ReviewItem, 'id' | 'title' | 'detail'> & { kind: ReviewItem['kind'] | 'duplicate' }>;
 }
 
 /** null = not blocked. A takeoff with open review items blocks Agent 4, the
@@ -37,9 +38,12 @@ export async function takeoffGate(bidId: string): Promise<GateBlock | null> {
       openItems: [],
     };
   }
-  if (review.status !== 'needs_review') return null;
+  // Next round A7 — a possible double count in Labor & Pricing blocks the
+  // proposal the same way it blocks the save.
+  const dupBlock = await laborDuplicateGate(bidId);
+  if (review.status !== 'needs_review') return dupBlock;
   const open = review.items.filter(reviewItemIsOpen);
-  if (!open.length) return null;
+  if (!open.length) return dupBlock;
   return {
     error: `The takeoff needs review before a proposal can be generated or sent: ${open.length} item${open.length === 1 ? '' : 's'} open (${open.slice(0, 4).map(i => i.title).join('; ')}${open.length > 4 ? '; …' : ''}). Resolve them in the Takeoff step.`,
     openItems: open.map(i => ({ id: i.id, kind: i.kind, title: i.title, detail: i.detail })),
@@ -125,7 +129,10 @@ async function applyResolution(
         return { ok: false, status: 400, error: 'Heads are not marked on the plans — enter the head count.' };
       }
       const tally = markerCounts.get(id);
-      const check = validateResolution(item, input, tally?.counted ?? null);
+      // Next round A7 — a bulk answer resolves to each item's own option.
+      const mine = perItemInput(item, input);
+      if ('error' in mine) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: mine.error }; }
+      const check = validateResolution(item, mine, tally?.counted ?? null);
       if (!check.ok) {
         await client.query('ROLLBACK');
         const excl = tally?.excluded.length ? ` Not counted: ${tally.excluded.map(e => `${e.count} on ${e.label}`).join('; ')}.` : '';
@@ -155,4 +162,16 @@ export function resolveReviewItems(bidId: string, itemIds: string[], input: Reso
 
 export function reopenReviewItem(bidId: string, itemId: string): Promise<ResolveOutcome> {
   return applyResolution(bidId, [itemId], null, '');
+}
+
+/** Next round A7 — the saved Labor & Pricing lines hold an unresolved
+ *  possible duplicate (a kept line from the previous run + a fresh takeoff
+ *  line for the same item). */
+export async function laborDuplicateGate(bidId: string): Promise<GateBlock | null> {
+  const pairs = laborDuplicatePairs(await getBidLines(bidId));
+  if (!pairs.length) return null;
+  return {
+    error: `Labor & Pricing has ${pairs.length === 1 ? 'a possible duplicate' : `${pairs.length} possible duplicates`}: ${describePair(pairs[0])}${pairs.length > 1 ? '; …' : ''}. Resolve it in Labor & Pricing (remove one, or keep both with a reason) before generating or sending a proposal.`,
+    openItems: pairs.map(p => ({ id: `dup:${p.keptKey}:${p.newKey}`, kind: 'duplicate', title: `Possible duplicate: ${p.keptDescription} / ${p.newDescription}`, detail: describePair(p) })),
+  };
 }

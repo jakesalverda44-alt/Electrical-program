@@ -5,7 +5,7 @@ import React, { useMemo, useState } from 'react';
 import { useApi } from '../../hooks/useApi';
 import Modal from '../../components/Modal';
 import { useConfirm } from '../../components/ConfirmDialog';
-import { DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap } from './types';
+import { type DuplicatePair, DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap } from './types';
 
 // Fix round 2 / SF2 — the resolver only offers items/assemblies whose unit
 // FAMILY is compatible with the line's own unit: EA is its own family; LF/C/M
@@ -55,6 +55,41 @@ export interface LaborPricingStepProps {
   save: () => Promise<unknown>;
   syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number; rebound?: number; unbound?: number } | null>;
   showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
+  /** Next round A7 — possible duplicates from the server (GET / sync /
+   *  refused save); the open ones block the save until resolved. */
+  duplicates?: DuplicatePair[];
+}
+
+/** Next round A7 — the pairs still open against the CURRENT lines: both
+ *  lines still here, and no "keep both" decision on the kept one. */
+export function openDuplicatePairs(pairs: DuplicatePair[], lines: EstimateLine[]): DuplicatePair[] {
+  const byKey = new Map(lines.filter(l => l.line_key).map(l => [l.line_key as string, l]));
+  return pairs.filter(p => {
+    const k = byKey.get(p.keptKey);
+    const n = byKey.get(p.newKey);
+    return !!k && !!n && !k.excluded && !n.excluded && !(k.dup_ok?.with ?? []).includes(p.newKey);
+  });
+}
+
+function DuplicatePairControl({ pair, onRemove, onKeepBoth }: {
+  pair: DuplicatePair;
+  onRemove: (key: string) => void;
+  onKeepBoth: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+  const ok = reason.trim().length >= 10 && /[A-Za-z]{3,}/.test(reason);
+  return (
+    <div className="lp-banner" data-testid={`lp-dup-${pair.keptKey}-${pair.newKey}`} style={{ borderColor: 'var(--red)' }}>
+      <div><strong>Possible duplicate</strong> ({pair.category}): “{pair.keptDescription}” ({pair.keptQty} {pair.unit}, kept from the previous run) and “{pair.newDescription}” ({pair.newQty} {pair.unit}, new takeoff line).</div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+        <button type="button" className="btn ghost" onClick={() => onRemove(pair.newKey)} data-testid="lp-dup-remove-new">Same item — remove the new line</button>
+        <button type="button" className="btn ghost" onClick={() => onRemove(pair.keptKey)} data-testid="lp-dup-remove-kept">Same item — remove my old line</button>
+        <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Different items? Say why (at least 10 characters)" data-testid="lp-dup-reason"
+          style={{ flex: '1 1 220px', font: 'inherit', fontSize: 12.5 }}/>
+        <button type="button" className="btn ghost" disabled={!ok} onClick={() => onKeepBoth(reason.trim())} data-testid="lp-dup-keep-both">Different items — keep both</button>
+      </div>
+    </div>
+  );
 }
 
 /** Fix round 1 / S8 — a brand-new manual line needs a STABLE id the instant
@@ -80,8 +115,10 @@ function lineKey(line: EstimateLine, idx: number): string {
 }
 
 export function LaborPricingStep({
-  lines, settings, recap, saving, syncing, saveError, dirty, setLines, setSettings, save, syncTakeoff, showToast,
+  lines, settings, recap, saving, syncing, saveError, dirty, setLines, setSettings, save, syncTakeoff, showToast, duplicates = [],
 }: LaborPricingStepProps) {
+  const openDups = useMemo(() => openDuplicatePairs(duplicates, lines), [duplicates, lines]);
+  const dupKeys = useMemo(() => new Set(openDups.flatMap(p => [p.keptKey, p.newKey])), [openDups]);
   const { data: library } = useApi<Library>('/estimating/library');
   const [resolverIndex, setResolverIndex] = useState<number | null>(null);
   const [resolverQuery, setResolverQuery] = useState('');
@@ -299,6 +336,21 @@ export function LaborPricingStep({
         </div>
       )}
 
+      {openDups.length > 0 && (
+        <div data-testid="lp-duplicates">
+          {openDups.map(p => (
+            <DuplicatePairControl key={`${p.keptKey}-${p.newKey}`} pair={p}
+              onRemove={key => setLines(prev => prev.filter(l => l.line_key !== key))}
+              onKeepBoth={reason => setLines(prev => prev.map(l => (l.line_key === p.keptKey
+                ? { ...l, dup_ok: { with: [...(l.dup_ok?.with ?? []), p.newKey], reason, at: new Date().toISOString() } }
+                : l)))}/>
+          ))}
+          <div style={{ fontSize: 12, color: 'var(--text3)', margin: '4px 0 8px' }}>
+            Resolve {openDups.length === 1 ? 'it' : 'each one'} before saving — the proposal is blocked until then too.
+          </div>
+        </div>
+      )}
+
       {recheckCount > 0 && (
         <div className="lp-banner" data-testid="lp-recheck-banner">
           {recheckCount} line{recheckCount === 1 ? '' : 's'} kept from the previous analysis run (you had edited {recheckCount === 1 ? 'it' : 'them'}) — re-check {recheckCount === 1 ? 'it' : 'them'} against the new takeoff.
@@ -320,7 +372,8 @@ export function LaborPricingStep({
         <button type="button" className="btn ghost" onClick={addManualLine} data-testid="lp-add-manual">
           Add manual line
         </button>
-        <button type="button" className="btn primary" onClick={() => void save()} disabled={saving} data-testid="lp-save-button">
+        <button type="button" className="btn primary" onClick={() => void save()} disabled={saving || openDups.length > 0} data-testid="lp-save-button"
+          title={openDups.length ? 'Resolve the possible duplicate first' : undefined}>
           {saving ? 'Saving…' : 'Save'}
         </button>
         {saveError && <span style={{ color: 'var(--red)', fontSize: 12, alignSelf: 'center' }} data-testid="lp-save-error">{saveError}</span>}
@@ -421,9 +474,11 @@ export function LaborPricingStep({
                               : line.recheck_reason === 'ambiguous_match'
                                 ? 're-check: more than one new takeoff line matches'
                                 : 'From previous run — re-check'}
-                            <button type="button" className="lp-reset-btn" style={{ display: 'inline', marginLeft: 4, color: 'var(--amber)' }}
-                              data-testid={`lp-recheck-done-${idx}`}
-                              onClick={() => updateLine(idx, { recheck_run_id: null, recheck_reason: null })}>checked</button>
+                            {!dupKeys.has(line.line_key ?? '') && (
+                              <button type="button" className="lp-reset-btn" style={{ display: 'inline', marginLeft: 4, color: 'var(--amber)' }}
+                                data-testid={`lp-recheck-done-${idx}`}
+                                onClick={() => updateLine(idx, { recheck_run_id: null, recheck_reason: null })}>checked</button>
+                            )}
                           </span>
                         )}
                         {line.qty_overridden && (

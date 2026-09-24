@@ -1731,6 +1731,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           saving={estimatingBid.saving}
           syncing={estimatingBid.syncing}
           saveError={estimatingBid.saveError}
+          duplicates={estimatingBid.duplicates}
           setLines={estimatingBid.setLines}
           setSettings={estimatingBid.setSettings}
           save={estimatingBid.save}

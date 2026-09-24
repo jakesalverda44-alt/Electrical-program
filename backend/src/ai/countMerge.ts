@@ -77,6 +77,8 @@ export interface TypeCountResult {
   wattage: number | null;
   /** B4 — blocking: same area or different areas? */
   areaQuestion?: AreaQuestion;
+  /** Next round A3/A7 — counted only on a photometric sheet (the fallback). */
+  photometricOnly?: boolean;
   /** S3 — blocking: the count covers only part of what should have been
    *  counted (no plan of the right kind, only the power plan for lighting,
    *  only an enlarged or partial plan). */
@@ -184,7 +186,7 @@ export function matchRowToTarget(row: Record<string, unknown>, targets: CountTar
   return best;
 }
 
-type CombineResult = Pick<TypeCountResult, 'count' | 'sheets' | 'flags' | 'areaQuestion' | 'coverage'> & { allowedFailed: string[]; unreadableOn: string[] };
+type CombineResult = Pick<TypeCountResult, 'count' | 'sheets' | 'flags' | 'areaQuestion' | 'coverage' | 'photometricOnly'> & { allowedFailed: string[]; unreadableOn: string[] };
 
 /** Next round A3 — site and building-exterior fixture types only. */
 export function isSiteFixtureCategory(c: TargetCategory): boolean {
@@ -218,7 +220,7 @@ export function combineSheetCounts(t: CountTarget, sheets: SheetCountInput[]): C
   const used = alt.sheets.filter(x => x.used).map(x => x.label);
   alt.sheets = [...base.sheets, ...alt.sheets];
   alt.flags.push(`${t.type}: not shown on the electrical plans — ${alt.count} counted on the photometric sheet ${used.join(', ')}.`);
-  return alt;
+  return { ...alt, ...(alt.count > 0 ? { photometricOnly: true } : {}) };
 }
 
 function combineCore(
@@ -459,6 +461,7 @@ export function mergeCountsIntoTakeoff(
       count: c.count, heads, status, reason, sheets: c.sheets, flags: c.flags,
       ...(c.areaQuestion && status === 'counted' ? { areaQuestion: c.areaQuestion } : {}),
       ...(c.coverage && status === 'counted' ? { coverage: c.coverage } : {}),
+      ...(c.photometricOnly && status === 'counted' ? { photometricOnly: true } : {}),
     });
     flags.push(...c.flags);
   }

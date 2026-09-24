@@ -32,3 +32,8 @@
   .tr-panel { margin: 10px 12px 4px; }
   .tr-actions input[type='text'] { min-width: 0; width: 100%; }
 }
+/* Next round A7 — review items grouped by cause. */
+.tr-group { margin-top: 12px; }
+.tr-group-title { margin: 0; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); }
+.tr-group-info { margin-top: 12px; font-size: 12.5px; color: var(--text3); }
+.tr-group-info > summary { cursor: pointer; font-weight: 700; }
