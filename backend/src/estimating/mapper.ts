@@ -317,6 +317,58 @@ function racewayKindConflict(a: string | null, b: string | null): boolean {
   return a != null && b != null && a !== b;
 }
 
+// Review round 2 / N-R2-4 — matching kind NAME alone ("connector" ==
+// "connector") isn't enough for a FITTING: "3/4\" EMT connector" must never
+// match an accubid-imported lighting-track part just because both are
+// tagged "connector" — a real EMT connector's own name says EMT (or another
+// raceway material), and a live-end-feed track connector's doesn't.
+// "Fittings match on size plus raceway type" (the decision's own words) —
+// size is already covered by the existing spec/rating-conflict guard
+// (hasConflictingSpec); this adds the raceway-type half for the FITTING
+// kinds specifically. 'conduit' is excluded here: two bare raceway runs
+// ("3/4\" EMT" vs "3/4\" conduit") disagreeing on named material is already
+// caught by the ordinary materialConflict check above (which requires both
+// sides to actually name a *different* material — not just "one names
+// none"), so re-requiring a shared tag for 'conduit' would wrongly reject a
+// legitimate generic-vs-specific raceway alias.
+function fittingKindNeedsMaterialMatch(kind: string | null): kind is string {
+  return kind != null && kind !== 'conduit';
+}
+function sharesMaterialTag(a: Set<string>, b: Set<string>): boolean {
+  for (const t of a) if (b.has(t)) return true;
+  return false;
+}
+
+// Review round 2 / R2-S1 — an item's kind comes from its PRIMARY (head) noun,
+// not from every word that happens to appear in its name. "3/4\" EMT conduit
+// w/ fittings", "2\" rigid steel conduit (incl. fittings)" and the seed
+// catalog's own all-in raceway items ("3/4\" EMT (incl. couplings/straps)",
+// "…(incl. fittings/glue)") are all RACEWAY — "fittings"/"couplings"/
+// "straps"/"glue" there is a QUALIFIER PHRASE ("incl.", "including", "w/",
+// "with" + the word) noting what the price bundles in, never the head noun.
+// A genuine fitting product ("Expansion fitting, conduit", "Coupling - EMT
+// Set Screw Steel", "Conduit body (LB/T)") never carries that qualifier-
+// phrase shape — "fitting"/"coupling"/"body" is the very first word, not a
+// trailing note — so it's unaffected. Stripping the qualifier phrase before
+// classifying restores every match this over-broad guard (99d9453) took
+// away, without giving back the false match it was added to prevent.
+const RACEWAY_QUALIFIER_WORD = '(?:fittings?|couplings?|straps?|clips?|clamps?|glue)';
+const RACEWAY_QUALIFIER_RE = new RegExp(
+  `\\b(?:incl|including|w/|with)\\s+${RACEWAY_QUALIFIER_WORD}(?:\\s*[/,]\\s*${RACEWAY_QUALIFIER_WORD})*\\b`,
+  'g'
+);
+
+/** racewayKind, but computed from RAW normalized text (post-normalize(), pre-
+ *  tokenize) so the qualifier-phrase strip above can see and remove multi-
+ *  word / slash-joined phrases a Set<string> token bag has already lost the
+ *  adjacency to detect ("couplings/straps" tokenizes as ONE token; "w/" and
+ *  "fittings" are two SEPARATE tokens with no record they were adjacent). */
+function racewayKindFromNormalizedText(normText: string): string | null {
+  const stripped = normText.replace(RACEWAY_QUALIFIER_RE, ' ');
+  const tokenSet = new Set(stripped.split(' ').filter(Boolean));
+  return racewayKind(tokenSet, materialTagsOf(tokenSet));
+}
+
 // "Schedule 40"/"Schedule 80" is a real, common conduit-material qualifier —
 // its number is NOT a size or rating and must never trip the conflict guard
 // below (real seed regression: "4\" PVC" was failing to alias-match its own
@@ -385,7 +437,12 @@ function scoreCandidate(
   }
   const descMaterialTags = materialTagsOf(mergedTokens);
   const descConductorTags = conductorTagsOf(mergedTokens);
-  const descRacewayKind = racewayKind(mergedTokens, descMaterialTags);
+  // Review round 2 / R2-S1 — computed from raw normalized TEXT (merging
+  // descNorm+altNorm the same way mergedTokens merges their token sets), not
+  // from the already-tokenized mergedTokens: the qualifier-phrase strip
+  // needs the adjacency a Set<string> has already discarded (see
+  // racewayKindFromNormalizedText's own comment).
+  const descRacewayKind = racewayKindFromNormalizedText(altNorm ? `${descNorm} ${altNorm}` : descNorm);
   if (confidence !== 'exact') {
     for (const n of names) {
       if (!n) continue;
@@ -398,7 +455,12 @@ function scoreCandidate(
       // Review round 2 / B3 — "3/4 EMT" (kind: conduit) must never alias-
       // match "3/4 Connector - EMT Set Screw Steel" (kind: connector) even
       // though neither materialConflict above fires (both are tagged "emt").
-      if (racewayKindConflict(descRacewayKind, racewayKind(nTokens, nMaterialTags))) continue;
+      const nRacewayKindAlias = racewayKindFromNormalizedText(n);
+      if (racewayKindConflict(descRacewayKind, nRacewayKindAlias)) continue;
+      // N-R2-4 — same fitting kind on both sides isn't enough; they must
+      // also share a raceway material tag (see fittingKindNeedsMaterialMatch).
+      if (fittingKindNeedsMaterialMatch(descRacewayKind) && descRacewayKind === nRacewayKindAlias
+        && !sharesMaterialTag(descMaterialTags, nMaterialTags)) continue;
       // R2-SF1 — a candidate that NAMES a raceway/wire type (EMT/PVC/RMC/MC/
       // FMC/LFMC/THHN) can't earn alias-tier confidence off a description
       // that names NO type at all — "3/4\" conduit" sharing only the
@@ -425,7 +487,10 @@ function scoreCandidate(
       const nMaterialTags = materialTagsOf(nTokens);
       if (materialConflict(descMaterialTags, nMaterialTags)) continue;
       if (materialConflict(descConductorTags, conductorTagsOf(nTokens))) continue;
-      if (racewayKindConflict(descRacewayKind, racewayKind(nTokens, nMaterialTags))) continue; // review round 2 / B3, same rationale as the alias tier above
+      const nRacewayKindFuzzy = racewayKindFromNormalizedText(n);
+      if (racewayKindConflict(descRacewayKind, nRacewayKindFuzzy)) continue; // review round 2 / B3, same rationale as the alias tier above
+      if (fittingKindNeedsMaterialMatch(descRacewayKind) && descRacewayKind === nRacewayKindFuzzy
+        && !sharesMaterialTag(descMaterialTags, nMaterialTags)) continue; // N-R2-4, same rationale as the alias tier above
       if (nMaterialTags.size > 0 && descMaterialTags.size === 0) continue; // R2-SF1, same rationale as the alias tier above
       best = Math.max(best, overlapScore(mergedTokens, nTokens, tokenWeight));
     }

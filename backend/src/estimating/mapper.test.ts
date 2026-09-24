@@ -315,3 +315,44 @@ describe('mapTakeoffLine — B3: mismatch regressions against the real seed libr
     // seed for that resolver to consume instead of DISC-400.
   });
 });
+
+describe('mapTakeoffLine — Review round 2 / R2-S1: the raceway kind guard rejects legitimate matches on the seed catalog', () => {
+  // 99d9453's fitting-word guard treated ANY mention of "fittings" as making
+  // an item a fitting — including the seed's own all-in raceway items
+  // ("…(incl. fittings)", "…(incl. couplings/straps)", "…(incl. fittings/glue)")
+  // and an ordinary takeoff line noting the same thing ("EMT conduit w/
+  // fittings"). The fix strips the QUALIFIER PHRASE ("incl./including/w//
+  // with" + fittings/couplings/straps/glue) before classifying kind, so
+  // these are restored to matching as plain raceway, while a genuine fitting
+  // product (no such qualifier phrase — "Expansion fitting, conduit",
+  // "Coupling - EMT Set Screw Steel") is unaffected.
+  const library = libraryFromSeed();
+
+  it('"2" rigid steel conduit" matches RGD-200 (its own name says "incl. fittings")', () => {
+    const m = mapTakeoffLine(line({ description: '2" rigid steel conduit', unit: 'LF' }), library);
+    expect(m.matchedCode).toBe('RGD-200');
+    expect(m.matchConfidence).not.toBe('none');
+  });
+
+  it('"3/4" EMT conduit w/ fittings" matches EMT-075', () => {
+    const m = mapTakeoffLine(line({ description: '3/4" EMT conduit w/ fittings', unit: 'LF' }), library);
+    expect(m.matchedCode).toBe('EMT-075');
+    expect(m.matchConfidence).not.toBe('none');
+  });
+
+  it('"2" PVC conduit with fittings" matches PVCB-200', () => {
+    const m = mapTakeoffLine(line({ description: '2" PVC conduit with fittings', unit: 'LF' }), library);
+    expect(m.matchedCode).toBe('PVCB-200');
+    expect(m.matchConfidence).not.toBe('none');
+  });
+
+  it('a genuine fitting product is unaffected — "Expansion fitting, conduit" still matches FIT-EXPANSION, not a bare conduit item', () => {
+    const m = mapTakeoffLine(line({ description: 'Expansion fitting, conduit', unit: 'EA' }), library);
+    expect(m.matchedCode).toBe('FIT-EXPANSION');
+  });
+
+  it('a genuine coupling is unaffected — "EMT coupling" never matches bare EMT conduit', () => {
+    const m = mapTakeoffLine(line({ description: '3/4" EMT coupling', unit: 'EA' }), library);
+    expect(m.matchedCode).not.toBe('EMT-075');
+  });
+});
