@@ -550,3 +550,131 @@ comfortably inside the round's "≤ ~$6/bid" goal against the $4.64 counter/Agen
   every path that sets a type's status to `counted` with `count > 0` already does so because SOME sheet
   was `used`, so `lineEvidenceKind` returning `'none'` mostly guards against a future merge-code change
   breaking that invariant, not a case observed in this round's own fixtures.
+
+---
+
+## Fix round — Parts 1–3 (review `2026-09-24-evidence-round-review.md`, a479103)
+
+**Executor:** Opus 5. **Findings covered:** B4, B7, B8, B9, S1, S2, S3, S9, S10, S11, S12. The Part 4–5 findings (B1–B3, B5, B6, S4–S8, S13, S14, nits) are left to the Sonnet executor. Same rules as before: worktree only, no Agent tool, no real API calls, no migrations needed (none added; the next free number is still **137**). Every reproduced finding's repro is now a test.
+
+| Commit | Findings |
+|---|---|
+| c14ddf8 | B4 — sheet-pair alignment and one-object pairing |
+| bb670ab | B4 — the supplement pass re-attributes carried marks to viewports |
+| f820ebb | B7, B8, B9 (text-layer panels), S10 |
+| b7c25c1 | S9, S12, B9 (review item and no replacement) |
+| 4c6a7b6 | S1, S2, S3 and the honest fixture numbers |
+| 11e1c45 | S11 |
+
+### B4 — the sheet-pair sum needs positive evidence
+- **Alignment comes first**, and never from the marks' own bounding box:
+  - the building outlines on both sheets (offset and scale); else
+  - a translation voted by marks of types drawn on both sheets: at least 3 votes, at least half the shared marks, an offset of at most 3", and the same scale; else
+  - the sheet frame (same size and scale), with a 1.0" tolerance; else
+  - **unclear** → a review item, never a sum.
+- **Pairing:** a type's marks within 0.5" of each other after alignment are **one object**.
+  - 60% or more paired → duplicate;
+  - different content → a complementary sum that counts each pair once;
+  - anything else → unclear.
+- **Verified on the real renders** (wall lines measured at 100 DPI):
+  - E-1 and E-2 are the same building, with E-2 drawn 0.53" right and 0.73" up. The fixture's first building boxes were rough and are now corrected.
+  - E-2 #11 is labelled 1/8" but drawn at 1/4". Its area on the main plan was mapped through the office J-box, pole #2 and the FDCOKE cooler. My first transcription had that area at a quarter of its size, which is what made B-32 miss.
+  - Now **B32 on #11 lands 0.05" from E-1's B-32**. It is one outlet: simplex is 5 + 5 − 1 = **9**.
+- **Tests:**
+  - the reviewer's 10 identical duplexes → **10, not 20**, both at the same position and drawn 2" apart;
+  - AREA A/B still sums (→ 7);
+  - an ENLARGED same-area sheet → the larger count, not summed;
+  - a 20" "offset" is never accepted as a registration;
+  - unalignable sheets → unclear;
+  - Kissimmee B-32 counted once, both in a full run and in a supplement pass.
+
+### B7 / B8 / B9 / S10 / S9 / S12 — schedules
+- **B7:**
+  - A numbered tag matches as a whole token with its exact suffix. EF-1 matches "EF 1" or "EF1", but never EF-12 or EF-2.
+  - Each row goes to **exactly one** target:
+    - the target whose tag it names; else
+    - only if the row names no equipment tag at all, the single target its description matches.
+    - Two description matches means the row belongs to nobody, and the counter keeps those types.
+  - EF-1/2/3 → **3** (was 9). RTU-1/RTU-2 → 1 each.
+- **B8:**
+  - `multiplierOf` reads only `(5)`, `(5) EA`, `(QTY 5)`, `QTY 5`, `QTY: 5`, or a stand-alone `x5`.
+  - It never reads `MAX 30`, `2X4`, `2'X4'`, `(2)#10`, ratings or model numbers.
+  - On equipment and load rows it reads the description cell only. The reviewer's WH-1 row → 1.
+- **B9:**
+  - A text-layer panel with repeated CKT / DESCRIPTION headers splits into left and right rows.
+  - A panel with only odd or only even circuits is **incomplete**.
+  - Incomplete panels give no circuit rows and no equipment quantities, never replace Agent 1's rows, and raise the blocking `schedule:panels-unread` item ("branch circuits not verified").
+- **S10:**
+  - `(5)` repeated on every row of one tag → counted once (5, not 25).
+  - Multi-pole continuations count as one load even when the description repeats.
+  - `1,3,5` → circuit 1 with 3 poles (not circuit 135).
+  - The same panel read twice is used once. If the two copies differ, the more complete one is kept, with a warning.
+  - Panel names are parsed from "PANEL SCHEDULE A", "PANELBOARD LP-1", "A PANEL" and "PANEL: LP2".
+  - SPARE, SPACE and "--" are never loads.
+- **S9:**
+  - An Agent 1 circuit row is replaced only when **every panel it covers** was read completely. A row that names no panel covers all panels.
+  - If an unnamed row covering an unread panel stays, the parser's rows are not added beside it, and this is flagged.
+  - `isCircuitCountRow` now also catches "20A/1P breakers", "Dedicated circuits (20/1)" and "60/3 RTU circuits". The last one had been sitting beside the parser's 60/3 row on Kissimmee.
+- **S12:** Agent 1 is no longer told to leave schedule quantities out. It states them as before, and the parser's quantities replace them only where it read the schedule.
+
+### S1 / S2 / S3 — typicals
+- **S1:**
+  - A package that is the host's **own** legend or schedule row is an assembly.
+  - Its devices are recorded on the host's line ("each incl. 1 receptacle mounted to base plate") and are never expanded into a commodity type.
+  - On Kissimmee the coil+J symbol is the display baseflex (J-box, 6' flex, receptacle in the kick plate). The 3 extra duplexes are gone.
+  - The eval's `baseflex` item now matches that legend identity and honestly reports **3 against the estimator's 8**.
+- **S2:** A device named without a per-host quantity raises a `typicalqty:` item:
+  - **blocking** when none is drawn within 2" of a host (the estimator's total is enforced);
+  - **information** when some are drawn there. The office pole's floor simplex outlets are drawn on #11, so on Kissimmee this is information.
+- **S3:**
+  - Drawn-at-host is measured in the host sheet's main-plan frame, within 0.75" of the tag.
+  - Enlarged-plan marks are mapped through their area on the main plan, and other sheets are aligned first.
+  - A device drawn at the host on its own sheet is subtracted.
+  - A device at the host's position **on another sheet** is **asked about** (`typicalat:`, both totals, enforced), never subtracted silently.
+  - Kissimmee example: E-1's "duplex outlet at deck" (A-31) sits exactly over the checkout pole (A-29), so it is now a question.
+  - Pole detail viewports need no subtraction: marks in details were already excluded in Part 1.
+
+### S11 — families
+- **Catalog numbers are normalized:**
+  - hyphens count as separators;
+  - voltages and option or finish suffixes are dropped;
+  - so "DSX1-LED-P8-40K-T4M-277-HS" is S1.
+- "Different schedules" compares schedule sheet identity, so "E-7" = "E-7 SITE PLAN".
+- Unreadable members never fold, and the symbol-definition fold takes only zero-count types.
+- A numbered item (FDS-1) never folds into a generic legend symbol.
+
+### Kissimmee-shaped fixture — honest numbers
+These are the fixture's own numbers after the fixes, **without** anything gap-fill adds. The fixture still carries Part 4's synthetic GFCI gap-fill reply (B3, the Sonnet executor's). The assertions subtract whatever gap-fill added, so they hold before and after that fix.
+
+| | Before the round | After the round (review) | After this fix round | Expected |
+|---|---|---|---|---|
+| Receptacles (traceable) | 19 | 37 (+5 synthetic = 42) | **33** | 38 |
+| — Simplex | 5 | 11 | **10** (9 drawn: E-1 5 + #11 5 − B-32; +1 tester pole) | 8 |
+| — Duplex / floor | 3 | 15 | **12** (4 drawn + 8 at the poles) | 11 |
+| — GFCI | 7 | 7 (+5 synthetic) | **7** (1 main + 6 restroom plan) | 16 incl. WP |
+| — WP GFI | 4 | 4 | **4** | — |
+| Baseflex (coil+J) | 3 (no_match) | no_match | **3** | 8 |
+| Site poles / heads | 6 / 7 | 3 / 4 | **3 / 4** | 3 / 4 |
+| Battery chargers | 0 | 5 | **5** (Panel B 15–23) | 5 |
+| Other equipment from rows | — | 10 types = 1 each | **same** (WH, ALC, mini-tune, drink mach, DF, pylon sign, RTU-1/2, DISCON A/B) | — |
+| Review items (with the gap-fill reply still in) | 46 | 11 (8 blocking) | **13 (9 blocking)** | ≤ 12 |
+
+- **The two new review items:**
+  - the blocking checkout-pole "same outlet on two sheets?" question (S3);
+  - the office-pole floor-simplex information item (S2).
+- **GFCI:** 11 against the audited 16. As the reviewer found, the other 5 are not on E-1; they are an open question for the audit, not a counter miss.
+
+### Test suites (one full run each, at the end)
+`tsc --noEmit` is clean in both packages.
+
+| Suite | Review baseline (71bfccd) | This fix round |
+|---|---|---|
+| Backend `npm test` | 1965 passed, 3 failed, 4 not run of 1972 (186 files) | **2000 passed, 3 failed, 4 not run of 2007** (186 files: 183 passed, 2 failed, 1 lost to "Worker exited unexpectedly") |
+| Frontend `npx vitest run` | 1287 / 1287 | **1287 / 1287** |
+
+The failures are the known flakes, as in every earlier round: `intakeSimilarCache` ×2 and the `integration` lead follow-up backfill timeout. The worker crash loses 4 tests.
+
+### Deferred / limits
+- The pole-host "possibly the same outlet" rule relies on alignment. On an unalignable pair nothing is subtracted or asked, and the expansion stands.
+- Registration by vote assumes the same scale on both sheets. Different-scale sheets without building boxes are unclear, which means blocking, as before.
+- Recommended for the Sonnet round: B3 should replace the synthetic GFCI gap-fill reply. The Kissimmee assertions already subtract gap-fill additions, so they will keep passing.
