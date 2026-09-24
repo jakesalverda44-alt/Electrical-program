@@ -22,7 +22,7 @@
 //    2026+ shop.
 import { TAKEOFF_CATEGORIES } from '../bidstd/boilerplate';
 import { parseAccubidBom, BomRow, BomParseWarning, BOM_UNIT_DIVISOR } from './accubidBom';
-import { EstUnit } from './pricing';
+import { EstUnit, UNIT_DIVISOR } from './pricing';
 import { Library, LibraryItem, createItem, updateItem, createAssembly, updateAssembly } from './library';
 import { mapTakeoffLine } from './mapper';
 import { toLibraryCandidates } from './bidEstimate';
@@ -289,8 +289,12 @@ export interface ImportedItemPlan {
   wasLedProxy: boolean;
   isDemolition: boolean;
   /** Present for 'update' and 'propose_update' — what the row would change
-   *  from (and, for a proposal, why it wasn't applied automatically). */
-  previous?: { laborHours: number; materialCost: number | null; source: string };
+   *  from (and, for a proposal, why it wasn't applied automatically).
+   *  `unit` (N-R2-1) is the EXISTING item's own unit — needed to convert
+   *  laborHours/materialCost into ITS basis if a unit_mismatch proposal is
+   *  ever accepted (the row's own laborHours/materialCost are denominated
+   *  in `unit` above, the ROW's unit, which is exactly what disagrees). */
+  previous?: { laborHours: number; materialCost: number | null; source: string; unit: EstUnit };
   /** Set only for 'propose_update' — S15: a reconciled match whose UNIT
    *  disagrees with the existing item, or whose labor-hours delta is more
    *  than 2x, is never silently overwritten; it's offered here as a named
@@ -454,7 +458,7 @@ export function buildImportPreview(bomText: string, library: Library, opts: Buil
       items.push({
         action: 'skip_manual', code: existing.code, name: existing.name, category: existing.category,
         unit: existing.unit, laborHours, materialCost, wasLedProxy: wasProxy, isDemolition,
-        previous: { laborHours: existing.labor_hours, materialCost: existing.material_cost, source: existing.source },
+        previous: { laborHours: existing.labor_hours, materialCost: existing.material_cost, source: existing.source, unit: existing.unit },
       });
     } else {
       // Review round 2 / S15 — never silently overwrite a reconciled item's
@@ -469,7 +473,7 @@ export function buildImportPreview(bomText: string, library: Library, opts: Buil
         items.push({
           action: 'propose_update', code: existing.code, name: existing.name, category: existing.category,
           unit, laborHours, materialCost, wasLedProxy: wasProxy, isDemolition,
-          previous: { laborHours: existing.labor_hours, materialCost: existing.material_cost, source: existing.source },
+          previous: { laborHours: existing.labor_hours, materialCost: existing.material_cost, source: existing.source, unit: existing.unit },
           proposalReason: unitMismatch ? 'unit_mismatch' : 'big_delta',
         });
       } else {
@@ -479,7 +483,7 @@ export function buildImportPreview(bomText: string, library: Library, opts: Buil
           // (and material_cost, when price-authoritative) update.
           action: 'update', code: existing.code, name: reconciledItem ? existing.name : canonical, category: existing.category,
           unit: existing.unit, laborHours, materialCost, wasLedProxy: wasProxy, isDemolition,
-          previous: { laborHours: existing.labor_hours, materialCost: existing.material_cost, source: existing.source },
+          previous: { laborHours: existing.labor_hours, materialCost: existing.material_cost, source: existing.source, unit: existing.unit },
         });
       }
     }
@@ -534,6 +538,18 @@ export interface ApplyImportOptions {
    *  hours delta) is applied ONLY when its code is explicitly listed here —
    *  never automatically, no matter how confident the reconciliation was. */
   acceptProposals?: Set<string>;
+}
+
+// Review round 2 / N-R2-1 — converts a $/hours figure denominated in
+// `fromUnit` into the equivalent figure denominated in `toUnit`, using the
+// SAME EA=1/LF=1/C=100/M=1000 divisor convention pricing.ts's own priceBid
+// extends lines with (UNIT_DIVISOR) — e.g. 0.9 h/EA becomes 90 h/C (a
+// fixture that takes 0.9h each takes 90h per 100 of them), or 4.0 h/C
+// becomes 0.04 h/EA. null in, null out.
+function convertBetweenUnits(value: number | null, fromUnit: EstUnit, toUnit: EstUnit): number | null {
+  if (value == null) return null;
+  if (fromUnit === toUnit) return value;
+  return value * (UNIT_DIVISOR[toUnit] / UNIT_DIVISOR[fromUnit]);
 }
 
 /** Writes a preview's create/update plans to the DB. Never touches a
@@ -591,12 +607,23 @@ export async function applyImportPreview(preview: ImportPreview, opts: ApplyImpo
         if (ok) updated++; else skipped++;
       }
     } else if (plan.action === 'update' || plan.action === 'propose_update') {
+      // Review round 2 / N-R2-1 — an ACCEPTED unit_mismatch proposal must
+      // convert the row's own laborHours/materialCost (denominated in the
+      // ROW's unit) into the EXISTING item's unit basis before writing —
+      // its labor_hours/material_cost columns are still denominated in
+      // `previous.unit`, since accepting a proposal never changes the
+      // item's own `unit` column. A big_delta proposal (same unit on both
+      // sides) needs no conversion.
+      const needsUnitConversion = plan.action === 'propose_update' && plan.proposalReason === 'unit_mismatch' && plan.previous;
+      const targetUnit = needsUnitConversion ? plan.previous!.unit : plan.unit;
+      const laborHours = convertBetweenUnits(plan.laborHours, plan.unit, targetUnit);
+      const materialCost = plan.materialCost != null ? convertBetweenUnits(plan.materialCost, plan.unit, targetUnit) : null;
       // Review round 2 / N17 — atomic: applyAccubidItemUpdate's own
       // `WHERE code=$1 AND source <> 'manual'` is the guard now, checked and
       // applied in the SAME statement — no separate SELECT that a
       // concurrent hand-edit could slip in behind.
       const ok = await applyAccubidItemUpdate(plan.code, {
-        laborHours: plan.laborHours, ...(plan.materialCost != null ? { materialCost: plan.materialCost, materialPriceDate: preview.bomDate } : {}),
+        laborHours, ...(materialCost != null ? { materialCost, materialPriceDate: preview.bomDate } : {}),
       });
       if (ok) updated++; else skipped++;
     }

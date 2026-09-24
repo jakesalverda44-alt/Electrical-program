@@ -652,7 +652,16 @@ router.post('/library/accubid-import/apply', requireAuth, requireAdmin, pdfUploa
       warnings: preview.warnings,
     });
   }
-  const result = await applyImportPreview(preview);
+  // Review round 2 / N-R2-1 — wire the admin's accepted proposal codes
+  // through to the apply step. Without this, a propose_update row (S15's
+  // unit-mismatch/big-delta guard) could never actually be accepted — the
+  // route never passed acceptProposals at all, so every proposal was a dead
+  // end regardless of what the estimator picked in the preview UI.
+  const acceptProposalsRaw = body.acceptProposals;
+  const acceptProposals = new Set(
+    Array.isArray(acceptProposalsRaw) ? acceptProposalsRaw.filter((c): c is string => typeof c === 'string') : []
+  );
+  const result = await applyImportPreview(preview, { acceptProposals });
 
   const rows = parseAccubidBom(resolved.text).rows;
   const poleBasePlan = derivePoleBaseAssembly(rows);

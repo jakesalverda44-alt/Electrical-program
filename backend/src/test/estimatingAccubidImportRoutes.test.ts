@@ -290,6 +290,52 @@ describe('Review round 2 / S12 — apply follows the preview\'s own reconciliati
   });
 });
 
+describe("Review round 2 / N-R2-1 — acceptProposals is wired through the apply route", () => {
+  it('a unit-mismatch proposal is skipped without acceptProposals, then applies WITH IT — converting hours into the existing item\'s own unit basis', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const admin = await makeUser('owner');
+    const tag = randomUUID().slice(0, 8);
+    // An existing accubid-sourced panel item, priced per EA (8 h/EA) — same
+    // normalized spec (kind=panel, size=225a) as the BOM row below, but a
+    // DIFFERENT unit, so buildImportPreview proposes rather than updates.
+    const existingCode = `TESTONLY-${tag.toUpperCase()}-PANEL`;
+    await pool.query(
+      `INSERT INTO est_items (code, name, category, unit, material_cost, labor_hours, source, active)
+       VALUES ($1,$2,'Service & Distribution','EA',1450,8,'accubid',true)`,
+      [existingCode, `TestOnly-${tag} 737A Panelboard - Existing`]
+    );
+    try {
+      // Printed per C (100 pieces): 3.000 h/C.
+      const bomText = `TestOnly-${tag} 737A Panelboard                                             100.000 C          10.00                     10.00           10.00 C                      3.000                        3.000 Normal`;
+
+      const preview = await request(app).post('/api/estimating/library/accubid-import/preview').set(auth(admin.token))
+        .send({ bomText, updatePrices: false }).expect(200);
+      const plan = preview.body.items.find((i: { code: string }) => i.code === existingCode);
+      expect(plan.action).toBe('propose_update');
+      expect(plan.proposalReason).toBe('unit_mismatch');
+
+      // Without acceptProposals: skipped, item unchanged, result.proposed counts it.
+      const withoutAccept = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
+        .send({ bomText, updatePrices: false, force: true }).expect(200);
+      expect(withoutAccept.body.proposed).toBe(1);
+      const { rows: unchanged } = await pool.query('SELECT labor_hours FROM est_items WHERE code=$1', [existingCode]);
+      expect(Number(unchanged[0].labor_hours)).toBe(8);
+
+      // WITH acceptProposals: applies, converting 3.000 h/C -> h/EA (÷100 = 0.03).
+      const withAccept = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
+        .send({ bomText, updatePrices: false, force: true, acceptProposals: [existingCode] }).expect(200);
+      expect(withAccept.body.updated).toBe(1);
+      expect(withAccept.body.proposed).toBe(0);
+      const { rows: changed } = await pool.query('SELECT labor_hours, unit FROM est_items WHERE code=$1', [existingCode]);
+      expect(changed[0].unit).toBe('EA'); // the item's OWN unit column is never changed by accepting
+      expect(Number(changed[0].labor_hours)).toBeCloseTo(0.03, 4);
+    } finally {
+      await pool.query('DELETE FROM est_items WHERE code=$1', [existingCode]);
+    }
+  });
+});
+
 // Deterministic codes for a synthetic BOM's rows, computed the same way the
 // module under test does, so cleanup never relies on a LIKE scan that could
 // also match another concurrently-running instance of this same test.
