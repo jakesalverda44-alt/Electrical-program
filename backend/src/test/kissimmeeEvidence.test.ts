@@ -27,7 +27,7 @@ import { screenPosition } from '../estimating/pageGeometry';
 import { planCountTiles } from '../ai/countRender';
 import { counterTileSpec } from '../ai/modelLimits';
 import { runCountingStage, runSupplementCounting, type CountResult } from '../ai/countingStage';
-import { buildReviewItems, referencedSheetItems, reviewItemIsOpen, enforcedCounts, type ReviewItem } from '../ai/reviewItems';
+import { buildReviewItems, referencedSheetItems, reviewItemIsOpen, enforcedCounts, applyGroupMemberResolution, type ReviewItem } from '../ai/reviewItems';
 import { normalizeSheetId } from '../ai/sheetRefs';
 import { resolveAccountTerms } from '../bidstd/accountRules';
 import { scopeQuestionsFor } from '../bidstd/accountRulesDb';
@@ -236,26 +236,44 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     const counterCalls = after.calls.filter(c => systemText(c).includes('counting symbols on ONE electrical plan sheet'));
     expect(counterCalls.every(c => !/^- BATT CHGR \|/m.test(userText(c)))).toBe(true);
   });
-  it('the review list: 46 -> 13 (9 blocking); 4.5 groups the 12 legend-only zeros into one item', (ctx) => {
+  it('the review list: 46 -> 21 (17 blocking); B6 groups only the 4 non-equipment/non-phone-board legend zeros, honest count above 12', (ctx) => {
     if (!have) return ctx.skip();
-    expect(after.review).toHaveLength(13);
-    expect(after.review.filter(reviewItemIsOpen)).toHaveLength(9);
+    // Fix round B6 — equipment (by category: 1" empty conduit/J-box, the
+    // 200A disconnect, T/thermostat, MB, WIREWAY, LCP, DATA CONCENTRATOR)
+    // and the phone-board duplex are never grouped, however many
+    // legend-zeros otherwise qualify: they're individual $-risk items, so
+    // the honest blocking count is reported even though it's now above 12
+    // (17, not 9) — nothing here is hidden in a bulk "confirm none" item.
+    expect(after.review).toHaveLength(21);
+    expect(after.review.filter(reviewItemIsOpen)).toHaveLength(17);
     const group = after.review.find(i => i.id.startsWith('legend-zero:'))!;
     expect(group).toBeTruthy();
-    expect(group.title).toBe('12 legend items not found on any counted sheet — confirm none on this job');
-    expect(group.groupedTypes!.map(g => g.key).sort()).toEqual([
+    expect(group.title).toBe('4 legend items not found on any counted sheet — answer each one');
+    expect(group.groupedTypes!.map(g => g.key).sort()).toEqual(['M2', 'N', 'QUADPLEX RECEPTACLE', 'STORE OPEN/CLOSE PUSHBUTTON']);
+    const equipmentAndPhoneBoardKeys = [
       '1 EMPTY CONDUIT AND J-BOX TO DECK', '200A FUSED DISCONNECT NEMA 3R', 'DATA CONCENTRATOR',
-      'DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX ON PHONE BOARD', 'LCP', 'M2', 'MB', 'N',
-      'QUADPLEX RECEPTACLE', 'STORE OPEN/CLOSE PUSHBUTTON', 'T', 'WIREWAY',
-    ]);
+      'DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX ON PHONE BOARD', 'LCP', 'MB', 'T', 'WIREWAY',
+    ];
+    for (const key of equipmentAndPhoneBoardKeys) {
+      const item = after.review.find(i => i.id === `count:${key}`);
+      expect(item, `${key} should be its own individual blocking item, never grouped`).toBeTruthy();
+      expect(reviewItemIsOpen(item!)).toBe(true);
+    }
     expect(after.review.filter(reviewItemIsOpen).map(i => i.id).sort()).toEqual([
       group.id, after.review.find(i => i.id.startsWith('typicalat:'))!.id, 'refsheet:SGN101', 'scope:disconnects', 'scope:power_poles:furnish', 'scope:power_poles:install',
       'unscheduled:GALVANIZED-UNISTRUT-14GA-FIXTURE-SUPPORT-E-3', 'unscheduled:LIGHT-POLE-CONCRETE-BASE-E-7',
       'unscheduled:POLE-CONCRETE-BASE-FOUNDATION-3-0-ABOVE-GRADE-PH0-1',
+      ...equipmentAndPhoneBoardKeys.map(k => `count:${k}`),
     ].sort());
-    // Resolving the group in one motion zeroes every member (never a silent drop).
-    const resolved = { ...group, resolution: { action: 'not_on_job' as const, reason: 'One-line/detail items only, none drawn or scheduled on this job', by: 'Jake', at: 't' } };
-    const enforced = enforcedCounts(after.cr, [...after.review.filter(i => i.id !== group.id), resolved]);
+    // Fix round B6 — each member of the (now much smaller) group carries
+    // its own resolution; the group resolves only once every member has
+    // answered, never a single blanket flag.
+    let resolvedGroup = group;
+    for (const g of group.groupedTypes!) {
+      resolvedGroup = applyGroupMemberResolution(resolvedGroup, g.key, { action: 'not_on_job', reason: 'One-line/detail items only, none drawn or scheduled on this job' }, 'Jake');
+    }
+    expect(resolvedGroup.resolution).toBeTruthy();
+    const enforced = enforcedCounts(after.cr, [...after.review.filter(i => i.id !== group.id), resolvedGroup]);
     for (const g of group.groupedTypes!) expect(enforced.byType.get(g.key)).toBeNull();
     // Gone, with the reason: the E-1/E-2 "same area?" pair (1.4), 9 schedule-
     // owned equipment zeros (3.2), the stacked site-light rows and types

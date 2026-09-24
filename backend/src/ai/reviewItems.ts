@@ -88,9 +88,11 @@ export interface ReviewItem {
    *  the answer replaces. */
   familyPrimary?: string[];
   /** Evidence round 4.5 — a grouped item: legend-only zero-count types with
-   *  no plan presence and no schedule row, combined into ONE "confirm none
-   *  of these" item. A bulk not_on_job resolution zeroes every member. */
-  groupedTypes?: Array<{ key: string; type: string; description: string }>;
+   *  no plan presence and no schedule row, combined into ONE list. Fix
+   *  round B6 — each member carries its OWN resolution (not on job / a
+   *  count / confirmed markers); the group itself resolves only once every
+   *  member has one (see applyGroupMemberResolution). */
+  groupedTypes?: Array<{ key: string; type: string; description: string; resolution?: ReviewResolution }>;
   /** N4 — an earlier run's resolution for this item that was NOT carried
    *  over because the drawings/counts changed; shown for re-confirmation. */
   previousResolution?: ReviewResolution;
@@ -531,20 +533,33 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   return sortByRisk(grouped).map(i => ({ ...i, group: groupOf(i) }));
 }
 
+const EQUIPMENT_KEYWORD_RE = /\bmeter\s*base\b|\bwireway\b|\bdiscon(?:nect)?\b|\bLCP\b|\bdata\s*concentrator\b|\bpanel(?:board)?\b/i;
+const PHONE_BOARD_RE = /phone[\s-]?board/i;
+
 /** Evidence round 4.5 — legend-only zero-count types with no plan presence
  *  at all (never found on any counted sheet) AND no independent schedule
- *  row of their own are combined into ONE "confirm none of these" item,
- *  instead of one review item apiece. Nothing is dropped: every member is
- *  still listed (in `groupedTypes`), and resolving the group with a reason
- *  marks every member not on this job — the same outcome as resolving each
- *  one, in one motion. A single qualifying item is left alone (grouping one
- *  item saves nothing). */
+ *  row of their own are combined into ONE list, instead of one review item
+ *  apiece. Nothing is dropped: every member is still listed (in
+ *  `groupedTypes`), and fix round B6 gives each one its own action —
+ *  the group resolves only once every member has answered (see
+ *  applyGroupMemberResolution). A single qualifying item is left alone
+ *  (grouping one item saves nothing).
+ *
+ *  Fix round B6 — equipment (by category, an equipment-schedule/panel row,
+ *  or an equipment keyword in its own name) and phone-board receptacle
+ *  types are individual $-risk items, at their own tier, however many
+ *  legend-zero entries otherwise qualify: they are NEVER folded into this
+ *  group. */
 export function groupLegendZeroItems(items: ReviewItem[], countResult: CountResult | null): ReviewItem[] {
   const typeByKey = new Map((countResult?.types ?? []).map(t => [t.key, t]));
   const isGroupable = (i: ReviewItem): boolean => {
     if (i.kind !== 'count' || !i.id.startsWith('count:') || i.id.endsWith(':heads') || i.blocking === false) return false;
     const t = typeByKey.get(i.typeKey ?? '');
-    return !!t && t.status === 'zero' && t.reason === 'not found on any counted plan sheet' && (t.scheduleRows?.length ?? 0) === 0;
+    if (!t || t.status !== 'zero' || t.reason !== 'not found on any counted plan sheet' || (t.scheduleRows?.length ?? 0) !== 0) return false;
+    const text = `${t.type} ${t.description}`;
+    if (t.category === 'equipment' || EQUIPMENT_KEYWORD_RE.test(text)) return false;
+    if (PHONE_BOARD_RE.test(text)) return false;
+    return true;
   };
   const members = items.filter(isGroupable);
   if (members.length < 2) return items;
@@ -556,13 +571,36 @@ export function groupLegendZeroItems(items: ReviewItem[], countResult: CountResu
   const group: ReviewItem = {
     id: `legend-zero:${slug(keySlug)}`,
     kind: 'count',
-    title: `${n} legend items not found on any counted sheet — confirm none on this job`,
-    detail: `${groupedTypes.map(g => `${g.type}${g.description ? ` — ${g.description}` : ''}`).join('; ')}. None of these were found on any sheet the analysis counted, and none has its own schedule row — confirm none of them are on this job (one reason covers all), or resolve one alone by entering a count, placing/confirming markers, or re-running the analysis after adding it as a fixture type.`,
+    title: `${n} legend items not found on any counted sheet — answer each one`,
+    detail: `${groupedTypes.map(g => `${g.type}${g.description ? ` — ${g.description}` : ''}`).join('; ')}. None of these were found on any sheet the analysis counted, and none has its own schedule row. Answer EACH one on its own: not on this job (with a reason), a count, or confirmed markers on the plans — the group stays open until every item has its own answer.`,
     groupedTypes,
-    actions: ['not_on_job'],
+    actions: ['count', 'markers', 'not_on_job'],
     fingerprint: `legend-zero|${keySlug}`,
   };
   return [...rest, group];
+}
+
+/** Fix round B6 — resolves ONE member of a legend-zero group (or, when
+ *  `memberKey` is omitted, every member that doesn't have an answer yet —
+ *  the "apply to all" shortcut, still one resolution recorded per member,
+ *  never a single blanket flag). Returns the updated item; its own
+ *  top-level `resolution` is set (so `reviewItemIsOpen` treats the group as
+ *  resolved) only once every member has answered. */
+export function applyGroupMemberResolution(
+  item: ReviewItem,
+  memberKey: string | undefined,
+  resolution: Omit<ReviewResolution, 'by' | 'at'>,
+  by: string,
+): ReviewItem {
+  const at = new Date().toISOString();
+  const full: ReviewResolution = { ...resolution, by, at };
+  const groupedTypes = (item.groupedTypes ?? []).map(m => (memberKey ? m.key === memberKey : !m.resolution) ? { ...m, resolution: full } : m);
+  const allAnswered = groupedTypes.length > 0 && groupedTypes.every(m => m.resolution);
+  return {
+    ...item,
+    groupedTypes,
+    resolution: allAnswered ? { action: 'confirm', reason: 'every item in the group answered', by, at } : item.resolution,
+  };
 }
 
 /** Evidence round 4.5 — $ risk ordering: equipment, then poles, then
@@ -690,6 +728,9 @@ export interface ResolveInput {
   answerIndex?: unknown;
   /** Next round A7 — bulk 'answer': each item's pre-filled answer. */
   useSuggested?: unknown;
+  /** Fix round B6 — which member of a legend-zero group this resolves;
+   *  omitted resolves every member of the group that has no answer yet. */
+  memberKey?: unknown;
 }
 
 /** Next round A7 — the per-item input of a bulk resolution. */
@@ -853,11 +894,16 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (!i.id.startsWith('unscheduled:') || !i.resolution || i.resolution.action !== 'count') continue;
     extraLines.push({ category: i.category ?? 'Interior Lighting', item: i.rowItem ?? i.title, qty: i.resolution.qty! });
   }
-  // Evidence round 4.5 — "confirm none of these" on a grouped legend-zero
-  // item zeroes every member it lists, the same as resolving each alone.
+  // Fix round B6 — each grouped legend-zero member carries its OWN
+  // resolution now; applied individually (a member can be "not on job"
+  // while a sibling is a real count), whether or not the group as a whole
+  // has every member answered yet.
   for (const i of list) {
-    if (!i.id.startsWith('legend-zero:') || !i.resolution || i.resolution.action !== 'not_on_job') continue;
-    for (const m of i.groupedTypes ?? []) byType.set(m.key, null);
+    if (!i.id.startsWith('legend-zero:')) continue;
+    for (const m of i.groupedTypes ?? []) {
+      if (!m.resolution) continue;
+      byType.set(m.key, m.resolution.action === 'not_on_job' ? null : (m.resolution.qty ?? null));
+    }
   }
   return { byType, extraLines };
 }

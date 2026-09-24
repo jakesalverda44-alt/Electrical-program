@@ -2144,14 +2144,17 @@ router.get('/:bidId/review', requireAuth, asyncHandler(async (req: AuthRequest, 
 router.post('/:bidId/review/resolve', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const body = req.body as { itemIds?: unknown; action?: unknown; qty?: unknown; reason?: unknown; answer?: unknown; answerIndex?: unknown; useSuggested?: unknown };
+  const body = req.body as { itemIds?: unknown; action?: unknown; qty?: unknown; reason?: unknown; answer?: unknown; answerIndex?: unknown; useSuggested?: unknown; memberKey?: unknown };
   const itemIds = Array.isArray(body.itemIds) ? body.itemIds.filter((x): x is string => typeof x === 'string') : [];
   const action = body.action;
   if (!itemIds.length) return res.status(400).json({ error: 'itemIds required' });
   if (action !== 'count' && action !== 'markers' && action !== 'not_on_job' && action !== 'answer' && action !== 'confirm') {
     return res.status(400).json({ error: 'action must be count, markers, not_on_job, answer or confirm' });
   }
-  const out = await resolveReviewItems(bidId, itemIds, { action, qty: body.qty, reason: body.reason, answer: body.answer, answerIndex: body.answerIndex, useSuggested: body.useSuggested }, req.user!.name);
+  // B6 — a legend-zero GROUP resolves member by member: memberKey names
+  // which member of the group this call answers (omitted = every member
+  // still unanswered, each recorded with its own resolution).
+  const out = await resolveReviewItems(bidId, itemIds, { action, qty: body.qty, reason: body.reason, answer: body.answer, answerIndex: body.answerIndex, useSuggested: body.useSuggested, memberKey: body.memberKey }, req.user!.name);
   if (!out.ok) return res.status(out.status).json({ error: out.error });
   // Task 12 — the last open item just cleared: compose the pre-bid draft.
   let draftStarted = false;

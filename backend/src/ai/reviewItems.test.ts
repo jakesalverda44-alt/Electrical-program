@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { carryOverResolutions, validateResolution, reviewResolutionsForAgent4, buildReviewItems, enforcedCounts, riskRank as riskRankOf, type ReviewItem } from './reviewItems';
+import { carryOverResolutions, validateResolution, reviewResolutionsForAgent4, buildReviewItems, enforcedCounts, riskRank as riskRankOf, applyGroupMemberResolution, type ReviewItem } from './reviewItems';
 import { runCountingStage, type CountResult } from './countingStage';
 import { mergeCountsIntoTakeoff } from './countMerge';
 import { buildCountTargets } from './countTargets';
@@ -281,45 +281,51 @@ describe('4.5 — grouping legend-only zero items and $ risk ordering', () => {
   it('two or more legend-only zero-count types with no plan presence and no schedule row group into ONE item; nothing is dropped', () => {
     const a1 = {
       symbolLegend: [
-        { symbol: 'MB', description: 'Meter base', category: 'equipment', sourceSheet: 'E-0.1' },
-        { symbol: 'WW', description: 'Wireway', category: 'equipment', sourceSheet: 'E-0.1' },
-        { symbol: 'LCP', description: 'Lighting control panel', category: 'equipment', sourceSheet: 'E-0.1' },
+        { symbol: 'OS', description: 'Occupancy sensor', category: 'lighting_control', sourceSheet: 'E-0.1' },
+        { symbol: 'PC', description: 'Photocell', category: 'lighting_control', sourceSheet: 'E-0.1' },
+        { symbol: 'MS', description: 'Motion sensor', category: 'lighting_control', sourceSheet: 'E-0.1' },
       ],
       quantities: [],
     };
     const [e2] = pick([['E-2', 'POWER PLAN']]);
     const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: [], unreadable: [] }], { evidence: EMPTY_EVIDENCE });
     const items = buildReviewItems(cr);
-    expect(items.find(i => i.id === 'count:MB')).toBeUndefined();
-    expect(items.find(i => i.id === 'count:WW')).toBeUndefined();
-    expect(items.find(i => i.id === 'count:LCP')).toBeUndefined();
+    expect(items.find(i => i.id === 'count:OS')).toBeUndefined();
+    expect(items.find(i => i.id === 'count:PC')).toBeUndefined();
+    expect(items.find(i => i.id === 'count:MS')).toBeUndefined();
     const group = items.find(i => i.id.startsWith('legend-zero:'))!;
     expect(group).toBeTruthy();
     expect(group.kind).toBe('count');
-    expect(group.actions).toEqual(['not_on_job']);
-    expect(group.groupedTypes?.map(g => g.key).sort()).toEqual(['LCP', 'MB', 'WW']);
-    expect(group.title).toBe('3 legend items not found on any counted sheet — confirm none on this job');
-    // Resolving the group with a reason zeroes every member (never silently).
-    const resolved = { ...group, resolution: { action: 'not_on_job' as const, reason: 'Design-build scope, none of this equipment on this job', by: 'J', at: 't' } };
+    expect(group.actions).toEqual(['count', 'markers', 'not_on_job']);
+    expect(group.groupedTypes?.map(g => g.key).sort()).toEqual(['MS', 'OS', 'PC']);
+    expect(group.title).toBe('3 legend items not found on any counted sheet — answer each one');
+    // Fix round B6 — each member gets its OWN action; the group is not
+    // resolved (still blocks) until every member has answered.
+    let resolved = applyGroupMemberResolution(group, 'OS', { action: 'not_on_job', reason: 'Design-build scope, not this job' }, 'J');
+    expect(resolved.resolution).toBeUndefined(); // PC, MS still unanswered
+    resolved = applyGroupMemberResolution(resolved, 'PC', { action: 'count', qty: 4 }, 'J');
+    expect(resolved.resolution).toBeUndefined(); // MS still unanswered
+    resolved = applyGroupMemberResolution(resolved, 'MS', { action: 'not_on_job', reason: 'Design-build scope, not this job' }, 'J');
+    expect(resolved.resolution).toBeTruthy(); // every member answered — now resolved
     const enforced = enforcedCounts(cr, [resolved]);
-    expect(enforced.byType.get('MB')).toBeNull();
-    expect(enforced.byType.get('WW')).toBeNull();
-    expect(enforced.byType.get('LCP')).toBeNull();
+    expect(enforced.byType.get('OS')).toBeNull();
+    expect(enforced.byType.get('PC')).toBe(4);
+    expect(enforced.byType.get('MS')).toBeNull();
   });
   it('a single qualifying item is left alone — grouping one saves nothing', () => {
-    const a1 = { symbolLegend: [{ symbol: 'MB', description: 'Meter base', category: 'equipment', sourceSheet: 'E-0.1' }], quantities: [] };
+    const a1 = { symbolLegend: [{ symbol: 'OS', description: 'Occupancy sensor', category: 'lighting_control', sourceSheet: 'E-0.1' }], quantities: [] };
     const [e2] = pick([['E-2', 'POWER PLAN']]);
     const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: [], unreadable: [] }], { evidence: EMPTY_EVIDENCE });
     const items = buildReviewItems(cr);
-    expect(items.find(i => i.id === 'count:MB')).toBeTruthy();
+    expect(items.find(i => i.id === 'count:OS')).toBeTruthy();
     expect(items.find(i => i.id.startsWith('legend-zero:'))).toBeUndefined();
   });
   it('a type WITH a schedule row, or found on an uncounted sheet, never joins the group', () => {
     const a1 = {
       equipment: [{ tag: 'EQ-1', description: 'Dryer 15 HP' }],
       symbolLegend: [
-        { symbol: 'MB', description: 'Meter base', category: 'equipment', sourceSheet: 'E-0.1' },
-        { symbol: 'WW', description: 'Wireway', category: 'equipment', sourceSheet: 'E-0.1' },
+        { symbol: 'OS', description: 'Occupancy sensor', category: 'lighting_control', sourceSheet: 'E-0.1' },
+        { symbol: 'PC', description: 'Photocell', category: 'lighting_control', sourceSheet: 'E-0.1' },
       ],
       quantities: [],
     };
@@ -327,10 +333,41 @@ describe('4.5 — grouping legend-only zero items and $ risk ordering', () => {
     const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: [], unreadable: [] }], { evidence: EMPTY_EVIDENCE });
     // EQ-1 counted 0 with no marks — still no schedule row of its own (a
     // symbol-count zero, not a scheduleRows-owned quantity) so it's eligible
-    // too; this just confirms grouping still requires 2+ (MB + WW + EQ-1).
+    // too, but B6 excludes it anyway (equipment); this confirms grouping
+    // still requires 2+ non-equipment members (OS + PC).
     const items = buildReviewItems(cr);
+    expect(items.find(i => i.id === 'count:EQ-1')).toBeTruthy();
     const group = items.find(i => i.id.startsWith('legend-zero:'))!;
-    expect(group.groupedTypes!.length).toBeGreaterThanOrEqual(2);
+    expect(group.groupedTypes!.map(g => g.key).sort()).toEqual(['OS', 'PC']);
+  });
+  it('B6 — equipment (by category, or an equipment keyword) and phone-board receptacles are NEVER grouped, however many otherwise qualify', () => {
+    const a1 = {
+      symbolLegend: [
+        { symbol: 'MB', description: 'Meter base', category: 'equipment', sourceSheet: 'E-0.1' },
+        { symbol: 'WW', description: 'Wireway', category: 'equipment', sourceSheet: 'E-0.1' },
+        { symbol: 'LCP', description: 'Lighting control panel', category: 'equipment', sourceSheet: 'E-0.1' },
+        { symbol: 'DC', description: 'Data concentrator', category: 'equipment', sourceSheet: 'E-0.1' },
+        { symbol: 'DISCON A', description: '200A fused disconnect', category: 'equipment', sourceSheet: 'E-0.1' },
+        // A receptacle described as "on phone board" — device category, but
+        // still an individual $-risk item, never folded into the group.
+        { symbol: 'PBD', description: 'Duplex receptacle on phone board', category: 'device', sourceSheet: 'E-0.1' },
+        // Two ordinary, ungrouped-otherwise device types so the group still
+        // forms (it just never includes any of the six above).
+        { symbol: 'OS', description: 'Occupancy sensor', category: 'lighting_control', sourceSheet: 'E-0.1' },
+        { symbol: 'PC', description: 'Photocell', category: 'lighting_control', sourceSheet: 'E-0.1' },
+      ],
+      quantities: [],
+    };
+    const [e2] = pick([['E-2', 'POWER PLAN']]);
+    const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: [], unreadable: [] }], { evidence: EMPTY_EVIDENCE });
+    const items = buildReviewItems(cr);
+    for (const key of ['MB', 'WW', 'LCP', 'DC', 'DISCON A', 'PBD']) {
+      const item = items.find(i => i.id === `count:${key}`);
+      expect(item, `${key} should be its own item, not grouped`).toBeTruthy();
+      expect(item!.actions).not.toEqual(['not_on_job']); // full default action set — an ordinary individual count item
+    }
+    const group = items.find(i => i.id.startsWith('legend-zero:'))!;
+    expect(group.groupedTypes?.map(g => g.key).sort()).toEqual(['OS', 'PC']);
   });
   it('riskRank: equipment < poles < family/typical < wet/hazard device < commodity device < unscheduled < scope < other', () => {
     const equipment = countItem('count:MB', { category: 'equipment' });

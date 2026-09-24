@@ -5,7 +5,7 @@ import { pool } from '../db/pool';
 import { getBidLines } from './bidEstimate';
 import { lineForType } from './aiMarkers';
 import {
-  reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf,
+  reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf, applyGroupMemberResolution,
   type ReviewItem, type ResolveInput,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
@@ -202,6 +202,10 @@ async function applyResolution(
     const { rows } = await client.query('SELECT review_items, run_id FROM takeoff_results WHERE bid_id = $1 FOR UPDATE', [bidId]);
     if (!rows.length) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: 'No takeoff for this bid.' }; }
     const items = ((rows[0].review_items as ReviewItem[] | null) ?? []).map(i => ({ ...i }));
+    // Fix round B6 — which member(s) of a legend-zero group this call
+    // actually answered, for the labeled-events block below (never
+    // re-logs a member's earlier answer just because it's still there).
+    const touchedGroupMembers = new Map<string, string[]>();
     // Fix round N9 — a bulk resolution covers ONE cause group (the UI's
     // bulk actions); the one exception is "not on this job" across count
     // items (the multi-select).
@@ -221,6 +225,36 @@ async function applyResolution(
       if (id.endsWith(':heads') && input.action === 'markers') {
         await client.query('ROLLBACK');
         return { ok: false, status: 400, error: 'Heads are not marked on the plans — enter the head count.' };
+      }
+      // Fix round B6 — a legend-zero GROUP resolves member by member, each
+      // with its own action, never a single blanket flag for the whole
+      // group.
+      if (item.id.startsWith('legend-zero:')) {
+        const memberKey = typeof input.memberKey === 'string' ? input.memberKey : undefined;
+        const targets = memberKey
+          ? (item.groupedTypes ?? []).filter(m => m.key === memberKey)
+          : (item.groupedTypes ?? []).filter(m => !m.resolution);
+        if (memberKey && !targets.length) {
+          await client.query('ROLLBACK');
+          return { ok: false, status: 404, error: `${memberKey} is not in this group, or already resolved.` };
+        }
+        const touchedKeys: string[] = [];
+        for (const t of targets) {
+          const memberItem: ReviewItem = { id: `count:${t.key}`, kind: 'count', title: t.type, detail: t.description, typeKey: t.key, type: t.type, description: t.description, actions: ['count', 'markers', 'not_on_job'] };
+          const mine = perItemInput(memberItem, input);
+          if ('error' in mine) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: mine.error }; }
+          const markerTally = mine.action === 'markers' ? await confirmedMarkersForType(bidId, t.key) : null;
+          const check = validateResolution(memberItem, mine, markerTally?.counted ?? null);
+          if (!check.ok) {
+            await client.query('ROLLBACK');
+            const excl = markerTally?.excluded.length ? ` Not counted: ${markerTally.excluded.map(e => `${e.count} on ${e.label}`).join('; ')}.` : '';
+            return { ok: false, status: 400, error: `${t.type}: ${check.error}${excl}` };
+          }
+          Object.assign(item, applyGroupMemberResolution(item, t.key, check.resolution, by));
+          touchedKeys.push(t.key);
+        }
+        if (touchedKeys.length) touchedGroupMembers.set(id, touchedKeys);
+        continue;
       }
       const tally = markerCounts.get(id);
       // Next round A7 — a bulk answer resolves to each item's own option.
@@ -249,13 +283,32 @@ async function applyResolution(
         const { rows: b } = await pool.query('SELECT brand, project_type FROM bids WHERE id = $1', [bidId]).catch(() => ({ rows: [] as Array<{ brand: string | null; project_type: string | null }> }));
         const brand = b[0]?.brand ?? null;
         const projectType = b[0]?.project_type ?? null;
-        await logLabeledEvents(itemIds.filter(id => items.find(i => i.id === id)?.resolution).map(id => {
-          const item = items.find(i => i.id === id)!;
-          return {
+        // Fix round B6 — a legend-zero group logs one event per member it
+        // actually answered THIS call (touchedGroupMembers), never the
+        // members it already answered on an earlier call.
+        const events: Parameters<typeof logLabeledEvents>[0] = [];
+        for (const id of itemIds) {
+          const item = items.find(i => i.id === id);
+          if (!item) continue;
+          const touched = touchedGroupMembers.get(id);
+          if (touched) {
+            for (const key of touched) {
+              const m = item.groupedTypes?.find(g => g.key === key);
+              if (!m?.resolution) continue;
+              events.push({
+                bidId, runId, kind: 'review_resolution' as const, typeKey: key, client: brand, projectType, by,
+                detail: { itemId: id, memberKey: key, group: item.group, action: m.resolution.action, qty: m.resolution.qty ?? null },
+              });
+            }
+            continue;
+          }
+          if (!item.resolution) continue;
+          events.push({
             bidId, runId, kind: 'review_resolution' as const, typeKey: item.typeKey ?? null, client: brand, projectType, by,
-            detail: { itemId: id, group: item.group, action: item.resolution!.action, answer: item.resolution!.answer ?? null, qty: item.resolution!.qty ?? null },
-          };
-        }));
+            detail: { itemId: id, group: item.group, action: item.resolution.action, answer: item.resolution.answer ?? null, qty: item.resolution.qty ?? null },
+          });
+        }
+        await logLabeledEvents(events);
       })();
     }
     return { ok: true, review: { status, items } };
