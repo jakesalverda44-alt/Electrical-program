@@ -323,6 +323,7 @@ async function loadMostRecentBidDoc(bidId: string, category: string, mimetype: s
     `SELECT id, name, display_name, category, file_type, file_size, file_data, storage_url, compose_inputs_hash
        FROM documents
       WHERE linked_id = $1 AND category = $2 AND file_type = $3 AND deleted_at IS NULL AND gate_passed = true
+        AND superseded_at IS NULL
         AND ($4::uuid IS NULL OR takeoff_run_id = $4::uuid)
       ORDER BY created_at DESC LIMIT 1`,
     [bidId, category, mimetype, runId]

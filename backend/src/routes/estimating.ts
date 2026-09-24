@@ -185,6 +185,10 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
       // default rather than being forced to 'takeoff' here.
       qty_source: (ALLOWED_QTY_SOURCE as readonly string[]).includes(raw.qty_source as string)
         ? (raw.qty_source as 'takeoff' | 'manual' | 'markup') : undefined,
+      // Re-run reset — round-tripped; only a well-formed run id is kept.
+      recheck_run_id: typeof raw.recheck_run_id === 'string'
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw.recheck_run_id)
+        ? raw.recheck_run_id : null,
       source: raw.source as 'takeoff' | 'manual',
       sort: typeof raw.sort === 'number' ? raw.sort : undefined,
     });

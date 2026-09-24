@@ -5,6 +5,7 @@
 //
 // Storage order is Cloudinary → Google Drive → base64 in the row itself, so a file is
 // always retrievable even with no external storage configured.
+import crypto from 'crypto';
 import { pool } from '../db/pool';
 import { logger } from './logger';
 import { uploadFile, ensureSubfolder } from '../services/googleDrive';
@@ -74,6 +75,11 @@ export interface StoreDocumentInput {
   /** Fix round 2 / R2-B1 — the compose-inputs hash of a generated GC /
    *  pre-bid document (sending refuses a file whose inputs changed). */
   composeInputsHash?: string | null;
+  /** Re-run reset — the CRM made this file (a generated proposal, takeoff,
+   *  bid_data.json or pre-bid package). Never an analysis input; superseded
+   *  by a re-run. Defaults to true whenever any of the generate-* markers
+   *  above is set. */
+  generated?: boolean;
 }
 
 async function resolveDriveFolder(linkedId: string, div: string, category: string): Promise<string | null> {
@@ -147,14 +153,19 @@ export async function storeDocument(input: StoreDocumentInput) {
     await pool.query('DELETE FROM documents WHERE linked_id=$1 AND category=$2', [linkedId, category]);
   }
 
+  const generated = input.generated
+    ?? (!!input.gatePassed || !!input.takeoffRunId || !!input.composeInputsHash || category === 'bid_data');
+  const contentSha256 = file.buffer ? crypto.createHash('sha256').update(file.buffer).digest('hex') : null;
   const { rows } = await pool.query(
     `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category,
-                            file_size, file_type, uploaded_by, storage_url, file_data, gate_passed, takeoff_run_id, compose_inputs_hash)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                            file_size, file_type, uploaded_by, storage_url, file_data, gate_passed, takeoff_run_id, compose_inputs_hash,
+                            generated, content_sha256)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
      RETURNING id, linked_id, linked_name, div, name, display_name, category, file_size,
-               file_type, storage_url, uploaded_by, created_at, gate_passed`,
+               file_type, storage_url, uploaded_by, created_at, gate_passed, generated`,
     [linkedId || null, linkedName || null, div, file.originalname, displayName, category,
-     file.size, safeMimeType, uploadedBy, storageUrl || null, fileData, !!input.gatePassed, input.takeoffRunId ?? null, input.composeInputsHash ?? null]
+     file.size, safeMimeType, uploadedBy, storageUrl || null, fileData, !!input.gatePassed, input.takeoffRunId ?? null, input.composeInputsHash ?? null,
+     generated, contentSha256]
   );
   return rows[0];
 }

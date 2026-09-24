@@ -61,6 +61,7 @@ import { verifyBidDocx, verifyBidText, type VerifyOptions } from '../bidstd/veri
 import { BidData } from '../bidstd/bidData';
 import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
 import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
+import { resetForRerun, type RerunResetSummary, GENERATED_OUTPUT_CATEGORIES } from '../services/rerunReset';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
 const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'warehouse', 'restaurant', 'medical', 'retail', 'other'];
@@ -609,16 +610,50 @@ export async function scopeInputsHash(bidId: string): Promise<string> {
 /** Fix round 1 / B5 — begin a new analysis run for a bid (see /analyze).
  *  Returns the new run id. */
 export async function startAnalysisRun(bidId: string): Promise<string> {
+  return (await beginAnalysisRun(bidId)).runId;
+}
+
+/** Re-run reset — mints the run id AND resets everything the previous run
+ *  produced (services/rerunReset.ts) in ONE transaction: a re-run is either
+ *  fully reset or not started. The takeoff_results row is locked first, so
+ *  two re-runs of the same bid serialize. */
+export async function beginAnalysisRun(bidId: string): Promise<{ runId: string; reset: RerunResetSummary }> {
   const runId = crypto.randomUUID();
-  await pool.query(`
-    INSERT INTO takeoff_results (bid_id, status, run_id, review_status) VALUES ($1, 'running', $2, 'pending')
-    ON CONFLICT (bid_id) DO UPDATE SET status='running', created_at=now(), run_id=$2,
-      agent1_output=NULL, agent2_output=NULL, agent3_output=NULL, count_result=NULL,
-      agent4_output=NULL, agent4_price=NULL, agent4_status=NULL, agent4_error=NULL, agent4_run_id=NULL, agent4_source=NULL,
-      draft_output=NULL, draft_status=NULL, draft_error=NULL, draft_inputs_hash=NULL, draft_run_id=NULL,
-      review_status='pending'
-  `, [bidId, runId]);
-  return runId;
+  const c = await pool.connect();
+  try {
+    await c.query('BEGIN');
+    const { rows: prev } = await c.query(
+      'SELECT run_id, agent2_output, agent4_price, review_items FROM takeoff_results WHERE bid_id=$1 FOR UPDATE', [bidId]
+    );
+    await c.query(`
+      INSERT INTO takeoff_results (bid_id, status, run_id, review_status, reset_run_id) VALUES ($1, 'running', $2, 'pending', $2)
+      ON CONFLICT (bid_id) DO UPDATE SET status='running', created_at=now(), run_id=$2,
+        agent1_output=NULL, agent2_output=NULL, agent3_output=NULL, count_result=NULL,
+        agent4_output=NULL, agent4_price=NULL, agent4_status=NULL, agent4_error=NULL, agent4_run_id=NULL, agent4_source=NULL,
+        draft_output=NULL, draft_status=NULL, draft_error=NULL, draft_inputs_hash=NULL, draft_run_id=NULL,
+        review_status='pending',
+        -- Re-run reset — the review (items AND the estimator's answers to
+        -- them), the account-term snapshot, output hygiene and the last
+        -- error go too: nothing from the previous run carries over.
+        review_items=NULL, account_terms=NULL, hygiene=NULL, raw_response=NULL,
+        reset_run_id=$2
+    `, [bidId, runId]);
+    const reset = await resetForRerun(c, bidId, runId, {
+      runId: (prev[0]?.run_id as string | null) ?? null,
+      agent2Output: (prev[0]?.agent2_output as string | null) ?? null,
+      agent4Price: prev[0]?.agent4_price ?? null,
+      reviewItems: prev[0]?.review_items ?? null,
+    });
+    const { rfis: _rfis, ...summary } = reset;
+    await c.query('UPDATE takeoff_results SET reset_summary=$2 WHERE bid_id=$1', [bidId, JSON.stringify(summary)]);
+    await c.query('COMMIT');
+    return { runId, reset };
+  } catch (err) {
+    await c.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    c.release();
+  }
 }
 
 /** Compose the pre-bid draft. Never throws: failures land in draft_status /
@@ -985,7 +1020,7 @@ export async function runPipeline(
     // Non-fatal: a failure here loses the markers, never the counts.
     try {
       const markers = await writeAiCountMarkers(bidId, stage.countResult,
-        files.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })));
+        files.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })), runId);
       (stage.countResult as unknown as Record<string, unknown>).markers = markers;
     } catch (err) {
       logger.warn({ err, bidId }, '[takeoff] writing AI count markers failed');
@@ -2026,18 +2061,38 @@ router.get('/intelligence/:bidId', requireAuth, async (req: AuthRequest, res) =>
 });
 
 // POST analyze — 3-agent sequential pipeline
-router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload.array('files', 50), asyncHandler(async (req: AuthRequest, res) => {
-  const bidId = req.body.bidId;
-  if (!bidId) return res.status(400).json({ error: 'bidId required' });
+/** One analysis input left out, and why (logged with every run). */
+export interface AnalysisInputExclusion {
+  name: string;
+  documentId?: string;
+  reason: 'crm_generated' | 'duplicate';
+  detail: string;
+}
 
-  const bid = await loadAccessibleBid(res, req.user!, bidId);
-  if (!bid) return;
-
-  const rawFiles = (req.files as Express.Multer.File[]) ?? [];
+/** The bid's files that go to the analysis for one /analyze call.
+ *
+ *  Live AutoZone re-run (2026-09-23): Agent 1 was sent the previous run's
+ *  "Proposal - AutoZone - 2026-09-23.pdf" as a drawing, and the plan set and
+ *  spec book twice each (once uploaded in this session, once selected from
+ *  Project Files) — 28 Opus batches of ~88k input tokens instead of ~14.
+ *
+ *  - A document the CRM generated (documents.generated, or a proposal /
+ *    takeoff / pre-bid / bid_data category) is never an input. An upload
+ *    whose bytes (sha256, else name + size) match one of this bid's
+ *    generated documents is dropped too.
+ *  - A document id selected twice is sent once; two inputs with the same
+ *    bytes (sha256) are sent once, the document-backed copy winning (its id
+ *    places the counting stage's markers on the Plans view).
+ *  Every exclusion is logged with its reason. */
+export async function gatherAnalysisInputs(
+  bidId: string, rawUploads: Express.Multer.File[], docIds: string[],
+): Promise<{ files: Express.Multer.File[]; excluded: AnalysisInputExclusion[] }> {
+  const excluded: AnalysisInputExclusion[] = [];
+  const generatedCategories = GENERATED_OUTPUT_CATEGORIES as unknown as string[];
 
   // Expand any zip archives into their constituent PDF/image files
-  const files: Express.Multer.File[] = [];
-  for (const f of rawFiles) {
+  const uploads: Express.Multer.File[] = [];
+  for (const f of rawUploads) {
     if (f.originalname.toLowerCase().endsWith('.zip')) {
       try {
         const zip = new AdmZip(f.buffer);
@@ -2045,7 +2100,7 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
           if (entry.isDirectory) continue;
           const n = entry.name.toLowerCase();
           if (!n.endsWith('.pdf') && !n.endsWith('.jpg') && !n.endsWith('.jpeg') && !n.endsWith('.png')) continue;
-          files.push({
+          uploads.push({
             ...f,
             originalname: entry.name,
             buffer: entry.getData(),
@@ -2055,25 +2110,31 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
         }
       } catch { /* corrupt or unreadable zip — skip */ }
     } else {
-      files.push(f);
+      uploads.push(f);
     }
   }
-  // Also pull in any documents already attached to this bid
-  const rawDocIds = req.body.document_ids;
-  const docIds: string[] = Array.isArray(rawDocIds)
-    ? (rawDocIds as string[]).filter(Boolean)
-    : (typeof rawDocIds === 'string' && rawDocIds.trim()) ? [rawDocIds.trim()] : [];
 
+  const fromDocs: Express.Multer.File[] = [];
+  const seenDocIds = new Set<string>();
   for (const docId of docIds) {
+    if (seenDocIds.has(docId)) {
+      excluded.push({ name: docId, documentId: docId, reason: 'duplicate', detail: 'the same document was selected twice' });
+      continue;
+    }
+    seenDocIds.add(docId);
     try {
       const { rows: docRows } = await pool.query(
-        'SELECT name, file_type, file_data, storage_url FROM documents WHERE id=$1 AND deleted_at IS NULL',
+        'SELECT name, file_type, file_data, storage_url, category, generated FROM documents WHERE id=$1 AND deleted_at IS NULL',
         [docId]
       );
       const doc = docRows[0];
       if (!doc) continue;
 
       const fname = doc.name as string;
+      if (doc.generated || generatedCategories.includes(doc.category as string)) {
+        excluded.push({ name: fname, documentId: docId, reason: 'crm_generated', detail: `a CRM-generated ${doc.category} document, not a drawing` });
+        continue;
+      }
       const ftype = (doc.file_type as string) || 'application/octet-stream';
       let buf: Buffer | null = null;
 
@@ -2098,7 +2159,7 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
       }
 
       if (!buf) continue;
-      files.push({
+      fromDocs.push({
         documentId: docId,
         fieldname: 'files',
         originalname: fname,
@@ -2116,8 +2177,73 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
     }
   }
 
+  // An upload that IS one of this bid's generated documents (e.g. a
+  // downloaded proposal PDF dropped back in) is not a drawing either.
+  const { rows: generatedDocs } = await pool.query(
+    `SELECT name, display_name, file_size, content_sha256 FROM documents
+      WHERE linked_id = $1::text AND deleted_at IS NULL AND (generated = true OR category = ANY($2::text[]))`,
+    [bidId, generatedCategories]
+  );
+  const sha = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
+  const keptUploads: Express.Multer.File[] = [];
+  for (const f of uploads) {
+    const h = sha(f.buffer);
+    const match = generatedDocs.find(g => g.content_sha256
+      ? g.content_sha256 === h
+      : Number(g.file_size) === f.buffer.length && [g.name, g.display_name].includes(f.originalname));
+    if (match) {
+      excluded.push({ name: f.originalname, reason: 'crm_generated', detail: `matches the CRM-generated document "${match.display_name || match.name}"` });
+      continue;
+    }
+    keptUploads.push(f);
+  }
+
+  // Same bytes twice (the upload from this session AND its Project Files
+  // copy, or one file filed twice): send it once.
+  const files: Express.Multer.File[] = [];
+  const byHash = new Map<string, string>();
+  for (const f of [...fromDocs, ...keptUploads]) {
+    const h = sha(f.buffer);
+    const first = byHash.get(h);
+    if (first !== undefined) {
+      excluded.push({
+        name: f.originalname, documentId: (f as PipelineFile).documentId, reason: 'duplicate',
+        detail: `same content as "${first}"`,
+      });
+      continue;
+    }
+    byHash.set(h, f.originalname);
+    files.push(f);
+  }
+
+  logger.info({
+    bidId,
+    sent: files.map(f => f.originalname),
+    excluded,
+  }, '[takeoff] analysis inputs — CRM-generated documents and duplicates excluded');
+  return { files, excluded };
+}
+
+router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload.array('files', 50), asyncHandler(async (req: AuthRequest, res) => {
+  const bidId = req.body.bidId;
+  if (!bidId) return res.status(400).json({ error: 'bidId required' });
+
+  const bid = await loadAccessibleBid(res, req.user!, bidId);
+  if (!bid) return;
+
+  const rawFiles = (req.files as Express.Multer.File[]) ?? [];
+  // Also pull in any documents already attached to this bid
+  const rawDocIds = req.body.document_ids;
+  const docIds: string[] = Array.isArray(rawDocIds)
+    ? (rawDocIds as string[]).filter(Boolean)
+    : (typeof rawDocIds === 'string' && rawDocIds.trim()) ? [rawDocIds.trim()] : [];
+  // Re-run reset follow-up — never the CRM's own outputs, never a file twice.
+  const { files, excluded: excludedInputs } = await gatherAnalysisInputs(bidId, rawFiles, docIds);
+
   if (!files.length) {
-    return res.status(400).json({ error: 'Upload at least one plan file, or select files from Project Files, before running AI analysis.' });
+    const why = excludedInputs.some(e => e.reason === 'crm_generated')
+      ? ' CRM-generated proposals, takeoffs and pre-bid packages are never analysis inputs.' : '';
+    return res.status(400).json({ error: `Upload at least one plan file, or select files from Project Files, before running AI analysis.${why}` });
   }
 
   // Prefer the key configured in Settings -> AI; fall back to the env var.
@@ -2133,7 +2259,7 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   // and the review is 'pending' — every GC document and send is blocked —
   // until the counting stage writes this run's review. The estimator's
   // earlier resolutions stay in review_items for the carry-over (N4).
-  const analysisRunId = await startAnalysisRun(bidId);
+  const { runId: analysisRunId, reset } = await beginAnalysisRun(bidId);
 
   // Log AI usage for rate limiting and audit
   await pool.query(
@@ -2150,6 +2276,12 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
     message: 'Analysis started',
     totalFiles: files.length,
     electricalSheets: electricalCount,
+    runId: analysisRunId,
+    excludedInputs,
+    // Re-run reset — what was cleared / kept, and the workspace RFIs after
+    // it (the client installs these so its autosave can't restore the
+    // cleared ones).
+    reset,
   });
 
   const client = new Anthropic({ apiKey });
@@ -2298,7 +2430,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
         );
         return;
       }
-      await pool.query(
+      const written = await pool.query(
         `UPDATE takeoff_results SET
           agent4_output=$1, agent4_price=$2, agent4_notes=$3,
           agent4_model=$4, usage_agent4=$5,
@@ -2307,11 +2439,15 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
         [JSON.stringify(parsed), parsedPrice, internalNotes?.trim() || null, config.modelA4, JSON.stringify(resp.usage), bidId, runId]
       );
       // The proposal price is the later, more authoritative number — sync it into
-      // the pipeline the same way the estimate save already does.
-      await pool.query(
-        'UPDATE bids SET amount=$1 WHERE id=$2 AND deleted_at IS NULL',
-        [parsedPrice, bidId]
-      );
+      // the pipeline the same way the estimate save already does. Re-run
+      // reset — only when this run is still current: an Agent 4 from a run
+      // that a re-run superseded must not write the price the reset cleared.
+      if (written.rowCount) {
+        await pool.query(
+          'UPDATE bids SET amount=$1 WHERE id=$2 AND deleted_at IS NULL',
+          [parsedPrice, bidId]
+        );
+      }
       logger.info({ bidId }, '[agent4] Proposal generated successfully');
     } catch (err) {
       logger.error({ err, bidId }, '[agent4] Background run failed');
