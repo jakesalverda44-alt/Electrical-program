@@ -522,8 +522,32 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     const totalCount = fileObjectsRef.current.length + selectedDocIds.size;
     // Next round A3 — "Run without N sheets": the missing referenced sheets
     // nobody skipped are recorded as not provided (proposal clarifications).
-    const unskipped = sheetCheckRef.current.data?.unskippedMissing ?? 0;
-    if (unskipped > 0) await sheetCheckRef.current.update({ action: 'skip_all_missing' });
+    // Fix round B1/S7 — never on a stale check, and the estimator sees
+    // exactly which sheets will be recorded as not provided.
+    const check = sheetCheckRef.current.data;
+    if (check?.status === 'running') {
+      set({ aiLog: ['✗ The sheet check is still running for the files you just added — wait for it to finish, then run.'] });
+      return null;
+    }
+    const missingNow = (check?.missing ?? []).filter(m => !m.skip);
+    if (missingNow.length > 0) {
+      const ok = await confirm({
+        title: `Run without ${missingNow.length} sheet${missingNow.length === 1 ? '' : 's'}?`,
+        body: (
+          <div>
+            <p>These referenced sheets are not in the upload. They will be listed on the proposal as not provided:</p>
+            <ul>{missingNow.map(m => <li key={m.id}>{m.notProvidedText}</li>)}</ul>
+          </div>
+        ),
+        confirmLabel: 'Run without them',
+      });
+      if (!ok) return null;
+      const saved = await sheetCheckRef.current.update({ action: 'skip_all_missing', inputKey: check?.inputKey ?? null });
+      if (!saved) {
+        set({ aiLog: ['✗ The sheet check changed — check the missing sheets again, then run.'] });
+        return null;
+      }
+    }
     set({ aiRunning: true, aiLog: [`Sending ${totalCount} file(s) (${elecCount} electrical sheet${elecCount !== 1 ? 's' : ''} identified)…`] });
     try {
       const formData = new FormData();

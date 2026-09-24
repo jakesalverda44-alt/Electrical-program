@@ -37,7 +37,7 @@ import {
 import { isPdftoppmAvailable, type SheetClass } from '../ai/documentPrep';
 import { extractPdfPageTexts, isPdftotextAvailable } from '../ai/pdfText';
 import {
-  extractRegexRefs, resolveRefs, alwaysUsefulPages, parseAiRefs, normalizeSheetId,
+  extractRegexRefs, resolveRefs, alwaysUsefulPages, parseAiRefs, normalizeSheetId, learnSheetPattern,
   type SheetRef, type ResolvedRef, type RefInventoryPage, type NoteSentence,
 } from '../ai/sheetRefs';
 import { callWithRetry } from '../ai/retry';
@@ -56,8 +56,18 @@ export const TEXT_LAYER_MIN_CHARS = 50;
  *  tiles; the cap keeps a "see architectural" from sending a whole A-set). */
 export const MAX_REFERENCE_PAGES = 12;
 
-export interface PageOverride { decision: 'include' | 'exclude'; reason: string; by: string; at: string }
-export interface RefSkip { reason: string; by: string; at: string; auto?: boolean }
+export interface PageOverride {
+  decision: 'include' | 'exclude'; reason: string; by: string; at: string;
+  /** N7 — the page it was made on, so it follows the sheet into a revised
+   *  file (a new content hash) instead of lapsing silently. */
+  sheetNo?: string; title?: string;
+}
+export interface RefSkip {
+  reason: string; by: string; at: string; auto?: boolean;
+  /** S7 — the sheet check (input_key) the skip was made against; a skip
+   *  from another set of inputs is not honored. */
+  inputKey?: string | null;
+}
 
 export interface CheckedPage {
   /** `${sha256}#${page}` — stable across re-uploads and renames. */
@@ -129,7 +139,7 @@ export function applySelection(
   pagesIn: CheckedPage[],
   overrides: Record<string, PageOverride>,
 ): { pages: CheckedPage[]; refs: ResolvedRef[] } {
-  const pages = pagesIn.map(p => ({ ...p, override: overrides[p.key], referencedBy: undefined as string[] | undefined }));
+  const pages = pagesIn.map(p => ({ ...p, override: overrideFor(p, overrides), referencedBy: undefined as string[] | undefined }));
   // 1. the classifier's own selection, file by file (FIX-1 drop rule).
   const byFile = new Map<string, CheckedPage[]>();
   for (const p of pages) {
@@ -159,7 +169,7 @@ export function applySelection(
   // 2. references.
   const inventory: RefInventoryPage[] = pages.map(p => ({ key: p.key, file: p.file, page: p.page, sheetNo: p.sheetNo, title: p.title, discipline: p.discipline }));
   const sources = pages.filter(p => (p.role === 'analysis' || p.override?.decision === 'include') && isRefSource(p));
-  const refs = resolveRefs(sources.flatMap(p => p.refs), inventory);
+  const refs = resolveRefs(sources.flatMap(p => p.refs), inventory, learnSheetPattern(pages.map(p => p.sheetNo)));
   const byKey = new Map(pages.map(p => [p.key, p]));
   let refPages = 0;
   const makeReference = (p: CheckedPage, why: string, from?: string) => {
@@ -194,13 +204,32 @@ export function applySelection(
 }
 
 /** Pure: missing references with the estimator's skip decisions. */
-export function missingRefs(result: SheetCheckResult | null, skips: Record<string, RefSkip>): MissingRef[] {
-  return (result?.refs ?? []).filter(r => r.status === 'missing').map(r => ({ ...r, ...(skips[r.id] ? { skip: skips[r.id] } : {}) }));
+/** S7 — a skip counts only for the inputs it was made against. */
+function skipApplies(skip: RefSkip | undefined, inputKey: string | null | undefined): skip is RefSkip {
+  return !!skip && (!skip.inputKey || !inputKey || skip.inputKey === inputKey);
 }
 
-/** Pure: proposal clarifications for skipped references (one line each). */
-export function skippedClarifications(result: SheetCheckResult | null, skips: Record<string, RefSkip>): string[] {
-  return missingRefs(result, skips).filter(m => m.skip).map(m => `${m.notProvidedText}.`);
+export function missingRefs(result: SheetCheckResult | null, skips: Record<string, RefSkip>, inputKey?: string | null): MissingRef[] {
+  return (result?.refs ?? []).filter(r => r.status === 'missing')
+    .map(r => ({ ...r, ...(skipApplies(skips[r.id], inputKey) ? { skip: skips[r.id] } : {}) }));
+}
+
+/** Pure: proposal clarifications for skipped references (one line each). A
+ *  reference that is no longer missing (the sheet was added later) prints
+ *  nothing. */
+export function skippedClarifications(result: SheetCheckResult | null, skips: Record<string, RefSkip>, inputKey?: string | null): string[] {
+  return missingRefs(result, skips, inputKey).filter(m => m.skip).map(m => `${m.notProvidedText}.`);
+}
+
+/** N7 — the override for a page: by its key, else (a revised file) the one
+ *  made on the same sheet number and title, when exactly one matches. */
+export function overrideFor(p: Pick<CheckedPage, 'key' | 'sheetNo' | 'title'>, overrides: Record<string, PageOverride>): PageOverride | undefined {
+  if (overrides[p.key]) return overrides[p.key];
+  const no = normalizeSheetId(p.sheetNo);
+  if (!no) return undefined;
+  const hits = Object.values(overrides).filter(o => o.sheetNo && normalizeSheetId(o.sheetNo) === no
+    && (o.title ?? '').trim().toUpperCase() === p.title.trim().toUpperCase());
+  return hits.length === 1 ? hits[0] : undefined;
 }
 
 /** What the analysis does with one PDF, from the sheet check. */
@@ -329,7 +358,11 @@ export async function buildInventory(files: CheckInputFile[], opts: BuildOptions
 
   // Regex references on every page with text (cheap; kept per page so an
   // override that forces a page in can use its notes without a re-check).
-  const prefixes = new Set(pages.map(p => normalizeSheetId(p.sheetNo)).filter((k): k is string => !!k).map(k => /^[A-Z]+/.exec(k)?.[0] ?? ''));
+  // B1 — the set's own sheet-number shape and ids: a referenced id that is
+  // not in the upload is reported only when it looks like one of them.
+  const pattern = learnSheetPattern(pages.map(p => p.sheetNo));
+  const inventoryKeys = new Set(pages.map(p => normalizeSheetId(p.sheetNo)).filter((k): k is string => !!k));
+  const prefixes = { pattern, inventoryKeys };
   const unresolved: Array<{ page: CheckedPage; s: NoteSentence }> = [];
   for (const p of pages) {
     const text = pageTexts.get(p.file)?.[p.page - 1] ?? '';

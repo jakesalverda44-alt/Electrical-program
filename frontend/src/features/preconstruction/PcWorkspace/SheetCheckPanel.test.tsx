@@ -71,7 +71,7 @@ describe('SheetCheckPanel', () => {
     expect((screen.getByTestId('skip-sheet:M1-confirm') as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByTestId('skip-sheet:M1-reason'), { target: { value: 'Mechanical set not issued for bid' } });
     fireEvent.click(screen.getByTestId('skip-sheet:M1-confirm'));
-    await waitFor(() => expect(onUpdate).toHaveBeenCalledWith({ action: 'skip', refId: 'sheet:M1', reason: 'Mechanical set not issued for bid' }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledWith({ action: 'skip', refId: 'sheet:M1', reason: 'Mechanical set not issued for bid', inputKey: null }));
   });
 
   it('Left out: force a page in with a reason', async () => {

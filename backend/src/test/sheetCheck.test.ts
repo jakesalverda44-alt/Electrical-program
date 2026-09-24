@@ -167,13 +167,16 @@ describe('sheet check (Documents step)', () => {
     r = await put({ action: 'clear', pageKey: bySheet(r.body, 'PH0.1').key });
     expect(bySheet(r.body, 'PH0.1').role).toBe('reference');
 
-    expect((await put({ action: 'skip', refId: 'sheet:M1', reason: 'meh' })).status).toBe(400);
-    r = await put({ action: 'skip', refId: 'sheet:M1', reason: 'Mechanical set not issued for bid' });
+    const inputKey = body.inputKey as string;
+    expect((await put({ action: 'skip', refId: 'sheet:M1', reason: 'meh', inputKey })).status).toBe(400);
+    r = await put({ action: 'skip', refId: 'sheet:M1', reason: 'Mechanical set not issued for bid', inputKey });
     expect(r.body.missing.find((m: { id: string }) => m.id === 'sheet:M1').skip).toMatchObject({ reason: 'Mechanical set not issued for bid' });
     expect(r.body.unskippedMissing).toBe(r.body.missing.length - 1);
     r = await put({ action: 'unskip', refId: 'sheet:M1' });
     expect(r.body.unskippedMissing).toBe(r.body.missing.length);
-    r = await put({ action: 'skip_all_missing' });
+    // S7 — a skip against another set of inputs is refused.
+    expect((await put({ action: 'skip_all_missing', inputKey: 'stale' })).status).toBe(409);
+    r = await put({ action: 'skip_all_missing', inputKey });
     expect(r.body.unskippedMissing).toBe(0);
     // Skipped references become proposal clarifications.
     const row = await loadSheetCheck(bidId);
@@ -264,5 +267,27 @@ describe('sheet check (Documents step)', () => {
     const inv = tr.prep_inventory as Array<{ sheetNo: string; role: string; reason: string; included: boolean }>;
     expect(inv.find(p => p.sheetNo === 'PH0.1')).toMatchObject({ role: 'reference', included: true, reason: expect.stringContaining('E-7 note 3') });
     expect(inv.find(p => p.sheetNo === 'A-1.1')).toMatchObject({ role: 'excluded', included: false });
+  });
+
+  it('fix round S7 / N7: no skip while a check runs; skips lapse when the inputs change; overrides need run_analysis', async () => {
+    if (!ok || !have) return;
+    const bidId = await makeBid();
+    const body = await runCheck(bidId);
+    const put = (b: Record<string, unknown>, who = user) => request(app).put(`/api/preconstruction/${bidId}/sheet-check`).set(auth(who.token)).send(b);
+    const inputKey = body.inputKey as string;
+    await pool.query(`UPDATE bid_sheet_check SET status='running' WHERE bid_id=$1`, [bidId]);
+    expect((await put({ action: 'skip_all_missing', inputKey })).status).toBe(409);
+    await pool.query(`UPDATE bid_sheet_check SET status='complete' WHERE bid_id=$1`, [bidId]);
+    const r = await put({ action: 'skip_all_missing', inputKey });
+    expect(r.status).toBe(200);
+    expect(r.body.unskippedMissing).toBe(0);
+    // The inputs change (a new check for other files): the old skips lapse.
+    await pool.query(`UPDATE bid_sheet_check SET input_key='other-files' WHERE bid_id=$1`, [bidId]);
+    const g = await request(app).get(`/api/preconstruction/${bidId}/sheet-check`).set(auth(user.token));
+    expect(g.body.unskippedMissing).toBe(g.body.missing.length);
+    const row = await loadSheetCheck(bidId);
+    expect(skippedClarifications(row!.result, row!.skips, row!.input_key)).toEqual([]);
+    const sales = await makeUser('sales_manager');
+    expect([403, 404]).toContain((await put({ action: 'skip_all_missing', inputKey: 'other-files' }, sales)).status);
   });
 });

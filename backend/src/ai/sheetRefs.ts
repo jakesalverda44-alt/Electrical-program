@@ -106,14 +106,63 @@ const NOT_SHEET_PREFIXES = new Set(['NEC', 'NFPA', 'UL', 'ASTM', 'IEEE', 'ANSI',
   'CFR', 'AWG', 'KCMIL', 'MCM', 'KV', 'KVA', 'VA', 'AMP', 'HP', 'KW', 'CKT', 'MDP', 'RTU', 'EF', 'WH', 'AHU',
   'CU', 'DS', 'LP', 'HP', 'NO', 'PG', 'ART', 'SEC', 'TYP', 'EA', 'QTY', 'FT', 'IN', 'MM']);
 
-/** "E-7", "E7", "PH0.1", "PH-0.1", "E-001", "e 3.1" -> normalized key
- *  ("E7", "PH0.1", "E1", "E3.1"), or null when it isn't a sheet id. */
+/** "E-7", "E7", "PH0.1", "PH-0.1", "E-001", "e 3.1", "E-1001", "E2.01" ->
+ *  normalized key ("E7", "PH0.1", "E1", "E3.1", "E1001", "E2.1"), or null
+ *  when it isn't a sheet id. N4 — up to 4 digits; leading zeros of the
+ *  decimal part dropped so "E2.01" and "E-2.1" are one sheet. */
 export function normalizeSheetId(raw: string): string | null {
-  const m = /^\s*([A-Za-z]{1,3})\s*[-.\s]?\s*(\d{1,3}(?:\.\d{1,2})?)([A-Za-z])?\s*$/.exec(raw);
+  const m = /^\s*([A-Za-z]{1,3})\s*[-.\s]?\s*(\d{1,4}(?:\.\d{1,2})?)([A-Za-z])?\s*$/.exec(raw);
   if (!m) return null;
   const prefix = m[1].toUpperCase();
-  const num = m[2].split('.').map((part, i) => (i === 0 ? String(Number(part)) : part)).join('.');
+  const num = m[2].split('.').map(part => String(Number(part))).join('.');
   return `${prefix}${num}${(m[3] ?? '').toUpperCase()}`;
+}
+
+/** Fix round B1 — the shape of THIS set's sheet numbers, learned from the
+ *  inventory ("E-1", "E-0.1", "PH0.1" -> separators "-" and "", up to 1
+ *  main digit, decimals used). A referenced id that is NOT in the upload is
+ *  reported missing only when it has that shape. */
+export interface SheetPattern {
+  prefixes: Set<string>;
+  seps: Set<string>;
+  maxDigits: number;
+  decimals: boolean;
+  /** No parsable sheet numbers: fall back to the known-prefix list only. */
+  empty: boolean;
+}
+
+interface IdParts { prefix: string; sep: string; digits: string; decimal: string; suffix: string }
+
+function parseIdParts(raw: string): IdParts | null {
+  const m = /^\s*([A-Za-z]{1,3})([-.\s]?)(\d{1,4})(\.\d{1,2})?([A-Za-z])?\s*$/.exec(raw);
+  if (!m) return null;
+  return { prefix: m[1].toUpperCase(), sep: m[2] === ' ' ? ' ' : m[2], digits: m[3], decimal: m[4] ?? '', suffix: m[5] ?? '' };
+}
+
+export function learnSheetPattern(sheetNos: string[]): SheetPattern {
+  const pat: SheetPattern = { prefixes: new Set(), seps: new Set(), maxDigits: 0, decimals: false, empty: true };
+  for (const no of sheetNos) {
+    const p = parseIdParts(no);
+    if (!p) continue;
+    pat.empty = false;
+    pat.prefixes.add(p.prefix);
+    pat.seps.add(p.sep);
+    pat.maxDigits = Math.max(pat.maxDigits, p.digits.replace(/^0+(?=\d)/, '').length);
+    if (p.decimal) pat.decimals = true;
+  }
+  return pat;
+}
+
+/** Does a (missing) id look like one of this set's sheet numbers? */
+export function matchesSheetPattern(raw: string, pat: SheetPattern | null | undefined): boolean {
+  const p = parseIdParts(raw);
+  if (!p || NOT_SHEET_PREFIXES.has(p.prefix)) return false;
+  if (!KNOWN_SHEET_PREFIXES.has(p.prefix) && !(pat?.prefixes.has(p.prefix))) return false;
+  if (!pat || pat.empty) return p.sep !== ' ';
+  if (!pat.seps.has(p.sep)) return false;
+  if (p.digits.replace(/^0+(?=\d)/, '').length > pat.maxDigits + 1) return false;
+  if (p.decimal && !pat.decimals) return false;
+  return true;
 }
 
 function prefixOf(key: string): string {
@@ -122,26 +171,85 @@ function prefixOf(key: string): string {
 
 // ── Regex reference extraction ──────────────────────────────────────────────
 
-const CONTEXT_WORDS = String.raw`SEE|REFER(?:\s+TO)?|REFERENCE|PER|ON|IN|SHEETS?|DWGS?\.?|DRAWINGS?|DETAILS?|COORDINATE\s+WITH|AS\s+SHOWN\s+ON`;
-const ID_TOKEN = String.raw`(?:\d{1,2}\s*\/\s*)?([A-Z]{1,3}\s?[-.]?\s?\d{1,3}(?:\.\d{1,2})?[A-Z]?)\b`;
+/** Fix round B1 — an explicit pointer only. Bare ON / IN are NOT context
+ *  words ("6 RECEPTACLES ON A 20 AMP CIRCUIT" is not sheet A20); "ON SHEET"
+ *  / "ON DWG" are. */
+const ANCHOR_RE = /\b(?:SEE|REFER(?:\s+TO)?|REFERENCE|PER|COORDINATE\s+WITH|(?:AS\s+)?SHOWN\s+ON|(?:ON|IN)\s+(?=SHEETS?\b|DWGS?\b|DRAWINGS?\b)|SHEETS?|DWGS?\.?|DRAWINGS?|DETAILS?)\b/g;
+/** Words that may sit between the pointer and the id. A SHEET/DWG word also
+ *  allows a spaced id ("SHEET E 3"). */
+const FILLER_RE = /^(?:[\s:#,]|THE\b|SHEETS?\b|DWGS?\.?|DRAWINGS?\b|DETAILS?\b|PLANS?\b|(?:\d{1,2}|[A-Z])\s*(?:\/|ON\s+SHEET\b|ON\s+DWG\b))+/;
+/** An id followed by one of these is an amperage, circuit, fixture/pole
+ *  tag, level, conduit size… never a sheet. */
+const REJECT_AFTER = /^(?:["”'’]|\s*(?:AMPS?|A|V|VOLTS?|VA|KVA|KW|HP|W|WATTS?|FIXTURES?|POLES?|CIRCUITS?|CKTS?|TYPES?|LEVELS?|REQUIREMENTS?|SIDES?|CONDUITS?|CABLES?|WIRES?|BOX(?:ES)?|RECEPTACLES?|OUTLETS?|HEADS?|LAMPS?)\b)/;
+/** A filler word that means the id is a type / circuit / panel tag. */
+const REJECT_FILLER = /\b(?:TYPE|FIXTURE|CKT|CIRCUIT|PANEL|POLE)\b/;
+const ID_RE = /^([A-Z]{1,3})(\s?[-.]?)(\d{1,4}(?:\.\d{1,2})?)([A-Z])?(?![A-Z0-9])/;
+const JOIN_RE = /^\s*(,|AND\b|&|THRU\b|THROUGH\b|TO\b)\s*/;
+
+export interface RefExtractOptions {
+  /** Extra accepted prefixes (the inventory's own). */
+  knownPrefixes?: Set<string>;
+  /** This set's sheet-number shape; ids not in `inventoryKeys` must match it. */
+  pattern?: SheetPattern;
+  /** Normalized sheet ids actually in the upload. */
+  inventoryKeys?: Set<string>;
+}
+
+/** Fix round B1 — the ids after one pointer: "SEE E-2 AND E-3",
+ *  "REFER TO SHEET C-3.1", "DETAIL 3/E-5", "E-1 THRU E-4" (N2: a range is
+ *  expanded, at most 20). Returns the raw ids. */
+function idsAfterPointer(text: string): string[] {
+  const out: string[] = [];
+  const fm = FILLER_RE.exec(text);
+  const filler = fm ? fm[0] : '';
+  if (REJECT_FILLER.test(filler)) return out;
+  const allowSpace = /\b(SHEETS?|DWGS?)\b/.test(filler);
+  let rest = text.slice(filler.length);
+  let prev: { prefix: string; n: number; int: boolean } | null = null;
+  let rangeNext = false;
+  for (let guard = 0; guard < 12; guard++) {
+    const m = ID_RE.exec(rest);
+    if (!m) break;
+    const sep = m[2];
+    if (/\s/.test(sep) && !allowSpace) break;
+    const after = rest.slice(m[0].length);
+    if (REJECT_AFTER.test(after)) break;
+    const raw = `${m[1]}${sep.trim()}${m[3]}${m[4] ?? ''}`;
+    const int = !m[3].includes('.') && !m[4];
+    const n = Number(m[3]);
+    if (rangeNext && prev && prev.prefix === m[1] && prev.int && int && n > prev.n && n - prev.n <= 20) {
+      const sepRaw = sep.trim();
+      for (let k = prev.n + 1; k < n; k++) out.push(`${m[1]}${sepRaw}${k}`);
+    }
+    out.push(raw);
+    prev = { prefix: m[1], n, int };
+    rest = after;
+    const j = JOIN_RE.exec(rest);
+    if (!j) break;
+    rangeNext = /THRU|THROUGH|TO/.test(j[1]);
+    rest = rest.slice(j[0].length).replace(/^(?:SHEETS?\s+|DWGS?\.?\s+)/, '');
+  }
+  return out;
+}
 
 /** Discipline-only references and what makes them one. `needsContext`: the
  *  phrase only counts after SEE / REFER / PER / COORDINATE WITH (so "wired by
  *  mechanical contractor" is not a reference to the mechanical drawings). */
 const DISCIPLINE_PATTERNS: Array<{ key: DisciplineRefKey; re: RegExp; needsContext: boolean }> = [
-  { key: 'equipment_schedule', re: /\b(?:MECHANICAL|PLUMBING|HVAC|MECH\.?|EQUIPMENT)\s+(?:EQUIPMENT\s+)?SCHEDULES?\b/, needsContext: false },
-  { key: 'photometric', re: /\bPHOTOMETRICS?(?:\s+(?:SITE\s+)?(?:PLAN|LAYOUT|CALC(?:ULATION)?S?|DRAWINGS?))?\b|\bSITE\s+LIGHTING\s+PLAN\b/, needsContext: false },
-  { key: 'reflected_ceiling', re: /\bREFLECTED\s+CEILING\s+PLANS?\b|\bR\.?C\.?P\.?\b/, needsContext: false },
-  { key: 'life_safety', re: /\bLIFE\s+SAFETY\s+PLANS?\b/, needsContext: false },
+  { key: 'equipment_schedule', re: /\b(?:MECHANICAL|PLUMBING|HVAC|MECH\.?|EQUIPMENT)\s+(?:EQUIPMENT\s+)?SCHEDULES?\b/, needsContext: true },
+  { key: 'photometric', re: /\bPHOTOMETRICS?(?:\s+(?:SITE\s+)?(?:PLAN|LAYOUT|CALC(?:ULATION)?S?|DRAWINGS?))?\b|\bSITE\s+LIGHTING\s+PLAN\b/, needsContext: true },
+  { key: 'reflected_ceiling', re: /\bREFLECTED\s+CEILING\s+PLANS?\b|\bR\.?C\.?P\.?\b/, needsContext: true },
+  { key: 'life_safety', re: /\bLIFE\s+SAFETY\s+PLANS?\b/, needsContext: true },
   { key: 'mechanical', re: /\b(?:MECHANICAL|HVAC)(?:\s+(?:DRAWINGS?|PLANS?|SHEETS?|DWGS?))?\b/, needsContext: true },
   { key: 'plumbing', re: /\bPLUMBING(?:\s+(?:DRAWINGS?|PLANS?|SHEETS?|DWGS?))?\b/, needsContext: true },
   { key: 'civil', re: /\b(?:CIVIL|SITE\s+CIVIL|SITE\s+UTILITY)(?:\s+(?:DRAWINGS?|PLANS?|SHEETS?|DWGS?))?\b/, needsContext: true },
   { key: 'architectural', re: /\b(?:ARCHITECTURAL|ARCH\.?)(?:\s+(?:DRAWINGS?|PLANS?|SHEETS?|DWGS?|ELEVATIONS?))?\b/, needsContext: true },
   { key: 'structural', re: /\bSTRUCTURAL(?:\s+(?:DRAWINGS?|PLANS?|SHEETS?|DWGS?))?\b/, needsContext: true },
   { key: 'fire_protection', re: /\bFIRE\s+(?:PROTECTION|SPRINKLER)(?:\s+(?:DRAWINGS?|PLANS?|SHEETS?|DWGS?))?\b/, needsContext: true },
-  { key: 'kitchen', re: /\b(?:KITCHEN|FOOD\s+SERVICE)\s+(?:EQUIPMENT\s+)?(?:DRAWINGS?|PLANS?|SHEETS?|SCHEDULES?)\b/, needsContext: false },
+  { key: 'kitchen', re: /\b(?:KITCHEN|FOOD\s+SERVICE)\s+(?:EQUIPMENT\s+)?(?:DRAWINGS?|PLANS?|SHEETS?|SCHEDULES?)\b/, needsContext: true },
   { key: 'landscape', re: /\bLANDSCAPE\s+(?:DRAWINGS?|PLANS?|SHEETS?)\b/, needsContext: true },
 ];
+const BROAD_DISCIPLINES = new Set<DisciplineRefKey>(['mechanical', 'plumbing', 'civil', 'architectural', 'structural', 'fire_protection', 'landscape']);
 const DISCIPLINE_CONTEXT = /\b(?:SEE|REFER(?:\s+TO)?|REFERENCE|PER|COORDINATE\s+WITH|AS\s+SHOWN\s+ON|SHOWN\s+ON|IN\s+ACCORDANCE\s+WITH)\s+(?:THE\s+)?(?:[A-Z/&]+\s+){0,2}$/;
 
 /** A sentence / note of a page's text, with the numbered note it sits under. */
@@ -154,7 +262,17 @@ export function splitNotes(pageText: string): NoteSentence[] {
   let note: string | undefined;
   // pdftotext -layout keeps a sheet's columns side by side on one line; a
   // run of 3+ spaces is a column gap, so each column piece is its own line.
-  const lines = pageText.split(/\r?\n/).flatMap(l => l.split(/\s{3,}/));
+  const pieces = pageText.split(/\r?\n/).flatMap(l => l.split(/\s{3,}/));
+  // N1 — "SEE SHEET" at the end of a line continues on the next one.
+  const lines: string[] = [];
+  for (const piece of pieces) {
+    const prev = lines[lines.length - 1];
+    if (prev !== undefined && /\b(?:SEE|REFER(?:\s+TO)?|PER|SHEETS?|DWGS?\.?|DETAILS?|COORDINATE\s+WITH|(?:AS\s+)?SHOWN\s+ON)\s*$/i.test(prev.trim()) && piece.trim()) {
+      lines[lines.length - 1] = `${prev.trim()} ${piece.trim()}`;
+    } else {
+      lines.push(piece);
+    }
+  }
   for (const rawLine of lines) {
     const line = rawLine.replace(/\s+/g, ' ').trim();
     if (!line) continue;
@@ -175,15 +293,17 @@ function snippet(s: string, max = 160): string {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
-/** Pure: every reference the regex can read from one page's text.
- *  `knownPrefixes` adds the inventory's own sheet prefixes to the accepted
- *  list (a set that numbers sheets "EL-1" or "LT-2"). The referencing page's
- *  own sheet number is never a reference. */
+/** Pure: every reference the regex can read from one page's text. The
+ *  third argument is either extra accepted prefixes (the inventory's own) or
+ *  the full options (B1: the set's sheet-number pattern and the ids in the
+ *  upload — an id not in the upload must match the pattern). The
+ *  referencing page's own sheet number is never a reference. */
 export function extractRegexRefs(
   pageText: string,
   from: { key: string; label: string; sheetNo: string },
-  knownPrefixes: Set<string> = new Set(),
+  optsIn: Set<string> | RefExtractOptions = {},
 ): { refs: SheetRef[]; unresolved: NoteSentence[] } {
+  const opts: RefExtractOptions = optsIn instanceof Set ? { knownPrefixes: optsIn } : optsIn;
   const refs: SheetRef[] = [];
   const unresolved: NoteSentence[] = [];
   const selfKey = normalizeSheetId(from.sheetNo);
@@ -194,25 +314,25 @@ export function extractRegexRefs(
     seen.add(k);
     refs.push({ ...r, fromKey: from.key, fromLabel: from.label, source: 'regex' });
   };
-  const idRe = new RegExp(String.raw`\b(?:${CONTEXT_WORDS})\b[\s:#]*((?:(?:SHEETS?|DWGS?\.?|DRAWINGS?|DETAILS?|PLAN)\s+)?(?:${ID_TOKEN}(?:\s*(?:,|AND|&|THRU|THROUGH|TO|-)\s*${ID_TOKEN})*))`, 'g');
+  const known = (prefix: string) => KNOWN_SHEET_PREFIXES.has(prefix) || !!opts.knownPrefixes?.has(prefix) || !!opts.pattern?.prefixes.has(prefix);
 
   for (const s of splitNotes(pageText)) {
     const upper = s.text.toUpperCase();
     let found = false;
-    // Explicit sheet ids after a context word ("SEE E-5 AND E-6", "REFER TO SHEET C-3.1").
-    idRe.lastIndex = 0;
+    // Explicit sheet ids after a pointer ("SEE E-5 AND E-6", "REFER TO SHEET C-3.1").
+    ANCHOR_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
-    while ((m = idRe.exec(upper))) {
-      const tokens = m[1].match(new RegExp(ID_TOKEN, 'g')) ?? [];
-      for (const tok of tokens) {
-        const id = tok.replace(/^\d{1,2}\s*\/\s*/, '');
+    while ((m = ANCHOR_RE.exec(upper))) {
+      const tail = upper.slice(m.index + m[0].length);
+      for (const id of idsAfterPointer(tail)) {
         const key = normalizeSheetId(id);
         if (!key) continue;
         const prefix = prefixOf(key);
-        if (NOT_SHEET_PREFIXES.has(prefix)) continue;
-        if (!KNOWN_SHEET_PREFIXES.has(prefix) && !knownPrefixes.has(prefix)) continue;
+        if (NOT_SHEET_PREFIXES.has(prefix) || !known(prefix)) continue;
         if (key === selfKey) { found = true; continue; }
-        add({ kind: 'sheet', key, label: id.replace(/\s+/g, ''), context: snippet(s.text), ...(s.note ? { note: s.note } : {}) });
+        const inUpload = !!opts.inventoryKeys?.has(key);
+        if (!inUpload && opts.pattern && !matchesSheetPattern(id, opts.pattern)) continue;
+        add({ kind: 'sheet', key, label: id, context: snippet(s.text), ...(s.note ? { note: s.note } : {}) });
         found = true;
       }
     }
@@ -220,12 +340,17 @@ export function extractRegexRefs(
     // Most specific first; a matched phrase is blanked so "MECHANICAL
     // EQUIPMENT SCHEDULE" is not also a "mechanical drawings" reference.
     let rest = upper;
+    let specific = false;
     for (const d of DISCIPLINE_PATTERNS) {
       const dm = d.re.exec(rest);
       if (!dm) continue;
+      // N3 — "REFER TO ARCHITECTURAL REFLECTED CEILING PLAN" is the RCP,
+      // not also every architectural sheet.
+      if (specific && BROAD_DISCIPLINES.has(d.key)) continue;
       if (d.needsContext && !DISCIPLINE_CONTEXT.test(rest.slice(0, dm.index))) continue;
       rest = `${rest.slice(0, dm.index)}${' '.repeat(dm[0].length)}${rest.slice(dm.index + dm[0].length)}`;
       add({ kind: 'discipline', key: d.key, label: dm[0].toLowerCase(), context: snippet(s.text), ...(s.note ? { note: s.note } : {}) });
+      if (!BROAD_DISCIPLINES.has(d.key)) specific = true;
       found = true;
     }
     // A sentence that plainly points somewhere, but nowhere the regex could
@@ -280,7 +405,7 @@ export function pagesForDiscipline(key: DisciplineRefKey, inventory: RefInventor
 /** Pure: resolve every reference against the inventory. One ResolvedRef per
  *  distinct target (a sheet referenced from three places is one entry with
  *  three `referencedBy`). */
-export function resolveRefs(refs: SheetRef[], inventory: RefInventoryPage[]): ResolvedRef[] {
+export function resolveRefs(refs: SheetRef[], inventory: RefInventoryPage[], pattern?: SheetPattern): ResolvedRef[] {
   const byId = new Map<string, ResolvedRef>();
   const bySheetKey = new Map<string, RefInventoryPage[]>();
   for (const p of inventory) {
@@ -297,6 +422,8 @@ export function resolveRefs(refs: SheetRef[], inventory: RefInventoryPage[]): Re
       let status: RefStatus;
       if (r.kind === 'sheet') {
         pages = bySheetKey.get(r.key) ?? [];
+        // B1 — a missing id must look like this set's sheet numbers.
+        if (!pages.length && pattern && !matchesSheetPattern(r.label, pattern)) continue;
         const titles = new Set(pages.map(p => p.title.trim().toUpperCase()));
         status = pages.length === 0 ? 'missing' : titles.size > 1 ? 'ambiguous' : 'present';
       } else {

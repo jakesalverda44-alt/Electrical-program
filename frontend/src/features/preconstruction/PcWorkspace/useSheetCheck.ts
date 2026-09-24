@@ -39,14 +39,16 @@ export interface SheetCheckData {
   otherFiles: string[];
   error: string | null;
   checkedAt: string | null;
+  /** S7 — the inputs this check was made for (skips are bound to it). */
+  inputKey?: string | null;
 }
 
 export type SheetCheckUpdate =
   | { action: 'include' | 'exclude'; pageKey: string; reason: string }
   | { action: 'clear'; pageKey: string }
-  | { action: 'skip'; refId: string; reason: string }
+  | { action: 'skip'; refId: string; reason: string; inputKey?: string | null }
   | { action: 'unskip'; refId: string }
-  | { action: 'skip_all_missing'; reason?: string };
+  | { action: 'skip_all_missing'; reason?: string; inputKey?: string | null };
 
 /** "Run without 2 sheets" while referenced sheets are missing and not skipped. */
 export function runButtonLabel(unskippedMissing: number | undefined, base = 'Run AI Analysis'): string {

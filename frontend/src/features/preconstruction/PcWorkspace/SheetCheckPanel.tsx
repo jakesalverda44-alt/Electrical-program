@@ -112,7 +112,7 @@ function SheetCheckPanel({ data, error, canRun, onUpdate, onRecheck, onUpload, o
                 {m.referencedBy[0]?.context && <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2 }}>“{m.referencedBy[0].context}”</div>}
                 {skipping === m.id && (
                   <ReasonForm testId={`skip-${m.id}`} placeholder={`Why skip it? (proposal will say: ${m.notProvidedText})`} confirm="Skip"
-                    onSubmit={reason => onUpdate({ action: 'skip', refId: m.id, reason })} onCancel={() => setSkipping(null)}/>
+                    onSubmit={reason => onUpdate({ action: 'skip', refId: m.id, reason, inputKey: data?.inputKey ?? null })} onCancel={() => setSkipping(null)}/>
                 )}
               </div>
             ))}

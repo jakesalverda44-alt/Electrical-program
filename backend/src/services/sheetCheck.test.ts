@@ -55,3 +55,13 @@ describe('applySelection', () => {
       .toEqual(['Civil / site drawings not provided at time of bid.']);
   });
 });
+
+describe('fix round N7 — an override follows its sheet into a revised file', () => {
+  it('matched by sheet number + title when the content hash changed', () => {
+    const old = page('set.pdf', 2, 'A-1.1', 'FLOOR PLAN', 'architectural');
+    const revised = { ...page('set-rev.pdf', 2, 'A-1.1', 'FLOOR PLAN', 'architectural'), key: 'newsha#2' };
+    const ov = { [old.key]: { decision: 'include' as const, reason: 'Receptacle layout lives here', by: 'J', at: 't', sheetNo: 'A-1.1', title: 'FLOOR PLAN' } };
+    const { pages } = applySelection([page('set-rev.pdf', 1, 'E-1', 'POWER PLAN', 'electrical'), revised], ov);
+    expect(pages[1]).toMatchObject({ role: 'analysis', reason: expect.stringContaining('Receptacle layout') });
+  });
+});

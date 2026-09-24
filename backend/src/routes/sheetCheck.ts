@@ -19,7 +19,7 @@ import { pool } from '../db/pool';
 import { drawingUpload } from '../utils/upload';
 import { gatherAnalysisInputs, loadAIConfig } from './preconstruction';
 import {
-  claimSheetCheck, runSheetCheck, loadSheetCheck, reselect, missingRefs, inputKeyOf,
+  claimSheetCheck, runSheetCheck, loadSheetCheck, missingRefs, inputKeyOf, applySelection,
   type SheetCheckRow, type PageOverride, type RefSkip,
 } from '../services/sheetCheck';
 import { isRealReason } from '../ai/reviewItems';
@@ -29,7 +29,7 @@ const router = Router();
 /** What the Documents step renders. */
 export function sheetCheckPayload(row: SheetCheckRow | null) {
   if (!row) return { status: 'idle' as const, pages: [], refs: [], missing: [], unclassifiedFiles: [], otherFiles: [], overrides: {}, skips: {}, error: null, checkedAt: null, inputKey: null };
-  const missing = missingRefs(row.result, row.skips ?? {});
+  const missing = missingRefs(row.result, row.skips ?? {}, row.input_key);
   return {
     status: row.status,
     pages: row.result?.pages ?? [],
@@ -87,46 +87,71 @@ router.post('/:bidId/sheet-check/run', requireAuth, requireAIPermission('run_ana
     });
   }));
 
-router.put('/:bidId/sheet-check', requireAuth, asyncHandler(async (req: AuthRequest, res: Response) => {
+// N7 — skips print on the proposal: the same permission as running the analysis.
+router.put('/:bidId/sheet-check', requireAuth, requireAIPermission('run_analysis'), asyncHandler(async (req: AuthRequest, res: Response) => {
   const bidId = req.params.bidId;
   const bid = await loadAccessibleBid(res, req.user!, bidId);
   if (!bid) return;
-  const row = await loadSheetCheck(bidId);
-  if (!row?.result) return res.status(409).json({ error: 'The sheet check has not run for this bid yet.' });
   const action = String(req.body?.action ?? '');
   const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
   const by = req.user?.name || req.user?.email || 'estimator';
   const at = new Date().toISOString();
-  const overrides: Record<string, PageOverride> = { ...(row.overrides ?? {}) };
-  const skips: Record<string, RefSkip> = { ...(row.skips ?? {}) };
-
-  if (action === 'include' || action === 'exclude' || action === 'clear') {
-    const pageKey = String(req.body?.pageKey ?? '');
-    if (!row.result.pages.some(p => p.key === pageKey)) return res.status(404).json({ error: 'That page is not in this sheet check.' });
-    if (action === 'clear') delete overrides[pageKey];
-    else {
-      if (!isRealReason(reason)) return res.status(400).json({ error: 'Give a reason (at least 10 characters).' });
-      overrides[pageKey] = { decision: action, reason, by, at };
+  const bodyKey = typeof req.body?.inputKey === 'string' ? req.body.inputKey : null;
+  // S7 — one writer at a time, and never against a check that is still
+  // running or was made for other inputs.
+  const tx = await pool.connect();
+  try {
+    await tx.query('BEGIN');
+    const { rows } = await tx.query('SELECT status, input_key, result, overrides, skips FROM bid_sheet_check WHERE bid_id=$1 FOR UPDATE', [bidId]);
+    const row = rows[0] as Pick<SheetCheckRow, 'status' | 'input_key' | 'result' | 'overrides' | 'skips'> | undefined;
+    const fail = async (status: number, error: string) => { await tx.query('ROLLBACK'); return res.status(status).json({ error }); };
+    if (!row?.result) return await fail(409, 'The sheet check has not run for this bid yet.');
+    if (row.status === 'running') return await fail(409, 'The sheet check is still running — wait for it to finish, then try again.');
+    if ((action === 'skip' || action === 'skip_all_missing') && bodyKey !== row.input_key) {
+      return await fail(409, 'The files changed since this sheet check — wait for the new check, then try again.');
     }
-  } else if (action === 'skip' || action === 'unskip') {
-    const refId = String(req.body?.refId ?? '');
-    if (!row.result.refs.some(r => r.id === refId && r.status === 'missing')) return res.status(404).json({ error: 'That reference is not missing in this sheet check.' });
-    if (action === 'unskip') delete skips[refId];
-    else {
-      if (!isRealReason(reason)) return res.status(400).json({ error: 'Give a reason (at least 10 characters).' });
-      skips[refId] = { reason, by, at };
+    const overrides: Record<string, PageOverride> = { ...(row.overrides ?? {}) };
+    const skips: Record<string, RefSkip> = { ...(row.skips ?? {}) };
+    if (action === 'include' || action === 'exclude' || action === 'clear') {
+      const pageKey = String(req.body?.pageKey ?? '');
+      const page = row.result.pages.find(p => p.key === pageKey);
+      if (!page) return await fail(404, 'That page is not in this sheet check.');
+      if (action === 'clear') {
+        delete overrides[pageKey];
+        // An override carried over from a revised file (N7) is cleared too.
+        const applied = page.override;
+        if (applied) for (const [k, o] of Object.entries(overrides)) if (o.at === applied.at && o.by === applied.by && o.sheetNo === applied.sheetNo) delete overrides[k];
+      } else {
+        if (!isRealReason(reason)) return await fail(400, 'Give a reason (at least 10 characters).');
+        overrides[pageKey] = { decision: action, reason, by, at, sheetNo: page.sheetNo, title: page.title };
+      }
+    } else if (action === 'skip' || action === 'unskip') {
+      const refId = String(req.body?.refId ?? '');
+      if (!row.result.refs.some(r => r.id === refId && r.status === 'missing')) return await fail(404, 'That reference is not missing in this sheet check.');
+      if (action === 'unskip') delete skips[refId];
+      else {
+        if (!isRealReason(reason)) return await fail(400, 'Give a reason (at least 10 characters).');
+        skips[refId] = { reason, by, at, inputKey: row.input_key };
+      }
+    } else if (action === 'skip_all_missing') {
+      // "Run without N sheets" — every missing reference nobody skipped yet is
+      // recorded as not provided (it becomes a proposal clarification).
+      const why = isRealReason(reason) ? reason : 'Not provided at time of bid — analysis run without it';
+      for (const m of missingRefs(row.result, skips, row.input_key)) if (!m.skip) skips[m.id] = { reason: why, by, at, auto: true, inputKey: row.input_key };
+    } else {
+      return await fail(400, 'Unknown action.');
     }
-  } else if (action === 'skip_all_missing') {
-    // "Run without N sheets" — every missing reference nobody skipped yet is
-    // recorded as not provided (it becomes a proposal clarification).
-    const why = isRealReason(reason) ? reason : 'Not provided at time of bid — analysis run without it';
-    for (const m of missingRefs(row.result, skips)) if (!m.skip) skips[m.id] = { reason: why, by, at, auto: true };
-  } else {
-    return res.status(400).json({ error: 'Unknown action.' });
+    const { pages, refs } = applySelection(row.result.pages, overrides);
+    await tx.query('UPDATE bid_sheet_check SET overrides=$2, skips=$3, result=$4, updated_at=now() WHERE bid_id=$1',
+      [bidId, JSON.stringify(overrides), JSON.stringify(skips), JSON.stringify({ ...row.result, pages, refs })]);
+    await tx.query('COMMIT');
+  } catch (err) {
+    await tx.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    tx.release();
   }
-  await pool.query('UPDATE bid_sheet_check SET overrides=$2, skips=$3, updated_at=now() WHERE bid_id=$1',
-    [bidId, JSON.stringify(overrides), JSON.stringify(skips)]);
-  res.json(sheetCheckPayload(await reselect(bidId)));
+  res.json(sheetCheckPayload(await loadSheetCheck(bidId)));
 }));
 
 export default router;

@@ -2973,7 +2973,7 @@ export async function composeCurrentBidData(
   let accountCorrections: string[] = [];
   // Next round A3 — referenced sheets skipped in the sheet check.
   const sheetRow = await loadSheetCheck(bidId);
-  const clarifications = sheetRow ? skippedClarifications(sheetRow.result, sheetRow.skips ?? {}) : [];
+  const clarifications = sheetRow ? skippedClarifications(sheetRow.result, sheetRow.skips ?? {}, sheetRow.input_key) : [];
   // Next round B3 — the Labor & Pricing screen's Alternates (add/deduct,
   // including a system-computed one like the 7-Eleven Graybar-package
   // deduct), printed as separate proposal lines.

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeSheetId, extractRegexRefs, resolveRefs, alwaysUsefulPages, parseAiRefs, splitNotes,
-  type RefInventoryPage,
+  learnSheetPattern, matchesSheetPattern, type RefInventoryPage,
 } from './sheetRefs';
 
 const from = (sheetNo = 'E-7') => ({ key: `set.pdf#7`, label: `${sheetNo} "ELECTRICAL SITE PLAN"`, sheetNo });
@@ -19,6 +19,9 @@ describe('normalizeSheetId', () => {
     expect(normalizeSheetId('C-3.1')).toBe('C3.1');
     expect(normalizeSheetId('M1.0A')).toBe('M1.0A');
     expect(normalizeSheetId('LIGHTING')).toBeNull();
+    // N4 — 4 digits; E2.01 and E-2.1 are one sheet.
+    expect(normalizeSheetId('E-1001')).toBe('E1001');
+    expect(normalizeSheetId('E2.01')).toBe(normalizeSheetId('E-2.1'));
     expect(normalizeSheetId('')).toBeNull();
   });
 });
@@ -159,3 +162,67 @@ describe('splitNotes — pdftotext -layout columns', () => {
     expect(s.map(x => x.text)).toEqual(['3. POLES PER PH0.1.', 'E-3 LIGHTING PLAN', 'SCALE 1/8"']);
   });
 });
+
+// ── Fix round — B1 / N1 / N2 / N3 ───────────────────────────────────────────
+// The reviewer's false cases, run the way the sheet check runs them: with
+// the set's own sheet-number pattern and ids (the Kissimmee-shaped INV).
+const PATTERN = learnSheetPattern(INV.map(p => p.sheetNo));
+const KEYS = new Set(INV.map(p => normalizeSheetId(p.sheetNo)!));
+const live = (text: string) => extractRegexRefs(text, from('E-7'), { pattern: PATTERN, inventoryKeys: KEYS }).refs.map(r => `${r.kind}:${r.key}`);
+
+describe('fix round B1 — ordinary note wording is never a sheet', () => {
+  it.each([
+    'MAXIMUM OF 6 RECEPTACLES ON A 20 AMP CIRCUIT.',
+    'MOUNT AT 18" AFF IN A 4" SQ BOX.',
+    'PROVIDE (2) 20A CIRCUITS IN A 1" CONDUIT.',
+    'CIRCUIT ON C-3',
+    'LOCATE ON S 1 SIDE',
+    'INSTALL ON L-1 LEVEL',
+    'PER T-24 REQUIREMENTS',
+    'PHOTOCELL ON S1 AND S2 POLES',
+    'EMERGENCY DRIVER IN F2 FIXTURES',
+    'SEE TYPE A1 FIXTURE',
+    'PER CKT C-3',
+    'SEE PANEL L-1',
+    'PER #12 AWG',
+    'SEE 3/4" CONDUIT',
+    'REFER TO A 20 AMP BREAKER',
+    'PER NEC 210.8',
+  ])('%s -> nothing', (text) => {
+    expect(live(text)).toEqual([]);
+  });
+  it.each([
+    ['SEE M-1 FOR RTU DATA.', ['sheet:M1']],
+    ['REFER TO SHEET C-3.1 FOR UTILITY ROUTING.', ['sheet:C3.1']],
+    ['POLE LOCATIONS PER PH0.1.', ['sheet:PH0.1']],
+    ['MOUNT PER DETAIL 3/E-5.', ['sheet:E5']],
+    ['SEE DETAIL 4 ON SHEET E-2.', ['sheet:E2']],
+    ['ROUTE AS SHOWN ON SHEET E 3.', ['sheet:E3']],
+  ])('%s -> %j', (text, want) => {
+    expect(live(text)).toEqual(want);
+  });
+  it('a missing id must look like this set\'s sheet numbers', () => {
+    expect(matchesSheetPattern('M-1', PATTERN)).toBe(true);
+    expect(matchesSheetPattern('M 1', PATTERN)).toBe(false); // no set sheet uses a space
+    expect(matchesSheetPattern('E-1001', PATTERN)).toBe(false); // this set's numbers are 1 digit
+    expect(matchesSheetPattern('QZ-1', PATTERN)).toBe(false); // unknown prefix
+    // An AI-read id is filtered the same way when it resolves as missing.
+    const refs = parseAiRefs('[{"kind":"sheet","id":"A 20"},{"kind":"sheet","id":"M-1"}]', { key: 'k', label: 'E-7' }, 'haiku');
+    expect(resolveRefs(refs, INV, PATTERN).map(r => r.id)).toEqual(['sheet:M1']);
+  });
+});
+
+describe('fix round N1 / N2 / N3', () => {
+  it('N1: a pointer wrapped onto the next line', () => {
+    expect(live('3. ROUTE CONDUIT, SEE SHEET\nE-2 FOR HOMERUNS.')).toEqual(['sheet:E2']);
+  });
+  it('N2: a range is expanded', () => {
+    expect(live('SEE E-1 THRU E-4.')).toEqual(['sheet:E1', 'sheet:E2', 'sheet:E3', 'sheet:E4']);
+  });
+  it('N3: RCP only, not every architectural sheet; bare headings are not references', () => {
+    expect(live('REFER TO ARCHITECTURAL REFLECTED CEILING PLAN.')).toEqual(['discipline:reflected_ceiling']);
+    expect(live('MECHANICAL EQUIPMENT SCHEDULE')).toEqual([]);
+    expect(live('ABBREVIATIONS: RCP REFLECTED CEILING PLAN')).toEqual([]);
+  });
+});
+
