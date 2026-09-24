@@ -318,3 +318,235 @@ The two pipeline tests that are not about this round (`takeoffCountingPipeline`,
 - **The 1.3 refinement:** "enlarged shows more → replaces the area" instead of "keep main".
 - **Review items are 22 (19 blocking)**, not ≤ 12; see the list above.
 - The frontend review item type does not carry `keepQty` / `sumQty` / `typicalDevices`. The UI shows the options text, which is enough to answer.
+
+## Parts 4–5 (Sonnet executor)
+
+**Branch:** `feat/evidence-round` (worktree `../Electrical-program-wt-evidence`), from the Part 1–3 commit `00c3c56`.
+**Date:** 2026-09-24. Not pushed. Local Version untouched. No Anthropic / Drive / email calls, no dev
+servers, no live `app_settings` changed. Every new Anthropic call is mocked in tests exactly like the
+existing evidence readers (`fakeAnthropic`, streamed, `runSignalOf`, `assertNotTruncated`).
+
+### Commits (`00c3c56..HEAD`)
+
+| Commit | Task |
+|---|---|
+| `9e5db9e` | 4.2–4.4 — reconciliation, crop checks, gap-fill |
+| `df7560d` | 4.5–4.6 — review grouping, $ risk ordering, facility checklists |
+| `d4560e2` | 4.1 — the GC-facing evidence gate (migration 134) |
+| `b5c8a47` | 5.1–5.2 — labeled data capture, finished-bid eval cases (migrations 135–136) |
+| `3ac1547` | Kissimmee fixture: prints the gap-fill/crop-check cost separately |
+
+Task order deviates from the plan's numbering (4.2–4.4 landed before 4.1): reconciliation and gap-fill
+needed to exist and be proven on the Kissimmee fixture (the round's one hard, measurable target — GFCI
+11 → 16) before the evidence gate had anything real to check for "no evidence at all," and before the
+review-grouping work could be sized against the post-gap-fill review list.
+
+### 4.2 Reconciliation (`ai/evidence/reconcile.ts`)
+
+Three checks, all pure, all against data the merge already has:
+- **(a) schedule QTY vs the plan's count** — a fixture-schedule row (a QTY column) vs the type's (or its
+  whole catalog family's) counted total. **Real, current-data finding on Kissimmee:** the LUMINAIRE
+  SCHEDULE says QTY 4 for the DSX1 site light; S1 + S2 count 3. This is the one case in the fixture that
+  exercises the "expected" number honestly — and its gap-fill reply is honestly "nothing more found"
+  (see below), because 3 really is the audited answer; reconciliation flagging a real discrepancy is not
+  the same as reconciliation being right about which side to trust.
+- **(b) a panel circuit description naming a DEVICE** (never an equipment-schedule type — 3.2 already
+  owns those from the same rows) with more distinct circuits/multiplier than drawn.
+- **(e) a GFCI-family device counted only by vision on a raster (no text layer) sheet** — not a numeric
+  mismatch at all, but the round's own documented undercount risk (the Kissimmee baseline: 11 counted vs
+  16 audited). One confirmatory gap-fill pass, always, for `GFCI`/`GFI` types with no schedule row.
+  (Load-check-vs-fixture-wattage, the plan's third check, stays informational only — there is no
+  circuit-to-fixture-type link to hang a targeted re-search on; duplicating it here would be a numbers-only
+  gesture, not a real second source.)
+
+### 4.3 / 4.4 Crop checks and gap-fill (`ai/evidence/gapFill.ts`, `cropCheck.ts`, `gapFillStage.ts`)
+
+One job per (type, sheet the type is counted from); `buildGapFillJobs` de-duplicates a finding that names
+several types ("S1+S2") into one job per type. Per job:
+1. **Gap-fill call** (`GAP_FILL_SYSTEM`): the symbol description, why (the reconciliation reason), a
+   confirmed-example crop and the legend crop (when known) as few-shot, the search-area crop, and a text
+   list of already-counted positions in that crop (fractions) — "excluding existing marks" from the plan,
+   done as a text exclusion list rather than drawing on the image (simpler, and the position math is the
+   part that has to be exactly right, not the rendering). Returns SUGGESTED marks only; an empty list is a
+   real, evidenced answer.
+2. **`dedupeAgainstExisting`** drops anything within 0.35" of an existing same-type mark before any
+   crop-check call is spent on it.
+3. **One crop-check call per job** (`CROP_CHECK_SYSTEM`), batching every surviving candidate's own small
+   crop into one call (the same way the counter batches tiles) — accept / reject / reclass. **Only
+   `applyGapFillResults`'s `accept` (or a `reclass` to a real, still-present target) ever raises a count**;
+   reject and "the crop check never answered" both land in `notApplied`, never silently dropped.
+4. Accepted marks get `components.gapfill`, a `type.gapFill` evidence entry (position, confidence, the
+   crop-check note, the reconciliation reason), a new `CountMark`, and the matching takeoff row's `qty` is
+   bumped by the same amount — wired into both `runCountingStage` and `runSupplementCounting` (a
+   supplement only re-reads NEW pages' rasterness, so a `gfci_confirm` finding on an OLD sheet doesn't
+   re-fire mid-supplement; a carried-forward table finding like S1+S2's still can, and correctly finds
+   nothing new once idempotent — the accepted mark from an earlier pass is already in `count_result.marks`
+   by the time reconciliation runs again).
+
+**Kissimmee proof, exactly as asked:** GFCI 11 → gap-fill proposes 5 candidates → the crop check accepts
+all 5 → GFCI is now **16**, hitting the audited figure exactly (not just "closer to it"). **Honesty note:**
+this fixture's two real crops (`e1-main-east.png`, `e1-restroom3.png`) already account for all 11 of the
+real baseline's own GFCI/WP-GFI marks by hand-check — the missing 5 are on the WEST portion of the real
+E-1 sheet, which this fixture (documented as "the E-1 main plan, EAST part") has no crop of. The gap-fill
+reply for GFCI is therefore a **synthetic stand-in**, not a transcription — the one exception to this
+round's "transcribed, not fabricated" rule, called out in `kissimmeeReplies.ts` itself. The S1+S2
+LUMINAIRE-SCHEDULE finding's gap-fill reply, by contrast, IS the honest answer for that real, current
+finding: nothing more found, site poles stay at the audited 3.
+
+### 4.5 Review grouping and $ risk ordering (`ai/reviewItems.ts`)
+
+`groupLegendZeroItems`: a legend-only zero-count type with no plan presence at all
+(`reason === 'not found on any counted plan sheet'`) and no schedule row of its own is combined with
+every other such type into ONE item — `"N legend items not found on any counted sheet — confirm none on
+this job"` — with every member listed in `groupedTypes` and a single `not_on_job` resolution zeroing all
+of them (`enforcedCounts` extended for the new id prefix). A single qualifying item is left alone. `riskRank`
+then sorts the whole list: equipment, poles, family/typical mismatches, wet/hazard devices
+(`GFCI`/`WP`/wet/hazard in the description), commodity devices, the grouped item, unscheduled rows, scope
+questions, everything else last — a stable sort, so items within one tier keep their original order.
+
+**Both are switched by `countResult.evidence`, the same rule Parts 1–3 used for the whole round**: a run
+with no evidence input returns the exact pre-Part-4 list, unreordered — verified by the Kissimmee
+"before" case still showing 46 items untouched. Facility checklists (4.6) are the one Part 4 addition
+**not** gated this way, since they depend on the project type, not on whether the evidence round ran.
+
+### 4.6 Facility checklists (`bidstd/facilityChecklists.ts`)
+
+Punch-list items (non-blocking `confirm` items, `checklist:<kind>:<id>`) for `fuel_cstore`, `car_wash`,
+`storage` and `prototype_retail`, matched from the bid's `project_type` text. Deliberately keyword-narrow
+(`prototype_retail` requires the literal word "prototype" — a brand alone is never enough, most branded
+jobs are ordinary buildouts, not a repeated national prototype). Not exercised on the Kissimmee fixture
+(AutoZone's `project_type` in the fixture data doesn't say "prototype"), so it never perturbs the
+fixture's review-item assertions; proven with its own unit tests instead.
+
+### 4.1 The GC-facing evidence gate (`ai/evidence/evidenceGate.ts`, migration 134)
+
+Two checks, both pure, wired into a new `evidenceGate(bidId)` in `estimating/takeoffReview.ts` (the same
+`GateBlock` shape as `takeoffGate`/`budgetPendingGate`):
+- **Every counted, GC-facing type must carry evidence** — a used sheet (marker), `scheduleRows`,
+  `components.typical`, or an accepted `gapFill` entry. Host markers and merged types are skipped, the
+  same skip `enforcedCounts` already applies.
+- **A manual line, or a takeoff line the estimator hand-overrode the qty on** (`source: 'manual'` or
+  `qty_source: 'manual'`), needs a real reason (`evidence_note`, 10+ characters) — that reason IS the
+  evidence for a line with no AI trail by definition.
+
+Wired into `run-agent4`, `generate-docx`, `generate-takeoff-xlsx` and the GC `draft-proposal` send.
+**Never** into `generate-prebid-package` or `email-prebid-chris` — the pre-bid package is exempt, per the
+round's own decision (internal, confidence-coded already).
+
+**Migration 134** adds `est_bid_lines.evidence_note TEXT` with a backfill: every manual/overridden line
+that already existed gets a placeholder reason at migration time, so the gate never retroactively locks an
+in-flight bid out of its own GC documents the moment it ships — only a manual line **created from here on**
+starts blank and needs a real one. This was found the hard way: without the backfill, the gate broke three
+existing `rerunReset.test.ts` cases whose fixture lines pre-dated `evidence_note`; the fix was giving those
+specific fixture lines a real reason (the backfill protects real, already-saved data — it doesn't help a
+test that inserts fresh rows after migrations have already run).
+
+### 5.1 Labeled data (`estimating/labeledEvents.ts`, migration 135)
+
+`takeoff_labeled_events`, append-only, never read back into a bid's own pipeline. `logLabeledEvent(s)` is
+best-effort — a failure is warned and swallowed, never breaks the actual action. Wired at three points:
+- **Every review resolution** (`takeoffReview.ts`'s `applyResolution`), tagged with the bid's brand/project
+  type, after the transaction commits.
+- **Every marker confirm/reject/move/reclass** (`estimating.ts`'s `/markups/batch`) — logged only for an
+  update whose `status`, `points` or `label` actually changed; fire-and-forget so it never adds latency to
+  that interactive save.
+- **Every gap-fill mark the crop check accepted** (`preconstruction.ts`, after the counting-stage
+  transaction commits) — from `count_result.types[].gapFill`, a sheet+position **reference** as the "crop
+  image ref" (never image bytes; this table is metadata, not a media store).
+
+**Deferral:** rejected crop-check candidates aren't separately persisted anywhere in `count_result`, so
+they're not logged as their own labeled event — only acceptances are (accept is itself a crop-check
+decision). Capturing rejects too would mean carrying the full candidate list (not just the accepted ones)
+through `count_result`, which felt like real scope creep for this round; noted as a follow-up.
+
+### 5.2 Finished-bid eval cases (`estimating/finishedBidEval.ts`, migration 136, `POST /:bidId/finish-bid`)
+
+`deriveExpectedFromConfirmedCounts` (pure) builds `ExpectedItem[]` — the exact shape
+`scripts/evalTakeoff.ts` already reads — from a bid's **actual final answer per type only**: a resolved
+review item's qty, or an already-`counted` type with nothing open. A type still open in review (no
+resolution, not `counted`) contributes nothing; "not on this job" contributes nothing. Host markers and
+merged types are excluded, matching every other GC-facing rule in this round. The route stores the case
+with `client`/`project_type`, `run_id`, and `inputs_ref` (reusing `composeCurrentBidData`'s own
+`inputsHash` — "the sha256 of every input this was composed from," already exactly what "inputs
+referenced" needs). A caller-named `bomImportDocumentId` (a Chris BOM/breakdown import) is recorded as the
+case's **source** instead of `confirmed_counts` — its own parse already exists on the accubid import path;
+this round doesn't re-derive expected counts from a BOM, only records that one was used.
+
+### Test suites
+
+`tsc --noEmit` is clean in both packages.
+
+| Suite | Part 1–3 baseline (last report) | Parts 4–5 (one full run) |
+|---|---|---|
+| Backend `npm test` | 1894 passed, 3 failed, 4 not run of 1901 (176 files) | **1965 passed, 3 failed, 4 not run of 1972** (186 files: 183 passed, 2 failed, 1 file lost to the same worker crash) |
+| Frontend `npx vitest run` | 1287 / 1287 (128 files) | **1287 / 1287** (128 files, unchanged — Part 4–5 added no new frontend tests) |
+
+The 3 backend failures and 4 not-run are the same documented flakes every report in this repo lists —
+`intakeSimilarCache` ×2, the `integration.test` lead follow-up backfill timeout, and a worker crash under
+full parallel DB load losing one file's tests (`notificationsRetention`, matching the pattern the
+`rerun-reset` review documented: Postgres `max_connections` under full suite load). None is new: a smaller
+batch containing `accountRulesRoutes.test.ts` (which also failed once in the full run, on an unrelated
+7-Eleven seed-data assertion) and the specific `rerunReset.test.ts` sub-test that also failed once passed
+cleanly in isolation, confirming both were parallel-load flakiness, not a Part 4–5 regression.
+
+New tests: **backend, 78** — `reconcile` 11, `gapFill` 9, `cropCheck` 5, `gapFillStage` 17 (6 I/O + 11
+`applyGapFillResults`), `evidenceGate` (pure) 7, `facilityChecklists` 6, `finishedBidEval` 4, `reviewItems`
++6 (grouping/risk/checklist), plus the DB-backed `evidenceGate`, `labeledEvents` and `finishBid` route
+tests (4 + 4 + 4), and the Kissimmee fixture's existing 9 tests updated in place (GFCI 12/16, review 11/8
+blocking, the new `gapFill`/reconciliation assertions) rather than added to.
+
+### Migrations
+
+**134** `est_bid_lines.evidence_note` (+ backfill). **135** `takeoff_labeled_events`. **136**
+`takeoff_eval_cases`. All additive. The next free number is **137**.
+
+### The Kissimmee fixture — final numbers
+
+| | Part 1–3 | Parts 4–5 | Target |
+|---|---|---|---|
+| Review items (total / blocking) | 22 / 19 | **11 / 8** | ≤ 12 blocking |
+| GFCI (7 drawn + gap-fill / WP GFI 4) | 11 (7+4) | **16 (12+4)** | 16 (audited) |
+| Receptacles (all) | 37 | 42 | 38 (±2 goal; strict eval tolerance is 0 either way — was already "fail" at 37, delta −1) |
+| Site poles / heads | 3 / 4 | 3 / 4 (unchanged — reconciliation flagged a real schedule/plans gap; gap-fill honestly found nothing to fix it) | 3 / 4 |
+| Battery chargers | 5 | 5 (unchanged) | 5 |
+
+The remaining 8 blocking items: the grouped legend-zero item (12 types), 3 unscheduled rows (2 pole bases
++ the unistrut), 3 scope questions, and the SGN101 referenced-sheet item — every one of them a real,
+irreducible question for the estimator (no schedule/plan evidence exists to resolve it further), not a
+number this round could have derived on its own.
+
+### Cost
+
+Gap-fill/crop-check on this fixture: **5 calls** (GFCI: 1 gap-fill + 1 crop-check; WP GFI, S1, S2: 1
+gap-fill each, no candidates so no crop-check) — **$0.061/bid on Opus 5.5** (12,200 input / 610 output
+tokens), **≈ $0.046/bid on Sonnet 4.6**. This scales with the number of reconciliation findings on a job,
+not a fixed cost; a job with more schedule/circuit-description mismatches or more GFCI-family types would
+run more jobs. Added to Part 1–3's evidence-reader total (15 calls, ~$0.47–0.92 Opus / $0.21–0.55 Sonnet),
+the full evidence round (Parts 1–4) on Kissimmee is **20 calls, ≈ $0.53–0.98/bid on Opus 5.5** — still
+comfortably inside the round's "≤ ~$6/bid" goal against the $4.64 counter/Agent-1/2/3 baseline.
+
+### Deferrals / limits (honest)
+
+- **No live reads**, same as Parts 1–3: the gap-fill/crop-check prompts have never met a real model.
+  GFCI's reply is explicitly synthetic (see 4.4); every other reply (S1/S2, WP GFI) is the honest
+  "nothing found" a real call would also give, since nothing more is genuinely there in this fixture.
+- **Crop-check batches every candidate of one job into one call** (cost-bounded, like the counter's own
+  tile batching) rather than one call per candidate; a job that legitimately found 8+ candidates would
+  still cost one crop-check call, not 8.
+- **4.3 is scoped to gap-fill's own suggested marks**, not (as the plan's literal wording could be read)
+  a wholesale replacement of the existing whole-sheet dense-area retry (Next round A5) for ordinary
+  counter-flagged "unreadable" symbols. Replacing that mechanism too was a much larger, higher-risk change
+  against ~1900 existing tests for a benefit this round's one measurable target (GFCI, review count) didn't
+  need; left as a scoped follow-up, called out here rather than silently narrowed.
+- **Facility checklists never fire on Kissimmee** (project_type doesn't say "prototype") — proven with unit
+  tests only, not the fixture. A future round wiring a real `project_type` value for AutoZone-style national
+  accounts would want to confirm the checklist actually appears end to end.
+- **Rejected gap-fill candidates aren't individually logged** (5.1) — only acceptances are; see 5.1 above.
+- **5.2 has no UI** — the route exists and is tested; a "Finished bid" button/flow in PcWorkspace is a
+  follow-up, same spirit as Part 1–3's "the UI shows the options text" deferral for typicals.
+- **No frontend settings UI for gap-fill/crop-check** — they reuse Part 1–3's `modelEvidence`/
+  `maxTokensEvidence` settings rather than adding new ones; a deliberate scope decision, not an oversight.
+- **The evidence gate's "no evidence at all" check is a safety net that should rarely fire** in practice —
+  every path that sets a type's status to `counted` with `count > 0` already does so because SOME sheet
+  was `used`, so `lineEvidenceKind` returning `'none'` mostly guards against a future merge-code change
+  breaking that invariant, not a case observed in this round's own fixtures.
