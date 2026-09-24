@@ -186,7 +186,7 @@ export async function resetForRerun(
   // just cleared it moves to the unassigned bucket rather than dangling.
   const markers = await c.query(
     `UPDATE est_markups SET deleted_at = now(), updated_at = now()
-      WHERE bid_id = $1 AND source = 'ai_count' AND status = 'suggested' AND deleted_at IS NULL`,
+      WHERE bid_id = $1 AND source IN ('ai_count', 'gap_fill') AND status = 'suggested' AND deleted_at IS NULL`,
     [bidId]
   );
   const deletedKeys = deleted.rows.map(r => r.line_key);

@@ -86,7 +86,7 @@ describe('gap-fill end to end — suggest -> confirm -> count, never a count by 
     const gfItem = items.find(i => i.id === `gapfill:${TYPE_KEY}`)!;
     expect(gfItem).toBeTruthy();
     expect(gfItem.title).toBe('Gap-fill found 1 possible GX — confirm on plans');
-    expect(gfItem.actions).toEqual(['markers', 'count', 'not_on_job']);
+    expect(gfItem.actions).toEqual(['markers', 'confirm', 'count']); // B10 — never "not on this job"
     expect(reviewItemIsOpen(gfItem)).toBe(true);
     expect(cr.types[0].count).toBe(4); // untouched
     expect(enforcedCounts(cr, items).byType.get(TYPE_KEY)).toBe(4);
@@ -135,5 +135,58 @@ describe('gap-fill end to end — suggest -> confirm -> count, never a count by 
     // Never confirmed — the suggestion just sits there.
     expect(enforcedCounts(cr, items).byType.get(TYPE_KEY)).toBe(4);
     expect(reviewItemIsOpen(gfItem)).toBe(true);
+  });
+});
+
+describe('Fix round 3 / S18 — a re-run clears gap-fill\'s suggested markers exactly like the counter\'s own', () => {
+  it('a stale gap-fill suggestion from an earlier run is gone after a re-run — never confirmable, never confirmed twice', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bidId = await createBid(u.token);
+    const documentId = await insertPlanDoc(bidId);
+    const cr = syntheticCountResult(documentId);
+    const files = [{ file: 'plan.pdf', documentId, size: 10 }];
+
+    // Run 1: the counter's own marks, then gap-fill's ONE suggestion.
+    await writeAiCountMarkers(bidId, cr, files);
+    const run1 = await writeGapFillMarkers(bidId, cr, cr.evidence!.gapFill!.suggested, files);
+    expect(run1.written).toBe(1);
+    const run1Id = run1.writtenIds[0];
+
+    // The estimator never confirms it. A re-run happens (a new upload, or
+    // just re-running the analysis): the counter's own pass writes fresh
+    // marks (source 'ai_count') AND, per S18, clears every prior SUGGESTED
+    // marker — the counter's own AND gap-fill's — before this run's own
+    // gap-fill pass writes its own (possibly different) suggestion.
+    await writeAiCountMarkers(bidId, cr, files);
+    const run2 = await writeGapFillMarkers(bidId, cr, cr.evidence!.gapFill!.suggested, files);
+    expect(run2.written).toBe(1);
+    const run2Id = run2.writtenIds[0];
+    expect(run2Id).not.toBe(run1Id); // a fresh row, not the stale one revived
+
+    // The stale run-1 suggestion is soft-deleted — gone from every live
+    // query, so the Plans view can never surface it to be confirmed at all,
+    // let alone twice.
+    const { rows: staleRow } = await pool.query('SELECT deleted_at FROM est_markups WHERE id = $1', [run1Id]);
+    expect(staleRow[0].deleted_at).not.toBeNull();
+    const { rows: live } = await pool.query(
+      `SELECT id FROM est_markups WHERE bid_id = $1 AND source = 'gap_fill' AND status = 'suggested' AND deleted_at IS NULL`,
+      [bidId]
+    );
+    expect(live.map(r => r.id)).toEqual([run2Id]);
+
+    // Confirming every LIVE marker (run 2's own 4 counted marks plus its 1
+    // gap-fill suggestion) counts it exactly once each, even though two
+    // gap-fill suggestions were ever written across the two runs.
+    await pool.query(`UPDATE est_markups SET status = 'confirmed' WHERE bid_id = $1 AND deleted_at IS NULL`, [bidId]);
+    const items = buildReviewItems(cr);
+    const gfItem = items.find(i => i.id === `gapfill:${TYPE_KEY}`)!;
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, status, count_result, review_items, review_status) VALUES ($1,'agent1_complete',$2,$3,'needs_review')`,
+      [bidId, JSON.stringify(cr), JSON.stringify(items)]
+    );
+    const res = await request(app).post(`/api/preconstruction/${bidId}/review/resolve`)
+      .set(auth(u.token)).send({ itemIds: [gfItem.id], action: 'markers' }).expect(200);
+    expect(res.body.items.find((i: ReviewItem) => i.id === gfItem.id).resolution).toMatchObject({ action: 'markers', qty: 5 }); // 4 + 1, never 4 + 2
   });
 });

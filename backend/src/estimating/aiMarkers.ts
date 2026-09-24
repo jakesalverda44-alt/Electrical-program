@@ -99,9 +99,13 @@ async function writeWithClient(
   }
   const typeTag = (k: string) => countResult.targets.find(t => t.key === k)?.type ?? k;
   if (!scope) {
+    // Fix round 3 / S18 — a re-run clears EVERY prior suggestion, gap-fill's
+    // own (source 'gap_fill') exactly like the counter's (source
+    // 'ai_count'); a stale gap-fill suggestion from an earlier run must
+    // never be confirmable after the run that made it is gone.
     const replaced = await client.query(
       `UPDATE est_markups SET deleted_at = now(), updated_at = now()
-        WHERE bid_id = $1 AND source = 'ai_count' AND status = 'suggested' AND deleted_at IS NULL RETURNING id`,
+        WHERE bid_id = $1 AND source IN ('ai_count', 'gap_fill') AND status = 'suggested' AND deleted_at IS NULL RETURNING id`,
       [bidId]
     );
     summary.replacedIds = replaced.rows.map(r => r.id as string);
@@ -115,7 +119,7 @@ async function writeWithClient(
       const labels = sc.typeKeys ? sc.typeKeys.map(k => typeTag(k).toUpperCase()) : null;
       const replaced = await client.query(
         `UPDATE est_markups SET deleted_at = now(), updated_at = now()
-          WHERE bid_id = $1 AND source = 'ai_count' AND status = 'suggested' AND deleted_at IS NULL
+          WHERE bid_id = $1 AND source IN ('ai_count', 'gap_fill') AND status = 'suggested' AND deleted_at IS NULL
             AND document_id = $2 AND page_index = $3 AND ($4::text[] IS NULL OR upper(label) = ANY($4::text[])) RETURNING id`,
         [bidId, documentId, sheet.page - 1, labels]
       );
@@ -276,7 +280,7 @@ export async function assignAiMarkersToLines(bidId: string): Promise<{ assigned:
   const lineByTag = new Map(targets.map(t => [t.type.toUpperCase(), lineForType(t, lines)]));
   const { rows } = await pool.query(
     `SELECT id, label FROM est_markups
-      WHERE bid_id = $1 AND source = 'ai_count' AND status = 'suggested' AND line_key IS NULL AND deleted_at IS NULL`,
+      WHERE bid_id = $1 AND source IN ('ai_count', 'gap_fill') AND status = 'suggested' AND line_key IS NULL AND deleted_at IS NULL`,
     [bidId]
   );
   let assigned = 0;
