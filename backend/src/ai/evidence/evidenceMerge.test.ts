@@ -178,3 +178,27 @@ describe('fix round B4 — named partitions still sum; an enlarged same-area she
     expect(m.types.find(x => x.key === t.key)!.count).toBe(10);
   });
 });
+
+describe('fix round S9 — Agent 1 circuit rows are replaced per panel, only where the parser read it completely', () => {
+  const ctx = (t: string) => ({ sheetKey: key(52), sheetLabel: 'E-4 "Lighting Control Panel Details"', viewportId: `${key(52)}@${t}`, viewportTitle: t });
+  const A = parseScheduleReply(TABLE_REPLIES['PANEL A'], ctx('PANEL A'))!;
+  const halfB = (() => { const j = JSON.parse(TABLE_REPLIES['PANEL B']); j.rows = j.rows.filter((r: { cells: string[] }) => Number(r.cells[0]) % 2 === 1); return parseScheduleReply(JSON.stringify(j), ctx('PANEL B'))!; })();
+  const rows = (items: string[]) => ({ ...base.agent1, quantities: items.map(item => ({ category: 'Branch Power', item, qty: 9, unit: 'EA' })) });
+  it('Panel B half read: its row stays; Panel A\'s is replaced by the parser\'s rows', () => {
+    expect(halfB.warnings.join(' ')).toMatch(/only the odd side was read/);
+    const m = mergeCountsIntoTakeoff(rows(['20/1 branch circuits Panel A (non-lighting, non-sign)', '20/1 branch circuits Panel B']), targets, [input(49), input(50), ...others()],
+      { countingRan: true, evidence: { tables: [A, halfB], scheduleCounts: scheduleCounts(targets, [A, halfB]) } });
+    expect(m.removedRows.map(r => String(r.row.item))).toContain('20/1 branch circuits Panel A (non-lighting, non-sign)');
+    expect(m.quantities.some(q => q.item === '20/1 branch circuits Panel B')).toBe(true);
+    expect(m.quantities.filter(q => /Branch circuit .* Panel /.test(String(q.item))).every(q => /Panel A/.test(String(q.item)))).toBe(true);
+    // No equipment quantity from a half-read panel: the battery chargers stay with the counter.
+    expect(scheduleCounts(targets, [A, halfB]).has('BATT CHGR')).toBe(false);
+  });
+  it('an unnamed Agent 1 circuit row covering an unread panel stays, and the parser\'s rows are NOT added beside it', () => {
+    const m = mergeCountsIntoTakeoff(rows(['Lighting branch circuits 20/1 (work, sales)']), targets, [input(49), input(50), ...others()],
+      { countingRan: true, evidence: { tables: [A, halfB] } });
+    expect(m.quantities.some(q => q.item === 'Lighting branch circuits 20/1 (work, sales)')).toBe(true);
+    expect(m.quantities.some(q => /^Branch circuit /.test(String(q.item)))).toBe(false);
+    expect(m.flags.join(' ')).toMatch(/not every panel \(B\)/);
+  });
+});

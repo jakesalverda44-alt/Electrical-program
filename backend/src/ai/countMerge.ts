@@ -28,7 +28,7 @@ import type { CountSheet, SheetRole, SheetFocus } from './countSheets';
 import { relateSheets, type SheetRelation } from './evidence/sheetRelation';
 import type { SheetGeom, Viewport } from './evidence/viewports';
 import type { SheetMarkResolution } from './evidence/viewportResolve';
-import { circuitSummaryRows, isCircuitCountRow, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
+import { circuitSummaryRows, isCircuitCountRow, panelNameOf, panelsNamedIn, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
 import { expandTypicals, hostKeyOf, type HostMark, type TypicalExpansion, type TypicalPackage, type UnmappedTypicalDevice } from './evidence/typicals';
 import { applyFamilies, applyScheduleLegendEquivalence, applySymbolDefinitions, catalogOf, type FamilyDecision } from './evidence/families';
 
@@ -719,7 +719,29 @@ export function mergeCountsIntoTakeoff(
   const sitePolesCounted = siteTypes.length ? siteTypes.map(t => `${t.type} ×${t.count}`).join(' + ') : '';
   // 3.4 — branch-circuit counts are the schedule parser's when it read the
   // panels; the parser's own rows (with their evidence) replace Agent 1's.
-  const circuitRows = opts.evidence?.tables ? circuitSummaryRows(opts.evidence.tables) : [];
+  // Fix round S9 — per panel: an Agent 1 circuit row is replaced only when
+  // every panel it covers was read COMPLETELY by the parser (a row naming no
+  // panel covers them all). If any Agent 1 row covering an unread panel
+  // stays and names no panel, the parser's rows are not added beside it
+  // (they would duplicate part of it).
+  const allCircuitRows = opts.evidence?.tables ? circuitSummaryRows(opts.evidence.tables) : [];
+  const readPanels = new Set(allCircuitRows.map(c => c.panel));
+  const panelKey = (n: string) => n.toUpperCase().replace(/^PANEL(BOARD)?\s*/, '').replace(/["'\s]/g, '');
+  const expectedPanels = new Set([
+    ...(Array.isArray(agent1.panels) ? (agent1.panels as Array<Record<string, unknown>>).map(pn => panelKey(String(pn?.name ?? ''))).filter(Boolean) : []),
+    ...(opts.evidence?.tables ?? []).filter(t => t.kind === 'panel').map(t => panelNameOf(t.title)),
+  ]);
+  const everyPanelRead = readPanels.size > 0 && [...expectedPanels].every(pn => readPanels.has(pn));
+  const circuitRowReplaced = (row: Record<string, unknown>) => {
+    const named = panelsNamedIn(String(row.item ?? '')).map(panelKey);
+    return named.length ? named.every(pn => readPanels.has(pn)) : everyPanelRead;
+  };
+  const keptUnnamedCircuitRow = evidenceOn && original.some(r => isCircuitCountRow(r) && !circuitRowReplaced(r) && !panelsNamedIn(String(r.item ?? '')).length
+    && !matchRowToTarget(r, TYPE_ROW_CATEGORIES.has(String(r.category ?? '').trim().toLowerCase()) ? lineTargets : deviceTargets));
+  const circuitRows = keptUnnamedCircuitRow ? [] : allCircuitRows;
+  if (keptUnnamedCircuitRow && allCircuitRows.length) {
+    flags.push(`Panel schedules ${[...readPanels].join(', ')} were read, but not every panel (${[...expectedPanels].filter(pn => !readPanels.has(pn)).join(', ') || 'unknown'}) — the drawing analysis's circuit counts are kept and the parser's rows are not added beside them.`);
+  }
   if (evidenceOut) evidenceOut.circuitRows = circuitRows.length;
   const categoryByType = new Map<string, string>();
   for (const row of original) {
@@ -731,7 +753,7 @@ export function mergeCountsIntoTakeoff(
       continue;
     }
     if (evidenceOn && isCircuitCountRow(row)) {
-      if (circuitRows.length) {
+      if (circuitRows.length && circuitRowReplaced(row)) {
         removedRows.push({ row, reason: 'branch-circuit count — replaced by the schedule parser\'s rows (panel schedules read row by row)', replacedByType: null });
         continue;
       }
@@ -741,6 +763,8 @@ export function mergeCountsIntoTakeoff(
         flags.push(`"${String(row.item ?? '')}" is a branch-circuit count, not a fixture — moved to Branch Power (the panel schedules could not be read to replace it).`);
         continue;
       }
+      kept.push(row);
+      continue;
     }
     if (evidenceOn && FIXTURE_ROW_CATEGORIES.has(cat)) {
       const rc = catalogOf(String(row.item ?? '')) ?? catalogOf(String(row.spec ?? ''));

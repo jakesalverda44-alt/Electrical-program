@@ -69,11 +69,13 @@ describe('agent1PromptWithCountingSections (takeoff accuracy Task 2)', () => {
   });
 });
 
-describe('evidence round 3.4 — Agent 1 no longer states schedule quantities', () => {
+describe('evidence round 3.4 / fix round S12 — the parser replaces Agent 1\'s schedule quantities only where it read them', () => {
   it('the default prompt and a customized one both carry the SCHEDULE QUANTITIES rule', async () => {
     const { AGENT1_SYSTEM, AGENT1_COUNTING_SECTIONS, agent1PromptWithCountingSections } = await import('./prompts');
-    expect(AGENT1_COUNTING_SECTIONS).toMatch(/SCHEDULE QUANTITIES — .*never put a quantity in quantities\[\] for panel-schedule circuits or breakers/);
-    expect(AGENT1_COUNTING_SECTIONS).toMatch(/equipment-schedule items \(battery chargers/);
+    // Fix round S12 — no ban: Agent 1's quantities stand wherever no parser source replaces them.
+    expect(AGENT1_COUNTING_SECTIONS).toMatch(/SCHEDULE QUANTITIES — list every equipment-schedule item/);
+    expect(AGENT1_COUNTING_SECTIONS).toMatch(/they stand wherever the schedules could not be read/);
+    expect(AGENT1_COUNTING_SECTIONS).not.toMatch(/never put a quantity/);
     expect(AGENT1_SYSTEM).toContain('SCHEDULE QUANTITIES');
     expect(agent1PromptWithCountingSections('My custom analyzer prompt.')).toContain('SCHEDULE QUANTITIES');
   });

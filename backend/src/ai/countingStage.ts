@@ -21,7 +21,7 @@ import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { runEvidenceStage, type EvidenceCache, type EvidencePage, type EvidenceStageOutput, type EvidenceUsage } from './evidence/evidenceStage';
 import { resolveSheetMarks, viewportPromptBlock, type EnlargedDecision, type SheetMarkResolution } from './evidence/viewportResolve';
 import { hostTargets, type TypicalPackage } from './evidence/typicals';
-import { scheduleCounts, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
+import { isCompletePanel, scheduleCounts, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
 import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewports';
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
 import { applyGapFillResults, buildGapFillJobs, runGapFillStage, type GapFillSheetAsset } from './evidence/gapFillStage';
@@ -275,7 +275,7 @@ function finish(
         panelsExpected: Array.isArray(input.agent1.panels) ? input.agent1.panels.length : 0,
         panelsUnread: evidence.ev.pages.flatMap(p => p.viewports.viewports
           .filter(v => v.kind === 'schedule' && /\bPANEL(BOARD)?\b/i.test(v.title) && !/\bLOAD\b/i.test(v.title))
-          .filter(v => !evidence.ev.tables.some(t => t.viewportId === v.id && t.kind === 'panel' && !t.warnings.length))
+          .filter(v => !evidence.ev.tables.some(t => t.viewportId === v.id && isCompletePanel(t)))
           .map(v => `${v.title} (${p.label})`)),
       },
     } : {}),

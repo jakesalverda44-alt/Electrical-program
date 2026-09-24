@@ -368,8 +368,8 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     items.push({
       id: 'schedule:panels-unread',
       kind: 'confirm',
-      title: `Panel schedule${ev.panelsUnread.length === 1 ? '' : 's'} not read — branch circuits missing from the takeoff`,
-      detail: `${ev.panelsUnread.join('; ')} could not be read row by row, so the takeoff has no branch-circuit count from ${ev.panelsUnread.length === 1 ? 'it' : 'them'}. Add the circuits in Labor & Pricing (then confirm here with a reason), or re-run the analysis.`,
+      title: `Panel schedule${ev.panelsUnread.length === 1 ? '' : 's'} not read completely — branch circuits not verified`,
+      detail: `${ev.panelsUnread.join('; ')} could not be read row by row completely, so ${ev.panelsUnread.length === 1 ? 'its' : 'their'} branch circuits stay as the drawing analysis read them (not replaced, not verified) and no equipment quantity is taken from ${ev.panelsUnread.length === 1 ? 'it' : 'them'}. Check the circuits in Labor & Pricing and confirm here with a reason, or re-run the analysis.`,
       actions: ['confirm'],
       fingerprint: `panels-unread|${ev.panelsUnread.join('|')}`,
     });
