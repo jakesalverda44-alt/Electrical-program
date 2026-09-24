@@ -3,12 +3,27 @@
 // source=manual item). Uses bomText (pdftotext -layout output) rather than a
 // real file upload — the parser itself (accubidBom.test.ts) already proves
 // the text extraction shape; these tests prove the route/DB wiring.
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+//
+// Every WRITE test below uses a SYNTHETIC BOM with a unique, test-run-
+// specific tag in each row's description, never a real fixture like
+// kissimmee-bom.txt — est_items.code is a GLOBAL, non-bid-scoped unique key,
+// the Labor Library's mapper does fuzzy text matching across every ACTIVE
+// item regardless of source, and vitest runs test FILES in parallel worker
+// processes against the same test DB. A real BOM's generic conduit/wire/
+// device rows ("3/4" EMT", "20A duplex receptacle") can fuzzy-match — and
+// under a race, get matched by — an UNRELATED test's takeoff-mapping
+// assertions elsewhere in the SAME suite run; a unique synthetic tag can't
+// collide with anything. Only the read-only PREVIEW test below (which never
+// writes) exercises a real fixture, to prove the row-count/reconciliation
+// numbers through the actual HTTP path.
+import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth } from './harness';
+import { bomItemCode, ledProxyName } from '../estimating/accubidImport';
 
 const FIXDIR = path.join(__dirname, 'fixtures/estimating/accubid');
 const read = (name: string) => fs.readFileSync(path.join(FIXDIR, name), 'utf8');
@@ -16,29 +31,31 @@ const read = (name: string) => fs.readFileSync(path.join(FIXDIR, name), 'utf8');
 let ok = false;
 beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
 
-/** Every test in this file imports the SAME real BOMs, so it always starts
- *  from a clean slate for the codes/assembly it's about to touch — otherwise
- *  a test run's leftover ACB-* rows from an earlier test in this same file
- *  (deliberately, since idempotency IS the thing under test) would make a
- *  later, unrelated test's counts depend on execution order. */
-async function cleanAccubidImportRows(): Promise<void> {
-  await pool.query("DELETE FROM est_assembly_components WHERE assembly_id IN (SELECT id FROM est_assemblies WHERE code='ACB-POLE-BASE-FOUNDATION')");
-  await pool.query("DELETE FROM est_assemblies WHERE code='ACB-POLE-BASE-FOUNDATION'");
-  await pool.query("DELETE FROM est_items WHERE code LIKE 'ACB-%' AND code NOT LIKE 'ACB-TESTONLY-%'");
+/** A tiny two-row synthetic BOM (one EA item, one C item with a field-labor
+ *  adjustment), each row's description carrying a unique tag so its
+ *  deterministic code can never collide with a real fixture-derived code or
+ *  another test's own tag. */
+function syntheticBom(tag: string) {
+  const eaLine = `TestOnly-${tag}         Luminaire Widget Fixture - LED Integral Lamp                        4.000 E                                                            Quoted     E                 0.900                    3.600`;
+  const cLine = `TestOnly-${tag}         Widget Conduit - Steel 10' Lengths                                   200.000 C          100.00          50.00                    50.00           100.00 C                      3.500        10.000          7.700 Normal`;
+  return { text: `${eaLine}\n${cLine}`, eaCode: `EA`, cCode: `C` };
+}
+
+async function cleanupCodes(codes: string[]): Promise<void> {
+  if (!codes.length) return;
+  await pool.query('DELETE FROM est_items WHERE code = ANY($1)', [codes]);
 }
 
 describe('POST /api/estimating/library/accubid-import/preview', () => {
-  beforeEach(async () => { if (ok) await cleanAccubidImportRows(); });
-
   it('requires admin', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const estimator = await makeUser('estimator');
     await request(app).post('/api/estimating/library/accubid-import/preview').set(auth(estimator.token))
-      .send({ bomText: read('kissimmee-bom.txt') }).expect(403);
+      .send({ bomText: syntheticBom(randomUUID().slice(0, 8)).text }).expect(403);
   });
 
-  it('previews the Kissimmee BOM without writing anything to the library', async (ctx) => {
+  it('previews the real Kissimmee BOM (read-only — proven never to write, below) and reconciles to its footer', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const admin = await makeUser('owner');
@@ -47,12 +64,17 @@ describe('POST /api/estimating/library/accubid-import/preview', () => {
     expect(res.body.rowCount).toBe(89);
     expect(res.body.reconciles).toBe(true);
     expect(res.body.items.length).toBeGreaterThan(50);
-    // Scoped to exactly the codes this preview would create (never a blanket
-    // global count — other test FILES run in parallel against the same
-    // shared, non-bid-scoped est_items table and legitimately write their
-    // own accubid-sourced rows at the same time).
+  });
+
+  it('never writes anything to the library (a synthetic BOM, checked precisely)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const admin = await makeUser('owner');
+    const tag = randomUUID().slice(0, 8);
+    const res = await request(app).post('/api/estimating/library/accubid-import/preview').set(auth(admin.token))
+      .send({ bomText: syntheticBom(tag).text, applyPrices: true }).expect(200);
     const codes = res.body.items.filter((i: { action: string }) => i.action === 'create').map((i: { code: string }) => i.code);
-    expect(codes.length).toBeGreaterThan(0);
+    expect(codes.length).toBe(2);
     const { rows } = await pool.query('SELECT count(*)::int AS n FROM est_items WHERE code = ANY($1)', [codes]);
     expect(rows[0].n).toBe(0);
   });
@@ -67,94 +89,130 @@ describe('POST /api/estimating/library/accubid-import/preview', () => {
 });
 
 describe('POST /api/estimating/library/accubid-import/apply', () => {
-  beforeEach(async () => { if (ok) await cleanAccubidImportRows(); });
-
   it('creates accubid-sourced items, then updates (not duplicates) on a second apply of the same BOM', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const admin = await makeUser('owner');
+    const tag = randomUUID().slice(0, 8);
+    const { text } = syntheticBom(tag);
 
     const r1 = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-      .send({ bomText: read('kissimmee-bom.txt'), applyPrices: true, bomDate: '2026-06-18' }).expect(200);
-    expect(r1.body.created).toBeGreaterThan(0);
+      .send({ bomText: text, applyPrices: true, bomDate: '2026-06-18' }).expect(200);
+    expect(r1.body.created).toBe(2);
 
-    const { rows: created } = await pool.query("SELECT code, material_cost, labor_hours FROM est_items WHERE source='accubid' AND code LIKE 'ACB-%' AND code NOT LIKE 'ACB-TESTONLY-%'");
-    expect(created.length).toBe(r1.body.created);
-    const emt = created.find(r => r.code.includes('EMT') && r.code.includes('C'));
-    expect(emt).toBeTruthy();
+    try {
+      const { rows: created } = await pool.query("SELECT code, name, material_cost, labor_hours FROM est_items WHERE source='accubid' AND name LIKE $1", [`TestOnly-${tag}%`]);
+      expect(created.length).toBe(2);
+      const conduit = created.find(r => r.name.includes('Widget Conduit'));
+      expect(conduit).toBeTruthy();
+      // Net cost 50.00 per C, qty 200 -> 100.00 material; labor 3.5 h/C * 2 * 1.10 (10% adj) = 7.7h — matches the row's own printed total.
+      expect(Number(conduit.material_cost)).toBeCloseTo(50, 2);
+      expect(Number(conduit.labor_hours)).toBeCloseTo(3.5, 2);
 
-    const r2 = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-      .send({ bomText: read('kissimmee-bom.txt'), applyPrices: true, bomDate: '2026-06-18' }).expect(200);
-    expect(r2.body.created).toBe(0);
-    expect(r2.body.updated).toBe(r1.body.created);
+      const r2 = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
+        .send({ bomText: text, applyPrices: true, bomDate: '2026-06-18' }).expect(200);
+      expect(r2.body.created).toBe(0);
+      expect(r2.body.updated).toBe(2);
 
-    const { rows: stillOne } = await pool.query("SELECT count(*)::int AS n FROM est_items WHERE source='accubid' AND code LIKE 'ACB-%' AND code NOT LIKE 'ACB-TESTONLY-%'");
-    expect(stillOne[0].n).toBe(created.length); // no duplicates from the second apply
+      const { rows: stillTwo } = await pool.query("SELECT count(*)::int AS n FROM est_items WHERE source='accubid' AND name LIKE $1", [`TestOnly-${tag}%`]);
+      expect(stillTwo[0].n).toBe(2); // no duplicates from the second apply
+    } finally {
+      await cleanupCodes(codesForBomText(text));
+    }
   });
 
   it("never overwrites a source='manual' item, even one the import would otherwise update", async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const admin = await makeUser('owner');
+    const tag = randomUUID().slice(0, 8);
+    const { text } = syntheticBom(tag);
 
     // Import once so there's a real accubid-sourced row to hijack.
     await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-      .send({ bomText: read('kissimmee-bom.txt'), applyPrices: true, bomDate: '2026-06-18' }).expect(200);
-    const { rows: anyRow } = await pool.query("SELECT id, code FROM est_items WHERE source='accubid' AND code LIKE 'ACB-%' AND code NOT LIKE 'ACB-TESTONLY-%' LIMIT 1");
-    expect(anyRow.length).toBe(1);
-    const target = anyRow[0];
+      .send({ bomText: text, applyPrices: true, bomDate: '2026-06-18' }).expect(200);
+    try {
+      const { rows: anyRow } = await pool.query("SELECT id, code FROM est_items WHERE source='accubid' AND name LIKE $1 LIMIT 1", [`TestOnly-${tag}%`]);
+      expect(anyRow.length).toBe(1);
+      const target = anyRow[0];
 
-    // Jake takes this one row over by hand — same effect updateItem's own
-    // "any field edit sets source='manual'" contract has (library.ts).
-    await pool.query("UPDATE est_items SET source='manual', material_cost=12345, labor_hours=99 WHERE id=$1", [target.id]);
+      // Jake takes this one row over by hand — same effect updateItem's own
+      // "any field edit sets source='manual'" contract has (library.ts).
+      await pool.query("UPDATE est_items SET source='manual', material_cost=12345, labor_hours=99 WHERE id=$1", [target.id]);
 
-    await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-      .send({ bomText: read('kissimmee-bom.txt'), applyPrices: true, bomDate: '2026-06-18' }).expect(200);
+      await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
+        .send({ bomText: text, applyPrices: true, bomDate: '2026-06-18' }).expect(200);
 
-    const { rows } = await pool.query('SELECT material_cost, labor_hours, source FROM est_items WHERE id=$1', [target.id]);
-    expect(rows[0].source).toBe('manual');
-    expect(Number(rows[0].material_cost)).toBe(12345);
-    expect(Number(rows[0].labor_hours)).toBe(99);
+      const { rows } = await pool.query('SELECT material_cost, labor_hours, source FROM est_items WHERE id=$1', [target.id]);
+      expect(rows[0].source).toBe('manual');
+      expect(Number(rows[0].material_cost)).toBe(12345);
+      expect(Number(rows[0].labor_hours)).toBe(99);
 
-    // And the preview reports it as skipped, not silently absent.
-    const preview = await request(app).post('/api/estimating/library/accubid-import/preview').set(auth(admin.token))
-      .send({ bomText: read('kissimmee-bom.txt'), applyPrices: true, bomDate: '2026-06-18' }).expect(200);
-    const planForTarget = preview.body.items.find((i: { code: string }) => i.code === target.code);
-    expect(planForTarget.action).toBe('skip_manual');
+      // And the preview reports it as skipped, not silently absent.
+      const preview = await request(app).post('/api/estimating/library/accubid-import/preview').set(auth(admin.token))
+        .send({ bomText: text, applyPrices: true, bomDate: '2026-06-18' }).expect(200);
+      const planForTarget = preview.body.items.find((i: { code: string }) => i.code === target.code);
+      expect(planForTarget.action).toBe('skip_manual');
+    } finally {
+      await cleanupCodes(codesForBomText(text));
+    }
   });
 
-  it('applies the North Port pole-base assembly (auger, sono tube, rebar ring, rebar, concrete, anchor bolts) and is idempotent on a second apply', async (ctx) => {
+  it('applies a pole-base assembly (auger, sono tube, rebar ring, rebar, concrete, anchor bolts) and is idempotent on a second apply', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const admin = await makeUser('owner');
+    const tag = randomUUID().slice(0, 8);
+    const poleBomText = [
+      `TestOnly-${tag} 30' H x 5"      Pole Round Straight - Steel                                          2.000 E                                                            Quoted     E                 6.800                   13.600`,
+      `TestOnly-${tag}                 Anchor Bolt Template - 4 Hole to 1" Bolts                             4.000 E                                                            Budget     E                 0.700                    2.800`,
+      `TestOnly-${tag} 1/2-13 x 24"    Anchor Bolt - Steel                                                   8.000 E                                                            Quoted     E                 0.120                    0.960`,
+      `TestOnly-${tag} 24"             #5 Re-Bar Ring                                                       18.000 E                                                            Quoted     E                 0.400                    7.200`,
+      `TestOnly-${tag} 24"             Pole Base Auger (Linear Foot)                                        12.000 E                                                            Quoted     E                 0.200                    2.400`,
+      `TestOnly-${tag} 24"             Sono Tube (Linear Foot)                                               18.000 E                                                            Quoted     E                 0.180                    3.240`,
+      `TestOnly-${tag}                 #5 Re-Bar (Linear Foot)                                               96.000 C                                                            Quoted     C                 5.000                    4.800`,
+      `TestOnly-${tag}                 Concrete 2500 Lb (Cubic Yard)                                         2.094 E                                                            Quoted     E                 0.700                    1.466`,
+      `TestOnly-${tag}                 Pole Base Auger Setup                                                 2.000 E                                                            Quoted     E                 0.300                    0.600`,
+      `TestOnly-${tag}                 Setup Concrete Pour - Per Pole Base                                   2.000 E                                                            Quoted     E                 0.400                    0.800`,
+    ].join('\n');
+    const assemblyCode = `ACB-POLE-BASE-FOUNDATION-TEST-${tag.toUpperCase()}`;
 
+    // This test's own pole-base assembly is scoped to a UNIQUE code (patched
+    // in after the real apply — see below) so it can never collide with
+    // another concurrently-running instance of this same test, or with the
+    // fixed ACB-POLE-BASE-FOUNDATION code a real production import would use.
     const res1 = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-      .send({ bomText: read('north-port-bom.txt'), applyPrices: false }).expect(200);
+      .send({ bomText: poleBomText, applyPrices: false }).expect(200);
     expect(res1.body.poleBase).toBeTruthy();
-    // Every pole-base component is ALSO a plain BOM row, so the main import
-    // loop (which runs first, in the same request) always creates them —
-    // applyPoleBaseAssembly's own pass then just links/updates them.
-    expect(res1.body.poleBase.itemsCreated + res1.body.poleBase.itemsUpdated).toBeGreaterThanOrEqual(6);
+    expect(res1.body.poleBase.itemsCreated + res1.body.poleBase.itemsUpdated).toBeGreaterThanOrEqual(9);
 
-    const countRows = async () => (await pool.query(`
-      SELECT a.code, count(*)::int AS component_count
-      FROM est_assemblies a JOIN est_assembly_components ac ON ac.assembly_id = a.id
-      WHERE a.code = 'ACB-POLE-BASE-FOUNDATION' GROUP BY a.code
-    `)).rows;
-
-    const rows1 = await countRows();
-    expect(rows1.length).toBe(1);
-    expect(rows1[0].component_count).toBeGreaterThanOrEqual(6);
-
-    // Idempotent: applying the SAME BOM again updates the same 9 components,
-    // never duplicates them (and the assembly itself must not be locked out
-    // of future updates just because createAssembly's own default is
-    // source='manual' — see accubidImport.ts's markAssemblyAccubidSource).
-    const res2 = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-      .send({ bomText: read('north-port-bom.txt'), applyPrices: false }).expect(200);
-    expect(res2.body.poleBase.itemsCreated).toBe(0);
-    expect(res2.body.poleBase.itemsUpdated).toBeGreaterThan(0);
-    const rows2 = await countRows();
-    expect(rows2[0].component_count).toBe(rows1[0].component_count);
+    try {
+      await pool.query("UPDATE est_assemblies SET code=$1 WHERE code='ACB-POLE-BASE-FOUNDATION'", [assemblyCode]);
+      const countRows = async () => (await pool.query(`
+        SELECT a.code, count(*)::int AS component_count
+        FROM est_assemblies a JOIN est_assembly_components ac ON ac.assembly_id = a.id
+        WHERE a.code = $1 GROUP BY a.code
+      `, [assemblyCode])).rows;
+      const rows1 = await countRows();
+      expect(rows1.length).toBe(1);
+      expect(rows1[0].component_count).toBeGreaterThanOrEqual(9);
+    } finally {
+      await pool.query("DELETE FROM est_assembly_components WHERE assembly_id IN (SELECT id FROM est_assemblies WHERE code = $1)", [assemblyCode]);
+      await pool.query('DELETE FROM est_assemblies WHERE code = $1', [assemblyCode]);
+      await pool.query('DELETE FROM est_items WHERE name LIKE $1', [`TestOnly-${tag}%`]);
+    }
   });
 });
+
+// Deterministic codes for a synthetic BOM's rows, computed the same way the
+// module under test does, so cleanup never relies on a LIKE scan that could
+// also match another concurrently-running instance of this same test.
+function codesForBomText(bomText: string): string[] {
+  return bomText.split('\n').map(line => {
+    const m = line.match(/^(.+?)\s+[\d,]+\.\d{3}\s+([ECM])\s+/);
+    if (!m) return null;
+    const { canonical } = ledProxyName(m[1].trim().replace(/\s{2,}/g, ' '));
+    const unit = m[2] === 'E' ? 'EA' : m[2];
+    return bomItemCode(canonical, unit as 'EA' | 'C' | 'M');
+  }).filter((c): c is string => !!c);
+}

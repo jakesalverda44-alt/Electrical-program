@@ -24,6 +24,8 @@ import { TAKEOFF_CATEGORIES } from '../bidstd/boilerplate';
 import { parseAccubidBom, BomRow, BomParseWarning, BOM_UNIT_DIVISOR } from './accubidBom';
 import { EstUnit } from './pricing';
 import { Library, LibraryItem, createItem, updateItem, createAssembly, updateAssembly } from './library';
+import { mapTakeoffLine } from './mapper';
+import { toLibraryCandidates } from './bidEstimate';
 
 const CAT = {
   SERVICE: TAKEOFF_CATEGORIES[0],
@@ -148,31 +150,43 @@ export interface BuildImportPreviewOptions {
 export function buildImportPreview(bomText: string, library: Library, opts: BuildImportPreviewOptions): ImportPreview {
   const parsed = parseAccubidBom(bomText);
   const byCode = new Map<string, LibraryItem>(library.items.map(i => [i.code, i]));
+  // Reconcile against the EXISTING catalog (seed or otherwise) via the same
+  // matcher a takeoff line uses, so a BOM row for "3/4" EMT" updates the
+  // library's one real "3/4" EMT" item instead of creating a same-meaning
+  // duplicate under a different code — a duplicate the mapper would then
+  // have to arbitrate between on every future takeoff (and which a plain
+  // code-only lookup, as this function used to do exclusively, can never
+  // find on its own since an Accubid row's phrasing rarely matches a
+  // curated seed name/alias verbatim).
+  const candidates = toLibraryCandidates(library, { activeOnly: true });
 
   const items: ImportedItemPlan[] = [];
   const seenCodes = new Set<string>();
   for (const row of parsed.rows) {
     const { canonical, wasProxy } = ledProxyName(row.description);
     const unit = bomUnitToEstUnit(row.unit);
-    const code = bomItemCode(canonical, unit);
-    // Two BOM rows can legitimately map to the same canonical item within
-    // ONE import (e.g. the same fixture appearing on two floors of the plan
-    // with different attribute text that happened to normalize the same) —
-    // never plan the same code twice in one preview; the later occurrence's
-    // labor hours would just overwrite the earlier one identically anyway
-    // since they're the same catalog row.
-    if (seenCodes.has(code)) continue;
-    seenCodes.add(code);
-
+    const deterministicCode = bomItemCode(canonical, unit);
     const isDemolition = /^Demolition\s*-/i.test(row.description);
     const laborHours = row.laborUnit;
     if (laborHours == null) {
+      if (seenCodes.has(deterministicCode)) continue;
+      seenCodes.add(deterministicCode);
       items.push({
-        action: 'skip_no_labor', code, name: canonical, category: classifyBomCategory(canonical),
+        action: 'skip_no_labor', code: deterministicCode, name: canonical, category: classifyBomCategory(canonical),
         unit, laborHours: null, materialCost: null, wasLedProxy: wasProxy, isDemolition,
       });
       continue;
     }
+
+    // Only an ITEM match at high confidence reconciles — an assembly match
+    // (e.g. a whole duplex-circuit bundle) has no single labor_hours field
+    // to update, so those rows keep the deterministic-code path below.
+    const mapped = mapTakeoffLine({ category: '', description: canonical, qty: 1, unit }, candidates);
+    const reconciled = mapped.matchedKind === 'item' && (mapped.matchConfidence === 'exact' || mapped.matchConfidence === 'alias') ? mapped.matchedCode : null;
+    const code = reconciled ?? deterministicCode;
+
+    if (seenCodes.has(code)) continue;
+    seenCodes.add(code);
 
     const materialCost = opts.applyPrices ? (row.netCost ?? (row.matCondition === 'No Cost' ? 0 : null)) : null;
     const existing = byCode.get(code);
@@ -189,8 +203,11 @@ export function buildImportPreview(bomText: string, library: Library, opts: Buil
       });
     } else {
       items.push({
-        action: 'update', code, name: canonical, category: classifyBomCategory(canonical),
-        unit, laborHours, materialCost, wasLedProxy: wasProxy, isDemolition,
+        // A reconciled match keeps the EXISTING curated name (never
+        // overwritten with the BOM's own phrasing) — only its labor_hours
+        // (and material_cost, when price-authoritative) update.
+        action: 'update', code, name: reconciled ? existing.name : canonical, category: existing.category,
+        unit: existing.unit, laborHours, materialCost, wasLedProxy: wasProxy, isDemolition,
         previous: { laborHours: existing.labor_hours, materialCost: existing.material_cost, source: existing.source },
       });
     }
