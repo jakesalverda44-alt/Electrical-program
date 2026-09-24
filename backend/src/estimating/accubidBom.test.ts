@@ -197,6 +197,22 @@ describe('parseAccubidBom — full real BOMs reconcile to the footer (fixtures, 
     });
   }
 
+  // Review round 2 / S11 — the report date parsed off each real BOM's own
+  // "Job #" header line, never a caller-supplied or hardcoded value. Only
+  // Kissimmee is actually current-priced (2026); the other four real jobs
+  // are 2024 exports, which S11's price cutoff must treat as stale.
+  it("parses each real BOM's own report date off its header line (never a caller-supplied or hardcoded one)", () => {
+    expect(parseAccubidBom(read('kissimmee-bom.txt')).reportDate).toBe('2026-06-18');
+    expect(parseAccubidBom(read('36th-street-bom.txt')).reportDate).toBe('2024-04-09');
+    expect(parseAccubidBom(read('north-port-bom.txt')).reportDate).toBe('2024-03-22');
+    expect(parseAccubidBom(read('orlando-clubhouse-bom.txt')).reportDate).toBe('2024-04-22');
+    expect(parseAccubidBom(read('rockledge-bom.txt')).reportDate).toBe('2024-04-11');
+  });
+
+  it('reportDate is null when the text has no recognizable header date (a synthetic/partial BOM)', () => {
+    expect(parseAccubidBom('Conduit - EMT   100.000 C   50.00   50.00 C   3.0   3.0 Normal').reportDate).toBeNull();
+  });
+
   it('36th Street and North Port carry demolition / pole-base rows with recognizable descriptions', () => {
     const demo = parseAccubidBom(read('36th-street-bom.txt'));
     expect(demo.rows.some(r => /Demolition -/.test(r.description))).toBe(true);

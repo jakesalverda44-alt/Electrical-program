@@ -66,7 +66,7 @@ function applyPlanInMemory(library: Library, items: ImportedItemPlan[]): Library
 
 describe('B3 / S18 — the seed catalog keeps its own picks after a real Kissimmee import', () => {
   const before = seedLibrary();
-  const preview = buildImportPreview(read('kissimmee-bom.txt'), before, { applyPrices: true, bomDate: '2026-06-18' });
+  const preview = buildImportPreview(read('kissimmee-bom.txt'), before, { updatePrices: true });
   const after = applyPlanInMemory(before, preview.items);
   const candidatesBefore = toCandidates(before);
   const candidatesAfter = toCandidates(after);

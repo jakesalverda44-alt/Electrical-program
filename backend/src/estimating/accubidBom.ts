@@ -80,9 +80,28 @@ export interface ParsedBom {
    *  against the footer to confirm nothing was dropped or double-counted. */
   computedMaterialTotal: number;
   computedLaborHours: number;
+  /** Review round 2 / S11 — the report's own print date/time, off the "Job #"
+   *  header line ("...  6/18/2026 11:22 AM  Page 1 of 3"), as an ISO
+   *  YYYY-MM-DD — never a caller-supplied or hardcoded date. null when the
+   *  header line doesn't carry a recognizable date (an edited/incomplete
+   *  export). */
+  reportDate: string | null;
 }
 
 const HEADER_SKIP = /^(Job Name|Job #|Attributes|Item Description|%|Extensi)/;
+// "6/18/2026 11:22 AM" / "6/18/2026 11:22AM" — printed once, on the "Job #"
+// line, right before "Page N of M".
+const HEADER_DATE_RE = /(\d{1,2})\/(\d{1,2})\/(\d{4})\s+\d{1,2}:\d{2}\s*[AP]M/i;
+
+function parseHeaderDate(text: string): string | null {
+  for (const rawLine of text.split(/\r?\n/)) {
+    const m = rawLine.match(HEADER_DATE_RE);
+    if (!m) continue;
+    const [, mo, day, year] = m;
+    return `${year}-${mo.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  return null;
+}
 // A footer line is just "$material  hours" with nothing else on it.
 const FOOTER_RE = /^\$?([\d,]+\.\d{2})\s+([\d,]+\.\d{3})$/;
 // Qty is always printed with exactly 3 decimals ("1,475.000"); the unit
@@ -235,6 +254,7 @@ export function parseAccubidBom(text: string): ParsedBom {
 
   const computedMaterialTotal = round2(rows.reduce((s, r) => s + (r.totalMaterial ?? 0), 0));
   const computedLaborHours = round3(rows.reduce((s, r) => s + (r.totalFieldLaborHours ?? 0), 0));
+  const reportDate = parseHeaderDate(text);
 
-  return { rows, warnings, footerMaterialTotal, footerLaborHours, computedMaterialTotal, computedLaborHours };
+  return { rows, warnings, footerMaterialTotal, footerLaborHours, computedMaterialTotal, computedLaborHours, reportDate };
 }

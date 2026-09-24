@@ -81,7 +81,7 @@ describe('bomItemCode', () => {
 
 describe('buildImportPreview — against an empty library', () => {
   it('plans every Kissimmee row with labor hours as a create, never touches material_cost when applyPrices is false', () => {
-    const preview = buildImportPreview(read('kissimmee-bom.txt'), EMPTY_LIBRARY, { applyPrices: false });
+    const preview = buildImportPreview(read('kissimmee-bom.txt'), EMPTY_LIBRARY, { updatePrices: false });
     expect(preview.warnings).toEqual([]);
     expect(preview.reconciles).toBe(true);
     expect(preview.rowCount).toBe(89);
@@ -96,14 +96,14 @@ describe('buildImportPreview — against an empty library', () => {
   });
 
   it('applies net cost as material_cost only when applyPrices is true (the 2026 Kissimmee BOM)', () => {
-    const preview = buildImportPreview(read('kissimmee-bom.txt'), EMPTY_LIBRARY, { applyPrices: true, bomDate: '2026-06-18' });
+    const preview = buildImportPreview(read('kissimmee-bom.txt'), EMPTY_LIBRARY, { updatePrices: true });
     const emt = preview.items.find(i => i.name.includes('Conduit - EMT') && i.name.startsWith('3/4'));
     expect(emt).toBeDefined();
     expect(emt!.materialCost).toBeCloseTo(92.38); // net cost per C, no vendor adj (plan fact)
   });
 
   it('maps LED-proxy rows to LED names on import (Rockledge, an older BOM)', () => {
-    const preview = buildImportPreview(read('rockledge-bom.txt'), EMPTY_LIBRARY, { applyPrices: false });
+    const preview = buildImportPreview(read('rockledge-bom.txt'), EMPTY_LIBRARY, { updatePrices: false });
     const striplight = preview.items.find(i => i.wasLedProxy && i.name.includes('Striplight'));
     expect(striplight).toBeDefined();
     expect(striplight!.name).toContain('LED Integral Lamp');
@@ -111,7 +111,7 @@ describe('buildImportPreview — against an empty library', () => {
   });
 
   it('never overwrites a source=manual item — plans skip_manual instead of update/create', () => {
-    const firstPass = buildImportPreview(read('kissimmee-bom.txt'), EMPTY_LIBRARY, { applyPrices: true, bomDate: '2026-06-18' });
+    const firstPass = buildImportPreview(read('kissimmee-bom.txt'), EMPTY_LIBRARY, { updatePrices: true });
     const someCreate = firstPass.items.find(i => i.action === 'create');
     expect(someCreate).toBeDefined();
     const library: Library = {
@@ -122,7 +122,7 @@ describe('buildImportPreview — against an empty library', () => {
       }],
       assemblies: [], factors: [],
     };
-    const preview = buildImportPreview(read('kissimmee-bom.txt'), library, { applyPrices: true, bomDate: '2026-06-18' });
+    const preview = buildImportPreview(read('kissimmee-bom.txt'), library, { updatePrices: true });
     const manualRow = preview.items.find(i => i.code === someCreate!.code);
     expect(manualRow?.action).toBe('skip_manual');
     // Nothing else changed action just because one row is manual.
@@ -130,7 +130,7 @@ describe('buildImportPreview — against an empty library', () => {
   });
 
   it('plans an update (not a duplicate create) for an existing source=accubid item with the same code', () => {
-    const preview1 = buildImportPreview(read('kissimmee-bom.txt'), EMPTY_LIBRARY, { applyPrices: true, bomDate: '2026-06-18' });
+    const preview1 = buildImportPreview(read('kissimmee-bom.txt'), EMPTY_LIBRARY, { updatePrices: true });
     const created = preview1.items.filter(i => i.action === 'create');
     expect(created.length).toBeGreaterThan(0);
     const libraryAfter: Library = {
@@ -141,7 +141,7 @@ describe('buildImportPreview — against an empty library', () => {
       })),
       assemblies: [], factors: [],
     };
-    const preview2 = buildImportPreview(read('kissimmee-bom.txt'), libraryAfter, { applyPrices: true, bomDate: '2026-06-18' });
+    const preview2 = buildImportPreview(read('kissimmee-bom.txt'), libraryAfter, { updatePrices: true });
     const stillCreated = preview2.items.filter(i => i.action === 'create');
     const updated = preview2.items.filter(i => i.action === 'update');
     const proposed = preview2.items.filter(i => i.action === 'propose_update');
@@ -158,6 +158,50 @@ describe('buildImportPreview — against an empty library', () => {
     expect(updated.length).toBeGreaterThan(0);
     expect(updated.length).toBeLessThanOrEqual(created.length);
     expect(proposed.length).toBe(0);
+  });
+});
+
+describe('Review round 2 / S11 — price import is a rule (the BOM\'s own header date vs. a configurable cutoff), not a caller flag', () => {
+  it('a 2024 BOM never gets prices even when the admin ticks "update prices" — no material_cost, no crash, no silent -100 (S13 interaction)', () => {
+    const preview = buildImportPreview(read('rockledge-bom.txt'), EMPTY_LIBRARY, { updatePrices: true });
+    expect(preview.bomDate).toBe('2024-04-11'); // the BOM's OWN header date, not a caller guess
+    expect(preview.applyPrices).toBe(false); // requested, but blocked by the cutoff
+    expect(preview.pricesBlockedByCutoff).toBe(true);
+    for (const i of preview.items) expect(i.materialCost).toBeNull();
+  });
+
+  it('the 2026 Kissimmee BOM gets prices when the admin ticks "update prices" — the exact positive case', () => {
+    const preview = buildImportPreview(read('kissimmee-bom.txt'), EMPTY_LIBRARY, { updatePrices: true });
+    expect(preview.bomDate).toBe('2026-06-18');
+    expect(preview.applyPrices).toBe(true);
+    expect(preview.pricesBlockedByCutoff).toBe(false);
+    const emt = preview.items.find(i => i.name.includes('Conduit - EMT') && i.name.startsWith('3/4'));
+    expect(emt!.materialCost).toBeCloseTo(92.38);
+  });
+
+  it('the admin\'s checkbox alone is not sufficient — even the current Kissimmee BOM gets no prices when "update prices" is off', () => {
+    const preview = buildImportPreview(read('kissimmee-bom.txt'), EMPTY_LIBRARY, { updatePrices: false });
+    expect(preview.applyPrices).toBe(false);
+    expect(preview.pricesBlockedByCutoff).toBe(false); // not "blocked" — never requested in the first place
+    for (const i of preview.items) expect(i.materialCost).toBeNull();
+  });
+
+  it('the cutoff is configurable — raising it past Kissimmee\'s own date blocks even the current BOM; lowering it admits a 2024 BOM', () => {
+    const raised = buildImportPreview(read('kissimmee-bom.txt'), EMPTY_LIBRARY, { updatePrices: true, priceCutoffDate: '2027-01-01' });
+    expect(raised.applyPrices).toBe(false);
+    expect(raised.pricesBlockedByCutoff).toBe(true);
+
+    const lowered = buildImportPreview(read('rockledge-bom.txt'), EMPTY_LIBRARY, { updatePrices: true, priceCutoffDate: '2024-01-01' });
+    expect(lowered.applyPrices).toBe(true);
+    expect(lowered.pricesBlockedByCutoff).toBe(false);
+  });
+
+  it('a BOM with no readable header date never gets prices, even with "update prices" on (never falls back to today)', () => {
+    const line = `Conduit - EMT   100.000 C   50.00   50.00 C   3.0   3.0 Normal`;
+    const preview = buildImportPreview(line, EMPTY_LIBRARY, { updatePrices: true });
+    expect(preview.bomDate).toBeNull();
+    expect(preview.applyPrices).toBe(false);
+    expect(preview.pricesBlockedByCutoff).toBe(true);
   });
 });
 
@@ -274,7 +318,7 @@ describe('review round 2 / B3 — buildImportPreview reconciles by normalized sp
       unit: 'C', material_cost: 60, material_price_date: null, labor_hours: 4.0, aliases: ['3/4" emt (incl. couplings/straps)'], source: 'seed', active: true,
     };
     const library: Library = { items: [seedEmt], assemblies: [], factors: [] };
-    const preview = buildImportPreview(read('kissimmee-bom.txt'), library, { applyPrices: true, bomDate: '2026-06-18' });
+    const preview = buildImportPreview(read('kissimmee-bom.txt'), library, { updatePrices: true });
     const emtPlan = preview.items.find(i => i.code === 'EMT-075');
     expect(emtPlan).toBeTruthy();
     expect(emtPlan!.action).toBe('update');
@@ -297,7 +341,7 @@ describe('review round 2 / S15 — a reconciled match is never silently overwrit
     const library: Library = { items: [seedPanel], assemblies: [], factors: [] };
     // A synthetic one-row BOM: same kind+size (panel/225a) but priced per C (never true for a real panel, but exercises the guard deterministically).
     const line = 'Test-Panel             225A Panelboard - Test                                             100.000 C          10.00                     10.00           10.00 C                      3.000                        3.000 Normal';
-    const preview = buildImportPreview(line, library, { applyPrices: false });
+    const preview = buildImportPreview(line, library, { updatePrices: false });
     const plan = preview.items.find(i => i.code === 'PNL-225');
     expect(plan?.action).toBe('propose_update');
     expect(plan?.proposalReason).toBe('unit_mismatch');
@@ -311,7 +355,7 @@ describe('review round 2 / S15 — a reconciled match is never silently overwrit
     const library: Library = { items: [seedPanel], assemblies: [], factors: [] };
     // 3.6 h vs the seed's 8h is more than 2x down — must propose, not overwrite silently.
     const line = 'Test-Panel             225A Panelboard - Test                                              1.000 E                                                            Quoted     E                 3.600                    3.600';
-    const preview = buildImportPreview(line, library, { applyPrices: false });
+    const preview = buildImportPreview(line, library, { updatePrices: false });
     const plan = preview.items.find(i => i.code === 'PNL-225');
     expect(plan?.action).toBe('propose_update');
     expect(plan?.proposalReason).toBe('big_delta');
@@ -326,7 +370,7 @@ describe('review round 2 / S15 — a reconciled match is never silently overwrit
     };
     const library: Library = { items: [seedPanel], assemblies: [], factors: [] };
     const line = 'Test-Panel             225A Panelboard - Test                                              1.000 E                                                            Quoted     E                 7.000                    7.000';
-    const preview = buildImportPreview(line, library, { applyPrices: false });
+    const preview = buildImportPreview(line, library, { updatePrices: false });
     const plan = preview.items.find(i => i.code === 'PNL-225');
     expect(plan?.action).toBe('update');
   });
@@ -363,7 +407,7 @@ describe('review round 2 / N17 — pole count sums every pole row, and unparsed 
     // of that unit letter later in the row — accubidBom.ts's own
     // "no second unit column found" warning.
     const badLine = 'Something Weird BOM Row                                  5.000 C   10.00   Normal';
-    const preview = buildImportPreview(badLine, EMPTY_LIBRARY, { applyPrices: false });
+    const preview = buildImportPreview(badLine, EMPTY_LIBRARY, { updatePrices: false });
     expect(preview.warnings).toHaveLength(1);
     const unparsed = preview.items.find(i => i.action === 'skip_unparsed');
     expect(unparsed).toBeTruthy();

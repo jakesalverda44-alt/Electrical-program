@@ -34,11 +34,19 @@ beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
 /** A tiny two-row synthetic BOM (one EA item, one C item with a field-labor
  *  adjustment), each row's description carrying a unique tag so its
  *  deterministic code can never collide with a real fixture-derived code or
- *  another test's own tag. */
+ *  another test's own tag.
+ *
+ *  Review round 2 / S11 — price import now gates on the BOM's OWN header
+ *  date (never a caller-supplied one), so this synthetic BOM carries a real
+ *  header line in the same shape a real Accubid export prints it, dated
+ *  comfortably past the price-import cutoff (2026-01-01) — the tests below
+ *  that exercise price application need a header the parser can actually
+ *  read a date off of. */
 function syntheticBom(tag: string) {
+  const header = `Job Name - TestOnly-${tag}\nJob # - TestOnly-${tag}                                                                                              6/18/2026 11:22 AM               Page 1 of 1`;
   const eaLine = `TestOnly-${tag}         Luminaire Widget Fixture - LED Integral Lamp                        4.000 E                                                            Quoted     E                 0.900                    3.600`;
   const cLine = `TestOnly-${tag}         Widget Conduit - Steel 10' Lengths                                   200.000 C          100.00          50.00                    50.00           100.00 C                      3.500        10.000          7.700 Normal`;
-  return { text: `${eaLine}\n${cLine}`, eaCode: `EA`, cCode: `C` };
+  return { text: `${header}\n${eaLine}\n${cLine}`, eaCode: `EA`, cCode: `C` };
 }
 
 async function cleanupCodes(codes: string[]): Promise<void> {
@@ -60,7 +68,7 @@ describe('POST /api/estimating/library/accubid-import/preview', () => {
     const { app } = await import('../index');
     const admin = await makeUser('owner');
     const res = await request(app).post('/api/estimating/library/accubid-import/preview').set(auth(admin.token))
-      .send({ bomText: read('kissimmee-bom.txt'), applyPrices: true }).expect(200);
+      .send({ bomText: read('kissimmee-bom.txt'), updatePrices: true }).expect(200);
     expect(res.body.rowCount).toBe(89);
     expect(res.body.reconciles).toBe(true);
     expect(res.body.items.length).toBeGreaterThan(50);
@@ -72,7 +80,7 @@ describe('POST /api/estimating/library/accubid-import/preview', () => {
     const admin = await makeUser('owner');
     const tag = randomUUID().slice(0, 8);
     const res = await request(app).post('/api/estimating/library/accubid-import/preview').set(auth(admin.token))
-      .send({ bomText: syntheticBom(tag).text, applyPrices: true }).expect(200);
+      .send({ bomText: syntheticBom(tag).text, updatePrices: true }).expect(200);
     const codes = res.body.items.filter((i: { action: string }) => i.action === 'create').map((i: { code: string }) => i.code);
     expect(codes.length).toBe(2);
     const { rows } = await pool.query('SELECT count(*)::int AS n FROM est_items WHERE code = ANY($1)', [codes]);
@@ -103,7 +111,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
     // created) threw before cleanupCodes ever ran, leaking a real row into
     // the shared test-catalog table for every later test run to trip over.
     const r1 = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-      .send({ bomText: text, applyPrices: true, bomDate: '2026-06-18' }).expect(200);
+      .send({ bomText: text, updatePrices: true }).expect(200);
 
     try {
       expect(r1.body.created).toBe(2);
@@ -116,7 +124,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
       expect(Number(conduit.labor_hours)).toBeCloseTo(3.5, 2);
 
       const r2 = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-        .send({ bomText: text, applyPrices: true, bomDate: '2026-06-18' }).expect(200);
+        .send({ bomText: text, updatePrices: true }).expect(200);
       expect(r2.body.created).toBe(0);
       expect(r2.body.updated).toBe(2);
 
@@ -136,7 +144,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
 
     // Import once so there's a real accubid-sourced row to hijack.
     await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-      .send({ bomText: text, applyPrices: true, bomDate: '2026-06-18' }).expect(200);
+      .send({ bomText: text, updatePrices: true }).expect(200);
     try {
       const { rows: anyRow } = await pool.query("SELECT id, code FROM est_items WHERE source='accubid' AND name LIKE $1 LIMIT 1", [`TestOnly-${tag}%`]);
       expect(anyRow.length).toBe(1);
@@ -147,7 +155,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
       await pool.query("UPDATE est_items SET source='manual', material_cost=12345, labor_hours=99 WHERE id=$1", [target.id]);
 
       await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-        .send({ bomText: text, applyPrices: true, bomDate: '2026-06-18' }).expect(200);
+        .send({ bomText: text, updatePrices: true }).expect(200);
 
       const { rows } = await pool.query('SELECT material_cost, labor_hours, source FROM est_items WHERE id=$1', [target.id]);
       expect(rows[0].source).toBe('manual');
@@ -156,7 +164,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
 
       // And the preview reports it as skipped, not silently absent.
       const preview = await request(app).post('/api/estimating/library/accubid-import/preview').set(auth(admin.token))
-        .send({ bomText: text, applyPrices: true, bomDate: '2026-06-18' }).expect(200);
+        .send({ bomText: text, updatePrices: true }).expect(200);
       const planForTarget = preview.body.items.find((i: { code: string }) => i.code === target.code);
       expect(planForTarget.action).toBe('skip_manual');
     } finally {
@@ -188,7 +196,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
     // another concurrently-running instance of this same test, or with the
     // fixed ACB-POLE-BASE-FOUNDATION code a real production import would use.
     const res1 = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
-      .send({ bomText: poleBomText, applyPrices: false }).expect(200);
+      .send({ bomText: poleBomText, updatePrices: false }).expect(200);
     expect(res1.body.poleBase).toBeTruthy();
     expect(res1.body.poleBase.itemsCreated + res1.body.poleBase.itemsUpdated).toBeGreaterThanOrEqual(9);
 

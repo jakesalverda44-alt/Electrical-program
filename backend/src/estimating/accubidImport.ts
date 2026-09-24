@@ -286,8 +286,17 @@ export interface ImportedItemPlan {
 }
 
 export interface ImportPreview {
+  /** Review round 2 / S11 — always the BOM's OWN header date (accubidBom.ts's
+   *  parseHeaderDate), never a caller-supplied or hardcoded one. null when
+   *  the header didn't carry a recognizable date. */
   bomDate: string | null;
+  /** Whether prices were actually imported for this preview — both the
+   *  admin's "update prices" checkbox AND the cutoff check had to pass. */
   applyPrices: boolean;
+  /** True when the admin ticked "update prices" but the BOM's own header
+   *  date is before `priceCutoffDate` (or missing) — prices were withheld
+   *  even though they were requested, so a caller can tell the estimator why. */
+  pricesBlockedByCutoff: boolean;
   rowCount: number;
   warnings: BomParseWarning[];
   items: ImportedItemPlan[];
@@ -301,10 +310,20 @@ export interface ImportPreview {
   reconciles: boolean;
 }
 
+/** Review round 2 / S11 — a bid's price import is a RULE, not a caller flag:
+ *  labor hours import from any BOM, but material prices only ever import
+ *  from a BOM whose own header date is on or after this cutoff (2026 —
+ *  Chris's Accubid catalog's prices are known-current only from the 2026
+ *  Kissimmee export on; a 2024 job's prices are stale). Configurable so a
+ *  later, newer round of BOMs doesn't need a code change to move it. */
+export const DEFAULT_PRICE_IMPORT_CUTOFF = '2026-01-01';
+
 export interface BuildImportPreviewOptions {
-  /** True only for the current-price BOM (the 2026-06-18 Kissimmee export). */
-  applyPrices: boolean;
-  bomDate?: string | null;
+  /** The admin's "update prices" checkbox on the import screen — necessary
+   *  but never sufficient on its own; see pricesBlockedByCutoff. */
+  updatePrices: boolean;
+  /** Defaults to DEFAULT_PRICE_IMPORT_CUTOFF. */
+  priceCutoffDate?: string;
 }
 
 /** One entry per normalized-spec key, built from the CURRENT library — a
@@ -329,6 +348,14 @@ function buildSpecIndex(library: Library): Map<string, LibraryItem> {
  *  skipped rather than creating a zero-everything item. */
 export function buildImportPreview(bomText: string, library: Library, opts: BuildImportPreviewOptions): ImportPreview {
   const parsed = parseAccubidBom(bomText);
+  // Review round 2 / S11 — the rule: the admin's checkbox is necessary, the
+  // BOM's OWN header date meeting the cutoff is necessary, either alone is
+  // not sufficient. A BOM with no readable header date never gets prices
+  // (never falls back to "today" or any other guess).
+  const cutoff = opts.priceCutoffDate ?? DEFAULT_PRICE_IMPORT_CUTOFF;
+  const priceDateEligible = parsed.reportDate != null && parsed.reportDate >= cutoff;
+  const applyPrices = opts.updatePrices && priceDateEligible;
+  const pricesBlockedByCutoff = opts.updatePrices && !priceDateEligible;
   const byCode = new Map<string, LibraryItem>(library.items.map(i => [i.code, i]));
   // Two reconciliation passes against the EXISTING catalog, so a BOM row for
   // "3/4" EMT" updates the library's one real "3/4" EMT" item instead of
@@ -379,7 +406,7 @@ export function buildImportPreview(bomText: string, library: Library, opts: Buil
     if (seenCodes.has(code)) continue;
     seenCodes.add(code);
 
-    const materialCost = opts.applyPrices ? (row.netCost ?? (row.matCondition === 'No Cost' ? 0 : null)) : null;
+    const materialCost = applyPrices ? (row.netCost ?? (row.matCondition === 'No Cost' ? 0 : null)) : null;
     const existing = reconciledItem ?? byCode.get(code) ?? null;
     if (!existing) {
       items.push({
@@ -437,8 +464,9 @@ export function buildImportPreview(bomText: string, library: Library, opts: Buil
         && Math.abs(parsed.computedLaborHours - (parsed.footerLaborHours ?? parsed.computedLaborHours)) < 0.002);
 
   return {
-    bomDate: opts.bomDate ?? null,
-    applyPrices: opts.applyPrices,
+    bomDate: parsed.reportDate,
+    applyPrices,
+    pricesBlockedByCutoff,
     rowCount: parsed.rows.length,
     warnings: parsed.warnings,
     items,
@@ -468,6 +496,12 @@ export interface ApplyImportOptions {
  *  same rows to the same values the second time, it doesn't duplicate them —
  *  because the plan's `code` is deterministic (bomItemCode). */
 export async function applyImportPreview(preview: ImportPreview, opts: ApplyImportOptions = {}): Promise<ApplyImportResult> {
+  // Review round 2 / S11 — material_price_date is always preview.bomDate
+  // (the BOM's own header date, from buildImportPreview) below, never
+  // guessed as "today" the way it used to be: a plan's materialCost is only
+  // ever non-null when buildImportPreview's own applyPrices was true, which
+  // itself requires bomDate to be set and past the cutoff — so this is
+  // never actually null on any path that reaches it.
   let created = 0;
   let updated = 0;
   let skipped = 0;
@@ -487,7 +521,7 @@ export async function applyImportPreview(preview: ImportPreview, opts: ApplyImpo
         await createItem({
           code: plan.code, name: plan.name, category: plan.category, unit: plan.unit,
           material_cost: plan.materialCost ?? 0,
-          material_price_date: plan.materialCost != null ? (preview.bomDate ?? new Date().toISOString().slice(0, 10)) : null,
+          material_price_date: plan.materialCost != null ? (preview.bomDate) : null,
           labor_hours: plan.laborHours ?? 0,
         });
         // createItem always writes source='manual' by its own generic
@@ -507,7 +541,7 @@ export async function applyImportPreview(preview: ImportPreview, opts: ApplyImpo
         if ((err as { code?: string }).code !== '23505') throw err;
         const byCode = await findByCode(plan.code);
         if (byCode && byCode.source !== 'manual') {
-          await updateItem(byCode.id, { labor_hours: plan.laborHours ?? byCode.labor_hours, ...(plan.materialCost != null ? { material_cost: plan.materialCost, material_price_date: preview.bomDate ?? new Date().toISOString().slice(0, 10) } : {}) });
+          await updateItem(byCode.id, { labor_hours: plan.laborHours ?? byCode.labor_hours, ...(plan.materialCost != null ? { material_cost: plan.materialCost, material_price_date: preview.bomDate } : {}) });
           await markAccubidSource(plan.code);
           updated++;
         } else {
@@ -525,7 +559,7 @@ export async function applyImportPreview(preview: ImportPreview, opts: ApplyImpo
       if (byCode.source === 'manual') { skipped++; continue; }
       await updateItem(byCode.id, {
         labor_hours: plan.laborHours ?? byCode.labor_hours,
-        ...(plan.materialCost != null ? { material_cost: plan.materialCost, material_price_date: preview.bomDate ?? new Date().toISOString().slice(0, 10) } : {}),
+        ...(plan.materialCost != null ? { material_cost: plan.materialCost, material_price_date: preview.bomDate } : {}),
       });
       await markAccubidSource(plan.code); // updateItem sets source='manual' on any field change — restore 'accubid'
       updated++;
@@ -640,7 +674,7 @@ export const POLE_BASE_ASSEMBLY_CODE = 'ACB-POLE-BASE-FOUNDATION';
  *  would be (idempotent by bomItemCode); the assembly itself is
  *  create-or-replace-components by its fixed code. */
 export async function applyPoleBaseAssembly(
-  plan: PoleBaseAssemblyPlan, library: Library, opts: { applyPrices: boolean; bomDate?: string | null }
+  plan: PoleBaseAssemblyPlan, library: Library
 ): Promise<{ itemsCreated: number; itemsUpdated: number }> {
   const byCode = new Map(library.items.map(i => [i.code, i]));
   let itemsCreated = 0;
