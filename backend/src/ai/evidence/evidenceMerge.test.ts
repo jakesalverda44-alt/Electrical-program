@@ -6,12 +6,12 @@
 import { describe, it, expect } from 'vitest';
 import { buildCountTargets, type CountTarget } from '../countTargets';
 import { mergeCountsIntoTakeoff, type SheetCountInput } from '../countMerge';
-import { buildReviewItems, enforcedCounts, validateResolution, type ReviewItem } from '../reviewItems';
+import { buildReviewItems, enforcedCounts, validateResolution, reviewItemIsOpen, type ReviewItem } from '../reviewItems';
 import type { CountResult } from '../countingStage';
 import { parseViewportReply, type SheetGeom } from './viewports';
 import { resolveSheetMarks } from './viewportResolve';
 import { parseTypicalsReply, hostTargets } from './typicals';
-import { parseScheduleReply, scheduleCounts, dedupePanels } from './schedules';
+import { parseScheduleReply, scheduleCounts, dedupePanels, panelChoices, circuitSummaryRows } from './schedules';
 import { selectCountSheets, levelOf } from '../countSheets';
 import { VIEWPORT_REPLIES, TYPICALS_REPLIES, TABLE_REPLIES, E1_RESTROOM_REPEATS } from '../../test/fixtures/evidence/kissimmeeReplies';
 import { loadKissimmeeBaseline, KISSIMMEE_FILE } from '../../test/fixtures/evidence/kissimmeeBaseline';
@@ -258,5 +258,66 @@ describe('fix round 3 / S15 — stacked floors are never dropped as "duplicates"
   it('an unnamed-level sheet with the same layout as a LEVEL 2 sheet -> asked, not summed or dropped silently', () => {
     const m = mergeCountsIntoTakeoff(base.agent1, [t], [sh('E-101', 'POWER PLAN', ''), sh('E-102', 'LEVEL 2 POWER PLAN', '2')], { countingRan: true, evidence: {} });
     expect(m.types[0].areaQuestion).toMatchObject({ keep: 10, sum: 20 });
+  });
+});
+
+describe('fix round 4 / S20 — the same panel read on two sheets', () => {
+  const batt = targets.find(t => t.key === 'BATT CHGR')!;
+  const ctx = (sheet: string) => ({ sheetKey: sheet, sheetLabel: sheet, viewportId: `${sheet}@B`, viewportTitle: 'PANEL B' });
+  const panelB = (sheet: string, load15: string, extra: string[][] = []) => {
+    const j = JSON.parse(TABLE_REPLIES['PANEL B']);
+    j.rows = j.rows.map((r: { cells: string[] }) => (r.cells[0] === '15' ? { ...r, cells: [r.cells[0], r.cells[1], r.cells[2], r.cells[3], load15, r.cells[5], r.cells[6]] } : r));
+    j.rows = [...j.rows, ...extra.map(cells => ({ cells }))];
+    return parseScheduleReply(JSON.stringify(j), ctx(sheet))!;
+  };
+  it('the reviewer\'s repro: E-4 / E-4.1 differ only in one load ("1,490" vs "1,940") -> ONE panel: chargers 5 (not 10), a non-blocking load note', () => {
+    const tables = dedupePanels([panelB('E-4', '1,490'), panelB('E-4.1', '1,940')]);
+    expect(tables).toHaveLength(1);
+    expect(tables[0].warnings.join(' ')).toMatch(/load differs on E-4 vs E-4.1 \(circuit 15\)/);
+    expect(scheduleCounts([batt], tables).get('BATT CHGR')!.qty).toBe(5);
+    const m = mergeCountsIntoTakeoff(base.agent1, targets, [input(49)], { countingRan: true, evidence: { tables, scheduleCounts: scheduleCounts(targets, tables) } });
+    const items = buildReviewItems(cr(m, targets, { tables, panelChoices: panelChoices(targets, tables) }));
+    expect(items.find(i => i.id.startsWith('panel-load:'))).toMatchObject({ blocking: false, group: 'schedule' });
+    expect(items.some(i => i.id.startsWith('panel-dup:'))).toBe(false);
+  });
+  it('the review\'s three-charger shape: two reads of a 3-charger panel with one load differing -> 3', () => {
+    const three = (sheet: string, l: string) => parseScheduleReply(JSON.stringify({ title: 'PANEL B', columns: ['CKT', 'BREAKER', 'DESCRIPTION', 'A'],
+      rows: [['15', '20/1', 'BATTERY CHARGER', l], ['17', '20/1', 'BATTERY CHARGER', '1,490'], ['19', '20/1', 'BATTERY CHARGER', '1,490'], ['2', '-/1', 'SPACE', '0']].map(cells => ({ cells })) }), ctx(sheet))!;
+    const tables = dedupePanels([three('E-4', '1,490'), three('E-4.1', '1,940')]);
+    expect(scheduleCounts([batt], tables).get('BATT CHGR')!.qty).toBe(3);
+    expect(circuitSummaryRows(tables).reduce((s, r) => s + Number(r.row.qty), 0)).toBe(3);
+  });
+  it('a TRUE conflict (different circuits): both kept, a blocking item with ENFORCED answers', () => {
+    const tables = dedupePanels([panelB('E-4', '1,490'), panelB('E-4.1', '1,490', [['43', '20/1', 'BATTERY CHARGER', '1,490']])]);
+    expect(tables).toHaveLength(2);
+    const choices = panelChoices(targets, tables);
+    expect(scheduleCounts(targets, tables).get('BATT CHGR')!.qty).toBe(11);
+    const m = mergeCountsIntoTakeoff(base.agent1, targets, [input(49)], { countingRan: true, evidence: { tables, scheduleCounts: scheduleCounts(targets, tables) } });
+    const c = cr(m, targets, { tables, panelChoices: choices });
+    const items = buildReviewItems(c);
+    const q = items.find(i => i.id.startsWith('panel-dup:'))!;
+    expect(q.options).toEqual(['Two panels — keep both', 'Same panel — use E-4\'s copy', 'Same panel — use E-4.1\'s copy']);
+    expect(reviewItemIsOpen(q)).toBe(true);
+    const pick = (idx: number) => items.map(i => (i.id === q.id ? { ...i, resolution: { ...(validateResolution(i, { action: 'answer', answer: q.options![idx] }, null) as { ok: true; resolution: NonNullable<ReviewItem['resolution']> }).resolution, by: 'e', at: 't' } } : i));
+    const useE4 = enforcedCounts(c, pick(1));
+    expect(useE4.byType.get('BATT CHGR')).toBe(5);
+    expect(useE4.removeLines).toEqual(expect.arrayContaining(['Branch circuit 20/1 — Panel B — E-4.1']));
+    expect(enforcedCounts(c, pick(2)).byType.get('BATT CHGR')).toBe(6);
+    const keepBoth = enforcedCounts(c, pick(0));
+    expect(keepBoth.byType.get('BATT CHGR')).toBe(11);
+    expect(keepBoth.removeLines).toBeUndefined();
+  });
+});
+
+describe('fix round 4 / S20 — enforceCounts removes a dropped panel copy\'s circuit lines by exact name', () => {
+  it('removes "… Panel B — E-4.1", keeps "… Panel B — E-4"; a missing line is reported, never guessed', async () => {
+    const { enforceCountsOnTakeoff: enforceCounts } = await import('../../bidstd/enforceCounts');
+    const takeoff = [{ name: 'Branch Power', items: [
+      { item: 'Branch circuit 20/1 — Panel B — E-4', description: '', unit: 'EA', qty: 15 },
+      { item: 'Branch circuit 20/1 — Panel B — E-4.1', description: '', unit: 'EA', qty: 16 },
+    ] }];
+    const r = enforceCounts(takeoff as never, null, { byType: new Map(), extraLines: [], removeLines: ['Branch circuit 20/1 — Panel B — E-4.1', 'Branch circuit 60/3 — Panel B — E-4.1'] });
+    expect(r.takeoff[0].items.map(i => i.item)).toEqual(['Branch circuit 20/1 — Panel B — E-4']);
+    expect(r.corrections.join(' ')).toMatch(/60\/3 — Panel B — E-4.1" \(a dropped panel copy's circuits\) is not in the takeoff/);
   });
 });

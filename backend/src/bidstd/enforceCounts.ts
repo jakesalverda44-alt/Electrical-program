@@ -235,6 +235,18 @@ export function enforceCountsOnTakeoff(
   const targets = countResult?.targets ?? [];
   const byKey = new Map(targets.map(t => [t.key, t]));
   const possibleDoubles: EnforceCountsResult['possibleDoubles'] = [];
+  // Fix round 4 / S20 — lines the estimator's panel answer removes (the
+  // dropped copy's circuit lines), matched by exact item text only.
+  for (const item of enforced.removeLines ?? []) {
+    const want = norm(item);
+    let removed = false;
+    for (const cat of takeoff) {
+      const before = cat.items.length;
+      cat.items = cat.items.filter(it => norm(String(it.item ?? '')) !== want);
+      if (cat.items.length !== before) { removed = true; corrections.push(`"${item}" removed — the estimator chose one copy of that panel.`); }
+    }
+    if (!removed) corrections.push(`"${item}" (a dropped panel copy's circuits) is not in the takeoff under that name — check the branch circuits.`);
+  }
   if (!targets.length && !enforced.extraLines.length) return { takeoff, corrections, ambiguous, conflicts, possibleDoubles };
 
   const located = new Map<string, Array<{ cat: TakeoffCategory; it: TakeoffItem }>>();

@@ -21,7 +21,7 @@ import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { runEvidenceStage, type EvidenceCache, type EvidencePage, type EvidenceStageOutput, type EvidenceUsage } from './evidence/evidenceStage';
 import { resolveSheetMarks, viewportPromptBlock, type EnlargedDecision, type SheetMarkResolution } from './evidence/viewportResolve';
 import { hostTargets, type TypicalPackage } from './evidence/typicals';
-import { dedupePanels, isCompletePanel, scheduleCounts, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
+import { dedupePanels, isCompletePanel, panelChoices, scheduleCounts, type PanelChoice, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
 import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewports';
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
 import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillStage, sha256Of, type GapFillSheetAsset } from './evidence/gapFillStage';
@@ -83,6 +83,8 @@ export interface CountResultEvidence {
   scheduleOwned: string[];
   /** Panels the drawing analysis found (panels[]). */
   panelsExpected: number;
+  /** Fix round 4 / S20 — same-name panel conflicts with their enforced answers. */
+  panelChoices?: PanelChoice[];
   /** Panel-schedule viewports the viewport reader identified whose table
    *  could not be read completely — their branch circuits have no source
    *  (3.4: Agent 1 no longer states them). */
@@ -292,6 +294,8 @@ function finish(
         circuitRows: merged.evidence?.circuitRows ?? 0,
         scheduleOwned: [...evidence.schedCounts.keys()],
         panelsExpected: Array.isArray(input.agent1.panels) ? input.agent1.panels.length : 0,
+        // Fix round 4 / S20 — what each answer to a panel conflict changes.
+        panelChoices: panelChoices(targets, evidence.ev.tables),
         panelsUnread: evidence.ev.pages.flatMap(p => p.viewports.viewports
           .filter(v => v.kind === 'schedule' && /\bPANEL(BOARD)?\b/i.test(v.title) && !/\bLOAD\b/i.test(v.title))
           .filter(v => !evidence.ev.tables.some(t => t.viewportId === v.id && isCompletePanel(t)))

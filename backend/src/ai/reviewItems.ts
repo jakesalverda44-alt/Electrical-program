@@ -19,7 +19,7 @@
 import type { CountResult, CountMark } from './countingStage';
 import { outsideAptInstall, describeAssignment } from '../bidstd/tradeAssignment';
 import { facilityChecklistItems } from '../bidstd/facilityChecklists';
-import { PANEL_CONFLICT, panelNameOf } from './evidence/schedules';
+import { PANEL_CONFLICT, PANEL_LOAD_NOTE, panelNameOf, type PanelChoice } from './evidence/schedules';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -93,6 +93,8 @@ export interface ReviewItem {
   /** Evidence round 2.2 — a typical item: the device types and per-host
    *  quantities a resolved host count adds. */
   typicalDevices?: Array<{ key: string; perHost: number }>;
+  /** Fix round 4 / S20 — a panel-conflict item: what each answer changes. */
+  panelChoice?: PanelChoice;
   /** Evidence round 3.3 — a family item: the primary type keys whose total
    *  the answer replaces. */
   familyPrimary?: string[];
@@ -550,6 +552,22 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   // are counted (two panels, or a revision?) — blocking until the estimator
   // confirms, one item per panel name.
   const conflictNames = new Set<string>();
+  // Fix round 4 / S20 — ENFORCED answers: two panels (keep both), or the
+  // same panel — use one copy (its schedule quantities; the other copies'
+  // circuit lines removed).
+  for (const ch of ev?.panelChoices ?? []) {
+    conflictNames.add(ch.name);
+    items.push({
+      id: `panel-dup:${ch.identity}`,
+      kind: 'confirm',
+      title: `Panel ${ch.name} is read on ${ch.copies.length} sheets with different circuits — two panels or one?`,
+      detail: `${ch.copies.map(c => `${c.sheetLabel} (${c.rows} rows)`).join('; ')}. Both are counted now (circuits and equipment summed). Choose: two panels (keep both), or the same panel (a revision) — use one sheet's copy; the other copy's circuits and equipment then leave the takeoff.`,
+      options: ['Two panels — keep both', ...ch.copies.map(c => `Same panel — use ${c.sheetLabel}'s copy`)],
+      panelChoice: ch,
+      actions: ['answer'],
+      fingerprint: `panel-dup|${ch.identity}|${ch.copies.map(c => `${c.sheetLabel}:${c.rows}`).join(';')}`,
+    });
+  }
   for (const tbl of ev?.tables ?? []) {
     if (tbl.kind !== 'panel' || !tbl.warnings.some(w => w.includes(PANEL_CONFLICT))) continue;
     const name = panelNameOf(tbl.title);
@@ -565,16 +583,32 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `panel-dup|${name}|${copies.map(c => `${c.sheetLabel}:${c.rows.length}`).join(';')}`,
     });
   }
+  // Fix round 4 / S20 — the same panel read twice with a different load:
+  // one copy used, a note (never blocking).
   for (const tbl of ev?.tables ?? []) {
-    if (!tbl.warnings.filter(w => !w.includes(PANEL_CONFLICT)).length) continue;
+    const notes = tbl.warnings.filter(w => w.includes(PANEL_LOAD_NOTE));
+    if (!notes.length) continue;
+    items.push({
+      id: `panel-load:${tbl.id}`,
+      kind: 'confirm',
+      blocking: false,
+      title: `Panel ${panelNameOf(tbl.title)}: a load reads differently on two sheets`,
+      detail: `${notes.join(' ')} The same circuits and descriptions, so one panel — counted once.`,
+      actions: ['confirm'],
+      fingerprint: `panel-load|${notes.join('|')}`,
+    });
+  }
+  const incomplete = (w: string) => !w.includes(PANEL_CONFLICT) && !w.includes(PANEL_LOAD_NOTE);
+  for (const tbl of ev?.tables ?? []) {
+    if (!tbl.warnings.filter(incomplete).length) continue;
     items.push({
       id: `schedule:${tbl.id}`,
       kind: 'confirm',
       blocking: false,
       title: `Schedule read incompletely: ${tbl.title} (${tbl.sheetLabel})`,
-      detail: `${tbl.warnings.filter(w => !w.includes(PANEL_CONFLICT)).join(' ')} Quantities taken from this table may be short — check it on the sheet.`,
+      detail: `${tbl.warnings.filter(incomplete).join(' ')} Quantities taken from this table may be short — check it on the sheet.`,
       actions: ['confirm'],
-      fingerprint: `schedule|${tbl.warnings.filter(w => !w.includes(PANEL_CONFLICT)).join('|')}`,
+      fingerprint: `schedule|${tbl.warnings.filter(incomplete).join('|')}`,
     });
   }
   // Next round A7 — a type counted only on the photometric sheet (the
@@ -849,11 +883,11 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
  *  action): 'zero', 'unreadable', 'area:<sheets>', 'coverage', 'heads',
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
-  if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : i.id.startsWith('schedule:') ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
+  if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';
   if (i.id.startsWith('reconcile:')) return 'reconcile';
-  if (i.id.startsWith('schedule:') || i.id.startsWith('panel-dup:') || i.id.startsWith('schedqty:')) return 'schedule';
+  if (i.id.startsWith('schedule:') || i.id.startsWith('panel-dup:') || i.id.startsWith('panel-load:') || i.id.startsWith('schedqty:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
   if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';
@@ -1021,6 +1055,9 @@ export function validateResolution(item: ReviewItem, input: ResolveInput, marker
 export interface EnforcedCounts {
   byType: Map<string, number | null>;
   extraLines: Array<{ category: string; item: string; qty: number }>;
+  /** Fix round 4 / S20 — lines (exact item text) that must leave the
+   *  takeoff: the circuit lines of a panel copy the estimator dropped. */
+  removeLines?: string[];
 }
 
 export function enforcedCounts(countResult: CountResult | null, items: ReviewItem[] | null | undefined): EnforcedCounts {
@@ -1118,7 +1155,18 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
       byType.set(m.key, m.resolution.action === 'not_on_job' ? null : (m.resolution.qty ?? null));
     }
   }
-  return { byType, extraLines };
+  // Fix round 4 / S20 — "the same panel — use <sheet>'s copy": that copy's
+  // schedule quantities, and the other copies' circuit lines removed.
+  const removeLines: string[] = [];
+  for (const i of list) {
+    if (!i.id.startsWith('panel-dup:') || !i.panelChoice || i.resolution?.action !== 'answer') continue;
+    const idx = (i.options ?? []).indexOf(i.resolution.answer ?? '') - 1;
+    const choice = idx >= 0 ? i.panelChoice.useCopy[idx] : undefined;
+    if (!choice) continue;
+    for (const [k, q] of Object.entries(choice.typeQty)) byType.set(k, q);
+    removeLines.push(...choice.removeLines);
+  }
+  return { byType, extraLines, ...(removeLines.length ? { removeLines } : {}) };
 }
 
 /** The block Agent 4 receives, authoritative over Agent 1/2 for these items. */

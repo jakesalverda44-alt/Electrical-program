@@ -291,36 +291,100 @@ export function panelIdentity(t: Pick<ScheduleTable, 'title' | 'sheetLabel'>): s
   return `${panelNameOf(t.title)}${area ? `|${area}` : ''}`;
 }
 
-/** The content signature: circuit numbers with their descriptions and loads. */
+/** Fix round 4 / S20 — the content signature: circuit numbers with their
+ *  normalized descriptions. NEVER loads: two vision reads of one schedule
+ *  disagree on a digit ("1,490" / "1,940") far more often than a real
+ *  second panel repeats every circuit and description. */
 export function panelSignature(t: ScheduleTable): string {
-  return panelCircuitRows(t).map(r => `${r.circuit}:${normDesc(r.description)}:${r.loadVA ?? ''}`).sort().join('|');
+  return panelCircuitRows(t).filter(r => !r.continuation).map(r => `${r.circuit}:${normDesc(r.description)}`).sort().join('|');
+}
+
+function loadSignature(t: ScheduleTable): Map<number, number | null> {
+  return new Map(panelCircuitRows(t).map(r => [r.circuit, r.loadVA]));
 }
 
 export const PANEL_CONFLICT = 'also read with different content';
+export const PANEL_LOAD_NOTE = 'load differs on';
 
-/** Fix round S10 + fix round 3 / B12 — the same panel read twice (a panel
- *  schedule repeated on two sheets): one table per (name, building) AND
- *  content signature. Same identity, same content -> one. Same name with
- *  DIFFERENT content -> BOTH are kept (two panels, or a revision — the
- *  estimator decides) and each carries a PANEL_CONFLICT warning, which the
- *  counting stage stores on count_result.evidence.tables so the review list
- *  raises a blocking item. Idempotent. */
+/** Fix round S10 / fix round 3 B12 / fix round 4 S20 — the same panel read
+ *  twice: one table per (name, building) AND content (circuits +
+ *  descriptions).
+ *    * same identity, same content -> ONE (the first copy; a load that
+ *      differs between the copies is a non-blocking note on it:
+ *      "load differs on E-4 vs E-4.1");
+ *    * same name, DIFFERENT content -> BOTH kept, each with a
+ *      PANEL_CONFLICT warning; the review item offers ENFORCED answers
+ *      ("two panels" / "the same panel — use <sheet>'s copy").
+ *  Idempotent. */
 export function dedupePanels(tables: ScheduleTable[]): ScheduleTable[] {
   const out: ScheduleTable[] = [];
   for (const t of tables) {
     if (t.kind !== 'panel') { out.push(t); continue; }
     const id = panelIdentity(t);
     const sig = panelSignature(t);
-    if (out.some(o => o.kind === 'panel' && panelIdentity(o) === id && panelSignature(o) === sig)) continue;
+    const same = out.find(o => o.kind === 'panel' && panelIdentity(o) === id && panelSignature(o) === sig);
+    if (same) {
+      if (same.sheetKey !== t.sheetKey || same.id !== t.id) {
+        const la = loadSignature(same), lb = loadSignature(t);
+        const diff = [...la.keys()].filter(c => (la.get(c) ?? null) !== (lb.get(c) ?? null));
+        if (diff.length) {
+          const w = `Panel ${panelNameOf(t.title)}: ${PANEL_LOAD_NOTE} ${same.sheetLabel} vs ${t.sheetLabel} (circuit${diff.length === 1 ? '' : 's'} ${diff.slice(0, 6).join(', ')}) — ${same.sheetLabel}'s copy used`;
+          if (!same.warnings.includes(w)) same.warnings.push(w);
+        }
+      }
+      continue;
+    }
     out.push({ ...t, warnings: [...t.warnings] });
   }
   for (const t of out) {
     if (t.kind !== 'panel') continue;
-    const others = out.filter(o => o !== t && o.kind === 'panel' && panelNameOf(o.title) === panelNameOf(t.title) && panelIdentity(o) === panelIdentity(t));
+    const others = out.filter(o => o !== t && o.kind === 'panel' && panelIdentity(o) === panelIdentity(t));
     for (const o of others) {
       const w = `Panel ${panelNameOf(t.title)} is ${PANEL_CONFLICT} on ${o.sheetLabel} — both kept (two panels of that name, or a revision?)`;
       if (!t.warnings.includes(w)) t.warnings.push(w);
     }
+  }
+  return out;
+}
+
+/** A same-identity conflict, with what each answer changes (fix round 4 / S20). */
+export interface PanelChoice {
+  name: string;
+  identity: string;
+  copies: Array<{ tableId: string; sheetLabel: string; rows: number }>;
+  /** Per copy (same order): "the same panel — use this copy". The
+   *  schedule-owned type quantities it gives (null = no row left for the
+   *  type) and the parser's circuit lines of the OTHER copies to remove. */
+  useCopy: Array<{ typeQty: Record<string, number | null>; removeLines: string[] }>;
+}
+
+/** Pure (fix round 4 / S20): the enforced alternatives for every panel
+ *  conflict in (already de-duplicated) tables. */
+export function panelChoices(targets: CountTarget[], tables: ScheduleTable[]): PanelChoice[] {
+  const conflicts = new Map<string, ScheduleTable[]>();
+  for (const t of tables) {
+    if (t.kind !== 'panel' || !t.warnings.some(w => w.includes(PANEL_CONFLICT))) continue;
+    const id = panelIdentity(t);
+    conflicts.set(id, [...(conflicts.get(id) ?? []), t]);
+  }
+  const full = scheduleCounts(targets, tables);
+  const allLines = circuitSummaryRows(tables);
+  const out: PanelChoice[] = [];
+  for (const [identity, copies] of conflicts) {
+    if (copies.length < 2) continue;
+    const useCopy = copies.map(keep => {
+      const others = copies.filter(c => c !== keep);
+      const alt = scheduleCounts(targets, tables.filter(t => !others.includes(t)));
+      const typeQty: Record<string, number | null> = {};
+      for (const [k, v] of full) {
+        const a = alt.get(k);
+        if (!a) typeQty[k] = null;
+        else if (a.qty !== v.qty) typeQty[k] = a.qty;
+      }
+      const removeLines = allLines.filter(l => others.some(o => o.sheetKey === l.sheetKey && panelNameOf(o.title) === l.panel)).map(l => String(l.row.item));
+      return { typeQty, removeLines };
+    });
+    out.push({ name: panelNameOf(copies[0].title), identity, copies: copies.map(c => ({ tableId: c.id, sheetLabel: c.sheetLabel, rows: c.rows.length })), useCopy });
   }
   return out;
 }
@@ -553,7 +617,7 @@ export function panelsNamedIn(item: string): string[] {
 export function circuitSummaryRows(tablesIn: ScheduleTable[]): Array<{ row: Record<string, unknown>; evidence: ScheduleEvidenceRow[]; panel: string; sheetKey: string }> {
   const out: Array<{ row: Record<string, unknown>; evidence: ScheduleEvidenceRow[]; panel: string; sheetKey: string }> = [];
   const complete = dedupePanels(tablesIn).filter(isCompletePanel);
-  const nameCount = (n: string) => complete.filter(x => panelNameOf(x.title) === n).length;
+  const idCount = (t: ScheduleTable) => complete.filter(x => panelIdentity(x) === panelIdentity(t)).length;
   for (const t of complete) {
     const groups = new Map<string, PanelCircuitRow[]>();
     for (const r of panelCircuitRows(t)) {
@@ -567,7 +631,7 @@ export function circuitSummaryRows(tablesIn: ScheduleTable[]): Array<{ row: Reco
       out.push({
         panel: rs[0].panel, sheetKey: t.sheetKey,
         row: {
-          category: 'Branch Power', item: `Branch circuit ${k} — Panel ${rs[0].panel}${panelIdentity(t).includes('|') ? ` (${panelIdentity(t).split('|')[1]})` : ''}${nameCount(panelNameOf(t.title)) > 1 && !panelIdentity(t).includes('|') ? ` — ${t.sheetLabel.split(' ')[0]}` : ''}`, qty: rs.length, unit: 'EA',
+          category: 'Branch Power', item: `Branch circuit ${k} — Panel ${rs[0].panel}${panelIdentity(t).includes('|') ? ` (${panelIdentity(t).split('|')[1]})` : ''}${idCount(t) > 1 ? ` — ${t.sheetLabel.split(' ')[0]}` : ''}`, qty: rs.length, unit: 'EA',
           spec: rs.map(r => `${r.circuit} ${r.description}`).join('; ').slice(0, 300), sourceSheet: t.sheetLabel.split(' ')[0], confidence: 'VERIFIED',
           countedBy: 'schedule',
         },
