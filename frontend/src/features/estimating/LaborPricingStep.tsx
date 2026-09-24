@@ -293,37 +293,46 @@ export function LaborPricingStep({
     });
   };
 
-  return (
-    <div data-testid="labor-pricing-step">
-      {settings.pricing_mode === 'accubid' ? (
-        bidId ? <AccubidPricingPanel bidId={bidId} showToast={showToast} /> : null
-      ) : (
-      <>
+  // Review round 2 / S17 — a per-bid pricing-mode switch. Confirms first
+  // (switching immediately changes which number is "the" bid amount — see
+  // B4's persistPriceForBid), then flips settings.pricing_mode and saves
+  // right away so bids.amount/bid_estimates re-persist from the NEW mode's
+  // engine immediately, rather than sitting on a stale number from the old
+  // mode until some unrelated edit happens to trigger a save.
+  const onSwitchPricingMode = async () => {
+    const next = settings.pricing_mode === 'accubid' ? 'phase_a' : 'accubid';
+    const ok = await confirm({
+      title: next === 'accubid' ? 'Switch this bid to Accubid pricing?' : 'Switch this bid to Phase A pricing?',
+      body: next === 'accubid'
+        ? 'The price will come from crew, overhead/markup and vendor quotes (Chris\'s Accubid workflow) instead of the flat labor rate below. Labor factors you\'ve selected still apply, compounding as Accubid\'s own "Labor Factoring." Saves immediately.'
+        : 'The price will come from a flat labor rate, overhead % and profit % (Phase A) instead of crew/Accubid markups. Vendor quotes and Accubid settings stay saved but stop affecting the price until you switch back. Saves immediately.',
+    });
+    if (!ok) return;
+    setSettings(prev => ({ ...prev, pricing_mode: next }));
+    try {
+      await save();
+      showToast?.({ title: `Switched to ${next === 'accubid' ? 'Accubid' : 'Phase A'} pricing`, variant: 'success' });
+    } catch {
+      showToast?.({ title: 'Could not save the pricing-mode switch', variant: 'error' });
+    }
+  };
+
+  // Review round 2 / S17 — factors (and floors above 2, which scales the
+  // MULTI-STORY factor) are a property of the TAKEOFF, not of which pricing
+  // engine is active, so this row renders regardless of mode — it used to
+  // live only in the Phase A branch below, silently hiding it (and every
+  // factor an estimator had already picked) the moment a bid switched to
+  // Accubid mode, even though the backend was ALSO dropping those same
+  // factors from the Accubid hours sum (fixed in accubidBidData.ts).
+  const factorsRow = (
+    <>
       <div className="lp-settings-row">
-        <label className="lp-settings-field">
-          Labor rate ($/hr)
-          <input type="number" value={settings.labor_rate}
-            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.labor_rate); setSettings(prev => ({ ...prev, labor_rate: v })); }} />
-        </label>
-        <label className="lp-settings-field">
-          Crew size
-          <input type="number" value={settings.crew_size}
-            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.crew_size); setSettings(prev => ({ ...prev, crew_size: v })); }} />
-        </label>
         <label className="lp-settings-field" title="Multiplies the MULTI-STORY labor factor below — 0 means no multi-story adjustment even if that factor is selected.">
           Floors above 2
           <input type="number" min={0} value={settings.floors_above_2} data-testid="lp-floors-above-2"
             onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.floors_above_2); setSettings(prev => ({ ...prev, floors_above_2: v })); }} />
         </label>
-        {SETTINGS_PCT_FIELDS.map(f => (
-          <label className="lp-settings-field" key={f.key}>
-            {f.label}
-            <input type="number" value={settings[f.key] as number}
-              onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS[f.key] as number); setSettings(prev => ({ ...prev, [f.key]: v })); }} />
-          </label>
-        ))}
       </div>
-
       {factorsByGroup.length > 0 && (
         <div className="lp-settings-row" data-testid="lp-factor-chips">
           {factorsByGroup.map(([group, factors]) => (
@@ -343,6 +352,45 @@ export function LaborPricingStep({
           ))}
         </div>
       )}
+    </>
+  );
+
+  return (
+    <div data-testid="labor-pricing-step">
+      <div className="lp-settings-row" data-testid="lp-pricing-mode-row">
+        <span style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>
+          Pricing mode: <strong>{settings.pricing_mode === 'accubid' ? 'Accubid' : 'Phase A'}</strong>
+        </span>
+        <button type="button" className="btn ghost" onClick={() => void onSwitchPricingMode()} data-testid="lp-switch-pricing-mode">
+          Switch to {settings.pricing_mode === 'accubid' ? 'Phase A' : 'Accubid'} pricing
+        </button>
+      </div>
+
+      {factorsRow}
+
+      {settings.pricing_mode === 'accubid' ? (
+        bidId ? <AccubidPricingPanel bidId={bidId} showToast={showToast} /> : null
+      ) : (
+      <>
+      <div className="lp-settings-row">
+        <label className="lp-settings-field">
+          Labor rate ($/hr)
+          <input type="number" value={settings.labor_rate}
+            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.labor_rate); setSettings(prev => ({ ...prev, labor_rate: v })); }} />
+        </label>
+        <label className="lp-settings-field">
+          Crew size
+          <input type="number" value={settings.crew_size}
+            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.crew_size); setSettings(prev => ({ ...prev, crew_size: v })); }} />
+        </label>
+        {SETTINGS_PCT_FIELDS.map(f => (
+          <label className="lp-settings-field" key={f.key}>
+            {f.label}
+            <input type="number" value={settings[f.key] as number}
+              onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS[f.key] as number); setSettings(prev => ({ ...prev, [f.key]: v })); }} />
+          </label>
+        ))}
+      </div>
       </>
       )}
 

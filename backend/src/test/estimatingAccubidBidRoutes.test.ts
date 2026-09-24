@@ -166,6 +166,37 @@ describe('Quotes / cost lines / alternates CRUD', () => {
     expect(recap.body.recap.primeCost).toBeGreaterThanOrEqual(700);
   });
 
+  it("S17: the bid's selected labor factors COMPOUND onto Accubid's total hours, they're never dropped", async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+
+    const { rows: factorRows } = await pool.query(
+      "SELECT id, code FROM est_labor_factors WHERE code IN ('HEIGHT-10-14', 'MULTI-STORY')"
+    );
+    expect(factorRows.length).toBe(2);
+    const factorIds = factorRows.map(r => r.id as string);
+
+    // One line, 10 labor hours flat (material_unit_override 0 keeps this
+    // purely about hours), with both factors selected and 2 floors above 2
+    // -> MULTI-STORY contributes 3%*2=6%, HEIGHT-10-14 contributes 10% —
+    // compounding gives 10 * 1.10 * 1.06 = 11.66h, NOT Phase A's additive
+    // 10 * 1.16 = 11.60h.
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ category: 'Branch Power', description: 'Manual labor-only item', qty: 1, unit: 'EA', material_unit_override: 0, labor_hours_override: 10, source: 'manual' }],
+      settings: {
+        labor_rate: 38, factor_ids: factorIds, material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0,
+        overhead_pct: 0, profit_pct: 0, crew_size: 3, floors_above_2: 2,
+      },
+    }).expect(200);
+
+    const res = await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200);
+    expect(res.body.laborFactorMultiplier).toBeCloseTo(1.10 * 1.06, 6);
+    expect(res.body.totalHours).toBeCloseTo(11.66, 2);
+    expect(res.body.totalHours).not.toBeCloseTo(11.60, 2); // the additive (Phase A) answer
+  });
+
   it('N14: mixed-tax equipment lines sum EXACT per-line tax, never a blended %', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');

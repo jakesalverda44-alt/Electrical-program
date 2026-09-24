@@ -11,6 +11,7 @@ vi.mock('../../api/client', async () => {
 
 import { LaborPricingStep } from './LaborPricingStep';
 import { DEFAULT_SETTINGS, EstimateLine, EstimateSettings, PricingRecap, EMPTY_RECAP, Library } from './types';
+import { ConfirmProvider } from '../../components/ConfirmDialog';
 
 afterEach(cleanup);
 beforeEach(() => {
@@ -38,13 +39,13 @@ function makeRecap(): PricingRecap {
   };
 }
 
-function renderStep(overrides: Partial<Parameters<typeof LaborPricingStep>[0]> = {}) {
+function renderStep(overrides: Partial<Parameters<typeof LaborPricingStep>[0]> = {}, wrapper?: (children: React.ReactNode) => React.ReactElement) {
   const setLines = vi.fn();
   const setSettings = vi.fn();
   const save = vi.fn().mockResolvedValue(undefined);
   const syncTakeoff = vi.fn().mockResolvedValue({ added: 1, updated: 0, vanished: 0 });
   const lines: EstimateLine[] = [{ id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'manual' }];
-  render(
+  const el = (
     <LaborPricingStep
       lines={lines}
       settings={baseSettings()}
@@ -59,6 +60,7 @@ function renderStep(overrides: Partial<Parameters<typeof LaborPricingStep>[0]> =
       {...overrides}
     />
   );
+  render(wrapper ? wrapper(el) : el);
   return { setLines, setSettings, save, syncTakeoff };
 }
 
@@ -88,6 +90,46 @@ describe('LaborPricingStep — N3: floors above 2', () => {
     fireEvent.change(input, { target: { value: '4' } });
     const updater = setSettings.mock.calls[0][0] as (prev: EstimateSettings) => EstimateSettings;
     expect(updater(baseSettings()).floors_above_2).toBe(4);
+  });
+});
+
+describe('LaborPricingStep — Review round 2 / S17: pricing-mode switch and shared factors', () => {
+  it('floors-above-2 and the factor chips render in ACCUBID mode too — they used to be hidden entirely', async () => {
+    // bidId omitted -> AccubidPricingPanel itself doesn't mount (its own
+    // network calls are out of scope here); this isolates the assertion to
+    // LaborPricingStep's own JSX, which is what used to hide these.
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' } });
+    expect(await screen.findByTestId('lp-floors-above-2')).toBeTruthy();
+    expect(await screen.findByTestId('lp-factor-chips')).toBeTruthy();
+    expect(screen.getByTestId('lp-factor-HEIGHT-10-14')).toBeTruthy();
+  });
+
+  it('shows the current mode and a button to switch to the other one', async () => {
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' } });
+    const row = await screen.findByTestId('lp-pricing-mode-row');
+    expect(row.textContent).toContain('Accubid');
+    expect(screen.getByTestId('lp-switch-pricing-mode').textContent).toContain('Phase A');
+  });
+
+  it('declining the confirm (no ConfirmProvider = auto-decline) never switches mode or saves', async () => {
+    const { setSettings, save } = renderStep({ settings: { ...baseSettings(), pricing_mode: 'phase_a' } });
+    fireEvent.click(await screen.findByTestId('lp-switch-pricing-mode'));
+    await waitFor(() => {}); // let the declined promise settle
+    expect(setSettings).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('confirming the switch flips pricing_mode and saves immediately (B4: re-persists the price right away)', async () => {
+    const { setSettings, save } = renderStep(
+      { settings: { ...baseSettings(), pricing_mode: 'phase_a' } },
+      (children) => <ConfirmProvider>{children}</ConfirmProvider>,
+    );
+    fireEvent.click(await screen.findByTestId('lp-switch-pricing-mode'));
+    fireEvent.click(await screen.findByText('Confirm'));
+    await waitFor(() => expect(setSettings).toHaveBeenCalled());
+    const updater = setSettings.mock.calls[0][0] as (prev: EstimateSettings) => EstimateSettings;
+    expect(updater(baseSettings()).pricing_mode).toBe('accubid');
+    await waitFor(() => expect(save).toHaveBeenCalled());
   });
 });
 

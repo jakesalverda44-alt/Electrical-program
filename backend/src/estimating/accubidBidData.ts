@@ -11,13 +11,13 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool';
 import { getLibrary } from './library';
 import { priceBid, PricingSettings } from './pricing';
-import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals } from './bidEstimate';
+import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors } from './bidEstimate';
 import { computeBidComps } from '../utils/bidComps';
 import {
   computeAccubidRecap, AccubidRecapInput, AccubidRecapResult, QuoteLine, CrewConfig, CrewMember,
   computeFieldLaborCost, DEFAULT_LABOR_OVERHEAD_PCT, DEFAULT_MATERIAL_MARKUP_PCT,
   DEFAULT_LABOR_MARKUP_PCT, DEFAULT_QUOTE_MARKUP_PCT, DEFAULT_ADJUSTMENT_PCT,
-  DEFAULT_BURDEN_PCT, DEFAULT_FRINGE_PER_HR,
+  DEFAULT_BURDEN_PCT, DEFAULT_FRINGE_PER_HR, compoundLaborFactorMultiplier,
 } from './accubidRecap';
 import { computeAutoDeductAmount, formatAutoDeductLabel } from './autoDeductAlternate';
 import { matchAccountRule } from '../bidstd/accountRules';
@@ -297,24 +297,47 @@ export interface AccubidBidRecap {
   quotes: QuoteRow[];
   costLines: CostLineRow[];
   alternates: AlternateRow[];
+  /** Review round 2 / S17 — the compounding multiplier the bid's selected
+   *  labor factors (multi-story, height, etc) applied to totalHours; 1
+   *  means no factor is selected (or none is applicable — e.g. floors_above_2
+   *  is 0). Surfaced so the UI can show "Labor Factoring: +8.2%" instead of
+   *  hiding that a factor is silently in effect (or silently NOT in effect). */
+  laborFactorMultiplier: number;
 }
 
 /** Raw material $ and labor hours from the bid's saved est_bid_lines,
  *  resolved against the SAME library Phase A prices from (priceBid with
  *  every add-on pct zeroed out — this is purely "what do the lines cost/
- *  take, before any Accubid-side overhead or markup is layered on"). */
-async function materialAndHoursFromLines(bidId: string): Promise<{ material: number; hours: number }> {
-  const [library, lines] = await Promise.all([getLibrary(), getBidLines(bidId)]);
+ *  take, before any Accubid-side overhead or markup is layered on").
+ *
+ *  Review round 2 / S17 — the bid's selected labor factors (multi-story,
+ *  height, etc — est_bid_settings.factor_ids/floors_above_2, the SAME
+ *  settings row Phase A uses; factors aren't an Accubid-vs-Phase-A concept,
+ *  they're a property of the TAKEOFF) used to be dropped entirely here
+ *  (factors: [] into priceBid, and nothing applied afterward either) —
+ *  silently pricing every Accubid-mode bid as though no factor were ever
+ *  selected. priceBid still gets factors: [] (its own effectiveFactorPct is
+ *  Phase A's ADDITIVE model); the resolved factors are instead applied here
+ *  as Accubid's own COMPOUNDING "Labor Factoring" (compoundLaborFactorMultiplier),
+ *  per Chris's real reports. */
+async function materialAndHoursFromLines(bidId: string): Promise<{ material: number; hours: number; laborFactorMultiplier: number }> {
+  const [library, lines, settings] = await Promise.all([getLibrary(), getBidLines(bidId), getBidSettings(bidId)]);
   const resolved = resolveLines(lines, library);
   const neutralSettings: PricingSettings = {
     laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1,
   };
   const recap = priceBid(resolved, neutralSettings, []);
-  return { material: recap.totals.materialSubtotal, hours: recap.totals.laborHours };
+  const factors = resolveFactors(settings.factor_ids, library);
+  const laborFactorMultiplier = compoundLaborFactorMultiplier(factors, settings.floors_above_2 ?? 0);
+  return {
+    material: recap.totals.materialSubtotal,
+    hours: recap.totals.laborHours * laborFactorMultiplier,
+    laborFactorMultiplier,
+  };
 }
 
 export async function computeAccubidRecapForBid(bidId: string): Promise<AccubidBidRecap> {
-  const [settings, { material, hours }, quotes, costLines, alternates] = await Promise.all([
+  const [settings, { material, hours, laborFactorMultiplier }, quotes, costLines, alternates] = await Promise.all([
     getAccubidSettings(bidId), materialAndHoursFromLines(bidId), getQuotes(bidId), getCostLines(bidId), getAlternates(bidId),
   ]);
   const crew = crewFromSettings(settings);
@@ -351,7 +374,7 @@ export async function computeAccubidRecapForBid(bidId: string): Promise<AccubidB
     salesMarkupPct: settings.salesMarkupPct,
   };
   const recap = computeAccubidRecap(input);
-  return { recap, settings, crew, totalHours: hours, quotes, costLines, alternates };
+  return { recap, settings, crew, totalHours: hours, quotes, costLines, alternates, laborFactorMultiplier };
 }
 
 /** Next round Part B (coordinator follow-up) — recomputes and upserts the

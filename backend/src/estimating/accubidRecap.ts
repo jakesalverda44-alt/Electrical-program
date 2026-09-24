@@ -67,6 +67,36 @@ function pct(base: number, p: number): number {
   return roundMoney((base * p) / 100);
 }
 
+// ── Labor Factoring (Review round 2 / S17) ──────────────────────────────────
+// Accubid mode used to drop a bid's selected labor factors (multi-story,
+// height, etc — pricing.ts's own PricingFactorInput/effectiveFactorPct)
+// entirely: materialAndHoursFromLines priced with factors: [], silently
+// erasing whatever the estimator picked in the takeoff step. Per Chris's
+// real Accubid reports, a factor applies as its own "Labor Factoring" line
+// — each selected factor COMPOUNDS onto the hours in turn (hours * (1+f1%)
+// * (1+f2%) * ...), not Phase A's flat "sum every pct, apply one
+// multiplier" — the two agree only when at most one factor is selected
+// (the common case), and diverge (compounding is always >= additive for
+// positive pcts) once two or more stack.
+import { PricingFactorInput, PER_FLOOR_GROUP_KEY } from './pricing';
+
+/** Same one-factor-per-group exclusivity guard as pricing.ts's
+ *  effectiveFactorPct (first occurrence per groupKey wins), same per-floor
+ *  special case (the multistory group's pct is PER FLOOR ABOVE 2, not a
+ *  flat bump) — but COMPOUNDS instead of summing. Returns a multiplier
+ *  (1.0 = no factors selected), never negative or non-finite. */
+export function compoundLaborFactorMultiplier(factors: PricingFactorInput[], floorsAbove2 = 0): number {
+  const seenGroups = new Set<string>();
+  let multiplier = 1;
+  for (const f of factors) {
+    if (seenGroups.has(f.groupKey)) continue;
+    seenGroups.add(f.groupKey);
+    const effectivePct = f.groupKey === PER_FLOOR_GROUP_KEY ? f.pct * Math.max(0, floorsAbove2) : f.pct;
+    multiplier *= 1 + effectivePct / 100;
+  }
+  return Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1;
+}
+
 // ── Field labor from crew + hours (Decision B2) ─────────────────────────────
 
 export type CrewRole = 'journeyman' | 'apprentice' | 'foreman';

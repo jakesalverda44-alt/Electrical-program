@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { computeAccubidRecap, computeFieldLaborCost, fullCostPerHour, CrewConfig } from './accubidRecap';
+import { computeAccubidRecap, computeFieldLaborCost, fullCostPerHour, CrewConfig, compoundLaborFactorMultiplier } from './accubidRecap';
+import type { PricingFactorInput } from './pricing';
 
 // Every input below is transcribed from the real Accubid "Breakdown" PDF
 // exports (pdftotext -layout), Final Price / Field Labor pages — see
@@ -52,6 +53,50 @@ describe('computeFieldLaborCost — crew/hours reproduction, with the documented
     };
     const result = computeFieldLaborCost(323.793, crew);
     expect(Math.abs(result.totalCost - 10700.28)).toBeLessThanOrEqual(0.05);
+  });
+});
+
+describe('Review round 2 / S17 — compoundLaborFactorMultiplier: Accubid "Labor Factoring" compounds, Phase A sums', () => {
+  it('one factor: identical to Phase A\'s additive result (they only diverge once >= 2 factors stack)', () => {
+    const factors: PricingFactorInput[] = [{ code: 'OCCUPIED', pct: 15, groupKey: 'occupied' }];
+    expect(compoundLaborFactorMultiplier(factors)).toBeCloseTo(1.15, 6);
+  });
+
+  it('no factors selected -> multiplier of exactly 1 (never drops hours, never a no-op that reads as 0)', () => {
+    expect(compoundLaborFactorMultiplier([])).toBe(1);
+  });
+
+  it('two factors from different groups COMPOUND, not sum: (1.10)*(1.15) = 1.265, not 1.25', () => {
+    const factors: PricingFactorInput[] = [
+      { code: 'HEIGHT-10-14', pct: 10, groupKey: 'height' },
+      { code: 'OCCUPIED', pct: 15, groupKey: 'occupied' },
+    ];
+    expect(compoundLaborFactorMultiplier(factors)).toBeCloseTo(1.265, 6);
+    expect(compoundLaborFactorMultiplier(factors)).not.toBeCloseTo(1.25, 6); // Phase A's additive answer
+  });
+
+  it('only counts the first factor per group_key — never both height bands at once (same exclusivity rule as Phase A)', () => {
+    const heightFactors: PricingFactorInput[] = [
+      { code: 'HEIGHT-10-14', pct: 10, groupKey: 'height' },
+      { code: 'HEIGHT-20-PLUS', pct: 35, groupKey: 'height' },
+    ];
+    expect(compoundLaborFactorMultiplier(heightFactors)).toBeCloseTo(1.10, 6);
+  });
+
+  it('the multistory factor is per FLOOR ABOVE 2, same as Phase A\'s effectiveFactorPct', () => {
+    const multistory: PricingFactorInput[] = [{ code: 'MULTI-STORY', pct: 3, groupKey: 'multistory' }];
+    expect(compoundLaborFactorMultiplier(multistory)).toBe(1); // no floorsAbove2 -> no adjustment
+    expect(compoundLaborFactorMultiplier(multistory, 0)).toBe(1);
+    expect(compoundLaborFactorMultiplier(multistory, 4)).toBeCloseTo(1.12, 6); // 4 floors * 3% = 12%, one factor -> same as additive
+  });
+
+  it('multistory COMPOUNDS with a different group\'s flat factor: (1.09)*(1.15), not 1.24', () => {
+    const factors: PricingFactorInput[] = [
+      { code: 'MULTI-STORY', pct: 3, groupKey: 'multistory' },
+      { code: 'OCCUPIED', pct: 15, groupKey: 'occupied' },
+    ];
+    expect(compoundLaborFactorMultiplier(factors, 3)).toBeCloseTo(1.09 * 1.15, 6);
+    expect(compoundLaborFactorMultiplier(factors, 3)).not.toBeCloseTo(1.24, 6); // 9%+15% summed
   });
 });
 
