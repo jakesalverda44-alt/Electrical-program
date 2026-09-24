@@ -106,18 +106,28 @@ export interface FieldLaborResult {
  *  the breakdown's own displayed precision), then extends at that role's
  *  full cost per hour.
  *
- *  KNOWN QUIRK (documented, not silently hidden): when totalHours doesn't
- *  split evenly across the crew ratio (Kissimmee's 798.949h over a 1J:2A
- *  crew, Golf's 323.793h likewise), Accubid's own report is off by 1-2
- *  cents from this same hours-share-then-round-then-extend method — e.g.
- *  Kissimmee's real Extended Cost for Journeyman is $11,201.24; this
- *  function computes $11,201.25 from the identical inputs (266.316h *
- *  $42.06). The reproduction tests below allow a documented tolerance of
- *  <= $0.05 ONLY on this total, and ONLY for the two jobs where the crew
- *  ratio doesn't divide evenly (Kissimmee, Golf) — Seminole (1:1 split) and
- *  Bubble Down (equal hours given directly, no ratio math) reproduce this
- *  function EXACTLY, which is why the ratio-rounding step is the isolated
- *  suspect rather than the rate/burden/fringe math. */
+ *  KNOWN QUIRK (documented, not silently hidden) — Review round 2 / N11
+ *  corrected this comment's earlier explanation: this function is off by
+ *  1 (occasionally 2) cent(s) from Chris's real Extended Cost on several
+ *  jobs — Kissimmee, Golf, 36th Street AND Orlando (the review found 36th
+ *  Street at −$0.02 and Orlando at −$0.01) — including 36th Street's own
+ *  EVEN 1:1 crew split. The earlier comment blamed "the crew ratio doesn't
+ *  divide evenly," which can't be the real cause: an even split shouldn't
+ *  lose any precision at all, yet still misses by a cent. The real
+ *  explanation is that Accubid computes each role's TRUE hours by summing
+ *  that role's share of every LINE ITEM's own hours (each carrying its own
+ *  Field Labor Adj %), then extends cost from that unrounded, per-line-built
+ *  figure — only ROUNDING to 3 decimals for the printed "Hours" column,
+ *  after the cost extension already happened. This function only ever
+ *  receives the job's single TOTAL hours figure (accubidBidData.ts sums it
+ *  from every saved line, once), so it can only approximate a role's true
+ *  hours by splitting that one total by the crew ratio — a real, inherent
+ *  precision gap from not having each line's own role-split hours to work
+ *  from, not a bug in the split/round/extend arithmetic itself. Seminole and
+ *  Bubble Down happen to reproduce exactly (simpler jobs, apparently no
+ *  per-line adjustment % that would create this gap); every other real job
+ *  checked so far is off by a cent or two. The reproduction tests below
+ *  allow a documented tolerance of <= $0.05 on jobs known to show this gap. */
 export function computeFieldLaborCost(totalHours: number, crew: CrewConfig): FieldLaborResult {
   const totalCount = crew.members.reduce((s, m) => s + m.count, 0);
   const byRole: FieldLaborResult['byRole'] = [];
