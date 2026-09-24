@@ -231,19 +231,37 @@ export async function applyImportPreview(preview: ImportPreview): Promise<ApplyI
       continue;
     }
     if (plan.action === 'create') {
-      await createItem({
-        code: plan.code, name: plan.name, category: plan.category, unit: plan.unit,
-        material_cost: plan.materialCost ?? 0,
-        material_price_date: plan.materialCost != null ? (preview.bomDate ?? new Date().toISOString().slice(0, 10)) : null,
-        labor_hours: plan.laborHours ?? 0,
-      });
-      // createItem always writes source='manual' by its own generic contract
-      // (Task 5's admin-write path) — the accubid import needs source=
-      // 'accubid' so a LATER import can update it and a manual edit can
-      // still be told apart. Fixed up immediately, same transaction cost as
-      // any other single-row UPDATE.
-      await markAccubidSource(plan.code);
-      created++;
+      try {
+        await createItem({
+          code: plan.code, name: plan.name, category: plan.category, unit: plan.unit,
+          material_cost: plan.materialCost ?? 0,
+          material_price_date: plan.materialCost != null ? (preview.bomDate ?? new Date().toISOString().slice(0, 10)) : null,
+          labor_hours: plan.laborHours ?? 0,
+        });
+        // createItem always writes source='manual' by its own generic
+        // contract (Task 5's admin-write path) — the accubid import needs
+        // source='accubid' so a LATER import can update it and a manual
+        // edit can still be told apart. Fixed up immediately, same
+        // transaction cost as any other single-row UPDATE.
+        await markAccubidSource(plan.code);
+        created++;
+      } catch (err) {
+        // A concurrent import (two admins, or two BOMs sharing a row) can
+        // race two creates for the SAME deterministic code — the loser
+        // hits the unique constraint. Self-heal into an update rather than
+        // failing the whole import: the code is idempotent by construction
+        // (bomItemCode), so "someone already created this exact row" is
+        // never wrong to treat as "update it".
+        if ((err as { code?: string }).code !== '23505') throw err;
+        const byCode = await findByCode(plan.code);
+        if (byCode && byCode.source !== 'manual') {
+          await updateItem(byCode.id, { labor_hours: plan.laborHours ?? byCode.labor_hours, ...(plan.materialCost != null ? { material_cost: plan.materialCost, material_price_date: preview.bomDate ?? new Date().toISOString().slice(0, 10) } : {}) });
+          await markAccubidSource(plan.code);
+          updated++;
+        } else {
+          skipped++;
+        }
+      }
     } else if (plan.action === 'update') {
       const byCode = await findByCode(plan.code);
       if (!byCode) { skipped++; continue; }

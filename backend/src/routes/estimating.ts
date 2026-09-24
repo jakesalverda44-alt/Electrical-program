@@ -18,6 +18,8 @@ import {
 import { normalizeUnit, MapConfidence } from '../estimating/mapper';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
 import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
+import { computeBomCalibrationForJobs } from '../estimating/bomCalibration';
+import { pool } from '../db/pool';
 import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, setHalfSize, getPlanPdfDocuments } from '../estimating/sheets';
 import { parseAccubidBom } from '../estimating/accubidBom';
 import { buildImportPreview, applyImportPreview, derivePoleBaseAssembly, applyPoleBaseAssembly } from '../estimating/accubidImport';
@@ -689,6 +691,30 @@ router.post('/calibration/apply', requireAuth, requireAdmin, async (req, res) =>
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Could not apply adjustment' });
   }
+});
+
+// Next round Part B, Task 4 — calibration against Chris's real BOMs
+// (per-category hours, using HIS quantities, against the CURRENT library).
+// Read-only, same as GET /calibration — never writes anything (a suggestion
+// only; applyCalibrationAdjustment above is the one write path, and it's
+// always an explicit, separate action).
+router.post('/calibration/bom', requireAuth, requireAdmin, pdfUpload.array('files', 10), async (req: AuthRequest, res) => {
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const bomTextsRaw = Array.isArray(body.bomTexts) ? body.bomTexts : (typeof body.bomTexts === 'string' ? [body.bomTexts] : []);
+  const bomTexts: string[] = [...bomTextsRaw.filter((t): t is string => typeof t === 'string' && t.trim().length > 0)];
+  for (const f of files) {
+    try {
+      bomTexts.push((await extractPdfPageTexts(f.buffer)).join('\n'));
+    } catch {
+      return res.status(400).json({ error: `Could not extract text from "${f.originalname}" (pdftotext failed or is unavailable).` });
+    }
+  }
+  if (!bomTexts.length) return res.status(400).json({ error: 'Upload at least one BOM PDF, or pass bomTexts.' });
+
+  const { rows } = await pool.query("SELECT code, unit, labor_hours FROM est_items WHERE active = true");
+  const libraryByCode = new Map(rows.map(r => [r.code as string, { laborHours: Number(r.labor_hours), unit: r.unit as EstUnit }]));
+  res.json(computeBomCalibrationForJobs(bomTexts, libraryByCode));
 });
 
 // ── Per-bid ──────────────────────────────────────────────────────────────────

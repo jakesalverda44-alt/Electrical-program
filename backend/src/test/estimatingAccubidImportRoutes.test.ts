@@ -24,7 +24,7 @@ beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
 async function cleanAccubidImportRows(): Promise<void> {
   await pool.query("DELETE FROM est_assembly_components WHERE assembly_id IN (SELECT id FROM est_assemblies WHERE code='ACB-POLE-BASE-FOUNDATION')");
   await pool.query("DELETE FROM est_assemblies WHERE code='ACB-POLE-BASE-FOUNDATION'");
-  await pool.query("DELETE FROM est_items WHERE code LIKE 'ACB-%'");
+  await pool.query("DELETE FROM est_items WHERE code LIKE 'ACB-%' AND code NOT LIKE 'ACB-TESTONLY-%'");
 }
 
 describe('POST /api/estimating/library/accubid-import/preview', () => {
@@ -42,14 +42,19 @@ describe('POST /api/estimating/library/accubid-import/preview', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const admin = await makeUser('owner');
-    const before = await pool.query("SELECT count(*)::int AS n FROM est_items WHERE source='accubid'");
     const res = await request(app).post('/api/estimating/library/accubid-import/preview').set(auth(admin.token))
       .send({ bomText: read('kissimmee-bom.txt'), applyPrices: true }).expect(200);
     expect(res.body.rowCount).toBe(89);
     expect(res.body.reconciles).toBe(true);
     expect(res.body.items.length).toBeGreaterThan(50);
-    const after = await pool.query("SELECT count(*)::int AS n FROM est_items WHERE source='accubid'");
-    expect(after.rows[0].n).toBe(before.rows[0].n);
+    // Scoped to exactly the codes this preview would create (never a blanket
+    // global count — other test FILES run in parallel against the same
+    // shared, non-bid-scoped est_items table and legitimately write their
+    // own accubid-sourced rows at the same time).
+    const codes = res.body.items.filter((i: { action: string }) => i.action === 'create').map((i: { code: string }) => i.code);
+    expect(codes.length).toBeGreaterThan(0);
+    const { rows } = await pool.query('SELECT count(*)::int AS n FROM est_items WHERE code = ANY($1)', [codes]);
+    expect(rows[0].n).toBe(0);
   });
 
   it('rejects a request with neither a file nor bomText', async (ctx) => {
@@ -73,7 +78,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
       .send({ bomText: read('kissimmee-bom.txt'), applyPrices: true, bomDate: '2026-06-18' }).expect(200);
     expect(r1.body.created).toBeGreaterThan(0);
 
-    const { rows: created } = await pool.query("SELECT code, material_cost, labor_hours FROM est_items WHERE source='accubid' AND code LIKE 'ACB-%'");
+    const { rows: created } = await pool.query("SELECT code, material_cost, labor_hours FROM est_items WHERE source='accubid' AND code LIKE 'ACB-%' AND code NOT LIKE 'ACB-TESTONLY-%'");
     expect(created.length).toBe(r1.body.created);
     const emt = created.find(r => r.code.includes('EMT') && r.code.includes('C'));
     expect(emt).toBeTruthy();
@@ -83,7 +88,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
     expect(r2.body.created).toBe(0);
     expect(r2.body.updated).toBe(r1.body.created);
 
-    const { rows: stillOne } = await pool.query("SELECT count(*)::int AS n FROM est_items WHERE source='accubid' AND code LIKE 'ACB-%'");
+    const { rows: stillOne } = await pool.query("SELECT count(*)::int AS n FROM est_items WHERE source='accubid' AND code LIKE 'ACB-%' AND code NOT LIKE 'ACB-TESTONLY-%'");
     expect(stillOne[0].n).toBe(created.length); // no duplicates from the second apply
   });
 
@@ -95,7 +100,7 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
     // Import once so there's a real accubid-sourced row to hijack.
     await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
       .send({ bomText: read('kissimmee-bom.txt'), applyPrices: true, bomDate: '2026-06-18' }).expect(200);
-    const { rows: anyRow } = await pool.query("SELECT id, code FROM est_items WHERE source='accubid' AND code LIKE 'ACB-%' LIMIT 1");
+    const { rows: anyRow } = await pool.query("SELECT id, code FROM est_items WHERE source='accubid' AND code LIKE 'ACB-%' AND code NOT LIKE 'ACB-TESTONLY-%' LIMIT 1");
     expect(anyRow.length).toBe(1);
     const target = anyRow[0];
 
