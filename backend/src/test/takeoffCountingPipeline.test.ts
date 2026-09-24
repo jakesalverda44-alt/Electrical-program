@@ -156,6 +156,27 @@ describe('runPipeline — counting stage on kissimmee-mini.pdf', () => {
     expect(systemText(a2)).not.toContain('Southern Lighting Source');
   }, 120_000);
 
+  it('live shape: ONE upload Buffer that owns its ArrayBuffer goes through prep, pdf.js geometry and the counter renderer (AutoZone detached-buffer regression)', async (ctx) => {
+    if (!ok || !have) return ctx.skip();
+    const bidId = await makeBid();
+    const { client } = fakeAnthropic(responder());
+    // A multi-MB upload never comes from Node's small-Buffer pool: it spans its
+    // whole ArrayBuffer, which pdf.js would transfer (detach) if handed a view.
+    const shared = Buffer.alloc(PDF.length);
+    PDF.copy(shared);
+    const file = { originalname: 'AZ 10077 set.pdf', buffer: shared, mimetype: 'application/pdf', size: shared.length } as Express.Multer.File;
+    await runPipeline(bidId, [file], client, await loadAIConfig());
+    const { rows } = await pool.query('SELECT status, count_result FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    expect(rows[0].status).toBe('complete');
+    const cr = rows[0].count_result as CountResult;
+    expect(cr.sheets.map(s => [s.label.split(' ')[0], s.status, s.error ?? null])).toEqual([
+      ['E-3', 'counted', null],
+      ['E-1', 'counted', null],
+    ]);
+    expect(Object.fromEntries(cr.types.map(t => [t.key, t.count]))).toMatchObject({ A: 6, B: 3, D: 3, S1: 2, S2: 1 });
+    expect(shared.byteLength).toBe(PDF.length); // still intact after the whole run
+  }, 120_000);
+
   it('a truncated counter call fails the run with the counter\'s own message', async (ctx) => {
     if (!ok || !have) return ctx.skip();
     const bidId = await makeBid();
