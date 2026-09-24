@@ -18,6 +18,7 @@
 // resolution. The DB/route half lives in routes/preconstruction.ts.
 import type { CountResult } from './countingStage';
 import { outsideAptInstall, describeAssignment } from '../bidstd/tradeAssignment';
+import { facilityChecklistItems } from '../bidstd/facilityChecklists';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -86,6 +87,10 @@ export interface ReviewItem {
   /** Evidence round 3.3 — a family item: the primary type keys whose total
    *  the answer replaces. */
   familyPrimary?: string[];
+  /** Evidence round 4.5 — a grouped item: legend-only zero-count types with
+   *  no plan presence and no schedule row, combined into ONE "confirm none
+   *  of these" item. A bulk not_on_job resolution zeroes every member. */
+  groupedTypes?: Array<{ key: string; type: string; description: string }>;
   /** N4 — an earlier run's resolution for this item that was NOT carried
    *  over because the drawings/counts changed; shown for re-confirmation. */
   previousResolution?: ReviewResolution;
@@ -120,7 +125,13 @@ function slug(s: string): string {
 const AREA_SAME = (n: number) => `Same area — keep ${n}`;
 const AREA_DIFFERENT = (n: number) => `Different areas — sum ${n}`;
 
-export function buildReviewItems(countResult: CountResult | null, scopeQuestions: ScopeQuestionInput[] = []): ReviewItem[] {
+export interface BuildReviewItemsOptions {
+  /** Evidence round 4.6 — the bid's project type, for facility checklists
+   *  (fuel/c-store, car wash, storage, prototype retail). Absent = none. */
+  projectType?: string | null;
+}
+
+export function buildReviewItems(countResult: CountResult | null, scopeQuestions: ScopeQuestionInput[] = [], opts: BuildReviewItemsOptions = {}): ReviewItem[] {
   const items: ReviewItem[] = [];
   const targetByKey = new Map((countResult?.targets ?? []).map(t => [t.key, t]));
 
@@ -406,14 +417,101 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `scope|${q.options.join('|')}|${q.notes.join('|')}`,
     });
   }
-  return items.map(i => ({ ...i, group: groupOf(i) }));
+  // 4.6 — facility punch lists (fuel/c-store, car wash, storage, prototype
+  // retail), on the same queue, always non-blocking. Independent of the
+  // counting/evidence stage (it's about the project type, not the drawings),
+  // so — unlike grouping and $ risk ordering below — it is never gated on
+  // whether the evidence round ran.
+  for (const c of facilityChecklistItems(opts.projectType)) {
+    items.push({
+      id: `checklist:${c.kind}:${c.id}`,
+      kind: 'confirm',
+      blocking: false,
+      title: c.text,
+      detail: `${c.kind.replace(/_/g, ' ')} checklist — not evidence-driven; check it against the drawings.`,
+      actions: ['confirm'],
+      fingerprint: `checklist|${c.kind}|${c.id}`,
+    });
+  }
+  // Evidence round 4.5 — grouping and $ risk ordering are switched by the
+  // SAME `evidence` input as Parts 1-3 (countingStage's own rule): without
+  // it, the rest of this function behaves exactly as it did before Part 4,
+  // byte for byte — a run that never went through the evidence round is
+  // never reshuffled or re-grouped by it.
+  if (!countResult?.evidence) return items.map(i => ({ ...i, group: groupOf(i) }));
+  const grouped = groupLegendZeroItems(items, countResult);
+  return sortByRisk(grouped).map(i => ({ ...i, group: groupOf(i) }));
+}
+
+/** Evidence round 4.5 — legend-only zero-count types with no plan presence
+ *  at all (never found on any counted sheet) AND no independent schedule
+ *  row of their own are combined into ONE "confirm none of these" item,
+ *  instead of one review item apiece. Nothing is dropped: every member is
+ *  still listed (in `groupedTypes`), and resolving the group with a reason
+ *  marks every member not on this job — the same outcome as resolving each
+ *  one, in one motion. A single qualifying item is left alone (grouping one
+ *  item saves nothing). */
+export function groupLegendZeroItems(items: ReviewItem[], countResult: CountResult | null): ReviewItem[] {
+  const typeByKey = new Map((countResult?.types ?? []).map(t => [t.key, t]));
+  const isGroupable = (i: ReviewItem): boolean => {
+    if (i.kind !== 'count' || !i.id.startsWith('count:') || i.id.endsWith(':heads') || i.blocking === false) return false;
+    const t = typeByKey.get(i.typeKey ?? '');
+    return !!t && t.status === 'zero' && t.reason === 'not found on any counted plan sheet' && (t.scheduleRows?.length ?? 0) === 0;
+  };
+  const members = items.filter(isGroupable);
+  if (members.length < 2) return items;
+  const memberIds = new Set(members.map(m => m.id));
+  const rest = items.filter(i => !memberIds.has(i.id));
+  const groupedTypes = members.map(m => ({ key: m.typeKey!, type: m.type!, description: m.description ?? '' })).sort((a, b) => a.type.localeCompare(b.type));
+  const keySlug = groupedTypes.map(g => g.key).sort().join('|');
+  const n = groupedTypes.length;
+  const group: ReviewItem = {
+    id: `legend-zero:${slug(keySlug)}`,
+    kind: 'count',
+    title: `${n} legend items not found on any counted sheet — confirm none on this job`,
+    detail: `${groupedTypes.map(g => `${g.type}${g.description ? ` — ${g.description}` : ''}`).join('; ')}. None of these were found on any sheet the analysis counted, and none has its own schedule row — confirm none of them are on this job (one reason covers all), or resolve one alone by entering a count, placing/confirming markers, or re-running the analysis after adding it as a fixture type.`,
+    groupedTypes,
+    actions: ['not_on_job'],
+    fingerprint: `legend-zero|${keySlug}`,
+  };
+  return [...rest, group];
+}
+
+/** Evidence round 4.5 — $ risk ordering: equipment, then poles, then
+ *  fixture-family / typical-multiplier mismatches (often many devices at
+ *  once), then wet/hazard-location devices, then everything else
+ *  (commodity devices and admin/structural items last). A stable sort:
+ *  items of the same tier keep their original relative order. */
+export function riskRank(i: ReviewItem): number {
+  if (i.id.startsWith('counting:')) return -20;
+  if (i.id.startsWith('sheet:') || i.id.startsWith('file:') || i.id.startsWith('refsheet:')) return -15;
+  if (i.category === 'equipment') return 0;
+  if (i.category === 'site_lighting' || i.category === 'exterior_building') return 5;
+  if (i.id.startsWith('family:')) return 10;
+  if (i.id.startsWith('typical:')) return 15;
+  if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
+  if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
+  if (i.id.startsWith('legend-zero:')) return 33;
+  if (i.id.startsWith('unscheduled:')) return 35;
+  if (i.kind === 'scope_question') return 40;
+  return 45;
+}
+
+const HAZARD_RE = /\bweatherproof\b|\bWP\b|\bGFCI\b|\bGFI\b|\bwet\b|\bhazardous?\b|\bexplosion[- ]?proof\b/i;
+function isHazardOrWetDescription(s: string): boolean {
+  return HAZARD_RE.test(s);
+}
+
+function sortByRisk(items: ReviewItem[]): ReviewItem[] {
+  return items.map((it, i) => ({ it, i })).sort((a, b) => (riskRank(a.it) - riskRank(b.it)) || (a.i - b.i)).map(x => x.it);
 }
 
 /** Next round A7 — the cause an item is listed under (one group, one bulk
  *  action): 'zero', 'unreadable', 'area:<sheets>', 'coverage', 'heads',
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
-  if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : i.id.startsWith('schedule:') ? 'schedule' : 'info';
+  if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : i.id.startsWith('schedule:') ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : 'info';
+  if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('schedule:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
   if (i.id.startsWith('typical:')) return 'typical';
@@ -627,6 +725,12 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   for (const i of list) {
     if (!i.id.startsWith('unscheduled:') || !i.resolution || i.resolution.action !== 'count') continue;
     extraLines.push({ category: i.category ?? 'Interior Lighting', item: i.rowItem ?? i.title, qty: i.resolution.qty! });
+  }
+  // Evidence round 4.5 — "confirm none of these" on a grouped legend-zero
+  // item zeroes every member it lists, the same as resolving each alone.
+  for (const i of list) {
+    if (!i.id.startsWith('legend-zero:') || !i.resolution || i.resolution.action !== 'not_on_job') continue;
+    for (const m of i.groupedTypes ?? []) byType.set(m.key, null);
   }
   return { byType, extraLines };
 }

@@ -55,6 +55,8 @@ export interface ReviewItem {
   group?: string;
   typeKey?: string;
   category?: string;
+  /** Evidence round 4.5 — a grouped "confirm none of these" item's members. */
+  groupedTypes?: Array<{ key: string; type: string; description: string }>;
 }
 
 export interface TakeoffReview {
@@ -125,7 +127,8 @@ function errorOf(err: unknown, fallback: string): string {
  *  older runs are grouped the same way here). */
 export function groupKey(i: ReviewItem): string {
   if (i.group) return i.group;
-  if (i.blocking === false) return 'info';
+  if (i.blocking === false) return i.id.startsWith('checklist:') ? 'checklist' : 'info';
+  if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('counting:')) return 'counting';
   if (i.id.startsWith('refsheet:')) return 'refsheets';
   if (i.id.startsWith('sheet:') || i.id.startsWith('file:')) return 'sheets';
@@ -148,6 +151,7 @@ export function groupTitle(key: string, n: number): string {
   if (key === 'unreadable') return `${n} type${s} could not be read reliably`;
   if (key.startsWith('area')) return `Same area? ${key.replace(/^area:?/, '') || 'two plans of one level'} (${n} type${s})`;
   if (key === 'scope') return `Scope question${s} (${n})`;
+  if (key === 'legend-zero') return `Legend items not found on any counted sheet (${n} group${s === '' ? '' : 's'})`;
   if (key === 'unscheduled') return `${n} fixture${s} not on the schedule`;
   if (key === 'coverage') return `Partial coverage (${n})`;
   if (key === 'viewport') return `Enlarged plans — repeat the main plan or add devices? (${n})`;
@@ -159,11 +163,14 @@ export function groupTitle(key: string, n: number): string {
   if (key === 'refsheets') return `Referenced sheet${s} not in the analysis (${n})`;
   if (key === 'counting') return 'Counting';
   if (key === 'photometric') return `${n} type${s} counted from the photometric sheet only — for information`;
+  if (key === 'checklist') return `Facility checklist (${n}) — not evidence-driven`;
   if (key === 'info') return `${n} for information — installed by another trade, the Owner or a vendor (not blocking)`;
   return `Other (${n})`;
 }
 
-const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'scope', 'area', 'viewport', 'typical', 'family', 'schedule', 'zero', 'unreadable', 'coverage', 'heads', 'unscheduled', 'other', 'photometric', 'info'];
+// Evidence round 4.5 — grouped, roughly by $ risk: equipment/poles/family/
+// typical mismatches first, then commodity devices, then admin/informational.
+const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'scope', 'area', 'viewport', 'typical', 'family', 'schedule', 'zero', 'unreadable', 'coverage', 'heads', 'legend-zero', 'unscheduled', 'other', 'photometric', 'checklist', 'info'];
 
 export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement }: Props) {
   const open = review.items.filter(i => !i.resolution);

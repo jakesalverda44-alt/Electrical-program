@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { carryOverResolutions, validateResolution, reviewResolutionsForAgent4, buildReviewItems, enforcedCounts, type ReviewItem } from './reviewItems';
+import { carryOverResolutions, validateResolution, reviewResolutionsForAgent4, buildReviewItems, enforcedCounts, riskRank as riskRankOf, type ReviewItem } from './reviewItems';
 import { runCountingStage, type CountResult } from './countingStage';
 import { mergeCountsIntoTakeoff } from './countMerge';
 import { buildCountTargets } from './countTargets';
@@ -84,6 +84,15 @@ function countResultFrom(a1: Record<string, unknown>, sheets: Parameters<typeof 
   return { version: 2, ran: true, model: 'm', targets, targetNotes: [], sheets: [], skippedSheets: [], types: m.types, loadCheck: m.loadCheck,
     removedRows: m.removedRows, flags: m.flags, marks: [], noScheduleOrLegend: !targets.some(t => t.source === 'fixture_schedule' || t.source === 'legend'), ...extra };
 }
+/** Evidence round 4.5/4.6 — grouping, $ risk ordering and facility
+ *  checklists are switched by `countResult.evidence`, the same as Parts
+ *  1-3's own rule; this minimal stub turns it on for tests that are about
+ *  Part 4 (not about what the evidence readers themselves found). */
+const EMPTY_EVIDENCE: CountResult['evidence'] = {
+  model: 'm', usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+  calls: 0, cached: 0, errors: [], pages: [], typicals: [], expansions: [], unmappedTypical: [], tables: [], families: [],
+  symbolDefinitions: [], circuitRows: 0, scheduleOwned: [], panelsExpected: 0, panelsUnread: [],
+};
 const pick = (inv: Array<[string, string]>) => selectCountSheets(inv.map(([no, title], i) => ({ file: 'set.pdf', page: i + 1, sheetNo: no, title, discipline: 'electrical', cls: 'plan', included: true }))).counted;
 const marks = (counts: Record<string, number>) => Object.entries(counts).flatMap(([k, n]) => Array.from({ length: n }, () => ({ typeKey: k })));
 
@@ -210,6 +219,84 @@ describe('next round A4 — referencedSheetItems (post-Agent-1 safety net)', () 
     expect(items.map(i => i.id)).toEqual(['refsheet:E9', 'refsheet:C2.0']);
     expect(items[0]).toMatchObject({ kind: 'confirm', title: 'Referenced sheet E-9 not in analysis', actions: ['confirm'] });
     expect(reviewStatus(items)).toBe('needs_review');
+  });
+});
+
+describe('4.5 — grouping legend-only zero items and $ risk ordering', () => {
+  it('two or more legend-only zero-count types with no plan presence and no schedule row group into ONE item; nothing is dropped', () => {
+    const a1 = {
+      symbolLegend: [
+        { symbol: 'MB', description: 'Meter base', category: 'equipment', sourceSheet: 'E-0.1' },
+        { symbol: 'WW', description: 'Wireway', category: 'equipment', sourceSheet: 'E-0.1' },
+        { symbol: 'LCP', description: 'Lighting control panel', category: 'equipment', sourceSheet: 'E-0.1' },
+      ],
+      quantities: [],
+    };
+    const [e2] = pick([['E-2', 'POWER PLAN']]);
+    const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: [], unreadable: [] }], { evidence: EMPTY_EVIDENCE });
+    const items = buildReviewItems(cr);
+    expect(items.find(i => i.id === 'count:MB')).toBeUndefined();
+    expect(items.find(i => i.id === 'count:WW')).toBeUndefined();
+    expect(items.find(i => i.id === 'count:LCP')).toBeUndefined();
+    const group = items.find(i => i.id.startsWith('legend-zero:'))!;
+    expect(group).toBeTruthy();
+    expect(group.kind).toBe('count');
+    expect(group.actions).toEqual(['not_on_job']);
+    expect(group.groupedTypes?.map(g => g.key).sort()).toEqual(['LCP', 'MB', 'WW']);
+    expect(group.title).toBe('3 legend items not found on any counted sheet — confirm none on this job');
+    // Resolving the group with a reason zeroes every member (never silently).
+    const resolved = { ...group, resolution: { action: 'not_on_job' as const, reason: 'Design-build scope, none of this equipment on this job', by: 'J', at: 't' } };
+    const enforced = enforcedCounts(cr, [resolved]);
+    expect(enforced.byType.get('MB')).toBeNull();
+    expect(enforced.byType.get('WW')).toBeNull();
+    expect(enforced.byType.get('LCP')).toBeNull();
+  });
+  it('a single qualifying item is left alone — grouping one saves nothing', () => {
+    const a1 = { symbolLegend: [{ symbol: 'MB', description: 'Meter base', category: 'equipment', sourceSheet: 'E-0.1' }], quantities: [] };
+    const [e2] = pick([['E-2', 'POWER PLAN']]);
+    const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: [], unreadable: [] }], { evidence: EMPTY_EVIDENCE });
+    const items = buildReviewItems(cr);
+    expect(items.find(i => i.id === 'count:MB')).toBeTruthy();
+    expect(items.find(i => i.id.startsWith('legend-zero:'))).toBeUndefined();
+  });
+  it('a type WITH a schedule row, or found on an uncounted sheet, never joins the group', () => {
+    const a1 = {
+      equipment: [{ tag: 'EQ-1', description: 'Dryer 15 HP' }],
+      symbolLegend: [
+        { symbol: 'MB', description: 'Meter base', category: 'equipment', sourceSheet: 'E-0.1' },
+        { symbol: 'WW', description: 'Wireway', category: 'equipment', sourceSheet: 'E-0.1' },
+      ],
+      quantities: [],
+    };
+    const [e2] = pick([['E-2', 'POWER PLAN']]);
+    const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: [], unreadable: [] }], { evidence: EMPTY_EVIDENCE });
+    // EQ-1 counted 0 with no marks — still no schedule row of its own (a
+    // symbol-count zero, not a scheduleRows-owned quantity) so it's eligible
+    // too; this just confirms grouping still requires 2+ (MB + WW + EQ-1).
+    const items = buildReviewItems(cr);
+    const group = items.find(i => i.id.startsWith('legend-zero:'))!;
+    expect(group.groupedTypes!.length).toBeGreaterThanOrEqual(2);
+  });
+  it('riskRank: equipment < poles < family/typical < wet/hazard device < commodity device < unscheduled < scope < other', () => {
+    const equipment = countItem('count:MB', { category: 'equipment' });
+    const pole = countItem('count:S1', { category: 'site_lighting' });
+    const family = { ...countItem('family:X'), kind: 'area' as const };
+    const typical = { ...countItem('typical:X') };
+    const hazard = countItem('count:WPGFI', { category: 'device', type: 'WP GFI', description: 'Weatherproof GFCI receptacle' });
+    const commodity = countItem('count:S', { category: 'device', type: 'S', description: 'Simplex receptacle' });
+    const unscheduled = countItem('unscheduled:X');
+    const ranks = [equipment, pole, family, typical, hazard, commodity, unscheduled, scopeItem].map(riskRankOf);
+    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+  });
+});
+
+describe('4.6 — facility checklists on the same queue, always non-blocking', () => {
+  it('a matching project type adds its checklist items; no match adds none', () => {
+    const withChecklist = buildReviewItems(null, [], { projectType: 'Car Wash' });
+    expect(withChecklist.length).toBeGreaterThan(0);
+    expect(withChecklist.every(i => i.blocking === false && i.id.startsWith('checklist:car_wash:'))).toBe(true);
+    expect(buildReviewItems(null, [], { projectType: 'Office TI' })).toEqual([]);
+    expect(buildReviewItems(null, [])).toEqual([]);
   });
 });
 

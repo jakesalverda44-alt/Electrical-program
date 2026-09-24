@@ -27,7 +27,7 @@ import { screenPosition } from '../estimating/pageGeometry';
 import { planCountTiles } from '../ai/countRender';
 import { counterTileSpec } from '../ai/modelLimits';
 import { runCountingStage, runSupplementCounting, type CountResult } from '../ai/countingStage';
-import { buildReviewItems, referencedSheetItems, reviewItemIsOpen, type ReviewItem } from '../ai/reviewItems';
+import { buildReviewItems, referencedSheetItems, reviewItemIsOpen, enforcedCounts, type ReviewItem } from '../ai/reviewItems';
 import { normalizeSheetId } from '../ai/sheetRefs';
 import { resolveAccountTerms } from '../bidstd/accountRules';
 import { scopeQuestionsFor } from '../bidstd/accountRulesDb';
@@ -216,17 +216,27 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     const counterCalls = after.calls.filter(c => systemText(c).includes('counting symbols on ONE electrical plan sheet'));
     expect(counterCalls.every(c => !/^- BATT CHGR \|/m.test(userText(c)))).toBe(true);
   });
-  it('the review list: 46 -> 22 (19 blocking); what remains is listed exactly so a change is visible', (ctx) => {
+  it('the review list: 46 -> 11 (8 blocking, target <=12); 4.5 groups the 12 legend-only zeros into one item', (ctx) => {
     if (!have) return ctx.skip();
-    expect(after.review).toHaveLength(22);
+    expect(after.review).toHaveLength(11);
+    expect(after.review.filter(reviewItemIsOpen)).toHaveLength(8);
+    const group = after.review.find(i => i.id.startsWith('legend-zero:'))!;
+    expect(group).toBeTruthy();
+    expect(group.title).toBe('12 legend items not found on any counted sheet — confirm none on this job');
+    expect(group.groupedTypes!.map(g => g.key).sort()).toEqual([
+      '1 EMPTY CONDUIT AND J-BOX TO DECK', '200A FUSED DISCONNECT NEMA 3R', 'DATA CONCENTRATOR',
+      'DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX ON PHONE BOARD', 'LCP', 'M2', 'MB', 'N',
+      'QUADPLEX RECEPTACLE', 'STORE OPEN/CLOSE PUSHBUTTON', 'T', 'WIREWAY',
+    ]);
     expect(after.review.filter(reviewItemIsOpen).map(i => i.id).sort()).toEqual([
-      'count:1 EMPTY CONDUIT AND J-BOX TO DECK', 'count:200A FUSED DISCONNECT NEMA 3R', 'count:DATA CONCENTRATOR',
-      'count:DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX ON PHONE BOARD', 'count:LCP', 'count:M2', 'count:MB', 'count:N',
-      'count:QUADPLEX RECEPTACLE', 'count:STORE OPEN/CLOSE PUSHBUTTON', 'count:T', 'count:WIREWAY',
-      'refsheet:SGN101', 'scope:disconnects', 'scope:power_poles:furnish', 'scope:power_poles:install',
+      group.id, 'refsheet:SGN101', 'scope:disconnects', 'scope:power_poles:furnish', 'scope:power_poles:install',
       'unscheduled:GALVANIZED-UNISTRUT-14GA-FIXTURE-SUPPORT-E-3', 'unscheduled:LIGHT-POLE-CONCRETE-BASE-E-7',
       'unscheduled:POLE-CONCRETE-BASE-FOUNDATION-3-0-ABOVE-GRADE-PH0-1',
-    ]);
+    ].sort());
+    // Resolving the group in one motion zeroes every member (never a silent drop).
+    const resolved = { ...group, resolution: { action: 'not_on_job' as const, reason: 'One-line/detail items only, none drawn or scheduled on this job', by: 'Jake', at: 't' } };
+    const enforced = enforcedCounts(after.cr, [...after.review.filter(i => i.id !== group.id), resolved]);
+    for (const g of group.groupedTypes!) expect(enforced.byType.get(g.key)).toBeNull();
     // Gone, with the reason: the E-1/E-2 "same area?" pair (1.4), 9 schedule-
     // owned equipment zeros (3.2), the stacked site-light rows and types
     // (3.3), the branch-circuit "fixtures" (3.4), L (W2's photometric count).
