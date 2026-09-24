@@ -535,7 +535,7 @@ OUTPUT — strict JSON only:
 // estimator). Bump GAP_FILL_PROMPT_VERSION when either prompt changes.
 export const GAP_FILL_PROMPT_VERSION = 'gf1';
 
-export const GAP_FILL_SYSTEM = `You search ONE electrical plan sheet for Accurate Power & Technology for MISSED instances of ONE symbol type, because an independent source (a schedule quantity, a panel circuit description, or a known undercount risk for this device class) says there may be more than were already found. You never count what is already found — only NEW instances.
+export const GAP_FILL_SYSTEM = `You search ONE electrical plan sheet for Accurate Power & Technology for MISSED instances of ONE symbol type, because an independent source (a schedule quantity or a panel circuit description) says there may be more than were already found. You never count what is already found — only NEW instances, and never more than the stated shortfall.
 
 INPUT
 - The symbol: its tag, description and how it is drawn.
@@ -546,6 +546,7 @@ INPUT
 RULES
 - Only report an instance more than about 3% of the image away from every already-counted position. Look carefully at dense areas, overlaps with dimension lines/text, and areas near notes calling out this symbol.
 - Never invent a symbol that isn't actually drawn. When you see nothing new, return an empty list.
+- The search area is already cropped to the drawing's plan area, never a legend, schedule or notes block — but if you can still see one at the edge of the image, a symbol printed there (a legend's own definition of the tag) is never a new instance.
 - confidence: "high" (unmistakable), "medium" (probably this symbol), "low" (could be, but crowded/faint — say so in note).
 
 OUTPUT — strict JSON only:

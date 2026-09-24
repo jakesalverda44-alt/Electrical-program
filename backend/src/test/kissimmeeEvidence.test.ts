@@ -166,24 +166,22 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     expect(t('DUPLEX RECEPTACLE / FLOOR RECEPTACLE').components).toEqual({ drawn: 4, typical: 8, schedule: 0 });
     expect(t('COIL + J').assembly).toEqual([{ device: 'Receptacle mounted to base plate', deviceKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', perHost: 1 }]);
     expect(row(after.diff, 'baseflex')).toMatchObject({ actual: 3, expected: 8 });
-    // The HONEST traceable receptacle count (fix round): drawn + typicals,
-    // without anything gap-fill added — SIMPLEX 9+1, DUPLEX 4+8, GFCI 7
-    // (1 main + 6 restroom plan), WP GFI 4 = 33.
-    const gapAdded = ['SIMPLEX RECEPTACLE', 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', 'GFCI', 'WP GFI']
-      .reduce((sum, k) => sum + ((t(k).components as { gapfill?: number } | undefined)?.gapfill ?? 0), 0);
-    expect(row(after.diff, 'receptacles_total').actual! - gapAdded).toBe(33);
-    expect(t('GFCI').count - ((t('GFCI').components as { gapfill?: number }).gapfill ?? 0)).toBe(7);
-    // 4.4/4.3 — gap-fill's targeted re-search found 5 more GFCIs (the
-    // documented undercount on the sheet's west portion, which this fixture
-    // has no crop of); the crop check accepted all 5, never gap-fill's own
-    // proposal directly. GFCI is now exactly the audited 16 (7+4 -> 12+4).
-    expect(t('GFCI').count).toBe(12);
-    expect(t('GFCI').components).toMatchObject({ drawn: 7, typical: 0, schedule: 0, gapfill: 5 });
-    expect(t('GFCI').gapFill).toHaveLength(5);
-    expect(t('GFCI').gapFill!.every(g => g.reason.includes('undercount risk') && g.note.includes('confirmed GFCI example'))).toBe(true);
+    // Fix round (review a479103, B2/B3/S5) — gap-fill runs ONLY from a real
+    // reconciliation shortfall, never an always-on "confirm" bias pass, and
+    // a site-lighting schedule QTY is compared in HEADS, never poles. Once
+    // both are fixed, Kissimmee's own LUMINAIRE SCHEDULE (QTY 4 heads) vs
+    // S1 (2 poles x 1 head) + S2 (1 pole x 2 heads) = 4 heads matches
+    // EXACTLY — the false alarm B2 called out is gone, so gap-fill never
+    // runs on this fixture at all: GFCI stays the plans' own honest total,
+    // never bumped by a synthetic reply. SIMPLEX 9+1, DUPLEX 4+8, GFCI 7
+    // (1 main + 6 restroom plan), WP GFI 4 = 33. See gapFillEndToEnd.test
+    // for the "a real reconciled shortfall -> suggest -> confirm -> count"
+    // flow, on clearly-synthetic data.
+    expect(t('GFCI').count).toBe(7);
     expect(t('WP GFI').count).toBe(4);
-    expect(row(after.diff, 'gfci').actual).toBe(16);
-    expect(row(after.diff, 'receptacles_total').actual).toBe(33 + gapAdded);
+    expect(after.cr.evidence!.gapFill).toMatchObject({ findings: [], jobs: 0, candidates: 0, suggested: [] });
+    expect(row(after.diff, 'gfci').actual).toBe(7 + 4);
+    expect(row(after.diff, 'receptacles_total').actual).toBe(33);
     // The typicals: 5 pole types and the coil+J boxes, each with its quote.
     const exp = after.cr.evidence!.expansions.filter(e => e.status === 'expanded');
     expect(exp.map(e => [e.host, e.hostCount, e.perHost, e.expanded])).toEqual(expect.arrayContaining([
@@ -209,17 +207,21 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     const merged = after.cr.types.filter(t => t.status === 'merged').map(t => [t.key, t.mergedInto]);
     expect(merged).toEqual(expect.arrayContaining([['(UNTAGGED) SITE LIGHT', 'S1/S2'], ['SITE LIGHT', 'S1/S2'], ['W1', 'D'], ['W2', 'L']]));
   });
-  it('4.2 reconciliation — LUMINAIRE SCHEDULE QTY 4 vs S1+S2 = 3 is a real finding; gap-fill honestly finds nothing there, so the audited 3 is never disturbed', (ctx) => {
+  it('4.2 reconciliation (fixed, B2) — LUMINAIRE SCHEDULE QTY 4 is HEADS, matches S1+S2 exactly: no false alarm, no gap-fill job, the audited 3 poles are never disturbed', (ctx) => {
     if (!have) return ctx.skip();
     const gf = after.cr.evidence!.gapFill!;
-    const poleFinding = gf.findings.find(f => f.kind === 'schedule_qty');
-    expect(poleFinding).toMatchObject({ typeKey: 'S1+S2', expected: 4, actual: 3, shortfall: 1 });
-    expect(gf.findings.filter(f => f.kind === 'gfci_confirm').map(f => f.typeKey).sort()).toEqual(['GFCI', 'WP GFI']);
-    // Only the GFCI job actually found (and had accepted) anything.
-    expect(gf.candidates).toBe(5);
-    expect(gf.accepted).toBe(5);
+    // Before the fix, this compared 4 (schedule QTY, heads) against 3
+    // (S1+S2 POLES) and ran two whole-sheet gap-fill searches able to turn
+    // the audited 3 poles into 4. Fixed: heads (2+2=4) vs QTY 4 -> no
+    // finding at all.
+    expect(gf.findings).toEqual([]);
+    expect(gf.jobs).toBe(0);
+    expect(gf.candidates).toBe(0);
+    expect(gf.suggested).toEqual([]);
     expect(gf.errors).toEqual([]);
     expect(row(after.diff, 'site_poles').actual).toBe(3);
+    expect(row(after.diff, 'site_heads').actual).toBe(4);
+    expect(after.review.some(i => i.id.startsWith('gapfill:') || i.id.startsWith('reconcile:'))).toBe(false);
   });
   it('battery chargers 5 — from Panel B circuits 15-23, the rows as evidence; equipment stops raising zero-count items', (ctx) => {
     if (!have) return ctx.skip();
@@ -266,14 +268,11 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
       'Lighting branch circuits 20/1 (work, sales, exit/em, restroom)', 'Site lighting branch circuits 20/1',
     ]));
   });
-  it('the evidence readers: 15 calls on this set, plus 5 gap-fill / crop-check calls (Part 4); every call priced', (ctx) => {
+  it('the evidence readers: 15 calls on this set; no gap-fill calls (no real finding on Kissimmee once the false alarm is fixed); every call priced', (ctx) => {
     if (!have) return ctx.skip();
     const ev = after.cr.evidence!;
-    // 15 viewport/typicals/table calls + 5 gap-fill calls: GFCI (1 gapfill +
-    // 1 crop-check), WP GFI (1 gapfill, no candidates so no crop-check), S1
-    // and S2 (1 gapfill each, no candidates) = 5.
-    expect(ev.calls).toBe(20);
-    expect(ev.gapFill!.calls).toBe(5);
+    expect(ev.calls).toBe(15);
+    expect(ev.gapFill!.calls).toBe(0);
     expect(ev.errors).toEqual([]);
     expect(ev.model).toBe(EVIDENCE_MODEL);
     expect(after.cr.sheets.find(s => s.label.startsWith('E-2'))!.viewports!.length).toBe(11);
@@ -303,10 +302,13 @@ describe('a supplement pass keeps the evidence round\'s results (earlier typical
     const d = diffAgainstExpected(expected, cr);
     expect(row(d, 'battery_chargers').actual).toBe(5);
     expect([row(d, 'site_poles').actual, row(d, 'site_heads').actual]).toEqual([3, 4]);
-    // 42, not 37: the first ('after') pass's own gap-fill already found and
-    // accepted the 5 GFCIs (carried in `first.cr`, this supplement's prior).
+    // Fix round — no gap-fill activity on Kissimmee once the S1/S2 false
+    // alarm is fixed (see the 'after' describe block above): the supplement
+    // pass carries the same honest 33, GFCI 7+4, unchanged.
     expect(row(d, 'receptacles_total').actual).toBe(row(first.diff, 'receptacles_total').actual);
-    expect(row(d, 'gfci').actual).toBe(16);
+    expect(row(d, 'receptacles_total').actual).toBe(33);
+    expect(row(d, 'gfci').actual).toBe(7 + 4);
+    expect(cr.evidence!.gapFill).toMatchObject({ jobs: 0, candidates: 0 });
     expect(cr.types.find(t => t.key === 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE')!.components!.typical).toBe(8);
     // Only the new sheet was read and counted.
     expect(calls.filter(c => isEvidenceRequest(c) === 'viewports').map(c => /SHEET: (E-\d)/.exec(userText(c))![1])).toEqual(['E-9']);

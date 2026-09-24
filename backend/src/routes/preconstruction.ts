@@ -48,7 +48,7 @@ import { runCountingStage, runSupplementCounting, type CountResult } from '../ai
 import { dbEvidenceCache } from '../services/evidenceCache';
 import { normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
-import { writeAiCountMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
+import { writeAiCountMarkers, writeGapFillMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
 import { buildReviewItems, referencedSheetItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
 import { takeoffGate, budgetPendingGate, evidenceGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
 import { logLabeledEvents } from '../estimating/labeledEvents';
@@ -1246,6 +1246,18 @@ async function runPipelineStages(
           [JSON.stringify({ replacedIds: replacedIds ?? [], writtenIds: writtenIds ?? [] }), bidId]).catch(() => {});
       }
       (stage.countResult as unknown as Record<string, unknown>).markers = markerSummary;
+      // Fix round (B2) — gap-fill's suggested marks, same source files, same
+      // "never a count until confirmed" rule. Non-fatal, like the counter's
+      // own write above: a failure here loses the suggestions, never a count.
+      const gfSuggested = stage.countResult.evidence?.gapFill?.suggested ?? [];
+      if (gfSuggested.length) {
+        try {
+          await writeGapFillMarkers(bidId, stage.countResult, gfSuggested,
+            markerFiles.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })), runId);
+        } catch (err) {
+          logger.warn({ err, bidId }, '[takeoff] writing gap-fill suggested markers failed');
+        }
+      }
     } catch (err) {
       logger.warn({ err, bidId }, '[takeoff] writing AI count markers failed');
       (stage.countResult as unknown as Record<string, unknown>).markers = { error: 'suggested markers could not be written' };
@@ -1287,18 +1299,20 @@ async function runPipelineStages(
     } finally {
       tx.release();
     }
-    // Evidence round 5.1 — one labeled event per gap-fill mark the crop
-    // check accepted (4.3/4.4): a crop reference (sheet + position, never
-    // image bytes), the type, the confidence and why gap-fill searched.
+    // Evidence round 5.1 — one labeled event per gap-fill SUGGESTION (B2:
+    // never an accepted count — only the estimator's own later confirmation,
+    // logged separately at that point, ever is): a crop reference (sheet +
+    // position, never image bytes), the type, confidence and note.
     // Fire-and-forget, after the transaction, never delays the response.
     if (!superseded) {
-      const gapFillAccepted = stage.countResult.types.flatMap(t => (t.gapFill ?? []).map(g => ({
-        bidId, runId, kind: 'gapfill_accept' as const, typeKey: t.key, sheetKey: g.sheetKey,
+      const suggested = stage.countResult.evidence?.gapFill?.suggested ?? [];
+      const gapFillEvents = suggested.map(g => ({
+        bidId, runId, kind: 'gapfill_suggested' as const, typeKey: g.typeKey, sheetKey: g.sheetKey,
         client: bidRows[0]?.brand ?? null, projectType: bidRows[0]?.project_type ?? null,
         cropRef: { sheetKey: g.sheetKey },
-        detail: { x: g.x, y: g.y, confidence: g.confidence, note: g.note, reason: g.reason },
-      })));
-      if (gapFillAccepted.length) void logLabeledEvents(gapFillAccepted);
+        detail: { x: g.x, y: g.y, confidence: g.confidence, note: g.note.slice(0, 500) },
+      }));
+      if (gapFillEvents.length) void logLabeledEvents(gapFillEvents);
     }
   } catch (err) {
     if (stoppedBy(err)) return;

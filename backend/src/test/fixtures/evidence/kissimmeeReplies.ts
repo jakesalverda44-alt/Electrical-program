@@ -257,19 +257,18 @@ export function evidenceResponder(pageOf: (labelOrKey: string) => number | undef
 
 // ── Evidence round Part 4: gap-fill / crop-check responder ─────────────────
 //
-// HONEST PROVENANCE, Part 4. GFCI: the real Opus baseline's own marks (11 —
-// see kissimmeeBaseline) already account for every GFCI/WP-GFI symbol
-// visible on the two crops this fixture carries (e1-main-east.png,
-// e1-restroom3.png) — checked by hand against those PNGs. The other 5 (to
-// reach the audited 16) are on the WEST portion of the real E-1 sheet, which
-// this fixture does not carry a crop of (the report's own committed set is
-// "the E-1 main plan (EAST part)"). This reply is therefore a SYNTHETIC
-// stand-in for what a real gap-fill call would find there — never claimed as
-// a transcription of a real image, unlike every other reply in this file.
-// LUMINAIRE SCHEDULE's QTY 4 vs S1+S2's counted 3 (reconcile.ts 4.2(a)) is a
-// REAL, current-data finding too; its gap-fill reply is honestly "nothing
-// more found" — the audited answer really is 3, and gap-fill must not
-// fabricate a 4th pole just because a schedule cell disagrees.
+// Fix round (review a479103, B3) — the fixture no longer ships a synthetic
+// GFCI reply. The real E-1 west portion has no GFCI symbols (rendered and
+// checked by hand at 50-200 DPI in the review), and — separately — S5
+// removed the always-on "GFCI confirmatory" reconciliation pass that used
+// to be the only thing that ever asked gap-fill about GFCI at all. With the
+// S1+S2 heads-vs-poles fix (B2) also closing the one real finding this
+// fixture ever had (LUMINAIRE SCHEDULE QTY 4 heads = S1+S2's own 2+2), no
+// gap-fill job runs on Kissimmee any more: this responder exists only so a
+// future finding (a real schedule/circuit mismatch this fixture doesn't
+// happen to have yet) gets an HONEST "nothing more found" instead of an
+// unanswered-call test failure. The full suggest -> confirm -> count flow,
+// on clearly-synthetic data, is proven in gapFillEndToEnd.test.ts instead.
 export function isGapFillRequest(req: FakeRequest): 'gapfill' | 'cropcheck' | null {
   const sys = systemText(req);
   if (sys.includes('MISSED instances of ONE symbol type')) return 'gapfill';
@@ -277,35 +276,11 @@ export function isGapFillRequest(req: FakeRequest): 'gapfill' | 'cropcheck' | nu
   return null;
 }
 
-const GFCI_GAPFILL_MARKS = [
-  { x: 0.62, y: 0.18, confidence: 'medium', note: 'small circle-slash by a sink note, west portion of the sheet' },
-  { x: 0.30, y: 0.44, confidence: 'medium', note: 'GFCI symbol by the break-room counter, west portion' },
-  { x: 0.71, y: 0.52, confidence: 'high', note: 'GFCI at the mop sink, west portion' },
-  { x: 0.15, y: 0.66, confidence: 'medium', note: 'GFCI near the employee entrance, west portion' },
-  { x: 0.44, y: 0.80, confidence: 'low', note: 'possible GFCI, partly obscured by a dimension line, west portion' },
-];
-
-/** Answers gap-fill (4.4) and crop-check (4.3) calls. Only the GFCI job
- *  finds anything (see the note above); every other job — WP GFI, and the
- *  S1+S2 site-light schedule-qty finding — gets an honest "nothing more
- *  found", so the audited numbers (WP GFI 4, site poles 3) are never
- *  disturbed by a reconciliation flag alone. */
 export function gapFillResponder() {
   return (req: FakeRequest): FakeReply => {
     const kind = isGapFillRequest(req);
-    const text = userText(req);
-    if (kind === 'gapfill') {
-      if (/^SYMBOL: GFCI\b/m.test(text)) return { text: JSON.stringify({ marks: GFCI_GAPFILL_MARKS }), usage: { input_tokens: 2600, output_tokens: 300 } };
-      return { text: '{"marks":[]}', usage: { input_tokens: 2600, output_tokens: 20 } };
-    }
-    if (kind === 'cropcheck') {
-      const ids = [...text.matchAll(/Candidate (c\d+):/g)].map(m => m[1]);
-      const accept = /^CANDIDATE SYMBOL: GFCI\b/m.test(text);
-      return {
-        text: JSON.stringify({ decisions: ids.map(id => ({ id, decision: accept ? 'accept' : 'reject', note: accept ? 'matches the confirmed GFCI example' : 'no clear symbol here' })) }),
-        usage: { input_tokens: 1800, output_tokens: 250 },
-      };
-    }
+    if (kind === 'gapfill') return { text: '{"marks":[]}', usage: { input_tokens: 2600, output_tokens: 20 } };
+    if (kind === 'cropcheck') return { text: '{"decisions":[]}', usage: { input_tokens: 0, output_tokens: 0 } };
     throw new Error('not a gap-fill request');
   };
 }

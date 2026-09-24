@@ -1,14 +1,28 @@
 // Evidence round 4.2 — reconciliation: independent second sources checked
-// against the merged counts. Each mismatch is ONE diff item showing both
-// sides with evidence; a real numeric shortfall (a second source says MORE
-// than the merge found) is what 4.4's gap-fill searches for. Pure.
+// against the merged counts. Each mismatch is ONE diff item (reviewItems.ts
+// turns it into a `reconcile:<type>` review item, or a `gapfill:<type>` one
+// when a targeted re-search found candidates worth checking) showing both
+// sides; a real UNDER-count (a second source says more than the merge
+// found) is what 4.4's gap-fill searches for — never an over-count, which
+// gap-fill has no way to "remove" a mark for anyway. Pure.
+//
+// Fix round (review a479103, B2) — two corrections from the real Kissimmee
+// data:
+//   * a site-lighting fixture-schedule QTY column counts LUMINAIRE HEADS,
+//     never poles ("two 209W fixtures per pole" on Kissimmee's E-1 note E).
+//     Comparing it to the pole count was a false alarm that could have
+//     silently turned the audited 3 poles into 4 the moment a crop check
+//     said "accept". `actualUnitsOf` fixes this for every site-lighting
+//     type, not just S1/S2.
+//   * the always-on GFCI-family "confirmatory" pass (S5) is gone. Gap-fill
+//     now runs ONLY from a real reconciliation shortfall — never a bias
+//     pass with no number behind it.
 //
 // Sources checked, per the plan:
 //   (a) a fixture-schedule row with an explicit QTY column vs the type's (or
 //       its whole catalog family's) counted total — e.g. Kissimmee's
-//       LUMINAIRE SCHEDULE says QTY 4 for the DSX1 site light; the plans (S1
-//       + S2, family-merged with the untagged photometric/E-7/E-3 rows)
-//       account for 3.
+//       LUMINAIRE SCHEDULE says QTY 4 for the DSX1 site light; S1 (1 head x
+//       2 poles) + S2 (2 heads x 1 pole) account for 4 heads. No finding.
 //   (b) a panel circuit description naming a DEVICE (not an equipment-
 //       schedule type — 3.2 already owns those) with a multiplier ("(5)")
 //       greater than the drawn count.
@@ -18,42 +32,59 @@
 //       never a gap-fill trigger.
 //   (d) typical host counts vs unit/pole counts — already 2.2's own
 //       `typical:` blocking review item; not duplicated here.
-// One more, narrowly scoped and clearly not a numeric mismatch: a GFCI-
-// family device counted only by vision on a sheet with no text layer is a
-// documented undercount risk (the Kissimmee baseline itself: 11 counted vs
-// 16 audited) — one confirmatory gap-fill pass, always, regardless of any
-// schedule number (there usually isn't one for a symbol-only device).
 import type { TypeCountResult } from '../countMerge';
 import type { CountTarget } from '../countTargets';
 import { multiplierOf, panelCircuitRows, rowNamesTarget, type ScheduleTable } from './schedules';
 
-export type ReconcileKind = 'schedule_qty' | 'circuit_desc' | 'gfci_confirm';
+export type ReconcileKind = 'schedule_qty' | 'circuit_desc';
+export type ReconcileDirection = 'under' | 'over';
 
 export interface ReconcileFinding {
   /** A single type key, or several joined with "+" when one schedule/row
    *  describes a whole catalog family (several primaries). */
   typeKey: string;
   kind: ReconcileKind;
+  /** 'under' — the second source says more than the plans (gap-fill can
+   *  search for the difference). 'over' — the plans show more than the
+   *  second source; informational only, never a gap-fill trigger (there is
+   *  nothing to search FOR). */
+  direction: ReconcileDirection;
   source: string;
-  /** The second source's own number; null when only "there may be more" is
-   *  known (the gfci_confirm case). */
-  expected: number | null;
+  expected: number;
   actual: number;
-  shortfall: number | null;
+  /** |expected - actual|; always greater than RECONCILE_TOLERANCE. */
+  diff: number;
   reason: string;
 }
 
+/** B2 — "blocking above a stated tolerance": a one-unit gap is common
+ *  transcription noise (a missed row, a rounding schedule note) and is not
+ *  worth a blocking item or a paid re-search on its own. */
+export const RECONCILE_TOLERANCE = 1;
+
 const QTY_COL_RE = /^QTY\.?$|^QUANTITY$/i;
-/** GFCI or GFI, as a tag or inside a description ("WEATHERPROOF DUPLEX
- *  RECPT.(GFI)"), never matching a longer unrelated word. */
-const GFCI_RE = /\bGFC?I\b/i;
 
 function activeTypes(types: TypeCountResult[]): TypeCountResult[] {
   return types.filter(t => !t.host && t.status !== 'merged');
 }
 
-/** (a) — schedule QTY vs the plans' count, summed across every type the row
- *  names (a family's several primaries can share one untagged row). */
+/** B2 — a site-lighting fixture-schedule QTY column counts HEADS, never
+ *  poles. Every other fixture category has no pole/head distinction, so its
+ *  own count already IS the unit the schedule counts. */
+function actualUnitsOf(t: TypeCountResult): number {
+  return t.category === 'site_lighting' ? (t.heads ?? 0) : t.count;
+}
+
+function finding(kind: ReconcileKind, typeKey: string, source: string, expected: number, actual: number, reasonOf: (diff: number, dir: ReconcileDirection) => string): ReconcileFinding | null {
+  const diff = expected - actual;
+  if (Math.abs(diff) <= RECONCILE_TOLERANCE) return null;
+  const direction: ReconcileDirection = diff > 0 ? 'under' : 'over';
+  return { typeKey, kind, direction, source, expected, actual, diff: Math.abs(diff), reason: reasonOf(Math.abs(diff), direction) };
+}
+
+/** (a) — schedule QTY vs the plans' count (heads, for site lighting), summed
+ *  across every type the row names (a family's several primaries can share
+ *  one untagged row). */
 export function scheduleQtyFindings(types: TypeCountResult[], targets: CountTarget[], tables: ScheduleTable[]): ReconcileFinding[] {
   const out: ReconcileFinding[] = [];
   const targetByKey = new Map(targets.map(t => [t.key, t]));
@@ -70,17 +101,12 @@ export function scheduleQtyFindings(types: TypeCountResult[], targets: CountTarg
         return tgt && tgt.category !== 'device' && tgt.category !== 'equipment' && rowNamesTarget(rowText, tgt);
       });
       if (!matches.length) continue;
-      const actual = matches.reduce((s, t) => s + t.count, 0);
-      if (actual >= qty) continue;
-      out.push({
-        typeKey: matches.map(m => m.key).join('+'),
-        kind: 'schedule_qty',
-        source: `${table.title} (${table.sheetLabel})`,
-        expected: qty,
-        actual,
-        shortfall: qty - actual,
-        reason: `${table.title} lists QTY ${qty}; the plans account for ${actual} (${matches.map(m => m.type).join(', ')}).`,
-      });
+      const isSite = matches.some(t => t.category === 'site_lighting');
+      const actual = matches.reduce((s, t) => s + actualUnitsOf(t), 0);
+      const unit = isSite ? 'heads' : '';
+      const f = finding('schedule_qty', matches.map(m => m.key).join('+'), `${table.title} (${table.sheetLabel})`, qty, actual,
+        (diff, dir) => `${table.title} lists QTY ${qty}${unit ? ` ${unit}` : ''}; the plans account for ${actual}${unit ? ` ${unit}` : ''} (${matches.map(m => m.type).join(', ')}) — ${dir === 'under' ? `${diff} short` : `${diff} over`}.`);
+      if (f) out.push(f);
     }
   }
   return out;
@@ -103,54 +129,14 @@ export function circuitDescFindings(types: TypeCountResult[], targets: CountTarg
     const matches = panelRows.filter(({ r }) => !r.continuation && r.description && rowNamesTarget(r.description, tgt));
     if (!matches.length) continue;
     const implied = matches.reduce((s, { r }) => s + (multiplierOf(r.description) ?? 1), 0);
-    if (implied <= drawn) continue;
     const { table } = matches[0];
-    out.push({
-      typeKey: t.key,
-      kind: 'circuit_desc',
-      source: `${table.title} (${table.sheetLabel}), ${matches.length} circuit${matches.length === 1 ? '' : 's'}`,
-      expected: implied,
-      actual: drawn,
-      shortfall: implied - drawn,
-      reason: `${matches.length} panel circuit${matches.length === 1 ? '' : 's'} name "${tgt.type}" (implying ${implied}); the plans show ${drawn}.`,
-    });
+    const f = finding('circuit_desc', t.key, `${table.title} (${table.sheetLabel}), ${matches.length} circuit${matches.length === 1 ? '' : 's'}`, implied, drawn,
+      (diff, dir) => `${matches.length} panel circuit${matches.length === 1 ? '' : 's'} name "${tgt.type}" (implying ${implied}); the plans show ${drawn} — ${dir === 'under' ? `${diff} short` : `${diff} over`}.`);
+    if (f) out.push(f);
   }
   return out;
 }
 
-/** (e) — a GFCI-family device counted only by vision on a raster (no text
- *  layer) sheet: one confirmatory gap-fill pass, not tied to any number. */
-export function gfciConfirmFindings(types: TypeCountResult[], rasterSheetKeys: ReadonlySet<string>): ReconcileFinding[] {
-  const out: ReconcileFinding[] = [];
-  if (!rasterSheetKeys.size) return out;
-  for (const t of activeTypes(types)) {
-    if (t.status !== 'counted' || t.count <= 0) continue;
-    if ((t.scheduleRows?.length ?? 0) > 0) continue;
-    if (!GFCI_RE.test(`${t.type} ${t.description}`)) continue;
-    const usedRaster = t.sheets.filter(s => s.used && rasterSheetKeys.has(s.sheetKey));
-    if (!usedRaster.length) continue;
-    out.push({
-      typeKey: t.key,
-      kind: 'gfci_confirm',
-      source: usedRaster.map(s => s.label).join(', '),
-      expected: null,
-      actual: t.count,
-      shortfall: null,
-      reason: 'GFCI-family device counted only by vision on a sheet with no text layer — a known undercount risk; one confirmatory gap-fill pass.',
-    });
-  }
-  return out;
-}
-
-export function reconcile(
-  types: TypeCountResult[],
-  targets: CountTarget[],
-  tables: ScheduleTable[],
-  rasterSheetKeys: ReadonlySet<string>,
-): ReconcileFinding[] {
-  return [
-    ...scheduleQtyFindings(types, targets, tables),
-    ...circuitDescFindings(types, targets, tables),
-    ...gfciConfirmFindings(types, rasterSheetKeys),
-  ];
+export function reconcile(types: TypeCountResult[], targets: CountTarget[], tables: ScheduleTable[]): ReconcileFinding[] {
+  return [...scheduleQtyFindings(types, targets, tables), ...circuitDescFindings(types, targets, tables)];
 }

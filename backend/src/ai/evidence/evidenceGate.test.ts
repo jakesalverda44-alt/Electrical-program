@@ -13,10 +13,15 @@ function type(over: Partial<TypeCountResult>): TypeCountResult {
 describe('lineEvidenceKind', () => {
   it('schedule beats everything else; a marker beats a bare typical component', () => {
     expect(lineEvidenceKind(type({ scheduleRows: [{ sheetKey: 's', sheetLabel: 'S', tableId: 't', table: 'T', rowIdx: 0, cells: [], qty: 1 }] }))).toBe('schedule');
-    expect(lineEvidenceKind(type({ gapFill: [{ x: 0, y: 0, sheetKey: 's', confidence: 'high', note: '', reason: '' }] }))).toBe('gapfill');
     expect(lineEvidenceKind(type({ sheets: [{ sheetKey: 's', label: 'S', count: 1, used: true }] }))).toBe('marker');
     expect(lineEvidenceKind(type({ sheets: [{ sheetKey: 's', label: 'S', count: 1, used: true }], photometricOnly: true }))).toBe('photometric');
     expect(lineEvidenceKind(type({ sheets: [], components: { drawn: 0, typical: 3, schedule: 0 } }))).toBe('typical');
+    expect(lineEvidenceKind(type({ sheets: [] }))).toBe('none');
+  });
+  it('B2 — a gap-fill suggestion is never, by itself, evidence (it is only ever a suggested marker + a review item)', () => {
+    // No `gapFill`-shaped field exists on TypeCountResult any more; a type
+    // with no drawn mark and no schedule row is 'none' regardless of what
+    // gap-fill proposed for it.
     expect(lineEvidenceKind(type({ sheets: [] }))).toBe('none');
   });
 });
@@ -35,6 +40,11 @@ describe('missingEvidenceTypes', () => {
     expect(missingEvidenceTypes([{ ...type({ key: 'H', sheets: [] }), host: true }])).toEqual([]);
     expect(missingEvidenceTypes([type({ key: 'M', status: 'merged', sheets: [] })])).toEqual([]);
   });
+  it('S14 — a type the estimator RESOLVED (any review-item action) is never flagged, even with no AI evidence', () => {
+    const bare = type({ key: 'B', sheets: [] });
+    expect(missingEvidenceTypes([bare], new Set(['B']))).toEqual([]);
+    expect(missingEvidenceTypes([bare], new Set(['OTHER']))).toHaveLength(1);
+  });
 });
 
 describe('manualLinesMissingReason', () => {
@@ -51,5 +61,9 @@ describe('manualLinesMissingReason', () => {
   it('an ordinary AI-sourced takeoff line is never flagged; an excluded line is never flagged', () => {
     expect(manualLinesMissingReason([takeoffLine])).toEqual([]);
     expect(manualLinesMissingReason([{ ...takeoffLine, source: 'manual', excluded: true }])).toEqual([]);
+  });
+  it('S6 — a long but letter-less "reason" (the migration 134 placeholder shape, or a keyboard-mash) still fails', () => {
+    expect(manualLinesMissingReason([{ ...takeoffLine, source: 'manual', evidence_note: '..........' }])).toHaveLength(1);
+    expect(manualLinesMissingReason([{ ...takeoffLine, source: 'manual', evidence_note: '1234567890123' }])).toHaveLength(1);
   });
 });

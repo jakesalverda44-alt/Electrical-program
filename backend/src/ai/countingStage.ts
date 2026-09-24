@@ -24,7 +24,7 @@ import { hostTargets, type TypicalPackage } from './evidence/typicals';
 import { isCompletePanel, scheduleCounts, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
 import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewports';
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
-import { applyGapFillResults, buildGapFillJobs, runGapFillStage, type GapFillSheetAsset } from './evidence/gapFillStage';
+import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillStage, sha256Of, type GapFillSheetAsset } from './evidence/gapFillStage';
 
 export const COUNT_RESULT_VERSION = 2;
 
@@ -52,8 +52,11 @@ export interface CountResultSheet {
   viewports?: Viewport[];
   viewportSource?: 'text' | 'vision' | 'none';
   viewportNote?: string;
-  /** Evidence round 1.2 — marks not counted as devices, per type, with why. */
-  excluded?: Array<{ typeKey: string; count: number; reasons: string[] }>;
+  /** Evidence round 1.2 — marks not counted as devices, per type, with why.
+   *  Fix round (B1) — `marks` (PDF points) lets gap-fill treat these as
+   *  "already known" too: a real GFCI a main-plan area's replacement
+   *  excluded must never come back as a gap-fill "new" one. */
+  excluded?: Array<{ typeKey: string; count: number; reasons: string[]; marks: Array<{ x: number; y: number }> }>;
   /** Evidence round 1.3 — enlarged plan vs main plan, per type. */
   enlarged?: EnlargedDecision[];
   /** Evidence round 1.3 — enlarged-plan marks held while the estimator's
@@ -86,15 +89,30 @@ export interface CountResultEvidence {
   panelsUnread: string[];
   /** Evidence round 4.2 / 4.3 / 4.4 — reconciliation against independent
    *  second sources, and the targeted gap-fill search + crop check that
-   *  ran for every shortfall it found. Absent only when reconciliation
-   *  itself never ran (no evidence input). */
+   *  ran for every UNDER shortfall it found. Absent only when reconciliation
+   *  itself never ran (no evidence input).
+   *
+   *  Fix round (B2) — gap-fill NEVER changes a GC-facing quantity: `count`
+   *  and `agent1.quantities` are untouched by this. `suggested` is written
+   *  to the Plans view as SUGGESTED markers (never confirmed), and each
+   *  type with one or more gets a `gapfill:<key>` review item; a finding
+   *  with no candidates (or an OVER finding) gets a `reconcile:<key>`
+   *  review item instead — every reconciliation finding reaches the
+   *  estimator one way or the other. */
   gapFill?: {
+    /** Every reconciliation finding, both directions — not just the ones
+     *  that got a gap-fill job. */
     findings: ReconcileFinding[];
+    /** S4 — jobs actually run vs. how many the cap (MAX_GAPFILL_JOBS) left
+     *  out, disclosed rather than silently dropped. */
+    jobs: number;
+    jobsSkipped: number;
+    cachedJobs: number;
     /** Candidates the gap-fill call proposed, across every job. */
     candidates: number;
-    /** Candidates the crop check accepted (or reclassified and accepted) —
-     *  the only ones that ever raised a count. */
-    accepted: number;
+    /** Accept, or a valid reclass — the count SUGGESTED to the estimator,
+     *  never counted automatically. */
+    suggested: Array<{ typeKey: string; sheetKey: string; x: number; y: number; confidence: string; note: string }>;
     calls: number;
     usage: EvidenceUsage;
     errors: string[];
@@ -199,16 +217,17 @@ function finish(
       return { ...r, placed, ...(c.viewports ? { viewports: c.viewports } : {}), ...(c.pending ? { pendingEnlarged: c.pending } : {}) };
     }
     const res = resolveSheetMarks(r.placed, page.viewports.viewports, r.geometry ?? page.geometry);
-    const exBy = new Map<string, { count: number; reasons: Set<string> }>();
+    const exBy = new Map<string, { count: number; reasons: Set<string>; marks: Array<{ x: number; y: number }> }>();
     for (const m of res.excluded) {
-      const e = exBy.get(m.typeKey) ?? { count: 0, reasons: new Set<string>() };
+      const e = exBy.get(m.typeKey) ?? { count: 0, reasons: new Set<string>(), marks: [] };
       e.count++; e.reasons.add(m.reason);
+      if (Number.isFinite(m.x) && Number.isFinite(m.y)) e.marks.push({ x: m.x, y: m.y });
       exBy.set(m.typeKey, e);
     }
     extra.set(r.sheet.key, {
       viewports: page.viewports.viewports, viewportSource: page.viewports.source,
       ...(page.viewports.note ? { viewportNote: page.viewports.note } : {}),
-      ...(exBy.size ? { excluded: [...exBy.entries()].map(([typeKey, e]) => ({ typeKey, count: e.count, reasons: [...e.reasons] })) } : {}),
+      ...(exBy.size ? { excluded: [...exBy.entries()].map(([typeKey, e]) => ({ typeKey, count: e.count, reasons: [...e.reasons], marks: e.marks })) } : {}),
       ...(res.enlarged.length ? { enlarged: res.enlarged } : {}),
       ...(res.pending.length ? { pending: res.pending } : {}),
     });
@@ -299,25 +318,24 @@ function finish(
 }
 
 /** Evidence round 4.2 / 4.3 / 4.4 — after the merge, check every independent
- *  second source against it (reconcile) and, for a real shortfall, run one
- *  targeted gap-fill + crop-check job per (type, sheet). Mutates `agent1`
- *  and `countResult` in place with whatever the crop check ACCEPTED (never
- *  gap-fill's own proposal); everything else — rejected, or a job the
- *  sheet's PDF/geometry made impossible — is recorded, never silently
- *  dropped. A run with no evidence input never calls this (Part 4 is
- *  switched by the same `evidence` input as Parts 1-3). */
+ *  second source against it (reconcile) and, for a real UNDER shortfall,
+ *  run one targeted gap-fill + crop-check job per (type, sheet it is
+ *  counted from). Fix round (B2) — this NEVER touches `countResult.types`
+ *  or `agent1.quantities`: the crop check's "accept" only ever produces a
+ *  SUGGESTED marker (written to the Plans view by the caller, same as the
+ *  counter's own marks) plus a review item. A run with no evidence input
+ *  never calls this (Part 4 is switched by the same `evidence` input as
+ *  Parts 1-3). */
 async function runGapFillPass(
   input: Pick<CountingStageInput, 'client' | 'pdfs' | 'shouldStop'>,
-  evidenceCfg: { model: string; maxTokens: number },
-  agent1: Record<string, unknown>,
+  evidenceCfg: { model: string; maxTokens: number; cache?: EvidenceCache },
   countResult: CountResult,
   allTargets: CountTarget[],
   tables: ScheduleTable[],
-  rasterSheetKeys: Set<string>,
 ): Promise<void> {
-  const findings = reconcile(countResult.types, allTargets, tables, rasterSheetKeys);
-  const jobs = buildGapFillJobs(findings, countResult.types);
-  const empty = { findings, candidates: 0, accepted: 0, calls: 0, usage: { ...ZERO_USAGE }, errors: [] as string[] };
+  const findings = reconcile(countResult.types, allTargets, tables);
+  const { jobs, jobsSkipped } = buildGapFillJobs(findings, countResult.types);
+  const empty = { findings, jobs: 0, jobsSkipped, cachedJobs: 0, candidates: 0, suggested: [] as NonNullable<CountResultEvidence['gapFill']>['suggested'], calls: 0, usage: { ...ZERO_USAGE }, errors: [] as string[] };
   if (!jobs.length) {
     if (countResult.evidence) countResult.evidence.gapFill = empty;
     return;
@@ -329,28 +347,42 @@ async function runGapFillPass(
     const sheet = countResult.sheets.find(s => s.key === job.sheetKey);
     const pdf = sheet ? input.pdfs.get(sheet.file) : undefined;
     if (!sheet?.geometry || !pdf) { unusable.push(job.sheetKey); continue; }
-    assets.set(job.sheetKey, { page: sheet.page, pdf, geometry: sheet.geometry, existingMarks: countResult.marks.filter(m => m.sheetKey === job.sheetKey) });
+    const excludedMarks = (sheet.excluded ?? []).flatMap(e => e.marks.map(m => ({ typeKey: e.typeKey, x: m.x, y: m.y })));
+    assets.set(job.sheetKey, {
+      page: sheet.page, pdf, geometry: sheet.geometry,
+      existingMarks: countResult.marks.filter(m => m.sheetKey === job.sheetKey),
+      excludedMarks,
+      searchRect: planSearchRect(sheet.viewports),
+      viewports: sheet.viewports ?? null,
+      sha: sha256Of(pdf),
+    });
   }
   const usableJobs = jobs.filter(j => assets.has(j.sheetKey));
   if (!usableJobs.length) {
-    if (countResult.evidence) countResult.evidence.gapFill = { ...empty, errors: [...new Set(unusable)].map(k => `${k}: no sheet PDF or geometry was available for gap-fill`) };
+    if (countResult.evidence) countResult.evidence.gapFill = { ...empty, jobs: 0, errors: [...new Set(unusable)].map(k => `${k}: no sheet PDF or geometry was available for gap-fill`) };
     return;
   }
   const gf = await runGapFillStage({
     client: input.client, model: evidenceCfg.model, maxTokens: evidenceCfg.maxTokens,
-    jobs: usableJobs, targets: allTargets, assets, shouldStop: input.shouldStop,
+    jobs: usableJobs, targets: allTargets, assets, shouldStop: input.shouldStop, cache: evidenceCfg.cache,
   });
-  const applied = applyGapFillResults(countResult.types, (agent1.quantities as Record<string, unknown>[] | undefined) ?? [], countResult.marks, gf.candidates);
-  countResult.types = applied.types;
-  countResult.marks = applied.marks;
-  agent1.quantities = applied.quantities;
-  for (const t of applied.types) for (const f of t.flags) if (!countResult.flags.includes(f)) countResult.flags.push(f);
-  if (agent1.countingSummary && typeof agent1.countingSummary === 'object') {
-    (agent1.countingSummary as Record<string, unknown>).pendingEstimatorReview =
-      countResult.types.filter(t => t.status !== 'counted' && t.status !== 'merged' && !t.host).map(t => `${t.type} (${t.reason})`);
+  // B1 — a reclass is deduped against the RECLASSIFIED type's own marks
+  // (counted + excluded) too, not just the type gap-fill originally asked
+  // about.
+  const existingByTypeAndSheet = new Map<string, Array<{ x: number; y: number }>>();
+  for (const [sheetKey, asset] of assets) {
+    for (const m of [...asset.existingMarks, ...(asset.excludedMarks ?? [])]) {
+      const k = `${m.typeKey}@${sheetKey}`;
+      if (!existingByTypeAndSheet.has(k)) existingByTypeAndSheet.set(k, []);
+      existingByTypeAndSheet.get(k)!.push({ x: m.x, y: m.y });
+    }
   }
+  const { suggested } = resolveGapFillCandidates(gf.candidates, existingByTypeAndSheet);
   if (countResult.evidence) {
-    countResult.evidence.gapFill = { findings, candidates: gf.candidates.length, accepted: applied.accepted, calls: gf.calls, usage: gf.usage, errors: gf.errors };
+    countResult.evidence.gapFill = {
+      findings, jobs: usableJobs.length, jobsSkipped, cachedJobs: gf.cachedJobs,
+      candidates: gf.candidates.length, suggested, calls: gf.calls, usage: gf.usage, errors: gf.errors,
+    };
     for (const k of Object.keys(countResult.evidence.usage) as Array<keyof EvidenceUsage>) countResult.evidence.usage[k] += gf.usage[k];
     countResult.evidence.calls += gf.calls;
   }
@@ -420,8 +452,7 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     : { sheets: selection.counted.map(sheet => ({ sheet, status: 'counted' as const, geometryOk: false, geometry: null, placed: [], mergedDuplicates: 0, unreadable: [], rejected: [], notes: ['every type on this job is owned by the schedules — nothing to count'], calls: 0, tiles: 0 })), usage: { ...ZERO_USAGE } };
   const { agent1, countResult } = finish(input, allTargets, targetNotes, run.sheets, selection.skipped, true, undefined, evidence);
   if (input.evidence && evidence) {
-    const rasterSheetKeys = new Set(evidence.ev.pages.filter(p => !p.hasTextLayer).map(p => p.key));
-    await runGapFillPass(input, input.evidence, agent1, countResult, allTargets, evidence.ev.tables, rasterSheetKeys);
+    await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
   }
   return { agent1, countResult, usage: run.usage };
 }
@@ -646,11 +677,7 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
   const seen = new Set(countResult.removedRows.map(r => JSON.stringify(r.row)));
   countResult.removedRows = [...countResult.removedRows, ...input.prior.removedRows.filter(r => !seen.has(JSON.stringify(r.row)))];
   if (input.evidence && evidence) {
-    // Only the NEW pages' rasterness is known this pass (carried tables can
-    // still raise a schedule_qty / circuit_desc finding on an OLD sheet; a
-    // gfci_confirm finding needs that sheet's OWN pass to have read it).
-    const rasterSheetKeys = new Set(evidence.ev.pages.filter(p => !p.hasTextLayer).map(p => p.key));
-    await runGapFillPass(input, input.evidence, agent1, countResult, allTargets, evidence.ev.tables, rasterSheetKeys);
+    await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
   }
   return { agent1, countResult, usage };
 }

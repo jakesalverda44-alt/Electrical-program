@@ -401,6 +401,54 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `family|${q.primaryCount}|${q.memberCount}`,
     });
   }
+  // Fix round (review a479103, B2) — every reconciliation finding reaches
+  // the estimator, one way or the other:
+  //   * an UNDER finding gap-fill found candidates for -> `gapfill:<type>`,
+  //     "N possible <type> — confirm on plans" (the estimator confirms the
+  //     SUGGESTED markers in the Plans view, then resolves this with the
+  //     same "Use confirmed markers" action any count item has);
+  //   * anything else (an UNDER finding with nothing found, or an OVER
+  //     finding — gap-fill has nothing to search FOR on an over-count) ->
+  //     `reconcile:<type>`, shown with both sides. An over-count is
+  //     informational only: the plans are not wrong just because a
+  //     schedule cell disagrees.
+  if (ev?.gapFill) {
+    const typeByKey = new Map((countResult?.types ?? []).map(t => [t.key, t]));
+    const suggestedByType = new Map<string, NonNullable<typeof ev.gapFill>['suggested']>();
+    for (const s of ev.gapFill.suggested) {
+      if (!suggestedByType.has(s.typeKey)) suggestedByType.set(s.typeKey, []);
+      suggestedByType.get(s.typeKey)!.push(s);
+    }
+    for (const f of ev.gapFill.findings) {
+      const keys = f.typeKey.split('+');
+      const label = keys.map(k => typeByKey.get(k)?.type ?? k).join('/');
+      const relevant = keys.flatMap(k => suggestedByType.get(k) ?? []);
+      if (f.direction === 'under' && relevant.length) {
+        items.push({
+          id: `gapfill:${f.typeKey}`,
+          kind: 'count',
+          title: `Gap-fill found ${relevant.length} possible ${label} — confirm on plans`,
+          detail: `${f.reason} A targeted re-search suggested ${relevant.length} mark${relevant.length === 1 ? '' : 's'} on the plans (Plans view, shown as SUGGESTED) — confirm the real ones there, then use "Use confirmed markers" here. Nothing here is counted until you do.`,
+          typeKey: keys.length === 1 ? keys[0] : f.typeKey,
+          type: label,
+          actions: ['markers', 'count', 'not_on_job'],
+          fingerprint: `gapfill|${f.expected}|${f.actual}|${relevant.length}`,
+        });
+        continue;
+      }
+      items.push({
+        id: `reconcile:${f.typeKey}`,
+        kind: 'confirm',
+        blocking: f.direction === 'under',
+        title: `${f.direction === 'under' ? 'Possible shortfall' : 'Possible over-count'}: ${label} vs ${f.source}`,
+        detail: `${f.reason}${f.direction === 'under' ? ' A targeted re-search found nothing more on the plans — confirm the count as it stands (with a reason), or correct it.' : ' The plans show more than the second source — confirm the count (with a reason), or correct it.'}`,
+        typeKey: keys.length === 1 ? keys[0] : undefined,
+        type: label,
+        actions: ['confirm', 'count'],
+        fingerprint: `reconcile|${f.expected}|${f.actual}|${f.direction}`,
+      });
+    }
+  }
   // Evidence round 3.4 — a panel schedule the viewport reader found but the
   // schedule reader could not read completely: its branch circuits have no
   // source (Agent 1 no longer states them).
@@ -528,6 +576,11 @@ export function riskRank(i: ReviewItem): number {
   if (i.category === 'equipment') return 0;
   if (i.category === 'site_lighting' || i.category === 'exterior_building') return 5;
   if (i.id.startsWith('family:')) return 10;
+  // Fix round (B2) — a real reconciliation shortfall (a second source vs
+  // the plans) is a direct $ risk signal, ranked with the other schedule-
+  // derived mismatches.
+  if (i.id.startsWith('gapfill:')) return 12;
+  if (i.id.startsWith('reconcile:')) return 13;
   if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 15;
   if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
@@ -550,8 +603,10 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
  *  action): 'zero', 'unreadable', 'area:<sheets>', 'coverage', 'heads',
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
-  if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : i.id.startsWith('schedule:') ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : 'info';
+  if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : i.id.startsWith('schedule:') ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
+  if (i.id.startsWith('gapfill:')) return 'gapfill';
+  if (i.id.startsWith('reconcile:')) return 'reconcile';
   if (i.id.startsWith('schedule:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
   if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 'typical';
@@ -724,6 +779,20 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   const extraLines: EnforcedCounts['extraLines'] = [];
   const list = items ?? [];
   const res = (id: string) => list.find(i => i.id === id)?.resolution;
+  // Fix round (B2) — `gapfill:`/`reconcile:` ids can name several types at
+  // once ("S1+S2", one catalog family sharing a schedule row); index every
+  // member key back to its item so a single type's own qty lookup still
+  // finds it.
+  const byMemberKey = (prefix: 'gapfill:' | 'reconcile:') => {
+    const m = new Map<string, ReviewItem>();
+    for (const i of list) {
+      if (!i.id.startsWith(prefix) || !i.resolution) continue;
+      for (const k of i.id.slice(prefix.length).split('+')) m.set(k, i);
+    }
+    return m;
+  };
+  const gapfillByKey = byMemberKey('gapfill:');
+  const reconcileByKey = byMemberKey('reconcile:');
   for (const t of countResult?.types ?? []) {
     if (t.host || t.status === 'merged') continue;
     let qty: number | null | undefined;
@@ -738,6 +807,14 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (cov) qty = cov.action === 'not_on_job' ? null : (cov.qty ?? qty);
     const rec = res(`recount:${t.key}`);
     if (rec) qty = rec.qty ?? qty;
+    // B2 — "Use confirmed markers" (or a typed count) on a gapfill: item is
+    // the ONLY way a gap-fill suggestion ever becomes a real count; a
+    // reconcile: item (no candidates, or an over-count) works the same way
+    // for a manual correction/confirmation.
+    const gf = gapfillByKey.get(t.key)?.resolution;
+    if (gf) qty = gf.action === 'not_on_job' ? null : (gf.qty ?? qty);
+    const rc = reconcileByKey.get(t.key)?.resolution;
+    if (rc) qty = rc.action === 'not_on_job' ? null : (rc.qty ?? qty);
     if (qty !== undefined && (qty === null || qty > 0)) byType.set(t.key, qty);
     if (t.category === 'site_lighting') {
       const heads = res(`count:${t.key}:heads`);

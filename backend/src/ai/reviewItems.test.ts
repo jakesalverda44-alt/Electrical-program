@@ -222,6 +222,61 @@ describe('next round A4 — referencedSheetItems (post-Agent-1 safety net)', () 
   });
 });
 
+describe('Fix round B2 — gapfill: / reconcile: review items; gap-fill never counts by itself', () => {
+  const a1 = { fixtureSchedule: [{ type: 'A', description: '2x4 LED troffer', location: 'interior', wattage: 32 }] };
+  const [e2] = pick([['E-2', 'POWER PLAN']]);
+  const finding = (over: Partial<{ typeKey: string; kind: 'schedule_qty' | 'circuit_desc'; direction: 'under' | 'over'; source: string; expected: number; actual: number; diff: number; reason: string }> = {}) =>
+    ({ typeKey: 'A', kind: 'schedule_qty' as const, direction: 'under' as const, source: 'FIXTURE SCHEDULE', expected: 5, actual: 3, diff: 2, reason: 'FIXTURE SCHEDULE lists QTY 5; the plans account for 3.', ...over });
+
+  it('an UNDER finding with suggested candidates -> gapfill:<type>, "confirm on plans", never a count by itself', () => {
+    const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: marks({ A: 3 }), unreadable: [] }], {
+      evidence: { ...EMPTY_EVIDENCE, gapFill: { findings: [finding()], jobs: 1, jobsSkipped: 0, cachedJobs: 0, candidates: 2, suggested: [{ typeKey: 'A', sheetKey: e2.key, x: 1, y: 1, confidence: 'high', note: 'n' }], calls: 2, usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, errors: [] } },
+    });
+    const items = buildReviewItems(cr);
+    const item = items.find(i => i.id === 'gapfill:A')!;
+    expect(item).toBeTruthy();
+    expect(item.title).toBe('Gap-fill found 1 possible A — confirm on plans');
+    expect(item.actions).toEqual(['markers', 'count', 'not_on_job']);
+    expect(items.find(i => i.id === 'reconcile:A')).toBeUndefined();
+    // The type's OWN count is untouched — gap-fill never counts by itself.
+    expect(cr.types.find(t => t.key === 'A')!.count).toBe(3);
+    expect(enforcedCounts(cr, items).byType.get('A')).toBe(3);
+  });
+
+  it('resolving gapfill: with "markers" (confirmed count) raises the count; "not on job" zeroes it', () => {
+    const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: marks({ A: 3 }), unreadable: [] }], {
+      evidence: { ...EMPTY_EVIDENCE, gapFill: { findings: [finding()], jobs: 1, jobsSkipped: 0, cachedJobs: 0, candidates: 1, suggested: [{ typeKey: 'A', sheetKey: e2.key, x: 1, y: 1, confidence: 'high', note: 'n' }], calls: 2, usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, errors: [] } },
+    });
+    const items = buildReviewItems(cr);
+    const resolved = { ...items.find(i => i.id === 'gapfill:A')!, resolution: { action: 'markers' as const, qty: 5, by: 'J', at: 't' } };
+    expect(enforcedCounts(cr, [resolved]).byType.get('A')).toBe(5);
+    const noj = { ...items.find(i => i.id === 'gapfill:A')!, resolution: { action: 'not_on_job' as const, reason: 'Confirmed with the GC', by: 'J', at: 't' } };
+    expect(enforcedCounts(cr, [noj]).byType.get('A')).toBeNull();
+  });
+
+  it('an UNDER finding with NO candidates found -> reconcile:<type>, blocking, shown with both sides', () => {
+    const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: marks({ A: 3 }), unreadable: [] }], {
+      evidence: { ...EMPTY_EVIDENCE, gapFill: { findings: [finding()], jobs: 1, jobsSkipped: 0, cachedJobs: 0, candidates: 0, suggested: [], calls: 1, usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, errors: [] } },
+    });
+    const items = buildReviewItems(cr);
+    const item = items.find(i => i.id === 'reconcile:A')!;
+    expect(item).toBeTruthy();
+    expect(item.blocking).not.toBe(false);
+    expect(item.detail).toContain('FIXTURE SCHEDULE lists QTY 5');
+    expect(items.find(i => i.id === 'gapfill:A')).toBeUndefined();
+  });
+
+  it('an OVER finding is informational only (blocking: false) — never sent to gap-fill, never blocks', () => {
+    const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: marks({ A: 8 }), unreadable: [] }], {
+      evidence: { ...EMPTY_EVIDENCE, gapFill: { findings: [finding({ direction: 'over', expected: 5, actual: 8, diff: 3 })], jobs: 0, jobsSkipped: 0, cachedJobs: 0, candidates: 0, suggested: [], calls: 0, usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, errors: [] } },
+    });
+    const items = buildReviewItems(cr);
+    const item = items.find(i => i.id === 'reconcile:A')!;
+    expect(item.blocking).toBe(false);
+    expect(item.title).toContain('Possible over-count');
+  });
+});
+
 describe('4.5 — grouping legend-only zero items and $ risk ordering', () => {
   it('two or more legend-only zero-count types with no plan presence and no schedule row group into ONE item; nothing is dropped', () => {
     const a1 = {

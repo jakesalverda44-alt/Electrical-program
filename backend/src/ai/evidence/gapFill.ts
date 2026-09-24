@@ -6,6 +6,9 @@ import { parseAIJSON } from '../json';
 import { displayedToPdf, screenPosition } from '../../estimating/pageGeometry';
 import type { RectIn, SheetGeom } from './viewports';
 
+/** Absolute ceiling regardless of caller — a job's own cap (B2: the
+ *  reconciled shortfall) is always passed explicitly and is normally much
+ *  smaller than this. */
 export const MAX_GAPFILL_CANDIDATES = 8;
 
 export interface GapFillCandidate {
@@ -25,12 +28,13 @@ function clean(s: unknown, max = 200): string {
  *  sheet via `rect`. Malformed entries are dropped, never guessed into
  *  shape; a reply with no usable `marks` array returns null (the caller
  *  treats it the same as "no evidence read"). */
-export function parseGapFillReply(text: string, rect: RectIn): GapFillCandidate[] | null {
+export function parseGapFillReply(text: string, rect: RectIn, maxCandidates = MAX_GAPFILL_CANDIDATES): GapFillCandidate[] | null {
   const parsed = parseAIJSON(text);
   const raw = parsed && Array.isArray(parsed.marks) ? (parsed.marks as unknown[]) : null;
   if (!raw) return null;
+  const cap = Math.max(0, Math.min(MAX_GAPFILL_CANDIDATES, maxCandidates));
   const out: GapFillCandidate[] = [];
-  for (const m of raw.slice(0, MAX_GAPFILL_CANDIDATES)) {
+  for (const m of raw.slice(0, cap)) {
     if (!m || typeof m !== 'object') continue;
     const r = m as Record<string, unknown>;
     const nx = Number(r.x), ny = Number(r.y);

@@ -202,6 +202,69 @@ export async function writeAiCountMarkers(
   }
 }
 
+/** Fix round (B2) — writes gap-fill's SUGGESTED marks (evidence round
+ *  4.3/4.4's reconciliation-triggered re-search) as `est_markups` rows with
+ *  `source: 'gap_fill'`, `status: 'suggested'` — exactly the same "AI
+ *  proposed, estimator confirms" shape as the counter's own marks
+ *  (writeAiCountMarkers), never a count on their own (B2's core rule).
+ *  Deduped against whatever the estimator already confirmed, the same way. */
+export async function writeGapFillMarkers(
+  bidId: string,
+  countResult: CountResult,
+  suggested: Array<{ typeKey: string; sheetKey: string; x: number; y: number }>,
+  files: PipelineFileRef[],
+  runId?: string | null,
+): Promise<{ written: number; skippedAlreadyMarked: number; writtenIds: string[] }> {
+  const out = { written: 0, skippedAlreadyMarked: 0, writtenIds: [] as string[] };
+  if (!suggested.length) return out;
+  const docByFile = await resolveDocumentsForFiles(bidId, files);
+  const lines = await getBidLines(bidId);
+  const lineByType = new Map(countResult.targets.map(t => [t.key, lineForType(t, lines)]));
+  const typeByKey = new Map(countResult.targets.map(t => [t.key, t]));
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    if (runId !== undefined) {
+      const { rows } = await client.query('SELECT run_id, status FROM takeoff_results WHERE bid_id = $1 FOR SHARE', [bidId]);
+      if ((rows[0]?.run_id ?? null) !== runId || rows[0]?.status === 'cancelled') { await client.query('ROLLBACK'); return out; }
+    }
+    const confirmed = await client.query(
+      `SELECT document_id, page_index, line_key, label, points FROM est_markups
+        WHERE bid_id = $1 AND status = 'confirmed' AND kind = 'count' AND deleted_at IS NULL`,
+      [bidId]
+    );
+    for (const s of suggested) {
+      const sheet = countResult.sheets.find(x => x.key === s.sheetKey);
+      const documentId = sheet ? docByFile.get(sheet.file) : undefined;
+      if (!sheet || !documentId) continue;
+      const pageIndex = sheet.page - 1;
+      const lineKey = lineByType.get(s.typeKey) ?? null;
+      const tag = typeByKey.get(s.typeKey)?.type ?? s.typeKey;
+      const dup = confirmed.rows.some(r => {
+        if (r.document_id !== documentId || Number(r.page_index) !== pageIndex) return false;
+        const p = (r.points as Array<{ x: number; y: number }>)[0];
+        if (!p || Math.hypot(p.x - s.x, p.y - s.y) > AI_MARKER_DEDUP_PT) return false;
+        return (r.label && String(r.label).toUpperCase() === tag.toUpperCase()) || (lineKey && r.line_key === lineKey);
+      });
+      if (dup) { out.skippedAlreadyMarked++; continue; }
+      const ins = await client.query(
+        `INSERT INTO est_markups (bid_id, document_id, page_index, line_key, kind, points, status, label, created_by, source, updated_at)
+         VALUES ($1, $2, $3, $4, 'count', $5::jsonb, 'suggested', $6, 'Gap-fill', 'gap_fill', now()) RETURNING id`,
+        [bidId, documentId, pageIndex, lineKey, JSON.stringify([{ x: s.x, y: s.y }]), tag]
+      );
+      out.writtenIds.push(ins.rows[0].id as string);
+      out.written++;
+    }
+    await client.query('COMMIT');
+    return out;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 /** POST markups/assign-ai: assigns every still-UNASSIGNED, still-suggested AI
  *  marker whose label maps to exactly one saved line. Never reassigns a
  *  marker the estimator (or an earlier assignment) already placed on a line,
