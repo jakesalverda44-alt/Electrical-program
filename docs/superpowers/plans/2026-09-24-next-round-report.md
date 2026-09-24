@@ -322,3 +322,156 @@ The pole-base assembly derived from North Port (auger 6 ft/pole, sono tube 9 ft/
 - `backend/src/bidstd/composeProposal.ts` (the `estimatorAlternates` input) and `backend/src/routes/preconstruction.ts` (wiring it through `composeCurrentBidData`).
 - `frontend/src/features/estimating/AccubidPricingPanel.tsx` / `useAccubidPricing.ts` — the new UI; deliberately plain (functional, not pixel-polished) given the time budget.
 - `backend/src/test/estimatingAccubidImportRoutes.test.ts` — worth a look specifically for WHY it uses synthetic tagged BOMs instead of the real fixtures (see the file's own header comment and the "real bug" note above).
+
+---
+
+# Fix round — Part A (review `2026-09-24-next-round-review.md`, MERGE AFTER FIXES)
+
+**Executor:** Opus 5. **Scope:** the Part A findings only: B1, B2, S1–S10, and N1–N10 and N12 (N6 was not asked for; it was fixed as well). Part B's findings are left to the Part B executor. No Part B file was changed.
+
+**Commits** (`0a78cb9..710f570`):
+
+| Commit | Findings |
+|---|---|
+| 0fe3a60 | B1, N1–N4, S7 (skips / lock), N7 |
+| 8d311d5 | S4, S6, N5, N6 |
+| dd23db1 | B2, S3, S5, S7 (supplement) |
+| a6b1f9a | S1, S2 |
+| 3b6188a | S8, S9, N10 |
+| 4aca32f | S10 |
+| 710f570 | N8, N9, N12 |
+
+**Migration 130:** `sheet_page_cache.cache_key`, and the primary key becomes (sha, page, cache_key). The next free number is 131.
+
+## Blockers
+
+- **B1 — the reference regex no longer invents sheets.**
+  - Pointers must be explicit: SEE, REFER TO, REFERENCE, PER, COORDINATE WITH, AS SHOWN ON, ON SHEET, ON DWG, SHEET, DWG, DETAIL. Bare ON / IN no longer count.
+  - An id with a space ("E 3") is accepted only after SHEET or DWG.
+  - An id is rejected when it is followed by AMP, A, V, a quote mark, FIXTURE(S), POLE(S), CIRCUIT(S), TYPE, LEVEL, REQUIREMENTS, SIDE, CONDUIT…, or preceded by TYPE, CKT, CIRCUIT, PANEL or POLE.
+  - An id that is not in the upload is reported missing only when it matches this set's own sheet-number pattern, learned from the inventory: prefixes, separators, digit count and decimals. Ids read by Haiku or vision are filtered the same way in `resolveRefs`.
+  - All of the reviewer's false cases are tests: 20 AMP, 4" SQ BOX, 1" CONDUIT, CIRCUIT ON C-3, S 1 SIDE, L-1 LEVEL, T-24 REQUIREMENTS, S1/S2 POLES, F2 FIXTURES, TYPE A1, CKT C-3, PANEL L-1, #12, 3/4", 20 AMP BREAKER and NEC 210.8.
+  - So are the true cases: SEE M-1, REFER TO SHEET C-3.1, PER PH0.1, 3/E-5, DETAIL 4 ON SHEET E-2, and SHEET E 3.
+  - "Run without N sheets" now lists the sheets in a confirm before it records them as not provided.
+- **B2 — the supplement pass leaves earlier markers alone.**
+  - It soft-deletes and rewrites AI markers only for what it re-counts: the new sheets, and on an earlier sheet only the new types.
+  - It resolves documents for the run's earlier files as well.
+  - The ids it changed are recorded in `takeoff_results.supplement.markers`, and `restore()` reverts exactly those.
+  - Tested:
+    - after a failed pass, the marker set is identical to before;
+    - after a successful pass, E-3's markers are kept and the new types are added.
+
+## Should-fix
+
+- **S1 — tile sizing against the API's real limits.** The Claude API vision docs (read 2026-09-24) give a long-edge limit and a visual-token limit, ⌈w/28⌉ × ⌈h/28⌉, per tier:
+
+  | Tier | Models | Long edge | Visual tokens |
+  |---|---|---|---|
+  | High-res | Claude 4.7+, e.g. Opus 5.5, Sonnet 5 | 2576 px | 4784 |
+  | Standard | everything else, e.g. Sonnet 4.6, Haiku 4.5 | 1568 px | 1568 |
+
+  - Tiles are now sent at exactly the size the server keeps (`fitImageToLimits`). They are sized so a square tile gets at least 196 px/in.
+  - **My A5 claims were wrong.** "Opus 5.5 245 px/in, sharper, 8.8k tokens, 1.6×" is incorrect. Worse, the standard path I kept as-is (8" tiles at 1568 px) was downscaled by the server to about 155 px/in, not the 196 it claimed.
+  - Real numbers (`countingRetry.test.ts` checks them):
+
+    | Counter model | Sheet | Tile | Tiles | Image tokens | px/in (min) |
+    |---|---|---|---|---|---|
+    | Opus 5.5, before (A5) | 36×24 | 10.5" | 12 | ≈57k | ≈219 (server-downscaled) |
+    | Opus 5.5, now | 36×24 | 9.8" | 12 | ≈57k | 219 |
+    | Opus 5.5, now | 42×30 | 9.8" | 20 | ≈94k | 231 |
+    | Standard, before | 36×24 | 8" | 20 | ≈31k | ≈155 (server-downscaled) |
+    | Standard, now | 36×24 | 5.5" | 42 | ≈65k | 214 |
+    | Standard, now | 42×30 | 5.5" | 63 | ≈98k | 214 |
+
+  - **Cost.** At the docs' Opus price of $5 per million input tokens, the image part of an Opus counter pass is about $0.29 per 36×24 sheet. On a standard-tier counter, the fix roughly doubles image tokens per sheet (about 31k → 65k), because the old path was being downscaled.
+  - **Not changed:** Agent 1's tiles (`documentPrep`). They are still sent at 1568 px, so on standard-tier models the server downscales them to about 1.2 MP, and `TOKENS_PER_TILE = 3000` over-estimates them for batching. That was outside A5, and I left it unchanged.
+- **S2 — the dense-area retry is narrower and never silent.**
+  - The retry asks only for the types the sheet flagged as unreadable, and replaces only those; every other type keeps its first-pass count.
+  - A lower recount raises a blocking `recount:<TYPE>` review item (count, or confirm). Its resolution is enforced on the GC documents.
+  - It runs at most once per sheet. The retry tile is never smaller than the tile that already reaches the 300 DPI raster: Opus 6.4", standard 3.6". Progress reads "Re-counting dense sheet N of M".
+  - **Cost of one retry**, on a 36×24 sheet:
+    - Opus: 30 tiles, about 121k image tokens, about 2.1× the first pass (about $0.60);
+    - standard tier: 117 tiles, about 169k tokens, about 2.6× the first pass.
+- **S3 — the supplement pass takes only genuinely new pages.**
+  - Each page is compared by content hash (its text layer).
+  - A page identical to one already in the run is skipped.
+  - A page whose sheet number is already in the run, but with different content, counts as a revision: the upload is refused with 409 and `fullRerun: true`, listing the sheets, and the estimator is told to run the full analysis again.
+  - The new files are planned against the run's pages. A lone M-1 is therefore a reference page: context for Agent 1, never counted.
+- **S4 — the reference cap only trims extras.**
+  - Explicitly referenced sheets and every photometric / site page always go.
+  - Only the "always useful" extras (RCP, life safety, equipment schedules) share the cap of 12.
+  - A broad discipline reference ("see civil") gives at most 3 pages.
+- **S5 — rejection before the claim, and a complete restore.**
+  - Every rejection (already in the run, a revised set, unreadable) happens before the claim.
+  - `restore()` now also puts back:
+    - the Agent 4 and draft run ids;
+    - the Agent 2, Agent 3 and counter usage and model columns.
+  - `restore()` never restores over a newer run.
+- **S6 — the classification cache key.**
+  - The key is now content + classifier model + a hash of the classifier prompt.
+  - A page the classifier never placed is not cached, so the next check classifies it again.
+  - A new "Re-classify pages" action (route flag and panel button) forgets the cache for the current files.
+- **S7 — skips.**
+  - The sheet-check PUT runs under a row lock. It is refused while a check is running, and refused when it names a different `inputKey`.
+  - Each skip carries the input key of the check it was made against, and is not honored after the inputs change.
+  - After a successful supplement, references the added pages satisfy become present, and their skips (and so their clarifications) are removed.
+- **S8 — the GC-scope gate.**
+  - New phrasings caught: "GC to / shall / will provide / furnish / install", "by / from the GC", "GC furnished / provided / installed".
+  - Power, temporary power, cabling, raceway and device boxes now count as electrical items.
+  - Scope bullets are scanned as well.
+  - The allow-list excuses only the items it covers, one item at a time.
+- **S9 — a bare "BY OWNER".**
+  - A bare "BY OWNER", owner's vendor, or vendor now means who **furnishes** the item. APT installs it, so a zero count still blocks.
+  - Only these are information: "by others", another trade, an explicit "installed by …", or N.I.C.
+- **S10 — the duplicate gate.**
+  - When both lines carry a type tag, the tag decides: "Pole light S1" matches "S1 site pole", and "Fixture type C" matches "Type C".
+  - These are no longer paired: 2x4 vs 2x2, quad vs duplex, USB vs duplex, A1 vs A2.
+  - "Same item — exclude the new line" is now a user exclusion, which acts as a tombstone that sync keeps. A test runs the sync and checks the pair does not come back.
+
+## Nits
+
+- **N1:** a pointer at the end of a line joins the next line.
+- **N2:** ranges expand ("E-1 THRU E-4" gives E-1 to E-4).
+- **N3:**
+  - A specific plan type suppresses the broad discipline in the same sentence.
+  - Every discipline reference needs a pointer, so a bare heading or an abbreviation list is not a reference.
+- **N4:** ids of up to 4 digits are read, and "E2.01" = "E-2.1".
+- **N5:**
+  - Page texts and plans are keyed by content hash.
+  - Two different files with the same name are renamed at intake ("Electrical (2).pdf").
+- **N6 (extra):** every vague notes sentence is read, 40 per Haiku call.
+- **N7:**
+  - The sheet-check PUT needs `run_analysis`.
+  - Overrides follow their sheet (number + title) into a revised file.
+- **N8:**
+  - A failed Agent 1 batch aborts its in-flight siblings.
+  - `usage_agent1` is written even when the run fails.
+  - Progress writes are chained, so they land in order.
+- **N9:** the server refuses a bulk resolution that spans cause groups. The one exception is "not on this job" across count items.
+- **N10:** "Signage by sign vendor, power by EC" reads as the vendor's sign with APT's connection, and "BY GC/EC" reads as APT.
+- **N12:** the stopAnalysis S2 test waits for the new run it started, and the progress test tolerates batch start order.
+
+## Kissimmee-shaped fixture
+
+**7 blocking items (of 12)**, against 14 for the same drawings run under the old rules.
+
+- **Changed because of S9:** D1 (data outlet, owner's vendor) and CM (camera, by owner) are now APT-installed. So the fixture's counter counts them on E-2, as it would on the real set; a zero would rightly block.
+- **The 7:**
+  - the E-2 / E-2.1 "same area?" pair (2 items);
+  - L and OS not found;
+  - the unscheduled "Site lights 4 (E-7)";
+  - the two power-pole halves, with APT pre-filled.
+
+## Test suites (one full run each, at the end)
+
+- **Backend:** **1746 passed, 3 failed, 4 not run** (1753 tests; 165 files: 162 passed, 2 failed, 1 lost to the worker crash).
+  - The failures are the known flakes: `intakeSimilarCache` ×2, the `integration` backfill timeout, and the `notificationsRetention` worker crash (its 4 tests are the 4 not run).
+  - The review's own run was 1696 passed, 4 failed, 4 not run, of 1704. The `stopAnalysis` failure it reported (N12) is fixed.
+- **Frontend:** **1280 / 1280** (128 files).
+- **tsc:** clean on both backend and frontend.
+
+## Not fixed / limits
+
+- **Agent 1 tile sizing** (see S1) is unchanged.
+- **Revision detection** compares page text. A scanned page with no text layer whose sheet number is already in the run is always treated as a revision, and gets the full re-run prompt. It is never silently added.
+- **No live runs.** Nothing ran against the Anthropic API.
