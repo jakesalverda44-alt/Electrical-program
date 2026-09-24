@@ -216,3 +216,17 @@ describe('fix round 3 / B12 — the conflict reaches the REAL review list', () =
     expect(dup[0].blocking).not.toBe(false);
   });
 });
+
+describe('fix round 3 / S17 — the schedule question reaches the review list and is enforced', () => {
+  it('two "EF (2)" circuits: schedqty item, 2 for now, "4 in all" enforced', () => {
+    const t = { ...targets.find(x => x.key === 'EF')! };
+    const tb = parseScheduleReply(JSON.stringify({ title: 'PANEL B', columns: ['CKT', 'BREAKER', 'DESCRIPTION', 'A'], rows: [['7', '20/1', 'EF (2)', '300'], ['9', '20/1', 'EF (2)', '300'], ['2', '-/1', 'SPACE', '0']].map(cells => ({ cells })) }),
+      { sheetKey: 'E-4', sheetLabel: 'E-4', viewportId: 'E-4@B', viewportTitle: 'PANEL B' })!;
+    const m = mergeCountsIntoTakeoff(base.agent1, [t], [input(49)], { countingRan: true, evidence: { tables: [tb], scheduleCounts: scheduleCounts([t], [tb]) } });
+    expect(m.types[0].count).toBe(2);
+    const items = buildReviewItems(cr(m, [t], {}));
+    const q = items.find(i => i.id === 'schedqty:EF')!;
+    expect(q).toMatchObject({ kind: 'area', keepQty: 2, sumQty: 4, group: 'schedule' });
+    expect(enforcedCounts(cr(m, [t], {}), items.map(i => (i.id === q.id ? { ...i, resolution: answer(i, 1).resolution } : i))).byType.get('EF')).toBe(4);
+  });
+});

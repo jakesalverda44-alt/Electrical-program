@@ -113,6 +113,8 @@ export interface TypeCountResult {
    *  the type's own count changes only once the estimator confirms that
    *  marker, at which point it is a 'marker' component like any other. */
   components?: { drawn: number; typical: number; schedule: number };
+  /** Fix round 3 / S17 — the schedule rows allow two readings (blocking). */
+  scheduleQuestion?: { keep: number; add: number; reason: string };
   /** Evidence round 3.2 — schedule rows that own this quantity. */
   scheduleRows?: Array<{ sheetKey: string; sheetLabel: string; tableId: string; table: string; rowIdx: number; cells: string[]; qty: number }>;
   /** Evidence round 2.2 — typical packages expanded into this type. */
@@ -571,6 +573,7 @@ export function mergeCountsIntoTakeoff(
         key: t.key, type: t.type, description: t.description, category: t.category, wattage: t.wattage,
         count: sc.qty, heads: null, status: 'counted', reason: '', sheets: [], flags: [`${t.type}: ${sc.qty} from the schedules — ${sc.note}.`],
         components: { drawn: 0, typical: 0, schedule: sc.qty },
+        ...(sc.question ? { scheduleQuestion: sc.question } : {}),
         scheduleRows: sc.rows.map(r => ({ sheetKey: r.sheetKey, sheetLabel: r.sheetLabel, tableId: r.tableId, table: r.table, rowIdx: r.rowIdx, cells: r.cells, qty: r.qty })),
       });
       continue;

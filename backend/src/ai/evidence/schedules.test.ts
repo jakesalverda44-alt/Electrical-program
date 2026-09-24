@@ -182,8 +182,10 @@ describe('fix round S10 — schedule over-counts', () => {
     { sheetKey: sheet, sheetLabel: sheet, viewportId: `${sheet}@${title}`, viewportTitle: title })!;
   const batt = eq('BATT CHGR', 'Battery chargers');
   const five = [15, 17, 19, 21, 23].map(c => [String(c), '20/1', 'BATT CHGR (5)', '1490']);
-  it('"(5)" repeated on each of five rows -> 5, not 25', () => {
-    expect(scheduleCounts([batt], [tbl('PANEL B', five)]).get('BATT CHGR')!.qty).toBe(5);
+  it('"(5)" repeated on each of five rows -> 5 for now, not 25 (fix round 3: and asked)', () => {
+    const c = scheduleCounts([batt], [tbl('PANEL B', five)]).get('BATT CHGR')!;
+    expect(c.qty).toBe(5);
+    expect(c.question).toMatchObject({ keep: 5, add: 25 });
   });
   it('a multi-pole load whose description repeats on each pole row -> one load', () => {
     const t = tbl('PANEL B', [['1', '60/3', 'RTU-1', '6124'], ['3', '60/3', 'RTU-1', '6124'], ['5', '60/3', 'RTU-1', '6124']]);
@@ -244,5 +246,25 @@ describe('fix round 3 / B12 — two buildings\' "PANEL A" are two panels', () =>
     const once = dedupePanels([b1('E-101 "POWER PLAN"'), b1('E-4 "SCHEDULES"')]);
     expect(once).toHaveLength(1);
     expect(dedupePanels(dedupePanels([b1('E-101'), b2('E-201')]))[0].warnings).toHaveLength(1);
+  });
+});
+
+describe('fix round 3 / S17 — "(n)" on some rows of a tag', () => {
+  const eq = (tag: string, description: string) => ({ type: tag, key: tag, description, symbolHint: '', wattage: null, category: 'equipment' as const, source: 'equipment_schedule' as const, sourceSheet: 'E-4', headsPerPole: null, emergency: false });
+  const tbl = (rows: string[][]) => parseScheduleReply(JSON.stringify({ title: 'PANEL B', columns: ['CKT', 'BREAKER', 'DESCRIPTION', 'A'], rows: [...rows, ['42', '-/1', 'SPACE', '0']].map(cells => ({ cells })) }),
+    { sheetKey: 'E-4', sheetLabel: 'E-4', viewportId: 'E-4@B', viewportTitle: 'PANEL B' })!;
+  it('BATT CHGR (5) on B-15 + four plain BATT CHGR rows -> 5 (the circuits feed the 5), no question (was 9)', () => {
+    const c = scheduleCounts([eq('BATT CHGR', 'Battery chargers')], [tbl([['15', '20/1', 'BATT CHGR (5)', '1490'], ...[17, 19, 21, 23].map(n => [String(n), '20/1', 'BATT CHGR', '1490'])])]).get('BATT CHGR')!;
+    expect(c.qty).toBe(5);
+    expect(c.question).toBeUndefined();
+  });
+  it('two circuits each "EF (2)" -> 2 for now and a question: 2 or 4', () => {
+    const c = scheduleCounts([eq('EF', 'Exhaust fan')], [tbl([['7', '20/1', 'EF (2)', '300'], ['9', '20/1', 'EF (2)', '300']])]).get('EF')!;
+    expect(c.qty).toBe(2);
+    expect(c.question).toMatchObject({ keep: 2, add: 4 });
+  });
+  it('"(2)" on one row but 3 circuits -> a question (2 or 4), never added silently', () => {
+    const c = scheduleCounts([eq('EF', 'Exhaust fan')], [tbl([['7', '20/1', 'EF (2)', '300'], ['9', '20/1', 'EF', '300'], ['11', '20/1', 'EF', '300']])]).get('EF')!;
+    expect(c).toMatchObject({ qty: 2, question: { keep: 2, add: 4 } });
   });
 });

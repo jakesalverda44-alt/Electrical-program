@@ -237,6 +237,22 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
         fingerprint: `viewport|${q.keep}|${q.add}|${q.items.map(x => `${x.sheet}:${x.viewport}:${x.count}`).join(';')}`,
       });
     }
+    // Fix round 3 / S17 — the schedule rows allow two quantities.
+    if (t.status === 'counted' && t.scheduleQuestion) {
+      const q = t.scheduleQuestion;
+      items.push({
+        id: `schedqty:${t.key}`,
+        kind: 'area',
+        title: `${title}: how many does the schedule mean?`,
+        detail: `${q.reason} (${(t.scheduleRows ?? []).map(r => `${r.table} ${r.cells.slice(0, 3).filter(Boolean).join(' ')}`).slice(0, 6).join('; ')})`,
+        options: [`${q.keep} in all`, `${q.add} in all`],
+        keepQty: q.keep,
+        sumQty: q.add,
+        actions: ['answer', 'count'],
+        ...base,
+        fingerprint: `schedqty|${q.keep}|${q.add}`,
+      });
+    }
     if (t.status === 'counted' && t.coverage?.length) {
       items.push({
         id: `coverage:${t.key}`,
@@ -715,7 +731,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';
   if (i.id.startsWith('reconcile:')) return 'reconcile';
-  if (i.id.startsWith('schedule:') || i.id.startsWith('panel-dup:')) return 'schedule';
+  if (i.id.startsWith('schedule:') || i.id.startsWith('panel-dup:') || i.id.startsWith('schedqty:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
   if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';
@@ -914,6 +930,8 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (area) qty = area.qty ?? qty;
     const vq = res(`viewport:${t.key}`);
     if (vq) qty = vq.qty ?? qty;
+    const sq = res(`schedqty:${t.key}`);
+    if (sq) qty = sq.qty ?? qty;
     const cov = res(`coverage:${t.key}`);
     if (cov) qty = cov.action === 'not_on_job' ? null : (cov.qty ?? qty);
     const rec = res(`recount:${t.key}`);

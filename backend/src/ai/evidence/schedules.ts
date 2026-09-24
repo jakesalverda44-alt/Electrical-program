@@ -343,6 +343,9 @@ export interface ScheduleCount {
   qty: number;
   rows: ScheduleEvidenceRow[];
   note: string;
+  /** Fix round 3 / S17 — the rows allow two readings: `keep` (used for
+   *  now) or `add`; the estimator decides. */
+  question?: { keep: number; add: number; reason: string };
 }
 
 const ABBREV: Array<[RegExp, string]> = [
@@ -493,19 +496,35 @@ export function scheduleCounts(targets: CountTarget[], tablesIn: ScheduleTable[]
     // one load: panel rows are the evidence when both exist.
     const panelEv = evidence.filter(e => tables.find(t => t.id === e.tableId)?.kind === 'panel');
     const rows = panelEv.length ? panelEv : evidence;
+    // Fix round 3 / S17 — "(n)" on the rows of one tag:
+    //   * one row says "(n)", the others are plain circuits for the same tag
+    //     and there are at most n rows -> n (the circuits feed the n units);
+    //   * more rows than n, or several rows each saying "(n)" -> n for now
+    //     and a QUESTION with both readings (never added silently).
     const mults = rows.filter(e => e.qty > 1).map(e => e.qty);
     let qty: number;
+    let question: ScheduleCount['question'];
     let note = `${rows.length} schedule row${rows.length === 1 ? '' : 's'} (${rows.map(e => `${e.table} ${e.cells.slice(0, 3).filter(Boolean).join(' ')}`).slice(0, 6).join('; ')})`;
-    if (mults.length > 1 && mults.every(m => m === mults[0])) {
-      // The same "(n)" on every row of this tag is the tag's total, once.
-      qty = Math.max(mults[0], rows.length);
-      note += ` — "(${mults[0]})" repeated on ${mults.length} rows counted once`;
+    if (!mults.length) {
+      qty = rows.length;
+    } else if (mults.length === 1 && rows.length <= mults[0]) {
+      qty = mults[0];
+      if (rows.length > 1) note += ` — "(${mults[0]})" on one row; the other ${rows.length - 1} circuit(s) feed the same ${mults[0]}`;
     } else {
-      qty = rows.reduce((s, e) => s + e.qty, 0);
+      const n = Math.max(...mults);
+      const added = rows.reduce((s, e) => s + e.qty, 0);
+      qty = n;
+      question = {
+        keep: n, add: added,
+        reason: mults.length > 1
+          ? `${mults.length} rows each say "(${[...new Set(mults)].join(')" / "(')})" — the same ${n} listed on each circuit, or ${added} in all?`
+          : `one row says "(${n})" but ${rows.length} circuits are listed — ${n} in all, or ${added}?`,
+      };
+      note += ` — ${question.reason} (${n} for now)`;
     }
     const descMult = multiplierOf(tgt.description);
     if (qty === 1 && descMult) { qty = descMult; note += ` × ${descMult} per the schedule description`; }
-    out.set(tgt.key, { key: tgt.key, qty, rows, note });
+    out.set(tgt.key, { key: tgt.key, qty, rows, note, ...(question ? { question } : {}) });
   }
   return out;
 }
