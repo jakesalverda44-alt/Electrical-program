@@ -388,3 +388,61 @@ Net: the traceable real total is **36** (42 − 5 synthetic − 1 B-32 double), 
   - 137 re-creates the `est_markups` source check as a superset of 113's (`ai_count` plus `gap_fill`), so existing rows validate. It is idempotent.
   - 138 is `CREATE UNIQUE INDEX IF NOT EXISTS`. Nit: it fails on a database that already holds duplicate `takeoff_eval_cases` rows, but only pre-merge dev databases that ran 136 could have them.
 - **N6/N7/N8:** the labeled-event caps, the 180-day cache purge and the frontend group order all look right.
+
+---
+
+## Round 3: fix range 3c66503..03bcfea
+
+**Scope:** new blockers and regressions only. Reviewed by Opus 5.5, read-only. No full suites were run: the targeted run was **20 files, 238/238 passed** (`src/ai/evidence/*`, `reviewItems`, `kissimmeeEvidence`, `gapFillEndToEnd`, `reviewGroupMembers`, `reviewBulk`, `evalCasesMigration139`, `supplementPass`). The scratch files were deleted and the worktree is clean.
+
+**Verdict: MERGE AFTER FIXES.**
+- Every Round 2 finding is closed.
+- One new blocker, B13, is in the per-type answer path. The fix is small.
+- Two should-fix items are worth doing in the same pass.
+
+### Round 2 repros, re-run
+
+| Finding | Result |
+|---|---|
+| B10 | **Closed.** The gap-fill item's "no more" answer keeps GFCI at **7**, never null. `gapfill:`/`reconcile:` items no longer offer `not_on_job`, so no bulk path reaches them. |
+| B11 | **Closed.** My repro now leaves S1 = 2 and S2 = 1, heads 2 / 2: an item-level resolution without members writes nothing. Each member answers separately, in its own unit. `count`/`markers` without `memberKey` on a finding that covers two or more types gives 400. |
+| B12 | **Closed.** Two buildings' PANEL A → WH **2**, circuits **3 + 4 = 7**, with separate lines per building. |
+| S15 | **Closed.** L1/L2, UPPER and "FLOORS 2-4" now parse as levels. A same-layout pair whose titles name no level becomes a blocking question, not a silent drop. |
+| S16 | **Closed.** Any bulk `/review/resolve` that includes equipment gets 400 (`takeoffReview.ts:226`). In the UI, equipment has no checkbox and is not in the group bulk. |
+| S17 | **Closed.** "BATT CHGR (5)" plus 4 plain rows → **5**, with no question. |
+| S18 | **Closed.** All four clean-up sites now match `source IN ('ai_count','gap_fill')`, including `rerunReset.ts:189`. |
+| S19 | **Closed on Kissimmee.** A-31 and A-29 now raise no question (`kissimmeeEvidence.test.ts:199`). See S21 for the general rule. |
+| Migrations 138/139 | **OK.** 138 is now a no-op. 139 deletes only duplicate eval-case rows (the newest per (bid, run, source) is kept, with an id tie-break), then creates the index. It is idempotent and passes the destructive-SQL guard. That table exists only on this branch. |
+
+### New blocker
+
+**B13. "Use confirmed markers" on a site-lighting member stores the pole-marker count as heads and derives the poles from that. Reproduced (`enforcedCounts`).**
+- **Where:**
+  - `backend/src/estimating/takeoffReview.ts:298-311`: `confirmedMarkersForType(bidId, t.key)` counts **pole symbols**. The result goes into the member's resolution unchanged, even when the member's `unit` is `'heads'`.
+  - `backend/src/ai/reviewItems.ts:1026-1036`: `byType.set(key:heads, qty)`, then `poles = qty / headsPerPole`.
+- **Scenario:**
+  - S2 is a twin-head pole (headsPerPole 2) with 1 pole counted and 2 heads.
+  - The schedule shows a heads shortfall, and gap-fill suggests a second S2 pole.
+  - The estimator confirms both pole markers and chooses "Use confirmed markers". The tally is 2.
+  - Result: **S2 heads = 2, poles = 1**. The truth is 2 poles and 4 heads, so both pole and head quantities drop.
+  - With a single-head pole and an odd tally, the heads value is simply wrong.
+- **Fix:** for a `unit: 'heads'` member, turn a markers tally into heads before storing it: `qty = tally × headsPerPole`, and poles = tally. If headsPerPole is unknown, write the tally to poles and ask for the heads. Otherwise, don't offer `markers` on heads members. Add a test through `/review/resolve`.
+
+### Should-fix
+
+- **S20. The same panel read on two sheets is summed when even one cell differs, and the blocking item's answer changes nothing. Reproduced.**
+  - Where: `backend/src/ai/evidence/schedules.ts:295-326` (the signature includes `loadVA`); `reviewItems.ts:541-558` (`panel-dup:` has only `confirm`).
+  - Scenario: PANEL B appears on E-4 and E-4.1. Two separate vision reads disagree on one load ("1,490" vs "1,940"). Result: **battery chargers 6 instead of 3**, and "Branch circuit 20/1 — Panel B" appears once per sheet (3 + 3), all VERIFIED. The item tells the estimator to correct Labor & Pricing by hand; "confirm" clears the block without fixing anything.
+  - Fix:
+    - Compare circuit numbers and descriptions only (not loads) when deciding whether two copies are the same panel.
+    - Give `panel-dup:` enforced answers: "the same panel — use <sheet>'s copy" (drop the other copy's circuit rows and equipment rows) or "two panels — keep both".
+- **S21. The at-host question is skipped whenever only one of the two marks shows a circuit, so a drawn outlet at a pole is summed with the pole's typical outlets. Reasoned.**
+  - Where: `backend/src/ai/evidence/typicals.ts:264`. `circuitOk` is `(!m && !h) || m === h`, so "one side tagged, the other not" means the marks are not the same device.
+  - Scenario: this is common. A drawn outlet carries its homerun tag ("A-40") and the pole's hexagon tag carries none, or the other way round. The question from Round 2 no longer fires, the expansion stands, and the drawn outlet is counted as well. The Round 1 over-count can come back on another sheet.
+  - A mis-read circuit tag suppresses the question the same way.
+  - Fix: skip the question only when **both** marks show circuit tags and those tags differ. Otherwise ask.
+
+### Nits
+
+- **N9.** A heads answer on a type whose headsPerPole is unknown leaves the poles as counted, and no item or flag says so (`reviewItems.ts:1031-1034`). Add a flag or info item: "poles not re-derived — confirm the pole count".
+- **N10.** The counter prompt now asks for a circuit tag on every mark. That adds a little output on dense lighting sheets, and a wrong tag only affects the at-host question (see S21). No count changes.
