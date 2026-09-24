@@ -9,6 +9,7 @@ import {
   type ReviewItem, type ResolveInput,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
+import { missingEvidenceTypes, manualLinesMissingReason } from '../ai/evidence/evidenceGate';
 
 export interface TakeoffReview {
   status: 'clear' | 'needs_review' | 'pending' | null;
@@ -70,6 +71,43 @@ export async function budgetPendingGate(bidId: string): Promise<GateBlock | null
   return {
     error: `A vendor quote is still budget-pending (${names.slice(0, 4).join('; ')}${names.length > 4 ? '; …' : ''}) — firm it up in Labor & Pricing before a proposal is generated or sent.`,
     openItems: [],
+  };
+}
+
+/** Evidence round 4.1 — the GC-facing evidence gate: every counted,
+ *  GC-facing type must carry evidence (a marker, a schedule row, a typical
+ *  expansion, an accepted gap-fill mark — ai/evidence/evidenceGate.ts), and
+ *  every manual line (or a hand-overridden takeoff quantity) needs a
+ *  reason. null = not blocked.
+ *
+ *  Deliberately NEVER called by generate-prebid-package / email-prebid-
+ *  chris, the same way budgetPendingGate is exempt for it: the pre-bid
+ *  package is internal, confidence-coded already (Decision, evidence round
+ *  plan), and composed before pricing exists at all. A GC-facing generate/
+ *  send route calls this the same way it calls takeoffGate / budgetPendingGate. */
+export async function evidenceGate(bidId: string): Promise<GateBlock | null> {
+  const { rows } = await pool.query('SELECT count_result FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  const cr = (rows[0]?.count_result as CountResult | null) ?? null;
+  const missingTypes = missingEvidenceTypes(cr?.types ?? []);
+  const missingLines = manualLinesMissingReason(await getBidLines(bidId));
+  if (!missingTypes.length && !missingLines.length) return null;
+  const openItems = [
+    ...missingTypes.map(t => ({
+      id: `evidence:${t.key}`, kind: 'count' as const,
+      title: `Type ${t.type}${t.description ? ` — ${t.description}` : ''}`,
+      detail: 'This counted quantity carries no evidence (no marker, schedule row, typical expansion, or accepted gap-fill mark) — check the Plans view or the Takeoff review.',
+    })),
+    ...missingLines.map(l => ({
+      id: `evidence:manual:${l.description || '(untitled line)'}`, kind: 'confirm' as const,
+      title: l.description || '(untitled line)',
+      detail: 'A manual line (or a hand-typed quantity) needs a reason in Labor & Pricing before it can go on a GC document.',
+    })),
+  ];
+  const names = openItems.map(i => i.title);
+  const n = openItems.length;
+  return {
+    error: `${n} takeoff line${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} evidence before a GC document can be generated or sent: ${names.slice(0, 4).join('; ')}${names.length > 4 ? '; …' : ''}. Add a marker/schedule reference, or a reason, in Labor & Pricing.`,
+    openItems,
   };
 }
 

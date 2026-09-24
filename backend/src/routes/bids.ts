@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { takeoffGate, budgetPendingGate } from '../estimating/takeoffReview';
+import { takeoffGate, budgetPendingGate, evidenceGate } from '../estimating/takeoffReview';
 import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, canRestore, AuthRequest, ownScopeId } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
@@ -381,6 +381,10 @@ router.post('/:id/draft-proposal', requireAuth, async (req: AuthRequest, res) =>
   // that internal package carries no pricing at all.
   const budgetGate = await budgetPendingGate(bid.id);
   if (budgetGate) return res.status(409).json({ error: budgetGate.error });
+  // Evidence round 4.1 — every GC-facing quantity needs evidence (or, for a
+  // manual/hand-typed line, a reason). Never applied to email-prebid-chris.
+  const evGate = await evidenceGate(bid.id);
+  if (evGate) return res.status(409).json({ error: evGate.error, reviewItems: evGate.openItems });
 
   const to = Array.isArray(req.body?.to)
     ? (req.body.to as unknown[]).map(e => String(e).trim()).filter(Boolean)

@@ -215,6 +215,9 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
       dup_ok: validDupOk(raw.dup_ok),
       source: raw.source as 'takeoff' | 'manual',
       sort: typeof raw.sort === 'number' ? raw.sort : undefined,
+      // Evidence round 4.1 — round-tripped like synced_description; the GC-
+      // facing evidence gate reads it back off the saved line.
+      evidence_note: typeof raw.evidence_note === 'string' ? raw.evidence_note.slice(0, 500) : null,
     });
   }
   return { ok: true, value: out };

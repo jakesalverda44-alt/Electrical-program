@@ -128,6 +128,12 @@ export interface ClientLineInput {
   dup_ok?: { with: string[]; reason: string; by?: string; at?: string } | null;
   source: 'takeoff' | 'manual';
   sort?: number;
+  /** Evidence round 4.1 — why a manual line, or a manually-overridden qty,
+   *  is what it is. The GC-facing evidence gate (ai/evidence/evidenceGate.ts)
+   *  requires this on a manual/allowance line before it will let a GC
+   *  document be generated; it is never required on a takeoff-sourced,
+   *  AI-evidenced line. */
+  evidence_note?: string | null;
 }
 
 export interface BidLineRow extends ClientLineInput {
@@ -219,6 +225,7 @@ function rowToBidLine(r: Record<string, unknown>): BidLineRow {
     dup_ok: (r.dup_ok as BidLineRow['dup_ok']) ?? null,
     source: r.source as 'takeoff' | 'manual',
     sort: Number(r.sort),
+    evidence_note: (r.evidence_note as string | null) ?? null,
   };
 }
 
@@ -1009,8 +1016,8 @@ export async function saveBidEstimate(
         `INSERT INTO est_bid_lines
            (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id,
             material_unit_override, labor_hours_override, confidence, excluded, source, qty_overridden, sync_excluded,
-            match_confidence, match_source, synced_description, line_key, qty_source, recheck_run_id, recheck_reason, dup_ok)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
+            match_confidence, match_source, synced_description, line_key, qty_source, recheck_run_id, recheck_reason, dup_ok, evidence_note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
         [bidId, l.sort, l.category, l.description, l.qty, l.unit,
          l.assembly_id ?? null, l.item_id ?? null, l.takeoff_key ?? null, l.takeoff_item_id ?? null,
          l.material_unit_override ?? null, l.labor_hours_override ?? null,
@@ -1040,7 +1047,11 @@ export async function saveBidEstimate(
          l.source === 'takeoff' ? (l.recheck_run_id ?? null) : null,
          l.source === 'takeoff' && l.recheck_run_id ? (l.recheck_reason ?? null) : null,
          // Next round A7 — "different items — keep both" (a kept line only).
-         l.source === 'takeoff' && l.dup_ok ? JSON.stringify(l.dup_ok) : null]
+         l.source === 'takeoff' && l.dup_ok ? JSON.stringify(l.dup_ok) : null,
+         // Evidence round 4.1 — round-tripped like sync_excluded/qty_source:
+         // the client sends back whatever it received, trimmed to null when
+         // blank so an empty string never counts as "has a reason".
+         (typeof l.evidence_note === 'string' && l.evidence_note.trim()) ? l.evidence_note.trim() : null]
       );
     }
 
