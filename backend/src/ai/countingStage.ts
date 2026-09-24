@@ -14,7 +14,7 @@ import { buildCountTargets, type CountTarget } from './countTargets';
 import { counterTileSpec, retryTileIn, type ModelImageLimits } from './modelLimits';
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
 import { planOffsetTiles, readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry, type TileRectIn } from './countRender';
-import { CONSISTENCY_PROMPT_VERSION, MAX_CONSISTENCY_SHEETS, MAX_CONSISTENCY_TILES, coverRect, consistencyTypes, entryOf, reconcilePasses, type ConsistencyEntry, type ConsistencySuggestion } from './evidence/consistency';
+import { CONSISTENCY_PROMPT_VERSION, MAX_CONSISTENCY_SHEETS, MAX_CONSISTENCY_TILES, agreeRadiusPt, coverRect, consistencyTypes, entryOf, reconcilePasses, type ConsistencyEntry, type ConsistencySuggestion } from './evidence/consistency';
 import { runCounter, type SheetCountResult } from './counter';
 import { mergeCountsIntoTakeoff, isSiteFixtureCategory, type CountMergeResult, type CountMergeEvidenceResult, type SheetCountInput } from './countMerge';
 import { logger } from '../utils/logger';
@@ -677,6 +677,7 @@ async function consistencyPass(
   const cacheKey = `${input.model}|${CONSISTENCY_PROMPT_VERSION}`;
   const zero = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
   const secondBySheet = new Map<string, SheetCountResult['placed']>();
+  const kindBySheet = new Map<string, string>();
   const rendered: Array<{ sheet: CountSheet; rendered: RenderedCountPage | null; renderError?: string }> = [];
   const pending: typeof jobs = [];
   let cached = 0;
@@ -698,7 +699,12 @@ async function consistencyPass(
       warnings.push(`${j.r.sheet.label}: consistency pass skipped (${rects.length} tiles over the cap)`);
       continue;
     }
-    const kind = `consistency:${j.types.map(t => t.typeKey).join('+')}:${tileIn}`;
+    // Review fix N7 — the cache key carries the shifted tiles covered and a
+    // hash of the first pass's marks: a re-run whose first pass differs
+    // never reuses a stale second pass.
+    const firstHash = sha256Of(Buffer.from(JSON.stringify(j.r.placed.filter(p => j.types.some(t => t.typeKey === p.typeKey)).map(p => [p.typeKey, Math.round(p.x ?? 0), Math.round(p.y ?? 0)]).sort()))).slice(0, 16);
+    const kind = `consistency:${j.types.map(t => t.typeKey).join('+')}:${tileIn}:${rects.map(r => r.id).sort().join(',')}:${firstHash}`;
+    kindBySheet.set(j.r.sheet.key, kind);
     const sha = sha256Of(pdf);
     if (cache) {
       try {
@@ -738,7 +744,7 @@ async function consistencyPass(
         secondBySheet.set(j.r.sheet.key, s2.placed);
         if (cache) {
           const pdf = input.pdfs.get(j.r.sheet.file)!;
-          await cache.set(sha256Of(pdf), j.r.sheet.page, `consistency:${j.types.map(t => t.typeKey).join('+')}:${tileIn}`, cacheKey, { placed: s2.placed })
+          await cache.set(sha256Of(pdf), j.r.sheet.page, kindBySheet.get(j.r.sheet.key)!, cacheKey, { placed: s2.placed })
             .catch(err => logger.warn({ err }, '[counting] consistency cache write failed'));
         }
       }
@@ -759,7 +765,12 @@ async function consistencyPass(
     const suggested: ConsistencySuggestion[] = [];
     const notReseen: ConsistencySuggestion[] = [];
     for (const t of j.types) {
-      const rec = reconcilePasses(j.r.placed.filter(p => p.typeKey === t.typeKey), p2.filter(p => p.typeKey === t.typeKey));
+      const firstMarks = j.r.placed.filter(p => p.typeKey === t.typeKey);
+      const radius = agreeRadiusPt(firstMarks);
+      const rec = reconcilePasses(firstMarks, p2.filter(p => p.typeKey === t.typeKey), radius);
+      // Review fix N6 — a second-pass mark within the radius of ANY counted
+      // mark is that symbol reported twice, never a suggestion.
+      rec.onlySecond = rec.onlySecond.filter(m => !firstMarks.some(f => Math.hypot(f.x - m.x, f.y - m.y) <= radius));
       entries.push(entryOf(j.r.sheet.key, j.r.sheet.label, t.typeKey, t.why, rec));
       // Review fix B1 — pass 1's marks stay counted, re-found or not; only
       // pass-2-only marks are suggestions (possible additions).

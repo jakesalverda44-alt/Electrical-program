@@ -71,7 +71,10 @@ describe('real-run fix 2 — the real Kissimmee type list', () => {
     expect(sc.get('WH')?.qty).toBe(1);
     expect([sc.get('FRONT WALL SIGN')?.qty, sc.get('SIDE WALL SIGN')?.qty, sc.get('PYLON SIGN')?.qty]).toEqual([1, 2, 1]);
     const live0 = scheduleCounts(realTargets(), live.countResult.evidence.tables);
-    expect([live0.has('ALC PANEL'), live0.has('WH'), live0.has('PYLON SIGN'), live0.has('FRONT WALL SIGN')]).toEqual([false, false, false, false]);
+    // (Review fix S13 — a row's distinguishing words must be the target's
+    // own, so even without consolidation FRONT WALL SIGN's row no longer
+    // goes to nobody: "SIGN" / "SIGN-JB" don't explain FRONT.)
+    expect([live0.has('ALC PANEL'), live0.has('WH'), live0.has('PYLON SIGN'), live0.has('FRONT WALL SIGN')]).toEqual([false, false, false, true]);
   });
 
   it('the live run\'s 24 blocking zero-count items: 9 were another name (7 folded now, T and POWER POLES after the count), 5 had rows a synonym made ambiguous (now owned)', () => {

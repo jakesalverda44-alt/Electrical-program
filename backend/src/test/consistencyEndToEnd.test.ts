@@ -126,3 +126,39 @@ describe('review fix S12 — a supplement on a run counted before consolidation 
     ]);
   });
 });
+
+describe('Round 2 fix S15 — confirmed consistency markers are never added again after a re-run', () => {
+  it('70 + 3 confirmed = 73; a re-run whose first pass finds 72 (2 of the 3 among them) -> 73, not 75', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bidId = await createBid(u.token);
+    const documentId = await insertPlanDoc(bidId);
+    const grid = (n: number) => Array.from({ length: n }, (_, i) => ({ sheetKey, typeKey: KEY, x: 50 + (i % 10) * 60, y: 50 + Math.floor(i / 10) * 45 }));
+    const extra = [{ x: 50, y: 500 }, { x: 110, y: 500 }, { x: 170, y: 500 }];
+    const runOf = (marks: ReturnType<typeof grid>, suggested: Array<{ x: number; y: number }>) => {
+      const c = cr();
+      c.types[0].count = marks.length;
+      c.marks = marks;
+      c.evidence!.consistency!.entries = [{ sheetKey, sheetLabel: 'E-3', typeKey: KEY, why: 'high count', first: marks.length, second: marks.length + suggested.length, agreed: marks.length, onlyFirst: 0, onlySecond: suggested.length, agreement: 1 }];
+      c.evidence!.consistency!.suggested = suggested.map(p => ({ typeKey: KEY, sheetKey, ...p, pass: 'second' as const }));
+      (c as unknown as { markers: unknown }).markers = { sheetDocuments: [{ sheetKey, label: 'E-3', documentId, pageIndex: 0 }] };
+      return c;
+    };
+    // Run 1: 70 counted, 3 suggested; the estimator confirms all 3 -> 73.
+    const c1 = runOf(grid(70), extra);
+    const items1 = buildReviewItems(c1);
+    await pool.query(`INSERT INTO takeoff_results (bid_id, status, count_result, review_items, review_status) VALUES ($1,'agent1_complete',$2,$3,'needs_review')`, [bidId, JSON.stringify(c1), JSON.stringify(items1)]);
+    const w = await writeGapFillMarkers(bidId, c1, c1.evidence!.consistency!.suggested, [{ file: 'plan.pdf', documentId, size: 10 }], null, 'Consistency check');
+    await pool.query(`UPDATE est_markups SET status = 'confirmed' WHERE id = ANY($1::uuid[])`, [w.writtenIds]);
+    const id1 = items1.find(i => i.id.startsWith('consistency:'))!.id;
+    const r1 = await request(app).post(`/api/preconstruction/${bidId}/review/resolve`).set(auth(u.token)).send({ itemIds: [id1], action: 'markers' }).expect(200);
+    expect(r1.body.items.find((i: ReviewItem) => i.id === id1).resolution.qty).toBe(73);
+    // Run 2 (re-run): the first pass finds 72 — the 70 plus two of the three.
+    const c2 = runOf([...grid(70), { sheetKey, typeKey: KEY, x: 52, y: 501 }, { sheetKey, typeKey: KEY, x: 109, y: 499 }], [{ x: 400, y: 600 }]);
+    const items2 = buildReviewItems(c2);
+    await pool.query('UPDATE takeoff_results SET count_result = $1, review_items = $2 WHERE bid_id = $3', [JSON.stringify(c2), JSON.stringify(items2), bidId]);
+    const id2 = items2.find(i => i.id.startsWith('consistency:'))!.id;
+    const r2 = await request(app).post(`/api/preconstruction/${bidId}/review/resolve`).set(auth(u.token)).send({ itemIds: [id2], action: 'markers' }).expect(200);
+    expect(r2.body.items.find((i: ReviewItem) => i.id === id2).resolution.qty).toBe(73);
+  });
+});

@@ -181,7 +181,7 @@ describe('countSheets with mocked passes', () => {
     const pass2 = [...grid.slice(1), { type: 'A', x: 13.5, y: 9.5 }];
     const a = fakeAnthropic(counter(grid, pass2));
     await run(a.client, [target('A')], cache);
-    expect([...store.keys()][0]).toMatch(/\|1\|consistency:A:6\.4\|claude-opus-5-5\|cs1$/);
+    expect([...store.keys()][0]).toMatch(/\|1\|consistency:A:6\.4:SR[^:]+:[0-9a-f]{16}\|claude-opus-5-5\|cs1$/);
     const b = fakeAnthropic(counter(grid, 'fail'));
     const out = await run(b.client, [target('A')], cache);
     expect(b.calls.filter(c => userText(c).includes('CONSISTENCY PASS')).length).toBe(0);

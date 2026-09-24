@@ -649,10 +649,13 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       kind: 'area',
       title: `Circuit ${c.circuit}: one receptacle drawn as ${name(c.kept.typeKey)} and as ${name(c.dropped.typeKey)}`,
       detail: `${c.kept.sheetLabel} draws it as ${name(c.kept.typeKey)} and ${c.dropped.sheetLabel} as ${name(c.dropped.typeKey)}, at the same place on the same circuit — one receptacle, counted once (as ${name(c.kept.typeKey)} for now). Which is it?`,
-      options: [`${name(c.kept.typeKey)} (as counted)`, name(c.dropped.typeKey)],
+      // Review fix S14 — or two real receptacles (a counter duplex and a
+      // floor simplex at one desk, one circuit): count both.
+      options: [`${name(c.kept.typeKey)} (as counted)`, name(c.dropped.typeKey), 'Two different receptacles — count both'],
       classShift: { from: c.kept.typeKey, to: c.dropped.typeKey },
       actions: ['answer'],
-      fingerprint: `classconflict|${c.kept.sheetLabel}|${c.dropped.sheetLabel}`,
+      // Review fix N8 — the circuit is part of the fingerprint.
+      fingerprint: `classconflict|${c.circuit}|${c.kept.sheetLabel}|${c.dropped.sheetLabel}`,
     });
   }
   // Review fix S3 — a combined tag whose own quantity disagrees with the
@@ -1145,7 +1148,21 @@ export function sheetIdCandidates(text: string): Array<{ id: string; index: numb
     if (/\s/.test(id) && !/[-.]/.test(id) && !KNOWN_SHEET_PREFIXES.has(prefix)) continue;
     out.push({ id: id.replace(/\s+/g, ' ').trim(), index: m.index });
   }
-  return out;
+  // Round 2 nit N9 — "E-8 thru E-10" names E-9 too (at most 20 between).
+  const ranged: Array<{ id: string; index: number }> = [];
+  for (let k = 0; k < out.length; k++) {
+    ranged.push(out[k]);
+    const a = out[k], b = out[k + 1];
+    if (!b) continue;
+    const between = text.slice(a.index + a.id.length, b.index);
+    if (!/^\s*(?:THRU|THROUGH|TO|-|–)\s*$/i.test(between)) continue;
+    const pa = /^([A-Za-z]+)(\s?[-.]?\s?)(\d+)$/.exec(a.id), pb = /^([A-Za-z]+)\s?[-.]?\s?(\d+)$/.exec(b.id);
+    if (!pa || !pb || pa[1].toUpperCase() !== pb[1].toUpperCase()) continue;
+    const lo = Number(pa[3]), hi = Number(pb[2]);
+    if (!(hi > lo && hi - lo <= 20)) continue;
+    for (let n = lo + 1; n < hi; n++) ranged.push({ id: `${pa[1]}${pa[2]}${n}`, index: a.index });
+  }
+  return ranged;
 }
 
 /** A re-run rebuilds the list; any item with the same id that the estimator
@@ -1339,9 +1356,13 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   }
   // Review fix S1 — the class conflict answered "the other class".
   for (const i of list) {
-    if (!i.id.startsWith('classconflict:') || !i.classShift || i.resolution?.action !== 'answer' || i.resolution.answer !== i.options?.[1]) continue;
+    if (!i.id.startsWith('classconflict:') || !i.classShift || i.resolution?.action !== 'answer') continue;
+    const pick = (i.options ?? []).indexOf(i.resolution.answer ?? '');
+    if (pick < 1) continue;
     const from = byType.get(i.classShift.from), to = byType.get(i.classShift.to);
-    if (from != null && from > 0) byType.set(i.classShift.from, from - 1 > 0 ? from - 1 : null);
+    // 1: relabel (one receptacle, the other class); 2: two receptacles —
+    // the dropped mark comes back under its own class.
+    if (pick === 1 && from != null && from > 0) byType.set(i.classShift.from, from - 1 > 0 ? from - 1 : null);
     if (to !== null) byType.set(i.classShift.to, (to ?? 0) + 1);
   }
   // Fix round S3 — "the same outlet on two sheets": subtract.

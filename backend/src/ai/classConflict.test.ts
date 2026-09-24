@@ -42,7 +42,7 @@ describe('review fix S1 — one receptacle under two class names on two sheets',
         { key: 'SIMPLEX', type: 'simplex', description: '', category: 'device', count: 8, heads: null, status: 'counted', reason: '', sheets: [], flags: [], wattage: null }],
       evidence: { tables: [], expansions: [], families: [], typicals: [], classConflicts: c } } as unknown as CountResult;
     const q = buildReviewItems(cr).find(i => i.id.startsWith('classconflict:'))!;
-    expect(q.options).toEqual(['Duplex (as counted)', 'simplex']);
+    expect(q.options).toEqual(['Duplex (as counted)', 'simplex', 'Two different receptacles — count both']);
     const e = enforcedCounts(cr, [{ ...q, resolution: { action: 'answer', answer: 'simplex', by: 'x', at: 'y' } }]);
     expect([e.byType.get('DUPLEX RECEPTACLE / FLOOR RECEPTACLE'), e.byType.get('SIMPLEX')]).toEqual([13, 9]);
   });

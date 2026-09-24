@@ -960,8 +960,15 @@ export function mergeCountsIntoTakeoff(
       // steel", "Site light pole locations (A-15 …)") are the counted pole
       // lines of the site family: never a second pole line. Bases,
       // foundations and arms are accessories and stay with the estimator.
+      // Round 2 nit N10 — an AREA / SITE light pole only: never a bollard or
+      // a pedestrian / walkway pole, and when both state a height the pole's
+      // must be within 5 ft of the site fixtures' mounting height.
+      const notLight = /\b(flag|camera|cctv|security|banner|sign|antenna|bollard|pedestrian|walkway|pathway|path|decorative|power\s+pole)\b/i.test(`${String(row.item ?? '')} ${String(row.spec ?? '')}`);
+      const poleFt = Number(/(\d{1,2})\s*(?:['’]|ft\b|feet\b)/i.exec(String(row.item ?? '').split(/,|;|\s[-–—]\s/)[0])?.[1] ?? NaN);
+      const mh = siteTypes.map(t => Number(/(\d{1,2})\s*(?:['’]|ft\b)\s*(?:-\s*0"?\s*)?MH\b|\bMH\s*(?:=\s*)?(\d{1,2})/i.exec(t.description)?.slice(1).find(Boolean) ?? NaN)).filter(Number.isFinite);
+      const heightOk = !Number.isFinite(poleFt) || !mh.length || mh.some(h => Math.abs(h - poleFt) <= 5);
       const ACCESSORY = /\bbases?\b(?!\s+cover)|\b(foundation|footing|arms?|bracket|power\s+poles?|pier|receptacles?|outlets?|gfci|gfi|photocells?|conduit|wire|wiring|j-?box|junction|handhole|pull\s*box)\b/i;
-      if (sitePolesCounted && /\b(light\s+)?poles?\b/i.test(String(row.item ?? ''))
+      if (sitePolesCounted && !notLight && heightOk && /\b(light\s+)?poles?\b/i.test(String(row.item ?? ''))
         && /\b(site|light|area|parking)\b/i.test(String(row.item ?? ''))
         && !ACCESSORY.test(String(row.item ?? ''))) {
         removedRows.push({ row, reason: `the site light poles — counted as ${sitePolesCounted} (site family), never stacked`, replacedByType: null });
@@ -979,8 +986,7 @@ export function mergeCountsIntoTakeoff(
       // luminaire / site lighting, or it comes from the photometric sheet;
       // a flag, camera, CCTV, banner or sign pole never.
       const lightPole = /\b(light(?:ing)?|luminaire|lamp|photometric)\b/i.test(`${String(row.item ?? '')} ${String(row.spec ?? '')}`) || /^PH/i.test(String(row.sourceSheet ?? '').trim());
-      const notLight = /\b(flag|camera|cctv|security|banner|sign|antenna|bollard|power\s+pole)\b/i.test(`${String(row.item ?? '')} ${String(row.spec ?? '')}`);
-      if (sitePolesCounted && lightPole && !notLight && /\b(?:steel|alum(?:inum|\.)?|square|round|tapered|\d+\s*['’]|\d+\s*(?:ft|feet))\b[^,;]*\bpoles?\b/i.test(headClause)
+      if (sitePolesCounted && lightPole && !notLight && heightOk && /\b(?:steel|alum(?:inum|\.)?|square|round|tapered|\d+\s*['’]|\d+\s*(?:ft|feet))\b[^,;]*\bpoles?\b/i.test(headClause)
         && !ACCESSORY.test(headClause) && Number(row.qty) === siteTotal) {
         removedRows.push({ row, reason: `the site light poles (${Number(row.qty)} — the counted ${sitePolesCounted}, site family), never stacked`, replacedByType: null });
         continue;

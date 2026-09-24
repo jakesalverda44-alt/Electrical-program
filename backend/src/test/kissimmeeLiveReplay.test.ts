@@ -254,17 +254,17 @@ describe('real-run fix 4 — no "panel schedules not read completely" item for t
 });
 
 describe('real-run fix 5 — dense-sheet consistency: a second pass on a shifted tile grid, reconciled by location', () => {
-  it('E-3: A 70 / 73 and B 45 / 52 — pass 1\'s 70 / 45 stay counted (all re-found), pass 2\'s extra 3 + 7 suggested', (ctx) => {
+  it('E-3: A 70 / 73 and B 45 / 52 — pass 1\'s 70 / 45 stay counted (all re-found), pass 2\'s extra 3 + 4 suggested (3 more B were double reports of counted marks — round 2 N6)', (ctx) => {
     if (!have) return ctx.skip();
     const c = after.cr.evidence!.consistency!;
     expect(c.entries.map(e => [e.sheetLabel.split(' ')[0], e.typeKey, e.why, e.first, e.second, e.agreed, e.onlyFirst, e.onlySecond, e.agreement])).toEqual([
       ['E-3', 'A', 'high count', 70, 73, 70, 0, 3, 1],
-      ['E-3', 'B', 'high count', 45, 52, 45, 0, 7, 1],
+      ['E-3', 'B', 'high count', 45, 49, 45, 0, 4, 1],
     ]);
     // Never auto-counted: A and B stay at the marks both passes found.
     const t = (k: string) => after.cr.types.find(x => x.key === k)!;
     expect([t('A').count, t('B').count]).toEqual([70, 45]);
-    expect(c.suggested.length).toBe(10);
+    expect(c.suggested.length).toBe(7);
     expect(c.suggested.every(s => s.pass === 'second' && s.sheetKey.endsWith('#51'))).toBe(true);
     // One review item for the check, answered type by type.
     const item = after.review.find(i => i.id === 'consistency:A+B')!;

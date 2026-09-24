@@ -500,7 +500,7 @@ export function circuitRefs(s: string): Array<{ panel: string; circuit: number }
   // count word does not follow it ("A-6, 180 VA" is A-6; "A-1, 3 phase"
   // and "A-12, 3 fixtures" are A-1 / A-12); no circuit is over 84.
   const UNIT = String.raw`\s*(?:VA|KVA|W|KW|WATTS?|PHASE|PH|FIXTURES?|AMPS?|A|HP|V|VOLTS?|LAMPS?|HEADS?|RECEPTACLES?|OUTLETS?|UNITS?|EA|POLES?|WIRES?)\b|\s*#`;
-  const re = new RegExp(String.raw`\b([A-Z]{1,3})\s*-\s*(\d{1,3}(?:\s*[,/&]\s*\d{1,3}(?![0-9#]|,\d{3}|${UNIT}))*)\b`, 'g');
+  const re = new RegExp(String.raw`\b([A-Z]{1,3})\s*-\s*(\d{1,3}(?:\s*[,/&]\s*\d{1,3}(?![0-9#]|,\d{3}|\s*-\s*#|${UNIT}))*)\b`, 'g');
   let m: RegExpExecArray | null;
   const up = s.toUpperCase();
   while ((m = re.exec(up))) {
@@ -543,15 +543,33 @@ export function rowNamesTarget(rowText: string, t: CountTarget): boolean {
  *  tag it names (a numbered tag wins over a word tag); else, only when it
  *  names no equipment target's tag at all, the ONE target its description
  *  matches (two description matches = nobody's: the counter keeps them). */
+/** Review fix S13 — a row's words a target does not explain (prefix-
+ *  tolerant: "INSTANT" is "INSTANTANEOUS"). "INSTANT WATER HEATER" is not
+ *  WH "Water heater" (INSTANT is unexplained) — it is IWH "Instantaneous
+ *  water heater", which explains every word. */
+const ROW_NEUTRAL = new Set(['ELECTRIC', 'ELECTRICAL', 'SPARE', 'UNIT', 'UNITS', 'EQUIPMENT', 'LOAD', 'LOADS', 'EACH']);
+function unexplainedWords(rowText: string, t: CountTarget): string[] {
+  const own = sigWords(`${t.type} ${t.description}`);
+  const explained = (w: string) => own.some(o => o === w || (Math.min(o.length, w.length) >= 4 && (o.startsWith(w) || w.startsWith(o))));
+  return sigWords(rowText).filter(w => !ROW_NEUTRAL.has(w) && !explained(w));
+}
+function leadMatches(rowText: string, t: CountTarget): boolean {
+  if (rowNamesTag(rowText, t)) return true;
+  const row = sigWords(rowText);
+  const lead = sigWords(t.description.split(/[,;(]/)[0] ?? '').slice(0, 3);
+  return lead.length >= 2 && lead.every(w => row.some(r => r === w || (Math.min(r.length, w.length) >= 4 && (r.startsWith(w) || w.startsWith(r)))));
+}
+
 function assignRow(rowText: string, candidates: CountTarget[], all: CountTarget[]): CountTarget | null {
   const byTag = all.filter(t => rowNamesTag(rowText, t));
-  if (byTag.length) {
-    const numbered = byTag.filter(t => tagRegex(t.type));
-    const pick = numbered.length ? numbered : byTag;
-    return pick.length === 1 && candidates.includes(pick[0]) ? pick[0] : null;
-  }
-  const byDesc = candidates.filter(t => rowNamesTarget(rowText, t));
-  return byDesc.length === 1 ? byDesc[0] : null;
+  const numbered = byTag.filter(t => tagRegex(t.type));
+  if (numbered.length) return numbered.length === 1 && candidates.includes(numbered[0]) ? numbered[0] : null;
+  // Word tags and descriptions: the row must name the target AND every word
+  // of the row must be the target's own — a row with a distinguishing word
+  // the target lacks belongs to the sibling that has it, or to nobody.
+  const named = [...new Set([...byTag, ...candidates.filter(t => leadMatches(rowText, t))])];
+  const clean = named.filter(t => unexplainedWords(rowText, t).length === 0);
+  return clean.length === 1 && candidates.includes(clean[0]) ? clean[0] : null;
 }
 
 /** Pure (3.2): schedule-owned quantities for equipment-schedule types.

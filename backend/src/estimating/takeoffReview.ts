@@ -10,6 +10,7 @@ import {
   type ReviewItem, type ResolveInput,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
+import { agreeRadiusPt } from '../ai/evidence/consistency';
 import { missingEvidenceTypes, manualLinesMissingReason } from '../ai/evidence/evidenceGate';
 import { logLabeledEvents } from './labeledEvents';
 
@@ -170,18 +171,38 @@ export async function confirmedMarkersForType(bidId: string, typeKey: string): P
 
 /** Review fix S8 — the consistency check's own SUGGESTED marks the
  *  estimator confirmed, for one type: "confirm the found marks" ADDS these
- *  to the kept (first-pass) count, never replaces it with a bid-wide tally. */
+ *  to the kept (first-pass) count, never replaces it with a bid-wide tally.
+ *  Round 2 fix S15 — a confirmed marker outlives a re-run: one the CURRENT
+ *  first pass already counts (within the same matching radius, on the same
+ *  sheet) is that fixture, never added again. */
 export async function confirmedConsistencyMarkers(bidId: string, typeKey: string): Promise<number> {
   const { rows } = await pool.query('SELECT count_result FROM takeoff_results WHERE bid_id = $1', [bidId]);
-  const cr = rows[0]?.count_result as CountResult | null;
+  const cr = rows[0]?.count_result as (CountResult & { markers?: { sheetDocuments?: Array<{ sheetKey: string; documentId: string; pageIndex: number }> } }) | null;
   const tag = (cr?.targets?.find(t => t.key === typeKey)?.type ?? typeKey).toUpperCase();
   const r = await pool.query(
-    `SELECT count(*)::int AS n FROM est_markups
+    `SELECT document_id, page_index, points FROM est_markups
       WHERE bid_id = $1 AND kind = 'count' AND status = 'confirmed' AND deleted_at IS NULL
         AND source = 'gap_fill' AND created_by = 'Consistency check' AND upper(coalesce(label, '')) = $2`,
     [bidId, tag]
   );
-  return Number(r.rows[0]?.n ?? 0);
+  const docs = cr?.markers?.sheetDocuments ?? [];
+  return extraConfirmedMarks(r.rows.map(x => ({
+    sheetKey: docs.find(d => d.documentId === x.document_id && d.pageIndex === Number(x.page_index))?.sheetKey ?? null,
+    point: (x.points as Array<{ x: number; y: number }>)?.[0] ?? null,
+  })), (cr?.marks ?? []).filter(m => m.typeKey === typeKey)).length;
+}
+
+/** Pure (S15): the confirmed marks the current first pass does not already
+ *  count. A marker on an unknown sheet, or with no point, is kept. */
+export function extraConfirmedMarks<T extends { sheetKey: string | null; point: { x: number; y: number } | null }>(
+  confirmed: T[], current: Array<{ sheetKey: string; x: number; y: number }>,
+): T[] {
+  return confirmed.filter(c => {
+    if (!c.sheetKey || !c.point) return true;
+    const mine = current.filter(m => m.sheetKey === c.sheetKey);
+    const radius = agreeRadiusPt(mine);
+    return !mine.some(m => Math.hypot(m.x - c.point!.x, m.y - c.point!.y) <= radius);
+  });
 }
 
 /** Back-compat: the number that counts. */
