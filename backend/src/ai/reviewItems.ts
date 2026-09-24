@@ -19,6 +19,7 @@
 import type { CountResult, CountMark } from './countingStage';
 import { outsideAptInstall, describeAssignment } from '../bidstd/tradeAssignment';
 import { facilityChecklistItems } from '../bidstd/facilityChecklists';
+import { PANEL_CONFLICT, panelNameOf } from './evidence/schedules';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -466,16 +467,35 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   }
   // Evidence round 3.1 — a panel schedule the reader could not transcribe
   // completely: its quantities are still used, the gap is shown.
+  // Fix round 3 / B12 — two panels of one name with different content: both
+  // are counted (two panels, or a revision?) — blocking until the estimator
+  // confirms, one item per panel name.
+  const conflictNames = new Set<string>();
   for (const tbl of ev?.tables ?? []) {
-    if (!tbl.warnings.length) continue;
+    if (tbl.kind !== 'panel' || !tbl.warnings.some(w => w.includes(PANEL_CONFLICT))) continue;
+    const name = panelNameOf(tbl.title);
+    if (conflictNames.has(name)) continue;
+    conflictNames.add(name);
+    const copies = (ev?.tables ?? []).filter(x => x.kind === 'panel' && panelNameOf(x.title) === name);
+    items.push({
+      id: `panel-dup:${name}`,
+      kind: 'confirm',
+      title: `Panel ${name} is read on ${copies.length} sheets with different content — two panels or one?`,
+      detail: `${copies.map(c => `${c.sheetLabel} (${c.rows.length} rows)`).join('; ')}. Both are counted now (their circuits and equipment are summed). If they are the SAME panel (a revision), correct the circuits and equipment in Labor & Pricing, then confirm here with a reason; if they are two panels, confirm that.`,
+      actions: ['confirm'],
+      fingerprint: `panel-dup|${name}|${copies.map(c => `${c.sheetLabel}:${c.rows.length}`).join(';')}`,
+    });
+  }
+  for (const tbl of ev?.tables ?? []) {
+    if (!tbl.warnings.filter(w => !w.includes(PANEL_CONFLICT)).length) continue;
     items.push({
       id: `schedule:${tbl.id}`,
       kind: 'confirm',
       blocking: false,
       title: `Schedule read incompletely: ${tbl.title} (${tbl.sheetLabel})`,
-      detail: `${tbl.warnings.join(' ')} Quantities taken from this table may be short — check it on the sheet.`,
+      detail: `${tbl.warnings.filter(w => !w.includes(PANEL_CONFLICT)).join(' ')} Quantities taken from this table may be short — check it on the sheet.`,
       actions: ['confirm'],
-      fingerprint: `schedule|${tbl.warnings.join('|')}`,
+      fingerprint: `schedule|${tbl.warnings.filter(w => !w.includes(PANEL_CONFLICT)).join('|')}`,
     });
   }
   // Next round A7 — a type counted only on the photometric sheet (the
@@ -662,6 +682,8 @@ export function riskRank(i: ReviewItem): number {
   if (i.category === 'equipment') return 0;
   if (i.category === 'site_lighting' || i.category === 'exterior_building') return 5;
   if (i.id.startsWith('family:')) return 10;
+  // Fix round 3 / B12 — a doubled panel moves circuits and equipment.
+  if (i.id.startsWith('panel-dup:') || i.id.startsWith('schedqty:')) return 11;
   // Fix round (B2) — a real reconciliation shortfall (a second source vs
   // the plans) is a direct $ risk signal, ranked with the other schedule-
   // derived mismatches.
@@ -693,7 +715,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';
   if (i.id.startsWith('reconcile:')) return 'reconcile';
-  if (i.id.startsWith('schedule:')) return 'schedule';
+  if (i.id.startsWith('schedule:') || i.id.startsWith('panel-dup:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
   if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';

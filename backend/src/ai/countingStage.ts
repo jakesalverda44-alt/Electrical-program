@@ -21,7 +21,7 @@ import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { runEvidenceStage, type EvidenceCache, type EvidencePage, type EvidenceStageOutput, type EvidenceUsage } from './evidence/evidenceStage';
 import { resolveSheetMarks, viewportPromptBlock, type EnlargedDecision, type SheetMarkResolution } from './evidence/viewportResolve';
 import { hostTargets, type TypicalPackage } from './evidence/typicals';
-import { isCompletePanel, scheduleCounts, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
+import { dedupePanels, isCompletePanel, scheduleCounts, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
 import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewports';
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
 import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillStage, sha256Of, type GapFillSheetAsset } from './evidence/gapFillStage';
@@ -436,6 +436,9 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
       client: input.client, model: input.evidence.model, maxTokens: input.evidence.maxTokens,
       pages, pdfs: input.pdfs, targets, cache: input.evidence.cache, shouldStop: input.shouldStop,
     });
+    // Fix round 3 / B12 — one table per panel identity and content, the
+    // same-name conflicts flagged ON THE STORED TABLES (the review list reads them).
+    ev.tables = dedupePanels(ev.tables);
     const hosts = hostTargets(ev.typicals, targets);
     const schedCounts = scheduleCounts(targets, ev.tables);
     allTargets = [...targets, ...hosts];
@@ -639,7 +642,7 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
       ? await runEvidenceStage({ client: input.client, model: input.evidence.model, maxTokens: input.evidence.maxTokens, pages, pdfs: input.pdfs, targets, cache: input.evidence.cache, shouldStop: input.shouldStop })
       : { pages: [], typicals: [], tables: [], usage: { ...ZERO_USAGE }, calls: 0, cached: 0, errors: [], model: input.evidence.model };
     ev.typicals = [...(input.prior.evidence?.typicals ?? []), ...ev.typicals];
-    ev.tables = [...(input.prior.evidence?.tables ?? []), ...ev.tables];
+    ev.tables = dedupePanels([...(input.prior.evidence?.tables ?? []), ...ev.tables]);
     const schedCounts = scheduleCounts(targets, ev.tables);
     allTargets = [...targets, ...hostTargets(ev.typicals, targets)];
     counterTargets = allTargets.filter(t => !schedCounts.has(t.key));

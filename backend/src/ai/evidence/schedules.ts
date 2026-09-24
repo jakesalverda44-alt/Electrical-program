@@ -18,6 +18,7 @@
 import { parseAIJSON } from '../json';
 import { normalizeTypeKey, type CountTarget } from '../countTargets';
 import type { RectIn, TextRun } from './viewports';
+import { areaOf } from '../countSheets';
 
 export type TableKind = 'panel' | 'fixture' | 'equipment' | 'load' | 'other';
 
@@ -282,22 +283,44 @@ export function isCompletePanel(t: ScheduleTable): boolean {
   return t.kind === 'panel' && !t.warnings.some(w => /incomplete|no circuit/.test(w));
 }
 
-/** Fix round S10 — the same panel read twice (on two sheets, or a revised
- *  copy): one table per panel name. Identical content -> the first is kept;
- *  different content -> the more complete one is kept and a warning added. */
+/** Fix round 3 / B12 — a panel's identity: its name AND the building /
+ *  area the sheet shows ("E-101 BUILDING 1 POWER PLAN" and "E-201 BUILDING 2
+ *  …" each have their own PANEL A). */
+export function panelIdentity(t: Pick<ScheduleTable, 'title' | 'sheetLabel'>): string {
+  const area = areaOf(t.sheetLabel.replace(/^\S+\s*/, ''));
+  return `${panelNameOf(t.title)}${area ? `|${area}` : ''}`;
+}
+
+/** The content signature: circuit numbers with their descriptions and loads. */
+export function panelSignature(t: ScheduleTable): string {
+  return panelCircuitRows(t).map(r => `${r.circuit}:${normDesc(r.description)}:${r.loadVA ?? ''}`).sort().join('|');
+}
+
+export const PANEL_CONFLICT = 'also read with different content';
+
+/** Fix round S10 + fix round 3 / B12 — the same panel read twice (a panel
+ *  schedule repeated on two sheets): one table per (name, building) AND
+ *  content signature. Same identity, same content -> one. Same name with
+ *  DIFFERENT content -> BOTH are kept (two panels, or a revision — the
+ *  estimator decides) and each carries a PANEL_CONFLICT warning, which the
+ *  counting stage stores on count_result.evidence.tables so the review list
+ *  raises a blocking item. Idempotent. */
 export function dedupePanels(tables: ScheduleTable[]): ScheduleTable[] {
   const out: ScheduleTable[] = [];
-  const sig = (t: ScheduleTable) => panelCircuitRows(t).map(r => `${r.circuit}:${normDesc(r.description)}`).sort().join('|');
   for (const t of tables) {
     if (t.kind !== 'panel') { out.push(t); continue; }
-    const name = panelNameOf(t.title);
-    const i = out.findIndex(o => o.kind === 'panel' && panelNameOf(o.title) === name);
-    if (i < 0) { out.push(t); continue; }
-    const o = out[i];
-    if (sig(o) === sig(t)) continue;
-    const better = (isCompletePanel(t) && !isCompletePanel(o)) || (isCompletePanel(t) === isCompletePanel(o) && t.rows.length > o.rows.length) ? t : o;
-    const other = better === t ? o : t;
-    out[i] = { ...better, warnings: [...better.warnings, `Panel ${name} is also read on ${other.sheetLabel} with different content — ${better.sheetLabel}'s copy used; check which is current`] };
+    const id = panelIdentity(t);
+    const sig = panelSignature(t);
+    if (out.some(o => o.kind === 'panel' && panelIdentity(o) === id && panelSignature(o) === sig)) continue;
+    out.push({ ...t, warnings: [...t.warnings] });
+  }
+  for (const t of out) {
+    if (t.kind !== 'panel') continue;
+    const others = out.filter(o => o !== t && o.kind === 'panel' && panelNameOf(o.title) === panelNameOf(t.title) && panelIdentity(o) === panelIdentity(t));
+    for (const o of others) {
+      const w = `Panel ${panelNameOf(t.title)} is ${PANEL_CONFLICT} on ${o.sheetLabel} — both kept (two panels of that name, or a revision?)`;
+      if (!t.warnings.includes(w)) t.warnings.push(w);
+    }
   }
   return out;
 }
@@ -508,9 +531,11 @@ export function panelsNamedIn(item: string): string[] {
  *  read panel and breaker size, with the rows as evidence; `panels` = the
  *  panels they cover. SPARE / SPACE and continuation rows are not circuits;
  *  a panel read twice is counted once. */
-export function circuitSummaryRows(tablesIn: ScheduleTable[]): Array<{ row: Record<string, unknown>; evidence: ScheduleEvidenceRow[]; panel: string }> {
-  const out: Array<{ row: Record<string, unknown>; evidence: ScheduleEvidenceRow[]; panel: string }> = [];
-  for (const t of dedupePanels(tablesIn).filter(isCompletePanel)) {
+export function circuitSummaryRows(tablesIn: ScheduleTable[]): Array<{ row: Record<string, unknown>; evidence: ScheduleEvidenceRow[]; panel: string; sheetKey: string }> {
+  const out: Array<{ row: Record<string, unknown>; evidence: ScheduleEvidenceRow[]; panel: string; sheetKey: string }> = [];
+  const complete = dedupePanels(tablesIn).filter(isCompletePanel);
+  const nameCount = (n: string) => complete.filter(x => panelNameOf(x.title) === n).length;
+  for (const t of complete) {
     const groups = new Map<string, PanelCircuitRow[]>();
     for (const r of panelCircuitRows(t)) {
       if (r.continuation || !r.description || isEmptyLoad(r.description)) continue;
@@ -521,9 +546,9 @@ export function circuitSummaryRows(tablesIn: ScheduleTable[]): Array<{ row: Reco
     }
     for (const [k, rs] of groups) {
       out.push({
-        panel: rs[0].panel,
+        panel: rs[0].panel, sheetKey: t.sheetKey,
         row: {
-          category: 'Branch Power', item: `Branch circuit ${k} — Panel ${rs[0].panel}`, qty: rs.length, unit: 'EA',
+          category: 'Branch Power', item: `Branch circuit ${k} — Panel ${rs[0].panel}${panelIdentity(t).includes('|') ? ` (${panelIdentity(t).split('|')[1]})` : ''}${nameCount(panelNameOf(t.title)) > 1 && !panelIdentity(t).includes('|') ? ` — ${t.sheetLabel.split(' ')[0]}` : ''}`, qty: rs.length, unit: 'EA',
           spec: rs.map(r => `${r.circuit} ${r.description}`).join('; ').slice(0, 300), sourceSheet: t.sheetLabel.split(' ')[0], confidence: 'VERIFIED',
           countedBy: 'schedule',
         },

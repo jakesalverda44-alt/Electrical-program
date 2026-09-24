@@ -11,7 +11,7 @@ import type { CountResult } from '../countingStage';
 import { parseViewportReply, type SheetGeom } from './viewports';
 import { resolveSheetMarks } from './viewportResolve';
 import { parseTypicalsReply, hostTargets } from './typicals';
-import { parseScheduleReply, scheduleCounts } from './schedules';
+import { parseScheduleReply, scheduleCounts, dedupePanels } from './schedules';
 import { selectCountSheets } from '../countSheets';
 import { VIEWPORT_REPLIES, TYPICALS_REPLIES, TABLE_REPLIES, E1_RESTROOM_REPEATS } from '../../test/fixtures/evidence/kissimmeeReplies';
 import { loadKissimmeeBaseline, KISSIMMEE_FILE } from '../../test/fixtures/evidence/kissimmeeBaseline';
@@ -200,5 +200,19 @@ describe('fix round S9 — Agent 1 circuit rows are replaced per panel, only whe
     expect(m.quantities.some(q => q.item === 'Lighting branch circuits 20/1 (work, sales)')).toBe(true);
     expect(m.quantities.some(q => /^Branch circuit /.test(String(q.item)))).toBe(false);
     expect(m.flags.join(' ')).toMatch(/not every panel \(B\)/);
+  });
+});
+
+describe('fix round 3 / B12 — the conflict reaches the REAL review list', () => {
+  it('two different "PANEL A" tables stored on count_result.evidence.tables raise one blocking panel-dup item', () => {
+    const mk = (label: string, desc: string) => parseScheduleReply(JSON.stringify({ title: 'PANEL A', columns: ['CKT', 'BREAKER', 'DESCRIPTION', 'A'], rows: [['1', '20/1', desc, '900'], ['2', '-/1', 'SPACE', '0'], ['3', '20/1', 'WH', '1500']].map(cells => ({ cells })) }),
+      { sheetKey: label, sheetLabel: label, viewportId: `${label}@A`, viewportTitle: 'PANEL A' })!;
+    const tables = dedupePanels([mk('E-101', 'LIGHTING'), mk('E-201', 'RECEPTACLES')]);
+    const m = mergeCountsIntoTakeoff(base.agent1, targets, [input(49), input(50), ...others()], { countingRan: true, evidence: { tables } });
+    const items = buildReviewItems(cr(m, targets, { tables }));
+    const dup = items.filter(i => i.id.startsWith('panel-dup:'));
+    expect(dup).toHaveLength(1);
+    expect(dup[0]).toMatchObject({ id: 'panel-dup:A', kind: 'confirm', group: 'schedule' });
+    expect(dup[0].blocking).not.toBe(false);
   });
 });

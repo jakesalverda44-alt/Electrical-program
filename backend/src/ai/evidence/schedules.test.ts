@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { buildCountTargets } from '../countTargets';
 import {
   parseScheduleReply, tableFromRuns, panelCircuitRows, panelContinuity, scheduleCounts, multiplierOf, circuitRefs,
-  isCircuitCountRow, circuitSummaryRows, rowNamesTarget, tableKindOf, isCompletePanel, isEmptyLoad, panelNameOf, panelsNamedIn, type ScheduleTable,
+  isCircuitCountRow, circuitSummaryRows, rowNamesTarget, tableKindOf, isCompletePanel, isEmptyLoad, panelNameOf, panelsNamedIn, dedupePanels, panelIdentity, PANEL_CONFLICT, type ScheduleTable,
 } from './schedules';
 import { TABLE_REPLIES } from '../../test/fixtures/evidence/kissimmeeReplies';
 import { loadKissimmeeBaseline } from '../../test/fixtures/evidence/kissimmeeBaseline';
@@ -216,5 +216,33 @@ describe('fix round S9 — Agent 1 circuit rows', () => {
     expect(isCircuitCountRow({ item: '20A high magnetic breaker B-20' })).toBe(false);
     expect(panelsNamedIn('20/1 branch circuits Panel A (non-lighting)')).toEqual(['A']);
     expect(panelsNamedIn('Branch circuits Panels A & B')).toEqual(['A', 'B']);
+  });
+});
+
+describe('fix round 3 / B12 — two buildings\' "PANEL A" are two panels', () => {
+  const wh = { type: 'WH', key: 'WH', description: 'Water heater', symbolHint: '', wattage: null, category: 'equipment' as const, source: 'equipment_schedule' as const, sourceSheet: 'P-1', headsPerPole: null, emergency: false };
+  const pa = (sheetLabel: string, rows: string[][]) => parseScheduleReply(JSON.stringify({ title: 'PANEL A', columns: ['CKT', 'BREAKER', 'DESCRIPTION', 'A'], rows: [...rows, ['42', '-/1', 'SPACE', '0']].map(cells => ({ cells })) }),
+    { sheetKey: sheetLabel, sheetLabel, viewportId: `${sheetLabel}@A`, viewportTitle: 'PANEL A' })!;
+  const b1 = (label: string) => pa(label, [['1', '20/1', 'WATER HEATER', '1500'], ['3', '20/1', 'LIGHTING', '900'], ['5', '20/1', 'LIGHTING', '800']]);
+  const b2 = (label: string) => pa(label, [['1', '20/1', 'WATER HEATER', '1500'], ['3', '20/1', 'RECEPTACLES', '900'], ['5', '20/1', 'RECEPTACLES', '720'], ['7', '20/1', 'RECEPTACLES', '540']]);
+  it('the reviewer\'s repro (no building names in the titles): water heaters 2, Panel A circuits 7, both flagged', () => {
+    const tables = dedupePanels([b1('E-101 "POWER PLAN"'), b2('E-201 "POWER PLAN"')]);
+    expect(tables).toHaveLength(2);
+    expect(tables.every(t => t.warnings.some(w => w.includes(PANEL_CONFLICT)))).toBe(true);
+    expect(scheduleCounts([wh], tables).get('WH')!.qty).toBe(2);
+    expect(circuitSummaryRows(tables).reduce((s, r) => s + Number(r.row.qty), 0)).toBe(7);
+    // A conflict never makes a panel "incomplete".
+    expect(tables.every(isCompletePanel)).toBe(true);
+  });
+  it('titles naming the buildings: two identities, no conflict, lines per building', () => {
+    const tables = dedupePanels([b1('E-101 "BUILDING 1 POWER PLAN"'), b2('E-201 "BUILDING 2 POWER PLAN"')]);
+    expect(tables.map(panelIdentity)).toEqual(['A|BUILDING 1', 'A|BUILDING 2']);
+    expect(tables.every(t => t.warnings.length === 0)).toBe(true);
+    expect(circuitSummaryRows(tables).map(r => r.row.item)).toEqual(['Branch circuit 20/1 — Panel A (BUILDING 1)', 'Branch circuit 20/1 — Panel A (BUILDING 2)']);
+  });
+  it('the same panel with the same content on two sheets -> one; idempotent', () => {
+    const once = dedupePanels([b1('E-101 "POWER PLAN"'), b1('E-4 "SCHEDULES"')]);
+    expect(once).toHaveLength(1);
+    expect(dedupePanels(dedupePanels([b1('E-101'), b2('E-201')]))[0].warnings).toHaveLength(1);
   });
 });
