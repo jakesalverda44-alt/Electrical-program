@@ -18,7 +18,7 @@ import { blankWorkspace, PcWorkspace } from './constants';
 import { ConfirmProvider } from '../../components/ConfirmDialog';
 import { Bid } from '../../types';
 import { DEFAULT_SETTINGS, EMPTY_RECAP, type EstimateLine } from '../estimating/types';
-import { rerunPlan } from './PcWorkspace/rerunReset';
+import { rerunPlan, RerunConfirmBody } from './PcWorkspace/rerunReset';
 
 afterEach(() => { cleanup(); window.history.replaceState(null, '', '/'); get.mockReset(); post.mockReset(); put.mockReset(); del.mockReset(); });
 
@@ -91,7 +91,7 @@ function mockApi(opts: { results?: Record<string, unknown> | null; resultsAfterS
   post.mockImplementation((url: string) => {
     if (url === '/preconstruction/analyze') return Promise.resolve({ data: { status: 'running', totalFiles: 1, runId: 'run-2', reset: RESET, excludedInputs: [] } });
     if (url === `/estimating/${bid.id}/price`) return Promise.resolve({ data: { recap: EMPTY_RECAP } });
-    if (url === `/preconstruction/${bid.id}/stop-analysis`) { stopped = true; return Promise.resolve({ data: { message: 'Stopped by Jake', stopped: {}, aborted: 1 } }); }
+    if (url === `/preconstruction/${bid.id}/stop-analysis`) { stopped = true; return Promise.resolve({ data: { message: 'Stopped by Jake', stopped: { analysis: true, agent4: true, draft: true }, aborted: 1 } }); }
     return Promise.resolve({ data: {} });
   });
   put.mockResolvedValue({ data: {} });
@@ -162,8 +162,8 @@ describe('Re-run Analysis — confirm lists what is cleared and kept; every pane
 
     // RFIs panel shows the fresh list.
     fireEvent.click(screen.getAllByTestId('est-step-scope')[0]);
-    await screen.findByText('Jake: who furnishes the poles?');
-    expect(screen.queryByText('AI: confirm Type A count?')).toBeNull();
+    await screen.findByDisplayValue('Jake: who furnishes the poles?');
+    expect(screen.queryByDisplayValue('AI: confirm Type A count?')).toBeNull();
 
     // Labor & Pricing: the kept line is flagged and can be marked checked.
     fireEvent.click(screen.getAllByTestId('est-step-pricing')[0]);
@@ -221,7 +221,7 @@ describe('Re-run Analysis — confirm lists what is cleared and kept; every pane
 describe('rerunPlan — mirrors the server rules for the dialog', () => {
   it('counts AI RFIs nobody acted on, untouched takeoff lines, touched and manual lines', () => {
     const plan = rerunPlan({ rfis: RFIS, lines: LINES_BEFORE, savedGrandTotal: 23173, bidAmount: 23173, pricingDirty: true });
-    expect(plan).toEqual({ aiRfis: 1, keptRfis: 2, clearedLines: 1, keptTouchedLines: 1, manualLines: 1, amount: 23173, pricingDirty: true });
+    expect(plan).toEqual({ aiRfis: 1, keptRfis: 2, clearedLines: 1, keptTouchedLines: 1, manualLines: 1, amount: 23173, amountCleared: true, scopeCleared: 0, scopeKept: 0, pricingDirty: true, markupUnsaved: false });
     // A pre-migration RFI (no origin) with the import's id shape counts as AI.
     const legacy = rerunPlan({ rfis: [{ id: '1.5', question: 'q', submitted: false, answer: '' }], lines: [], savedGrandTotal: null, bidAmount: null, pricingDirty: false });
     expect(legacy.aiRfis).toBe(1);
@@ -310,5 +310,110 @@ describe('Stop analysis — button states', () => {
     expect(screen.getByTestId('prebid-draft-stopped').textContent).toContain('Stopped by Jake');
     expect(screen.queryByTestId('stop-draft')).toBeNull();
     expect(screen.getByText('Compose the draft again')).toBeTruthy();
+  });
+});
+
+
+// ── Fix round (review 2026-09-24) ───────────────────────────────────────────
+
+describe('fix round B2 — the confirm shows the actual bid amount, cleared only when it is the estimate', () => {
+  const base = { rfis: [], lines: [], pricingDirty: false };
+  it('a typed amount that differs from the estimate is listed as kept', () => {
+    const plan = rerunPlan({ ...base, savedGrandTotal: 23173, bidAmount: 25000 });
+    expect(plan).toMatchObject({ amount: 25000, amountCleared: false });
+    render(<RerunConfirmBody plan={plan}/>);
+    expect(screen.getByTestId('rerun-amount-kept').textContent).toContain('$25,000');
+    expect(screen.getByTestId('rerun-amount-cleared').textContent).not.toContain('$');
+  });
+  it('an amount equal to the estimate (or the Agent 4 price) to the cent is listed as cleared', () => {
+    expect(rerunPlan({ ...base, savedGrandTotal: 23173.45, bidAmount: 23173.45 }).amountCleared).toBe(true);
+    expect(rerunPlan({ ...base, savedGrandTotal: 23173.45, bidAmount: 23173.46 }).amountCleared).toBe(false);
+    const plan = rerunPlan({ ...base, savedGrandTotal: null, agent4Price: 81485.6, bidAmount: 81485.6 });
+    render(<RerunConfirmBody plan={plan}/>);
+    expect(screen.getByTestId('rerun-amount-cleared').textContent).toContain('bid amount ($81,486) that came from it');
+    expect(screen.queryByTestId('rerun-amount-kept')).toBeNull();
+  });
+  it('S6 — the confirm warns about plan markup still saving', () => {
+    render(<RerunConfirmBody plan={rerunPlan({ ...base, savedGrandTotal: null, bidAmount: null, markupUnsaved: true })}/>);
+    expect(screen.getByTestId('rerun-markup-warning')).toBeTruthy();
+  });
+});
+
+describe('fix round S4 / S5 / S1 / S3 in the workspace', () => {
+  it('S4 — the reset installs the kept scope sections, flagged; editing one clears its flag', async () => {
+    mockApi({ results: { status: 'complete', run_id: 'run-1', agent2_output: '{}' } });
+    post.mockImplementation((url: string) => {
+      if (url === '/preconstruction/analyze') {
+        return Promise.resolve({ data: { status: 'running', totalFiles: 1, runId: 'run-2', excludedInputs: [], reset: {
+          ...RESET, scope: { B: 'Jake typed branch power' }, scopeMeta: { ai: {}, recheck: ['B'] }, scopeCleared: ['A'],
+        } } });
+      }
+      if (url === `/estimating/${bid.id}/price`) return Promise.resolve({ data: { recap: EMPTY_RECAP } });
+      return Promise.resolve({ data: {} });
+    });
+    render(<Harness initial={{ activeTab: 'files', aiDone: true, rfis: RFIS,
+      scope: { A: 'AI service text', B: 'Jake typed branch power' }, scopeMeta: { ai: { A: 'AI service text' } } }}/>);
+    fireEvent.click(await screen.findByTestId('project-doc-checkbox-d-plan'));
+    fireEvent.click(screen.getAllByTestId('est-step-takeoff')[0]);
+    fireEvent.click(await screen.findByTestId('rerun-analysis'));
+    const body = await screen.findByTestId('rerun-confirm-body');
+    expect(within(body).getByTestId('rerun-clears').textContent).toContain('1 Scope of Work section the AI filled');
+    expect(within(body).getByTestId('rerun-keeps').textContent).toContain('1 Scope of Work section you typed or edited');
+    fireEvent.click(within(dialog()).getByText('Clear and re-run'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/analyze', expect.any(FormData), expect.anything()));
+    fireEvent.click(screen.getAllByTestId('est-step-scope')[0]);
+    expect(await screen.findByTestId('scope-recheck-B')).toBeTruthy();
+    expect((screen.getByTestId('scope-text-A') as HTMLTextAreaElement).value).toBe('');
+    fireEvent.change(screen.getByTestId('scope-text-B'), { target: { value: 'Jake typed branch power (checked)' } });
+    await waitFor(() => expect(screen.queryByTestId('scope-recheck-B')).toBeNull());
+  });
+
+  it('S5 — editing an imported AI RFI makes it the estimator\'s own (origin manual)', async () => {
+    mockApi({ results: { status: 'complete', run_id: 'run-1', agent2_output: '{}' } });
+    render(<Harness initial={{ activeTab: 'rfis', rfis: RFIS }}/>);
+    const input = await screen.findByTestId('rfi-question-1790000000000.11');
+    fireEvent.change(input, { target: { value: 'Confirm the Type A count on E-2.1 and E-2.2?' } });
+    await waitFor(() => {
+      const puts = put.mock.calls.filter(c => c[0] === `/preconstruction/${bid.id}/workspace`);
+      const last = puts[puts.length - 1];
+      expect(last).toBeTruthy();
+      const r = (last![1] as { rfis: Array<{ id: string; question: string; origin: string }> }).rfis.find(x => x.id === '1790000000000.11')!;
+      expect(r).toMatchObject({ question: 'Confirm the Type A count on E-2.1 and E-2.2?', origin: 'manual' });
+    }, { timeout: 3000 });
+    // A sent RFI is not editable.
+    expect(screen.queryByTestId('rfi-question-1790000000000.22')).toBeNull();
+  });
+
+  it('S1 — a person\'s file under the Proposal category is selectable; only generated files are locked', async () => {
+    mockApi({ results: null });
+    get.mockImplementation((url: string) => {
+      if (url === '/documents') return Promise.resolve({ data: [
+        { id: 'd-user', name: 'GC sketch.pdf', display_name: 'GC sketch.pdf', category: 'proposal', file_type: 'application/pdf', generated: false },
+        DOCS[1],
+      ] });
+      return Promise.resolve({ data: null });
+    });
+    render(<Harness initial={{ activeTab: 'files' }}/>);
+    const user = await screen.findByTestId('project-doc-checkbox-d-user') as HTMLInputElement;
+    expect(user.disabled).toBe(false);
+    expect(screen.queryByTestId('project-doc-generated-d-user')).toBeNull();
+    expect((screen.getByTestId('project-doc-checkbox-d-prop') as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it('S3 — a stop that arrives after the run finished: no "Stopped", the run is left to complete', async () => {
+    mockApi({ results: { status: 'agent3_running', run_id: 'run-2', progress: { stage: 'agent3', label: 'Agent 3 of 3: QA review & risk assessment', step: 1, of: 1 } } });
+    post.mockImplementation((url: string) => {
+      if (url === `/preconstruction/${bid.id}/stop-analysis`) {
+        return Promise.reject({ response: { status: 409, data: { error: 'The analysis has already finished — nothing to stop.', alreadyFinished: true } } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    render(<Harness initial={{ activeTab: 'takeoff' }}/>);
+    fireEvent.click(await screen.findByTestId('stop-analysis'));
+    fireEvent.click(within(dialog()).getByText('Stop'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/stop-analysis`, { what: 'analysis' }));
+    await new Promise(r => setTimeout(r, 50));
+    expect(screen.queryByTestId('ai-stopped')).toBeNull();
+    expect(screen.getByTestId('stop-analysis')).toBeTruthy(); // still running as far as the UI knows; the poller applies "complete"
   });
 });

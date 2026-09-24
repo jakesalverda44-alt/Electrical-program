@@ -189,6 +189,8 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
       recheck_run_id: typeof raw.recheck_run_id === 'string'
         && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw.recheck_run_id)
         ? raw.recheck_run_id : null,
+      recheck_reason: raw.recheck_reason === 'no_confident_match' || raw.recheck_reason === 'ambiguous_match'
+        ? raw.recheck_reason : null,
       source: raw.source as 'takeoff' | 'manual',
       sort: typeof raw.sort === 'number' ? raw.sort : undefined,
     });

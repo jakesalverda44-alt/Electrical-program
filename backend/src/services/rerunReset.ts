@@ -45,6 +45,7 @@ export interface RerunResetSummary {
     savedEstimate: boolean;
     bidAmount: boolean;
   };
+  amount: { before: number | null; kept: boolean };
   kept: {
     manualLines: number;
     recheckLines: number;
@@ -55,6 +56,11 @@ export interface RerunResetSummary {
   /** The workspace RFIs after the reset — the client installs these so its
    *  autosave can't PUT the cleared ones back. */
   rfis: WorkspaceRfi[];
+  /** Fix round S4 — the Scope of Work after the reset (kept sections) and its
+   *  meta (which sections to re-check), installed the same way. */
+  scope: Record<string, string>;
+  scopeMeta: ScopeMeta;
+  scopeCleared: string[];
 }
 
 /** An RFI's origin. RFIs from before migration 121 carry none: the AI import
@@ -91,6 +97,56 @@ function agent2RfiQuestions(agent2Output: string | null | undefined): Set<string
   }
 }
 
+export interface ScopeMeta {
+  /** The text the AI wrote into each section (Agent 2 auto-fill / import). */
+  ai?: Record<string, string>;
+  /** Sections kept through a re-run: "from previous run — re-check". */
+  recheck?: string[];
+}
+
+/** Fix round S4 — the Scope of Work sections Agent 2's JSON produced, keyed
+ *  like the Scope tab (mirrors the frontend's scopeSectionsFrom mapping).
+ *  Only the fallback for sections filled before scope_meta existed. */
+export function agent2ScopeSections(agent2Output: string | null | undefined): Record<string, string> {
+  if (!agent2Output) return {};
+  try {
+    const t = agent2Output.trim();
+    const fenced = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const c = fenced ? fenced[1].trim() : t;
+    const start = c.indexOf('{');
+    const sow = (JSON.parse(start >= 0 ? c.slice(start) : c) as { scopeOfWork?: Record<string, string[]> }).scopeOfWork;
+    if (!sow) return {};
+    const join = (a?: string[]) => (a ?? []).join('\n');
+    const out: Record<string, string> = {
+      A: join(sow.A_ServiceDistribution), B: join(sow.B_BranchPower), C: join(sow.C_LightingControls),
+      D: join(sow.E_LowVoltage), F: join(sow.D_SiteLightingUnderground), G: join(sow.F_Coordination),
+    };
+    for (const k of Object.keys(out)) if (!out[k].trim()) delete out[k];
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Letters and digits only, lowercased — bullets, markdown and spacing
+ *  never make an untouched AI section look "edited". */
+const scopeKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+/** Fix round S4 — a re-run clears a Scope of Work section only while it is
+ *  still exactly what the AI wrote; typed, edited, pre-bid- or import-filled
+ *  sections are kept and flagged for re-check. */
+export function resetScope(scope: Record<string, string>, meta: ScopeMeta, agent2Output: string | null | undefined): { scope: Record<string, string>; meta: ScopeMeta; cleared: string[] } {
+  const aiText: Record<string, string> = { ...agent2ScopeSections(agent2Output), ...(meta.ai ?? {}) };
+  const kept: Record<string, string> = {};
+  const cleared: string[] = [];
+  for (const [k, text] of Object.entries(scope ?? {})) {
+    if (typeof text !== 'string' || !text.trim()) continue;
+    if (aiText[k] != null && scopeKey(aiText[k]) === scopeKey(text)) cleared.push(k);
+    else kept[k] = text;
+  }
+  return { scope: kept, meta: { ai: {}, recheck: Object.keys(kept) }, cleared };
+}
+
 /** SQL predicate: a takeoff line the estimator touched. */
 export const TOUCHED_TAKEOFF_LINE_SQL = `(
   qty_overridden = true
@@ -118,7 +174,7 @@ export async function resetForRerun(
     [bidId]
   );
   const recheck = await c.query(
-    `UPDATE est_bid_lines SET recheck_run_id = $2, updated_at = now()
+    `UPDATE est_bid_lines SET recheck_run_id = $2, recheck_reason = NULL, updated_at = now()
       WHERE bid_id = $1 AND source = 'takeoff' AND ${TOUCHED_TAKEOFF_LINE_SQL}`,
     [bidId, runId]
   );
@@ -146,30 +202,39 @@ export async function resetForRerun(
   );
 
   // ── Saved estimate + bids.amount ─────────────────────────────────────────
-  // bids.amount is cleared only when it came from the pipeline (a saved
-  // estimate or Agent 4's price); a bid with neither keeps what was typed.
-  const est = await c.query('DELETE FROM bid_estimates WHERE bid_id = $1', [bidId]);
+  // Fix round B2 — bids.amount is cleared ONLY when it equals, to the cent,
+  // the saved estimate's grand total or the Agent 4 price being cleared: it
+  // came from the pipeline. A typed (or since-changed) amount is kept.
+  const est = await c.query<{ grand_total: string | null }>('DELETE FROM bid_estimates WHERE bid_id = $1 RETURNING grand_total', [bidId]);
   const savedEstimate = (est.rowCount ?? 0) > 0;
-  const priceWasSet = previous.agent4Price != null;
+  const cents = (v: unknown) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Math.round(Number(v) * 100));
+  const derived = new Set([cents(est.rows[0]?.grand_total), cents(previous.agent4Price)].filter((v): v is number => v != null));
+  const { rows: bidRows } = await c.query('SELECT amount FROM bids WHERE id = $1 FOR UPDATE', [bidId]);
+  const amountBefore = bidRows[0]?.amount != null ? Number(bidRows[0].amount) : null;
   let bidAmount = false;
-  if (savedEstimate || priceWasSet) {
-    const a = await c.query('UPDATE bids SET amount = NULL WHERE id = $1 AND amount IS NOT NULL', [bidId]);
-    bidAmount = (a.rowCount ?? 0) > 0;
+  if (amountBefore != null && derived.has(cents(amountBefore)!)) {
+    await c.query('UPDATE bids SET amount = NULL WHERE id = $1', [bidId]);
+    bidAmount = true;
   }
 
   // ── Workspace: AI RFIs, scope sections, confirmed service ───────────────
-  const { rows: wsRows } = await c.query('SELECT rfis FROM bid_workspaces WHERE bid_id = $1 FOR UPDATE', [bidId]);
+  const { rows: wsRows } = await c.query('SELECT rfis, scope, scope_meta FROM bid_workspaces WHERE bid_id = $1 FOR UPDATE', [bidId]);
   const before = Array.isArray(wsRows[0]?.rfis) ? (wsRows[0].rfis as WorkspaceRfi[]) : [];
   const questions = agent2RfiQuestions(previous.agent2Output);
   const rfis = before
     .filter(r => rfiSurvivesRerun(r, questions))
     .map(r => ({ ...r, origin: r.origin ?? (rfiIsAi(r, questions) ? 'ai' : 'manual') }) as WorkspaceRfi);
+  const scopeReset = resetScope(
+    (wsRows[0]?.scope as Record<string, string> | null) ?? {},
+    (wsRows[0]?.scope_meta as ScopeMeta | null) ?? {},
+    previous.agent2Output,
+  );
   if (wsRows.length) {
     await c.query(
-      `UPDATE bid_workspaces SET rfis = $2::jsonb, scope = '{}'::jsonb, confirmed_service = NULL,
+      `UPDATE bid_workspaces SET rfis = $2::jsonb, scope = $3::jsonb, scope_meta = $4::jsonb, confirmed_service = NULL,
               ai_done = false, proposal_generated = false, updated_at = now()
         WHERE bid_id = $1`,
-      [bidId, JSON.stringify(rfis)]
+      [bidId, JSON.stringify(rfis), JSON.stringify(scopeReset.scope), JSON.stringify(scopeReset.meta)]
     );
   }
 
@@ -193,6 +258,8 @@ export async function resetForRerun(
       savedEstimate,
       bidAmount,
     },
+    /** Fix round B2 — the bids.amount before the reset and whether it stayed. */
+    amount: { before: amountBefore, kept: amountBefore != null && !bidAmount },
     kept: {
       manualLines: (manual.rows[0]?.n as number) ?? 0,
       recheckLines: recheck.rowCount ?? 0,
@@ -201,5 +268,8 @@ export async function resetForRerun(
       rfis: rfis.length,
     },
     rfis,
+    scope: scopeReset.scope,
+    scopeMeta: scopeReset.meta,
+    scopeCleared: scopeReset.cleared,
   };
 }

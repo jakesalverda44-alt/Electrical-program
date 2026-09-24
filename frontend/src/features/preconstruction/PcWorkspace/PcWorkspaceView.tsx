@@ -196,6 +196,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       active_tab: w.activeTab,
       notes: w.notes,
       scope: w.scope,
+      scope_meta: w.scopeMeta ?? null,
       rfis: w.rfis,
       files: w.files,
       ai_done: w.aiDone,
@@ -550,14 +551,24 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // old outputs." The confirm lists exactly what goes and what stays; the
   // server does the reset atomically with the new run (POST /analyze), and
   // applyServerReset mirrors it into every panel without a page reload.
+  // Fix round S5 — an edited RFI is the estimator's own: a re-run keeps it.
+  const editRfi = (id: string, question: string) => {
+    set(prev => ({ rfis: prev.rfis.map(r => (r.id === id ? { ...r, question, origin: 'manual' as const } : r)) }));
+  };
+
   const rerunAI = async () => {
     if (wsRef.current.aiRunning) return;
     const plan = rerunPlan({
       rfis: wsRef.current.rfis,
       lines: estimatingBid.proposed ? [] : estimatingBid.lines,
       savedGrandTotal: estimatingBid.savedGrandTotal,
+      agent4Price: aiResults?.agent4_price != null ? Number(aiResults.agent4_price) : null,
       bidAmount: bid.amount != null ? Number(bid.amount) : null,
       pricingDirty: estimatingBid.dirty,
+      scope: wsRef.current.scope,
+      scopeMeta: wsRef.current.scopeMeta,
+      agent2Output: aiResults?.agent2_output as string | undefined,
+      markupUnsaved: markupUnsavedRef.current,
     });
     if (!(await confirm({
       title: 'Re-run the AI analysis?',
@@ -565,6 +576,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       confirmLabel: 'Clear and re-run',
       destructive: true,
     }))) return;
+    // Fix round S6 — unsaved plan markup is saved first; if it can't be,
+    // the re-run doesn't start (the reset would orphan it).
+    if (markupUnsavedRef.current) {
+      const saved = await (markupFlushRef.current?.() ?? Promise.resolve(false));
+      if (!saved) {
+        showToast({ variant: 'error', title: 'Re-run not started', sub: 'Your plan markup could not be saved. Retry the save on the Plans view, then re-run.' });
+        return;
+      }
+    }
     // A pending autosave carries the RFIs as they are now; send it first so
     // it can never land after the server's reset and restore cleared ones.
     if (saveTimer.current) {
@@ -582,8 +602,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const applyServerReset = (reset: RerunResetSummary) => {
     setAiResults(null);
     set({
-      aiDone: false, scope: {}, confirmedService: undefined, proposalGenerated: false,
+      aiDone: false, confirmedService: undefined, proposalGenerated: false,
       rfis: reset.rfis as PcWorkspace['rfis'],
+      // Fix round S4 — only untouched AI sections were cleared.
+      scope: reset.scope ?? {},
+      scopeMeta: reset.scopeMeta ?? {},
     });
     setSvcVoltage(''); setSvcAmpacity(''); setSvcPanel('');
     setProposalPreview(null);
@@ -1038,6 +1061,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const onConfirmService = useStableFn(handleConfirmService);
   const onAddRfi = useStableFn(addRfi);
   const onImportRfis = useStableFn(importRfisFromAnalysis);
+  const onEditRfi = useStableFn(editRfi);
   const onSubmitOpenRfis = useStableFn(() => { void submitOpenRfis(); });
   const onRemoveFile = useStableFn(removeFile);
   const onClearFiles = useStableFn(clearFiles);
@@ -1105,6 +1129,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // either useUnsavedGuard registration; this component just no longer
   // calls the global confirmLeave itself for step/toggle navigation.
   const markupUnsavedRef = useRef(false);
+  // Fix round S6 — PlansWorkspace's "save pending markup now".
+  const markupFlushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const onRegisterMarkupFlush = useStableFn((flush: (() => Promise<boolean>) | null) => { markupFlushRef.current = flush; });
   const onMarkupUnsavedChange = useStableFn((hasUnsaved: boolean) => { markupUnsavedRef.current = hasUnsaved; });
   const confirmMarkupLeave = useStableFn((proceed: () => void) => {
     if (!markupUnsavedRef.current) { proceed(); return; }
@@ -1182,7 +1209,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [plansEpoch, setPlansEpoch] = useState(0);
   const refreshPanels = (afterReset: boolean) => {
     setResultsEpoch(e => e + 1);
-    if (!markupUnsavedRef.current) setPlansEpoch(e => e + 1);
+    // Fix round S6 — after a reset the markup was saved first, so Plans
+    // always refreshes; at the end of a run it waits for unsaved markup.
+    if (afterReset || !markupUnsavedRef.current) setPlansEpoch(e => e + 1);
     reloadTakeoff();
     reloadProjectDocs();
     if (afterReset || !estimatingBid.dirty) estimatingBid.rehydrate();
@@ -1199,24 +1228,36 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       destructive: true,
     }))) return;
     setStopping(what);
+    let didStop = false;
     try {
-      const { data } = await api.post<{ message: string }>(`/preconstruction/${bid.id}/stop-analysis`, { what });
-      if (what === 'analysis') {
+      const { data } = await api.post<{ message: string; stopped: Record<StopKind, boolean> }>(`/preconstruction/${bid.id}/stop-analysis`, { what });
+      didStop = !!data.stopped?.[what];
+      // Fix round S3 — only a job the server actually stopped shows as
+      // stopped; the pollers keep running otherwise.
+      if (what === 'analysis' && didStop) {
         stopAnalysisPolling();
         set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `■ ${data.message}. Re-run the analysis to continue.`] }));
       }
-      if (what === 'agent4') { stopAgent4Polling(); setAgent4Running(false); }
+      if (what === 'agent4' && didStop) { stopAgent4Polling(); setAgent4Running(false); }
       showToast({ title: 'Stopped', sub: data.message });
     } catch (err) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Could not stop the run';
-      showToast({ variant: 'error', title: 'Stop failed', sub: msg });
+      const body = (err as { response?: { data?: { error?: string; alreadyFinished?: boolean } } })?.response?.data;
+      if (body?.alreadyFinished) {
+        // It finished while the confirm was open: leave the run alone — the
+        // pollers apply its completion as usual.
+        showToast({ variant: 'info', title: 'Already finished', sub: body.error ?? 'Nothing was running any more.' });
+      } else {
+        showToast({ variant: 'error', title: 'Stop failed', sub: body?.error ?? 'Could not stop the run' });
+      }
     } finally {
       setStopping(null);
-      try {
-        const r = await api.get(`/preconstruction/${bid.id}/results`);
-        setAiResults(r.data);
-        if (what === 'analysis') refreshPanels(false);
-      } catch { /* the pollers catch up */ }
+      if (didStop) {
+        try {
+          const r = await api.get(`/preconstruction/${bid.id}/results`);
+          setAiResults(r.data);
+          if (what === 'analysis') refreshPanels(false);
+        } catch { /* the pollers catch up */ }
+      }
     }
   };
   const onStopAnalysis = useStableFn(() => { void stopRun('analysis'); });
@@ -1445,6 +1486,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
                   // navigation instead of the global (pricing-inclusive)
                   // confirmLeave.
                   onMarkupUnsavedChange={onMarkupUnsavedChange}
+                  registerMarkupFlush={onRegisterMarkupFlush}
                   // Fix round 1 / B8 — Settings > Labor Library > Defaults
                   // (app-wide, this component's own `settings` prop —
                   // NOT estimatingBid.settings above, which is this
@@ -1484,6 +1526,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               addRfi={onAddRfi}
               importRfisFromAnalysis={onImportRfis}
               submitOpenRfis={onSubmitOpenRfis}
+              editRfi={onEditRfi}
             />
           </>
         );

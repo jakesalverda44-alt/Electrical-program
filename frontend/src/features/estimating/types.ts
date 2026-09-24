@@ -61,6 +61,8 @@ export interface EstimateLine {
    *  analysis was re-run: "From previous run — re-check". Sync from takeoff
    *  re-binds it; the estimator clears it (null) once checked. */
   recheck_run_id?: string | null;
+  /** Fix round B1 — why Sync from takeoff could not re-bind this kept line. */
+  recheck_reason?: 'no_confident_match' | 'ambiguous_match' | null;
   source: 'takeoff' | 'manual';
   sort?: number;
 }

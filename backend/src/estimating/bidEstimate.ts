@@ -120,6 +120,9 @@ export interface ClientLineInput {
    *  — re-check". The next sync-takeoff re-binds it to the new takeoff; the
    *  client sends null once the estimator has checked it. */
   recheck_run_id?: string | null;
+  /** Fix round B1 — why sync-takeoff could not re-bind a kept line:
+   *  'no_confident_match' | 'ambiguous_match'; null once bound. */
+  recheck_reason?: 'no_confident_match' | 'ambiguous_match' | null;
   source: 'takeoff' | 'manual';
   sort?: number;
 }
@@ -205,6 +208,7 @@ function rowToBidLine(r: Record<string, unknown>): BidLineRow {
     synced_description: (r.synced_description as string | null) ?? null,
     qty_source: (r.qty_source as 'takeoff' | 'manual' | 'markup' | undefined) ?? 'takeoff',
     recheck_run_id: (r.recheck_run_id as string | null) ?? null,
+    recheck_reason: (r.recheck_reason as BidLineRow['recheck_reason']) ?? null,
     source: r.source as 'takeoff' | 'manual',
     sort: Number(r.sort),
   };
@@ -551,6 +555,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     synced_description: m.description,
     qty_source: 'takeoff',
     recheck_run_id: null,
+    recheck_reason: null,
     source: 'takeoff',
     sort: idx,
   }));
@@ -614,30 +619,35 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
   }
 
   // Re-run reset — a line the estimator had touched survives a re-run with
-  // recheck_run_id set, and re-binds here. The new run can renumber item
-  // ids, so a key alone isn't trusted when a row with the line's own
-  // description exists: same key + same description, then same category +
-  // same description, then same key. A carried line with no match at all is
-  // left alone (still priced and flagged) rather than excluded.
+  // recheck_run_id set, and re-binds here. Fix round B1: ONLY on category +
+  // unit + normalized description. The item key is never enough — Agent 2
+  // renumbers items between runs, so "Power||6.1" can be a GFCI in the new
+  // run where it was a duplex before (the reviewer's repro double-priced
+  // the duplex and re-priced the GFCI at the duplex's overrides). Exactly
+  // one candidate binds; none, or a key-only match, is "no confident
+  // match"; two or more is "ambiguous" (never pick). An unbound kept line
+  // is left as it was (still priced, flagged) — never excluded. A bound
+  // kept line supersedes the new row: no fresh line is added for it.
   const rowDescs = (i: number) => [normText(mapped[i].description), normText(rawRows[i].spec), normText(rawRows[i].item)].filter(Boolean);
   const lineDescs = (l: BidLineRow) => [normText(l.synced_description), normText(l.description)].filter(Boolean);
   const descMatch = (l: BidLineRow, i: number) => rowDescs(i).some(d => lineDescs(l).includes(d));
   const catMatch = (l: BidLineRow, i: number) => normText(rawRows[i].category) === normText(l.category);
-  let pending = [...carried];
+  const unitMatch = (l: BidLineRow, i: number) => normalizeUnit(mapped[i].unit) === normalizeUnit(l.unit);
   let rebound = 0;
-  const bindPass = (pred: (l: BidLineRow, i: number) => boolean) => {
-    pending = pending.filter(line => {
-      const i = keys.findIndex((k, idx) => !existingByKey.has(k) && pred(line, idx));
-      if (i < 0) return true;
+  const unboundReason = new Map<string, 'no_confident_match' | 'ambiguous_match'>();
+  for (const line of carried) {
+    const candidates = keys
+      .map((k, i) => i)
+      .filter(i => !existingByKey.has(keys[i]) && catMatch(line, i) && unitMatch(line, i) && descMatch(line, i));
+    if (candidates.length === 1) {
+      const i = candidates[0];
       existingByKey.set(keys[i], line);
       if (keys[i] !== line.takeoff_key) rebound++;
-      return false;
-    });
-  };
-  bindPass((l, i) => keys[i] === l.takeoff_key && descMatch(l, i));
-  bindPass((l, i) => catMatch(l, i) && descMatch(l, i));
-  bindPass((l, i) => keys[i] === l.takeoff_key);
-  const unbound = pending.length;
+    } else {
+      unboundReason.set(line.id, candidates.length > 1 ? 'ambiguous_match' : 'no_confident_match');
+    }
+  }
+  const unbound = unboundReason.size;
 
   const freshKeys = new Set<string>();
   let added = 0;
@@ -701,13 +711,16 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
         // to its real description here, not the old "[No longer in
         // takeoff]"-prefixed one.
         // takeoff_key: a carried-over line may have re-bound to a new key.
+        // Fix round B1 — a kept line keeps the estimator's description.
+        const nextDescription = existingLine.recheck_run_id ? existingLine.description : m.description;
         await client.query(
           `UPDATE est_bid_lines
              SET qty=$1, unit=$2, description=$3, confidence=$4, takeoff_item_id=$5,
                  excluded=$6, sync_excluded=$7, assembly_id=$8, item_id=$9,
-                 match_confidence=$10, synced_description=$11, qty_source=$12, takeoff_key=$14, updated_at=now()
+                 match_confidence=$10, synced_description=$11, qty_source=$12, takeoff_key=$14,
+                 recheck_reason=NULL, updated_at=now()
            WHERE id=$13`,
-          [nextQty, m.unit, m.description, m.sourceConfidence ?? null, row.item ?? null,
+          [nextQty, m.unit, nextDescription, m.sourceConfidence ?? null, row.item ?? null,
            nextExcluded, nextSyncExcluded, nextAssemblyId, nextItemId,
            nextMatchConfidence, nextSyncedDescription, nextQtySource, existingLine.id, key]
         );
@@ -724,6 +737,10 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
         );
         added++;
       }
+    }
+
+    for (const [id, reason] of unboundReason) {
+      await client.query('UPDATE est_bid_lines SET recheck_reason=$1, updated_at=now() WHERE id=$2', [reason, id]);
     }
 
     for (const [key, line] of existingByKey) {
@@ -919,8 +936,8 @@ export async function saveBidEstimate(
         `INSERT INTO est_bid_lines
            (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id,
             material_unit_override, labor_hours_override, confidence, excluded, source, qty_overridden, sync_excluded,
-            match_confidence, match_source, synced_description, line_key, qty_source, recheck_run_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+            match_confidence, match_source, synced_description, line_key, qty_source, recheck_run_id, recheck_reason)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
         [bidId, l.sort, l.category, l.description, l.qty, l.unit,
          l.assembly_id ?? null, l.item_id ?? null, l.takeoff_key ?? null, l.takeoff_item_id ?? null,
          l.material_unit_override ?? null, l.labor_hours_override ?? null,
@@ -947,7 +964,8 @@ export async function saveBidEstimate(
          // qty_overridden-implies-'manual' backfill migration 108 applied.
          resolvedLineKey, resolveQtySource(l),
          // Re-run reset — round-tripped; a manual line never carries it.
-         l.source === 'takeoff' ? (l.recheck_run_id ?? null) : null]
+         l.source === 'takeoff' ? (l.recheck_run_id ?? null) : null,
+         l.source === 'takeoff' && l.recheck_run_id ? (l.recheck_reason ?? null) : null]
       );
     }
 

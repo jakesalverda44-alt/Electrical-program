@@ -54,7 +54,8 @@ import { app } from '../index';
 import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth, type TestUser } from './harness';
 import { runPipeline, runDraftComposition, loadAIConfig, beginAnalysisRun } from '../routes/preconstruction';
-import { runningCount, abortableClient } from '../ai/runControl';
+import { runningCount, abortableClient, registerRun, isCancellationError, RunCancelledError } from '../ai/runControl';
+import { callWithRetry } from '../ai/retry';
 import { writeAiCountMarkers } from '../estimating/aiMarkers';
 
 let ok = false;
@@ -273,5 +274,121 @@ describe('abortableClient', () => {
     abortableClient(base, run.signal).messages.stream({} as never);
     run.abort();
     expect(seen!.aborted).toBe(true);
+  });
+});
+
+
+// ── Fix round (review 2026-09-24) ───────────────────────────────────────────
+
+describe('fix round S2 — a re-run cancels the previous run\'s in-flight work first', () => {
+  it('POST /analyze aborts the old run\'s stream (billing stops) and its Agent 4 / draft jobs; the old run writes nothing', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId } = await runningBid();
+    sdk.calls = [];
+    sdk.handler = () => new Promise(() => { /* the old run hangs until aborted */ });
+    const oldRun = runPipeline(bidId, IMAGES, fakeClient, await loadAIConfig());
+    await until(() => sdk.calls.length === 1);
+    const oldSignal = sdk.calls[0].signal!;
+    const agent4 = registerRun(bidId, 'agent4', 'some-old-run');
+    const draft = registerRun(bidId, 'draft', 'some-old-run');
+    // The new run: a plan PDF filed on the bid.
+    const pdf = Buffer.from('%PDF-1.4\n% plans\n');
+    const { rows } = await pool.query(
+      `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category, file_size, file_type, uploaded_by, file_data)
+       VALUES ($1,'x','elec','E-1.pdf','E-1.pdf','plans',$2,'application/pdf','test',$3) RETURNING id`,
+      [bidId, pdf.length, pdf.toString('base64')]
+    );
+    sdk.handler = async () => { throw new Error('new run: no model in this test'); };
+    const res = await request(app).post('/api/preconstruction/analyze').set(auth(user.token)).field('bidId', bidId).field('document_ids', rows[0].id);
+    expect(res.status).toBe(200);
+    expect(oldSignal.aborted).toBe(true);
+    expect(agent4.signal.aborted).toBe(true);
+    expect(draft.signal.aborted).toBe(true);
+    agent4.release(); draft.release();
+    await oldRun; // exits cleanly
+    const oldCalls = sdk.calls.filter(c => c.signal === oldSignal);
+    expect(oldCalls).toHaveLength(1);
+  });
+});
+
+describe('fix round S3 — Stop is phase- and run-specific', () => {
+  it('a stop after the analysis finished is a no-op ("already finished") and never kills the draft that follows', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId, runId } = await runningBid();
+    await pool.query(`UPDATE takeoff_results SET status='complete', draft_status='running' WHERE bid_id=$1`, [bidId]);
+    const draft = registerRun(bidId, 'draft', runId);
+    const res = await request(app).post(`/api/preconstruction/${bidId}/stop-analysis`).set(auth(user.token)).send({ what: 'analysis' });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ alreadyFinished: true, aborted: 0 });
+    expect(res.body.error).toMatch(/already finished/);
+    expect(draft.signal.aborted).toBe(false);
+    const { rows: [tr] } = await pool.query('SELECT status, draft_status FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    expect(tr).toEqual({ status: 'complete', draft_status: 'running' });
+    draft.release();
+  });
+
+  it('the end-of-run draft is its own job: stopping the analysis handle does not abort it', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { bidId } = await runningBid();
+    await pool.query(`UPDATE takeoff_results SET status='complete', agent1_output='{}', agent2_output='{}', review_items='[]', review_status='clear' WHERE bid_id=$1`, [bidId]);
+    // A draft composed on a raw client while an (old) analysis handle is aborted.
+    const analysis = registerRun(bidId, 'analysis', 'another-run');
+    sdk.calls = [];
+    sdk.handler = async () => JSON.stringify({ sections: [{ title: 'A', bullets: ['x'] }], exclusions: [], takeoff: [] });
+    const composing = runDraftComposition(bidId, fakeClient, await loadAIConfig());
+    analysis.release();
+    await composing;
+    expect(sdk.calls).toHaveLength(1);
+    expect(sdk.calls[0].signal!.aborted).toBe(false);
+  });
+
+  it('a stop aborts only the run it cancelled, never a job of another run', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId, runId } = await runningBid();
+    const current = registerRun(bidId, 'analysis', runId);
+    const other = registerRun(bidId, 'analysis', 'a-later-run');
+    const res = await request(app).post(`/api/preconstruction/${bidId}/stop-analysis`).set(auth(user.token)).send({ what: 'analysis' });
+    expect(res.status).toBe(200);
+    expect(current.signal.aborted).toBe(true);
+    expect(other.signal.aborted).toBe(false);
+    current.release(); other.release();
+  });
+});
+
+describe('fix round N4 — Agent 4 is registered before it is visible as running', () => {
+  it('a stop right after the response reaches the job: the call never starts or is aborted, nothing written', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { user, bidId } = await runningBid();
+    await pool.query(`UPDATE takeoff_results SET status='complete', agent1_output='{}', agent2_output='{}', review_items='[]', review_status='clear' WHERE bid_id=$1`, [bidId]);
+    sdk.calls = [];
+    sdk.handler = () => new Promise(() => { /* hangs */ });
+    await request(app).post(`/api/preconstruction/${bidId}/run-agent4`).set(auth(user.token)).send({ price: '1000' }).expect(200);
+    expect(runningCount(bidId, 'agent4')).toBe(1);
+    const stop = await request(app).post(`/api/preconstruction/${bidId}/stop-analysis`).set(auth(user.token)).send({ what: 'agent4' });
+    expect(stop.status).toBe(200);
+    await until(() => runningCount(bidId, 'agent4') === 0);
+    expect(sdk.calls.every(c => c.signal?.aborted)).toBe(true);
+    const { rows: [tr] } = await pool.query('SELECT agent4_status, agent4_output FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    expect(tr).toMatchObject({ agent4_status: 'cancelled', agent4_output: null });
+  });
+});
+
+describe('fix round N5 / N6', () => {
+  it('N5 — cancellation is decided by type, never by message text', () => {
+    expect(isCancellationError(new Error('upstream connection aborted by peer'))).toBe(false);
+    expect(isCancellationError(Object.assign(new Error('x'), { name: 'APIUserAbortError' }))).toBe(true);
+    expect(isCancellationError(new RunCancelledError())).toBe(true);
+  });
+
+  it('N6 — a stop wakes the retry backoff at once and ends the retries', async () => {
+    const ctl = new AbortController();
+    let attempts = 0;
+    const started = Date.now();
+    const p = callWithRetry(async () => { attempts++; throw Object.assign(new Error('overloaded'), { status: 529 }); },
+      { baseDelayMs: 20_000, maxDelayMs: 20_000, signal: ctl.signal });
+    setTimeout(() => ctl.abort(new RunCancelledError()), 50);
+    await expect(p).rejects.toBeInstanceOf(RunCancelledError);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(attempts).toBe(1);
   });
 });

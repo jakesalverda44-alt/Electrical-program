@@ -170,8 +170,11 @@ async function analyzedBid(): Promise<Fixture> {
     { id: '1790000000003', question: 'Estimator legacy typed RFI', submitted: false, answer: '' },
   ];
   await pool.query(
-    `INSERT INTO bid_workspaces (bid_id, notes, scope, rfis, files, ai_done, proposal_generated, confirmed_service, overhead_pct, profit_pct, estimate_overrides)
-     VALUES ($1, 'Jake: GC wants alt price for LED retrofit', '{"service":"800A service"}', $2, '[{"id":"f1","name":"FULL SET.pdf"}]', true, true,
+    `INSERT INTO bid_workspaces (bid_id, notes, scope, scope_meta, rfis, files, ai_done, proposal_generated, confirmed_service, overhead_pct, profit_pct, estimate_overrides)
+     VALUES ($1, 'Jake: GC wants alt price for LED retrofit',
+             '{"A":"• 800A service entrance (ECFECI)","B":"Jake: branch power per E-2.1, home runs only","C":"AI lighting text, then edited by Jake"}',
+             '{"ai":{"A":"• 800A service entrance (ECFECI)","C":"AI lighting text"}}',
+             $2, '[{"id":"f1","name":"FULL SET.pdf"}]', true, true,
              '{"voltage":"480/277","ampacity":"800","panel":"MDP","confirmed":true}', 12, 18, '{"Power||6.1":22}')`,
     [bidId, JSON.stringify(rfis)]
   );
@@ -240,7 +243,10 @@ describe('re-run reset — beginAnalysisRun clears the previous run and keeps th
       'AI already drafted to the GC', 'Estimator: who furnishes the poles?', 'Estimator legacy typed RFI',
     ]);
     expect((ws.rfis as Array<{ origin: string }>).map(r => r.origin)).toEqual(['ai', 'manual', 'manual']);
-    expect(ws.scope).toEqual({});
+    // Scope: only the untouched AI section goes; typed and edited ones stay, flagged.
+    expect(ws.scope).toEqual({ B: 'Jake: branch power per E-2.1, home runs only', C: 'AI lighting text, then edited by Jake' });
+    expect(ws.scope_meta).toEqual({ ai: {}, recheck: ['B', 'C'] });
+    expect(reset.scopeCleared).toEqual(['A']);
     expect(ws.confirmed_service).toBeNull();
     expect(ws.ai_done).toBe(false);
     expect(ws.proposal_generated).toBe(false);
@@ -582,5 +588,176 @@ describe('migration 121 backfill', () => {
     const { rows: docs } = await pool.query('SELECT id, generated FROM documents WHERE linked_id=$1', [bidId]);
     const g = new Map(docs.map(d => [d.id as string, d.generated]));
     expect([g.get(gp), g.get(bd), g.get(plan)]).toEqual([true, true, false]);
+  });
+});
+
+// ── Fix round (review 2026-09-24-rerun-reset-review.md) ─────────────────────
+
+async function keptLineBid(line: { description: string; key: string; unit?: string; qty?: number; material?: number | null }, rows: Array<Record<string, unknown>>) {
+  const user = await makeUser('owner');
+  const { rows: b } = await pool.query(`INSERT INTO bids (name, gc, salesperson_id) VALUES ($1, 'GC', $2) RETURNING id`, [`FR ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, user.id]);
+  const bidId = b[0].id as string;
+  await pool.query(
+    `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, takeoff_key, source, qty_overridden, qty_source, material_unit_override, synced_description)
+     VALUES ($1, 0, $2, $3, $4, $5, $6, 'takeoff', true, 'manual', $7, $3)`,
+    [bidId, line.key.split('||')[0], line.description, line.qty ?? 34, line.unit ?? 'EA', line.key, line.material ?? 9.5]
+  );
+  await pool.query(`INSERT INTO takeoff_results (bid_id, status, agent2_output) VALUES ($1, 'complete', '{}')`, [bidId]);
+  const { runId } = await beginAnalysisRun(bidId);
+  await pool.query(`UPDATE takeoff_results SET status='complete', agent2_output=$2 WHERE bid_id=$1`, [bidId, JSON.stringify({ takeoff: rows })]);
+  return { bidId, runId };
+}
+
+describe('fix round B1 — a kept line re-binds only on category + unit + description', () => {
+  it('the reviewer\'s Duplex/GFCI repro: the renumbered key is NOT enough — no bind, flagged, GFCI keeps its own numbers', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { bidId, runId } = await keptLineBid({ description: 'Duplex receptacle', key: 'Power||6.1' }, [
+      { category: 'Power', item: '6.1', spec: 'GFCI receptacle, weather-resistant', qty: 10, unit: 'EA' },
+      { category: 'Power', item: '6.4', spec: 'Duplex receptacle, 20A', qty: 30, unit: 'EA' },
+    ]);
+    const r = await syncTakeoff(bidId);
+    const kept = r.lines.find(l => l.recheck_run_id === runId)!;
+    expect(kept).toMatchObject({ description: 'Duplex receptacle', qty: 34, material_unit_override: 9.5, takeoff_key: 'Power||6.1', recheck_reason: 'no_confident_match', excluded: false });
+    const gfci = r.lines.find(l => l.description.startsWith('GFCI'))!;
+    expect(gfci).toMatchObject({ qty: 10, material_unit_override: null, recheck_run_id: null, qty_overridden: false });
+    expect(r.lines.filter(l => l.description.startsWith('Duplex receptacle, 20A'))).toHaveLength(1);
+    expect(r).toMatchObject({ rebound: 0, unbound: 1 });
+  });
+
+  it('an exact match re-binds and supersedes the new row: one line, no double pricing, the estimator\'s description and qty kept', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { bidId, runId } = await keptLineBid({ description: 'Duplex receptacle', key: 'Power||6.1' }, [
+      { category: 'Power', item: '6.1', spec: 'GFCI receptacle, weather-resistant', qty: 10, unit: 'EA' },
+      { category: 'Power', item: '6.4', spec: 'Duplex  RECEPTACLE', qty: 30, unit: 'ea' },
+    ]);
+    const r = await syncTakeoff(bidId);
+    const duplex = r.lines.filter(l => /duplex/i.test(l.description));
+    expect(duplex).toHaveLength(1);
+    expect(duplex[0]).toMatchObject({ description: 'Duplex receptacle', qty: 34, takeoff_key: 'Power||6.4', recheck_run_id: runId, recheck_reason: null, material_unit_override: 9.5 });
+    expect(r.lines).toHaveLength(2);
+    expect(r).toMatchObject({ rebound: 1, unbound: 0, added: 1 });
+  });
+
+  it('a different unit is not a match', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { bidId } = await keptLineBid({ description: 'EMT 3/4"', key: 'Raceway||2.1', unit: 'LF' }, [
+      { category: 'Raceway', item: '2.1', spec: 'EMT 3/4"', qty: 12, unit: 'EA' },
+    ]);
+    const r = await syncTakeoff(bidId);
+    expect(r.lines.find(l => l.qty_overridden)!.recheck_reason).toBe('no_confident_match');
+    expect(r.unbound).toBe(1);
+  });
+
+  it('N1 — two equal candidates: never picks, flags ambiguous', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { bidId } = await keptLineBid({ description: 'Duplex receptacle', key: 'Power||6.1' }, [
+      { category: 'Power', item: '6.2', spec: 'Duplex receptacle', qty: 12, unit: 'EA' },
+      { category: 'Power', item: '6.3', spec: 'Duplex receptacle', qty: 18, unit: 'EA' },
+    ]);
+    const r = await syncTakeoff(bidId);
+    const kept = r.lines.find(l => l.qty_overridden)!;
+    expect(kept).toMatchObject({ recheck_reason: 'ambiguous_match', takeoff_key: 'Power||6.1', qty: 34 });
+    expect(r.unbound).toBe(1);
+  });
+
+  it('the reason round-trips through a save and clears with "checked"', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { bidId } = await keptLineBid({ description: 'Duplex receptacle', key: 'Power||6.1' }, [
+      { category: 'Power', item: '6.1', spec: 'GFCI receptacle', qty: 10, unit: 'EA' },
+    ]);
+    const user = await makeUser('owner');
+    await syncTakeoff(bidId);
+    const got = await request(app).get(`/api/estimating/${bidId}`).set(auth(user.token)).expect(200);
+    const lines = got.body.lines as Array<Record<string, unknown>>;
+    expect(lines.find(l => l.qty_overridden)!.recheck_reason).toBe('no_confident_match');
+    const saved = await request(app).put(`/api/estimating/${bidId}`).set(auth(user.token)).send({ lines, settings: got.body.settings }).expect(200);
+    expect((saved.body.lines as Array<Record<string, unknown>>).find(l => l.qty_overridden)!.recheck_reason).toBe('no_confident_match');
+    const checked = lines.map(l => (l.qty_overridden ? { ...l, recheck_run_id: null, recheck_reason: null } : l));
+    const after = await request(app).put(`/api/estimating/${bidId}`).set(auth(user.token)).send({ lines: checked, settings: got.body.settings }).expect(200);
+    expect((after.body.lines as Array<Record<string, unknown>>).find(l => l.qty_overridden)).toMatchObject({ recheck_run_id: null, recheck_reason: null });
+  });
+});
+
+describe('fix round B2 — bids.amount is cleared only when it IS the cleared estimate / Agent 4 price', () => {
+  async function amountBid(amount: number | null, grandTotal: number | null, agent4Price: number | null) {
+    const user = await makeUser('owner');
+    const { rows } = await pool.query(`INSERT INTO bids (name, gc, salesperson_id, amount) VALUES ('Amt', 'GC', $1, $2) RETURNING id`, [user.id, amount]);
+    const bidId = rows[0].id as string;
+    await pool.query(`INSERT INTO takeoff_results (bid_id, status, agent4_price) VALUES ($1, 'complete', $2)`, [bidId, agent4Price]);
+    if (grandTotal != null) {
+      await pool.query(`INSERT INTO bid_estimates (bid_id, overhead_pct, profit_pct, line_items, subtotals, total_direct, total_overhead, total_profit, grand_total)
+        VALUES ($1, 10, 15, '[]', '{}', 0, 0, 0, $2)`, [bidId, grandTotal]);
+    }
+    const { reset } = await beginAnalysisRun(bidId);
+    const { rows: [b] } = await pool.query('SELECT amount FROM bids WHERE id=$1', [bidId]);
+    return { amount: b.amount == null ? null : Number(b.amount), reset };
+  }
+
+  it('the reviewer\'s repro: estimate 23,173, amount typed as 25,000 -> kept', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const r = await amountBid(25000, 23173, null);
+    expect(r.amount).toBe(25000);
+    expect(r.reset.cleared.bidAmount).toBe(false);
+    expect(r.reset.amount).toEqual({ before: 25000, kept: true });
+  });
+
+  it('equal to the cent to the estimate -> cleared; a cent off -> kept', async (ctx) => {
+    if (!ok) return ctx.skip();
+    expect((await amountBid(23173.45, 23173.45, null)).amount).toBeNull();
+    expect((await amountBid(23173.46, 23173.45, null)).amount).toBe(23173.46);
+  });
+
+  it('equal to the Agent 4 price being cleared -> cleared', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const r = await amountBid(81485.6, 80000, 81485.6);
+    expect(r.amount).toBeNull();
+    expect(r.reset.amount).toEqual({ before: 81485.6, kept: false });
+  });
+});
+
+describe('fix round S1 — only the generated flag excludes an input', () => {
+  it('a person\'s PDF filed under Takeoff or Proposal is still analysed', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const f = await analyzedBid();
+    const userTakeoff = await insertDoc(f.bidId, 'E-series takeoff plans.pdf', 'takeoff', { generated: false });
+    const userProposal = await insertDoc(f.bidId, 'GC scope sketch.pdf', 'proposal', { generated: false });
+    const { files, excluded } = await gatherAnalysisInputs(f.bidId, [], [userTakeoff, userProposal, f.docs.proposalPdf]);
+    expect(files.map(x => x.originalname)).toEqual(['E-series takeoff plans.pdf', 'GC scope sketch.pdf']);
+    expect(excluded.map(e => e.documentId)).toEqual([f.docs.proposalPdf]);
+  });
+});
+
+describe('fix round S4 — scope sections', () => {
+  it('without scope_meta (sections filled before it existed) a section equal to Agent 2\'s scope still clears', async () => {
+    const { resetScope } = await import('../services/rerunReset');
+    const agent2 = JSON.stringify({ scopeOfWork: { A_ServiceDistribution: ['800A service entrance', 'MDP'], B_BranchPower: ['Receptacles'] } });
+    const r = resetScope({ A: '• 800A service entrance\n• MDP', B: 'Receptacles per E-2 — added by Jake' }, {}, agent2);
+    expect(r).toEqual({ scope: { B: 'Receptacles per E-2 — added by Jake' }, meta: { ai: {}, recheck: ['B'] }, cleared: ['A'] });
+  });
+});
+
+describe('fix round N2 — replaceExisting soft-deletes, and never a generated file', () => {
+  it('import re-filing a category soft-deletes the old upload and leaves generated files alone', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const f = await analyzedBid();
+    const oldUpload = await insertDoc(f.bidId, 'old import.pdf', 'proposal', { generated: false });
+    const { storeDocument } = await import('../utils/storeDocument');
+    const bytes = PDF('new import');
+    await storeDocument({ file: { buffer: bytes, originalname: 'new import.pdf', mimetype: 'application/pdf', size: bytes.length } as Express.Multer.File,
+      linkedId: f.bidId, linkedName: 'x', div: 'elec', category: 'proposal', uploadedBy: 'test', replaceExisting: true });
+    const { rows } = await pool.query('SELECT id, deleted_at FROM documents WHERE id = ANY($1::uuid[])', [[oldUpload, f.docs.proposalPdf, f.docs.proposalDocx]]);
+    const m = new Map(rows.map(r => [r.id as string, r.deleted_at]));
+    expect(rows).toHaveLength(3); // nothing hard-deleted
+    expect(m.get(oldUpload)).not.toBeNull();
+    expect(m.get(f.docs.proposalPdf)).toBeNull();
+    expect(m.get(f.docs.proposalDocx)).toBeNull();
+  });
+});
+
+describe('fix round N8 — a small pool per test worker', () => {
+  it('caps the pool under test so the full suite stays under max_connections', async () => {
+    const { POOL_MAX } = await import('../db/pool');
+    expect(POOL_MAX).toBe(5);
+    expect((pool as unknown as { options: { max: number } }).options.max).toBe(5);
   });
 });

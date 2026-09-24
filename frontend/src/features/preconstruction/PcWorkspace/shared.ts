@@ -28,11 +28,11 @@ export interface ProjectDoc {
   superseded_at?: string | null;
 }
 
-/** Generated categories never offered as analysis inputs (the server
- *  refuses them too). */
-export const GENERATED_DOC_CATEGORIES = ['proposal', 'takeoff', 'prebid_scope', 'prebid_takeoff', 'bid_data'];
+/** A CRM-generated file (never an analysis input; the server refuses it
+ *  too). Fix round S1 — by the flag only, never the category: a person can
+ *  file a real drawing under Proposal / Takeoff / Pre-Bid. */
 export function isGeneratedDoc(d: ProjectDoc): boolean {
-  return !!d.generated || GENERATED_DOC_CATEGORIES.includes(d.category);
+  return !!d.generated;
 }
 
 export type { PcStepKey };

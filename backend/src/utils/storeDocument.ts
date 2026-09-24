@@ -150,7 +150,13 @@ export async function storeDocument(input: StoreDocumentInput) {
   }
 
   if (replaceExisting && linkedId) {
-    await pool.query('DELETE FROM documents WHERE linked_id=$1 AND category=$2', [linkedId, category]);
+    // Fix round N2 — soft delete (the documents convention: restorable from
+    // the trash), and never a CRM-generated file: filed proposals and pre-bid
+    // packages are superseded by a re-run, never deleted.
+    await pool.query(
+      'UPDATE documents SET deleted_at=now() WHERE linked_id=$1 AND category=$2 AND deleted_at IS NULL AND generated = false',
+      [linkedId, category]
+    );
   }
 
   const generated = input.generated

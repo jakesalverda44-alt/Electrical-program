@@ -24,6 +24,7 @@ import { promisify } from 'util';
 import sharp from 'sharp';
 import Anthropic from '@anthropic-ai/sdk';
 import { callWithRetry } from './retry';
+import { runSignalOf } from './runControl';
 import { assertNotTruncated } from './stopReason';
 import { PAGE_CLASSIFIER_SYSTEM } from './prompts';
 import { sanitizeForPrompt } from './sanitizeForPrompt';
@@ -311,7 +312,7 @@ export async function classifyPages(
       temperature: 0,
       system: [{ type: 'text', text: PAGE_CLASSIFIER_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content }],
-    }).finalMessage(), { onRetry: (a, _e, d) => logger.warn(`[pageClassifier] retry ${a} in ${d}ms`) });
+    }).finalMessage(), { signal: runSignalOf(client), onRetry: (a, _e, d) => logger.warn(`[pageClassifier] retry ${a} in ${d}ms`) });
 
     assertNotTruncated(resp, 'Page classifier', CLASSIFIER_MAX_TOKENS, 'the classifier budget is fixed in code at 2,500 tokens per 20-page batch, not a Settings field');
     const text = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');

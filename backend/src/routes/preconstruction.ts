@@ -61,8 +61,8 @@ import { verifyBidDocx, verifyBidText, type VerifyOptions } from '../bidstd/veri
 import { BidData } from '../bidstd/bidData';
 import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
 import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
-import { resetForRerun, type RerunResetSummary, GENERATED_OUTPUT_CATEGORIES } from '../services/rerunReset';
-import { registerRun, abortableClient, abortRuns, isCancellationError, RunCancelledError } from '../ai/runControl';
+import { resetForRerun, type RerunResetSummary } from '../services/rerunReset';
+import { registerRun, abortableClient, abortRuns, isCancellationError, RunCancelledError, runSignalOf } from '../ai/runControl';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
 const PROJECT_TYPES = ['cstore_fuel', 'car_wash', 'self_storage', 'office', 'warehouse', 'restaurant', 'medical', 'retail', 'other'];
@@ -646,7 +646,7 @@ export async function beginAnalysisRun(bidId: string): Promise<{ runId: string; 
       agent4Price: prev[0]?.agent4_price ?? null,
       reviewItems: prev[0]?.review_items ?? null,
     });
-    const { rfis: _rfis, ...summary } = reset;
+    const { rfis: _rfis, scope: _scope, ...summary } = reset;
     await c.query('UPDATE takeoff_results SET reset_summary=$2 WHERE bid_id=$1', [bidId, JSON.stringify(summary)]);
     await c.query('COMMIT');
     return { runId, reset };
@@ -668,7 +668,7 @@ export async function runDraftComposition(bidId: string, client: Anthropic, conf
   const draftRun = (runRows[0]?.run_id as string | null) ?? null;
   // Stop analysis — the draft can be stopped on its own (draft_status
   // 'cancelled'); its model call carries this job's abort signal.
-  const handle = registerRun(bidId, 'draft');
+  const handle = registerRun(bidId, 'draft', draftRun);
   client = abortableClient(client, handle.signal);
   try {
     const gate = await takeoffGate(bidId);
@@ -709,7 +709,7 @@ export async function runDraftComposition(bidId: string, client: Anthropic, conf
       max_tokens: config.maxTokensA4,
       system: [{ type: 'text', text: config.promptA4 || AGENT4_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: userMsg }],
-    }).finalMessage(), { onRetry: (a, _e, d) => logger.warn(`[draft] retry ${a} in ${d}ms`) });
+    }).finalMessage(), { signal: runSignalOf(client), onRetry: (a, _e, d) => logger.warn(`[draft] retry ${a} in ${d}ms`) });
     assertNotTruncated(resp, 'Agent 4 (pre-bid draft)', config.maxTokensA4);
     const parsed = parseAIJSON(extractText(resp));
     if (!parsed || !isAgent4Shape(parsed)) {
@@ -787,9 +787,12 @@ export async function runPipeline(
 ): Promise<void> {
   // Stop analysis — every model call of this run carries the run's abort
   // signal (POST /:bidId/stop-analysis aborts it).
-  const handle = registerRun(bidId, 'analysis');
+  // Fix round S3 — registered under its run id: a stop / re-run aborts this
+  // run only, never a later one.
+  const { rows: runRow } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const handle = registerRun(bidId, 'analysis', (runRow[0]?.run_id as string | null) ?? null);
   try {
-    await runPipelineStages(bidId, files, abortableClient(client, handle.signal), config, handle.signal);
+    await runPipelineStages(bidId, files, abortableClient(client, handle.signal), config, handle.signal, client);
   } finally {
     handle.release();
   }
@@ -801,6 +804,10 @@ async function runPipelineStages(
   client: Anthropic,
   config: AIConfig,
   signal: AbortSignal,
+  /** Fix round S3 — the unwrapped client, for the end-of-run draft: the
+   *  draft is its own job (own stop), so stopping an analysis that has
+   *  just finished can never kill it. */
+  draftClient: Anthropic,
 ): Promise<void> {
   let agent1Output = '';
   let agent2Output = '';
@@ -927,7 +934,7 @@ async function runPipelineStages(
           system: [{ type: 'text', text: agent1PromptWithCountingSections(config.promptA1), cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: contentBlocks }],
         }).finalMessage()
-      , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
+      , { signal: runSignalOf(client), onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 transient error, retry ${a} in ${d}ms`) });
       agent1Output = extractText(resp);
       logAgent1Response(bidId, resp, agent1Output, 'single', prep);
       // Task 2.4 — classifier usage is part of drawing analysis, folded into
@@ -970,7 +977,7 @@ async function runPipelineStages(
               system: [{ type: 'text', text: agent1PromptWithCountingSections(config.promptA1), cache_control: { type: 'ephemeral' } }],
             messages: [{ role: 'user', content: contentBlocks }],
           }).finalMessage()
-        , { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
+        , { signal: runSignalOf(client), onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
         logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${agent1Batches.length}`, prep);
         // Takeoff accuracy Task 1 — a truncated batch used to fall through to
@@ -1081,7 +1088,9 @@ async function runPipelineStages(
     const stage = await runCountingStage({
       client, model: config.modelCounter, maxTokens: config.maxTokensCounter,
       agent1: agent1ForCounting, inventory: countingInventory, pdfs,
-      shouldStop: () => signal.aborted,
+      // Fix round S2 — also once a newer run took over (the progress write
+      // below sets `superseded`): a superseded run launches no more sheets.
+      shouldStop: () => signal.aborted || superseded,
       onProgress: (done, total) => {
         if (total) void setProgress('counting', `Counting sheet ${Math.min(done + 1, total)} of ${total}`, Math.min(done + 1, total), total);
       },
@@ -1154,7 +1163,7 @@ async function runPipelineStages(
         // and the UI keep the pretty agent1Output exactly as today.
         content: `Use the following Drawing Analyzer JSON as the authoritative source for all quantities and project data. Generate your complete Estimator output following your output format exactly.\n\n${renderAccountTermsBlock(accountTerms, effectiveAccountTerms(accountTerms, reviewItemsNow)) ?? ''}\n\n${agent2ScopeBlock ?? ''}\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}`,
       }],
-    }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
+    }).finalMessage(), { signal: runSignalOf(client), onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 2 transient error, retry ${a} in ${d}ms`) });
     assertNotTruncated(resp, 'Agent 2', config.maxTokensA2);
     agent2Output = extractText(resp);
     // Task 9 — the same hygiene on Agent 2's JSON: the bid's GC, no
@@ -1216,7 +1225,7 @@ async function runPipelineStages(
         // Task 4.1 — compact in the request body (both prior agents' outputs).
         content: `Review the following outputs and generate your complete Chief Estimator QC review following your output format exactly.\n\nDRAWING ANALYZER JSON:\n\n${compactForHandoff(agent1Output)}\n\n---\n\nESTIMATOR OUTPUT:\n\n${compactForHandoff(agent2Output)}${prebidCrossCheck ? `\n\n---\n\n${prebidCrossCheck}` : ''}`,
       }],
-    }).finalMessage(), { onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
+    }).finalMessage(), { signal: runSignalOf(client), onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 3 transient error, retry ${a} in ${d}ms`) });
     assertNotTruncated(resp, 'Agent 3', config.maxTokensA3);
     agent3Output = extractText(resp);
     const agent3ToStore = extractJSONText(agent3Output) ?? agent3Output;
@@ -1236,8 +1245,12 @@ async function runPipelineStages(
     // when nothing is waiting on the estimator (otherwise it's composed the
     // moment the Needs-review list clears).
     if (await checkpoint()) return;
-    await runDraftComposition(bidId, client, config);
-    if (await checkpoint()) return;
+    // The run is complete: the draft is its own job from here on (own
+    // abort handle, own stop), and the writes below belong to a finished
+    // run — only a NEWER run (never a late stop) skips them.
+    await runDraftComposition(bidId, draftClient, config);
+    const { rows: stillCurrent } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    if ((stillCurrent[0]?.run_id ?? null) !== runId) return;
 
     // Also persist structured fields from agent1 JSON for backward compatibility
     const a1 = parseAIJSON(agent1Output) ?? {};
@@ -1841,14 +1854,18 @@ router.put('/:bidId/workspace', requireAuth, async (req: AuthRequest, res) => {
     // workspace autosave now carries them too, so a draft survives even before
     // that action. Does not change what /estimates stores or the estimate math.
     overhead_pct, profit_pct, estimate_overrides,
+    // Fix round S4 — which scope sections the AI wrote / need re-check.
+    // Absent (an older client) keeps what is stored.
+    scope_meta,
   } = req.body;
   const { rows } = await pool.query(
-    `INSERT INTO bid_workspaces (bid_id, step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated, confirmed_service, overhead_pct, profit_pct, estimate_overrides, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now())
+    `INSERT INTO bid_workspaces (bid_id, step, active_tab, notes, scope, rfis, files, ai_done, proposal_generated, confirmed_service, overhead_pct, profit_pct, estimate_overrides, scope_meta, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE($14::jsonb, '{}'::jsonb),now())
      ON CONFLICT (bid_id) DO UPDATE SET
        step=$2, active_tab=$3, notes=$4, scope=$5, rfis=$6, files=$7,
        ai_done=$8, proposal_generated=$9, confirmed_service=$10,
-       overhead_pct=$11, profit_pct=$12, estimate_overrides=$13, updated_at=now()
+       overhead_pct=$11, profit_pct=$12, estimate_overrides=$13,
+       scope_meta=COALESCE($14::jsonb, bid_workspaces.scope_meta), updated_at=now()
      RETURNING *`,
     [bidId, step||'intake', active_tab||'overview', notes||'',
      JSON.stringify(scope||{}), JSON.stringify(rfis||[]), JSON.stringify(files||[]),
@@ -1856,7 +1873,8 @@ router.put('/:bidId/workspace', requireAuth, async (req: AuthRequest, res) => {
      confirmed_service ? JSON.stringify(confirmed_service) : null,
      overhead_pct === undefined || overhead_pct === null || overhead_pct === '' ? null : Number(overhead_pct),
      profit_pct === undefined || profit_pct === null || profit_pct === '' ? null : Number(profit_pct),
-     JSON.stringify(estimate_overrides || {})]
+     JSON.stringify(estimate_overrides || {}),
+     scope_meta && typeof scope_meta === 'object' ? JSON.stringify(scope_meta) : null]
   );
   res.json(rows[0]);
 });
@@ -2158,8 +2176,8 @@ export interface AnalysisInputExclusion {
  *  spec book twice each (once uploaded in this session, once selected from
  *  Project Files) — 28 Opus batches of ~88k input tokens instead of ~14.
  *
- *  - A document the CRM generated (documents.generated, or a proposal /
- *    takeoff / pre-bid / bid_data category) is never an input. An upload
+ *  - A document the CRM generated (documents.generated — never inferred
+ *    from its category) is never an input. An upload
  *    whose bytes (sha256, else name + size) match one of this bid's
  *    generated documents is dropped too.
  *  - A document id selected twice is sent once; two inputs with the same
@@ -2170,7 +2188,6 @@ export async function gatherAnalysisInputs(
   bidId: string, rawUploads: Express.Multer.File[], docIds: string[],
 ): Promise<{ files: Express.Multer.File[]; excluded: AnalysisInputExclusion[] }> {
   const excluded: AnalysisInputExclusion[] = [];
-  const generatedCategories = GENERATED_OUTPUT_CATEGORIES as unknown as string[];
 
   // Expand any zip archives into their constituent PDF/image files
   const uploads: Express.Multer.File[] = [];
@@ -2213,7 +2230,9 @@ export async function gatherAnalysisInputs(
       if (!doc) continue;
 
       const fname = doc.name as string;
-      if (doc.generated || generatedCategories.includes(doc.category as string)) {
+      // Fix round S1 — by the generated flag only: a person can file a real
+      // drawing under Proposal / Takeoff / Pre-Bid, and it must still go.
+      if (doc.generated) {
         excluded.push({ name: fname, documentId: docId, reason: 'crm_generated', detail: `a CRM-generated ${doc.category} document, not a drawing` });
         continue;
       }
@@ -2263,8 +2282,8 @@ export async function gatherAnalysisInputs(
   // downloaded proposal PDF dropped back in) is not a drawing either.
   const { rows: generatedDocs } = await pool.query(
     `SELECT name, display_name, file_size, content_sha256 FROM documents
-      WHERE linked_id = $1::text AND deleted_at IS NULL AND (generated = true OR category = ANY($2::text[]))`,
-    [bidId, generatedCategories]
+      WHERE linked_id = $1::text AND deleted_at IS NULL AND generated = true`,
+    [bidId]
   );
   const sha = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
   const keptUploads: Express.Multer.File[] = [];
@@ -2358,12 +2377,29 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   const aiConfig = await loadAIConfig();
 
   // Mark as running
-  // Fix round 1 / B5 — a new run: everything composed from the previous run
-  // (Agent 4's output and price, the pre-bid draft, the counts) is cleared,
-  // and the review is 'pending' — every GC document and send is blocked —
-  // until the counting stage writes this run's review. The estimator's
-  // earlier resolutions stay in review_items for the carry-over (N4).
-  const { runId: analysisRunId, reset } = await beginAnalysisRun(bidId);
+  // Fix round S2 — the previous run's in-flight AI work (analysis, counter,
+  // draft, Agent 4) is aborted FIRST, through the same mechanism as Stop, so
+  // it stops billing. Its writes are refused anyway (run-id guards).
+  abortRuns(bidId, ['analysis', 'draft', 'agent4'], undefined, 'Superseded by a new analysis run');
+
+  // A new run (fix round 1 / B5 + the re-run reset): everything the previous
+  // run produced is cleared in the same transaction that mints the run id —
+  // including the review items AND the estimator's answers to them (Jake: a
+  // clean slate; nothing carries over) — and the review is 'pending' (every
+  // GC document and send blocked) until the counting stage writes this
+  // run's review. The estimator's own work is kept (services/rerunReset.ts).
+  let started: Awaited<ReturnType<typeof beginAnalysisRun>>;
+  try {
+    started = await beginAnalysisRun(bidId);
+  } catch (err) {
+    // The old run was aborted above; don't leave it looking alive.
+    await pool.query(
+      `UPDATE takeoff_results SET status='cancelled', raw_response='Stopped: a new analysis could not start' WHERE bid_id=$1 AND status = ANY($2::text[])`,
+      [bidId, ANALYSIS_RUNNING_STATUSES]
+    ).catch(() => {});
+    throw err;
+  }
+  const { runId: analysisRunId, reset } = started;
   // Re-run defaults to the last run's inputs: remember which documents this
   // run read (an upload counts as its filed copy, matched by content hash).
   await pool.query('UPDATE takeoff_results SET input_document_ids=$2 WHERE bid_id=$1 AND run_id=$3',
@@ -2421,31 +2457,33 @@ router.post('/:bidId/stop-analysis', requireAuth, requireAIPermission('run_analy
   const message = `Stopped by ${req.user?.name ?? 'the estimator'}`;
   const want = (k: string) => what === 'all' || what === k;
 
+  // Fix round S3 — phase- and run-specific: only a job that is actually
+  // running is cancelled, and only THAT run's in-flight calls are aborted.
+  // A stop that arrives after the job finished is a no-op ("already
+  // finished"): it never kills the draft that follows a finished analysis,
+  // nor the finished run's scope / auto-fill / Drive writes.
   const stopped = { analysis: false, agent4: false, draft: false };
+  let aborted = 0;
   if (want('analysis')) {
     const r = await pool.query(
       `UPDATE takeoff_results SET status='cancelled', raw_response=$2, cancelled_at=now(), cancelled_by=$3, progress=NULL
-        WHERE bid_id=$1 AND status = ANY($4::text[])`,
+        WHERE bid_id=$1 AND status = ANY($4::text[]) RETURNING run_id`,
       [bidId, message, req.user?.name ?? null, ANALYSIS_RUNNING_STATUSES]
     );
-    stopped.analysis = (r.rowCount ?? 0) > 0;
+    if (r.rowCount) { stopped.analysis = true; aborted += abortRuns(bidId, ['analysis'], r.rows[0].run_id ?? null, message); }
   }
   if (want('agent4')) {
     const r = await pool.query(
-      `UPDATE takeoff_results SET agent4_status='cancelled', agent4_error=$2 WHERE bid_id=$1 AND agent4_status='running'`, [bidId, message]
+      `UPDATE takeoff_results SET agent4_status='cancelled', agent4_error=$2 WHERE bid_id=$1 AND agent4_status='running' RETURNING run_id`, [bidId, message]
     );
-    stopped.agent4 = (r.rowCount ?? 0) > 0;
+    if (r.rowCount) { stopped.agent4 = true; aborted += abortRuns(bidId, ['agent4'], r.rows[0].run_id ?? null, message); }
   }
   if (want('draft')) {
     const r = await pool.query(
-      `UPDATE takeoff_results SET draft_status='cancelled', draft_error=$2 WHERE bid_id=$1 AND draft_status='running'`, [bidId, message]
+      `UPDATE takeoff_results SET draft_status='cancelled', draft_error=$2 WHERE bid_id=$1 AND draft_status='running' RETURNING run_id`, [bidId, message]
     );
-    stopped.draft = (r.rowCount ?? 0) > 0;
+    if (r.rowCount) { stopped.draft = true; aborted += abortRuns(bidId, ['draft'], r.rows[0].run_id ?? null, message); }
   }
-  // Abort in-flight calls even when the DB row had already moved on (a job
-  // between its last write and its exit still holds a live stream).
-  const kinds = (['analysis', 'agent4', 'draft'] as const).filter(k => want(k));
-  const aborted = abortRuns(bidId, [...kinds]);
   if (stopped.analysis || stopped.agent4 || stopped.draft) {
     await pool.query(
       `INSERT INTO activity (kind, div, text, user_id) VALUES ('ai_analysis','preconstruction',$1,$2)`,
@@ -2453,8 +2491,9 @@ router.post('/:bidId/stop-analysis', requireAuth, requireAIPermission('run_analy
     ).catch(() => {});
   }
   logger.info({ bidId, stopped, aborted, by: req.user?.name }, '[takeoff] stop-analysis');
-  if (!stopped.analysis && !stopped.agent4 && !stopped.draft && !aborted) {
-    return res.status(409).json({ error: 'Nothing is running for this bid.', stopped, aborted });
+  if (!stopped.analysis && !stopped.agent4 && !stopped.draft) {
+    const label = what === 'analysis' ? 'The analysis has' : what === 'agent4' ? 'The proposal run has' : what === 'draft' ? 'The pre-bid draft has' : 'Everything has';
+    return res.status(409).json({ error: `${label} already finished — nothing to stop.`, alreadyFinished: true, stopped, aborted });
   }
   res.json({ stopped, aborted, message });
 }));
@@ -2530,6 +2569,14 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   const workspaceScope = (wsRows[0]?.scope as Record<string, string> | undefined) ?? null;
   const savedEstimate = estRows[0] ?? null;
 
+  // Stop analysis — Agent 4 can be stopped (agent4_status 'cancelled'); its
+  // call carries this job's abort signal and no write lands after a stop.
+  // Fix round N4 — registered BEFORE 'running' is visible, so a stop that
+  // lands right after the response always reaches the call.
+  const agent4Handle = registerRun(bidId, 'agent4', runId);
+  const a4Client = abortableClient(client, agent4Handle.signal);
+  let userMsg: string;
+  try {
   // Mark as running and respond immediately — don't wait for AI
   await pool.query(
     `UPDATE takeoff_results SET agent4_status='running', agent4_error=NULL, agent4_output=NULL WHERE bid_id=$1 AND run_id IS NOT DISTINCT FROM $2`,
@@ -2538,7 +2585,7 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   res.json({ status: 'running' });
 
   // Run AI call in background
-  const userMsg = buildAgent4UserMessage({
+  userMsg = buildAgent4UserMessage({
     price,
     internalNotes,
     agent1Output,
@@ -2549,19 +2596,22 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
     accountTerms: await accountTermsBlockFor(bidId, trRows[0].account_terms as AccountTermsSnapshot | null, trRows[0].review_items as ReviewItem[] | null, agent1Output),
     scopeList: renderScopeListBlock((await getBidScopeList(bidId)).items),
   });
+  } catch (err) {
+    agent4Handle.release();
+    throw err;
+  }
 
-  // Stop analysis — Agent 4 can be stopped (agent4_status 'cancelled'); its
-  // call carries this job's abort signal and no write lands after a stop.
-  const agent4Handle = registerRun(bidId, 'agent4');
-  const a4Client = abortableClient(client, agent4Handle.signal);
   (async () => {
     try {
+      // Fix round N4 — a stop that landed while the message was being built.
+      const { rows: live } = await pool.query('SELECT agent4_status FROM takeoff_results WHERE bid_id=$1', [bidId]);
+      if (agent4Handle.signal.aborted || live[0]?.agent4_status === 'cancelled') throw new RunCancelledError();
       const resp = await callWithRetry(() => a4Client.messages.stream({
         model: config.modelA4,
         max_tokens: config.maxTokensA4,
           system: [{ type: 'text', text: config.promptA4 || AGENT4_SYSTEM, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: userMsg }],
-      }).finalMessage(), { onRetry: (a, _e, d) => logger.warn(`[agent4] retry ${a} in ${d}ms`) });
+      }).finalMessage(), { signal: runSignalOf(a4Client), onRetry: (a, _e, d) => logger.warn(`[agent4] retry ${a} in ${d}ms`) });
 
       assertNotTruncated(resp, 'Agent 4', config.maxTokensA4);
       const rawText = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');

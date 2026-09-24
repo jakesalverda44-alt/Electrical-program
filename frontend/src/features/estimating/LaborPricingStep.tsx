@@ -302,7 +302,7 @@ export function LaborPricingStep({
       {recheckCount > 0 && (
         <div className="lp-banner" data-testid="lp-recheck-banner">
           {recheckCount} line{recheckCount === 1 ? '' : 's'} kept from the previous analysis run (you had edited {recheckCount === 1 ? 'it' : 'them'}) — re-check {recheckCount === 1 ? 'it' : 'them'} against the new takeoff.
-          {' '}Sync from takeoff re-binds {recheckCount === 1 ? 'it' : 'them'} to the new run; mark each one checked when done.
+          {' '}Sync from takeoff re-binds {recheckCount === 1 ? 'it' : 'them'} to the new run only on the same category, unit and description; a line it can&apos;t match is left as is (it may duplicate a new takeoff line) — mark each one checked when done.
         </div>
       )}
 
@@ -416,10 +416,14 @@ export function LaborPricingStep({
                             title="You had edited this line before the analysis was re-run, so it was kept. Check it against the new takeoff."
                             style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: 'var(--amber)', border: '1px solid var(--amber)', borderRadius: 4, padding: '1px 4px' }}
                           >
-                            From previous run — re-check
+                            {line.recheck_reason === 'no_confident_match'
+                              ? 're-check: no confident match in the new takeoff'
+                              : line.recheck_reason === 'ambiguous_match'
+                                ? 're-check: more than one new takeoff line matches'
+                                : 'From previous run — re-check'}
                             <button type="button" className="lp-reset-btn" style={{ display: 'inline', marginLeft: 4, color: 'var(--amber)' }}
                               data-testid={`lp-recheck-done-${idx}`}
-                              onClick={() => updateLine(idx, { recheck_run_id: null })}>checked</button>
+                              onClick={() => updateLine(idx, { recheck_run_id: null, recheck_reason: null })}>checked</button>
                           </span>
                         )}
                         {line.qty_overridden && (

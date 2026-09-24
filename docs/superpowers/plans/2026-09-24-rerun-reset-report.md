@@ -236,3 +236,115 @@ on re-run; an unticked pre-selection stays unticked).
    in-flight stream on another instance runs to completion.
 6. **Re-run needs the files re-selected**, as before (nothing is sent
    automatically). Should a re-run default to the last run's input documents?
+
+---
+
+# Fix round (review `2026-09-24-rerun-reset-review.md`, verdict MERGE AFTER FIXES)
+
+Migration **124**: `est_bid_lines.recheck_reason` and
+`bid_workspaces.scope_meta`. The next plan starts at **125**. The reviewer's
+reproduced repros are now tests.
+
+## Blockers
+
+- **B1 — a kept line re-binds only on category + unit + normalized
+  description.**
+  - The item key alone never binds, because keys renumber between runs.
+  - Exactly one candidate binds. When a kept line binds, the matching new row
+    is not also added, so the item is not priced twice. The kept line keeps
+    the estimator's description, qty and overrides.
+  - When nothing matches, or only the key matches, the line is not bound and
+    is flagged `no_confident_match`. Its takeoff key, qty and overrides are
+    untouched.
+  - When two candidates match equally (N1), none is picked and the line is
+    flagged `ambiguous_match`.
+  - An unbound line stays priced and is never excluded. Labor & Pricing shows
+    "re-check: no confident match in the new takeoff" (or the ambiguous
+    wording), and the banner says an unmatched line may duplicate a new
+    takeoff line.
+  - Tests:
+    - the reviewer's Duplex/GFCI repro: no bind, the GFCI keeps its own qty
+      and material, one "Duplex 20A" line;
+    - an exact match superseding the new row;
+    - a different unit;
+    - an ambiguous tie;
+    - the reason round-tripping through a save and clearing with "checked".
+- **B2 — `bids.amount` is cleared only when it equals, to the cent, the
+  cleared estimate grand total or Agent 4 price.** Anything else (typed,
+  imported or changed) is kept. The reset reports `amount: {before, kept}`.
+  The confirm shows the actual amount: "and the bid amount ($X) that came from
+  it" under Cleared, or "The bid amount ($X) — you set it" under Kept.
+  - Tests: the 23,173 vs 25,000 repro, one cent either side, and the Agent 4
+    price.
+
+## Should-fix
+
+- **S1** — an input is excluded only by `documents.generated`, or an upload
+  whose content hash matches a generated document. A person's PDF filed under
+  Proposal, Takeoff or Pre-Bid is analysed and selectable. The Generated
+  badge follows the same rule.
+- **S2** — `/analyze` aborts the previous run's in-flight analysis, counter,
+  draft and Agent 4 calls through the stop mechanism before the reset. The
+  counter's stop check is also true once the run is superseded. If the reset
+  itself fails, the aborted run is marked cancelled rather than left looking
+  alive.
+- **S3** — Stop is phase- and run-specific.
+  - It aborts only when a running job was actually cancelled, and only that
+    run's jobs (the registry is keyed by run id).
+  - A stop after the job finished returns 409 "already finished" and aborts
+    nothing.
+  - The end-of-run draft is its own job on the unwrapped client, so a late
+    analysis stop can't kill it. The finished run's scope, auto-fill and Drive
+    writes now skip only when a newer run took over.
+  - The UI shows "Stopped" only when the server stopped the job; on
+    "already finished" it leaves the run to complete.
+- **S4** — Scope of Work sections record what the AI wrote in
+  `scope_meta.ai` (auto-fill and "Import from AI Takeoff"). A re-run clears a
+  section only while it still matches the AI's text. Before scope_meta
+  existed, the fallback is to compare against the previous Agent 2
+  scopeOfWork. Typed, edited, pre-bid and imported sections are kept and
+  flagged "From previous run — re-check"; editing a section clears its flag.
+  The confirm counts both.
+- **S5** — a draft RFI's question is editable, and editing it sets
+  `origin: 'manual'`, so a re-run keeps it. Sent RFIs aren't editable.
+- **S6** — PlansWorkspace hands the workspace a markup flush
+  (`useMarkupFlush`). The re-run saves pending markup first and does not start
+  if the save fails. The Plans view is always refreshed after a reset, and the
+  confirm warns about markup still saving.
+  - Note: the Re-run control lives in List view, and leaving Plans view already
+    goes through the markup guard, so this is defence in depth.
+  - Tested at the hook level.
+
+## Nits
+
+- **N2** — `storeDocument({replaceExisting})` soft-deletes, following the
+  documents convention (restorable), and never touches a generated file.
+- **N3** — the `/analyze` comment now says review answers are cleared, with
+  no carry-over.
+- **N4** — Agent 4 registers its abort handle before `agent4_status='running'`
+  is visible, and re-checks the status just before the call.
+- **N5** — `isCancellationError` goes by type only: `RunCancelledError`,
+  `APIUserAbortError` or `AbortError`, never the message text.
+- **N6** — `callWithRetry` takes the run signal (`runSignalOf(client)`), wakes
+  from the backoff on a stop, and throws at once.
+- **N8** — the test pool is `max 5` with a 1 s idle timeout (production stays
+  at 20). Two full backend runs had no "too many clients".
+
+## Results
+
+- **Backend:**
+  - Run 1: 1521 passed, 3 failed.
+  - Run 2: 1520 passed, 4 failed.
+  - Both runs had 1528 tests, and neither run hit "too many clients".
+  - Failures:
+    - the known flakes: intakeSimilarCache ×2, the integration.test backfill
+      timeout, and the notificationsRetention worker crash;
+    - in run 2 only, one estimatingMarkups "socket hang up" under load. That
+      file passes 28/28 on its own.
+  - New fix-round tests: 13 in `rerunReset.test.ts` (30 total) and 7 in
+    `stopAnalysis.test.ts` (17 total).
+- **Frontend:** 125 files, 1250/1250 passed. The new tests are 7 in
+  `PcWorkspaceRerunReset.test.tsx` (18 total) and 4 in `useMarkupFlush.test.ts`.
+  Two existing RFI tests now query by display value, since RFI questions are
+  editable inputs.
+- **tsc:** backend and frontend clean.

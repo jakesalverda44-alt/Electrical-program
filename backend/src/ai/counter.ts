@@ -17,7 +17,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { COUNTER_SYSTEM } from './prompts';
 import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { callWithRetry } from './retry';
-import { RunCancelledError } from './runControl';
+import { RunCancelledError, runSignalOf } from './runControl';
 import { assertNotTruncated, AgentTruncatedError, isAgentTruncatedError } from './stopReason';
 import { parseAIJSON } from './json';
 import { normalizeTypeKey, type CountTarget } from './countTargets';
@@ -409,7 +409,7 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
         system: [{ type: 'text', text: COUNTER_SYSTEM, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content }],
         ...(supportsEffort(input.model) ? { output_config: { effort: 'high' as const } } : {}),
-      }).finalMessage(), { onRetry: (a, _e, d) => logger.warn(`[counter] ${r.sheet.label} retry ${a} in ${d}ms`) });
+      }).finalMessage(), { signal: runSignalOf(input.client), onRetry: (a, _e, d) => logger.warn(`[counter] ${r.sheet.label} retry ${a} in ${d}ms`) });
       r.calls++;
       usage.input_tokens += resp.usage?.input_tokens ?? 0;
       usage.output_tokens += resp.usage?.output_tokens ?? 0;

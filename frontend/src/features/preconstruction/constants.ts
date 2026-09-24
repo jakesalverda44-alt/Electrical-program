@@ -72,6 +72,9 @@ export interface PcWorkspace {
   /** origin (migration 121): 'ai' = imported from the analysis, 'manual' =
    *  typed by the estimator. A re-run clears AI RFIs nobody acted on. */
   rfis: { id: string; question: string; submitted: boolean; answer: string; origin?: 'ai' | 'manual' }[];
+  /** Fix round S4 — which Scope of Work sections the AI wrote (their text as
+   *  written) and which were kept through a re-run and need re-checking. */
+  scopeMeta?: { ai?: Record<string, string>; recheck?: string[] };
   proposalGenerated: boolean;
   notes: string;
   amount: number;

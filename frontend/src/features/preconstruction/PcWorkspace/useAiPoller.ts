@@ -104,13 +104,17 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
             // the AI must not clobber it. The explicit "Import from AI Takeoff" button
             // still overwrites — that one is a deliberate choice.
             const merged = { ...prev.scope };
+            // Fix round S4 — remember what the AI wrote, so a re-run clears
+            // only sections nobody has edited since.
+            const ai = { ...(prev.scopeMeta?.ai ?? {}) };
             let filled = 0;
             for (const [k, v] of Object.entries(scopeFill)) {
-              if (!(merged[k] ?? '').trim()) { merged[k] = v; filled++; }
+              if (!(merged[k] ?? '').trim()) { merged[k] = v; ai[k] = v; filled++; }
             }
             return {
               aiRunning: false, aiDone: true,
               scope: filled ? merged : prev.scope,
+              ...(filled ? { scopeMeta: { ...(prev.scopeMeta ?? {}), ai } } : {}),
               aiLog: [...(prev.aiLog ?? []), filled
                 ? '✓ Analysis complete — Scope of Work auto-filled. See Plan Review tab.'
                 : '✓ Analysis complete — see Plan Review tab.'],

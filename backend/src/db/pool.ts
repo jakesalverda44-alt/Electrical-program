@@ -22,9 +22,16 @@ dotenv.config();
 // duplicated in two files is a value that silently drifts.
 export const STATEMENT_TIMEOUT_MS = 15_000;
 
+// Fix round N8 — under test every vitest worker (one per test file in
+// flight) opens its own pool; at 20 each the full suite exhausted Postgres'
+// max_connections ("sorry, too many clients already"). A small, quickly
+// released pool per test worker keeps the whole suite well under the limit.
+const IS_TEST = process.env.NODE_ENV === 'test';
+export const POOL_MAX = IS_TEST ? 5 : 20;
+
 const POOL_TUNING = {
-  max: 20,
-  idleTimeoutMillis: 30_000,
+  max: POOL_MAX,
+  idleTimeoutMillis: IS_TEST ? 1_000 : 30_000,
   connectionTimeoutMillis: 5_000,
   statement_timeout: STATEMENT_TIMEOUT_MS,
 };

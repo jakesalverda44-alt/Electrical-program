@@ -27,6 +27,8 @@ export interface RetryOptions {
   baseDelayMs?: number;
   maxDelayMs?: number;
   onRetry?: (attempt: number, err: unknown, delayMs: number) => void;
+  /** Fix round N6 — a stop wakes the backoff at once and ends the retries. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -38,6 +40,7 @@ export async function callWithRetry<T>(fn: () => Promise<T>, opts: RetryOptions 
   const retries = opts.retries ?? 4;
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
+    if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('aborted');
     try {
       return await fn();
     } catch (err) {
@@ -47,7 +50,13 @@ export async function callWithRetry<T>(fn: () => Promise<T>, opts: RetryOptions 
       if (attempt === retries || !isRetryableError(err)) throw err;
       const delay = backoffDelay(attempt, opts.baseDelayMs, opts.maxDelayMs);
       opts.onRetry?.(attempt + 1, err, delay);
-      await new Promise(r => setTimeout(r, delay));
+      await new Promise<void>(r => {
+        if (opts.signal?.aborted) return r();
+        const t = setTimeout(() => { opts.signal?.removeEventListener('abort', wake); r(); }, delay);
+        const wake = () => { clearTimeout(t); r(); };
+        opts.signal?.addEventListener('abort', wake, { once: true });
+      });
+      if (opts.signal?.aborted) throw opts.signal.reason ?? err;
     }
   }
   throw lastErr;
