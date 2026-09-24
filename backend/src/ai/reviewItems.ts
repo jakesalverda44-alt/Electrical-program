@@ -16,7 +16,7 @@
 // Pure: building, merging (a re-run keeps the estimator's earlier
 // resolutions — their work is never silently discarded) and validating a
 // resolution. The DB/route half lives in routes/preconstruction.ts.
-import type { CountResult } from './countingStage';
+import type { CountResult, CountMark } from './countingStage';
 import { outsideAptInstall, describeAssignment } from '../bidstd/tradeAssignment';
 import { facilityChecklistItems } from '../bidstd/facilityChecklists';
 
@@ -529,8 +529,56 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   // byte for byte — a run that never went through the evidence round is
   // never reshuffled or re-grouped by it.
   if (!countResult?.evidence) return items.map(i => ({ ...i, group: groupOf(i) }));
+  // Fix round S13 — a high auto-accepted count is exactly where a repeated
+  // over- or under-count is easiest to miss (nobody reads 40 marks one by
+  // one): a non-blocking spot-check samples a handful of this type's own
+  // placed marks and asks the estimator to eyeball just those against the
+  // plans, never the type's own count: (that stays open on its own terms).
+  for (const t of spotCheckSamples(countResult)) {
+    items.push({
+      id: `spotcheck:${t.typeKey}`,
+      kind: 'confirm',
+      blocking: false,
+      title: `Spot-check: confirm these ${t.sample.length} marks — Type ${t.type} (${t.total} auto-counted)`,
+      detail: `A random sample of ${t.sample.length} of the ${t.total} marks the drawing analysis placed for ${t.type}${t.description ? ` (${t.description})` : ''}, on ${[...new Set(t.sample.map(m => m.sheetKey))].join(', ')}: open the Plans view and confirm each one is real (not a double count, not a stray mark). Informational only — it never changes the count on its own.`,
+      actions: ['confirm'],
+      fingerprint: `spotcheck|${t.typeKey}|${t.total}`,
+    });
+  }
   const grouped = groupLegendZeroItems(items, countResult);
   return sortByRisk(grouped).map(i => ({ ...i, group: groupOf(i) }));
+}
+
+/** Fix round S13 — a 5-10% QA sample (7.5% here, min 3) of a high auto-
+ *  accepted count's own placed marks, one non-blocking review item per
+ *  qualifying type. Deterministic (a stride across the type's OWN marks,
+ *  sorted for stability) — a repeated run always samples the same marks
+ *  for the same count, so the item's fingerprint is stable across re-runs. */
+export const SPOTCHECK_MIN_COUNT = 20;
+export const SPOTCHECK_RATE = 0.075;
+export const SPOTCHECK_MIN_SAMPLE = 3;
+export function spotCheckSamples(countResult: CountResult | null): Array<{ typeKey: string; type: string; description: string; total: number; sample: CountMark[] }> {
+  const out: Array<{ typeKey: string; type: string; description: string; total: number; sample: CountMark[] }> = [];
+  for (const t of countResult?.types ?? []) {
+    if (t.host || t.status !== 'counted' || t.count < SPOTCHECK_MIN_COUNT) continue;
+    const marks = (countResult?.marks ?? [])
+      .filter(m => m.typeKey === t.key)
+      .slice()
+      .sort((a, b) => a.sheetKey.localeCompare(b.sheetKey) || a.x - b.x || a.y - b.y);
+    if (!marks.length) continue;
+    const n = Math.min(marks.length, Math.max(SPOTCHECK_MIN_SAMPLE, Math.round(marks.length * SPOTCHECK_RATE)));
+    const stride = marks.length / n;
+    const sample: CountMark[] = [];
+    const seen = new Set<number>();
+    for (let i = 0; i < n; i++) {
+      const idx = Math.min(marks.length - 1, Math.floor(i * stride));
+      if (seen.has(idx)) continue;
+      seen.add(idx);
+      sample.push(marks[idx]);
+    }
+    out.push({ typeKey: t.key, type: t.type, description: t.description, total: t.count, sample });
+  }
+  return out;
 }
 
 const EQUIPMENT_KEYWORD_RE = /\bmeter\s*base\b|\bwireway\b|\bdiscon(?:nect)?\b|\bLCP\b|\bdata\s*concentrator\b|\bpanel(?:board)?\b/i;
@@ -641,7 +689,7 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
  *  action): 'zero', 'unreadable', 'area:<sheets>', 'coverage', 'heads',
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
-  if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : i.id.startsWith('schedule:') ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : 'info';
+  if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : i.id.startsWith('schedule:') ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';
   if (i.id.startsWith('reconcile:')) return 'reconcile';

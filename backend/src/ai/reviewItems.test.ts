@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { carryOverResolutions, validateResolution, reviewResolutionsForAgent4, buildReviewItems, enforcedCounts, riskRank as riskRankOf, applyGroupMemberResolution, type ReviewItem } from './reviewItems';
+import { carryOverResolutions, validateResolution, reviewResolutionsForAgent4, buildReviewItems, enforcedCounts, riskRank as riskRankOf, applyGroupMemberResolution, spotCheckSamples, SPOTCHECK_MIN_COUNT, reviewItemIsOpen, type ReviewItem } from './reviewItems';
 import { runCountingStage, type CountResult } from './countingStage';
 import { mergeCountsIntoTakeoff } from './countMerge';
 import { buildCountTargets } from './countTargets';
@@ -389,6 +389,46 @@ describe('4.6 — facility checklists on the same queue, always non-blocking', (
     expect(withChecklist.every(i => i.blocking === false && i.id.startsWith('checklist:car_wash:'))).toBe(true);
     expect(buildReviewItems(null, [], { projectType: 'Office TI' })).toEqual([]);
     expect(buildReviewItems(null, [])).toEqual([]);
+  });
+});
+
+describe('Fix round S13 — a 5-10% spot-check sample of a high auto-accepted count', () => {
+  const a1 = { fixtureSchedule: [{ type: 'A', description: '2x4 LED troffer', location: 'interior', wattage: 32 }] };
+  const [e2] = pick([['E-2', 'POWER PLAN']]);
+
+  it(`a type at or above ${SPOTCHECK_MIN_COUNT} gets ONE non-blocking spotcheck: item; below the threshold, none`, () => {
+    const marksA25 = Array.from({ length: 25 }, (_, i) => ({ sheetKey: e2.key, typeKey: 'A', x: i, y: 0 }));
+    const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: marks({ A: 25 }), unreadable: [] }], { evidence: EMPTY_EVIDENCE, marks: marksA25 });
+    const items = buildReviewItems(cr);
+    const item = items.find(i => i.id === 'spotcheck:A')!;
+    expect(item).toBeTruthy();
+    expect(item.blocking).toBe(false);
+    // 25 * 7.5% = 1.875 -> rounds to 2, but the floor is 3.
+    expect(item.title).toBe('Spot-check: confirm these 3 marks — Type A (25 auto-counted)');
+    expect(item.actions).toEqual(['confirm']);
+
+    const marksA19 = Array.from({ length: 19 }, (_, i) => ({ sheetKey: e2.key, typeKey: 'A', x: i, y: 0 }));
+    const under = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: marks({ A: 19 }), unreadable: [] }], { evidence: EMPTY_EVIDENCE, marks: marksA19 });
+    expect(buildReviewItems(under).find(i => i.id === 'spotcheck:A')).toBeUndefined();
+  });
+
+  it('never blocks the gate, and never changes the type\'s own count on its own', () => {
+    const marksA30 = Array.from({ length: 30 }, (_, i) => ({ sheetKey: e2.key, typeKey: 'A', x: i, y: 0 }));
+    const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: marks({ A: 30 }), unreadable: [] }], { evidence: EMPTY_EVIDENCE, marks: marksA30 });
+    const items = buildReviewItems(cr);
+    const item = items.find(i => i.id === 'spotcheck:A')!;
+    expect(reviewItemIsOpen(item)).toBe(false); // blocking: false -> never open
+    expect(enforcedCounts(cr, items).byType.get('A')).toBe(30);
+  });
+
+  it('spotCheckSamples is deterministic: the same marks always sample the same indices', () => {
+    const m = Array.from({ length: 40 }, (_, i) => ({ sheetKey: e2.key, typeKey: 'A', x: i, y: 0 }));
+    const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: marks({ A: 40 }), unreadable: [] }], { evidence: EMPTY_EVIDENCE, marks: m });
+    const a = spotCheckSamples(cr);
+    const b = spotCheckSamples(cr);
+    expect(a).toEqual(b);
+    expect(a[0].sample.length).toBe(Math.round(40 * 0.075)); // 3 -> exactly the 7.5% rate, above the floor
+    expect(new Set(a[0].sample.map(s => s.x)).size).toBe(a[0].sample.length); // no duplicate marks
   });
 });
 

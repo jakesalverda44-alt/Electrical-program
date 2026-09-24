@@ -244,8 +244,13 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     // legend-zeros otherwise qualify: they're individual $-risk items, so
     // the honest blocking count is reported even though it's now above 12
     // (17, not 9) — nothing here is hidden in a bulk "confirm none" item.
-    expect(after.review).toHaveLength(21);
+    // S13 adds two more non-blocking spot-check items (Type A: 73 counted,
+    // Type B: 52 counted — both above the 20-count threshold), so the
+    // total is 23, not 21; the blocking count is unaffected (17).
+    expect(after.review).toHaveLength(23);
     expect(after.review.filter(reviewItemIsOpen)).toHaveLength(17);
+    expect(after.review.find(i => i.id === 'spotcheck:A')).toMatchObject({ blocking: false, title: 'Spot-check: confirm these 5 marks — Type A (73 auto-counted)' });
+    expect(after.review.find(i => i.id === 'spotcheck:B')).toMatchObject({ blocking: false, title: 'Spot-check: confirm these 4 marks — Type B (52 auto-counted)' });
     const group = after.review.find(i => i.id.startsWith('legend-zero:'))!;
     expect(group).toBeTruthy();
     expect(group.title).toBe('4 legend items not found on any counted sheet — answer each one');
