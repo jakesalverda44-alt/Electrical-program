@@ -915,3 +915,102 @@ Affected test files run: `TakeoffReviewPanel.test.tsx` (29), `PcWorkspaceProposa
 `reviewBulk.test.ts`, `gapFillEndToEnd.test.ts`, `kissimmeeEvidence.test.ts` — all passing (45 backend + 44
 frontend across the touched files) — plus a full frontend `npx vitest run` (1306/1306) and `tsc --noEmit`
 clean in both packages.
+
+---
+
+## Fix round 3 — Parts 1–3 (review "Round 2", 3c66503)
+
+**Executor:** Opus 5. **Scope:** B12, S15, S17, S19 and the migration-138 nit. Sonnet does B10, B11, S16 and S18 after this, on the same branch; the tree is left clean for it. Same rules as before: worktree only, no Agent tool, no real API calls. Each repro is now a test.
+
+| Commit | Finding |
+|---|---|
+| d7ae5fc | Migration nit: migration **139** de-duplicates eval cases, then creates the unique index (138 is now a no-op) |
+| 265d451 | B12 |
+| 7473e77 | S17 |
+| 8ca3134 | S15 |
+| b25dc0f | S15 follow-up: the supplement test's first floor now names its level |
+| db055fd | S19 |
+
+### Migration nit
+- 138 was already applied to the test DB, so the fix went into a new migration.
+- Old 138 created the unique index directly, which fails on a dev DB that already holds duplicates. It is now a no-op, and the index moved to **139**:
+  - 139 first deletes duplicates, keeping the newest row per (bid, run, source);
+  - then it runs `CREATE UNIQUE INDEX IF NOT EXISTS`.
+- On a DB that already ran the old 138, 139 changes nothing.
+- The test runs in a rolled-back transaction:
+  - 3 duplicate rows → 1 row plus the index;
+  - a re-run of 139 changes nothing.
+- **The next free migration number is 140.**
+
+### B12: panels are keyed by name + building + content
+- **Identity.** A panel's identity is its name **and** the building or area its sheet title names ("BUILDING 1").
+- **Same identity, same content** → one table. The content signature is the set of circuit numbers, descriptions and loads.
+- **Same name, different content:**
+  - **both** tables are kept and summed;
+  - each carries a conflict warning;
+  - the counting stage and the supplement pass store the warning on `count_result.evidence.tables`, so the real review list raises one blocking `panel-dup:<name>` item ("two panels or one?").
+- Circuit lines name the building. When two same-name panels have no building, the lines name the sheet instead.
+- **Tests:**
+  - the reviewer's repro → water heaters **2**, Panel A circuits **7** (was 1 and 4), both tables flagged;
+  - building-named titles → two identities, no conflict;
+  - the same content on two sheets → one table;
+  - the item reaches `buildReviewItems` from the stored tables.
+
+### S15: stacked floors
+- `levelOf` now reads:
+  - L1 / L2, LEVEL n, LEVEL TWO, 2ND LEVEL;
+  - FIRST–SIXTH FLOOR / LEVEL;
+  - UPPER / LOWER;
+  - BASEMENT / CELLAR, MEZZANINE, ROOF;
+  - "FLOORS 2-4".
+- A same-layout pair (the marks coincide) where either sheet's title names **no level** is never taken silently as "the same devices drawn twice":
+  - it becomes the blocking keep/sum question;
+  - the same applies to an unnamed-level sheet against a named-level sheet;
+  - complementary layers (Kissimmee E-1/E-2) still sum.
+- **Tests:**
+  - the level forms;
+  - L1 / L2 typical floors → 20, summed;
+  - two unnamed same-layout sheets → question (keep 10 / sum 20);
+  - unnamed vs LEVEL 2 → question.
+- An existing test changed: `supplementPass.test.ts`. Its E-3 "LIGHTING PLAN" (no level) and E-9 "LEVEL 2 LIGHTING PLAN" put symbols at the same page positions, so they are now asked about. That test is about the supplement pass, so E-3 is now titled "FIRST FLOOR LIGHTING PLAN".
+
+### S17: "(n)" on some rows of a tag
+- One row says "(n)" and there are at most n rows → **n**. The other circuits feed the same n units.
+- More rows than n, or several rows each saying "(n)" → **n for now**, plus a blocking `schedqty:` question showing both readings. The answer is enforced.
+- **Tests:**
+  - "BATT CHGR (5)" + 4 plain rows → **5** with no question (was 9);
+  - two circuits "EF (2)" → 2 for now, asked "2 or 4"; answering "4" is enforced;
+  - "(2)" on one of 3 circuits → asked.
+- Kissimmee is unchanged: its Panel B rows are plain "BATTERY CHARGER", so battery chargers stay 5.
+
+### S19: the at-host question needs matching circuits
+- The counter may report the circuit tag at a symbol as a 5th mark element ("A-31", or "" when none — never guessed).
+- The tag is normalized (A-31 = A31) and carried through:
+  - the overlap de-duplication;
+  - the viewport resolution;
+  - `count_result.marks`;
+  - the supplement pass.
+- The "same outlet on two sheets?" question is asked only when the two circuits match, or when neither mark shows one.
+- **Kissimmee** (checked on the renders):
+  - E-1's "duplex outlet at deck" is **A-31** (CCTV MONITOR);
+  - checkout pole #2's leader says **A-29** (CK OUT REG & PRN);
+  - so the question is gone.
+  - The fixture's counter now reports those two tags.
+  - Review items: **22 (16 blocking)**.
+
+### Kissimmee fixture after fix round 3
+- Receptacles: **33** traceable, unchanged:
+  - SIMPLEX 9 drawn + 1 typical;
+  - DUPLEX 4 drawn + 8 typical;
+  - GFCI 7;
+  - WP GFI 4.
+- Site poles / heads: **3 / 4**.
+- Battery chargers: **5**; the other equipment is 1 each.
+- Baseflex: **3** (expected 8).
+- Review items: **22 (16 blocking)**. The drop from 23 (17) is the removed A-31 question.
+
+### Tests (fix round 3)
+- `tsc --noEmit` is clean.
+- **Targeted runs:** `src/ai/**`, `kissimmeeEvidence`, `takeoffCountingPipeline`, `aiCountMarkers`, `supplementPass` and `evalCasesMigration139` — **569/569 passed** after the supplement-test title change.
+- **One full backend run:** **2050 passed, 3 failed, 4 not run of 2057** (190 files: 187 passed, 2 failed, 1 lost to "Worker exited unexpectedly"). The failures are the known flakes: `intakeSimilarCache` ×2 and the `integration` lead follow-up backfill timeout. The crashed worker's 4 tests are the 4 not run.
+- The frontend was not touched this round, so it was not re-run.
