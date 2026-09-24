@@ -130,6 +130,10 @@ export function groupKey(i: ReviewItem): string {
   if (i.id.startsWith('refsheet:')) return 'refsheets';
   if (i.id.startsWith('sheet:') || i.id.startsWith('file:')) return 'sheets';
   if (i.id.startsWith('scope:')) return 'scope';
+  if (i.id.startsWith('viewport:')) return 'viewport';
+  if (i.id.startsWith('typical:')) return 'typical';
+  if (i.id.startsWith('family:')) return 'family';
+  if (i.id.startsWith('schedule:')) return 'schedule';
   if (i.id.startsWith('unscheduled:')) return 'unscheduled';
   if (i.id.startsWith('coverage:')) return 'coverage';
   if (i.id.endsWith(':heads')) return 'heads';
@@ -146,6 +150,10 @@ export function groupTitle(key: string, n: number): string {
   if (key === 'scope') return `Scope question${s} (${n})`;
   if (key === 'unscheduled') return `${n} fixture${s} not on the schedule`;
   if (key === 'coverage') return `Partial coverage (${n})`;
+  if (key === 'viewport') return `Enlarged plans — repeat the main plan or add devices? (${n})`;
+  if (key === 'typical') return `Typical packages — how many hosts? (${n})`;
+  if (key === 'family') return `Same fixture on two schedules (${n})`;
+  if (key === 'schedule') return `Schedules not read completely (${n})`;
   if (key === 'heads') return `Pole heads (${n})`;
   if (key === 'sheets') return `Pages not counted (${n})`;
   if (key === 'refsheets') return `Referenced sheet${s} not in the analysis (${n})`;
@@ -155,7 +163,7 @@ export function groupTitle(key: string, n: number): string {
   return `Other (${n})`;
 }
 
-const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'scope', 'area', 'zero', 'unreadable', 'coverage', 'heads', 'unscheduled', 'other', 'photometric', 'info'];
+const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'scope', 'area', 'viewport', 'typical', 'family', 'schedule', 'zero', 'unreadable', 'coverage', 'heads', 'unscheduled', 'other', 'photometric', 'info'];
 
 export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement }: Props) {
   const open = review.items.filter(i => !i.resolution);

@@ -27,7 +27,7 @@ vi.mock('../services/googleDrive', async (importOriginal) => {
 import { app } from '../index';
 import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth, type TestUser } from './harness';
-import { fakeAnthropic, systemText, userText, type FakeRequest } from './fixtures/takeoff/fakeAnthropic';
+import { fakeAnthropic, emptyEvidenceReply, systemText, userText, type FakeRequest } from './fixtures/takeoff/fakeAnthropic';
 import { perfectCounter } from './fixtures/takeoff/perfectCounter';
 import { MINI_P2_SYMBOLS, MINI_P3_SYMBOLS } from './fixtures/takeoff/buildSymbolPdf';
 import { runPipeline, loadAIConfig } from '../routes/preconstruction';
@@ -88,6 +88,9 @@ function responder() {
     'E-1 "ELECTRICAL SITE PLAN"': { rendered: rendered[3], symbols: MINI_P3_SYMBOLS },
   });
   return (req: FakeRequest) => {
+    // Evidence round — the evidence readers find nothing on these sheets.
+    const ev = emptyEvidenceReply(req);
+    if (ev) return ev;
     const sys = systemText(req);
     if (sys.includes('construction document sheet classifier')) {
       const pages = [...userText(req).matchAll(/Page (\d+) \(absolute/g)].map(m => Number(m[1]));

@@ -15,8 +15,14 @@ import { counterTileSpec, retryTileIn, type ModelImageLimits } from './modelLimi
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
 import { readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry } from './countRender';
 import { runCounter, type SheetCountResult } from './counter';
-import { mergeCountsIntoTakeoff, isSiteFixtureCategory, type CountMergeResult } from './countMerge';
+import { mergeCountsIntoTakeoff, isSiteFixtureCategory, type CountMergeResult, type CountMergeEvidenceResult, type SheetCountInput } from './countMerge';
 import { logger } from '../utils/logger';
+import { sanitizeForPrompt } from './sanitizeForPrompt';
+import { runEvidenceStage, type EvidenceCache, type EvidencePage, type EvidenceStageOutput, type EvidenceUsage } from './evidence/evidenceStage';
+import { resolveSheetMarks, viewportPromptBlock, type EnlargedDecision } from './evidence/viewportResolve';
+import { hostTargets, type TypicalPackage } from './evidence/typicals';
+import { scheduleCounts, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
+import type { Viewport } from './evidence/viewports';
 
 export const COUNT_RESULT_VERSION = 2;
 
@@ -40,6 +46,39 @@ export interface CountResultSheet {
   unreadable: SheetCountResult['unreadable'];
   /** Next round A5 — the dense-area retry, both passes. */
   retry?: SheetCountResult['retry'];
+  /** Evidence round 1.1 — the sheet's viewports and where they came from. */
+  viewports?: Viewport[];
+  viewportSource?: 'text' | 'vision' | 'none';
+  viewportNote?: string;
+  /** Evidence round 1.2 — marks not counted as devices, per type, with why. */
+  excluded?: Array<{ typeKey: string; count: number; reasons: string[] }>;
+  /** Evidence round 1.3 — enlarged plan vs main plan, per type. */
+  enlarged?: EnlargedDecision[];
+}
+
+/** Evidence round Parts 1-3 — what the evidence readers found and cost. */
+export interface CountResultEvidence {
+  model: string;
+  usage: EvidenceUsage;
+  calls: number;
+  cached: number;
+  errors: string[];
+  pages: Array<{ key: string; label: string; source: 'text' | 'vision' | 'none'; viewports: number; hasTextLayer: boolean; note?: string }>;
+  typicals: TypicalPackage[];
+  expansions: CountMergeEvidenceResult['expansions'];
+  unmappedTypical: CountMergeEvidenceResult['unmappedTypical'];
+  tables: ScheduleTable[];
+  families: CountMergeEvidenceResult['families'];
+  symbolDefinitions: CountMergeEvidenceResult['symbolDefinitions'];
+  circuitRows: number;
+  /** Types whose quantity the schedule parser owns (never sent to the counter). */
+  scheduleOwned: string[];
+  /** Panels the drawing analysis found (panels[]). */
+  panelsExpected: number;
+  /** Panel-schedule viewports the viewport reader identified whose table
+   *  could not be read completely — their branch circuits have no source
+   *  (3.4: Agent 1 no longer states them). */
+  panelsUnread: string[];
 }
 
 /** One counted symbol, in PDF points on its page (est_markups space). */
@@ -66,6 +105,8 @@ export interface CountResult {
   /** S3 — PDFs the page classifier returned nothing for (whole file never
    *  looked at by the counter). */
   unclassifiedFiles?: string[];
+  /** Evidence round Parts 1-3. */
+  evidence?: CountResultEvidence;
 }
 
 export interface CountingStageInput {
@@ -79,6 +120,9 @@ export interface CountingStageInput {
   /** Stop analysis — see CounterRunInput. */
   shouldStop?: () => boolean;
   onProgress?: (done: number, total: number, phase?: 'retry') => void;
+  /** Evidence round Parts 1-3 — the narrow readers (viewports, typicals,
+   *  schedules). Absent = the counting stage runs exactly as before. */
+  evidence?: { model: string; maxTokens: number; cache?: EvidenceCache };
 }
 
 export interface CountingStageOutput {
@@ -89,6 +133,11 @@ export interface CountingStageOutput {
 
 const ZERO_USAGE = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
 
+interface FinishEvidence {
+  ev: EvidenceStageOutput;
+  schedCounts: Map<string, ScheduleCount>;
+}
+
 function finish(
   input: CountingStageInput,
   targets: CountTarget[],
@@ -97,10 +146,49 @@ function finish(
   skippedSheets: CountResult['skippedSheets'],
   ran: boolean,
   notRunReason: string | undefined,
+  evidence?: FinishEvidence,
 ): { agent1: Record<string, unknown>; countResult: CountResult } {
-  const merged = mergeCountsIntoTakeoff(input.agent1, targets, sheetResults, { countingRan: ran, notRunReason });
-  const marks: CountMark[] = sheetResults.flatMap(r => r.status === 'counted'
-    ? r.placed.map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100 }))
+  // Evidence round 1.2 / 1.3 — attribute every mark to its viewport and
+  // reconcile enlarged plans with the main plan, before any cross-sheet rule.
+  const vpBy = new Map((evidence?.ev.pages ?? []).map(p => [p.key, p]));
+  const extra = new Map<string, Pick<CountResultSheet, 'viewports' | 'viewportSource' | 'viewportNote' | 'excluded' | 'enlarged'>>();
+  const mergeInputs: SheetCountInput[] = sheetResults.map(r => {
+    const page = vpBy.get(r.sheet.key);
+    if (!evidence || r.status !== 'counted' || !page) return r;
+    const res = resolveSheetMarks(r.placed, page.viewports.viewports, r.geometry ?? page.geometry);
+    const exBy = new Map<string, { count: number; reasons: Set<string> }>();
+    for (const m of res.excluded) {
+      const e = exBy.get(m.typeKey) ?? { count: 0, reasons: new Set<string>() };
+      e.count++; e.reasons.add(m.reason);
+      exBy.set(m.typeKey, e);
+    }
+    extra.set(r.sheet.key, {
+      viewports: page.viewports.viewports, viewportSource: page.viewports.source,
+      ...(page.viewports.note ? { viewportNote: page.viewports.note } : {}),
+      ...(exBy.size ? { excluded: [...exBy.entries()].map(([typeKey, e]) => ({ typeKey, count: e.count, reasons: [...e.reasons] })) } : {}),
+      ...(res.enlarged.length ? { enlarged: res.enlarged } : {}),
+    });
+    if (res.notes.length) r.notes.push(...res.notes);
+    return {
+      ...r,
+      placed: res.counted.map(m => ({ ...m, tileIds: m.tileIds ?? [] })),
+      geometry: r.geometry ?? page.geometry,
+      viewports: page.viewports.viewports,
+      pendingEnlarged: res.pending,
+    } as SheetCountInput & SheetCountResult;
+  });
+  if (evidence?.ev.errors.length) logger.warn({ errors: evidence.ev.errors }, '[counting] evidence readers: some pieces could not be read');
+  const merged = mergeCountsIntoTakeoff(input.agent1, targets, mergeInputs, {
+    countingRan: ran, notRunReason,
+    ...(evidence ? { evidence: { scheduleCounts: evidence.schedCounts, typicals: evidence.ev.typicals, tables: evidence.ev.tables } } : {}),
+  });
+  // Excluded marks per type, for the review detail and the evidence.
+  for (const t of merged.types) {
+    const n = [...extra.values()].reduce((s, e) => s + (e.excluded?.find(x => x.typeKey === t.key)?.count ?? 0), 0);
+    if (n) t.excludedMarks = n;
+  }
+  const marks: CountMark[] = mergeInputs.flatMap(r => r.status === 'counted'
+    ? r.placed.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x! * 100) / 100, y: Math.round(p.y! * 100) / 100 }))
     : []);
   const classified = new Set(input.inventory.map(p => p.file));
   const unclassifiedFiles = input.inventory.length ? [...input.pdfs.keys()].filter(f => !classified.has(f)) : [];
@@ -120,17 +208,37 @@ function finish(
       calls: r.calls, tiles: r.tiles, geometryOk: r.geometryOk, geometry: r.geometry,
       mergedDuplicates: r.mergedDuplicates, rejected: r.rejected.length, notes: r.notes, unreadable: r.unreadable,
       ...(r.retry ? { retry: r.retry } : {}),
+      ...(extra.get(r.sheet.key) ?? {}),
     })),
     skippedSheets,
     types: merged.types,
     loadCheck: merged.loadCheck,
     removedRows: merged.removedRows,
-    flags: merged.flags,
+    flags: [...merged.flags, ...(evidence?.ev.errors ?? []).map(e => `Evidence not read — ${e}.`)],
     marks,
+    ...(evidence ? {
+      evidence: {
+        model: evidence.ev.model, usage: evidence.ev.usage, calls: evidence.ev.calls, cached: evidence.ev.cached, errors: evidence.ev.errors,
+        pages: evidence.ev.pages.map(p => ({ key: p.key, label: p.label, source: p.viewports.source, viewports: p.viewports.viewports.length, hasTextLayer: p.hasTextLayer, ...(p.viewports.note ? { note: p.viewports.note } : {}) })),
+        typicals: evidence.ev.typicals,
+        expansions: merged.evidence?.expansions ?? [],
+        unmappedTypical: merged.evidence?.unmappedTypical ?? [],
+        tables: evidence.ev.tables,
+        families: merged.evidence?.families ?? [],
+        symbolDefinitions: merged.evidence?.symbolDefinitions ?? [],
+        circuitRows: merged.evidence?.circuitRows ?? 0,
+        scheduleOwned: [...evidence.schedCounts.keys()],
+        panelsExpected: Array.isArray(input.agent1.panels) ? input.agent1.panels.length : 0,
+        panelsUnread: evidence.ev.pages.flatMap(p => p.viewports.viewports
+          .filter(v => v.kind === 'schedule' && /\bPANEL(BOARD)?\b/i.test(v.title) && !/\bLOAD\b/i.test(v.title))
+          .filter(v => !evidence.ev.tables.some(t => t.viewportId === v.id && t.kind === 'panel' && !t.warnings.length))
+          .map(v => `${v.title} (${p.label})`)),
+      },
+    } : {}),
   };
   // Agent 2/3/4 read agent1_output: counted rows replace Agent 1's, and a
   // short summary rides along so QC sees what was counted and what is held.
-  const pending = merged.types.filter(t => t.status !== 'counted').map(t => `${t.type} (${t.reason})`);
+  const pending = merged.types.filter(t => t.status !== 'counted' && t.status !== 'merged' && !t.host).map(t => `${t.type} (${t.reason})`);
   const agent1 = {
     ...input.agent1,
     quantities: merged.quantities,
@@ -173,11 +281,48 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     return { agent1, countResult, usage: { ...ZERO_USAGE } };
   }
 
+  // Evidence round Parts 1-3 — viewports, typicals and schedules first: the
+  // counter then counts host markers, skips schedule-owned types, and is
+  // told each sheet's viewports.
+  let evidence: FinishEvidence | undefined;
+  let counterTargets = targets;
+  let allTargets = targets;
+  let sheetNotes: Map<string, string> | undefined;
+  if (input.evidence) {
+    const counted = selection.counted.filter(c => !c.photometric);
+    const countedKeys = new Set(counted.map(c => c.key));
+    const pages: EvidencePage[] = [
+      ...counted.map(c => ({ key: c.key, file: c.file, page: c.page, label: c.label, counted: true })),
+      ...input.inventory
+        .filter(p => p.included && p.discipline === 'electrical' && p.role !== 'reference' && (p.cls === 'schedule' || p.cls === 'detail')
+          && !countedKeys.has(`${p.file}#${p.page}`) && !/^PH/i.test(p.sheetNo.trim()))
+        .map(p => ({ key: `${p.file}#${p.page}`, file: p.file, page: p.page, label: sheetLabelOf(p), counted: false })),
+    ];
+    const ev = await runEvidenceStage({
+      client: input.client, model: input.evidence.model, maxTokens: input.evidence.maxTokens,
+      pages, pdfs: input.pdfs, targets, cache: input.evidence.cache, shouldStop: input.shouldStop,
+    });
+    const hosts = hostTargets(ev.typicals, targets);
+    const schedCounts = scheduleCounts(targets, ev.tables);
+    allTargets = [...targets, ...hosts];
+    counterTargets = allTargets.filter(t => !schedCounts.has(t.key));
+    sheetNotes = new Map(ev.pages.filter(p => p.viewports.viewports.length).map(p => [p.key, viewportPromptBlock(p.viewports.viewports, sanitizeForPrompt)]));
+    evidence = { ev, schedCounts };
+    logger.info({ pages: ev.pages.length, calls: ev.calls, cached: ev.cached, typicals: ev.typicals.length, tables: ev.tables.length, hosts: hosts.length, scheduleOwned: schedCounts.size, errors: ev.errors }, '[counting] evidence readers done');
+  }
+
   // A truncated call throws AgentTruncatedError out of here (the run fails);
   // every other per-sheet failure is recorded on that sheet by runCounter.
-  const run = await countSheets(input, targets, selection.counted, input.onProgress);
-  const { agent1, countResult } = finish(input, targets, targetNotes, run.sheets, selection.skipped, true, undefined);
+  const run = counterTargets.length
+    ? await countSheets(input, counterTargets, selection.counted, input.onProgress, sheetNotes)
+    : { sheets: selection.counted.map(sheet => ({ sheet, status: 'counted' as const, geometryOk: false, geometry: null, placed: [], mergedDuplicates: 0, unreadable: [], rejected: [], notes: ['every type on this job is owned by the schedules — nothing to count'], calls: 0, tiles: 0 })), usage: { ...ZERO_USAGE } };
+  const { agent1, countResult } = finish(input, allTargets, targetNotes, run.sheets, selection.skipped, true, undefined, evidence);
   return { agent1, countResult, usage: run.usage };
+}
+
+function sheetLabelOf(p: InventoryPage): string {
+  const no = p.sheetNo.trim(), t = p.title.trim();
+  return no && t ? `${no} "${t}"` : no || (t ? `"${t}"` : `${p.file} p${p.page}`);
 }
 
 type RenderedSheet = { sheet: CountSheet; rendered: RenderedCountPage | null; renderError?: string };
@@ -198,12 +343,13 @@ export async function countSheets(
   targets: CountTarget[],
   sheets: CountSheet[],
   onProgress?: (done: number, total: number, phase?: 'retry') => void,
+  sheetNotes?: Map<string, string>,
 ): Promise<{ sheets: SheetCountResult[]; usage: CountingStageOutput['usage'] }> {
   const spec = counterTileSpec(input.model);
   const run = await runCounter({
     client: input.client, model: input.model, maxTokens: input.maxTokens, targets,
     sheets: await renderSheets(sheets, input.pdfs, { limits: spec.limits, tileIn: spec.tileIn }),
-    shouldStop: input.shouldStop, onProgress,
+    shouldStop: input.shouldStop, onProgress, sheetNotes,
   });
   const dense = run.sheets.filter(r => r.status === 'counted' && r.unreadable.length > 0);
   if (!dense.length || input.shouldStop?.()) return run;
@@ -217,7 +363,7 @@ export async function countSheets(
   const again = await runCounter({
     client: input.client, model: input.model, maxTokens: input.maxTokens, targets: targets.filter(t => flaggedAll.has(t.key)),
     sheets: await renderSheets(dense.map(d => d.sheet), input.pdfs, { limits: spec.limits, tileIn }),
-    shouldStop: input.shouldStop,
+    shouldStop: input.shouldStop, sheetNotes,
     onProgress: onProgress ? (d, t) => onProgress(d, t, 'retry') : undefined,
   });
   for (const k of Object.keys(run.usage) as Array<keyof typeof run.usage>) run.usage[k] += again.usage[k];

@@ -80,6 +80,12 @@ export interface ReviewItem {
   group?: string;
   /** Next round A6 — a pre-filled scope answer ("by G.C." -> APT). */
   suggested?: string;
+  /** Evidence round 2.2 — a typical item: the device types and per-host
+   *  quantities a resolved host count adds. */
+  typicalDevices?: Array<{ key: string; perHost: number }>;
+  /** Evidence round 3.3 — a family item: the primary type keys whose total
+   *  the answer replaces. */
+  familyPrimary?: string[];
   /** N4 — an earlier run's resolution for this item that was NOT carried
    *  over because the drawings/counts changed; shown for re-confirmation. */
   previousResolution?: ReviewResolution;
@@ -163,6 +169,10 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   }
 
   for (const t of countResult?.types ?? []) {
+    // Evidence round — a host marker is a multiplier, not a line (its own
+    // review comes through the typical it multiplies); a merged type is part
+    // of another type (3.3) and carries no count of its own.
+    if (t.host || targetByKey.get(t.key)?.role === 'host' || t.status === 'merged') continue;
     const sheets = t.sheets.filter(s => s.count > 0).map(s => `${s.label}: ${s.count}${s.used ? '' : ` (not used — ${s.ignoredReason ?? 'ignored'})`}`);
     const fp = `${t.status}|${t.count}|${sheets.join(';')}`;
     const base = { typeKey: t.key, type: t.type, description: t.description, category: t.category, aiCount: t.count, sheets, fingerprint: fp };
@@ -194,6 +204,23 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
         sumQty: q.sum,
         actions: ['answer', 'count'],
         ...base,
+      });
+    }
+    // Evidence round 1.3 — an enlarged plan whose place on the main plan is
+    // not known shows this type too: repeats (keep) or adds (sum)?
+    if (t.status === 'counted' && t.viewportQuestion) {
+      const q = t.viewportQuestion;
+      items.push({
+        id: `viewport:${t.key}`,
+        kind: 'area',
+        title: `${title}: does the enlarged plan repeat the main plan?`,
+        detail: `${q.items.map(x => `${x.sheet} ${x.viewport}: ${x.count}`).join('; ')} — where it sits on the main plan is not known. Repeats the main plan (keep ${q.keep}) or adds devices (${q.add})?`,
+        options: [`Repeats the main plan — keep ${q.keep}`, `Adds devices — ${q.add}`],
+        keepQty: q.keep,
+        sumQty: q.add,
+        actions: ['answer', 'count'],
+        ...base,
+        fingerprint: `viewport|${q.keep}|${q.add}|${q.items.map(x => `${x.sheet}:${x.viewport}:${x.count}`).join(';')}`,
       });
     }
     if (t.status === 'counted' && t.coverage?.length) {
@@ -258,6 +285,98 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `unscheduled|${qty}|${sheet}`,
     });
   }
+  // Evidence round 2.2 — a typical package whose hosts were not counted:
+  // the multiplier is never guessed. The estimator enters the host count
+  // (each device type gets per-host x count) or marks it not on this job.
+  const ev = countResult?.evidence;
+  const byPackage = new Map<string, NonNullable<typeof ev>['expansions']>();
+  for (const e of ev?.expansions ?? []) {
+    if (e.status !== 'no_multiplier') continue;
+    byPackage.set(e.packageId, [...(byPackage.get(e.packageId) ?? []), e]);
+  }
+  for (const [pkg, es] of byPackage) {
+    const e0 = es[0];
+    const typeName = (k: string) => (countResult?.types ?? []).find(t => t.key === k)?.type ?? k;
+    items.push({
+      id: `typical:${pkg}`,
+      kind: 'count',
+      title: `Typical: ${e0.host} — how many?`,
+      detail: `${e0.viewportLabel || 'The legend'} says each ${e0.host.toLowerCase()} carries ${es.map(e => `${e.perHost} × ${typeName(e.deviceKey)}`).join(' + ')} ("${e0.quote.slice(0, 160)}"), but ${e0.reason}. Enter how many ${e0.host.toLowerCase()}s there are (each adds its devices), or mark it not on this job.`,
+      typicalDevices: es.map(e => ({ key: e.deviceKey, perHost: e.perHost })),
+      actions: ['count', 'not_on_job'],
+      fingerprint: `typical|${es.map(e => `${e.deviceKey}x${e.perHost}`).join(',')}|${e0.reason}`,
+    });
+  }
+  for (const [i, u] of (ev?.unmappedTypical ?? []).entries()) {
+    items.push({
+      id: `unscheduled:TYPICAL-${slug(`${u.host} ${u.text}`)}-${i + 1}`,
+      kind: 'count',
+      title: `Typical device not matched to a type: ${u.text}`,
+      detail: `Each ${u.host.toLowerCase()} carries ${u.qty} × ${u.text} ("${u.quote.slice(0, 160)}"), which matches no legend or schedule type. Enter the total, or mark it not on this job.`,
+      rowItem: `${u.text} (at ${u.host.toLowerCase()}s, typical)`,
+      category: 'Branch Power',
+      aiCount: 0,
+      actions: ['count', 'not_on_job'],
+      fingerprint: `typicalx|${u.qty}|${u.quote.slice(0, 60)}`,
+    });
+  }
+  // Evidence round 3.3 — a family member that counted MORE than the type it
+  // is the same fixture as: the estimator decides which count stands.
+  for (const d of ev?.families ?? []) {
+    if (!d.question) continue;
+    const q = d.question;
+    const primaryKeys = q.intoKeys;
+    if (primaryKeys.length !== 1) {
+      items.push({
+        id: `family:${q.key}`,
+        kind: 'confirm',
+        title: `Same fixture on two schedules: ${q.key} = ${q.into}`,
+        detail: `${q.key} has the same catalog number as ${q.into} (${d.family}). ${q.into} counted ${q.primaryCount} in total; ${q.key} counted ${q.memberCount}. Check the plans; confirm ${q.into}'s counts (with a reason), or correct them with markers.`,
+        actions: ['confirm'],
+        fingerprint: `family|${q.primaryCount}|${q.memberCount}`,
+      });
+      continue;
+    }
+    items.push({
+      id: `family:${q.key}`,
+      kind: 'area',
+      title: `Same fixture on two schedules: ${q.key} = ${q.into}`,
+      detail: `${q.key} has the same catalog number as ${q.into} (${d.family}). ${q.into} counted ${q.primaryCount}; ${q.key} counted ${q.memberCount}. They are one fixture — which count stands?`,
+      options: [`Keep ${q.into} — ${q.primaryCount}`, `Use ${q.key}'s count — ${q.memberCount}`],
+      keepQty: q.primaryCount,
+      sumQty: q.memberCount,
+      familyPrimary: primaryKeys,
+      actions: ['answer'],
+      fingerprint: `family|${q.primaryCount}|${q.memberCount}`,
+    });
+  }
+  // Evidence round 3.4 — a panel schedule the viewport reader found but the
+  // schedule reader could not read completely: its branch circuits have no
+  // source (Agent 1 no longer states them).
+  if (ev?.panelsUnread?.length) {
+    items.push({
+      id: 'schedule:panels-unread',
+      kind: 'confirm',
+      title: `Panel schedule${ev.panelsUnread.length === 1 ? '' : 's'} not read — branch circuits missing from the takeoff`,
+      detail: `${ev.panelsUnread.join('; ')} could not be read row by row, so the takeoff has no branch-circuit count from ${ev.panelsUnread.length === 1 ? 'it' : 'them'}. Add the circuits in Labor & Pricing (then confirm here with a reason), or re-run the analysis.`,
+      actions: ['confirm'],
+      fingerprint: `panels-unread|${ev.panelsUnread.join('|')}`,
+    });
+  }
+  // Evidence round 3.1 — a panel schedule the reader could not transcribe
+  // completely: its quantities are still used, the gap is shown.
+  for (const tbl of ev?.tables ?? []) {
+    if (!tbl.warnings.length) continue;
+    items.push({
+      id: `schedule:${tbl.id}`,
+      kind: 'confirm',
+      blocking: false,
+      title: `Schedule read incompletely: ${tbl.title} (${tbl.sheetLabel})`,
+      detail: `${tbl.warnings.join(' ')} Quantities taken from this table may be short — check it on the sheet.`,
+      actions: ['confirm'],
+      fingerprint: `schedule|${tbl.warnings.join('|')}`,
+    });
+  }
   // Next round A7 — a type counted only on the photometric sheet (the
   // fallback, A3): shown for information, never blocking.
   for (const t of countResult?.types ?? []) {
@@ -294,7 +413,11 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
  *  action): 'zero', 'unreadable', 'area:<sheets>', 'coverage', 'heads',
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
-  if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : 'info';
+  if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : i.id.startsWith('schedule:') ? 'schedule' : 'info';
+  if (i.id.startsWith('schedule:')) return 'schedule';
+  if (i.id.startsWith('viewport:')) return 'viewport';
+  if (i.id.startsWith('typical:')) return 'typical';
+  if (i.id.startsWith('family:')) return 'family';
   if (i.id.startsWith('counting:')) return 'counting';
   if (i.id.startsWith('refsheet:')) return 'refsheets';
   if (i.id.startsWith('sheet:') || i.id.startsWith('file:')) return 'sheets';
@@ -464,12 +587,15 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   const list = items ?? [];
   const res = (id: string) => list.find(i => i.id === id)?.resolution;
   for (const t of countResult?.types ?? []) {
+    if (t.host || t.status === 'merged') continue;
     let qty: number | null | undefined;
     const direct = res(`count:${t.key}`);
     if (t.status === 'counted') qty = t.count;
     if (direct) qty = direct.action === 'not_on_job' ? null : (direct.qty ?? qty);
     const area = res(`area:${t.key}`);
     if (area) qty = area.qty ?? qty;
+    const vq = res(`viewport:${t.key}`);
+    if (vq) qty = vq.qty ?? qty;
     const cov = res(`coverage:${t.key}`);
     if (cov) qty = cov.action === 'not_on_job' ? null : (cov.qty ?? qty);
     const rec = res(`recount:${t.key}`);
@@ -480,6 +606,23 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
       if (heads) byType.set(`${t.key}:heads`, heads.action === 'not_on_job' ? null : (heads.qty ?? null));
       else if (t.heads != null && t.status === 'counted') byType.set(`${t.key}:heads`, t.heads);
     }
+  }
+  // Evidence round 2.2 — a resolved typical host count adds per-host x count
+  // of each device type (on top of what was drawn).
+  for (const i of list) {
+    if (!i.id.startsWith('typical:') || !i.resolution || i.resolution.action !== 'count') continue;
+    for (const d of i.typicalDevices ?? []) {
+      const cur = byType.get(d.key);
+      if (cur === null) continue; // the type itself is not on this job
+      byType.set(d.key, (cur ?? 0) + d.perHost * (i.resolution.qty ?? 0));
+    }
+  }
+  // Evidence round 3.3 — "use the other schedule's count" for a family.
+  for (const i of list) {
+    if (!i.id.startsWith('family:') || !i.resolution || i.resolution.action !== 'answer') continue;
+    const prim = i.familyPrimary ?? [];
+    if (i.resolution.qty === i.keepQty || prim.length !== 1) continue;
+    byType.set(prim[0], i.resolution.qty ?? null);
   }
   for (const i of list) {
     if (!i.id.startsWith('unscheduled:') || !i.resolution || i.resolution.action !== 'count') continue;

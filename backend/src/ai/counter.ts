@@ -62,6 +62,7 @@ function targetLine(t: CountTarget): string {
   ];
   if (t.symbolHint) parts.push(`drawn as: ${sanitizeForPrompt(t.symbolHint)}`);
   if (t.category === 'site_lighting') parts.push('POLE-MOUNTED — mark each pole once');
+  if (t.role === 'host') parts.push('HOST MARKER — mark each drawn instance of this tag/symbol on the plans once (it multiplies a typical)');
   return `- ${parts.join(' | ')}`;
 }
 
@@ -82,6 +83,7 @@ export function buildCounterContent(
   targets: CountTarget[],
   tiles: CountTile[],
   group: { index: number; of: number },
+  sheetNote = '',
 ): Anthropic.ContentBlockParam[] {
   const blocks: Anthropic.ContentBlockParam[] = [];
   const scope = group.of > 1
@@ -89,7 +91,7 @@ export function buildCounterContent(
     : '';
   blocks.push({
     type: 'text',
-    text: `SHEET: ${sanitizeForPrompt(sheet.label)}${scope}\n\nCOUNT TARGETS (tag | kind | description | how drawn):\n${targets.map(targetLine).join('\n')}`,
+    text: `SHEET: ${sanitizeForPrompt(sheet.label)}${scope}\n\nCOUNT TARGETS (tag | kind | description | how drawn):\n${targets.map(targetLine).join('\n')}${sheetNote}`,
   });
   for (const t of tiles) {
     blocks.push({ type: 'text', text: `Tile ${t.id} (row ${t.row}, column ${t.col})` });
@@ -341,6 +343,9 @@ export interface CounterRunInput {
   shouldStop?: () => boolean;
   /** Live progress: sheets whose every call has finished, of all sheets. */
   onProgress?: (done: number, total: number) => void;
+  /** Evidence round 1.2 — per sheet key, extra instructions appended to the
+   *  target list (the sheet's viewports). */
+  sheetNotes?: Map<string, string>;
 }
 
 export interface CounterRunResult {
@@ -424,7 +429,7 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
     const r = results[w.si];
     if (r.status === 'failed') return;
     const targets = targetsForSheet(r.sheet, input.targets);
-    const content = buildCounterContent(r.sheet, targets, w.tiles, { index: w.index, of: w.of });
+    const content = buildCounterContent(r.sheet, targets, w.tiles, { index: w.index, of: w.of }, input.sheetNotes?.get(r.sheet.key) ?? '');
     try {
       const resp = await callWithRetry(() => input.client.messages.stream({
         model: input.model,
