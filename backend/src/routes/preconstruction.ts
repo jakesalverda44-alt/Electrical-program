@@ -49,7 +49,7 @@ import { normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
 import { writeAiCountMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
 import { buildReviewItems, referencedSheetItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
-import { takeoffGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
+import { takeoffGate, budgetPendingGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
 import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
 import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey, overrideFor } from '../bidstd/scopeList';
@@ -2820,6 +2820,11 @@ router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis
   // questions block the proposal until the estimator resolves them.
   const gate = await takeoffGate(bidId);
   if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+  // Fix round 2 / B5 — a budget-pending vendor quote blocks the paid Agent 4
+  // proposal-price run too (it would otherwise price the GC proposal off a
+  // number CES/the vendor hasn't confirmed).
+  const budgetGate = await budgetPendingGate(bidId);
+  if (budgetGate) return res.status(409).json({ error: budgetGate.error });
 
   const { rows: trRows } = await pool.query(
     'SELECT agent1_output, agent2_output, review_items, account_terms, run_id FROM takeoff_results WHERE bid_id=$1',
@@ -3316,6 +3321,10 @@ router.get('/:bidId/generate-docx', requireAuth, requireAIPermission('view_resul
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const gate = await takeoffGate(bidId);
   if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+  // Fix round 2 / B5 — a budget-pending vendor quote blocks the GC-facing
+  // proposal docx/PDF (soffice-converted from this same buffer below).
+  const budgetGate = await budgetPendingGate(bidId);
+  if (budgetGate) return res.status(409).json({ error: budgetGate.error });
 
   const loaded = await composeCurrentBidData(bidId);
   if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error, ...(loaded.failures ? { failures: loaded.failures } : {}) });
@@ -3451,6 +3460,9 @@ router.get('/:bidId/generate-takeoff-xlsx', requireAuth, requireAIPermission('vi
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const gate = await takeoffGate(bidId);
   if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
+  // Fix round 2 / B5 — a budget-pending vendor quote blocks the GC takeoff xlsx too.
+  const budgetGate = await budgetPendingGate(bidId);
+  if (budgetGate) return res.status(409).json({ error: budgetGate.error });
 
   const loaded = await composeCurrentBidData(bidId);
   if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error, ...(loaded.failures ? { failures: loaded.failures } : {}) });

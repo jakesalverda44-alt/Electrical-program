@@ -50,6 +50,29 @@ export async function takeoffGate(bidId: string): Promise<GateBlock | null> {
   };
 }
 
+/** Fix round 2 / B5 — a budget-pending vendor quote (Accubid's
+ *  status='budget_pending', accubidRecap.ts's blocksSend) used to block
+ *  nothing on the server: only the Labor & Pricing UI's own banner knew
+ *  about it. null = not blocked. A GC-facing generate/send route calls this
+ *  the SAME way it calls takeoffGate — both return the identical GateBlock
+ *  shape, and a caller that needs both checks calls each in turn.
+ *  Deliberately NEVER called by generate-prebid-package / email-prebid-
+ *  chris (the internal pre-bid package to Chris) — that package is scope/
+ *  quantities only, composed from the pre-bid draft before pricing exists
+ *  at all, and stays allowed regardless of quote status. */
+export async function budgetPendingGate(bidId: string): Promise<GateBlock | null> {
+  const { rows } = await pool.query(
+    `SELECT description FROM est_bid_quotes WHERE bid_id = $1 AND status = 'budget_pending' ORDER BY sort, created_at`,
+    [bidId]
+  );
+  if (!rows.length) return null;
+  const names = rows.map(r => (r.description as string) || 'Untitled quote');
+  return {
+    error: `A vendor quote is still budget-pending (${names.slice(0, 4).join('; ')}${names.length > 4 ? '; …' : ''}) — firm it up in Labor & Pricing before a proposal is generated or sent.`,
+    openItems: [],
+  };
+}
+
 export interface MarkerTally {
   /** Confirmed markers on the sheets the merge takes this type from. */
   counted: number;
