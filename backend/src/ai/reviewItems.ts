@@ -238,6 +238,36 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   return items;
 }
 
+/** Next round A4 — the post-Agent-1 safety net: a sheet Agent 1 says the
+ *  drawings reference (its `missingSheets`, after the hygiene dropped the
+ *  ones actually loaded) that the sheet check did not already know about
+ *  (as present, missing or skipped). One blocking item per sheet: upload it
+ *  (the supplement pass), or confirm the takeoff doesn't need it (reason). */
+export function referencedSheetItems(
+  missingSheets: unknown,
+  known: { loadedSheetKeys: Set<string>; checkRefKeys: Set<string> },
+  normalize: (raw: string) => string | null,
+): ReviewItem[] {
+  const out: ReviewItem[] = [];
+  const seen = new Set<string>();
+  for (const raw of Array.isArray(missingSheets) ? missingSheets : []) {
+    const text = typeof raw === 'string' ? raw : typeof (raw as { sheet?: unknown })?.sheet === 'string' ? String((raw as { sheet: string }).sheet) : '';
+    const id = /([A-Za-z]{1,3}\s?[-.]?\s?\d{1,3}(?:\.\d{1,2})?[A-Za-z]?)/.exec(text)?.[1] ?? '';
+    const key = id ? normalize(id) : null;
+    if (!key || seen.has(key) || known.loadedSheetKeys.has(key) || known.checkRefKeys.has(key)) continue;
+    seen.add(key);
+    out.push({
+      id: `refsheet:${key}`,
+      kind: 'confirm',
+      title: `Referenced sheet ${id.replace(/\s+/g, '')} not in analysis`,
+      detail: `The drawing analysis found a reference to ${text.trim().slice(0, 160)}, which is not in the uploaded set and the sheet check did not flag. Upload it (it is analysed and counted into this run), or confirm the takeoff doesn't need it (with a reason).`,
+      actions: ['confirm'],
+      fingerprint: `refsheet|${key}`,
+    });
+  }
+  return out;
+}
+
 /** A re-run rebuilds the list; any item with the same id that the estimator
  *  already resolved keeps that resolution (flagged carriedOver) — but only
  *  when the item was built from the same evidence (N4: its fingerprint). When

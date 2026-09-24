@@ -43,10 +43,11 @@ import { parseMoney } from '../utils/money';
 import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
-import { runCountingStage, type CountResult } from '../ai/countingStage';
+import { runCountingStage, runSupplementCounting, type CountResult } from '../ai/countingStage';
+import { normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
 import { writeAiCountMarkers } from '../estimating/aiMarkers';
-import { buildReviewItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
+import { buildReviewItems, referencedSheetItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
 import { takeoffGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
 import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
@@ -812,11 +813,23 @@ async function accountTermsBlockFor(bidId: string, stored: AccountTermsSnapshot 
 // ── Background pipeline ───────────────────────────────────────────────────────
 // Exported (takeoff accuracy) so integration tests can drive the real pipeline
 // with an injected fake Anthropic client — never a real API call from tests.
+/** Next round A4 — a supplement pass: the run's earlier state, into which
+ *  the new pages are analysed and counted (same run id). */
+export interface SupplementContext {
+  priorAgent1: Record<string, unknown>;
+  priorCount: CountResult | null;
+  priorInventory: PrepInventoryEntry[];
+  priorUsage: Record<string, unknown>;
+  /** The run's earlier input files, for counting NEW types on old sheets. */
+  oldFiles: Express.Multer.File[];
+}
+
 export async function runPipeline(
   bidId: string,
   files: Express.Multer.File[],
   client: Anthropic,
-  config: AIConfig
+  config: AIConfig,
+  opts: { supplement?: SupplementContext } = {},
 ): Promise<void> {
   // Stop analysis — every model call of this run carries the run's abort
   // signal (POST /:bidId/stop-analysis aborts it).
@@ -825,7 +838,7 @@ export async function runPipeline(
   const { rows: runRow } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
   const handle = registerRun(bidId, 'analysis', (runRow[0]?.run_id as string | null) ?? null);
   try {
-    await runPipelineStages(bidId, files, abortableClient(client, handle.signal), config, handle.signal, client);
+    await runPipelineStages(bidId, files, abortableClient(client, handle.signal), config, handle.signal, client, opts.supplement);
   } finally {
     handle.release();
   }
@@ -841,7 +854,14 @@ async function runPipelineStages(
    *  draft is its own job (own stop), so stopping an analysis that has
    *  just finished can never kill it. */
   draftClient: Anthropic,
+  supplement?: SupplementContext,
 ): Promise<void> {
+  const newFileNames = new Set(files.map(f => f.originalname));
+  // A4 — in a supplement pass the stored inventory / usage keep the run's
+  // earlier pages and cost; the new pages are added.
+  const storedInventory = (inv: PrepInventoryEntry[]) => supplement
+    ? [...supplement.priorInventory.filter(p => !newFileNames.has(p.file)), ...inv] : inv;
+  const storedUsage = (u: Record<string, unknown>) => supplement ? mergeUsage(supplement.priorUsage, u) : u;
   let agent1Output = '';
   let agent2Output = '';
   let agent3Output = '';
@@ -995,7 +1015,7 @@ async function runPipelineStages(
         output_tokens: (resp.usage?.output_tokens ?? 0) + classifierUsage.output_tokens,
       };
       await guarded(`UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
-        [JSON.stringify(mergedUsage), config.model, JSON.stringify(prepInventory), prepFidelity, bidId]
+        [JSON.stringify(storedUsage(mergedUsage as unknown as Record<string, unknown>)), config.model, JSON.stringify(storedInventory(prepInventory)), prepFidelity, bidId]
       ).catch(() => {});
       // Takeoff accuracy Task 1 — after the usage write, so a truncated (but
       // still billed) call's cost is recorded before the run fails.
@@ -1043,7 +1063,7 @@ async function runPipelineStages(
       }
       batchUsage = mergeUsage(batchUsage, classifierUsage);
       await guarded(`UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2, prep_inventory=$3, prep_fidelity=$4 WHERE bid_id=$5`,
-        [JSON.stringify(batchUsage), config.model, JSON.stringify(prepInventory), prepFidelity, bidId]
+        [JSON.stringify(storedUsage(batchUsage)), config.model, JSON.stringify(storedInventory(prepInventory)), prepFidelity, bidId]
       ).catch(() => {});
 
       // Merge batch results — generic merge over the actual AGENT1_SYSTEM schema
@@ -1068,6 +1088,8 @@ async function runPipelineStages(
       return;
     }
     agent1JSON = parsedAgent1;
+    // A4 — the supplement's pages are merged into the run's analysis.
+    if (supplement) agent1JSON = mergeAgent1Batches([supplement.priorAgent1, parsedAgent1]);
 
     // Task 4.2 — empty-analysis guard: if every batch failed to parse,
     // mergeAgent1Batches still returns a valid-looking {} that would otherwise
@@ -1088,6 +1110,7 @@ async function runPipelineStages(
     let cleaned = applyGcHygiene(agent1JSON, bidGc, hygiene);
     const loadedSheetNos = [
       ...countingInventory.map(p => p.sheetNo),
+      ...(supplement?.priorInventory ?? []).map(p => p.sheetNo),
       ...(Array.isArray((cleaned.project as Record<string, unknown> | undefined)?.sheets) ? ((cleaned.project as Record<string, unknown>).sheets as unknown[]).map(String) : []),
     ];
     cleaned = filterMissingSheets(cleaned, loadedSheetNos, hygiene);
@@ -1133,16 +1156,21 @@ async function runPipelineStages(
         ...manual.filter(m => !have.has(String(m.type ?? '').toUpperCase())).map(m => ({ ...m, sourceSheet: 'Entered by the estimator' })),
       ];
     }
-    const stage = await runCountingStage({
+    const countingInput = {
       client, model: config.modelCounter, maxTokens: config.maxTokensCounter,
       agent1: agent1ForCounting, inventory: countingInventory, pdfs,
       // Fix round S2 — also once a newer run took over (the progress write
       // below sets `superseded`): a superseded run launches no more sheets.
       shouldStop: () => signal.aborted || superseded,
-      onProgress: (done, total) => {
+      onProgress: (done: number, total: number) => {
         if (total) void setProgress('counting', `Counting sheet ${Math.min(done + 1, total)} of ${total}`, Math.min(done + 1, total), total);
       },
-    });
+    };
+    // A4 — a supplement pass counts only what the new pages can change.
+    if (supplement) for (const f of supplement.oldFiles) if (!pdfs.has(f.originalname) && (f.originalname.split('.').pop() || '').toLowerCase() === 'pdf') pdfs.set(f.originalname, f.buffer);
+    const stage = supplement?.priorCount
+      ? await runSupplementCounting({ ...countingInput, prior: supplement.priorCount, priorInventory: supplement.priorInventory, newFiles: newFileNames })
+      : await runCountingStage(countingInput);
     agent1Output = JSON.stringify(stage.agent1, null, 2);
     if (superseded) return;
     // Task 6 — counted locations become suggested markers in the Plans view.
@@ -1164,7 +1192,15 @@ async function runPipelineStages(
     // resolutions for the same items (their work is never discarded).
     // N5 — the carry-over reads and writes review_items in ONE transaction
     // under a row lock, so a resolve that commits meanwhile is never lost.
-    const freshItems = buildReviewItems(stage.countResult, scopeQuestionsFor(accountTerms));
+    // A4 — sheets Agent 1 says are referenced that the sheet check missed.
+    const sheetRow = await loadSheetCheck(bidId).catch(() => null);
+    const inventoryKeys = new Set([...countingInventory, ...(supplement?.priorInventory ?? [])]
+      .map(p => normalizeSheetId(p.sheetNo)).filter((k): k is string => !!k));
+    const checkRefKeys = new Set((sheetRow?.result?.refs ?? []).filter(r => r.kind === 'sheet').map(r => r.key));
+    const freshItems = [
+      ...buildReviewItems(stage.countResult, scopeQuestionsFor(accountTerms)),
+      ...referencedSheetItems((stage.agent1 as Record<string, unknown>).missingSheets, { loadedSheetKeys: inventoryKeys, checkRefKeys }, normalizeSheetId),
+    ];
     const tx = await pool.connect();
     try {
       await tx.query('BEGIN');
@@ -2548,6 +2584,105 @@ router.post('/:bidId/stop-analysis', requireAuth, requireAIPermission('run_analy
 
 // POST run-agent4 — kicks off Proposal Formatter in background, returns immediately
 // Frontend polls GET /:bidId/results and watches agent4_status for completion.
+// Next round A4 — the supplement pass. A sheet the drawings reference turned
+// up after the run (a "Referenced sheet X not in analysis" review item, or
+// one skipped in the sheet check): upload it here and it is analysed by
+// Agent 1 on just its pages, merged into THIS run (same run id), counted
+// only for what it can change, and Agents 2-3 run again. The GC documents
+// stay blocked meanwhile (review 'pending'); the run's Agent 4 / draft
+// output stop being current. If the pass fails, the run is put back exactly
+// as it was and the failure is recorded (takeoff_results.supplement).
+router.post('/:bidId/supplement', requireAuth, requireAIPermission('run_analysis'), upload.array('files', 50), asyncHandler(async (req: AuthRequest, res) => {
+  const bidId = req.params.bidId;
+  const bid = await loadAccessibleBid(res, req.user!, bidId);
+  if (!bid) return;
+  const rawDocIds = req.body.document_ids;
+  const docIds: string[] = Array.isArray(rawDocIds) ? (rawDocIds as string[]).filter(Boolean)
+    : (typeof rawDocIds === 'string' && rawDocIds.trim()) ? [rawDocIds.trim()] : [];
+  const { files: incoming } = await gatherAnalysisInputs(bidId, (req.files as Express.Multer.File[]) ?? [], docIds);
+  if (!incoming.length) return res.status(400).json({ error: 'Upload the referenced sheet (PDF) to add it to this analysis.' });
+  const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!apiKey) return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI.' });
+
+  // Claim: only a finished run takes a supplement (one at a time).
+  const tx = await pool.connect();
+  let snap: Record<string, unknown>;
+  try {
+    await tx.query('BEGIN');
+    const { rows } = await tx.query(
+      `SELECT run_id, status, agent1_output, count_result, prep_inventory, review_items, review_status, usage_agent1,
+              input_document_ids, agent2_output, agent3_output, hygiene, account_terms
+         FROM takeoff_results WHERE bid_id=$1 FOR UPDATE`, [bidId]);
+    const tr = rows[0];
+    if (!tr?.run_id || tr.status !== 'complete') {
+      await tx.query('ROLLBACK');
+      return res.status(409).json({ error: 'A sheet can be added once the analysis has finished (and while no other run is going).' });
+    }
+    snap = tr;
+    await tx.query(
+      `UPDATE takeoff_results SET status='running', review_status='pending', agent4_run_id=NULL, draft_run_id=NULL,
+         progress=$2, supplement=$3 WHERE bid_id=$1`,
+      [bidId, JSON.stringify({ stage: 'prep', label: 'Adding the referenced sheet to the analysis', step: null, of: null, at: new Date().toISOString() }),
+       JSON.stringify({ status: 'running', files: incoming.map(f => f.originalname), by: req.user?.name ?? null, at: new Date().toISOString() })]);
+    await tx.query('COMMIT');
+  } catch (err) {
+    await tx.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    tx.release();
+  }
+
+  // The run's earlier inputs (for counting new types on old sheets), and no
+  // file twice: a page already in the run would be counted twice.
+  const oldIds = (snap.input_document_ids as string[] | null) ?? [];
+  const { files: oldFiles } = oldIds.length ? await gatherAnalysisInputs(bidId, [], oldIds) : { files: [] as Express.Multer.File[] };
+  const sha = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
+  const oldHashes = new Set(oldFiles.map(f => sha(f.buffer)));
+  const newFiles = incoming.filter(f => !oldHashes.has(sha(f.buffer)));
+  const restore = async (message: string) => {
+    await pool.query(
+      `UPDATE takeoff_results SET status='complete', agent1_output=$2, count_result=$3, prep_inventory=$4, review_items=$5,
+         review_status=$6, usage_agent1=$7, agent2_output=$8, agent3_output=$9, hygiene=$10, account_terms=$11,
+         supplement=$12, progress=NULL
+       WHERE bid_id=$1 AND run_id=$13`,
+      [bidId, snap.agent1_output, JSON.stringify(snap.count_result ?? null), JSON.stringify(snap.prep_inventory ?? null),
+       JSON.stringify(snap.review_items ?? null), snap.review_status, JSON.stringify(snap.usage_agent1 ?? null),
+       snap.agent2_output, snap.agent3_output, JSON.stringify(snap.hygiene ?? null), JSON.stringify(snap.account_terms ?? null),
+       JSON.stringify({ status: 'error', error: message, files: incoming.map(f => f.originalname), at: new Date().toISOString() }), snap.run_id]);
+  };
+  if (!newFiles.length) {
+    await restore('Those files are already part of this analysis.');
+    return res.status(400).json({ error: 'Those files are already part of this analysis.' });
+  }
+  res.json({ status: 'running', supplement: true, files: newFiles.map(f => f.originalname) });
+
+  const config = await loadAIConfig();
+  const supplement: SupplementContext = {
+    priorAgent1: parseAIJSON(String(snap.agent1_output ?? '')) ?? {},
+    priorCount: (snap.count_result as CountResult | null) ?? null,
+    priorInventory: (snap.prep_inventory as PrepInventoryEntry[] | null) ?? [],
+    priorUsage: (snap.usage_agent1 as Record<string, unknown> | null) ?? {},
+    oldFiles,
+  };
+  const runId = snap.run_id as string;
+  runPipeline(bidId, newFiles, new Anthropic({ apiKey }), config, { supplement }).then(async () => {
+    const { rows } = await pool.query('SELECT status, run_id, agent1_output, raw_response FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    if (rows[0]?.run_id !== runId) return;
+    if (rows[0]?.status === 'cancelled') { await restore('Stopped — the run is as it was before the sheet was added.'); return; }
+    if (rows[0]?.status === 'error') {
+      await restore(`The added sheet could not be analysed: ${String(rows[0].agent1_output ?? rows[0].raw_response ?? '').slice(0, 300)}`);
+      return;
+    }
+    // The run now reads the new documents too (a re-run pre-ticks them).
+    const ids = [...new Set([...oldIds, ...(await inputDocumentIds(bidId, newFiles))])];
+    await pool.query(`UPDATE takeoff_results SET input_document_ids=$2, supplement=$3 WHERE bid_id=$1 AND run_id=$4`,
+      [bidId, ids, JSON.stringify({ status: 'complete', files: newFiles.map(f => f.originalname), by: req.user?.name ?? null, at: new Date().toISOString() }), runId]);
+  }).catch(async err => {
+    logger.error({ err, bidId }, '[takeoff] supplement pass failed');
+    await restore(`The added sheet could not be analysed: ${describeAIError(err)}`).catch(() => {});
+  });
+}));
+
 router.post('/:bidId/run-agent4', requireAuth, requireAIPermission('run_analysis'), asyncHandler(async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   const { price, internalNotes } = req.body as { price?: string; internalNotes?: string };

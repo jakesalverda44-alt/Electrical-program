@@ -197,3 +197,18 @@ describe('N4 / N6 — re-confirmation after a new drawing set; real reasons', ()
     expect(validateResolution(countItem('count:A'), { action: 'not_on_job', reason: 'Alternate only, not bid' }, null).ok).toBe(true);
   });
 });
+
+describe('next round A4 — referencedSheetItems (post-Agent-1 safety net)', () => {
+  it('one blocking confirm item per sheet the check did not know; loaded and already-checked sheets are not raised', async () => {
+    const { referencedSheetItems, reviewStatus } = await import('./reviewItems');
+    const { normalizeSheetId } = await import('./sheetRefs');
+    const items = referencedSheetItems(
+      ['E-9 (see note 5 on E-3)', 'M-1', 'E-3', 'E9', { sheet: 'C-2.0' }, 'not a sheet'],
+      { loadedSheetKeys: new Set(['E3']), checkRefKeys: new Set(['M1']) },
+      normalizeSheetId,
+    );
+    expect(items.map(i => i.id)).toEqual(['refsheet:E9', 'refsheet:C2.0']);
+    expect(items[0]).toMatchObject({ kind: 'confirm', title: 'Referenced sheet E-9 not in analysis', actions: ['confirm'] });
+    expect(reviewStatus(items)).toBe('needs_review');
+  });
+});

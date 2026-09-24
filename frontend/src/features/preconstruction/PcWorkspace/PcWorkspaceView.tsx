@@ -1087,6 +1087,20 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const onResumeAI = useStableFn(() => { void resumeAI(); });
   const onRerunAI = useStableFn(() => { void rerunAI(); });
   const onRecheckSheets = useStableFn(() => { void sheetCheck.run(); });
+  // Next round A4 — a referenced sheet uploaded after the run is analysed and
+  // counted into it (supplement pass); the workspace polls it like a run.
+  const onSupplement = useStableFn(async (files: File[]) => {
+    const fd = new FormData();
+    files.forEach(f => fd.append('files', f));
+    try {
+      await api.post(`/preconstruction/${bid.id}/supplement`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      runPersistFiles(files);
+      set(prev => ({ aiRunning: true, aiDone: false, aiLog: [...(prev.aiLog ?? []), `Adding ${files.map(f => f.name).join(', ')} to the analysis…`] }));
+      pollForResults(Date.now());
+    } catch (err: unknown) {
+      showToast({ variant: 'error', title: 'Sheet not added', sub: (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'The supplement pass could not start.' });
+    }
+  });
   const onUploadMissing = useStableFn(() => { fileInputRef.current?.click(); });
   const onCopyToClipboard = useStableFn(copyToClipboard);
   const onConfirmService = useStableFn(handleConfirmService);
@@ -1456,6 +1470,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             countResult={(aiResults?.count_result as React.ComponentProps<typeof TakeoffReviewPanel>['countResult']) ?? null}
             onReviewChange={r => setAiResults(prev => (prev ? { ...prev, review_status: r.status, review_items: r.items } : prev))}
             showToast={showToast}
+            onSupplement={onSupplement}
           />
         );
         return (

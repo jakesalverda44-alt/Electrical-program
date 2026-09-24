@@ -43,3 +43,4 @@ CREATE TABLE IF NOT EXISTS bid_sheet_check (
 ALTER TABLE bid_sheet_check DROP CONSTRAINT IF EXISTS bid_sheet_check_status_check;
 ALTER TABLE bid_sheet_check ADD CONSTRAINT bid_sheet_check_status_check
   CHECK (status IN ('idle', 'running', 'complete', 'error'));
+

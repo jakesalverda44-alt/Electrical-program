@@ -77,6 +77,8 @@ interface Props {
   countResult: CountResultLite | null;
   onReviewChange: (review: TakeoffReview) => void;
   showToast: (t: Toast) => void;
+  /** Next round A4 — upload a referenced sheet into this run (supplement pass). */
+  onSupplement?: (files: File[]) => Promise<void>;
 }
 
 function resolutionText(r: ReviewResolution): string {
@@ -111,7 +113,7 @@ function errorOf(err: unknown, fallback: string): string {
   return (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback;
 }
 
-export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast }: Props) {
+export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement }: Props) {
   const open = review.items.filter(i => !i.resolution);
   const resolved = review.items.filter(i => i.resolution);
   const [qty, setQty] = useState<Record<string, string>>({});
@@ -323,6 +325,21 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                   </div>
                 );
               })()}
+              {item.id.startsWith('refsheet:') && onSupplement && (
+                <div className="tr-types" data-testid={`supplement-${item.id}`}>
+                  <label className="btn ghost sm" style={{ cursor: busy ? 'default' : 'pointer' }}>
+                    Upload the sheet
+                    <input type="file" accept=".pdf" multiple style={{ display: 'none' }} data-testid={`supplement-input-${item.id}`}
+                      disabled={busy !== null}
+                      onChange={e => {
+                        const files = Array.from(e.target.files ?? []);
+                        e.target.value = '';
+                        if (files.length) void onSupplement(files);
+                      }}/>
+                  </label>
+                  <span className="tr-sub">It is analysed and counted into this run (only what it can change), then Agents 2–3 run again.</span>
+                </div>
+              )}
               {item.id.startsWith('counting:') && (
                 <div className="tr-types" data-testid="count-types-entry">
                   <label className="tr-sub" htmlFor={`types-${item.id}`}>Or enter the fixture types (one per line, e.g. “A — 2x4 LED troffer”), then re-run the analysis to count them:</label>

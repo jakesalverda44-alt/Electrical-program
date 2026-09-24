@@ -187,3 +187,16 @@ describe('TakeoffReviewPanel — fix round 1', () => {
     ]);
   });
 });
+
+describe('next round A4 — Referenced sheet not in analysis', () => {
+  it('offers Upload the sheet (supplement pass) and Confirm with a reason', async () => {
+    const onSupplement = vi.fn(async () => {});
+    render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} onSupplement={onSupplement}
+      review={{ status: 'needs_review', items: [{ id: 'refsheet:E9', kind: 'confirm', title: 'Referenced sheet E-9 not in analysis', detail: 'The drawing analysis found a reference to E-9 (see note 5 on E-3)…', actions: ['confirm'] }] }} />);
+    expect(screen.getByTestId('review-item-refsheet:E9').textContent).toContain('Referenced sheet E-9 not in analysis');
+    const file = new File([new Uint8Array(5000)], 'E-9.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByTestId('supplement-input-refsheet:E9'), { target: { files: [file] } });
+    await waitFor(() => expect(onSupplement).toHaveBeenCalledWith([file]));
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeTruthy();
+  });
+});
