@@ -374,7 +374,9 @@ async function indexDocument(bidId: string, doc: PlanDocument): Promise<number> 
   }
   let pdfDoc;
   try {
-    pdfDoc = await openPdfDocument(buf);
+    // Zero-copy is safe here: `buf` is this function's own and is never
+    // read again after pdf.js takes it (see openPdfDocument).
+    pdfDoc = await openPdfDocument(buf, { transfer: true });
   } catch (err) {
     throw new Error(`Could not parse this file as a PDF: ${err instanceof Error ? err.message : String(err)}`);
   }

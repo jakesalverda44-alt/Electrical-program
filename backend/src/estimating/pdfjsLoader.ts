@@ -74,23 +74,27 @@ async function loadPdfJsModule(): Promise<PdfJsModule> {
 
 /** Parses a PDF buffer and returns the pdfjs document. Caller MUST call
  *  `.destroy()` when done (releases pdfjs's internal worker/canvas
- *  resources) — every caller in this module does so in a finally block. */
-export async function openPdfDocument(buf: Buffer): Promise<PdfJsDocument> {
+ *  resources) — every caller in this module does so in a finally block.
+ *
+ *  pdf.js TRANSFERS (detaches) an ArrayBuffer its input fully spans. The
+ *  live AutoZone run (2026-09-23) lost every counted sheet to that:
+ *  readPageGeometry parsed the pipeline's own upload Buffer through a
+ *  zero-copy view, pdf.js detached it, and renderCountTiles then failed on
+ *  every page with "Cannot perform Construct on a detached ArrayBuffer".
+ *  So by default pdf.js gets a COPY and the caller's Buffer is never
+ *  touched. `transfer: true` keeps fix round 1 / B9's zero-copy view for a
+ *  caller that owns its Buffer outright and never reads it again (sheet
+ *  indexing, where a 100-150MB set would otherwise be held twice). */
+export async function openPdfDocument(buf: Buffer, opts: { transfer?: boolean } = {}): Promise<PdfJsDocument> {
   const pdfjs = await loadPdfJsModule();
   // useSystemFonts avoids pdfjs trying to fetch standard-font metrics over
   // HTTP (no network access in this backend context); isEvalSupported:false
   // avoids pdfjs's optional eval-based fast path for embedded PostScript
   // functions — irrelevant to text/geometry extraction and one less thing
   // to sandbox.
-  // Fix round 1 / B9 — `new Uint8Array(buf)` COPIES every byte into a new
-  // backing ArrayBuffer (Uint8Array's array-like-input constructor
-  // overload). For a 100-150MB plan set that's a second full-size
-  // allocation on top of the Buffer sheets.ts's fetchDocumentBuffer
-  // already built — exactly the "double-buffering" the review calls out.
-  // `new Uint8Array(buffer, byteOffset, length)` is the VIEW overload: it
-  // wraps the SAME underlying memory Buffer already owns (a Node Buffer
-  // IS backed by an ArrayBuffer), zero extra bytes copied.
-  const view = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-  const loadingTask = pdfjs.getDocument({ data: view, useSystemFonts: true, isEvalSupported: false });
+  const data = opts.transfer
+    ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength) // view: pdf.js may detach buf
+    : new Uint8Array(buf); // copy: buf stays usable for the caller
+  const loadingTask = pdfjs.getDocument({ data, useSystemFonts: true, isEvalSupported: false });
   return loadingTask.promise;
 }
