@@ -4,7 +4,7 @@
 // nothing is transcribed and no model is called.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { loadKissimmeeLive, liveBlocking, LIVE_PLAN_FILE } from './fixtures/realrun/kissimmeeLive';
-import { replayPdfs, replayEvidenceCache, replayCounter, liveCounterMarks, liveAgent1Input, isCounterRequest, REPLAY_COUNTER_MODEL, type ReplayMark } from './fixtures/realrun/replay';
+import { replayPdfs, replayEvidenceCache, replayCounter, liveCounterMarks, liveAgent1Input, isCounterRequest, REPLAY_COUNTER_MODEL, E4_MEASURED_VIEWPORTS, type ReplayMark } from './fixtures/realrun/replay';
 import { fakeAnthropic, userText, type FakeRequest } from './fixtures/takeoff/fakeAnthropic';
 import { loadKissimmeeBaseline } from './fixtures/evidence/kissimmeeBaseline';
 import { gapFillResponder, isGapFillRequest } from './fixtures/evidence/kissimmeeReplies';
@@ -111,7 +111,7 @@ describe('the live Kissimmee run, replayed through the fixed code — the review
     expect([t('A').count, t('B').count, t('M').count, t('C').count, t('G').count]).toEqual([70, 45, 6, 2, 10]);
   });
 
-  it('blocking 46 -> 14 (goal <= 15), 53 -> 23 items; before / after per group printed', (ctx) => {
+  it('blocking 46 -> 17, 53 -> 25 items (after the review fixes: the EF connection, the 209W heads conflict and the B-32 class question now block); before / after per group printed', (ctx) => {
     if (!have) return ctx.skip();
     const before = table(live.reviewItems, groupOfLive as never, ((i: { blocking?: boolean }) => i.blocking !== false) as never);
     const now = table(after.review, groupOfAfter as never, reviewItemIsOpen as never);
@@ -124,12 +124,13 @@ describe('the live Kissimmee run, replayed through the fixed code — the review
     ].join('\n'));
     expect([liveBlocking(live).length, live.reviewItems.length]).toEqual([46, 53]);
     const blocking = after.review.filter(reviewItemIsOpen);
-    expect(blocking.length).toBeLessThanOrEqual(15);
-    expect(blocking.length).toBe(14);
-    expect(after.review.length).toBe(23);
+    expect(blocking.length).toBe(17);
+    expect(after.review.length).toBe(25);
     expect(blocking.map(i => i.id).sort()).toEqual([
+      'classconflict:B32:DUPLEX RECEPTACLE / FLOOR RECEPTACLE:SIMPLEX',
       'consistency:A+B',
-      'count:AIM', 'count:CF', 'count:CT/SERVICE CABINET', 'count:DATA CONC', 'count:METER BASE', 'count:QC', 'count:T-1/T-2', 'count:WIREWAY',
+      'count:AIM', 'count:CF', 'count:CT/SERVICE CABINET', 'count:DATA CONC', 'count:EXHAUST FAN RECESSED (AUTOZONE FURN, HVAC INSTALL, EC WIRE)', 'count:METER BASE', 'count:QC', 'count:T-1/T-2', 'count:WIREWAY',
+      after.review.find(i => i.id.startsWith('typicalheads:'))!.id,
       after.review.find(i => i.id.startsWith('legend-zero:'))!.id,
       'scope:disconnects', 'scope:lighting', 'scope:panels',
       'unscheduled:LIGHT-POLE-CONCRETE-BASE-W-ANCHOR-BOLTS-PH0-1',
@@ -159,13 +160,19 @@ describe('the live Kissimmee run, replayed through the fixed code — the review
       expect(typeOf(k).scheduleRows!.length, k).toBeGreaterThan(0);
     }
     expect(typeOf('ALC PANEL').aliases!.map(a => a.key).sort()).toEqual(['ALC', 'LCP', 'LIGHTING CONTACTOR ENCLOSURE']);
-    // The information items stay visible.
-    for (const id of ['count:EXHAUST FAN RECESSED (AUTOZONE FURN, HVAC INSTALL, EC WIRE)', 'refsheet:SGN101']) {
+    // The information items stay visible; the notes restatement is shown.
+    for (const id of ['refsheet:SGN101']) {
       const i = after.review.find(x => x.id === id)!;
       expect(i, id).toBeTruthy();
       expect(i.blocking).toBe(false);
     }
-    expect(after.review.find(i => i.id.startsWith('typicalheads:'))!.blocking).toBe(false);
+    expect(after.review.find(i => i.id.startsWith('typicalnote:'))!.blocking).toBe(false);
+    // Review fix S11 — the EF connection and the heads conflict block.
+    expect(reviewItemIsOpen(after.review.find(i => i.id.startsWith('typicalheads:'))!)).toBe(true);
+    // Review fix N1 — E-5's rebuilt viewports are placeholders: only their
+    // titles are used, and they are not panel schedules (fix 4).
+    expect(E4_MEASURED_VIEWPORTS).toEqual(['u4', 'u5', 'u6']);
+    expect(after.cr.evidence!.pages.find(p => p.label.startsWith('E-5'))!.viewports).toBe(3);
   });
 
   it('RTU = 2, never 4; every quantity has a single source', (ctx) => {

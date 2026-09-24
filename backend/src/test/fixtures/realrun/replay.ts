@@ -11,6 +11,8 @@
 //     every typical package, every schedule table) — the readers' parsers
 //     already ran on the real replies; the cache is how a re-run of
 //     unchanged files gets them in production too;
+//   * (review fix N1) E-5's rebuilt viewport rectangles are invented
+//     placeholders — only their titles are used;
 //   * the plan set is a blank raster set with the real sheets' geometry
 //     (1728 x 2592 pt, /Rotate 270; PH0.1 2592 x 1728), so tiles and mark
 //     positions are the real ones.
@@ -45,12 +47,20 @@ const E4_RECTS: Record<string, [number, number, number, number]> = {
   u4: [58, 700, 487, 905], u5: [493, 18, 912, 445], u6: [912, 18, 1330, 445],
 };
 const PX = 36 / 1440;
+/** Review fix N1 — invented, see rebuiltViewports. */
+export const E5_PLACEHOLDER = (i: number): [number, number, number, number] => [58 + i * 300, 500, 58 + i * 300 + 280, 700];
+export const E4_MEASURED_VIEWPORTS = Object.keys(E4_RECTS);
 
 function rebuiltViewports(run: KissimmeeLiveRun, page: number): Viewport[] {
   const tables = run.countResult.evidence.tables.filter(t => t.sheetKey === `${LIVE_PLAN_FILE}#${page}`);
   return tables.filter(t => t.viewportId).map((t, i) => {
     const num = t.viewportId!.split('@').pop()!;
-    const px = E4_RECTS[num] ?? [58 + i * 300, 500, 58 + i * 300 + 280, 700];
+    // Review fix N1 — E-4's rectangles are MEASURED (the evidence round's
+    // transcription of the real sheet). E-5's are INVENTED placeholders (no
+    // measurement exists): only their TITLES matter to anything the replay
+    // checks (fix 4: a "PANELBOARD - DIAGRAM" is not a panel schedule), and
+    // nothing is rendered or counted inside them.
+    const px = E4_RECTS[num] ?? E5_PLACEHOLDER(i);
     const rectIn = { left: px[0] * PX, top: px[1] * PX, width: (px[2] - px[0]) * PX, height: (px[3] - px[1]) * PX };
     return {
       id: t.viewportId!, number: /^u\d+$/.test(num) ? '' : num, title: t.title, scale: '', kind: 'schedule', rectIn,
