@@ -148,8 +148,17 @@ export function computeFieldLaborCost(totalHours: number, crew: CrewConfig): Fie
 export interface TaxedAmount {
   /** Net cost before tax. */
   amount: number;
-  /** Percent, default 0. */
+  /** Percent, default 0. Ignored when taxAmount is given. */
   taxPct?: number;
+  /** Review round 2 / N14 — an exact tax DOLLAR figure, for a net amount
+   *  that's itself a SUM of several lines which may each carry a different
+   *  tax rate (equipment/general-expense cost lines) — passing the true sum
+   *  of each line's own tax here reproduces it to the cent. The alternative
+   *  (accubidBidData.ts's old approach) blended every line's rate into one
+   *  weighted-average %, rounded to 2 decimals, and re-derived tax from
+   *  that — lossy whenever the lines don't all share one tax rate. Takes
+   *  priority over taxPct when both are present. */
+  taxAmount?: number;
 }
 
 export interface QuoteLine {
@@ -231,7 +240,7 @@ export interface AccubidRecapResult {
 
 function taxedAmount(t: TaxedAmount | undefined): { net: number; tax: number; withTax: number } {
   const net = t?.amount ?? 0;
-  const tax = pct(net, t?.taxPct ?? 0);
+  const tax = t?.taxAmount != null ? roundMoney(t.taxAmount) : pct(net, t?.taxPct ?? 0);
   return { net, tax, withTax: roundMoney(net + tax) };
 }
 

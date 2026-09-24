@@ -128,6 +128,25 @@ describe('Quotes / cost lines / alternates CRUD', () => {
     expect(recap.body.recap.primeCost).toBeGreaterThanOrEqual(700);
   });
 
+  it('N14: mixed-tax equipment lines sum EXACT per-line tax, never a blended %', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    // $600 @ 7% ($42.00) + $400 @ 0% ($0.00) — two different tax rates in
+    // the same equipment list, the exact shape the old blended-% approach
+    // mishandled.
+    await request(app).post(`/api/estimating/${bidId}/accubid/cost-lines`).set(auth(u.token)).send({
+      kind: 'equipment', description: 'Taxed lift rental', amount: 600, taxPct: 7,
+    }).expect(200);
+    await request(app).post(`/api/estimating/${bidId}/accubid/cost-lines`).set(auth(u.token)).send({
+      kind: 'equipment', description: 'Untaxed equipment fee', amount: 400, taxPct: 0,
+    }).expect(200);
+    const recap = await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200);
+    expect(recap.body.recap.equipmentTax).toBeCloseTo(42.00, 2);
+    expect(recap.body.recap.equipmentTotal).toBeCloseTo(1042.00, 2);
+  });
+
   it('alternates never change the recap\'s selling price (printed separately)', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');

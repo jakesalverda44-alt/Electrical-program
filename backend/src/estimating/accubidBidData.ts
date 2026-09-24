@@ -324,19 +324,25 @@ export async function computeAccubidRecapForBid(bidId: string): Promise<AccubidB
   const geLines = costLines.filter(c => c.kind === 'general_expense');
   const equipmentTotal = equipmentLines.reduce((s, c) => s + c.amount, 0);
   const geTotal = geLines.reduce((s, c) => s + c.amount, 0);
-  // Cost lines can each carry their own tax; the recap's TaxedAmount is a
-  // single net+pct pair, so a mixed-tax list is pre-taxed here and passed
-  // through at 0% (the recap would otherwise apply one blended % twice).
-  const equipmentNetPlusTax = equipmentLines.reduce((s, c) => s + c.amount * (1 + c.taxPct / 100), 0);
-  const geNetPlusTax = geLines.reduce((s, c) => s + c.amount * (1 + c.taxPct / 100), 0);
+  // Review round 2 / N14 — each cost line can carry its OWN tax %, so the
+  // exact tax dollars are summed per line here and passed through as
+  // AccubidRecapInput's taxAmount, instead of blending every line's rate
+  // into one weighted-average % (rounded to 2 decimals) and re-deriving tax
+  // from that — lossy the moment two lines in the same list don't share a
+  // tax rate (a taxed piece of equipment next to a non-taxed permit fee,
+  // say). Rounding each line's own tax to the cent before summing matches
+  // how a real invoice/PO actually taxes each item.
+  const roundMoneyLine = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+  const equipmentTax = equipmentLines.reduce((s, c) => s + roundMoneyLine(c.amount * (c.taxPct / 100)), 0);
+  const geTax = geLines.reduce((s, c) => s + roundMoneyLine(c.amount * (c.taxPct / 100)), 0);
 
   const quoteLines: QuoteLine[] = quotes.map(q => ({ description: q.description, amount: q.amount, taxPct: q.taxPct, markupPct: q.markupPct, status: q.status }));
 
   const input: AccubidRecapInput = {
     material: { amount: material, taxPct: settings.materialTaxPct },
     fieldLaborCost: fieldLabor.totalCost,
-    equipment: { amount: equipmentTotal, taxPct: equipmentTotal > 0 ? Math.round(((equipmentNetPlusTax / equipmentTotal) - 1) * 10000) / 100 : 0 },
-    generalExpenses: { amount: geTotal, taxPct: geTotal > 0 ? Math.round(((geNetPlusTax / geTotal) - 1) * 10000) / 100 : 0 },
+    equipment: { amount: equipmentTotal, taxAmount: equipmentTax },
+    generalExpenses: { amount: geTotal, taxAmount: geTax },
     quotes: quoteLines,
     laborOverheadPct: settings.laborOverheadPct,
     materialMarkupPct: settings.materialMarkupPct,

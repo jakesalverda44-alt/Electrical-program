@@ -216,4 +216,31 @@ describe('computeAccubidRecap — reproduces Chris\'s Selling Price to the cent,
     expect(Number.isFinite(r.sellingPrice)).toBe(true);
     expect(r.sellingPrice).toBeGreaterThanOrEqual(0);
   });
+
+  // Review round 2 / N14 — equipment/GE tax is passed as an exact DOLLAR
+  // figure (the sum of each line's own tax), never blended into one
+  // weighted-average % and re-derived from that (accubidBidData.ts's old
+  // approach, lossy the moment two lines in the same list don't share a
+  // tax rate — a taxed piece of equipment next to a non-taxed permit fee).
+  it('taxAmount on equipment/generalExpenses reproduces exact per-line tax, bypassing the lossy blended-% path entirely', () => {
+    const r = computeAccubidRecap({
+      material: { amount: 0 }, fieldLaborCost: 0,
+      equipment: { amount: 1000, taxAmount: 42.00 }, // $600 @ 7% ($42.00) + $400 @ 0%
+      generalExpenses: { amount: 500, taxAmount: 12.25 }, // $175 @ 7% ($12.25) + $325 @ 0%
+      laborOverheadPct: 0, materialMarkupPct: 0, laborMarkupPct: 0,
+    });
+    expect(r.equipmentTax).toBeCloseTo(42.00, 2);
+    expect(r.equipmentTotal).toBeCloseTo(1042.00, 2);
+    expect(r.generalExpensesTax).toBeCloseTo(12.25, 2);
+    expect(r.generalExpensesTotal).toBeCloseTo(512.25, 2);
+  });
+
+  it('taxAmount takes priority over taxPct when both are given (never double-applies tax)', () => {
+    const r = computeAccubidRecap({
+      material: { amount: 0 }, fieldLaborCost: 0,
+      equipment: { amount: 1000, taxPct: 99, taxAmount: 42.00 },
+      laborOverheadPct: 0, materialMarkupPct: 0, laborMarkupPct: 0,
+    });
+    expect(r.equipmentTax).toBeCloseTo(42.00, 2); // not 990.00 (99% of 1000)
+  });
 });
