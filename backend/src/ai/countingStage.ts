@@ -211,6 +211,19 @@ function scheduleCircuitsOf(sc: Map<string, ScheduleCount>): Map<string, Set<str
   return out;
 }
 
+/** Real-run fix 4 — a viewport that is a PANEL SCHEDULE (whose unread
+ *  circuits would have no source), by its title. Live Kissimmee: E-5's
+ *  "PANELBOARD - DIAGRAM" and "PANELBOARD - MOUNTING HEIGHT SECTION" were
+ *  read as tables, came back with no rows (there are none to read), and
+ *  raised "Panel schedules not read completely" although both real panel
+ *  schedules (E-4, Panel A and B, 42 rows each) were read completely. A
+ *  diagram, section, elevation, detail, riser, one-line, schematic or
+ *  mounting drawing of a panel is not its schedule. */
+export function isPanelScheduleTitle(title: string): boolean {
+  if (!/\bPANEL(BOARD)?S?\b/i.test(title) || /\bLOAD\b/i.test(title)) return false;
+  return !/\b(DIAGRAMS?|SECTIONS?|ELEVATIONS?|DETAILS?|RISERS?|ONE[\s-]?LINE|SINGLE[\s-]?LINE|SCHEMATICS?|MOUNTING|LAYOUTS?|PLANS?|ENLARGED|HEIGHTS?|WIRING)\b/i.test(title);
+}
+
 /** The panels the drawing analysis found (panels[].name), for circuit identity. */
 function panelNamesOf(agent1: Record<string, unknown>): string[] {
   return Array.isArray(agent1.panels) ? (agent1.panels as Array<Record<string, unknown>>).map(p => String(p?.name ?? '')).filter(Boolean) : [];
@@ -358,7 +371,7 @@ function finish(
         panelChoices: panelChoices(targets, evidence.ev.tables),
         ...(evidence.cons ? { consolidation: { merges: evidence.cons.merges, uncertain: evidence.cons.uncertain, hostBindings } } : {}),
         panelsUnread: evidence.ev.pages.flatMap(p => p.viewports.viewports
-          .filter(v => v.kind === 'schedule' && /\bPANEL(BOARD)?\b/i.test(v.title) && !/\bLOAD\b/i.test(v.title))
+          .filter(v => isPanelScheduleTitle(v.title))
           .filter(v => !evidence.ev.tables.some(t => t.viewportId === v.id && isCompletePanel(t)))
           .map(v => `${v.title} (${p.label})`)),
       },

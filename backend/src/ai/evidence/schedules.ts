@@ -40,6 +40,9 @@ export interface ScheduleTable {
   rows: ScheduleRow[];
   source: 'text' | 'vision';
   warnings: string[];
+  /** Real-run fix 4 — an incomplete panel read was completed by reading each
+   *  side (odd / even circuits) separately. */
+  sidesRead?: boolean;
 }
 
 function clean(s: unknown, max = 160): string {
@@ -277,6 +280,39 @@ export function panelContinuity(table: ScheduleTable): string[] {
     if (missing.length) out.push(`${table.title}: circuit(s) ${missing.join(', ')} missing from the transcription — incomplete`);
   }
   return out;
+}
+
+/** Real-run fix 4 — a panel read that came back incomplete, merged with
+ *  the reads of each side (odd circuits, even circuits) taken separately:
+ *  a circuit the first read has keeps its row; a circuit only a side read
+ *  has is added from it. The warnings are recomputed on the merged rows —
+ *  a panel still missing circuits stays incomplete (never papered over). */
+export function mergePanelReads(base: ScheduleTable, sides: Array<ScheduleTable | null>): ScheduleTable {
+  const cktIdx = (t: ScheduleTable) => { const i = t.columns.findIndex(c => /\bCKT\b|\bCIRCUIT\s*#|^#$|\bNO\.?\b/i.test(c)); return i < 0 ? 0 : i; };
+  const cktOf = (t: ScheduleTable, r: ScheduleRow) => Number(((r.cells[cktIdx(t)] ?? '').match(/\d+/) ?? [''])[0]);
+  const have = new Set(base.rows.map(r => cktOf(base, r)).filter(n => n > 0));
+  const rows = [...base.rows];
+  const read: string[] = [];
+  for (const side of sides) {
+    if (!side || side.kind !== 'panel') continue;
+    let added = 0;
+    for (const r of side.rows) {
+      const n = cktOf(side, r);
+      if (!(n > 0) || have.has(n)) continue;
+      // Re-order the side's cells into the base table's columns by header name.
+      const cells = side.columns.length && base.columns.length && side.columns.join('|') !== base.columns.join('|')
+        ? base.columns.map(bc => { const j = side.columns.findIndex(sc => sc.toUpperCase() === bc.toUpperCase()); return j >= 0 ? (r.cells[j] ?? '') : ''; })
+        : r.cells;
+      rows.push({ ...r, cells, rowIdx: rows.length });
+      have.add(n);
+      added++;
+    }
+    read.push(`${added}`);
+  }
+  const merged: ScheduleTable = { ...base, rows, columns: base.columns.length ? base.columns : (sides.find(x => x)?.columns ?? []), warnings: [] };
+  merged.warnings = panelContinuity(merged);
+  merged.sidesRead = true;
+  return merged;
 }
 
 export function isCompletePanel(t: ScheduleTable): boolean {

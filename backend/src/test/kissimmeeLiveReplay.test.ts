@@ -146,3 +146,13 @@ describe('real-run fix 3 — the power-pole legend packages expand, times the dr
     expect(38 - total).toBe(4);
   });
 });
+
+describe('real-run fix 4 — no "panel schedules not read completely" item for two panel drawings', () => {
+  it('both E-4 panels complete and used for the branch circuits; the E-5 diagram / section are not schedules', (ctx) => {
+    if (!have) return ctx.skip();
+    expect(live.reviewItems.some(i => i.id === 'schedule:panels-unread')).toBe(true);
+    expect(after.cr.evidence!.panelsUnread).toEqual([]);
+    expect(after.review.find(i => i.id === 'schedule:panels-unread')).toBeUndefined();
+    expect(after.cr.evidence!.circuitRows).toBeGreaterThan(0);
+  });
+});
