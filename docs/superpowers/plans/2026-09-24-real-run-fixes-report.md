@@ -348,3 +348,200 @@ loses 4 tests, the same pattern as before.
 - **The frontend** shows the new `consistency` / `synonym` groups with their titles and per-type
   controls (the existing `reconcileMembers` UI). There is no dedicated Plans-view filter for the
   consistency suggestions; they appear as SUGGESTED markers, created by "Consistency check".
+
+---
+
+## Fix round (review `2026-09-24-real-run-fixes-review.md`, 361f259 — MERGE AFTER FIXES)
+
+**Executor:** Opus 5. Same worktree and rules: no Agent tool, no real API calls, no live DB, no
+migrations needed (the next free number is still **140**; `consistency_accept` needed no schema change,
+`event_kind` is free text). Each repro is now a test.
+
+| Commit | Findings |
+|---|---|
+| c5b032b | B1, S8, N3 — the consistency pass never lowers a count without a human |
+| 5415497 | B2, B3, N4, S2–S7 — consolidation needs direct evidence; generic names never bridge |
+| 465c1b6 | S1 — one receptacle under two class names on two sheets counts once |
+| a610493 | S9 — real sheet references are never dropped or downgraded |
+| 6cde742 | S10, S11, N2, N5 |
+| ae1fc79 | S12 — a supplement over a pre-consolidation run never doubles |
+| 563f9cc | N1 + the replay's new numbers + the frontend class-conflict group |
+| (last) | This section |
+
+### Blockers
+
+**B1 — the consistency pass never lowers a count.**
+- Pass 1's marks stay counted, whether the second pass re-found them or not. Agreement only raises
+  confidence.
+- Marks only pass 2 found are SUGGESTED (possible additions).
+- Pass-1 marks pass 2 did not re-find stay counted and are listed as "not re-seen".
+- Agreement is re-found ÷ pass 1.
+  - Under 85% (strictly), a **blocking** item shows both counts and the disagreeing marks.
+  - "Keep the counted number" keeps pass 1's.
+- Test: 70 counted, 50 re-found → **70** plus the blocking item. The 50%-cliff "inconclusive" rule is
+  gone.
+
+**B2 — no transitive linking.** A merge needs direct pairwise evidence between the two types. Any one
+of these counts:
+- a shared tag (PYLON / PYLON SIGN, ALC / ALC PANEL, EWH = WH = "water heater");
+- a tag that abbreviates the other item. For LCP this is "lighting control panel" on the same circuit
+  B-25; without shared circuits, the abbreviation must be the other's whole core;
+- the same core words;
+- a legend symbol restating it.
+
+How the evidence is used:
+- Items that cite their own circuits merge as cliques only.
+- A name without circuits folds into the one entity it matches.
+- A name that matches two or more distinct entities, or that bridges two names which don't match each
+  other, is **generic**.
+  - It is counted and decided by its marks (the uncertain path).
+  - It never owns or blocks a schedule row.
+- Tests:
+  - FRONT and SIDE wall sign plus a "Wall sign" legend stay **3**;
+  - a kitchen exhaust fan never folds into EF through an "Exhaust fan" legend.
+
+**B3 — letter-suffixed tags are numbered siblings.** This covers EF-A / EF-B, WH-A, DISCON-A, "EF A"
+and P-1A. They stay distinct even with identical descriptions: EF-A / EF-B → **2**.
+
+### Should-fix
+
+**S1 — B-32 is one receptacle.** Plain receptacles of different classes are paired across sheets when
+all of these hold:
+- they coincide after the sheets are aligned;
+- they carry the same circuit tag;
+- the pair is unambiguous. The reach is 0.75", or 1.0" through an enlarged plan's hand-read area; the
+  real B-32 pair is 0.59" apart.
+
+The main plan's mark is kept (DUPLEX on E-1). An enforced class-conflict question asks which class it
+is. **Receptacles 34 → 33.**
+
+**S2 — combined tags citing circuits.** A combined tag counted from the circuits it cites is one per
+member: "RTU-1/RTU-2" → **2**.
+
+**S3 — combined tag parsing.**
+- "RTU-1/2/3" and "RTU-1 & 2" are parsed.
+- Members that are not listed are created, so they are counted or asked about. They never stack on
+  the members that are present.
+- A "(n)" that differs from the member count is a blocking `combined:` question.
+
+**S4 — distinct loads stay separate.**
+- Equal circuits are necessary, never enough.
+- Circuits a description "controls", "serves" or is "for" are not its own.
+- Only neutral modifiers ("electric") are ignored.
+- These stay separate: a circulating pump, an instantaneous water heater, a hood interlock, an ice
+  machine on the drink machine's circuit, a contactor for the pylon sign, and a time clock controlling
+  the signs.
+
+**S5 — circuit parsing.**
+- `circuitRefs` drops a continuation number that is followed by a unit or count word ("A-6, 180 VA",
+  "3 phase", "3 fixtures").
+- Circuits are capped at 84.
+- Consolidation needs the drawing's panel list. T-1, SP-1 and P-4 are never circuits without it.
+
+**S6 — generic symbols against schedule-owned types.** A generic symbol whose candidates have no marks,
+or are schedule-owned, becomes a `synonym:` question. Six "P" marks never stack on the PP#n quantities.
+With none drawn, the symbol is folded as information.
+
+**S7 — "The same device" answer.** It drops only the coinciding marks; the rest keep their own count.
+
+**S8 — consistency mechanics:**
+- **Matching.** Maximum one-to-one matching. The radius is 0.75 × the type's median nearest-neighbour
+  spacing, clamped to 0.2–0.5". A jittered 70-mark read at ±15 pt is re-found 70 / 70.
+- **Failures.** A truncated or failed second pass is skipped, with a non-blocking warning item. It
+  never fails the run.
+- **Viewports.** Suggestions obey the viewport rules: plan viewports only.
+- **Confirming.** "Confirm the found marks" **adds** the confirmed consistency suggestions to the kept
+  count (tested against the DB: 4 + 1 confirmed = 5).
+- **Tile size.** The pass reads at the retry's 6.4" tiles.
+- **Supplement pass.** It keeps the check, and so its answer.
+- **Caps.** 3 sheets and 16 shifted tiles per sheet, with one cover per type.
+- **Caching.** By sheet hash + types + tile size + prompt version (`cs1`).
+
+**S9 — sheet references.**
+- Only the text before or at an id marks it as a spec citation. "E-9 (Div 16)" and "Sheet E-8 SECTION
+  2" keep the sheet.
+- A known discipline prefix is a sheet of this job whatever its digits. A missing M-101, P-201, A-201
+  or E-101, and "E4.1" or "Refer to sheet E8", stay blocking.
+- Only an explicit vendor's or third party's drawing is information (SGN101).
+
+**S10 — the pole-spec rule.** It removes a row only for a light pole. It never removes a flag, camera,
+CCTV, banner or sign pole.
+
+**S11 — two downgrades reversed.**
+- The 209W note is information only when its per-pole number equals every site type's heads per pole.
+  Kissimmee's note gives 6 against the schedule's 4, so it is **blocking** with both numbers.
+- A zero-count type APT connects blocks. Only `aptScope: 'none'` is information, so **EF blocks**.
+
+**S12 — supplement over a pre-consolidation run.** Remapped alias marks on top of the canonical's own
+are dropped. Test: 3 shared + 1 separate gives 4, not 7.
+
+### Nits
+
+- **N1:** E-5's rebuilt viewport rectangles in the replay are invented placeholders; only their titles
+  are used. This is documented in `replay.ts` and asserted. E-4's are measured.
+- **N2:** PP#5 (the data / security pipes) is a raceway line, never a pole connection.
+- **N3:** a confirmed consistency suggestion logs `consistency_accept`.
+- **N4:** only the exact tag base folds a numbered family (RTU → RTU-n). "DISCONNECT" against DS-n, or
+  POWER POLES against PP#n, is uncertain.
+- **N5:** a notes line that restates an assembly's device is information, never swallowed. An
+  "additional outlet" note is a new device and is asked about.
+
+### The live run, replayed again
+
+| | Live | After the first round | After this fix round |
+|---|---|---|---|
+| Review items: blocking / total | 46 / 53 | 14 / 23 | **17 / 25** |
+| Receptacles (simplex / duplex+floor / GFCI / WP) | 25 (8 / 6 / 7 / 4) | 34 (9 / 14 / 7 / 4) | **33 (8 / 14 / 7 / 4)** |
+| RTU | 4 | 2 | **2** |
+| Power-pole outlets | 0 | 8 duplex + 1 simplex | **8 duplex + 1 simplex** |
+| A / B | 70 / 45 | 70 / 45 (agreed marks), 3 + 7 suggested | **70 / 45 kept** (pass 1; pass 2 re-found all of them), 3 + 7 suggested |
+
+**Per group, before → after** (blocking / total):
+
+| Group | Before | After |
+|---|---|---|
+| zero | 24/24 | 9/9 (EF now blocks) |
+| referenced sheets | 13/13 | 0/1 |
+| unscheduled | 3/3 | 1/1 |
+| scope | 3/3 | 3/3 |
+| legend-zero | 1/1 | 1/1 |
+| typical | 1/1 | 1/1 (the 209W heads conflict) |
+| schedule | 1/1 | 0/0 |
+| consistency | — | 1/1 |
+| classconflict | — | 1/1 (B-32) |
+| information / photometric / spot-check | 0/7 | 0/7 |
+
+**The 3 new blocking items are the review's own decisions:** EF (APT's connection), the 209W note
+(6 vs 4 heads) and B-32's class. The ≤ 15 goal of the first round is therefore no longer met: 17
+blocking. Nothing was hidden to reach a number.
+
+**The consistency pass's cost.** It now reads at the retry's smaller tiles: one call on 8 shifted tiles,
+an estimated ~33k input / ~5.8k output tokens. That is **about $0.25 per bid on Opus 5.5** (estimate;
+up from $0.18 at the first-pass tile size). It is capped at 3 sheets and 16 tiles each, and a re-run of
+unchanged sheets costs $0 because it is cached.
+
+### Test suites (one full run each, at the end)
+
+`tsc --noEmit` is clean in both packages.
+
+| Suite | Result |
+|---|---|
+| Backend `npm test` | **2149 passed, 3 failed, 4 not run of 2156** (201 files: 198 passed, 2 failed, 1 lost to "Worker exited unexpectedly"). The failures are the known flakes: `intakeSimilarCache` ×2 and the `integration` backfill timeout. |
+| Frontend `npx vitest run` | **1316 passed, 1 failed of 1317**. The failure is the known `SurveyMarkupEditor` flake; it passed 1/1 when run alone. |
+
+**The backend was run twice.** The first full run also failed 3 tests in `kissimmeeReviewNoise`: that
+older fixture asserted the HVAC-installed fan at zero was information, which S11 now makes blocking.
+Its assertions were updated to the decision: 8 blocking items, still within its ≤ 8 goal. The file
+passes, and the second full run above is the one reported. `integration`'s "bad enum → 400" failed
+once in the first run and passed alone and in the second run.
+
+**New tests in this round:**
+- `consistency` rewritten: 13 tests;
+- `consistencyEndToEnd`: 4 (DB);
+- `consolidateReview`: 13;
+- `classConflict`: 3;
+- `realRunRefs`: +3;
+- `realRunReview`: +5;
+- updated: `consolidate`, `realRunPoles`, the replay acceptance test, `reviewItems` (A6),
+  `kissimmeeReviewNoise`, `kissimmeeEvidence` (its fake answers the retry-size shifted tiles);
+- frontend: +1 group.
