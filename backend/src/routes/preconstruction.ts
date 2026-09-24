@@ -2184,11 +2184,24 @@ router.post('/:bidId/review/reopen', requireAuth, asyncHandler(async (req: AuthR
 //     analysis has run; never an unresolved AI guess, see
 //     deriveExpectedFromConfirmedCounts);
 //   * a Chris BOM/breakdown import reference, when the estimator names one
-//     (bomImportDocumentId) — recorded as the input the case is FROM, not
-//     re-derived here (that parse already exists on the accubid import path).
-router.post('/:bidId/finish-bid', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+//     (bomImportDocumentId) — recorded as the input the case is FROM (fix
+//     round S8: validated as THIS bid's OWN cost_breakdown document, never
+//     someone else's or a plans/photo upload). Nothing here actually parses
+//     that document into `expected` yet, so the case's `source` stays the
+//     honest 'confirmed_counts' until that parse exists — S8, never
+//     mislabeled just because a reference was named.
+// Fix round S7 — an eval case is an ANSWER KEY: it needs the same "every
+// count resolved" guarantee a proposal send has, so it shares the
+// proposal's own gate (open items block it here too, listed, never
+// silently excluded from the answer key). Fix round N4 — idempotent per
+// (bid, run, source): a second call for the same run updates that one eval
+// case instead of duplicating it in the eval set; view_results is the
+// weakest AI permission that already gates reading a bid's takeoff.
+router.post('/:bidId/finish-bid', requireAuth, requireAIPermission('view_results'), asyncHandler(async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const gate = await takeoffGate(bidId);
+  if (gate) return res.status(409).json({ error: gate.error, reviewItems: gate.openItems });
   const { rows: trRows } = await pool.query('SELECT count_result, review_items, run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
   const countResult = trRows[0]?.count_result as CountResult | null;
   if (!countResult) return res.status(400).json({ error: 'No takeoff analysis on this bid yet — run the analysis first.' });
@@ -2196,6 +2209,18 @@ router.post('/:bidId/finish-bid', requireAuth, asyncHandler(async (req: AuthRequ
   const runId = (trRows[0]?.run_id as string | null) ?? null;
   const { rows: bidRows } = await pool.query('SELECT brand, project_type FROM bids WHERE id=$1', [bidId]);
   const bomImportDocumentId = typeof req.body?.bomImportDocumentId === 'string' ? req.body.bomImportDocumentId : null;
+  let bomImportLabel: string | null = null;
+  if (bomImportDocumentId) {
+    const { rows: docRows } = await pool.query(
+      `SELECT category, display_name, name FROM documents WHERE id = $1 AND linked_id = $2 AND deleted_at IS NULL`,
+      [bomImportDocumentId, bidId]
+    );
+    if (!docRows.length) return res.status(400).json({ error: 'bomImportDocumentId does not belong to this bid.' });
+    if (docRows[0].category !== 'cost_breakdown') {
+      return res.status(400).json({ error: 'bomImportDocumentId is not a BOM / cost breakdown document on this bid.' });
+    }
+    bomImportLabel = (docRows[0].display_name as string | null) ?? (docRows[0].name as string | null);
+  }
 
   const expected = deriveExpectedFromConfirmedCounts(countResult, reviewItems);
   if (!expected.length) {
@@ -2203,13 +2228,18 @@ router.post('/:bidId/finish-bid', requireAuth, asyncHandler(async (req: AuthRequ
   }
   const loaded = await composeCurrentBidData(bidId, { validate: false, persist: false }).catch(() => null);
   const inputsHash = loaded && loaded.ok ? loaded.inputsHash : null;
+  const source = 'confirmed_counts'; // S8 — honest until a BOM parse actually feeds `expected`
   const { rows } = await pool.query(
     `INSERT INTO takeoff_eval_cases (bid_id, run_id, client, project_type, source, expected, inputs_ref, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, created_at`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (bid_id, (COALESCE(run_id::text, 'no-run')), source) DO UPDATE SET
+       client = EXCLUDED.client, project_type = EXCLUDED.project_type, expected = EXCLUDED.expected,
+       inputs_ref = EXCLUDED.inputs_ref, created_by = EXCLUDED.created_by, created_at = now()
+     RETURNING id, created_at`,
     [
       bidId, runId, bidRows[0]?.brand ?? null, bidRows[0]?.project_type ?? null,
-      bomImportDocumentId ? 'bom_import' : 'confirmed_counts', JSON.stringify(expected),
-      JSON.stringify({ runId, inputsHash, ...(bomImportDocumentId ? { bomImportDocumentId } : {}) }), req.user!.name,
+      source, JSON.stringify(expected),
+      JSON.stringify({ runId, inputsHash, ...(bomImportDocumentId ? { bomImportDocumentId, bomImportLabel } : {}) }), req.user!.name,
     ]
   );
   res.json({ id: rows[0].id, createdAt: rows[0].created_at, itemCount: expected.length, expected });
