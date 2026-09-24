@@ -539,3 +539,51 @@ The pole-base assembly derived from North Port (auger 6 ft/pole, sono tube 9 ft/
 - **N11's two new reproduction tests** (36th Street, Orlando) — no source crew-rate data available in this worktree; see above.
 - **No live runs.** Nothing ran against the Anthropic/Graph API; `takeoffReviewGate.test.ts`'s B5 tests mock the Anthropic SDK to throw if constructed, same as its existing review-gate tests.
 - **S17's "Labor Factoring" UI** shows no dedicated readout of the compounding multiplier on screen yet (the backend/`AccubidBidRecap.laborFactorMultiplier` is there for a future display; this round only added the mode switch and un-hid the factor controls).
+
+# Fix round 2 — Part B (review `2026-09-24-next-round-review.md`'s "Round 2" section, commit `f523af3`, MERGE AFTER FIXES)
+
+**Executor:** Sonnet 5. **Scope:** the Round 2 findings only — the new blocker R2-B1, the new should-fix R2-S1, and nits N-R2-1 through N-R2-5 (N-R2-6 left alone, per the coordinator: "it errs safe"). Same worktree/branch/hard rules as every prior fix round in this series; no live Anthropic/Graph calls (every DB test either mocks the Anthropic SDK to throw if constructed, or never touches a route that could reach it).
+
+**Migrations:** started at 132 (one added — `132_accubid_reconciled_provenance.sql`). 133 is the next free number.
+
+**Commits** (`f523af3..6784115`):
+
+| Commit | Finding(s) |
+|---|---|
+| 8376c27 | R2-S1 |
+| 9c567c4 | R2-B1 (blocker), N-R2-4's test |
+| 4da6849 | N-R2-1 |
+| 996c69f | N-R2-2 |
+| 062ab11 | N-R2-3 |
+| 6784115 | N-R2-5 |
+
+## Blocker
+
+- **R2-B1 — a bare-conduit BOM row never reconciles into an "all-in" seed raceway item.** The B3 spec-key reconciliation matched a bare-conduit row ("3/4" Conduit - EMT 10' Lengths", Chris's real bare-conduit-only rate, 3.2 h/C) into the seed's ALL-IN item ("3/4" EMT (incl. couplings/straps)", 4.0 h/C — bundling a size's typical fittings labor) purely because both key to the same kind/size/material, silently dropping ~20% labor off every future takeoff pricing off EMT-075. New `isAllInRacewayItem(name)` recognizes the qualifier-phrase shape ("incl./including" or "w//with" + fittings/couplings/straps/glue); `buildSpecIndex` and the mapper-fallback reconciliation path both exclude any matching kind='conduit' item from being a reconciliation target — a bare-conduit row creates its own bare-conduit item instead (idempotent on re-import, same as any other create). This is the review's "either" option (exclude from reconciliation) rather than computing conduit + median fittings ratios and proposing an updated all-in figure — `deriveConduitFittingsForJob`/`medianConduitFittingsRatios` already exist for that, but verifying the arithmetic needs more real per-job data than this round has; the coordinator's own test criterion ("stays 4.0h/$60, OR becomes a proposal... never 3.2h silently") accepts the simpler, fully-verified fix.
+  - **Test:** the real Kissimmee BOM's 3/4" EMT row never targets EMT-075 (stays 4.0h/$60, source stays 'seed'); a new bare-conduit item is created alongside it at Chris's real 3.2h rate.
+
+## Should-fix
+
+- **R2-S1 — the kind guard classifies by the PRIMARY noun, not every word in the name.** 99d9453's guard treated any mention of "fittings" as making an item a fitting — including the seed catalog's own all-in items and an ordinary takeoff line noting the same thing ("EMT conduit w/ fittings"). `racewayKindFromNormalizedText` strips the qualifier PHRASE ("incl./including/w//with" + fittings/couplings/straps/clips/clamps/glue) from raw text before classifying — needs raw text, not an already-tokenized set, since the phrase's adjacency is exactly what a token bag discards. A genuine fitting product ("Expansion fitting, conduit", "Coupling - EMT Set Screw Steel") never carries that qualifier shape, so it's unaffected.
+  - **Test:** "2" rigid steel conduit" → RGD-200, "3/4" EMT conduit w/ fittings" → EMT-075, "2" PVC conduit with fittings" → PVCB-200 (all three previously unmatched) — plus two guardrails proving a genuine fitting is unaffected.
+
+## Nits
+
+- **N-R2-1 — `acceptProposals` wired through the apply route.** The route computed a preview and applied it but never read `acceptProposals` from the body, so a `propose_update` row (S15) was a dead end no matter what an estimator picked. Now parsed from `body.acceptProposals` into the Set `applyImportPreview` already expected. Per the review's own follow-up ("a unit-mismatch proposal must convert units before writing"): `ImportedItemPlan.previous` now also carries the existing item's own unit, and accepting a `unit_mismatch` proposal converts `laborHours`/`materialCost` into that unit (`convertBetweenUnits`, the same EA=1/LF=1/C=100/M=1000 divisor convention `pricing.ts`'s `UNIT_DIVISOR` uses) before writing — a `big_delta` proposal needs no conversion (same unit on both sides already).
+- **N-R2-2 — a reconciled item keeps its own source; Accubid provenance is a separate field.** `applyAccubidItemUpdate` used to restamp `source='accubid'` on every reconciled write, even a 'seed' one — which then made the mapper's own tie-break (`preferCandidate`) rank that curated row BELOW every other, un-reconciled seed item on a tied score, backwards from the intent. Migration 132 adds `est_items.accubid_reconciled_at`; the guarded UPDATE now stamps that instead of touching `source`. A genuine new create is unaffected (still `source='accubid'`, no prior provenance to preserve).
+- **N-R2-3 — the 7-Eleven deduct excludes fire-alarm/control panels; keeps fixtures with an attached control accessory.** `panels` matched any line containing the word "panel" ("Fire alarm control panel", over-deducting); the new `PANEL_EXCLUDE_RE` excludes fire-alarm/FACP/annunciator/security/access-control/nurse-call/control panels specifically, checked only for the `panels` term. `NEVER_DEDUCT_RE` excluded any line merely mentioning a control word, under-deducting real fixtures ("LED wall pack w/ photocell", "Troffer w/ integral occupancy sensor"); `isControlDeviceItself` now strips the same "w//with/integral" qualifier-phrase shape as R2-S1 before testing whether a control word remains as the line's own subject — a standalone control device ("Photocell, button-type") is still excluded.
+- **N-R2-4 — done as part of R2-S1's commit.** Two candidates agreeing on a FITTING kind name alone (both "connector") now also need a shared raceway material tag (`fittingKindNeedsMaterialMatch` + `sharesMaterialTag`) — kind-name agreement alone let "3/4" EMT connector" match an accubid-imported lighting-track part naming no raceway material at all. `conduit`-vs-`conduit` is excluded from this stricter check (already covered by the ordinary `materialConflict` guard). Verified the test genuinely fails without the guard by temporarily disabling it and confirming the assertion broke, then restoring.
+- **N-R2-5 — the pre-bid package marks a budget-pending quote in its internal notes.** `generate-prebid-package` now reads the bid's quotes and appends `"BUDGET — pending vendor quote: {description}."` to `bidData.prebid.flags` (rendered as "INTERNAL NOTES & DISCREPANCIES", the one section that exists only on this internal document) for each budget-pending one. `bidData.prebid` was previously never populated anywhere in the real pipeline at all — this is its first real production use. No price is added or implied; the package still carries none.
+- **N-R2-6 — left alone**, per the coordinator's instruction (the review itself calls it conservative/safe: an absent sheet is flagged as missing only when its separator style matches the upload's own, so it never over-flags — the opposite direction of B1's original bug).
+
+## Test suites
+
+- **Targeted suites, run after each finding:** mapper.test.ts (40/40), accubidImport.test.ts (44/44), accubidMapperReconciliation.test.ts (6/6), autoDeductAlternate.test.ts (16/16, pure) + its DB route test (5/5), estimatingAccubidImportRoutes.test.ts (13/13, DB), prebidDraftWorkflow.test.ts (6/6, DB) plus takeoffReviewGate/fixRound1Staleness/bidStandardGeneration (39/39, DB) — all green after every commit, not just at the end.
+- **Full pure estimating/bidstd suite:** 509/509 (25 files), run repeatedly through the round.
+- **One full backend run at the end:** **1815 passed, 3 failed** of 1822 (166 files: 163 passed, 2 failed, plus 1 worker crash unrelated to any test in this round). The 3 failures are the same pre-existing flakes documented in every prior fix round's own report — `intakeSimilarCache` ×2 (timeout) and `integration`'s lead-follow-up-backfill (timeout) — in modules this round never touched (intake similarity cache, lead follow-up). No regression in any estimating/accubid/bidstd/preconstruction file.
+- **tsc:** clean on both backend and frontend.
+
+## Not fixed / limits
+
+- **R2-B1's alternative fix** (compute conduit + median fittings ratios and PROPOSE a recomputed all-in figure for EMT-075/EMT-100/the PVC/rigid all-in items) was not built — see the blocker's own note above. The building blocks (`deriveConduitFittingsForJob`, `medianConduitFittingsRatios`) already existed before this round and remain available for whoever has the real per-job Breakdown data to validate the arithmetic against.
+- **No live runs.** Nothing ran against the Anthropic/Graph API.
