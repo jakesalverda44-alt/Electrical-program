@@ -330,7 +330,7 @@ describe('Real-run fixes 2 / 5 — the dense-sheet check and the same-device que
     setup({
       status: 'needs_review',
       items: [
-        { id: 'synonym:MOTION SENSOR', kind: 'area', group: 'synonym', title: 'Type Motion sensor: the same device as M1 / M2?', detail: '1 of the 1 marks', options: ['Different devices — keep 1', 'The same device — drop Motion sensor'], keepQty: 1, sumQty: 0, actions: ['answer'] },
+        { id: 'synonym:MOTION SENSOR', kind: 'area', group: 'synonym', title: 'Type Motion sensor: the same device as M1 / M2?', detail: '1 of the 1 marks', options: ['Different devices — keep 1', 'The same device — drop Motion sensor'], actions: ['answer'] },
         { id: 'consistency:A+B', kind: 'count', group: 'consistency', title: 'Dense-sheet check: 10 marks only one of two counting passes found — confirm on plans', detail: 'Type A: first pass 70, second pass (shifted tiles) 73, both found 70 (96% agree)', actions: ['markers', 'confirm', 'count'],
           reconcileMembers: [
             { key: 'A', type: 'A', description: '8 ft LED strip', unit: 'count', currentQty: 70, headsPerPole: null },
