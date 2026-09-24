@@ -29,7 +29,11 @@ import { logger } from '../utils/logger';
 
 const execFileP = promisify(execFile);
 
-export type SheetClass = 'schedule' | 'plan' | 'detail';
+/** Next round A3 — 'reference': a sheet the analysis reads for context only
+ *  (a referenced mechanical schedule, the photometric plan, an RCP): lower
+ *  resolution, never counted by Agent 1 (the counter may still use a
+ *  photometric / site sheet for site fixture types — countSheets.ts). */
+export type SheetClass = 'schedule' | 'plan' | 'detail' | 'reference';
 
 type ImageBlock = Anthropic.ImageBlockParam;
 type DocumentBlock = Anthropic.DocumentBlockParam;
@@ -149,6 +153,9 @@ const DEFAULT_TILE_SETTINGS: Record<SheetClass, TileClassSettings> = {
   schedule: { tileInches: 8,  maxTilesPerPage: 15, dpi: 200 },
   detail:   { tileInches: 12, maxTilesPerPage: 9,  dpi: 170 },
   plan:     { tileInches: 16, maxTilesPerPage: 6,  dpi: 130 },
+  // A 36x24 reference sheet is 2 tiles (~67 px/in after the downscale):
+  // enough to read a schedule's headings and a site layout, cheap to send.
+  reference: { tileInches: 24, maxTilesPerPage: 2, dpi: 100 },
 };
 
 /** Settings-driven overrides — DPI and tile-count cap only, per class. */

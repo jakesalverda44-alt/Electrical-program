@@ -109,10 +109,13 @@ export type Agent1WorkUnit =
       estTokens: number;
     };
 
+/** Next round A3 — what Agent 1 is told about a reference sheet. */
+export const REFERENCE_SHEET_NOTE = 'context only: another discipline\'s sheet that the electrical drawings reference or that carries equipment data; read its schedules and notes, but do not count fixtures or devices from it and do not list it as a missing sheet';
+
 /** Class ordering used both for the old whole-file sort and this page-level
  *  one: schedules first (read best when Agent 1 sees them first), then
  *  details, then plans. */
-const CLASS_ORDER: Record<SheetClass, number> = { schedule: 0, detail: 1, plan: 2 };
+const CLASS_ORDER: Record<SheetClass, number> = { schedule: 0, detail: 1, plan: 2, reference: 3 };
 
 /** Pure — schedule-first ordering across the WHOLE upload (not just within one
  *  file): a stable sort so pages within the same class keep their original
@@ -223,7 +226,9 @@ export async function buildBlocksForBatch(
     }
     // 'pdf-page' — u.label is built from the vision classifier's echoed sheet
     // number/title, also attacker-influenceable via a hostile title block.
-    blocks.push({ type: 'text', text: `--- Sheet: ${sanitizeForPrompt(u.label)} (${sanitizeForPrompt(u.cls)}) ---` });
+    blocks.push({ type: 'text', text: u.cls === 'reference'
+      ? `--- Sheet: ${sanitizeForPrompt(u.label)} (reference — ${REFERENCE_SHEET_NOTE}) ---`
+      : `--- Sheet: ${sanitizeForPrompt(u.label)} (${sanitizeForPrompt(u.cls)}) ---` });
     addText(u.label, u.page, u.pageText);
     const tiles = tilesByKey.get(`${u.filename}#${u.page}`);
     if (tiles) blocks.push(...tiles);

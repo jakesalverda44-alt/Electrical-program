@@ -431,6 +431,23 @@ PAGE NUMBERS: Each crop is preceded by a "Page N" label. N is the ABSOLUTE page 
 OUTPUT: Return ONLY a valid JSON array, no prose, no markdown fences, one entry per page in the order given, using each page's ABSOLUTE page number:
 [{"page": 1, "sheetNo": "E-101", "title": "Electrical Site Plan", "discipline": "electrical", "cls": "plan"}]`;
 
+// Next round A2 — reading sheet references the regex couldn't (Haiku, text)
+// and from a scanned sheet's notes region (Sonnet, vision). Output is a
+// small JSON array; services/sheetCheck.ts parses it strictly.
+const SHEET_REF_KINDS = `Each reference is either
+- {"kind": "sheet", "id": "<sheet number exactly as printed, e.g. M-1, C-3.1, PH0.1>"}, or
+- {"kind": "discipline", "key": one of "mechanical" | "plumbing" | "civil" | "architectural" | "structural" | "fire_protection" | "photometric" | "reflected_ceiling" | "life_safety" | "equipment_schedule" | "kitchen" | "landscape"}
+Only references to OTHER DRAWINGS or SCHEDULES count — never code sections (NEC, NFPA, UL), specification sections, equipment tags (RTU-1, EF-2), panel names, or the owner's / a vendor's documents that are not drawing sheets. Never guess a sheet number that is not printed.`;
+
+export const SHEET_REFS_TEXT_SYSTEM = `You read general-notes sentences from electrical drawing sheets and list the other drawings each one points to.
+${SHEET_REF_KINDS}
+OUTPUT: a JSON array only, no prose, one entry per reference found, with "i" = the sentence number: [{"i": 3, "kind": "discipline", "key": "mechanical"}, {"i": 5, "kind": "sheet", "id": "C-3.1"}]. Sentences that point to no drawing produce no entry. An empty array [] is a valid answer.`;
+
+export const SHEET_REFS_VISION_SYSTEM = `You are given the general-notes region of a scanned electrical drawing sheet (no text layer). Read the notes and list every other drawing they point to ("SEE M-1", "REFER TO CIVIL", "PER PHOTOMETRIC PLAN", "COORDINATE WITH MECHANICAL EQUIPMENT SCHEDULE").
+${SHEET_REF_KINDS}
+Add "context": the note text (max 120 characters) to each entry.
+OUTPUT: a JSON array only, no prose: [{"kind": "sheet", "id": "M-1", "context": "SEE M-1 FOR RTU DATA"}]. An empty array [] is a valid answer.`;
+
 // Takeoff accuracy, Task 4 — the dedicated counting stage (Agent 1C).
 // One call per electrical plan sheet (or per tile-group of an oversized
 // sheet): the type list + every tile of the sheet. Positions come back

@@ -57,7 +57,7 @@ const VALID_CLASSES = new Set<SheetClass>(['schedule', 'plan', 'detail']);
 /** Disciplines page selection includes — electrical scope can live on any of
  *  these, plus 'unknown' (the classifier failed to place the page at all —
  *  default-include, matching the current filter's philosophy). */
-const SELECT_DISCIPLINES = new Set<Discipline>(['electrical', 'fuel', 'lowvoltage', 'cover', 'unknown']);
+export const SELECT_DISCIPLINES = new Set<Discipline>(['electrical', 'fuel', 'lowvoltage', 'cover', 'unknown']);
 
 /* ---------------------------------------------------------------------------
  * Pure: crop geometry — the right 25% strip, full height. Title blocks on

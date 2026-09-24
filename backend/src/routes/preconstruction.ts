@@ -62,6 +62,7 @@ import { BidData } from '../bidstd/bidData';
 import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
 import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
 import { resetForRerun, type RerunResetSummary } from '../services/rerunReset';
+import { planSheetsForRun, type FileSheetPlan } from '../services/sheetCheck';
 import { registerRun, abortableClient, abortRuns, isCancellationError, RunCancelledError, runSignalOf } from '../ai/runControl';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
@@ -79,6 +80,9 @@ export interface AIConfig {
   modelClassifier: string;
   /** Takeoff accuracy — the dedicated counting stage (Agent 1C). */
   modelCounter: string;
+  /** Next round A2 — Sonnet vision reads a scanned sheet's notes region for
+   *  references (setting ai_sheet_refs_vision_model). */
+  modelRefVision: string;
   maxTokensCounter: number;
   maxTokensA1: number;
   maxTokensA2: number;
@@ -118,7 +122,7 @@ export async function loadAIConfig(): Promise<AIConfig> {
     temperatureSetting,
     promptA1Setting, promptA2Setting, promptA3Setting, promptA4Setting,
     dpiScheduleSetting, dpiPlanSetting, tilesScheduleSetting, tilesPlanSetting,
-    modelCounterSetting, maxCounterSetting,
+    modelCounterSetting, maxCounterSetting, modelRefVisionSetting,
   ] = await Promise.all([
     getSetting('ai_model'),
     getSetting('ai_takeoff_agent2_model'),
@@ -140,6 +144,7 @@ export async function loadAIConfig(): Promise<AIConfig> {
     getSetting('ai_prep_tiles_plan'),
     getSetting('ai_takeoff_counter_model'),
     getSetting('ai_max_tokens_counter'),
+    getSetting('ai_sheet_refs_vision_model'),
   ]);
   const defaultModel = (process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim();
   return {
@@ -149,6 +154,7 @@ export async function loadAIConfig(): Promise<AIConfig> {
     modelA4: (modelA4Setting || 'claude-sonnet-4-6'),
     modelClassifier: (modelClassifierSetting || 'claude-haiku-4-5-20251001'),
     modelCounter: ((modelCounterSetting || '').trim() || DEFAULT_COUNTER_MODEL),
+    modelRefVision: ((modelRefVisionSetting || '').trim() || 'claude-sonnet-4-6'),
     maxTokensCounter: parseNumberSetting(maxCounterSetting || '', DEFAULT_MAX_TOKENS_COUNTER, 1024, 128000),
     maxTokensA1: parseNumberSetting(maxA1Setting || '', DEFAULT_MAX_TOKENS_A1, 256, 64000),
     maxTokensA2: parseNumberSetting(maxA2Setting || '', DEFAULT_MAX_TOKENS_A2, 256, 64000),
@@ -296,6 +302,12 @@ interface PrepInventoryEntry {
    *  non-electrical discipline), so a low-fidelity/zero-content run is visible
    *  in the inventory instead of a silent per-page `included: false`. */
   reason?: string;
+  /** Next round A1/A3 — how the sheet check placed this page: analysed,
+   *  sent as a reference page (context only, not counted — except a
+   *  photometric / site sheet for site fixture types), or left out. */
+  role?: 'analysis' | 'reference' | 'excluded';
+  /** "E-7 note 3" — where a reference page was referenced from. */
+  referencedBy?: string[];
 }
 
 /** FIX-2 (phase 2 post-review) — per-PDF Stage 0 prep result. Classification,
@@ -341,8 +353,28 @@ async function prepOnePdf(
   client: Anthropic,
   classifierModel: string,
   buffer: Buffer,
-  filename: string
+  filename: string,
+  plan?: FileSheetPlan,
 ): Promise<PdfPrepResult> {
+  // Next round A1 — the sheet check already classified this file (cached by
+  // content hash) and decided every page's role: no second classifier call.
+  if (plan && plan.classifications.length) {
+    const pageTexts = plan.pageTexts;
+    const selection: PdfPageSelection[] = [];
+    const inventory: PrepInventoryEntry[] = plan.classifications.map(c => {
+      const r = plan.roles.get(c.page) ?? { role: 'excluded' as const, reason: 'not placed by the sheet check' };
+      if (r.role !== 'excluded') {
+        selection.push({ page: c.page, label: formatSheetLabel(c.sheetNo, c.title, `${filename} p${c.page}`), cls: r.role === 'reference' ? 'reference' : c.cls });
+      }
+      return {
+        file: filename, page: c.page, sheetNo: c.sheetNo, title: c.title, discipline: c.discipline, cls: c.cls,
+        included: r.role !== 'excluded', textChars: pageTexts[c.page - 1]?.length ?? 0, classified: c.discipline !== 'unknown',
+        role: r.role, reason: r.reason, ...(r.referencedBy?.length ? { referencedBy: r.referencedBy } : {}),
+      };
+    });
+    const dropFile = selection.length === 0;
+    return { filename, buffer, pageTexts, pages: selection, revivedPages: selection, dropFile, inventory, usage: NO_USAGE };
+  }
   let pageTexts: string[] = [];
   if (await isPdftotextAvailable()) {
     try {
@@ -441,7 +473,8 @@ async function prepareAgent1Upload(
   filesToSend: Express.Multer.File[],
   client: Anthropic,
   classifierModel: string,
-  tileOverrides: TileSettingsOverrides
+  tileOverrides: TileSettingsOverrides,
+  plans: Map<string, FileSheetPlan> = new Map(),
 ): Promise<AgentUploadPrepResult> {
   const inventory: PrepInventoryEntry[] = [];
   const classifierUsage = { input_tokens: 0, output_tokens: 0 };
@@ -459,7 +492,7 @@ async function prepareAgent1Upload(
       });
       continue;
     }
-    const prep = await prepOnePdf(client, classifierModel, f.buffer, f.originalname);
+    const prep = await prepOnePdf(client, classifierModel, f.buffer, f.originalname, plans.get(f.originalname));
     classifierUsage.input_tokens += prep.usage.input_tokens;
     classifierUsage.output_tokens += prep.usage.output_tokens;
     if (prep.pages === null) opaqueFallbacks.push(prep);
@@ -903,9 +936,24 @@ async function runPipelineStages(
     // split, which had no relationship to how much content a call actually
     // carried. If Stage 0 prep fails outright for the whole upload, fall back
     // to a single legacy document-block call rather than losing the run.
+    // Next round A1 — the sheet check's page inventory and selection (cached
+    // by content hash: an unchanged file is not classified again), with the
+    // estimator's overrides and the reference pages it found.
+    let plans = new Map<string, FileSheetPlan>();
+    let planUsage = { ...NO_USAGE };
+    try {
+      const planned = await planSheetsForRun(bidId, filesToSend, client, config.modelClassifier);
+      plans = planned.plans;
+      planUsage = planned.usage;
+    } catch (err) {
+      if (isAgentTruncatedError(err) || isCancellationError(err) || signal.aborted) throw err;
+      logger.warn({ err, bidId }, '[takeoff] sheet check plan failed — pages are classified per file as before');
+    }
     let uploadPrep: AgentUploadPrepResult;
     try {
-      uploadPrep = await prepareAgent1Upload(filesToSend, client, config.modelClassifier, config.tileOverrides);
+      uploadPrep = await prepareAgent1Upload(filesToSend, client, config.modelClassifier, config.tileOverrides, plans);
+      uploadPrep.classifierUsage.input_tokens += planUsage.input_tokens;
+      uploadPrep.classifierUsage.output_tokens += planUsage.output_tokens;
     } catch (err) {
       if (isAgentTruncatedError(err) || isCancellationError(err) || signal.aborted) throw err;
       logger.warn({ err, bidId }, '[takeoff] Stage 0 document prep failed for the whole upload — falling back to one legacy document-block call');
