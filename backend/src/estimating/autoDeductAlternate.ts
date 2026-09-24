@@ -44,10 +44,41 @@ const TERM_DESCRIPTION_MATCH: Partial<Record<TermKey, RegExp>> = {
 
 // Never part of the Graybar package regardless of which term matched: raw
 // raceway/wire/feeder text (APT's own scope, even inside a Service &
-// Distribution or Lighting Controls category), lighting CONTROLS (sensors,
-// photocells, contactors, time clocks — never the fixtures themselves), and
-// a panel SCHEDULE reference (paperwork, not a physical panel).
-const NEVER_DEDUCT_RE = /\b(conduit|raceway|\bwire\b|wiring|cables?|feeders?|thhn|thwn|\bemt\b|\bpvc\b|\brmc\b|\brigid\b|\bmc\b|\bfmc\b|\blfmc\b|liquidtight|occupancy\s+sensors?|photo\s*cells?|contactors?|time\s*clocks?|lighting\s+relays?|panel\s*schedules?)\b/i;
+// Distribution or Lighting Controls category), and a panel SCHEDULE
+// reference (paperwork, not a physical panel). No qualifier-phrase nuance
+// needed here — a line that names conduit/wire/feeder text is never itself
+// a fixture/panel/switchgear/receptacle/disconnect no matter how it's worded.
+const NEVER_DEDUCT_RACEWAY_RE = /\b(conduit|raceway|\bwire\b|wiring|cables?|feeders?|thhn|thwn|\bemt\b|\bpvc\b|\brmc\b|\brigid\b|\bmc\b|\bfmc\b|\blfmc\b|liquidtight|panel\s*schedules?)\b/i;
+
+// Review round 2 / N-R2-3 — a lighting CONTROL is excluded only when it's
+// the item ITSELF (a standalone sensor/photocell/contactor/time clock/relay
+// panel line), never when it's merely an ATTACHED ACCESSORY on a real
+// fixture ("LED wall pack w/ photocell", "Troffer w/ integral occupancy
+// sensor" — both are still fixtures, still Graybar-package items). Same
+// qualifier-phrase-stripping shape as R2-S1's raceway fix: strip the "w//
+// with/integral" + control-word phrase before testing whether a control
+// word remains as the line's own subject.
+const CONTROL_WORD = '(?:occupancy\\s+sensors?|photo\\s*cells?|contactors?|time\\s*clocks?|lighting\\s+relays?)';
+const CONTROL_ACCESSORY_QUALIFIER_RE = new RegExp(`\\b(?:w/|with|integral)\\s+(?:an?\\s+)?${CONTROL_WORD}`, 'gi');
+const CONTROL_WORD_RE = new RegExp(`\\b${CONTROL_WORD}\\b`, 'i');
+
+function isControlDeviceItself(description: string): boolean {
+  const stripped = description.replace(CONTROL_ACCESSORY_QUALIFIER_RE, ' ');
+  return CONTROL_WORD_RE.test(stripped);
+}
+
+// Review round 2 / N-R2-3 — "panels" must match whole PACKAGE item types
+// (an actual distribution panelboard), never any line that merely contains
+// the word "panel": "Fire alarm control panel" and "Mechanical control
+// panel connection" are NOT the Graybar electrical panelboard package.
+const PANEL_EXCLUDE_RE = /\b(?:fire\s+alarm|facp|annunciator|security|access\s+control|nurse\s+call|control)\s+panels?\b/i;
+
+function matchesTerm(key: TermKey, description: string): boolean {
+  const re = TERM_DESCRIPTION_MATCH[key];
+  if (!re || !re.test(description)) return false;
+  if (key === 'panels' && PANEL_EXCLUDE_RE.test(description)) return false;
+  return true;
+}
 
 function toCents(n: number): number { return Math.round((n + Number.EPSILON) * 100); }
 function fromCents(c: number): number { return c / 100; }
@@ -55,12 +86,14 @@ function roundMoney(n: number): number { return fromCents(toCents(n)); }
 
 /** True when a priced line is one of the EXACT Graybar-package item types
  *  named by the config's term keys — never a whole category. The
- *  "Lighting Controls" category and any raceway/wire/feeder/controls text
- *  are excluded no matter which term would otherwise have matched. */
+ *  "Lighting Controls" category, raw raceway/wire/feeder text, and a
+ *  standalone control DEVICE (never a fixture's own attached accessory —
+ *  N-R2-3) are excluded no matter which term would otherwise have matched. */
 export function lineMatchesAutoDeduct(line: Pick<DeductLineInput, 'category' | 'description'>, termKeys: TermKey[]): boolean {
   if (line.category === 'Lighting Controls') return false;
-  if (NEVER_DEDUCT_RE.test(line.description)) return false;
-  return termKeys.some(key => TERM_DESCRIPTION_MATCH[key]?.test(line.description) ?? false);
+  if (NEVER_DEDUCT_RACEWAY_RE.test(line.description)) return false;
+  if (isControlDeviceItself(line.description)) return false;
+  return termKeys.some(key => matchesTerm(key, line.description));
 }
 
 /** amount = Σ material $ of matched, non-excluded lines, plus that sum's

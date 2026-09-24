@@ -39,6 +39,25 @@ describe('lineMatchesAutoDeduct', () => {
   it('never matches a lighting CONTROL device even outside the Lighting Controls category (a mis-filed row)', () => {
     expect(lineMatchesAutoDeduct({ category: 'Interior Lighting', description: 'Photocell for exterior fixtures' }, [...SEVEN_ELEVEN_TERM_KEYS])).toBe(false);
   });
+
+  // Review round 2 / N-R2-3
+  it('"panels" never matches a fire-alarm or other non-electrical control panel just because it contains the word "panel"', () => {
+    expect(lineMatchesAutoDeduct({ category: 'Low Voltage Infrastructure (Conduit & Boxes Only)', description: 'Fire alarm control panel' }, ['panels'])).toBe(false);
+    expect(lineMatchesAutoDeduct({ category: 'Service & Distribution', description: 'Mechanical control panel connection' }, ['panels'])).toBe(false);
+    // A real electrical panelboard still matches.
+    expect(lineMatchesAutoDeduct({ category: 'Service & Distribution', description: '225A Panelboard, 42-circuit' }, ['panels'])).toBe(true);
+  });
+
+  it('a fixture that merely mentions an attached photocell or occupancy sensor is STILL a fixture — never under-deducted', () => {
+    expect(lineMatchesAutoDeduct({ category: 'Exterior / Site Lighting', description: 'LED wall pack w/ photocell' }, ['lighting'])).toBe(true);
+    expect(lineMatchesAutoDeduct({ category: 'Interior Lighting', description: 'Type A - 2x4 LED troffer w/ integral occupancy sensor' }, ['lighting'])).toBe(true);
+    expect(lineMatchesAutoDeduct({ category: 'Interior Lighting', description: '2x4 LED troffer with integral photocell' }, ['lighting'])).toBe(true);
+  });
+
+  it('a STANDALONE control device is still excluded, even worded almost identically to the "attached accessory" phrasing', () => {
+    expect(lineMatchesAutoDeduct({ category: 'Interior Lighting', description: 'Photocell, button-type' }, [...SEVEN_ELEVEN_TERM_KEYS])).toBe(false);
+    expect(lineMatchesAutoDeduct({ category: 'Interior Lighting', description: 'Ceiling-mount occupancy sensor' }, [...SEVEN_ELEVEN_TERM_KEYS])).toBe(false);
+  });
 });
 
 describe('computeAutoDeductAmount', () => {
