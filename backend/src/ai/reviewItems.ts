@@ -94,6 +94,28 @@ export interface ReviewItem {
    *  count / confirmed markers); the group itself resolves only once every
    *  member has one (see applyGroupMemberResolution). */
   groupedTypes?: Array<{ key: string; type: string; description: string; resolution?: ReviewResolution }>;
+  /** Fix round 3 / B10, B11 — a gap-fill/reconcile item's own types, ONE per
+   *  type the finding covers (never fewer than 1). Each answers separately
+   *  — a single number is never broadcast across several types (B11). The
+   *  item's own top-level `resolution` mirrors the single member's when
+   *  there is exactly one; for 2+, it is set only once every member has
+   *  answered (see applyReconcileMemberResolution). */
+  reconcileMembers?: Array<{
+    key: string; type: string; description: string;
+    /** The finding's own basis for this member: 'heads' for a site_lighting
+     *  type (2.2/B2 already compare heads for these, never poles); 'count'
+     *  otherwise. An entered/confirmed number is always in THIS unit. */
+    unit: 'heads' | 'count';
+    /** The member's current value, in `unit` — what "No more on this job —
+     *  keep current count N" keeps. */
+    currentQty: number;
+    /** From the fixture schedule, when it states one. Only meaningful when
+     *  unit is 'heads': poles are re-derived from a corrected heads answer
+     *  ONLY when this is known (an exact multiple); when it's null, poles
+     *  stay exactly as directly counted from the plans — never guessed. */
+    headsPerPole: number | null;
+    resolution?: ReviewResolution;
+  }>;
   /** N4 — an earlier run's resolution for this item that was NOT carried
    *  over because the drawings/counts changed; shown for re-confirmation. */
   previousResolution?: ReviewResolution;
@@ -420,17 +442,33 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `family|${q.primaryCount}|${q.memberCount}`,
     });
   }
-  // Fix round (review a479103, B2) — every reconciliation finding reaches
-  // the estimator, one way or the other:
-  //   * an UNDER finding gap-fill found candidates for -> `gapfill:<type>`,
-  //     "N possible <type> — confirm on plans" (the estimator confirms the
-  //     SUGGESTED markers in the Plans view, then resolves this with the
-  //     same "Use confirmed markers" action any count item has);
+  // Fix round (review a479103, B2; fix round 3 / B10, B11) — every
+  // reconciliation finding reaches the estimator, one way or the other:
+  //   * an UNDER finding gap-fill found candidates for -> `gapfill:<type>`;
   //   * anything else (an UNDER finding with nothing found, or an OVER
   //     finding — gap-fill has nothing to search FOR on an over-count) ->
   //     `reconcile:<type>`, shown with both sides. An over-count is
   //     informational only: the plans are not wrong just because a
   //     schedule cell disagrees.
+  // B10 — neither item ever offers "not on this job": the finding is about
+  // a SECOND SOURCE disagreeing with the plans, never a reason the type
+  // itself isn't on the job. Their actions are exactly:
+  //   * 'markers'  — "Confirm the found marks on the plans" (gap-fill only:
+  //     a jump to its own SUGGESTED markers in the Plans view, then "Use
+  //     confirmed markers" here);
+  //   * 'confirm'  — "No more on this job — keep current count N": rejects
+  //     the suggestion/mismatch, keeps the type's CURRENT count exactly (for
+  //     a gap-fill item, this also drops its own suggested markers — S18's
+  //     est_markups source='gap_fill'/status='suggested' rows for this type
+  //     — so a rejected suggestion never lingers to be confirmed later);
+  //   * 'count'    — "Enter correct count", one field per type (B11): never
+  //     a single number broadcast across every type a finding covers.
+  // B11 — the unit an answer is IN follows the finding's own basis: heads
+  // for a site_lighting type (the same basis reconcile() itself compares,
+  // B2's actualUnitsOf), plain count otherwise. Poles are directly counted
+  // from the plans; a heads answer only ever re-derives them when the
+  // fixture schedule states heads-per-pole (an exact multiple) — when it
+  // doesn't, poles are left exactly as counted, never guessed from heads.
   if (ev?.gapFill) {
     const typeByKey = new Map((countResult?.types ?? []).map(t => [t.key, t]));
     const suggestedByType = new Map<string, NonNullable<typeof ev.gapFill>['suggested']>();
@@ -438,19 +476,35 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       if (!suggestedByType.has(s.typeKey)) suggestedByType.set(s.typeKey, []);
       suggestedByType.get(s.typeKey)!.push(s);
     }
+    const membersOf = (keys: string[]): NonNullable<ReviewItem['reconcileMembers']> => keys.map(k => {
+      const t = typeByKey.get(k);
+      const tgt = targetByKey.get(k);
+      const heads = t?.category === 'site_lighting';
+      return {
+        key: k, type: t?.type ?? k, description: t?.description ?? '',
+        unit: heads ? 'heads' as const : 'count' as const,
+        currentQty: heads ? (t?.heads ?? 0) : (t?.count ?? 0),
+        headsPerPole: heads ? (tgt?.headsPerPole ?? null) : null,
+      };
+    });
     for (const f of ev.gapFill.findings) {
       const keys = f.typeKey.split('+');
       const label = keys.map(k => typeByKey.get(k)?.type ?? k).join('/');
       const relevant = keys.flatMap(k => suggestedByType.get(k) ?? []);
+      const members = membersOf(keys);
+      const perType = members.length > 1
+        ? ` Answer each type separately — ${members.map(m => `${m.type} (currently ${m.currentQty} ${m.unit})`).join(', ')}.`
+        : '';
       if (f.direction === 'under' && relevant.length) {
         items.push({
           id: `gapfill:${f.typeKey}`,
           kind: 'count',
           title: `Gap-fill found ${relevant.length} possible ${label} — confirm on plans`,
-          detail: `${f.reason} A targeted re-search suggested ${relevant.length} mark${relevant.length === 1 ? '' : 's'} on the plans (Plans view, shown as SUGGESTED) — confirm the real ones there, then use "Use confirmed markers" here. Nothing here is counted until you do.`,
+          detail: `${f.reason} A targeted re-search suggested ${relevant.length} mark${relevant.length === 1 ? '' : 's'} on the plans (Plans view, shown as SUGGESTED).${perType} Confirm the found marks on the plans, answer "No more on this job" to keep the current count, or enter the correct count — nothing here is counted until you do.`,
           typeKey: keys.length === 1 ? keys[0] : f.typeKey,
           type: label,
-          actions: ['markers', 'count', 'not_on_job'],
+          actions: ['markers', 'confirm', 'count'],
+          reconcileMembers: members,
           fingerprint: `gapfill|${f.expected}|${f.actual}|${relevant.length}`,
         });
         continue;
@@ -460,10 +514,11 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
         kind: 'confirm',
         blocking: f.direction === 'under',
         title: `${f.direction === 'under' ? 'Possible shortfall' : 'Possible over-count'}: ${label} vs ${f.source}`,
-        detail: `${f.reason}${f.direction === 'under' ? ' A targeted re-search found nothing more on the plans — confirm the count as it stands (with a reason), or correct it.' : ' The plans show more than the second source — confirm the count (with a reason), or correct it.'}`,
+        detail: `${f.reason}${f.direction === 'under' ? ' A targeted re-search found nothing more on the plans.' : ' The plans show more than the second source.'}${perType} Answer "No more on this job" to keep the current count, or enter the correct count.`,
         typeKey: keys.length === 1 ? keys[0] : undefined,
         type: label,
         actions: ['confirm', 'count'],
+        reconcileMembers: members,
         fingerprint: `reconcile|${f.expected}|${f.actual}|${f.direction}`,
       });
     }
@@ -687,6 +742,33 @@ export function applyGroupMemberResolution(
   };
 }
 
+/** Fix round 3 / B10, B11 — resolves ONE type of a `gapfill:`/`reconcile:`
+ *  finding (`memberKey` omitted only ever applies the SAME resolution to
+ *  every member that has none yet — legal only for a 'confirm' reject,
+ *  since that never needs a per-member number; the route layer refuses a
+ *  'count'/'markers' broadcast across 2+ unresolved members with a 400).
+ *  With exactly one member, the item's own top-level `resolution` mirrors
+ *  it directly (unchanged shape from before B11); with 2+, that mirror
+ *  only appears once every member has answered. */
+export function applyReconcileMemberResolution(
+  item: ReviewItem,
+  memberKey: string | undefined,
+  resolution: Omit<ReviewResolution, 'by' | 'at'>,
+  by: string,
+): ReviewItem {
+  const at = new Date().toISOString();
+  const full: ReviewResolution = { ...resolution, by, at };
+  const reconcileMembers = (item.reconcileMembers ?? []).map(m => (memberKey ? m.key === memberKey : !m.resolution) ? { ...m, resolution: full } : m);
+  const allAnswered = reconcileMembers.length > 0 && reconcileMembers.every(m => m.resolution);
+  return {
+    ...item,
+    reconcileMembers,
+    resolution: allAnswered
+      ? (reconcileMembers.length === 1 ? full : { action: 'confirm', reason: 'every type in this finding answered', by, at })
+      : item.resolution,
+  };
+}
+
 /** Evidence round 4.5 — $ risk ordering: equipment, then poles, then
  *  fixture-family / typical-multiplier mismatches (often many devices at
  *  once), then wet/hazard-location devices, then everything else
@@ -906,20 +988,6 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   const extraLines: EnforcedCounts['extraLines'] = [];
   const list = items ?? [];
   const res = (id: string) => list.find(i => i.id === id)?.resolution;
-  // Fix round (B2) — `gapfill:`/`reconcile:` ids can name several types at
-  // once ("S1+S2", one catalog family sharing a schedule row); index every
-  // member key back to its item so a single type's own qty lookup still
-  // finds it.
-  const byMemberKey = (prefix: 'gapfill:' | 'reconcile:') => {
-    const m = new Map<string, ReviewItem>();
-    for (const i of list) {
-      if (!i.id.startsWith(prefix) || !i.resolution) continue;
-      for (const k of i.id.slice(prefix.length).split('+')) m.set(k, i);
-    }
-    return m;
-  };
-  const gapfillByKey = byMemberKey('gapfill:');
-  const reconcileByKey = byMemberKey('reconcile:');
   for (const t of countResult?.types ?? []) {
     if (t.host || t.status === 'merged') continue;
     let qty: number | null | undefined;
@@ -936,19 +1004,37 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (cov) qty = cov.action === 'not_on_job' ? null : (cov.qty ?? qty);
     const rec = res(`recount:${t.key}`);
     if (rec) qty = rec.qty ?? qty;
-    // B2 — "Use confirmed markers" (or a typed count) on a gapfill: item is
-    // the ONLY way a gap-fill suggestion ever becomes a real count; a
-    // reconcile: item (no candidates, or an over-count) works the same way
-    // for a manual correction/confirmation.
-    const gf = gapfillByKey.get(t.key)?.resolution;
-    if (gf) qty = gf.action === 'not_on_job' ? null : (gf.qty ?? qty);
-    const rc = reconcileByKey.get(t.key)?.resolution;
-    if (rc) qty = rc.action === 'not_on_job' ? null : (rc.qty ?? qty);
     if (qty !== undefined && (qty === null || qty > 0)) byType.set(t.key, qty);
     if (t.category === 'site_lighting') {
       const heads = res(`count:${t.key}:heads`);
       if (heads) byType.set(`${t.key}:heads`, heads.action === 'not_on_job' ? null : (heads.qty ?? null));
       else if (t.heads != null && t.status === 'counted') byType.set(`${t.key}:heads`, t.heads);
+    }
+  }
+  // Fix round 3 / B10, B11 — each gap-fill/reconcile member answers in its
+  // OWN unit (heads for site_lighting, count otherwise; B11) and never a
+  // single number broadcast to a sibling. "No more on this job — keep
+  // current count" ('confirm') leaves the member exactly as it already is
+  // — no byType write, by design, never null. An entered/confirmed 'count'
+  // (a real number, in the member's own unit) is the ONLY thing that ever
+  // raises a gap-fill suggestion into a real count (B2), and the ONLY
+  // place poles are ever re-derived from a heads answer — only when the
+  // fixture schedule states heads-per-pole, and only as an exact multiple;
+  // otherwise poles stay exactly as directly counted from the plans.
+  for (const i of list) {
+    if (!i.id.startsWith('gapfill:') && !i.id.startsWith('reconcile:')) continue;
+    for (const m of i.reconcileMembers ?? []) {
+      const r = m.resolution;
+      if (!r || r.action === 'confirm' || r.qty == null) continue;
+      if (m.unit === 'heads') {
+        byType.set(`${m.key}:heads`, r.qty);
+        if (m.headsPerPole) {
+          const poles = r.qty / m.headsPerPole;
+          if (Number.isInteger(poles)) byType.set(m.key, poles);
+        }
+      } else {
+        byType.set(m.key, r.qty);
+      }
     }
   }
   // Evidence round 2.2 — a resolved typical host count adds per-host x count

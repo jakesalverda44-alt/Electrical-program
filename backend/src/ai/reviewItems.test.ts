@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { carryOverResolutions, validateResolution, reviewResolutionsForAgent4, buildReviewItems, enforcedCounts, riskRank as riskRankOf, applyGroupMemberResolution, spotCheckSamples, SPOTCHECK_MIN_COUNT, reviewItemIsOpen, type ReviewItem } from './reviewItems';
+import { carryOverResolutions, validateResolution, reviewResolutionsForAgent4, buildReviewItems, enforcedCounts, riskRank as riskRankOf, applyGroupMemberResolution, applyReconcileMemberResolution, spotCheckSamples, SPOTCHECK_MIN_COUNT, reviewItemIsOpen, type ReviewItem } from './reviewItems';
 import { runCountingStage, type CountResult } from './countingStage';
 import { mergeCountsIntoTakeoff } from './countMerge';
 import { buildCountTargets } from './countTargets';
@@ -236,22 +236,56 @@ describe('Fix round B2 — gapfill: / reconcile: review items; gap-fill never co
     const item = items.find(i => i.id === 'gapfill:A')!;
     expect(item).toBeTruthy();
     expect(item.title).toBe('Gap-fill found 1 possible A — confirm on plans');
-    expect(item.actions).toEqual(['markers', 'count', 'not_on_job']);
+    // Fix round 3 / B10 — never offers "not on this job"; exactly markers
+    // (confirm the found marks), confirm (reject — keep the current count)
+    // and count (enter the correct one).
+    expect(item.actions).toEqual(['markers', 'confirm', 'count']);
+    expect(item.reconcileMembers).toEqual([{ key: 'A', type: 'A', description: '2x4 LED troffer', unit: 'count', currentQty: 3, headsPerPole: null }]);
     expect(items.find(i => i.id === 'reconcile:A')).toBeUndefined();
     // The type's OWN count is untouched — gap-fill never counts by itself.
     expect(cr.types.find(t => t.key === 'A')!.count).toBe(3);
     expect(enforcedCounts(cr, items).byType.get('A')).toBe(3);
   });
 
-  it('resolving gapfill: with "markers" (confirmed count) raises the count; "not on job" zeroes it', () => {
+  it('resolving gapfill: with "markers" (confirmed count) raises the count; B10 — "confirm" (reject) keeps the CURRENT count, never null', () => {
     const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: marks({ A: 3 }), unreadable: [] }], {
       evidence: { ...EMPTY_EVIDENCE, gapFill: { findings: [finding()], jobs: 1, jobsSkipped: 0, cachedJobs: 0, candidates: 1, suggested: [{ typeKey: 'A', sheetKey: e2.key, x: 1, y: 1, confidence: 'high', note: 'n' }], calls: 2, usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, errors: [] } },
     });
     const items = buildReviewItems(cr);
-    const resolved = { ...items.find(i => i.id === 'gapfill:A')!, resolution: { action: 'markers' as const, qty: 5, by: 'J', at: 't' } };
+    const gfItem = items.find(i => i.id === 'gapfill:A')!;
+    const resolved = applyReconcileMemberResolution(gfItem, 'A', { action: 'markers', qty: 5 }, 'J');
     expect(enforcedCounts(cr, [resolved]).byType.get('A')).toBe(5);
-    const noj = { ...items.find(i => i.id === 'gapfill:A')!, resolution: { action: 'not_on_job' as const, reason: 'Confirmed with the GC', by: 'J', at: 't' } };
-    expect(enforcedCounts(cr, [noj]).byType.get('A')).toBeNull();
+    // B10 — the reviewer's exact repro: 7 real GFCIs, gap-fill's 2 suggested
+    // marks turn out to be dimension ticks. Rejecting them must NEVER null
+    // the type: it keeps exactly the current count (never the reviewer's
+    // dreaded 7 -> 0).
+    // The route layer (takeoffReview.ts) fills qty from the member's own
+    // currentQty before calling this — mirrored here for the assertion.
+    const rejected = applyReconcileMemberResolution(gfItem, 'A', { action: 'confirm', reason: 'Suggested marks are dimension ticks, not fixtures', qty: 3 }, 'J');
+    expect(enforcedCounts(cr, [rejected]).byType.get('A')).toBe(3); // kept at the current count, not null
+    expect(rejected.reconcileMembers![0].resolution).toMatchObject({ action: 'confirm', qty: 3 });
+  });
+
+  it('B10 — the reviewer\'s GFCI 7 -> 0 repro: rejecting a gap-fill suggestion keeps the count at 7, never zeroes it', () => {
+    const gfciA1 = { fixtureSchedule: [{ type: 'GFCI', description: 'GFCI duplex receptacle', location: 'interior', wattage: 20 }] };
+    const cr = countResultFrom(gfciA1, [{ sheet: e2, status: 'counted', placed: marks({ GFCI: 7 }), unreadable: [] }], {
+      evidence: {
+        ...EMPTY_EVIDENCE,
+        gapFill: {
+          findings: [{ typeKey: 'GFCI', kind: 'schedule_qty', direction: 'under', source: 'FIXTURE SCHEDULE', expected: 9, actual: 7, diff: 2, reason: 'FIXTURE SCHEDULE lists QTY 9; the plans account for 7.' }],
+          jobs: 1, jobsSkipped: 0, cachedJobs: 0, candidates: 2,
+          suggested: [{ typeKey: 'GFCI', sheetKey: e2.key, x: 1, y: 1, confidence: 'high', note: 'n' }, { typeKey: 'GFCI', sheetKey: e2.key, x: 2, y: 1, confidence: 'high', note: 'n' }],
+          calls: 2, usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, errors: [],
+        },
+      },
+    });
+    const items = buildReviewItems(cr);
+    const gfItem = items.find(i => i.id === 'gapfill:GFCI')!;
+    expect(gfItem.actions).not.toContain('not_on_job');
+    // The estimator determines the 2 suggested marks are dimension ticks —
+    // rejects them with "No more on this job — keep current count 7".
+    const rejected = applyReconcileMemberResolution(gfItem, 'GFCI', { action: 'confirm', reason: 'Suggested marks are dimension ticks, not GFCI receptacles' }, 'Jake');
+    expect(enforcedCounts(cr, [rejected]).byType.get('GFCI')).toBe(7); // stays 7, never null / never 0
   });
 
   it('an UNDER finding with NO candidates found -> reconcile:<type>, blocking, shown with both sides', () => {
@@ -274,6 +308,88 @@ describe('Fix round B2 — gapfill: / reconcile: review items; gap-fill never co
     const item = items.find(i => i.id === 'reconcile:A')!;
     expect(item.blocking).toBe(false);
     expect(item.title).toContain('Possible over-count');
+  });
+});
+
+describe('Fix round 3 / B11 — a multi-type finding answers per type, never a broadcast', () => {
+  // The reviewer's own repro: S1 has 2 poles x 1 head (headsPerPole 1) = 2
+  // heads; S2 has 1 pole x 2 heads (headsPerPole 2) = 2 heads. 4 heads
+  // total. A schedule reconciliation for "S1+S2" is answered PER TYPE.
+  const reconcileItem = (): ReviewItem => ({
+    id: 'reconcile:S1+S2', kind: 'confirm', blocking: true,
+    title: 'Possible shortfall: S1/S2 vs LUMINAIRE SCHEDULE',
+    detail: 'LUMINAIRE SCHEDULE lists QTY 6; the plans account for 4.',
+    type: 'S1/S2', actions: ['confirm', 'count'],
+    reconcileMembers: [
+      { key: 'S1', type: 'S1', description: 'Pole light', unit: 'heads', currentQty: 2, headsPerPole: 1 },
+      { key: 'S2', type: 'S2', description: 'Dual-head pole light', unit: 'heads', currentQty: 2, headsPerPole: 2 },
+    ],
+  });
+  const cr = (): CountResult => ({
+    version: 2, ran: true, model: 'm', targets: [], targetNotes: [], sheets: [], skippedSheets: [],
+    types: [
+      { key: 'S1', type: 'S1', description: 'Pole light', category: 'site_lighting', count: 2, heads: 2, status: 'counted', reason: '', sheets: [], flags: [], wattage: null },
+      { key: 'S2', type: 'S2', description: 'Dual-head pole light', category: 'site_lighting', count: 1, heads: 2, status: 'counted', reason: '', sheets: [], flags: [], wattage: null },
+    ],
+    loadCheck: { ran: false, countedWatts: 0, circuitVA: 0, gapPct: null, discrepancy: false, perPanel: [], suspectCircuits: [] },
+    removedRows: [], flags: [], marks: [],
+  });
+
+  it('each type answered separately with the CORRECT total: heads set directly, poles derived from heads-per-pole', () => {
+    const item = reconcileItem();
+    // S1: the schedule actually meant 3 heads per pole worth (3 heads),
+    // headsPerPole 1 -> poles re-derive to 3.
+    const afterS1 = applyReconcileMemberResolution(item, 'S1', { action: 'count', qty: 3 }, 'Jake');
+    // S2: 4 heads, headsPerPole 2 -> poles re-derive to 2.
+    const afterBoth = applyReconcileMemberResolution(afterS1, 'S2', { action: 'count', qty: 4 }, 'Jake');
+    const enforced = enforcedCounts(cr(), [afterBoth]);
+    expect(enforced.byType.get('S1:heads')).toBe(3);
+    expect(enforced.byType.get('S1')).toBe(3); // 3 heads / 1 per pole
+    expect(enforced.byType.get('S2:heads')).toBe(4);
+    expect(enforced.byType.get('S2')).toBe(2); // 4 heads / 2 per pole
+    // The item itself only resolves (blocks clear) once EVERY type answered.
+    expect(afterS1.resolution).toBeUndefined();
+    expect(afterBoth.resolution).toBeTruthy();
+  });
+
+  it('a heads answer that is not a whole multiple of heads-per-pole leaves poles exactly as counted (never guessed)', () => {
+    const item = reconcileItem();
+    // S1: 5 heads is not a multiple of headsPerPole 1... use S2 instead,
+    // whose headsPerPole is 2: 5 heads doesn't divide evenly.
+    const afterS2 = applyReconcileMemberResolution(item, 'S2', { action: 'count', qty: 5 }, 'Jake');
+    const enforced = enforcedCounts(cr(), [afterS2]);
+    expect(enforced.byType.get('S2:heads')).toBe(5);
+    expect(enforced.byType.get('S2')).toBe(1); // untouched — the plans' own directly-counted pole count
+  });
+
+  it('headsPerPole unknown: a heads answer sets heads only, poles stay exactly as directly counted', () => {
+    const item = reconcileItem();
+    item.reconcileMembers![0].headsPerPole = null; // the schedule never states S1's heads-per-pole
+    const afterS1 = applyReconcileMemberResolution(item, 'S1', { action: 'count', qty: 7 }, 'Jake');
+    const enforced = enforcedCounts(cr(), [afterS1]);
+    expect(enforced.byType.get('S1:heads')).toBe(7);
+    expect(enforced.byType.get('S1')).toBe(2); // untouched — directly counted, never derived from heads
+  });
+
+  it('"No more on this job" (confirm/reject) keeps each type at its OWN current heads — never a shared number', () => {
+    const item = reconcileItem();
+    const afterS1 = applyReconcileMemberResolution(item, 'S1', { action: 'confirm', reason: 'Confirmed with the GC on-site walk 9/24' }, 'Jake');
+    const afterBoth = applyReconcileMemberResolution(afterS1, 'S2', { action: 'confirm', reason: 'Confirmed with the GC on-site walk 9/24' }, 'Jake');
+    const enforced = enforcedCounts(cr(), [afterBoth]);
+    // Untouched — each member's own currentQty, never one broadcast value.
+    expect(enforced.byType.get('S1:heads')).toBe(2);
+    expect(enforced.byType.get('S1')).toBe(2);
+    expect(enforced.byType.get('S2:heads')).toBe(2);
+    expect(enforced.byType.get('S2')).toBe(1);
+  });
+
+  it('a single-type finding needs no memberKey ambiguity — its own item.resolution mirrors the one member directly', () => {
+    const single: ReviewItem = {
+      id: 'reconcile:S1', kind: 'confirm', title: 't', detail: 'd', actions: ['confirm', 'count'],
+      reconcileMembers: [{ key: 'S1', type: 'S1', description: '', unit: 'heads', currentQty: 2, headsPerPole: 1 }],
+    };
+    const resolved = applyReconcileMemberResolution(single, 'S1', { action: 'count', qty: 4 }, 'Jake');
+    expect(resolved.resolution).toMatchObject({ action: 'count', qty: 4 });
   });
 });
 

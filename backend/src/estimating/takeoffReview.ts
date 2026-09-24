@@ -6,6 +6,7 @@ import { getBidLines } from './bidEstimate';
 import { lineForType } from './aiMarkers';
 import {
   reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf, applyGroupMemberResolution,
+  applyReconcileMemberResolution,
   type ReviewItem, type ResolveInput,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
@@ -182,18 +183,17 @@ async function applyResolution(
   input: ResolveInput | null,
   by: string,
 ): Promise<ResolveOutcome> {
-  // 'markers' needs a count computed outside the row lock.
+  // 'markers' needs a count computed outside the row lock. Fix round 3 /
+  // B11 — a `gapfill:`/`reconcile:` id's marker tally is no longer summed
+  // across every type it names (that was B11's own bug: the sum was then
+  // given to EACH member); those items resolve member by member, each
+  // tallied on its own single key, inline in the per-member branch below.
   const markerCounts = new Map<string, MarkerTally>();
   if (input?.action === 'markers') {
     for (const id of itemIds) {
-      // Fix round (B2) — a `gapfill:`/`reconcile:` id can name several
-      // types at once ("S1+S2"); its marker tally is the sum across them.
-      const m = /^(?:count|coverage|gapfill|reconcile):(.+)$/.exec(id);
-      const isTypeItem = !!m && !id.endsWith(':heads');
-      if (!isTypeItem) { markerCounts.set(id, { counted: 0, excluded: [] }); continue; }
-      const keys = m![1].split('+');
-      const tallies = await Promise.all(keys.map(k => confirmedMarkersForType(bidId, k)));
-      markerCounts.set(id, { counted: tallies.reduce((s, t) => s + t.counted, 0), excluded: tallies.flatMap(t => t.excluded) });
+      const m = /^(?:count|coverage):(.+)$/.exec(id);
+      if (!m || id.endsWith(':heads')) { markerCounts.set(id, { counted: 0, excluded: [] }); continue; }
+      markerCounts.set(id, await confirmedMarkersForType(bidId, m[1]));
     }
   }
   const client = await pool.connect();
@@ -256,6 +256,62 @@ async function applyResolution(
         if (touchedKeys.length) touchedGroupMembers.set(id, touchedKeys);
         continue;
       }
+      // Fix round 3 / B10, B11 — a gap-fill/reconcile finding resolves per
+      // TYPE, never a single number broadcast to every type it covers. With
+      // exactly one type there's no ambiguity (memberKey optional); with
+      // 2+, 'count'/'markers' (a real number) REQUIRE memberKey — omitting
+      // it 400s instead of guessing which type the number was for. Only
+      // 'confirm' ("No more on this job — keep current count") may still
+      // apply to every unanswered type at once: it carries no shared
+      // number, each type just keeps its own current value.
+      if (item.id.startsWith('gapfill:') || item.id.startsWith('reconcile:')) {
+        const members = item.reconcileMembers ?? [];
+        const memberKey = typeof input.memberKey === 'string' ? input.memberKey : undefined;
+        let targets: NonNullable<ReviewItem['reconcileMembers']>;
+        if (memberKey) {
+          targets = members.filter(m => m.key === memberKey);
+          if (!targets.length) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: `${memberKey} is not part of this finding.` }; }
+        } else if (members.length <= 1) {
+          targets = members;
+        } else if (input.action === 'confirm') {
+          targets = members.filter(m => !m.resolution);
+        } else {
+          await client.query('ROLLBACK');
+          return { ok: false, status: 400, error: `This covers ${members.length} types — answer each one separately (${members.map(m => m.type).join(', ')}).` };
+        }
+        const touchedKeys: string[] = [];
+        for (const t of targets) {
+          const memberItem: ReviewItem = {
+            id: `${item.id.split(':')[0]}:${t.key}`, kind: item.kind, title: t.type, detail: item.detail,
+            typeKey: t.key, type: t.type, description: t.description, actions: item.actions,
+          };
+          const mine = perItemInput(memberItem, input);
+          if ('error' in mine) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: mine.error }; }
+          const markerTally = mine.action === 'markers' ? await confirmedMarkersForType(bidId, t.key) : null;
+          const check = validateResolution(memberItem, mine, markerTally?.counted ?? null);
+          if (!check.ok) {
+            await client.query('ROLLBACK');
+            const excl = markerTally?.excluded.length ? ` Not counted: ${markerTally.excluded.map(e => `${e.count} on ${e.label}`).join('; ')}.` : '';
+            return { ok: false, status: 400, error: `${t.type}: ${check.error}${excl}` };
+          }
+          // B11 — the entered/confirmed number is in the member's OWN unit
+          // (heads for site_lighting); 'confirm' keeps its current value in
+          // that same unit, never null, never someone else's number.
+          const resolution: Parameters<typeof applyReconcileMemberResolution>[2] = check.resolution.action === 'confirm'
+            ? { ...check.resolution, qty: t.currentQty }
+            : check.resolution;
+          Object.assign(item, applyReconcileMemberResolution(item, t.key, resolution, by));
+          // B10 — "No more on this job" rejects only THIS type's own
+          // SUGGESTED gap-fill markers; a confirmed marker (or the type's
+          // real count) is never touched.
+          if (check.resolution.action === 'confirm') {
+            await client.query(`DELETE FROM est_markups WHERE bid_id = $1 AND label = $2 AND source = 'gap_fill' AND status = 'suggested'`, [bidId, t.key]);
+          }
+          touchedKeys.push(t.key);
+        }
+        if (touchedKeys.length) touchedGroupMembers.set(id, touchedKeys);
+        continue;
+      }
       const tally = markerCounts.get(id);
       // Next round A7 — a bulk answer resolves to each item's own option.
       const mine = perItemInput(item, input);
@@ -293,7 +349,7 @@ async function applyResolution(
           const touched = touchedGroupMembers.get(id);
           if (touched) {
             for (const key of touched) {
-              const m = item.groupedTypes?.find(g => g.key === key);
+              const m = item.groupedTypes?.find(g => g.key === key) ?? item.reconcileMembers?.find(g => g.key === key);
               if (!m?.resolution) continue;
               events.push({
                 bidId, runId, kind: 'review_resolution' as const, typeKey: key, client: brand, projectType, by,
