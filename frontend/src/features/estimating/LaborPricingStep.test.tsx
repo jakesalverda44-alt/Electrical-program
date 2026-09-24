@@ -501,3 +501,37 @@ describe('next round A7 — a possible duplicate blocks the save until resolved'
     expect((screen.getByTestId('lp-save-button') as HTMLButtonElement).disabled).toBe(false);
   });
 });
+
+describe('next round B2/B3 — pricing_mode switches Phase A settings for the Accubid panel', () => {
+  it('renders the Phase A settings row when pricing_mode is phase_a (or unset — every existing test above)', () => {
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'phase_a' } });
+    expect(screen.getByText('Labor rate ($/hr)')).toBeTruthy();
+    expect(screen.queryByTestId('accubid-pricing-panel')).toBeNull();
+  });
+
+  it('renders the Accubid panel instead of the Phase A settings row when pricing_mode is accubid and a bidId is given', async () => {
+    // Next round B2/B3 — AccubidPricingPanel fetches GET /:bidId/accubid
+    // through the SAME mocked api.get this file already uses for the
+    // library; route by URL so both callers get a shape they can render.
+    get.mockImplementation((url: string) =>
+      url.includes('/accubid')
+        ? Promise.resolve({
+            data: {
+              recap: { materialTotal: 0, materialTax: 0, fieldLaborCost: 0, equipmentTotal: 0, equipmentTax: 0, generalExpensesTotal: 0, generalExpensesTax: 0, subcontractsTotal: 0, subcontractsTax: 0, quotesNetTotal: 0, quotesTaxTotal: 0, quotesMarkupTotal: 0, budgetPendingQuotes: [], primeCost: 0, materialOverhead: 0, laborOverhead: 0, equipmentOverhead: 0, generalExpensesOverhead: 0, subcontractOverhead: 0, quotesOverhead: 0, totalOverhead: 0, netCost: 0, materialMarkup: 0, laborMarkup: 0, equipmentMarkup: 0, generalExpensesMarkup: 0, subcontractMarkup: 0, adjustmentMarkup: 0, totalMarkup: 0, salesMarkup: 0, sellingPrice: 0, blocksSend: false },
+              settings: { shift: 'day', journeymanCount: 1, journeymanRate: 37, apprenticeCount: 2, apprenticeRate: 27, foremanCount: 0, foremanRate: 45, nightJourneymanRate: null, nightApprenticeRate: null, nightForemanRate: null, burdenPct: 4, fringePerHr: 1.5, materialTaxPct: 0, laborOverheadPct: 38, materialMarkupPct: 20, laborMarkupPct: 20, quoteMarkupDefaultPct: 18, adjustmentMarkupPct: 0, salesMarkupPct: 0 },
+              totalHours: 0, quotes: [], costLines: [], alternates: [],
+            },
+          })
+        : Promise.resolve({ data: { items: [], assemblies: [], factors: [] } })
+    );
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' }, bidId: 'bid1' });
+    await waitFor(() => expect(screen.getByTestId('accubid-pricing-panel')).toBeTruthy());
+    expect(screen.queryByText('Labor rate ($/hr)')).toBeNull();
+  });
+
+  it('renders neither the Phase A row nor a crash when accubid mode has no bidId yet', () => {
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' } });
+    expect(screen.queryByText('Labor rate ($/hr)')).toBeNull();
+    expect(screen.queryByTestId('accubid-pricing-panel')).toBeNull();
+  });
+});

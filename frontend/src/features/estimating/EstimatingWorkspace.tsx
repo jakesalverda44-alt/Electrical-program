@@ -17,6 +17,9 @@ export interface EstimatingWorkspaceProps {
   saveState: SaveState;
   nextAction: { label: string; onClick: () => void } | null;
 
+  /** Next round B2/B3 — mounts the Accubid-mode Crew/Quotes/Equipment/GE/
+   *  Alternates panel when settings.pricing_mode === 'accubid'. */
+  bidId?: string;
   lines: EstimateLine[];
   settings: EstimateSettings;
   recap: PricingRecap;
@@ -64,7 +67,7 @@ export interface EstimatingWorkspaceProps {
 }
 
 export default function EstimatingWorkspace({
-  currentStep, onSelectStep, doneByStep, saveState, nextAction,
+  currentStep, onSelectStep, doneByStep, saveState, nextAction, bidId,
   lines, settings, recap, proposed, dirty, savedGrandTotal, saving, syncing, saveError, duplicates, setLines, setSettings, save, syncTakeoff, showToast,
   comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary,
   linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys,
@@ -96,6 +99,7 @@ export default function EstimatingWorkspace({
     >
       {currentStep === 'pricing' ? (
         <LaborPricingStep
+          bidId={bidId}
           lines={lines}
           settings={settings}
           recap={recap}

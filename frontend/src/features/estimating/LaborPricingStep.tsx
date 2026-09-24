@@ -6,6 +6,7 @@ import { useApi } from '../../hooks/useApi';
 import Modal from '../../components/Modal';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { type DuplicatePair, DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap } from './types';
+import { AccubidPricingPanel } from './AccubidPricingPanel';
 
 // Fix round 2 / SF2 — the resolver only offers items/assemblies whose unit
 // FAMILY is compatible with the line's own unit: EA is its own family; LF/C/M
@@ -38,6 +39,9 @@ function numberOrDefault(raw: string, fallback: number): number {
 }
 
 export interface LaborPricingStepProps {
+  /** Next round B2/B3 — mounts AccubidPricingPanel in place of the Phase A
+   *  settings row when settings.pricing_mode === 'accubid'. */
+  bidId?: string;
   lines: EstimateLine[];
   settings: EstimateSettings;
   recap: PricingRecap;
@@ -115,7 +119,7 @@ function lineKey(line: EstimateLine, idx: number): string {
 }
 
 export function LaborPricingStep({
-  lines, settings, recap, saving, syncing, saveError, dirty, setLines, setSettings, save, syncTakeoff, showToast, duplicates = [],
+  bidId, lines, settings, recap, saving, syncing, saveError, dirty, setLines, setSettings, save, syncTakeoff, showToast, duplicates = [],
 }: LaborPricingStepProps) {
   const openDups = useMemo(() => openDuplicatePairs(duplicates, lines), [duplicates, lines]);
   const dupKeys = useMemo(() => new Set(openDups.flatMap(p => [p.keptKey, p.newKey])), [openDups]);
@@ -291,6 +295,10 @@ export function LaborPricingStep({
 
   return (
     <div data-testid="labor-pricing-step">
+      {settings.pricing_mode === 'accubid' ? (
+        bidId ? <AccubidPricingPanel bidId={bidId} showToast={showToast} /> : null
+      ) : (
+      <>
       <div className="lp-settings-row">
         <label className="lp-settings-field">
           Labor rate ($/hr)
@@ -334,6 +342,8 @@ export function LaborPricingStep({
             </div>
           ))}
         </div>
+      )}
+      </>
       )}
 
       {openDups.length > 0 && (

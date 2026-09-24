@@ -1722,6 +1722,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           // proposalReady, same gate composeBidData's own ambiguity check
           // needs Agent 4's takeoff array for).
           ambiguousQtyKeys={proposalPreview?.ambiguousQtyKeys}
+          bidId={bid.id}
           lines={estimatingBid.lines}
           settings={estimatingBid.settings}
           recap={estimatingBid.recap}
