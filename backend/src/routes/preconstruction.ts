@@ -51,6 +51,8 @@ import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, c
 import { writeAiCountMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
 import { buildReviewItems, referencedSheetItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
 import { takeoffGate, budgetPendingGate, evidenceGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
+import { logLabeledEvents } from '../estimating/labeledEvents';
+import { deriveExpectedFromConfirmedCounts } from '../estimating/finishedBidEval';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
 import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
 import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey, overrideFor } from '../bidstd/scopeList';
@@ -1285,6 +1287,19 @@ async function runPipelineStages(
     } finally {
       tx.release();
     }
+    // Evidence round 5.1 — one labeled event per gap-fill mark the crop
+    // check accepted (4.3/4.4): a crop reference (sheet + position, never
+    // image bytes), the type, the confidence and why gap-fill searched.
+    // Fire-and-forget, after the transaction, never delays the response.
+    if (!superseded) {
+      const gapFillAccepted = stage.countResult.types.flatMap(t => (t.gapFill ?? []).map(g => ({
+        bidId, runId, kind: 'gapfill_accept' as const, typeKey: t.key, sheetKey: g.sheetKey,
+        client: bidRows[0]?.brand ?? null, projectType: bidRows[0]?.project_type ?? null,
+        cropRef: { sheetKey: g.sheetKey },
+        detail: { x: g.x, y: g.y, confidence: g.confidence, note: g.note, reason: g.reason },
+      })));
+      if (gapFillAccepted.length) void logLabeledEvents(gapFillAccepted);
+    }
   } catch (err) {
     if (stoppedBy(err)) return;
     const message = isAgentTruncatedError(err) ? (err as Error).message : `Counting stage failed: ${describeAIError(err)}`;
@@ -2144,6 +2159,43 @@ router.post('/:bidId/review/reopen', requireAuth, asyncHandler(async (req: AuthR
   const out = await reopenReviewItem(bidId, itemId);
   if (!out.ok) return res.status(out.status).json({ error: out.error });
   res.json(out.review);
+}));
+
+// Evidence round 5.2 — "Finished bid": attach an answer key and store it as
+// an eval case (scripts/evalTakeoff.ts's shape). Two sources:
+//   * the bid's own CONFIRMED counts (default — always available once the
+//     analysis has run; never an unresolved AI guess, see
+//     deriveExpectedFromConfirmedCounts);
+//   * a Chris BOM/breakdown import reference, when the estimator names one
+//     (bomImportDocumentId) — recorded as the input the case is FROM, not
+//     re-derived here (that parse already exists on the accubid import path).
+router.post('/:bidId/finish-bid', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const { rows: trRows } = await pool.query('SELECT count_result, review_items, run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const countResult = trRows[0]?.count_result as CountResult | null;
+  if (!countResult) return res.status(400).json({ error: 'No takeoff analysis on this bid yet — run the analysis first.' });
+  const reviewItems = (trRows[0]?.review_items as ReviewItem[] | null) ?? [];
+  const runId = (trRows[0]?.run_id as string | null) ?? null;
+  const { rows: bidRows } = await pool.query('SELECT brand, project_type FROM bids WHERE id=$1', [bidId]);
+  const bomImportDocumentId = typeof req.body?.bomImportDocumentId === 'string' ? req.body.bomImportDocumentId : null;
+
+  const expected = deriveExpectedFromConfirmedCounts(countResult, reviewItems);
+  if (!expected.length) {
+    return res.status(400).json({ error: 'No confirmed counts to build an eval case from yet — resolve the takeoff review first.' });
+  }
+  const loaded = await composeCurrentBidData(bidId, { validate: false, persist: false }).catch(() => null);
+  const inputsHash = loaded && loaded.ok ? loaded.inputsHash : null;
+  const { rows } = await pool.query(
+    `INSERT INTO takeoff_eval_cases (bid_id, run_id, client, project_type, source, expected, inputs_ref, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, created_at`,
+    [
+      bidId, runId, bidRows[0]?.brand ?? null, bidRows[0]?.project_type ?? null,
+      bomImportDocumentId ? 'bom_import' : 'confirmed_counts', JSON.stringify(expected),
+      JSON.stringify({ runId, inputsHash, ...(bomImportDocumentId ? { bomImportDocumentId } : {}) }), req.user!.name,
+    ]
+  );
+  res.json({ id: rows[0].id, createdAt: rows[0].created_at, itemCount: expected.length, expected });
 }));
 
 // Fix round 1 / B2 — the estimator enters the fixture types (when the

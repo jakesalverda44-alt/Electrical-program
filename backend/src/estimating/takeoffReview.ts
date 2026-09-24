@@ -10,6 +10,7 @@ import {
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
 import { missingEvidenceTypes, manualLinesMissingReason } from '../ai/evidence/evidenceGate';
+import { logLabeledEvents } from './labeledEvents';
 
 export interface TakeoffReview {
   status: 'clear' | 'needs_review' | 'pending' | null;
@@ -178,7 +179,7 @@ async function applyResolution(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { rows } = await client.query('SELECT review_items FROM takeoff_results WHERE bid_id = $1 FOR UPDATE', [bidId]);
+    const { rows } = await client.query('SELECT review_items, run_id FROM takeoff_results WHERE bid_id = $1 FOR UPDATE', [bidId]);
     if (!rows.length) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: 'No takeoff for this bid.' }; }
     const items = ((rows[0].review_items as ReviewItem[] | null) ?? []).map(i => ({ ...i }));
     // Fix round N9 — a bulk resolution covers ONE cause group (the UI's
@@ -220,6 +221,23 @@ async function applyResolution(
     const status = reviewStatus(items);
     await client.query('UPDATE takeoff_results SET review_items = $1, review_status = $2 WHERE bid_id = $3', [JSON.stringify(items), status, bidId]);
     await client.query('COMMIT');
+    // Evidence round 5.1 — labeled data, best-effort, outside the
+    // transaction (never lets logging delay or fail the actual resolve).
+    if (input) {
+      const runId = rows[0].run_id as string | null;
+      void (async () => {
+        const { rows: b } = await pool.query('SELECT brand, project_type FROM bids WHERE id = $1', [bidId]).catch(() => ({ rows: [] as Array<{ brand: string | null; project_type: string | null }> }));
+        const brand = b[0]?.brand ?? null;
+        const projectType = b[0]?.project_type ?? null;
+        await logLabeledEvents(itemIds.filter(id => items.find(i => i.id === id)?.resolution).map(id => {
+          const item = items.find(i => i.id === id)!;
+          return {
+            bidId, runId, kind: 'review_resolution' as const, typeKey: item.typeKey ?? null, client: brand, projectType, by,
+            detail: { itemId: id, group: item.group, action: item.resolution!.action, answer: item.resolution!.answer ?? null, qty: item.resolution!.qty ?? null },
+          };
+        }));
+      })();
+    }
     return { ok: true, review: { status, items } };
   } catch (err) {
     await client.query('ROLLBACK');

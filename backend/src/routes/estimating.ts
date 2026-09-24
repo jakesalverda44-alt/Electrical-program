@@ -39,8 +39,9 @@ import { serveDocument } from './documents';
 import { assignAiMarkersToLines } from '../estimating/aiMarkers';
 import {
   getMarkups, batchMarkups, getRollup, applyMarkups, getMarkupLineKeysByIds,
-  MarkupCreateInput, MarkupUpdateInput,
+  MarkupCreateInput, MarkupUpdateInput, type MarkupRow,
 } from '../estimating/markups';
+import { logLabeledEvents } from '../estimating/labeledEvents';
 import { MarkupKind, MarkupStatus, MarkupPoint } from '../estimating/markupMath';
 
 // Fix round 1 / B2 — a route handler awaiting saveBidEstimate/syncTakeoff
@@ -1224,6 +1225,33 @@ router.get('/:bidId/markups', requireAuth, async (req: AuthRequest, res) => {
   res.json({ markups });
 });
 
+/** Evidence round 5.1 — one labeled event per updated markup whose STATUS,
+ *  POINTS or LABEL actually changed in this batch (a create is the AI's own
+ *  suggestion or a fresh manual placement, not a correction of one — never
+ *  logged here). Best-effort: a lookup or insert failure here is swallowed
+ *  by logLabeledEvent itself, never surfaced to the caller. */
+async function logMarkerLabeledEvents(bidId: string, updates: MarkupUpdateInput[], updatedRows: MarkupRow[]): Promise<void> {
+  const changed = updates.filter(u => u.status !== undefined || u.points !== undefined || u.label !== undefined);
+  if (!changed.length) return;
+  const byId = new Map(updatedRows.map(r => [r.id, r]));
+  const { rows: b } = await pool.query('SELECT brand, project_type FROM bids WHERE id = $1', [bidId]).catch(() => ({ rows: [] as Array<{ brand: string | null; project_type: string | null }> }));
+  const client = b[0]?.brand ?? null;
+  const projectType = b[0]?.project_type ?? null;
+  await logLabeledEvents(changed.map(u => {
+    const row = byId.get(u.id);
+    return {
+      bidId, kind: 'marker_update' as const, typeKey: row?.label ?? null, sheetKey: row?.documentId ? `${row.documentId}#${row.pageIndex}` : null,
+      client, projectType,
+      detail: {
+        markupId: u.id,
+        ...(u.status !== undefined ? { status: u.status } : {}),
+        ...(u.points !== undefined ? { moved: true } : {}),
+        ...(u.label !== undefined ? { reclassTo: u.label } : {}),
+      },
+    };
+  }));
+}
+
 router.post('/:bidId/markups/batch', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
@@ -1290,6 +1318,11 @@ router.post('/:bidId/markups/batch', requireAuth, async (req: AuthRequest, res) 
   });
 
   const result = await batchMarkups(bidId, req.user!.name ?? null, { creates: scopedCreates, updates, deletes: v.deletes });
+  // Evidence round 5.1 — labeled data: a count marker's confirm/reject
+  // (status), move (points) or reclass (label) is exactly the estimator's
+  // own correction of what the AI proposed. Fire-and-forget: never adds
+  // latency to the (very interactive) markup save, never fails it.
+  void logMarkerLabeledEvents(bidId, updates, result.updated);
   // One uniform shape for "this item didn't make it, and here's why" —
   // format/scope rejections (computed above, never reach the DB) and
   // batchMarkups' own DB-level skips (an id already claimed by another
