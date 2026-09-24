@@ -678,3 +678,211 @@ The failures are the known flakes, as in every earlier round: `intakeSimilarCach
 - The pole-host "possibly the same outlet" rule relies on alignment. On an unalignable pair nothing is subtracted or asked, and the expansion stands.
 - Registration by vote assumes the same scale on both sheets. Different-scale sheets without building boxes are unclear, which means blocking, as before.
 - Recommended for the Sonnet round: B3 should replace the synthetic GFCI gap-fill reply. The Kissimmee assertions already subtract gap-fill additions, so they will keep passing.
+
+## Fix round — Parts 4–5 (review `2026-09-24-evidence-round-review.md`, a479103)
+
+**Executor:** Sonnet 5. **Findings covered:** B1, B2, B3, B5, B6, S4, S5, S6, S7, S8, S13, S14, N1, N2 (already
+in place, see below), N3 (report language only), N4, N5, N6, N7, N8. Opus's Parts 1–3 fix round is committed
+through fca055d; this round starts from there. Same rules throughout: worktree only, no Agent tool, no real
+API calls, migrations from **137**, `npm test` / `npx vitest run` once each at the end. Every reproduced
+finding's repro is a test.
+
+| Commit | Findings |
+|---|---|
+| 7b51cf1 | B1, B2, B3, S4, S5 — gap-fill/crop-check never counts by itself |
+| 7ef6a45 | S6, S14, N5, N6 — reason gate, resolved-item evidence, stable ids, labeled events |
+| ba04579 | B6 — equipment / phone-board receptacles never grouped |
+| c5956ef | S7, S8, N4 — finish-bid gated, BOM reference validated, idempotent |
+| ecba00d | S13 — spot-check sample of a high auto-accepted count |
+| 022ef33 | N7 — 180-day retention for the sheet evidence cache |
+| 24ac62b | N8 — frontend review-item groups follow the backend's $-risk order |
+| 5989235 | B5 — Evidence / reason field, jump-to-line |
+
+### B2 (core principle) — gap-fill and crop-check never count by themselves
+This is the change everything else in this round is built on. Before: an accepted gap-fill/crop-check
+candidate silently raised a type's count. After: it never does.
+
+- `reconcile()` (`backend/src/ai/evidence/reconcile.ts`) compares actual **units** against the second
+  source (schedule/typical qty) — `actualUnitsOf(t)` uses `t.heads` for `site_lighting`, `t.count`
+  otherwise. This is also the **S1+S2 fix**: the reviewer's false alarm compared the LUMINAIRE SCHEDULE's
+  head count against S1+S2's POLE count; on the real Kissimmee numbers (2 poles × 1 head + 1 pole × 2
+  heads = 4 heads) that now matches the schedule's QTY 4 exactly, and no finding fires at all — the audited
+  3 poles are never touched.
+- A real reconciliation shortfall (`ReconcileFinding{direction:'under', diff}`) builds a gap-fill job
+  (`buildGapFillJobs`, capped at `MAX_GAPFILL_JOBS`, ranked by $ risk). The model proposes candidates;
+  crop-check accepts/rejects/reclasses them (unchanged mechanics, now proven end to end — see B3 below).
+  Accepted candidates become **suggested** `est_markups` rows (`source:'gap_fill'`, migration 137) plus
+  **one** review item:
+  - `gapfill:<type>` when there's a candidate to confirm — "Gap-fill found N possible `<type>` —
+    confirm on plans", capped at the reconciled shortfall, actions `['markers','count','not_on_job']`.
+  - `reconcile:<type>` when there's no candidate (or an over-count, informational only) — the shortfall
+    still reaches the review list, it just has nothing to point at.
+- The type's own count (`countResult.types`) is **never** touched by `runGapFillPass` or
+  `resolveGapFillCandidates` — confirmed by a dedicated assertion in every gap-fill test. The **only** way
+  a gap-fill suggestion becomes a real count is the estimator confirming markers in the Plans view and
+  resolving the `gapfill:` item with `action:'markers'` (`enforcedCounts`'s `gapfillByKey`/`reconcileByKey`
+  lookup) — the exact same mechanism that already turns a counted mark into a GC quantity everywhere else.
+
+### B1 — gap-fill's exclusion set and search area
+- The exclusion set passed into a gap-fill job now includes **every** existing mark, including excluded
+  ones (a main-plan area a legend-viewport/enlarged-plan mark replaced) — `GapFillSheetAsset.excludedMarks`.
+- The search rectangle (`planSearchRect`) is the bounding box of **countable viewports only**
+  (`main_plan`/`enlarged_plan`, per Part 1's own rules) — never a legend, schedule, notes or detail
+  viewport, and never a replaced main-plan area.
+- Any candidate the model still proposes outside that rectangle, or inside a legend/schedule/notes
+  viewport, is rejected before it ever reaches crop-check.
+- Reproduced with the reviewer's own repro (#5 POWER SCHEDULE, #3 restroom landings) in
+  `gapFillStage.test.ts`.
+
+### B3 — the synthetic GFCI reply
+- `kissimmeeReplies.ts`'s always-on GFCI gap-fill reply (a hard-coded set of "found" marks, regardless of
+  what the real west half of E-1 actually shows) is gone; `gapFillResponder()` now always answers
+  honestly (`{"marks":[]}` / `{"decisions":[]}`) — because on the real Kissimmee data there is, in fact,
+  nothing to gap-fill there once B2's false alarm is fixed and S5 removes the always-on bias pass (see
+  below). The Kissimmee fixture's GFCI count is **7** (E-1's own drawn marks), never inflated.
+- The full **suggest → confirm → count** lifecycle — the thing B3 actually asked to prove — is instead
+  demonstrated end to end on clearly-synthetic data in the new `gapFillEndToEnd.test.ts`: a made-up
+  "GFCI-EXAMPLE" schedule shortfall (5 vs. 4) proposes one candidate, becomes a `gapfill:` item, gets
+  written as a suggested marker, and the count only reaches 5 after the estimator confirms every marker
+  on the sheet and resolves the item with "Use confirmed markers" — never automatically.
+
+### S4 / S5 — gap-fill jobs and the GFCI bias pass
+- **S4:** gap-fill jobs are built only from real reconciliation shortfalls, ranked and capped
+  (`MAX_GAPFILL_JOBS = 12`), cached by `(sheet content sha256, type, prompt version)` through the same
+  evidence cache Parts 1–3 already use, with the cap and cache hits disclosed on
+  `countResult.evidence.gapFill.{jobsSkipped,cachedJobs}`.
+- **S5:** the always-on "confirm GFCI" pass — the thing that made B3's synthetic reply necessary in the
+  first place — is gone. Gap-fill now only ever runs from an actual reconciliation shortfall.
+
+### B6 — equipment and phone-board receptacles never grouped
+- `groupLegendZeroItems`'s "N legend items not found — confirm none on this job" bulk item was folding
+  in meter base, wireway, a 200A fused disconnect, LCP, data concentrator, a "1\" empty conduit and J-box"
+  equipment symbol, a thermostat (T), and a phone-board duplex receptacle — high-$ items that could get
+  waved through with one click and one reason.
+- Excluded from grouping now: any type in `category:'equipment'`, any type whose own name/description
+  matches an equipment keyword (meter base, wireway, disconnect(s)/DISCON, LCP, data concentrator,
+  panel(board) — belt-and-suspenders alongside the category check), and any receptacle described as on a
+  phone board. On the real Kissimmee fixture this drops the group from 12 members to **4**
+  (M2, N, QUADPLEX RECEPTACLE, STORE OPEN/CLOSE PUSHBUTTON) and turns the other 8 into their own
+  individual blocking items — **21 review items, 17 blocking** (was 13/9), the honest count even though
+  it's now above 12.
+- The group itself no longer resolves with a single blanket flag either: each member now carries its own
+  resolution (`applyGroupMemberResolution`), and the group is not resolved (still blocks) until every
+  member has answered. `/review/resolve` takes an optional `memberKey` to answer one member at a time (or
+  every unanswered one, still recorded per member, when omitted — the "apply to all" shortcut).
+
+### S6 / S14 / N5 — the reason gate, resolved-item evidence, stable ids
+- **S6:** the migration-134 placeholder evidence note is cleared the moment a manual/overridden line's
+  quantity actually changes (`bidEstimate.ts`'s `EVIDENCE_NOTE_PLACEHOLDER` handling), instead of
+  surviving forever; `isRealReason` requires 10+ characters with 3+ distinct letters, so `..........`
+  still fails the gate.
+- **S14:** `missingEvidenceTypes` takes the review items' resolved keys — a "not on job" or a confirmed
+  qty now counts as evidence, so a resolved item no longer blocks the gate forever.
+- **N5:** `evidence:manual:<description>` (which broke the instant the description text changed) is now
+  `evidence:line:<lineKey>`, stable across edits; `GateBlock.openItems` carries the `lineKey` for B5's
+  jump-to-line.
+
+### S7 / S8 / N4 — finish-bid
+- **S7:** finish-bid now runs the same `takeoffGate()` a proposal send does — an open review item 409s
+  it, with the list of open items, instead of quietly building the eval case around whatever happened to
+  be resolved.
+- **S8:** `bomImportDocumentId` is validated as THIS bid's own `category:'cost_breakdown'` document
+  (never an arbitrary string, another bid's document, or a plans/photo upload). `expected` is still
+  derived from the bid's own confirmed counts — nothing parses the BOM into it yet — so the case's
+  `source` stays honestly `'confirmed_counts'`, never relabeled to `'bom_import'` on a name alone; the
+  reference is still recorded for provenance.
+- **N4:** added `requireAIPermission('view_results')` (it only had `requireAuth` before) and a unique
+  index on `(bid_id, run_id, source)` (migration 138) so a second finish-bid call for the same run updates
+  the one eval case instead of duplicating it.
+
+### S13 — spot-check sample of a high auto-accepted count
+- Every counted type at or above 20 gets one non-blocking `spotcheck:<type>` review item: a deterministic
+  7.5% sample (min 3, a stable stride across the type's own placed marks — never `Math.random`) of marks
+  to eyeball against the plans. It never blocks the gate and never changes the count by itself. On
+  Kissimmee: Type A (73 counted) → 5-mark sample, Type B (52 counted) → 4-mark sample.
+
+### N6 / N7 — labeled events and cache retention
+- **N6:** gap-fill suggestions and estimator marker confirmations are now logged as labeled events too
+  (`gapfill_suggested` / `gapfill_accept`), not just the original AI count, so 5.1's training data can
+  tell a human decision from a model one; every logged event's string fields are capped
+  (`MAX_DETAIL_STRING`).
+- **N7:** migration 133's `sheet_evidence_cache` had no retention; `purgeExpired()` (the same hourly-job
+  purge audit_log/notifications/intake_items already use) now drops cache rows older than a fixed 180
+  days.
+
+### N8 — the frontend follows the backend's $-risk order
+`TakeoffReviewPanel`'s `GROUP_ORDER` pre-dated `gapfill:`/`reconcile:` (B2) and `spotcheck:` (S13) — those
+fell through to an untitled "other" bucket — and had `scope` ordered 4th, far ahead of where the backend's
+`riskRank()` actually ranks scope questions (40, near the bottom). `GROUP_ORDER` is re-sequenced to track
+`riskRank`, and `groupTitle`/`groupKey` know about the three new groups.
+
+### B5 — Evidence / reason field, jump-to-line
+The backend's evidence gate already blocked a manual/overridden Labor & Pricing line with no real reason;
+the frontend had nowhere to type one except the description field. `EstimateLine` gains `evidence_note`;
+`LaborPricingStep` shows an "Evidence / reason" input under any line with `source:'manual'` or
+`qty_source:'manual'` (never on an excluded line), flagged until it reads as a real reason. The gate's 409
+already names the first offending line by its `lineKey` (N5); Download .docx's error handler now reads it
+and switches straight to Labor & Pricing, scrolling to and focusing that exact line's field.
+
+### N1 / N2 / N3 — nits
+- **N1:** the reclass target list is deduped after reclass (`resolveGapFillCandidates`).
+- **N2:** gap-fill already used per-viewport tiles at the counter's own resolution (`planSearchRect` +
+  the counting stage's tile renderer), not a whole-sheet low-res image — verified while rebuilding
+  `gapFillStage.ts` for B1/B2; no separate fix needed.
+- **N3:** the report's own Parts 1–4 cost figures (S4/S5's now-removed always-on GFCI pass, "$0.061/bid
+  on Opus 5.5") described a gap-fill pass that no longer exists on Kissimmee post-fix — corrected below.
+  Everywhere this round prints a token-usage-derived dollar figure it's phrased as an **estimate**
+  (`usageCost()`, Anthropic list prices) — never presented as an actual, billed cost.
+
+### Kissimmee-shaped fixture — honest numbers (after this fix round)
+| | Before this fix round | After this fix round |
+|---|---|---|
+| Receptacles (traceable) | 33 | **33** |
+| — Simplex | 10 | **10** |
+| — Duplex / floor | 12 | **12** |
+| — GFCI | 7 | **7** |
+| — WP GFI | 4 | **4** |
+| GFCI total (GFCI + WP GFI) | 11 | **11** |
+| Site poles / heads | 3 / 4 | **3 / 4** (no reconciliation finding at all — B2's heads-vs-poles fix) |
+| Battery chargers | 5 | **5** |
+| Gap-fill/crop-check calls on Kissimmee | 5 (the synthetic GFCI pass) | **0** (no real shortfall; S5 also removed the always-on pass) |
+| Review items | 13 | **23** |
+| — blocking | 9 | **17** |
+
+The review-item jump from 13/9 to 23/17 is entirely B6 (8 equipment/phone-board items un-grouped: 13 → 21,
+9 → 17) and S13 (2 non-blocking spot-check items: 21 → 23, blocking unchanged). Nothing here is a
+regression — it's B6's "report the honest blocking count, even if it's above 12" and S13's new
+informational item, both explicitly asked for. Receptacles/GFCI/poles/battery chargers are unchanged from
+the Parts 1–3 fix round's own honest numbers, confirming B2/B3/S5 didn't disturb them.
+
+### Test suites (one full run each, at the end)
+`tsc --noEmit` is clean in both packages.
+
+| Suite | Parts 1–3 fix round baseline | This fix round |
+|---|---|---|
+| Backend `npm test` | 2000 passed, 3 failed, 4 not run of 2007 (186 files) | **2032 passed, 3 failed, 4 not run of 2039** (189 files: 186 passed, 2 failed, 1 lost to "Worker exited unexpectedly") |
+| Frontend `npx vitest run` | 1287 / 1287 | **1296 / 1296** |
+
+The 3 backend failures are the same known flakes carried since the original review baseline (documented
+above, under Parts 1–3's own test table): `intakeSimilarCache` ×2 (a global cache-signature race under
+full-suite contention against a long-lived shared test database; the test file's own comments describe
+this exact failure mode) and the `integration` lead follow-up backfill timeout — none of the touched
+files (`reconcile.ts`, `gapFillStage.ts`, `reviewItems.ts`, `finishedBidEval.ts`, `evidenceGate.ts`,
+`takeoffReview.ts`, `bidEstimate.ts`, `labeledEvents.ts`, `audit.ts`) are anywhere near intake or lead
+follow-up code. Re-run individually, `integration.test.ts` passes; `intakeSimilarCache.test.ts` times out
+even alone, consistent with its own documented "under full-suite contention... occasionally never lands a
+clean window" caveat on this worktree's now heavily-populated test database.
+
+### Deferred / limits
+- B5's jump-to-line only fires from Download .docx's evidence-gate 409 (where the backend's `evidenceGate`
+  is actually wired in); the takeoff .xlsx and internal pre-bid package downloads never run that gate
+  (a deliberate Parts 1–4 scope decision — "never applied to the pre-bid package" — carried forward, not
+  a gap introduced here).
+- B6's per-member group resolution UI (multiple distinct actions inside one group card) is proven at the
+  API level (`reviewGroupMembers.test.ts`) and the pure layer; TakeoffReviewPanel's own bulk-resolve UI
+  for a legend-zero group still sends one action to every open member in one call (the existing "apply to
+  all" bulk button) rather than offering a per-member action picker in the group's own row — a frontend
+  UI follow-up, not a correctness gap (the backend still records and requires each member's own answer).
+- S8 validates the BOM reference and keeps the source honest, but does not implement BOM parsing itself —
+  `expected` is still confirmed-counts-derived either way, exactly as the finding asked ("keep
+  confirmed_counts as source until BOM is actually parsed").
