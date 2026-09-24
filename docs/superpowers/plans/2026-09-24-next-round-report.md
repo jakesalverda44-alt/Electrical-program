@@ -218,3 +218,107 @@ Migrations: **125** (`sheet_page_cache`, `bid_sheet_check`), **126** (`takeoff_r
   - Golf: labor 323.793 h at 1J $37 + 2A $27, burden 4%, fringe $1.50 = $10,700.28; OH 12% = 1,284.03; net 30,540.97; material and labor markup 18% = 2,224.20 / 2,157.18; quotes 18% = 896.40; adjustment 2% = 610.82 → **$36,429.57**.
 - **Caveat:** Kissimmee's field labor from hours × crew (798.949 × (42.06 + 2 × 29.58) / 3) is **$26,956.54**, 2¢ above his $26,956.52. His J / A extended lines are 11,201.24 / 15,755.28, which don't split 1:2 exactly. Accubid's crew allocation has a rounding step I could not reverse-engineer. Golf matches exactly.
 - **Percentages:** Kissimmee's breakdown uses OH 18%, markup 22% and adj 1% (Chris's per-job inputs), not the Decision 5 defaults (38/20/18).
+
+---
+
+# Part B — execution report
+
+**Branch:** `feat/sheets-and-pricing` (same worktree), on top of Part A's `abd5ad9`.
+**Executor:** Sonnet 5 · **Date:** 2026-09-23/24
+
+## Commits (`abd5ad9..HEAD`)
+
+| Commit | Task |
+|---|---|
+| 62be088 | B1a: Accubid BOM parser (`accubidBom.ts`) |
+| 4fe508c | B1b: BOM import into the Labor Library (`accubidImport.ts` + routes) |
+| 80269fb | B2: Accubid-style recap engine (`accubidRecap.ts`) |
+| 9e65530 | B2/B3 schema + routes: migration 128 (accubid settings, quotes, equipment/GE, alternates, per-GC OH defaults) |
+| 89474ee | B3 (coordinator follow-up): 7-Eleven → APT scope + auto deduct alternate; alternates print on the proposal (migration 129) |
+| e8bf3ee | B4: calibration extension against Chris's real BOMs (`bomCalibration.ts`) |
+| 3d53733 | B3 frontend: the Accubid Labor & Pricing panel |
+| 3d90851 | Fix: accubid-import tests were polluting the shared `est_items` catalog (a real cross-file hazard found by running the full suite) |
+| 0f04722 | Fix: `DEFAULT_SETTINGS.pricing_mode='accubid'` broke every test that spreads `DEFAULT_SETTINGS` as its own mock |
+
+Migrations: **128** (`est_bid_settings.pricing_mode`, `est_accubid_settings`, `est_bid_quotes`, `est_bid_cost_lines`, `est_bid_alternates`, `est_gc_overhead_defaults`), **129** (7-Eleven account rule → APT scope + `account_rules.auto_deduct_alternate`, guarded against an admin's own edit). Both additive.
+
+## Test suites (full run, once each, at the end)
+
+| Suite | Part A final | Part B final |
+|---|---|---|
+| Backend `npm test` | 1605 tests: 1597 passed, 4 failed, 4 not run. 156 files | **1704 tests: 1696 passed, 4 failed, 4 not run.** 165 files (161 passed, 3 failed, 1 lost to the worker crash) |
+| Frontend `npx vitest run` | 1264 passed, 2 failed (126 files) | **1280 passed, 0 failed** (128 files) |
+| `tsc --noEmit` (both) | clean | clean |
+
+**Backend failures, classified** (none is a regression, none is in code Part B added — same standard Part A used):
+- `intakeSimilarCache.test.ts` ×2 — the known flake (timeout / stale cache), documented in Part A's baseline.
+- `integration.test.ts` "backfills a follow-up…" — the known load timeout.
+- `notificationsRetention` — the known worker crash (its tests are the 4 "not run").
+- `estimatingSheetsRoutes.test.ts` "404s a documentId that belongs to a different bid" — a NEW flake instance under full-suite load (unrelated file, unrelated code); passes 32/32 alone. Same "load" category Part A's `rerunReset` deadlock was.
+
+**A real bug the full-suite run caught and Part B fixed, not a flake:** the accubid-import route tests originally wrote real-fixture-derived rows ("3/4\" Conduit - EMT 10' Lengths") into the shared, non-bid-scoped `est_items` table. Those rows' text is close enough to the seed library's own curated item ("3/4\" EMT (incl. couplings/straps)") that the takeoff mapper's fuzzy matcher occasionally preferred the $0 accubid row over the real seed item — caught as `estimatingBid.test.ts`'s seed-magnitude assertion coming back `materialExt: 0`. Fixed by (a) making every accubid-import WRITE test use a uniquely-tagged synthetic BOM instead of a real fixture, and (b) making `buildImportPreview` try to reconcile against an existing catalog item via the same exact/alias matcher a takeoff line uses before minting a new deterministic code (a real improvement, though it doesn't by itself close the fuzzy-tier case — see Limits below).
+
+## Reproduction table (Chris's Selling Price, to the cent, using each job's OWN percentages)
+
+| Job | Chris's price | CRM's price | Difference |
+|---|---|---|---|
+| Autozone Kissimmee (18% OH / 22% markup / 1% adj) | $79,112.23 | $79,112.23 | $0.00 |
+| Gulf Simulator (12% OH / 18% markup+quotes / 2% adj) | $36,429.57 | $36,429.57 | $0.00 |
+| James Co Seminole State (22% OH/markup, per-quote 18%/20%) | $20,991.53 | $20,991.53 | $0.00 |
+| Bubble Down Remodel (42% OH, 22% markup, 4% adj, night crew) | $36,925.89 | $36,925.89 | $0.00 |
+| 36th Street Warehouse (7% material tax, 70% OH, 1% CE sales markup) | $22,553.54 | $22,553.54 | $0.00 |
+| Orlando Clubhouse (bonus — BOM + breakdown both complete) | $97,649.38 | $97,649.38 | $0.00 |
+
+Every one of the five required jobs plus one bonus reproduces exactly. These six numbers are produced by `computeAccubidRecap` (`backend/src/estimating/accubidRecap.ts`) fed Chris's own printed **Field Labor total** (not re-derived from crew×hours — see below) plus his other breakdown inputs; `accubidRecap.test.ts` asserts every intermediate line (labor overhead, net cost, each markup, total markup) to the cent, not just the final price.
+
+**The one documented exception — field labor computed FROM crew + hours** (`computeFieldLaborCost`, used when pricing a bid this engine builds itself rather than reproducing an already-known breakdown):
+
+| Job | Crew ratio | Chris's field labor | CRM's crew-computed field labor | Difference |
+|---|---|---|---|---|
+| Autozone Kissimmee | 1 journeyman : 2 apprentices, 798.949 h (doesn't split evenly into thirds) | $26,956.52 | $26,956.53 | **$0.01** |
+| Gulf Simulator | 1 journeyman : 2 apprentices, 323.793 h (also doesn't split evenly, but happens to round cleanly) | $10,700.28 | $10,700.28 | $0.00 |
+| James Co Seminole State | 1:1, 197.458 h (splits evenly) | $7,483.66 | $7,483.66 | $0.00 |
+| Bubble Down Remodel | equal hours given directly (208/208, no ratio math) | $10,911.68 | $10,911.68 | $0.00 |
+
+Only Kissimmee is off, by one cent, and only because its crew ratio doesn't divide 798.949 h evenly into 3-decimal shares — Accubid's own report is itself internally inconsistent by 1-2¢ on the *per-trade* lines there (Journeyman extends to $11,201.25 by the identical hours-share/round/extend method his report uses elsewhere, but he prints $11,201.24). This is closer than Part A's own attempt at this same reconciliation (which used a single blended crew rate and landed 2¢ off); I could not find the exact intra-cent rounding step Accubid uses for an unevenly-split crew, and the plan's own ≤ $0.05 tolerance is documented in `accubidRecap.test.ts` and applies **only** to this one line, not to any full-recap reproduction above (all of which match exactly, using Chris's own field-labor figure as the input).
+
+## Import counts per BOM (`accubidBom.ts` / `accubidImport.ts`, all verified against the real PDFs' own footers)
+
+| BOM | Rows | Reconciles to footer | Notes |
+|---|---|---|---|
+| Autozone Kissimmee (2026-06-18, the price-authoritative BOM) | 89 | $25,842.56 / 798.949 h | 3 site poles + anchor bolts only (base by others) |
+| 36th Street Warehouse | 58 | $3,399.32 / 189.21 h | has demolition-unit rows |
+| North Port Storage | 131 | $29,593.45 / 1,841.485 h | the only BOM with pole-base units (8 poles) |
+| Orlando Clubhouse | 96 | $14,976.39 / 606.518 h | |
+| Rockledge Storage | 105 | $28,413.56 / 1,393.656 h | has the "Fluorescent" LED-proxy rows |
+
+The pole-base assembly derived from North Port (auger 6 ft/pole, sono tube 9 ft/pole, #5 rebar ring 9/pole, #5 rebar 48 ft/pole, concrete 1.047 yd/pole, anchor bolt template 2/pole, anchor bolt 4/pole, plus per-pole auger/pour setup) is written as one bundling assembly (`ACB-POLE-BASE-FOUNDATION`) over 9 component items.
+
+## What's built (B1-B4)
+
+- **B1 — BOM parser + import**: `accubidBom.ts` (pure parser, handles both report column layouts found across the five real BOMs, and a real PDF quirk — a vendor-adjustment % over 1000% with its decimal digits clipped by the column width). `accubidImport.ts`: LED-proxy mapping (fluorescent/HID/metal-halide → the LED-equivalent catalog name, keeping Accubid's own labor hours), demolition items (imported as ordinary priced items), the pole-base assembly, conduit-fittings ratios (couplings/connectors/straps per 100 ft) and box-accessory ratios (plaster ring / cover per box), each a median across all five real BOMs, and an idempotent create/update-by-deterministic-code import that never touches a `source='manual'` row. Routes: `POST /api/estimating/library/accubid-import/{preview,apply}` (admin, accepts a PDF upload or raw text).
+- **B2 — Accubid recap**: `accubidRecap.ts`, reverse-engineered against the Final Price / Field Labor pages of five real breakdowns (see the reproduction table). Crew/burden/fringe, per-item labor adjustment (via the BOM parser's own `fieldLaborAdjPct`), labor overhead (and a full per-category overhead structure for completeness, though only labor OH is ever nonzero in Chris's real jobs), separate material/labor markup, per-quote tax+markup, equipment/GE with optional tax, an adjustment markup on net cost, and a final "CE Sales Markup" surcharge (36th Street, Orlando). `accubidBidData.ts` wires this to a bid's saved `est_bid_lines` (reusing Phase A's `resolveLines`/`priceBid` with every Phase A add-on zeroed out, so material $/labor hours are the exact same numbers Phase A prices from) and writes `bid_estimates`/`bids.amount` — same downstream contract as Phase A, so `composeProposal`'s price flow is unchanged either way.
+- **B3 — Labor & Pricing sections**: Crew (day/night shift, journeyman/apprentice/foreman, burden/fringe), Quotes (status firm/budget-pending — a budget-pending quote sets `blocksSend`), Equipment, General Expenses, Alternates (add/deduct, printed on the Cowork-format proposal via a new `estimatorAlternates` composeProposal input, never changing `total_price`), and a per-GC overhead default table (Settings, all 38% today). Backend routes + DB fully built and tested; frontend built for Crew/Overhead-Markup/Quotes/Equipment/GE/Alternates (`AccubidPricingPanel.tsx`), mounted by `LaborPricingStep` in place of the Phase A settings row when `pricing_mode === 'accubid'`.
+  - **Coordinator follow-up (7-Eleven):** migration 129 changes the seeded 7-Eleven account rule to APT furnish & install (fixtures, panels, switchgear/SPD/receptacles via `other_equipment`, disconnects) through the Graybar 7-Eleven national account, guarded against an admin's own edit. `autoDeductAlternate.ts` (pure) computes the auto-deduct amount — matched lines' material + material markup (+ tax if the rule is marked taxable), installation labor structurally excluded since only `materialExt` is ever passed in — and `syncAutoDeductAlternateForBid` upserts it as an `auto` alternate (unique per bid + source rule) whenever accubid settings are saved.
+- **B4 — calibration extension**: `bomCalibration.ts` compares Chris's own per-row hours (at his own quantities, including his field-labor adjustment %) against the CURRENT library's hours for the same quantity, per takeoff category, combinable across several jobs. Read-only — same "suggest, never auto-apply" rule as the existing `applyCalibrationAdjustment`. `POST /api/estimating/calibration/bom` (admin) accepts one or more BOM PDFs/text.
+
+## Deferrals (honest)
+
+- **Settings → Labor Library → "Import Accubid BOM" preview-diff UI** — the backend route (preview + apply, with a create/update/skip_manual/skip_no_labor diff) is built and tested; no frontend screen for it yet. An admin can drive it via the API today.
+- **Per-GC overhead default table's own Settings screen** — same story: `GET/PUT /api/estimating/gc-overhead-defaults[/:gcName]` works and is tested; no Settings UI.
+- **Fittings ratios are derived and tested but not yet wired into the conduit/device assemblies' own `qty_per`** — B1's plan line "apply them in the conduit/device assemblies" is the one sub-item not done; `deriveConduitFittingsForJob`/`medianConduitFittingsRatios` and the box-accessory equivalents are real, tested pure functions, just not yet applied as an update to the seed assemblies.
+- **`buildImportPreview`'s reconcile-with-existing-item step only trusts exact/alias-confidence matches** (never fuzzy) — by design, since auto-overwriting a library row's hours off a fuzzy text match risks silently corrupting the wrong item. This means a BOM row whose phrasing doesn't closely match a seed item's curated name/alias (true of most raceway/wire/device rows, whose Accubid phrasing is generic and rarely matches the seed catalog's own alias text) still creates a same-meaning duplicate catalog row under a separate `ACB-...` code rather than updating the existing seed row. This is a known limitation worth a follow-up (either curating aliases on import, or a reviewed "merge suggestion" UI) — not a correctness bug in any test or reproduction above, but a real library-hygiene gap after a production import.
+- **Account rules Settings UI does not yet expose `auto_deduct_alternate` for editing** — the seeded 7-Eleven config works and is tested; `saveAccountRule`/`validateRuleInput` don't read/write the field, so an admin can't add this to a different rule from the UI yet (only via a direct migration/DB edit).
+- **7-Eleven's `receptacles`** ride on the generic `other_equipment` term (no dedicated `TermKey` exists for it) and the auto-deduct matcher's receptacle detection is a description regex (`/receptacle/i`) scoped to the `Branch Power` category — reasonable, but not as precise as a dedicated term/category would be.
+- No live runs against the Anthropic API; nothing here touched Local Version or a live database. All reproduction numbers above are pure-function tests against real BOM/breakdown text.
+
+## Top files for review
+
+- `backend/src/estimating/accubidBom.ts` / `accubidBom.test.ts` — the parser; the two-layout handling and the clipped-percentage tolerance are the trickiest parts.
+- `backend/src/estimating/accubidRecap.ts` / `accubidRecap.test.ts` — the pricing model; every formula is backed by a worked real-number comment.
+- `backend/src/estimating/accubidImport.ts` — the LED-proxy/pole-base/fittings-ratio logic, and the exact/alias reconciliation step (see Deferrals above for its known limit).
+- `backend/src/estimating/accubidBidData.ts` — where the recap meets the DB (per-bid settings, quotes/cost-lines/alternates CRUD, the auto-deduct sync).
+- `database/migrations/128_accubid_pricing.sql`, `129_seven_eleven_apt_scope.sql`.
+- `backend/src/bidstd/composeProposal.ts` (the `estimatorAlternates` input) and `backend/src/routes/preconstruction.ts` (wiring it through `composeCurrentBidData`).
+- `frontend/src/features/estimating/AccubidPricingPanel.tsx` / `useAccubidPricing.ts` — the new UI; deliberately plain (functional, not pixel-polished) given the time budget.
+- `backend/src/test/estimatingAccubidImportRoutes.test.ts` — worth a look specifically for WHY it uses synthetic tagged BOMs instead of the real fixtures (see the file's own header comment and the "real bug" note above).
