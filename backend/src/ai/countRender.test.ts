@@ -1,3 +1,4 @@
+import { counterTileSpec, imageTokens } from './modelLimits';
 // Takeoff accuracy Task 3 — counting renderer. Pure tile geometry, plus the
 // real thing: pdftoppm at 300 DPI on the committed vector test PDF
 // (kissimmee-mini.pdf), including a /Rotate 90 page with a non-zero MediaBox
@@ -131,18 +132,25 @@ describe('renderCountTiles — real pdftoppm, 300 DPI', () => {
     expect(rendered.get(2)!.rasterHeightPx).toBe(5100);
   });
 
-  it('every tile is a JPEG under 5 MB at >= 190 px/in, long edge <= 1568', async (ctx) => {
+  it('fix round S1: with the counter model\'s tile spec every tile is a JPEG under 5 MB, within BOTH API limits (never downscaled by the server) and >= 190 px/in', async (ctx) => {
     if (!have) return ctx.skip();
-    for (const r of rendered.values()) {
-      expect(r.tiles.length).toBeGreaterThan(1);
-      for (const t of r.tiles) {
-        expect(t.jpeg.subarray(0, 2).toString('hex')).toBe('ffd8');
-        expect(t.bytes).toBeLessThan(5_000_000);
-        expect(Math.max(t.imageWidth, t.imageHeight)).toBeLessThanOrEqual(1568);
-        expect(t.pxPerIn).toBeGreaterThanOrEqual(190);
+    const pdf = fs.readFileSync(path.join(__dirname, '../test/fixtures/takeoff/kissimmee-mini.pdf'));
+    const geo = await readPageGeometry(pdf, [2, 3]);
+    for (const model of ['claude-sonnet-4-6', 'claude-opus-5-5']) {
+      const spec = counterTileSpec(model);
+      for (const p of [2, 3]) {
+        const r = await renderCountTiles(pdf, p, geo.get(p)!, { limits: spec.limits, tileIn: spec.tileIn });
+        expect(r.tiles.length).toBeGreaterThan(1);
+        for (const t of r.tiles) {
+          expect(t.jpeg.subarray(0, 2).toString('hex')).toBe('ffd8');
+          expect(t.bytes).toBeLessThan(5_000_000);
+          expect(Math.max(t.imageWidth, t.imageHeight)).toBeLessThanOrEqual(spec.maxLongEdge);
+          expect(imageTokens(t.imageWidth, t.imageHeight)).toBeLessThanOrEqual(spec.maxTokens);
+          expect(t.pxPerIn).toBeGreaterThanOrEqual(190);
+        }
       }
     }
-  });
+  }, 120_000);
 
   for (const [page, symbols] of [[2, MINI_P2_SYMBOLS], [3, MINI_P3_SYMBOLS]] as const) {
     it(`page ${page}: every symbol's centroid on its tile converts back to its PDF coordinate within 1 pt`, async (ctx) => {

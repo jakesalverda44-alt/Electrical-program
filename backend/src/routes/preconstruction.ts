@@ -1173,8 +1173,8 @@ async function runPipelineStages(
       // Fix round S2 — also once a newer run took over (the progress write
       // below sets `superseded`): a superseded run launches no more sheets.
       shouldStop: () => signal.aborted || superseded,
-      onProgress: (done: number, total: number) => {
-        if (total) void setProgress('counting', `Counting sheet ${Math.min(done + 1, total)} of ${total}`, Math.min(done + 1, total), total);
+      onProgress: (done: number, total: number, phase?: 'retry') => {
+        if (total) void setProgress('counting', `${phase === 'retry' ? 'Re-counting dense sheet' : 'Counting sheet'} ${Math.min(done + 1, total)} of ${total}`, Math.min(done + 1, total), total);
       },
     };
     // A4 — a supplement pass counts only what the new pages can change.

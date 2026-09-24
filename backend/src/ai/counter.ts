@@ -324,6 +324,9 @@ export interface SheetCountResult {
     /** Which pass the counts come from. */
     used: 'retry' | 'first';
     error?: string;
+    /** Fix round S2 — types the recount found FEWER of: never accepted
+     *  silently (a blocking review item asks the estimator). */
+    lower?: Array<{ typeKey: string; first: number; retry: number }>;
   };
 }
 

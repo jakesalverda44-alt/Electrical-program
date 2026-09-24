@@ -11,7 +11,7 @@
 //     and land in Needs review, which blocks the proposal until resolved.
 import type Anthropic from '@anthropic-ai/sdk';
 import { buildCountTargets, type CountTarget } from './countTargets';
-import { counterTileSpec, retryTileIn } from './modelLimits';
+import { counterTileSpec, retryTileIn, type ModelImageLimits } from './modelLimits';
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
 import { readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry } from './countRender';
 import { runCounter, type SheetCountResult } from './counter';
@@ -78,7 +78,7 @@ export interface CountingStageInput {
   pdfs: Map<string, Buffer>;
   /** Stop analysis — see CounterRunInput. */
   shouldStop?: () => boolean;
-  onProgress?: (done: number, total: number) => void;
+  onProgress?: (done: number, total: number, phase?: 'retry') => void;
 }
 
 export interface CountingStageOutput {
@@ -197,41 +197,55 @@ export async function countSheets(
   input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop'>,
   targets: CountTarget[],
   sheets: CountSheet[],
-  onProgress?: (done: number, total: number) => void,
+  onProgress?: (done: number, total: number, phase?: 'retry') => void,
 ): Promise<{ sheets: SheetCountResult[]; usage: CountingStageOutput['usage'] }> {
   const spec = counterTileSpec(input.model);
   const run = await runCounter({
     client: input.client, model: input.model, maxTokens: input.maxTokens, targets,
-    sheets: await renderSheets(sheets, input.pdfs, { maxLongEdge: spec.maxLongEdge, tileIn: spec.tileIn }),
+    sheets: await renderSheets(sheets, input.pdfs, { limits: spec.limits, tileIn: spec.tileIn }),
     shouldStop: input.shouldStop, onProgress,
   });
   const dense = run.sheets.filter(r => r.status === 'counted' && r.unreadable.length > 0);
   if (!dense.length || input.shouldStop?.()) return run;
-  const tileIn = retryTileIn(spec.tileIn);
-  logger.info({ sheets: dense.map(d => d.sheet.label), tileIn }, '[counting] dense-area retry at a higher resolution');
+  // Fix round S2 — once per sheet, only for the types it could not read:
+  // every other type keeps the first pass's count (a different tile grid
+  // must not silently change a count that was read fine).
+  const flaggedBy = new Map(dense.map(d => [d.sheet.key, new Set(d.unreadable.map(u => u.typeKey))]));
+  const flaggedAll = new Set([...flaggedBy.values()].flatMap(x => [...x]));
+  const tileIn = retryTileIn(spec.tileIn, spec.limits);
+  logger.info({ sheets: dense.map(d => d.sheet.label), types: [...flaggedAll], tileIn }, '[counting] dense-area retry at a higher resolution');
   const again = await runCounter({
-    client: input.client, model: input.model, maxTokens: input.maxTokens, targets,
-    sheets: await renderSheets(dense.map(d => d.sheet), input.pdfs, { maxLongEdge: spec.maxLongEdge, tileIn }),
+    client: input.client, model: input.model, maxTokens: input.maxTokens, targets: targets.filter(t => flaggedAll.has(t.key)),
+    sheets: await renderSheets(dense.map(d => d.sheet), input.pdfs, { limits: spec.limits, tileIn }),
     shouldStop: input.shouldStop,
+    onProgress: onProgress ? (d, t) => onProgress(d, t, 'retry') : undefined,
   });
   for (const k of Object.keys(run.usage) as Array<keyof typeof run.usage>) run.usage[k] += again.usage[k];
   run.sheets = run.sheets.map(r => {
     if (!dense.includes(r)) return r;
+    const flagged = flaggedBy.get(r.sheet.key)!;
     const a = again.sheets.find(x => x.sheet.key === r.sheet.key);
+    const firstCounts = countsByType(r.placed.filter(p => flagged.has(p.typeKey)));
     const base = {
       firstTileIn: spec.tileIn, tileIn,
-      firstCounts: countsByType(r.placed),
-      firstUnreadable: [...new Set(r.unreadable.map(u => u.typeKey))],
+      firstCounts,
+      firstUnreadable: [...flagged],
     };
     if (a && a.status === 'counted') {
-      const retryCounts = countsByType(a.placed);
-      const diff = [...new Set([...Object.keys(base.firstCounts), ...Object.keys(retryCounts)])]
-        .filter(k => (base.firstCounts[k] ?? 0) !== (retryCounts[k] ?? 0))
-        .map(k => `${k} ${base.firstCounts[k] ?? 0}→${retryCounts[k] ?? 0}`);
+      const retryPlaced = a.placed.filter(p => flagged.has(p.typeKey));
+      const retryCounts = countsByType(retryPlaced);
+      const lower = [...flagged].filter(k => (retryCounts[k] ?? 0) < (firstCounts[k] ?? 0))
+        .map(k => ({ typeKey: k, first: firstCounts[k] ?? 0, retry: retryCounts[k] ?? 0 }));
+      const diff = [...flagged].filter(k => (firstCounts[k] ?? 0) !== (retryCounts[k] ?? 0))
+        .map(k => `${k} ${firstCounts[k] ?? 0}→${retryCounts[k] ?? 0}`);
       return {
-        ...a,
-        retry: { ...base, retryCounts, used: 'retry' as const },
-        notes: [...a.notes, `Re-counted at a higher resolution (${tileIn}" tiles; first pass ${spec.tileIn}") because some symbols could not be read reliably${diff.length ? ` — ${diff.join(', ')}` : ' — same counts'}.`],
+        ...r,
+        placed: [...r.placed.filter(p => !flagged.has(p.typeKey)), ...retryPlaced],
+        unreadable: a.unreadable.filter(u => flagged.has(u.typeKey)),
+        mergedDuplicates: r.mergedDuplicates + a.mergedDuplicates,
+        calls: r.calls + a.calls,
+        retry: { ...base, retryCounts, used: 'retry' as const, ...(lower.length ? { lower } : {}) },
+        notes: [...r.notes, `Re-counted ${[...flagged].join(', ')} at a higher resolution (${tileIn}" tiles; first pass ${spec.tileIn}") because they could not be read reliably${diff.length ? ` — ${diff.join(', ')}` : ' — same counts'}.`],
       };
     }
     return { ...r, retry: { ...base, retryCounts: {}, used: 'first' as const, error: a?.error ?? 'the retry could not run' } };
@@ -241,7 +255,7 @@ export async function countSheets(
 
 /** Render sequentially (one 300 DPI raster in memory at a time); keep only
  *  the JPEG tiles for the calls. */
-async function renderSheets(sheetsIn: CountSheet[], pdfs: Map<string, Buffer>, opts: { maxLongEdge?: number; tileIn?: number } = {}): Promise<RenderedSheet[]> {
+async function renderSheets(sheetsIn: CountSheet[], pdfs: Map<string, Buffer>, opts: { limits?: ModelImageLimits; tileIn?: number } = {}): Promise<RenderedSheet[]> {
   const rendered: RenderedSheet[] = [];
   const byFile = new Map<string, CountSheet[]>();
   for (const s of sheetsIn) {

@@ -218,6 +218,26 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       });
     }
   }
+  // Fix round S2 — the dense-area recount found FEWER of a type than the
+  // first pass: the estimator decides (never silently accepted).
+  const lowerByType = new Map<string, string[]>();
+  for (const sh of countResult?.sheets ?? []) {
+    for (const l of sh.retry?.lower ?? []) {
+      lowerByType.set(l.typeKey, [...(lowerByType.get(l.typeKey) ?? []), `${sh.label}: first pass ${l.first}, recount ${l.retry}`]);
+    }
+  }
+  for (const [key, notes] of lowerByType) {
+    const t = (countResult?.types ?? []).find(x => x.key === key);
+    if (!t || t.status !== 'counted') continue;
+    items.push({
+      id: `recount:${key}`,
+      kind: 'count',
+      title: `Type ${t.type}${t.description ? ` — ${t.description}` : ''}: the recount found fewer`,
+      detail: `The sheet was re-counted at a higher resolution because some symbols could not be read, and the recount found fewer (${notes.join('; ')}). The takeoff has ${t.count}. Enter the right count, or confirm ${t.count} (with a reason).`,
+      typeKey: t.key, type: t.type, description: t.description, category: t.category, aiCount: t.count,
+      sheets: notes, actions: ['count', 'confirm'], fingerprint: `recount|${t.count}|${notes.join(';')}`,
+    });
+  }
   // B3 — Agent 1 rows that match no scheduled type: held, never dropped.
   for (const r of countResult?.removedRows ?? []) {
     if (!r.unscheduled) continue;
@@ -281,6 +301,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('scope:')) return 'scope';
   if (i.id.startsWith('unscheduled:')) return 'unscheduled';
   if (i.id.startsWith('coverage:')) return 'coverage';
+  if (i.id.startsWith('recount:')) return 'recount';
   if (i.id.endsWith(':heads')) return 'heads';
   if (i.kind === 'area') {
     const labels = (i.detail.split(' — ')[0] ?? '').split(' / ').map(x => x.replace(/\s+\d+$/, '').split(' ')[0]).filter(Boolean).sort();
@@ -451,6 +472,8 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (area) qty = area.qty ?? qty;
     const cov = res(`coverage:${t.key}`);
     if (cov) qty = cov.action === 'not_on_job' ? null : (cov.qty ?? qty);
+    const rec = res(`recount:${t.key}`);
+    if (rec) qty = rec.qty ?? qty;
     if (qty !== undefined && (qty === null || qty > 0)) byType.set(t.key, qty);
     if (t.category === 'site_lighting') {
       const heads = res(`count:${t.key}:heads`);
