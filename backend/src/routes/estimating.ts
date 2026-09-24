@@ -23,6 +23,13 @@ import { parseAccubidBom } from '../estimating/accubidBom';
 import { buildImportPreview, applyImportPreview, derivePoleBaseAssembly, applyPoleBaseAssembly } from '../estimating/accubidImport';
 import { extractPdfPageTexts } from '../ai/pdfText';
 import { pdfUpload } from '../utils/upload';
+import {
+  computeAccubidRecapForBid, saveAccubidRecapForBid, getAccubidSettings, saveAccubidSettings, AccubidSettings,
+  createQuote, updateQuote, deleteQuote, QuoteInput,
+  createCostLine, updateCostLine, deleteCostLine, CostLineInput,
+  createAlternate, updateAlternate, deleteAlternate, AlternateInput,
+  listGcOverheadDefaults, setGcOverheadDefault,
+} from '../estimating/accubidBidData';
 // Fix round 1 / S4 — reuse the exact same Content-Type/Content-Disposition/
 // nosniff lockdown routes/documents.ts already applies (audit Security #6),
 // instead of the plan-file route rolling its own (looser) header logic.
@@ -100,6 +107,10 @@ function validateSettings(body: unknown): ValidationResult<ClientSettingsInput> 
     pcts[field] = v;
   }
   const factorIds = Array.isArray(s.factor_ids) ? s.factor_ids.filter((x): x is string => typeof x === 'string') : [];
+  // Next round B2 — omitted (undefined) means "leave whatever pricing mode
+  // this bid already has" (saveBidEstimate's own COALESCE handles that); an
+  // explicit, recognized value switches it.
+  const pricingMode = s.pricing_mode === 'phase_a' || s.pricing_mode === 'accubid' ? s.pricing_mode : undefined;
   return {
     ok: true,
     value: {
@@ -113,6 +124,7 @@ function validateSettings(body: unknown): ValidationResult<ClientSettingsInput> 
       profit_pct: pcts.profit_pct,
       crew_size: crewSize,
       floors_above_2: floorsAbove2,
+      pricing_mode: pricingMode,
     },
   };
 }
@@ -639,6 +651,20 @@ router.post('/library/accubid-import/apply', requireAuth, requireAdmin, pdfUploa
   res.json({ ...result, poleBase });
 });
 
+// ── Settings: per-GC overhead default table (Decision 5) ────────────────────
+// Declared before /:bidId so "gc-overhead-defaults" is never captured as a bid id.
+
+router.get('/gc-overhead-defaults', requireAuth, async (_req, res) => {
+  res.json(await listGcOverheadDefaults());
+});
+
+router.put('/gc-overhead-defaults/:gcName', requireAuth, requireAdmin, async (req, res) => {
+  const overheadPct = Number((req.body ?? {}).overheadPct);
+  if (!Number.isFinite(overheadPct) || overheadPct < 0) return res.status(400).json({ error: 'overheadPct must be a non-negative number' });
+  await setGcOverheadDefault(req.params.gcName, overheadPct);
+  res.json({ gcName: req.params.gcName, overheadPct });
+});
+
 // ── Calibration (Task 6) ─────────────────────────────────────────────────────
 // Declared before /:bidId so "calibration" is never captured as a bid id.
 
@@ -740,6 +766,173 @@ router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const result = await catchNonFiniteTotal(saveBidEstimate(bidId, linesV.value, settingsV.value));
   if (!result.ok) return res.status(400).json({ error: 'Computed totals are not finite — refusing to save' });
   res.json(result.value);
+});
+
+// ── Accubid-style recap (Next round Part B, Task 2/3) ───────────────────────
+
+function validateAccubidSettings(body: unknown): ValidationResult<AccubidSettings> {
+  const s = (body ?? {}) as Record<string, unknown>;
+  const num = (v: unknown, field: string, opts: { min?: number } = {}): number | { error: string } => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || (opts.min != null && n < opts.min)) return { error: `${field} must be a number${opts.min != null ? ` >= ${opts.min}` : ''}` };
+    return n;
+  };
+  const fields: Record<string, number> = {};
+  const numericFields: Array<[keyof AccubidSettings, string]> = [
+    ['journeymanCount', 'journeymanCount'], ['journeymanRate', 'journeymanRate'],
+    ['apprenticeCount', 'apprenticeCount'], ['apprenticeRate', 'apprenticeRate'],
+    ['foremanCount', 'foremanCount'], ['foremanRate', 'foremanRate'],
+    ['burdenPct', 'burdenPct'], ['fringePerHr', 'fringePerHr'], ['materialTaxPct', 'materialTaxPct'],
+    ['laborOverheadPct', 'laborOverheadPct'], ['materialMarkupPct', 'materialMarkupPct'], ['laborMarkupPct', 'laborMarkupPct'],
+    ['quoteMarkupDefaultPct', 'quoteMarkupDefaultPct'], ['adjustmentMarkupPct', 'adjustmentMarkupPct'], ['salesMarkupPct', 'salesMarkupPct'],
+  ];
+  for (const [key, field] of numericFields) {
+    const r = num(s[key], field, { min: 0 });
+    if (typeof r !== 'number') return { ok: false, error: r.error };
+    fields[key] = r;
+  }
+  const shift = s.shift === 'night' ? 'night' : 'day';
+  const nightField = (v: unknown): number | null => (v == null || v === '') ? null : Number(v);
+  return {
+    ok: true,
+    value: {
+      shift,
+      journeymanCount: fields.journeymanCount, journeymanRate: fields.journeymanRate,
+      apprenticeCount: fields.apprenticeCount, apprenticeRate: fields.apprenticeRate,
+      foremanCount: fields.foremanCount, foremanRate: fields.foremanRate,
+      nightJourneymanRate: nightField(s.nightJourneymanRate), nightApprenticeRate: nightField(s.nightApprenticeRate), nightForemanRate: nightField(s.nightForemanRate),
+      burdenPct: fields.burdenPct, fringePerHr: fields.fringePerHr, materialTaxPct: fields.materialTaxPct,
+      laborOverheadPct: fields.laborOverheadPct, materialMarkupPct: fields.materialMarkupPct, laborMarkupPct: fields.laborMarkupPct,
+      quoteMarkupDefaultPct: fields.quoteMarkupDefaultPct, adjustmentMarkupPct: fields.adjustmentMarkupPct, salesMarkupPct: fields.salesMarkupPct,
+    },
+  };
+}
+
+router.get('/:bidId/accubid', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const data = await computeAccubidRecapForBid(bidId);
+  res.json(data);
+});
+
+router.put('/:bidId/accubid/settings', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const v = validateAccubidSettings(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  await saveAccubidSettings(bidId, v.value);
+  const data = await saveAccubidRecapForBid(bidId);
+  res.json(data);
+});
+
+function validateQuoteInput(body: unknown): ValidationResult<QuoteInput> {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const description = typeof b.description === 'string' ? b.description.trim() : '';
+  if (!description) return { ok: false, error: 'description is required' };
+  const amount = Number(b.amount);
+  if (!Number.isFinite(amount) || amount < 0) return { ok: false, error: 'amount must be a non-negative number' };
+  const markupPct = Number(b.markupPct);
+  if (!Number.isFinite(markupPct) || markupPct < 0) return { ok: false, error: 'markupPct must be a non-negative number' };
+  const taxPct = b.taxPct != null ? Number(b.taxPct) : 0;
+  if (!Number.isFinite(taxPct) || taxPct < 0) return { ok: false, error: 'taxPct must be a non-negative number' };
+  const status = b.status === 'firm' ? 'firm' : 'budget_pending';
+  return { ok: true, value: { description, amount, taxPct, markupPct, status, vendor: typeof b.vendor === 'string' ? b.vendor : null, sort: b.sort != null ? Number(b.sort) : 0 } };
+}
+
+router.post('/:bidId/accubid/quotes', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const v = validateQuoteInput(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  res.json(await createQuote(bidId, v.value));
+});
+
+router.put('/:bidId/accubid/quotes/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const updated = await updateQuote(req.params.id, req.body ?? {});
+  if (!updated) return res.status(404).json({ error: 'Quote not found' });
+  res.json(updated);
+});
+
+router.delete('/:bidId/accubid/quotes/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const ok = await deleteQuote(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Quote not found' });
+  res.status(204).end();
+});
+
+function validateCostLineInput(body: unknown): ValidationResult<CostLineInput> {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const kind = b.kind === 'general_expense' ? 'general_expense' : b.kind === 'equipment' ? 'equipment' : null;
+  if (!kind) return { ok: false, error: 'kind must be "equipment" or "general_expense"' };
+  const description = typeof b.description === 'string' ? b.description.trim() : '';
+  if (!description) return { ok: false, error: 'description is required' };
+  const amount = Number(b.amount);
+  if (!Number.isFinite(amount) || amount < 0) return { ok: false, error: 'amount must be a non-negative number' };
+  const taxPct = b.taxPct != null ? Number(b.taxPct) : 0;
+  if (!Number.isFinite(taxPct) || taxPct < 0) return { ok: false, error: 'taxPct must be a non-negative number' };
+  return { ok: true, value: { kind, description, amount, taxPct, sort: b.sort != null ? Number(b.sort) : 0 } };
+}
+
+router.post('/:bidId/accubid/cost-lines', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const v = validateCostLineInput(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  res.json(await createCostLine(bidId, v.value));
+});
+
+router.put('/:bidId/accubid/cost-lines/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const updated = await updateCostLine(req.params.id, req.body ?? {});
+  if (!updated) return res.status(404).json({ error: 'Cost line not found' });
+  res.json(updated);
+});
+
+router.delete('/:bidId/accubid/cost-lines/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const ok = await deleteCostLine(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Cost line not found' });
+  res.status(204).end();
+});
+
+function validateAlternateInput(body: unknown): ValidationResult<AlternateInput> {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const kind = b.kind === 'deduct' ? 'deduct' : b.kind === 'add' ? 'add' : null;
+  if (!kind) return { ok: false, error: 'kind must be "add" or "deduct"' };
+  const description = typeof b.description === 'string' ? b.description.trim() : '';
+  if (!description) return { ok: false, error: 'description is required' };
+  const amount = Number(b.amount);
+  if (!Number.isFinite(amount) || amount < 0) return { ok: false, error: 'amount must be a non-negative number' };
+  return { ok: true, value: { kind, description, amount, sort: b.sort != null ? Number(b.sort) : 0 } };
+}
+
+router.post('/:bidId/accubid/alternates', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const v = validateAlternateInput(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  res.json(await createAlternate(bidId, v.value));
+});
+
+router.put('/:bidId/accubid/alternates/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const updated = await updateAlternate(req.params.id, req.body ?? {});
+  if (!updated) return res.status(404).json({ error: 'Alternate not found (or it is a system-computed one — those cannot be hand-edited)' });
+  res.json(updated);
+});
+
+router.delete('/:bidId/accubid/alternates/:id', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const ok = await deleteAlternate(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Alternate not found (or it is a system-computed one)' });
+  res.status(204).end();
 });
 
 // ── Sheets (Phase B, Task 2) ─────────────────────────────────────────────────

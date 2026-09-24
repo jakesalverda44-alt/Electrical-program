@@ -148,6 +148,10 @@ export interface ClientSettingsInput {
   crew_size: number;
   /** Fix round 1 / N3 — multiplies the MULTI-STORY labor factor's pct. */
   floors_above_2: number;
+  /** Next round B2 — 'accubid' is the default for a bid that has never saved
+   *  settings before; an existing saved bid keeps 'phase_a' unless the
+   *  estimator explicitly switches (see migration 128's backfill). */
+  pricing_mode?: 'phase_a' | 'accubid';
 }
 
 function round2(n: number): number {
@@ -273,6 +277,7 @@ export async function getBidSettings(bidId: string): Promise<ClientSettingsInput
       profit_pct: numberOr(r.profit_pct, 15),
       crew_size: numberOr(r.crew_size, 3),
       floors_above_2: numberOr(r.floors_above_2, 0),
+      pricing_mode: r.pricing_mode === 'phase_a' ? 'phase_a' : 'accubid',
     };
   }
   const [laborRate, taxPct, toolsPct, supervisionPct, consumablesPct, inherited] = await Promise.all([
@@ -294,6 +299,9 @@ export async function getBidSettings(bidId: string): Promise<ClientSettingsInput
     profit_pct: inherited.profit_pct,
     crew_size: 3,
     floors_above_2: 0,
+    // Next round B2 — a bid with no est_bid_settings row yet has never been
+    // saved through either engine: default it to the new Accubid mode.
+    pricing_mode: 'accubid',
   };
 }
 
@@ -977,14 +985,15 @@ export async function saveBidEstimate(
 
     await client.query(
       `INSERT INTO est_bid_settings
-         (bid_id, labor_rate, factor_ids, material_tax_pct, small_tools_pct, supervision_pct, consumables_pct, overhead_pct, profit_pct, crew_size, floors_above_2, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
+         (bid_id, labor_rate, factor_ids, material_tax_pct, small_tools_pct, supervision_pct, consumables_pct, overhead_pct, profit_pct, crew_size, floors_above_2, pricing_mode, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($12,'accubid'),now())
        ON CONFLICT (bid_id) DO UPDATE SET
          labor_rate=$2, factor_ids=$3, material_tax_pct=$4, small_tools_pct=$5,
-         supervision_pct=$6, consumables_pct=$7, overhead_pct=$8, profit_pct=$9, crew_size=$10, floors_above_2=$11, updated_at=now()`,
+         supervision_pct=$6, consumables_pct=$7, overhead_pct=$8, profit_pct=$9, crew_size=$10, floors_above_2=$11,
+         pricing_mode=COALESCE($12, est_bid_settings.pricing_mode), updated_at=now()`,
       [bidId, settings.labor_rate, settings.factor_ids, settings.material_tax_pct, settings.small_tools_pct,
        settings.supervision_pct, settings.consumables_pct, settings.overhead_pct, settings.profit_pct, settings.crew_size,
-       settings.floors_above_2]
+       settings.floors_above_2, settings.pricing_mode ?? null]
     );
 
     bidEstimate = await writeBidEstimateSnapshot(
