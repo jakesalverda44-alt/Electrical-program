@@ -287,6 +287,17 @@ function materialConflict(aTags: Set<string>, bTags: Set<string>): boolean {
 const FITTING_KIND_WORDS: Record<string, string> = {
   coupling: 'coupling', connector: 'connector', strap: 'strap', clamp: 'strap', clip: 'strap',
   bushing: 'bushing', locknut: 'locknut', adapter: 'adapter', elbow: 'elbow',
+  // A generic "fitting" word (e.g. "Expansion fitting, conduit") is a
+  // fitting too, even though it names no OTHER specific fitting word —
+  // found in testing alongside accubidImport.ts's own identical fix.
+  fitting: 'fitting', fittings: 'fitting',
+  // "Conduit body (LB/T), EMT or rigid" names no other fitting word and
+  // carries an EMT/rigid material tag, so without this it falls through to
+  // the bare-conduit material-tag inference below and collides with a real
+  // run of EMT conduit on the same raceway kind — same bug shape as
+  // accubidImport.ts's identical "conduit body" fix, mirrored here so the
+  // mapper's alias/fuzzy guard agrees with import reconciliation.
+  body: 'fitting',
 };
 const RACEWAY_MATERIALS = new Set(['emt', 'pvc', 'rmc', 'fmc', 'lfmc']);
 

@@ -712,9 +712,18 @@ router.post('/calibration/bom', requireAuth, requireAdmin, pdfUpload.array('file
   }
   if (!bomTexts.length) return res.status(400).json({ error: 'Upload at least one BOM PDF, or pass bomTexts.' });
 
-  const { rows } = await pool.query("SELECT code, unit, labor_hours FROM est_items WHERE active = true");
-  const libraryByCode = new Map(rows.map(r => [r.code as string, { laborHours: Number(r.labor_hours), unit: r.unit as EstUnit }]));
-  res.json(computeBomCalibrationForJobs(bomTexts, libraryByCode));
+  // Review round 2 / N16 — fetch full item data (name/category/aliases/
+  // source), not just code+unit+hours: the calibration comparison now
+  // resolves each BOM row through the SAME mapper a real takeoff line uses,
+  // never by the row's own deterministic import code (which finds nothing,
+  // or the wrong thing, once an import has reconciled the row onto an
+  // EXISTING seed item rather than minting its own).
+  const { rows } = await pool.query("SELECT code, name, category, unit, aliases, source, labor_hours FROM est_items WHERE active = true");
+  const items = rows.map(r => ({
+    code: r.code as string, name: r.name as string, category: r.category as string, unit: r.unit as EstUnit,
+    aliases: (r.aliases as string[]) ?? [], source: r.source as string, laborHours: Number(r.labor_hours),
+  }));
+  res.json(computeBomCalibrationForJobs(bomTexts, items));
 });
 
 // ── Per-bid ──────────────────────────────────────────────────────────────────

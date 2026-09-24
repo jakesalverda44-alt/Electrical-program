@@ -87,21 +87,173 @@ function slug(s: string): string {
   return s.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 }
 
+// Review round 2 / S14 — the 40-char slice above merges different items whose
+// canonical text agrees for the first 40 characters ("400A Safety Switch
+// Heavy Duty Fusible 600V 3 Pole - NEMA 3R" and "...- NEMA 1" both slice to
+// "400A-SAFETY-SWITCH-HEAVY-DUTY-FUSIBLE-6", identical), so the LAST import
+// silently wins and overwrites the other's hours. A short hash of the FULL
+// (untruncated) canonical text makes every distinct description produce a
+// distinct code regardless of how long its common prefix is, while staying
+// deterministic (same input -> same code, so re-importing the same BOM still
+// updates the same row rather than duplicating it).
+function shortHash(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h).toString(36).toUpperCase().padStart(6, '0').slice(0, 6);
+}
+
 /** A code is derived from the CANONICAL description (post LED-proxy mapping)
  *  + unit, so the SAME physical item always lands on the same row no matter
  *  which job's BOM it was first seen on, and re-importing the same or an
- *  updated BOM updates that row instead of duplicating it. */
+ *  updated BOM updates that row instead of duplicating it. The hash suffix
+ *  (S14) guarantees two DIFFERENT descriptions never collide just because
+ *  they share their first 40 characters. */
 export function bomItemCode(canonicalDescription: string, unit: EstUnit): string {
-  return `ACB-${slug(canonicalDescription)}-${unit}`;
+  return `ACB-${slug(canonicalDescription)}-${shortHash(canonicalDescription)}-${unit}`;
 }
 
 function bomUnitToEstUnit(u: BomRow['unit']): EstUnit {
   return u === 'E' ? 'EA' : u;
 }
 
+// ── Normalized item spec (kind + size + material) — review round 2 / B3 ─────
+// "Import reconciliation matches existing items by a normalized spec: size +
+// item kind + material/type. On a match it UPDATES the existing item; it
+// never creates a same-meaning duplicate." This is a SEPARATE, more
+// deterministic mechanism than the takeoff mapper's fuzzy/alias scoring
+// (kept below as a fallback for names this simple keyword scan can't
+// classify, e.g. a panelboard's full curated name) — reconciling a very
+// consequential action (silently overwriting a library row's hours/price)
+// off exact keyword+size+material agreement is safer to reason about and
+// test than trusting alias-tier text scoring for it.
+
+export type ItemKind =
+  | 'coupling' | 'connector' | 'strap' | 'bushing' | 'locknut' | 'adapter' | 'elbow' | 'fitting'
+  | 'conduit' | 'box' | 'wire' | 'device' | 'fixture' | 'panel' | 'disconnect'
+  | 'transformer' | 'ground'
+  // Device SUB-kinds, checked before the generic 'device' fallback — a
+  // GFCI, duplex, single and switch at the SAME amp rating are different
+  // real products (found in testing: "20A duplex" / "20A GFCI duplex" /
+  // "20A single" all shared one "device|20a|" key and consolidated onto one
+  // library row with three different real labor-hour rates).
+  | 'device_gfci' | 'device_duplex' | 'device_single' | 'device_switch';
+
+// Order matters: a FITTING word always wins over the bare-raceway fallback
+// at the bottom (same rationale as mapper.ts's racewayKind) — "EMT coupling"
+// is a coupling, not conduit. Checked top to bottom, first match wins.
+const KIND_PATTERNS: Array<{ kind: ItemKind; re: RegExp }> = [
+  { kind: 'coupling', re: /\bcoupling\b/i },
+  { kind: 'connector', re: /\bconnector\b/i },
+  { kind: 'strap', re: /\b(strut clamp|strap|clamp|clip)\b/i },
+  { kind: 'bushing', re: /\bbushing\b/i },
+  { kind: 'locknut', re: /\blocknut\b/i },
+  { kind: 'adapter', re: /\badapter\b/i },
+  { kind: 'elbow', re: /\belbow\b/i },
+  // A generic "fitting" word (e.g. "Expansion fitting, conduit") must win
+  // over the literal 'conduit' word check right below — found in testing:
+  // "Expansion fitting, conduit" was misclassified as bare conduit (it
+  // names no OTHER fitting keyword), colliding with a real bare-conduit
+  // BOM row on the same normalized spec key.
+  { kind: 'fitting', re: /\bfitting(s)?\b/i },
+  // A "conduit body" (LB/T, condulet) is a FITTING, not a raceway run — it
+  // names no size and often mentions a material ("EMT or rigid") generically
+  // covering several, so without this it collides on the exact same
+  // kind+material spec key as any plain EMT/rigid conduit row that also has
+  // no size token, silently reconciling a run-of-conduit row onto the
+  // catalog's conduit-body fitting (found via a synthetic-BOM route test:
+  // FIT-CONDBODY's 0.25h leaked into a totally unrelated 3.2h conduit row).
+  { kind: 'fitting', re: /\bconduit body\b/i },
+  { kind: 'conduit', re: /\bconduit\b/i },
+  { kind: 'box', re: /\bbox\b/i },
+  { kind: 'wire', re: /\b(wire|cable)\b/i },
+  { kind: 'device_gfci', re: /\bgfci\b/i },
+  { kind: 'device_duplex', re: /\bduplex\b/i },
+  { kind: 'device_switch', re: /\bswitch\b/i },
+  { kind: 'device_single', re: /\bsingle\b/i },
+  { kind: 'device', re: /\b(receptacle|outlet|decorator)\b/i },
+  { kind: 'fixture', re: /\b(luminaire|fixture)\b/i },
+  { kind: 'panel', re: /\bpanel(board)?\b/i },
+  { kind: 'disconnect', re: /\b(disconnect|safety switch)\b/i },
+  { kind: 'transformer', re: /\btransformer\b/i },
+  { kind: 'ground', re: /\bground(ing)?\b/i },
+  // Bare raceway fallback: a material tag with NO fitting/other kind word
+  // above already matched implies bare conduit ("3/4\" EMT" names no kind
+  // word at all, but IS conduit).
+  { kind: 'conduit', re: /\b(emt|pvc|rmc|rigid|fmc|flex|lfmc|liquidtight)\b/i },
+];
+
+function inferItemKind(text: string): ItemKind | null {
+  for (const { kind, re } of KIND_PATTERNS) if (re.test(text)) return kind;
+  return null;
+}
+
+/** The first inch-fraction size ("3/4\""), wire gauge ("#12"), or amp rating
+ *  named — enough to tell "3/4\" EMT" apart from "1\" EMT", or a "20A"
+ *  device from a "30A" one, without needing a full dimensional parser. */
+function extractSize(text: string): string | null {
+  const inch = text.match(/(\d+(?:-\d+\/\d+)?(?:\/\d+)?)\s*"/);
+  if (inch) return `${inch[1]}in`;
+  const gauge = text.match(/#\s*(\d+(?:\/\d+)?)/);
+  if (gauge) return `ga${gauge[1]}`;
+  const amp = text.match(/\b(\d+)\s*a\b/i);
+  if (amp) return `${amp[1]}a`;
+  return null;
+}
+
+function extractMaterial(text: string): string | null {
+  const t = text.toLowerCase();
+  if (/\bemt\b/.test(t)) return 'emt';
+  if (/\bpvc\b/.test(t)) return 'pvc';
+  if (/\b(rmc|rigid)\b/.test(t)) return 'rmc';
+  if (/\b(lfmc|liquidtight)\b/.test(t)) return 'lfmc';
+  if (/\b(fmc|flex)\b/.test(t)) return 'fmc';
+  if (/\bmc\b/.test(t)) return 'mc';
+  if (/\b(thhn|thwn)\b/.test(t)) return 'thhn';
+  if (/\baluminum\b/.test(t)) return 'aluminum';
+  if (/\bcopper\b/.test(t)) return 'copper';
+  return null;
+}
+
+export interface NormalizedSpec { kind: ItemKind; size: string | null; material: string | null; key: string }
+
+/** null when no kind word/material tag is recognized at all (an arbitrary
+ *  catalog line like "Fire Rated Playwood" or "Misc Materials") — those
+ *  never reconcile by spec, only by the mapper-based fallback below. */
+export function normalizedItemSpec(description: string): NormalizedSpec | null {
+  const kind = inferItemKind(description);
+  if (!kind) return null;
+  const size = extractSize(description);
+  const material = extractMaterial(description);
+  return { kind, size, material, key: `${kind}|${size ?? ''}|${material ?? ''}` };
+}
+
+// A found-in-testing follow-up to the review's own B3 ask: several "hardware"
+// kinds (straps/clamps/clips, bushings, locknuts, adapters, elbows, boxes,
+// fixtures, ground hardware) have MANY visually/physically different products
+// that share the SAME kind + size + material — "3/4\" Conduit Clip Screw-On"
+// vs "3/4\" Conduit Clip Snap Close" are different products, both kind=strap,
+// size=3/4in, no material tag — and a plain fixture wattage/mount style isn't
+// captured by `extractSize` at all ("175W Wall Mount" vs "250W Pole Top" both
+// key to "fixture||"). Reconciling those by spec key risks silently merging
+// two different real products' hours. Scoped to the kinds whose size+material
+// combination genuinely, uniquely identifies one product in this catalog —
+// raceway, wire, device (by amp rating), panel/disconnect (by amp rating) and
+// transformer — where the review's own repro lives. Every kind is still
+// useful for CATEGORY classification and the mapper's racewayKind guard; this
+// only gates whether normalizedItemSpec's key is trusted for RECONCILIATION
+// (silently updating an existing row).
+const RECONCILABLE_KINDS = new Set<ItemKind>([
+  'conduit', 'coupling', 'connector', 'wire', 'panel', 'disconnect', 'transformer',
+  'device', 'device_gfci', 'device_duplex', 'device_single', 'device_switch',
+]);
+
+export function isReconcilableSpec(spec: NormalizedSpec | null): spec is NormalizedSpec {
+  return !!spec && RECONCILABLE_KINDS.has(spec.kind);
+}
+
 // ── Per-row import plan ──────────────────────────────────────────────────────
 
-export type ImportAction = 'create' | 'update' | 'skip_manual' | 'skip_no_labor' | 'skip_unparsed';
+export type ImportAction = 'create' | 'update' | 'skip_manual' | 'skip_no_labor' | 'skip_unparsed' | 'propose_update';
 
 export interface ImportedItemPlan {
   action: ImportAction;
@@ -110,15 +262,27 @@ export interface ImportedItemPlan {
   category: string;
   unit: EstUnit;
   /** Hours per unit (per EA / per C / per M) — Accubid's own unit, carried
-   *  through unchanged; this is the whole point of the import. */
+   *  through unchanged; this is the whole point of the import. For
+   *  'propose_update' this is the row's own value, offered for review —
+   *  never applied automatically (see applyImportPreview). */
   laborHours: number | null;
   /** $/unit — only set when this import is the price-authoritative BOM AND
    *  the row itself has a net cost. null means "don't touch material_cost". */
   materialCost: number | null;
   wasLedProxy: boolean;
   isDemolition: boolean;
-  /** Present only for action 'update' — what the row would change from. */
+  /** Present for 'update' and 'propose_update' — what the row would change
+   *  from (and, for a proposal, why it wasn't applied automatically). */
   previous?: { laborHours: number; materialCost: number | null; source: string };
+  /** Set only for 'propose_update' — S15: a reconciled match whose UNIT
+   *  disagrees with the existing item, or whose labor-hours delta is more
+   *  than 2x, is never silently overwritten; it's offered here as a named
+   *  reason for the estimator to accept or reject per row. */
+  proposalReason?: 'unit_mismatch' | 'big_delta';
+  /** Set only for 'skip_unparsed' — the raw line pdftotext gave, so the
+   *  admin can see exactly what didn't import (S12/N17: never silently
+   *  dropped). */
+  rawLine?: string;
 }
 
 export interface ImportPreview {
@@ -143,6 +307,22 @@ export interface BuildImportPreviewOptions {
   bomDate?: string | null;
 }
 
+/** One entry per normalized-spec key, built from the CURRENT library — a
+ *  curated (non-accubid) row always wins a collision (two rows sharing a
+ *  spec key should not normally happen, but if it does, an estimator's own
+ *  seed/manual row is the more trustworthy target). */
+function buildSpecIndex(library: Library): Map<string, LibraryItem> {
+  const index = new Map<string, LibraryItem>();
+  for (const item of library.items) {
+    if (!item.active) continue;
+    const spec = normalizedItemSpec(item.name);
+    if (!isReconcilableSpec(spec)) continue;
+    const cur = index.get(spec.key);
+    if (!cur || (cur.source === 'accubid' && item.source !== 'accubid')) index.set(spec.key, item);
+  }
+  return index;
+}
+
 /** Builds a diff between a parsed BOM and the CURRENT library — never writes.
  *  Every row that carries labor hours becomes one item plan; a row with
  *  neither labor hours nor a name (never observed, but never assumed) is
@@ -150,14 +330,18 @@ export interface BuildImportPreviewOptions {
 export function buildImportPreview(bomText: string, library: Library, opts: BuildImportPreviewOptions): ImportPreview {
   const parsed = parseAccubidBom(bomText);
   const byCode = new Map<string, LibraryItem>(library.items.map(i => [i.code, i]));
-  // Reconcile against the EXISTING catalog (seed or otherwise) via the same
-  // matcher a takeoff line uses, so a BOM row for "3/4" EMT" updates the
-  // library's one real "3/4" EMT" item instead of creating a same-meaning
-  // duplicate under a different code — a duplicate the mapper would then
-  // have to arbitrate between on every future takeoff (and which a plain
-  // code-only lookup, as this function used to do exclusively, can never
-  // find on its own since an Accubid row's phrasing rarely matches a
-  // curated seed name/alias verbatim).
+  // Two reconciliation passes against the EXISTING catalog, so a BOM row for
+  // "3/4" EMT" updates the library's one real "3/4" EMT" item instead of
+  // creating a same-meaning duplicate under a different code:
+  //  1. Review round 2 / B3 — a normalized spec key (kind + size + material),
+  //     exact-match only. This is what catches "3/4\" EMT" -> EMT-075
+  //     deterministically, and can never itself confuse a raceway with a
+  //     fitting (inferItemKind gives them different kinds).
+  //  2. The takeoff mapper's own exact/alias tiers (unchanged), for a name
+  //     normalizedItemSpec can't classify at all (e.g. a panelboard's full
+  //     curated name) — mapper.ts's own raceway-kind guard (same review
+  //     round) makes this fallback safe for conduit/fitting text too.
+  const specIndex = buildSpecIndex(library);
   const candidates = toLibraryCandidates(library, { activeOnly: true });
 
   const items: ImportedItemPlan[] = [];
@@ -178,18 +362,25 @@ export function buildImportPreview(bomText: string, library: Library, opts: Buil
       continue;
     }
 
-    // Only an ITEM match at high confidence reconciles — an assembly match
-    // (e.g. a whole duplex-circuit bundle) has no single labor_hours field
-    // to update, so those rows keep the deterministic-code path below.
-    const mapped = mapTakeoffLine({ category: '', description: canonical, qty: 1, unit }, candidates);
-    const reconciled = mapped.matchedKind === 'item' && (mapped.matchConfidence === 'exact' || mapped.matchConfidence === 'alias') ? mapped.matchedCode : null;
-    const code = reconciled ?? deterministicCode;
+    const rowSpec = normalizedItemSpec(canonical);
+    let reconciledItem: LibraryItem | null = rowSpec ? (specIndex.get(rowSpec.key) ?? null) : null;
+    if (!reconciledItem) {
+      // Fallback: only an ITEM match at high confidence reconciles — an
+      // assembly match (e.g. a whole duplex-circuit bundle) has no single
+      // labor_hours field to update, so those rows keep the
+      // deterministic-code path below.
+      const mapped = mapTakeoffLine({ category: '', description: canonical, qty: 1, unit }, candidates);
+      if (mapped.matchedKind === 'item' && (mapped.matchConfidence === 'exact' || mapped.matchConfidence === 'alias')) {
+        reconciledItem = byCode.get(mapped.matchedCode!) ?? null;
+      }
+    }
+    const code = reconciledItem?.code ?? deterministicCode;
 
     if (seenCodes.has(code)) continue;
     seenCodes.add(code);
 
     const materialCost = opts.applyPrices ? (row.netCost ?? (row.matCondition === 'No Cost' ? 0 : null)) : null;
-    const existing = byCode.get(code);
+    const existing = reconciledItem ?? byCode.get(code) ?? null;
     if (!existing) {
       items.push({
         action: 'create', code, name: canonical, category: classifyBomCategory(canonical),
@@ -197,20 +388,48 @@ export function buildImportPreview(bomText: string, library: Library, opts: Buil
       });
     } else if (existing.source === 'manual') {
       items.push({
-        action: 'skip_manual', code, name: existing.name, category: existing.category,
+        action: 'skip_manual', code: existing.code, name: existing.name, category: existing.category,
         unit: existing.unit, laborHours, materialCost, wasLedProxy: wasProxy, isDemolition,
         previous: { laborHours: existing.labor_hours, materialCost: existing.material_cost, source: existing.source },
       });
     } else {
-      items.push({
-        // A reconciled match keeps the EXISTING curated name (never
-        // overwritten with the BOM's own phrasing) — only its labor_hours
-        // (and material_cost, when price-authoritative) update.
-        action: 'update', code, name: reconciled ? existing.name : canonical, category: existing.category,
-        unit: existing.unit, laborHours, materialCost, wasLedProxy: wasProxy, isDemolition,
-        previous: { laborHours: existing.labor_hours, materialCost: existing.material_cost, source: existing.source },
-      });
+      // Review round 2 / S15 — never silently overwrite a reconciled item's
+      // hours when the UNIT basis disagrees (its hours-per-unit means a
+      // different thing) or when the delta is more than 2x (almost always a
+      // wrong reconciliation, or an older/different BOM's stale number) —
+      // propose it for the estimator's own review instead of applying it.
+      const unitMismatch = existing.unit !== unit;
+      const prevHours = existing.labor_hours;
+      const bigDelta = prevHours > 0 && laborHours > 0 && (laborHours / prevHours >= 2 || prevHours / laborHours >= 2);
+      if (reconciledItem && (unitMismatch || bigDelta)) {
+        items.push({
+          action: 'propose_update', code: existing.code, name: existing.name, category: existing.category,
+          unit, laborHours, materialCost, wasLedProxy: wasProxy, isDemolition,
+          previous: { laborHours: existing.labor_hours, materialCost: existing.material_cost, source: existing.source },
+          proposalReason: unitMismatch ? 'unit_mismatch' : 'big_delta',
+        });
+      } else {
+        items.push({
+          // A reconciled match keeps the EXISTING curated name (never
+          // overwritten with the BOM's own phrasing) — only its labor_hours
+          // (and material_cost, when price-authoritative) update.
+          action: 'update', code: existing.code, name: reconciledItem ? existing.name : canonical, category: existing.category,
+          unit: existing.unit, laborHours, materialCost, wasLedProxy: wasProxy, isDemolition,
+          previous: { laborHours: existing.labor_hours, materialCost: existing.material_cost, source: existing.source },
+        });
+      }
     }
+  }
+
+  // Review round 2 / S12/N17 — every line pdftotext could shape-match a row
+  // header (qty + a bare E/C/M unit column) but then failed to parse fully
+  // is surfaced in the preview's own item list, not just the separate
+  // `warnings` array a caller could ignore.
+  for (const w of parsed.warnings) {
+    items.push({
+      action: 'skip_unparsed', code: '', name: w.line.trim().slice(0, 120), category: '', unit: 'EA',
+      laborHours: null, materialCost: null, wasLedProxy: false, isDemolition: false, rawLine: w.line,
+    });
   }
 
   const reconciles = parsed.footerMaterialTotal == null
@@ -227,24 +446,40 @@ export function buildImportPreview(bomText: string, library: Library, opts: Buil
     footerLaborHours: parsed.footerLaborHours,
     computedMaterialTotal: parsed.computedMaterialTotal,
     computedLaborHours: parsed.computedLaborHours,
-    reconciles,
+    // A missing footer is never "reconciled" (review round 2 / S12) — a
+    // caller (the apply route) treats that the same as a real mismatch,
+    // unless it passes force.
+    reconciles: parsed.footerMaterialTotal != null && reconciles,
   };
 }
 
-export interface ApplyImportResult { created: number; updated: number; skipped: number }
+export interface ApplyImportResult { created: number; updated: number; skipped: number; proposed: number }
+
+export interface ApplyImportOptions {
+  /** Review round 2 / S15 — a 'propose_update' row (unit mismatch or a >2x
+   *  hours delta) is applied ONLY when its code is explicitly listed here —
+   *  never automatically, no matter how confident the reconciliation was. */
+  acceptProposals?: Set<string>;
+}
 
 /** Writes a preview's create/update plans to the DB. Never touches a
  *  'skip_manual' row (Jake's edit stands) or a 'skip_no_labor' row (nothing
  *  usable to import). Idempotent: running the SAME preview twice updates the
  *  same rows to the same values the second time, it doesn't duplicate them —
  *  because the plan's `code` is deterministic (bomItemCode). */
-export async function applyImportPreview(preview: ImportPreview): Promise<ApplyImportResult> {
+export async function applyImportPreview(preview: ImportPreview, opts: ApplyImportOptions = {}): Promise<ApplyImportResult> {
   let created = 0;
   let updated = 0;
   let skipped = 0;
+  let proposed = 0;
+  const acceptProposals = opts.acceptProposals ?? new Set<string>();
   for (const plan of preview.items) {
     if (plan.action === 'skip_manual' || plan.action === 'skip_no_labor' || plan.action === 'skip_unparsed') {
       skipped++;
+      continue;
+    }
+    if (plan.action === 'propose_update' && !acceptProposals.has(plan.code)) {
+      proposed++;
       continue;
     }
     if (plan.action === 'create') {
@@ -279,9 +514,15 @@ export async function applyImportPreview(preview: ImportPreview): Promise<ApplyI
           skipped++;
         }
       }
-    } else if (plan.action === 'update') {
+    } else if (plan.action === 'update' || plan.action === 'propose_update') {
+      // Review round 2 / N17 — re-check the row's CURRENT source, fetched
+      // fresh right now rather than trusting the preview's (possibly
+      // stale-by-now) snapshot: an admin can hand-edit this exact row in the
+      // window between preview and apply, which sets source='manual' — that
+      // edit must never be silently overwritten and relabelled 'accubid'.
       const byCode = await findByCode(plan.code);
       if (!byCode) { skipped++; continue; }
+      if (byCode.source === 'manual') { skipped++; continue; }
       await updateItem(byCode.id, {
         labor_hours: plan.laborHours ?? byCode.labor_hours,
         ...(plan.materialCost != null ? { material_cost: plan.materialCost, material_price_date: preview.bomDate ?? new Date().toISOString().slice(0, 10) } : {}),
@@ -290,7 +531,7 @@ export async function applyImportPreview(preview: ImportPreview): Promise<ApplyI
       updated++;
     }
   }
-  return { created, updated, skipped };
+  return { created, updated, skipped, proposed };
 }
 
 // updateItem/createItem (library.ts) always set source='manual' on a write —
@@ -364,8 +605,12 @@ export interface PoleBaseAssemblyPlan {
  *  by-others base, e.g. AutoZone Kissimmee — "base by others" per the seed
  *  library's own LTG-POLE note). */
 export function derivePoleBaseAssembly(rows: BomRow[]): PoleBaseAssemblyPlan | null {
-  const poleRow = rows.find(r => POLE_COUNT_RE.test(r.description));
-  const poleCount = poleRow?.qty ?? 0;
+  // Review round 2 / N17 — a job can have more than one pole ROW (different
+  // pole heights/gauges are separate BOM lines, e.g. "20' H x 4-1/2\" Pole
+  // Round Straight" and "25' H x 5\" Pole Round Straight" on the same job) —
+  // sum every matching row's qty, never just the first one found.
+  const poleRows = rows.filter(r => POLE_COUNT_RE.test(r.description));
+  const poleCount = poleRows.reduce((sum, r) => sum + r.qty, 0);
   if (!poleCount) return null;
 
   const components: PoleBaseComponentPlan[] = [];

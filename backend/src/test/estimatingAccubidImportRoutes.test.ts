@@ -96,11 +96,17 @@ describe('POST /api/estimating/library/accubid-import/apply', () => {
     const tag = randomUUID().slice(0, 8);
     const { text } = syntheticBom(tag);
 
+    // Review round 2 — the created-count assertion moved INSIDE the
+    // try/finally: it used to sit before it, so a failure here (as this
+    // exact test caught pre-fitting-fix, when a synthetic conduit row
+    // collided with FIT-CONDBODY's spec key and only 1 of 2 rows got
+    // created) threw before cleanupCodes ever ran, leaking a real row into
+    // the shared test-catalog table for every later test run to trip over.
     const r1 = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
       .send({ bomText: text, applyPrices: true, bomDate: '2026-06-18' }).expect(200);
-    expect(r1.body.created).toBe(2);
 
     try {
+      expect(r1.body.created).toBe(2);
       const { rows: created } = await pool.query("SELECT code, name, material_cost, labor_hours FROM est_items WHERE source='accubid' AND name LIKE $1", [`TestOnly-${tag}%`]);
       expect(created.length).toBe(2);
       const conduit = created.find(r => r.name.includes('Widget Conduit'));

@@ -55,7 +55,10 @@ function applyPlanInMemory(library: Library, items: ImportedItemPlan[]): Library
       });
     } else if (plan.action === 'update') {
       const existing = byCode.get(plan.code);
-      if (existing) byCode.set(plan.code, { ...existing, labor_hours: plan.laborHours ?? existing.labor_hours, material_cost: plan.materialCost ?? existing.material_cost });
+      // Mirrors applyImportPreview's own real behavior: an update always
+      // (re)stamps source='accubid' (markAccubidSource), same as the real
+      // apply path — a reconciled write is never left/relabelled 'manual'.
+      if (existing) byCode.set(plan.code, { ...existing, labor_hours: plan.laborHours ?? existing.labor_hours, material_cost: plan.materialCost ?? existing.material_cost, source: 'accubid' });
     }
   }
   return { items: Array.from(byCode.values()), assemblies: library.assemblies, factors: [] };
@@ -102,13 +105,19 @@ describe('B3 / S18 — the seed catalog keeps its own picks after a real Kissimm
     }
   });
 
-  it('the specific B3 repro: a 1,200 LF run of 3/4" EMT still prices at the real seed rate, not an EMT connector', () => {
+  it('the specific B3 repro: a 1,200 LF run of 3/4" EMT still prices at the real (now reconciled) seed rate, not an EMT connector', () => {
     const mapped = mapTakeoffLine({ category: '', description: '3/4" EMT', qty: 1200, unit: 'LF' }, candidatesAfter);
     expect(mapped.matchedCode).toBe('EMT-075');
     const seedItem = after.items.find(i => i.code === 'EMT-075')!;
-    // Real seed magnitudes: $60/C material, 4.0 h/C -> 1200 LF = 12 C -> $720 / 48h.
-    expect(seedItem.material_cost).toBeCloseTo(60, 2);
-    expect(seedItem.labor_hours).toBeCloseTo(4.0, 2);
+    // Review round 2 / B3 — the normalized-spec reconciliation (kind=conduit,
+    // size=3/4in, material=emt) now updates EMT-075 IN PLACE with Chris's own
+    // Kissimmee rate ($92.38/C net, 3.2 h/C — Part B's own verified facts),
+    // rather than leaving the seed's $60/4.0h placeholder untouched and
+    // creating a same-meaning duplicate elsewhere. Either way, the outcome
+    // the review cares about holds: never the connector's numbers.
+    expect(seedItem.material_cost).toBeCloseTo(92.38, 2);
+    expect(seedItem.labor_hours).toBeCloseTo(3.2, 2);
+    expect(seedItem.source).toBe('accubid'); // updateItem's own contract: a reconciled write is still accubid-sourced, never silently 'manual'
     // And it must NOT be the connector's tiny $ea / high per-C hours the review found.
     const connector = after.items.find(i => /connector/i.test(i.name) && /emt/i.test(i.name) && /3\/4/.test(i.name));
     if (connector) expect(mapped.matchedCode).not.toBe(connector.code);

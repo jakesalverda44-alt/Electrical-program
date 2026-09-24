@@ -19,12 +19,12 @@ import { bomItemCode } from '../estimating/accubidImport';
 let ok = false;
 beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
 
-function syntheticBomLine(tag: string, laborUnit: number): { line: string; code: string } {
+function syntheticBomLine(tag: string, laborUnit: number): { line: string; code: string; description: string } {
   // Same row shape accubidBom.test.ts already proves the parser handles —
   // qty 100.000 C, no cost fields, just a labor unit and total field labor.
   const description = `TestOnly-${tag} Conduit - EMT 10' Lengths`;
   const line = `${description}                                          100.000 C                                                                               C                     ${laborUnit.toFixed(3)}                       ${laborUnit.toFixed(3)} Normal`;
-  return { line, code: bomItemCode(description, 'C') };
+  return { line, code: bomItemCode(description, 'C'), description };
 }
 
 describe('POST /api/estimating/calibration/bom', () => {
@@ -41,11 +41,16 @@ describe('POST /api/estimating/calibration/bom', () => {
     const { app } = await import('../index');
     const admin = await makeUser('owner');
     const tag = randomUUID().slice(0, 8);
-    const { line, code } = syntheticBomLine(tag, 3.2);
+    const { line, code, description } = syntheticBomLine(tag, 3.2);
+    // Review round 2 / N16 — the comparison now resolves through the mapper
+    // (name/alias text), never the row's own deterministic code, so the
+    // planted item's NAME must be something the BOM row's own description
+    // can exact-match — a bare "test item" (the pre-N16 fixture) would never
+    // match at all under the new resolution.
     await pool.query(
       `INSERT INTO est_items (code, name, category, unit, material_cost, labor_hours, source, active)
-       VALUES ($1,'test item','Branch Power','C',0,3.2,'accubid',true)`,
-      [code]
+       VALUES ($1,$2,'Branch Power','C',0,3.2,'accubid',true)`,
+      [code, description]
     );
     try {
       const res = await request(app).post('/api/estimating/calibration/bom').set(auth(admin.token))
@@ -67,11 +72,11 @@ describe('POST /api/estimating/calibration/bom', () => {
     const { app } = await import('../index');
     const admin = await makeUser('owner');
     const tag = randomUUID().slice(0, 8);
-    const { line, code } = syntheticBomLine(tag, 4.0); // Chris's real hours
+    const { line, code, description } = syntheticBomLine(tag, 4.0); // Chris's real hours
     await pool.query(
       `INSERT INTO est_items (code, name, category, unit, material_cost, labor_hours, source, active)
-       VALUES ($1,'test item','Branch Power','C',0,2.0,'accubid',true)`, // engine's own rate is HALF
-      [code]
+       VALUES ($1,$2,'Branch Power','C',0,2.0,'accubid',true)`, // engine's own rate is HALF
+      [code, description]
     );
     try {
       const res = await request(app).post('/api/estimating/calibration/bom').set(auth(admin.token))

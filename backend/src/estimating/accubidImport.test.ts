@@ -5,9 +5,9 @@ import { parseAccubidBom } from './accubidBom';
 import {
   ledProxyName, classifyBomCategory, bomItemCode, buildImportPreview,
   derivePoleBaseAssembly, deriveConduitFittingsForJob, medianConduitFittingsRatios,
-  deriveBoxAccessoriesForJob, medianBoxAccessoryRatios,
+  deriveBoxAccessoriesForJob, medianBoxAccessoryRatios, normalizedItemSpec,
 } from './accubidImport';
-import type { Library } from './library';
+import type { Library, LibraryItem } from './library';
 
 const FIXDIR = path.join(__dirname, '../test/fixtures/estimating/accubid');
 const read = (name: string) => fs.readFileSync(path.join(FIXDIR, name), 'utf8');
@@ -144,10 +144,20 @@ describe('buildImportPreview — against an empty library', () => {
     const preview2 = buildImportPreview(read('kissimmee-bom.txt'), libraryAfter, { applyPrices: true, bomDate: '2026-06-18' });
     const stillCreated = preview2.items.filter(i => i.action === 'create');
     const updated = preview2.items.filter(i => i.action === 'update');
+    const proposed = preview2.items.filter(i => i.action === 'propose_update');
     // Every code from the first pass' creates now exists, so this second pass
-    // should update the same set, not create it again.
+    // should never create anything again.
     expect(stillCreated.length).toBe(0);
-    expect(updated.length).toBe(created.length);
+    // Review round 2 / B3 — the normalized-spec reconciliation can now
+    // legitimately consolidate several first-pass rows that share a spec key
+    // (e.g. two wire colors of the same gauge) onto ONE second-pass target,
+    // so `updated` need not equal `created` one-for-one any more — it just
+    // must never be zero, and never exceed it (never MORE targets than
+    // sources), and nothing should need review on a re-import of the exact
+    // same BOM (no delta at all between the two passes).
+    expect(updated.length).toBeGreaterThan(0);
+    expect(updated.length).toBeLessThanOrEqual(created.length);
+    expect(proposed.length).toBe(0);
   });
 });
 
@@ -228,5 +238,135 @@ describe('box accessory ratios (plaster ring / cover per 4" square box)', () => 
     expect(coversPerBox).not.toBeNull();
     expect(ringsPerBox as number).toBeGreaterThan(0);
     expect(coversPerBox as number).toBeGreaterThan(0);
+  });
+});
+
+describe('review round 2 / B3 — normalizedItemSpec (kind + size + material)', () => {
+  it('classifies a raceway vs its fittings as DIFFERENT kinds at the same size/material', () => {
+    const conduit = normalizedItemSpec('3/4" Conduit - EMT 10\' Lengths')!;
+    const connector = normalizedItemSpec('3/4" Connector - EMT Set Screw Steel')!;
+    const coupling = normalizedItemSpec('3/4" Coupling - EMT Set Screw Steel')!;
+    expect(conduit.kind).toBe('conduit');
+    expect(connector.kind).toBe('connector');
+    expect(coupling.kind).toBe('coupling');
+    expect(conduit.key).not.toBe(connector.key);
+    expect(conduit.key).not.toBe(coupling.key);
+    expect(conduit.size).toBe('3/4in');
+    expect(conduit.material).toBe('emt');
+  });
+
+  it('a bare raceway with no kind/material word at all is unclassifiable (null) — never a false reconciliation target', () => {
+    expect(normalizedItemSpec('Fire Rated Playwood')).toBeNull();
+    expect(normalizedItemSpec('Misc Materials')).toBeNull();
+  });
+
+  it('differentiates by size (3/4" EMT vs 1" EMT)', () => {
+    const threeQuarter = normalizedItemSpec('3/4" Conduit - EMT 10\' Lengths')!;
+    const oneInch = normalizedItemSpec('1" Conduit - EMT 10\' Lengths')!;
+    expect(threeQuarter.key).not.toBe(oneInch.key);
+  });
+});
+
+describe('review round 2 / B3 — buildImportPreview reconciles by normalized spec, never creating a raceway/fitting duplicate', () => {
+  it('a real Kissimmee row for 3/4" EMT conduit updates the seed EMT-075 item directly, never a new ACB- code', () => {
+    const seedEmt: LibraryItem = {
+      id: 'seed-emt-075', code: 'EMT-075', name: '3/4" EMT (incl. couplings/straps)', category: 'Branch Power',
+      unit: 'C', material_cost: 60, material_price_date: null, labor_hours: 4.0, aliases: ['3/4" emt (incl. couplings/straps)'], source: 'seed', active: true,
+    };
+    const library: Library = { items: [seedEmt], assemblies: [], factors: [] };
+    const preview = buildImportPreview(read('kissimmee-bom.txt'), library, { applyPrices: true, bomDate: '2026-06-18' });
+    const emtPlan = preview.items.find(i => i.code === 'EMT-075');
+    expect(emtPlan).toBeTruthy();
+    expect(emtPlan!.action).toBe('update');
+    expect(emtPlan!.laborHours).toBeCloseTo(3.2, 2);
+    expect(emtPlan!.materialCost).toBeCloseTo(92.38, 2);
+    // No competing ACB- item was ALSO planned for "3/4 conduit - emt" text.
+    const acbConduitDup = preview.items.find(i => i.code.startsWith('ACB-') && i.code.includes('CONDUIT') && i.code.includes('EMT') && i.code.includes('3-4'));
+    expect(acbConduitDup).toBeUndefined();
+  });
+});
+
+describe('review round 2 / S15 — a reconciled match is never silently overwritten across a unit mismatch or a big delta', () => {
+  it('a unit mismatch proposes instead of updating', () => {
+    // PNL-225-shaped: a panel item seeded as EA, but (contrived) a BOM row
+    // that would reconcile to it printed in a different unit.
+    const seedPanel: LibraryItem = {
+      id: 'seed-panel', code: 'PNL-225', name: '225A MLO Panelboard', category: 'Service & Distribution',
+      unit: 'EA', material_cost: 1450, material_price_date: null, labor_hours: 8, aliases: ['225a panelboard'], source: 'seed', active: true,
+    };
+    const library: Library = { items: [seedPanel], assemblies: [], factors: [] };
+    // A synthetic one-row BOM: same kind+size (panel/225a) but priced per C (never true for a real panel, but exercises the guard deterministically).
+    const line = 'Test-Panel             225A Panelboard - Test                                             100.000 C          10.00                     10.00           10.00 C                      3.000                        3.000 Normal';
+    const preview = buildImportPreview(line, library, { applyPrices: false });
+    const plan = preview.items.find(i => i.code === 'PNL-225');
+    expect(plan?.action).toBe('propose_update');
+    expect(plan?.proposalReason).toBe('unit_mismatch');
+  });
+
+  it('a >2x labor-hours delta proposes instead of updating', () => {
+    const seedPanel: LibraryItem = {
+      id: 'seed-panel', code: 'PNL-225', name: '225A MLO Panelboard', category: 'Service & Distribution',
+      unit: 'EA', material_cost: 1450, material_price_date: null, labor_hours: 8, aliases: ['225a panelboard'], source: 'seed', active: true,
+    };
+    const library: Library = { items: [seedPanel], assemblies: [], factors: [] };
+    // 3.6 h vs the seed's 8h is more than 2x down — must propose, not overwrite silently.
+    const line = 'Test-Panel             225A Panelboard - Test                                              1.000 E                                                            Quoted     E                 3.600                    3.600';
+    const preview = buildImportPreview(line, library, { applyPrices: false });
+    const plan = preview.items.find(i => i.code === 'PNL-225');
+    expect(plan?.action).toBe('propose_update');
+    expect(plan?.proposalReason).toBe('big_delta');
+    expect(plan?.previous?.laborHours).toBe(8);
+    expect(plan?.laborHours).toBeCloseTo(3.6, 2);
+  });
+
+  it('a normal (< 2x, same unit) delta still updates as before', () => {
+    const seedPanel: LibraryItem = {
+      id: 'seed-panel', code: 'PNL-225', name: '225A MLO Panelboard', category: 'Service & Distribution',
+      unit: 'EA', material_cost: 1450, material_price_date: null, labor_hours: 8, aliases: ['225a panelboard'], source: 'seed', active: true,
+    };
+    const library: Library = { items: [seedPanel], assemblies: [], factors: [] };
+    const line = 'Test-Panel             225A Panelboard - Test                                              1.000 E                                                            Quoted     E                 7.000                    7.000';
+    const preview = buildImportPreview(line, library, { applyPrices: false });
+    const plan = preview.items.find(i => i.code === 'PNL-225');
+    expect(plan?.action).toBe('update');
+  });
+});
+
+describe('review round 2 / S14 — codes never collide just because two descriptions share a 40-char prefix', () => {
+  it('two safety switches whose names agree for the first 40 characters get DIFFERENT codes', () => {
+    const nema1 = bomItemCode('400A Safety Switch Heavy Duty Fusible 600V 3 Pole - NEMA 1', 'EA');
+    const nema3r = bomItemCode('400A Safety Switch Heavy Duty Fusible 600V 3 Pole - NEMA 3R', 'EA');
+    expect(nema1.slice(0, 40)).toBe(nema3r.slice(0, 40)); // same 40-char prefix (the premise of the bug)
+    expect(nema1).not.toBe(nema3r); // but the full codes differ
+  });
+
+  it('is still deterministic (idempotent re-import)', () => {
+    const a = bomItemCode('400A Safety Switch Heavy Duty Fusible 600V 3 Pole - NEMA 1', 'EA');
+    const b = bomItemCode('400A Safety Switch Heavy Duty Fusible 600V 3 Pole - NEMA 1', 'EA');
+    expect(a).toBe(b);
+  });
+});
+
+describe('review round 2 / N17 — pole count sums every pole row, and unparsed lines never vanish silently', () => {
+  it('sums two different pole rows on the same job instead of taking only the first', () => {
+    const rows = parseAccubidBom([
+      "20' H x 4-1/2\"        Pole Round Straight - Steel                                           5.000 E                                                            Quoted     E                 4.800                   24.000",
+      "25' H x 5\"            Pole Round Straight - Steel                                            3.000 E                                                            Quoted     E                 5.500                   16.500",
+      '                       Anchor Bolt Template - 4 Hole to 1" Bolts                               16.000 E                                                            Budget     E                 0.700                   11.200',
+    ].join('\n')).rows;
+    const plan = derivePoleBaseAssembly(rows);
+    expect(plan?.poleCount).toBe(8); // 5 + 3, not just the first row's 5
+  });
+
+  it('a qty+unit-shaped line that fails to parse further (no second unit column) is surfaced as skip_unparsed in preview.items, never silently dropped', () => {
+    // Shape-matches "qty + a bare unit letter" but has no SECOND occurrence
+    // of that unit letter later in the row — accubidBom.ts's own
+    // "no second unit column found" warning.
+    const badLine = 'Something Weird BOM Row                                  5.000 C   10.00   Normal';
+    const preview = buildImportPreview(badLine, EMPTY_LIBRARY, { applyPrices: false });
+    expect(preview.warnings).toHaveLength(1);
+    const unparsed = preview.items.find(i => i.action === 'skip_unparsed');
+    expect(unparsed).toBeTruthy();
+    expect(unparsed!.rawLine).toContain('Something Weird BOM Row');
   });
 });
