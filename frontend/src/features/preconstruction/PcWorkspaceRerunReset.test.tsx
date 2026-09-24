@@ -174,6 +174,39 @@ describe('Re-run Analysis — confirm lists what is cleared and kept; every pane
     await waitFor(() => expect(screen.queryByTestId('lp-recheck-badge-0')).toBeNull());
   });
 
+  it('re-run defaults to the last run\'s inputs: those documents are pre-ticked (generated / missing ones skipped) and stay editable', async () => {
+    mockApi({ results: { status: 'complete', run_id: 'run-1', agent2_output: '{}', input_document_ids: ['d-plan', 'd-prop', 'd-gone'] } });
+    render(<Harness initial={{ activeTab: 'files', aiDone: true, rfis: RFIS }}/>);
+    const planBox = await screen.findByTestId('project-doc-checkbox-d-plan') as HTMLInputElement;
+    await waitFor(() => expect(planBox.checked).toBe(true));
+    expect((screen.getByTestId('project-doc-checkbox-d-prop') as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByText('1 selected')).toBeTruthy();
+    // Editable: untick and tick again — the pre-selection does not come back on its own.
+    fireEvent.click(planBox);
+    await waitFor(() => expect(planBox.checked).toBe(false));
+    fireEvent.click(planBox);
+    await waitFor(() => expect(planBox.checked).toBe(true));
+
+    fireEvent.click(screen.getAllByTestId('est-step-takeoff')[0]);
+    fireEvent.click(await screen.findByTestId('rerun-analysis'));
+    await screen.findByTestId('rerun-confirm-body');
+    fireEvent.click(within(dialog()).getByText('Clear and re-run'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/analyze', expect.any(FormData), expect.anything()));
+    const fd = post.mock.calls.find(c => c[0] === '/preconstruction/analyze')![1] as FormData;
+    expect(fd.getAll('document_ids')).toEqual(['d-plan']);
+  });
+
+  it('an unticked pre-selection stays unticked', async () => {
+    mockApi({ results: { status: 'complete', run_id: 'run-1', agent2_output: '{}', input_document_ids: ['d-plan'] } });
+    render(<Harness initial={{ activeTab: 'files', aiDone: true }}/>);
+    const planBox = await screen.findByTestId('project-doc-checkbox-d-plan') as HTMLInputElement;
+    await waitFor(() => expect(planBox.checked).toBe(true));
+    fireEvent.click(planBox);
+    await waitFor(() => expect(planBox.checked).toBe(false));
+    await new Promise(r => setTimeout(r, 50));
+    expect(planBox.checked).toBe(false);
+  });
+
   it('cancelling the confirm changes nothing', async () => {
     mockApi({ results: { status: 'complete', run_id: 'run-1', agent2_output: '{}' } });
     render(<Harness initial={{ activeTab: 'takeoff', aiDone: true, rfis: RFIS }}/>);

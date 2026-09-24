@@ -1,8 +1,8 @@
 # Re-run reset, analysis inputs, Stop analysis, pdf.js buffer fix — report
 
 Branch `fix/rerun-reset`, from main `cc486ce`. It is not merged and not pushed. Worktree
-`Electrical-program-wt-rerun-reset`. Migrations **121** (reset) and **122** (stop). The
-next plan starts at **123**.
+`Electrical-program-wt-rerun-reset`. Migrations **121** (reset), **122** (stop) and **123** (run inputs). The
+next plan starts at **124**.
 
 | Commit | What |
 |---|---|
@@ -11,7 +11,8 @@ next plan starts at **123**.
 | b08aa59 | **pdf.js detached-buffer fix.** The same patch is `acfc2bc` on branch `fix/pdf-buffer-detach`, cut straight from main, so it can merge first. |
 | 386347f | Fresh-install max-token defaults: Agent 2 = 32,000, Agent 3 = 16,000 |
 | d811a06 | Frontend: reset confirm, panel refresh, recheck badge, Stop buttons, progress |
-| (last) | This report |
+| 3299c56 | This report |
+| (last) | Re-run defaults to the last run's inputs (answers to the open questions) |
 
 ## 1. Re-run reset
 
@@ -193,7 +194,32 @@ fails; with the fix it passes.
   and four dashboardCoTotals tests. All of these pass when run on their own.
 - `tsc --noEmit` is clean for backend and frontend.
 
-## Open questions
+## Follow-up: re-run defaults to the last run's inputs
+
+Jake tripped over the unticked boxes on the live re-run. Each `/analyze` now
+records `takeoff_results.input_document_ids` (migration 123). A file from a
+document keeps its id. An upload maps to this bid's filed, non-generated
+copy with the same content hash. Generated and duplicate inputs are never
+recorded.
+
+The workspace pre-ticks those documents in "From Project Files", once per
+run and only when nothing is picked or uploaded yet. Generated or missing ids
+are skipped. It stays an ordinary selection: the estimator can untick it and
+it does not come back on its own.
+
+Tests: 1 backend test (the ids recorded, including an upload mapped by hash,
+and returned by `/results`) and 2 frontend tests (pre-ticked, editable, sent
+on re-run; an unticked pre-selection stays unticked).
+
+## Open questions — answered by the coordinator
+
+1. Review answers stay cleared on re-run (a clean slate).
+2. AI RFIs already drafted to the GC or answered stay (real correspondence).
+3. NULL for `bids.amount` is fine.
+4. Single-process local deploy — the in-memory abort is enough.
+5. Yes: re-run defaults to the last run's inputs (done, above).
+
+## Original open questions
 
 1. **Review answers are now cleared on re-run.** This turns off the N4
    carry-over, where earlier resolutions were re-offered on the next run. Keep

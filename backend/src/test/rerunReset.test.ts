@@ -521,6 +521,25 @@ describe('analysis inputs — never the CRM\'s own documents, never a file twice
     expect(res.body.excludedInputs.map((e: { reason: string }) => e.reason)).toEqual(['crm_generated', 'duplicate']);
   });
 
+  it('each run records its input documents (an upload maps to its filed copy by hash) so the next re-run can pre-select them', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const f = await analyzedBid();
+    const crypto = await import('crypto');
+    const specBytes = Buffer.from((await pool.query('SELECT file_data FROM documents WHERE id=$1', [f.docs.spec])).rows[0].file_data, 'base64');
+    await pool.query('UPDATE documents SET content_sha256=$2 WHERE id=$1', [f.docs.spec, crypto.createHash('sha256').update(specBytes).digest('hex')]);
+    const res = await request(app).post('/api/preconstruction/analyze').set(auth(f.user.token))
+      .field('bidId', f.bidId)
+      .field('document_ids', f.docs.plan)
+      .field('document_ids', f.docs.proposalPdf)
+      .attach('files', specBytes, 'spec-uploaded-this-session.pdf');
+    expect(res.status).toBe(200);
+    const { rows: [tr] } = await pool.query('SELECT input_document_ids, run_id FROM takeoff_results WHERE bid_id=$1', [f.bidId]);
+    expect(tr.run_id).toBe(res.body.runId);
+    expect(tr.input_document_ids).toEqual([f.docs.plan, f.docs.spec]);
+    const results = await request(app).get(`/api/preconstruction/${f.bidId}/results`).set(auth(f.user.token)).expect(200);
+    expect(results.body.input_document_ids).toEqual([f.docs.plan, f.docs.spec]);
+  });
+
   it('storeDocument marks generate-* output as generated and records the content hash', async (ctx) => {
     if (!ok) return ctx.skip();
     const f = await analyzedBid();

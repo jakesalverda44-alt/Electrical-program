@@ -2306,6 +2306,28 @@ export async function gatherAnalysisInputs(
   return { files, excluded };
 }
 
+/** Re-run defaults — the document ids behind an analysis' input files. A
+ *  file that came from a document keeps its id; an upload maps to this bid's
+ *  non-generated document with the same bytes (the Files panel files every
+ *  upload), else it is left out. Order-preserving, no duplicates. */
+export async function inputDocumentIds(bidId: string, files: Express.Multer.File[]): Promise<string[]> {
+  const { rows } = await pool.query(
+    `SELECT id, content_sha256 FROM documents
+      WHERE linked_id = $1::text AND deleted_at IS NULL AND generated = false AND content_sha256 IS NOT NULL
+      ORDER BY created_at DESC`,
+    [bidId]
+  );
+  const byHash = new Map<string, string>();
+  for (const r of rows) if (!byHash.has(r.content_sha256 as string)) byHash.set(r.content_sha256 as string, r.id as string);
+  const ids: string[] = [];
+  for (const f of files) {
+    const id = (f as PipelineFile).documentId
+      ?? byHash.get(crypto.createHash('sha256').update(f.buffer).digest('hex'));
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
 router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload.array('files', 50), asyncHandler(async (req: AuthRequest, res) => {
   const bidId = req.body.bidId;
   if (!bidId) return res.status(400).json({ error: 'bidId required' });
@@ -2342,6 +2364,10 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   // until the counting stage writes this run's review. The estimator's
   // earlier resolutions stay in review_items for the carry-over (N4).
   const { runId: analysisRunId, reset } = await beginAnalysisRun(bidId);
+  // Re-run defaults to the last run's inputs: remember which documents this
+  // run read (an upload counts as its filed copy, matched by content hash).
+  await pool.query('UPDATE takeoff_results SET input_document_ids=$2 WHERE bid_id=$1 AND run_id=$3',
+    [bidId, await inputDocumentIds(bidId, files), analysisRunId]).catch(err => logger.warn({ err, bidId }, '[takeoff] could not record input documents'));
 
   // Log AI usage for rate limiting and audit
   await pool.query(

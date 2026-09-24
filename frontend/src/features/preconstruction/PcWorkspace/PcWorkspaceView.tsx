@@ -19,9 +19,9 @@ import Icon from '../../../components/Icon';
 // tabs are their own memoized modules now; this parent keeps the workspace
 // state, the autosave and the data fetches, and hands each tab the slice it
 // renders. Nothing about what is rendered changed.
-import { ProjectDoc, SetWorkspace, STEP_ORDER, TakeoffOnFile } from './shared';
+import { ProjectDoc, SetWorkspace, STEP_ORDER, TakeoffOnFile, isGeneratedDoc } from './shared';
 import { historicalCostsCache, unitCostLibCache, useGlobalPcCache } from './globalCache';
-import { isElecSheet, parseAgent1Service, parseAgentJson, scopeSectionsFrom } from './parsing';
+import { isElecSheet, isPdfOrImage, parseAgent1Service, parseAgentJson, scopeSectionsFrom } from './parsing';
 import { POLL_TIMEOUT_MESSAGE, useAiPoller } from './useAiPoller';
 import { useStableFn } from './useStableFn';
 import { importReducer, initialImportState } from './importReducer';
@@ -337,6 +337,23 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     params: { linked_id: bid.id },
   });
   useEffect(() => { if (projectDocsData) setProjectDocs(projectDocsData); }, [projectDocsData]);
+
+  // Re-run defaults to the last run's inputs: once per analysis run, when
+  // nothing is picked or uploaded yet, pre-tick the documents that run read
+  // (takeoff_results.input_document_ids) in "From Project Files". Still just
+  // a selection — the estimator can change it before running.
+  const preselectedRunRef = useRef<string | null>(null);
+  useEffect(() => {
+    const runId = aiResults?.run_id as string | undefined;
+    const ids = aiResults?.input_document_ids as string[] | null | undefined;
+    if (!runId || !Array.isArray(ids) || !projectDocsData || preselectedRunRef.current === runId) return;
+    preselectedRunRef.current = runId;
+    if (fileObjectsRef.current.length) return;
+    const eligible = new Set(projectDocsData.filter(d => isPdfOrImage(d) && !isGeneratedDoc(d)).map(d => d.id));
+    const pick = ids.filter(id => eligible.has(id));
+    if (!pick.length) return;
+    setSelectedDocIds(prev => (prev.size ? prev : new Set(pick)));
+  }, [aiResults?.run_id, aiResults?.input_document_ids, projectDocsData]);
 
   // Task 11 — struck from Batch 2: bid_workspaces also carries overhead_pct/
   // profit_pct/estimate_overrides now (via the continuous autosave), not
