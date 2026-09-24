@@ -49,7 +49,7 @@ export function useAccubidPricing(bidId: string | null): UseAccubidPricingResult
     setLoading(true);
     setError(null);
     api.get<AccubidBidResponse>(`/estimating/${bidId}/accubid`)
-      .then(res => { if (!cancelled) setData(res.data); })
+      .then(res => { if (!cancelled && res.data) setData(res.data); })
       .catch(err => { if (!cancelled) setError(err?.crmError?.message ?? 'Could not load the Accubid recap.'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -63,7 +63,7 @@ export function useAccubidPricing(bidId: string | null): UseAccubidPricingResult
     setError(null);
     try {
       const res = await api.put<AccubidBidResponse>(`/estimating/${bidId}/accubid/settings`, next);
-      setData(res.data);
+      if (res.data) setData(res.data);
     } catch (err) {
       setError((err as { crmError?: { message?: string } })?.crmError?.message ?? 'Could not save the crew/pricing settings.');
       throw err;

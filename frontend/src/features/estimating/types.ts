@@ -167,10 +167,19 @@ export interface SaveBidResponse {
   lines: EstimateLine[];
 }
 
+// Next round B2 — pricing_mode is deliberately left OUT of this constant.
+// The server (getBidSettings) is the one place that defaults a bid with no
+// saved settings row to 'accubid'; countless existing tests construct a
+// settings object from ...DEFAULT_SETTINGS as their OWN mocked API response,
+// and giving this constant an opinion here would silently switch every one
+// of them into accubid mode (and crash, since they never mock the Accubid
+// endpoint LaborPricingStep would then call) — see AccubidPricingPanel /
+// useAccubidPricing, only ever mounted when a real response explicitly
+// says pricing_mode === 'accubid'.
 export const DEFAULT_SETTINGS: EstimateSettings = {
   labor_rate: 38, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3,
   supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3,
-  floors_above_2: 0, pricing_mode: 'accubid',
+  floors_above_2: 0,
 };
 
 // ── Next round Part B — Accubid-style recap (crew/quotes/equipment/GE/
