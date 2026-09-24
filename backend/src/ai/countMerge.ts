@@ -892,10 +892,24 @@ export function mergeCountsIntoTakeoff(
       // steel", "Site light pole locations (A-15 …)") are the counted pole
       // lines of the site family: never a second pole line. Bases,
       // foundations and arms are accessories and stay with the estimator.
+      const ACCESSORY = /\bbases?\b(?!\s+cover)|\b(foundation|footing|arms?|bracket|power\s+poles?|pier|receptacles?|outlets?|gfci|gfi|photocells?|conduit|wire|wiring|j-?box|junction|handhole|pull\s*box)\b/i;
       if (sitePolesCounted && /\b(light\s+)?poles?\b/i.test(String(row.item ?? ''))
         && /\b(site|light|area|parking)\b/i.test(String(row.item ?? ''))
-        && !/\bbases?\b(?!\s+cover)|\b(foundation|footing|arms?|bracket|power\s+poles?|pier|receptacles?|outlets?|gfci|gfi|photocells?|conduit|wire|wiring|j-?box|junction|handhole|pull\s*box)\b/i.test(String(row.item ?? ''))) {
+        && !ACCESSORY.test(String(row.item ?? ''))) {
         removedRows.push({ row, reason: `the site light poles — counted as ${sitePolesCounted} (site family), never stacked`, replacedByType: null });
+        continue;
+      }
+      // Real-run fix 6 — the photometric sheet's pole spec ("25' 5in square
+      // steel pole, dark bronze, 3' conc base"): a POLE row (its first
+      // clause is the pole; what follows describes it) whose quantity is
+      // exactly the counted site poles is those poles — never a second pole
+      // line. A different quantity stays with the estimator; a base /
+      // foundation row (its first clause) is an accessory, as before.
+      const headClause = String(row.item ?? '').split(/,|;|\s[-–—]\s/)[0];
+      const siteTotal = siteTypes.reduce((n, t) => n + t.count, 0);
+      if (sitePolesCounted && /\b(?:steel|alum(?:inum|\.)?|square|round|tapered|\d+\s*['’]|\d+\s*(?:ft|feet))\b[^,;]*\bpoles?\b/i.test(headClause)
+        && !ACCESSORY.test(headClause) && Number(row.qty) === siteTotal) {
+        removedRows.push({ row, reason: `the site light poles (${Number(row.qty)} — the counted ${sitePolesCounted}, site family), never stacked`, replacedByType: null });
         continue;
       }
     }

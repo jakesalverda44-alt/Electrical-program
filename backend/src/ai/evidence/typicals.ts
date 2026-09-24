@@ -294,10 +294,16 @@ export function expandTypicals(
     }
     return n;
   };
+  // Real-run fix 6 — a device that is already part of a host's own
+  // assembly (the legend's baseflex: "receptacle mounted to base plate") is
+  // the same device when a notes block describes it again at that host
+  // ("outlet on flex … installed in fixture base"): part of the assembly,
+  // never a second question about how many.
+  const inAssembly = new Set(packages.filter(p => isAssemblyPackage(p, targets)).flatMap(p => p.devices.map(d => `${hostKeyOf(p)}|${d.targetKey}`)));
   for (const p of packages) {
     const hostKey = hostKeyOf(p);
     const hc = hostCounts.get(hostKey);
-    const assembly = isAssemblyPackage(p, targets);
+    const assembly = isAssemblyPackage(p, targets) || (p.devices.length > 0 && p.devices.every(d => d.targetKey && d.qty == null && inAssembly.has(`${hostKey}|${d.targetKey}`)));
     for (const d of p.devices) {
       if (!d.targetKey && d.qty != null && !assembly) { unmapped.push({ packageId: p.id, host: p.host, text: d.text, qty: d.qty, quote: p.quote }); continue; }
       if (!d.targetKey && (d.qty == null || assembly)) continue;

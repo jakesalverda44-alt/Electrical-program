@@ -428,7 +428,28 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `typicalqty|${e.deviceKey}|${e.drawnAtHosts}|${e.hostCount ?? ''}`,
     });
   }
+  // Real-run fix 6 — a note's "typical" fixtures per SITE POLE ("parking lot
+  // site lights typically have two 209W fixtures per pole") restates the
+  // site family's heads, which its schedule already states per type (S1 1,
+  // S2 2): the schedule is used and the note is shown, not blocking. Only
+  // when every counted site type has its heads from the schedule.
+  const siteCounted = (countResult?.types ?? []).filter(t => t.category === 'site_lighting' && t.status === 'counted' && t.count > 0);
+  const siteHeadsKnown = siteCounted.length > 0 && siteCounted.every(t => t.heads != null);
   for (const [i, u] of (ev?.unmappedTypical ?? []).entries()) {
+    if (siteHeadsKnown && /\b(site|parking|area)\b[^.]*\bpoles?\b|\bpoles?\b[^.]*\b(site|parking|area)\b/i.test(u.host)
+      && /\b(fixtures?|luminaires?|heads?|lights?|\d+\s*W)\b/i.test(u.text)) {
+      const heads = siteCounted.reduce((n, t) => n + (t.heads ?? 0), 0);
+      items.push({
+        id: `typicalheads:${slug(`${u.host} ${u.text}`)}`,
+        kind: 'confirm',
+        blocking: false,
+        title: `Note: ${u.qty} × ${u.text} per ${u.host.toLowerCase()} — the fixture schedule's heads are used`,
+        detail: `"${u.quote.slice(0, 160)}" — a general note. The fixture schedule states the heads per pole for each site type (${siteCounted.map(t => `${t.type} ${t.count} pole${t.count === 1 ? '' : 's'}, ${t.heads} head${t.heads === 1 ? '' : 's'}`).join('; ')} = ${heads} heads), and that is what the takeoff carries. Check the site plan if the note should override it.`,
+        actions: ['confirm'],
+        fingerprint: `typicalheads|${u.qty}|${heads}`,
+      });
+      continue;
+    }
     items.push({
       id: `unscheduled:TYPICAL-${slug(`${u.host} ${u.text}`)}-${i + 1}`,
       kind: 'count',
@@ -938,7 +959,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('reconcile:')) return 'reconcile';
   if (i.id.startsWith('schedule:') || i.id.startsWith('panel-dup:') || i.id.startsWith('panel-load:') || i.id.startsWith('schedqty:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
-  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 'typical';
+  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalheads:')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';
   if (i.id.startsWith('synonym:')) return 'synonym';
   if (i.id.startsWith('counting:')) return 'counting';

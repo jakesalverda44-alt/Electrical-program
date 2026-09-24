@@ -87,22 +87,97 @@ const byGroup = (items: Array<{ group?: string; id: string; blocking?: boolean }
   return out;
 };
 
-describe('the live Kissimmee run, replayed through the fixed code', () => {
-  it('prints before / after', (ctx) => {
+const groupOfLive = (i: { group?: string; id: string }) => i.group ?? (i.id.startsWith('refsheet:') ? 'refsheets' : 'other');
+const groupOfAfter = (i: ReviewItem) => i.group ?? (i.id.startsWith('refsheet:') ? 'refsheets' : 'other');
+function table(items: Array<{ id: string; group?: string; blocking?: boolean }>, groupOf: (i: never) => string, open: (i: never) => boolean) {
+  const out: Record<string, [number, number]> = {};
+  for (const i of items) {
+    const g = groupOf(i as never);
+    out[g] = out[g] ?? [0, 0];
+    if (open(i as never)) out[g][0]++;
+    out[g][1]++;
+  }
+  return out;
+}
+
+describe('the live Kissimmee run, replayed through the fixed code — the review list', () => {
+  it('replay fidelity: the fixed code gets the live run\'s own counts where nothing was fixed', (ctx) => {
     if (!have) return ctx.skip();
-    const t = (k: string) => after.cr.types.find(x => x.key === k);
+    const liveT = (k: string) => live.countResult.types.find(t => t.key === k)!.count;
+    const t = (k: string) => after.cr.types.find(x => x.key === k)!;
+    for (const k of ['A', 'B', 'M', 'C', 'G', 'E', 'F', 'J', 'D', 'L', 'S1', 'S2', 'GFCI', 'WP GFI', 'FLEX+J', 'M1', 'MOTION SENSOR', 'BATTERY CHARGER', 'DISCON A', 'DISCON B', 'MINI-TUNE']) {
+      expect(t(k).count, k).toBe(liveT(k));
+    }
+    expect([t('A').count, t('B').count, t('M').count, t('C').count, t('G').count]).toEqual([70, 45, 6, 2, 10]);
+  });
+
+  it('blocking 46 -> 14 (goal <= 15), 53 -> 23 items; before / after per group printed', (ctx) => {
+    if (!have) return ctx.skip();
+    const before = table(live.reviewItems, groupOfLive as never, ((i: { blocking?: boolean }) => i.blocking !== false) as never);
+    const now = table(after.review, groupOfAfter as never, reviewItemIsOpen as never);
+    const groups = [...new Set([...Object.keys(before), ...Object.keys(now)])];
     // eslint-disable-next-line no-console
-    console.log([
-      `BEFORE (live): ${live.reviewItems.length} items, ${liveBlocking(live).length} blocking — ${JSON.stringify(byGroup(live.reviewItems, (i: { blocking?: boolean }) => i.blocking !== false))}`,
-      `AFTER (replay): ${after.review.length} items, ${after.review.filter(reviewItemIsOpen).length} blocking — ${JSON.stringify(byGroup(after.review, reviewItemIsOpen))}`,
+    console.log(['GROUP              BEFORE (blocking/total)   AFTER (blocking/total)',
+      ...groups.map(g => `${g.padEnd(18)} ${`${before[g]?.[0] ?? 0}/${before[g]?.[1] ?? 0}`.padStart(8)}                  ${`${now[g]?.[0] ?? 0}/${now[g]?.[1] ?? 0}`.padStart(6)}`),
+      `TOTAL              ${`${liveBlocking(live).length}/${live.reviewItems.length}`.padStart(8)}                  ${`${after.review.filter(reviewItemIsOpen).length}/${after.review.length}`.padStart(6)}`,
       ...after.review.map(i => `  ${reviewItemIsOpen(i) ? 'B' : 'i'} ${i.id} — ${i.title}`),
-      `types: ${after.cr.types.filter(x => x.status !== 'merged').map(x => `${x.key}=${x.count}${x.status !== 'counted' ? `(${x.status})` : ''}${x.components?.typical ? `[+${x.components.typical} typ]` : ''}`).join(', ')}`,
-      `merged: ${after.cr.types.filter(x => x.status === 'merged').map(x => `${x.key}->${x.mergedInto}`).join('; ')}`,
-      `expansions: ${after.cr.evidence!.expansions.map(e => `${e.status} ${e.hostKey} ${e.deviceKey} ${e.hostCount}x${e.perHost}=${e.expanded}`).join('; ')}`,
-      `RTU total: ${(t('RTU-1')?.count ?? 0) + (t('RTU-2')?.count ?? 0)}; file ${LIVE_PLAN_FILE}`,
     ].join('\n'));
+    expect([liveBlocking(live).length, live.reviewItems.length]).toEqual([46, 53]);
+    const blocking = after.review.filter(reviewItemIsOpen);
+    expect(blocking.length).toBeLessThanOrEqual(15);
+    expect(blocking.length).toBe(14);
+    expect(after.review.length).toBe(23);
+    expect(blocking.map(i => i.id).sort()).toEqual([
+      'consistency:A+B',
+      'count:AIM', 'count:CF', 'count:CT/SERVICE CABINET', 'count:DATA CONC', 'count:METER BASE', 'count:QC', 'count:T-1/T-2', 'count:WIREWAY',
+      after.review.find(i => i.id.startsWith('legend-zero:'))!.id,
+      'scope:disconnects', 'scope:lighting', 'scope:panels',
+      'unscheduled:LIGHT-POLE-CONCRETE-BASE-W-ANCHOR-BOLTS-PH0-1',
+    ].sort());
+  });
+
+  it('nothing real is hidden: every zero-count equipment type is its own item; the group holds no equipment; every alias is kept with its reason', (ctx) => {
+    if (!have) return ctx.skip();
+    const zeroEquipment = after.cr.types.filter(t => t.status === 'zero' && t.category === 'equipment');
+    for (const t of zeroEquipment) expect(after.review.find(i => i.id === `count:${t.key}`), t.key).toBeTruthy();
+    const group = after.review.find(i => i.id.startsWith('legend-zero:'))!;
+    const typeOf = (k: string) => after.cr.types.find(t => t.key === k)!;
+    expect(group.groupedTypes!.every(g => typeOf(g.key).category !== 'equipment')).toBe(true);
+    expect(group.groupedTypes!.map(g => g.key).sort()).toEqual(['DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX', 'K', 'M2', 'N', 'PHOTOCELL SENSOR', 'QUADPLEX', 'STORE OPEN/CLOSE PUSHBUTTON']);
+    // Every alias is on the list, merged, with the entity it belongs to.
+    const merged = after.cr.types.filter(t => t.status === 'merged');
+    for (const k of ['RTU', 'RTU-1/RTU-2', 'ALC', 'LCP', 'LIGHTING CONTACTOR ENCLOSURE', 'PYLON', 'SIGN', 'SIGN-JB', 'POWER POLES', 'PP', 'P', 'DUPLEX', 'EWH', 'EF', 'T']) {
+      const m = merged.find(t => t.key === k);
+      expect(m, k).toBeTruthy();
+      expect(m!.mergedInto, k).toBeTruthy();
+      expect(m!.reason.length, k).toBeGreaterThan(10);
+    }
+    // The equipment the live run left at zero because a synonym made its
+    // schedule row ambiguous is now counted FROM the row (evidence kept).
+    for (const [k, q] of [['ALC PANEL', 1], ['WH', 1], ['FRONT WALL SIGN', 1], ['SIDE WALL SIGN', 2], ['PYLON SIGN', 1]] as const) {
+      expect(typeOf(k).count, k).toBe(q);
+      expect(typeOf(k).scheduleRows!.length, k).toBeGreaterThan(0);
+    }
+    expect(typeOf('ALC PANEL').aliases!.map(a => a.key).sort()).toEqual(['ALC', 'LCP', 'LIGHTING CONTACTOR ENCLOSURE']);
+    // The information items stay visible.
+    for (const id of ['count:EXHAUST FAN RECESSED (AUTOZONE FURN, HVAC INSTALL, EC WIRE)', 'refsheet:SGN101']) {
+      const i = after.review.find(x => x.id === id)!;
+      expect(i, id).toBeTruthy();
+      expect(i.blocking).toBe(false);
+    }
+    expect(after.review.find(i => i.id.startsWith('typicalheads:'))!.blocking).toBe(false);
+  });
+
+  it('RTU = 2, never 4; every quantity has a single source', (ctx) => {
+    if (!have) return ctx.skip();
+    const t = (k: string) => after.cr.types.find(x => x.key === k)!;
+    expect([t('RTU-1').count, t('RTU-2').count, t('RTU-1/RTU-2').count, t('RTU').count]).toEqual([1, 1, 0, 0]);
+    expect(live.countResult.types.filter(x => /^RTU/.test(x.key)).reduce((n, x) => n + x.count, 0)).toBe(4);
+    // Agent 1's own RTU row is replaced by the entity's lines, never stacked.
+    expect(after.cr.removedRows.find(r => String(r.row.item).startsWith('60/3 RTU circuits'))!.reason).toMatch(/type RTU-1/);
   });
 });
+
 describe('real-run fix 3 — the power-pole legend packages expand, times the drawn poles', () => {
   it('live: every pole package was an "assembly" of its PP#n type, expanded 0; tester perHost with hostCount null', () => {
     const exp = live.countResult.evidence.expansions.filter(e => /^PP#/.test(e.hostKey));
