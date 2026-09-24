@@ -56,6 +56,7 @@ import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nea
 import { getBidScopeList } from '../bidstd/scopeListDb';
 import { ComposeBidRow, SavedConfidenceItem } from '../bidstd/composeBidData';
 import { composeProposal } from '../bidstd/composeProposal';
+import { getAlternates } from '../estimating/accubidBidData';
 import { resolveUniqueJobNumber } from '../bidstd/boilerplate';
 import { renderTakeoffXlsx } from '../bidstd/takeoffXlsx';
 import { renderPrebidScopeDocx, prebidScopeFilename } from '../bidstd/prebidScopeDocx';
@@ -2973,6 +2974,10 @@ export async function composeCurrentBidData(
   // Next round A3 — referenced sheets skipped in the sheet check.
   const sheetRow = await loadSheetCheck(bidId);
   const clarifications = sheetRow ? skippedClarifications(sheetRow.result, sheetRow.skips ?? {}) : [];
+  // Next round B3 — the Labor & Pricing screen's Alternates (add/deduct,
+  // including a system-computed one like the 7-Eleven Graybar-package
+  // deduct), printed as separate proposal lines.
+  const estimatorAlternates = (await getAlternates(bidId).catch(() => [])).map(a => ({ kind: a.kind, description: a.description, amount: a.amount }));
 
   // agent4_price NUMERIC(12,2) is the authoritative, DB-validated price (see
   // run-agent4's parseMoney gate) — format it here rather than trusting whatever
@@ -3025,7 +3030,7 @@ export async function composeCurrentBidData(
       agent4: parsed as Agent4Output, bidRow, price: formattedPrice ?? '', savedLineItems,
       accountSnap, accountResolved, scopeItems: scopeList.items, overrides: scopeList.overrides,
       countResult: trRows[0].count_result as CountResult | null, reviewItems: trRows[0].review_items as ReviewItem[] | null,
-      clarifications,
+      clarifications, estimatorAlternates,
     });
     const { data, jobNumberGenerated } = composed;
     ambiguousQtyKeys = composed.ambiguousQtyKeys;
@@ -3122,7 +3127,7 @@ export async function composeCurrentBidData(
   const inputsHash = composeInputsHash({
     runId, source: useDraft ? 'draft' : 'final', composed: raw, price: rawPrice,
     countResult: trRows[0].count_result, reviewItems: trRows[0].review_items, accountTerms: accountSnap,
-    scopeList, bid: bid ?? null, clarifications,
+    scopeList, bid: bid ?? null, clarifications, estimatorAlternates,
   });
   return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys, accountCorrections, verifyOptions, hygieneWarnings, runId, inputsHash };
 }
@@ -3134,6 +3139,8 @@ export function composeInputsHash(x: {
   /** Next round A3 — only hashed when present, so documents filed before
    *  the sheet check existed keep their hash. */
   clarifications?: string[];
+  /** Next round B3 — only hashed when present, same reason. */
+  estimatorAlternates?: Array<{ kind: string; description: string; amount: number }>;
 }): string {
   const sha = (v: unknown) => crypto.createHash('sha256').update(typeof v === 'string' ? v : JSON.stringify(v ?? null)).digest('hex');
   const resolutions = ((x.reviewItems ?? []) as ReviewItem[]).map(i => [i.id, i.resolution ? [i.resolution.action, i.resolution.qty ?? null, i.resolution.answer ?? null, i.resolution.furnishBy ?? null, i.resolution.installBy ?? null] : null]);
@@ -3142,6 +3149,7 @@ export function composeInputsHash(x: {
     sha(x.accountTerms ?? null), sha(x.scopeList.items), sha(x.scopeList.overrides),
     x.bid ? [x.bid.name, x.bid.loc, x.bid.gc, x.bid.contact, x.bid.job_number, x.bid.brand, x.bid.sq_ft ?? null] : null,
     ...(x.clarifications?.length ? [x.clarifications] : []),
+    ...(x.estimatorAlternates?.length ? [x.estimatorAlternates] : []),
   ]);
 }
 

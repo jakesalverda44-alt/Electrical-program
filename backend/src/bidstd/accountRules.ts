@@ -93,6 +93,25 @@ export interface AccountRule {
   noMdpUnlessOnDrawings: boolean;
   notes: string;
   active: boolean;
+  /** Next round Part B (coordinator follow-up) — an optional automatic
+   *  deduct/add alternate this rule prices for the bid (the 7-Eleven Graybar
+   *  package: "furnished by others instead" deducts the material + material
+   *  markup + tax of the terms listed in termKeys). Computed from the bid's
+   *  own recap by estimating/autoDeductAlternate.ts, never hand-typed. */
+  autoDeductAlternate?: AutoDeductAlternateConfig | null;
+}
+
+export interface AutoDeductAlternateConfig {
+  enabled: boolean;
+  /** Which of this rule's terms the deduct is priced against (their
+   *  material $, matched to bid lines by category/description — see
+   *  estimating/autoDeductAlternate.ts). */
+  termKeys: TermKey[];
+  /** Whether the deducted amount also backs out tax on those items. */
+  taxable?: boolean;
+  /** May contain the literal token %AMOUNT% (replaced with the formatted
+   *  dollar amount when the alternate is generated). */
+  label: string;
 }
 
 export interface FurnishStatement { item: string; furnishBy: string; installBy: string; sourceSheet: string; quote: string }

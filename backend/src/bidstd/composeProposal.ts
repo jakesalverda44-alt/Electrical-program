@@ -38,6 +38,21 @@ export interface ComposeProposalInput {
   /** Next round A3 — referenced sheets the estimator skipped ("Mechanical
    *  schedules not provided at time of bid."): Exclusions & Clarifications. */
   clarifications?: string[];
+  /** Next round B3 — the Labor & Pricing screen's Alternates (add/deduct),
+   *  printed as separate lines that never change the base price. */
+  estimatorAlternates?: EstimatorAlternate[];
+}
+
+export interface EstimatorAlternate { kind: 'add' | 'deduct'; description: string; amount: number }
+
+/** "ADD $1,200.00 — EV charger rough-in per owner's alternate request." /
+ *  "DEDUCT $1,830.00 — if existing office fixtures stay (36th Street)." */
+export function formatAlternateBullet(a: EstimatorAlternate): string {
+  const amount = Number.isFinite(a.amount) ? a.amount : 0;
+  const formatted = amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+  const verb = a.kind === 'add' ? 'ADD' : 'DEDUCT';
+  const desc = a.description.trim().replace(/[.;]\s*$/, '');
+  return `${verb} ${formatted} — ${desc}.`;
 }
 
 export interface ComposeFailure { check: string; detail: string; category?: string; line?: string; /** The override flag that keeps/picks this line. */ flag?: string }
@@ -75,6 +90,18 @@ export function composeProposal(input: ComposeProposalInput): ComposeProposalOut
     savedLineItems: input.savedLineItems ?? [],
     lightingTermsBullet: lightingTermsBullet(input.accountResolved.find(t => t.term === 'lighting')),
   });
+  // Next round B3 — the estimator's own Alternates (add/deduct), printed as
+  // separate lines that never change the base price. Deterministic, once
+  // (never duplicated if this bid's alternates already made it into the
+  // AI's own `alternates` output somehow — matched by exact bullet text).
+  const existingAlternateText = (data.alternates ?? []).map(b => (typeof b === 'string' ? b : `${b.b}${b.t}`));
+  const newAlternateBullets = (input.estimatorAlternates ?? [])
+    .map(formatAlternateBullet)
+    .filter(b => !existingAlternateText.includes(b));
+  if (newAlternateBullets.length) {
+    data.alternates = [...(data.alternates ?? []), ...newAlternateBullets];
+    corrections.push(...newAlternateBullets.map(b => `Alternate added from Labor & Pricing: "${b}"`));
+  }
   // Fix round 2 / N-R2-3 — Section C is exactly 3 bullets, deterministically:
   // never a 422 loop that only another Agent 4 run could break.
   corrections.push(...fitSectionC(data));

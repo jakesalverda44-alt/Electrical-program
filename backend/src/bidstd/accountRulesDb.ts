@@ -21,6 +21,7 @@ function rowToRule(r: Record<string, unknown>): AccountRule {
     noMdpUnlessOnDrawings: !!r.no_mdp_unless_on_drawings,
     notes: (r.notes as string) ?? '',
     active: r.active !== false,
+    autoDeductAlternate: (r.auto_deduct_alternate as AccountRule['autoDeductAlternate']) ?? null,
   };
 }
 

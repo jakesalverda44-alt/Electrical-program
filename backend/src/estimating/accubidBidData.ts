@@ -19,6 +19,9 @@ import {
   DEFAULT_LABOR_MARKUP_PCT, DEFAULT_QUOTE_MARKUP_PCT, DEFAULT_ADJUSTMENT_PCT,
   DEFAULT_BURDEN_PCT, DEFAULT_FRINGE_PER_HR,
 } from './accubidRecap';
+import { computeAutoDeductAmount, formatAutoDeductLabel } from './autoDeductAlternate';
+import { matchAccountRule } from '../bidstd/accountRules';
+import { listAccountRules } from '../bidstd/accountRulesDb';
 
 function numberOr(v: unknown, fallback: number): number {
   const n = Number(v);
@@ -340,6 +343,45 @@ export async function computeAccubidRecapForBid(bidId: string): Promise<AccubidB
   return { recap, settings, crew, totalHours: hours, quotes, costLines, alternates };
 }
 
+/** Next round Part B (coordinator follow-up) — recomputes and upserts the
+ *  bid's account-rule auto deduct alternate (the 7-Eleven Graybar package),
+ *  if the bid's matched account rule has one configured. A no-op (and
+ *  removes any stale auto alternate) when the rule has none, or when
+ *  nothing on the bid matches its termKeys. Uses Phase A's own
+ *  resolveLines/priceBid for the per-line material breakdown — the same
+ *  basis regardless of which pricing mode (phase_a/accubid) the bid is in,
+ *  since est_bid_lines and the library are shared. */
+export async function syncAutoDeductAlternateForBid(bidId: string): Promise<void> {
+  const { rows: bidRows } = await pool.query('SELECT brand, name, project_type FROM bids WHERE id = $1 AND deleted_at IS NULL', [bidId]);
+  const bid = bidRows[0] as { brand?: string | null; name?: string | null; project_type?: string | null } | undefined;
+  const SOURCE_RULE = 'account_rule_auto_deduct';
+  if (!bid) { await pool.query('DELETE FROM est_bid_alternates WHERE bid_id=$1 AND source_rule=$2', [bidId, SOURCE_RULE]); return; }
+
+  const rules = await listAccountRules();
+  const { rule } = matchAccountRule(rules, { brand: bid.brand, bidName: bid.name, projectType: bid.project_type });
+  const config = rule?.autoDeductAlternate;
+  if (!config?.enabled) {
+    await pool.query('DELETE FROM est_bid_alternates WHERE bid_id=$1 AND source_rule=$2', [bidId, SOURCE_RULE]);
+    return;
+  }
+
+  const [library, lines, settings] = await Promise.all([getLibrary(), getBidLines(bidId), getAccubidSettings(bidId)]);
+  const resolved = resolveLines(lines, library);
+  const neutralSettings: PricingSettings = { laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1 };
+  const priced = priceBid(resolved, neutralSettings, []);
+
+  const result = computeAutoDeductAmount(
+    priced.lines.map(l => ({ category: l.category, description: l.description, materialExt: l.materialExt, excluded: l.excluded })),
+    { termKeys: config.termKeys, materialMarkupPct: settings.materialMarkupPct, taxable: config.taxable, materialTaxPct: settings.materialTaxPct }
+  );
+
+  await upsertAutoAlternate(bidId, SOURCE_RULE, {
+    kind: 'deduct',
+    description: formatAutoDeductLabel(config.label, result.amount),
+    amount: result.amount,
+  });
+}
+
 /** Writes the recap's Selling Price into bid_estimates/bids.amount — the
  *  same downstream contract Phase A's writeBidEstimateSnapshot guarantees
  *  (composeProposal / the proposal price flow read bids.amount either way,
@@ -367,5 +409,8 @@ export async function saveAccubidRecapForBid(bidId: string): Promise<AccubidBidR
   } finally {
     client.release();
   }
+  // Outside the transaction (its own upsert, non-critical to the save
+  // succeeding — a failure here shouldn't roll back a real price save).
+  await syncAutoDeductAlternateForBid(bidId).catch(() => {});
   return result;
 }

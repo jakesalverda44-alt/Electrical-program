@@ -82,3 +82,41 @@ describe('next round A6 — "by G.C." never reaches the GC as an exclusion', () 
     expect(run('Painting by the GC.').lineFailures).toEqual([]);
   });
 });
+
+describe('next round B3 — Labor & Pricing Alternates print as separate proposal lines', () => {
+  const run = (estimatorAlternates: Array<{ kind: 'add' | 'deduct'; description: string; amount: number }>) => {
+    const a4 = coworkKissimmeeAgent4();
+    const snap = resolveAccountTerms(AUTOZONE_SEED, 'brand', [], false);
+    return composeProposal({
+      agent4: a4,
+      bidRow: { name: 'AutoZone Store #10077', loc: '2860 N Old Lake Wilson Rd, Kissimmee, FL 34747', gc: 'Summit General Contractors', brand: 'AutoZone' },
+      price: '$81,485.60', accountSnap: snap,
+      accountResolved: applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'APT', 'scope:power_poles:install': 'APT' }),
+      scopeItems: [], overrides: [], countResult: null, reviewItems: [], estimatorAlternates,
+    });
+  };
+
+  it('a deduct alternate (36th Street-shaped) prints as its own bullet, never changing the base price', () => {
+    const r = run([{ kind: 'deduct', description: 'if existing office fixtures stay', amount: 1830 }]);
+    expect(r.data.alternates).toEqual(expect.arrayContaining(['DEDUCT $1,830.00 — if existing office fixtures stay.']));
+    expect(r.data.total_price).toBe('$81,485.60');
+    expect(r.corrections.some(c => c.includes('Alternate added from Labor & Pricing'))).toBe(true);
+  });
+
+  it('an add alternate prints too, and a system-computed one (auto deduct) prints the same way', () => {
+    const r = run([
+      { kind: 'add', description: 'EV charger rough-in per owner request', amount: 1200 },
+      { kind: 'deduct', description: 'If the Graybar package is furnished by others through the Graybar 7-Eleven national account, deduct $9,600.00 — installation remains in APT scope', amount: 9600 },
+    ]);
+    expect(r.data.alternates).toEqual(expect.arrayContaining([
+      'ADD $1,200.00 — EV charger rough-in per owner request.',
+      expect.stringContaining('DEDUCT $9,600.00'),
+    ]));
+  });
+
+  it('never duplicates a bullet already present', () => {
+    const r = run([{ kind: 'deduct', description: 'if existing office fixtures stay', amount: 1830 }]);
+    const count = r.data.alternates!.filter(b => b === 'DEDUCT $1,830.00 — if existing office fixtures stay.').length;
+    expect(count).toBe(1);
+  });
+});
