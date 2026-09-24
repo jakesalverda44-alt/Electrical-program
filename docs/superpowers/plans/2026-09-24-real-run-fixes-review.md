@@ -174,3 +174,66 @@
 - **N3.** Confirming a consistency suggestion logs a `gapfill_accept` labeled event, which mislabels the training data. Use a `consistency_accept` kind.
 - **N4.** A non-legend class name folds without checking (`consolidate.ts:321`). A schedule row "DISCONNECT, NEMA 3R" folds into DS-1 + DS-2 even when there are untagged disconnects.
 - **N5.** The baseflex notes-restatement absorption also swallows an unrelated "additional outlet in fixture base" note that has no quantity. This is narrow.
+
+---
+
+## Round 2: fix range 361f259..8ab3a7a
+
+**Scope:** blockers and regressions only. Reviewed by Opus 5.5, read-only.
+- The targeted run passed 25 files, **303/303**: `src/ai/evidence/*`, `realRunRefs`, `realRunReview`, `reviewItems`, the live replay, `kissimmeeEvidence`, `kissimmeeReviewNoise`, `consistencyEndToEnd` and `classConflict`.
+- The Round 1 repros were re-run unchanged against the fixed modules: `repro1-4`, `cons1-2`, `refs`, `refs2`, `pole2` and `heads`, all in the scratchpad.
+- No full suite was run. The worktree is clean.
+
+**Verdict: MERGE.**
+- All 3 blockers and every Round 1 should-fix are closed.
+- There are no new blockers.
+- Three new should-fix items (S13–S15) come from this round's own fixes. Each is narrow and has a small fix. They are best done before the next live run.
+
+### Round 1 repros, re-run
+
+| Finding | Result |
+|---|---|
+| B1 | **Closed.** Pass-1 marks always stay counted (`countingStage.ts:762-767`). 70 counted and 50 re-found gives **70**, plus a blocking item under 85%. Only pass-2-only marks are suggested. "Keep" keeps pass 1's count. |
+| B2 | **Closed.** FRONT and SIDE WALL SIGN plus a generic "Wall sign" give 1 + 2 rows. SIGN is uncertain (counted by its marks) and never a bridge. KEF stays separate. |
+| B3 | **Closed.** EF-A/EF-B, "EF A"/"EF B", WH-A/WH-B, DISCON-A/DISCON-B and UH-1A/UH-1B are all distinct: **2**. |
+| S1 | **Closed.** B-32 is counted once, with an enforced class question. Receptacles are **33** (asserted in the replay). |
+| S2/S3 | **Closed.** "RTU-1/RTU-2" citing circuits → 2. With only RTU-1 present, the combined tag folds into RTU-1 + a created RTU-2, never stacked. "RTU-1/2/3" gives RTU-3 as a member. RTU still folds into RTU-1/RTU-2 as a class, and PP into PP#n. |
+| S4 | **Closed.** The circulating pump, the ice machine on the drink machine's circuit, the contactor for the pylon sign and the time clock controlling the signs all stay separate. See S13 for a new side effect. |
+| S5 | **Closed.** "A-6, 180 VA", "2 HP", "3 phase" and "3 fixtures" give no phantom circuit. "A-2, 4-#12" still gives A4 (nit). |
+| S6/S7 | **Closed.** P against schedule-owned PP#1–6 with no marks becomes a `synonym:` question. "Same device" drops only the coinciding marks. |
+| S8 | **Closed.** Maximum matching (Kuhn's augmenting paths) with an adaptive radius: a 70-mark grid at 25–30 pt jitter is re-found 70/70. A truncated second pass is skipped with a warning. It is capped (3 sheets × 16 tiles) and cached. "Confirm" adds. |
+| S9 | **Closed.** The real references I tried stay blocking. "E-9 (Div 16)", "Sheet E-8 SECTION 2", "E-8 (12345)", M-101, P-201, A-201, E-101, E4.1, "Sheet E 8" and "Refer to sheet E8" are all blocking. SGN101 is the only information item, and callouts ("1/E-5", "DETAIL 3/E4") give nothing. |
+| S10 | **Closed.** Flag and camera poles are kept as unscheduled questions. |
+| S11 | **Closed.** The 209W note is blocking, with 6 vs 4. EF at zero blocks. |
+
+### Regression scan
+
+- **The direct-evidence merge rule** still merges true synonyms: RTU → RTU-1/RTU-2 and PP → PP#n (class), PYLON/PYLON SIGN and ALC/ALC PANEL/LCP (replay-asserted). POWER POLES against PP#n is now uncertain (N4) and resolves through its marks or the `synonym:` question. No double count reappears on Kissimmee: RTU 2, pole outlets 8 + 1.
+- **The Hungarian/Kuhn matching** is correct maximum-cardinality matching. Pass 1 always stands, so it cannot lower a count. Its only inflation path is a human confirming a suggestion (see S15 and N6).
+- **Cache key:** `consistency:<types>:<tileIn>` plus `model|cs1` on the sheet's content hash. See N7.
+- **Cross-type location + circuit pairing:** see S14.
+
+### Should-fix (new in this round)
+
+- **S13. An instantaneous water heater can now be counted twice: its panel row goes to WH, and IWH is counted from the plans. Reproduced (`repro2` "IWH vs WH").**
+  - Where: `backend/src/ai/evidence/schedules.ts` `assignRow`/`rowNamesTarget`, via the S4 split in `consolidate.ts`.
+  - Before this round, IWH folded into WH, so WH = 2 was right.
+  - Now IWH ("Instantaneous water heater at hand sink") stays separate. But the Panel A row "INSTANT WATER HEATER" (A-29) matches only WH's lead words, because INSTANT ≠ INSTANTANEOUS. So WH = **2** from the rows, and IWH is sent to the counter as well. One drawn IWH symbol gives 3 heaters for 2 real ones.
+  - Fix: a row whose description has qualifier words beyond a target's own (INSTANT, CIRC, PUMP …) is not that target's, or goes to the best-scoring target. When a split-off sibling exists, raise the ambiguous row as a `schedqty:` question.
+- **S14. The class-conflict question cannot say "two receptacles". Reasoned.**
+  - Where: `backend/src/ai/reviewItems.ts:648-656`. The options are only kept-class or dropped-class.
+  - The pairing fires on the same circuit within 0.75" (1.0" through an enlarged plan). A counter duplex on E-1 and a floor simplex on E-2 #11 at one desk, both on B30, are two real devices, but the answer can only relabel one.
+  - Fix: add a third option, "two receptacles — count both", that restores the dropped mark. Add the circuit to the fingerprint too (N8).
+- **S15. Confirmed consistency markers outlive a re-run and are added again. Reasoned.**
+  - Where: `backend/src/estimating/takeoffReview.ts:174-185` (`confirmedConsistencyMarkers` counts every confirmed `Consistency check` marker, of any age), and `:333` (`currentQty + confirmed`).
+  - Re-run and reset clear only *suggested* markers.
+  - Scenario: an estimator confirms 3 consistency suggestions (70 + 3 = 73), then re-runs. The new first pass finds 72, so it now includes 2 of those fixtures. The new item's "Confirm the found marks" gives 72 + 3 (stale) + any new ones, about **75**.
+  - Fix: tally only markers whose `recheck_run_id` or created run matches the item's run, or those that don't coincide with a current first-pass mark.
+
+### Nits
+
+- **N6.** A second-pass double report of one symbol leaves an unmatched `onlySecond` mark about 0.1" from an agreed mark, and it is suggested. A careless confirm adds 1. Drop onlySecond marks within the radius of any first-pass mark.
+- **N7.** The consistency cache key leaves out the cover rectangle and the first pass's marks. After a re-run whose first pass differs, a cached second pass over the old cover is reused, and the agreement figures come out stale. Add a hash of the cover tiles.
+- **N8.** The `classconflict:` fingerprint leaves out the circuit, so two conflicts between the same sheet pair share one fingerprint.
+- **N9.** "A-2, 4-#12" still reads A4. "E-8 thru E-10" yields E-8 and E-10 but not E-9, which is older behaviour.
+- **N10.** A "12' pedestrian bollard light pole" row whose quantity happens to equal the counted site poles is still removed as "the site light poles". Compare the pole height or catalog as well as the quantity.
