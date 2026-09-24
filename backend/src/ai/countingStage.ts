@@ -77,6 +77,8 @@ export interface CountResultEvidence {
   pages: Array<{ key: string; label: string; source: 'text' | 'vision' | 'none'; viewports: number; hasTextLayer: boolean; note?: string }>;
   typicals: TypicalPackage[];
   expansions: CountMergeEvidenceResult['expansions'];
+  /** Review fix S1 — one receptacle drawn on two sheets under two classes. */
+  classConflicts?: CountMergeEvidenceResult['classConflicts'];
   unmappedTypical: CountMergeEvidenceResult['unmappedTypical'];
   tables: ScheduleTable[];
   families: CountMergeEvidenceResult['families'];
@@ -382,6 +384,7 @@ function finish(
         pages: evidence.ev.pages.map(p => ({ key: p.key, label: p.label, source: p.viewports.source, viewports: p.viewports.viewports.length, hasTextLayer: p.hasTextLayer, ...(p.viewports.note ? { note: p.viewports.note } : {}) })),
         typicals: evidence.ev.typicals,
         expansions: merged.evidence?.expansions ?? [],
+        ...(merged.evidence?.classConflicts?.length ? { classConflicts: merged.evidence.classConflicts } : {}),
         unmappedTypical: merged.evidence?.unmappedTypical ?? [],
         tables: evidence.ev.tables,
         families: merged.evidence?.families ?? [],

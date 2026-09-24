@@ -26,10 +26,11 @@
 import { isFixtureCategory, normalizeTypeKey, type CountTarget, type TargetCategory } from './countTargets';
 import type { CountSheet, SheetRole, SheetFocus } from './countSheets';
 import { alignSheets, mainPlanPosition, relateSheets, type SheetRelation } from './evidence/sheetRelation';
+import { isPlainReceptacle } from './evidence/consolidate';
 import type { SheetGeom, Viewport } from './evidence/viewports';
 import type { SheetMarkResolution } from './evidence/viewportResolve';
 import { circuitSummaryRows, isCircuitCountRow, panelNameOf, panelsNamedIn, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
-import { expandTypicals, hostKeyOf, type HostMark, type TypicalExpansion, type TypicalPackage, type UnmappedTypicalDevice } from './evidence/typicals';
+import { circuitsOverlap, expandTypicals, hostKeyOf, type HostMark, type TypicalExpansion, type TypicalPackage, type UnmappedTypicalDevice } from './evidence/typicals';
 import { applyFamilies, applyScheduleLegendEquivalence, applySymbolDefinitions, catalogOf, type FamilyDecision } from './evidence/families';
 
 export interface SheetCountInput {
@@ -575,11 +576,70 @@ export interface MergeEvidence {
 }
 
 export interface CountMergeEvidenceResult {
+  /** Review fix S1 — receptacles drawn on two sheets under two class names. */
+  classConflicts?: ClassConflict[];
   expansions: TypicalExpansion[];
   unmappedTypical: UnmappedTypicalDevice[];
   families: FamilyDecision[];
   symbolDefinitions: Array<{ key: string; into: string }>;
   circuitRows: number;
+}
+
+/** Review fix S1 — one receptacle drawn on two sheets of a level under two
+ *  plain class names (E-1 draws B-32 as a DUPLEX, E-2 #11 as a SIMPLEX): the
+ *  marks coincide after the sheets are aligned AND carry the same circuit
+ *  tag, so they are ONE object. The one on a main plan is kept (else the
+ *  first sheet's), the other leaves its type, and a class-conflict question
+ *  asks which class it is. Plain receptacles only (simplex / duplex /
+ *  floor) — never a GFCI or WP one. Mutates `sheets[].placed`. */
+export interface ClassConflict {
+  circuit: string;
+  kept: { sheetLabel: string; typeKey: string };
+  dropped: { sheetLabel: string; typeKey: string };
+}
+/** Marks within this (after alignment) with the same circuit are one
+ *  receptacle; an enlarged plan's area on the main plan is read by eye, so a
+ *  mark mapped through it gets the wider tolerance. Only an UNAMBIGUOUS pair
+ *  (one candidate on that circuit within reach) is paired. */
+export const CLASS_PAIR_IN = 0.75;
+export const CLASS_PAIR_ENLARGED_IN = 1.0;
+export function pairReceptacleClasses(targets: CountTarget[], sheets: SheetCountInput[], isHost: (k: string) => boolean = () => false): ClassConflict[] {
+  const plain = new Set(targets.filter(t => !t.mergedInto?.length && isPlainReceptacle(t)).map(t => t.key));
+  if (plain.size < 2) return [];
+  const out: ClassConflict[] = [];
+  const rel = (s: SheetCountInput) => ({ key: s.sheet.key, label: s.sheet.label, geometry: s.geometry ?? null, viewports: s.viewports ?? null,
+    marks: s.placed.filter(p => Number.isFinite(p.x)).map(p => ({ typeKey: p.typeKey, x: p.x!, y: p.y!, viewportId: p.viewportId ?? null })) });
+  const counted = sheets.filter(s => s.status === 'counted' && !s.sheet.photometric && s.geometry);
+  const kindOf = (s: SheetCountInput, m: { viewportId?: string | null }) => s.viewports?.find(v => v.id === m.viewportId)?.kind ?? null;
+  for (let i = 0; i < counted.length; i++) {
+    for (let j = i + 1; j < counted.length; j++) {
+      const A = counted[i], B = counted[j];
+      if ((A.sheet.level ?? '') !== (B.sheet.level ?? '')) continue;
+      const al = alignSheets(rel(A), rel(B), isHost);
+      if (!al) continue;
+      const posA = (m: SheetCountInput['placed'][number]) => mainPlanPosition({ typeKey: m.typeKey, x: m.x!, y: m.y!, viewportId: m.viewportId ?? null }, rel(A));
+      const posB = (m: SheetCountInput['placed'][number]) => { const p = mainPlanPosition({ typeKey: m.typeKey, x: m.x!, y: m.y!, viewportId: m.viewportId ?? null }, rel(B)); return p ? al.map(p) : null; };
+      const used = new Set<object>();
+      for (const a of A.placed) {
+        if (!plain.has(a.typeKey) || !a.circuit || !Number.isFinite(a.x) || used.has(a)) continue;
+        const pa = posA(a);
+        if (!pa) continue;
+        const reach = (m: SheetCountInput['placed'][number]) => (kindOf(A, a) === 'enlarged_plan' || kindOf(B, m) === 'enlarged_plan' ? CLASS_PAIR_ENLARGED_IN : CLASS_PAIR_IN);
+        const near = B.placed.filter(m => m !== a && !used.has(m) && plain.has(m.typeKey) && m.circuit && circuitsOverlap(m.circuit.replace(/-/g, ''), a.circuit!.replace(/-/g, ''))
+          && Number.isFinite(m.x) && (() => { const pb = posB(m); return !!pb && Math.hypot(pb.x - pa.x, pb.y - pa.y) <= reach(m); })());
+        // Same class on both sheets is the sheet-pair rule's (B4); here only
+        // a different class, and only an unambiguous one.
+        if (near.length !== 1 || near[0].typeKey === a.typeKey) continue;
+        const b = near[0];
+        used.add(a); used.add(b);
+        const keepA = kindOf(A, a) === 'main_plan' || kindOf(B, b) !== 'main_plan';
+        const [keepS, keepM, dropS, dropM] = keepA ? [A, a, B, b] : [B, b, A, a];
+        dropS.placed = dropS.placed.filter(m => m !== dropM);
+        out.push({ circuit: a.circuit, kept: { sheetLabel: keepS.sheet.label, typeKey: keepM.typeKey }, dropped: { sheetLabel: dropS.sheet.label, typeKey: dropM.typeKey } });
+      }
+    }
+  }
+  return out;
 }
 
 export function mergeCountsIntoTakeoff(
@@ -594,6 +654,8 @@ export function mergeCountsIntoTakeoff(
   const isHost = (k: string) => hostKeys.has(k);
   const sched = opts.evidence?.scheduleCounts ?? new Map<string, ScheduleCount>();
   const evidenceOn = !!opts.evidence;
+  // Review fix S1 — one receptacle under two class names on two sheets.
+  const classConflicts = evidenceOn && opts.countingRan ? pairReceptacleClasses(targets, sheets, isHost) : [];
 
   for (const t of targets) {
     // Real-run fix 2 — another name of an entity: never counted, never a
@@ -695,7 +757,7 @@ export function mergeCountsIntoTakeoff(
   // ── 2.2 Typical expansion ────────────────────────────────────────────────
   let evidenceOut: CountMergeEvidenceResult | undefined;
   if (opts.countingRan && opts.evidence) {
-    evidenceOut = { expansions: [], unmappedTypical: [], families: [], symbolDefinitions: [], circuitRows: 0 };
+    evidenceOut = { expansions: [], unmappedTypical: [], families: [], symbolDefinitions: [], circuitRows: 0, ...(classConflicts.length ? { classConflicts } : {}) };
     const packages = opts.evidence.typicals ?? [];
     if (packages.length) {
       const hostCounts = new Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[] }>();

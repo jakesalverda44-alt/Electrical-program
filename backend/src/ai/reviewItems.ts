@@ -94,6 +94,9 @@ export interface ReviewItem {
   /** Evidence round 2.2 — a typical item: the device types and per-host
    *  quantities a resolved host count adds. */
   typicalDevices?: Array<{ key: string; perHost: number }>;
+  /** Review fix S1 — a class-conflict item: answered with option 1, one
+   *  receptacle moves from `from` to `to`. */
+  classShift?: { from: string; to: string };
   /** Fix round 4 / S20 — a panel-conflict item: what each answer changes. */
   panelChoice?: PanelChoice;
   /** Evidence round 3.3 — a family item: the primary type keys whose total
@@ -612,6 +615,21 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `consistency|${per.map(p => `${p.k}:${p.first}/${p.agreed}/${p.suggested}`).join(';')}`,
     });
   }
+  // Review fix S1 — one receptacle drawn on two sheets under two class
+  // names: counted once (as the main plan draws it); which class is it?
+  for (const c of ev?.classConflicts ?? []) {
+    const name = (k: string) => (countResult?.types ?? []).find(t => t.key === k)?.type ?? k;
+    items.push({
+      id: `classconflict:${c.circuit}:${c.kept.typeKey}:${c.dropped.typeKey}`,
+      kind: 'area',
+      title: `Circuit ${c.circuit}: one receptacle drawn as ${name(c.kept.typeKey)} and as ${name(c.dropped.typeKey)}`,
+      detail: `${c.kept.sheetLabel} draws it as ${name(c.kept.typeKey)} and ${c.dropped.sheetLabel} as ${name(c.dropped.typeKey)}, at the same place on the same circuit — one receptacle, counted once (as ${name(c.kept.typeKey)} for now). Which is it?`,
+      options: [`${name(c.kept.typeKey)} (as counted)`, name(c.dropped.typeKey)],
+      classShift: { from: c.kept.typeKey, to: c.dropped.typeKey },
+      actions: ['answer'],
+      fingerprint: `classconflict|${c.kept.sheetLabel}|${c.dropped.sheetLabel}`,
+    });
+  }
   // Review fix S3 — a combined tag whose own quantity disagrees with the
   // members it names: the estimator decides (confirm with a reason, or
   // correct the member lines).
@@ -999,6 +1017,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalheads:')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';
   if (i.id.startsWith('synonym:') || i.id.startsWith('combined:')) return 'synonym';
+  if (i.id.startsWith('classconflict:')) return 'classconflict';
   if (i.id.startsWith('counting:')) return 'counting';
   if (i.id.startsWith('refsheet:')) return 'refsheets';
   if (i.id.startsWith('sheet:') || i.id.startsWith('file:')) return 'sheets';
@@ -1287,6 +1306,13 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
       if (cur === null) continue; // the type itself is not on this job
       byType.set(d.key, (cur ?? 0) + d.perHost * (i.resolution.qty ?? 0));
     }
+  }
+  // Review fix S1 — the class conflict answered "the other class".
+  for (const i of list) {
+    if (!i.id.startsWith('classconflict:') || !i.classShift || i.resolution?.action !== 'answer' || i.resolution.answer !== i.options?.[1]) continue;
+    const from = byType.get(i.classShift.from), to = byType.get(i.classShift.to);
+    if (from != null && from > 0) byType.set(i.classShift.from, from - 1 > 0 ? from - 1 : null);
+    if (to !== null) byType.set(i.classShift.to, (to ?? 0) + 1);
   }
   // Fix round S3 — "the same outlet on two sheets": subtract.
   for (const i of list) {

@@ -194,7 +194,9 @@ describe('real-run fix 3 — the power-pole legend packages expand, times the dr
     const D = 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE';
     expect(exp.map(e => [e.hostKey, e.deviceKey, e.status, e.hostCount, e.perHost, e.drawnAtHosts, e.expanded])).toEqual([
       ['PP#1', D, 'expanded', 1, 2, 0, 2],
-      ['PP#1', 'SIMPLEX', 'qty_unstated', 1, 0, 5, 0],
+      // 4 simplex drawn near the office pole (review fix S1: B-32 is E-1's
+      // duplex, drawn again on #11 as a simplex — counted once, as the duplex).
+      ['PP#1', 'SIMPLEX', 'qty_unstated', 1, 0, 4, 0],
       ['PP#2', D, 'expanded', 1, 1, 0, 1],
       ['PP#3', D, 'expanded', 2, 1, 0, 2],
       ['PP#4', 'SIMPLEX', 'expanded', 1, 1, 0, 1],
@@ -217,19 +219,20 @@ describe('real-run fix 3 — the power-pole legend packages expand, times the dr
     expect(after.review.find(i => i.id === 'count:PP#4')).toBeUndefined();
   });
 
-  it('receptacles 34 (simplex 9, duplex / floor 14, GFCI 7, WP GFI 4) — plausible against Chris\'s 38', (ctx) => {
+  it('receptacles 33 (simplex 8, duplex / floor 14, GFCI 7, WP GFI 4) — B-32 once (review fix S1); plausible against Chris\'s 38', (ctx) => {
     if (!have) return ctx.skip();
     const t = (k: string) => after.cr.types.find(x => x.key === k)!;
     const r = { simplex: t('SIMPLEX'), duplex: t('DUPLEX RECEPTACLE / FLOOR RECEPTACLE'), gfci: t('GFCI'), wp: t('WP GFI') };
-    expect([r.simplex.count, r.duplex.count, r.gfci.count, r.wp.count]).toEqual([9, 14, 7, 4]);
-    expect(r.simplex.components).toEqual({ drawn: 8, typical: 1, schedule: 0 });
+    expect([r.simplex.count, r.duplex.count, r.gfci.count, r.wp.count]).toEqual([8, 14, 7, 4]);
+    expect(r.simplex.components).toEqual({ drawn: 7, typical: 1, schedule: 0 });
     expect(r.duplex.components).toEqual({ drawn: 6, typical: 8, schedule: 0 });
     const total = r.simplex.count + r.duplex.count + r.gfci.count + r.wp.count;
-    expect(total).toBe(34);
+    expect(total).toBe(33);
+    expect(after.cr.evidence!.classConflicts).toEqual([{ circuit: 'B32', kept: { sheetLabel: 'E-1 "Power Plan & General Notes"', typeKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE' }, dropped: { sheetLabel: 'E-2 "Power Plan & Details"', typeKey: 'SIMPLEX' } }]);
     // Chris: GFCI 16, duplex 11, single 8, decorator 3 = 38. Duplex +
-    // decorator 14 = our 14; single 8 vs our 9; the whole gap is GFCI
+    // decorator 14 = our 14; single 8 = our 8; the whole gap is GFCI
     // (11 vs 16) — the open audit question since the evidence round.
-    expect(38 - total).toBe(4);
+    expect(38 - total).toBe(5);
   });
 });
 
