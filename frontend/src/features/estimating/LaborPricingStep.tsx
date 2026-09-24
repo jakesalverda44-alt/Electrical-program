@@ -86,8 +86,8 @@ function DuplicatePairControl({ pair, onRemove, onKeepBoth }: {
     <div className="lp-banner" data-testid={`lp-dup-${pair.keptKey}-${pair.newKey}`} style={{ borderColor: 'var(--red)' }}>
       <div><strong>Possible duplicate</strong> ({pair.category}): “{pair.keptDescription}” ({pair.keptQty} {pair.unit}, kept from the previous run) and “{pair.newDescription}” ({pair.newQty} {pair.unit}, new takeoff line).</div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-        <button type="button" className="btn ghost" onClick={() => onRemove(pair.newKey)} data-testid="lp-dup-remove-new">Same item — remove the new line</button>
-        <button type="button" className="btn ghost" onClick={() => onRemove(pair.keptKey)} data-testid="lp-dup-remove-kept">Same item — remove my old line</button>
+        <button type="button" className="btn ghost" onClick={() => onRemove(pair.newKey)} data-testid="lp-dup-remove-new">Same item — exclude the new line</button>
+        <button type="button" className="btn ghost" onClick={() => onRemove(pair.keptKey)} data-testid="lp-dup-remove-kept">Same item — exclude my old line</button>
         <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Different items? Say why (at least 10 characters)" data-testid="lp-dup-reason"
           style={{ flex: '1 1 220px', font: 'inherit', fontSize: 12.5 }}/>
         <button type="button" className="btn ghost" disabled={!ok} onClick={() => onKeepBoth(reason.trim())} data-testid="lp-dup-keep-both">Different items — keep both</button>
@@ -350,7 +350,9 @@ export function LaborPricingStep({
         <div data-testid="lp-duplicates">
           {openDups.map(p => (
             <DuplicatePairControl key={`${p.keptKey}-${p.newKey}`} pair={p}
-              onRemove={key => setLines(prev => prev.filter(l => l.line_key !== key))}
+              // Fix round S10 — excluded (a tombstone on the takeoff item that
+              // sync keeps), never deleted: a delete came back on the next sync.
+              onRemove={key => setLines(prev => prev.map(l => (l.line_key === key ? { ...l, excluded: true, sync_excluded: false } : l)))}
               onKeepBoth={reason => setLines(prev => prev.map(l => (l.line_key === p.keptKey
                 ? { ...l, dup_ok: { with: [...(l.dup_ok?.with ?? []), p.newKey], reason, at: new Date().toISOString() } }
                 : l)))}/>

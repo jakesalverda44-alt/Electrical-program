@@ -59,6 +59,9 @@ const SYNONYMS: Array<[string, RegExp]> = [
   ['GFCI', /\b(gfci|gfi|ground\s+fault)\b/i],
   ['SENSOR', /\b(occupancy|vacancy|motion|sensors?)\b/i],
   ['PHOTOCELL', /\b(photo\s*cells?|photocontrols?)\b/i],
+  ['POLE', /\b(poles?|pole[- ]mounted)\b/i],
+  ['QUAD', /\b(quad(?:plex)?|fourplex|double\s+duplex)\b/i],
+  ['USB', /\busb\b/i],
 ];
 
 function features(text: string): { groups: Set<string>; sizes: Set<string>; words: Set<string> } {
@@ -76,14 +79,37 @@ export function plausiblySameText(a: string, b: string): boolean {
   const y = features(b);
   const sizeConflict = x.sizes.size > 0 && y.sizes.size > 0 && ![...x.sizes].some(s => y.sizes.has(s));
   if (sizeConflict) return false;
+  // Fix round S10 — a 2x4 is not a 2x2.
+  const ax = gridSizes(a); const bx = gridSizes(b);
+  if (ax.size && bx.size && ![...ax].some(s => bx.has(s))) return false;
+  // Fix round S10 — a type tag decides when both lines carry one: "Pole
+  // light S1" = "S1 site pole", "Fixture type C" = "Type C"; A1 != A2.
+  const at = typeTags(a); const bt = typeTags(b);
+  if (at.size && bt.size) return [...at].some(t => bt.has(t));
   // A specific kind on one side only is a different item: a GFCI is not a
-  // plain duplex (the re-run review's own repro), an exit is not a strip.
+  // plain duplex (the re-run review's own repro), a quad or USB receptacle
+  // is not a duplex, an exit is not a strip.
   if (SPECIFIC_GROUPS.some(g => x.groups.has(g) !== y.groups.has(g))) return false;
   if ([...x.groups].some(g => y.groups.has(g))) return true;
   return [...x.words].filter(w => y.words.has(w)).length >= 2;
 }
 
-const SPECIFIC_GROUPS = ['GFCI', 'EMERGENCY', 'SENSOR', 'PHOTOCELL'];
+const SPECIFIC_GROUPS = ['GFCI', 'EMERGENCY', 'SENSOR', 'PHOTOCELL', 'QUAD', 'USB'];
+
+/** "2x4", "2 X 2" -> {"2X4"}; orientation-free ("4x2" = "2x4"). */
+function gridSizes(text: string): Set<string> {
+  return new Set([...text.toUpperCase().matchAll(/\b(\d{1,2})\s*X\s*(\d{1,2})\b/g)].map(m => [m[1], m[2]].sort().join('X')));
+}
+
+/** Type tags a line names: "TYPE C", "(C)", "S1", "W2A". */
+export function typeTags(text: string): Set<string> {
+  const t = text.toUpperCase();
+  const out = new Set<string>();
+  for (const m of t.matchAll(/\bTYPE\s*[:#-]?\s*([A-Z]{1,2}\d{0,2}[A-Z]?)\b/g)) out.add(m[1]);
+  for (const m of t.matchAll(/\(\s*([A-Z]{1,2}\d{0,2}[A-Z]?)\s*\)/g)) out.add(m[1]);
+  for (const m of t.matchAll(/\b([A-Z]{1,2}\d{1,2}[A-Z]?)\b/g)) if (!/^(?:EA|LF|NO|QT|PC)\d/.test(m[1])) out.add(m[1]);
+  return out;
+}
 
 /** Does a free-text line plausibly describe the counted type? The type's
  *  schedule description and symbol keywords, not its tag: the same kind of

@@ -84,3 +84,44 @@ describe('Labor & Pricing: a possible duplicate blocks the save and the proposal
 });
 
 it('ran against the test database (not skipped)', () => { expect(ok).toBe(true); });
+
+describe('fix round S10 — the duplicate gate', () => {
+  const kept = (description: string, category = 'Exterior Site Lighting'): DupLine => ({ line_key: 'k', category, description, unit: 'EA', qty: 3, source: 'takeoff', recheck_run_id: RUN, recheck_reason: 'no_confident_match' });
+  const fresh = (description: string, category = 'Exterior Site Lighting'): DupLine => ({ line_key: 'n', category, description, unit: 'EA', qty: 3, source: 'takeoff' });
+  it.each([
+    ['Pole light S1', 'S1 site pole'],
+    ['Fixture type C', 'Type C'],
+  ])('catches %s vs %s', (a, b) => {
+    expect(laborDuplicatePairs([kept(a, 'Interior Lighting'), fresh(b, 'Interior Lighting')])).toHaveLength(1);
+  });
+  it.each([
+    ['2x4 LED troffer', '2x2 LED troffer', 'Interior Lighting'],
+    ['Duplex receptacle', 'Quad receptacle', 'Branch Power'],
+    ['USB receptacle', 'Duplex receptacle', 'Branch Power'],
+    ['Type A1 strip', 'Type A2 strip', 'Interior Lighting'],
+  ])('no false pair: %s vs %s', (a, b, cat) => {
+    expect(laborDuplicatePairs([kept(a, cat), fresh(b, cat)])).toEqual([]);
+  });
+});
+
+describe('fix round S10 — "remove the new line" is a tombstone that survives a sync', () => {
+  it('the new takeoff line is excluded (not deleted); sync keeps it excluded; the pair does not come back', async () => {
+    if (!ok) return;
+    const { bidId, newKey } = await bidWithPair();
+    await pool.query(`INSERT INTO takeoff_results (bid_id, status, agent2_output) VALUES ($1, 'complete', $2)`, [bidId, JSON.stringify({ takeoff: [
+      { category: 'Branch Power', item: '6.4', spec: 'Duplex receptacle, 20A', qty: 30, unit: 'EA', confidence: 'FIRM' },
+    ] })]);
+    await pool.query(`UPDATE est_bid_lines SET takeoff_key='Branch Power||6.4' WHERE line_key=$1`, [newKey]);
+    const got = await request(app).get(`/api/estimating/${bidId}`).set(auth(user.token));
+    const lines = got.body.lines.map((l: { line_key: string }) => l.line_key === newKey ? { ...l, excluded: true, sync_excluded: false } : l);
+    expect((await request(app).put(`/api/estimating/${bidId}`).set(auth(user.token)).send({ lines, settings: got.body.settings })).status).toBe(200);
+    const synced = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(user.token));
+    expect(synced.status).toBe(200);
+    expect(synced.body.duplicates).toEqual([]);
+    const after = synced.body.lines.filter((l: { description: string }) => l.description === 'Duplex receptacle, 20A');
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({ line_key: newKey, excluded: true });
+    expect(await takeoffGate(bidId)).toBeNull();
+  });
+});
+

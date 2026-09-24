@@ -483,7 +483,8 @@ describe('next round A7 — a possible duplicate blocks the save until resolved'
     expect(screen.queryByTestId('lp-recheck-done-0')).toBeNull();
     fireEvent.click(screen.getByTestId('lp-dup-remove-new'));
     const updater = setLines.mock.calls[setLines.mock.calls.length - 1][0] as (p: EstimateLine[]) => EstimateLine[];
-    expect(updater([kept, fresh]).map(l => l.line_key)).toEqual(['K']);
+    // Fix round S10 — excluded (a tombstone sync keeps), not deleted.
+    expect(updater([kept, fresh]).map(l => [l.line_key, !!l.excluded])).toEqual([['K', false], ['N', true]]);
   });
 
   it('keep both needs a real reason and records it on the kept line', () => {
