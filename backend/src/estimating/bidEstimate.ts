@@ -317,10 +317,10 @@ export function toLibraryCandidates(library: Library, opts: { activeOnly?: boole
   const activeOnly = opts.activeOnly ?? true;
   const assemblies: LibraryCandidate[] = library.assemblies
     .filter(a => !activeOnly || a.active)
-    .map(a => ({ kind: 'assembly', id: a.id, code: a.code, name: a.name, category: a.category, unit: a.unit, aliases: a.aliases }));
+    .map(a => ({ kind: 'assembly', id: a.id, code: a.code, name: a.name, category: a.category, unit: a.unit, aliases: a.aliases, source: a.source }));
   const items: LibraryCandidate[] = library.items
     .filter(i => !activeOnly || i.active)
-    .map(i => ({ kind: 'item', id: i.id, code: i.code, name: i.name, category: i.category, unit: i.unit, aliases: i.aliases }));
+    .map(i => ({ kind: 'item', id: i.id, code: i.code, name: i.name, category: i.category, unit: i.unit, aliases: i.aliases, source: i.source }));
   // Assemblies first so the mapper's "prefer an assembly over a bare item" tie-break
   // has an assembly candidate to prefer regardless of DB row order.
   return [...assemblies, ...items];

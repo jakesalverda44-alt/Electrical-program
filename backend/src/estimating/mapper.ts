@@ -62,6 +62,15 @@ export interface LibraryCandidate {
   category: string;
   unit: string;
   aliases: string[];
+  /** Review round 2 / B3 — est_items.source / est_assemblies.source
+   *  ('seed'|'accubid'|'manual'|'calibrated'). Used only as a tie-break
+   *  (below): a curated seed/manual/calibrated row outranks a raw,
+   *  unreconciled Accubid-imported row when both score identically —
+   *  an accubid-imported "3/4" Coupling - EMT Set Screw Steel" must never
+   *  beat the seed's own "3/4" EMT" item on a bare tie. Optional so every
+   *  existing caller that built a LibraryCandidate by hand (tests, mostly)
+   *  keeps compiling; a candidate with no source is treated as neutral. */
+  source?: string;
 }
 
 export interface MappedLine {
@@ -264,6 +273,39 @@ function materialConflict(aTags: Set<string>, bTags: Set<string>): boolean {
   return true;
 }
 
+// Review round 2 / B3 — a raceway line ("3/4 EMT") must never alias/fuzzy-
+// match a FITTING for that same raceway type (a coupling, connector, strap,
+// bushing, locknut, adapter or elbow) just because they share a material tag
+// (both "emt") and a size: {3/4, emt} is a token SUBSET of "3/4 Connector -
+// EMT Set Screw Steel" (real regression: the takeoff mapper priced a 1,200 LF
+// run of 3/4 EMT as if every foot were one $ea EMT connector). A fitting word
+// in the text always wins over the bare-raceway fallback below - a
+// description that explicitly says "EMT coupling" IS a coupling, not
+// conduit. This is a separate dimension from MATERIAL_TAGS (which already
+// correctly keeps EMT from matching a THHN wire item): two names can share
+// the identical material tag and still be a hard conflict here.
+const FITTING_KIND_WORDS: Record<string, string> = {
+  coupling: 'coupling', connector: 'connector', strap: 'strap', clamp: 'strap', clip: 'strap',
+  bushing: 'bushing', locknut: 'locknut', adapter: 'adapter', elbow: 'elbow',
+};
+const RACEWAY_MATERIALS = new Set(['emt', 'pvc', 'rmc', 'fmc', 'lfmc']);
+
+/** null = "no raceway/fitting kind named" (never a conflict with anything -
+ *  most items, e.g. a duplex receptacle, don't participate in this guard at
+ *  all). A fitting word (checked first) always wins; otherwise a raceway
+ *  material tag with no fitting word implies bare conduit/raceway. */
+function racewayKind(tokenSet: Set<string>, materialTags: Set<string>): string | null {
+  for (const t of tokenSet) {
+    const kind = FITTING_KIND_WORDS[t];
+    if (kind) return kind;
+  }
+  for (const tag of materialTags) if (RACEWAY_MATERIALS.has(tag)) return 'conduit';
+  return null;
+}
+function racewayKindConflict(a: string | null, b: string | null): boolean {
+  return a != null && b != null && a !== b;
+}
+
 // "Schedule 40"/"Schedule 80" is a real, common conduit-material qualifier —
 // its number is NOT a size or rating and must never trip the conflict guard
 // below (real seed regression: "4\" PVC" was failing to alias-match its own
@@ -332,6 +374,7 @@ function scoreCandidate(
   }
   const descMaterialTags = materialTagsOf(mergedTokens);
   const descConductorTags = conductorTagsOf(mergedTokens);
+  const descRacewayKind = racewayKind(mergedTokens, descMaterialTags);
   if (confidence !== 'exact') {
     for (const n of names) {
       if (!n) continue;
@@ -341,6 +384,10 @@ function scoreCandidate(
       const nMaterialTags = materialTagsOf(nTokens);
       if (materialConflict(descMaterialTags, nMaterialTags)) continue;
       if (materialConflict(descConductorTags, conductorTagsOf(nTokens))) continue;
+      // Review round 2 / B3 — "3/4 EMT" (kind: conduit) must never alias-
+      // match "3/4 Connector - EMT Set Screw Steel" (kind: connector) even
+      // though neither materialConflict above fires (both are tagged "emt").
+      if (racewayKindConflict(descRacewayKind, racewayKind(nTokens, nMaterialTags))) continue;
       // R2-SF1 — a candidate that NAMES a raceway/wire type (EMT/PVC/RMC/MC/
       // FMC/LFMC/THHN) can't earn alias-tier confidence off a description
       // that names NO type at all — "3/4\" conduit" sharing only the
@@ -367,6 +414,7 @@ function scoreCandidate(
       const nMaterialTags = materialTagsOf(nTokens);
       if (materialConflict(descMaterialTags, nMaterialTags)) continue;
       if (materialConflict(descConductorTags, conductorTagsOf(nTokens))) continue;
+      if (racewayKindConflict(descRacewayKind, racewayKind(nTokens, nMaterialTags))) continue; // review round 2 / B3, same rationale as the alias tier above
       if (nMaterialTags.size > 0 && descMaterialTags.size === 0) continue; // R2-SF1, same rationale as the alias tier above
       best = Math.max(best, overlapScore(mergedTokens, nTokens, tokenWeight));
     }
@@ -386,6 +434,24 @@ function scoreCandidate(
 }
 
 const TIER_RANK: Record<MapConfidence, number> = { exact: 3, alias: 2, fuzzy: 1, none: 0 };
+
+/** Deterministic tie-break WITHIN one confidence tier, same rankScore: an
+ *  assembly beats a bare item (unchanged); failing that, a curated row
+ *  (seed/manual/calibrated) beats a raw, unreconciled Accubid-imported row —
+ *  review round 2 / B3: library.ts's own `ORDER BY category, name` used to
+ *  let raw import order decide this (an "3/4 Connector..." ACB row sorting
+ *  before the seed "3/4 EMT" item was the exact tie B3 reproduced). Neither
+ *  rule fires, keep whichever the caller already had (the earlier candidate
+ *  in iteration order — unchanged, deterministic default). */
+function preferCandidate(a: LibraryCandidate, b: LibraryCandidate): boolean {
+  if (a.kind === 'assembly' && b.kind !== 'assembly') return true;
+  if (a.kind !== 'assembly' && b.kind === 'assembly') return false;
+  const aAccubid = a.source === 'accubid';
+  const bAccubid = b.source === 'accubid';
+  if (!aAccubid && bAccubid) return true;
+  if (aAccubid && !bAccubid) return false;
+  return false;
+}
 
 function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCandidate[], freq: Map<string, number>): MappedLine {
   const descNorm = normalize(line.description);
@@ -411,9 +477,8 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
     // (which includes those bonuses) only breaks ties WITHIN the same tier.
     if (curTier > bestTier) { best = scored; continue; }
     if (curTier < bestTier) continue;
-    if (scored.rankScore > best.rankScore
-      || (scored.rankScore === best.rankScore && scored.candidate.kind === 'assembly' && best.candidate.kind === 'item')
-    ) {
+    if (scored.rankScore > best.rankScore) { best = scored; continue; }
+    if (scored.rankScore === best.rankScore && preferCandidate(scored.candidate, best.candidate)) {
       best = scored;
     }
   }

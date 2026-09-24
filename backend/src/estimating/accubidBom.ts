@@ -147,6 +147,43 @@ function parseRow(line: string): BomRow | BomParseWarning | null {
     default: return { line, reason: `${b.length} material fields — expected 0-5` };
   }
 
+  // Review round 2 / S13 — the field-count mapping above is ambiguous for a
+  // row where Cost was fully credited (a -100% vendor adjustment: "cost
+  // entered, then zeroed out"): its printed tokens are [Price-or-Cost,
+  // -100.0, 0.00], the exact same SHAPE as an ordinary 3-token row
+  // [cost, netCost, totalMat] — so the switch above reads the real
+  // vendorCostAdjPct (-100.0) as netCost, and net cost comes out NEGATIVE
+  // ($-100). Net cost is never legitimately negative in a real BOM; when the
+  // slot the switch assigned to netCost IS negative and there's a following
+  // token to promote (what the switch called totalMaterial), that following
+  // token is the REAL net cost, the negative one was vendorCostAdjPct, and
+  // there is no separate total-material token printed for a $0 net cost row
+  // (Accubid doesn't print a redundant "0.00" for it) — reproduces exactly
+  // for both the 3-token and 4-token real rows the review found (North Port
+  // HPS lamp / 2-button LV control, Orlando 250W/400W MH lamps, Rockledge
+  // 30A NEMA 3R switch).
+  if (netCost != null && netCost < 0 && totalMaterial != null) {
+    vendorCostAdjPct = netCost;
+    netCost = totalMaterial;
+    totalMaterial = null;
+  }
+  // S13's safety net: still negative (no token to promote, or a shape this
+  // heuristic doesn't cover) — never write a negative material cost; warn
+  // instead of guessing further.
+  if (netCost != null && netCost < 0) {
+    return { line, reason: `net cost parsed as negative (${netCost}) — unrecognized column shape` };
+  }
+  // S13's other safety net: the row's own arithmetic must hold (net cost /
+  // divisor * qty === total material, to the cent) whenever both are
+  // printed — a silent column misassignment elsewhere would show up here.
+  if (netCost != null && totalMaterial != null) {
+    const divisor = BOM_UNIT_DIVISOR[unit];
+    const expected = (netCost / divisor) * num(qtyStr);
+    if (Math.abs(expected - totalMaterial) > 0.01) {
+      return { line, reason: `net cost x qty/divisor (${expected.toFixed(2)}) does not match the printed total material (${totalMaterial.toFixed(2)})` };
+    }
+  }
+
   const a = after.map(num);
   let laborUnit: number | null = null;
   let fieldLaborAdjPct: number | null = null;

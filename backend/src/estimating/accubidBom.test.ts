@@ -113,6 +113,43 @@ describe('parseAccubidBom — row shapes (unit tests, not the full files)', () =
     expect(rows[0].totalMaterial).toBeCloseTo(645.62);
   });
 
+  it('review round 2 / S13: a -100% vendor cost adjustment (cost entered, then fully credited) parses net cost as 0.00, never -100 (3-token shape)', () => {
+    const line = '400W                   Lamp Mogul Base Clear - HPS                                             53.000 E                 22.43 -100.0         0.00                  No Cost    E                 0.140                    7.420';
+    const { rows, warnings } = parseAccubidBom(line);
+    expect(warnings).toEqual([]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].vendorCostAdjPct).toBeCloseTo(-100);
+    expect(rows[0].netCost).toBe(0);
+    expect(rows[0].netCost).not.toBeLessThan(0);
+    expect(rows[0].totalMaterial).toBeNull();
+  });
+
+  it('review round 2 / S13: the same -100% shape with a Price AND Cost both printed (4-token shape)', () => {
+    const line = 'White                  2-Button Low Voltage Control On/Off                                     65.000 C    6,150.00   6,520.51 -100.0        0.00                  Quoted     C               20.000                    13.000';
+    const { rows, warnings } = parseAccubidBom(line);
+    expect(warnings).toEqual([]);
+    expect(rows[0].vendorCostAdjPct).toBeCloseTo(-100);
+    expect(rows[0].netCost).toBe(0);
+  });
+
+  it('review round 2 / S13: never accepts a row whose net cost still comes out negative (safety net)', () => {
+    // A single bare negative token with nothing to promote into net cost —
+    // there's no way to recover the real value, so this must warn, not guess.
+    const line = 'Test Item                                                                                    5.000 E                                                                              -50.00 No Cost   E                 1.000                    5.000';
+    const { rows, warnings } = parseAccubidBom(line);
+    expect(rows).toHaveLength(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].reason).toMatch(/negative/);
+  });
+
+  it('review round 2 / S13: warns instead of silently accepting a row whose printed total material disagrees with net cost x qty', () => {
+    const line = 'Bad Row Test           Widget - Mismatched Total                                             100.000 C          50.00                     50.00           999.99 C                      3.000                        3.000 Normal';
+    const { rows, warnings } = parseAccubidBom(line);
+    expect(rows).toHaveLength(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].reason).toMatch(/does not match/);
+  });
+
   it('handles a row with no labor fields at all (Rockledge "Booster" line)', () => {
     const line = '#3 - Green            Booster 0.27 Caliber Short 10 Shot Magazine                               24.700 E       36.95      34.19               34.19          844.49 Normal      E';
     const { rows, warnings } = parseAccubidBom(line);
