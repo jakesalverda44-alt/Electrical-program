@@ -552,6 +552,34 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       });
     }
   }
+  // Real-run fix 5 — the dense-sheet consistency pass: marks only ONE of
+  // the two counting passes found are SUGGESTED markers (Plans view), never
+  // counted until the estimator confirms them. One item for the whole check,
+  // answered type by type (the gap-fill mechanics: confirm the found marks /
+  // keep the current count / enter the count).
+  if (ev?.consistency && (ev.consistency.suggested.length || ev.consistency.entries.some(e => e.inconclusive))) {
+    const cons = ev.consistency;
+    const typeByKey = new Map((countResult?.types ?? []).map(t => [t.key, t]));
+    const keys = [...new Set([...cons.suggested.map(s => s.typeKey), ...cons.entries.filter(e => e.inconclusive).map(e => e.typeKey)])].sort();
+    const per = keys.map(k => {
+      const es = cons.entries.filter(e => e.typeKey === k);
+      const sum = (f: (e: typeof es[number]) => number) => es.reduce((n, e) => n + f(e), 0);
+      const agreed = sum(e => e.agreed), union = agreed + sum(e => e.onlyFirst) + sum(e => e.onlySecond);
+      return { k, t: typeByKey.get(k), first: sum(e => e.first), second: sum(e => e.second), agreed, only: union - agreed, rate: union ? agreed / union : 1, inconclusive: es.some(e => e.inconclusive) };
+    });
+    const n = cons.suggested.length;
+    items.push({
+      id: `consistency:${keys.join('+')}`,
+      kind: 'count',
+      title: n ? `Dense-sheet check: ${n} mark${n === 1 ? '' : 's'} only one of two counting passes found — confirm on plans` : 'Dense-sheet check: the two counting passes disagree — confirm the count on the plans',
+      detail: `${per.map(p => `Type ${p.t?.type ?? p.k}: first pass ${p.first}, second pass (shifted tiles) ${p.second}, both found ${p.agreed} (${Math.round(p.rate * 100)}% agree) — ${p.inconclusive ? `the passes disagree too much to check each other: the first pass's ${p.first} stands, unconfirmed` : `${p.agreed} counted, ${p.only} suggested`}`).join('; ')}. The suggested marks are in the Plans view (SUGGESTED). Confirm the real ones there, answer "No more on this job" to keep the counted number, or enter the count — none is counted until you do.`,
+      typeKey: keys.length === 1 ? keys[0] : undefined,
+      type: per.map(p => p.t?.type ?? p.k).join('/'),
+      actions: ['markers', 'confirm', 'count'],
+      reconcileMembers: per.map(p => ({ key: p.k, type: p.t?.type ?? p.k, description: p.t?.description ?? '', unit: 'count' as const, currentQty: p.t?.count ?? 0, headsPerPole: null })),
+      fingerprint: `consistency|${per.map(p => `${p.k}:${p.agreed}/${p.only}`).join(';')}`,
+    });
+  }
   // Evidence round 3.4 — a panel schedule the viewport reader found but the
   // schedule reader could not read completely: its branch circuits have no
   // source (Agent 1 no longer states them).
@@ -878,7 +906,7 @@ export function riskRank(i: ReviewItem): number {
   // Fix round (B2) — a real reconciliation shortfall (a second source vs
   // the plans) is a direct $ risk signal, ranked with the other schedule-
   // derived mismatches.
-  if (i.id.startsWith('gapfill:')) return 12;
+  if (i.id.startsWith('gapfill:') || i.id.startsWith('consistency:')) return 12;
   if (i.id.startsWith('reconcile:')) return 13;
   if (i.id.startsWith('synonym:')) return 14;
   if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 15;
@@ -906,6 +934,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';
+  if (i.id.startsWith('consistency:')) return 'consistency';
   if (i.id.startsWith('reconcile:')) return 'reconcile';
   if (i.id.startsWith('schedule:') || i.id.startsWith('panel-dup:') || i.id.startsWith('panel-load:') || i.id.startsWith('schedqty:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
@@ -1177,7 +1206,7 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   // fixture schedule states heads-per-pole, and only as an exact multiple;
   // otherwise poles stay exactly as directly counted from the plans.
   for (const i of list) {
-    if (!i.id.startsWith('gapfill:') && !i.id.startsWith('reconcile:')) continue;
+    if (!i.id.startsWith('gapfill:') && !i.id.startsWith('reconcile:') && !i.id.startsWith('consistency:')) continue;
     for (const m of i.reconcileMembers ?? []) {
       const r = m.resolution;
       if (!r || r.action === 'confirm') continue;

@@ -24,7 +24,7 @@ import { loadKissimmeeBaseline, KISSIMMEE_FILE } from './fixtures/evidence/kissi
 import { evidenceResponder, isEvidenceRequest, E2_HOST_MARKS, E1_RESTROOM_REPEATS, E1_DECK_DUPLEX, gapFillResponder, isGapFillRequest } from './fixtures/evidence/kissimmeeReplies';
 import { fakeAnthropic, systemText, userText, type FakeRequest, type FakeReply } from './fixtures/takeoff/fakeAnthropic';
 import { screenPosition } from '../estimating/pageGeometry';
-import { planCountTiles } from '../ai/countRender';
+import { planCountTiles, planOffsetTiles } from '../ai/countRender';
 import { counterTileSpec } from '../ai/modelLimits';
 import { runCountingStage, runSupplementCounting, type CountResult } from '../ai/countingStage';
 import { buildReviewItems, referencedSheetItems, reviewItemIsOpen, enforcedCounts, applyGroupMemberResolution, type ReviewItem } from '../ai/reviewItems';
@@ -57,8 +57,9 @@ function tileCounter(truth: Map<string, { geom: { widthPt: number; heightPt: num
     const { geom: g, symbols } = truth.get(label)!;
     const asked = new Set([...text.split('\n')].filter(l => l.startsWith('- ') && l.includes(' | ')).map(l => normalizeTypeKey(l.slice(2).split(' | ')[0])));
     const shown = g.rotation === 90 || g.rotation === 270 ? { w: g.heightPt / 72, h: g.widthPt / 72 } : { w: g.widthPt / 72, h: g.heightPt / 72 };
-    const rects = new Map(planCountTiles(shown.w, shown.h, { tileIn: spec.tileIn }).map(r => [r.id, r]));
-    const ids = [...text.matchAll(/Tile (R\d+C\d+) \(row/g)].map(m => m[1]);
+    // Real-run fix 5 — the consistency pass's shifted tiles ("SR1C2") too.
+    const rects = new Map([...planCountTiles(shown.w, shown.h, { tileIn: spec.tileIn }), ...planOffsetTiles(shown.w, shown.h, { tileIn: spec.tileIn })].map(r => [r.id, r]));
+    const ids = [...text.matchAll(/Tile (S?R\d+C\d+) \(row/g)].map(m => m[1]);
     const marks: unknown[] = [];
     for (const s of symbols) {
       if (!asked.has(s.type)) continue;

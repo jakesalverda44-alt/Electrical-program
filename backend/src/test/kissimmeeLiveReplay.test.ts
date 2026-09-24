@@ -4,8 +4,9 @@
 // nothing is transcribed and no model is called.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { loadKissimmeeLive, liveBlocking, LIVE_PLAN_FILE } from './fixtures/realrun/kissimmeeLive';
-import { replayPdfs, replayEvidenceCache, replayCounter, liveCounterMarks, liveAgent1Input, isCounterRequest, REPLAY_COUNTER_MODEL } from './fixtures/realrun/replay';
-import { fakeAnthropic, type FakeRequest } from './fixtures/takeoff/fakeAnthropic';
+import { replayPdfs, replayEvidenceCache, replayCounter, liveCounterMarks, liveAgent1Input, isCounterRequest, REPLAY_COUNTER_MODEL, type ReplayMark } from './fixtures/realrun/replay';
+import { fakeAnthropic, userText, type FakeRequest } from './fixtures/takeoff/fakeAnthropic';
+import { loadKissimmeeBaseline } from './fixtures/evidence/kissimmeeBaseline';
 import { gapFillResponder, isGapFillRequest } from './fixtures/evidence/kissimmeeReplies';
 import { runCountingStage, type CountResult } from '../ai/countingStage';
 import { buildCountTargets } from '../ai/countTargets';
@@ -18,6 +19,7 @@ import { AUTOZONE_SEED } from './fixtures/bidstd/kissimmeeProposal';
 import { isPdftoppmAvailable } from '../ai/documentPrep';
 import { DEFAULT_EVIDENCE_MODEL } from '../routes/preconstruction';
 import type { InventoryPage } from '../ai/countSheets';
+import { usageCost } from '../eval/takeoffEval';
 
 const live = loadKissimmeeLive();
 
@@ -34,14 +36,23 @@ function keyMap() {
   };
 }
 
-export async function replayLive(extra: { secondPass?: Parameters<typeof replayCounter>[1] } = {}): Promise<LiveReplay> {
+/** The consistency pass's second read: the EARLIER real Opus run of the
+ *  same drawings (bid d9abdb87, the evidence round's baseline) — every mark
+ *  it placed on E-3. A real second reading of the same sheet, though not one
+ *  made on the shifted tile grid (no model can be called here). */
+export function secondPassMarks(): ReplayMark[] {
+  return loadKissimmeeBaseline().marks.filter(m => m.sheetKey.endsWith('#51')).map(m => ({ ...m }));
+}
+
+export async function replayLive(): Promise<LiveReplay> {
   const run = loadKissimmeeLive();
-  const counter = replayCounter(run, liveCounterMarks(run), keyMap());
+  const keys = keyMap();
+  const first = replayCounter(run, liveCounterMarks(run), keys);
+  const second = replayCounter(run, secondPassMarks(), keys);
   const gf = gapFillResponder();
-  const { client, calls } = fakeAnthropic(req => (isCounterRequest(req) ? counter(req)
+  const { client, calls } = fakeAnthropic(req => (isCounterRequest(req) ? (userText(req).includes('CONSISTENCY PASS') ? second(req) : first(req))
     : isGapFillRequest(req) ? gf(req)
     : (() => { throw new Error(`unexpected model call: ${JSON.stringify(req.system).slice(0, 120)}`); })()));
-  void extra;
   const stage = await runCountingStage({
     client, model: REPLAY_COUNTER_MODEL, maxTokens: 32000,
     agent1: liveAgent1Input(run), inventory: run.inventory as InventoryPage[], pdfs: await replayPdfs(),
@@ -154,5 +165,35 @@ describe('real-run fix 4 — no "panel schedules not read completely" item for t
     expect(after.cr.evidence!.panelsUnread).toEqual([]);
     expect(after.review.find(i => i.id === 'schedule:panels-unread')).toBeUndefined();
     expect(after.cr.evidence!.circuitRows).toBeGreaterThan(0);
+  });
+});
+
+describe('real-run fix 5 — dense-sheet consistency: a second pass on a shifted tile grid, reconciled by location', () => {
+  it('E-3: A 70 / 73 and B 45 / 52 — the marks both passes found are counted, the rest suggested; agreement reported', (ctx) => {
+    if (!have) return ctx.skip();
+    const c = after.cr.evidence!.consistency!;
+    expect(c.entries.map(e => [e.sheetLabel.split(' ')[0], e.typeKey, e.why, e.first, e.second, e.agreed, e.onlyFirst, e.onlySecond, e.agreement])).toEqual([
+      ['E-3', 'A', 'high count', 70, 73, 70, 0, 3, 0.959],
+      ['E-3', 'B', 'high count', 45, 52, 45, 0, 7, 0.865],
+    ]);
+    // Never auto-counted: A and B stay at the marks both passes found.
+    const t = (k: string) => after.cr.types.find(x => x.key === k)!;
+    expect([t('A').count, t('B').count]).toEqual([70, 45]);
+    expect(c.suggested.length).toBe(10);
+    expect(c.suggested.every(s => s.pass === 'second' && s.sheetKey.endsWith('#51'))).toBe(true);
+    // One review item for the check, answered type by type.
+    const item = after.review.find(i => i.id === 'consistency:A+B')!;
+    expect(reviewItemIsOpen(item)).toBe(true);
+    expect(item.reconcileMembers!.map(m => [m.key, m.currentQty])).toEqual([['A', 70], ['B', 45]]);
+    expect(item.detail).toContain('Type A: first pass 70, second pass (shifted tiles) 73, both found 70 (96% agree)');
+    // Bounded: one extra counter call, only A and B, only the shifted tiles
+    // over their marks (E-3's building area), no other sheet.
+    const second = after.calls.filter(r => isCounterRequest(r) && userText(r).includes('CONSISTENCY PASS'));
+    expect(second.length).toBe(1);
+    const targetBlock = userText(second[0]).split('COUNT TARGETS')[1].split('\n\n')[0];
+    expect(targetBlock.split('\n').filter(l => /^- /.test(l)).map(l => l.slice(2).split(' | ')[0])).toEqual(['A', 'B']);
+    expect(c.tiles).toBe(4); // of the shifted grid's 20: only those over the A / B marks
+    // eslint-disable-next-line no-console
+    console.log(`[consistency] tiles ${c.tiles}, calls ${c.calls}, usage ${JSON.stringify(c.usage)}, est $${usageCost(c.usage, REPLAY_COUNTER_MODEL)!.toFixed(3)} on ${REPLAY_COUNTER_MODEL}`);
   });
 });

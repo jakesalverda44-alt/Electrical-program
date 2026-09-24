@@ -272,7 +272,7 @@ async function applyResolution(
       // 'confirm' ("No more on this job — keep current count") may still
       // apply to every unanswered type at once: it carries no shared
       // number, each type just keeps its own current value.
-      if (item.id.startsWith('gapfill:') || item.id.startsWith('reconcile:')) {
+      if (item.id.startsWith('gapfill:') || item.id.startsWith('reconcile:') || item.id.startsWith('consistency:')) {
         const members = item.reconcileMembers ?? [];
         const memberKey = typeof input.memberKey === 'string' ? input.memberKey : undefined;
         let targets: NonNullable<ReviewItem['reconcileMembers']>;

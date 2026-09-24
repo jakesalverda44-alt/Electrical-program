@@ -1258,6 +1258,18 @@ async function runPipelineStages(
           logger.warn({ err, bidId }, '[takeoff] writing gap-fill suggested markers failed');
         }
       }
+      // Real-run fix 5 — marks only one of the two consistency passes found:
+      // SUGGESTED markers (the same never-counted-until-confirmed rows as
+      // gap-fill's, cleared the same way on a re-run).
+      const csSuggested = stage.countResult.evidence?.consistency?.suggested ?? [];
+      if (csSuggested.length) {
+        try {
+          await writeGapFillMarkers(bidId, stage.countResult, csSuggested,
+            markerFiles.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })), runId, 'Consistency check');
+        } catch (err) {
+          logger.warn({ err, bidId }, '[takeoff] writing consistency-check suggested markers failed');
+        }
+      }
     } catch (err) {
       logger.warn({ err, bidId }, '[takeoff] writing AI count markers failed');
       (stage.countResult as unknown as Record<string, unknown>).markers = { error: 'suggested markers could not be written' };

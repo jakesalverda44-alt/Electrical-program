@@ -21,8 +21,9 @@
 // live, and gave no viewports either way).
 import { buildRasterSet, type RasterPage } from '../evidence/buildRasterSheet';
 import { screenPosition } from '../../../estimating/pageGeometry';
-import { planCountTiles } from '../../../ai/countRender';
-import { counterTileSpec } from '../../../ai/modelLimits';
+import sharp from 'sharp';
+import { planCountTiles, planOffsetTiles } from '../../../ai/countRender';
+import { counterTileSpec, imageTokens } from '../../../ai/modelLimits';
 import { normalizeTypeKey } from '../../../ai/countTargets';
 import { rectInToBoxPt, type Viewport } from '../../../ai/evidence/viewports';
 import type { EvidenceCache } from '../../../ai/evidence/evidenceStage';
@@ -121,11 +122,11 @@ export function replayCounter(
   run: KissimmeeLiveRun,
   marks: ReplayMark[],
   keyOf: (liveKey: string) => string | null,
-  opts: { usage?: { input_tokens: number; output_tokens: number }; extraTiles?: (wIn: number, hIn: number) => Array<{ id: string; leftIn: number; topIn: number; widthIn: number; heightIn: number }> } = {},
+  opts: { extraTiles?: (wIn: number, hIn: number) => Array<{ id: string; leftIn: number; topIn: number; widthIn: number; heightIn: number }> } = {},
 ) {
   const spec = counterTileSpec(REPLAY_COUNTER_MODEL);
   const labels = new Map(run.countResult.sheets.map(s => [s.label, s]));
-  return (req: FakeRequest): FakeReply => {
+  return async (req: FakeRequest): Promise<FakeReply> => {
     const text = userText(req);
     const sheet = [...labels.values()].find(s => text.includes(`SHEET: ${s.label}`));
     if (!sheet?.geometry) return { text: JSON.stringify({ marks: [], unreadable: [], notes: [] }) };
@@ -133,7 +134,7 @@ export function replayCounter(
     const asked = new Set(text.split('\n').filter(l => l.startsWith('- ') && l.includes(' | ')).map(l => normalizeTypeKey(l.slice(2).split(' | ')[0])));
     const shown = g.rotation === 90 || g.rotation === 270 ? { w: g.heightPt / 72, h: g.widthPt / 72 } : { w: g.widthPt / 72, h: g.heightPt / 72 };
     const rects = new Map<string, { leftIn: number; topIn: number; widthIn: number; heightIn: number }>();
-    for (const r of [...planCountTiles(shown.w, shown.h, { tileIn: spec.tileIn }), ...(opts.extraTiles?.(shown.w, shown.h) ?? [])]) {
+    for (const r of [...planCountTiles(shown.w, shown.h, { tileIn: spec.tileIn }), ...planOffsetTiles(shown.w, shown.h, { tileIn: spec.tileIn }), ...(opts.extraTiles?.(shown.w, shown.h) ?? [])]) {
       if (text.includes(`Tile ${r.id} (row`)) rects.set(r.id, r);
     }
     const out: unknown[] = [];
@@ -146,8 +147,27 @@ export function replayCounter(
         if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) out.push([k, id, Number(nx.toFixed(4)), Number(ny.toFixed(4)), ...(s.circuit ? [s.circuit] : [])]);
       }
     }
-    return { text: JSON.stringify({ marks: out, unreadable: [], notes: [] }), usage: opts.usage ?? { input_tokens: 60000, output_tokens: 4000 } };
+    return { text: JSON.stringify({ marks: out, unreadable: [], notes: [] }), usage: await estimatedUsage(req, out.length) };
   };
+}
+
+/** An honest ESTIMATE of what the real call costs (no model is called): the
+ *  image tokens of every tile actually sent (their real pixel sizes), the
+ *  text at ~4 characters a token, and ~25 output tokens a mark plus 1,500
+ *  for the reasoning around them. */
+export async function estimatedUsage(req: FakeRequest, marks: number): Promise<{ input_tokens: number; output_tokens: number }> {
+  const blocks = Array.isArray(req.messages[0]?.content) ? req.messages[0].content as Array<{ type: string; text?: string; source?: { data: string } }> : [];
+  let input = Math.ceil((systemTextLen(req) + blocks.filter(b => b.type === 'text').reduce((n, b) => n + (b.text?.length ?? 0), 0)) / 4);
+  for (const b of blocks) {
+    if (b.type !== 'image' || !b.source) continue;
+    const m = await sharp(Buffer.from(b.source.data, 'base64')).metadata();
+    input += imageTokens(m.width ?? 0, m.height ?? 0);
+  }
+  return { input_tokens: input, output_tokens: 1500 + 25 * marks };
+}
+
+function systemTextLen(req: FakeRequest): number {
+  return systemText(req).length;
 }
 
 export const isCounterRequest = (req: FakeRequest) => systemText(req).includes('counting symbols on ONE electrical plan sheet');

@@ -98,6 +98,39 @@ export function planCountTiles(
   return out;
 }
 
+/** Real-run fix 5 — the SHIFTED tile grid of the consistency pass: the same
+ *  tile size and overlap, every tile edge moved half a step, so a symbol a
+ *  first-pass tile edge cut sits whole in a shifted tile. Only the tiles
+ *  that intersect `within` (displayed inches) are kept. Ids are "S" + the
+ *  row/column ("SR1C2"). */
+export function planOffsetTiles(
+  displayedWidthIn: number,
+  displayedHeightIn: number,
+  opts: { tileIn?: number; overlapIn?: number; titleBlockFrac?: number; within?: { left: number; top: number; width: number; height: number } | null } = {},
+): TileRectIn[] {
+  const tileIn = opts.tileIn ?? COUNT_TILE_IN;
+  const overlapIn = opts.overlapIn ?? COUNT_OVERLAP_IN;
+  const frac = opts.titleBlockFrac ?? TITLE_BLOCK_FRAC;
+  if (!(displayedWidthIn > 0) || !(displayedHeightIn > 0)) return [];
+  const shifted = (extent: number): Array<{ start: number; len: number }> => {
+    const base = axisSpans(extent, tileIn, overlapIn);
+    if (base.length === 1) return base;
+    const len = base[0].len, step = len - overlapIn;
+    const out: Array<{ start: number; len: number }> = [{ start: 0, len: Math.min(extent, step / 2 + overlapIn) }];
+    for (let s = step / 2; s < extent - overlapIn; s += step) out.push({ start: s, len: Math.min(len, extent - s) });
+    return out;
+  };
+  const cols = shifted(displayedWidthIn * (1 - frac));
+  const rows = shifted(displayedHeightIn);
+  const w = opts.within;
+  const out: TileRectIn[] = [];
+  rows.forEach((r, ri) => cols.forEach((c, ci) => {
+    if (w && (c.start > w.left + w.width || c.start + c.len < w.left || r.start > w.top + w.height || r.start + r.len < w.top)) return;
+    out.push({ id: `SR${ri + 1}C${ci + 1}`, row: ri + 1, col: ci + 1, leftIn: c.start, topIn: r.start, widthIn: c.len, heightIn: r.len });
+  }));
+  return out;
+}
+
 /** Pure: effective pixels per inch a tile lands at after the long-edge resize. */
 export function effectivePxPerIn(tile: Pick<TileRectIn, 'widthIn' | 'heightIn'>, maxLongEdgeOrLimits: number | ModelImageLimits = COUNT_MAX_LONG_EDGE, dpi = COUNT_DPI): number {
   // Fix round S1 — both API limits (long edge AND visual tokens), from the
@@ -223,7 +256,7 @@ export async function renderCountTiles(
   pdf: Buffer,
   page: number,
   geometry: PageGeometry,
-  opts: { dpi?: number; maxLongEdge?: number; maxTokens?: number; limits?: ModelImageLimits; tileIn?: number; overlapIn?: number; titleBlockFrac?: number } = {},
+  opts: { dpi?: number; maxLongEdge?: number; maxTokens?: number; limits?: ModelImageLimits; tileIn?: number; overlapIn?: number; titleBlockFrac?: number; rects?: TileRectIn[] } = {},
 ): Promise<RenderedCountPage> {
   const dpi = opts.dpi ?? COUNT_DPI;
   const limits: ModelImageLimits = opts.limits ?? {
@@ -248,7 +281,7 @@ export async function renderCountTiles(
     const pxPerInX = width / (shown.width / 72);
     const pxPerInY = height / (shown.height / 72);
 
-    const rects = planCountTiles(shown.width / 72, shown.height / 72, opts);
+    const rects = opts.rects ?? planCountTiles(shown.width / 72, shown.height / 72, opts);
     const tiles: CountTile[] = [];
     for (const r of rects) {
       const left = Math.max(0, Math.round(r.leftIn * pxPerInX));

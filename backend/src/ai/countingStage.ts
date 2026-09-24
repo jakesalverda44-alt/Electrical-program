@@ -13,7 +13,8 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { buildCountTargets, type CountTarget } from './countTargets';
 import { counterTileSpec, retryTileIn, type ModelImageLimits } from './modelLimits';
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
-import { readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry } from './countRender';
+import { planOffsetTiles, readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry } from './countRender';
+import { CONSISTENCY_MIN_AGREEMENT, coverRect, consistencyTypes, entryOf, reconcilePasses, type ConsistencyEntry, type ConsistencySuggestion } from './evidence/consistency';
 import { runCounter, type SheetCountResult } from './counter';
 import { mergeCountsIntoTakeoff, isSiteFixtureCategory, type CountMergeResult, type CountMergeEvidenceResult, type SheetCountInput } from './countMerge';
 import { logger } from '../utils/logger';
@@ -86,6 +87,11 @@ export interface CountResultEvidence {
   panelsExpected: number;
   /** Fix round 4 / S20 — same-name panel conflicts with their enforced answers. */
   panelChoices?: PanelChoice[];
+  /** Real-run fix 5 — the second counting pass on a shifted tile grid for
+   *  high-count / density-flagged types, reconciled by location: counted =
+   *  the marks BOTH passes found; the rest are SUGGESTED (a review item),
+   *  never counted until confirmed. */
+  consistency?: { entries: ConsistencyEntry[]; suggested: ConsistencySuggestion[]; calls: number; usage: EvidenceUsage; tiles: number };
   /** Real-run fix 2 — one canonical entity per thing: every other name of
    *  it (synonyms, a class name, a combined tag, a pole-tag legend) with the
    *  evidence, and the generic legend symbols decided by their marks. */
@@ -183,6 +189,8 @@ interface FinishEvidence {
   schedCounts: Map<string, ScheduleCount>;
   /** Real-run fix 2. */
   cons?: Consolidation;
+  /** Real-run fix 5 — the consistency pass's own calls / usage / tiles. */
+  consistencyRun?: { calls: number; usage: EvidenceUsage; tiles: number };
 }
 
 /** Real-run fix 2 — a typical package the reader bound to another name of
@@ -370,6 +378,11 @@ function finish(
         // Fix round 4 / S20 — what each answer to a panel conflict changes.
         panelChoices: panelChoices(targets, evidence.ev.tables),
         ...(evidence.cons ? { consolidation: { merges: evidence.cons.merges, uncertain: evidence.cons.uncertain, hostBindings } } : {}),
+        ...(sheetResults.some(r => r.consistency?.length) ? { consistency: {
+          entries: sheetResults.flatMap(r => r.consistency ?? []),
+          suggested: sheetResults.flatMap(r => r.consistencySuggested ?? []),
+          calls: evidence.consistencyRun?.calls ?? 0, usage: evidence.consistencyRun?.usage ?? { ...ZERO_USAGE }, tiles: evidence.consistencyRun?.tiles ?? 0,
+        } } : {}),
         panelsUnread: evidence.ev.pages.flatMap(p => p.viewports.viewports
           .filter(v => isPanelScheduleTitle(v.title))
           .filter(v => !evidence.ev.tables.some(t => t.viewportId === v.id && isCompletePanel(t)))
@@ -538,9 +551,10 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
 
   // A truncated call throws AgentTruncatedError out of here (the run fails);
   // every other per-sheet failure is recorded on that sheet by runCounter.
-  const run = counterTargets.length
-    ? await countSheets(input, counterTargets, selection.counted, input.onProgress, sheetNotes)
+  const run: Awaited<ReturnType<typeof countSheets>> = counterTargets.length
+    ? await countSheets(input, counterTargets, selection.counted, input.onProgress, sheetNotes, { consistency: !!input.evidence })
     : { sheets: selection.counted.map(sheet => ({ sheet, status: 'counted' as const, geometryOk: false, geometry: null, placed: [], mergedDuplicates: 0, unreadable: [], rejected: [], notes: ['every type on this job is owned by the schedules — nothing to count'], calls: 0, tiles: 0 })), usage: { ...ZERO_USAGE } };
+  if (evidence && run.consistency) evidence.consistencyRun = run.consistency;
   const { agent1, countResult } = finish(input, allTargets, targetNotes, run.sheets, selection.skipped, true, undefined, evidence);
   if (input.evidence && evidence) {
     await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
@@ -567,6 +581,99 @@ function countsByType(placed: Array<{ typeKey: string }>): Record<string, number
  *  at a higher effective resolution (smaller tiles). The retry's counts are
  *  used when it succeeds; both passes are kept on the sheet. */
 export async function countSheets(
+  input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop'>,
+  targets: CountTarget[],
+  sheets: CountSheet[],
+  onProgress?: (done: number, total: number, phase?: 'retry') => void,
+  sheetNotes?: Map<string, string>,
+  opts: { consistency?: boolean } = {},
+): Promise<{ sheets: SheetCountResult[]; usage: CountingStageOutput['usage']; consistency?: { calls: number; usage: CountingStageOutput['usage']; tiles: number } }> {
+  const run = await countSheetsOnce(input, targets, sheets, onProgress, sheetNotes);
+  if (!opts.consistency || input.shouldStop?.()) return run;
+  const c = await consistencyPass(input, targets, run.sheets, sheetNotes);
+  if (!c) return run;
+  for (const k of Object.keys(run.usage) as Array<keyof typeof run.usage>) run.usage[k] += c.usage[k];
+  return { ...run, consistency: c };
+}
+
+/** Real-run fix 5 — the second counting pass on a SHIFTED tile grid for
+ *  each sheet's high-count / density-flagged types (only the shifted tiles
+ *  that cover their marks), reconciled by location: the marks both passes
+ *  found stay counted; a mark only one pass found leaves the count and is
+ *  SUGGESTED (sheet.consistencySuggested). Mutates the sheets' `placed`.
+ *  A pass that fails keeps the first pass and says so (never a silent
+ *  change). Returns null when no sheet needed it. */
+async function consistencyPass(
+  input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop'>,
+  targets: CountTarget[],
+  results: SheetCountResult[],
+  sheetNotes?: Map<string, string>,
+): Promise<{ calls: number; usage: CountingStageOutput['usage']; tiles: number } | null> {
+  const hostKeys = new Set(targets.filter(t => t.role === 'host').map(t => t.key));
+  const jobs = results.filter(r => r.status === 'counted' && r.geometry && r.geometryOk !== false)
+    .map(r => ({ r, types: consistencyTypes(r.placed, r.unreadable, k => hostKeys.has(k)) }))
+    .filter(j => j.types.length);
+  if (!jobs.length) return null;
+  const spec = counterTileSpec(input.model);
+  const rendered: Array<{ sheet: CountSheet; rendered: RenderedCountPage | null; renderError?: string }> = [];
+  for (const j of jobs) {
+    const g = j.r.geometry!;
+    const pdf = input.pdfs.get(j.r.sheet.file);
+    const keys = new Set(j.types.map(t => t.typeKey));
+    const within = coverRect(j.r.placed.filter(p => keys.has(p.typeKey) && Number.isFinite(p.x)).map(p => pdfToDisplayedIn(p.x, p.y, g)));
+    const shown = g.rotation === 90 || g.rotation === 270 ? { w: g.heightPt / 72, h: g.widthPt / 72 } : { w: g.widthPt / 72, h: g.heightPt / 72 };
+    const rects = planOffsetTiles(shown.w, shown.h, { tileIn: spec.tileIn, within });
+    if (!pdf || !rects.length) { rendered.push({ sheet: j.r.sheet, rendered: null, renderError: 'the PDF for this sheet was not available' }); continue; }
+    try {
+      rendered.push({ sheet: j.r.sheet, rendered: await renderCountTiles(pdf, j.r.sheet.page, g, { limits: spec.limits, rects }) });
+    } catch (err) {
+      rendered.push({ sheet: j.r.sheet, rendered: null, renderError: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  const allKeys = new Set(jobs.flatMap(j => j.types.map(t => t.typeKey)));
+  logger.info({ sheets: jobs.map(j => j.r.sheet.label), types: [...allKeys] }, '[counting] consistency pass on a shifted tile grid');
+  const second = await runCounter({
+    client: input.client, model: input.model, maxTokens: input.maxTokens, targets: targets.filter(t => allKeys.has(t.key)),
+    sheets: rendered, shouldStop: input.shouldStop,
+    sheetNotes: new Map(jobs.map(j => [j.r.sheet.key, `${sheetNotes?.get(j.r.sheet.key) ?? ''}\n\nCONSISTENCY PASS: these tiles are the same sheet on a grid shifted by half a tile — count every instance of the targets they show, as always.`])),
+  });
+  let calls = 0;
+  for (const j of jobs) {
+    const s2 = second.sheets.find(x => x.sheet.key === j.r.sheet.key);
+    calls += s2?.calls ?? 0;
+    if (!s2 || s2.status !== 'counted') {
+      j.r.notes.push(`Consistency pass (shifted tiles) could not run for ${j.types.map(t => t.typeKey).join(', ')}: ${s2?.error ?? 'not rendered'} — the first pass's counts stand, unchecked.`);
+      continue;
+    }
+    const entries: ConsistencyEntry[] = [];
+    const suggested: ConsistencySuggestion[] = [];
+    let placed = j.r.placed;
+    for (const t of j.types) {
+      const rec = reconcilePasses(placed.filter(p => p.typeKey === t.typeKey), s2.placed.filter(p => p.typeKey === t.typeKey));
+      const entry = entryOf(j.r.sheet.key, j.r.sheet.label, t.typeKey, t.why, rec);
+      // The passes disagree wholesale (under half the marks in common — a
+      // second read that saw next to nothing, say): no pass is a check on
+      // the other. The first pass's count stands, unconfirmed, and the
+      // review item says so; nothing is suggested or dropped on its word.
+      if (entry.agreement < CONSISTENCY_MIN_AGREEMENT) {
+        entries.push({ ...entry, inconclusive: true });
+        continue;
+      }
+      entries.push(entry);
+      placed = [...placed.filter(p => p.typeKey !== t.typeKey), ...rec.agreed];
+      suggested.push(...rec.onlyFirst.map(m => ({ typeKey: t.typeKey, sheetKey: j.r.sheet.key, x: m.x, y: m.y, pass: 'first' as const })),
+        ...rec.onlySecond.map(m => ({ typeKey: t.typeKey, sheetKey: j.r.sheet.key, x: m.x, y: m.y, pass: 'second' as const })));
+    }
+    j.r.placed = placed;
+    j.r.calls += s2.calls;
+    j.r.consistency = entries;
+    j.r.consistencySuggested = suggested;
+    j.r.notes.push(`Consistency pass (shifted tiles): ${entries.map(e => `${e.typeKey} ${e.first}/${e.second}, ${e.agreed} agree (${Math.round(e.agreement * 100)}%)${e.inconclusive ? ' — inconclusive, first pass kept unconfirmed' : ''}`).join('; ')} — marks only one pass found are suggested, not counted.`);
+  }
+  return { calls, usage: second.usage, tiles: rendered.reduce((n, r) => n + (r.rendered?.tiles.length ?? 0), 0) };
+}
+
+async function countSheetsOnce(
   input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop'>,
   targets: CountTarget[],
   sheets: CountSheet[],
@@ -744,7 +851,8 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
 
   const results: SheetCountResult[] = oldSheets.map(s => priorSheetResult(s, input.prior));
   if (newSheets.length && counterTargets.length) {
-    const run = await countSheets(input, counterTargets, newSheets, input.onProgress, sheetNotes);
+    const run = await countSheets(input, counterTargets, newSheets, input.onProgress, sheetNotes, { consistency: !!input.evidence });
+    if (evidence && run.consistency) evidence.consistencyRun = run.consistency;
     add(run.usage);
     results.push(...run.sheets);
   }

@@ -153,6 +153,8 @@ export function groupKey(i: ReviewItem): string {
   if (i.blocking === false) return 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';
+  if (i.id.startsWith('consistency:')) return 'consistency';
+  if (i.id.startsWith('synonym:')) return 'synonym';
   if (i.id.startsWith('reconcile:')) return 'reconcile';
   if (i.id.startsWith('counting:')) return 'counting';
   if (i.id.startsWith('refsheet:')) return 'refsheets';
@@ -187,6 +189,10 @@ export function groupTitle(key: string, n: number): string {
   // over-count, information only). Never a count by itself.
   if (key === 'gapfill') return `Gap-fill found possible marks — confirm on plans (${n})`;
   if (key === 'reconcile') return `Reconciliation mismatch${s}: schedule/typical vs. the plans (${n})`;
+  // Real-run fixes 2 / 5 — a generic symbol drawn on another type's marks;
+  // marks only one of two counting passes found on a dense sheet.
+  if (key === 'synonym') return `The same device under two names? (${n})`;
+  if (key === 'consistency') return `Dense-sheet check — marks only one counting pass found (${n})`;
   if (key === 'spotcheck') return `Spot-check samples of a high count (${n}) — for information`;
   if (key === 'schedule') return `Schedules not read completely (${n})`;
   if (key === 'heads') return `Pole heads (${n})`;
@@ -209,7 +215,7 @@ export function groupTitle(key: string, n: number): string {
 // ranked near the BOTTOM server-side (riskRank 40) — no longer jump the
 // queue just because they're a different kind of item. spotcheck (S13) is
 // informational, grouped with photometric/checklist/info at the tail.
-const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'zero', 'family', 'gapfill', 'reconcile', 'schedule', 'typical', 'area', 'viewport', 'unreadable', 'coverage', 'heads', 'legend-zero', 'unscheduled', 'scope', 'other', 'photometric', 'spotcheck', 'checklist', 'info'];
+const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'zero', 'family', 'gapfill', 'consistency', 'reconcile', 'synonym', 'schedule', 'typical', 'area', 'viewport', 'unreadable', 'coverage', 'heads', 'legend-zero', 'unscheduled', 'scope', 'other', 'photometric', 'spotcheck', 'checklist', 'info'];
 
 export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement }: Props) {
   const open = review.items.filter(i => !i.resolution);
