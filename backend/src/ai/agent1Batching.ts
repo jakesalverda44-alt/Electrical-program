@@ -250,7 +250,9 @@ export const AGENT1_CONCURRENCY = 3;
  *  once the in-flight ones settle. */
 export async function runBatchesInOrder<T>(
   count: number,
-  worker: (index: number) => Promise<T>,
+  /** `signal` aborts when a sibling batch failed (N8): an in-flight batch
+   *  stops billing instead of finishing for nothing. */
+  worker: (index: number, signal: AbortSignal) => Promise<T>,
   opts: {
     concurrency?: number;
     shouldStop?: () => boolean | Promise<boolean>;
@@ -262,14 +264,19 @@ export async function runBatchesInOrder<T>(
   let stopped = false;
   let done = 0;
   let running = 0;
+  const siblings = new AbortController();
   await runWithConcurrencyLimit(Array.from({ length: count }, (_, i) => i), opts.concurrency ?? AGENT1_CONCURRENCY, async (i) => {
     if (failure || stopped) return;
     if (await opts.shouldStop?.()) { stopped = true; return; }
     running++;
     try {
-      results[i] = await worker(i);
+      results[i] = await worker(i, siblings.signal);
     } catch (err) {
-      if (!failure) failure = { err };
+      if (!failure) {
+        failure = { err };
+        // Fix round N8 — the run fails: abort the batches still in flight.
+        siblings.abort(new RunCancelledError('a sibling Agent 1 batch failed'));
+      }
     } finally {
       running--;
       done++;

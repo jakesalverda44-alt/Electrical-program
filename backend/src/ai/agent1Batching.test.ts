@@ -184,3 +184,16 @@ describe('next round A5 — runBatchesInOrder (parallel Agent 1 batches)', () =>
     expect(seen[3]).toBe('4/4:0');
   });
 });
+
+describe('fix round N8 — a failed batch aborts its in-flight siblings', () => {
+  it('the siblings\' signal aborts at the first failure; the first error is the one thrown', async () => {
+    const { runBatchesInOrder } = await import('./agent1Batching');
+    const aborted: number[] = [];
+    await expect(runBatchesInOrder(3, (i, signal) => new Promise((resolve, reject) => {
+      if (i === 1) { setTimeout(() => reject(new Error('Agent 1 (batch 2 of 3) ran out of room')), 5); return; }
+      signal.addEventListener('abort', () => { aborted.push(i); reject(new Error('aborted')); }, { once: true });
+      setTimeout(() => resolve(i), 1000);
+    }))).rejects.toThrow('ran out of room');
+    expect(aborted.sort()).toEqual([0, 2]);
+  });
+});

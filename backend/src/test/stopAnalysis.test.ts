@@ -53,7 +53,7 @@ vi.mock('../services/googleDrive', async (importOriginal) => {
 import { app } from '../index';
 import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth, type TestUser } from './harness';
-import { runPipeline, runDraftComposition, loadAIConfig, beginAnalysisRun } from '../routes/preconstruction';
+import { runPipeline, runDraftComposition, loadAIConfig, beginAnalysisRun, ANALYSIS_RUNNING_STATUSES } from '../routes/preconstruction';
 import { runningCount, abortableClient, registerRun, isCancellationError, RunCancelledError } from '../ai/runControl';
 import { callWithRetry } from '../ai/retry';
 import { writeAiCountMarkers } from '../estimating/aiMarkers';
@@ -202,8 +202,11 @@ describe('stop-analysis — the analysis pipeline', () => {
       return isAgent1(req) ? JSON.stringify({ project: { name: 'x' } }) : '{}';
     };
     await runPipeline(bidId, IMAGES, fakeClient, await loadAIConfig());
-    // Next round A5 — all three start at once; then "N of 3 batches done".
-    expect(seen).toEqual(['Agent 1: 3 batches, 3 at a time', 'Agent 1: 3 batches, 3 at a time', 'Agent 1: 3 batches, 3 at a time']);
+    // Next round A5 — all three start at once; a batch that finishes first
+    // may already have written "1 of 3 batches done" (fix round N12: the
+    // order of the three starts is not fixed under load).
+    expect(seen[0]).toBe('Agent 1: 3 batches, 3 at a time');
+    for (const l of seen) expect(l).toMatch(/^Agent 1: (3 batches, 3 at a time|[12] of 3 batches done( \(\d running\))?)$/);
     const { rows } = await pool.query('SELECT progress FROM takeoff_results WHERE bid_id=$1', [bidId]);
     expect(rows[0].progress?.label ?? '').not.toMatch(/batch \d+ of/);
   });
@@ -299,6 +302,7 @@ describe('fix round S2 — a re-run cancels the previous run\'s in-flight work f
     sdk.handler = () => new Promise(() => { /* the old run hangs until aborted */ });
     const oldRun = runPipeline(bidId, IMAGES, fakeClient, await loadAIConfig());
     await until(() => sdk.calls.length === 3); // A5 — 3 batches at once
+    const firstWave = sdk.calls.slice(0, 3);
     const oldSignal = sdk.calls[0].signal!;
     const agent4 = registerRun(bidId, 'agent4', 'some-old-run');
     const draft = registerRun(bidId, 'draft', 'some-old-run');
@@ -317,8 +321,20 @@ describe('fix round S2 — a re-run cancels the previous run\'s in-flight work f
     expect(draft.signal.aborted).toBe(true);
     agent4.release(); draft.release();
     await oldRun; // exits cleanly
-    const oldCalls = sdk.calls.filter(c => c.signal === oldSignal);
-    expect(oldCalls).toHaveLength(3); // the first wave, all aborted; nothing after
+    // Fix round N8 — each batch carries its own signal (run + siblings);
+    // every one of the old run's first wave was aborted, and it started no more.
+    for (const c of firstWave) expect(c.signal!.aborted).toBe(true);
+    const oldBatches = sdk.calls.filter(c => /batch \d+ of 3\b/.test(String((c.req.messages as Array<{ content: Array<{ text?: string }> }>)[0]?.content?.at?.(-1)?.text ?? '')));
+    expect(oldBatches).toHaveLength(3);
+    // Fix round N12 — wait for the NEW run this test started to finish, so
+    // it can't call the shared fake SDK during the next test.
+    const t0 = Date.now();
+    for (;;) {
+      const { rows: [tr] } = await pool.query('SELECT status FROM takeoff_results WHERE bid_id=$1', [bidId]);
+      if ((!ANALYSIS_RUNNING_STATUSES.includes(tr.status) && runningCount(bidId, 'analysis') === 0) || Date.now() - t0 > 15_000) break;
+      await new Promise(r => setTimeout(r, 25));
+    }
+    expect(runningCount(bidId, 'analysis')).toBe(0);
   });
 });
 

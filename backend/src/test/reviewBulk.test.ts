@@ -50,6 +50,15 @@ describe('A7 — bulk resolution by group', () => {
     expect(await takeoffGate(bidId)).toBeNull();
   });
 
+  it('fix round N9: a bulk request across groups is refused on the server', async () => {
+    if (!ok) return;
+    const bidId = await bid();
+    const res = await request(app).post(`/api/preconstruction/${bidId}/review/resolve`).set(auth(user.token))
+      .send({ itemIds: ['area:GFI', 'scope:power_poles:furnish'], action: 'answer', answerIndex: 0 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/one group/);
+  });
+
   it('a bad bulk request changes nothing', async () => {
     if (!ok) return;
     const bidId = await bid();

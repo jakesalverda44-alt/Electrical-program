@@ -923,9 +923,14 @@ async function runPipelineStages(
     return true;
   };
   /** Live progress for the UI (takeoff_results.progress). Best effort. */
-  const setProgress = (stage: string, label: string, step: number | null = null, of: number | null = null) =>
-    guarded('UPDATE takeoff_results SET progress=$1 WHERE bid_id=$2',
-      [JSON.stringify({ stage, label, step, of, at: new Date().toISOString() }), bidId]).catch(() => {});
+  // Fix round N8 — progress writes are chained, so they land in the order
+  // they were made ("3 of 13" never overwritten by a late "2 of 13").
+  let progressChain: Promise<unknown> = Promise.resolve();
+  const setProgress = (stage: string, label: string, step: number | null = null, of: number | null = null) => {
+    const value = JSON.stringify({ stage, label, step, of, at: new Date().toISOString() });
+    progressChain = progressChain.then(() => guarded('UPDATE takeoff_results SET progress=$1 WHERE bid_id=$2', [value, bidId]).catch(() => {}));
+    return progressChain;
+  };
 
   // ── Agent 1 ─────────────────────────────────────────────────────────────────
   try {
@@ -1033,7 +1038,7 @@ async function runPipelineStages(
       let batchUsage: Record<string, unknown> = { ...NO_USAGE };
       const total = agent1Batches.length;
       await setProgress('agent1', `Agent 1: ${total} batches, ${Math.min(AGENT1_CONCURRENCY, total)} at a time`, 0, total);
-      const parsedByBatch = await runBatchesInOrder(total, async (bi) => {
+      const parsedByBatch = await runBatchesInOrder(total, async (bi, batchSignal) => {
         const contentBlocks = agent1Batches[bi];
         const prep = summarizePrep(contentBlocks);
         contentBlocks.push({
@@ -1042,14 +1047,15 @@ async function runPipelineStages(
         });
 
         logAgent1Request(bidId, contentBlocks, config.model, config.maxTokensA1, `batch ${bi + 1}/${total}`, prep);
+        const runSig = runSignalOf(client);
         const bResp = await callWithRetry(() =>
           client.messages.stream({
             model: config.model,
             max_tokens: config.maxTokensA1,
             system: [{ type: 'text', text: agent1PromptWithCountingSections(config.promptA1), cache_control: { type: 'ephemeral' } }],
             messages: [{ role: 'user', content: contentBlocks }],
-          }).finalMessage()
-        , { signal: runSignalOf(client), onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
+          }, { signal: batchSignal }).finalMessage()
+        , { signal: runSig ? AbortSignal.any([runSig, batchSignal]) : batchSignal, onRetry: (a, _e, d) => console.warn(`[takeoff] Agent 1 batch transient error, retry ${a} in ${d}ms`) });
         const bText = extractText(bResp);
         logAgent1Response(bidId, bResp, bText, `batch ${bi + 1}/${total}`, prep);
         // FIX-7 — sum the full usage shape across batches (a truncated
@@ -1070,6 +1076,12 @@ async function runPipelineStages(
         onSettled: (done, of, running) => {
           void setProgress('agent1', `Agent 1: ${done} of ${of} batches done${running ? ` (${running} running)` : ''}`, done, of);
         },
+      }).catch(async (err) => {
+        // Fix round N8 — batches that ran were billed: record their usage
+        // even when the run fails.
+        await guarded(`UPDATE takeoff_results SET usage_agent1=$1, model_agent1=$2 WHERE bid_id=$3`,
+          [JSON.stringify(storedUsage(mergeUsage(batchUsage, classifierUsage))), config.model, bidId]).catch(() => {});
+        throw err;
       });
       const batchResults = parsedByBatch.filter((p): p is Record<string, unknown> => !!p);
       batchUsage = mergeUsage(batchUsage, classifierUsage);

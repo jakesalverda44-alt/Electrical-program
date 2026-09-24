@@ -5,7 +5,7 @@ import { pool } from '../db/pool';
 import { getBidLines } from './bidEstimate';
 import { lineForType } from './aiMarkers';
 import {
-  reviewStatus, validateResolution, reviewItemIsOpen, perItemInput,
+  reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf,
   type ReviewItem, type ResolveInput,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
@@ -120,6 +120,18 @@ async function applyResolution(
     const { rows } = await client.query('SELECT review_items FROM takeoff_results WHERE bid_id = $1 FOR UPDATE', [bidId]);
     if (!rows.length) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: 'No takeoff for this bid.' }; }
     const items = ((rows[0].review_items as ReviewItem[] | null) ?? []).map(i => ({ ...i }));
+    // Fix round N9 — a bulk resolution covers ONE cause group (the UI's
+    // bulk actions); the one exception is "not on this job" across count
+    // items (the multi-select).
+    if (input && itemIds.length > 1) {
+      const picked = itemIds.map(id => items.find(i => i.id === id)).filter((i): i is ReviewItem => !!i);
+      const groups = new Set(picked.map(i => i.group ?? groupOf(i)));
+      const nojCounts = input.action === 'not_on_job' && picked.every(i => i.kind === 'count');
+      if (groups.size > 1 && !nojCounts) {
+        await client.query('ROLLBACK');
+        return { ok: false, status: 400, error: 'A bulk resolution must cover items of one group.' };
+      }
+    }
     for (const id of itemIds) {
       const item = items.find(i => i.id === id);
       if (!item) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: `Review item not found: ${id}` }; }
