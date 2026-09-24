@@ -5,12 +5,14 @@ import { useMutation } from '../../../hooks/useMutation';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, inputStyle } from '../shared';
 
-const VISION_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'];
+// Current models first. Older ids stay listed so a saved value never falls off
+// the list (a <select> whose value isn't an option would save the first option).
+const VISION_MODELS = ['claude-opus-5-5', 'claude-sonnet-5', 'claude-opus-5', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'];
 // Takeoff accuracy Task 1 — the counting stage defaults to Opus 5.5 (Decision 1).
-const COUNTER_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-4-6'];
-const TEXT_MODELS   = ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8'];
+const COUNTER_MODELS = ['claude-opus-5-5', 'claude-sonnet-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-4-6'];
+const TEXT_MODELS   = ['claude-opus-5-5', 'claude-sonnet-5', 'claude-opus-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8'];
 // Evidence round — the narrow readers (viewports, typical packages, schedule rows).
-const EVIDENCE_MODELS = ['claude-opus-5-5', 'claude-sonnet-4-6', 'claude-opus-4-8'];
+const EVIDENCE_MODELS = ['claude-opus-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-opus-4-8'];
 
 const ALL_KEYS = [
   'ai_anthropic_key',
@@ -40,7 +42,7 @@ const AGENT_LABELS = ['Drawing Analysis', 'Scope & Estimate', 'QA Review', 'Prop
 const PROMPT_KEYS = ['ai_prompt_agent1', 'ai_prompt_agent2', 'ai_prompt_agent3', 'ai_prompt_agent4'] as const;
 const MODEL_KEYS  = ['ai_model', 'ai_takeoff_agent2_model', 'ai_takeoff_agent3_model', 'ai_takeoff_agent4_model'] as const;
 const TOKEN_KEYS  = ['ai_max_tokens_agent1', 'ai_max_tokens_agent2', 'ai_max_tokens_agent3', 'ai_max_tokens_agent4'] as const;
-const SONNET_FIRST = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-opus-4-8'];
+const SONNET_FIRST = ['claude-sonnet-5', 'claude-opus-5-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-opus-4-8'];
 const MODEL_LISTS = [VISION_MODELS, TEXT_MODELS, TEXT_MODELS, SONNET_FIRST];
 const TOKEN_DEFAULTS = ['16000', '32000', '16000', '8000'];
 const AGT = ['agent1', 'agent2', 'agent3', 'agent4'] as const;
