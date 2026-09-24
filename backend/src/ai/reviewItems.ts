@@ -255,7 +255,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   }
   for (const [key, notes] of lowerByType) {
     const t = (countResult?.types ?? []).find(x => x.key === key);
-    if (!t || t.status !== 'counted') continue;
+    if (!t || t.status !== 'counted' || t.host) continue;
     items.push({
       id: `recount:${key}`,
       kind: 'count',

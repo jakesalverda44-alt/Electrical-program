@@ -137,7 +137,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   ai_takeoff_agent4_model: 'claude-sonnet-4-6', ai_max_tokens_agent4: '8000', ai_prompt_agent4: '',
   ai_reply_draft_model: 'claude-opus-4-8', ai_build_from_notes_model: 'claude-haiku-4-5-20251001',
   ai_takeoff_counter_model: 'claude-opus-5-5', ai_max_tokens_counter: '32000',
-  ai_takeoff_evidence_model: 'claude-sonnet-4-6', ai_max_tokens_evidence: '16000',
+  ai_takeoff_evidence_model: 'claude-opus-5-5', ai_max_tokens_evidence: '16000',
   ai_prep_classifier_model: 'claude-haiku-4-5-20251001',
   ai_prep_dpi_schedule: '', ai_prep_dpi_plan: '', ai_prep_tiles_schedule: '', ai_prep_tiles_plan: '',
   ai_enabled: 'true', ai_analysis_enabled: 'true', ai_daily_limit_per_user: '10', ai_role_permissions: '',

@@ -745,7 +745,7 @@ export function mergeCountsIntoTakeoff(
       // foundations and arms are accessories and stay with the estimator.
       if (sitePolesCounted && /\b(light\s+)?poles?\b/i.test(String(row.item ?? ''))
         && /\b(site|light|area|parking)\b/i.test(String(row.item ?? ''))
-        && !/\bbases?\b(?!\s+cover)|\b(foundation|footing|arms?|bracket|power\s+poles?|pier)\b/i.test(String(row.item ?? ''))) {
+        && !/\bbases?\b(?!\s+cover)|\b(foundation|footing|arms?|bracket|power\s+poles?|pier|receptacles?|outlets?|gfci|gfi|photocells?|conduit|wire|wiring|j-?box|junction|handhole|pull\s*box)\b/i.test(String(row.item ?? ''))) {
         removedRows.push({ row, reason: `the site light poles — counted as ${sitePolesCounted} (site family), never stacked`, replacedByType: null });
         continue;
       }

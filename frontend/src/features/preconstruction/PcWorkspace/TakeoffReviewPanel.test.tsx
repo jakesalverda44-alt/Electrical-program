@@ -258,9 +258,9 @@ describe('evidence round — enlarged-plan, typical, family and schedule groups'
     setup({
       status: 'needs_review',
       items: [
-        { id: 'viewport:GFCI', kind: 'area', group: 'viewport', title: 'Type GFCI — GFCI duplex receptacle: does the enlarged plan repeat the main plan?', detail: 'E-1 #3 RESTROOM POWER AND LIGHTING: 6 — where it sits on the main plan is not known. Repeats the main plan (keep 3) or adds devices (9)?', options: ['Repeats the main plan — keep 3', 'Adds devices — 9'], keepQty: 3, sumQty: 9, actions: ['answer', 'count'] },
+        { id: 'viewport:GFCI', kind: 'area', group: 'viewport', title: 'Type GFCI — GFCI duplex receptacle: does the enlarged plan repeat the main plan?', detail: 'E-1 #3 RESTROOM POWER AND LIGHTING: 6 — where it sits on the main plan is not known. Repeats the main plan (keep 3) or adds devices (9)?', options: ['Repeats the main plan — keep 3', 'Adds devices — 9'], actions: ['answer', 'count'] },
         { id: 'typical:e2@9#3', kind: 'count', group: 'typical', title: 'Typical: Parts pod power pole — how many?', detail: '#9 POWER POLE LEGEND says each parts pod power pole carries 1 × DUPLEX RECEPTACLE / FLOOR RECEPTACLE', actions: ['count', 'not_on_job'] },
-        { id: 'family:W2', kind: 'area', group: 'family', title: 'Same fixture on two schedules: W2 = L', detail: 'W2 has the same catalog number as L.', options: ['Keep L — 1', "Use W2's count — 4"], keepQty: 1, sumQty: 4, actions: ['answer'] },
+        { id: 'family:W2', kind: 'area', group: 'family', title: 'Same fixture on two schedules: W2 = L', detail: 'W2 has the same catalog number as L.', options: ['Keep L — 1', "Use W2's count — 4"], actions: ['answer'] },
         { id: 'schedule:panels-unread', kind: 'confirm', group: 'schedule', title: 'Panel schedule not read — branch circuits missing from the takeoff', detail: 'PANEL B (E-4) could not be read row by row.', actions: ['confirm'] },
       ],
     });

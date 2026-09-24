@@ -52,14 +52,14 @@ describe('AISection — Agent 1C counter settings', () => {
 });
 
 describe('AISection — evidence readers (evidence round)', () => {
-  it('shows the defaults (Sonnet 4.6, 16000) and saving PUTs both keys', async () => {
+  it('shows the defaults (Opus 5.5, 16000) and saving PUTs both keys', async () => {
     setup();
-    expect((screen.getByLabelText('Evidence model') as HTMLSelectElement).value).toBe('claude-sonnet-4-6');
+    expect((screen.getByLabelText('Evidence model') as HTMLSelectElement).value).toBe('claude-opus-5-5');
     expect((screen.getByLabelText('Evidence max tokens') as HTMLInputElement).value).toBe('16000');
-    fireEvent.change(screen.getByLabelText('Evidence model'), { target: { value: 'claude-opus-5-5' } });
+    fireEvent.change(screen.getByLabelText('Evidence model'), { target: { value: 'claude-sonnet-4-6' } });
     fireEvent.click(await screen.findByRole('button', { name: /save/i }));
     await waitFor(() => expect(put).toHaveBeenCalled());
     const body = put.mock.calls[0][1] as Record<string, string>;
-    expect(body.ai_takeoff_evidence_model).toBe('claude-opus-5-5');
+    expect(body.ai_takeoff_evidence_model).toBe('claude-sonnet-4-6');
   });
 });

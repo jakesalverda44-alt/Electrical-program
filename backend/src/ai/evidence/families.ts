@@ -153,6 +153,9 @@ export function applySymbolDefinitions(types: Ty[], targetsIn: CountTarget[]): {
   for (const t of out) {
     const tgt = targets.get(t.key);
     if (!tgt || tgt.source !== 'legend' || t.status === 'counted' || t.status === 'merged' || tgt.role === 'host') continue;
+    // Only an equipment symbol, never a device that happens to name a tag
+    // ("Duplex receptacle at pylon sign base" is a receptacle to count).
+    if (tgt.category !== 'equipment' || /RECEPT|OUTLET|SWITCH|SENSOR|\bGFC?I\b|J-?BOX|JUNCTION/i.test(t.description)) continue;
     const desc = ` ${t.description.toUpperCase().replace(/[^A-Z0-9]+/g, ' ')} `;
     // Only a scheduled TAG ("PYLON SIGN", "SITE LIGHT", "DISCON A") — never
     // another legend entry, whose key is itself a description ("MOTION

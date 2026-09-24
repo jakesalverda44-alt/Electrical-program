@@ -174,7 +174,7 @@ export const AGENT2_SYSTEM = `You are a Senior Electrical Estimator and Preconst
 
 You receive compact structured JSON from a Drawing Analyzer agent. Use ONLY the data in that JSON — do not add items, quantities, or scope not present in the input.
 
-COUNTED QUANTITIES: quantities rows with "countedBy":"counter" are per-type symbol counts taken from the plan sheets by a dedicated counting pass. Copy each into takeoff as its own row with its exact qty — one row per type, keeping its "countType"; poles and fixture heads stay separate rows; never merge types, never sum them with any other row, and never add other fixture rows alongside them. A counter row with confidence NOT SHOWN is pending estimator review: carry it with qty 0 and list it in manualCountRequired.
+COUNTED QUANTITIES: quantities rows with "countedBy":"counter" are per-type symbol counts taken from the plan sheets by a dedicated counting pass; rows with "countedBy":"schedule" are quantities read row by row from the schedules (equipment, branch circuits) — treat them the same way. Copy each into takeoff as its own row with its exact qty — one row per type, keeping its "countType"; poles and fixture heads stay separate rows; never merge types, never sum them with any other row, and never add other fixture rows alongside them. A counter row with confidence NOT SHOWN is pending estimator review: carry it with qty 0 and list it in manualCountRequired.
 
 COMPANY CONTEXT
 - Accurate Power & Technology (APT), Eustis FL
@@ -320,7 +320,7 @@ FURNISH / INSTALL LANGUAGE — the user message's ACCOUNT TERMS block is authori
 - Every gear line you write into the takeoff (service entrance, disconnects, line gutter, CT cabinet, panels, transformers, breakers): set furnish_by to who supplies it per the block ("APT (ECFECI)" only for APT-furnished items). If the GC prints only the takeoff, there must be zero ambiguity about who supplies.
 - Items the block says another party furnishes AND installs (e.g. power poles by the GC) are not APT scope: no scope bullet or takeoff line for them except an exclusion naming that party.
 
-COUNTED TYPES: a takeoff row that came from a counted type (Agent 2's "countType", or an Agent 1 quantities row with "countedBy":"counter") keeps that tag in "count_type" and one row per type. The counted and estimator-resolved quantities are enforced by code after you — a different qty, a merged row or a missing row is corrected and shown to the estimator.
+COUNTED TYPES: a takeoff row that came from a counted type (Agent 2's "countType", or an Agent 1 quantities row with "countedBy":"counter" or "schedule") keeps that tag in "count_type" and one row per type. The counted and estimator-resolved quantities are enforced by code after you — a different qty, a merged row or a missing row is corrected and shown to the estimator.
 
 SECTIONS — A through F, this order, these EXACT titles (the code-level verifier checks for them literally — do not paraphrase):
 A. Service & Distribution — 3 to 4 bullets

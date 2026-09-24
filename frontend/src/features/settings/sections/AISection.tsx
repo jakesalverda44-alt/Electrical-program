@@ -10,7 +10,7 @@ const VISION_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5
 const COUNTER_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-4-6'];
 const TEXT_MODELS   = ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8'];
 // Evidence round — the narrow readers (viewports, typical packages, schedule rows).
-const EVIDENCE_MODELS = ['claude-sonnet-4-6', 'claude-opus-5-5', 'claude-opus-4-8'];
+const EVIDENCE_MODELS = ['claude-opus-5-5', 'claude-sonnet-4-6', 'claude-opus-4-8'];
 
 const ALL_KEYS = [
   'ai_anthropic_key',

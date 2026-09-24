@@ -115,10 +115,12 @@ const DEFAULT_MAX_TOKENS_A4 = 8000;
  *  sized for thinking plus ~200-400 compact marks per sheet (see counter.ts). */
 export const DEFAULT_COUNTER_MODEL = 'claude-opus-5-5';
 export const DEFAULT_MAX_TOKENS_COUNTER = 32000;
-/** Evidence round — the readers read one crop / one table per call; Sonnet
- *  is enough for printed legends and schedules. Opus 5.5 can be chosen in
- *  Settings (its larger image limit reads small print better). */
-export const DEFAULT_EVIDENCE_MODEL = 'claude-sonnet-4-6';
+/** Evidence round — the readers read one sheet overview / one crop / one
+ *  table per call. Opus 5.5 by default: its high-resolution image limit
+ *  (3.75 MP) sees a 36x24 sheet overview at ~64 px/in and a panel schedule
+ *  crop at ~180 px/in; the standard tier (Sonnet 4.6, 1.2 MP) gets ~37 and
+ *  ~105 px/in — small print. Changeable in Settings -> AI. */
+export const DEFAULT_EVIDENCE_MODEL = 'claude-opus-5-5';
 export const DEFAULT_MAX_TOKENS_EVIDENCE = 16000;
 const DEFAULT_TEMPERATURE = 0.3;
 

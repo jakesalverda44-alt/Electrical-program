@@ -77,6 +77,11 @@ describe('symbol definitions and schedule rows for legend symbols', () => {
     // Another legend entry is never "the tag" ("Motion sensor LSXR-50-HL" is not the generic motion sensor).
     expect(get('M2').status).toBe('zero');
   });
+  it('a DEVICE that names a tag is never folded (a receptacle at the pylon sign is a receptacle to count)', () => {
+    const extra = { ...T('SIMPLEX RECEPTACLE'), type: 'X1', key: 'X1', description: 'Duplex receptacle at PYLON SIGN base', category: 'device' as const };
+    const r = applySymbolDefinitions([ty('PYLON SIGN', 1), { ...ty('SIMPLEX RECEPTACLE', 0), key: 'X1', type: 'X1', description: extra.description, category: 'device' }], [...targets, extra]);
+    expect(r.types.find(t => t.key === 'X1')!.status).toBe('zero');
+  });
   it('EF (schedule, 0) is the legend\'s "Exhaust fan recessed" (2); a phone-board duplex is never folded into a plain duplex', () => {
     const r = applyScheduleLegendEquivalence([ty('EF', 0), ty('EXHAUST FAN RECESSED', 2), ty('DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX ON PHONE BOARD', 0), ty('DUPLEX RECEPTACLE / FLOOR RECEPTACLE', 4)], targets);
     expect(r.types.find(t => t.key === 'EF')).toMatchObject({ status: 'merged', mergedInto: 'Exhaust fan recessed' });

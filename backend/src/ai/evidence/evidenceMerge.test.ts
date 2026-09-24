@@ -134,6 +134,17 @@ describe('3.3 — merged types carry no line, no review item, no enforced count'
     expect(items.some(i => /SITE LIGHT/.test(i.id))).toBe(false);
     expect(enforcedCounts(c, items).byType.has('SITE LIGHT')).toBe(false);
   });
+  it('Agent 1 rows that ARE the site poles are the family\'s lines; a receptacle or base at a pole is not', () => {
+    const a1 = { ...base.agent1, quantities: [
+      { category: 'Exterior Site Lighting', item: 'Site light pole locations (A-15 single, A-17 two heads @90 deg, A-19 single)', qty: 3, unit: 'EA' },
+      { category: 'Exterior Site Lighting', item: 'GFCI receptacle at light pole base', qty: 3, unit: 'EA' },
+      { category: 'Exterior Site Lighting', item: 'Light pole concrete base', qty: 3, unit: 'EA' },
+    ] };
+    const m2 = mergeCountsIntoTakeoff(a1, targets, [input(49), input(50), ...others()], { countingRan: true, evidence: {} });
+    expect(m2.removedRows.map(r => [String(r.row.item).slice(0, 20), !!r.unscheduled])).toEqual([
+      ['Site light pole loca', false], ['GFCI receptacle at l', true], ['Light pole concrete ', true],
+    ]);
+  });
   it('a family question\'s answer replaces the primary\'s count', () => {
     const fake: CountResult = { ...c, evidence: { ...cr(m, targets, {}).evidence!, families: [{ family: 'DSXW1', primary: ['L'], merged: [], question: { key: 'W2', memberCount: 4, primaryCount: 1, into: 'L', intoKeys: ['L'] }, flags: [] }] } };
     const items = buildReviewItems(fake);

@@ -20,12 +20,12 @@ describe('ai_takeoff_evidence_model / ai_max_tokens_evidence', () => {
       await request(app).put('/api/settings').set(auth(admin.token)).send({ ai_takeoff_evidence_model: '', ai_max_tokens_evidence: '' }).expect(200);
       let cfg = await loadAIConfig();
       expect([cfg.modelEvidence, cfg.maxTokensEvidence]).toEqual([DEFAULT_EVIDENCE_MODEL, DEFAULT_MAX_TOKENS_EVIDENCE]);
-      await request(app).put('/api/settings').set(auth(admin.token)).send({ ai_takeoff_evidence_model: 'claude-opus-5-5', ai_max_tokens_evidence: '24000' }).expect(200);
+      await request(app).put('/api/settings').set(auth(admin.token)).send({ ai_takeoff_evidence_model: 'claude-sonnet-4-6', ai_max_tokens_evidence: '24000' }).expect(200);
       const res = await request(app).get('/api/settings').set(auth(admin.token)).expect(200);
       const byKey = Object.fromEntries((res.body as { key: string; value: string }[]).map(r => [r.key, r.value]));
-      expect(byKey.ai_takeoff_evidence_model).toBe('claude-opus-5-5');
+      expect(byKey.ai_takeoff_evidence_model).toBe('claude-sonnet-4-6');
       cfg = await loadAIConfig();
-      expect([cfg.modelEvidence, cfg.maxTokensEvidence]).toEqual(['claude-opus-5-5', 24000]);
+      expect([cfg.modelEvidence, cfg.maxTokensEvidence]).toEqual(['claude-sonnet-4-6', 24000]);
     } finally {
       await request(app).put('/api/settings').set(auth(admin.token))
         .send({ ai_takeoff_evidence_model: prev.ai_takeoff_evidence_model ?? '', ai_max_tokens_evidence: prev.ai_max_tokens_evidence ?? '' }).expect(200);
