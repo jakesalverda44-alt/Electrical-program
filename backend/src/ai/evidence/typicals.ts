@@ -248,6 +248,16 @@ export function isAssemblyPackage(p: TypicalPackage, targets: CountTarget[]): bo
   return [...tw].filter(w => qw.has(w)).length >= 2;
 }
 
+/** "A40,42" / "A42" -> share A42. Normalized tags (no hyphens). */
+export function circuitsOverlap(a: string, b: string): boolean {
+  const set = (t: string) => {
+    const m = /^([A-Z]*)(.*)$/.exec(t)!;
+    return new Set(m[2].split(/[,/&]/).filter(Boolean).map(n => `${m[1]}${n}`));
+  };
+  const sa = set(a);
+  return [...set(b)].some(x => sa.has(x));
+}
+
 /** Pure (2.2): expand every package's stated devices by its host count. */
 export function expandTypicals(
   packages: TypicalPackage[],
@@ -261,7 +271,11 @@ export function expandTypicals(
   // host's own outlet only if their circuits agree (or neither shows one):
   // E-1's "duplex outlet at deck" is A-31 (CCTV MONITOR), checkout pole #2
   // is A-29 — different outlets, no question.
-  const circuitOk = (m: { circuit?: string }, h: HostMark) => (!m.circuit && !h.circuit) || (!!m.circuit && m.circuit === h.circuit);
+  // Fix round 4 / S21 — skipped ONLY when both show a circuit tag and the
+  // tags share no circuit ("A40,42" and "A42" share one); one side or
+  // neither tagged -> still asked (a drawn outlet usually carries its
+  // homerun tag while the pole's hexagon doesn't).
+  const circuitOk = (m: { circuit?: string }, h: HostMark) => !(m.circuit && h.circuit && !circuitsOverlap(m.circuit, h.circuit));
   const near = (hc: { marks: HostMark[] }, key: string, r: number, perHost: number, own: boolean | null = true) => {
     let n = 0;
     for (const h of hc.marks) {

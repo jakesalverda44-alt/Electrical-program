@@ -144,9 +144,11 @@ describe('fix round 3 / S19 — the at-host question needs matching circuits (or
   it('Kissimmee: A-31 (CCTV MONITOR) vs pole #2 on A-29 -> no question', () => {
     expect(expandTypicals([p], hosts('A29'), dev('A31'), targets).expansions[0].possibleAtHosts).toBeUndefined();
   });
-  it('same circuit -> asked; neither shows a circuit -> asked; only one shows one -> not asked', () => {
+  it('fix round 4 / S21: asked unless BOTH show tags that differ — same circuit, neither, or only one side tagged -> asked', () => {
     expect(expandTypicals([p], hosts('A29'), dev('A29'), targets).expansions[0].possibleAtHosts).toBe(1);
     expect(expandTypicals([p], hosts(), dev(), targets).expansions[0].possibleAtHosts).toBe(1);
-    expect(expandTypicals([p], hosts('A29'), dev(), targets).expansions[0].possibleAtHosts).toBeUndefined();
+    expect(expandTypicals([p], hosts('A29'), dev(), targets).expansions[0].possibleAtHosts).toBe(1);
+    expect(expandTypicals([p], hosts(), dev('A40'), targets).expansions[0].possibleAtHosts).toBe(1);
+    expect(expandTypicals([p], hosts('A40,42'), dev('A42'), targets).expansions[0].possibleAtHosts).toBe(1);
   });
 });
