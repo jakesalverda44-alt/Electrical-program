@@ -15,6 +15,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import api from '../../../api/client';
 import './takeoffReview.css';
 import type { Toast } from '../../../types';
+import { useConfirm } from '../../../components/ConfirmDialog';
 
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
 
@@ -55,8 +56,10 @@ export interface ReviewItem {
   group?: string;
   typeKey?: string;
   category?: string;
-  /** Evidence round 4.5 — a grouped "confirm none of these" item's members. */
-  groupedTypes?: Array<{ key: string; type: string; description: string }>;
+  /** Evidence round 4.5 — a grouped legend-zero item's members. Fix round
+   *  B6 — each member carries its OWN resolution now; the group itself
+   *  resolves only once every member has one. */
+  groupedTypes?: Array<{ key: string; type: string; description: string; resolution?: ReviewResolution }>;
 }
 
 export interface TakeoffReview {
@@ -211,6 +214,11 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
 
   const [extras, setExtras] = useState<ReviewExtras>({});
   const [typesText, setTypesText] = useState('');
+  // Fix round B6 — a legend-zero group's members are answered one at a
+  // time; `confirm()` gates the "mark all remaining" shortcut behind a
+  // dialog that lists every member it would touch.
+  const confirm = useConfirm();
+  const [groupAllReason, setGroupAllReason] = useState<Record<string, string>>({});
   const openCountIds = useMemo(() => open.filter(i => actionsOf(i).includes('not_on_job')).map(i => i.id), [open]);
 
   // Fix round 1 / S5, S8 — the matched account rule, and for a bid analysed
@@ -322,7 +330,12 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
         const renderItem = (item: ReviewItem) => (
             <li key={item.id} className="tr-item" data-testid={`review-item-${item.id}`}>
               <div className="tr-item-head">
-                {actionsOf(item).includes('not_on_job') && (
+                {/* Fix round B6 — a grouped item is never added to the
+                    cross-item multi-select: that bar's "Mark selected not on
+                    this job" would otherwise resolve the WHOLE group with
+                    one bulk action and no memberKey, no per-member answers,
+                    no confirm listing — exactly what B6 removed. */}
+                {actionsOf(item).includes('not_on_job') && !item.groupedTypes?.length && (
                   <input
                     type="checkbox"
                     aria-label={`Select ${item.title}`}
@@ -345,7 +358,96 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                   Earlier answer (the drawings or counts changed — confirm again): {resolutionText(item.previousResolution)}
                 </div>
               )}
-              {(() => {
+              {/* Fix round B6 — a legend-zero group: EACH member gets its own
+                  row with its own action (not on job / enter qty). No bulk
+                  button applies one action to every member at once; the one
+                  shortcut ("mark all remaining not on job") sits behind a
+                  confirm dialog listing every member it would touch, and —
+                  structurally, since B6 never groups an equipment or
+                  phone-board type in the first place — only ever offers to
+                  touch non-equipment members. */}
+              {item.groupedTypes && item.groupedTypes.length > 0 ? (
+                <div className="tr-group-members" data-testid={`review-groupmembers-${item.id}`}>
+                  <ul className="tr-list">
+                    {item.groupedTypes.map(m => {
+                      const mid = `${item.id}::${m.key}`;
+                      return (
+                        <li key={m.key} className="tr-item" data-testid={`review-groupmember-${mid}`}>
+                          <div className="tr-item-head">
+                            <strong>{m.type}</strong>{m.description ? ` — ${m.description}` : ''}
+                          </div>
+                          {m.resolution ? (
+                            <div className="tr-sub" data-testid={`review-groupmember-done-${mid}`}>{resolutionText(m.resolution)}</div>
+                          ) : (
+                            <div className="tr-actions">
+                              <input
+                                type="number" min={1} step={1} inputMode="numeric"
+                                aria-label={`Count for ${m.type}`}
+                                placeholder="Count (from the schedule, or as counted)"
+                                value={qty[mid] ?? ''}
+                                data-testid={`groupmember-qty-${mid}`}
+                                onChange={e => setQty(q => ({ ...q, [mid]: e.target.value }))}
+                              />
+                              <button type="button" className="btn primary sm" disabled={!qty[mid] || busy !== null}
+                                data-testid={`groupmember-count-${mid}`}
+                                onClick={() => void resolve([item.id], { action: 'count', qty: Number(qty[mid]), memberKey: m.key }, `grpmember:${mid}`)}>
+                                Save count
+                              </button>
+                              <input
+                                type="text"
+                                aria-label={`Why ${m.type} is not on this job`}
+                                placeholder="Reason (at least 10 characters)"
+                                value={reason[mid] ?? ''}
+                                data-testid={`groupmember-reason-input-${mid}`}
+                                onChange={e => setReason(rr => ({ ...rr, [mid]: e.target.value }))}
+                              />
+                              <button type="button" className="btn ghost sm" disabled={(reason[mid] ?? '').trim().length < 10 || busy !== null}
+                                data-testid={`groupmember-noj-${mid}`}
+                                onClick={() => void resolve([item.id], { action: 'not_on_job', reason: reason[mid], memberKey: m.key }, `grpmember:${mid}`)}>
+                                Not on this job
+                              </button>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {(() => {
+                    const remaining = item.groupedTypes!.filter(m => !m.resolution);
+                    if (remaining.length < 2) return null; // one left: just answer it above
+                    const allReason = groupAllReason[item.id] ?? '';
+                    return (
+                      <div className="tr-bulk" data-testid={`group-noj-all-${item.id}`}>
+                        <input type="text" aria-label={`Reason for all ${remaining.length} remaining members of ${item.title}`}
+                          placeholder="Reason for all of them (at least 10 characters)"
+                          value={allReason} data-testid={`group-noj-all-reason-${item.id}`}
+                          onChange={e => setGroupAllReason(g => ({ ...g, [item.id]: e.target.value }))} />
+                        <button type="button" className="btn ghost sm" disabled={allReason.trim().length < 10 || busy !== null}
+                          data-testid={`group-noj-all-button-${item.id}`}
+                          onClick={async () => {
+                            const ok = await confirm({
+                              title: `Mark all ${remaining.length} remaining not on this job?`,
+                              body: (
+                                <ul>
+                                  {remaining.map(m => <li key={m.key}>{m.type}{m.description ? ` — ${m.description}` : ''}</li>)}
+                                </ul>
+                              ),
+                              confirmLabel: 'Confirm',
+                            });
+                            if (!ok) return;
+                            // No memberKey: the server answers every member
+                            // that doesn't have one yet, each with its OWN
+                            // recorded resolution — never a single blanket
+                            // flag on the group.
+                            void resolve([item.id], { action: 'not_on_job', reason: allReason }, `grp:${item.id}:all`);
+                          }}>
+                          Mark all {remaining.length} remaining not on this job
+                        </button>
+                      </div>
+                    );
+                  })()}
+                </div>
+              ) : (() => {
                 const acts = actionsOf(item);
                 return (
                   <div className="tr-actions" {...(acts.includes('answer') ? { role: 'radiogroup', 'aria-label': item.question ?? item.title } : {})}>

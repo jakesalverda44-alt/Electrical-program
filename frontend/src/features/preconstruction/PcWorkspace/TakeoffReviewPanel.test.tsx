@@ -3,6 +3,7 @@
 import React from 'react';
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { ConfirmProvider } from '../../../components/ConfirmDialog';
 
 const post = vi.fn();
 const get = vi.fn();
@@ -12,7 +13,7 @@ vi.mock('../../../api/client', async () => {
   return { ...actual, default: { post: (...a: unknown[]) => post(...a), get: (...a: unknown[]) => get(...a), put: (...a: unknown[]) => put(...a) } };
 });
 
-import TakeoffReviewPanel, { parseCountTypes, type TakeoffReview } from './TakeoffReviewPanel';
+import TakeoffReviewPanel, { parseCountTypes, type TakeoffReview, type ReviewItem } from './TakeoffReviewPanel';
 
 afterEach(cleanup);
 beforeEach(() => { post.mockReset(); get.mockReset(); put.mockReset(); });
@@ -301,5 +302,119 @@ describe('Fix round N8 — the UI groups items in the SAME $-risk order the back
     expect(at('Gap-fill')).toBeLessThan(at('Reconciliation'));
     expect(at('Reconciliation')).toBeLessThan(at('Scope question'));
     expect(at('Scope question')).toBeLessThan(at('Spot-check'));
+  });
+});
+
+describe('Fix round B6 — a legend-zero group answers member by member, never one bulk action for the whole group', () => {
+  const GROUP_ID = 'legend-zero:MS-OS-PC';
+  function groupItem(overrides: Partial<ReviewItem> = {}): ReviewItem {
+    return { ...baseGroupItem(), ...overrides };
+  }
+  function baseGroupItem(): ReviewItem {
+    return {
+      id: GROUP_ID, kind: 'count' as const,
+      title: '3 legend items not found on any counted sheet — answer each one',
+      detail: 'Motion sensor; Occupancy sensor; Photocell.',
+      actions: ['count' as const, 'markers' as const, 'not_on_job' as const],
+      groupedTypes: [
+        { key: 'MS', type: 'Motion sensor', description: 'Motion sensor' },
+        { key: 'OS', type: 'Occupancy sensor', description: 'Occupancy sensor' },
+        { key: 'PC', type: 'Photocell', description: 'Photocell' },
+      ],
+    };
+  }
+  function renderGroup(item = groupItem(), wrapper?: (children: React.ReactNode) => React.ReactElement) {
+    const el = <TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} review={{ status: 'needs_review', items: [item] }} />;
+    render(wrapper ? wrapper(el) : el);
+  }
+
+  it('never adds the group to the cross-item multi-select (no checkbox — the bottom bulk bar can\'t touch it)', () => {
+    renderGroup();
+    expect(screen.queryByLabelText(`Select ${groupItem().title}`)).toBeNull();
+  });
+
+  it('each member has its OWN count / not-on-job controls; answering one never posts for the others', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'needs_review', items: [groupItem()] } });
+    renderGroup();
+    // Three independent rows, one per member.
+    expect(screen.getByTestId(`review-groupmember-${GROUP_ID}::MS`)).toBeTruthy();
+    expect(screen.getByTestId(`review-groupmember-${GROUP_ID}::OS`)).toBeTruthy();
+    expect(screen.getByTestId(`review-groupmember-${GROUP_ID}::PC`)).toBeTruthy();
+
+    fireEvent.change(screen.getByTestId(`groupmember-reason-input-${GROUP_ID}::MS`), { target: { value: 'Design-build scope, not this job' } });
+    fireEvent.click(screen.getByTestId(`groupmember-noj-${GROUP_ID}::MS`));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', {
+      itemIds: [GROUP_ID], action: 'not_on_job', reason: 'Design-build scope, not this job', memberKey: 'MS',
+    }));
+    expect(post).toHaveBeenCalledTimes(1); // only MS — never OS or PC
+  });
+
+  it('a member answered with a count sends that member\'s own qty and memberKey', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'needs_review', items: [groupItem()] } });
+    renderGroup();
+    fireEvent.change(screen.getByTestId(`groupmember-qty-${GROUP_ID}::OS`), { target: { value: '6' } });
+    fireEvent.click(screen.getByTestId(`groupmember-count-${GROUP_ID}::OS`));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', {
+      itemIds: [GROUP_ID], action: 'count', qty: 6, memberKey: 'OS',
+    }));
+  });
+
+  it('an already-answered member shows its resolution instead of controls', () => {
+    renderGroup(groupItem({
+      groupedTypes: [
+        { key: 'MS', type: 'Motion sensor', description: 'Motion sensor', resolution: { action: 'not_on_job', reason: 'Design-build scope', by: 'Jake', at: 't' } },
+        { key: 'OS', type: 'Occupancy sensor', description: 'Occupancy sensor' },
+        { key: 'PC', type: 'Photocell', description: 'Photocell' },
+      ],
+    }));
+    expect(screen.getByTestId(`review-groupmember-done-${GROUP_ID}::MS`).textContent).toContain('Not on this job — Design-build scope');
+    expect(screen.queryByTestId(`groupmember-noj-${GROUP_ID}::MS`)).toBeNull();
+    expect(screen.getByTestId(`groupmember-noj-${GROUP_ID}::OS`)).toBeTruthy();
+  });
+
+  it('"mark all remaining" only appears with 2+ unanswered, requires a reason, and is gated behind a confirm dialog listing every remaining member', async () => {
+    renderGroup(groupItem({
+      groupedTypes: [
+        { key: 'MS', type: 'Motion sensor', description: 'Motion sensor', resolution: { action: 'not_on_job', reason: 'x', by: 'J', at: 't' } },
+        { key: 'OS', type: 'Occupancy sensor', description: 'Occupancy sensor' },
+        { key: 'PC', type: 'Photocell', description: 'Photocell' },
+      ],
+    }));
+    // OS and PC remain: the shortcut is offered.
+    const button = screen.getByTestId(`group-noj-all-button-${GROUP_ID}`) as HTMLButtonElement;
+    expect(button.disabled).toBe(true); // no reason yet
+    fireEvent.change(screen.getByTestId(`group-noj-all-reason-${GROUP_ID}`), { target: { value: 'Design-build scope, not this job' } });
+    expect(button.disabled).toBe(false);
+  });
+
+  it('never posts on click alone — only after the confirm dialog is accepted; declining (no ConfirmProvider) posts nothing', async () => {
+    renderGroup(groupItem({
+      groupedTypes: [
+        { key: 'MS', type: 'Motion sensor', description: 'Motion sensor' },
+        { key: 'OS', type: 'Occupancy sensor', description: 'Occupancy sensor' },
+        { key: 'PC', type: 'Photocell', description: 'Photocell' },
+      ],
+    }));
+    fireEvent.change(screen.getByTestId(`group-noj-all-reason-${GROUP_ID}`), { target: { value: 'Design-build scope, not this job' } });
+    fireEvent.click(screen.getByTestId(`group-noj-all-button-${GROUP_ID}`));
+    await waitFor(() => {}); // let the auto-declined (no ConfirmProvider) promise settle
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('accepting the confirm (which lists every remaining member) resolves them all, each still getting its own recorded answer server-side (no memberKey — the "apply to all unanswered" call)', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'needs_review', items: [groupItem()] } });
+    renderGroup(groupItem(), (children) => <ConfirmProvider>{children}</ConfirmProvider>);
+    fireEvent.change(screen.getByTestId(`group-noj-all-reason-${GROUP_ID}`), { target: { value: 'Design-build scope, not this job' } });
+    fireEvent.click(screen.getByTestId(`group-noj-all-button-${GROUP_ID}`));
+    // The confirm dialog lists every remaining member by name before anything is sent.
+    await waitFor(() => expect(screen.getByText('Mark all 3 remaining not on this job?')).toBeTruthy());
+    expect(screen.getByText('Motion sensor')).toBeTruthy();
+    expect(screen.getByText('Occupancy sensor')).toBeTruthy();
+    expect(screen.getByText('Photocell')).toBeTruthy();
+    expect(post).not.toHaveBeenCalled(); // not yet — only after Confirm is clicked
+    fireEvent.click(screen.getByText('Confirm'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', {
+      itemIds: [GROUP_ID], action: 'not_on_job', reason: 'Design-build scope, not this job',
+    }));
   });
 });
