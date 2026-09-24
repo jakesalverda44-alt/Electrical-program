@@ -6,7 +6,7 @@ import { getBidLines } from './bidEstimate';
 import { lineForType } from './aiMarkers';
 import {
   reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf, applyGroupMemberResolution,
-  applyReconcileMemberResolution, headsMemberResolution,
+  applyReconcileMemberResolution,
   type ReviewItem, type ResolveInput,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
@@ -310,7 +310,7 @@ async function applyResolution(
           // complete a half-done answer (N9).
           const resolution: Parameters<typeof applyReconcileMemberResolution>[2] = check.resolution.action === 'confirm'
             ? { ...check.resolution, qty: t.currentQty }
-            : t.unit === 'heads' ? headsMemberResolution(t, check.resolution) : check.resolution;
+            : check.resolution; // heads members: applyReconcileMemberResolution turns it into poles + heads
           Object.assign(item, applyReconcileMemberResolution(item, t.key, resolution, by));
           // B10 — "No more on this job" rejects only THIS type's own
           // SUGGESTED gap-fill markers; a confirmed marker (or the type's

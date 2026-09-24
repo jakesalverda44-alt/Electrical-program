@@ -791,8 +791,14 @@ export function applyReconcileMemberResolution(
   by: string,
 ): ReviewItem {
   const at = new Date().toISOString();
+  // Fix round 4 / B13, N9 — a heads member's tally / number becomes poles
+  // and heads (or asks for the missing one).
+  const reconcileMembers = (item.reconcileMembers ?? []).map(m => {
+    if (!(memberKey ? m.key === memberKey : !m.resolution || !!m.resolution.needs)) return m;
+    const r = m.unit === 'heads' && resolution.action !== 'confirm' ? headsMemberResolution(m, resolution) : resolution;
+    return { ...m, resolution: { ...r, by, at } as ReviewResolution };
+  });
   const full: ReviewResolution = { ...resolution, by, at };
-  const reconcileMembers = (item.reconcileMembers ?? []).map(m => (memberKey ? m.key === memberKey : !m.resolution) ? { ...m, resolution: full } : m);
   const allAnswered = reconcileMembers.length > 0 && reconcileMembers.every(m => m.resolution && !m.resolution.needs);
   return {
     ...item,

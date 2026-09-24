@@ -360,6 +360,8 @@ describe('Fix round 3 / B11 — a multi-type finding answers per type, never a b
     const enforced = enforcedCounts(cr(), [afterS2]);
     expect(enforced.byType.get('S2:heads')).toBe(5);
     expect(enforced.byType.get('S2')).toBe(1); // untouched — the plans' own directly-counted pole count
+    // Fix round 4 / N9 — never silently: the member asks for the pole count.
+    expect(afterS2.reconcileMembers!.find(m => m.key === 'S2')!.resolution).toMatchObject({ needs: 'poles' });
   });
 
   it('headsPerPole unknown: a heads answer sets heads only, poles stay exactly as directly counted', () => {
@@ -369,6 +371,9 @@ describe('Fix round 3 / B11 — a multi-type finding answers per type, never a b
     const enforced = enforcedCounts(cr(), [afterS1]);
     expect(enforced.byType.get('S1:heads')).toBe(7);
     expect(enforced.byType.get('S1')).toBe(2); // untouched — directly counted, never derived from heads
+    // Fix round 4 / N9 — and the member asks for the pole count (blocking).
+    expect(afterS1.reconcileMembers![0].resolution).toMatchObject({ needs: 'poles' });
+    expect(afterS1.resolution).toBeUndefined();
   });
 
   it('"No more on this job" (confirm/reject) keeps each type at its OWN current heads — never a shared number', () => {
