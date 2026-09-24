@@ -131,6 +131,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // proposal never downloads silently; this panel tells the estimator
   // exactly what to fix.
   const [verifyFailures, setVerifyFailures] = useState<VerifyFailure[] | null>(null);
+  // Fix round B5 — the evidence gate's 409 (generate-docx) names the first
+  // offending Labor & Pricing line by its line_key; jumping to it switches
+  // to the pricing step and asks LaborPricingStep to scroll to and focus
+  // that line's "Evidence / reason" field.
+  const [focusLineKey, setFocusLineKey] = useState<string | null>(null);
   // FIX-12 — downloadDocx had no busy-state, unlike its xlsx/prebid
   // siblings, so a double-click could double-file the same generation.
   const [prebidBusy, setPrebidBusy] = useState(false);
@@ -807,19 +812,32 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // gate failure or any other server error always surfaces a real message
   // instead of a generic "download failed" (Task 7.2 — the download button
   // never silently fails).
-  async function readBlobError(err: unknown, fallback: string): Promise<{ sub: string; failures: VerifyFailure[] | null }> {
+  async function readBlobError(err: unknown, fallback: string): Promise<{ sub: string; failures: VerifyFailure[] | null; reviewItems: Array<{ id: string; title: string; lineKey?: string }> | null }> {
     let sub = fallback;
     let failures: VerifyFailure[] | null = null;
+    let reviewItems: Array<{ id: string; title: string; lineKey?: string }> | null = null;
     try {
       const axiosErr = err as { response?: { data?: Blob } };
       if (axiosErr.response?.data instanceof Blob) {
         const text = await axiosErr.response.data.text();
-        const json = JSON.parse(text) as { error?: string; failures?: VerifyFailure[] };
+        const json = JSON.parse(text) as { error?: string; failures?: VerifyFailure[]; reviewItems?: Array<{ id: string; title: string; lineKey?: string }> };
         if (json.error) sub = json.error;
         if (Array.isArray(json.failures)) failures = json.failures;
+        if (Array.isArray(json.reviewItems)) reviewItems = json.reviewItems;
       }
     } catch { /* ignore parse failure — fallback message stands */ }
-    return { sub, failures };
+    return { sub, failures, reviewItems };
+  }
+
+  // Fix round B5 — the evidence gate's 409 lists every offending line; jump
+  // to the FIRST one named by a line_key (evidence:line:<lineKey> ids) —
+  // switching to Labor & Pricing and focusing its reason field there beats
+  // a toast the estimator has to go hunting from.
+  function jumpToFirstEvidenceLine(reviewItems: Array<{ id: string; lineKey?: string }> | null) {
+    const withLine = reviewItems?.find(i => i.lineKey);
+    if (!withLine?.lineKey) return;
+    onSelectStep('pricing');
+    setFocusLineKey(withLine.lineKey);
   }
 
   function triggerDownload(blob: Blob, filename: string) {
@@ -847,8 +865,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       showToast,
       errorToast: false,
       onError: async (err) => {
-        const { sub, failures } = await readBlobError(err, 'Could not generate the proposal document');
+        const { sub, failures, reviewItems } = await readBlobError(err, 'Could not generate the proposal document');
         if (failures?.length) setVerifyFailures(failures);
+        jumpToFirstEvidenceLine(reviewItems); // B5 — a line missing its evidence/reason: go straight to it
         showToast({ variant: 'error', title: 'Download failed', sub });
       },
     },
@@ -1764,6 +1783,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           save={estimatingBid.save}
           syncTakeoff={estimatingBid.syncTakeoff}
           showToast={showToastStable}
+          focusLineKey={focusLineKey}
+          onFocusedLine={() => setFocusLineKey(null)}
           initialInsightsOpen={legacyTabWantsInsights(ws.activeTab)}
           comparables={comparablesForSummary}
           insights={

@@ -197,6 +197,51 @@ describe('PcWorkspace Proposal tab — verify-gate 422 panel (Task 7.2)', () => 
     expect(screen.getByText('[JOB NUMBER]')).toBeTruthy();
     expect(screen.getAllByText(/Re-run Agent 4/).length).toBeGreaterThan(0);
   });
+
+  // Fix round B5 — the evidence gate's 409 names the offending Labor &
+  // Pricing line by its line_key; Download .docx should jump straight to
+  // it (switch to the pricing step, scroll to and focus its reason field)
+  // instead of leaving the estimator to go hunting from a toast alone.
+  it('jumps to Labor & Pricing and focuses the named line\'s reason field when the evidence gate 409s', async () => {
+    baseMocks();
+    const evidenceBody = {
+      error: 'The takeoff needs review before a proposal can be generated or sent: 1 item open (Manual line missing its evidence/reason: Owner-furnished panel).',
+      reviewItems: [{ id: 'evidence:line:lk-owner-panel', kind: 'confirm', title: 'Manual line missing its evidence/reason: Owner-furnished panel', detail: 'd', lineKey: 'lk-owner-panel' }],
+    };
+    const blob = new Blob([JSON.stringify(evidenceBody)], { type: 'application/json' });
+    get.mockImplementation((url: string, opts?: { responseType?: string }) => {
+      if (url === `/preconstruction/${bid.id}/generate-docx` && opts?.responseType === 'blob') {
+        return Promise.reject({ response: { data: blob } });
+      }
+      if (url === `/preconstruction/${bid.id}/results`) return Promise.resolve({ data: AI_RESULTS_COMPLETE });
+      if (url === `/preconstruction/${bid.id}/proposal-preview`) return Promise.resolve({ data: PREVIEW });
+      if (url === `/estimating/${bid.id}`) {
+        return Promise.resolve({
+          data: {
+            lines: [{ id: 'l1', line_key: 'lk-owner-panel', category: 'Service & Distribution', description: 'Owner-furnished panel', qty: 1, unit: 'EA', source: 'manual' }],
+            settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: 0 },
+            recap: { lines: [], categories: [], totals: { materialTotal: 0, laborHours: 0, laborCost: 0, materialTax: 0, consumables: 0, smallTools: 0, supervision: 0, overhead: 0, profit: 0, directCost: 0, grandTotal: 0 }, warnings: { unresolvedCount: 0, fuzzyMatchCount: 0 } },
+            proposed: false, savedGrandTotal: null,
+          },
+        });
+      }
+      if (url === '/estimating/library') return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      if (url === '/preconstruction/costs') return Promise.resolve({ data: [] });
+      if (url === `/preconstruction/${bid.id}/takeoff`) return Promise.resolve({ data: null });
+      if (url === `/preconstruction/intelligence/${bid.id}`) return Promise.resolve({ data: null });
+      if (url === '/estimates/unit-costs') return Promise.resolve({ data: { global: {}, by_project_type: {} } });
+      if (url === `/estimates/${bid.id}`) return Promise.resolve({ data: null });
+      if (url === '/documents') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: null });
+    });
+
+    renderProposalTab();
+    await waitFor(() => expect(screen.getByText('Proposal Preview')).toBeTruthy());
+    fireEvent.click(screen.getByText('Download .docx'));
+
+    await waitFor(() => expect(screen.getByLabelText('Evidence / reason for Owner-furnished panel')).toBeTruthy());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Evidence / reason for Owner-furnished panel')));
+  });
 });
 
 // Takeoff accuracy Task 12 — the pre-bid package moved from Review & Proposal

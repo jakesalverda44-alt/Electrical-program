@@ -1,7 +1,7 @@
 // Task 9 — the Labor & Pricing screen. Replaces the old flat-rate PricingTab.
 // Receives its state from useEstimatingBid() (owned by the caller, shared
 // with BidSummary) rather than fetching or persisting anything itself.
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../hooks/useApi';
 import Modal from '../../components/Modal';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -62,6 +62,17 @@ export interface LaborPricingStepProps {
   /** Next round A7 — possible duplicates from the server (GET / sync /
    *  refused save); the open ones block the save until resolved. */
   duplicates?: DuplicatePair[];
+  /** Fix round B5 — a line_key named by the evidence gate's 409 (a manual/
+   *  overridden line with no real "Evidence / reason" yet); scrolls to and
+   *  focuses that line's reason field once, then calls onFocusedLine. */
+  focusLineKey?: string | null;
+  onFocusedLine?: () => void;
+}
+
+/** Fix round B5 — mirrors backend/src/ai/reviewItems.ts's isRealReason: a
+ *  real explanation, not just enough characters (".........." fails). */
+export function isRealReason(reason: string): boolean {
+  return reason.trim().length >= 10 && /[A-Za-z]{3,}/.test(reason);
 }
 
 /** Next round A7 — the pairs still open against the CURRENT lines: both
@@ -120,6 +131,7 @@ function lineKey(line: EstimateLine, idx: number): string {
 
 export function LaborPricingStep({
   bidId, lines, settings, recap, saving, syncing, saveError, dirty, setLines, setSettings, save, syncTakeoff, showToast, duplicates = [],
+  focusLineKey, onFocusedLine,
 }: LaborPricingStepProps) {
   const openDups = useMemo(() => openDuplicatePairs(duplicates, lines), [duplicates, lines]);
   const dupKeys = useMemo(() => new Set(openDups.flatMap(p => [p.keptKey, p.newKey])), [openDups]);
@@ -161,6 +173,25 @@ export function LaborPricingStep({
   }, [lines]);
 
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  // Fix round B5 — the evidence gate's 409 names an offending line by its
+  // line_key; jump to it: un-collapse its category if needed, scroll it
+  // into view and focus its reason field, once.
+  const evidenceNoteRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  useEffect(() => {
+    if (!focusLineKey) return;
+    const line = lines.find(l => l.line_key === focusLineKey);
+    if (!line) { onFocusedLine?.(); return; }
+    if (collapsed[line.category]) setCollapsed(prev => ({ ...prev, [line.category]: false }));
+    const t = setTimeout(() => {
+      const el = evidenceNoteRefs.current[focusLineKey];
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el?.focus();
+      onFocusedLine?.();
+    }, 50); // one tick past the un-collapse re-render above, so the row exists to scroll to
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusLineKey]);
 
   const recheckCount = lines.filter(l => !!l.recheck_run_id).length;
 
@@ -549,6 +580,32 @@ export function LaborPricingStep({
                           >
                             🔒 qty
                           </span>
+                        )}
+                        {/* Fix round B5 — a manual line, or a takeoff line
+                            whose qty was hand-overridden, has no AI evidence
+                            trail; the evidence gate (409 on generate/send)
+                            blocks on it until this reads as a real reason
+                            (10+ characters, actual letters). */}
+                        {!line.excluded && (line.source === 'manual' || line.qty_source === 'manual') && (
+                          <div className="tr-sub" style={{ marginTop: 4 }}>
+                            <input
+                              type="text"
+                              aria-label={`Evidence / reason for ${line.description || 'this line'}`}
+                              placeholder="Evidence / reason (10+ characters) — why this line/quantity, with no AI takeoff evidence behind it"
+                              value={line.evidence_note ?? ''}
+                              data-field="evidence_note"
+                              data-row={idx}
+                              data-testid={`lp-evidence-note-${idx}`}
+                              ref={el => { if (line.line_key) evidenceNoteRefs.current[line.line_key] = el; }}
+                              onChange={e => updateLine(idx, { evidence_note: e.target.value })}
+                              style={!isRealReason(line.evidence_note ?? '') ? { borderColor: 'var(--amber)' } : undefined}
+                            />
+                            {!isRealReason(line.evidence_note ?? '') && (
+                              <span data-testid={`lp-evidence-note-missing-${idx}`} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: 'var(--amber)' }}>
+                                needed before this can go to the GC
+                              </span>
+                            )}
+                          </div>
                         )}
                       </td>
                       <td>

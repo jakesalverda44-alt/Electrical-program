@@ -67,6 +67,12 @@ export interface EstimateLine {
   dup_ok?: { with: string[]; reason: string; by?: string; at?: string } | null;
   source: 'takeoff' | 'manual';
   sort?: number;
+  /** Fix round B5 — a manual line (source 'manual') or a takeoff line the
+   *  estimator hand-overrode the qty on (qty_source 'manual') has no AI
+   *  evidence trail; this reason stands in for it. The evidence gate (409
+   *  on generate/send) blocks until it reads as a real explanation (10+
+   *  characters, actual letters — a placeholder like ".........." fails). */
+  evidence_note?: string | null;
 }
 
 /** Next round A7 — a possible double count: a line kept from the previous
