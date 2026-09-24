@@ -1,0 +1,17 @@
+-- Fix round 2 — Part B / N-R2-2 — a reconciled item (accubidImport.ts's
+-- normalized-spec or mapper-fallback reconciliation updating an EXISTING
+-- item's hours/price in place — B3/R2-B1) used to be RESTAMPED
+-- source='accubid' unconditionally, even when it started out 'seed'. That
+-- lost information the takeoff mapper's own tie-break (preferCandidate)
+-- needs: a curated seed item that's been reconciled with real Accubid
+-- numbers is still the curated, trustworthy row — but once its source read
+-- 'accubid', preferCandidate ranked it BELOW every other, un-reconciled
+-- seed item on a tied score, exactly backwards from the intent.
+--
+-- `source` now stays whatever it already was for a RECONCILED update (never
+-- touched); this new column records that Accubid pricing/labor data has, at
+-- some point, been reconciled into the row, independently of provenance —
+-- for a future "last synced from Accubid" display, without overloading
+-- `source` to carry two different facts (where the row came from, and
+-- whether it's been kept in sync) in one field.
+ALTER TABLE est_items ADD COLUMN IF NOT EXISTS accubid_reconciled_at TIMESTAMPTZ;

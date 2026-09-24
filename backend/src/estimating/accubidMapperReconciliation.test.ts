@@ -55,10 +55,13 @@ function applyPlanInMemory(library: Library, items: ImportedItemPlan[]): Library
       });
     } else if (plan.action === 'update') {
       const existing = byCode.get(plan.code);
-      // Mirrors applyImportPreview's own real behavior: an update always
-      // (re)stamps source='accubid' (markAccubidSource), same as the real
-      // apply path — a reconciled write is never left/relabelled 'manual'.
-      if (existing) byCode.set(plan.code, { ...existing, labor_hours: plan.laborHours ?? existing.labor_hours, material_cost: plan.materialCost ?? existing.material_cost, source: 'accubid' });
+      // Review round 2 / N-R2-2 — mirrors applyAccubidItemUpdate's real
+      // behavior: `source` is NEVER touched by a reconciled update any more
+      // (a 'seed' item stays 'seed') — only labor_hours/material_cost
+      // change. A reconciled write is still never left/relabelled 'manual'
+      // (buildImportPreview already routes a manual item to skip_manual
+      // long before it ever reaches an 'update' plan).
+      if (existing) byCode.set(plan.code, { ...existing, labor_hours: plan.laborHours ?? existing.labor_hours, material_cost: plan.materialCost ?? existing.material_cost });
     }
   }
   return { items: Array.from(byCode.values()), assemblies: library.assemblies, factors: [] };

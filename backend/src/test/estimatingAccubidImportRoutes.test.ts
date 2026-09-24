@@ -336,6 +336,53 @@ describe("Review round 2 / N-R2-1 — acceptProposals is wired through the apply
   });
 });
 
+describe('Review round 2 / N-R2-2 — a reconciled item keeps its own source; Accubid provenance is a separate field', () => {
+  it("a source='seed' item reconciled by a real BOM row stays source='seed' (never restamped 'accubid'), with accubid_reconciled_at set", async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const admin = await makeUser('owner');
+    const tag = randomUUID().slice(0, 8);
+    const existingCode = `TESTONLY-${tag.toUpperCase()}-DISC`;
+    // 'disconnect' kind, an unusual amp rating so it can't collide with any
+    // real seed catalog spec key — source='seed', same as a real curated row.
+    await pool.query(
+      `INSERT INTO est_items (code, name, category, unit, material_cost, labor_hours, source, active)
+       VALUES ($1,$2,'Service & Distribution','EA',500,2.5,'seed',true)`,
+      [existingCode, `TestOnly-${tag} 737A Disconnect Switch`]
+    );
+    try {
+      const bomText = `TestOnly-${tag} 737A Disconnect Switch                                        1.000 E                                                            Quoted     E                 3.000                    3.000`;
+      const res = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
+        .send({ bomText, updatePrices: false, force: true }).expect(200);
+      expect(res.body.updated).toBe(1);
+      const { rows } = await pool.query('SELECT source, labor_hours, accubid_reconciled_at FROM est_items WHERE code=$1', [existingCode]);
+      expect(rows[0].source).toBe('seed'); // never relabelled
+      expect(Number(rows[0].labor_hours)).toBeCloseTo(3.0, 2); // the reconciliation still applied
+      expect(rows[0].accubid_reconciled_at).not.toBeNull(); // provenance of the reconciliation event lives here instead
+    } finally {
+      await pool.query('DELETE FROM est_items WHERE code=$1', [existingCode]);
+    }
+  });
+
+  it("a brand-new item CREATED by the import is still source='accubid' — N-R2-2 only changes the UPDATE path", async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const admin = await makeUser('owner');
+    const tag = randomUUID().slice(0, 8);
+    const bomText = `TestOnly-${tag} 737A Disconnect Switch Brand New                              1.000 E                                                            Quoted     E                 3.000                    3.000`;
+    const res = await request(app).post('/api/estimating/library/accubid-import/apply').set(auth(admin.token))
+      .send({ bomText, updatePrices: false, force: true }).expect(200);
+    expect(res.body.created).toBe(1);
+    try {
+      const { rows } = await pool.query("SELECT source, accubid_reconciled_at FROM est_items WHERE name LIKE $1", [`TestOnly-${tag}%`]);
+      expect(rows[0].source).toBe('accubid');
+      expect(rows[0].accubid_reconciled_at).toBeNull(); // a create is not a "reconciliation" of an existing row
+    } finally {
+      await pool.query('DELETE FROM est_items WHERE name LIKE $1', [`TestOnly-${tag}%`]);
+    }
+  });
+});
+
 // Deterministic codes for a synthetic BOM's rows, computed the same way the
 // module under test does, so cleanup never relies on a LIKE scan that could
 // also match another concurrently-running instance of this same test.

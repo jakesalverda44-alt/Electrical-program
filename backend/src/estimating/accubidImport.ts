@@ -658,12 +658,21 @@ async function markAssemblyAccubidSource(code: string): Promise<void> {
  *  sets source='manual') landing between the SELECT and the first UPDATE,
  *  or between the two separate UPDATEs, would still get silently
  *  overwritten and relabelled 'accubid' — exactly what this guard exists to
- *  prevent. This does hours/cost/price-date AND the 'accubid' source stamp
- *  in ONE statement, guarded by `WHERE code=$1 AND source <> 'manual'`, with
- *  COALESCE keeping the existing DB value for whichever field the plan
- *  didn't supply — no prior SELECT needed at all. 0 rows affected means
- *  either the code doesn't exist yet, or a concurrent manual edit won; the
- *  caller treats both exactly like the old skip_manual path. */
+ *  prevent. This does hours/cost/price-date AND (N-R2-2) the reconciled-
+ *  provenance stamp in ONE statement, guarded by `WHERE code=$1 AND source
+ *  <> 'manual'`, with COALESCE keeping the existing DB value for whichever
+ *  field the plan didn't supply — no prior SELECT needed at all. 0 rows
+ *  affected means either the code doesn't exist yet, or a concurrent manual
+ *  edit won; the caller treats both exactly like the old skip_manual path.
+ *
+ *  Review round 2 / N-R2-2 — `source` is deliberately NEVER touched here any
+ *  more (migration 132): a reconciled item keeps whatever provenance it
+ *  already had ('seed' stays 'seed') so the mapper's own tie-break
+ *  (preferCandidate) still ranks it as the curated row it is, instead of
+ *  demoting it below every OTHER, un-reconciled seed item just because this
+ *  one happened to get its numbers refreshed from a real BOM. The new
+ *  accubid_reconciled_at timestamp records that reconciliation happened,
+ *  independently of where the row itself came from. */
 async function applyAccubidItemUpdate(
   code: string, patch: { laborHours: number | null; materialCost?: number | null; materialPriceDate?: string | null }
 ): Promise<boolean> {
@@ -673,7 +682,7 @@ async function applyAccubidItemUpdate(
         SET labor_hours = COALESCE($1, labor_hours),
             material_cost = CASE WHEN $2::boolean THEN $3 ELSE material_cost END,
             material_price_date = CASE WHEN $2::boolean THEN $4 ELSE material_price_date END,
-            source = 'accubid', updated_at = now()
+            accubid_reconciled_at = now(), updated_at = now()
       WHERE code = $5 AND source <> 'manual'`,
     [patch.laborHours, setMaterial, patch.materialCost ?? null, patch.materialPriceDate ?? null, code]
   );
