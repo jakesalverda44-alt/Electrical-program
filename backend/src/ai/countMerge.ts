@@ -419,7 +419,14 @@ function combineCore(
       flags.push(`${t.type}: ${nonzero.map(g => `${g.s.sheet.label} (${g.c.count})`).join(' + ')}${rel.paired ? ` − ${rel.paired} drawn on both` : ''} — ${rel.pairs.map(p => p.reason).join('; ')}.`);
       continue;
     }
-    if (rel.kind === 'duplicate') {
+    // Fix round 3 / S15 — sheets whose titles name no level may be two
+    // floors of a typical layout: a "same devices drawn twice" is never
+    // taken silently there; it becomes the blocking question below.
+    const unparsedLevel = nonzero.some(g => !g.s.sheet.level);
+    if (rel.kind === 'duplicate' && unparsedLevel) {
+      flags.push(`${t.type}: ${nonzero.map(g => g.s.sheet.label).join(' and ')} show the same layout, but their titles name no level — the same drawing twice, or two floors of a typical layout? Needs review.`);
+    }
+    if (rel.kind === 'duplicate' && !unparsedLevel) {
       const keep = nonzero.reduce((a, b) => (b.c.count > a.c.count ? b : a));
       keep.c.used = true;
       mainTotal += keep.c.count;
@@ -438,6 +445,31 @@ function combineCore(
       if (g !== best) g.c.ignoredReason = `same area as ${best.s.sheet.label}? — needs the estimator (larger kept for now)`;
     }
     flags.push(`${t.type} counted on ${nonzero.map(g => `${g.s.sheet.label} (${g.c.count})`).join(' and ')} — the titles don't say whether these show the same area or different parts of the level. Needs review.`);
+  }
+
+  // Fix round 3 / S15 — a sheet whose title names no level against a sheet
+  // of a named level: if they are the same layout (the marks coincide),
+  // it may be that floor drawn twice — asked, never summed or dropped
+  // silently. (Provisionally the larger is kept, like any open question.)
+  if (opts.relations) {
+    const unnamed = main.filter(u => !u.s.sheet.level && u.c.count > 0 && u.c.used);
+    const named = main.filter(u => u.s.sheet.level && u.c.count > 0 && u.c.used);
+    for (const a of unnamed) {
+      for (const b of named) {
+        if (!a.c.used || !b.c.used) continue;
+        const rel = relateGroup(t, [a.s, b.s], opts);
+        if (rel.kind !== 'duplicate') continue;
+        relations.push(...rel.pairs.map(({ sheets, kind, reason }) => ({ sheets, kind, reason })));
+        const smaller = a.c.count <= b.c.count ? a : b;
+        const larger = smaller === a ? b : a;
+        smaller.c.used = false;
+        smaller.c.ignoredReason = `same layout as ${larger.s.sheet.label} and its title names no level — the same floor twice? needs the estimator (larger kept for now)`;
+        mainTotal -= smaller.c.count;
+        ambiguousExtra += smaller.c.count;
+        ambiguousSheets.push({ label: a.s.sheet.label, count: a.c.count }, { label: b.s.sheet.label, count: b.c.count });
+        flags.push(`${t.type}: ${a.s.sheet.label} (no level in its title) has the same layout as ${b.s.sheet.label} — the same floor drawn twice, or another floor? Needs review.`);
+      }
+    }
   }
 
   // Enlarged plans: never summed with the main plan.

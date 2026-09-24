@@ -12,7 +12,7 @@ import { parseViewportReply, type SheetGeom } from './viewports';
 import { resolveSheetMarks } from './viewportResolve';
 import { parseTypicalsReply, hostTargets } from './typicals';
 import { parseScheduleReply, scheduleCounts, dedupePanels } from './schedules';
-import { selectCountSheets } from '../countSheets';
+import { selectCountSheets, levelOf } from '../countSheets';
 import { VIEWPORT_REPLIES, TYPICALS_REPLIES, TABLE_REPLIES, E1_RESTROOM_REPEATS } from '../../test/fixtures/evidence/kissimmeeReplies';
 import { loadKissimmeeBaseline, KISSIMMEE_FILE } from '../../test/fixtures/evidence/kissimmeeBaseline';
 
@@ -228,5 +228,35 @@ describe('fix round 3 / S17 — the schedule question reaches the review list an
     const q = items.find(i => i.id === 'schedqty:EF')!;
     expect(q).toMatchObject({ kind: 'area', keepQty: 2, sumQty: 4, group: 'schedule' });
     expect(enforcedCounts(cr(m, [t], {}), items.map(i => (i.id === q.id ? { ...i, resolution: answer(i, 1).resolution } : i))).byType.get('EF')).toBe(4);
+  });
+});
+
+describe('fix round 3 / S15 — stacked floors are never dropped as "duplicates"', () => {
+  const t = targets.find(x => x.key === 'SIMPLEX RECEPTACLE')!;
+  const typical = Array.from({ length: 10 }, (_, i) => ({ typeKey: t.key, x: 300 + i * 40, y: 600 }));
+  const others2 = (n: number, y: number) => Array.from({ length: n }, (_, i) => ({ typeKey: 'COIL + J', x: 900 + i * 30, y }));
+  const sh = (no: string, title: string, level: string): SheetCountInput => ({
+    sheet: { ...sheetOf(49), key: `k#${no}`, sheetNo: no, title, label: `${no} "${title}"`, role: 'building', area: '', level, focus: 'power' },
+    status: 'counted', unreadable: [], geometry: G, viewports: null, placed: [...typical, ...others2(5, 900)],
+  });
+  it('levelOf reads L1/L2, LEVEL TWO, 2ND LEVEL, UPPER/LOWER, BASEMENT/CELLAR, MEZZANINE, ROOF, FLOORS 2-4', () => {
+    expect(['L1 POWER PLAN', 'L2 POWER PLAN', 'LEVEL TWO POWER PLAN', '2ND LEVEL POWER', 'SECOND LEVEL LIGHTING', 'UPPER LEVEL POWER PLAN', 'LOWER FLOOR PLAN',
+      'BASEMENT POWER PLAN', 'CELLAR LIGHTING', 'MEZZANINE PLAN', 'ROOF POWER PLAN', 'POWER PLAN - FLOORS 2-4', 'POWER PLAN'].map(levelOf))
+      .toEqual(['1', '2', '2', '2', '2', 'UPPER', 'LOWER', 'BASEMENT', 'BASEMENT', 'MEZZANINE', 'ROOF', '2-4', '']);
+  });
+  it('the reviewer\'s repro, titles now parsed: "L1 …" and "L2 …" with the same typical layout -> 20, summed', () => {
+    const a = sh('E-101', 'L1 POWER PLAN', levelOf('L1 POWER PLAN')), b = sh('E-102', 'L2 POWER PLAN', levelOf('L2 POWER PLAN'));
+    const m = mergeCountsIntoTakeoff(base.agent1, [t], [a, b], { countingRan: true, evidence: {} });
+    expect(m.types[0].count).toBe(20);
+    expect(m.types[0].areaQuestion).toBeUndefined();
+  });
+  it('two same-layout sheets whose titles name NO level -> a blocking question (keep 10 / sum 20), never a silent duplicate', () => {
+    const m = mergeCountsIntoTakeoff(base.agent1, [t], [sh('E-101', 'POWER PLAN', ''), sh('E-102', 'TYPICAL FLOOR POWER PLAN', '')], { countingRan: true, evidence: {} });
+    expect(m.types[0].areaQuestion).toMatchObject({ keep: 10, sum: 20 });
+    expect(buildReviewItems(cr(m, [t])).some(i => i.id === `area:${t.key}`)).toBe(true);
+  });
+  it('an unnamed-level sheet with the same layout as a LEVEL 2 sheet -> asked, not summed or dropped silently', () => {
+    const m = mergeCountsIntoTakeoff(base.agent1, [t], [sh('E-101', 'POWER PLAN', ''), sh('E-102', 'LEVEL 2 POWER PLAN', '2')], { countingRan: true, evidence: {} });
+    expect(m.types[0].areaQuestion).toMatchObject({ keep: 10, sum: 20 });
   });
 });

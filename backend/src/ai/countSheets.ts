@@ -64,17 +64,31 @@ export function sheetLabel(sheetNo: string, title: string, fallback: string): st
   return no || (t ? `"${t}"` : fallback);
 }
 
-/** Level identity from a sheet title, normalized ("LEVEL 2", "2ND FLOOR",
- *  "SECOND FLOOR" -> "2"; "MEZZANINE"/"ROOF" kept as words). '' when none. */
+/** Level identity from a sheet title, normalized ("LEVEL 2", "L2", "2ND
+ *  FLOOR", "SECOND FLOOR" -> "2"; "UPPER"/"LOWER"/"MEZZANINE"/"ROOF"/
+ *  "BASEMENT" kept as words; "FLOORS 2-4" -> "2-4"). '' when none.
+ *  Fix round 3 / S15 — L1/L2, LEVEL TWO, 2ND LEVEL, UPPER/LOWER, BASEMENT /
+ *  CELLAR and FLOORS n-m were unparsed, so two stacked floors landed in one
+ *  level group. */
 export function levelOf(title: string): string {
-  const t = title.toUpperCase();
-  const words: Record<string, string> = { FIRST: '1', SECOND: '2', THIRD: '3', FOURTH: '4', FIFTH: '5', GROUND: '1' };
-  let m = /\b(?:LEVEL|FLOOR)\s+(\d+)\b/.exec(t);
+  const t = title.toUpperCase().replace(/[–—]/g, '-');
+  const words: Record<string, string> = { FIRST: '1', SECOND: '2', THIRD: '3', FOURTH: '4', FIFTH: '5', SIXTH: '6', GROUND: '1', ONE: '1', TWO: '2', THREE: '3', FOUR: '4', FIVE: '5' };
+  let m = /\bFLOORS?\s+(\d+)\s*(?:-|TO|THRU|THROUGH)\s*(\d+)\b/.exec(t);
+  if (m) return `${m[1]}-${m[2]}`;
+  m = /\b(?:LEVEL|FLOOR|LVL)\s*#?\s*(\d+)\b/.exec(t);
   if (m) return m[1];
-  m = /\b(\d+)(?:ST|ND|RD|TH)\s+FLOOR\b/.exec(t);
-  if (m) return m[1];
-  m = /\b(FIRST|SECOND|THIRD|FOURTH|FIFTH|GROUND)\s+FLOOR\b/.exec(t);
+  m = /\b(?:LEVEL|FLOOR)\s+(ONE|TWO|THREE|FOUR|FIVE)\b/.exec(t);
   if (m) return words[m[1]];
+  m = /\bL(\d{1,2})\b/.exec(t);
+  if (m) return m[1];
+  m = /\b(\d+)(?:ST|ND|RD|TH)\s+(?:FLOOR|LEVEL)\b/.exec(t);
+  if (m) return m[1];
+  m = /\b(FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|GROUND)\s+(?:FLOOR|LEVEL)\b/.exec(t);
+  if (m) return words[m[1]];
+  m = /\b(UPPER|LOWER)\s+(?:FLOOR|LEVEL)\b/.exec(t);
+  if (m) return m[1];
+  m = /\b(BASEMENT|CELLAR)\b/.exec(t);
+  if (m) return 'BASEMENT';
   m = /\b(MEZZANINE|ROOF)\b/.exec(t);
   return m ? m[1] : '';
 }
