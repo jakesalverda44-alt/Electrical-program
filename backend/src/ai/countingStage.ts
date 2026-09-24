@@ -22,7 +22,7 @@ import { runEvidenceStage, type EvidenceCache, type EvidencePage, type EvidenceS
 import { resolveSheetMarks, viewportPromptBlock, type EnlargedDecision, type SheetMarkResolution } from './evidence/viewportResolve';
 import { hostTargets, type TypicalPackage } from './evidence/typicals';
 import { scheduleCounts, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
-import type { Viewport } from './evidence/viewports';
+import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewports';
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
 import { applyGapFillResults, buildGapFillJobs, runGapFillStage, type GapFillSheetAsset } from './evidence/gapFillStage';
 
@@ -187,7 +187,16 @@ function finish(
     const page = vpBy.get(r.sheet.key);
     if (!evidence || r.status !== 'counted' || !page) {
       const c = extra.get(r.sheet.key);
-      return c ? { ...r, ...(c.viewports ? { viewports: c.viewports } : {}), ...(c.pending ? { pendingEnlarged: c.pending } : {}) } : r;
+      if (!c) return r;
+      // Fix round B4 — a carried sheet's stored marks lost their viewport:
+      // re-attribute them (they were counted marks already) so the sheet-pair
+      // relation maps enlarged-plan marks onto the main plan again.
+      const g = r.geometry;
+      const placed = c.viewports && g ? r.placed.map(m => {
+        const p = pdfToDisplayedIn(m.x, m.y, g);
+        return { ...m, viewportId: viewportAt(c.viewports!, p.x, p.y)?.id ?? null };
+      }) : r.placed;
+      return { ...r, placed, ...(c.viewports ? { viewports: c.viewports } : {}), ...(c.pending ? { pendingEnlarged: c.pending } : {}) };
     }
     const res = resolveSheetMarks(r.placed, page.viewports.viewports, r.geometry ?? page.geometry);
     const exBy = new Map<string, { count: number; reasons: Set<string> }>();
