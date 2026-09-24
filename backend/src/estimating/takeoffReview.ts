@@ -6,7 +6,7 @@ import { getBidLines } from './bidEstimate';
 import { lineForType } from './aiMarkers';
 import {
   reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf, applyGroupMemberResolution,
-  applyReconcileMemberResolution,
+  applyReconcileMemberResolution, headsMemberResolution,
   type ReviewItem, type ResolveInput,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
@@ -282,7 +282,7 @@ async function applyResolution(
         } else if (members.length <= 1) {
           targets = members;
         } else if (input.action === 'confirm') {
-          targets = members.filter(m => !m.resolution);
+          targets = members.filter(m => !m.resolution || !!m.resolution.needs);
         } else {
           await client.query('ROLLBACK');
           return { ok: false, status: 400, error: `This covers ${members.length} types — answer each one separately (${members.map(m => m.type).join(', ')}).` };
@@ -305,9 +305,12 @@ async function applyResolution(
           // B11 — the entered/confirmed number is in the member's OWN unit
           // (heads for site_lighting); 'confirm' keeps its current value in
           // that same unit, never null, never someone else's number.
+          // Fix round 4 / B13 — a heads member: a marker tally is POLES
+          // (x heads-per-pole = heads, or heads still needed); a number may
+          // complete a half-done answer (N9).
           const resolution: Parameters<typeof applyReconcileMemberResolution>[2] = check.resolution.action === 'confirm'
             ? { ...check.resolution, qty: t.currentQty }
-            : check.resolution;
+            : t.unit === 'heads' ? headsMemberResolution(t, check.resolution) : check.resolution;
           Object.assign(item, applyReconcileMemberResolution(item, t.key, resolution, by));
           // B10 — "No more on this job" rejects only THIS type's own
           // SUGGESTED gap-fill markers; a confirmed marker (or the type's

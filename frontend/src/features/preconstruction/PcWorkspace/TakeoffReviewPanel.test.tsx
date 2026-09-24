@@ -556,3 +556,19 @@ describe('Fix round 3 / B10, B11 (frontend) — gap-fill/reconcile items answer 
     expect(screen.queryByTestId('reconcilemember-reject-gapfill:GFCI::GFCI')).toBeNull();
   });
 });
+
+describe('fix round 4 / B13, N9 — a half-done site-light member asks for the missing number', () => {
+  it('poles confirmed, heads per pole unknown -> "enter the heads" and Save heads posts a count for that member', async () => {
+    post.mockResolvedValue({ data: { status: 'needs_review', items: [] } });
+    setup({ status: 'needs_review', items: [{
+      id: 'gapfill:S2', kind: 'count', title: 'Gap-fill found 1 possible S2', detail: 'schedule 4 heads, plans 2', actions: ['markers', 'confirm', 'count'],
+      reconcileMembers: [{ key: 'S2', type: 'S2', description: 'Twin-head area light', unit: 'heads', currentQty: 2, headsPerPole: null,
+        resolution: { action: 'markers', poles: 2, needs: 'heads', by: 'Jake', at: 't' } }],
+    }] });
+    expect(screen.getByTestId('review-reconcilemember-needs-gapfill:S2::S2').textContent).toMatch(/2 poles confirmed — heads per pole is not on the schedule: enter the heads/);
+    fireEvent.change(screen.getByTestId('reconcilemember-needs-qty-gapfill:S2::S2'), { target: { value: '3' } });
+    fireEvent.click(screen.getByTestId('reconcilemember-needs-save-gapfill:S2::S2'));
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(post.mock.calls[0][1]).toMatchObject({ action: 'count', qty: 3, memberKey: 'S2' });
+  });
+});

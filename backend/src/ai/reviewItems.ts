@@ -38,6 +38,14 @@ export interface ReviewResolution {
   /** True when this resolution was made on an earlier analysis run and
    *  carried forward to this one. */
   carriedOver?: boolean;
+  /** Fix round 4 / B13, N9 — a site-lighting (heads) member: the POLE count
+   *  this answer sets, when it sets one. */
+  poles?: number;
+  /** Fix round 4 / B13, N9 — the answer is half done: the other number is
+   *  still needed ('heads' after a pole-marker tally with unknown heads per
+   *  pole; 'poles' after a heads answer the poles can't be derived from).
+   *  The member stays open (blocking) until it is entered. */
+  needs?: 'heads' | 'poles';
 }
 
 export interface ReviewItem {
@@ -750,6 +758,32 @@ export function applyGroupMemberResolution(
  *  With exactly one member, the item's own top-level `resolution` mirrors
  *  it directly (unchanged shape from before B11); with 2+, that mirror
  *  only appears once every member has answered. */
+/** Fix round 4 / B13, N9 — a site-lighting member answers in HEADS, but
+ *  "Use confirmed markers" tallies POLE symbols. Pure: the member's
+ *  resolution for a markers tally or an entered number.
+ *    * markers tally T: poles = T; heads = T x heads-per-pole when the
+ *      schedule states it, else the heads are still needed;
+ *    * a number while heads are still needed -> the heads (poles kept);
+ *    * a number while poles are still needed -> the poles (heads kept);
+ *    * a heads number: poles = heads / heads-per-pole when that is exact,
+ *      else the poles are still needed (never left silently as counted). */
+export function headsMemberResolution(
+  member: { headsPerPole: number | null; resolution?: ReviewResolution },
+  resolution: Omit<ReviewResolution, 'by' | 'at'>,
+): Omit<ReviewResolution, 'by' | 'at'> {
+  const hpp = member.headsPerPole;
+  const prior = member.resolution;
+  const n = resolution.qty;
+  if (resolution.action === 'markers' && n != null) {
+    return hpp ? { ...resolution, poles: n, qty: n * hpp } : { ...resolution, poles: n, qty: undefined, needs: 'heads' };
+  }
+  if (resolution.action !== 'count' || n == null) return resolution;
+  if (prior?.needs === 'heads' && prior.poles != null) return { ...resolution, poles: prior.poles, qty: n };
+  if (prior?.needs === 'poles' && prior.qty != null) return { ...resolution, qty: prior.qty, poles: n };
+  if (hpp && n % hpp === 0) return { ...resolution, qty: n, poles: n / hpp };
+  return { ...resolution, qty: n, needs: 'poles' };
+}
+
 export function applyReconcileMemberResolution(
   item: ReviewItem,
   memberKey: string | undefined,
@@ -759,7 +793,7 @@ export function applyReconcileMemberResolution(
   const at = new Date().toISOString();
   const full: ReviewResolution = { ...resolution, by, at };
   const reconcileMembers = (item.reconcileMembers ?? []).map(m => (memberKey ? m.key === memberKey : !m.resolution) ? { ...m, resolution: full } : m);
-  const allAnswered = reconcileMembers.length > 0 && reconcileMembers.every(m => m.resolution);
+  const allAnswered = reconcileMembers.length > 0 && reconcileMembers.every(m => m.resolution && !m.resolution.needs);
   return {
     ...item,
     reconcileMembers,
@@ -1025,14 +1059,13 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (!i.id.startsWith('gapfill:') && !i.id.startsWith('reconcile:')) continue;
     for (const m of i.reconcileMembers ?? []) {
       const r = m.resolution;
-      if (!r || r.action === 'confirm' || r.qty == null) continue;
+      if (!r || r.action === 'confirm') continue;
       if (m.unit === 'heads') {
-        byType.set(`${m.key}:heads`, r.qty);
-        if (m.headsPerPole) {
-          const poles = r.qty / m.headsPerPole;
-          if (Number.isInteger(poles)) byType.set(m.key, poles);
-        }
-      } else {
+        // Fix round 4 / B13, N9 — poles and heads each from the answer when
+        // it gives them (a half-done answer keeps the item open/blocking).
+        if (r.poles != null) byType.set(m.key, r.poles);
+        if (r.qty != null) byType.set(`${m.key}:heads`, r.qty);
+      } else if (r.qty != null) {
         byType.set(m.key, r.qty);
       }
     }

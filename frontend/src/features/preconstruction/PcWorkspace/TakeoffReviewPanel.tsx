@@ -29,6 +29,10 @@ export interface ReviewResolution {
   by: string;
   at: string;
   carriedOver?: boolean;
+  /** Fix round 4 / B13, N9 — a site-light member's pole count, and which
+   *  number is still needed (the member stays open until it is entered). */
+  poles?: number;
+  needs?: 'heads' | 'poles';
 }
 
 export interface ReviewItem {
@@ -481,7 +485,29 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                             <strong>{m.type}</strong>{m.description ? ` — ${m.description}` : ''}
                             <span className="tr-sub"> — currently {m.currentQty} {m.unit}</span>
                           </div>
-                          {m.resolution ? (
+                          {m.resolution?.needs ? (
+                            // Fix round 4 / B13, N9 — half done: poles or heads still needed.
+                            <div className="tr-actions" data-testid={`review-reconcilemember-needs-${mid}`}>
+                              <span className="tr-sub">
+                                {m.resolution.needs === 'heads'
+                                  ? `${m.resolution.poles} pole${m.resolution.poles === 1 ? '' : 's'} confirmed — heads per pole is not on the schedule: enter the heads.`
+                                  : `${m.resolution.qty} heads entered — the poles can't be derived: enter the pole count.`}
+                              </span>
+                              <input
+                                type="number" min={1} step={1} inputMode="numeric"
+                                aria-label={`${m.resolution.needs === 'heads' ? 'Heads' : 'Pole count'} for ${m.type}`}
+                                placeholder={m.resolution.needs === 'heads' ? 'Heads' : 'Poles'}
+                                value={qty[mid] ?? ''}
+                                data-testid={`reconcilemember-needs-qty-${mid}`}
+                                onChange={e => setQty(q => ({ ...q, [mid]: e.target.value }))}
+                              />
+                              <button type="button" className="btn primary sm" disabled={!qty[mid] || busy !== null}
+                                data-testid={`reconcilemember-needs-save-${mid}`}
+                                onClick={() => void resolve([item.id], { action: 'count', qty: Number(qty[mid]), memberKey: m.key }, `rcmember:${mid}`)}>
+                                {m.resolution.needs === 'heads' ? 'Save heads' : 'Save poles'}
+                              </button>
+                            </div>
+                          ) : m.resolution ? (
                             <div className="tr-sub" data-testid={`review-reconcilemember-done-${mid}`}>{resolutionText(m.resolution)}</div>
                           ) : (
                             <div className="tr-actions">
