@@ -283,3 +283,108 @@ Net: the traceable real total is **36** (42 − 5 synthetic − 1 B-32 double), 
 10. **Cost.** The model and pricing are correct. The readers are cached; gap-fill is not, and its job count is unbounded (S4, N3).
 11. **Migrations 133–136.** Idempotent and non-destructive (N7).
 12. **Tests.** Totals match the report, and every failure is a known flake. But `kissimmeeEvidence.test.ts` asserts the synthetic 16 / 42 (B3).
+
+---
+
+## Round 2: fix range a479103..32014e3
+
+**Scope:** blockers and regressions only. Reviewed by Opus 5.5, read-only. No full suites were run; the targeted runs were conclusive.
+
+**Verdict: NOT YET.**
+- All 9 original blockers are closed at the level they were raised.
+- The fixes introduced three new blockers, all in quantities that reach the GC, and all reproduced:
+  - **B10:** a "not on this job" answer on a gap-fill item zeroes the whole type;
+  - **B11:** a multi-type (family) reconcile/gap-fill resolution applies the full quantity to every member;
+  - **B12:** panel de-duplication silently drops a second building's panel of the same name.
+- Each fix is local.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| Targeted backend runs | `src/ai/evidence/*`, `reviewItems`, `kissimmeeEvidence`, `gapFillEndToEnd`, `evidenceGate`, `finishBid`, `reviewGroupMembers`, `takeoffReviewGate`, `labeledEvents`: **21 files, 234/234 passed** |
+| Round 1 repros, re-run | Via `tsx` and a scratch vitest file, which I deleted afterwards. The worktree is clean. |
+| Full suites | Not run. The report's figures are backend 2032 passed with 3 known flakes, and frontend 1306/1306. |
+
+### The 9 blockers
+
+| # | Status | Evidence |
+|---|---|---|
+| B1 | **Closed** | The exclusion list now includes excluded marks (`gapFillStage.ts:258`). The search area is the plan viewports only (`:210`). A candidate outside a main or enlarged plan viewport is rejected before the crop check (`:309-317`). |
+| B2 | **Closed** as asked. Two new bugs are in the resolution path; see B10 and B11. | `countResult.types` is never touched. Accepted candidates become suggested `gap_fill` markers plus one `gapfill:` item, capped at the shortfall. S1+S2 now reconciles heads (4 = 4), so Kissimmee has no finding (`kissimmeeEvidence.test.ts:182`). |
+| B3 | **Closed** | The synthetic reply is gone. The fixture asserts receptacles 33, GFCI 7 + WP GFI 4, and 0 gap-fill calls (`kissimmeeEvidence.test.ts:180-184, 298, 332-334`). |
+| B4 | **Closed** | My repro (10 identical duplexes, different other content, no building box) now gives **duplicate, 10** (it gave 20). B-32 is counted once: simplex is 9 drawn + 1 typical. Complementary sums use a + b − paired (`sheetRelation.ts:205-211`). |
+| B5 | **Closed** | There is an "Evidence / reason" input on manual and overridden lines (`LaborPricingStep.tsx`). A 409 from docx, xlsx, agent4 or the draft-proposal send now jumps to the line (d9d6fac, with tests on all four paths). |
+| B6 | **Mostly closed.** The UI remark is S16 below. | Equipment and phone-board receptacles are never grouped. Group members answer one at a time. The group's "mark all remaining" shortcut needs a reason and a confirm dialog that names every member. |
+| B7 | **Closed** | EF-1/2/3 → 3. A row belongs to exactly one target (`schedules.ts:410-421`). |
+| B8 | **Closed** | "MAX 30", "2X4", "(2)#10" and "EF (2) 1/2HP" give null. Only the description cell is read. |
+| B9 | **Closed** | A text-layer panel splits into left and right rows. An odd-only or even-only panel is incomplete and never verified, and never replaces Agent 1's rows (`schedules.ts:264-285`, `countMerge`). |
+
+### New blockers
+
+**B10. "Not on this job" on a `gapfill:` item deletes the whole type. Reproduced.**
+- **Where:**
+  - `backend/src/ai/reviewItems.ts:903-904` (`if (gf) qty = gf.action === 'not_on_job' ? null : …`);
+  - the item offers `['markers','count','not_on_job']` (`reviewItems.ts:436`);
+  - it is kind `count`, so the UI's cross-item multi-select (`TakeoffReviewPanel.tsx:222`) and the group bulk "Mark all N not on this job" (`:547-575`) both include it.
+- **Scenario:** a GFCI type has 7 counted. Gap-fill suggests 2 more, and they turn out to be dimension ticks. The estimator answers the item "Not on this job — suggested marks are dimension ticks". `enforcedCounts(...).byType.get('GFCI')` goes from **7 to null**, and all 7 real GFCIs leave the takeoff.
+- **Fix:** the natural answer to a gap-fill item is "the suggestions aren't real". Replace `not_on_job` on `gapfill:` items with `confirm` (keep the count). Never map a `gapfill:` or `reconcile:` resolution to null. Keep these items out of the not-on-job multi-select and group bulk.
+
+**B11. A multi-type reconcile/gap-fill resolution gives the full quantity to every member, and a heads finding lands on poles. Reproduced.**
+- **Where:**
+  - `reviewItems.ts:875-884` (`byMemberKey` indexes every key in "S1+S2" to the same item);
+  - `reviewItems.ts:903-906` (`qty = rc.qty` for each member);
+  - `backend/src/estimating/takeoffReview.ts:189-196` (the markers tally sums across the members, then gives that sum to each member).
+- **Scenario:** S1 has 2 poles and 2 heads, S2 has 1 pole and 2 heads. A schedule reconciliation for S1+S2 is resolved with "count 5", meaning 5 heads per the schedule. The result is **S1 = 5 poles and S2 = 5 poles** (10 poles, was 3), while the heads stay 2 + 2. The site_lighting finding is in heads (`reconcile.ts` `actualUnitsOf`), but the answer is applied to `count`, which is poles.
+- **Fix:**
+  - For a multi-type item, ask per member, or apply the total to exactly one primary.
+  - For site_lighting, write the answer to `:heads` and leave the pole count alone.
+  - Test S1+S2 through `enforcedCounts`.
+
+**B12. Panel de-duplication by name drops a different building's panel, and its warning is never shown. Reproduced.**
+- **Where:**
+  - `backend/src/ai/evidence/schedules.ts:288-305` (`dedupePanels` keys only on `panelNameOf(title)`);
+  - it is called inside `scheduleCounts` (`:430`) and `circuitSummaryRows` (`:513`) on local copies, so the "also read … with different content" warning never reaches `evidence.tables`, which is what `reviewItems.ts:469-479` reads.
+- **Scenario:** a two-building job (a storage or multi-building set) with "PANEL A" on E-101 (Building 1: WH + 2 lighting circuits) and on E-201 (Building 2: WH + 3 receptacle circuits).
+  - `scheduleCounts` gives **WH = 1** (should be 2).
+  - `circuitSummaryRows` gives **"Branch circuit 20/1 — Panel A: 4"** (should be 7). Building 1's circuits are dropped.
+  - Both results are VERIFIED, both tables have `warnings: []`, and there is no review item.
+- **Fix:**
+  - Treat two same-name panels as duplicates only when their content matches; that de-dup is fine.
+  - When the content differs, keep both. Key them by the sheet's area/building (`areaOf` of the sheet title) as well as the name, or raise a blocking "same panel or two panels?" item.
+  - Either way, apply the warning to the stored `evidence.tables` so it surfaces.
+
+### Remaining should-fix (new or not fully closed)
+
+- **S15. On floors whose titles don't parse to a level, one floor is silently dropped as a "duplicate". Reproduced.**
+  - Where: `backend/src/ai/countSheets.ts:69-80`; `sheetRelation.ts:130-183, 201-203`.
+  - `levelOf` returns '' for "L2 POWER PLAN", "UPPER LEVEL …" and "POWER PLAN – FLOORS 2-4", so two stacked floors land in one level group. With a typical layout, the frame or vote alignment pairs 10 of 10 marks, and the result is **duplicate**: one floor kept, silently.
+  - The same would have happened before this round. It is now a confident "same devices drawn twice".
+  - Answer to "can the vote align two different floors?": floors whose levels parse are never compared. Floors whose levels don't parse are compared and can be aligned.
+  - Fix: when the sheets have *similar* content (cosine ≥ 0.5) and coincide, raise a blocking "same drawing or a typical floor?" item. Keep the silent duplicate only for different-content layers. Also teach `levelOf` "L2", "UPPER/LOWER LEVEL" and "FLOORS n-m".
+- **S16. B6 is only partly closed in the UI: equipment can still be zeroed with one click.** Reasoned.
+  - The 8 un-grouped equipment and phone-board items join the "zero" group, and that group's pre-existing bulk "Mark all N not on this job" (`TakeoffReviewPanel.tsx:569-571`) needs only one reason, with no dialog.
+  - The cross-group multi-select (`:222`, server `takeoffReview.ts:212-219`, the N9 exception) does the same.
+  - Fix: leave equipment-category items out of both bulk paths, or require the confirm dialog that lists every member (as legend-zero now does).
+- **S17. "(5)" on one row plus plain rows still over-counts. Reproduced.**
+  - Where: `schedules.ts:470-480`.
+  - "BATT CHGR (5)" on B-15 plus four plain "BATT CHGR" rows gives **9** (should be 5). Two circuits each "EF (2)" give 2, which may be 4.
+  - Fix: when rows disagree (a multiplier on some rows, not all), raise a blocking item with both readings instead of summing.
+- **S18. Gap-fill's suggested markers are never cleared on a re-run or reset.** Reasoned.
+  - Where: `estimating/aiMarkers.ts:104, 118, 279` and `services/rerunReset.ts:189`, which only delete `source = 'ai_count'` suggestions.
+  - `gap_fill` suggestions from every run pile up in the Plans view. An estimator who confirms two stale copies of the same suggestion adds 2 through "Use confirmed markers".
+  - Fix: clear `source IN ('ai_count','gap_fill')` suggestions in all three places, and in the rerun reset.
+- **S19. The A-31 at-host question is a false positive on the real sheet.** Checked against the real renders and Panel A.
+  - E-1's "duplex outlet at deck" is on circuit **A-31 (CCTV MONITOR)**. The checkout pole #2 is fed from **A-29 (CK OUT REG & PRN)**, per the A-29 leader on E-2. They are different outlets about 0.7" apart after alignment.
+  - The item is a blocking question, not a silent subtraction, but an estimator who answers "same outlet" loses one pole outlet.
+  - Fix: when both marks carry circuit tags and the tags differ, don't ask. Or show the circuits in the question.
+
+### Spot checks that passed
+
+- **S6:** the migration placeholder is cleared when the line's quantity changes (`bidEstimate.ts:1035`), and `..........` fails `isRealReason`.
+  - Nit: a line copied in the UI carries the placeholder with it. Match only when the prior line with that `line_key` exists.
+- **S7/S8/N4:** finish-bid now checks `requireAIPermission('view_results')`, returns 409 on an open `takeoffGate`, requires the BOM document to be this bid's `cost_breakdown`, keeps the source `confirmed_counts`, and upserts on `(bid_id, run_id, source)`.
+- **Migrations 137–138:**
+  - 137 re-creates the `est_markups` source check as a superset of 113's (`ai_count` plus `gap_fill`), so existing rows validate. It is idempotent.
+  - 138 is `CREATE UNIQUE INDEX IF NOT EXISTS`. Nit: it fails on a database that already holds duplicate `takeoff_eval_cases` rows, but only pre-merge dev databases that ran 136 could have them.
+- **N6/N7/N8:** the labeled-event caps, the 180-day cache purge and the frontend group order all look right.
