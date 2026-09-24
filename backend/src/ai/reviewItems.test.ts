@@ -212,3 +212,35 @@ describe('next round A4 — referencedSheetItems (post-Agent-1 safety net)', () 
     expect(reviewStatus(items)).toBe('needs_review');
   });
 });
+
+describe('next round A6 — legend items assigned by G.C. / another trade (Kissimmee strings)', () => {
+  it('G.C. items are APT targets (counted, blocking at zero); the HVAC-installed fan at zero is information only', async () => {
+    const { buildCountTargets } = await import('./countTargets');
+    const { mergeCountsIntoTakeoff } = await import('./countMerge');
+    const { buildReviewItems, reviewStatus } = await import('./reviewItems');
+    const a1 = {
+      fixtureSchedule: [],
+      symbolLegend: [
+        { symbol: 'S', description: 'Simplex receptacle, G.C. furnished/installed', category: 'device', sourceSheet: 'E-0.1' },
+        { symbol: 'DF', description: 'Duplex receptacle / floor receptacle, G.C.', category: 'device', sourceSheet: 'E-0.1' },
+        { symbol: 'EF', description: 'Exhaust fan recessed, installed by HVAC, wired by EC', category: 'equipment', sourceSheet: 'E-0.1' },
+      ],
+      quantities: [],
+    };
+    const { targets } = buildCountTargets(a1);
+    const by = Object.fromEntries(targets.map(t => [t.key, t]));
+    expect(by.S.assignment).toMatchObject({ aptScope: 'full', viaGc: true });
+    expect(by.DF.assignment).toMatchObject({ aptScope: 'full', viaGc: true });
+    expect(by.EF.assignment).toMatchObject({ aptScope: 'connection', otherTrade: 'HVAC' });
+    const merged = mergeCountsIntoTakeoff(a1, targets, [], { countingRan: true });
+    const cr = { version: 2, ran: true, model: 'm', targets, targetNotes: [], sheets: [], skippedSheets: [], types: merged.types, loadCheck: merged.loadCheck, removedRows: [], flags: [], marks: [] };
+    const items = buildReviewItems(cr as never);
+    const ef = items.find(i => i.id === 'count:EF')!;
+    expect(ef.blocking).toBe(false);
+    expect(ef.detail).toContain('installed by HVAC; APT wires / connects it — listed for information, not blocking');
+    expect(items.find(i => i.id === 'count:S')!.blocking).toBeUndefined();
+    // Only the fan open: clear. With S open too: needs review.
+    expect(reviewStatus([ef])).toBe('clear');
+    expect(reviewStatus(items)).toBe('needs_review');
+  });
+});

@@ -23,6 +23,7 @@
 // furnishes and installs, required bullets) — with every change logged —
 // and verifyBid blocks the rule's forbidden phrases.
 import type { Agent4Output, Agent4Section } from '../ai/agent4Message';
+import { tradeAssignmentOf, GC_MEANS_APT_RULE } from './tradeAssignment';
 
 export type Party = 'APT' | 'GC' | 'Owner' | 'Vendor' | 'Others';
 export const PARTIES: Party[] = ['APT', 'GC', 'Owner', 'Vendor', 'Others'];
@@ -122,6 +123,8 @@ export interface TermQuestion {
   /** B7/S7 — conflict options carry their structured parties (same order as
    *  options); nothing re-parses the display text. */
   optionParties?: Array<{ furnishBy: Party; installBy: Party }>;
+  /** Next round A6 — the pre-filled answer ("by G.C." on the drawings -> APT). */
+  suggested?: Party;
 }
 
 export const ASK_PARTIES: Party[] = ['APT', 'GC', 'Owner', 'Vendor'];
@@ -252,7 +255,27 @@ const PARTY_WORDS = String.raw`(?:the\s+)?([a-z0-9.&'\- ]+?)`;
  *  "FURNISHED AND INSTALLED BY OWNER", "F&I BY GC" -> both;
  *  "BY EQUIPMENT VENDOR", "BY OTHERS" -> both (multi-word parties);
  *  a half the statement doesn't give stays null (never copied from the other). */
-export function parseStatementParties(furnishByRaw: string, installByRaw: string, quoteRaw: string): { furnish: Party | null; install: Party | null } {
+export function parseStatementParties(furnishByRaw: string, installByRaw: string, quoteRaw: string): StatementParties {
+  const raw = parseStatementPartiesRaw(furnishByRaw, installByRaw, quoteRaw);
+  // Next round A6 (Decision 4) — on electrical drawings "by G.C." is APT
+  // scope: the GC subcontracts the electrical to APT. Read as APT, and
+  // remember it came from a GC note (an `ask` term is still asked, with APT
+  // pre-filled).
+  const viaGc = { furnish: raw.furnish === 'GC', install: raw.install === 'GC' };
+  return {
+    furnish: raw.furnish === 'GC' ? 'APT' : raw.furnish,
+    install: raw.install === 'GC' ? 'APT' : raw.install,
+    ...(viaGc.furnish || viaGc.install ? { viaGc } : {}),
+  };
+}
+
+export interface StatementParties { furnish: Party | null; install: Party | null; viaGc?: { furnish: boolean; install: boolean } }
+
+/** The parties exactly as printed (GC stays GC). parseStatementParties is
+ *  the DRAWINGS reader (GC read as APT, Decision 4); statedParties checks
+ *  our own scope text against the resolved terms and uses this one — an
+ *  estimator's "GC" answer is a real GC. */
+export function parseStatementPartiesRaw(furnishByRaw: string, installByRaw: string, quoteRaw: string): { furnish: Party | null; install: Party | null } {
   let furnish = normalizeParty(furnishByRaw);
   let install = normalizeParty(installByRaw);
   const q = ` ${quoteRaw.toLowerCase().replace(/\s+/g, ' ')} `;
@@ -272,10 +295,19 @@ export function parseStatementParties(furnishByRaw: string, installByRaw: string
     const p = bare ? normalizeParty(bare[1]) : null;
     if (p && !/\b(furnish|install|supplied|provided)\b/.test(q.slice(0, bare!.index))) { furnish = p; install = p; }
   }
+  if (!furnish && !install) {
+    // "G.C. FURNISHED/INSTALLED", "OWNER FURNISHED, EC INSTALLED" — the
+    // party before the verb (tradeAssignment's reader; a GC half stays GC
+    // here — parseStatementParties reads it as APT and remembers it).
+    const a = tradeAssignmentOf(quoteRaw);
+    const map = (x: string | null, gc: boolean): Party | null => gc ? 'GC'
+      : x === 'APT' ? 'APT' : x === 'Owner' ? 'Owner' : x === 'Vendor' ? 'Vendor' : x === 'Others' || x === 'OtherTrade' ? 'Others' : null;
+    if (a) { furnish = map(a.furnish, a.gcHalves.furnish); install = map(a.install, a.gcHalves.install); }
+  }
   return { furnish, install };
 }
 
-function statementParties(s: FurnishStatement): { furnish: Party | null; install: Party | null } {
+function statementParties(s: FurnishStatement): StatementParties {
   return parseStatementParties(s.furnishBy, s.installBy, s.quote);
 }
 
@@ -307,8 +339,13 @@ export function resolveAccountTerms(
       // B7/S7 — an explicit drawing statement wins, half by half; any half
       // the drawings leave open is asked on its own (APT / GC / Owner / Vendor).
       const best = found.find(x => x.furnish && x.install) ?? found[0];
-      const furnishBy = best?.furnish ?? null;
-      const installBy = best?.install ?? found.find(x => x.install)?.install ?? null;
+      const installSrc = best?.install ? best : found.find(x => x.install);
+      // A6 — a half that came from a "by G.C." note is still asked (the
+      // account rule says ask), with APT pre-filled; the rest is known.
+      const gcFurnish = !!best?.viaGc?.furnish;
+      const gcInstall = !!installSrc?.viaGc?.install;
+      const furnishBy = gcFurnish ? null : best?.furnish ?? null;
+      const installBy = gcInstall ? null : installSrc?.install ?? null;
       const citation = best ? { sheet: best.s.sourceSheet, quote: best.s.quote } : undefined;
       if (furnishBy && installBy) {
         resolved.push({ term, furnishBy, installBy, source: 'drawings', citation });
@@ -316,6 +353,7 @@ export function resolveAccountTerms(
       }
       const notes = [
         best ? `${best.s.sourceSheet || 'Drawings'}: "${best.s.quote}"` : 'No furnish/install statement for this was found on the drawings.',
+        ...(gcFurnish || gcInstall ? ['The drawings say "by G.C." — on electrical drawings that is APT scope (the GC subcontracts the electrical to APT), so APT is pre-filled.'] : []),
         ...aiNotesForTerm(term),
       ];
       const known = { ...(furnishBy ? { furnishBy } : {}), ...(installBy ? { installBy } : {}), ...(citation ? { citation } : {}) };
@@ -323,14 +361,14 @@ export function resolveAccountTerms(
         questions.push({
           term, kind: 'ask', half: 'furnish', label: `${label} — furnished by`,
           question: `Who FURNISHES the ${label.toLowerCase()}? (APT / GC / Owner / Vendor)`,
-          options: [...ASK_PARTIES], notes, known,
+          options: [...ASK_PARTIES], notes, known, ...(gcFurnish ? { suggested: 'APT' as Party } : {}),
         });
       }
       if (!installBy) {
         questions.push({
           term, kind: 'ask', half: 'install', label: `${label} — installed by`,
           question: `Who INSTALLS the ${label.toLowerCase()}? (APT / GC / Owner / Vendor)`,
-          options: [...ASK_PARTIES], notes, known,
+          options: [...ASK_PARTIES], notes, known, ...(gcInstall ? { suggested: 'APT' as Party } : {}),
         });
       }
       continue;
@@ -517,6 +555,9 @@ export function renderAccountTermsBlock(snap: AccountTermsSnapshot | null, resol
   for (const b of snap.requiredScopeBullets) lines.push(`- Required Section ${b.section} bullet: "${b.text}"`);
   const forbidden = effectiveForbiddenPhrases(snap, resolved);
   if (forbidden.length) lines.push(`- Never write: ${forbidden.map(f => `"${f}"`).join(', ')}.`);
+  // Next round A6 — Decision 4, for every account (the terms above win for
+  // the terms they name).
+  lines.push(`- ${GC_MEANS_APT_RULE}`);
   return lines.join('\n');
 }
 
@@ -614,7 +655,7 @@ export function statedParties(term: TermKey, text: string): { furnish: Party | n
   const t = TERM_PATTERNS[term].source.replace(/^\\b|\\b$/g, '');
   const at = new RegExp(t, 'i').exec(text)!.index;
   const before = text.slice(0, at).toLowerCase();
-  const explicit = parseStatementParties('', '', text);
+  const explicit = parseStatementPartiesRaw('', '', text);
   let furnish = explicit.furnish;
   let install = explicit.install;
   const adj = /\b([a-z0-9]+(?:\s+[a-z0-9]+)?)-(furnished|supplied|provided)\b/i.exec(text.slice(Math.max(0, at - 40), at + 5));

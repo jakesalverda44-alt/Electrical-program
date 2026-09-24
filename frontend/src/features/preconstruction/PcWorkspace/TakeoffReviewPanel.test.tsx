@@ -200,3 +200,14 @@ describe('next round A4 — Referenced sheet not in analysis', () => {
     expect(screen.getByRole('button', { name: 'Confirm' })).toBeTruthy();
   });
 });
+
+describe('next round A6 — a "by G.C." note pre-fills APT', () => {
+  it('APT is selected and saving sends it', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'clear', items: [] } });
+    render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null}
+      review={{ status: 'needs_review', items: [{ id: 'scope:power_poles:furnish', kind: 'scope_question', title: 'Power poles — furnished by', detail: 'Who FURNISHES the power poles?', question: 'Who FURNISHES the power poles?', options: ['APT', 'GC', 'Owner', 'Vendor'], suggested: 'APT', notes: [] }] }} />);
+    expect((screen.getByRole('radio', { name: 'APT' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['scope:power_poles:furnish'], action: 'answer', answer: 'APT' }));
+  });
+});

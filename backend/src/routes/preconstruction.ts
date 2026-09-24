@@ -2153,7 +2153,7 @@ router.post('/:bidId/non-electrical-overrides', requireAuth, asyncHandler(async 
   const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
   // S-R2-5 — bound to this exact line AND this flag.
   const flag = typeof req.body?.flag === 'string' ? req.body.flag : 'non_electrical';
-  if (!/^(non_electrical|excluded_scope|spec|(count_line|dup_keep|dup_remove):[A-Z0-9 .:-]{1,40})$/.test(flag)) return res.status(400).json({ error: 'unknown flag' });
+  if (!/^(non_electrical|excluded_scope|spec|gc_scope|(count_line|dup_keep|dup_remove):[A-Z0-9 .:-]{1,40})$/.test(flag)) return res.status(400).json({ error: 'unknown flag' });
   if (!category || !line) return res.status(400).json({ error: 'category and line required' });
   // Fix round 1 — one override mechanism for every "keep this" decision: a
   // non-electrical line (S9), a line on the Not-included list (N7), or an

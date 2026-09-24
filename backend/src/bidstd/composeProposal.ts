@@ -15,6 +15,13 @@ import { composeBidData, type ComposeBidRow, type SavedConfidenceItem } from './
 import { enforceCountsOnTakeoff, countMismatchProblems } from './enforceCounts';
 import { exclusionBulletsFor, excludedScopeFindings, nonElectricalFindings, overrideFor, normalizeLineKey, type ScopeItem, type NonElectricalOverride } from './scopeList';
 import { validateBidData, type BidData } from './bidData';
+import { gcScopeFindings } from './tradeAssignment';
+import { TERM_PATTERNS } from './accountRules';
+
+/** Terms the account rule / the estimator really assigned to the GC. */
+function gcTermPatterns(resolved: ResolvedTerm[]): RegExp[] {
+  return resolved.filter(t => t.furnishBy === 'GC' || t.installBy === 'GC').map(t => TERM_PATTERNS[t.term]);
+}
 
 export interface ComposeProposalInput {
   agent4: Agent4Output;
@@ -115,6 +122,12 @@ export function composeProposal(input: ComposeProposalInput): ComposeProposalOut
     ...irrelevantSpecSentences(gcScopeText(data), input.bidRow.loc ?? '').block
       .filter(x => overrideFor(normalizeLineKey('spec', x), input.overrides, 'spec') === null)
       .map(x => ({ check: 'irrelevant_spec', detail: `Names a region other than the project's location — owner-spec text for other stores/regions? Remove it, or keep it with a reason: "${x}"`, category: 'spec', line: x, flag: 'spec' })),
+    // Next round A6 (Decision 4) — electrical work put on the GC ("Receptacles
+    // by GC", a GC-furnished line) unless the account terms really gave the
+    // GC that term; kept only with an exact-line reason (flag gc_scope).
+    ...gcScopeFindings(data, gcTermPatterns(input.accountResolved))
+      .filter(f => overrideFor(normalizeLineKey(f.category, f.line), input.overrides, 'gc_scope') === null)
+      .map(f => ({ check: 'gc_scope', detail: f.detail, category: f.category, line: f.line, flag: 'gc_scope' })),
     ...nonElectricalFindings(data, input.overrides).filter(f => !f.overridden && f.block)
       .map(f => ({ check: 'non_electrical', detail: `${f.category}: "${f.line}" (${f.unit}) looks like ${f.reason}`, category: f.category, line: f.line })),
   ];

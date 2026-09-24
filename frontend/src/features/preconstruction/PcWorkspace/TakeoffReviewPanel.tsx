@@ -47,6 +47,14 @@ export interface ReviewItem {
   /** An earlier run's answer, not carried because the drawings changed. */
   previousResolution?: ReviewResolution;
   resolution?: ReviewResolution;
+  /** Next round A6 — the pre-filled answer ("by G.C." on the drawings -> APT). */
+  suggested?: string;
+  /** Next round A6/A7 — false: information only, never blocks. */
+  blocking?: boolean;
+  /** Next round A7 — cause group. */
+  group?: string;
+  typeKey?: string;
+  category?: string;
 }
 
 export interface TakeoffReview {
@@ -269,15 +277,16 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                       <>
                         {(item.options ?? []).map(o => (
                           <label key={o} className="tr-radio">
-                            <input type="radio" name={`ans-${item.id}`} value={o} checked={answer[item.id] === o}
+                            <input type="radio" name={`ans-${item.id}`} value={o} checked={(answer[item.id] ?? item.suggested) === o}
                               onChange={() => setAnswer(a => ({ ...a, [item.id]: o }))} />
                             {o}
                           </label>
                         ))}
-                        <button type="button" className="btn primary sm" disabled={!answer[item.id] || busy !== null}
-                          onClick={() => void resolve([item.id], { action: 'answer', answer: answer[item.id] }, `ans:${item.id}`)}>
+                        <button type="button" className="btn primary sm" disabled={!(answer[item.id] ?? item.suggested) || busy !== null}
+                          onClick={() => void resolve([item.id], { action: 'answer', answer: answer[item.id] ?? item.suggested }, `ans:${item.id}`)}>
                           Save answer
                         </button>
+                        {item.suggested && !answer[item.id] && <span className="tr-sub">Pre-filled: {item.suggested} (the drawings say “by G.C.”, which is APT scope)</span>}
                       </>
                     )}
                     {acts.includes('count') && (

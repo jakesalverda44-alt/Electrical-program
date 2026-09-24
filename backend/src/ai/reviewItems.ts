@@ -17,6 +17,7 @@
 // resolutions — their work is never silently discarded) and validating a
 // resolution. The DB/route half lives in routes/preconstruction.ts.
 import type { CountResult } from './countingStage';
+import { outsideAptInstall, describeAssignment } from '../bidstd/tradeAssignment';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -71,6 +72,14 @@ export interface ReviewItem {
   /** N4 — what the item was built from; a resolution is carried to a new
    *  run only when this is unchanged. */
   fingerprint?: string;
+  /** Next round A6/A7 — false for information only (e.g. a zero count for
+   *  a type another trade / the Owner / a vendor installs): shown, never
+   *  blocking. Absent = blocking. */
+  blocking?: boolean;
+  /** Next round A7 — the cause group the UI lists it under. */
+  group?: string;
+  /** Next round A6 — a pre-filled scope answer ("by G.C." -> APT). */
+  suggested?: string;
   /** N4 — an earlier run's resolution for this item that was NOT carried
    *  over because the drawings/counts changed; shown for re-confirmation. */
   previousResolution?: ReviewResolution;
@@ -84,10 +93,14 @@ export interface ScopeQuestionInput {
   options: string[];
   optionParties?: Array<{ furnishBy: string; installBy: string }>;
   notes: string[];
+  /** Next round A6 — the pre-filled answer. */
+  suggested?: string;
 }
 
+/** Open AND blocking (an information item — `blocking: false` — never
+ *  holds the proposal). */
 export function reviewItemIsOpen(i: ReviewItem): boolean {
-  return !i.resolution;
+  return !i.resolution && i.blocking !== false;
 }
 
 export function reviewStatus(items: ReviewItem[]): 'clear' | 'needs_review' {
@@ -155,12 +168,17 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     const base = { typeKey: t.key, type: t.type, description: t.description, category: t.category, aiCount: t.count, sheets, fingerprint: fp };
     const title = `Type ${t.type}${t.description ? ` — ${t.description}` : ''}`;
     if (t.status !== 'counted') {
+      const tgt = targetByKey.get(t.key);
+      // Decision 4 — a type another trade / the Owner / a vendor installs:
+      // a zero count is information, not a block.
+      const info = outsideAptInstall(tgt?.assignment);
       items.push({
         id: `count:${t.key}`,
         kind: 'count',
         title,
-        detail: t.status === 'zero' ? `Counted 0: ${t.reason}.` : `Could not be counted: ${t.reason}.`,
+        detail: `${t.status === 'zero' ? `Counted 0: ${t.reason}.` : `Could not be counted: ${t.reason}.`}${info ? ` Its schedule says ${describeAssignment(tgt!.assignment!)} — listed for information, not blocking.` : ''}`,
         actions: ['count', 'markers', 'not_on_job'],
+        ...(info ? { blocking: false } : {}),
         ...base,
       });
     }
@@ -222,6 +240,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   }
   for (const q of scopeQuestions) {
     items.push({
+      ...(q.suggested ? { suggested: q.suggested } : {}),
       id: `scope:${q.term}`,
       kind: 'scope_question',
       title: q.label,

@@ -463,6 +463,7 @@ RULES
 - Count every drawn instance of each listed type on the plan area. Look at every tile systematically, row by row; small symbols in dense areas (restrooms, stockrooms, back-of-house) are the ones most often missed.
 - A symbol counts once per drawn instance even when several share one tag bubble or a "TYP" note. Never count text that only mentions a type (general notes, keynotes, schedules, legends, details).
 - Do not count items shown as existing to remain, by others, or future unless the target description says so.
+- Items marked "by G.C.", "G.C. furnished/installed" or "by the general contractor" ARE counted: on these electrical drawings the GC's scope is APT's (the GC subcontracts the electrical to APT).
 - Poles: for a pole-mounted site type, report one mark per POLE (at the pole), not per head.
 - If a listed type is drawn on this sheet but you cannot tell its instances apart reliably (illegible tags, overlapping hatching), list it under "unreadable" with the tile and a short reason instead of guessing. A type that simply does not appear on this sheet is omitted — it is not unreadable.
 - Never report a type that is not in COUNT TARGETS.
