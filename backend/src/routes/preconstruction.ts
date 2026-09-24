@@ -47,7 +47,7 @@ import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
 import { runCountingStage, runSupplementCounting, type CountResult } from '../ai/countingStage';
 import { normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
-import { writeAiCountMarkers } from '../estimating/aiMarkers';
+import { writeAiCountMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
 import { buildReviewItems, referencedSheetItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
 import { takeoffGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
@@ -65,7 +65,7 @@ import { BidData } from '../bidstd/bidData';
 import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
 import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
 import { resetForRerun, type RerunResetSummary } from '../services/rerunReset';
-import { planSheetsForRun, loadSheetCheck, skippedClarifications, type FileSheetPlan } from '../services/sheetCheck';
+import { planSheetsForRun, loadSheetCheck, skippedClarifications, buildInventory, pageContentHash, resolveRefsAfterSupplement, type FileSheetPlan, type SupplementPlanOptions, type CheckedPage } from '../services/sheetCheck';
 import { registerRun, abortableClient, abortRuns, isCancellationError, RunCancelledError, runSignalOf } from '../ai/runControl';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
@@ -824,6 +824,9 @@ export interface SupplementContext {
   priorUsage: Record<string, unknown>;
   /** The run's earlier input files, for counting NEW types on old sheets. */
   oldFiles: Express.Multer.File[];
+  /** Fix round S3 — plan the new pages against the run (and skip pages
+   *  already in it). */
+  plan?: SupplementPlanOptions;
 }
 
 export async function runPipeline(
@@ -964,7 +967,7 @@ async function runPipelineStages(
     let plans = new Map<string, FileSheetPlan>();
     let planUsage = { ...NO_USAGE };
     try {
-      const planned = await planSheetsForRun(bidId, filesToSend, client, config.modelClassifier);
+      const planned = await planSheetsForRun(bidId, filesToSend, client, config.modelClassifier, supplement?.plan);
       plans = planned.plans;
       planUsage = planned.usage;
     } catch (err) {
@@ -1185,9 +1188,27 @@ async function runPipelineStages(
     // Non-fatal: a failure here loses the markers, never the counts.
     try {
       if (await checkpoint()) throw new RunCancelledError();
-    const markers = await writeAiCountMarkers(bidId, stage.countResult,
-        files.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })), runId);
-      (stage.countResult as unknown as Record<string, unknown>).markers = markers;
+      // Fix round B2 — a supplement pass rewrites markers only for what it
+      // re-counted (the new sheets; on an earlier sheet only the new types),
+      // resolving documents for the run's earlier files too, and records
+      // exactly what it changed so a failed pass can put them back.
+      const markerFiles = [...(supplement?.oldFiles ?? []), ...files];
+      let scope: MarkerScope | undefined;
+      if (supplement) {
+        const priorKeys = new Set((supplement.priorCount?.targets ?? []).map(t => t.key));
+        const newTypes = stage.countResult.targets.map(t => t.key).filter(k => !priorKeys.has(k));
+        scope = stage.countResult.sheets.flatMap((sh): MarkerScope => newFileNames.has(sh.file)
+          ? [{ sheetKey: sh.key, typeKeys: null }]
+          : newTypes.length ? [{ sheetKey: sh.key, typeKeys: newTypes }] : []);
+      }
+      const markers = await writeAiCountMarkers(bidId, stage.countResult,
+        markerFiles.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })), runId, scope);
+      const { replacedIds, writtenIds, ...markerSummary } = markers;
+      if (supplement) {
+        await guarded(`UPDATE takeoff_results SET supplement = COALESCE(supplement, '{}'::jsonb) || jsonb_build_object('markers', $1::jsonb) WHERE bid_id=$2`,
+          [JSON.stringify({ replacedIds: replacedIds ?? [], writtenIds: writtenIds ?? [] }), bidId]).catch(() => {});
+      }
+      (stage.countResult as unknown as Record<string, unknown>).markers = markerSummary;
     } catch (err) {
       logger.warn({ err, bidId }, '[takeoff] writing AI count markers failed');
       (stage.countResult as unknown as Record<string, unknown>).markers = { error: 'suggested markers could not be written' };
@@ -2627,6 +2648,63 @@ router.post('/:bidId/supplement', requireAuth, requireAIPermission('run_analysis
   if (!incoming.length) return res.status(400).json({ error: 'Upload the referenced sheet (PDF) to add it to this analysis.' });
   const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
   if (!apiKey) return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI.' });
+  const config = await loadAIConfig();
+  const client = new Anthropic({ apiKey });
+
+  // Fix round S5 — every rejection happens BEFORE the claim: a rejected
+  // upload never touches the run (nor its Agent 4 proposal / draft).
+  const { rows: pre } = await pool.query('SELECT run_id, status, input_document_ids, prep_inventory FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  if (!pre[0]?.run_id || pre[0].status !== 'complete') {
+    return res.status(409).json({ error: 'A sheet can be added once the analysis has finished (and while no other run is going).' });
+  }
+  const oldIds = (pre[0].input_document_ids as string[] | null) ?? [];
+  const { files: oldFiles } = oldIds.length ? await gatherAnalysisInputs(bidId, [], oldIds) : { files: [] as Express.Multer.File[] };
+  const sha = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
+  const oldHashes = new Set(oldFiles.map(f => sha(f.buffer)));
+  const newFiles = incoming.filter(f => !oldHashes.has(sha(f.buffer)));
+  if (!newFiles.length) return res.status(400).json({ error: 'Those files are already part of this analysis.' });
+
+  // Fix round S3 — page by page: a page identical to one already in the run
+  // is skipped; a page whose sheet number is already in the run but whose
+  // content differs is a REVISION, which needs a full re-run (a supplement
+  // would count the old and the new sheet both).
+  const priorInventory = (pre[0].prep_inventory as PrepInventoryEntry[] | null) ?? [];
+  const oldPageHashes = new Set<string>();
+  for (const f of oldFiles) {
+    if ((f.originalname.split('.').pop() || '').toLowerCase() !== 'pdf') continue;
+    try { for (const t of await extractPdfPageTexts(f.buffer)) { const h = pageContentHash(t); if (h) oldPageHashes.add(h); } } catch { /* no text layer */ }
+  }
+  let built: Awaited<ReturnType<typeof buildInventory>>;
+  try {
+    built = await buildInventory(newFiles.map(f => ({ originalname: f.originalname, buffer: f.buffer })), { client, classifierModel: config.modelClassifier, visionModel: '', aiRefs: false });
+  } catch (err) {
+    return res.status(502).json({ error: `The added sheets could not be read: ${describeAIError(err)}` });
+  }
+  const priorNos = new Set(priorInventory.map(p => normalizeSheetId(p.sheetNo)).filter((k): k is string => !!k));
+  const skipPageKeys: string[] = [];
+  const revised: string[] = [];
+  for (const p of built.pages) {
+    const h = pageContentHash(built.pageTexts.get(p.sha)?.[p.page - 1]);
+    if (h && oldPageHashes.has(h)) { skipPageKeys.push(p.key); continue; }
+    const no = normalizeSheetId(p.sheetNo);
+    if (no && priorNos.has(no)) revised.push(p.sheetNo);
+  }
+  if (revised.length) {
+    return res.status(409).json({
+      error: `This upload has new versions of sheets already in the analysis (${[...new Set(revised)].slice(0, 8).join(', ')}). A revised set needs a full re-run of the analysis, not a supplement — adding them would count the old and the new sheets both.`,
+      fullRerun: true, revisedSheets: [...new Set(revised)],
+    });
+  }
+  if (built.pages.length && skipPageKeys.length === built.pages.length && !built.unclassifiedFiles.length) {
+    return res.status(400).json({ error: 'Every page of those files is already part of this analysis.' });
+  }
+  const checkRow = await loadSheetCheck(bidId);
+  const contextPages: CheckedPage[] = checkRow?.result?.pages?.length
+    ? checkRow.result.pages
+    : priorInventory.map(p => ({
+      key: `${p.file}#${p.page}`, file: p.file, sha: `prior:${p.file}`, page: p.page, sheetNo: p.sheetNo, title: p.title, discipline: p.discipline,
+      cls: p.cls as CheckedPage['cls'], textChars: p.textChars, hasTextLayer: p.textChars >= 50, classified: p.classified, refs: [], role: 'excluded' as const, reason: '',
+    }));
 
   // Claim: only a finished run takes a supplement (one at a time).
   const tx = await pool.connect();
@@ -2634,11 +2712,12 @@ router.post('/:bidId/supplement', requireAuth, requireAIPermission('run_analysis
   try {
     await tx.query('BEGIN');
     const { rows } = await tx.query(
-      `SELECT run_id, status, agent1_output, count_result, prep_inventory, review_items, review_status, usage_agent1,
-              input_document_ids, agent2_output, agent3_output, hygiene, account_terms
+      `SELECT run_id, status, agent1_output, count_result, prep_inventory, review_items, review_status,
+              usage_agent1, usage_agent2, usage_agent3, usage_counter, model_agent1, model_agent2, model_agent3, model_counter,
+              input_document_ids, agent2_output, agent3_output, hygiene, account_terms, agent4_run_id, draft_run_id
          FROM takeoff_results WHERE bid_id=$1 FOR UPDATE`, [bidId]);
     const tr = rows[0];
-    if (!tr?.run_id || tr.status !== 'complete') {
+    if (!tr?.run_id || tr.status !== 'complete' || tr.run_id !== pre[0].run_id) {
       await tx.query('ROLLBACK');
       return res.status(409).json({ error: 'A sheet can be added once the analysis has finished (and while no other run is going).' });
     }
@@ -2647,7 +2726,7 @@ router.post('/:bidId/supplement', requireAuth, requireAIPermission('run_analysis
       `UPDATE takeoff_results SET status='running', review_status='pending', agent4_run_id=NULL, draft_run_id=NULL,
          progress=$2, supplement=$3 WHERE bid_id=$1`,
       [bidId, JSON.stringify({ stage: 'prep', label: 'Adding the referenced sheet to the analysis', step: null, of: null, at: new Date().toISOString() }),
-       JSON.stringify({ status: 'running', files: incoming.map(f => f.originalname), by: req.user?.name ?? null, at: new Date().toISOString() })]);
+       JSON.stringify({ status: 'running', files: newFiles.map(f => f.originalname), by: req.user?.name ?? null, at: new Date().toISOString() })]);
     await tx.query('COMMIT');
   } catch (err) {
     await tx.query('ROLLBACK').catch(() => {});
@@ -2656,41 +2735,38 @@ router.post('/:bidId/supplement', requireAuth, requireAIPermission('run_analysis
     tx.release();
   }
 
-  // The run's earlier inputs (for counting new types on old sheets), and no
-  // file twice: a page already in the run would be counted twice.
-  const oldIds = (snap.input_document_ids as string[] | null) ?? [];
-  const { files: oldFiles } = oldIds.length ? await gatherAnalysisInputs(bidId, [], oldIds) : { files: [] as Express.Multer.File[] };
-  const sha = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
-  const oldHashes = new Set(oldFiles.map(f => sha(f.buffer)));
-  const newFiles = incoming.filter(f => !oldHashes.has(sha(f.buffer)));
+  // Fix round S5 / B2 — exactly as it was: outputs, usage, models, the
+  // Agent 4 / draft run ids, and the Plans-view markers this pass changed.
   const restore = async (message: string) => {
+    const { rows: cur } = await pool.query('SELECT run_id, supplement FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    if (cur[0]?.run_id !== snap.run_id) return; // a newer run took over: nothing to restore
+    await revertAiMarkerWrite(bidId, (cur[0]?.supplement as { markers?: { replacedIds?: string[]; writtenIds?: string[] } } | null)?.markers).catch(err => logger.warn({ err, bidId }, '[takeoff] supplement: markers not reverted'));
+    const j = (v: unknown) => JSON.stringify(v ?? null);
     await pool.query(
       `UPDATE takeoff_results SET status='complete', agent1_output=$2, count_result=$3, prep_inventory=$4, review_items=$5,
          review_status=$6, usage_agent1=$7, agent2_output=$8, agent3_output=$9, hygiene=$10, account_terms=$11,
-         supplement=$12, progress=NULL
+         supplement=$12, progress=NULL, usage_agent2=$14, usage_agent3=$15, usage_counter=$16,
+         model_agent1=$17, model_agent2=$18, model_agent3=$19, model_counter=$20, agent4_run_id=$21, draft_run_id=$22
        WHERE bid_id=$1 AND run_id=$13`,
-      [bidId, snap.agent1_output, JSON.stringify(snap.count_result ?? null), JSON.stringify(snap.prep_inventory ?? null),
-       JSON.stringify(snap.review_items ?? null), snap.review_status, JSON.stringify(snap.usage_agent1 ?? null),
-       snap.agent2_output, snap.agent3_output, JSON.stringify(snap.hygiene ?? null), JSON.stringify(snap.account_terms ?? null),
-       JSON.stringify({ status: 'error', error: message, files: incoming.map(f => f.originalname), at: new Date().toISOString() }), snap.run_id]);
+      [bidId, snap.agent1_output, j(snap.count_result), j(snap.prep_inventory), j(snap.review_items), snap.review_status, j(snap.usage_agent1),
+       snap.agent2_output, snap.agent3_output, j(snap.hygiene), j(snap.account_terms),
+       JSON.stringify({ status: 'error', error: message, files: newFiles.map(f => f.originalname), at: new Date().toISOString() }), snap.run_id,
+       j(snap.usage_agent2), j(snap.usage_agent3), j(snap.usage_counter),
+       snap.model_agent1, snap.model_agent2, snap.model_agent3, snap.model_counter, snap.agent4_run_id, snap.draft_run_id]);
   };
-  if (!newFiles.length) {
-    await restore('Those files are already part of this analysis.');
-    return res.status(400).json({ error: 'Those files are already part of this analysis.' });
-  }
-  res.json({ status: 'running', supplement: true, files: newFiles.map(f => f.originalname) });
+  res.json({ status: 'running', supplement: true, files: newFiles.map(f => f.originalname), skippedPages: skipPageKeys.length });
 
-  const config = await loadAIConfig();
   const supplement: SupplementContext = {
     priorAgent1: parseAIJSON(String(snap.agent1_output ?? '')) ?? {},
     priorCount: (snap.count_result as CountResult | null) ?? null,
     priorInventory: (snap.prep_inventory as PrepInventoryEntry[] | null) ?? [],
     priorUsage: (snap.usage_agent1 as Record<string, unknown> | null) ?? {},
     oldFiles,
+    plan: { contextPages, skipPageKeys },
   };
   const runId = snap.run_id as string;
-  runPipeline(bidId, newFiles, new Anthropic({ apiKey }), config, { supplement }).then(async () => {
-    const { rows } = await pool.query('SELECT status, run_id, agent1_output, raw_response FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  runPipeline(bidId, newFiles, client, config, { supplement }).then(async () => {
+    const { rows } = await pool.query('SELECT status, run_id, agent1_output, raw_response, prep_inventory FROM takeoff_results WHERE bid_id=$1', [bidId]);
     if (rows[0]?.run_id !== runId) return;
     if (rows[0]?.status === 'cancelled') { await restore('Stopped — the run is as it was before the sheet was added.'); return; }
     if (rows[0]?.status === 'error') {
@@ -2701,6 +2777,12 @@ router.post('/:bidId/supplement', requireAuth, requireAIPermission('run_analysis
     const ids = [...new Set([...oldIds, ...(await inputDocumentIds(bidId, newFiles))])];
     await pool.query(`UPDATE takeoff_results SET input_document_ids=$2, supplement=$3 WHERE bid_id=$1 AND run_id=$4`,
       [bidId, ids, JSON.stringify({ status: 'complete', files: newFiles.map(f => f.originalname), by: req.user?.name ?? null, at: new Date().toISOString() }), runId]);
+    // Fix round S7 — references the added sheets satisfy are present now;
+    // their "not provided" skips go.
+    const newNames = new Set(newFiles.map(f => f.originalname));
+    const added = ((rows[0]?.prep_inventory as PrepInventoryEntry[] | null) ?? []).filter(p => newNames.has(p.file))
+      .map(p => ({ key: `${p.file}#${p.page}`, file: p.file, page: p.page, sheetNo: p.sheetNo, title: p.title, discipline: p.discipline }));
+    await resolveRefsAfterSupplement(bidId, added).catch(err => logger.warn({ err, bidId }, '[takeoff] supplement: sheet-check references not updated'));
   }).catch(async err => {
     logger.error({ err, bidId }, '[takeoff] supplement pass failed');
     await restore(`The added sheet could not be analysed: ${describeAIError(err)}`).catch(() => {});

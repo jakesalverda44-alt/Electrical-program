@@ -44,7 +44,16 @@ export interface AiMarkerWriteSummary {
    *  (document + page), so confirmed markers can be tied back to the sheets
    *  a type is counted from. */
   sheetDocuments?: Array<{ sheetKey: string; label: string; documentId: string; pageIndex: number }>;
+  /** Fix round B2 — ids this write soft-deleted / inserted (not stored in
+   *  count_result; a failed supplement pass reverts exactly these). */
+  replacedIds?: string[];
+  writtenIds?: string[];
 }
+
+/** Fix round B2 — what one write may touch. Absent = the whole bid (a full
+ *  run). A supplement pass re-counts only some sheets, and on an earlier
+ *  sheet only the new types: `typeKeys` null = every type on that sheet. */
+export type MarkerScope = Array<{ sheetKey: string; typeKeys: string[] | null }>;
 
 /** Pure: the saved line a type maps to — exactly one line scoring an explicit
  *  tag or an exact description match, else null (ambiguous or none). */
@@ -81,18 +90,40 @@ async function writeWithClient(
   countResult: CountResult,
   docByFile: Map<string, string>,
   lines: BidLineRow[],
+  scope?: MarkerScope,
 ): Promise<AiMarkerWriteSummary> {
-  const summary: AiMarkerWriteSummary = { written: 0, skippedAlreadyMarked: 0, replacedSuggestions: 0, assigned: 0, unassigned: 0, sheetsWithoutMarkers: [], sheetDocuments: [] };
+  const summary: AiMarkerWriteSummary = { written: 0, skippedAlreadyMarked: 0, replacedSuggestions: 0, assigned: 0, unassigned: 0, sheetsWithoutMarkers: [], sheetDocuments: [], replacedIds: [], writtenIds: [] };
   for (const sheet of countResult.sheets) {
     const documentId = docByFile.get(sheet.file);
     if (documentId) summary.sheetDocuments!.push({ sheetKey: sheet.key, label: sheet.label, documentId, pageIndex: sheet.page - 1 });
   }
-  const replaced = await client.query(
-    `UPDATE est_markups SET deleted_at = now(), updated_at = now()
-      WHERE bid_id = $1 AND source = 'ai_count' AND status = 'suggested' AND deleted_at IS NULL`,
-    [bidId]
-  );
-  summary.replacedSuggestions = replaced.rowCount ?? 0;
+  const typeTag = (k: string) => countResult.targets.find(t => t.key === k)?.type ?? k;
+  if (!scope) {
+    const replaced = await client.query(
+      `UPDATE est_markups SET deleted_at = now(), updated_at = now()
+        WHERE bid_id = $1 AND source = 'ai_count' AND status = 'suggested' AND deleted_at IS NULL RETURNING id`,
+      [bidId]
+    );
+    summary.replacedIds = replaced.rows.map(r => r.id as string);
+  } else {
+    // B2 — only the re-counted sheets (and, on an earlier sheet, only the
+    // new types) lose their suggestions; every other sheet keeps its markers.
+    for (const sc of scope) {
+      const sheet = countResult.sheets.find(x => x.key === sc.sheetKey);
+      const documentId = sheet ? docByFile.get(sheet.file) : undefined;
+      if (!sheet || !documentId) continue;
+      const labels = sc.typeKeys ? sc.typeKeys.map(k => typeTag(k).toUpperCase()) : null;
+      const replaced = await client.query(
+        `UPDATE est_markups SET deleted_at = now(), updated_at = now()
+          WHERE bid_id = $1 AND source = 'ai_count' AND status = 'suggested' AND deleted_at IS NULL
+            AND document_id = $2 AND page_index = $3 AND ($4::text[] IS NULL OR upper(label) = ANY($4::text[])) RETURNING id`,
+        [bidId, documentId, sheet.page - 1, labels]
+      );
+      summary.replacedIds!.push(...replaced.rows.map(r => r.id as string));
+    }
+  }
+  summary.replacedSuggestions = summary.replacedIds!.length;
+  const inScope = (sheetKey: string, typeKey: string) => !scope || scope.some(sc => sc.sheetKey === sheetKey && (!sc.typeKeys || sc.typeKeys.includes(typeKey)));
 
   const lineByType = new Map(countResult.targets.map(t => [t.key, lineForType(t, lines)]));
   const typeByKey = new Map(countResult.targets.map(t => [t.key, t]));
@@ -103,13 +134,14 @@ async function writeWithClient(
   );
 
   for (const sheet of countResult.sheets) {
+    if (scope && !scope.some(sc => sc.sheetKey === sheet.key)) continue;
     if (sheet.status !== 'counted') { summary.sheetsWithoutMarkers.push({ label: sheet.label, reason: 'sheet was not counted' }); continue; }
     if (!sheet.geometryOk) { summary.sheetsWithoutMarkers.push({ label: sheet.label, reason: 'page geometry check failed — counts kept, positions not trusted' }); continue; }
     const documentId = docByFile.get(sheet.file);
     if (!documentId) { summary.sheetsWithoutMarkers.push({ label: sheet.label, reason: 'the PDF is not filed under this bid\'s Plans, so the Plans view cannot show it' }); continue; }
     const pageIndex = sheet.page - 1;
     const already = confirmed.rows.filter(r => r.document_id === documentId && Number(r.page_index) === pageIndex);
-    for (const m of countResult.marks.filter(x => x.sheetKey === sheet.key)) {
+    for (const m of countResult.marks.filter(x => x.sheetKey === sheet.key && inScope(x.sheetKey, x.typeKey))) {
       const lineKey = lineByType.get(m.typeKey) ?? null;
       const tag = typeByKey.get(m.typeKey)?.type ?? m.typeKey;
       const dup = already.some(r => {
@@ -118,11 +150,12 @@ async function writeWithClient(
         return (r.label && String(r.label).toUpperCase() === tag.toUpperCase()) || (lineKey && r.line_key === lineKey);
       });
       if (dup) { summary.skippedAlreadyMarked++; continue; }
-      await client.query(
+      const ins = await client.query(
         `INSERT INTO est_markups (bid_id, document_id, page_index, line_key, kind, points, status, label, created_by, source, updated_at)
-         VALUES ($1, $2, $3, $4, 'count', $5::jsonb, 'suggested', $6, 'AI counter', 'ai_count', now())`,
+         VALUES ($1, $2, $3, $4, 'count', $5::jsonb, 'suggested', $6, 'AI counter', 'ai_count', now()) RETURNING id`,
         [bidId, documentId, pageIndex, lineKey, JSON.stringify([{ x: m.x, y: m.y }]), tag]
       );
+      summary.writtenIds!.push(ins.rows[0].id as string);
       summary.written++;
       if (lineKey) summary.assigned++; else summary.unassigned++;
     }
@@ -140,6 +173,8 @@ export async function writeAiCountMarkers(
    *  write happens only while that run is still the bid's current one: a
    *  run superseded by a re-run never puts markers back after the reset. */
   runId?: string | null,
+  /** Fix round B2 — a supplement pass touches only what it re-counted. */
+  scope?: MarkerScope,
 ): Promise<AiMarkerWriteSummary> {
   const docByFile = await resolveDocumentsForFiles(bidId, files);
   const lines = await getBidLines(bidId);
@@ -156,7 +191,7 @@ export async function writeAiCountMarkers(
         };
       }
     }
-    const summary = await writeWithClient(client, bidId, countResult, docByFile, lines);
+    const summary = await writeWithClient(client, bidId, countResult, docByFile, lines, scope);
     await client.query('COMMIT');
     return summary;
   } catch (err) {
@@ -194,3 +229,16 @@ export async function assignAiMarkersToLines(bidId: string): Promise<{ assigned:
   }
   return { assigned, stillUnassigned: rows.length - assigned, updates };
 }
+
+/** Fix round B2 — undo one marker write (a failed / stopped supplement
+ *  pass): what it soft-deleted comes back, what it wrote goes. */
+export async function revertAiMarkerWrite(bidId: string, change: { replacedIds?: string[]; writtenIds?: string[] } | null | undefined): Promise<void> {
+  if (!change) return;
+  if (change.writtenIds?.length) {
+    await pool.query(`UPDATE est_markups SET deleted_at = now(), updated_at = now() WHERE bid_id = $1 AND id = ANY($2::uuid[]) AND status = 'suggested'`, [bidId, change.writtenIds]);
+  }
+  if (change.replacedIds?.length) {
+    await pool.query(`UPDATE est_markups SET deleted_at = NULL, updated_at = now() WHERE bid_id = $1 AND id = ANY($2::uuid[])`, [bidId, change.replacedIds]);
+  }
+}
+

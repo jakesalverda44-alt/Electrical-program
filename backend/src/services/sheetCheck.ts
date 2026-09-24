@@ -601,12 +601,88 @@ export async function reselect(bidId: string): Promise<SheetCheckRow | null> {
  *  reference call) with the bid's overrides applied. Files the cache
  *  doesn't know are classified now (and cached) — the analysis never runs
  *  on a stale selection. Returns the result for the run's record. */
+export interface SupplementPlanOptions {
+  /** The run's earlier pages (the bid's sheet check, else its prep
+   *  inventory): the new files are planned AGAINST them, so a lone M-1 is
+   *  resolved as the reference an earlier E-sheet points at. */
+  contextPages: CheckedPage[];
+  /** New pages identical to a page already in the run (per-page content
+   *  hash): never analysed again. */
+  skipPageKeys: string[];
+}
+
 export async function planSheetsForRun(
   bidId: string, files: CheckInputFile[], client: Anthropic, classifierModel: string,
+  supplement?: SupplementPlanOptions,
 ): Promise<{ plans: Map<string, FileSheetPlan>; result: SheetCheckResult; usage: { input_tokens: number; output_tokens: number } }> {
   const built = await buildInventory(files, { client, classifierModel, visionModel: '', aiRefs: false });
   const row = await loadSheetCheck(bidId);
-  const { pages, refs } = applySelection(built.pages, row?.overrides ?? {});
+  let pages: CheckedPage[];
+  let refs: ResolvedRef[];
+  if (!supplement) {
+    ({ pages, refs } = applySelection(built.pages, row?.overrides ?? {}));
+  } else {
+    // Fix round S3 — only genuinely new pages, planned against the run.
+    const newKeys = new Set(built.pages.map(p => p.key));
+    const skip = new Set(supplement.skipPageKeys);
+    const context = supplement.contextPages.filter(p => !newKeys.has(p.key));
+    const sel = applySelection([...context, ...built.pages], row?.overrides ?? {});
+    refs = sel.refs;
+    pages = sel.pages.filter(p => newKeys.has(p.key)).map(p => {
+      if (skip.has(p.key)) return { ...p, role: 'excluded' as const, reason: 'already in this analysis (same page content)' };
+      // A sheet the estimator added on purpose that no note points at and
+      // no discipline rule selects: context for the run, never counted in full.
+      // (Also the whole-file "included to be safe" rule: a lone mechanical
+      // file is context here, not a set to analyse in full.)
+      const otherDiscipline = !SELECT_DISCIPLINES.has(p.discipline as Discipline);
+      if (!p.override && (p.role === 'excluded' || (p.role === 'analysis' && otherDiscipline))) {
+        return { ...p, role: 'reference' as const, reason: p.referencedBy?.length ? p.reason : 'added to the analysis as a referenced sheet' };
+      }
+      return p;
+    });
+  }
   const result: SheetCheckResult = { version: 1, pages, refs, unclassifiedFiles: built.unclassifiedFiles, otherFiles: built.otherFiles, checkedAt: new Date().toISOString() };
   return { plans: plansFor(result, built.pageTexts), result, usage: built.usage };
+}
+
+/** Fix round S3 — a page's content identity for the supplement pass: its
+ *  text layer (normalized), or null for a scanned page. */
+export function pageContentHash(text: string | undefined): string | null {
+  const t = (text ?? '').replace(/\s+/g, ' ').trim();
+  return t.length >= TEXT_LAYER_MIN_CHARS ? crypto.createHash('sha256').update(t).digest('hex') : null;
+}
+
+/** Fix round S7 — after a successful supplement pass: references that the
+ *  added pages now satisfy are present, and their skips (and so their "not
+ *  provided" clarifications) are removed. */
+export async function resolveRefsAfterSupplement(bidId: string, added: RefInventoryPage[]): Promise<string[]> {
+  const tx = await pool.connect();
+  const resolved: string[] = [];
+  try {
+    await tx.query('BEGIN');
+    const { rows } = await tx.query('SELECT result, skips FROM bid_sheet_check WHERE bid_id=$1 FOR UPDATE', [bidId]);
+    const result = rows[0]?.result as SheetCheckResult | null;
+    if (!result) { await tx.query('ROLLBACK'); return resolved; }
+    const skips: Record<string, RefSkip> = { ...(rows[0].skips ?? {}) };
+    const keys = new Map(added.map(p => [normalizeSheetId(p.sheetNo), p.key]));
+    const refs = result.refs.map(r => {
+      if (r.status !== 'missing') return r;
+      const pages = r.kind === 'sheet'
+        ? (keys.has(r.key) ? [keys.get(r.key)!] : [])
+        : pagesForDiscipline(r.key as Parameters<typeof pagesForDiscipline>[0], added).map(p => p.key);
+      if (!pages.length) return r;
+      resolved.push(r.id);
+      delete skips[r.id];
+      return { ...r, status: 'present' as const, pages };
+    });
+    await tx.query('UPDATE bid_sheet_check SET result=$2, skips=$3, updated_at=now() WHERE bid_id=$1',
+      [bidId, JSON.stringify({ ...result, refs }), JSON.stringify(skips)]);
+    await tx.query('COMMIT');
+  } catch (err) {
+    await tx.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    tx.release();
+  }
+  return resolved;
 }

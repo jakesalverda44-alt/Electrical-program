@@ -24,7 +24,7 @@ const CLASS: Record<string, { sheetNo: string; title: string; cls: string }> = {
 };
 
 // ── what each agent answers ─────────────────────────────────────────────────
-const state = { agent1Supplement: 'ok' as 'ok' | 'garbage', calls: [] as Req[] };
+const state = { agent1Supplement: 'ok' as 'ok' | 'garbage', agent2: 'ok' as 'ok' | 'truncate', calls: [] as Req[] };
 const AGENT1_MAIN = {
   project: { name: 'Supp', address: '', gcName: 'GC', gcContact: '', gcEmail: '', drawingDate: '', sheets: ['E-0.1', 'E-3'], projectType: 'retail', sqFt: 0 },
   service: { voltage: '', mainAmps: 0, phase: 3, utilityCompany: '', transformerKVA: '', confidence: 'VERIFIED' },
@@ -52,7 +52,8 @@ function reply(req: Req): string {
   if (s.includes('construction document sheet classifier')) {
     // The classifier reads title blocks; the fake knows each file by its pages.
     const pages = [...u.matchAll(/Page (\d+) \(absolute/g)].map(m => Number(m[1]));
-    const names = u.includes('supp') ? ['E-9'] : ['E-0.1', 'E-3'];
+    if (u.includes('mech')) return JSON.stringify(pages.map(p => ({ page: p, sheetNo: 'M-1', title: 'MECHANICAL SCHEDULES', discipline: 'mechanical', cls: 'schedule' })));
+    const names = u.includes('supp') ? ['E-9'] : u.includes('addendum') ? ['E-3'] : ['E-0.1', 'E-3'];
     return JSON.stringify(pages.map((p, i) => ({ page: p, ...CLASS[names[i]], discipline: 'electrical' })));
   }
   if (s.includes('Senior Electrical Drawing Analyzer')) {
@@ -68,7 +69,7 @@ function reply(req: Req): string {
     if (u.includes('LED high bay')) for (let i = 0; i < (onE9 ? 4 : 1); i++) marks.push(['Z', 'R1C1', 0.15 + i * 0.1, 0.5]);
     return JSON.stringify({ marks, unreadable: [], notes: [] });
   }
-  if (s.includes('Senior Electrical Estimator')) return JSON.stringify({ scopeOfWork: {}, takeoff: [], rfis: [], manualCountRequired: [] });
+  if (s.includes('Senior Electrical Estimator')) return state.agent2 === 'truncate' ? 'TRUNCATE' : JSON.stringify({ scopeOfWork: {}, takeoff: [], rfis: [], manualCountRequired: [] });
   if (s.includes('Chief Electrical Estimator')) return JSON.stringify({ overallRisk: 'LOW', readyToSubmit: true });
   return '{}';
 }
@@ -78,7 +79,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
     messages = {
       stream: (req: Req) => {
         state.calls.push(req);
-        return { finalMessage: async () => ({ id: 'm', type: 'message', role: 'assistant', model: String(req.model), content: [{ type: 'text', text: reply(req), citations: null }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 10, output_tokens: 5 } }) };
+        return { finalMessage: async () => { const text = reply(req); return { id: 'm', type: 'message', role: 'assistant', model: String(req.model), content: [{ type: 'text', text, citations: null }], stop_reason: text === 'TRUNCATE' ? 'max_tokens' : 'end_turn', stop_sequence: null, usage: { input_tokens: 10, output_tokens: 5 } }; } };
       },
       create: async () => { throw new Error('not used'); },
     };
@@ -105,6 +106,13 @@ const MAIN = buildSymbolPdf([
   { mediaBox: [0, 0, W, H], symbols: [], texts: [...filler, ...tb('E-0.1', 'FIXTURE SCHEDULE')] },
   { mediaBox: [0, 0, W, H], symbols: [{ type: 'A', x: 200, y: 900 }], texts: [...filler, { x: 72, y: 700, size: 9, text: '5. SEE E-9 FOR THE MEZZANINE.' }, ...tb('E-3', 'LIGHTING PLAN')] },
 ]);
+const MECH = buildSymbolPdf([
+  { mediaBox: [0, 0, W, H], symbols: [], texts: [...filler.map(t => ({ ...t, text: t.text.replace('GENERAL NOTE', 'MECH NOTE') })), { x: 72, y: 700, size: 9, text: 'RTU-1 208V 3PH MCA 42 MOCP 60' }, ...tb('M-1', 'MECHANICAL SCHEDULES')] },
+]);
+// E-3 revised (addendum): same sheet number, different content.
+const REVISED = buildSymbolPdf([
+  { mediaBox: [0, 0, W, H], symbols: [{ type: 'A', x: 200, y: 900 }, { type: 'A', x: 400, y: 900 }], texts: [...filler, { x: 72, y: 700, size: 9, text: 'ADDENDUM 1: TWO FIXTURES ADDED IN SALES.' }, ...tb('E-3', 'LIGHTING PLAN')] },
+]);
 const SUPP = buildSymbolPdf([
   { mediaBox: [0, 0, W, H], symbols: [{ type: 'Z', x: 300, y: 900 }], texts: [...filler, ...tb('E-9', 'LEVEL 2 LIGHTING PLAN')] },
 ]);
@@ -116,7 +124,7 @@ beforeAll(async () => {
   process.env.ANTHROPIC_API_KEY = 'test-dummy-not-a-key';
   if (!ok) return;
   user = await makeUser('owner');
-  await pool.query('DELETE FROM sheet_page_cache WHERE content_sha256 = ANY($1)', [[sha256(MAIN), sha256(SUPP)]]);
+  await pool.query('DELETE FROM sheet_page_cache WHERE content_sha256 = ANY($1)', [[sha256(MAIN), sha256(SUPP), sha256(MECH), sha256(REVISED)]]);
 }, 30_000);
 
 async function analysedBid(): Promise<string> {
@@ -230,5 +238,95 @@ describe('A4 — referenced sheet not in analysis -> supplement pass', () => {
     await pool.query(`UPDATE takeoff_results SET status='counting' WHERE bid_id=$1`, [bidId]);
     const busy = await request(app).post(`/api/preconstruction/${bidId}/supplement`).set(auth(user.token)).attach('files', ownedBuffer(SUPP), 'supp.pdf');
     expect(busy.status).toBe(409);
+  }, 120_000);
+
+  async function markerIds(bidId: string) {
+    const { rows } = await pool.query(`SELECT id, label FROM est_markups WHERE bid_id=$1 AND source='ai_count' AND status='suggested' AND deleted_at IS NULL ORDER BY id`, [bidId]);
+    return rows as Array<{ id: string; label: string }>;
+  }
+
+  it('fix round B2: the earlier sheets keep their markers; a failed pass restores exactly the markers it changed', async () => {
+    if (!ok || !have) return;
+    const bidId = await analysedBid();
+    const before = await markerIds(bidId);
+    expect(before.filter(m => m.label === 'A').length).toBe(3); // E-3's A markers from the run
+    const addSupp = async () => {
+      await pool.query(`INSERT INTO documents (linked_id, name, category, file_type, file_data, file_size, uploaded_by, content_sha256)
+        VALUES ($1, 'supp E-9.pdf', 'plans', 'application/pdf', $2, $3, $4, $5)`, [bidId, SUPP.toString('base64'), SUPP.length, user.id, sha256(SUPP)]);
+      return request(app).post(`/api/preconstruction/${bidId}/supplement`).set(auth(user.token)).attach('files', ownedBuffer(SUPP), 'supp E-9.pdf');
+    };
+    // A pass that fails after the counting stage (Agent 2 truncates).
+    state.agent2 = 'truncate';
+    try {
+      expect((await addSupp()).status).toBe(200);
+      const after = await waitDone(bidId);
+      expect(after.supplement).toMatchObject({ status: 'error' });
+    } finally { state.agent2 = 'ok'; }
+    expect(await markerIds(bidId)).toEqual(before);
+    // A successful pass: E-3's A markers stay; Z markers are added (E-3's new type + E-9).
+    await pool.query(`DELETE FROM documents WHERE linked_id=$1 AND name='supp E-9.pdf'`, [bidId]);
+    expect((await addSupp()).status).toBe(200);
+    await waitDone(bidId);
+    const now = await markerIds(bidId);
+    for (const m of before) expect(now.map(x => x.id)).toContain(m.id);
+    expect(now.filter(m => m.label === 'Z').length).toBe(1 + 4);
+  }, 120_000);
+
+  it('fix round S5: a rejected upload never touches the run; a failed pass puts back the Agent 4 / draft run ids', async () => {
+    if (!ok || !have) return;
+    const bidId = await analysedBid();
+    const { rows: [r0] } = await pool.query('SELECT run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    await pool.query('UPDATE takeoff_results SET agent4_run_id=run_id, draft_run_id=run_id WHERE bid_id=$1', [bidId]);
+    const dup = await request(app).post(`/api/preconstruction/${bidId}/supplement`).set(auth(user.token)).attach('files', ownedBuffer(MAIN), 'main again.pdf');
+    expect(dup.status).toBe(400);
+    let { rows: [tr] } = await pool.query('SELECT status, agent4_run_id, draft_run_id FROM takeoff_results WHERE bid_id=$1', [bidId]);
+    expect(tr).toEqual({ status: 'complete', agent4_run_id: r0.run_id, draft_run_id: r0.run_id });
+    state.agent1Supplement = 'garbage';
+    try {
+      await request(app).post(`/api/preconstruction/${bidId}/supplement`).set(auth(user.token)).attach('files', ownedBuffer(SUPP), 'supp E-9.pdf');
+      await waitDone(bidId);
+    } finally { state.agent1Supplement = 'ok'; }
+    ({ rows: [tr] } = await pool.query('SELECT status, agent4_run_id, draft_run_id FROM takeoff_results WHERE bid_id=$1', [bidId]));
+    expect(tr).toEqual({ status: 'complete', agent4_run_id: r0.run_id, draft_run_id: r0.run_id });
+  }, 120_000);
+
+  it('fix round S3: a lone M-1 is analysed as a reference (not counted); a revised E-3 needs a full re-run', async () => {
+    if (!ok || !have) return;
+    const bidId = await analysedBid();
+    const revised = await request(app).post(`/api/preconstruction/${bidId}/supplement`).set(auth(user.token)).attach('files', ownedBuffer(REVISED), 'addendum 1.pdf');
+    expect(revised.status).toBe(409);
+    expect(revised.body).toMatchObject({ fullRerun: true, revisedSheets: ['E-3'] });
+    expect((await tr(bidId)).status).toBe('complete');
+
+    state.calls = [];
+    const res = await request(app).post(`/api/preconstruction/${bidId}/supplement`).set(auth(user.token)).attach('files', ownedBuffer(MECH), 'mech M-1.pdf');
+    expect(res.status).toBe(200);
+    await waitDone(bidId);
+    const row = await tr(bidId);
+    expect(row.status).toBe('complete');
+    const a1 = state.calls.filter(c => sys(c).includes('Senior Electrical Drawing Analyzer'));
+    expect(a1).toHaveLength(1);
+    expect(userText(a1[0])).toMatch(/--- Sheet: M-1 "MECHANICAL SCHEDULES" \(reference — context only/);
+    // never counted: no counter call on M-1
+    expect(state.calls.filter(c => sys(c).includes('counting symbols on ONE') && userText(c).includes('SHEET: M-1'))).toHaveLength(0);
+    expect((row.prep_inventory as Array<{ sheetNo: string; role: string }>).find(p => p.sheetNo === 'M-1')).toMatchObject({ role: 'reference' });
+  }, 120_000);
+
+  it('fix round S7: a skipped reference is resolved (its clarification removed) once the sheet is added', async () => {
+    if (!ok || !have) return;
+    const bidId = await analysedBid();
+    await pool.query(`INSERT INTO bid_sheet_check (bid_id, status, input_key, result, skips) VALUES ($1, 'complete', 'k', $2, $3)`, [bidId,
+      JSON.stringify({ version: 1, pages: [], unclassifiedFiles: [], otherFiles: [], checkedAt: '', refs: [
+        { id: 'sheet:E9', kind: 'sheet', key: 'E9', label: 'E-9', status: 'missing', pages: [], referencedBy: [], notProvidedText: 'Sheet E-9 not provided at time of bid' },
+      ] }),
+      JSON.stringify({ 'sheet:E9': { reason: 'Not issued with the bid set', by: 'J', at: 't', inputKey: 'k' } })]);
+    const { skippedClarifications, loadSheetCheck } = await import('../services/sheetCheck');
+    let row = await loadSheetCheck(bidId);
+    expect(skippedClarifications(row!.result, row!.skips, row!.input_key)).toEqual(['Sheet E-9 not provided at time of bid.']);
+    await request(app).post(`/api/preconstruction/${bidId}/supplement`).set(auth(user.token)).attach('files', ownedBuffer(SUPP), 'supp E-9.pdf');
+    await waitDone(bidId);
+    row = await loadSheetCheck(bidId);
+    expect(skippedClarifications(row!.result, row!.skips, row!.input_key)).toEqual([]);
+    expect(row!.result!.refs[0].status).toBe('present');
   }, 120_000);
 });
