@@ -16,6 +16,27 @@ async function makeBid(app: import('express').Express, user: TestUser, extra: Re
   return res.body.id as string;
 }
 
+// Review round 2 / B4 — this whole file tests the PHASE A save/sync engine's
+// own contract in isolation (index-alignment, floors_above_2, sync-takeoff
+// persistence, etc.) — none of it is about Accubid pricing. Since a new bid
+// defaults to Accubid mode (migration 128), and B4 now correctly routes an
+// Accubid-mode bid's bids.amount/bid_estimates.grand_total through the
+// ACCUBID recap instead of whatever Phase A's own save just computed, every
+// test that checks bids.amount/bid_estimates.grand_total against the PHASE A
+// recap needs its bid pinned to 'phase_a' up front — via this helper instead
+// of the plain makeBid() above (which some OTHER tests in this file still
+// need bare, e.g. S6's "before any est_bid_settings row exists" case).
+async function makePhaseABid(app: import('express').Express, user: TestUser, extra: Record<string, unknown> = {}) {
+  const bidId = await makeBid(app, user, extra);
+  await pool.query(
+    `INSERT INTO est_bid_settings (bid_id, labor_rate, factor_ids, material_tax_pct, small_tools_pct, supervision_pct, consumables_pct, overhead_pct, profit_pct, crew_size, floors_above_2, pricing_mode)
+     VALUES ($1,40,$2,0,0,0,0,0,0,3,0,'phase_a')
+     ON CONFLICT (bid_id) DO UPDATE SET pricing_mode='phase_a'`,
+    [bidId, []]
+  );
+  return bidId;
+}
+
 async function seedTakeoff(bidId: string, rows: { category: string; item: string; spec?: string; qty: number | string; unit: string; confidence?: string }[]) {
   const json = JSON.stringify({ takeoff: rows });
   await pool.query(
@@ -30,7 +51,7 @@ describe('GET /api/estimating/:bidId — proposed mapping', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     await seedTakeoff(bidId, [
       { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' },
     ]);
@@ -46,7 +67,7 @@ describe('GET /api/estimating/:bidId — proposed mapping', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const res = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
     expect(res.body.proposed).toBe(false);
     expect(res.body.lines).toEqual([]);
@@ -59,7 +80,7 @@ describe('PUT /api/estimating/:bidId — save', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const lib = await request(app).get('/api/estimating/library').set(auth(u.token)).expect(200);
     const item = lib.body.items.find((i: { unit: string }) => i.unit === 'EA');
 
@@ -97,7 +118,7 @@ describe('PUT /api/estimating/:bidId — save', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [
@@ -122,7 +143,7 @@ describe('PUT /api/estimating/:bidId — save', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     // Line 1 is excluded; line 2 (which follows it) has an override and a
     // takeoff_item_id. Building line_items by re-indexing the ORIGINAL input
@@ -150,7 +171,7 @@ describe('PUT /api/estimating/:bidId — save', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [{ category: 'Branch Power', description: 'Bad', qty: -1, unit: 'EA', source: 'manual' }],
       settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3 },
@@ -161,7 +182,7 @@ describe('PUT /api/estimating/:bidId — save', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [],
       settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 150, profit_pct: 15, crew_size: 3 },
@@ -172,7 +193,7 @@ describe('PUT /api/estimating/:bidId — save', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const lib = await request(app).get('/api/estimating/library').set(auth(u.token)).expect(200);
     await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [{ category: 'Branch Power', description: 'Bad', qty: 1, unit: 'EA', item_id: lib.body.items[0].id, assembly_id: lib.body.assemblies[0].id, source: 'manual' }],
@@ -186,7 +207,7 @@ describe('POST /api/estimating/:bidId/sync-takeoff — preserves estimator edits
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     await seedTakeoff(bidId, [
       { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' },
@@ -247,7 +268,7 @@ describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regression
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     // A VERIFY-confidence line arrives with qty 0 (the mapper never guesses
     // a non-numeric takeoff qty) — the estimator fills in the real number by
@@ -279,7 +300,7 @@ describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regression
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     await seedTakeoff(bidId, [
       { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' },
@@ -323,7 +344,7 @@ describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regression
     // logic was (and still is) correct in isolation.
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     await seedTakeoff(bidId, [
       { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' },
@@ -371,7 +392,7 @@ describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regression
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     await seedTakeoff(bidId, [
       { category: 'Grounding', item: '5/8" x 10\' copper-clad ground rod w/ exothermic connection', qty: 2, unit: 'EA' },
     ]);
@@ -408,7 +429,7 @@ describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regression
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     await seedTakeoff(bidId, [
       { category: 'Branch Power', item: '5.1', spec: '3/4" EMT', qty: 100, unit: 'LF' },
@@ -432,7 +453,7 @@ describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regression
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     await seedTakeoff(bidId, [
       { category: 'Branch Power', item: '5.1', spec: 'Some unmatched gizmo', qty: 1, unit: 'EA' },
@@ -463,7 +484,7 @@ describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regression
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     await seedTakeoff(bidId, [
       { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 10, unit: 'EA' },
@@ -480,7 +501,7 @@ describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regression
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     await seedTakeoff(bidId, [
       { category: 'Grounding', item: '5/8" x 10\' copper-clad ground rod w/ exothermic connection', qty: 2, unit: 'EA' },
@@ -500,7 +521,7 @@ describe('B2 — unit-unknown lines never 500 and never NaN', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     await seedTakeoff(bidId, [
       { category: 'Site / Underground / Allowances', item: 'Temporary power allowance', qty: 1, unit: 'SET' },
@@ -516,7 +537,7 @@ describe('B2 — unit-unknown lines never 500 and never NaN', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const saveRes = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [{ category: 'Branch Power', description: 'Odd line', qty: 3, unit: '', source: 'manual' }],
       settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },
@@ -529,7 +550,7 @@ describe('B2 — unit-unknown lines never 500 and never NaN', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [{ category: 'Branch Power', description: 'Bad override', qty: 1, unit: 'EA', material_unit_override: -5, source: 'manual' }],
       settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3 },
@@ -542,7 +563,7 @@ describe('B1 — end to end: takeoff -> mapper -> priceBid -> saveBidEstimate, r
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     // Agent 2/4's REAL line shape: { item: '5.1', spec: '3/4" EMT', qty: 1200, unit: 'LF' }
     // — `item` is Agent 4's short takeoff id, `spec` is the descriptive text.
@@ -593,7 +614,7 @@ describe('N3 — floors_above_2 multiplies the MULTI-STORY factor instead of app
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const lib = await request(app).get('/api/estimating/library').set(auth(u.token)).expect(200);
     const multistory = lib.body.factors.find((f: { code: string }) => f.code === 'MULTI-STORY');
     expect(multistory).toBeTruthy();
@@ -618,7 +639,7 @@ describe('N3 — floors_above_2 multiplies the MULTI-STORY factor instead of app
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [],
       settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: -1 },
@@ -629,7 +650,7 @@ describe('N3 — floors_above_2 multiplies the MULTI-STORY factor instead of app
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [],
       settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: 5 },
@@ -656,7 +677,7 @@ describe('S6 — a bid\'s first-ever settings inherit overhead/profit from bid_w
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     // bid_workspaces written AFTER bid_estimates (newer updated_at) — under
     // the old "newer wins" rule this would have taken precedence; the fixed
     // rule always prefers the deliberate bid_estimates save.
@@ -680,7 +701,7 @@ describe('S5 — an explicit 0 settings value is honored, not silently replaced 
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     await pool.query('INSERT INTO bid_workspaces (bid_id, overhead_pct, profit_pct) VALUES ($1,0,0) ON CONFLICT (bid_id) DO UPDATE SET overhead_pct=0, profit_pct=0', [bidId]);
 
     const res = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
@@ -695,7 +716,7 @@ describe('bid-level auth', () => {
     const { app } = await import('../index');
     const a = await makeUser('salesperson');
     const b = await makeUser('salesperson');
-    const bidId = await makeBid(app, b);
+    const bidId = await makePhaseABid(app, b);
     await request(app).get(`/api/estimating/${bidId}`).set(auth(a.token)).expect(403);
     await request(app).put(`/api/estimating/${bidId}`).set(auth(a.token)).send({
       lines: [], settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3 },
@@ -717,7 +738,7 @@ describe('POST /api/estimating/:bidId/price — no writes', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const res = await request(app).post(`/api/estimating/${bidId}/price`).set(auth(u.token)).send({
       lines: [{ category: 'Branch Power', description: 'Manual', qty: 2, unit: 'EA', material_unit_override: 10, labor_hours_override: 1, source: 'manual' }],
       settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },
@@ -737,7 +758,7 @@ describe('PUT/sync-takeoff — line_key stability (Phase B, Task 1)', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
 
     const settings = { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 };
     const firstSave = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
@@ -766,7 +787,7 @@ describe('PUT/sync-takeoff — line_key stability (Phase B, Task 1)', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const settings = { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 };
 
     await seedTakeoff(bidId, [
@@ -803,7 +824,7 @@ describe('PUT/sync-takeoff — line_key stability (Phase B, Task 1)', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const res = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [{ line_key: 'proposed-0', category: 'Branch Power', description: 'Line', qty: 1, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, source: 'manual' }],
       settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },
@@ -820,7 +841,7 @@ describe('PUT/sync-takeoff — line_key stability (Phase B, Task 1)', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const settings = { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 };
     const res = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [
@@ -842,7 +863,7 @@ describe('PUT/sync-takeoff — line_key stability (Phase B, Task 1)', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const settings = { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 };
     const first = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [{ line_key: 'proposed-0', category: 'Branch Power', description: 'Line A', qty: 1, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, source: 'manual' }],
@@ -864,7 +885,7 @@ describe('PUT /api/estimating/:bidId — qty_source (Phase B, Task 1)', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const res = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [
         { category: 'Branch Power', description: 'Untouched', qty: 1, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, source: 'manual' },
@@ -881,7 +902,7 @@ describe('PUT /api/estimating/:bidId — qty_source (Phase B, Task 1)', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const res = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [
         { category: 'Branch Power', description: 'Marked up', qty: 12, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, qty_overridden: true, qty_source: 'markup', confidence: 'FIRM', source: 'manual' },
@@ -895,7 +916,7 @@ describe('PUT /api/estimating/:bidId — qty_source (Phase B, Task 1)', () => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
-    const bidId = await makeBid(app, u);
+    const bidId = await makePhaseABid(app, u);
     const res = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
       lines: [{ category: 'Branch Power', description: 'Bad qty_source', qty: 1, unit: 'EA', material_unit_override: 5, labor_hours_override: 0.5, qty_source: 'ai-guessed', source: 'manual' }],
       settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },

@@ -11,7 +11,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool';
 import { getLibrary } from './library';
 import { priceBid, PricingSettings } from './pricing';
-import { getBidLines, resolveLines, BidLineRow } from './bidEstimate';
+import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals } from './bidEstimate';
 import { computeBidComps } from '../utils/bidComps';
 import {
   computeAccubidRecap, AccubidRecapInput, AccubidRecapResult, QuoteLine, CrewConfig, CrewMember,
@@ -143,8 +143,13 @@ export async function createQuote(bidId: string, q: QuoteInput): Promise<QuoteRo
   return { id: r.id, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), markupPct: Number(r.markup_pct), status: r.status, vendor: r.vendor, sort: Number(r.sort) };
 }
 
-export async function updateQuote(id: string, patch: Partial<QuoteInput>): Promise<QuoteRow | null> {
-  const { rows: existingRows } = await pool.query('SELECT * FROM est_bid_quotes WHERE id=$1', [id]);
+// Fix round 2 / B6 — every by-id query is scoped `WHERE id=$1 AND bid_id=$2`
+// (after the route's own loadAccessibleBid check on :bidId), so a quote id
+// from one bid can never be read, edited or deleted through a different
+// bid's URL — the reviewer's repro used their OWN accessible bid's URL with
+// the TARGET bid's quote id to bypass the ownership check entirely.
+export async function updateQuote(id: string, bidId: string, patch: Partial<QuoteInput>): Promise<QuoteRow | null> {
+  const { rows: existingRows } = await pool.query('SELECT * FROM est_bid_quotes WHERE id=$1 AND bid_id=$2', [id, bidId]);
   if (!existingRows.length) return null;
   const e = existingRows[0];
   const next = {
@@ -154,15 +159,15 @@ export async function updateQuote(id: string, patch: Partial<QuoteInput>): Promi
     sort: patch.sort ?? Number(e.sort),
   };
   const { rows } = await pool.query(
-    `UPDATE est_bid_quotes SET description=$1, amount=$2, tax_pct=$3, markup_pct=$4, status=$5, vendor=$6, sort=$7, updated_at=now() WHERE id=$8 RETURNING *`,
-    [next.description, next.amount, next.taxPct, next.markupPct, next.status, next.vendor, next.sort, id]
+    `UPDATE est_bid_quotes SET description=$1, amount=$2, tax_pct=$3, markup_pct=$4, status=$5, vendor=$6, sort=$7, updated_at=now() WHERE id=$8 AND bid_id=$9 RETURNING *`,
+    [next.description, next.amount, next.taxPct, next.markupPct, next.status, next.vendor, next.sort, id, bidId]
   );
   const r = rows[0];
   return { id: r.id, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), markupPct: Number(r.markup_pct), status: r.status, vendor: r.vendor, sort: Number(r.sort) };
 }
 
-export async function deleteQuote(id: string): Promise<boolean> {
-  const { rowCount } = await pool.query('DELETE FROM est_bid_quotes WHERE id=$1', [id]);
+export async function deleteQuote(id: string, bidId: string): Promise<boolean> {
+  const { rowCount } = await pool.query('DELETE FROM est_bid_quotes WHERE id=$1 AND bid_id=$2', [id, bidId]);
   return (rowCount ?? 0) > 0;
 }
 
@@ -185,8 +190,8 @@ export async function createCostLine(bidId: string, c: CostLineInput): Promise<C
   return { id: r.id, kind: r.kind, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), sort: Number(r.sort) };
 }
 
-export async function updateCostLine(id: string, patch: Partial<CostLineInput>): Promise<CostLineRow | null> {
-  const { rows: existingRows } = await pool.query('SELECT * FROM est_bid_cost_lines WHERE id=$1', [id]);
+export async function updateCostLine(id: string, bidId: string, patch: Partial<CostLineInput>): Promise<CostLineRow | null> {
+  const { rows: existingRows } = await pool.query('SELECT * FROM est_bid_cost_lines WHERE id=$1 AND bid_id=$2', [id, bidId]);
   if (!existingRows.length) return null;
   const e = existingRows[0];
   const next = {
@@ -194,15 +199,15 @@ export async function updateCostLine(id: string, patch: Partial<CostLineInput>):
     amount: patch.amount ?? Number(e.amount), taxPct: patch.taxPct ?? Number(e.tax_pct), sort: patch.sort ?? Number(e.sort),
   };
   const { rows } = await pool.query(
-    `UPDATE est_bid_cost_lines SET kind=$1, description=$2, amount=$3, tax_pct=$4, sort=$5, updated_at=now() WHERE id=$6 RETURNING *`,
-    [next.kind, next.description, next.amount, next.taxPct, next.sort, id]
+    `UPDATE est_bid_cost_lines SET kind=$1, description=$2, amount=$3, tax_pct=$4, sort=$5, updated_at=now() WHERE id=$6 AND bid_id=$7 RETURNING *`,
+    [next.kind, next.description, next.amount, next.taxPct, next.sort, id, bidId]
   );
   const r = rows[0];
   return { id: r.id, kind: r.kind, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), sort: Number(r.sort) };
 }
 
-export async function deleteCostLine(id: string): Promise<boolean> {
-  const { rowCount } = await pool.query('DELETE FROM est_bid_cost_lines WHERE id=$1', [id]);
+export async function deleteCostLine(id: string, bidId: string): Promise<boolean> {
+  const { rowCount } = await pool.query('DELETE FROM est_bid_cost_lines WHERE id=$1 AND bid_id=$2', [id, bidId]);
   return (rowCount ?? 0) > 0;
 }
 
@@ -225,8 +230,8 @@ export async function createAlternate(bidId: string, a: AlternateInput): Promise
   return { id: r.id, kind: r.kind, description: r.description, amount: Number(r.amount), auto: !!r.auto, sourceRule: r.source_rule, sort: Number(r.sort) };
 }
 
-export async function updateAlternate(id: string, patch: Partial<AlternateInput>): Promise<AlternateRow | null> {
-  const { rows: existingRows } = await pool.query('SELECT * FROM est_bid_alternates WHERE id=$1 AND auto=false', [id]);
+export async function updateAlternate(id: string, bidId: string, patch: Partial<AlternateInput>): Promise<AlternateRow | null> {
+  const { rows: existingRows } = await pool.query('SELECT * FROM est_bid_alternates WHERE id=$1 AND bid_id=$2 AND auto=false', [id, bidId]);
   if (!existingRows.length) return null; // an auto alternate is never hand-edited — only replaced by the next sync
   const e = existingRows[0];
   const next = {
@@ -234,15 +239,15 @@ export async function updateAlternate(id: string, patch: Partial<AlternateInput>
     amount: patch.amount ?? Number(e.amount), sort: patch.sort ?? Number(e.sort),
   };
   const { rows } = await pool.query(
-    `UPDATE est_bid_alternates SET kind=$1, description=$2, amount=$3, sort=$4, updated_at=now() WHERE id=$5 RETURNING *`,
-    [next.kind, next.description, next.amount, next.sort, id]
+    `UPDATE est_bid_alternates SET kind=$1, description=$2, amount=$3, sort=$4, updated_at=now() WHERE id=$5 AND bid_id=$6 RETURNING *`,
+    [next.kind, next.description, next.amount, next.sort, id, bidId]
   );
   const r = rows[0];
   return { id: r.id, kind: r.kind, description: r.description, amount: Number(r.amount), auto: !!r.auto, sourceRule: r.source_rule, sort: Number(r.sort) };
 }
 
-export async function deleteAlternate(id: string): Promise<boolean> {
-  const { rowCount } = await pool.query('DELETE FROM est_bid_alternates WHERE id=$1 AND auto=false', [id]);
+export async function deleteAlternate(id: string, bidId: string): Promise<boolean> {
+  const { rowCount } = await pool.query('DELETE FROM est_bid_alternates WHERE id=$1 AND bid_id=$2 AND auto=false', [id, bidId]);
   return (rowCount ?? 0) > 0;
 }
 
@@ -385,19 +390,39 @@ export async function syncAutoDeductAlternateForBid(bidId: string): Promise<void
 /** Writes the recap's Selling Price into bid_estimates/bids.amount — the
  *  same downstream contract Phase A's writeBidEstimateSnapshot guarantees
  *  (composeProposal / the proposal price flow read bids.amount either way,
- *  never caring which pricing mode produced it). */
+ *  never caring which pricing mode produced it).
+ *
+ *  Fix round 2 / B4 ("Also") — line_items/subtotals are now built the SAME
+ *  way writeBidEstimateSnapshot builds them (a Phase A recap of the bid's
+ *  actual lines, at neutral 0% settings — used ONLY for its per-line
+ *  category/qty_source/confidence/takeoff_key facts, never for the total),
+ *  instead of being hardcoded to '[]'/'{}' forever on a bid's first Accubid
+ *  save. Before this fix, a brand-new bid (which defaults to Accubid mode)
+ *  saved its very first lines through this path and never got real
+ *  line_items at all — composeBidData.ts's SavedConfidenceItem lookup came
+ *  back empty for every takeoff item, breaking Agent 4's per-line
+ *  confidence/qty routing on every Accubid-mode bid. */
 export async function saveAccubidRecapForBid(bidId: string): Promise<AccubidBidRecap> {
-  const result = await computeAccubidRecapForBid(bidId);
+  const [result, lines, library] = await Promise.all([
+    computeAccubidRecapForBid(bidId), getBidLines(bidId), getLibrary(),
+  ]);
   const comps = await computeBidComps(bidId);
+  const resolved = resolveLines(lines, library);
+  const neutralSettings: PricingSettings = { laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1 };
+  const phaseARecapForLineFacts = priceBid(resolved, neutralSettings, []);
+  const { legacyLineItems, subtotals } = buildLegacyLineItemsAndSubtotals(phaseARecapForLineFacts, lines);
+
   const client: PoolClient = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query(
       `INSERT INTO bid_estimates (bid_id, overhead_pct, profit_pct, line_items, subtotals, total_direct, total_overhead, total_profit, grand_total, comp_count, confidence, updated_at)
-       VALUES ($1,$2,$3,'[]'::jsonb,'{}'::jsonb,$4,$5,$6,$7,$8,$9,now())
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,now())
        ON CONFLICT (bid_id) DO UPDATE SET
-         overhead_pct=$2, profit_pct=$3, total_direct=$4, total_overhead=$5, total_profit=$6, grand_total=$7, comp_count=$8, confidence=$9, updated_at=now()`,
+         overhead_pct=$2, profit_pct=$3, line_items=$4::jsonb, subtotals=$5::jsonb,
+         total_direct=$6, total_overhead=$7, total_profit=$8, grand_total=$9, comp_count=$10, confidence=$11, updated_at=now()`,
       [bidId, result.settings.laborOverheadPct, result.settings.materialMarkupPct,
+       JSON.stringify(legacyLineItems), JSON.stringify(subtotals),
        result.recap.primeCost, result.recap.totalOverhead, result.recap.totalMarkup, result.recap.sellingPrice,
        comps.compCount, comps.confidence]
     );
@@ -413,4 +438,23 @@ export async function saveAccubidRecapForBid(bidId: string): Promise<AccubidBidR
   // succeeding — a failure here shouldn't roll back a real price save).
   await syncAutoDeductAlternateForBid(bidId).catch(() => {});
   return result;
+}
+
+/** Fix round 2 / B4 — the ONE entry point every quote/cost-line/alternate
+ *  mutation calls after writing its own row: re-persists
+ *  bid_estimates/bids.amount from whichever pricing engine the bid is
+ *  ACTUALLY in right now, so the two engines can never leave a stale number
+ *  behind after an edit (the reviewer's repro: adding a $5,000 quote left
+ *  bids.amount showing the pre-quote total until someone happened to press
+ *  the Accubid settings Save button). Phase A's own saveBidEstimate/
+ *  syncTakeoff call the same two functions directly (see bidEstimate.ts) —
+ *  this dispatcher exists for every OTHER mutation that doesn't already
+ *  know the bid's mode. */
+export async function persistPriceForBid(bidId: string): Promise<void> {
+  const settings = await getBidSettings(bidId);
+  if (settings.pricing_mode === 'phase_a') {
+    await persistPhaseAPriceForBid(bidId);
+  } else {
+    await saveAccubidRecapForBid(bidId);
+  }
 }

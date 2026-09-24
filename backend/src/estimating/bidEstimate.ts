@@ -766,19 +766,32 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
     }
 
     // Fix round 1 / B5 — persist bid_estimates/bids.amount from the exact
-    // lines sync just wrote, in the same transaction.
-    const { rows: freshLineRows } = await client.query(
-      'SELECT * FROM est_bid_lines WHERE bid_id = $1 ORDER BY sort, created_at', [bidId]
-    );
-    const freshLines = freshLineRows.map(rowToBidLine);
-    const resolved = resolveLines(freshLines, library);
-    const factors = resolveFactors(settings.factor_ids, library);
-    const recap = priceBid(resolved, toPricingSettings(settings, sqFt), factors);
-    await writeBidEstimateSnapshot(client, bidId, recap, freshLines, settings.overhead_pct, settings.profit_pct, comps);
+    // lines sync just wrote, in the same transaction. Fix round 2 / B4 — but
+    // only for a Phase A-mode bid: an Accubid-mode bid's price depends on
+    // more than just these lines (crew, quotes, cost lines, alternates), so
+    // it's re-persisted from the Accubid recap engine instead, right after
+    // this transaction commits the line changes (mirrors saveBidEstimate's
+    // identical branch).
+    const isAccubid = settings.pricing_mode === 'accubid';
+    let freshLines: BidLineRow[] = [];
+    if (!isAccubid) {
+      const { rows: freshLineRows } = await client.query(
+        'SELECT * FROM est_bid_lines WHERE bid_id = $1 ORDER BY sort, created_at', [bidId]
+      );
+      freshLines = freshLineRows.map(rowToBidLine);
+      const resolved = resolveLines(freshLines, library);
+      const factors = resolveFactors(settings.factor_ids, library);
+      const recap = priceBid(resolved, toPricingSettings(settings, sqFt), factors);
+      await writeBidEstimateSnapshot(client, bidId, recap, freshLines, settings.overhead_pct, settings.profit_pct, comps);
+    }
 
     await client.query('COMMIT');
+    if (isAccubid) {
+      const { saveAccubidRecapForBid } = await import('./accubidBidData');
+      await saveAccubidRecapForBid(bidId);
+    }
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
     client.release();
@@ -814,7 +827,7 @@ export interface SaveResult {
   remappedLineKeys: Record<string, string>;
 }
 
-interface LegacyLineItem {
+export interface LegacyLineItem {
   category: string;
   item: string;
   qty: number;
@@ -840,28 +853,22 @@ interface LegacyLineItem {
   takeoff_key: string | null;
 }
 
-/** Shared by saveBidEstimate() and syncTakeoff() — both need to write the
- *  SAME bid_estimates/bids.amount snapshot from a freshly-computed recap, in
- *  the same transaction as whatever changed est_bid_lines, so the two can
- *  never drift apart (Fix round 1 / B5: sync-takeoff used to leave
- *  bid_estimates/bids.amount stale after changing lines underneath them).
- *  Fix round 1 / B2: refuses (throws NonFiniteTotalError) rather than
- *  writing a non-finite total. */
-async function writeBidEstimateSnapshot(
-  client: PoolClient,
-  bidId: string,
-  recap: PricingRecap,
-  rows: BidLineRow[],
-  overheadPct: number,
-  profitPct: number,
-  comps: { compCount: number; confidence: string }
-): Promise<Record<string, unknown>> {
-  assertFiniteRecap(recap);
-
-  // Fix round 1 / S10 — category subtotals and each line's fully-loaded
-  // directShare (not material+labor / materialExt+laborExt alone) so the
-  // legacy line_items/subtotals Agent 4 and the Review step read actually
-  // sum to the real, fully-loaded price shown on screen.
+/** Fix round 1 / S10 (extracted, Fix round 2 / B4) — category subtotals and
+ *  each line's fully-loaded directShare (not material+labor / materialExt+
+ *  laborExt alone), so the legacy line_items/subtotals Agent 4 and the
+ *  Review step read actually sum to the real, fully-loaded price shown on
+ *  screen. Pulled out of writeBidEstimateSnapshot so accubidBidData.ts's
+ *  Accubid-mode save can build the SAME per-line qty_source/confidence/
+ *  takeoff_key data composeBidData.ts depends on (B4's "Also" follow-up:
+ *  these used to go blank — '[]'/'{}' — whenever an Accubid-mode bid was
+ *  saved, because saveAccubidRecapForBid never built them at all) even
+ *  though the Accubid engine itself has no per-line "directShare" concept —
+ *  `recap` here is always a PHASE A recap (computed with the bid's real
+ *  lines) purely as the source of per-line facts; it is never what decides
+ *  the bid's total in Accubid mode. */
+export function buildLegacyLineItemsAndSubtotals(
+  recap: PricingRecap, rows: BidLineRow[]
+): { legacyLineItems: LegacyLineItem[]; subtotals: Record<string, number> } {
   const subtotals: Record<string, number> = {};
   for (const cat of recap.categories) subtotals[cat.category] = round2(cat.subtotal);
 
@@ -887,6 +894,28 @@ async function writeBidEstimateSnapshot(
       qty_source: original?.qty_source ?? 'takeoff',
       takeoff_key: original?.takeoff_key ?? null,
     }));
+  return { legacyLineItems, subtotals };
+}
+
+/** Shared by saveBidEstimate() and syncTakeoff() — both need to write the
+ *  SAME bid_estimates/bids.amount snapshot from a freshly-computed recap, in
+ *  the same transaction as whatever changed est_bid_lines, so the two can
+ *  never drift apart (Fix round 1 / B5: sync-takeoff used to leave
+ *  bid_estimates/bids.amount stale after changing lines underneath them).
+ *  Fix round 1 / B2: refuses (throws NonFiniteTotalError) rather than
+ *  writing a non-finite total. */
+async function writeBidEstimateSnapshot(
+  client: PoolClient,
+  bidId: string,
+  recap: PricingRecap,
+  rows: BidLineRow[],
+  overheadPct: number,
+  profitPct: number,
+  comps: { compCount: number; confidence: string }
+): Promise<Record<string, unknown>> {
+  assertFiniteRecap(recap);
+
+  const { legacyLineItems, subtotals } = buildLegacyLineItemsAndSubtotals(recap, rows);
 
   const { rows: beRows } = await client.query(
     `INSERT INTO bid_estimates
@@ -903,6 +932,38 @@ async function writeBidEstimateSnapshot(
 
   await client.query('UPDATE bids SET amount = $1 WHERE id = $2 AND deleted_at IS NULL', [recap.totals.grandTotal, bidId]);
   return beRows[0];
+}
+
+/** Fix round 2 / B4 — the Phase A half of `persistPriceForBid`
+ *  (accubidBidData.ts's own half is `saveAccubidRecapForBid`). Recomputes
+ *  the Phase A recap from the bid's CURRENT saved lines/settings and writes
+ *  it as its own short transaction — the same "read current state, price
+ *  it, write it back" shape saveAccubidRecapForBid already uses, so a
+ *  caller (a quote/cost-line/alternate mutation, or saveBidEstimate/
+ *  syncTakeoff switching mode away from Accubid) can re-persist the price
+ *  after ANY edit without needing to thread a shared transaction through
+ *  unrelated code paths. Never called for an Accubid-mode bid — the
+ *  dispatcher is accubidBidData.ts's persistPriceForBid(). */
+export async function persistPhaseAPriceForBid(bidId: string): Promise<Record<string, unknown>> {
+  const [library, sqFt, comps, lines, settings] = await Promise.all([
+    getLibrary(), getBidSqFt(bidId), computeBidComps(bidId), getBidLines(bidId), getBidSettings(bidId),
+  ]);
+  const resolved = resolveLines(lines, library);
+  const factors = resolveFactors(settings.factor_ids, library);
+  const recap = priceBid(resolved, toPricingSettings(settings, sqFt), factors);
+  assertFiniteRecap(recap);
+  const client: PoolClient = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await writeBidEstimateSnapshot(client, bidId, recap, lines, settings.overhead_pct, settings.profit_pct, comps);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -983,26 +1044,47 @@ export async function saveBidEstimate(
       );
     }
 
-    await client.query(
+    const { rows: settingsRows } = await client.query(
       `INSERT INTO est_bid_settings
          (bid_id, labor_rate, factor_ids, material_tax_pct, small_tools_pct, supervision_pct, consumables_pct, overhead_pct, profit_pct, crew_size, floors_above_2, pricing_mode, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($12,'accubid'),now())
        ON CONFLICT (bid_id) DO UPDATE SET
          labor_rate=$2, factor_ids=$3, material_tax_pct=$4, small_tools_pct=$5,
          supervision_pct=$6, consumables_pct=$7, overhead_pct=$8, profit_pct=$9, crew_size=$10, floors_above_2=$11,
-         pricing_mode=COALESCE($12, est_bid_settings.pricing_mode), updated_at=now()`,
+         pricing_mode=COALESCE($12, est_bid_settings.pricing_mode), updated_at=now()
+       RETURNING pricing_mode`,
       [bidId, settings.labor_rate, settings.factor_ids, settings.material_tax_pct, settings.small_tools_pct,
        settings.supervision_pct, settings.consumables_pct, settings.overhead_pct, settings.profit_pct, settings.crew_size,
        settings.floors_above_2, settings.pricing_mode ?? null]
     );
+    const finalPricingMode: 'phase_a' | 'accubid' = settingsRows[0].pricing_mode === 'phase_a' ? 'phase_a' : 'accubid';
 
-    bidEstimate = await writeBidEstimateSnapshot(
-      client, bidId, recap, rows, settings.overhead_pct, settings.profit_pct, comps
-    );
-
-    await client.query('COMMIT');
+    // Fix round 2 / B4 — a Phase A save must never overwrite
+    // bid_estimates/bids.amount while the bid is in Accubid mode: this
+    // endpoint (PUT /:bidId) is also how the Accubid UI saves its own
+    // takeoff LINES (est_bid_lines is shared by both pricing modes), so it
+    // runs on every save regardless of mode. When the bid's mode (after
+    // this save's own settings write) is Accubid, the lines/settings
+    // changes still commit here, but the price snapshot is instead
+    // re-persisted from the Accubid recap engine, outside this transaction
+    // — the same "commit the edit, then re-persist the price" shape
+    // PUT /:bidId/accubid/settings already uses. A LAZY import avoids a
+    // static circular dependency (accubidBidData.ts already imports this
+    // module for its own line-resolving).
+    if (finalPricingMode === 'accubid') {
+      await client.query('COMMIT');
+      const { saveAccubidRecapForBid } = await import('./accubidBidData');
+      const accubidResult = await saveAccubidRecapForBid(bidId);
+      const { rows: beRows } = await pool.query('SELECT * FROM bid_estimates WHERE bid_id = $1', [bidId]);
+      bidEstimate = beRows[0] ?? { grand_total: accubidResult.recap.sellingPrice };
+    } else {
+      bidEstimate = await writeBidEstimateSnapshot(
+        client, bidId, recap, rows, settings.overhead_pct, settings.profit_pct, comps
+      );
+      await client.query('COMMIT');
+    }
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
     client.release();

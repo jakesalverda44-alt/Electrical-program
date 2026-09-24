@@ -30,7 +30,7 @@ import {
   createQuote, updateQuote, deleteQuote, QuoteInput,
   createCostLine, updateCostLine, deleteCostLine, CostLineInput,
   createAlternate, updateAlternate, deleteAlternate, AlternateInput,
-  listGcOverheadDefaults, setGcOverheadDefault,
+  listGcOverheadDefaults, setGcOverheadDefault, persistPriceForBid,
 } from '../estimating/accubidBidData';
 // Fix round 1 / S4 — reuse the exact same Content-Type/Content-Disposition/
 // nosniff lockdown routes/documents.ts already applies (audit Security #6),
@@ -874,27 +874,80 @@ function validateQuoteInput(body: unknown): ValidationResult<QuoteInput> {
   return { ok: true, value: { description, amount, taxPct, markupPct, status, vendor: typeof b.vendor === 'string' ? b.vendor : null, sort: b.sort != null ? Number(b.sort) : 0 } };
 }
 
+// Fix round 2 / B6 — a PATCH-style PUT only sends the fields it's changing,
+// but every field it DOES send must still be well-formed: the reviewer's
+// repro sent `{amount:'abc'}` straight through to a numeric SQL column and
+// got a 500. Each field here is validated only when present; an absent
+// field is left for accubidBidData.ts's own `patch.field ?? existing`
+// fallback to carry forward untouched.
+function validatePartial<T extends object>(
+  body: unknown,
+  checks: Record<string, (v: unknown) => string | null>
+): ValidationResult<Partial<T>> {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const value: Record<string, unknown> = {};
+  for (const [key, check] of Object.entries(checks)) {
+    if (!(key in b) || b[key] === undefined) continue;
+    const err = check(b[key]);
+    if (err) return { ok: false, error: err };
+    value[key] = b[key];
+  }
+  return { ok: true, value: value as Partial<T> };
+}
+
+const nonNegNumber = (field: string) => (v: unknown): string | null => {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? null : `${field} must be a non-negative number`;
+};
+const nonEmptyString = (field: string) => (v: unknown): string | null =>
+  (typeof v === 'string' && v.trim().length > 0) ? null : `${field} must be a non-empty string`;
+
+function validateQuotePatch(body: unknown): ValidationResult<Partial<QuoteInput>> {
+  const r = validatePartial<QuoteInput>(body, {
+    description: nonEmptyString('description'),
+    amount: nonNegNumber('amount'),
+    taxPct: nonNegNumber('taxPct'),
+    markupPct: nonNegNumber('markupPct'),
+    status: (v) => (v === 'firm' || v === 'budget_pending') ? null : 'status must be "firm" or "budget_pending"',
+    vendor: (v) => (v === null || typeof v === 'string') ? null : 'vendor must be a string or null',
+    sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
+  });
+  if (!r.ok) return r;
+  const value = { ...r.value } as Partial<QuoteInput>;
+  if (value.amount != null) value.amount = Number(value.amount);
+  if (value.taxPct != null) value.taxPct = Number(value.taxPct);
+  if (value.markupPct != null) value.markupPct = Number(value.markupPct);
+  if (value.sort != null) value.sort = Number(value.sort);
+  return { ok: true, value };
+}
+
 router.post('/:bidId/accubid/quotes', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const v = validateQuoteInput(req.body);
   if (!v.ok) return res.status(400).json({ error: v.error });
-  res.json(await createQuote(bidId, v.value));
+  const created = await createQuote(bidId, v.value);
+  await persistPriceForBid(bidId);
+  res.json(created);
 });
 
 router.put('/:bidId/accubid/quotes/:id', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const updated = await updateQuote(req.params.id, req.body ?? {});
+  const v = validateQuotePatch(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const updated = await updateQuote(req.params.id, bidId, v.value);
   if (!updated) return res.status(404).json({ error: 'Quote not found' });
+  await persistPriceForBid(bidId);
   res.json(updated);
 });
 
 router.delete('/:bidId/accubid/quotes/:id', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const ok = await deleteQuote(req.params.id);
+  const ok = await deleteQuote(req.params.id, bidId);
   if (!ok) return res.status(404).json({ error: 'Quote not found' });
+  await persistPriceForBid(bidId);
   res.status(204).end();
 });
 
@@ -911,27 +964,49 @@ function validateCostLineInput(body: unknown): ValidationResult<CostLineInput> {
   return { ok: true, value: { kind, description, amount, taxPct, sort: b.sort != null ? Number(b.sort) : 0 } };
 }
 
+function validateCostLinePatch(body: unknown): ValidationResult<Partial<CostLineInput>> {
+  const r = validatePartial<CostLineInput>(body, {
+    kind: (v) => (v === 'equipment' || v === 'general_expense') ? null : 'kind must be "equipment" or "general_expense"',
+    description: nonEmptyString('description'),
+    amount: nonNegNumber('amount'),
+    taxPct: nonNegNumber('taxPct'),
+    sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
+  });
+  if (!r.ok) return r;
+  const value = { ...r.value } as Partial<CostLineInput>;
+  if (value.amount != null) value.amount = Number(value.amount);
+  if (value.taxPct != null) value.taxPct = Number(value.taxPct);
+  if (value.sort != null) value.sort = Number(value.sort);
+  return { ok: true, value };
+}
+
 router.post('/:bidId/accubid/cost-lines', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const v = validateCostLineInput(req.body);
   if (!v.ok) return res.status(400).json({ error: v.error });
-  res.json(await createCostLine(bidId, v.value));
+  const created = await createCostLine(bidId, v.value);
+  await persistPriceForBid(bidId);
+  res.json(created);
 });
 
 router.put('/:bidId/accubid/cost-lines/:id', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const updated = await updateCostLine(req.params.id, req.body ?? {});
+  const v = validateCostLinePatch(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const updated = await updateCostLine(req.params.id, bidId, v.value);
   if (!updated) return res.status(404).json({ error: 'Cost line not found' });
+  await persistPriceForBid(bidId);
   res.json(updated);
 });
 
 router.delete('/:bidId/accubid/cost-lines/:id', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const ok = await deleteCostLine(req.params.id);
+  const ok = await deleteCostLine(req.params.id, bidId);
   if (!ok) return res.status(404).json({ error: 'Cost line not found' });
+  await persistPriceForBid(bidId);
   res.status(204).end();
 });
 
@@ -946,27 +1021,47 @@ function validateAlternateInput(body: unknown): ValidationResult<AlternateInput>
   return { ok: true, value: { kind, description, amount, sort: b.sort != null ? Number(b.sort) : 0 } };
 }
 
+function validateAlternatePatch(body: unknown): ValidationResult<Partial<AlternateInput>> {
+  const r = validatePartial<AlternateInput>(body, {
+    kind: (v) => (v === 'add' || v === 'deduct') ? null : 'kind must be "add" or "deduct"',
+    description: nonEmptyString('description'),
+    amount: nonNegNumber('amount'),
+    sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
+  });
+  if (!r.ok) return r;
+  const value = { ...r.value } as Partial<AlternateInput>;
+  if (value.amount != null) value.amount = Number(value.amount);
+  if (value.sort != null) value.sort = Number(value.sort);
+  return { ok: true, value };
+}
+
 router.post('/:bidId/accubid/alternates', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const v = validateAlternateInput(req.body);
   if (!v.ok) return res.status(400).json({ error: v.error });
-  res.json(await createAlternate(bidId, v.value));
+  const created = await createAlternate(bidId, v.value);
+  await persistPriceForBid(bidId);
+  res.json(created);
 });
 
 router.put('/:bidId/accubid/alternates/:id', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const updated = await updateAlternate(req.params.id, req.body ?? {});
+  const v = validateAlternatePatch(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const updated = await updateAlternate(req.params.id, bidId, v.value);
   if (!updated) return res.status(404).json({ error: 'Alternate not found (or it is a system-computed one — those cannot be hand-edited)' });
+  await persistPriceForBid(bidId);
   res.json(updated);
 });
 
 router.delete('/:bidId/accubid/alternates/:id', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
-  const ok = await deleteAlternate(req.params.id);
+  const ok = await deleteAlternate(req.params.id, bidId);
   if (!ok) return res.status(404).json({ error: 'Alternate not found (or it is a system-computed one)' });
+  await persistPriceForBid(bidId);
   res.status(204).end();
 });
 
