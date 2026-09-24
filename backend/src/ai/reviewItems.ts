@@ -20,6 +20,7 @@ import type { CountResult, CountMark } from './countingStage';
 import { outsideAptInstall, describeAssignment } from '../bidstd/tradeAssignment';
 import { facilityChecklistItems } from '../bidstd/facilityChecklists';
 import { PANEL_CONFLICT, PANEL_LOAD_NOTE, panelNameOf, type PanelChoice } from './evidence/schedules';
+import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './sheetRefs';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -916,23 +917,77 @@ export function referencedSheetItems(
   missingSheets: unknown,
   known: { loadedSheetKeys: Set<string>; checkRefKeys: Set<string> },
   normalize: (raw: string) => string | null,
+  opts: { pattern?: SheetPattern | null } = {},
 ): ReviewItem[] {
   const out: ReviewItem[] = [];
   const seen = new Set<string>();
   for (const raw of Array.isArray(missingSheets) ? missingSheets : []) {
     const text = typeof raw === 'string' ? raw : typeof (raw as { sheet?: unknown })?.sheet === 'string' ? String((raw as { sheet: string }).sheet) : '';
-    const id = /([A-Za-z]{1,3}\s?[-.]?\s?\d{1,3}(?:\.\d{1,2})?[A-Za-z]?)/.exec(text)?.[1] ?? '';
-    const key = id ? normalize(id) : null;
-    if (!key || seen.has(key) || known.loadedSheetKeys.has(key) || known.checkRefKeys.has(key)) continue;
-    seen.add(key);
-    out.push({
-      id: `refsheet:${key}`,
-      kind: 'confirm',
-      title: `Referenced sheet ${id.replace(/\s+/g, '')} not in analysis`,
-      detail: `The drawing analysis found a reference to ${text.trim().slice(0, 160)}, which is not in the uploaded set and the sheet check did not flag. Upload it (it is analysed and counted into this run), or confirm the takeoff doesn't need it (with a reason).`,
-      actions: ['confirm'],
-      fingerprint: `refsheet|${key}`,
-    });
+    // Real-run fix 1 — every whole-token id candidate in the text, never a
+    // piece of a word ("Spec 16050" is not "pec160", "Section 16480" not
+    // "ion164"), never a spec-section number.
+    for (const cand of sheetIdCandidates(text)) {
+      const key = normalize(cand.id);
+      if (!key || seen.has(key) || known.loadedSheetKeys.has(key) || known.checkRefKeys.has(key)) continue;
+      // The same rule as the sheet check (B1): a missing id must have the
+      // shape of THIS set's sheet numbers. One that doesn't ("SGN101 Sign
+      // Vendor Foundation Drawing" in a set numbered E-1 / C1.1 / PH0.1) is
+      // a vendor's or another party's drawing: listed for information,
+      // never blocking.
+      const ofThisSet = !opts.pattern || matchesSheetPattern(cand.id, opts.pattern);
+      seen.add(key);
+      out.push(ofThisSet ? {
+        id: `refsheet:${key}`,
+        kind: 'confirm',
+        title: `Referenced sheet ${cand.id.replace(/\s+/g, '')} not in analysis`,
+        detail: `The drawing analysis found a reference to ${text.trim().slice(0, 160)}, which is not in the uploaded set and the sheet check did not flag. Upload it (it is analysed and counted into this run), or confirm the takeoff doesn't need it (with a reason).`,
+        actions: ['confirm'],
+        fingerprint: `refsheet|${key}`,
+      } : {
+        id: `refsheet:${key}`,
+        kind: 'confirm',
+        blocking: false,
+        title: `Drawing ${cand.id.replace(/\s+/g, '')} named — not a sheet number of this set`,
+        detail: `The drawing analysis found a reference to ${text.trim().slice(0, 160)}. "${cand.id}" does not have the shape of this set's sheet numbers (${[...opts.pattern!.prefixes].sort().slice(0, 12).join(', ')}…), so it is read as another party's drawing (a vendor, sign or civil drawing), not a missing sheet of this set. Listed for information — upload it if it carries electrical scope.`,
+        actions: ['confirm'],
+        fingerprint: `refsheet-other|${key}`,
+      });
+    }
+  }
+  return out;
+}
+
+/** A CSI / MasterFormat spec-section number: 5-6 digits ("16050",
+ *  "015000") or "xx xx xx" ("26 05 19"), optionally after SECTION / SEC /
+ *  SPEC / DIVISION. Never a sheet. */
+const SPEC_SECTION_RE = /\b(?:SPEC(?:IFICATION)?S?|SECTIONS?|SECT?\.?|DIV(?:ISION)?|CSI)\b\.?\s*(?:SECTION\s*)?#?\s*\d/i;
+const SPEC_NUMBER_RE = /(?<![A-Za-z0-9])\d{2}\s\d{2}\s\d{2}(?![0-9])|(?<![A-Za-z0-9.])\d{5,6}(?![0-9])/;
+
+/** Real-run fix 1 — the sheet-id candidates in one "missing sheet" string:
+ *  whole tokens only (bounded by a non-letter / non-digit on both sides:
+ *  never the tail of "Spec", "Section" or "Sec"), never a spec-section
+ *  number or anything in a string that cites one ("Spec Section 16480
+ *  Panelboards", "Structural drawings (referenced Sec 01410 3.09)"), and
+ *  never a word that merely ends in digits' neighbours. */
+export function sheetIdCandidates(text: string): Array<{ id: string; index: number }> {
+  const out: Array<{ id: string; index: number }> = [];
+  const re = /(?<![A-Za-z0-9])([A-Za-z]{1,3}(?:\s?[-.]\s?|\s)?\d{1,4}(?:\.\d{1,2})?[A-Za-z]?)(?![A-Za-z0-9])/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const id = m[1];
+    const digits = /\d+/.exec(id)?.[0] ?? '';
+    // A 5-6 digit run is a specification section; "SEC 014" / "ION 164"
+    // never reach here (not whole tokens: the digits run on).
+    if (digits.length >= 5) continue;
+    // The id is the section word of a spec citation ("SECTION 1", "DIV 16").
+    if (SPEC_SECTION_RE.test(text.slice(m.index, m.index + id.length + 12))) continue;
+    if (SPEC_NUMBER_RE.test(text.slice(m.index, m.index + id.length + 8))) continue;
+    // A bare word followed by a space and a number ("Sheet 3", "Sec 3") is
+    // only a sheet id when the letters are a real sheet prefix — the
+    // pattern check (the caller) decides the rest.
+    const prefix = /^[A-Za-z]+/.exec(id)?.[0].toUpperCase() ?? '';
+    if (/\s/.test(id) && !/[-.]/.test(id) && !KNOWN_SHEET_PREFIXES.has(prefix)) continue;
+    out.push({ id: id.replace(/\s+/g, ' ').trim(), index: m.index });
   }
   return out;
 }
