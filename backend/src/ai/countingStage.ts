@@ -199,6 +199,34 @@ interface FinishEvidence {
   consistencyRun?: ConsistencyRun;
 }
 
+/** Real-run fix 2 / review fix S12 — marks under another name of an entity
+ *  (a supplement pass over a run counted before consolidation, which may
+ *  have counted BOTH names on the same symbols) become the canonical
+ *  entity's — and a remapped mark on top of one the entity already has
+ *  (within the counter's own overlap radius) is the same symbol, dropped:
+ *  never a doubled count. Mutates the sheets; returns how many were dropped. */
+export function remapAliasMarks(sheets: Array<{ placed: Array<{ typeKey: string; x?: number; y?: number }>; notes?: string[] }>, aliasOf: Map<string, string>, radiusPt = 0.35 * 72): number {
+  let dropped = 0;
+  for (const r of sheets) {
+    const kept: typeof r.placed = [];
+    const remapped: typeof r.placed = [];
+    for (const p of r.placed) (aliasOf.has(p.typeKey) ? remapped : kept).push(p);
+    for (const p of remapped) {
+      const k = canonicalKey(p.typeKey, aliasOf);
+      const dup = Number.isFinite(p.x) && kept.some(o => o.typeKey === k && Number.isFinite(o.x) && Math.hypot(o.x! - p.x!, o.y! - p.y!) <= radiusPt);
+      if (dup) { dropped++; continue; }
+      p.typeKey = k;
+      kept.push(p);
+    }
+    if (remapped.length) {
+      const n = remapped.length - remapped.filter(p => kept.includes(p)).length;
+      if (n) r.notes?.push(`${n} mark${n === 1 ? '' : 's'} counted under another name of an entity sat on its own marks — counted once.`);
+    }
+    r.placed = kept;
+  }
+  return dropped;
+}
+
 /** Real-run fix 2 — a typical package the reader bound to another name of
  *  an entity ("DUPLEX") points at its canonical target. */
 function remapTypicals(packages: TypicalPackage[], aliasOf: Map<string, string> | undefined): TypicalPackage[] {
@@ -288,9 +316,7 @@ function finish(
   // Real-run fix 2 — a mark under another name of an entity (a carried
   // supplement mark) is the canonical entity's.
   const aliasOf = evidence?.cons?.aliasOf;
-  if (aliasOf?.size) {
-    for (const r of sheetResults) for (const p of r.placed) p.typeKey = canonicalKey(p.typeKey, aliasOf);
-  }
+  if (aliasOf?.size) remapAliasMarks(sheetResults, aliasOf);
   // Real-run fix 3 — a pole-tag legend's marks are its members' (bound by
   // the circuit tag each mark carries), BEFORE any viewport / sheet rule, so
   // an enlarged plan's pole #2 is compared with the main plan's pole #2.

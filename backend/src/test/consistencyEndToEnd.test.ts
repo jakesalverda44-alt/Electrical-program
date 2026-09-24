@@ -108,3 +108,21 @@ describe('consistency check end to end (B1 / S8 / N3)', () => {
     expect(r.consistencySuggested!.length).toBe(2);
   });
 });
+
+describe('review fix S12 — a supplement on a run counted before consolidation never doubles', () => {
+  it('the old run counted DUPLEX and "DUPLEX RECEPTACLE / FLOOR" on the same 3 symbols (+1 DUPLEX elsewhere): 4, not 7', async () => {
+    const { remapAliasMarks } = await import('../ai/countingStage');
+    const prior = cr();
+    prior.marks = [
+      ...[100, 200, 300].map(x => ({ sheetKey, typeKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', x, y: 100 })),
+      ...[102, 199, 301, 700].map(x => ({ sheetKey, typeKey: 'DUPLEX', x, y: 101 })),
+    ];
+    const sheet = { key: sheetKey, file: 'plan.pdf', page: 1, sheetNo: 'E-3', title: 'LIGHTING', label: 'E-3', role: 'building', focus: 'lighting', level: '' } as CountSheet;
+    const r = priorSheetResult(sheet, prior);
+    const dropped = remapAliasMarks([r], new Map([['DUPLEX', 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE']]));
+    expect(dropped).toBe(3);
+    expect(r.placed.map(p => [p.typeKey, p.x])).toEqual([
+      ['DUPLEX RECEPTACLE / FLOOR RECEPTACLE', 100], ['DUPLEX RECEPTACLE / FLOOR RECEPTACLE', 200], ['DUPLEX RECEPTACLE / FLOOR RECEPTACLE', 300], ['DUPLEX RECEPTACLE / FLOOR RECEPTACLE', 700],
+    ]);
+  });
+});
