@@ -471,3 +471,59 @@ RULES
 OUTPUT — strict compact JSON only, no prose, no markdown:
 {"marks":[["A","R1C2",0.412,0.118]],"unreadable":[{"type":"C","tile":"R2C1","note":"tags illegible"}],"notes":[]}
 Each mark is [type tag exactly as listed, tile id, x, y] where x and y are the symbol's CENTER within that tile as fractions: x 0 = left edge to 1 = right edge, y 0 = top edge to 1 = bottom edge, three decimals. notes: at most 5 short strings, only for something an estimator must know (e.g. "sheet shows a matchline to E-3.1").`;
+
+// ── Evidence round (Parts 1-3): narrow structured readers ───────────────────
+// Each reads ONE thing from ONE crop (or its text) and returns strict JSON the
+// code validates. None of them counts devices — the counter does that.
+/** Bump when any evidence prompt changes: the evidence cache is keyed by it. */
+export const EVIDENCE_PROMPT_VERSION = 'ev1';
+
+export const VIEWPORT_SYSTEM = `You map the DRAWING VIEWPORTS on one construction drawing sheet for Accurate Power & Technology. You do not count anything.
+
+INPUT: the whole sheet as one image (the title block is at the right or bottom edge).
+
+A viewport is one drawing on the sheet with its own title bar — usually a number in a circle or box, a title, and a scale ("1  POWER PLAN  1/8" = 1'-0""). Titles sit at the BOTTOM-LEFT of their drawing. Schedules, legends and note blocks are viewports too (panel schedules often have only a title such as "PANEL A").
+
+For every viewport return:
+- number: the viewport number as printed ("3"), "" if none
+- title: the title exactly as printed
+- scale: as printed ("1/4\\" = 1'-0\\"", "NTS"), "" if none
+- kind: exactly one of main_plan (the sheet's main floor/site plan), enlarged_plan (a larger-scale or zoomed plan of part of the floor: restroom, office area, kitchen…), detail (details, sections, elevations, diagrams, riser/one-line, typical installations), schedule (panel / fixture / equipment / load tables), legend (symbol legends, symbol schedules), notes (general notes, keyed notes)
+- box: [x0, y0, x1, y1] — the viewport's drawing area INCLUDING its title bar, as fractions of the image width/height (0 = left/top, 1 = right/bottom), three decimals. Boxes of different viewports do not overlap.
+- building: main_plan / enlarged_plan only — [x0,y0,x1,y1] of the building outline (exterior walls) in that viewport; null if not a building plan
+- area_on_main: enlarged_plan only — [x0,y0,x1,y1] of the region ON THE MAIN PLAN that this enlarged plan shows, when the main plan marks it (a callout bubble with this viewport's number and sheet, a dashed boundary) or the room is clearly identifiable; null if you cannot tell
+
+Never include the title block. Never invent a viewport.
+
+OUTPUT — strict JSON only:
+{"viewports":[{"number":"1","title":"POWER PLAN","scale":"1/8\\" = 1'-0\\"","kind":"main_plan","box":[0.02,0.02,0.61,0.65],"building":[0.1,0.1,0.55,0.6],"area_on_main":null}]}`;
+
+export const TYPICALS_SYSTEM = `You read legends and note blocks on electrical drawings for Accurate Power & Technology and extract TYPICAL DEVICE PACKAGES: devices that come with each instance of something drawn on the plans, stated once ("each power pole has two duplex outlets", "vacuum island with 2 vacuums", "storage unit: one light and one receptacle", "junction box … receptacle mounted to base plate"). You do not count anything on the plans.
+
+INPUT: COUNT TARGETS (the job's device types, tag | description), then one or more legend / notes blocks, each labeled with its viewport id (as text or as an image).
+
+For every package return:
+- viewport: the id of the block it is in
+- host: what carries the devices, in the drawing's words ("Test station power pole")
+- host_tag: the tag printed at each host on the plans ("4" for a hexagon 4), "" if none
+- host_marker: how each host is drawn on the plans ("hexagon tag 4", "circle with J and coil") — "" if the host is one of the COUNT TARGETS
+- host_target: the COUNT TARGET tag that IS the host, when the host is itself a listed type; "" otherwise
+- devices: [{"text": the device as written, "target": the COUNT TARGET tag it is ("" if none fits), "qty": the number PER HOST as stated (words -> digits) or null when the quantity is not stated}]
+- quote: the sentence(s) verbatim (max 400 characters)
+
+Only packages the text actually states. A device whose number per host is not stated gets qty null — never guess. A note that only says where to run conduit, or who furnishes something, is not a package. Return {"packages":[]} when there are none.
+
+OUTPUT — strict JSON only:
+{"packages":[{"viewport":"<id>","host":"","host_tag":"","host_marker":"","host_target":"","devices":[{"text":"","target":"","qty":1}],"quote":""}]}`;
+
+export const SCHEDULE_ROWS_SYSTEM = `You transcribe ONE table (a panel schedule, fixture schedule, equipment schedule or load table) from a construction drawing for Accurate Power & Technology, ROW BY ROW. Never summarize, merge or skip rows; copy every cell as printed.
+
+INPUT: an image of one table.
+
+OUTPUT — strict JSON only:
+{"title":"PANEL A","columns":["CKT #","BREAKER TRIP/POLES","CIRCUIT DESCRIPTION","A","B","C","FEEDER"],"rows":[{"cells":["1","20/1","WORK LIGHTING","1,250","","","2#12,#12G,1/2\\"C"],"y0":0.212,"y1":0.228}]}
+- columns: the header cells, left to right (for a two-sided panel schedule, the columns of ONE side)
+- rows: one per printed row, top to bottom, in the columns' order ("" for an empty cell). A two-sided panel schedule (odd circuits left, even right, on one line) becomes TWO rows per line: the left side's row, then the right side's.
+- A multi-pole breaker's continuation rows keep their circuit number with the breaker cell as printed (e.g. "|") and an empty description.
+- y0 / y1: the row's top and bottom as fractions of the image height.
+- Header, title and total lines are not rows.`;

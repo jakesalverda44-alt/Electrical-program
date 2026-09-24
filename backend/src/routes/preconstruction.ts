@@ -45,6 +45,7 @@ import { compactForHandoff } from '../ai/compactPayload';
 import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
 import { runCountingStage, runSupplementCounting, type CountResult } from '../ai/countingStage';
+import { dbEvidenceCache } from '../services/evidenceCache';
 import { normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
 import { writeAiCountMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
@@ -86,6 +87,10 @@ export interface AIConfig {
   /** Next round A2 — Sonnet vision reads a scanned sheet's notes region for
    *  references (setting ai_sheet_refs_vision_model). */
   modelRefVision: string;
+  /** Evidence round — the narrow readers (viewports, typicals, schedule
+   *  rows): setting ai_takeoff_evidence_model / ai_max_tokens_evidence. */
+  modelEvidence: string;
+  maxTokensEvidence: number;
   maxTokensCounter: number;
   maxTokensA1: number;
   maxTokensA2: number;
@@ -110,9 +115,18 @@ const DEFAULT_MAX_TOKENS_A4 = 8000;
  *  sized for thinking plus ~200-400 compact marks per sheet (see counter.ts). */
 export const DEFAULT_COUNTER_MODEL = 'claude-opus-5-5';
 export const DEFAULT_MAX_TOKENS_COUNTER = 32000;
+/** Evidence round — the readers read one crop / one table per call; Sonnet
+ *  is enough for printed legends and schedules. Opus 5.5 can be chosen in
+ *  Settings (its larger image limit reads small print better). */
+export const DEFAULT_EVIDENCE_MODEL = 'claude-sonnet-4-6';
+export const DEFAULT_MAX_TOKENS_EVIDENCE = 16000;
 const DEFAULT_TEMPERATURE = 0.3;
 
 function parseNumberSetting(value: string, fallback: number, min: number, max: number): number {
+  // Evidence round (found by its settings test): an emptied field is stored
+  // as '' and Number('') is 0, which clamped to the MINIMUM (1,024 tokens —
+  // a truncated run) instead of meaning "use the default".
+  if (!String(value ?? '').trim()) return fallback;
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
@@ -126,6 +140,7 @@ export async function loadAIConfig(): Promise<AIConfig> {
     promptA1Setting, promptA2Setting, promptA3Setting, promptA4Setting,
     dpiScheduleSetting, dpiPlanSetting, tilesScheduleSetting, tilesPlanSetting,
     modelCounterSetting, maxCounterSetting, modelRefVisionSetting,
+    modelEvidenceSetting, maxEvidenceSetting,
   ] = await Promise.all([
     getSetting('ai_model'),
     getSetting('ai_takeoff_agent2_model'),
@@ -148,6 +163,8 @@ export async function loadAIConfig(): Promise<AIConfig> {
     getSetting('ai_takeoff_counter_model'),
     getSetting('ai_max_tokens_counter'),
     getSetting('ai_sheet_refs_vision_model'),
+    getSetting('ai_takeoff_evidence_model'),
+    getSetting('ai_max_tokens_evidence'),
   ]);
   const defaultModel = (process.env.ANTHROPIC_MODEL || process.env.AI_MODEL || DEFAULT_AI_MODEL).trim();
   return {
@@ -158,6 +175,8 @@ export async function loadAIConfig(): Promise<AIConfig> {
     modelClassifier: (modelClassifierSetting || 'claude-haiku-4-5-20251001'),
     modelCounter: ((modelCounterSetting || '').trim() || DEFAULT_COUNTER_MODEL),
     modelRefVision: ((modelRefVisionSetting || '').trim() || 'claude-sonnet-4-6'),
+    modelEvidence: ((modelEvidenceSetting || '').trim() || DEFAULT_EVIDENCE_MODEL),
+    maxTokensEvidence: parseNumberSetting(maxEvidenceSetting || '', DEFAULT_MAX_TOKENS_EVIDENCE, 1024, 64000),
     maxTokensCounter: parseNumberSetting(maxCounterSetting || '', DEFAULT_MAX_TOKENS_COUNTER, 1024, 128000),
     maxTokensA1: parseNumberSetting(maxA1Setting || '', DEFAULT_MAX_TOKENS_A1, 256, 64000),
     maxTokensA2: parseNumberSetting(maxA2Setting || '', DEFAULT_MAX_TOKENS_A2, 256, 64000),
@@ -1182,6 +1201,8 @@ async function runPipelineStages(
     const countingInput = {
       client, model: config.modelCounter, maxTokens: config.maxTokensCounter,
       agent1: agent1ForCounting, inventory: countingInventory, pdfs,
+      // Evidence round Parts 1-3 — viewports, typicals, schedule rows.
+      evidence: { model: config.modelEvidence, maxTokens: config.maxTokensEvidence, cache: dbEvidenceCache },
       // Fix round S2 — also once a newer run took over (the progress write
       // below sets `superseded`): a superseded run launches no more sheets.
       shouldStop: () => signal.aborted || superseded,
