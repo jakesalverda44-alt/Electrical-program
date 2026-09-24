@@ -21,7 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { buildRasterSet, BLANK_PAGE, KISSIMMEE_E1, KISSIMMEE_E2, KISSIMMEE_E4, type RasterPage } from './fixtures/evidence/buildRasterSheet';
 import { loadKissimmeeBaseline, KISSIMMEE_FILE } from './fixtures/evidence/kissimmeeBaseline';
-import { evidenceResponder, isEvidenceRequest, E2_HOST_MARKS, E1_RESTROOM_REPEATS, gapFillResponder, isGapFillRequest } from './fixtures/evidence/kissimmeeReplies';
+import { evidenceResponder, isEvidenceRequest, E2_HOST_MARKS, E1_RESTROOM_REPEATS, E1_DECK_DUPLEX, gapFillResponder, isGapFillRequest } from './fixtures/evidence/kissimmeeReplies';
 import { fakeAnthropic, systemText, userText, type FakeRequest, type FakeReply } from './fixtures/takeoff/fakeAnthropic';
 import { screenPosition } from '../estimating/pageGeometry';
 import { planCountTiles } from '../ai/countRender';
@@ -43,7 +43,7 @@ const COUNTER_MODEL = 'claude-opus-5-5';
 const EVIDENCE_MODEL = DEFAULT_EVIDENCE_MODEL;
 const expected = validateExpectedFile(JSON.parse(fs.readFileSync(path.join(__dirname, '../../eval/autozone-10077-kissimmee.expected.json'), 'utf8')));
 
-type Sym = { type: string; x: number; y: number };
+type Sym = { type: string; x: number; y: number; circuit?: string };
 
 /** A counter that reports every truth symbol of the sheet in every tile of
  *  the call containing it, for the types the call asked for. Tile rects come
@@ -66,7 +66,7 @@ function tileCounter(truth: Map<string, { geom: { widthPt: number; heightPt: num
       for (const id of ids) {
         const t = rects.get(id)!;
         const nx = (d.x / 72 - t.leftIn) / t.widthIn, ny = (d.y / 72 - t.topIn) / t.heightIn;
-        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) marks.push([s.type, id, Number(nx.toFixed(4)), Number(ny.toFixed(4))]);
+        if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) marks.push([s.type, id, Number(nx.toFixed(4)), Number(ny.toFixed(4)), ...(s.circuit ? [s.circuit] : [])]);
       }
     }
     return { text: JSON.stringify({ marks, unreadable: [], notes: [] }), usage: { input_tokens: 25000, output_tokens: 1800 } };
@@ -76,7 +76,9 @@ function tileCounter(truth: Map<string, { geom: { widthPt: number; heightPt: num
 function truthFor(mode: 'before' | 'after') {
   const m = new Map<string, { geom: { widthPt: number; heightPt: number; originX: number; originY: number; rotation: number }; symbols: Sym[] }>();
   for (const s of baseline.sheets) {
-    const symbols: Sym[] = baseline.marks.filter(x => x.sheetKey === s.key).map(x => ({ type: x.typeKey, x: x.x, y: x.y }));
+    const symbols: Sym[] = baseline.marks.filter(x => x.sheetKey === s.key).map(x => ({ type: x.typeKey, x: x.x, y: x.y,
+      // Fix round 3 / S19 — the "after" counter also reads circuit tags.
+      ...(mode === 'after' && s.page === 49 && Math.abs(x.x - E1_DECK_DUPLEX.x) < 0.5 && Math.abs(x.y - E1_DECK_DUPLEX.y) < 0.5 ? { circuit: E1_DECK_DUPLEX.circuit } : {}) }));
     if (mode === 'after' && s.page === 50) symbols.push(...E2_HOST_MARKS);
     if (mode === 'after' && s.page === 49) symbols.push(...E1_RESTROOM_REPEATS);
     m.set(s.label, { geom: s.geometry, symbols });
@@ -189,11 +191,14 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
       ['Test station power pole', 1, 1, 1], ['Test station power pole', 1, 1, 1], ['Commercial counter power pole', 1, 2, 2],
     ]));
     expect(after.cr.evidence!.expansions.filter(e => e.status === 'assembly').map(e => [e.host, e.hostCount])).toEqual([['Junction box with 6\'-0" flex conduit at wall & H.P. counters', 3]]);
-    // Fix round S3: E-1's "duplex outlet at deck" (A-31) sits over the
-    // checkout pole (A-29) once the sheets are aligned — asked, never
-    // subtracted silently. S2: the office pole's unstated floor simplex
-    // outlets are drawn near it (#11), so that item is information.
-    expect(after.review.find(i => i.id.startsWith('typicalat:') && i.id.includes('@9#2'))).toMatchObject({ kind: 'area', keepQty: 12, sumQty: 11 });
+    // Fix round S3 / fix round 3 S19: E-1's "duplex outlet at deck" sits
+    // over the checkout pole once the sheets are aligned, but it is on A-31
+    // (CCTV MONITOR) and the pole on A-29 (CK OUT REG & PRN): different
+    // outlets — no question, nothing subtracted. S2: the office pole's
+    // unstated floor simplex outlets are drawn near it (#11) -> information.
+    expect(after.review.some(i => i.id.startsWith('typicalat:'))).toBe(false);
+    expect(after.cr.evidence!.expansions.find(e => e.host === 'Checkout counter power pole')).toMatchObject({ expanded: 1, drawnAtHosts: 0 });
+    expect(after.cr.evidence!.expansions.find(e => e.host === 'Checkout counter power pole')!.possibleAtHosts ?? 0).toBe(0);
     expect(after.review.find(i => i.id.startsWith('typicalqty:'))).toMatchObject({ blocking: false });
     expect(exp.every(e => e.quote.length > 20)).toBe(true);
     // The E-1 / E-2 receptacles were summed as complementary layers.
@@ -236,7 +241,7 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     const counterCalls = after.calls.filter(c => systemText(c).includes('counting symbols on ONE electrical plan sheet'));
     expect(counterCalls.every(c => !/^- BATT CHGR \|/m.test(userText(c)))).toBe(true);
   });
-  it('the review list: 46 -> 21 (17 blocking); B6 groups only the 4 non-equipment/non-phone-board legend zeros, honest count above 12', (ctx) => {
+  it('the review list: 46 -> 22 (16 blocking; fix round 3 S19 removed the A-31 question); B6 groups only the 4 non-equipment/non-phone-board legend zeros, honest count above 12', (ctx) => {
     if (!have) return ctx.skip();
     // Fix round B6 — equipment (by category: 1" empty conduit/J-box, the
     // 200A disconnect, T/thermostat, MB, WIREWAY, LCP, DATA CONCENTRATOR)
@@ -247,8 +252,8 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     // S13 adds two more non-blocking spot-check items (Type A: 73 counted,
     // Type B: 52 counted — both above the 20-count threshold), so the
     // total is 23, not 21; the blocking count is unaffected (17).
-    expect(after.review).toHaveLength(23);
-    expect(after.review.filter(reviewItemIsOpen)).toHaveLength(17);
+    expect(after.review).toHaveLength(22);
+    expect(after.review.filter(reviewItemIsOpen)).toHaveLength(16);
     expect(after.review.find(i => i.id === 'spotcheck:A')).toMatchObject({ blocking: false, title: 'Spot-check: confirm these 5 marks — Type A (73 auto-counted)' });
     expect(after.review.find(i => i.id === 'spotcheck:B')).toMatchObject({ blocking: false, title: 'Spot-check: confirm these 4 marks — Type B (52 auto-counted)' });
     const group = after.review.find(i => i.id.startsWith('legend-zero:'))!;
@@ -265,7 +270,7 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
       expect(reviewItemIsOpen(item!)).toBe(true);
     }
     expect(after.review.filter(reviewItemIsOpen).map(i => i.id).sort()).toEqual([
-      group.id, after.review.find(i => i.id.startsWith('typicalat:'))!.id, 'refsheet:SGN101', 'scope:disconnects', 'scope:power_poles:furnish', 'scope:power_poles:install',
+      group.id, 'refsheet:SGN101', 'scope:disconnects', 'scope:power_poles:furnish', 'scope:power_poles:install',
       'unscheduled:GALVANIZED-UNISTRUT-14GA-FIXTURE-SUPPORT-E-3', 'unscheduled:LIGHT-POLE-CONCRETE-BASE-E-7',
       'unscheduled:POLE-CONCRETE-BASE-FOUNDATION-3-0-ABOVE-GRADE-PH0-1',
       ...equipmentAndPhoneBoardKeys.map(k => `count:${k}`),

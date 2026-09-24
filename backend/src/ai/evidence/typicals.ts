@@ -194,7 +194,7 @@ export const HOST_AREA_IN = 2;
 export const HOST_RADIUS_PT = HOST_RADIUS_IN * 72;
 
 /** Positions in DISPLAYED INCHES on the host sheet's main-plan frame. */
-export interface HostMark { sheetKey: string; x: number; y: number }
+export interface HostMark { sheetKey: string; x: number; y: number; circuit?: string }
 
 export interface TypicalExpansion {
   packageId: string;
@@ -252,16 +252,22 @@ export function isAssemblyPackage(p: TypicalPackage, targets: CountTarget[]): bo
 export function expandTypicals(
   packages: TypicalPackage[],
   hostCounts: Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string }>,
-  deviceMarks: Array<{ sheetKey: string; typeKey: string; x: number; y: number; fromSheet?: string }>,
+  deviceMarks: Array<{ sheetKey: string; typeKey: string; x: number; y: number; fromSheet?: string; circuit?: string }>,
   targets: CountTarget[] = [],
 ): { expansions: TypicalExpansion[]; unmapped: UnmappedTypicalDevice[] } {
   const expansions: TypicalExpansion[] = [];
   const unmapped: UnmappedTypicalDevice[] = [];
+  // Fix round 3 / S19 — a device on another sheet at a host's place is the
+  // host's own outlet only if their circuits agree (or neither shows one):
+  // E-1's "duplex outlet at deck" is A-31 (CCTV MONITOR), checkout pole #2
+  // is A-29 — different outlets, no question.
+  const circuitOk = (m: { circuit?: string }, h: HostMark) => (!m.circuit && !h.circuit) || (!!m.circuit && m.circuit === h.circuit);
   const near = (hc: { marks: HostMark[] }, key: string, r: number, perHost: number, own: boolean | null = true) => {
     let n = 0;
     for (const h of hc.marks) {
       const k = deviceMarks.filter(m => m.typeKey === key && m.sheetKey === h.sheetKey
         && (own === null || ((m.fromSheet ?? m.sheetKey) === h.sheetKey) === own)
+        && (own !== false || circuitOk(m, h))
         && Math.hypot(m.x - h.x, m.y - h.y) <= r).length;
       n += Math.min(k, perHost);
     }

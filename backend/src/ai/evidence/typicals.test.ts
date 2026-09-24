@@ -135,3 +135,18 @@ describe('fix round S3 — a device at a host drawn on ANOTHER sheet is asked ab
     expect(expandTypicals([p], hosts, own, targets).expansions[0]).toMatchObject({ drawnAtHosts: 1, expanded: 0 });
   });
 });
+
+describe('fix round 3 / S19 — the at-host question needs matching circuits (or none on either)', () => {
+  const p: TypicalPackage = { id: 'e2@9#2', sheetKey: E2, viewportId: null, viewportLabel: '#9', host: 'Checkout counter power pole', hostTag: '2', hostMarker: 'hexagon tag 2', hostTargetKey: null,
+    devices: [{ targetKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', text: 'duplex outlet', qty: 1 }], quote: 'CHECKOUT COUNTER POWER POLE WITH ONE DUPLEX OUTLET', source: 'vision' };
+  const hosts = (circuit?: string) => new Map([[hostKeyOf(p), { count: 1, sheets: ['E-2'], marks: [{ sheetKey: E2, x: 6.8, y: 9.4, ...(circuit ? { circuit } : {}) }] }]]);
+  const dev = (circuit?: string) => [{ sheetKey: E2, fromSheet: 'E-1', typeKey: 'DUPLEX RECEPTACLE / FLOOR RECEPTACLE', x: 6.85, y: 9.2, ...(circuit ? { circuit } : {}) }];
+  it('Kissimmee: A-31 (CCTV MONITOR) vs pole #2 on A-29 -> no question', () => {
+    expect(expandTypicals([p], hosts('A29'), dev('A31'), targets).expansions[0].possibleAtHosts).toBeUndefined();
+  });
+  it('same circuit -> asked; neither shows a circuit -> asked; only one shows one -> not asked', () => {
+    expect(expandTypicals([p], hosts('A29'), dev('A29'), targets).expansions[0].possibleAtHosts).toBe(1);
+    expect(expandTypicals([p], hosts(), dev(), targets).expansions[0].possibleAtHosts).toBe(1);
+    expect(expandTypicals([p], hosts('A29'), dev(), targets).expansions[0].possibleAtHosts).toBeUndefined();
+  });
+});

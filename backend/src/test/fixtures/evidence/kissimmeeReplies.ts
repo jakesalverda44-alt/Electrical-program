@@ -206,9 +206,18 @@ export const HOST_NAMES: Record<string, string> = {
   1: 'HOST TAG 1 OFFICE AREA POWER POLE', 2: 'HOST TAG 2 CHECKOUT COUNTER POWER POLE', 3: 'HOST TAG 3 PARTS POD POWER POLE',
   4: 'HOST TAG 4 TEST STATION POWER POLE', 6: 'HOST TAG 6 COMMERCIAL COUNTER POWER POLE',
 };
+/** Fix round 3 / S19 — circuit tags the real sheets print at these symbols
+ *  (read off the renders): pole #2's J-box leader says A-29 (Panel A 29,
+ *  CK OUT REG & PRN) on E-2; E-1's "duplex outlet at deck" says A-31 (Panel
+ *  A 31, CCTV MONITOR). The counter is asked to report them (5th element). */
+export const HOST_CIRCUITS: Record<string, string> = { 2: 'A-29' };
+/** E-1 baseline mark (PDF points) of the "duplex outlet at deck" and its circuit. */
+export const E1_DECK_DUPLEX = { x: 1012.51, y: 2136.4, circuit: 'A-31' };
+
 /** What a counter asked for the host tags reports on E-2 (pole 5 carries
  *  no devices, so it is never a host target). */
-export const E2_HOST_MARKS = HEXAGONS.filter(([t]) => HOST_NAMES[t]).map(([t, x, y]) => ({ type: HOST_NAMES[t], ...sheetPoint((380 + x) / 150, (600 + y) / 150) }));
+export const E2_HOST_MARKS = HEXAGONS.filter(([t]) => HOST_NAMES[t]).map(([t, x, y]) => ({ type: HOST_NAMES[t], ...sheetPoint((380 + x) / 150, (600 + y) / 150), ...(HOST_CIRCUITS[t] ? { circuit: HOST_CIRCUITS[t] } : {}) }));
+
 
 /** E-1 #3 restroom plan: the two GFCIs the main plan also shows (B-26, B-13),
  *  measured on e1-restroom3.png (100 DPI, origin 1180,1590 px). The Opus

@@ -28,7 +28,7 @@ import { NEVER_COUNTED_KINDS, pdfToDisplayedIn, rectContains, viewportAt, viewpo
 
 export { viewportLabel };
 
-export interface MarkIn { typeKey: string; x: number; y: number; tileIds?: string[] }
+export interface MarkIn { typeKey: string; x: number; y: number; tileIds?: string[]; circuit?: string }
 
 export interface ResolvedMark extends MarkIn {
   viewportId: string | null;

@@ -470,8 +470,8 @@ RULES
 - Never report a type that is not in COUNT TARGETS.
 
 OUTPUT — strict compact JSON only, no prose, no markdown:
-{"marks":[["A","R1C2",0.412,0.118]],"unreadable":[{"type":"C","tile":"R2C1","note":"tags illegible"}],"notes":[]}
-Each mark is [type tag exactly as listed, tile id, x, y] where x and y are the symbol's CENTER within that tile as fractions: x 0 = left edge to 1 = right edge, y 0 = top edge to 1 = bottom edge, three decimals. notes: at most 5 short strings, only for something an estimator must know (e.g. "sheet shows a matchline to E-3.1").`;
+{"marks":[["A","R1C2",0.412,0.118,"A-1"]],"unreadable":[{"type":"C","tile":"R2C1","note":"tags illegible"}],"notes":[]}
+Each mark is [type tag exactly as listed, tile id, x, y, circuit] where x and y are the symbol's CENTER within that tile as fractions: x 0 = left edge to 1 = right edge, y 0 = top edge to 1 = bottom edge, three decimals; circuit = the circuit tag printed at or leadered to that symbol ("A-31"), or "" when none is shown — never guess one. notes: at most 5 short strings, only for something an estimator must know (e.g. "sheet shows a matchline to E-3.1").`;
 
 // ── Evidence round (Parts 1-3): narrow structured readers ───────────────────
 // Each reads ONE thing from ONE crop (or its text) and returns strict JSON the

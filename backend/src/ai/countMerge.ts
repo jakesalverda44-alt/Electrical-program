@@ -38,7 +38,7 @@ export interface SheetCountInput {
   error?: string;
   /** Evidence round 1.2 — positions (PDF points) and the viewport each mark
    *  was attributed to, when known. */
-  placed: Array<{ typeKey: string; x?: number; y?: number; viewportId?: string | null }>;
+  placed: Array<{ typeKey: string; x?: number; y?: number; viewportId?: string | null; circuit?: string }>;
   unreadable: Array<{ typeKey: string; tileId: string | null; note: string }>;
   /** Evidence round 1.1 / 1.4 — the sheet's geometry and viewports (the
    *  sheet-pair relationship aligns marks with them). */
@@ -681,7 +681,7 @@ export function mergeCountsIntoTakeoff(
         const marks = sheets.filter(s => usedSheets.includes(s.sheet.key))
           .flatMap(s => s.placed.filter(m => m.typeKey === hk && Number.isFinite(m.x)).flatMap(m => {
             const p = mainPos(s, m);
-            return p ? [{ sheetKey: s.sheet.key, x: p.x, y: p.y }] : [];
+            return p ? [{ sheetKey: s.sheet.key, x: p.x, y: p.y, ...(m.circuit ? { circuit: m.circuit } : {}) }] : [];
           }));
         hostCounts.set(hk, {
           count: ty.status === 'counted' && ty.count > 0 ? ty.count : null,
@@ -694,7 +694,7 @@ export function mergeCountsIntoTakeoff(
       // (displayed inches): its own marks (enlarged-plan marks mapped onto
       // the main plan) and every other sheet's aligned onto it.
       const hostSheetKeys = new Set([...hostCounts.values()].flatMap(h => h.marks.map(m => m.sheetKey)));
-      const deviceMarks: Array<{ sheetKey: string; typeKey: string; x: number; y: number; fromSheet: string }> = [];
+      const deviceMarks: Array<{ sheetKey: string; typeKey: string; x: number; y: number; fromSheet: string; circuit?: string }> = [];
       for (const hk of hostSheetKeys) {
         const H = sheets.find(s => s.sheet.key === hk);
         if (!H) continue;
@@ -707,7 +707,7 @@ export function mergeCountsIntoTakeoff(
             const p = mainPos(S, m);
             if (!p) continue;
             const q = al ? al.map(p) : p;
-            deviceMarks.push({ sheetKey: hk, typeKey: m.typeKey, x: q.x, y: q.y, fromSheet: S.sheet.key });
+            deviceMarks.push({ sheetKey: hk, typeKey: m.typeKey, x: q.x, y: q.y, fromSheet: S.sheet.key, ...(m.circuit ? { circuit: m.circuit } : {}) });
           }
         }
       }

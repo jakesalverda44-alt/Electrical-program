@@ -399,3 +399,12 @@ describe('runCounter — real tiles of kissimmee-mini.pdf, perfect fake counter'
     expect(r.sheets[0]).toMatchObject({ status: 'failed', error: 'pdftoppm failed' });
   });
 });
+
+describe('fix round 3 / S19 — the counter reports the circuit tag at a symbol', () => {
+  it('a 5th element (or a circuit field) is read and normalized; nonsense is dropped', async () => {
+    const { parseCounterResponse, normalizeCircuit } = await import('./counter');
+    const r = parseCounterResponse(JSON.stringify({ marks: [['A', 'R1C1', 0.5, 0.5, 'A-31'], ['A', 'R1C1', 0.2, 0.2, ''], { type: 'A', tile: 'R1C1', x: 0.3, y: 0.3, circuit: 'b 20' }, ['A', 'R1C1', 0.4, 0.4, 'TYP']] }), new Set(['A']), new Set(['R1C1']))!;
+    expect(r.marks.map(m => m.circuit)).toEqual(['A31', undefined, 'B20', undefined]);
+    expect(normalizeCircuit('A-1,3,5')).toBe('A1,3,5');
+  });
+});

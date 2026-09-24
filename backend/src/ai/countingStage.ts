@@ -120,7 +120,7 @@ export interface CountResultEvidence {
 }
 
 /** One counted symbol, in PDF points on its page (est_markups space). */
-export interface CountMark { sheetKey: string; typeKey: string; x: number; y: number }
+export interface CountMark { sheetKey: string; typeKey: string; x: number; y: number; circuit?: string }
 
 /** Persisted as takeoff_results.count_result. */
 export interface CountResult {
@@ -251,7 +251,7 @@ function finish(
     if (n) t.excludedMarks = n;
   }
   const marks: CountMark[] = mergeInputs.flatMap(r => r.status === 'counted'
-    ? r.placed.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x! * 100) / 100, y: Math.round(p.y! * 100) / 100 }))
+    ? r.placed.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x! * 100) / 100, y: Math.round(p.y! * 100) / 100, ...(p.circuit ? { circuit: p.circuit } : {}) }))
     : []);
   const classified = new Set(input.inventory.map(p => p.file));
   const unclassifiedFiles = input.inventory.length ? [...input.pdfs.keys()].filter(f => !classified.has(f)) : [];
@@ -587,7 +587,7 @@ export interface SupplementCountingInput extends CountingStageInput {
  *  (status, the placed marks and what was unreadable) — never re-counted. */
 export function priorSheetResult(sheet: CountSheet, prior: CountResult): SheetCountResult {
   const stored = prior.sheets.find(x => x.key === sheet.key);
-  const placed = prior.marks.filter(m => m.sheetKey === sheet.key).map(m => ({ typeKey: m.typeKey, tileIds: [], x: m.x, y: m.y }));
+  const placed = prior.marks.filter(m => m.sheetKey === sheet.key).map(m => ({ typeKey: m.typeKey, tileIds: [], x: m.x, y: m.y, ...(m.circuit ? { circuit: m.circuit } : {}) }));
   return {
     sheet,
     status: stored?.status ?? 'failed',
