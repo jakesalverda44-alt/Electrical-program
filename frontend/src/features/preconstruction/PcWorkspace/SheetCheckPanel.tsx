@@ -15,6 +15,8 @@ interface Props {
   canRun: boolean;
   onUpdate: (u: SheetCheckUpdate) => Promise<boolean>;
   onRecheck: () => void;
+  /** Fix round S6 — classify the pages again (a page may have been missed). */
+  onReclassify?: () => void;
   onUpload: () => void;
   onRunAnalysis: () => void;
   analysisRunning: boolean;
@@ -43,7 +45,7 @@ function ReasonForm({ placeholder, confirm, onSubmit, onCancel, testId }: {
   );
 }
 
-function SheetCheckPanel({ data, error, canRun, onUpdate, onRecheck, onUpload, onRunAnalysis, analysisRunning }: Props) {
+function SheetCheckPanel({ data, error, canRun, onUpdate, onRecheck, onReclassify, onUpload, onRunAnalysis, analysisRunning }: Props) {
   const [skipping, setSkipping] = useState<string | null>(null);
   const [forcing, setForcing] = useState<string | null>(null);
   const [showLeftOut, setShowLeftOut] = useState(false);
@@ -66,7 +68,13 @@ function SheetCheckPanel({ data, error, canRun, onUpdate, onRecheck, onUpload, o
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {running && <span data-testid="sheet-check-running" style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 700 }}>Checking sheets…</span>}
           {canRun && !running && pages.length > 0 && (
-            <button className="btn ghost" onClick={onRecheck} style={{ height: 28, fontSize: 12 }}>Check again</button>
+            <>
+              <button className="btn ghost" onClick={onRecheck} style={{ height: 28, fontSize: 12 }}>Check again</button>
+              {onReclassify && (
+                <button className="btn ghost" onClick={onReclassify} style={{ height: 28, fontSize: 12 }} data-testid="sheet-check-reclassify"
+                  title="Read every title block again (e.g. a page was placed in the wrong discipline)">Re-classify pages</button>
+              )}
+            </>
           )}
         </div>
       </div>

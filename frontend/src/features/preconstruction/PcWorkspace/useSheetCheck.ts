@@ -96,9 +96,11 @@ export function useSheetCheck(opts: {
     }, POLL_MS);
   }, [load]);
 
-  const run = useCallback(async () => {
+  const run = useCallback(async (opts: { reclassify?: boolean } = {}) => {
     const fd = buildRef.current();
     if (!fd || !canRun) return;
+    // Fix round S6 — "Re-classify pages" forgets the cached classification.
+    if (opts.reclassify) fd.append('reclassify', 'true');
     setError(null);
     try {
       const res = await api.post<SheetCheckData>(`/preconstruction/${bidId}/sheet-check/run`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });

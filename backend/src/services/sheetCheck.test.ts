@@ -65,3 +65,24 @@ describe('fix round N7 — an override follows its sheet into a revised file', (
     expect(pages[1]).toMatchObject({ role: 'analysis', reason: expect.stringContaining('Receptacle layout') });
   });
 });
+
+describe('fix round S4 — the photometric sheet is never crowded out', () => {
+  it('SEE CIVIL + SEE ARCHITECTURAL + SEE STRUCTURAL (many sheets each) and 20 RCP/LS pages: PH0.1 still goes, explicit refs too', () => {
+    const ps = [page('set.pdf', 1, 'E-7', 'DETAILS', 'electrical', 'SITE CONDUIT SEE CIVIL. SEE ARCHITECTURAL DRAWINGS. SEE STRUCTURAL DRAWINGS. SEE M-1.')];
+    let n = 2;
+    for (const [pre, disc] of [['C', 'civil'], ['A', 'architectural'], ['S', 'structural']] as const) {
+      for (let i = 1; i <= 6; i++) ps.push(page('set.pdf', n++, `${pre}-${i}`, `${disc.toUpperCase()} SHEET ${i}`, disc));
+    }
+    for (let i = 1; i <= 20; i++) ps.push(page('set.pdf', n++, `A-9${i}`, i % 2 ? 'REFLECTED CEILING PLAN' : 'LIFE SAFETY PLAN', 'architectural'));
+    ps.push(page('set.pdf', n++, 'M-1', 'MECHANICAL PLAN', 'mechanical'));
+    ps.push(page('set.pdf', n++, 'PH0.1', 'PHOTOMETRIC SITE PLAN', 'civil'));
+    const { pages } = applySelection(ps, {});
+    const role = (no: string) => pages.find(p => p.sheetNo === no)!.role;
+    expect(role('PH0.1')).toBe('reference');
+    expect(role('M-1')).toBe('reference');
+    // each broad discipline gives at most 3 pages
+    for (const pre of ['C', 'S']) expect(pages.filter(p => p.sheetNo.startsWith(`${pre}-`) && p.role === 'reference').length).toBeLessThanOrEqual(3);
+    // the always-useful extras (RCP / life safety) are the ones capped
+    expect(pages.filter(p => p.reason.startsWith('always useful') && p.sheetNo !== 'PH0.1').length).toBe(MAX_REFERENCE_PAGES);
+  });
+});

@@ -1111,6 +1111,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const onResumeAI = useStableFn(() => { void resumeAI(); });
   const onRerunAI = useStableFn(() => { void rerunAI(); });
   const onRecheckSheets = useStableFn(() => { void sheetCheck.run(); });
+  const onReclassifySheets = useStableFn(() => { void sheetCheck.run({ reclassify: true }); });
   // Next round A4 — a referenced sheet uploaded after the run is analysed and
   // counted into it (supplement pass); the workspace polls it like a run.
   const onSupplement = useStableFn(async (files: File[]) => {
@@ -1413,6 +1414,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               canRun={canRunAnalysis}
               onUpdate={sheetCheck.update}
               onRecheck={onRecheckSheets}
+              onReclassify={onReclassifySheets}
               onUpload={onUploadMissing}
               onRunAnalysis={onRunAI}
               analysisRunning={ws.aiRunning}

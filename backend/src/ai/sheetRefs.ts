@@ -374,7 +374,7 @@ export function pagesForDiscipline(key: DisciplineRefKey, inventory: RefInventor
   const byDisc = (disc: string, prefix: RegExp) => inventory.filter(p => p.discipline === disc || pre(p, prefix));
   const preferSchedules = (pages: RefInventoryPage[]) => {
     const sched = pages.filter(p => title(p, /SCHEDULE/));
-    return (sched.length ? sched : pages).slice(0, 4);
+    return (sched.length ? sched : pages).slice(0, 3);
   };
   switch (key) {
     case 'photometric':
@@ -391,13 +391,13 @@ export function pagesForDiscipline(key: DisciplineRefKey, inventory: RefInventor
     case 'civil': {
       const pages = byDisc('civil', /^C[-\s.]?\d/i).filter(p => !pagesForDiscipline('photometric', [p]).length);
       const site = pages.filter(p => title(p, /SITE|UTILIT|PAVING|GRADING/));
-      return (site.length ? site : pages).slice(0, 4);
+      return (site.length ? site : pages).slice(0, 3);
     }
-    case 'architectural': return byDisc('architectural', /^A[-\s.]?\d/i).slice(0, 4);
-    case 'structural': return byDisc('structural', /^S[-\s.]?\d/i).slice(0, 4);
-    case 'fire_protection': return inventory.filter(p => pre(p, /^FP/i) || title(p, /FIRE\s+(PROTECTION|SPRINKLER)/)).slice(0, 4);
-    case 'kitchen': return inventory.filter(p => pre(p, /^(K|Q|FS)[-\s.]?\d/i) || title(p, /KITCHEN|FOOD\s+SERVICE/)).slice(0, 4);
-    case 'landscape': return inventory.filter(p => pre(p, /^L[-\s.]?\d/i) && p.discipline !== 'electrical').slice(0, 4);
+    case 'architectural': return byDisc('architectural', /^A[-\s.]?\d/i).slice(0, 3);
+    case 'structural': return byDisc('structural', /^S[-\s.]?\d/i).slice(0, 3);
+    case 'fire_protection': return inventory.filter(p => pre(p, /^FP/i) || title(p, /FIRE\s+(PROTECTION|SPRINKLER)/)).slice(0, 3);
+    case 'kitchen': return inventory.filter(p => pre(p, /^(K|Q|FS)[-\s.]?\d/i) || title(p, /KITCHEN|FOOD\s+SERVICE/)).slice(0, 3);
+    case 'landscape': return inventory.filter(p => pre(p, /^L[-\s.]?\d/i) && p.discipline !== 'electrical').slice(0, 3);
     default: return [];
   }
 }

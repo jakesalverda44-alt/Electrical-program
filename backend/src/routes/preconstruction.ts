@@ -495,7 +495,7 @@ async function prepareAgent1Upload(
       });
       continue;
     }
-    const prep = await prepOnePdf(client, classifierModel, f.buffer, f.originalname, plans.get(f.originalname));
+    const prep = await prepOnePdf(client, classifierModel, f.buffer, f.originalname, plans.get(crypto.createHash('sha256').update(f.buffer).digest('hex')));
     classifierUsage.input_tokens += prep.usage.input_tokens;
     classifierUsage.output_tokens += prep.usage.output_tokens;
     if (prep.pages === null) opaqueFallbacks.push(prep);
@@ -2407,6 +2407,22 @@ export async function gatherAnalysisInputs(
     }
     byHash.set(h, f.originalname);
     files.push(f);
+  }
+  // Fix round N5 — two different files with one name (a set and its
+  // addendum, both "Electrical.pdf") get distinct names, so nothing
+  // downstream that keys by name (page texts, tiles, the counter's PDFs,
+  // the inventory) can mix them.
+  const used = new Set<string>();
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    if (!used.has(f.originalname)) { used.add(f.originalname); continue; }
+    const dot = f.originalname.lastIndexOf('.');
+    const [stem, ext] = dot > 0 ? [f.originalname.slice(0, dot), f.originalname.slice(dot)] : [f.originalname, ''];
+    let n = 2;
+    while (used.has(`${stem} (${n})${ext}`)) n++;
+    const name = `${stem} (${n})${ext}`;
+    used.add(name);
+    files[i] = Object.assign(Object.create(Object.getPrototypeOf(f)), f, { originalname: name });
   }
 
   logger.info({

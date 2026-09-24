@@ -19,7 +19,7 @@ import { pool } from '../db/pool';
 import { drawingUpload } from '../utils/upload';
 import { gatherAnalysisInputs, loadAIConfig } from './preconstruction';
 import {
-  claimSheetCheck, runSheetCheck, loadSheetCheck, missingRefs, inputKeyOf, applySelection,
+  claimSheetCheck, runSheetCheck, loadSheetCheck, missingRefs, inputKeyOf, applySelection, forgetClassifications, sha256,
   type SheetCheckRow, type PageOverride, type RefSkip,
 } from '../services/sheetCheck';
 import { isRealReason } from '../ai/reviewItems';
@@ -74,6 +74,8 @@ router.post('/:bidId/sheet-check/run', requireAuth, requireAIPermission('run_ana
       return res.json(sheetCheckPayload(await loadSheetCheck(bidId)));
     }
     const inputKey = inputKeyOf(files);
+    // Fix round S6 — "Re-classify pages": forget the cached classification.
+    if (String(req.body?.reclassify ?? '') === 'true') await forgetClassifications(files.map(f => sha256(f.buffer)));
     const token = await claimSheetCheck(bidId, inputKey);
     // No key: the check still runs from the cache and the text layer; files
     // it has never seen are listed as unclassified (the analysis will

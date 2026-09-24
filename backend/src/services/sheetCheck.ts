@@ -37,13 +37,13 @@ import {
 import { isPdftoppmAvailable, type SheetClass } from '../ai/documentPrep';
 import { extractPdfPageTexts, isPdftotextAvailable } from '../ai/pdfText';
 import {
-  extractRegexRefs, resolveRefs, alwaysUsefulPages, parseAiRefs, normalizeSheetId, learnSheetPattern,
+  extractRegexRefs, resolveRefs, alwaysUsefulPages, parseAiRefs, normalizeSheetId, learnSheetPattern, pagesForDiscipline,
   type SheetRef, type ResolvedRef, type RefInventoryPage, type NoteSentence,
 } from '../ai/sheetRefs';
 import { callWithRetry } from '../ai/retry';
 import { runSignalOf, isCancellationError } from '../ai/runControl';
 import { assertNotTruncated, isAgentTruncatedError } from '../ai/stopReason';
-import { SHEET_REFS_TEXT_SYSTEM, SHEET_REFS_VISION_SYSTEM } from '../ai/prompts';
+import { SHEET_REFS_TEXT_SYSTEM, SHEET_REFS_VISION_SYSTEM, PAGE_CLASSIFIER_SYSTEM } from '../ai/prompts';
 import { sanitizeForPrompt } from '../ai/sanitizeForPrompt';
 
 const execFileP = promisify(execFile);
@@ -52,8 +52,10 @@ export type PageRole = 'analysis' | 'reference' | 'excluded';
 
 /** A page has a usable text layer from this many extracted characters. */
 export const TEXT_LAYER_MIN_CHARS = 50;
-/** At most this many reference pages go to the analysis (each is 1-2 low-res
- *  tiles; the cap keeps a "see architectural" from sending a whole A-set). */
+/** At most this many "always useful" extra pages (equipment schedules, RCP,
+ *  life safety) go as reference pages. Explicitly referenced sheets and
+ *  photometric / site pages are never capped (fix round S4); a broad
+ *  discipline reference gives at most 3 pages. */
 export const MAX_REFERENCE_PAGES = 12;
 
 export interface PageOverride {
@@ -141,21 +143,21 @@ export function applySelection(
 ): { pages: CheckedPage[]; refs: ResolvedRef[] } {
   const pages = pagesIn.map(p => ({ ...p, override: overrideFor(p, overrides), referencedBy: undefined as string[] | undefined }));
   // 1. the classifier's own selection, file by file (FIX-1 drop rule).
-  const byFile = new Map<string, CheckedPage[]>();
+  const byFile = new Map<string, CheckedPage[]>(); // N5 — by content hash
   for (const p of pages) {
-    if (!byFile.has(p.file)) byFile.set(p.file, []);
-    byFile.get(p.file)!.push(p);
+    if (!byFile.has(p.sha)) byFile.set(p.sha, []);
+    byFile.get(p.sha)!.push(p);
   }
   const dropped = new Set<string>();
-  for (const [file, ps] of byFile) {
+  for (const [sha, ps] of byFile) {
     const inv: PageClassification[] = ps.map(p => ({ page: p.page, sheetNo: p.sheetNo, title: p.title, discipline: p.discipline as Discipline, cls: p.cls as PageClassification['cls'] }));
-    if (shouldDropWholeFile(inv, file)) dropped.add(file);
+    if (shouldDropWholeFile(inv, ps[0].file)) dropped.add(sha);
   }
   if (dropped.size && dropped.size === byFile.size) dropped.clear(); // never drop everything
   for (const p of pages) {
     const disciplineIn = SELECT_DISCIPLINES.has(p.discipline as Discipline);
-    const allOtherInFile = !(byFile.get(p.file) ?? []).some(q => SELECT_DISCIPLINES.has(q.discipline as Discipline));
-    if (dropped.has(p.file)) { p.role = 'excluded'; p.reason = 'every page of this file is another discipline'; continue; }
+    const allOtherInFile = !(byFile.get(p.sha) ?? []).some(q => SELECT_DISCIPLINES.has(q.discipline as Discipline));
+    if (dropped.has(p.sha)) { p.role = 'excluded'; p.reason = 'every page of this file is another discipline'; continue; }
     if (disciplineIn) { p.role = 'analysis'; p.reason = p.discipline === 'unknown' ? 'the classifier could not place this page — included to be safe' : `${p.discipline} sheet`; continue; }
     if (allOtherInFile) { p.role = 'analysis'; p.reason = 'no electrical pages were identified in this file — included to be safe'; continue; }
     p.role = 'excluded';
@@ -171,30 +173,39 @@ export function applySelection(
   const sources = pages.filter(p => (p.role === 'analysis' || p.override?.decision === 'include') && isRefSource(p));
   const refs = resolveRefs(sources.flatMap(p => p.refs), inventory, learnSheetPattern(pages.map(p => p.sheetNo)));
   const byKey = new Map(pages.map(p => [p.key, p]));
-  let refPages = 0;
-  const makeReference = (p: CheckedPage, why: string, from?: string) => {
+  // Fix round S4 — what was explicitly referenced (a sheet id, or a
+  // discipline the notes point at) and every photometric / site-lighting
+  // page ALWAYS gets in; only the "always useful" extras share the cap.
+  let extraPages = 0;
+  const isPhotometric = (p: CheckedPage) => pagesForDiscipline('photometric', [{ key: p.key, file: p.file, page: p.page, sheetNo: p.sheetNo, title: p.title, discipline: p.discipline }]).length > 0;
+  const makeReference = (p: CheckedPage, why: string, opts: { from?: string; capped?: boolean } = {}) => {
     if (p.override) return;
-    if (from) p.referencedBy = [...new Set([...(p.referencedBy ?? []), from])];
+    if (opts.from) p.referencedBy = [...new Set([...(p.referencedBy ?? []), opts.from])];
     if (p.role !== 'excluded') return;
-    if (refPages >= MAX_REFERENCE_PAGES) { p.reason = `${p.reason} (reference page limit of ${MAX_REFERENCE_PAGES} reached)`; return; }
+    if (opts.capped && !isPhotometric(p)) {
+      if (extraPages >= MAX_REFERENCE_PAGES) { p.reason = `${p.reason} (limit of ${MAX_REFERENCE_PAGES} always-useful pages reached)`; return; }
+      extraPages++;
+    }
     p.role = 'reference';
     p.reason = why;
-    refPages++;
   };
-  for (const r of refs) {
+  // Explicit sheet ids first, then discipline references (each broad
+  // discipline gives at most 3 pages — pagesForDiscipline).
+  const ordered = [...refs.filter(r => r.kind === 'sheet'), ...refs.filter(r => r.kind === 'discipline')];
+  for (const r of ordered) {
     if (r.status === 'missing') continue;
     for (const k of r.pages) {
       const p = byKey.get(k);
       if (!p) continue;
       for (const by of r.referencedBy) {
         const fromLbl = `${shortLabel(byKey.get(by.fromKey) ?? { sheetNo: by.fromLabel, file: '', page: 0 })}${by.note ? ` ${by.note}` : ''}`;
-        makeReference(p, `referenced by ${fromLbl}`, fromLbl);
+        makeReference(p, `referenced by ${fromLbl}`, { from: fromLbl });
       }
     }
   }
   for (const u of alwaysUsefulPages(inventory)) {
     const p = byKey.get(u.key);
-    if (p && p.role === 'excluded') makeReference(p, `always useful: ${u.why}`);
+    if (p && p.role === 'excluded') makeReference(p, `always useful: ${u.why}`, { capped: true });
   }
   // 3. exclusions win last.
   for (const p of pages) {
@@ -245,10 +256,10 @@ export interface FileSheetPlan {
 export function plansFor(result: SheetCheckResult, pageTexts: Map<string, string[]>): Map<string, FileSheetPlan> {
   const plans = new Map<string, FileSheetPlan>();
   for (const p of result.pages) {
-    let plan = plans.get(p.file);
+    let plan = plans.get(p.sha);
     if (!plan) {
-      plan = { file: p.file, sha: p.sha, classifications: [], pageTexts: pageTexts.get(p.file) ?? [], roles: new Map() };
-      plans.set(p.file, plan);
+      plan = { file: p.file, sha: p.sha, classifications: [], pageTexts: pageTexts.get(p.sha) ?? [], roles: new Map() };
+      plans.set(p.sha, plan);
     }
     plan.classifications.push({ page: p.page, sheetNo: p.sheetNo, title: p.title, discipline: p.discipline as Discipline, cls: p.cls as PageClassification['cls'] });
     plan.roles.set(p.page, { role: p.role, reason: p.reason, ...(p.referencedBy ? { referencedBy: p.referencedBy } : {}) });
@@ -286,25 +297,38 @@ interface CacheRow {
   text_chars: number; has_text_layer: boolean; ai_refs: SheetRef[] | null;
 }
 
-async function readCache(sha: string): Promise<CacheRow[]> {
+/** Fix round S6 — the cache key: classifier model + a hash of its prompt.
+ *  A page the classifier never placed ('unknown', filled in) is NOT cached,
+ *  so the next check classifies that file again instead of keeping the miss
+ *  forever. */
+export function classifierCacheKey(model: string): string {
+  return `${model}|${crypto.createHash('sha256').update(PAGE_CLASSIFIER_SYSTEM).digest('hex').slice(0, 12)}`;
+}
+
+async function readCache(sha: string, key: string): Promise<CacheRow[]> {
   const { rows } = await pool.query(
-    'SELECT page, sheet_no, title, discipline, cls, text_chars, has_text_layer, ai_refs FROM sheet_page_cache WHERE content_sha256=$1 ORDER BY page',
-    [sha]);
+    'SELECT page, sheet_no, title, discipline, cls, text_chars, has_text_layer, ai_refs FROM sheet_page_cache WHERE content_sha256=$1 AND cache_key=$2 ORDER BY page',
+    [sha, key]);
   return rows as CacheRow[];
 }
 
-async function writeCache(sha: string, c: PageClassification, textChars: number, model: string): Promise<void> {
+async function writeCache(sha: string, key: string, c: PageClassification, textChars: number, model: string): Promise<void> {
   await pool.query(
-    `INSERT INTO sheet_page_cache (content_sha256, page, sheet_no, title, discipline, cls, text_chars, has_text_layer, model)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-     ON CONFLICT (content_sha256, page) DO UPDATE SET sheet_no=EXCLUDED.sheet_no, title=EXCLUDED.title,
+    `INSERT INTO sheet_page_cache (content_sha256, page, cache_key, sheet_no, title, discipline, cls, text_chars, has_text_layer, model)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     ON CONFLICT (content_sha256, page, cache_key) DO UPDATE SET sheet_no=EXCLUDED.sheet_no, title=EXCLUDED.title,
        discipline=EXCLUDED.discipline, cls=EXCLUDED.cls, text_chars=EXCLUDED.text_chars,
        has_text_layer=EXCLUDED.has_text_layer, model=EXCLUDED.model, ai_refs=NULL`,
-    [sha, c.page, c.sheetNo, c.title, c.discipline, c.cls, textChars, textChars >= TEXT_LAYER_MIN_CHARS, model]);
+    [sha, c.page, key, c.sheetNo, c.title, c.discipline, c.cls, textChars, textChars >= TEXT_LAYER_MIN_CHARS, model]);
 }
 
-async function writeAiRefs(sha: string, page: number, refs: SheetRef[]): Promise<void> {
-  await pool.query('UPDATE sheet_page_cache SET ai_refs=$3 WHERE content_sha256=$1 AND page=$2', [sha, page, JSON.stringify(refs)]);
+async function writeAiRefs(sha: string, key: string, page: number, refs: SheetRef[]): Promise<void> {
+  await pool.query('UPDATE sheet_page_cache SET ai_refs=$4 WHERE content_sha256=$1 AND cache_key=$2 AND page=$3', [sha, key, page, JSON.stringify(refs)]);
+}
+
+/** "Re-classify pages": forget the cached classification of these files. */
+export async function forgetClassifications(shas: string[]): Promise<void> {
+  if (shas.length) await pool.query('DELETE FROM sheet_page_cache WHERE content_sha256 = ANY($1)', [shas]);
 }
 
 /** Classify every PDF (cache first), extract its text, read its references.
@@ -326,8 +350,11 @@ export async function buildInventory(files: CheckInputFile[], opts: BuildOptions
     if (canText) {
       try { texts = await extractPdfPageTexts(f.buffer); } catch (err) { logger.warn({ err, file: f.originalname }, '[sheetCheck] pdftotext failed'); }
     }
-    pageTexts.set(f.originalname, texts);
-    let cached = await readCache(sha);
+    // N5 — keyed by content, never by file name (a set and an addendum can
+    // both be called "Electrical.pdf").
+    pageTexts.set(sha, texts);
+    const key = classifierCacheKey(opts.classifierModel);
+    let cached = await readCache(sha, key);
     if (!cached.length || (texts.length && cached.length !== texts.length)) {
       cached = [];
       if (!opts.client || !canRender) { unclassifiedFiles.push(f.originalname); continue; }
@@ -337,8 +364,11 @@ export async function buildInventory(files: CheckInputFile[], opts: BuildOptions
         const res = await classifyPages(opts.client, opts.classifierModel, crops, f.originalname);
         usage.input_tokens += res.usage.input_tokens;
         usage.output_tokens += res.usage.output_tokens;
-        for (const c of res.classifications) await writeCache(sha, c, texts[c.page - 1]?.length ?? 0, opts.classifierModel);
-        cached = await readCache(sha);
+        for (const c of res.classifications) {
+          const textChars = texts[c.page - 1]?.length ?? 0;
+          if (c.discipline !== 'unknown') await writeCache(sha, key, c, textChars, opts.classifierModel);
+          cached.push({ page: c.page, sheet_no: c.sheetNo, title: c.title, discipline: c.discipline, cls: c.cls, text_chars: textChars, has_text_layer: textChars >= TEXT_LAYER_MIN_CHARS, ai_refs: null });
+        }
       } catch (err) {
         if (isAgentTruncatedError(err) || isCancellationError(err)) throw err;
         logger.warn({ err, file: f.originalname }, '[sheetCheck] classification failed — the analysis falls back to the whole file');
@@ -365,7 +395,7 @@ export async function buildInventory(files: CheckInputFile[], opts: BuildOptions
   const prefixes = { pattern, inventoryKeys };
   const unresolved: Array<{ page: CheckedPage; s: NoteSentence }> = [];
   for (const p of pages) {
-    const text = pageTexts.get(p.file)?.[p.page - 1] ?? '';
+    const text = pageTexts.get(p.sha)?.[p.page - 1] ?? '';
     if (!text) continue;
     const { refs, unresolved: u } = extractRegexRefs(text, { key: p.key, label: label(p), sheetNo: p.sheetNo }, prefixes);
     p.refs.push(...refs.filter(r => !p.refs.some(x => x.kind === r.kind && x.key === r.key)));
@@ -376,18 +406,21 @@ export async function buildInventory(files: CheckInputFile[], opts: BuildOptions
 
   if (opts.aiRefs && opts.client) {
     // Haiku on notes sentences the regex couldn't resolve (pages not yet read).
-    const todo = unresolved.filter(u => !u.page.refs.some(r => r.source === 'haiku')).slice(0, 40);
+    const todo = unresolved.filter(u => !u.page.refs.some(r => r.source === 'haiku'));
     const alreadyRead = new Set(pages.filter(p => p.refs.some(r => r.source === 'haiku')).map(p => p.key));
     const fresh = todo.filter(u => !alreadyRead.has(u.page.key));
     if (fresh.length) {
       try {
-        const found = await readVagueRefs(opts.client, opts.classifierModel, fresh, usage);
+        // N6 — every sentence is read (40 per call), before any page is
+        // marked as read.
+        const found: SheetRef[] = [];
+        for (let i = 0; i < fresh.length; i += 40) found.push(...await readVagueRefs(opts.client, opts.classifierModel, fresh.slice(i, i + 40), usage));
         for (const p of new Set(fresh.map(u => u.page))) {
           const mine = found.filter(r => r.fromKey === p.key);
           p.refs.push(...mine);
           // Cache even an empty answer (marker ref never resolves) so the
           // same sentences are not re-asked on every check.
-          await writeAiRefs(p.sha, p.page, [...p.refs.filter(r => r.source !== 'regex'), ...(mine.length ? [] : [HAIKU_READ_MARKER(p)])]);
+          await writeAiRefs(p.sha, classifierCacheKey(opts.classifierModel), p.page, [...p.refs.filter(r => r.source !== 'regex'), ...(mine.length ? [] : [HAIKU_READ_MARKER(p)])]);
         }
       } catch (err) {
         if (isAgentTruncatedError(err) || isCancellationError(err)) throw err;
@@ -403,7 +436,7 @@ export async function buildInventory(files: CheckInputFile[], opts: BuildOptions
         try {
           const found = await readScannedNotesRefs(opts.client, opts.visionModel, f.buffer, p, usage);
           p.refs.push(...found);
-          await writeAiRefs(p.sha, p.page, [...p.refs.filter(r => r.source !== 'regex'), ...(found.length ? [] : [VISION_READ_MARKER(p)])]);
+          await writeAiRefs(p.sha, classifierCacheKey(opts.classifierModel), p.page, [...p.refs.filter(r => r.source !== 'regex'), ...(found.length ? [] : [VISION_READ_MARKER(p)])]);
         } catch (err) {
           if (isAgentTruncatedError(err) || isCancellationError(err)) throw err;
           logger.warn({ err, page: label(p) }, '[sheetCheck] vision reference reading failed for a scanned sheet');

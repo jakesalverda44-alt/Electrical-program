@@ -57,7 +57,7 @@ import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth, type TestUser } from './harness';
 import { KISSIMMEE_SET_CLASSIFIED, buildKissimmeeSetPdf, ownedBuffer } from './fixtures/takeoff/kissimmeeSet';
 import { isPdftoppmAvailable } from '../ai/documentPrep';
-import { planSheetsForRun, sha256, skippedClarifications, loadSheetCheck } from '../services/sheetCheck';
+import { planSheetsForRun, sha256, skippedClarifications, loadSheetCheck, classifierCacheKey, buildInventory } from '../services/sheetCheck';
 import { buildSymbolPdf } from './fixtures/takeoff/buildSymbolPdf';
 import { runPipeline, loadAIConfig } from '../routes/preconstruction';
 
@@ -143,7 +143,7 @@ describe('sheet check (Documents step)', () => {
     const { plans } = await planSheetsForRun(bidId, [{ originalname: 'AZ 10077 FULL SET.pdf', buffer: ownedBuffer(PDF) }],
       new (await import('@anthropic-ai/sdk')).default({ apiKey: 'x' }) as unknown as Anthropic, 'claude-haiku-4-5-20251001');
     expect(sdk.calls.length).toBe(first);
-    const plan = plans.get('AZ 10077 FULL SET.pdf')!;
+    const plan = plans.get(sha256(PDF))!; // N5 — keyed by content
     expect(plan.roles.get(7)).toMatchObject({ role: 'reference' });
     expect(plan.roles.get(2)).toMatchObject({ role: 'excluded' });
     expect(plan.pageTexts[5]).toContain('SEE M-1');
@@ -215,8 +215,8 @@ describe('sheet check (Documents step)', () => {
     expect(scanned.length).toBeGreaterThan(4096);
     await pool.query('DELETE FROM sheet_page_cache WHERE content_sha256=$1', [sha256(scanned)]);
     // Seed the classification (the crop has no text for the fake to read).
-    await pool.query(`INSERT INTO sheet_page_cache (content_sha256, page, sheet_no, title, discipline, cls, text_chars, has_text_layer)
-      VALUES ($1, 1, 'E-2', 'POWER PLAN', 'electrical', 'plan', 0, false)`, [sha256(scanned)]);
+    await pool.query(`INSERT INTO sheet_page_cache (content_sha256, page, cache_key, sheet_no, title, discipline, cls, text_chars, has_text_layer)
+      VALUES ($1, 1, $2, 'E-2', 'POWER PLAN', 'electrical', 'plan', 0, false)`, [sha256(scanned), classifierCacheKey((await loadAIConfig()).modelClassifier)]);
     const bidId = await makeBid();
     const res = await request(app).post(`/api/preconstruction/${bidId}/sheet-check/run`).set(auth(user.token)).attach('files', scanned, 'E-2 scan.pdf');
     expect(res.status).toBe(200);
@@ -289,5 +289,50 @@ describe('sheet check (Documents step)', () => {
     expect(skippedClarifications(row!.result, row!.skips, row!.input_key)).toEqual([]);
     const sales = await makeUser('sales_manager');
     expect([403, 404]).toContain((await put({ action: 'skip_all_missing', inputKey: 'other-files' }, sales)).status);
+  });
+
+  it('fix round S6: the cache key has the model + prompt version; a page the classifier missed is not cached (re-classified next time); re-classify forgets', async () => {
+    if (!ok || !have) return;
+    const Sdk = (await import('@anthropic-ai/sdk')).default;
+    const client = new Sdk({ apiKey: 'x' }) as unknown as Anthropic;
+    const f = [{ originalname: 'set.pdf', buffer: ownedBuffer(PDF) }];
+    // First: the classifier leaves page 8 out entirely (filled in as unknown).
+    const drop = KISSIMMEE_SET_CLASSIFIED.pop()!;
+    try {
+      await buildInventory(f, { client, classifierModel: 'claude-haiku-4-5-20251001', visionModel: '', aiRefs: false });
+    } finally { KISSIMMEE_SET_CLASSIFIED.push(drop); }
+    const { rows } = await pool.query('SELECT page FROM sheet_page_cache WHERE content_sha256=$1 AND cache_key=$2 ORDER BY page', [sha256(PDF), classifierCacheKey('claude-haiku-4-5-20251001')]);
+    expect(rows.map(r => r.page)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    // Next check classifies again (7 cached of 8 pages) and now gets page 8.
+    sdk.calls = [];
+    const again = await buildInventory(f, { client, classifierModel: 'claude-haiku-4-5-20251001', visionModel: '', aiRefs: false });
+    expect(sdk.calls.filter(c => sys(c).includes('sheet classifier'))).toHaveLength(1);
+    expect(again.pages.find(p => p.page === 8)!.sheetNo).toBe('C-3.1');
+    // Another model: its own cache (classified again).
+    sdk.calls = [];
+    await buildInventory(f, { client, classifierModel: 'claude-sonnet-5', visionModel: '', aiRefs: false });
+    expect(sdk.calls.filter(c => sys(c).includes('sheet classifier'))).toHaveLength(1);
+    // Re-classify from the route forgets the cache for these files.
+    const bidId = await makeBid();
+    await runCheck(bidId);
+    sdk.calls = [];
+    await request(app).post(`/api/preconstruction/${bidId}/sheet-check/run`).set(auth(user.token)).field('reclassify', 'true').attach('files', ownedBuffer(PDF), 'AZ 10077 FULL SET.pdf');
+    for (;;) {
+      const g = await request(app).get(`/api/preconstruction/${bidId}/sheet-check`).set(auth(user.token));
+      if (g.body.status !== 'running') break;
+      await new Promise(r => setTimeout(r, 50));
+    }
+    expect(sdk.calls.filter(c => sys(c).includes('sheet classifier'))).toHaveLength(1);
+  });
+
+  it('fix round N5: two different files with one name stay apart', async () => {
+    if (!ok) return;
+    const { gatherAnalysisInputs } = await import('../routes/preconstruction');
+    const bidId = await makeBid();
+    const a = { originalname: 'Electrical.pdf', buffer: ownedBuffer(PDF), mimetype: 'application/pdf', size: PDF.length } as Express.Multer.File;
+    const other = buildSymbolPdf([{ mediaBox: [0, 0, 1728, 1296], symbols: [], texts: [{ x: 72, y: 1000, size: 12, text: 'ADDENDUM 1 E-9 LIGHTING' }] }]);
+    const b = { originalname: 'Electrical.pdf', buffer: ownedBuffer(other), mimetype: 'application/pdf', size: other.length } as Express.Multer.File;
+    const { files } = await gatherAnalysisInputs(bidId, [a, b], []);
+    expect(files.map(f => f.originalname)).toEqual(['Electrical.pdf', 'Electrical (2).pdf']);
   });
 });
