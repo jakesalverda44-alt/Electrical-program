@@ -423,3 +423,100 @@
   - Bulk resolve is all-or-nothing and uses each item's own option.
   - Info items never hold the gate.
   - The duplicate gate runs on the PUT (409) and in `takeoffGate`, which covers every proposal and send path. `dup_ok` survives sync.
+
+---
+
+# Round 2: fix verification (`0a78cb9..b669acb`)
+
+**Scope:** blockers and regressions only. Part A fixes are `0a78cb9..b65ece3`; Part B fixes are `b65ece3..b669acb`, with migrations 130–131.
+
+**Verdict: MERGE AFTER FIXES.** Everything is verified fixed except one new blocker: the B3 fix makes a real import *under*-price raceway. It is confined to the Accubid import action, and a small change fixes it.
+
+## How it was checked
+
+- **tsc:** clean on backend and frontend.
+- **Targeted suites, all green:**
+  - sheetRefs, mapper, accubidBom, accubidImport, estimatingAccubidImportRoutes, estimatingAccubidBidRoutes, takeoffReviewGate, estimatingBid: 222/222;
+  - supplementPass, countingRetry, autoDeductAlternate (pure + route), accubidMapperReconciliation: 37/37.
+- **No full-suite run.** None was needed, because no targeted run was inconclusive.
+- **My Round 1 repros**, re-run as scratch scripts, and the DB repro against `electrical_crm_test`.
+- No API calls; Local Version was not touched.
+
+## Round 1 blockers
+
+| # | Result | Evidence |
+|---|---|---|
+| B1 | **Fixed** [reproduced] | My 33-phrase probe now gives: "ON A 20 AMP CIRCUIT", "IN A 4" SQ BOX", "IN A 1" CONDUIT", "CIRCUIT ON C-3", "S 1 SIDE", "L-1 LEVEL", "T-24 REQUIREMENTS" → no refs. SEE DETAIL 3/E-5, SHEET E2.1, m101, LS-1, "SEE SHEET\nE-2" (N1) and "E-1 THRU E-4" (N2 → E2, E3, E4 from E-1) all still resolve. "Run without N" now confirms with the list. |
+| B2 | **Fixed** [code-read + test] | `aiMarkers.ts` soft-deletes only within the `MarkerScope` (a sheet's document/page, plus the new type labels on earlier sheets). The replaced/written ids are recorded, and `restore()` reverts exactly those. The `supplementPass` B2 test is green. |
+| B3 | **Fixed as reported, but see R2-B1** [reproduced] | Seed + real Kissimmee import (and all 5 BOMs): "3/4" EMT" → `EMT-075` (was the ACB connector), and "1" EMT" → `EMT-100`. "2" PVC Schedule 40 conduit" → `PVCB-200` after Kissimmee. "#12 THHN", duplex, GFCI, exit and wall pack keep their seed picks. |
+| B4 | **Fixed** [reproduced, DB] | Same sequence as Round 1: first save 1,747.24 (accubid mode, defaults) → settings 1,862.40 → +$5,000 quote → **7,762.40** → Labor & Pricing Save → **7,762.40**. `bid_estimates.grand_total` = 7,762.40. |
+| B5 | **Fixed** [reproduced, DB + code] | With a budget-pending quote, draft-proposal, generate-docx and generate-takeoff-xlsx each return **409** "A vendor quote is still budget-pending (Switchgear)…". run-agent4 checks `budgetPendingGate` before any model call (`preconstruction.ts:2825`). Firming the quote clears the gate. compose-draft, generate-prebid-package and email-prebid-chris are ungated by design. See N-R2-5 on the "marked BUDGET" expectation. |
+| B6 | **Fixed** [reproduced, DB] | A cross-bid PUT or DELETE of a quote through the rep's own bid URL → **404**, and the owner's quote is unchanged (`budget_pending`, 5000.00). `{amount:'abc'}` → **400**; `{status:'weird'}` → **400**. |
+
+## New blocker
+
+### R2-B1. A real import prices "all-in" seed raceway at Chris's bare-conduit unit, so fittings labor drops out [reproduced]
+
+- **Where:**
+  - `backend/src/estimating/accubidImport.ts:395-452`. The spec-key index now reconciles the BOM row "3/4" Conduit - EMT 10' Lengths" into seed `EMT-075` "3/4" EMT (incl. couplings/straps)". The same happens to `EMT-100`, the PVC items "(incl. fittings/glue)" and RGD "(incl. fittings)".
+  - That is an `update`, not a `propose_update`: 4.0 → 3.2 h is under the 2× threshold.
+  - Accubid prices fittings as separate rows. The seed items are all-in, and the fittings ratios were never wired into the assemblies (deferred in Part B).
+- **Repro** (seed catalog + `buildImportPreview` of the real Kissimmee BOM, applying creates and updates):
+
+  | | 3/4" EMT, per 100 ft |
+  |---|---|
+  | Seed before import | 4.0 h, $60 |
+  | After import | **3.2 h, $92.38** |
+  | Chris's own Kissimmee rows (1,475 ft conduit + couplings, connectors, straps, strut clamps, stud clips) | **≥ 6.0 h, $108.29** |
+
+- **Effect:** after one admin import, every takeoff's 3/4" EMT carries 20% less labor than today and about 47% less than Chris's own all-in figure. The fittings ACB rows exist, but takeoff lines never name connectors or couplings, so that labor is never priced. The same shape applies to 1" EMT and PVC.
+- **Silent:** no review item or banner is raised.
+- **Fix (either):**
+  - Exclude seed items whose name says "incl." from reconciliation. The spec index should only match a BOM row to a same-scope item, so bare conduit maps to bare conduit and all-in to all-in.
+  - Or, when updating an all-in raceway item, write conduit hours + Σ(median fittings ratio × fitting unit) and conduit material + fittings material per 100 ft. `medianConduitFittingsRatios` already exists and is tested.
+  - Add a test: after the Kissimmee import, `EMT-075` hours are ≥ the seed's, or equal Chris's all-in figure within 10%.
+
+## New should-fix
+
+### R2-S1. The raceway kind guard rejects legitimate matches on the seed-only catalog, which is every bid today [reproduced]
+- **Where:** `backend/src/estimating/mapper.ts` `racewayKind` / `FITTING_KIND_WORDS` (added in 99d9453).
+  - `fitting`/`fittings` in a name makes it a "fitting".
+  - So every seed all-in raceway item ("…(incl. fittings/glue)", "rigid steel conduit (incl. fittings)") is classed as a fitting by name. A takeoff line that says "w/ fittings" is classed as a fitting too.
+- **Old vs new mapper, seed catalog only:**
+
+  | Takeoff line | Old mapper | New mapper |
+  |---|---|---|
+  | "2" rigid steel conduit" | `RGD-200` (alias) | **unmatched** |
+  | "3/4" EMT conduit w/ fittings" | `EMT-075` (fuzzy) | **unmatched** |
+  | "2" PVC conduit with fittings" | `PVCB-200` (fuzzy) | **unmatched** |
+
+  - 21 other raceway, wire and fitting lines were unchanged.
+  - After all 5 BOMs are imported, "2" PVC Schedule 40 conduit" also goes unmatched.
+- **Not silent:** unmatched lines raise the Labor & Pricing "N unmatched lines need resolving" banner. That's why this is should-fix, not a blocker.
+- **Fix:**
+  - Strip parenthetical "incl. …" and "w/ / with fittings" phrases before computing `racewayKind`.
+  - Treat a name with a raceway material and "conduit" or "incl." as `conduit`, even when it mentions fittings.
+  - Add the three lines above to `mapper.test.ts`.
+
+## Spot checks with no regression found
+
+- **S1 tile sizes.** The skill's model docs give 2576 px long edge, 3.75 MP and 4784 visual tokens for the high-res tier (Opus 4.7+, Sonnet 5), and 1568 px / 1568 tokens for Sonnet 4.6 and Haiku 4.5. `modelLimits.ts` now enforces both limits:
+  - high-res square tile 69×28 = 1932 px, 3.73 MP, 4761 tokens;
+  - `fitImageToLimits` means the server never downscales.
+  - The tier detection handles `claude-opus-5-5[1m]`, Bedrock ids and dated ids. The report's cost figures (standard tier ≈2× image tokens, a retry ≈2.1–2.6×) are now honest.
+- **S3 per-page revision / 409.** Page-hash matches are skipped. A known sheet number with different text is rejected with 409 `fullRerun` *before* the claim, so the run is untouched. A lone M-1 becomes a reference page. It errs safe: a reissued sheet whose only change is a date stamp, or any scanned page, gets the 409 rather than a double count.
+- **S15 propose flow.** A unit mismatch or a >2× hours delta becomes `propose_update` and is never applied. See N-R2-1.
+- **S16 deduct scope.** Feeder, conduit and wire, the "Lighting Controls" category, sensors and photocells are excluded. Labor is still never included, and the amount is printed once (migration 131, guarded on terms, notes and label). See N-R2-3.
+- **The remaining Round 1 S/N items** were not re-reviewed line by line, per the Round 2 scope. The targeted suites covering them are green.
+
+## Nits (Round 2)
+
+- **N-R2-1.** `propose_update` rows can never be accepted: the apply route (`routes/estimating.ts:~633-660`) never passes `acceptProposals`. It is safe but a dead end. If it is ever wired up, a unit-mismatch proposal must convert units before writing. [reasoned]
+- **N-R2-2.** Reconciled seed items are restamped `source='accubid'` (`applyAccubidItemUpdate`). The new `preferCandidate` tie-break then ranks those curated items *below* other seed rows. [reasoned]
+- **N-R2-3.** S16 deduct matcher:
+  - `panels` matches any "panel", e.g. "Fire alarm control panel", "Mechanical control panel connection". That over-deducts.
+  - `NEVER_DEDUCT_RE` drops real fixtures that mention a control: "LED wall pack w/ photocell", "Troffer w/ integral occupancy sensor". That under-deducts.
+  - Match whole package item types, and exclude only when the control is the item itself. [reasoned]
+- **N-R2-4.** After all 5 BOMs, "3/4" EMT connector" maps to `ACB-LIVE-END-FEED-CONNECTOR` ($0, a lighting-track part). The kind guard compares only the fitting kind, not the raceway material. [reproduced]
+- **N-R2-5.** No "BUDGET" marking exists on the pre-bid package or its email; a grep finds nothing. The package carries no price, so nothing wrong is sent. If the coordinator's decision expected a visible "BUDGET — pending CES" note to Chris, it isn't built. [reproduced by grep]
+- **N-R2-6.** `matchesSheetPattern` flags an absent sheet as missing only when its separator style matches the upload's. An electrical set numbered "E1.0" that references "M-101" won't list M-101 as missing. This is conservative, the opposite of B1. [reasoned]
