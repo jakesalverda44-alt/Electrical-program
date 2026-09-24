@@ -26,10 +26,11 @@
 import { isFixtureCategory, normalizeTypeKey, type CountTarget, type TargetCategory } from './countTargets';
 import type { CountSheet, SheetRole, SheetFocus } from './countSheets';
 import { alignSheets, mainPlanPosition, relateSheets, type SheetRelation } from './evidence/sheetRelation';
+import { isPlainReceptacle } from './evidence/consolidate';
 import type { SheetGeom, Viewport } from './evidence/viewports';
 import type { SheetMarkResolution } from './evidence/viewportResolve';
 import { circuitSummaryRows, isCircuitCountRow, panelNameOf, panelsNamedIn, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
-import { expandTypicals, hostKeyOf, type HostMark, type TypicalExpansion, type TypicalPackage, type UnmappedTypicalDevice } from './evidence/typicals';
+import { circuitsOverlap, expandTypicals, hostKeyOf, type HostMark, type TypicalExpansion, type TypicalPackage, type UnmappedTypicalDevice } from './evidence/typicals';
 import { applyFamilies, applyScheduleLegendEquivalence, applySymbolDefinitions, catalogOf, type FamilyDecision } from './evidence/families';
 
 export interface SheetCountInput {
@@ -130,6 +131,12 @@ export interface TypeCountResult {
   /** Evidence round 1.2 — marks of this type not counted as devices
    *  (legend / schedule / notes / detail / repeated in an enlarged plan). */
   excludedMarks?: number;
+  /** Real-run fix 2 — this entity's other names, kept as evidence (their
+   *  own counts are never added to this one). */
+  aliases?: Array<{ key: string; type: string; kind: string; basis: string }>;
+  /** Real-run fix 2 — a generic legend symbol whose marks sit on another
+   *  entity's marks: the same device under two names? (blocking). */
+  synonymQuestion?: { candidates: string[]; coincident: number; count: number; why?: string };
 }
 
 export interface LoadCheck {
@@ -556,6 +563,12 @@ export function computeLoadCheck(types: TypeCountResult[], panelCircuits: unknow
 export function countedRowItem(t: CountTarget): string {
   const desc = t.description || t.type;
   if (t.source === 'legend') return normalizeTypeKey(t.description) === t.key ? desc : `${desc} (${t.type})`;
+  // Review fix N2 — pipes / sleeves / conduit listed with the equipment
+  // (PP#5, "two 3in PVC pipes labeled DATA and SECURITY") are raceway, never
+  // a power connection.
+  if (t.category === 'equipment' && /\b(pipes?|conduits?|sleeves?|raceways?|chases?)\b/i.test(desc) && !/\b(power|receptacles?|outlets?|duplex|simplex|circuits?|ckts?|volts?|amps?)\b/i.test(desc)) {
+    return `${t.type} — ${desc} (conduit / raceway — no power connection)`;
+  }
   return t.category === 'equipment' ? `${t.type} — ${desc} (connection)` : `Type ${t.type} — ${desc}`;
 }
 
@@ -569,11 +582,70 @@ export interface MergeEvidence {
 }
 
 export interface CountMergeEvidenceResult {
+  /** Review fix S1 — receptacles drawn on two sheets under two class names. */
+  classConflicts?: ClassConflict[];
   expansions: TypicalExpansion[];
   unmappedTypical: UnmappedTypicalDevice[];
   families: FamilyDecision[];
   symbolDefinitions: Array<{ key: string; into: string }>;
   circuitRows: number;
+}
+
+/** Review fix S1 — one receptacle drawn on two sheets of a level under two
+ *  plain class names (E-1 draws B-32 as a DUPLEX, E-2 #11 as a SIMPLEX): the
+ *  marks coincide after the sheets are aligned AND carry the same circuit
+ *  tag, so they are ONE object. The one on a main plan is kept (else the
+ *  first sheet's), the other leaves its type, and a class-conflict question
+ *  asks which class it is. Plain receptacles only (simplex / duplex /
+ *  floor) — never a GFCI or WP one. Mutates `sheets[].placed`. */
+export interface ClassConflict {
+  circuit: string;
+  kept: { sheetLabel: string; typeKey: string };
+  dropped: { sheetLabel: string; typeKey: string };
+}
+/** Marks within this (after alignment) with the same circuit are one
+ *  receptacle; an enlarged plan's area on the main plan is read by eye, so a
+ *  mark mapped through it gets the wider tolerance. Only an UNAMBIGUOUS pair
+ *  (one candidate on that circuit within reach) is paired. */
+export const CLASS_PAIR_IN = 0.75;
+export const CLASS_PAIR_ENLARGED_IN = 1.0;
+export function pairReceptacleClasses(targets: CountTarget[], sheets: SheetCountInput[], isHost: (k: string) => boolean = () => false): ClassConflict[] {
+  const plain = new Set(targets.filter(t => !t.mergedInto?.length && isPlainReceptacle(t)).map(t => t.key));
+  if (plain.size < 2) return [];
+  const out: ClassConflict[] = [];
+  const rel = (s: SheetCountInput) => ({ key: s.sheet.key, label: s.sheet.label, geometry: s.geometry ?? null, viewports: s.viewports ?? null,
+    marks: s.placed.filter(p => Number.isFinite(p.x)).map(p => ({ typeKey: p.typeKey, x: p.x!, y: p.y!, viewportId: p.viewportId ?? null })) });
+  const counted = sheets.filter(s => s.status === 'counted' && !s.sheet.photometric && s.geometry);
+  const kindOf = (s: SheetCountInput, m: { viewportId?: string | null }) => s.viewports?.find(v => v.id === m.viewportId)?.kind ?? null;
+  for (let i = 0; i < counted.length; i++) {
+    for (let j = i + 1; j < counted.length; j++) {
+      const A = counted[i], B = counted[j];
+      if ((A.sheet.level ?? '') !== (B.sheet.level ?? '')) continue;
+      const al = alignSheets(rel(A), rel(B), isHost);
+      if (!al) continue;
+      const posA = (m: SheetCountInput['placed'][number]) => mainPlanPosition({ typeKey: m.typeKey, x: m.x!, y: m.y!, viewportId: m.viewportId ?? null }, rel(A));
+      const posB = (m: SheetCountInput['placed'][number]) => { const p = mainPlanPosition({ typeKey: m.typeKey, x: m.x!, y: m.y!, viewportId: m.viewportId ?? null }, rel(B)); return p ? al.map(p) : null; };
+      const used = new Set<object>();
+      for (const a of A.placed) {
+        if (!plain.has(a.typeKey) || !a.circuit || !Number.isFinite(a.x) || used.has(a)) continue;
+        const pa = posA(a);
+        if (!pa) continue;
+        const reach = (m: SheetCountInput['placed'][number]) => (kindOf(A, a) === 'enlarged_plan' || kindOf(B, m) === 'enlarged_plan' ? CLASS_PAIR_ENLARGED_IN : CLASS_PAIR_IN);
+        const near = B.placed.filter(m => m !== a && !used.has(m) && plain.has(m.typeKey) && m.circuit && circuitsOverlap(m.circuit.replace(/-/g, ''), a.circuit!.replace(/-/g, ''))
+          && Number.isFinite(m.x) && (() => { const pb = posB(m); return !!pb && Math.hypot(pb.x - pa.x, pb.y - pa.y) <= reach(m); })());
+        // Same class on both sheets is the sheet-pair rule's (B4); here only
+        // a different class, and only an unambiguous one.
+        if (near.length !== 1 || near[0].typeKey === a.typeKey) continue;
+        const b = near[0];
+        used.add(a); used.add(b);
+        const keepA = kindOf(A, a) === 'main_plan' || kindOf(B, b) !== 'main_plan';
+        const [keepS, keepM, dropS, dropM] = keepA ? [A, a, B, b] : [B, b, A, a];
+        dropS.placed = dropS.placed.filter(m => m !== dropM);
+        out.push({ circuit: a.circuit, kept: { sheetLabel: keepS.sheet.label, typeKey: keepM.typeKey }, dropped: { sheetLabel: dropS.sheet.label, typeKey: dropM.typeKey } });
+      }
+    }
+  }
+  return out;
 }
 
 export function mergeCountsIntoTakeoff(
@@ -588,8 +660,23 @@ export function mergeCountsIntoTakeoff(
   const isHost = (k: string) => hostKeys.has(k);
   const sched = opts.evidence?.scheduleCounts ?? new Map<string, ScheduleCount>();
   const evidenceOn = !!opts.evidence;
+  // Review fix S1 — one receptacle under two class names on two sheets.
+  const classConflicts = evidenceOn && opts.countingRan ? pairReceptacleClasses(targets, sheets, isHost) : [];
 
   for (const t of targets) {
+    // Real-run fix 2 — another name of an entity: never counted, never a
+    // line; kept on the list with the reason (and anything drawn under it).
+    if (t.mergedInto?.length && t.role !== 'host') {
+      const drawn = sheets.reduce((n, s) => n + (s.status === 'counted' ? s.placed.filter(p => p.typeKey === t.key).length : 0), 0);
+      const into = t.mergedInto.map(k => targets.find(x => x.key === k)?.type ?? k).join(' + ');
+      types.push({
+        key: t.key, type: t.type, description: t.description, category: t.category, wattage: t.wattage,
+        count: 0, heads: null, status: 'merged', reason: t.mergeReason ?? `another name for ${into}`, sheets: [],
+        flags: [`${t.type}: ${t.mergeReason ?? `another name for ${into}`} — not a line of its own.`],
+        mergedInto: into, ...(drawn ? { mergedCount: drawn } : {}),
+      });
+      continue;
+    }
     if (!opts.countingRan) {
       types.push({
         key: t.key, type: t.type, description: t.description, category: t.category, wattage: t.wattage,
@@ -665,19 +752,39 @@ export function mergeCountsIntoTakeoff(
     marks: s.placed.filter(p => Number.isFinite(p.x)).map(p => ({ typeKey: p.typeKey, x: p.x!, y: p.y!, viewportId: p.viewportId ?? null })) });
   const mainPos = (s: SheetCountInput, m: { typeKey: string; x?: number; y?: number; viewportId?: string | null }) =>
     s.geometry ? mainPlanPosition({ typeKey: m.typeKey, x: m.x!, y: m.y!, viewportId: m.viewportId ?? null }, relSheet(s)) : null;
+  // Real-run fix 2 — each entity keeps its other names as evidence.
+  for (const t of targets) {
+    if (!t.mergedInto?.length) continue;
+    for (const k of t.mergedInto) {
+      const c = types.find(x => x.key === k);
+      if (c) c.aliases = [...(c.aliases ?? []), { key: t.key, type: t.type, kind: t.mergeKind ?? 'synonym', basis: t.mergeReason ?? '' }];
+    }
+  }
   // ── 2.2 Typical expansion ────────────────────────────────────────────────
   let evidenceOut: CountMergeEvidenceResult | undefined;
   if (opts.countingRan && opts.evidence) {
-    evidenceOut = { expansions: [], unmappedTypical: [], families: [], symbolDefinitions: [], circuitRows: 0 };
+    evidenceOut = { expansions: [], unmappedTypical: [], families: [], symbolDefinitions: [], circuitRows: 0, ...(classConflicts.length ? { classConflicts } : {}) };
     const packages = opts.evidence.typicals ?? [];
     if (packages.length) {
-      const hostCounts = new Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string }>();
+      const hostCounts = new Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[] }>();
+      // Real-run fix 3 — a pole-tag legend's marks no circuit bound to one
+      // member: where the members without a bound tag may stand.
+      const tagOf = new Map<string, string>();
+      for (const t of targets) if (t.mergeKind === 'tag_legend') for (const k of t.mergedInto ?? []) tagOf.set(k, t.key);
       for (const p of packages) {
         const hk = hostKeyOf(p);
         if (hostCounts.has(hk)) continue;
         const ty = types.find(x => x.key === hk);
         if (!ty) { hostCounts.set(hk, { count: null, sheets: [], marks: [], reason: `the host "${p.host}" was not counted` }); continue; }
-        const usedSheets = ty.sheets.filter(x => x.used).map(x => x.sheetKey);
+        // A schedule-owned host (PP#3 "parts pod power poles (2)") has no
+        // used sheet: its bound tag marks are on the counted plans.
+        const usedSheets = (ty.scheduleRows?.length ? sheets.filter(s => s.status === 'counted' && !s.sheet.photometric).map(s => s.sheet.key) : ty.sheets.filter(x => x.used).map(x => x.sheetKey));
+        const tagKey = tagOf.get(hk);
+        const possible = tagKey ? sheets.filter(s => s.status === 'counted' && !s.sheet.photometric)
+          .flatMap(s => s.placed.filter(m => m.typeKey === tagKey && Number.isFinite(m.x)).flatMap(m => {
+            const pos = mainPos(s, m);
+            return pos ? [{ sheetKey: s.sheet.key, x: pos.x, y: pos.y }] : [];
+          })) : [];
         const marks = sheets.filter(s => usedSheets.includes(s.sheet.key))
           .flatMap(s => s.placed.filter(m => m.typeKey === hk && Number.isFinite(m.x)).flatMap(m => {
             const p = mainPos(s, m);
@@ -685,8 +792,9 @@ export function mergeCountsIntoTakeoff(
           }));
         hostCounts.set(hk, {
           count: ty.status === 'counted' && ty.count > 0 ? ty.count : null,
-          sheets: ty.sheets.filter(x => x.used).map(x => x.label),
+          sheets: ty.scheduleRows?.length ? [...new Set(ty.scheduleRows.map(r => r.sheetLabel))] : ty.sheets.filter(x => x.used).map(x => x.label),
           marks,
+          ...(possible.length ? { possible } : {}),
           ...(ty.status !== 'counted' || ty.count === 0 ? { reason: ty.status === 'unreadable' ? `the ${p.host.toLowerCase()} markers could not be read (${ty.reason})` : `no ${p.host.toLowerCase()} was found on the plans${p.hostTag ? ` (tag ${p.hostTag})` : ''}` } : {}),
         });
       }
@@ -821,7 +929,9 @@ export function mergeCountsIntoTakeoff(
     const cat = String(row.category ?? '').trim().toLowerCase();
     const match = TYPE_ROW_CATEGORIES.has(cat) ? matchRowToTarget(row, lineTargets) : matchRowToTarget(row, deviceTargets);
     if (match) {
-      removedRows.push({ row, reason: `replaced by the counted quantity for type ${match.type}`, replacedByType: match.type });
+      // Real-run fix 2 — a row under another name is replaced by the entity.
+      const canon = match.mergedInto?.length ? match.mergedInto.map(k => lineTargets.find(x => x.key === k)?.type ?? k).join(' + ') : match.type;
+      removedRows.push({ row, reason: `replaced by the counted quantity for type ${canon}${canon !== match.type ? ` (listed as ${match.type})` : ''}`, replacedByType: canon });
       if (!categoryByType.has(match.key) && String(row.category ?? '').trim()) categoryByType.set(match.key, String(row.category).trim());
       continue;
     }
@@ -850,10 +960,35 @@ export function mergeCountsIntoTakeoff(
       // steel", "Site light pole locations (A-15 …)") are the counted pole
       // lines of the site family: never a second pole line. Bases,
       // foundations and arms are accessories and stay with the estimator.
-      if (sitePolesCounted && /\b(light\s+)?poles?\b/i.test(String(row.item ?? ''))
+      // Round 2 nit N10 — an AREA / SITE light pole only: never a bollard or
+      // a pedestrian / walkway pole, and when both state a height the pole's
+      // must be within 5 ft of the site fixtures' mounting height.
+      const notLight = /\b(flag|camera|cctv|security|banner|sign|antenna|bollard|pedestrian|walkway|pathway|path|decorative|power\s+pole)\b/i.test(`${String(row.item ?? '')} ${String(row.spec ?? '')}`);
+      const poleFt = Number(/(\d{1,2})\s*(?:['’]|ft\b|feet\b)/i.exec(String(row.item ?? '').split(/,|;|\s[-–—]\s/)[0])?.[1] ?? NaN);
+      const mh = siteTypes.map(t => Number(/(\d{1,2})\s*(?:['’]|ft\b)\s*(?:-\s*0"?\s*)?MH\b|\bMH\s*(?:=\s*)?(\d{1,2})/i.exec(t.description)?.slice(1).find(Boolean) ?? NaN)).filter(Number.isFinite);
+      const heightOk = !Number.isFinite(poleFt) || !mh.length || mh.some(h => Math.abs(h - poleFt) <= 5);
+      const ACCESSORY = /\bbases?\b(?!\s+cover)|\b(foundation|footing|arms?|bracket|power\s+poles?|pier|receptacles?|outlets?|gfci|gfi|photocells?|conduit|wire|wiring|j-?box|junction|handhole|pull\s*box)\b/i;
+      if (sitePolesCounted && !notLight && heightOk && /\b(light\s+)?poles?\b/i.test(String(row.item ?? ''))
         && /\b(site|light|area|parking)\b/i.test(String(row.item ?? ''))
-        && !/\bbases?\b(?!\s+cover)|\b(foundation|footing|arms?|bracket|power\s+poles?|pier|receptacles?|outlets?|gfci|gfi|photocells?|conduit|wire|wiring|j-?box|junction|handhole|pull\s*box)\b/i.test(String(row.item ?? ''))) {
+        && !ACCESSORY.test(String(row.item ?? ''))) {
         removedRows.push({ row, reason: `the site light poles — counted as ${sitePolesCounted} (site family), never stacked`, replacedByType: null });
+        continue;
+      }
+      // Real-run fix 6 — the photometric sheet's pole spec ("25' 5in square
+      // steel pole, dark bronze, 3' conc base"): a POLE row (its first
+      // clause is the pole; what follows describes it) whose quantity is
+      // exactly the counted site poles is those poles — never a second pole
+      // line. A different quantity stays with the estimator; a base /
+      // foundation row (its first clause) is an accessory, as before.
+      const headClause = String(row.item ?? '').split(/,|;|\s[-–—]\s/)[0];
+      const siteTotal = siteTypes.reduce((n, t) => n + t.count, 0);
+      // Review fix S10 — only a LIGHT pole: its own words say light /
+      // luminaire / site lighting, or it comes from the photometric sheet;
+      // a flag, camera, CCTV, banner or sign pole never.
+      const lightPole = /\b(light(?:ing)?|luminaire|lamp|photometric)\b/i.test(`${String(row.item ?? '')} ${String(row.spec ?? '')}`) || /^PH/i.test(String(row.sourceSheet ?? '').trim());
+      if (sitePolesCounted && lightPole && !notLight && heightOk && /\b(?:steel|alum(?:inum|\.)?|square|round|tapered|\d+\s*['’]|\d+\s*(?:ft|feet))\b[^,;]*\bpoles?\b/i.test(headClause)
+        && !ACCESSORY.test(headClause) && Number(row.qty) === siteTotal) {
+        removedRows.push({ row, reason: `the site light poles (${Number(row.qty)} — the counted ${sitePolesCounted}, site family), never stacked`, replacedByType: null });
         continue;
       }
     }

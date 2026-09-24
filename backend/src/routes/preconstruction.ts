@@ -46,7 +46,7 @@ import { analysisIsEmpty } from '../ai/emptyAnalysis';
 import { buildPrebidCrossCheck } from '../ai/agent3CrossCheck';
 import { runCountingStage, runSupplementCounting, type CountResult } from '../ai/countingStage';
 import { dbEvidenceCache } from '../services/evidenceCache';
-import { normalizeSheetId } from '../ai/sheetRefs';
+import { learnSheetPattern, normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
 import { writeAiCountMarkers, writeGapFillMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
 import { buildReviewItems, referencedSheetItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
@@ -1258,6 +1258,18 @@ async function runPipelineStages(
           logger.warn({ err, bidId }, '[takeoff] writing gap-fill suggested markers failed');
         }
       }
+      // Real-run fix 5 — marks only one of the two consistency passes found:
+      // SUGGESTED markers (the same never-counted-until-confirmed rows as
+      // gap-fill's, cleared the same way on a re-run).
+      const csSuggested = stage.countResult.evidence?.consistency?.suggested ?? [];
+      if (csSuggested.length) {
+        try {
+          await writeGapFillMarkers(bidId, stage.countResult, csSuggested,
+            markerFiles.map(f => ({ file: f.originalname, documentId: (f as PipelineFile).documentId, size: f.buffer.length })), runId, 'Consistency check');
+        } catch (err) {
+          logger.warn({ err, bidId }, '[takeoff] writing consistency-check suggested markers failed');
+        }
+      }
     } catch (err) {
       logger.warn({ err, bidId }, '[takeoff] writing AI count markers failed');
       (stage.countResult as unknown as Record<string, unknown>).markers = { error: 'suggested markers could not be written' };
@@ -1277,7 +1289,10 @@ async function runPipelineStages(
     const checkRefKeys = new Set((sheetRow?.result?.refs ?? []).filter(r => r.kind === 'sheet').map(r => r.key));
     const freshItems = [
       ...buildReviewItems(stage.countResult, scopeQuestionsFor(accountTerms)),
-      ...referencedSheetItems((stage.agent1 as Record<string, unknown>).missingSheets, { loadedSheetKeys: inventoryKeys, checkRefKeys }, normalizeSheetId),
+      // Real-run fix 1 — a reference must have the shape of THIS set's
+      // sheet numbers (the sheet check's own B1 rule).
+      ...referencedSheetItems((stage.agent1 as Record<string, unknown>).missingSheets, { loadedSheetKeys: inventoryKeys, checkRefKeys }, normalizeSheetId,
+        { pattern: learnSheetPattern([...countingInventory, ...(supplement?.priorInventory ?? [])].map(p => p.sheetNo)) }),
     ];
     const tx = await pool.connect();
     try {

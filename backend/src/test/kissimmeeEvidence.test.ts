@@ -24,8 +24,8 @@ import { loadKissimmeeBaseline, KISSIMMEE_FILE } from './fixtures/evidence/kissi
 import { evidenceResponder, isEvidenceRequest, E2_HOST_MARKS, E1_RESTROOM_REPEATS, E1_DECK_DUPLEX, gapFillResponder, isGapFillRequest } from './fixtures/evidence/kissimmeeReplies';
 import { fakeAnthropic, systemText, userText, type FakeRequest, type FakeReply } from './fixtures/takeoff/fakeAnthropic';
 import { screenPosition } from '../estimating/pageGeometry';
-import { planCountTiles } from '../ai/countRender';
-import { counterTileSpec } from '../ai/modelLimits';
+import { planCountTiles, planOffsetTiles } from '../ai/countRender';
+import { counterTileSpec, retryTileIn } from '../ai/modelLimits';
 import { runCountingStage, runSupplementCounting, type CountResult } from '../ai/countingStage';
 import { buildReviewItems, referencedSheetItems, reviewItemIsOpen, enforcedCounts, applyGroupMemberResolution, type ReviewItem } from '../ai/reviewItems';
 import { normalizeSheetId } from '../ai/sheetRefs';
@@ -57,8 +57,9 @@ function tileCounter(truth: Map<string, { geom: { widthPt: number; heightPt: num
     const { geom: g, symbols } = truth.get(label)!;
     const asked = new Set([...text.split('\n')].filter(l => l.startsWith('- ') && l.includes(' | ')).map(l => normalizeTypeKey(l.slice(2).split(' | ')[0])));
     const shown = g.rotation === 90 || g.rotation === 270 ? { w: g.heightPt / 72, h: g.widthPt / 72 } : { w: g.widthPt / 72, h: g.heightPt / 72 };
-    const rects = new Map(planCountTiles(shown.w, shown.h, { tileIn: spec.tileIn }).map(r => [r.id, r]));
-    const ids = [...text.matchAll(/Tile (R\d+C\d+) \(row/g)].map(m => m[1]);
+    // Real-run fix 5 — the consistency pass's shifted tiles ("SR1C2") too.
+    const rects = new Map([...planCountTiles(shown.w, shown.h, { tileIn: spec.tileIn }), ...planOffsetTiles(shown.w, shown.h, { tileIn: retryTileIn(spec.tileIn, spec.limits) })].map(r => [r.id, r]));
+    const ids = [...text.matchAll(/Tile (S?R\d+C\d+) \(row/g)].map(m => m[1]);
     const marks: unknown[] = [];
     for (const s of symbols) {
       if (!asked.has(s.type)) continue;
@@ -241,7 +242,7 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     const counterCalls = after.calls.filter(c => systemText(c).includes('counting symbols on ONE electrical plan sheet'));
     expect(counterCalls.every(c => !/^- BATT CHGR \|/m.test(userText(c)))).toBe(true);
   });
-  it('the review list: 46 -> 22 (16 blocking; fix round 3 S19 removed the A-31 question); B6 groups only the 4 non-equipment/non-phone-board legend zeros, honest count above 12', (ctx) => {
+  it('the review list: 46 -> 21 (15 blocking; fix round 3 S19 removed the A-31 question; real-run fix 2 folded LCP into ALC); B6 groups only the 4 non-equipment/non-phone-board legend zeros, honest count above 12', (ctx) => {
     if (!have) return ctx.skip();
     // Fix round B6 — equipment (by category: 1" empty conduit/J-box, the
     // 200A disconnect, T/thermostat, MB, WIREWAY, LCP, DATA CONCENTRATOR)
@@ -252,8 +253,13 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     // S13 adds two more non-blocking spot-check items (Type A: 73 counted,
     // Type B: 52 counted — both above the 20-count threshold), so the
     // total is 23, not 21; the blocking count is unaffected (17).
-    expect(after.review).toHaveLength(22);
-    expect(after.review.filter(reviewItemIsOpen)).toHaveLength(16);
+    // Real-run fix 2 — LCP ("Venstar lighting contactor enclosure … fed
+    // from circuit B-25") is another name for ALC (B-25): folded into it
+    // with that evidence, no zero item of its own. 22 -> 21, 16 -> 15.
+    expect(after.review).toHaveLength(21);
+    expect(after.review.filter(reviewItemIsOpen)).toHaveLength(15);
+    expect(after.cr.types.find(t => t.key === 'LCP')).toMatchObject({ status: 'merged', mergedInto: 'ALC' });
+    expect(after.cr.types.find(t => t.key === 'ALC')!.aliases!.map(a => a.key)).toEqual(['LCP']);
     expect(after.review.find(i => i.id === 'spotcheck:A')).toMatchObject({ blocking: false, title: 'Spot-check: confirm these 5 marks — Type A (73 auto-counted)' });
     expect(after.review.find(i => i.id === 'spotcheck:B')).toMatchObject({ blocking: false, title: 'Spot-check: confirm these 4 marks — Type B (52 auto-counted)' });
     const group = after.review.find(i => i.id.startsWith('legend-zero:'))!;
@@ -262,7 +268,7 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     expect(group.groupedTypes!.map(g => g.key).sort()).toEqual(['M2', 'N', 'QUADPLEX RECEPTACLE', 'STORE OPEN/CLOSE PUSHBUTTON']);
     const equipmentAndPhoneBoardKeys = [
       '1 EMPTY CONDUIT AND J-BOX TO DECK', '200A FUSED DISCONNECT NEMA 3R', 'DATA CONCENTRATOR',
-      'DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX ON PHONE BOARD', 'LCP', 'MB', 'T', 'WIREWAY',
+      'DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX ON PHONE BOARD', 'MB', 'T', 'WIREWAY',
     ];
     for (const key of equipmentAndPhoneBoardKeys) {
       const item = after.review.find(i => i.id === `count:${key}`);

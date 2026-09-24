@@ -218,6 +218,7 @@ export async function writeGapFillMarkers(
   suggested: Array<{ typeKey: string; sheetKey: string; x: number; y: number }>,
   files: PipelineFileRef[],
   runId?: string | null,
+  createdBy = 'Gap-fill',
 ): Promise<{ written: number; skippedAlreadyMarked: number; writtenIds: string[] }> {
   const out = { written: 0, skippedAlreadyMarked: 0, writtenIds: [] as string[] };
   if (!suggested.length) return out;
@@ -253,8 +254,8 @@ export async function writeGapFillMarkers(
       if (dup) { out.skippedAlreadyMarked++; continue; }
       const ins = await client.query(
         `INSERT INTO est_markups (bid_id, document_id, page_index, line_key, kind, points, status, label, created_by, source, updated_at)
-         VALUES ($1, $2, $3, $4, 'count', $5::jsonb, 'suggested', $6, 'Gap-fill', 'gap_fill', now()) RETURNING id`,
-        [bidId, documentId, pageIndex, lineKey, JSON.stringify([{ x: s.x, y: s.y }]), tag]
+         VALUES ($1, $2, $3, $4, 'count', $5::jsonb, 'suggested', $6, $7, 'gap_fill', now()) RETURNING id`,
+        [bidId, documentId, pageIndex, lineKey, JSON.stringify([{ x: s.x, y: s.y }]), tag, createdBy]
       );
       out.writtenIds.push(ins.rows[0].id as string);
       out.written++;

@@ -325,6 +325,30 @@ describe('Fix round N8 — the UI groups items in the SAME $-risk order the back
   });
 });
 
+describe('Real-run fixes 2 / 5 — the dense-sheet check and the same-device question are their own titled groups', () => {
+  it('a consistency item lists each type with its own controls; the synonym question shows both options', () => {
+    setup({
+      status: 'needs_review',
+      items: [
+        { id: 'classconflict:B32:DUPLEX:SIMPLEX', kind: 'area', group: 'classconflict', title: 'Circuit B32: one receptacle drawn as Duplex and as simplex', detail: 'd', options: ['Duplex (as counted)', 'simplex'], actions: ['answer'] },
+        { id: 'synonym:MOTION SENSOR', kind: 'area', group: 'synonym', title: 'Type Motion sensor: the same device as M1 / M2?', detail: '1 of the 1 marks', options: ['Different devices — keep 1', 'The same device — drop Motion sensor'], actions: ['answer'] },
+        { id: 'consistency:A+B', kind: 'count', group: 'consistency', title: 'Dense-sheet check: 10 marks only one of two counting passes found — confirm on plans', detail: 'Type A: first pass 70, second pass (shifted tiles) 73, both found 70 (96% agree)', actions: ['markers', 'confirm', 'count'],
+          reconcileMembers: [
+            { key: 'A', type: 'A', description: '8 ft LED strip', unit: 'count', currentQty: 70, headsPerPole: null },
+            { key: 'B', type: 'B', description: '8 ft LED strip', unit: 'count', currentQty: 45, headsPerPole: null },
+          ] },
+      ],
+    });
+    const titles = Array.from(document.querySelectorAll('.tr-group-title')).map(el => el.textContent ?? '');
+    expect(titles.some(t => t.startsWith('Dense-sheet check — a second counting pass (1)'))).toBe(true);
+    expect(titles.some(t => t.startsWith('The same device under two names? (1)'))).toBe(true);
+    expect(titles.some(t => t.startsWith('One receptacle drawn as two classes on two sheets (1)'))).toBe(true);
+    expect(titles.findIndex(t => t.startsWith('Dense-sheet'))).toBeLessThan(titles.findIndex(t => t.startsWith('The same device')));
+    expect(screen.getByText('Different devices — keep 1')).toBeTruthy();
+    expect(screen.getAllByText(/currently 70|70/).length).toBeGreaterThan(0);
+  });
+});
+
 describe('Fix round B6 — a legend-zero group answers member by member, never one bulk action for the whole group', () => {
   const GROUP_ID = 'legend-zero:MS-OS-PC';
   function groupItem(overrides: Partial<ReviewItem> = {}): ReviewItem {

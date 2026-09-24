@@ -14,7 +14,7 @@ import { logger } from '../utils/logger';
 // marker (logged from the markup-confirm path, `by` the estimator's name)
 // — the two are never conflated, so a labeled-data consumer can always tell
 // a human label from a model one by `created_by`, not just by kind.
-export type LabeledEventKind = 'marker_update' | 'review_resolution' | 'crop_check' | 'gapfill_suggested' | 'gapfill_accept';
+export type LabeledEventKind = 'marker_update' | 'review_resolution' | 'crop_check' | 'gapfill_suggested' | 'gapfill_accept' | 'consistency_accept';
 
 const MAX_DETAIL_STRING = 500;
 

@@ -20,6 +20,7 @@ import type { CountResult, CountMark } from './countingStage';
 import { outsideAptInstall, describeAssignment } from '../bidstd/tradeAssignment';
 import { facilityChecklistItems } from '../bidstd/facilityChecklists';
 import { PANEL_CONFLICT, PANEL_LOAD_NOTE, panelNameOf, type PanelChoice } from './evidence/schedules';
+import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './sheetRefs';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -93,6 +94,9 @@ export interface ReviewItem {
   /** Evidence round 2.2 — a typical item: the device types and per-host
    *  quantities a resolved host count adds. */
   typicalDevices?: Array<{ key: string; perHost: number }>;
+  /** Review fix S1 — a class-conflict item: answered with option 1, one
+   *  receptacle moves from `from` to `to`. */
+  classShift?: { from: string; to: string };
   /** Fix round 4 / S20 — a panel-conflict item: what each answer changes. */
   panelChoice?: PanelChoice;
   /** Evidence round 3.3 — a family item: the primary type keys whose total
@@ -226,13 +230,16 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     if (t.status !== 'counted') {
       const tgt = targetByKey.get(t.key);
       // Decision 4 — a type another trade / the Owner / a vendor installs:
-      // a zero count is information, not a block.
-      const info = outsideAptInstall(tgt?.assignment);
+      // a zero count is information, not a block. Review fix S11 — only when
+      // NOTHING of it is APT's: a type APT connects ("HVAC install, EC wire",
+      // "by GC", owner-furnished) at zero is missing connection labour.
+      const info = tgt?.assignment?.aptScope === 'none';
+      const connects = !info && outsideAptInstall(tgt?.assignment);
       items.push({
         id: `count:${t.key}`,
         kind: 'count',
         title,
-        detail: `${t.status === 'zero' ? `Counted 0: ${t.reason}.` : `Could not be counted: ${t.reason}.`}${info ? ` Its schedule says ${describeAssignment(tgt!.assignment!)} — listed for information, not blocking.` : ''}`,
+        detail: `${t.status === 'zero' ? `Counted 0: ${t.reason}.` : `Could not be counted: ${t.reason}.`}${info ? ` Its schedule says ${describeAssignment(tgt!.assignment!)} — listed for information, not blocking.` : connects ? ` Its schedule says ${describeAssignment(tgt!.assignment!)} — the connection is APT's to price.` : ''}`,
         actions: ['count', 'markers', 'not_on_job'],
         ...(info ? { blocking: false } : {}),
         ...base,
@@ -267,6 +274,29 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
         actions: ['answer', 'count'],
         ...base,
         fingerprint: `viewport|${q.keep}|${q.add}|${q.items.map(x => `${x.sheet}:${x.viewport}:${x.count}`).join(';')}`,
+      });
+    }
+    // Real-run fix 2 — a generic legend symbol drawn where another entity's
+    // marks are: the same device under two names? Never merged silently.
+    if (t.status === 'counted' && t.synonymQuestion) {
+      const q = t.synonymQuestion;
+      const names = q.candidates.map(k => (countResult?.types ?? []).find(x => x.key === k)?.type ?? k).join(' / ');
+      // Review fix S7 — "the same device" drops only the marks that ARE the
+      // other type's; the rest keep their own count.
+      const keep = Math.max(0, t.count - q.coincident);
+      items.push({
+        id: `synonym:${t.key}`,
+        kind: 'area',
+        title: `${title}: the same device as ${names}?`,
+        detail: q.why
+          ? `${t.type} is a general name for ${names} and ${t.count} ${t.type} ${t.count === 1 ? 'is' : 'are'} drawn, but ${q.why}. Different items (keep ${t.count} ${t.type}), or the same items under a general name (no ${t.type} line — ${names} keep their own counts)?`
+          : `${q.coincident} of the ${q.count} ${t.type} marks sit where ${names} marks are. Different devices (keep ${t.count} ${t.type}), or those ${q.coincident} are ${names} under another name (keep ${keep} ${t.type} — the marks elsewhere)?`,
+        options: [`Different devices — keep ${t.count}`, keep ? `The same device — keep ${keep}` : `The same device — drop ${t.type}`],
+        keepQty: t.count,
+        sumQty: keep,
+        actions: ['answer'],
+        ...base,
+        fingerprint: `synonym|${q.coincident}|${t.count}`,
       });
     }
     // Fix round 3 / S17 — the schedule rows allow two quantities.
@@ -409,7 +439,50 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `typicalqty|${e.deviceKey}|${e.drawnAtHosts}|${e.hostCount ?? ''}`,
     });
   }
+  // Real-run fix 6 — a note's "typical" fixtures per SITE POLE ("parking lot
+  // site lights typically have two 209W fixtures per pole") restates the
+  // site family's heads, which its schedule already states per type (S1 1,
+  // S2 2): the schedule is used and the note is shown, not blocking. Only
+  // when every counted site type has its heads from the schedule.
+  const siteCounted = (countResult?.types ?? []).filter(t => t.category === 'site_lighting' && t.status === 'counted' && t.count > 0);
+  const siteHeadsKnown = siteCounted.length > 0 && siteCounted.every(t => t.heads != null);
+  // Review fix N5 — a notes line that names an assembly's own device again
+  // is never swallowed silently: information.
+  for (const e of ev?.expansions ?? []) {
+    if (!e.restated) continue;
+    items.push({
+      id: `typicalnote:${e.packageId}:${e.deviceKey}`,
+      kind: 'confirm',
+      blocking: false,
+      title: `Note at the ${e.host.toLowerCase()}: ${e.deviceText.toLowerCase()} — read as part of its assembly`,
+      detail: `${e.viewportLabel || 'A notes block'}: "${e.quote.slice(0, 160)}". It names no quantity and the same device is already part of the ${e.host.toLowerCase()} assembly, so it adds nothing; check the note if it means an additional device.`,
+      actions: ['confirm'],
+      fingerprint: `typicalnote|${e.deviceKey}`,
+    });
+  }
   for (const [i, u] of (ev?.unmappedTypical ?? []).entries()) {
+    if (siteHeadsKnown && /\b(site|parking|area)\b[^.]*\bpoles?\b|\bpoles?\b[^.]*\b(site|parking|area)\b/i.test(u.host)
+      && /\b(fixtures?|luminaires?|heads?|lights?|\d+\s*W)\b/i.test(u.text)) {
+      const heads = siteCounted.reduce((n, t) => n + (t.heads ?? 0), 0);
+      const poles = siteCounted.reduce((n, t) => n + t.count, 0);
+      // Review fix S11 — the note restates the schedule only when its
+      // per-pole number IS every site type's heads per pole; otherwise the
+      // two disagree (2 per pole x 3 = 6 vs the schedule's 4) — blocking.
+      const agrees = siteCounted.every(t => t.count > 0 && (t.heads ?? 0) / t.count === u.qty);
+      const perType = siteCounted.map(t => `${t.type} ${t.count} pole${t.count === 1 ? '' : 's'}, ${t.heads} head${t.heads === 1 ? '' : 's'}`).join('; ');
+      items.push({
+        id: `typicalheads:${slug(`${u.host} ${u.text}`)}`,
+        kind: 'confirm',
+        ...(agrees ? { blocking: false } : {}),
+        title: agrees
+          ? `Note: ${u.qty} × ${u.text} per ${u.host.toLowerCase()} — the same as the fixture schedule`
+          : `Site light heads: a note says ${u.qty} per pole (${u.qty * poles}), the fixture schedule ${heads}`,
+        detail: `"${u.quote.slice(0, 160)}". The fixture schedule: ${perType} = ${heads} heads.${agrees ? ' The note says the same.' : ` The note's ${u.qty} per pole × ${poles} poles = ${u.qty * poles}. The takeoff carries the schedule's ${heads} for now — confirm that (with a reason), or correct the heads on the site-light lines.`}`,
+        actions: ['confirm'],
+        fingerprint: `typicalheads|${u.qty}|${heads}|${poles}`,
+      });
+      continue;
+    }
     items.push({
       id: `unscheduled:TYPICAL-${slug(`${u.host} ${u.text}`)}-${i + 1}`,
       kind: 'count',
@@ -532,6 +605,84 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
         fingerprint: `reconcile|${f.expected}|${f.actual}|${f.direction}`,
       });
     }
+  }
+  // Real-run fix 5 / review fix B1 — the dense-sheet consistency pass. It
+  // NEVER lowers a count: pass 1's marks stay counted. Marks only pass 2
+  // found are SUGGESTED (Plans view) — possible additions; pass-1 marks
+  // pass 2 did not re-find are listed. One item for the check, answered
+  // type by type: "keep the counted number" keeps pass 1's; "confirm the
+  // found marks" ADDS the confirmed suggestions; or enter the count.
+  // Blocking when there is something to confirm or the passes agree under
+  // 85%.
+  if (ev?.consistency && (ev.consistency.suggested.length || ev.consistency.entries.some(e => e.lowAgreement))) {
+    const cons = ev.consistency;
+    const typeByKey = new Map((countResult?.types ?? []).map(t => [t.key, t]));
+    const keys = [...new Set([...cons.suggested.map(s => s.typeKey), ...cons.entries.filter(e => e.lowAgreement).map(e => e.typeKey)])].sort();
+    const per = keys.map(k => {
+      const es = cons.entries.filter(e => e.typeKey === k);
+      const sum = (f: (e: typeof es[number]) => number) => es.reduce((n, e) => n + f(e), 0);
+      const first = sum(e => e.first), agreed = sum(e => e.agreed);
+      return { k, t: typeByKey.get(k), first, second: sum(e => e.second), agreed, notReseen: sum(e => e.onlyFirst), suggested: cons.suggested.filter(x => x.typeKey === k).length, rate: first ? agreed / first : 1, low: es.some(e => e.lowAgreement) };
+    });
+    const n = cons.suggested.length;
+    const low = per.filter(p => p.low);
+    items.push({
+      id: `consistency:${keys.join('+')}`,
+      kind: 'count',
+      title: low.length
+        ? `Dense-sheet check: the two counting passes disagree on ${low.map(p => `Type ${p.t?.type ?? p.k}`).join(', ')} — check the count on the plans`
+        : `Dense-sheet check: ${n} possible mark${n === 1 ? '' : 's'} the second counting pass found — confirm on plans`,
+      detail: `${per.map(p => `Type ${p.t?.type ?? p.k}: counted ${p.first} (first pass); the second pass (shifted tiles) found ${p.second}, re-finding ${p.agreed} of the ${p.first} (${Math.round(p.rate * 100)}%)${p.notReseen ? `; ${p.notReseen} counted mark${p.notReseen === 1 ? '' : 's'} it did not re-find (still counted)` : ''}${p.suggested ? `; ${p.suggested} more it found (SUGGESTED, not counted)` : ''}`).join('; ')}. The first pass's count stands. Confirm the suggested marks on the plans (they are added to it), answer "keep the counted number", or enter the count.`,
+      typeKey: keys.length === 1 ? keys[0] : undefined,
+      type: per.map(p => p.t?.type ?? p.k).join('/'),
+      actions: ['markers', 'confirm', 'count'],
+      reconcileMembers: per.map(p => ({ key: p.k, type: p.t?.type ?? p.k, description: p.t?.description ?? '', unit: 'count' as const, currentQty: p.t?.count ?? 0, headsPerPole: null })),
+      fingerprint: `consistency|${per.map(p => `${p.k}:${p.first}/${p.agreed}/${p.suggested}`).join(';')}`,
+    });
+  }
+  // Review fix S1 — one receptacle drawn on two sheets under two class
+  // names: counted once (as the main plan draws it); which class is it?
+  for (const c of ev?.classConflicts ?? []) {
+    const name = (k: string) => (countResult?.types ?? []).find(t => t.key === k)?.type ?? k;
+    items.push({
+      id: `classconflict:${c.circuit}:${c.kept.typeKey}:${c.dropped.typeKey}`,
+      kind: 'area',
+      title: `Circuit ${c.circuit}: one receptacle drawn as ${name(c.kept.typeKey)} and as ${name(c.dropped.typeKey)}`,
+      detail: `${c.kept.sheetLabel} draws it as ${name(c.kept.typeKey)} and ${c.dropped.sheetLabel} as ${name(c.dropped.typeKey)}, at the same place on the same circuit — one receptacle, counted once (as ${name(c.kept.typeKey)} for now). Which is it?`,
+      // Review fix S14 — or two real receptacles (a counter duplex and a
+      // floor simplex at one desk, one circuit): count both.
+      options: [`${name(c.kept.typeKey)} (as counted)`, name(c.dropped.typeKey), 'Two different receptacles — count both'],
+      classShift: { from: c.kept.typeKey, to: c.dropped.typeKey },
+      actions: ['answer'],
+      // Review fix N8 — the circuit is part of the fingerprint.
+      fingerprint: `classconflict|${c.circuit}|${c.kept.sheetLabel}|${c.dropped.sheetLabel}`,
+    });
+  }
+  // Review fix S3 — a combined tag whose own quantity disagrees with the
+  // members it names: the estimator decides (confirm with a reason, or
+  // correct the member lines).
+  for (const q of ev?.consolidation?.questions ?? []) {
+    items.push({
+      id: `combined:${q.key}`,
+      kind: 'confirm',
+      title: `${q.type}: how many does the combined tag mean?`,
+      detail: `${q.reason}. Each member is counted on its own line now — confirm (with a reason), or correct the member counts.`,
+      actions: ['confirm'],
+      fingerprint: `combined|${q.reason}`,
+    });
+  }
+  // Review fix S8 — a consistency pass that was skipped (cap, failure,
+  // truncation) is said, never silent; it never blocks.
+  if (ev?.consistency?.warnings?.length) {
+    items.push({
+      id: 'consistency-skipped',
+      kind: 'confirm',
+      blocking: false,
+      title: 'Dense-sheet check skipped on part of the set',
+      detail: `${ev.consistency.warnings.join('; ')}. Those counts are the first pass's, unchecked.`,
+      actions: ['confirm'],
+      fingerprint: `consistency-skipped|${ev.consistency.warnings.join('|')}`,
+    });
   }
   // Evidence round 3.4 — a panel schedule the viewport reader found but the
   // schedule reader could not read completely: its branch circuits have no
@@ -859,8 +1010,9 @@ export function riskRank(i: ReviewItem): number {
   // Fix round (B2) — a real reconciliation shortfall (a second source vs
   // the plans) is a direct $ risk signal, ranked with the other schedule-
   // derived mismatches.
-  if (i.id.startsWith('gapfill:')) return 12;
+  if (i.id.startsWith('gapfill:') || i.id.startsWith('consistency:')) return 12;
   if (i.id.startsWith('reconcile:')) return 13;
+  if (i.id.startsWith('synonym:')) return 14;
   if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 15;
   if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
@@ -886,11 +1038,14 @@ export function groupOf(i: ReviewItem): string {
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';
+  if (i.id.startsWith('consistency:')) return 'consistency';
   if (i.id.startsWith('reconcile:')) return 'reconcile';
   if (i.id.startsWith('schedule:') || i.id.startsWith('panel-dup:') || i.id.startsWith('panel-load:') || i.id.startsWith('schedqty:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
-  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 'typical';
+  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalheads:')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';
+  if (i.id.startsWith('synonym:') || i.id.startsWith('combined:')) return 'synonym';
+  if (i.id.startsWith('classconflict:')) return 'classconflict';
   if (i.id.startsWith('counting:')) return 'counting';
   if (i.id.startsWith('refsheet:')) return 'refsheets';
   if (i.id.startsWith('sheet:') || i.id.startsWith('file:')) return 'sheets';
@@ -916,25 +1071,98 @@ export function referencedSheetItems(
   missingSheets: unknown,
   known: { loadedSheetKeys: Set<string>; checkRefKeys: Set<string> },
   normalize: (raw: string) => string | null,
+  opts: { pattern?: SheetPattern | null } = {},
 ): ReviewItem[] {
   const out: ReviewItem[] = [];
   const seen = new Set<string>();
   for (const raw of Array.isArray(missingSheets) ? missingSheets : []) {
     const text = typeof raw === 'string' ? raw : typeof (raw as { sheet?: unknown })?.sheet === 'string' ? String((raw as { sheet: string }).sheet) : '';
-    const id = /([A-Za-z]{1,3}\s?[-.]?\s?\d{1,3}(?:\.\d{1,2})?[A-Za-z]?)/.exec(text)?.[1] ?? '';
-    const key = id ? normalize(id) : null;
-    if (!key || seen.has(key) || known.loadedSheetKeys.has(key) || known.checkRefKeys.has(key)) continue;
-    seen.add(key);
-    out.push({
-      id: `refsheet:${key}`,
-      kind: 'confirm',
-      title: `Referenced sheet ${id.replace(/\s+/g, '')} not in analysis`,
-      detail: `The drawing analysis found a reference to ${text.trim().slice(0, 160)}, which is not in the uploaded set and the sheet check did not flag. Upload it (it is analysed and counted into this run), or confirm the takeoff doesn't need it (with a reason).`,
-      actions: ['confirm'],
-      fingerprint: `refsheet|${key}`,
-    });
+    // Real-run fix 1 — every whole-token id candidate in the text, never a
+    // piece of a word ("Spec 16050" is not "pec160", "Section 16480" not
+    // "ion164"), never a spec-section number.
+    for (const cand of sheetIdCandidates(text)) {
+      const key = normalize(cand.id);
+      if (!key || seen.has(key) || known.loadedSheetKeys.has(key) || known.checkRefKeys.has(key)) continue;
+      // Review fix S9 — a known discipline prefix (A, C, E, M, P, S, T …)
+      // is a sheet of this job whatever its digit count (a missing M-101
+      // carries RTU / EF connection scope): a real "needed but missing"
+      // item. Only an unknown prefix that the text names as a vendor's /
+      // third party's drawing ("SGN101 Sign Vendor Foundation Drawing") is
+      // information; any other unknown prefix still has to match this
+      // set's sheet-number pattern to count at all.
+      const prefix = /^[A-Za-z]+/.exec(cand.id)?.[0].toUpperCase() ?? '';
+      const knownPrefix = KNOWN_SHEET_PREFIXES.has(prefix) || !!opts.pattern?.prefixes.has(prefix);
+      const thirdParty = /\b(VENDOR|SIGN|MANUFACTURER|SUPPLIER|FABRICATOR|SHOP\s+DRAWING|BY\s+OTHERS|OWNER'?S?\s+CONSULTANT)\b/i.test(text);
+      const ofThisSet = knownPrefix || !opts.pattern || (!thirdParty && matchesSheetPattern(cand.id, opts.pattern));
+      if (!ofThisSet && !thirdParty) continue;
+      seen.add(key);
+      out.push(ofThisSet ? {
+        id: `refsheet:${key}`,
+        kind: 'confirm',
+        title: `Referenced sheet ${cand.id.replace(/\s+/g, '')} not in analysis`,
+        detail: `The drawing analysis found a reference to ${text.trim().slice(0, 160)}, which is not in the uploaded set and the sheet check did not flag. Upload it (it is analysed and counted into this run), or confirm the takeoff doesn't need it (with a reason).`,
+        actions: ['confirm'],
+        fingerprint: `refsheet|${key}`,
+      } : {
+        id: `refsheet:${key}`,
+        kind: 'confirm',
+        blocking: false,
+        title: `Drawing ${cand.id.replace(/\s+/g, '')} named — a vendor's / third party's drawing`,
+        detail: `The drawing analysis found a reference to ${text.trim().slice(0, 160)}. "${cand.id}" is not a sheet number of this set and the text names it as another party's drawing, so it is listed for information — upload it if it carries electrical scope.`,
+        actions: ['confirm'],
+        fingerprint: `refsheet-other|${key}`,
+      });
+    }
   }
   return out;
+}
+
+/** A CSI / MasterFormat spec-section number: 5-6 digits ("16050",
+ *  "015000") or "xx xx xx" ("26 05 19"), optionally after SECTION / SEC /
+ *  SPEC / DIVISION. Never a sheet. */
+
+/** Real-run fix 1 — the sheet-id candidates in one "missing sheet" string:
+ *  whole tokens only (bounded by a non-letter / non-digit on both sides:
+ *  never the tail of "Spec", "Section" or "Sec"), never a spec-section
+ *  number or anything in a string that cites one ("Spec Section 16480
+ *  Panelboards", "Structural drawings (referenced Sec 01410 3.09)"), and
+ *  never a word that merely ends in digits' neighbours. */
+export function sheetIdCandidates(text: string): Array<{ id: string; index: number }> {
+  const out: Array<{ id: string; index: number }> = [];
+  const re = /(?<![A-Za-z0-9])([A-Za-z]{1,3}(?:\s?[-.]\s?|\s)?\d{1,4}(?:\.\d{1,2})?[A-Za-z]?)(?![A-Za-z0-9])/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const id = m[1];
+    const digits = /\d+/.exec(id)?.[0] ?? '';
+    // A 5-6 digit run is a specification section; "SEC 014" / "ION 164"
+    // never reach here (not whole tokens: the digits run on).
+    if (digits.length >= 5) continue;
+    // Review fix S9 — only the text BEFORE / AT the id decides it is a spec
+    // citation ("Section 1", "Div 16"); spec words AFTER a real sheet id
+    // ("E-9 (Div 16)", "Sheet E-8 SECTION 2") never drop the sheet.
+    if (/\b(?:SPEC(?:IFICATION)?S?|SECTIONS?|SECT?|DIV(?:ISION)?|CSI)\.?\s*#?\s*$/i.test(text.slice(Math.max(0, m.index - 16), m.index))) continue;
+    // A bare word followed by a space and a number ("Sheet 3", "Sec 3") is
+    // only a sheet id when the letters are a real sheet prefix — the
+    // pattern check (the caller) decides the rest.
+    const prefix = /^[A-Za-z]+/.exec(id)?.[0].toUpperCase() ?? '';
+    if (/\s/.test(id) && !/[-.]/.test(id) && !KNOWN_SHEET_PREFIXES.has(prefix)) continue;
+    out.push({ id: id.replace(/\s+/g, ' ').trim(), index: m.index });
+  }
+  // Round 2 nit N9 — "E-8 thru E-10" names E-9 too (at most 20 between).
+  const ranged: Array<{ id: string; index: number }> = [];
+  for (let k = 0; k < out.length; k++) {
+    ranged.push(out[k]);
+    const a = out[k], b = out[k + 1];
+    if (!b) continue;
+    const between = text.slice(a.index + a.id.length, b.index);
+    if (!/^\s*(?:THRU|THROUGH|TO|-|–)\s*$/i.test(between)) continue;
+    const pa = /^([A-Za-z]+)(\s?[-.]?\s?)(\d+)$/.exec(a.id), pb = /^([A-Za-z]+)\s?[-.]?\s?(\d+)$/.exec(b.id);
+    if (!pa || !pb || pa[1].toUpperCase() !== pb[1].toUpperCase()) continue;
+    const lo = Number(pa[3]), hi = Number(pb[2]);
+    if (!(hi > lo && hi - lo <= 20)) continue;
+    for (let n = lo + 1; n < hi; n++) ranged.push({ id: `${pa[1]}${pa[2]}${n}`, index: a.index });
+  }
+  return ranged;
 }
 
 /** A re-run rebuilds the list; any item with the same id that the estimator
@@ -1081,6 +1309,9 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (cov) qty = cov.action === 'not_on_job' ? null : (cov.qty ?? qty);
     const rec = res(`recount:${t.key}`);
     if (rec) qty = rec.qty ?? qty;
+    // Real-run fix 2 — "the same device under another name": no line.
+    const syn = res(`synonym:${t.key}`);
+    if (syn?.action === 'answer' && syn.qty != null) qty = syn.qty > 0 ? syn.qty : null;
     if (qty !== undefined && (qty === null || qty > 0)) byType.set(t.key, qty);
     if (t.category === 'site_lighting') {
       const heads = res(`count:${t.key}:heads`);
@@ -1099,7 +1330,7 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   // fixture schedule states heads-per-pole, and only as an exact multiple;
   // otherwise poles stay exactly as directly counted from the plans.
   for (const i of list) {
-    if (!i.id.startsWith('gapfill:') && !i.id.startsWith('reconcile:')) continue;
+    if (!i.id.startsWith('gapfill:') && !i.id.startsWith('reconcile:') && !i.id.startsWith('consistency:')) continue;
     for (const m of i.reconcileMembers ?? []) {
       const r = m.resolution;
       if (!r || r.action === 'confirm') continue;
@@ -1122,6 +1353,17 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
       if (cur === null) continue; // the type itself is not on this job
       byType.set(d.key, (cur ?? 0) + d.perHost * (i.resolution.qty ?? 0));
     }
+  }
+  // Review fix S1 — the class conflict answered "the other class".
+  for (const i of list) {
+    if (!i.id.startsWith('classconflict:') || !i.classShift || i.resolution?.action !== 'answer') continue;
+    const pick = (i.options ?? []).indexOf(i.resolution.answer ?? '');
+    if (pick < 1) continue;
+    const from = byType.get(i.classShift.from), to = byType.get(i.classShift.to);
+    // 1: relabel (one receptacle, the other class); 2: two receptacles —
+    // the dropped mark comes back under its own class.
+    if (pick === 1 && from != null && from > 0) byType.set(i.classShift.from, from - 1 > 0 ? from - 1 : null);
+    if (to !== null) byType.set(i.classShift.to, (to ?? 0) + 1);
   }
   // Fix round S3 — "the same outlet on two sheets": subtract.
   for (const i of list) {

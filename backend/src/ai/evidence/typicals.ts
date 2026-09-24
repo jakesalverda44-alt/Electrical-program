@@ -222,6 +222,9 @@ export interface TypicalExpansion {
    *  'qty_unstated' (S2): the legend names the device but not how many per
    *  host — never guessed; a review item. */
   status: 'expanded' | 'no_multiplier' | 'assembly' | 'qty_unstated';
+  /** Review fix N5 — a notes line naming the assembly's own device again:
+   *  part of the assembly, shown as information. */
+  restated?: boolean;
   reason: string;
   quote: string;
   sheetKey: string;
@@ -237,12 +240,19 @@ function asmWords(s: string): Set<string> {
 }
 
 /** S1 — the package describes the host's OWN assembly: the host is a
- *  counted type and the quote is its own legend / schedule row (2+ of its
- *  description's words, or its host text shares 2+ words with it). */
+ *  counted DEVICE symbol (the display baseflex: J-box, flex and the
+ *  receptacle in the kick plate, priced as one line) and the quote is its
+ *  own legend / schedule row (2+ of its description's words, or its host
+ *  text shares 2+ words with it).
+ *  Real-run fix 3 — an EQUIPMENT host (a power pole, a counter, a kiosk:
+ *  its line is the equipment's own connection) never swallows the devices
+ *  mounted on it: the live Kissimmee run bound every pole package to its
+ *  PP#n equipment type and expanded nothing ("assembly", expanded 0). */
 export function isAssemblyPackage(p: TypicalPackage, targets: CountTarget[]): boolean {
   if (!p.hostTargetKey) return false;
   const t = targets.find(x => x.key === p.hostTargetKey);
   if (!t) return false;
+  if (t.category === 'equipment') return false;
   const tw = asmWords(t.description);
   const qw = asmWords(`${p.quote} ${p.host}`);
   return [...tw].filter(w => qw.has(w)).length >= 2;
@@ -261,7 +271,7 @@ export function circuitsOverlap(a: string, b: string): boolean {
 /** Pure (2.2): expand every package's stated devices by its host count. */
 export function expandTypicals(
   packages: TypicalPackage[],
-  hostCounts: Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string }>,
+  hostCounts: Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[] }>,
   deviceMarks: Array<{ sheetKey: string; typeKey: string; x: number; y: number; fromSheet?: string; circuit?: string }>,
   targets: CountTarget[] = [],
 ): { expansions: TypicalExpansion[]; unmapped: UnmappedTypicalDevice[] } {
@@ -287,10 +297,20 @@ export function expandTypicals(
     }
     return n;
   };
+  // Real-run fix 6 — a device that is already part of a host's own
+  // assembly (the legend's baseflex: "receptacle mounted to base plate") is
+  // the same device when a notes block describes it again at that host
+  // ("outlet on flex … installed in fixture base"): part of the assembly,
+  // never a second question about how many.
+  const inAssembly = new Set(packages.filter(p => isAssemblyPackage(p, targets)).flatMap(p => p.devices.map(d => `${hostKeyOf(p)}|${d.targetKey}`)));
   for (const p of packages) {
     const hostKey = hostKeyOf(p);
     const hc = hostCounts.get(hostKey);
-    const assembly = isAssemblyPackage(p, targets);
+    // Review fix N5 — "additional / extra / another outlet" is a new device,
+    // never the assembly's own again; a restatement is still shown (restated).
+    const additional = /\b(additional|extra|another|second|more|added)\b/i.test(`${p.quote} ${p.devices.map(d => d.text).join(' ')}`);
+    const restated = !isAssemblyPackage(p, targets) && !additional && p.devices.length > 0 && p.devices.every(d => d.targetKey && d.qty == null && inAssembly.has(`${hostKey}|${d.targetKey}`));
+    const assembly = isAssemblyPackage(p, targets) || restated;
     for (const d of p.devices) {
       if (!d.targetKey && d.qty != null && !assembly) { unmapped.push({ packageId: p.id, host: p.host, text: d.text, qty: d.qty, quote: p.quote }); continue; }
       if (!d.targetKey && (d.qty == null || assembly)) continue;
@@ -300,12 +320,19 @@ export function expandTypicals(
         hostSheets: hc?.sheets ?? [],
       };
       if (assembly) {
-        expansions.push({ ...base, hostCount: hc?.count ?? null, drawnAtHosts: 0, expanded: 0, status: 'assembly',
+        expansions.push({ ...base, hostCount: hc?.count ?? null, drawnAtHosts: 0, expanded: 0, status: 'assembly', ...(restated ? { restated: true } : {}),
           reason: `part of the ${p.host.toLowerCase()} assembly (${d.qty ?? 'n'} per ${p.host.toLowerCase()}) — priced with it, not as a separate ${d.text.toLowerCase()}` });
         continue;
       }
       if (d.qty == null) {
-        const drawn = hc && hc.count ? near(hc, d.targetKey!, HOST_AREA_IN, Number.MAX_SAFE_INTEGER, null) : 0;
+        // Real-run fix 3 — a host whose own tag is not bound (no circuit on
+        // it) is looked for at its family's unbound tags: devices drawn
+        // there are counted where drawn (information), never subtracted.
+        const unbound = !!(hc && !hc.marks.length && hc.possible?.length);
+        const drawn = !hc || !hc.count ? 0
+          : unbound ? new Set(hc.possible!.flatMap(h => deviceMarks.filter(m => m.typeKey === d.targetKey && m.sheetKey === h.sheetKey
+            && Math.hypot(m.x - h.x, m.y - h.y) <= HOST_AREA_IN))).size
+          : near(hc, d.targetKey!, HOST_AREA_IN, Number.MAX_SAFE_INTEGER, null);
         expansions.push({ ...base, hostCount: hc?.count ?? null, drawnAtHosts: drawn, expanded: 0, status: 'qty_unstated',
           reason: drawn ? `${drawn} drawn near the ${p.host.toLowerCase()}${(hc?.count ?? 0) === 1 ? '' : 's'} — counted where drawn` : `how many per ${p.host.toLowerCase()} is not stated and none is drawn near one` });
         continue;

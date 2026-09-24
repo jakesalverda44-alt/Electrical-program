@@ -13,18 +13,21 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { buildCountTargets, type CountTarget } from './countTargets';
 import { counterTileSpec, retryTileIn, type ModelImageLimits } from './modelLimits';
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
-import { readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry } from './countRender';
+import { planOffsetTiles, readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry, type TileRectIn } from './countRender';
+import { CONSISTENCY_PROMPT_VERSION, MAX_CONSISTENCY_SHEETS, MAX_CONSISTENCY_TILES, agreeRadiusPt, coverRect, consistencyTypes, entryOf, reconcilePasses, type ConsistencyEntry, type ConsistencySuggestion } from './evidence/consistency';
 import { runCounter, type SheetCountResult } from './counter';
 import { mergeCountsIntoTakeoff, isSiteFixtureCategory, type CountMergeResult, type CountMergeEvidenceResult, type SheetCountInput } from './countMerge';
 import { logger } from '../utils/logger';
+import { RunCancelledError } from './runControl';
 import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { runEvidenceStage, type EvidenceCache, type EvidencePage, type EvidenceStageOutput, type EvidenceUsage } from './evidence/evidenceStage';
-import { resolveSheetMarks, viewportPromptBlock, type EnlargedDecision, type SheetMarkResolution } from './evidence/viewportResolve';
+import { dropCircuitRepeats, resolveSheetMarks, viewportPromptBlock, type EnlargedDecision, type SheetMarkResolution } from './evidence/viewportResolve';
 import { hostTargets, type TypicalPackage } from './evidence/typicals';
-import { dedupePanels, isCompletePanel, panelChoices, scheduleCounts, type PanelChoice, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
+import { dedupePanels, isCompletePanel, panelChoices, panelNameOf, scheduleCounts, type PanelChoice, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
 import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewports';
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
 import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillStage, sha256Of, type GapFillSheetAsset } from './evidence/gapFillStage';
+import { bindHostTagMarks, canonicalKey, consolidateTargets, resolveUncertainSynonyms, type Consolidation, type ConsolidationMerge, type ConsolidationQuestion, type UncertainSynonym } from './evidence/consolidate';
 
 export const COUNT_RESULT_VERSION = 2;
 
@@ -74,6 +77,8 @@ export interface CountResultEvidence {
   pages: Array<{ key: string; label: string; source: 'text' | 'vision' | 'none'; viewports: number; hasTextLayer: boolean; note?: string }>;
   typicals: TypicalPackage[];
   expansions: CountMergeEvidenceResult['expansions'];
+  /** Review fix S1 — one receptacle drawn on two sheets under two classes. */
+  classConflicts?: CountMergeEvidenceResult['classConflicts'];
   unmappedTypical: CountMergeEvidenceResult['unmappedTypical'];
   tables: ScheduleTable[];
   families: CountMergeEvidenceResult['families'];
@@ -85,6 +90,15 @@ export interface CountResultEvidence {
   panelsExpected: number;
   /** Fix round 4 / S20 — same-name panel conflicts with their enforced answers. */
   panelChoices?: PanelChoice[];
+  /** Real-run fix 5 — the second counting pass on a shifted tile grid for
+   *  high-count / density-flagged types, reconciled by location: counted =
+   *  the marks BOTH passes found; the rest are SUGGESTED (a review item),
+   *  never counted until confirmed. */
+  consistency?: { entries: ConsistencyEntry[]; suggested: ConsistencySuggestion[]; notReseen?: ConsistencySuggestion[]; calls: number; usage: EvidenceUsage; tiles: number; cached?: number; warnings?: string[] };
+  /** Real-run fix 2 — one canonical entity per thing: every other name of
+   *  it (synonyms, a class name, a combined tag, a pole-tag legend) with the
+   *  evidence, and the generic legend symbols decided by their marks. */
+  consolidation?: { merges: ConsolidationMerge[]; uncertain: UncertainSynonym[]; hostBindings?: Array<{ tag: string; member: string; circuit: string; sheetKey: string }>; questions?: ConsolidationQuestion[] };
   /** Panel-schedule viewports the viewport reader identified whose table
    *  could not be read completely — their branch circuits have no source
    *  (3.4: Agent 1 no longer states them). */
@@ -173,9 +187,105 @@ export interface CountingStageOutput {
 
 const ZERO_USAGE = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
 
+/** Real-run fix 5 — what the consistency pass cost and what it skipped. */
+export interface ConsistencyRun { calls: number; usage: EvidenceUsage; tiles: number; cached: number; warnings: string[] }
+
 interface FinishEvidence {
   ev: EvidenceStageOutput;
   schedCounts: Map<string, ScheduleCount>;
+  /** Real-run fix 2. */
+  cons?: Consolidation;
+  /** Real-run fix 5 — the consistency pass's own calls / usage / tiles. */
+  consistencyRun?: ConsistencyRun;
+}
+
+/** Real-run fix 2 / review fix S12 — marks under another name of an entity
+ *  (a supplement pass over a run counted before consolidation, which may
+ *  have counted BOTH names on the same symbols) become the canonical
+ *  entity's — and a remapped mark on top of one the entity already has
+ *  (within the counter's own overlap radius) is the same symbol, dropped:
+ *  never a doubled count. Mutates the sheets; returns how many were dropped. */
+export function remapAliasMarks(sheets: Array<{ placed: Array<{ typeKey: string; x?: number; y?: number }>; notes?: string[] }>, aliasOf: Map<string, string>, radiusPt = 0.35 * 72): number {
+  let dropped = 0;
+  for (const r of sheets) {
+    const kept: typeof r.placed = [];
+    const remapped: typeof r.placed = [];
+    for (const p of r.placed) (aliasOf.has(p.typeKey) ? remapped : kept).push(p);
+    for (const p of remapped) {
+      const k = canonicalKey(p.typeKey, aliasOf);
+      const dup = Number.isFinite(p.x) && kept.some(o => o.typeKey === k && Number.isFinite(o.x) && Math.hypot(o.x! - p.x!, o.y! - p.y!) <= radiusPt);
+      if (dup) { dropped++; continue; }
+      p.typeKey = k;
+      kept.push(p);
+    }
+    if (remapped.length) {
+      const n = remapped.length - remapped.filter(p => kept.includes(p)).length;
+      if (n) r.notes?.push(`${n} mark${n === 1 ? '' : 's'} counted under another name of an entity sat on its own marks — counted once.`);
+    }
+    r.placed = kept;
+  }
+  return dropped;
+}
+
+/** Real-run fix 2 — a typical package the reader bound to another name of
+ *  an entity ("DUPLEX") points at its canonical target. */
+function remapTypicals(packages: TypicalPackage[], aliasOf: Map<string, string> | undefined): TypicalPackage[] {
+  if (!aliasOf?.size) return packages;
+  return packages.map(p => ({
+    ...p,
+    hostTargetKey: p.hostTargetKey ? canonicalKey(p.hostTargetKey, aliasOf) : p.hostTargetKey,
+    devices: p.devices.map(d => ({ ...d, targetKey: d.targetKey ? canonicalKey(d.targetKey, aliasOf) : d.targetKey })),
+  }));
+}
+
+/** Real-run fix 3 — the circuits each schedule-owned type's rows are on
+ *  ("PANEL A" row 30 -> A30). */
+function scheduleCircuitsOf(sc: Map<string, ScheduleCount>): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const [k, c] of sc) {
+    const set = new Set<string>();
+    for (const r of c.rows) {
+      const n = Number(/\d+/.exec(r.cells[0] ?? '')?.[0]);
+      if (Number.isInteger(n) && n > 0) set.add(`${panelNameOf(r.table)}${n}`);
+    }
+    out.set(k, set);
+  }
+  return out;
+}
+
+/** Review fix S8 — a consistency suggestion is kept only where a counted
+ *  mark could be: a main / enlarged plan viewport (or anywhere, when the
+ *  sheet has no viewports). */
+function onPlanViewport(vps: Viewport[] | undefined, g: PageGeometry | null, m: { x: number; y: number }): boolean {
+  if (!vps?.length || !g) return true;
+  const p = pdfToDisplayedIn(m.x, m.y, g);
+  const v = viewportAt(vps, p.x, p.y);
+  return !!v && (v.kind === 'main_plan' || v.kind === 'enlarged_plan');
+}
+
+/** Real-run fix 4 — a viewport that is a PANEL SCHEDULE (whose unread
+ *  circuits would have no source), by its title. Live Kissimmee: E-5's
+ *  "PANELBOARD - DIAGRAM" and "PANELBOARD - MOUNTING HEIGHT SECTION" were
+ *  read as tables, came back with no rows (there are none to read), and
+ *  raised "Panel schedules not read completely" although both real panel
+ *  schedules (E-4, Panel A and B, 42 rows each) were read completely. A
+ *  diagram, section, elevation, detail, riser, one-line, schematic or
+ *  mounting drawing of a panel is not its schedule. */
+export function isPanelScheduleTitle(title: string): boolean {
+  if (!/\bPANEL(BOARD)?S?\b/i.test(title) || /\bLOAD\b/i.test(title)) return false;
+  return !/\b(DIAGRAMS?|SECTIONS?|ELEVATIONS?|DETAILS?|RISERS?|ONE[\s-]?LINE|SINGLE[\s-]?LINE|SCHEMATICS?|MOUNTING|LAYOUTS?|PLANS?|ENLARGED|HEIGHTS?|WIRING)\b/i.test(title);
+}
+
+/** The panels the drawing analysis found (panels[].name), for circuit identity. */
+function panelNamesOf(agent1: Record<string, unknown>): string[] {
+  return Array.isArray(agent1.panels) ? (agent1.panels as Array<Record<string, unknown>>).map(p => String(p?.name ?? '')).filter(Boolean) : [];
+}
+
+/** Real-run fix 2 — the targets the counter looks for: never another name
+ *  of an entity (its canonical target is asked, naming it); a pole-tag
+ *  legend is asked as a host marker. */
+export function isAliasTarget(t: CountTarget): boolean {
+  return !!t.mergedInto?.length && t.role !== 'host';
 }
 
 function finish(
@@ -203,6 +313,15 @@ function finish(
       ...(c.enlarged ? { enlarged: c.enlarged } : {}), ...(c.pending?.length ? { pending: c.pending } : {}),
     });
   }
+  // Real-run fix 2 — a mark under another name of an entity (a carried
+  // supplement mark) is the canonical entity's.
+  const aliasOf = evidence?.cons?.aliasOf;
+  if (aliasOf?.size) remapAliasMarks(sheetResults, aliasOf);
+  // Real-run fix 3 — a pole-tag legend's marks are its members' (bound by
+  // the circuit tag each mark carries), BEFORE any viewport / sheet rule, so
+  // an enlarged plan's pole #2 is compared with the main plan's pole #2.
+  const hostBindings = evidence ? bindHostTagMarks(targets, sheetResults, scheduleCircuitsOf(evidence.schedCounts), panelNamesOf(input.agent1)) : [];
+  const equipmentKeys = new Set(targets.filter(t => t.category === 'equipment').map(t => t.key));
   const mergeInputs: SheetCountInput[] = sheetResults.map(r => {
     const page = vpBy.get(r.sheet.key);
     if (!evidence || r.status !== 'counted' || !page) {
@@ -219,6 +338,7 @@ function finish(
       return { ...r, placed, ...(c.viewports ? { viewports: c.viewports } : {}), ...(c.pending ? { pendingEnlarged: c.pending } : {}) };
     }
     const res = resolveSheetMarks(r.placed, page.viewports.viewports, r.geometry ?? page.geometry);
+    dropCircuitRepeats(res, equipmentKeys);
     const exBy = new Map<string, { count: number; reasons: Set<string>; marks: Array<{ x: number; y: number }> }>();
     for (const m of res.excluded) {
       const e = exBy.get(m.typeKey) ?? { count: 0, reasons: new Set<string>(), marks: [] };
@@ -255,6 +375,9 @@ function finish(
   const marks: CountMark[] = mergeInputs.flatMap(r => r.status === 'counted'
     ? r.placed.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x! * 100) / 100, y: Math.round(p.y! * 100) / 100, ...(p.circuit ? { circuit: p.circuit } : {}) }))
     : []);
+  // Real-run fix 2 — generic legend symbols: folded when zero, a question
+  // when their marks sit on a candidate's, a different device otherwise.
+  if (evidence?.cons?.uncertain.length) resolveUncertainSynonyms(merged.types, evidence.cons.uncertain, marks, undefined, { scheduleOwned: new Set(evidence.schedCounts.keys()) });
   const classified = new Set(input.inventory.map(p => p.file));
   const unclassifiedFiles = input.inventory.length ? [...input.pdfs.keys()].filter(f => !classified.has(f)) : [];
   const countResult: CountResult = {
@@ -287,6 +410,7 @@ function finish(
         pages: evidence.ev.pages.map(p => ({ key: p.key, label: p.label, source: p.viewports.source, viewports: p.viewports.viewports.length, hasTextLayer: p.hasTextLayer, ...(p.viewports.note ? { note: p.viewports.note } : {}) })),
         typicals: evidence.ev.typicals,
         expansions: merged.evidence?.expansions ?? [],
+        ...(merged.evidence?.classConflicts?.length ? { classConflicts: merged.evidence.classConflicts } : {}),
         unmappedTypical: merged.evidence?.unmappedTypical ?? [],
         tables: evidence.ev.tables,
         families: merged.evidence?.families ?? [],
@@ -296,8 +420,18 @@ function finish(
         panelsExpected: Array.isArray(input.agent1.panels) ? input.agent1.panels.length : 0,
         // Fix round 4 / S20 — what each answer to a panel conflict changes.
         panelChoices: panelChoices(targets, evidence.ev.tables),
+        ...(evidence.cons ? { consolidation: { merges: evidence.cons.merges, uncertain: evidence.cons.uncertain, hostBindings, questions: evidence.cons.questions } } : {}),
+        ...(sheetResults.some(r => r.consistency?.length) || evidence.consistencyRun?.warnings.length ? { consistency: {
+          entries: sheetResults.flatMap(r => r.consistency ?? []),
+          // Review fix S8 — a suggestion obeys the viewport rules: only on a
+          // plan viewport, never a legend / schedule / notes / detail one.
+          suggested: sheetResults.flatMap(r => (r.consistencySuggested ?? []).filter(m => onPlanViewport(extra.get(r.sheet.key)?.viewports, r.geometry, m))),
+          notReseen: sheetResults.flatMap(r => r.consistencyNotReseen ?? []),
+          calls: evidence.consistencyRun?.calls ?? 0, usage: evidence.consistencyRun?.usage ?? { ...ZERO_USAGE }, tiles: evidence.consistencyRun?.tiles ?? 0,
+          cached: evidence.consistencyRun?.cached ?? 0, warnings: evidence.consistencyRun?.warnings ?? [],
+        } } : {}),
         panelsUnread: evidence.ev.pages.flatMap(p => p.viewports.viewports
-          .filter(v => v.kind === 'schedule' && /\bPANEL(BOARD)?\b/i.test(v.title) && !/\bLOAD\b/i.test(v.title))
+          .filter(v => isPanelScheduleTitle(v.title))
           .filter(v => !evidence.ev.tables.some(t => t.viewportId === v.id && isCompletePanel(t)))
           .map(v => `${v.title} (${p.label})`)),
       },
@@ -393,7 +527,16 @@ async function runGapFillPass(
 }
 
 export async function runCountingStage(input: CountingStageInput): Promise<CountingStageOutput> {
-  const { targets, notes: targetNotes } = buildCountTargets(input.agent1);
+  const built = buildCountTargets(input.agent1);
+  let targets = built.targets;
+  const targetNotes = built.notes;
+  // Real-run fix 2 — one canonical entity per thing, before counting and
+  // review (switched by the evidence round, like the rest of it).
+  const cons = input.evidence && targets.length ? consolidateTargets(targets, { panels: panelNamesOf(input.agent1) }) : undefined;
+  if (cons) {
+    targets = cons.targets;
+    targetNotes.push(...cons.merges.map(m => `${m.type}: ${m.basis}.`));
+  }
   if (targets.length === 0) {
     const { agent1, countResult } = finish(input, [], targetNotes, [], [], false, 'no fixture schedule, legend, equipment schedule or lighting circuits to count');
     return { agent1, countResult, usage: { ...ZERO_USAGE } };
@@ -438,25 +581,27 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     ];
     const ev = await runEvidenceStage({
       client: input.client, model: input.evidence.model, maxTokens: input.evidence.maxTokens,
-      pages, pdfs: input.pdfs, targets, cache: input.evidence.cache, shouldStop: input.shouldStop,
+      pages, pdfs: input.pdfs, targets: targets.filter(t => !isAliasTarget(t)), cache: input.evidence.cache, shouldStop: input.shouldStop,
     });
+    ev.typicals = remapTypicals(ev.typicals, cons?.aliasOf);
     // Fix round 3 / B12 — one table per panel identity and content, the
     // same-name conflicts flagged ON THE STORED TABLES (the review list reads them).
     ev.tables = dedupePanels(ev.tables);
     const hosts = hostTargets(ev.typicals, targets);
     const schedCounts = scheduleCounts(targets, ev.tables);
     allTargets = [...targets, ...hosts];
-    counterTargets = allTargets.filter(t => !schedCounts.has(t.key));
+    counterTargets = allTargets.filter(t => !schedCounts.has(t.key) && !isAliasTarget(t));
     sheetNotes = new Map(ev.pages.filter(p => p.viewports.viewports.length).map(p => [p.key, viewportPromptBlock(p.viewports.viewports, sanitizeForPrompt)]));
-    evidence = { ev, schedCounts };
+    evidence = { ev, schedCounts, ...(cons ? { cons } : {}) };
     logger.info({ pages: ev.pages.length, calls: ev.calls, cached: ev.cached, typicals: ev.typicals.length, tables: ev.tables.length, hosts: hosts.length, scheduleOwned: schedCounts.size, errors: ev.errors }, '[counting] evidence readers done');
   }
 
   // A truncated call throws AgentTruncatedError out of here (the run fails);
   // every other per-sheet failure is recorded on that sheet by runCounter.
-  const run = counterTargets.length
-    ? await countSheets(input, counterTargets, selection.counted, input.onProgress, sheetNotes)
+  const run: Awaited<ReturnType<typeof countSheets>> = counterTargets.length
+    ? await countSheets(input, counterTargets, selection.counted, input.onProgress, sheetNotes, { consistency: !!input.evidence, cache: input.evidence?.cache })
     : { sheets: selection.counted.map(sheet => ({ sheet, status: 'counted' as const, geometryOk: false, geometry: null, placed: [], mergedDuplicates: 0, unreadable: [], rejected: [], notes: ['every type on this job is owned by the schedules — nothing to count'], calls: 0, tiles: 0 })), usage: { ...ZERO_USAGE } };
+  if (evidence && run.consistency) evidence.consistencyRun = run.consistency;
   const { agent1, countResult } = finish(input, allTargets, targetNotes, run.sheets, selection.skipped, true, undefined, evidence);
   if (input.evidence && evidence) {
     await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
@@ -483,6 +628,164 @@ function countsByType(placed: Array<{ typeKey: string }>): Record<string, number
  *  at a higher effective resolution (smaller tiles). The retry's counts are
  *  used when it succeeds; both passes are kept on the sheet. */
 export async function countSheets(
+  input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop'>,
+  targets: CountTarget[],
+  sheets: CountSheet[],
+  onProgress?: (done: number, total: number, phase?: 'retry') => void,
+  sheetNotes?: Map<string, string>,
+  opts: { consistency?: boolean; cache?: EvidenceCache } = {},
+): Promise<{ sheets: SheetCountResult[]; usage: CountingStageOutput['usage']; consistency?: ConsistencyRun }> {
+  const run = await countSheetsOnce(input, targets, sheets, onProgress, sheetNotes);
+  if (!opts.consistency || input.shouldStop?.()) return run;
+  const c = await consistencyPass(input, targets, run.sheets, sheetNotes, opts.cache);
+  if (!c) return run;
+  for (const k of Object.keys(run.usage) as Array<keyof typeof run.usage>) run.usage[k] += c.usage[k];
+  return { ...run, consistency: c };
+}
+
+/** Real-run fix 5 — the second counting pass on a SHIFTED tile grid for
+ *  each sheet's high-count / density-flagged types (only the shifted tiles
+ *  that cover their marks), reconciled by location: the marks both passes
+ *  found stay counted; a mark only one pass found leaves the count and is
+ *  SUGGESTED (sheet.consistencySuggested). Mutates the sheets' `placed`.
+ *  A pass that fails keeps the first pass and says so (never a silent
+ *  change). Returns null when no sheet needed it. */
+async function consistencyPass(
+  input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop'>,
+  targets: CountTarget[],
+  results: SheetCountResult[],
+  sheetNotes?: Map<string, string>,
+  cache?: EvidenceCache,
+): Promise<{ calls: number; usage: CountingStageOutput['usage']; tiles: number; cached: number; warnings: string[] } | null> {
+  const hostKeys = new Set(targets.filter(t => t.role === 'host').map(t => t.key));
+  const all = results.filter(r => r.status === 'counted' && r.geometry && r.geometryOk !== false)
+    .map(r => ({ r, types: consistencyTypes(r.placed, r.unreadable, k => hostKeys.has(k)) }))
+    .filter(j => j.types.length);
+  if (!all.length) return null;
+  const warnings: string[] = [];
+  // Review fix S8 — a per-run cap: the densest sheets first.
+  const denseCount = (j: typeof all[number]) => j.r.placed.filter(p => j.types.some(t => t.typeKey === p.typeKey)).length;
+  const jobs = all.slice().sort((p, q) => denseCount(q) - denseCount(p)).slice(0, MAX_CONSISTENCY_SHEETS);
+  for (const j of all.filter(x => !jobs.includes(x))) {
+    j.r.notes.push(`Consistency pass not run on this sheet (the per-run cap of ${MAX_CONSISTENCY_SHEETS} sheets) — its counts stand, unchecked.`);
+    warnings.push(`${j.r.sheet.label}: consistency pass skipped (per-run cap)`);
+  }
+  const spec = counterTileSpec(input.model);
+  // Review fix S8 — the dense sheets are exactly where the first pass's big
+  // tiles miss symbols: the check reads at the retry's (smaller) tile size.
+  const tileIn = retryTileIn(spec.tileIn, spec.limits);
+  const cacheKey = `${input.model}|${CONSISTENCY_PROMPT_VERSION}`;
+  const zero = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+  const secondBySheet = new Map<string, SheetCountResult['placed']>();
+  const kindBySheet = new Map<string, string>();
+  const rendered: Array<{ sheet: CountSheet; rendered: RenderedCountPage | null; renderError?: string }> = [];
+  const pending: typeof jobs = [];
+  let cached = 0;
+  let tiles = 0;
+  for (const j of jobs) {
+    const g = j.r.geometry!;
+    const pdf = input.pdfs.get(j.r.sheet.file);
+    const shown = g.rotation === 90 || g.rotation === 270 ? { w: g.heightPt / 72, h: g.widthPt / 72 } : { w: g.widthPt / 72, h: g.heightPt / 72 };
+    // One cover per type (never one box over every dense type).
+    const rectById = new Map<string, TileRectIn>();
+    for (const t of j.types) {
+      const within = coverRect(j.r.placed.filter(p => p.typeKey === t.typeKey && Number.isFinite(p.x)).map(p => pdfToDisplayedIn(p.x, p.y, g)));
+      for (const r of planOffsetTiles(shown.w, shown.h, { tileIn, within })) rectById.set(r.id, r);
+    }
+    const rects = [...rectById.values()];
+    if (!pdf || !rects.length) { j.r.notes.push('Consistency pass could not run: the PDF for this sheet was not available — the first pass stands, unchecked.'); continue; }
+    if (rects.length > MAX_CONSISTENCY_TILES) {
+      j.r.notes.push(`Consistency pass not run: it would need ${rects.length} shifted tiles (cap ${MAX_CONSISTENCY_TILES}) — the first pass stands, unchecked.`);
+      warnings.push(`${j.r.sheet.label}: consistency pass skipped (${rects.length} tiles over the cap)`);
+      continue;
+    }
+    // Review fix N7 — the cache key carries the shifted tiles covered and a
+    // hash of the first pass's marks: a re-run whose first pass differs
+    // never reuses a stale second pass.
+    const firstHash = sha256Of(Buffer.from(JSON.stringify(j.r.placed.filter(p => j.types.some(t => t.typeKey === p.typeKey)).map(p => [p.typeKey, Math.round(p.x ?? 0), Math.round(p.y ?? 0)]).sort()))).slice(0, 16);
+    const kind = `consistency:${j.types.map(t => t.typeKey).join('+')}:${tileIn}:${rects.map(r => r.id).sort().join(',')}:${firstHash}`;
+    kindBySheet.set(j.r.sheet.key, kind);
+    const sha = sha256Of(pdf);
+    if (cache) {
+      try {
+        const hit = await cache.get(sha, j.r.sheet.page, kind, cacheKey) as { placed?: SheetCountResult['placed'] } | null;
+        if (hit?.placed) { secondBySheet.set(j.r.sheet.key, hit.placed); cached++; continue; }
+      } catch (err) { logger.warn({ err }, '[counting] consistency cache read failed'); }
+    }
+    try {
+      const page = await renderCountTiles(pdf, j.r.sheet.page, g, { limits: spec.limits, rects });
+      tiles += page.tiles.length;
+      rendered.push({ sheet: j.r.sheet, rendered: page });
+      pending.push(j);
+    } catch (err) {
+      j.r.notes.push(`Consistency pass could not render this sheet (${err instanceof Error ? err.message : String(err)}) — the first pass stands, unchecked.`);
+    }
+  }
+  let calls = 0;
+  let usage = { ...zero };
+  if (rendered.length) {
+    const allKeys = new Set(pending.flatMap(j => j.types.map(t => t.typeKey)));
+    logger.info({ sheets: pending.map(j => j.r.sheet.label), types: [...allKeys], tileIn }, '[counting] consistency pass on a shifted tile grid');
+    try {
+      const second = await runCounter({
+        client: input.client, model: input.model, maxTokens: input.maxTokens, targets: targets.filter(t => allKeys.has(t.key)),
+        sheets: rendered, shouldStop: input.shouldStop,
+        sheetNotes: new Map(pending.map(j => [j.r.sheet.key, `${sheetNotes?.get(j.r.sheet.key) ?? ''}\n\nCONSISTENCY PASS: these tiles are the same sheet on a grid shifted by half a tile — count every instance of the targets they show, as always.`])),
+      });
+      usage = second.usage;
+      for (const j of pending) {
+        const s2 = second.sheets.find(x => x.sheet.key === j.r.sheet.key);
+        calls += s2?.calls ?? 0;
+        if (!s2 || s2.status !== 'counted') {
+          j.r.notes.push(`Consistency pass (shifted tiles) could not run for ${j.types.map(t => t.typeKey).join(', ')}: ${s2?.error ?? 'not rendered'} — the first pass's counts stand, unchecked.`);
+          warnings.push(`${j.r.sheet.label}: consistency pass failed (${s2?.error ?? 'not rendered'})`);
+          continue;
+        }
+        secondBySheet.set(j.r.sheet.key, s2.placed);
+        if (cache) {
+          const pdf = input.pdfs.get(j.r.sheet.file)!;
+          await cache.set(sha256Of(pdf), j.r.sheet.page, kindBySheet.get(j.r.sheet.key)!, cacheKey, { placed: s2.placed })
+            .catch(err => logger.warn({ err }, '[counting] consistency cache write failed'));
+        }
+      }
+    } catch (err) {
+      // Review fix S8 — a truncated / failed second pass is a skipped check
+      // with a warning, never a failed run. A stop still stops.
+      if (err instanceof RunCancelledError) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      for (const j of pending) j.r.notes.push(`Consistency pass (shifted tiles) failed (${msg}) — the first pass's counts stand, unchecked.`);
+      warnings.push(`consistency pass failed: ${msg}`);
+      logger.warn({ err }, '[counting] consistency pass failed — skipped');
+    }
+  }
+  for (const j of jobs) {
+    const p2 = secondBySheet.get(j.r.sheet.key);
+    if (!p2) continue;
+    const entries: ConsistencyEntry[] = [];
+    const suggested: ConsistencySuggestion[] = [];
+    const notReseen: ConsistencySuggestion[] = [];
+    for (const t of j.types) {
+      const firstMarks = j.r.placed.filter(p => p.typeKey === t.typeKey);
+      const radius = agreeRadiusPt(firstMarks);
+      const rec = reconcilePasses(firstMarks, p2.filter(p => p.typeKey === t.typeKey), radius);
+      // Review fix N6 — a second-pass mark within the radius of ANY counted
+      // mark is that symbol reported twice, never a suggestion.
+      rec.onlySecond = rec.onlySecond.filter(m => !firstMarks.some(f => Math.hypot(f.x - m.x, f.y - m.y) <= radius));
+      entries.push(entryOf(j.r.sheet.key, j.r.sheet.label, t.typeKey, t.why, rec));
+      // Review fix B1 — pass 1's marks stay counted, re-found or not; only
+      // pass-2-only marks are suggestions (possible additions).
+      suggested.push(...rec.onlySecond.map(m => ({ typeKey: t.typeKey, sheetKey: j.r.sheet.key, x: m.x, y: m.y, pass: 'second' as const })));
+      notReseen.push(...rec.onlyFirst.map(m => ({ typeKey: t.typeKey, sheetKey: j.r.sheet.key, x: m.x, y: m.y, pass: 'first' as const })));
+    }
+    j.r.consistency = entries;
+    j.r.consistencySuggested = suggested;
+    j.r.consistencyNotReseen = notReseen;
+    j.r.notes.push(`Consistency pass (shifted tiles, ${tileIn}"): ${entries.map(e => `${e.typeKey} ${e.first} counted, ${e.agreed} re-found (${Math.round(e.agreement * 100)}%), ${e.onlySecond} more suggested${e.lowAgreement ? ' — low agreement, review' : ''}`).join('; ')}.`);
+  }
+  return { calls, usage, tiles, cached, warnings };
+}
+
+async function countSheetsOnce(
   input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop'>,
   targets: CountTarget[],
   sheets: CountSheet[],
@@ -605,6 +908,20 @@ export function priorSheetResult(sheet: CountSheet, prior: CountResult): SheetCo
     notes: [...(stored?.notes ?? [])],
     calls: stored?.calls ?? 0,
     tiles: stored?.tiles ?? 0,
+    // Review fix S8 — the earlier pass's consistency check (and so its
+    // review item and answer) survives a supplement pass.
+    ...consistencyOf(prior, sheet.key),
+  };
+}
+
+function consistencyOf(prior: CountResult, sheetKey: string): Pick<SheetCountResult, 'consistency' | 'consistencySuggested' | 'consistencyNotReseen'> {
+  const c = prior.evidence?.consistency;
+  const entries = c?.entries.filter(e => e.sheetKey === sheetKey) ?? [];
+  if (!entries.length) return {};
+  return {
+    consistency: entries,
+    consistencySuggested: (c!.suggested ?? []).filter(x => x.sheetKey === sheetKey),
+    consistencyNotReseen: (c!.notReseen ?? []).filter(x => x.sheetKey === sheetKey),
   };
 }
 
@@ -617,8 +934,11 @@ export function priorSheetResult(sheet: CountSheet, prior: CountResult): SheetCo
  *  every other count comes from the earlier pass unchanged. Then the one
  *  merge runs over all of it. */
 export async function runSupplementCounting(input: SupplementCountingInput): Promise<CountingStageOutput> {
-  const { targets, notes: targetNotes } = buildCountTargets(input.agent1);
-  if (targets.length === 0) return runCountingStage(input);
+  const built = buildCountTargets(input.agent1);
+  if (built.targets.length === 0) return runCountingStage(input);
+  const cons = input.evidence ? consolidateTargets(built.targets, { panels: panelNamesOf(input.agent1) }) : undefined;
+  const targets = cons ? cons.targets : built.targets;
+  const targetNotes = [...built.notes, ...(cons?.merges ?? []).map(m => `${m.type}: ${m.basis}.`)];
   const priorKeys = new Set(input.prior.targets.map(t => t.key));
   const selection = selectCountSheets([...input.priorInventory.filter(p => !input.newFiles.has(p.file)), ...input.inventory.filter(p => input.newFiles.has(p.file))]);
   const isNew = (s: CountSheet) => input.newFiles.has(s.file);
@@ -643,21 +963,22 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
         .map(p => ({ key: `${p.file}#${p.page}`, file: p.file, page: p.page, label: sheetLabelOf(p), counted: false })),
     ];
     const ev: EvidenceStageOutput = pages.length
-      ? await runEvidenceStage({ client: input.client, model: input.evidence.model, maxTokens: input.evidence.maxTokens, pages, pdfs: input.pdfs, targets, cache: input.evidence.cache, shouldStop: input.shouldStop })
+      ? await runEvidenceStage({ client: input.client, model: input.evidence.model, maxTokens: input.evidence.maxTokens, pages, pdfs: input.pdfs, targets: targets.filter(t => !isAliasTarget(t)), cache: input.evidence.cache, shouldStop: input.shouldStop })
       : { pages: [], typicals: [], tables: [], usage: { ...ZERO_USAGE }, calls: 0, cached: 0, errors: [], model: input.evidence.model };
-    ev.typicals = [...(input.prior.evidence?.typicals ?? []), ...ev.typicals];
+    ev.typicals = remapTypicals([...(input.prior.evidence?.typicals ?? []), ...ev.typicals], cons?.aliasOf);
     ev.tables = dedupePanels([...(input.prior.evidence?.tables ?? []), ...ev.tables]);
     const schedCounts = scheduleCounts(targets, ev.tables);
     allTargets = [...targets, ...hostTargets(ev.typicals, targets)];
-    counterTargets = allTargets.filter(t => !schedCounts.has(t.key));
+    counterTargets = allTargets.filter(t => !schedCounts.has(t.key) && !isAliasTarget(t));
     sheetNotes = new Map(ev.pages.filter(p => p.viewports.viewports.length).map(p => [p.key, viewportPromptBlock(p.viewports.viewports, sanitizeForPrompt)]));
-    evidence = { ev, schedCounts };
+    evidence = { ev, schedCounts, ...(cons ? { cons } : {}) };
   }
   const newCounterTargets = counterTargets.filter(t => !priorKeys.has(t.key));
 
   const results: SheetCountResult[] = oldSheets.map(s => priorSheetResult(s, input.prior));
   if (newSheets.length && counterTargets.length) {
-    const run = await countSheets(input, counterTargets, newSheets, input.onProgress, sheetNotes);
+    const run = await countSheets(input, counterTargets, newSheets, input.onProgress, sheetNotes, { consistency: !!input.evidence, cache: input.evidence?.cache });
+    if (evidence && run.consistency) evidence.consistencyRun = run.consistency;
     add(run.usage);
     results.push(...run.sheets);
   }

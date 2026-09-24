@@ -342,6 +342,13 @@ export interface SheetCountResult {
      *  silently (a blocking review item asks the estimator). */
     lower?: Array<{ typeKey: string; first: number; retry: number }>;
   };
+  /** Real-run fix 5 — the consistency pass on a shifted tile grid, per
+   *  dense / high-count type of this sheet, and the marks only one pass
+   *  found (SUGGESTED, not in `placed`). */
+  consistency?: import('./evidence/consistency').ConsistencyEntry[];
+  consistencySuggested?: import('./evidence/consistency').ConsistencySuggestion[];
+  /** Review fix B1 — pass-1 marks pass 2 did not re-find (still counted). */
+  consistencyNotReseen?: import('./evidence/consistency').ConsistencySuggestion[];
 }
 
 export interface CounterRunInput {

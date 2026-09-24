@@ -109,7 +109,9 @@ describe('A7 — Kissimmee-shaped review noise', () => {
     console.log(`[A7] blocking before=${blocking(before).length} (of ${before.length} items) after=${b.length} (of ${after.length} items): ${b.map(i => i.id).join(', ')}`);
     expect(b.length).toBeLessThanOrEqual(8);
     expect(b.map(i => i.id).sort()).toEqual([
-      'area:DUPLEX RECEPTACLE', 'area:GFI', 'count:L', 'count:OS',
+      // Real-run review fix S11 — the HVAC-installed fan at zero blocks: its
+      // connection (wired by EC) is APT's labour.
+      'area:DUPLEX RECEPTACLE', 'area:GFI', 'count:EF', 'count:L', 'count:OS',
       'scope:power_poles:furnish', 'scope:power_poles:install', 'unscheduled:SITE-LIGHTS-E-7',
     ]);
   });
@@ -117,12 +119,15 @@ describe('A7 — Kissimmee-shaped review noise', () => {
   it('before (same drawings, old behaviour) was noisy for the causes the plan names', () => {
     const ids = blocking(before).map(i => i.id);
     for (const id of ['count:W1', 'count:W2', 'count:A', 'count:B', 'count:EF', 'count:T1', 'count:FA']) expect(ids).toContain(id);
-    expect(blocking(before).length).toBeGreaterThanOrEqual(2 * blocking(after).length);
+    // Real-run review fix S11 adds the EF connection back as a block (8), so
+    // "before" (14) is no longer twice "after"; it is still far noisier.
+    expect(blocking(before).length).toBeGreaterThan(blocking(after).length + 5);
   });
 
-  it('by others / N.I.C. / HVAC-installed types are information, not blocks; owner-furnished and G.C. items are counted', () => {
+  it('by others / N.I.C. types are information, not blocks; the HVAC-installed fan APT wires blocks (S11); owner-furnished and G.C. items are counted', () => {
     const info = after.filter(i => i.blocking === false).map(i => i.id);
-    expect(info).toEqual(expect.arrayContaining(['count:EF', 'count:T1', 'count:FA', 'photo:W1', 'photo:W2']));
+    expect(info).toEqual(expect.arrayContaining(['count:T1', 'count:FA', 'photo:W1', 'photo:W2']));
+    expect(info).not.toContain('count:EF');
     expect(info).not.toContain('count:D1');
     expect(info).not.toContain('count:CM');
     expect(after.find(i => i.id === 'count:SX')).toBeUndefined();

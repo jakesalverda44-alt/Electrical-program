@@ -35,7 +35,13 @@ import {
   viewportLabel, viewportsFromText, type RectIn, type SheetGeom, type SheetViewports, type TextRun, type Viewport,
 } from './viewports';
 import { parseTypicalsReply, type TypicalPackage } from './typicals';
-import { parseScheduleReply, tableFromRuns, type ScheduleTable } from './schedules';
+import { isCompletePanel, mergePanelReads, parseScheduleReply, tableFromRuns, type ScheduleTable } from './schedules';
+
+/** Real-run fix 4 — the side-by-side re-read of an incomplete panel. */
+export const PANEL_SIDES = [
+  { key: 'odd', instruction: 'Read ONLY the ODD-numbered circuits (1, 3, 5, …) — every one of them, in order, with their own breaker, description and load cells; skip every even-numbered circuit.' },
+  { key: 'even', instruction: 'Read ONLY the EVEN-numbered circuits (2, 4, 6, …) — every one of them, in order, with their own breaker, description and load cells; skip every odd-numbered circuit.' },
+] as const;
 
 const execFileP = promisify(execFile);
 
@@ -308,7 +314,7 @@ export async function runEvidenceStage(input: EvidenceStageInput): Promise<Evide
         return;
       }
       const kind = `table:${v.id.split('@').pop()}:${[v.rectIn.left, v.rectIn.top, v.rectIn.width, v.rectIn.height].map(n => n.toFixed(2)).join(',')}`;
-      const got = await cached<ScheduleTable>(c.sha, c.p.page, kind, cacheKey, async () => {
+      let got = await cached<ScheduleTable>(c.sha, c.p.page, kind, cacheKey, async () => {
         const img = await renderRegion(c.pdf, c.p.page, c.geometry, v.rectIn, limits);
         const text = await call(SCHEDULE_ROWS_SYSTEM, [
           { type: 'text', text: `TABLE: ${sanitizeForPrompt(viewportLabel(v))} on ${sanitizeForPrompt(c.p.label)}.` },
@@ -319,6 +325,29 @@ export async function runEvidenceStage(input: EvidenceStageInput): Promise<Evide
         if (!t) throw new Error('the schedule reply was not in the expected shape');
         return t;
       });
+      // Real-run fix 4 — a panel schedule that came back incomplete (one
+      // side only, or circuits skipped) is read again SIDE BY SIDE: one call
+      // for the odd circuits, one for the even, each told to transcribe
+      // only its side; the reads are merged by circuit number.
+      if (got && got.kind === 'panel' && !isCompletePanel(got)) {
+        const sides: Array<ScheduleTable | null> = [];
+        for (const side of PANEL_SIDES) {
+          sides.push(await cached<ScheduleTable>(c.sha, c.p.page, `${kind}:${side.key}`, cacheKey, async () => {
+            const img = await renderRegion(c.pdf, c.p.page, c.geometry, v.rectIn, limits);
+            const text = await call(SCHEDULE_ROWS_SYSTEM, [
+              { type: 'text', text: `TABLE: ${sanitizeForPrompt(viewportLabel(v))} on ${sanitizeForPrompt(c.p.label)}. ${side.instruction}` },
+              imageBlock(img.png),
+              { type: 'text', text: `Transcribe ONLY the ${side.key} circuits' rows. Strict JSON only.` },
+            ], `schedule ${c.p.label} ${viewportLabel(v)} (${side.key} side)`);
+            return parseScheduleReply(text, ctx);
+          }).catch(err => {
+            if (err instanceof RunCancelledError || isAgentTruncatedError(err)) throw err;
+            out.errors.push(`${c.p.label} ${viewportLabel(v)} (${side.key} side): could not be read (${err instanceof Error ? err.message : String(err)})`);
+            return null;
+          }));
+        }
+        got = mergePanelReads(got, sides);
+      }
       if (got) out.tables.push({ ...got, sheetKey: c.p.key, sheetLabel: c.p.label, viewportId: v.id });
     } catch (err) {
       if (err instanceof RunCancelledError || isAgentTruncatedError(err)) throw err;

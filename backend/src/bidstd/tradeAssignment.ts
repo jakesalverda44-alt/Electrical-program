@@ -67,9 +67,11 @@ export function tradeAssignmentOf(text: string): TradeAssignment | null {
     ?? new RegExp(String.raw`${PARTY_PHRASE}\s+(?:furnished|supplied|provided)\b(?!\s*(?:\/|and|&)\s*installed)`).exec(t);
   if (f && !furnish) furnish = party(f[1]);
   const i = new RegExp(String.raw`(?:installed|set|mounted)\s+by\s+${PARTY_PHRASE}`).exec(t)
-    ?? new RegExp(String.raw`(?<!furnished\s?\/\s?|furnished\sand\s|furnished\s&\s)${PARTY_PHRASE}\s+installed`).exec(t);
+    ?? new RegExp(String.raw`(?<!furnished\s?\/\s?|furnished\sand\s|furnished\s&\s)${PARTY_PHRASE}\s+installed`).exec(t)
+    // Real-run fix 2 — legend shorthand: "(AutoZone furn, HVAC install, EC wire)".
+    ?? new RegExp(String.raw`(?:^|[\s(,;])((?:hvac|mechanical|mech|plumbing|plumber|fire\s+protection|sprinkler)(?:\s+contractor)?)\s+install\b`).exec(t);
   if (i && !install) install = party(i[1]);
-  const CONNECT_BY_EC = /\b(?:wired|wiring|connected|connection|final\s+connection|power(?:ed)?)\s+by\s+(?:the\s+)?(?:e\.\s?c\.?|ec|electrical\s+contractor|electrician)\b|\bec\s+to\s+(?:wire|connect|provide\s+(?:power|connection))/;
+  const CONNECT_BY_EC = /\b(?:wired|wiring|connected|connection|final\s+connection|power(?:ed)?)\s+by\s+(?:the\s+)?(?:e\.\s?c\.?|ec|electrical\s+contractor|electrician)\b|\bec\s+to\s+(?:wire|connect|provide\s+(?:power|connection))|\bec\s+(?:wire|wires|wiring|connect|connects)\b/;
   const wiredByEc = CONNECT_BY_EC.test(t);
   if (!furnish && !install) {
     // "…, G.C." / "(BY OWNER)" / "N.I.C." — a bare trailing party. N10: the

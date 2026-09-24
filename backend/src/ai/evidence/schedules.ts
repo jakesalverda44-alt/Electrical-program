@@ -19,6 +19,7 @@ import { parseAIJSON } from '../json';
 import { normalizeTypeKey, type CountTarget } from '../countTargets';
 import type { RectIn, TextRun } from './viewports';
 import { areaOf } from '../countSheets';
+import { tagInfoOf } from './tags';
 
 export type TableKind = 'panel' | 'fixture' | 'equipment' | 'load' | 'other';
 
@@ -40,6 +41,9 @@ export interface ScheduleTable {
   rows: ScheduleRow[];
   source: 'text' | 'vision';
   warnings: string[];
+  /** Real-run fix 4 — an incomplete panel read was completed by reading each
+   *  side (odd / even circuits) separately. */
+  sidesRead?: boolean;
 }
 
 function clean(s: unknown, max = 160): string {
@@ -279,6 +283,39 @@ export function panelContinuity(table: ScheduleTable): string[] {
   return out;
 }
 
+/** Real-run fix 4 — a panel read that came back incomplete, merged with
+ *  the reads of each side (odd circuits, even circuits) taken separately:
+ *  a circuit the first read has keeps its row; a circuit only a side read
+ *  has is added from it. The warnings are recomputed on the merged rows —
+ *  a panel still missing circuits stays incomplete (never papered over). */
+export function mergePanelReads(base: ScheduleTable, sides: Array<ScheduleTable | null>): ScheduleTable {
+  const cktIdx = (t: ScheduleTable) => { const i = t.columns.findIndex(c => /\bCKT\b|\bCIRCUIT\s*#|^#$|\bNO\.?\b/i.test(c)); return i < 0 ? 0 : i; };
+  const cktOf = (t: ScheduleTable, r: ScheduleRow) => Number(((r.cells[cktIdx(t)] ?? '').match(/\d+/) ?? [''])[0]);
+  const have = new Set(base.rows.map(r => cktOf(base, r)).filter(n => n > 0));
+  const rows = [...base.rows];
+  const read: string[] = [];
+  for (const side of sides) {
+    if (!side || side.kind !== 'panel') continue;
+    let added = 0;
+    for (const r of side.rows) {
+      const n = cktOf(side, r);
+      if (!(n > 0) || have.has(n)) continue;
+      // Re-order the side's cells into the base table's columns by header name.
+      const cells = side.columns.length && base.columns.length && side.columns.join('|') !== base.columns.join('|')
+        ? base.columns.map(bc => { const j = side.columns.findIndex(sc => sc.toUpperCase() === bc.toUpperCase()); return j >= 0 ? (r.cells[j] ?? '') : ''; })
+        : r.cells;
+      rows.push({ ...r, cells, rowIdx: rows.length });
+      have.add(n);
+      added++;
+    }
+    read.push(`${added}`);
+  }
+  const merged: ScheduleTable = { ...base, rows, columns: base.columns.length ? base.columns : (sides.find(x => x)?.columns ?? []), warnings: [] };
+  merged.warnings = panelContinuity(merged);
+  merged.sidesRead = true;
+  return merged;
+}
+
 export function isCompletePanel(t: ScheduleTable): boolean {
   return t.kind === 'panel' && !t.warnings.some(w => /incomplete|no circuit/.test(w));
 }
@@ -457,11 +494,18 @@ export function multiplierOf(s: string): number | null {
  *  "breaker B-1,3,5", "circuit A-18". */
 export function circuitRefs(s: string): Array<{ panel: string; circuit: number }> {
   const out: Array<{ panel: string; circuit: number }> = [];
-  const re = /\b([A-Z]{1,3})\s*-\s*(\d{1,3}(?:\s*[,/&]\s*\d{1,3})*)\b/g;
+  // Real-run fix 2 — "ckt A-6, 1,220VA" is circuit A-6 (never A-1 and
+  // A-220): a continuation number is never the head of a thousands group.
+  // Review fix S5 — a continuation number is a circuit only when a unit or
+  // count word does not follow it ("A-6, 180 VA" is A-6; "A-1, 3 phase"
+  // and "A-12, 3 fixtures" are A-1 / A-12); no circuit is over 84.
+  const UNIT = String.raw`\s*(?:VA|KVA|W|KW|WATTS?|PHASE|PH|FIXTURES?|AMPS?|A|HP|V|VOLTS?|LAMPS?|HEADS?|RECEPTACLES?|OUTLETS?|UNITS?|EA|POLES?|WIRES?)\b|\s*#`;
+  const re = new RegExp(String.raw`\b([A-Z]{1,3})\s*-\s*(\d{1,3}(?:\s*[,/&]\s*\d{1,3}(?![0-9#]|,\d{3}|\s*-\s*#|${UNIT}))*)\b`, 'g');
   let m: RegExpExecArray | null;
-  while ((m = re.exec(s.toUpperCase()))) {
+  const up = s.toUpperCase();
+  while ((m = re.exec(up))) {
     if (/^(RTU|EF|CF|AHU|WH|DF|MB|NEMA|UL|IES|MH|HP|TYPE)$/.test(m[1])) continue;
-    for (const n of m[2].split(/[,/&]/).map(x => Number(x.trim()))) if (Number.isInteger(n) && n > 0) out.push({ panel: m[1], circuit: n });
+    for (const n of m[2].split(/[,/&]/).map(x => Number(x.trim()))) if (Number.isInteger(n) && n > 0 && n <= 84) out.push({ panel: m[1], circuit: n });
   }
   return out;
 }
@@ -499,15 +543,33 @@ export function rowNamesTarget(rowText: string, t: CountTarget): boolean {
  *  tag it names (a numbered tag wins over a word tag); else, only when it
  *  names no equipment target's tag at all, the ONE target its description
  *  matches (two description matches = nobody's: the counter keeps them). */
+/** Review fix S13 — a row's words a target does not explain (prefix-
+ *  tolerant: "INSTANT" is "INSTANTANEOUS"). "INSTANT WATER HEATER" is not
+ *  WH "Water heater" (INSTANT is unexplained) — it is IWH "Instantaneous
+ *  water heater", which explains every word. */
+const ROW_NEUTRAL = new Set(['ELECTRIC', 'ELECTRICAL', 'SPARE', 'UNIT', 'UNITS', 'EQUIPMENT', 'LOAD', 'LOADS', 'EACH']);
+function unexplainedWords(rowText: string, t: CountTarget): string[] {
+  const own = sigWords(`${t.type} ${t.description}`);
+  const explained = (w: string) => own.some(o => o === w || (Math.min(o.length, w.length) >= 4 && (o.startsWith(w) || w.startsWith(o))));
+  return sigWords(rowText).filter(w => !ROW_NEUTRAL.has(w) && !explained(w));
+}
+function leadMatches(rowText: string, t: CountTarget): boolean {
+  if (rowNamesTag(rowText, t)) return true;
+  const row = sigWords(rowText);
+  const lead = sigWords(t.description.split(/[,;(]/)[0] ?? '').slice(0, 3);
+  return lead.length >= 2 && lead.every(w => row.some(r => r === w || (Math.min(r.length, w.length) >= 4 && (r.startsWith(w) || w.startsWith(r)))));
+}
+
 function assignRow(rowText: string, candidates: CountTarget[], all: CountTarget[]): CountTarget | null {
   const byTag = all.filter(t => rowNamesTag(rowText, t));
-  if (byTag.length) {
-    const numbered = byTag.filter(t => tagRegex(t.type));
-    const pick = numbered.length ? numbered : byTag;
-    return pick.length === 1 && candidates.includes(pick[0]) ? pick[0] : null;
-  }
-  const byDesc = candidates.filter(t => rowNamesTarget(rowText, t));
-  return byDesc.length === 1 ? byDesc[0] : null;
+  const numbered = byTag.filter(t => tagRegex(t.type));
+  if (numbered.length) return numbered.length === 1 && candidates.includes(numbered[0]) ? numbered[0] : null;
+  // Word tags and descriptions: the row must name the target AND every word
+  // of the row must be the target's own — a row with a distinguishing word
+  // the target lacks belongs to the sibling that has it, or to nobody.
+  const named = [...new Set([...byTag, ...candidates.filter(t => leadMatches(rowText, t))])];
+  const clean = named.filter(t => unexplainedWords(rowText, t).length === 0);
+  return clean.length === 1 && candidates.includes(clean[0]) ? clean[0] : null;
 }
 
 /** Pure (3.2): schedule-owned quantities for equipment-schedule types.
@@ -523,14 +585,23 @@ export function scheduleCounts(targets: CountTarget[], tablesIn: ScheduleTable[]
   // schedule row ("EXHAUST FAN RECESSED — installed by HVAC") names a type
   // but is not a quantity.
   const otherRows = tables.filter(t => t.kind === 'equipment' || t.kind === 'load').flatMap(t => t.rows.map(r => ({ r, t })));
-  const cands = targets.filter(t => t.source === 'equipment_schedule' && t.role !== 'host');
-  const equipment = targets.filter(t => (t.category === 'equipment' || t.source === 'equipment_schedule') && t.role !== 'host');
+  // Real-run fix 2 — another name of an entity never owns (or blocks) a
+  // row: its canonical target does.
+  // Review fix B2 — a generic name (uncertainOf) never owns or blocks a row.
+  const cands = targets.filter(t => t.source === 'equipment_schedule' && t.role !== 'host' && !t.mergedInto?.length && !t.uncertainOf?.length);
+  const equipment = targets.filter(t => (t.category === 'equipment' || t.source === 'equipment_schedule') && t.role !== 'host' && !t.mergedInto?.length && !t.uncertainOf?.length);
   const ev = new Map<string, ScheduleEvidenceRow[]>();
   const push = (k: string, e: ScheduleEvidenceRow) => ev.set(k, [...(ev.get(k) ?? []), e]);
+  // Real-run fix 3 — rows a target owns ONLY because its own description
+  // cites their circuits ("Commercial counter power pole, 2 duplex,
+  // circuits A-40,42") are the circuits that feed ONE item, not one item
+  // per circuit (live Kissimmee: PP#6 = 2 and PP#1 = 3 poles; each is 1).
+  const byName = new Set<string>();
   // (a) panel circuits.
   for (const { r, t } of circuits) {
     if (r.continuation || !r.description || isEmptyLoad(r.description)) continue;
     let tgt = assignRow(r.description, cands, equipment);
+    if (tgt) byName.add(tgt.key);
     if (!tgt) {
       // The circuits a target's own description cites, confirmed by a word.
       const cited = cands.filter(c => circuitRefs(c.description).some(x => x.panel === r.panel && x.circuit === r.circuit)
@@ -549,6 +620,7 @@ export function scheduleCounts(targets: CountTarget[], tablesIn: ScheduleTable[]
     if (descCell && isEmptyLoad(descCell)) continue;
     const tgt = assignRow(text, cands, equipment);
     if (!tgt) continue;
+    byName.add(tgt.key);
     const qi = t.columns.findIndex(c => /^QTY\.?$|QUANTITY/i.test(c));
     const q = qi >= 0 ? Number(r.cells[qi]) : NaN;
     push(tgt.key, { sheetKey: t.sheetKey, sheetLabel: t.sheetLabel, tableId: t.id, table: t.title, rowIdx: r.rowIdx, cells: r.cells, ...(r.boxIn ? { boxIn: r.boxIn } : {}), qty: Number.isInteger(q) && q > 0 ? q : (descCell ? multiplierOf(descCell) : null) ?? 1 });
@@ -569,7 +641,12 @@ export function scheduleCounts(targets: CountTarget[], tablesIn: ScheduleTable[]
     let qty: number;
     let question: ScheduleCount['question'];
     let note = `${rows.length} schedule row${rows.length === 1 ? '' : 's'} (${rows.map(e => `${e.table} ${e.cells.slice(0, 3).filter(Boolean).join(' ')}`).slice(0, 6).join('; ')})`;
-    if (!mults.length) {
+    // Review fix S2 — a combined tag ("RTU-1/RTU-2") is one per member.
+    const members = tagInfoOf(tgt.type).members?.length ?? 0;
+    if (!byName.has(tgt.key) && !mults.length) {
+      qty = Math.max(1, members);
+      if (rows.length > 1) note += members > 1 ? ` — ${tgt.type} names ${members} units` : ` — the circuits its own description cites feed one ${tgt.type}`;
+    } else if (!mults.length) {
       qty = rows.length;
     } else if (mults.length === 1 && rows.length <= mults[0]) {
       qty = mults[0];

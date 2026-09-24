@@ -1258,7 +1258,9 @@ async function logMarkerLabeledEvents(bidId: string, updates: MarkupUpdateInput[
     const row = byId.get(u.id);
     if (u.status === 'confirmed' && row?.source === 'gap_fill') {
       events.push({
-        bidId, kind: 'gapfill_accept', typeKey: row.label ?? null, sheetKey: row.documentId ? `${row.documentId}#${row.pageIndex}` : null,
+        // Review fix N3 — a confirmed consistency-check suggestion is its own
+        // kind of decision, never mislabelled as a gap-fill acceptance.
+        bidId, kind: row.createdBy === 'Consistency check' ? 'consistency_accept' : 'gapfill_accept', typeKey: row.label ?? null, sheetKey: row.documentId ? `${row.documentId}#${row.pageIndex}` : null,
         client, projectType, detail: { markupId: u.id },
       });
     }
