@@ -251,6 +251,23 @@ export function isReconcilableSpec(spec: NormalizedSpec | null): spec is Normali
   return !!spec && RECONCILABLE_KINDS.has(spec.kind);
 }
 
+// Review round 2 / R2-B1 — the seed catalog's "all-in" raceway items ("3/4\"
+// EMT (incl. couplings/straps)", "rigid steel conduit (incl. fittings)",
+// "PVC Sch 40 (incl. fittings/glue)") already bundle a size's typical
+// coupling/connector/strap labor and material INTO the conduit rate. A real
+// Accubid BOM export prices fittings as their OWN separate rows — Chris's
+// "3/4\" Conduit - EMT 10' Lengths" row is bare-conduit-only labor (3.2 h/C),
+// never the all-in figure (Chris's fittings for that run are priced on
+// their own rows). Reconciling the bare-conduit row into the all-in item
+// silently drops the fittings labor from every future takeoff that prices
+// off it (the R2-B1 regression: EMT-075 dropped from 4.0h to 3.2h). A name
+// carrying an "incl./including/w//with fittings/couplings/straps/glue"
+// qualifier phrase is never a reconciliation target for a bare-conduit row.
+const ALL_IN_RACEWAY_RE = /\b(?:incl\.?|including)\b|\bw\/\s*(?:fittings?|couplings?|straps?|glue)\b|\bwith\s+(?:fittings?|couplings?|straps?|glue)\b/i;
+export function isAllInRacewayItem(name: string): boolean {
+  return ALL_IN_RACEWAY_RE.test(name);
+}
+
 // ── Per-row import plan ──────────────────────────────────────────────────────
 
 export type ImportAction = 'create' | 'update' | 'skip_manual' | 'skip_no_labor' | 'skip_unparsed' | 'propose_update';
@@ -340,6 +357,12 @@ function buildSpecIndex(library: Library): Map<string, LibraryItem> {
     if (!item.active) continue;
     const spec = normalizedItemSpec(item.name);
     if (!isReconcilableSpec(spec)) continue;
+    // R2-B1 — an all-in raceway item is never a reconciliation target for a
+    // bare-conduit BOM row (see isAllInRacewayItem's own comment). Scoped to
+    // kind='conduit' only — an all-in item is always classified as bare
+    // conduit by inferItemKind (it names no OTHER, more specific kind word),
+    // so this never accidentally excludes a genuinely different kind.
+    if (spec.kind === 'conduit' && isAllInRacewayItem(item.name)) continue;
     const cur = index.get(spec.key);
     if (!cur || (cur.source === 'accubid' && item.source !== 'accubid')) index.set(spec.key, item);
   }
@@ -402,7 +425,17 @@ export function buildImportPreview(bomText: string, library: Library, opts: Buil
       // deterministic-code path below.
       const mapped = mapTakeoffLine({ category: '', description: canonical, qty: 1, unit }, candidates);
       if (mapped.matchedKind === 'item' && (mapped.matchConfidence === 'exact' || mapped.matchConfidence === 'alias')) {
-        reconciledItem = byCode.get(mapped.matchedCode!) ?? null;
+        const candidateItem = byCode.get(mapped.matchedCode!) ?? null;
+        // R2-B1 — the mapper fallback must never reconcile a bare-conduit
+        // row into an all-in item either (buildSpecIndex above already
+        // excludes it from the SPEC-key path, but the mapper's own alias/
+        // fuzzy tiers can still name it — R2-S1's own fix restored exactly
+        // that alias match for the seed's all-in items).
+        if (candidateItem && rowSpec?.kind === 'conduit' && isAllInRacewayItem(candidateItem.name)) {
+          reconciledItem = null;
+        } else {
+          reconciledItem = candidateItem;
+        }
       }
     }
     const code = reconciledItem?.code ?? deterministicCode;

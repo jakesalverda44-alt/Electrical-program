@@ -355,4 +355,18 @@ describe('mapTakeoffLine — Review round 2 / R2-S1: the raceway kind guard reje
     const m = mapTakeoffLine(line({ description: '3/4" EMT coupling', unit: 'EA' }), library);
     expect(m.matchedCode).not.toBe('EMT-075');
   });
+
+  it('N-R2-4: "3/4" EMT connector" never maps to a lighting-track connector that names no raceway material at all', () => {
+    // Same size token as the takeoff line, and the same "connector" kind
+    // word (so the OLD kind-name-only guard sees no conflict at all) — a
+    // lighting track connector product that happens to also be a "3/4\""
+    // size part, exactly the kind of coincidental overlap real accubid-
+    // imported names can carry, per the review's own real repro.
+    const trackLib: LibraryCandidate[] = [
+      ...library,
+      { kind: 'item', id: 'i-track', code: 'ACB-LIVE-END-FEED-CONNECTOR', name: '3/4" Live End Feed Connector', category: 'Interior Lighting', unit: 'EA', aliases: [], source: 'accubid' },
+    ];
+    const m = mapTakeoffLine(line({ description: '3/4" EMT connector', unit: 'EA' }), trackLib);
+    expect(m.matchedCode).not.toBe('ACB-LIVE-END-FEED-CONNECTOR');
+  });
 });

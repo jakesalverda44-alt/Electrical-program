@@ -5,7 +5,7 @@ import { parseAccubidBom } from './accubidBom';
 import {
   ledProxyName, classifyBomCategory, bomItemCode, buildImportPreview,
   derivePoleBaseAssembly, deriveConduitFittingsForJob, medianConduitFittingsRatios,
-  deriveBoxAccessoriesForJob, medianBoxAccessoryRatios, normalizedItemSpec,
+  deriveBoxAccessoriesForJob, medianBoxAccessoryRatios, normalizedItemSpec, isAllInRacewayItem,
 } from './accubidImport';
 import type { Library, LibraryItem } from './library';
 
@@ -312,14 +312,14 @@ describe('review round 2 / B3 — normalizedItemSpec (kind + size + material)', 
 });
 
 describe('review round 2 / B3 — buildImportPreview reconciles by normalized spec, never creating a raceway/fitting duplicate', () => {
-  it('a real Kissimmee row for 3/4" EMT conduit updates the seed EMT-075 item directly, never a new ACB- code', () => {
-    const seedEmt: LibraryItem = {
-      id: 'seed-emt-075', code: 'EMT-075', name: '3/4" EMT (incl. couplings/straps)', category: 'Branch Power',
-      unit: 'C', material_cost: 60, material_price_date: null, labor_hours: 4.0, aliases: ['3/4" emt (incl. couplings/straps)'], source: 'seed', active: true,
+  it('a real Kissimmee row for a BARE conduit item (no "incl." qualifier) updates it directly, never a new ACB- code', () => {
+    const seedConduit: LibraryItem = {
+      id: 'seed-emt-075', code: 'EMT-075-BARE', name: '3/4" EMT conduit', category: 'Branch Power',
+      unit: 'C', material_cost: 60, material_price_date: null, labor_hours: 4.0, aliases: ['3/4" emt conduit'], source: 'seed', active: true,
     };
-    const library: Library = { items: [seedEmt], assemblies: [], factors: [] };
+    const library: Library = { items: [seedConduit], assemblies: [], factors: [] };
     const preview = buildImportPreview(read('kissimmee-bom.txt'), library, { updatePrices: true });
-    const emtPlan = preview.items.find(i => i.code === 'EMT-075');
+    const emtPlan = preview.items.find(i => i.code === 'EMT-075-BARE');
     expect(emtPlan).toBeTruthy();
     expect(emtPlan!.action).toBe('update');
     expect(emtPlan!.laborHours).toBeCloseTo(3.2, 2);
@@ -327,6 +327,44 @@ describe('review round 2 / B3 — buildImportPreview reconciles by normalized sp
     // No competing ACB- item was ALSO planned for "3/4 conduit - emt" text.
     const acbConduitDup = preview.items.find(i => i.code.startsWith('ACB-') && i.code.includes('CONDUIT') && i.code.includes('EMT') && i.code.includes('3-4'));
     expect(acbConduitDup).toBeUndefined();
+  });
+});
+
+describe('review round 2 / R2-B1 — a bare-conduit BOM row never reconciles into an "all-in" seed raceway item', () => {
+  it('a real Kissimmee row for 3/4" EMT conduit NEVER reconciles into the all-in EMT-075 ("incl. couplings/straps") — it creates its own bare-conduit item instead', () => {
+    const seedEmtAllIn: LibraryItem = {
+      id: 'seed-emt-075', code: 'EMT-075', name: '3/4" EMT (incl. couplings/straps)', category: 'Branch Power',
+      unit: 'C', material_cost: 60, material_price_date: null, labor_hours: 4.0, aliases: ['3/4" emt (incl. couplings/straps)'], source: 'seed', active: true,
+    };
+    const library: Library = { items: [seedEmtAllIn], assemblies: [], factors: [] };
+    const preview = buildImportPreview(read('kissimmee-bom.txt'), library, { updatePrices: true });
+
+    // The all-in item is NEVER planned for update — no plan targets its code.
+    const emtPlan = preview.items.find(i => i.code === 'EMT-075');
+    expect(emtPlan).toBeUndefined();
+
+    // A NEW bare-conduit item was created instead, at Chris's real bare rate.
+    const created = preview.items.find(i => i.action === 'create' && /3\/4/.test(i.name) && /emt/i.test(i.name) && /conduit/i.test(i.name));
+    expect(created).toBeTruthy();
+    expect(created!.laborHours).toBeCloseTo(3.2, 2);
+    expect(created!.code).not.toBe('EMT-075');
+  });
+
+  it('with EMPTY_LIBRARY (no all-in item at all), the same row still creates a normal conduit item — the guard is scoped to all-in names only', () => {
+    const preview = buildImportPreview(read('kissimmee-bom.txt'), EMPTY_LIBRARY, { updatePrices: true });
+    const created = preview.items.find(i => i.action === 'create' && /3\/4/.test(i.name) && /emt/i.test(i.name) && /conduit/i.test(i.name));
+    expect(created).toBeTruthy();
+    expect(created!.laborHours).toBeCloseTo(3.2, 2);
+  });
+
+  it('isAllInRacewayItem recognizes every seed all-in phrasing, and never a bare one', () => {
+    expect(isAllInRacewayItem('3/4" EMT (incl. couplings/straps)')).toBe(true);
+    expect(isAllInRacewayItem('rigid steel conduit (incl. fittings)')).toBe(true);
+    expect(isAllInRacewayItem('2" PVC Sch 40 (incl. fittings/glue)')).toBe(true);
+    expect(isAllInRacewayItem('EMT conduit w/ fittings')).toBe(true);
+    expect(isAllInRacewayItem('PVC conduit with fittings')).toBe(true);
+    expect(isAllInRacewayItem('3/4" EMT conduit')).toBe(false);
+    expect(isAllInRacewayItem('2" rigid steel conduit')).toBe(false);
   });
 });
 

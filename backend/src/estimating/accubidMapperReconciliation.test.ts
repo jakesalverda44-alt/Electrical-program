@@ -105,22 +105,30 @@ describe('B3 / S18 — the seed catalog keeps its own picks after a real Kissimm
     }
   });
 
-  it('the specific B3 repro: a 1,200 LF run of 3/4" EMT still prices at the real (now reconciled) seed rate, not an EMT connector', () => {
+  it('the specific B3 repro: a 1,200 LF run of 3/4" EMT still prices at the seed\'s all-in rate, not an EMT connector', () => {
     const mapped = mapTakeoffLine({ category: '', description: '3/4" EMT', qty: 1200, unit: 'LF' }, candidatesAfter);
     expect(mapped.matchedCode).toBe('EMT-075');
     const seedItem = after.items.find(i => i.code === 'EMT-075')!;
-    // Review round 2 / B3 — the normalized-spec reconciliation (kind=conduit,
-    // size=3/4in, material=emt) now updates EMT-075 IN PLACE with Chris's own
-    // Kissimmee rate ($92.38/C net, 3.2 h/C — Part B's own verified facts),
-    // rather than leaving the seed's $60/4.0h placeholder untouched and
-    // creating a same-meaning duplicate elsewhere. Either way, the outcome
-    // the review cares about holds: never the connector's numbers.
-    expect(seedItem.material_cost).toBeCloseTo(92.38, 2);
-    expect(seedItem.labor_hours).toBeCloseTo(3.2, 2);
-    expect(seedItem.source).toBe('accubid'); // updateItem's own contract: a reconciled write is still accubid-sourced, never silently 'manual'
+    // Review round 2 / R2-B1 — EMT-075's name says "(incl. couplings/
+    // straps)": it's an ALL-IN item, and a bare-conduit BOM row (Chris's own
+    // "3/4\" Conduit - EMT 10' Lengths", priced bare — his fittings for that
+    // run are separate rows) must NEVER reconcile into it and silently drop
+    // the bundled fittings labor (the R2-B1 regression this test used to
+    // assert as correct: 4.0h -> 3.2h, -20% labor on every future takeoff
+    // that prices off EMT-075). The seed's own all-in figure is untouched.
+    expect(seedItem.material_cost).toBeCloseTo(60, 2);
+    expect(seedItem.labor_hours).toBeCloseTo(4.0, 2);
+    expect(seedItem.source).toBe('seed'); // never touched, never relabelled
     // And it must NOT be the connector's tiny $ea / high per-C hours the review found.
     const connector = after.items.find(i => /connector/i.test(i.name) && /emt/i.test(i.name) && /3\/4/.test(i.name));
     if (connector) expect(mapped.matchedCode).not.toBe(connector.code);
+  });
+
+  it("R2-B1: the bare-conduit Kissimmee row creates its OWN accubid item at Chris's real bare rate, alongside the untouched all-in EMT-075", () => {
+    const bareConduit = after.items.find(i => i.source === 'accubid' && /3\/4/.test(i.name) && /emt/i.test(i.name) && /conduit/i.test(i.name) && !/connector|coupling/i.test(i.name));
+    expect(bareConduit).toBeTruthy();
+    expect(bareConduit!.labor_hours).toBeCloseTo(3.2, 2); // Chris's real bare-conduit rate
+    expect(bareConduit!.code).not.toBe('EMT-075');
   });
 
   it('sanity check per matched item/assembly: finite, non-negative $/hrs', () => {
