@@ -62,9 +62,10 @@ describe('purgeExpired', () => {
       .mockResolvedValueOnce({ rowCount: 0 }) // won_jobs
       .mockResolvedValueOnce({ rowCount: 0 }) // notifications_read
       .mockResolvedValueOnce({ rowCount: 5 }) // notifications_unread
-      .mockResolvedValueOnce({ rowCount: 1 }); // intake_items
+      .mockResolvedValueOnce({ rowCount: 1 }) // intake_items
+      .mockResolvedValueOnce({ rowCount: 7 }); // sheet_evidence_cache (N7)
     const counts = await purgeExpired(12);
-    expect(counts).toEqual({ audit_log: 3, generator_proposals: 2, notifications_unread: 5, intake_items: 1 });
+    expect(counts).toEqual({ audit_log: 3, generator_proposals: 2, notifications_unread: 5, intake_items: 1, sheet_evidence_cache: 7 });
   });
 
   // Audit data #2/#17 — the notification- and intake-retention deletes reuse
