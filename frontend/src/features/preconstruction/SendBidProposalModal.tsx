@@ -7,6 +7,10 @@ interface Props {
   bid: Bid;
   onSent: (result: { bid: Bid; wonJob: unknown; stageAdvanced: boolean; webLink: string; attached: 'pdf' | 'docx' }) => void;
   onClose: () => void;
+  /** Fix round B5/gap 2 — draft-proposal runs the same evidence gate as
+   *  generate-docx/xlsx/run-agent4; a 409 naming a Labor & Pricing line by
+   *  its line_key closes this modal and jumps straight to it there. */
+  onJumpToEvidenceLine?: (lineKey: string) => void;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -29,7 +33,7 @@ function defaultBodyText(bid: Bid): string {
 // Outlook DRAFT (with the filed proposal attached) that Jake reviews and
 // sends himself. See backend/src/routes/bids.ts's POST /:id/draft-proposal
 // and docs/superpowers/plans/2026-09-03-phase4-report.md's rework section.
-export default function SendBidProposalModal({ bid, onSent, onClose }: Props) {
+export default function SendBidProposalModal({ bid, onSent, onClose, onJumpToEvidenceLine }: Props) {
   const prefill = bid.contact && EMAIL_RE.test(bid.contact.trim()) ? bid.contact.trim() : '';
   const [to,      setTo]      = useState(prefill);
   const [cc,      setCc]      = useState('');
@@ -70,6 +74,15 @@ export default function SendBidProposalModal({ bid, onSent, onClose }: Props) {
     } catch (e: any) {
       setErrMsg(e?.response?.data?.error || e?.message || 'Failed to create the draft');
       setStatus('error');
+      // Fix round B5/gap 2 — a line missing its evidence/reason: close this
+      // modal and jump straight to it in Labor & Pricing, instead of
+      // leaving the estimator to go hunting from the error text alone.
+      const reviewItems = e?.response?.data?.reviewItems as Array<{ lineKey?: string }> | undefined;
+      const lineKey = reviewItems?.find(i => i.lineKey)?.lineKey;
+      if (lineKey && onJumpToEvidenceLine) {
+        onJumpToEvidenceLine(lineKey);
+        onClose();
+      }
     }
   };
 

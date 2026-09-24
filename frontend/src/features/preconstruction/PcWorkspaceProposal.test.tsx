@@ -375,3 +375,90 @@ describe('Fix round 2 / N-R2-6 — the legacy note shows in Review & Proposal to
     await waitFor(() => expect(screen.getByTestId('proposal-legacy-note').textContent).toContain('Analyzed before accuracy checks'));
   });
 });
+
+// Coordinator gap 2 (re-review) — the evidence gate is not special to
+// generate-docx: the backend already applies it to generate-takeoff-xlsx,
+// draft-proposal (send) and run-agent4 too (routes/preconstruction.ts,
+// routes/bids.ts — all four call evidenceGate(); only generate-prebid-
+// package for Chris is exempt). Each of those four paths' frontend error
+// handler must jump to the offending Labor & Pricing line the same way
+// Download .docx's already does.
+describe('Fix round B5/gap 2 — every GC-facing output jumps to the evidence-gate line, not just Download .docx', () => {
+  const EVIDENCE_BODY = {
+    error: 'The takeoff needs review before a proposal can be generated or sent: 1 item open.',
+    reviewItems: [{ id: 'evidence:line:lk-owner-panel', kind: 'confirm', title: 'Manual line missing its evidence/reason: Owner-furnished panel', detail: 'd', lineKey: 'lk-owner-panel' }],
+  };
+  function mocksWithEstimatingLine() {
+    get.mockImplementation((url: string, opts?: { responseType?: string }) => {
+      if (url === `/preconstruction/${bid.id}/generate-takeoff-xlsx` && opts?.responseType === 'blob') {
+        return Promise.reject({ response: { data: new Blob([JSON.stringify(EVIDENCE_BODY)], { type: 'application/json' }) } });
+      }
+      if (url === `/preconstruction/${bid.id}/results`) return Promise.resolve({ data: AI_RESULTS_COMPLETE });
+      if (url === `/preconstruction/${bid.id}/proposal-preview`) return Promise.resolve({ data: PREVIEW });
+      if (url === `/estimating/${bid.id}`) {
+        return Promise.resolve({
+          data: {
+            lines: [{ id: 'l1', line_key: 'lk-owner-panel', category: 'Service & Distribution', description: 'Owner-furnished panel', qty: 1, unit: 'EA', source: 'manual' }],
+            settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 7, small_tools_pct: 3, supervision_pct: 0, consumables_pct: 2, overhead_pct: 10, profit_pct: 15, crew_size: 3, floors_above_2: 0 },
+            recap: { lines: [], categories: [], totals: { materialTotal: 0, laborHours: 0, laborCost: 0, materialTax: 0, consumables: 0, smallTools: 0, supervision: 0, overhead: 0, profit: 0, directCost: 0, grandTotal: 0 }, warnings: { unresolvedCount: 0, fuzzyMatchCount: 0 } },
+            proposed: false, savedGrandTotal: null,
+          },
+        });
+      }
+      if (url === '/estimating/library') return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      if (url === '/preconstruction/costs') return Promise.resolve({ data: [] });
+      if (url === `/preconstruction/${bid.id}/takeoff`) return Promise.resolve({ data: null });
+      if (url === `/preconstruction/intelligence/${bid.id}`) return Promise.resolve({ data: null });
+      if (url === '/estimates/unit-costs') return Promise.resolve({ data: { global: {}, by_project_type: {} } });
+      if (url === `/estimates/${bid.id}`) return Promise.resolve({ data: null });
+      if (url === '/documents') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: null });
+    });
+  }
+
+  it('Download Takeoff (.xlsx): jumps to the named line on a 409', async () => {
+    baseMocks();
+    mocksWithEstimatingLine();
+    renderProposalTab();
+    await waitFor(() => expect(screen.getByText('Proposal Preview')).toBeTruthy());
+    fireEvent.click(screen.getByText('Download Takeoff (.xlsx)'));
+    await waitFor(() => expect(screen.getByLabelText('Evidence / reason for Owner-furnished panel')).toBeTruthy());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Evidence / reason for Owner-furnished panel')));
+  });
+
+  it('Run Agent 4: jumps to the named line on a 409 (JSON, not a blob)', async () => {
+    baseMocks();
+    mocksWithEstimatingLine();
+    post.mockImplementation((url: string) => url === `/preconstruction/${bid.id}/run-agent4`
+      ? Promise.reject({ response: { status: 409, data: EVIDENCE_BODY } })
+      : Promise.resolve({ data: {} }));
+    renderProposalTab();
+    await waitFor(() => expect(screen.getByText('Proposal Preview')).toBeTruthy());
+    const priceInput = await screen.findByPlaceholderText('e.g. 285000');
+    fireEvent.change(priceInput, { target: { value: '250000' } });
+    fireEvent.click(screen.getByText(/Re-run Agent 4|Run Agent 4/));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/run-agent4`, expect.objectContaining({ price: '250000' })));
+    await waitFor(() => expect(screen.getByLabelText('Evidence / reason for Owner-furnished panel')).toBeTruthy());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Evidence / reason for Owner-furnished panel')));
+  });
+
+  it('Draft Proposal Email (draft-proposal / send): closes the modal and jumps to the named line on a 409', async () => {
+    baseMocks();
+    mocksWithEstimatingLine();
+    post.mockImplementation((url: string) => url === `/bids/${bid.id}/draft-proposal`
+      ? Promise.reject({ response: { status: 409, data: EVIDENCE_BODY } })
+      : Promise.resolve({ data: {} }));
+    renderProposalTab();
+    await waitFor(() => expect(screen.getByText('Proposal Preview')).toBeTruthy());
+    fireEvent.click(screen.getByText('Draft Proposal Email'));
+    const toField = await screen.findByPlaceholderText('bids@generalcontractor.com');
+    fireEvent.change(toField, { target: { value: 'gc@example.com' } });
+    fireEvent.click(screen.getByText('Create Outlook Draft'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/bids/${bid.id}/draft-proposal`, expect.anything()));
+    // The modal is gone (jumped away, not left open showing the raw error).
+    await waitFor(() => expect(screen.queryByPlaceholderText('bids@generalcontractor.com')).toBeNull());
+    // Labor & Pricing is focused on the named line.
+    await waitFor(() => expect(screen.getByLabelText('Evidence / reason for Owner-furnished panel')).toBeTruthy());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Evidence / reason for Owner-furnished panel')));
+  });
+});

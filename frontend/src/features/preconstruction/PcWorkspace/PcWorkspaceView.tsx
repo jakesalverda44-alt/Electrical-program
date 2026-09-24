@@ -801,8 +801,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       pollAgent4();
     } catch (err) {
       setAgent4Running(false);
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to start Agent 4';
+      const body = (err as { response?: { data?: { error?: string; reviewItems?: Array<{ id: string; lineKey?: string }> } } })?.response?.data;
+      const msg = body?.error ?? 'Failed to start Agent 4';
       setAgent4StartError(msg);
+      jumpToFirstEvidenceLine(body?.reviewItems ?? null); // B5/gap 2 — the Agent 4 GC proposal run shares the same gate
       showToast({ variant: 'error', title: 'Agent 4 error', sub: msg });
     }
   };
@@ -829,15 +831,20 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     return { sub, failures, reviewItems };
   }
 
-  // Fix round B5 — the evidence gate's 409 lists every offending line; jump
-  // to the FIRST one named by a line_key (evidence:line:<lineKey> ids) —
+  // Fix round B5 / gap 2 — the evidence gate applies to EVERY GC-facing
+  // output (generate-docx, generate-takeoff-xlsx, draft-proposal/send,
+  // run-agent4 — never the internal pre-bid package for Chris); its 409
+  // lists every offending line, and every one of those call sites jumps to
+  // the FIRST one named by a line_key (evidence:line:<lineKey> ids) —
   // switching to Labor & Pricing and focusing its reason field there beats
   // a toast the estimator has to go hunting from.
+  function jumpToLineKey(lineKey: string) {
+    onSelectStep('pricing');
+    setFocusLineKey(lineKey);
+  }
   function jumpToFirstEvidenceLine(reviewItems: Array<{ id: string; lineKey?: string }> | null) {
     const withLine = reviewItems?.find(i => i.lineKey);
-    if (!withLine?.lineKey) return;
-    onSelectStep('pricing');
-    setFocusLineKey(withLine.lineKey);
+    if (withLine?.lineKey) jumpToLineKey(withLine.lineKey);
   }
 
   function triggerDownload(blob: Blob, filename: string) {
@@ -887,7 +894,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       showToast,
       errorToast: false,
       onError: async (err) => {
-        const { sub } = await readBlobError(err, 'Could not generate the takeoff spreadsheet');
+        const { sub, reviewItems } = await readBlobError(err, 'Could not generate the takeoff spreadsheet');
+        jumpToFirstEvidenceLine(reviewItems); // B5/gap 2 — the GC takeoff xlsx runs the same evidence gate
         showToast({ variant: 'error', title: 'Download failed', sub });
       },
     },
@@ -1698,6 +1706,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               xlsxBusy={xlsxBusy}
               sendProposalOpen={sendProposalOpen}
               setSendProposalOpen={setSendProposalOpen}
+              onJumpToEvidenceLine={jumpToLineKey}
               onBidUpdated={onBidUpdatedStable}
               showToast={showToastStable}
               generatePrebidPackage={onGeneratePrebidPackage}
