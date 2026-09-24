@@ -217,6 +217,14 @@ async function applyResolution(
         await client.query('ROLLBACK');
         return { ok: false, status: 400, error: 'A bulk resolution must cover items of one group.' };
       }
+      // Fix round 3 / S16 — equipment can't be zeroed by ANY bulk action
+      // (the zero-count group's "mark all", the cross-group multi-select,
+      // or anything else): each equipment item is answered on its own.
+      const equipment = picked.filter(i => i.category === 'equipment');
+      if (equipment.length) {
+        await client.query('ROLLBACK');
+        return { ok: false, status: 400, error: `Equipment is never resolved in bulk — answer each one on its own: ${equipment.map(i => i.title).join(', ')}.` };
+      }
     }
     for (const id of itemIds) {
       const item = items.find(i => i.id === id);
