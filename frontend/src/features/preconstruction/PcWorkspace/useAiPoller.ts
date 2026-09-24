@@ -23,9 +23,20 @@ interface UseAiPollerArgs {
   setAiResults: (data: Record<string, unknown> | null) => void;
   setAgent4Running: (running: boolean) => void;
   showToast: (t: Toast) => void;
+  /** Re-run reset — called once an analysis ends (complete, error or
+   *  stopped) so the parent can refresh every panel without a reload. */
+  onAnalysisSettled?: (data: Record<string, unknown>) => void;
 }
 
-export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showToast }: UseAiPollerArgs) {
+/** Stop analysis — the pipeline's live progress (takeoff_results.progress). */
+export interface AnalysisProgress {
+  stage: string;
+  label: string;
+  step: number | null;
+  of: number | null;
+}
+
+export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showToast, onAnalysisSettled }: UseAiPollerArgs) {
   const pollRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
   const agent4PollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -38,10 +49,27 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
   // and a hard deadline stops a stuck 'running' status polling forever.
   const pollCancelled = useRef(false);
   const [pollTimedOut, setPollTimedOut] = useState<null | 'analysis' | 'proposal'>(null);
+  const [progress, setProgress] = useState<AnalysisProgress | null>(null);
+  // Stop analysis — bumping a generation orphans the loop that was running
+  // (every tick checks its own generation), without touching the other loop.
+  const analysisGen = useRef(0);
+  const agent4Gen = useRef(0);
+  const settledRef = useRef(onAnalysisSettled);
+  settledRef.current = onAnalysisSettled;
 
-  const pollForResults = (startMs = Date.now(), shownAgent2 = false, shownAgent3 = false, failStreak = 0, shownCounting = false) => {
+  const stopAnalysisPolling = () => {
+    analysisGen.current++;
+    if (pollRef.current) clearTimeout(pollRef.current);
+    setProgress(null);
+  };
+  const stopAgent4Polling = () => {
+    agent4Gen.current++;
+    if (agent4PollRef.current) clearTimeout(agent4PollRef.current);
+  };
+
+  const pollForResults = (startMs = Date.now(), shownAgent2 = false, shownAgent3 = false, failStreak = 0, shownCounting = false, gen = analysisGen.current) => {
     pollRef.current = setTimeout(async () => {
-      if (pollCancelled.current) return;
+      if (pollCancelled.current || gen !== analysisGen.current) return;
       if (Date.now() - startMs > POLL_DEADLINE_MS) {
         setPollTimedOut('analysis');
         set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${POLL_TIMEOUT_MESSAGE}`] }));
@@ -49,7 +77,9 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
       }
       try {
         const { data } = await api.get(`/preconstruction/${bidId}/results`);
-        if (pollCancelled.current) return;
+        if (pollCancelled.current || gen !== analysisGen.current) return;
+        const p = data?.progress as AnalysisProgress | null | undefined;
+        setProgress(p && typeof p.label === 'string' ? p : null);
         let nextA2 = shownAgent2, nextA3 = shownAgent3;
         let nextCounting = shownCounting;
         if (data?.status === 'counting' && !shownCounting) {
@@ -57,14 +87,15 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
           set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Counting fixtures, devices and equipment on each plan sheet…'] }));
         }
         if (!shownAgent2 && (data?.status === 'agent2_running' || data?.status === 'agent2_complete')) {
-          set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Agent 2 of 3: Building scope & estimate…'] }));
+          set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Agent 2 of 3: building scope & estimate…'] }));
           nextA2 = true;
         }
         if (!shownAgent3 && (data?.status === 'agent2_complete' || data?.status === 'agent3_running')) {
-          set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Agent 3 of 3: Running QA review & risk assessment…'] }));
+          set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Agent 3 of 3: QA review & risk assessment…'] }));
           nextA3 = true;
         }
         if (data?.status === 'complete') {
+          setProgress(null);
           setAiResults(data);
           const scopeFill = buildScopeFromAgent2(data?.agent2_output);
           set(prev => {
@@ -85,17 +116,26 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
                 : '✓ Analysis complete — see Plan Review tab.'],
             };
           });
+          settledRef.current?.(data);
         } else if (data?.status === 'error') {
+          setProgress(null);
           setAiResults(data);
           set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${analysisErrorMessage(data)}`] }));
+          settledRef.current?.(data);
+        } else if (data?.status === 'cancelled') {
+          // Stop analysis — stopped from this or another browser.
+          setProgress(null);
+          setAiResults(data);
+          set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `■ ${String(data?.raw_response || 'Stopped')}. Re-run the analysis to continue.`] }));
+          settledRef.current?.(data);
         } else {
-          pollForResults(startMs, nextA2, nextA3, 0, nextCounting);
+          pollForResults(startMs, nextA2, nextA3, 0, nextCounting, gen);
         }
       } catch {
-        if (pollCancelled.current) return;
+        if (pollCancelled.current || gen !== analysisGen.current) return;
         // Retry up to 5 times before giving up — handles transient connection drops
         if (failStreak < 5) {
-          pollForResults(startMs, shownAgent2, shownAgent3, failStreak + 1, shownCounting);
+          pollForResults(startMs, shownAgent2, shownAgent3, failStreak + 1, shownCounting, gen);
         } else {
           set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), '✗ Could not reach server after several retries. The analysis may still be running — check the Plan Review tab in a minute.'] }));
         }
@@ -103,9 +143,9 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
     }, 3000);
   };
 
-  const pollAgent4 = (startMs = Date.now(), failStreak = 0) => {
+  const pollAgent4 = (startMs = Date.now(), failStreak = 0, gen = agent4Gen.current) => {
     agent4PollRef.current = setTimeout(async () => {
-      if (pollCancelled.current) return;
+      if (pollCancelled.current || gen !== agent4Gen.current) return;
       if (Date.now() - startMs > POLL_DEADLINE_MS) {
         setPollTimedOut('proposal');
         setAgent4Running(false);
@@ -113,7 +153,7 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
       }
       try {
         const { data } = await api.get(`/preconstruction/${bidId}/results`);
-        if (pollCancelled.current) return;
+        if (pollCancelled.current || gen !== agent4Gen.current) return;
         const status = data?.agent4_status as string | undefined;
         if (status === 'complete') {
           setAiResults(data);
@@ -124,12 +164,15 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
           setAgent4Running(false);
           const errMsg = (data?.agent4_error as string | undefined) ?? 'Failed to generate proposal';
           showToast({ variant: 'error', title: 'Agent 4 error', sub: errMsg });
+        } else if (status === 'cancelled') {
+          setAiResults(data);
+          setAgent4Running(false);
         } else {
-          pollAgent4(startMs, 0);
+          pollAgent4(startMs, 0, gen);
         }
       } catch {
-        if (pollCancelled.current) return;
-        if (failStreak < 5) pollAgent4(startMs, failStreak + 1);
+        if (pollCancelled.current || gen !== agent4Gen.current) return;
+        if (failStreak < 5) pollAgent4(startMs, failStreak + 1, gen);
         else {
           setAgent4Running(false);
           showToast({ variant: 'error', title: 'Agent 4 error', sub: 'Could not reach server. The proposal may still be generating — check back in a moment.' });
@@ -150,6 +193,8 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
         const shownA2 = ['agent2_running', 'agent2_complete', 'agent3_running'].includes(r.data.status);
         const shownA3 = r.data.status === 'agent3_running';
         set({ aiRunning: true, aiLog: ['Analysis in progress — reconnecting…'] });
+        const p = r.data?.progress as AnalysisProgress | null | undefined;
+        if (p && typeof p.label === 'string') setProgress(p);
         pollForResults(Date.now(), shownA2, shownA3);
       }
       // Reconnect Agent 4 poll if it was running when page was refreshed
@@ -171,5 +216,5 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
   }, [bidId]);
 
 
-  return { pollTimedOut, pollForResults, pollAgent4 };
+  return { pollTimedOut, pollForResults, pollAgent4, progress, stopAnalysisPolling, stopAgent4Polling };
 }

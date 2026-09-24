@@ -37,6 +37,7 @@ import ProposalTab from './ProposalTab';
 import CostsTab from './CostsTab';
 import IntelTab from './IntelTab';
 import ImportPanel, { ImportPanelProps } from './ImportPanel';
+import { rerunPlan, RerunConfirmBody, type AnalyzeStartResponse, type RerunResetSummary, type StopKind } from './rerunReset';
 // Task 7/8/9 (estimating redesign) — the new shell replaces StepTracker+
 // TabStrip's chrome; LaborPricingStep+useEstimatingBid replace PricingTab
 // (still present, unrendered — see the estimating report for why it wasn't
@@ -269,11 +270,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   onUpdateRef.current = onUpdate;
   const set = useCallback<SetWorkspace>(patchOrFn => {
     const current = wsRef.current;
-    if (typeof patchOrFn === 'function') {
-      onUpdateRef.current({ ...current, ...patchOrFn(current) });
-    } else {
-      onUpdateRef.current({ ...current, ...patchOrFn });
-    }
+    const next = typeof patchOrFn === 'function' ? { ...current, ...patchOrFn(current) } : { ...current, ...patchOrFn };
+    // Re-run reset — two set() calls in the same tick (applyServerReset, then
+    // the aiLog append) must compose: without this the second one merged
+    // onto the pre-reset workspace and silently restored the cleared RFIs.
+    wsRef.current = next;
+    onUpdateRef.current(next);
   }, []);
   const showToastStable = useStableFn(showToast);
   const onBidUpdatedStable = useStableFn(onBidUpdated);
@@ -311,12 +313,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // ── Polling ───────────────────────────────────────────────────────────
   // Both AI poll loops, their shared cancellation flag and the mount-time
   // reconnect moved to useAiPoller (audit code #10) unchanged.
-  const { pollTimedOut, pollForResults, pollAgent4 } = useAiPoller({
+  // Re-run reset — assigned below, once every panel's state exists.
+  const afterAnalysisRef = useRef<((data: Record<string, unknown>) => void) | null>(null);
+  const { pollTimedOut, pollForResults, pollAgent4, progress, stopAnalysisPolling, stopAgent4Polling } = useAiPoller({
     bidId: bid.id,
     set,
     setAiResults,
     setAgent4Running,
     showToast: showToastStable,
+    onAnalysisSettled: data => afterAnalysisRef.current?.(data),
   });
 
   // Fix round 2 / B3 — savedEstimate/setSavedEstimate (the STATE mirror of
@@ -457,8 +462,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // one-time pre-fill) until the estimator edits it by hand. See the effect
   // near `estimatingBid`'s declaration.
 
-  const runAI = async (force = false) => {
-    if (wsRef.current.aiRunning || (!force && wsRef.current.aiDone)) return;
+  const runAI = async (force = false): Promise<AnalyzeStartResponse | null> => {
+    if (wsRef.current.aiRunning || (!force && wsRef.current.aiDone)) return null;
     const elecUploaded = fileObjectsRef.current.filter(f => isElecSheet(f.name)).length;
     const elecSelected = projectDocs.filter(d => selectedDocIds.has(d.id) && isElecSheet(d.name)).length;
     const elecCount = elecUploaded + elecSelected;
@@ -469,7 +474,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         ? '✗ Files from a previous session can\'t be re-sent automatically. Go to the Files tab and check the boxes under "From Project Files" to include them, or re-upload the plan files.'
         : '✗ Upload plan files or select from Project Files before running AI analysis.';
       set({ aiLog: [msg] });
-      return;
+      return null;
     }
     const totalCount = fileObjectsRef.current.length + selectedDocIds.size;
     set({ aiRunning: true, aiLog: [`Sending ${totalCount} file(s) (${elecCount} electrical sheet${elecCount !== 1 ? 's' : ''} identified)…`] });
@@ -478,12 +483,23 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       formData.append('bidId', bid.id);
       fileObjectsRef.current.forEach(f => formData.append('files', f));
       selectedDocIds.forEach(id => formData.append('document_ids', id));
-      await api.post('/preconstruction/analyze', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
-      set(prev => ({ aiLog: [...(prev.aiLog ?? []), 'Agent 1 of 3: Reading plans & extracting drawing data (1–2 min)…'] }));
+      const { data } = await api.post<AnalyzeStartResponse>('/preconstruction/analyze', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      // Re-run reset — the server cleared the previous run's outputs in the
+      // same transaction that started this run; mirror it here at once (the
+      // workspace autosave would otherwise PUT the cleared RFIs back).
+      if (data?.reset) applyServerReset(data.reset);
+      const left = (data?.excludedInputs ?? []).map(e => `${e.name} (${e.reason === 'crm_generated' ? 'CRM-generated, not a drawing' : 'duplicate'})`);
+      set(prev => ({ aiLog: [
+        ...(prev.aiLog ?? []),
+        ...(left.length ? [`Left out: ${left.join('; ')}`] : []),
+        'Agent 1 of 3: reading plans & extracting drawing data…',
+      ] }));
       pollForResults(Date.now());
+      return data ?? null;
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to start analysis';
       set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${msg}`] }));
+      return null;
     }
   };
 
@@ -497,7 +513,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       const { data } = await api.post('/preconstruction/analyze', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       const startMsg = data.resumed
         ? 'Agent 2 of 3: Building scope & estimate…'
-        : 'Agent 1 of 3: Reading plans & extracting drawing data (1–2 min)…';
+        : 'Agent 1 of 3: reading plans & extracting drawing data…';
       set(prev => ({ aiLog: [...(prev.aiLog ?? []), startMsg] }));
       pollForResults(Date.now(), !!data.resumed, false);
     } catch (err: unknown) {
@@ -508,21 +524,66 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
   const addRfi = () => {
     if (!newRfi.trim()) return;
-    const rfi = { id: Date.now().toString(), question: newRfi.trim(), submitted: false, answer: '' };
+    const rfi = { id: Date.now().toString(), question: newRfi.trim(), submitted: false, answer: '', origin: 'manual' as const };
     set({ rfis: [...ws.rfis, rfi] });
     setNewRfi('');
   };
 
+  // Re-run reset — "when we re-run the analysis it should clear out all the
+  // old outputs." The confirm lists exactly what goes and what stays; the
+  // server does the reset atomically with the new run (POST /analyze), and
+  // applyServerReset mirrors it into every panel without a page reload.
   const rerunAI = async () => {
+    if (wsRef.current.aiRunning) return;
+    const plan = rerunPlan({
+      rfis: wsRef.current.rfis,
+      lines: estimatingBid.proposed ? [] : estimatingBid.lines,
+      savedGrandTotal: estimatingBid.savedGrandTotal,
+      bidAmount: bid.amount != null ? Number(bid.amount) : null,
+      pricingDirty: estimatingBid.dirty,
+    });
     if (!(await confirm({
-      title: 'Re-run the AI analysis? This will permanently delete the previous takeoff results and clear the Scope of Work.',
-      confirmLabel: 'Re-run',
+      title: 'Re-run the AI analysis?',
+      body: <RerunConfirmBody plan={plan}/>,
+      confirmLabel: 'Clear and re-run',
       destructive: true,
     }))) return;
+    // A pending autosave carries the RFIs as they are now; send it first so
+    // it can never land after the server's reset and restore cleared ones.
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+      await saveWorkspace();
+    }
+    await runAI(true);
+  };
+
+  // Everything the server reset, mirrored locally: workspace fields (the
+  // autosave then persists exactly what the server holds), the results,
+  // every panel's own state, and the panels that fetch for themselves
+  // (remounted via resultsEpoch).
+  const applyServerReset = (reset: RerunResetSummary) => {
     setAiResults(null);
-    set({ aiDone: false, aiRunning: false, aiLog: [], scope: {}, confirmedService: undefined });
+    set({
+      aiDone: false, scope: {}, confirmedService: undefined, proposalGenerated: false,
+      rfis: reset.rfis as PcWorkspace['rfis'],
+    });
     setSvcVoltage(''); setSvcAmpacity(''); setSvcPanel('');
-    runAI(true);
+    setProposalPreview(null);
+    setVerifyFailures(null);
+    setPrebidResult(null);
+    setChrisDraftLink(null);
+    setAgent4StartError(null);
+    setPropPrice('');
+    setPropPriceEdited(false);
+    refreshPanels(true);
+    const c = reset.cleared;
+    showToast({
+      title: 'Previous analysis cleared',
+      sub: `${c.takeoffLines} takeoff line${c.takeoffLines === 1 ? '' : 's'}, ${c.aiRfis} AI RFI${c.aiRfis === 1 ? '' : 's'}, ${c.suggestedMarkers} AI marker${c.suggestedMarkers === 1 ? '' : 's'} cleared`
+        + `${c.supersededDocuments ? ` · ${c.supersededDocuments} filed document${c.supersededDocuments === 1 ? '' : 's'} marked superseded` : ''}`
+        + `${reset.kept.recheckLines ? ` · ${reset.kept.recheckLines} edited line${reset.kept.recheckLines === 1 ? '' : 's'} kept to re-check` : ''}`,
+    });
   };
 
   const handleConfirmService = () => {
@@ -560,7 +621,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       showToast({ variant: 'info', title: 'Nothing new to import', sub: 'Every AI-suggested RFI is already on this list.' });
       return;
     }
-    const newRfis = toAdd.map(q => ({ id: Date.now().toString() + Math.random(), question: q, submitted: false, answer: '' }));
+    const newRfis = toAdd.map(q => ({ id: Date.now().toString() + Math.random(), question: q, submitted: false, answer: '', origin: 'ai' as const }));
     set({ rfis: [...ws.rfis, ...newRfis] });
     showToast({ title: `Imported ${newRfis.length} RFI${newRfis.length === 1 ? '' : 's'}`, sub: 'From the AI analysis' });
   };
@@ -950,7 +1011,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // still calling the latest closure, so a tab only re-renders when the data it
   // shows changes — not every time the autosave chip ticks over.
   const onAdvanceStep = useStableFn(advanceStep);
-  const onRunAI = useStableFn(() => { void runAI(); });
+  // Re-run reset — any analysis after the first one (e.g. after a stop or an
+  // error) resets the previous run's outputs, so it goes through the same
+  // confirm as "Re-run Analysis".
+  const onRunAI = useStableFn(() => { void (aiResults?.run_id || aiResults?.status ? rerunAI() : runAI()); });
   const onResumeAI = useStableFn(() => { void resumeAI(); });
   const onRerunAI = useStableFn(() => { void rerunAI(); });
   const onCopyToClipboard = useStableFn(copyToClipboard);
@@ -1092,6 +1156,56 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // twice — see useUnsavedGuard's per-call `id`).
   useUnsavedGuard(estimatingBid.dirty);
 
+  // Re-run reset — the panels that fetch their own data (review extras,
+  // scope list, pre-bid package, plan markers) remount on a new epoch;
+  // Labor & Pricing / Bid Summary re-hydrate from the server. Runs after a
+  // reset (discarding unsaved pricing edits the estimator was warned about)
+  // and again when the analysis ends (keeping unsaved edits).
+  const [resultsEpoch, setResultsEpoch] = useState(0);
+  const [plansEpoch, setPlansEpoch] = useState(0);
+  const refreshPanels = (afterReset: boolean) => {
+    setResultsEpoch(e => e + 1);
+    if (!markupUnsavedRef.current) setPlansEpoch(e => e + 1);
+    reloadTakeoff();
+    reloadProjectDocs();
+    if (afterReset || !estimatingBid.dirty) estimatingBid.rehydrate();
+  };
+  afterAnalysisRef.current = () => refreshPanels(false);
+
+  // Stop analysis — stops the analysis, an Agent 4 run or the pre-bid draft.
+  const [stopping, setStopping] = useState<StopKind | null>(null);
+  const stopRun = async (what: StopKind) => {
+    if (!(await confirm({
+      title: what === 'analysis' ? 'Stop the analysis?' : what === 'agent4' ? 'Stop generating the proposal?' : 'Stop composing the pre-bid draft?',
+      body: 'Stops the AI run; you\'ll need to re-run. Tokens already used are still billed.',
+      confirmLabel: 'Stop',
+      destructive: true,
+    }))) return;
+    setStopping(what);
+    try {
+      const { data } = await api.post<{ message: string }>(`/preconstruction/${bid.id}/stop-analysis`, { what });
+      if (what === 'analysis') {
+        stopAnalysisPolling();
+        set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `■ ${data.message}. Re-run the analysis to continue.`] }));
+      }
+      if (what === 'agent4') { stopAgent4Polling(); setAgent4Running(false); }
+      showToast({ title: 'Stopped', sub: data.message });
+    } catch (err) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Could not stop the run';
+      showToast({ variant: 'error', title: 'Stop failed', sub: msg });
+    } finally {
+      setStopping(null);
+      try {
+        const r = await api.get(`/preconstruction/${bid.id}/results`);
+        setAiResults(r.data);
+        if (what === 'analysis') refreshPanels(false);
+      } catch { /* the pollers catch up */ }
+    }
+  };
+  const onStopAnalysis = useStableFn(() => { void stopRun('analysis'); });
+  const onStopAgent4 = useStableFn(() => { void stopRun('agent4'); });
+  const onStopDraft = useStableFn(() => { void stopRun('draft'); });
+
   // Fix round 1 / S3 — the Review step and Agent 4 (runAgent4Proposal, below)
   // must read the engine's LATEST SAVED total, not a stale one-time pre-fill.
   // Syncs propPrice from estimatingBid.recap whenever it reflects a saved
@@ -1204,6 +1318,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               rerunAI={onRerunAI}
               settings={settings}
               userRole={userRole}
+              progress={progress}
+              stopAnalysis={onStopAnalysis}
+              stopping={stopping === 'analysis'}
             />
             <TakeoffTab
               ws={ws}
@@ -1230,6 +1347,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         // happens in Plans).
         const reviewPanel = (
           <TakeoffReviewPanel
+            key={`review-${resultsEpoch}`}
             bidId={bid.id}
             review={{
               status: (aiResults?.review_status as TakeoffReview['status']) ?? null,
@@ -1244,7 +1362,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           <>
             {reviewPanel}
             {/* Takeoff accuracy Task 11 — the estimator's scope list. */}
-            <ScopeListPanel bidId={bid.id} showToast={showToast} />
+            <ScopeListPanel key={`scope-${resultsEpoch}`} bidId={bid.id} showToast={showToast} />
             <div className="est-view-toggle" role="tablist" aria-label="Takeoff view">
               <button
                 type="button"
@@ -1268,6 +1386,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             {/* Takeoff accuracy Task 12 — the pre-bid package at the end of
                 the Takeoff step (moved from Review & Proposal). */}
             <PrebidPackagePanel
+              key={`prebid-${resultsEpoch}`}
               bid={bid}
               aiResults={aiResults}
               setAiResults={setAiResults}
@@ -1279,10 +1398,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               chrisDraftBusy={chrisDraftBusy}
               chrisDraftLink={chrisDraftLink}
               showToast={showToast}
+              stopDraft={onStopDraft}
+              stoppingDraft={stopping === 'draft'}
             />
             {planView.view === 'plans' ? (
               <Suspense fallback={<div style={{ padding: 32, color: 'var(--text3)' }}>Loading plan viewer…</div>}>
                 <PlansWorkspace
+                  key={`plans-${plansEpoch}`}
                   bidId={bid.id}
                   lines={estimatingBid.lines}
                   settings={estimatingBid.settings}
@@ -1405,6 +1527,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               agent4StartError={agent4StartError}
               setAgent4StartError={setAgent4StartError}
               agent4Running={agent4Running}
+              stopAgent4={onStopAgent4}
+              stoppingAgent4={stopping === 'agent4'}
               runAgent4Proposal={onRunAgent4}
               downloadDocx={onDownloadDocx}
               docxBusy={docxBusy}

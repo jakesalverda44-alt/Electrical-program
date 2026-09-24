@@ -3,6 +3,7 @@ import Icon from '../../../components/Icon';
 import { PcWorkspace } from '../constants';
 import { AppSettings, checkAIPermission } from '../../../hooks/useAppSettings';
 import { AiResults, SetWorkspace } from './shared';
+import type { AnalysisProgress } from './useAiPoller';
 
 interface BidTabProps {
   ws: PcWorkspace;
@@ -13,9 +14,17 @@ interface BidTabProps {
   rerunAI: () => void;
   settings?: AppSettings;
   userRole?: string;
+  /** Stop analysis — live pipeline progress and the Stop button. */
+  progress?: AnalysisProgress | null;
+  stopAnalysis?: () => void;
+  stopping?: boolean;
 }
 
-function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRole }: BidTabProps) {
+function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRole, progress, stopAnalysis, stopping }: BidTabProps) {
+  const status = aiResults?.status as string | undefined;
+  const stopped = !ws.aiRunning && status === 'cancelled';
+  const failed = !ws.aiRunning && status === 'error';
+  const pct = progress?.step && progress?.of ? Math.min(100, Math.round((progress.step / progress.of) * 100)) : null;
   return (
     <div style={{ padding: '20px 24px' }}>
       <div className="panel" style={{ marginBottom: 16 }}>
@@ -38,9 +47,9 @@ function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRo
             </div>
           ) : (
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: ws.aiLog.length ? 16 : 0 }}>
-              <button className="btn" onClick={() => runAI()} disabled={ws.aiRunning || ws.aiDone} style={{ fontSize: 13 }}>
+              <button className="btn" onClick={() => runAI()} disabled={ws.aiRunning || ws.aiDone || stopped || failed} style={{ fontSize: 13 }} data-testid="run-ai-takeoff">
                 <Icon name="spark" size={14} stroke={1.9}/>
-                {ws.aiDone ? 'Takeoff Complete' : ws.aiRunning ? 'Running…' : 'Run AI Takeoff'}
+                {ws.aiDone ? 'Takeoff Complete' : ws.aiRunning ? 'Running…' : stopped ? 'Stopped' : 'Run AI Takeoff'}
               </button>
               {!ws.aiRunning && !ws.aiDone && !!aiResults?.agent1_output && (
                 <button className="btn ghost" onClick={resumeAI} style={{ fontSize: 13, color: 'var(--blue)' }}
@@ -51,11 +60,27 @@ function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRo
             </div>
           )}
           {ws.aiRunning && (
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ height: 4, background: 'var(--border2)', borderRadius: 2, overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: '60%', background: 'var(--blue)', borderRadius: 2,
-                  animation: 'pcprogress 2.5s ease-in-out infinite alternate' }}/>
+            <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12 }} data-testid="ai-progress">
+              <div style={{ flex: 1 }}>
+                <div style={{ height: 4, background: 'var(--border2)', borderRadius: 2, overflow: 'hidden' }}>
+                  {pct != null ? (
+                    <div style={{ height: '100%', width: `${pct}%`, background: 'var(--blue)', borderRadius: 2, transition: 'width .4s' }}/>
+                  ) : (
+                    <div style={{ height: '100%', width: '60%', background: 'var(--blue)', borderRadius: 2,
+                      animation: 'pcprogress 2.5s ease-in-out infinite alternate' }}/>
+                  )}
+                </div>
+                {progress?.label && (
+                  <div data-testid="ai-progress-label" style={{ marginTop: 6, fontSize: 12, fontWeight: 700, color: 'var(--text2)' }}>{progress.label}</div>
+                )}
               </div>
+              {stopAnalysis && (
+                <button className="btn ghost" onClick={stopAnalysis} disabled={stopping} data-testid="stop-analysis"
+                  style={{ fontSize: 12.5, color: 'var(--red)', borderColor: 'rgba(224,106,106,.45)', flexShrink: 0 }}
+                  title="Stops the AI run; you'll need to re-run. Tokens already used are still billed.">
+                  {stopping ? 'Stopping…' : 'Stop analysis'}
+                </button>
+              )}
             </div>
           )}
           {ws.aiLog.length > 0 && (
@@ -68,14 +93,21 @@ function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRo
               {ws.aiRunning && <div style={{ color: 'var(--blue)' }}>▌</div>}
             </div>
           )}
-          {ws.aiDone && (
+          {stopped && (
+            <div data-testid="ai-stopped" style={{ marginTop: 10, fontSize: 12.5, fontWeight: 700, color: 'var(--amber)' }}>
+              Stopped{aiResults?.raw_response ? ` — ${String(aiResults.raw_response)}` : ''}. Nothing from this run was saved; re-run the analysis to continue.
+            </div>
+          )}
+          {(ws.aiDone || stopped || failed) && !ws.aiRunning && (
             <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
-              <button className="btn ghost" onClick={() => set({ activeTab: 'takeoff' })} style={{ fontSize: 13 }}>
-                View Results <Icon name="arrow" size={13} stroke={2}/>
-              </button>
-              <button className="btn ghost" onClick={rerunAI}
+              {ws.aiDone && (
+                <button className="btn ghost" onClick={() => set({ activeTab: 'takeoff' })} style={{ fontSize: 13 }}>
+                  View Results <Icon name="arrow" size={13} stroke={2}/>
+                </button>
+              )}
+              <button className="btn ghost" onClick={rerunAI} data-testid="rerun-analysis"
                 style={{ fontSize: 13, color: 'var(--red)', borderColor: 'rgba(224,106,106,.35)' }}
-                title="Delete previous results and run a fresh AI analysis">
+                title="Clear the previous run's outputs (your own work is kept) and run a fresh AI analysis">
                 Re-run Analysis
               </button>
             </div>

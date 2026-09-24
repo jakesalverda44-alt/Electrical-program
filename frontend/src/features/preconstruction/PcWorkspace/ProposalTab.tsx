@@ -24,6 +24,9 @@ interface ProposalTabProps {
   agent4StartError: string | null;
   setAgent4StartError: (v: string | null) => void;
   agent4Running: boolean;
+  /** Stop analysis — stop a running Agent 4. */
+  stopAgent4?: () => void;
+  stoppingAgent4?: boolean;
   runAgent4Proposal: () => void;
   downloadDocx: () => void;
   docxBusy: boolean;
@@ -48,7 +51,7 @@ interface ProposalTabProps {
 }
 
 function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, engineTotal, onUseEngineTotal, propNotes, setPropNotes,
-  agent4StartError, setAgent4StartError, agent4Running, runAgent4Proposal, downloadDocx, docxBusy,
+  agent4StartError, setAgent4StartError, agent4Running, stopAgent4, stoppingAgent4, runAgent4Proposal, downloadDocx, docxBusy,
   downloadTakeoffXlsx, xlsxBusy, sendProposalOpen, setSendProposalOpen, onBidUpdated, showToast,
   generatePrebidPackage, prebidBusy, prebidResult, downloadFiledDocument, emailPrebidToChris,
   chrisDraftBusy, chrisDraftLink, verifyFailures, proposalPreview, convertOpen, setConvertOpen,
@@ -285,8 +288,20 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
         <div className="panel" style={{ marginBottom: 16 }}>
           <div style={{ padding: '14px 20px', fontSize: 13, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 10 }}>
             <div className="spinner" style={{ width: 16, height: 16, border: '2px solid var(--border2)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', flexShrink: 0 }}/>
-            Generating proposal with Agent 4 — this takes 30–60 seconds…
+            <span style={{ flex: 1 }}>Generating the proposal with Agent 4…</span>
+            {stopAgent4 && (
+              <button className="btn ghost" onClick={stopAgent4} disabled={stoppingAgent4} data-testid="stop-agent4"
+                style={{ fontSize: 12.5, color: 'var(--red)', borderColor: 'rgba(224,106,106,.45)' }}
+                title="Stops the AI run; you'll need to re-run. Tokens already used are still billed.">
+                {stoppingAgent4 ? 'Stopping…' : 'Stop'}
+              </button>
+            )}
           </div>
+        </div>
+      )}
+      {!agent4Running && aiResults?.agent4_status === 'cancelled' && (
+        <div data-testid="agent4-stopped" style={{ marginBottom: 16, fontSize: 12.5, fontWeight: 700, color: 'var(--amber)' }}>
+          Proposal generation stopped{aiResults?.agent4_error ? ` — ${String(aiResults.agent4_error)}` : ''}. Generate it again when ready.
         </div>
       )}
 

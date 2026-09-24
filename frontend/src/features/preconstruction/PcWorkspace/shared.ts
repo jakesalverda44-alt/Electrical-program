@@ -20,6 +20,19 @@ export interface TakeoffOnFile {
   source_file: string | null;
 }
 
-export interface ProjectDoc { id: string; name: string; display_name: string; category: string; file_type: string; }
+export interface ProjectDoc {
+  id: string; name: string; display_name: string; category: string; file_type: string;
+  /** Re-run reset — the CRM generated this file (never an analysis input). */
+  generated?: boolean;
+  /** Re-run reset — a later analysis run superseded this generated file. */
+  superseded_at?: string | null;
+}
+
+/** Generated categories never offered as analysis inputs (the server
+ *  refuses them too). */
+export const GENERATED_DOC_CATEGORIES = ['proposal', 'takeoff', 'prebid_scope', 'prebid_takeoff', 'bid_data'];
+export function isGeneratedDoc(d: ProjectDoc): boolean {
+  return !!d.generated || GENERATED_DOC_CATEGORIES.includes(d.category);
+}
 
 export type { PcStepKey };

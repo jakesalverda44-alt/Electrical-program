@@ -45,8 +45,12 @@ export interface UseEstimatingBidResult {
    *  to remap the active line and any pending/quarantined markers away
    *  from a placeholder the instant it stops existing. */
   save: (linesOverride?: EstimateLine[]) => Promise<Record<string, string>>;
-  syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number } | null>;
+  syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number; rebound?: number; unbound?: number } | null>;
   reload: () => void;
+  /** Re-run reset — drop the local state and hydrate again from the server
+   *  (a plain `reload` never re-hydrates past the first load). Discards
+   *  unsaved edits: the caller decides when that is right. */
+  rehydrate: () => void;
   /** Fix round 1 / B1 — installs a server-confirmed {lines, recap} DIRECTLY
    *  (no GET round trip) as the new live state AND the new persisted
    *  baseline — e.g. apply-markups' own response, which already contains
@@ -220,16 +224,22 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       // in the same transaction (fix round 1 / B5) from this same recap.
       setSavedGrandTotal(res.recap.totals.grandTotal);
       persistedRef.current = { lines: res.lines, settings };
-      return { added: res.added, updated: res.updated, vanished: res.vanished };
+      return { added: res.added, updated: res.updated, vanished: res.vanished, rebound: res.rebound, unbound: res.unbound };
     } finally {
       if (aliveRef.current) setSyncing(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bidId, settings]);
 
+  const rehydrate = useCallback(() => {
+    hydratedRef.current = false;
+    persistedRef.current = null;
+    reload();
+  }, [reload]);
+
   return {
     loading: initialLoading && !hydratedRef.current,
     lines, settings, recap, proposed, dirty, saving, syncing, pricing, saveError, savedGrandTotal,
-    setLines, setSettings, save, syncTakeoff, reload, installSaved,
+    setLines, setSettings, save, syncTakeoff, reload, rehydrate, installSaved,
   };
 }

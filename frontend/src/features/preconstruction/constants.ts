@@ -69,7 +69,9 @@ export interface PcWorkspace {
   aiRunning: boolean;
   aiDone: boolean;
   scope: Record<string, string>;
-  rfis: { id: string; question: string; submitted: boolean; answer: string }[];
+  /** origin (migration 121): 'ai' = imported from the analysis, 'manual' =
+   *  typed by the estimator. A re-run clears AI RFIs nobody acted on. */
+  rfis: { id: string; question: string; submitted: boolean; answer: string; origin?: 'ai' | 'manual' }[];
   proposalGenerated: boolean;
   notes: string;
   amount: number;
