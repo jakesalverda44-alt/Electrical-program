@@ -270,6 +270,24 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
         fingerprint: `viewport|${q.keep}|${q.add}|${q.items.map(x => `${x.sheet}:${x.viewport}:${x.count}`).join(';')}`,
       });
     }
+    // Real-run fix 2 — a generic legend symbol drawn where another entity's
+    // marks are: the same device under two names? Never merged silently.
+    if (t.status === 'counted' && t.synonymQuestion) {
+      const q = t.synonymQuestion;
+      const names = q.candidates.map(k => (countResult?.types ?? []).find(x => x.key === k)?.type ?? k).join(' / ');
+      items.push({
+        id: `synonym:${t.key}`,
+        kind: 'area',
+        title: `${title}: the same device as ${names}?`,
+        detail: `${q.coincident} of the ${q.count} ${t.type} marks sit where ${names} marks are. Different devices (keep ${t.count} ${t.type}), or ${t.type} is another name for ${names} (drop the ${t.type} line — ${names} keep their own counts)?`,
+        options: [`Different devices — keep ${t.count}`, `The same device — drop ${t.type}`],
+        keepQty: t.count,
+        sumQty: 0,
+        actions: ['answer'],
+        ...base,
+        fingerprint: `synonym|${q.coincident}|${t.count}`,
+      });
+    }
     // Fix round 3 / S17 — the schedule rows allow two quantities.
     if (t.status === 'counted' && t.scheduleQuestion) {
       const q = t.scheduleQuestion;
@@ -862,6 +880,7 @@ export function riskRank(i: ReviewItem): number {
   // derived mismatches.
   if (i.id.startsWith('gapfill:')) return 12;
   if (i.id.startsWith('reconcile:')) return 13;
+  if (i.id.startsWith('synonym:')) return 14;
   if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 15;
   if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
@@ -892,6 +911,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('viewport:')) return 'viewport';
   if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';
+  if (i.id.startsWith('synonym:')) return 'synonym';
   if (i.id.startsWith('counting:')) return 'counting';
   if (i.id.startsWith('refsheet:')) return 'refsheets';
   if (i.id.startsWith('sheet:') || i.id.startsWith('file:')) return 'sheets';
@@ -1136,6 +1156,9 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (cov) qty = cov.action === 'not_on_job' ? null : (cov.qty ?? qty);
     const rec = res(`recount:${t.key}`);
     if (rec) qty = rec.qty ?? qty;
+    // Real-run fix 2 — "the same device under another name": no line.
+    const syn = res(`synonym:${t.key}`);
+    if (syn?.action === 'answer' && syn.qty === 0) qty = null;
     if (qty !== undefined && (qty === null || qty > 0)) byType.set(t.key, qty);
     if (t.category === 'site_lighting') {
       const heads = res(`count:${t.key}:heads`);

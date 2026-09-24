@@ -130,6 +130,12 @@ export interface TypeCountResult {
   /** Evidence round 1.2 — marks of this type not counted as devices
    *  (legend / schedule / notes / detail / repeated in an enlarged plan). */
   excludedMarks?: number;
+  /** Real-run fix 2 — this entity's other names, kept as evidence (their
+   *  own counts are never added to this one). */
+  aliases?: Array<{ key: string; type: string; kind: string; basis: string }>;
+  /** Real-run fix 2 — a generic legend symbol whose marks sit on another
+   *  entity's marks: the same device under two names? (blocking). */
+  synonymQuestion?: { candidates: string[]; coincident: number; count: number };
 }
 
 export interface LoadCheck {
@@ -590,6 +596,19 @@ export function mergeCountsIntoTakeoff(
   const evidenceOn = !!opts.evidence;
 
   for (const t of targets) {
+    // Real-run fix 2 — another name of an entity: never counted, never a
+    // line; kept on the list with the reason (and anything drawn under it).
+    if (t.mergedInto?.length && t.role !== 'host') {
+      const drawn = sheets.reduce((n, s) => n + (s.status === 'counted' ? s.placed.filter(p => p.typeKey === t.key).length : 0), 0);
+      const into = t.mergedInto.map(k => targets.find(x => x.key === k)?.type ?? k).join(' + ');
+      types.push({
+        key: t.key, type: t.type, description: t.description, category: t.category, wattage: t.wattage,
+        count: 0, heads: null, status: 'merged', reason: t.mergeReason ?? `another name for ${into}`, sheets: [],
+        flags: [`${t.type}: ${t.mergeReason ?? `another name for ${into}`} — not a line of its own.`],
+        mergedInto: into, ...(drawn ? { mergedCount: drawn } : {}),
+      });
+      continue;
+    }
     if (!opts.countingRan) {
       types.push({
         key: t.key, type: t.type, description: t.description, category: t.category, wattage: t.wattage,
@@ -665,6 +684,14 @@ export function mergeCountsIntoTakeoff(
     marks: s.placed.filter(p => Number.isFinite(p.x)).map(p => ({ typeKey: p.typeKey, x: p.x!, y: p.y!, viewportId: p.viewportId ?? null })) });
   const mainPos = (s: SheetCountInput, m: { typeKey: string; x?: number; y?: number; viewportId?: string | null }) =>
     s.geometry ? mainPlanPosition({ typeKey: m.typeKey, x: m.x!, y: m.y!, viewportId: m.viewportId ?? null }, relSheet(s)) : null;
+  // Real-run fix 2 — each entity keeps its other names as evidence.
+  for (const t of targets) {
+    if (!t.mergedInto?.length) continue;
+    for (const k of t.mergedInto) {
+      const c = types.find(x => x.key === k);
+      if (c) c.aliases = [...(c.aliases ?? []), { key: t.key, type: t.type, kind: t.mergeKind ?? 'synonym', basis: t.mergeReason ?? '' }];
+    }
+  }
   // ── 2.2 Typical expansion ────────────────────────────────────────────────
   let evidenceOut: CountMergeEvidenceResult | undefined;
   if (opts.countingRan && opts.evidence) {
@@ -821,7 +848,9 @@ export function mergeCountsIntoTakeoff(
     const cat = String(row.category ?? '').trim().toLowerCase();
     const match = TYPE_ROW_CATEGORIES.has(cat) ? matchRowToTarget(row, lineTargets) : matchRowToTarget(row, deviceTargets);
     if (match) {
-      removedRows.push({ row, reason: `replaced by the counted quantity for type ${match.type}`, replacedByType: match.type });
+      // Real-run fix 2 — a row under another name is replaced by the entity.
+      const canon = match.mergedInto?.length ? match.mergedInto.map(k => lineTargets.find(x => x.key === k)?.type ?? k).join(' + ') : match.type;
+      removedRows.push({ row, reason: `replaced by the counted quantity for type ${canon}${canon !== match.type ? ` (listed as ${match.type})` : ''}`, replacedByType: canon });
       if (!categoryByType.has(match.key) && String(row.category ?? '').trim()) categoryByType.set(match.key, String(row.category).trim());
       continue;
     }

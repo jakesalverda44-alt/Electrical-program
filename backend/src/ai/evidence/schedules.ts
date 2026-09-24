@@ -457,7 +457,9 @@ export function multiplierOf(s: string): number | null {
  *  "breaker B-1,3,5", "circuit A-18". */
 export function circuitRefs(s: string): Array<{ panel: string; circuit: number }> {
   const out: Array<{ panel: string; circuit: number }> = [];
-  const re = /\b([A-Z]{1,3})\s*-\s*(\d{1,3}(?:\s*[,/&]\s*\d{1,3})*)\b/g;
+  // Real-run fix 2 — "ckt A-6, 1,220VA" is circuit A-6 (never A-1 and
+  // A-220): a continuation number is never the head of a thousands group.
+  const re = /\b([A-Z]{1,3})\s*-\s*(\d{1,3}(?:\s*[,/&]\s*\d{1,3}(?![0-9#]|,\d{3}))*)\b/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(s.toUpperCase()))) {
     if (/^(RTU|EF|CF|AHU|WH|DF|MB|NEMA|UL|IES|MH|HP|TYPE)$/.test(m[1])) continue;
@@ -523,8 +525,10 @@ export function scheduleCounts(targets: CountTarget[], tablesIn: ScheduleTable[]
   // schedule row ("EXHAUST FAN RECESSED — installed by HVAC") names a type
   // but is not a quantity.
   const otherRows = tables.filter(t => t.kind === 'equipment' || t.kind === 'load').flatMap(t => t.rows.map(r => ({ r, t })));
-  const cands = targets.filter(t => t.source === 'equipment_schedule' && t.role !== 'host');
-  const equipment = targets.filter(t => (t.category === 'equipment' || t.source === 'equipment_schedule') && t.role !== 'host');
+  // Real-run fix 2 — another name of an entity never owns (or blocks) a
+  // row: its canonical target does.
+  const cands = targets.filter(t => t.source === 'equipment_schedule' && t.role !== 'host' && !t.mergedInto?.length);
+  const equipment = targets.filter(t => (t.category === 'equipment' || t.source === 'equipment_schedule') && t.role !== 'host' && !t.mergedInto?.length);
   const ev = new Map<string, ScheduleEvidenceRow[]>();
   const push = (k: string, e: ScheduleEvidenceRow) => ev.set(k, [...(ev.get(k) ?? []), e]);
   // (a) panel circuits.

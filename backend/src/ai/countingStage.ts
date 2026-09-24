@@ -25,6 +25,7 @@ import { dedupePanels, isCompletePanel, panelChoices, scheduleCounts, type Panel
 import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewports';
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
 import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillStage, sha256Of, type GapFillSheetAsset } from './evidence/gapFillStage';
+import { canonicalKey, consolidateTargets, resolveUncertainSynonyms, type Consolidation, type ConsolidationMerge, type UncertainSynonym } from './evidence/consolidate';
 
 export const COUNT_RESULT_VERSION = 2;
 
@@ -85,6 +86,10 @@ export interface CountResultEvidence {
   panelsExpected: number;
   /** Fix round 4 / S20 — same-name panel conflicts with their enforced answers. */
   panelChoices?: PanelChoice[];
+  /** Real-run fix 2 — one canonical entity per thing: every other name of
+   *  it (synonyms, a class name, a combined tag, a pole-tag legend) with the
+   *  evidence, and the generic legend symbols decided by their marks. */
+  consolidation?: { merges: ConsolidationMerge[]; uncertain: UncertainSynonym[] };
   /** Panel-schedule viewports the viewport reader identified whose table
    *  could not be read completely — their branch circuits have no source
    *  (3.4: Agent 1 no longer states them). */
@@ -176,6 +181,31 @@ const ZERO_USAGE = { input_tokens: 0, output_tokens: 0, cache_creation_input_tok
 interface FinishEvidence {
   ev: EvidenceStageOutput;
   schedCounts: Map<string, ScheduleCount>;
+  /** Real-run fix 2. */
+  cons?: Consolidation;
+}
+
+/** Real-run fix 2 — a typical package the reader bound to another name of
+ *  an entity ("DUPLEX") points at its canonical target. */
+function remapTypicals(packages: TypicalPackage[], aliasOf: Map<string, string> | undefined): TypicalPackage[] {
+  if (!aliasOf?.size) return packages;
+  return packages.map(p => ({
+    ...p,
+    hostTargetKey: p.hostTargetKey ? canonicalKey(p.hostTargetKey, aliasOf) : p.hostTargetKey,
+    devices: p.devices.map(d => ({ ...d, targetKey: d.targetKey ? canonicalKey(d.targetKey, aliasOf) : d.targetKey })),
+  }));
+}
+
+/** The panels the drawing analysis found (panels[].name), for circuit identity. */
+function panelNamesOf(agent1: Record<string, unknown>): string[] {
+  return Array.isArray(agent1.panels) ? (agent1.panels as Array<Record<string, unknown>>).map(p => String(p?.name ?? '')).filter(Boolean) : [];
+}
+
+/** Real-run fix 2 — the targets the counter looks for: never another name
+ *  of an entity (its canonical target is asked, naming it); a pole-tag
+ *  legend is asked as a host marker. */
+export function isAliasTarget(t: CountTarget): boolean {
+  return !!t.mergedInto?.length && t.role !== 'host';
 }
 
 function finish(
@@ -202,6 +232,12 @@ function finish(
       ...(c.viewportNote ? { viewportNote: c.viewportNote } : {}), ...(c.excluded ? { excluded: c.excluded } : {}),
       ...(c.enlarged ? { enlarged: c.enlarged } : {}), ...(c.pending?.length ? { pending: c.pending } : {}),
     });
+  }
+  // Real-run fix 2 — a mark under another name of an entity (a carried
+  // supplement mark) is the canonical entity's.
+  const aliasOf = evidence?.cons?.aliasOf;
+  if (aliasOf?.size) {
+    for (const r of sheetResults) for (const p of r.placed) p.typeKey = canonicalKey(p.typeKey, aliasOf);
   }
   const mergeInputs: SheetCountInput[] = sheetResults.map(r => {
     const page = vpBy.get(r.sheet.key);
@@ -255,6 +291,9 @@ function finish(
   const marks: CountMark[] = mergeInputs.flatMap(r => r.status === 'counted'
     ? r.placed.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x! * 100) / 100, y: Math.round(p.y! * 100) / 100, ...(p.circuit ? { circuit: p.circuit } : {}) }))
     : []);
+  // Real-run fix 2 — generic legend symbols: folded when zero, a question
+  // when their marks sit on a candidate's, a different device otherwise.
+  if (evidence?.cons?.uncertain.length) resolveUncertainSynonyms(merged.types, evidence.cons.uncertain, marks);
   const classified = new Set(input.inventory.map(p => p.file));
   const unclassifiedFiles = input.inventory.length ? [...input.pdfs.keys()].filter(f => !classified.has(f)) : [];
   const countResult: CountResult = {
@@ -296,6 +335,7 @@ function finish(
         panelsExpected: Array.isArray(input.agent1.panels) ? input.agent1.panels.length : 0,
         // Fix round 4 / S20 — what each answer to a panel conflict changes.
         panelChoices: panelChoices(targets, evidence.ev.tables),
+        ...(evidence.cons ? { consolidation: { merges: evidence.cons.merges, uncertain: evidence.cons.uncertain } } : {}),
         panelsUnread: evidence.ev.pages.flatMap(p => p.viewports.viewports
           .filter(v => v.kind === 'schedule' && /\bPANEL(BOARD)?\b/i.test(v.title) && !/\bLOAD\b/i.test(v.title))
           .filter(v => !evidence.ev.tables.some(t => t.viewportId === v.id && isCompletePanel(t)))
@@ -393,7 +433,16 @@ async function runGapFillPass(
 }
 
 export async function runCountingStage(input: CountingStageInput): Promise<CountingStageOutput> {
-  const { targets, notes: targetNotes } = buildCountTargets(input.agent1);
+  const built = buildCountTargets(input.agent1);
+  let targets = built.targets;
+  const targetNotes = built.notes;
+  // Real-run fix 2 — one canonical entity per thing, before counting and
+  // review (switched by the evidence round, like the rest of it).
+  const cons = input.evidence && targets.length ? consolidateTargets(targets, { panels: panelNamesOf(input.agent1) }) : undefined;
+  if (cons) {
+    targets = cons.targets;
+    targetNotes.push(...cons.merges.map(m => `${m.type}: ${m.basis}.`));
+  }
   if (targets.length === 0) {
     const { agent1, countResult } = finish(input, [], targetNotes, [], [], false, 'no fixture schedule, legend, equipment schedule or lighting circuits to count');
     return { agent1, countResult, usage: { ...ZERO_USAGE } };
@@ -438,17 +487,18 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     ];
     const ev = await runEvidenceStage({
       client: input.client, model: input.evidence.model, maxTokens: input.evidence.maxTokens,
-      pages, pdfs: input.pdfs, targets, cache: input.evidence.cache, shouldStop: input.shouldStop,
+      pages, pdfs: input.pdfs, targets: targets.filter(t => !isAliasTarget(t)), cache: input.evidence.cache, shouldStop: input.shouldStop,
     });
+    ev.typicals = remapTypicals(ev.typicals, cons?.aliasOf);
     // Fix round 3 / B12 — one table per panel identity and content, the
     // same-name conflicts flagged ON THE STORED TABLES (the review list reads them).
     ev.tables = dedupePanels(ev.tables);
     const hosts = hostTargets(ev.typicals, targets);
     const schedCounts = scheduleCounts(targets, ev.tables);
     allTargets = [...targets, ...hosts];
-    counterTargets = allTargets.filter(t => !schedCounts.has(t.key));
+    counterTargets = allTargets.filter(t => !schedCounts.has(t.key) && !isAliasTarget(t));
     sheetNotes = new Map(ev.pages.filter(p => p.viewports.viewports.length).map(p => [p.key, viewportPromptBlock(p.viewports.viewports, sanitizeForPrompt)]));
-    evidence = { ev, schedCounts };
+    evidence = { ev, schedCounts, ...(cons ? { cons } : {}) };
     logger.info({ pages: ev.pages.length, calls: ev.calls, cached: ev.cached, typicals: ev.typicals.length, tables: ev.tables.length, hosts: hosts.length, scheduleOwned: schedCounts.size, errors: ev.errors }, '[counting] evidence readers done');
   }
 
@@ -617,8 +667,11 @@ export function priorSheetResult(sheet: CountSheet, prior: CountResult): SheetCo
  *  every other count comes from the earlier pass unchanged. Then the one
  *  merge runs over all of it. */
 export async function runSupplementCounting(input: SupplementCountingInput): Promise<CountingStageOutput> {
-  const { targets, notes: targetNotes } = buildCountTargets(input.agent1);
-  if (targets.length === 0) return runCountingStage(input);
+  const built = buildCountTargets(input.agent1);
+  if (built.targets.length === 0) return runCountingStage(input);
+  const cons = input.evidence ? consolidateTargets(built.targets, { panels: panelNamesOf(input.agent1) }) : undefined;
+  const targets = cons ? cons.targets : built.targets;
+  const targetNotes = [...built.notes, ...(cons?.merges ?? []).map(m => `${m.type}: ${m.basis}.`)];
   const priorKeys = new Set(input.prior.targets.map(t => t.key));
   const selection = selectCountSheets([...input.priorInventory.filter(p => !input.newFiles.has(p.file)), ...input.inventory.filter(p => input.newFiles.has(p.file))]);
   const isNew = (s: CountSheet) => input.newFiles.has(s.file);
@@ -643,15 +696,15 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
         .map(p => ({ key: `${p.file}#${p.page}`, file: p.file, page: p.page, label: sheetLabelOf(p), counted: false })),
     ];
     const ev: EvidenceStageOutput = pages.length
-      ? await runEvidenceStage({ client: input.client, model: input.evidence.model, maxTokens: input.evidence.maxTokens, pages, pdfs: input.pdfs, targets, cache: input.evidence.cache, shouldStop: input.shouldStop })
+      ? await runEvidenceStage({ client: input.client, model: input.evidence.model, maxTokens: input.evidence.maxTokens, pages, pdfs: input.pdfs, targets: targets.filter(t => !isAliasTarget(t)), cache: input.evidence.cache, shouldStop: input.shouldStop })
       : { pages: [], typicals: [], tables: [], usage: { ...ZERO_USAGE }, calls: 0, cached: 0, errors: [], model: input.evidence.model };
-    ev.typicals = [...(input.prior.evidence?.typicals ?? []), ...ev.typicals];
+    ev.typicals = remapTypicals([...(input.prior.evidence?.typicals ?? []), ...ev.typicals], cons?.aliasOf);
     ev.tables = dedupePanels([...(input.prior.evidence?.tables ?? []), ...ev.tables]);
     const schedCounts = scheduleCounts(targets, ev.tables);
     allTargets = [...targets, ...hostTargets(ev.typicals, targets)];
-    counterTargets = allTargets.filter(t => !schedCounts.has(t.key));
+    counterTargets = allTargets.filter(t => !schedCounts.has(t.key) && !isAliasTarget(t));
     sheetNotes = new Map(ev.pages.filter(p => p.viewports.viewports.length).map(p => [p.key, viewportPromptBlock(p.viewports.viewports, sanitizeForPrompt)]));
-    evidence = { ev, schedCounts };
+    evidence = { ev, schedCounts, ...(cons ? { cons } : {}) };
   }
   const newCounterTargets = counterTargets.filter(t => !priorKeys.has(t.key));
 
