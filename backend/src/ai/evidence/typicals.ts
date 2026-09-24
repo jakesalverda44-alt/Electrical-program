@@ -222,6 +222,9 @@ export interface TypicalExpansion {
    *  'qty_unstated' (S2): the legend names the device but not how many per
    *  host — never guessed; a review item. */
   status: 'expanded' | 'no_multiplier' | 'assembly' | 'qty_unstated';
+  /** Review fix N5 — a notes line naming the assembly's own device again:
+   *  part of the assembly, shown as information. */
+  restated?: boolean;
   reason: string;
   quote: string;
   sheetKey: string;
@@ -303,7 +306,11 @@ export function expandTypicals(
   for (const p of packages) {
     const hostKey = hostKeyOf(p);
     const hc = hostCounts.get(hostKey);
-    const assembly = isAssemblyPackage(p, targets) || (p.devices.length > 0 && p.devices.every(d => d.targetKey && d.qty == null && inAssembly.has(`${hostKey}|${d.targetKey}`)));
+    // Review fix N5 — "additional / extra / another outlet" is a new device,
+    // never the assembly's own again; a restatement is still shown (restated).
+    const additional = /\b(additional|extra|another|second|more|added)\b/i.test(`${p.quote} ${p.devices.map(d => d.text).join(' ')}`);
+    const restated = !isAssemblyPackage(p, targets) && !additional && p.devices.length > 0 && p.devices.every(d => d.targetKey && d.qty == null && inAssembly.has(`${hostKey}|${d.targetKey}`));
+    const assembly = isAssemblyPackage(p, targets) || restated;
     for (const d of p.devices) {
       if (!d.targetKey && d.qty != null && !assembly) { unmapped.push({ packageId: p.id, host: p.host, text: d.text, qty: d.qty, quote: p.quote }); continue; }
       if (!d.targetKey && (d.qty == null || assembly)) continue;
@@ -313,7 +320,7 @@ export function expandTypicals(
         hostSheets: hc?.sheets ?? [],
       };
       if (assembly) {
-        expansions.push({ ...base, hostCount: hc?.count ?? null, drawnAtHosts: 0, expanded: 0, status: 'assembly',
+        expansions.push({ ...base, hostCount: hc?.count ?? null, drawnAtHosts: 0, expanded: 0, status: 'assembly', ...(restated ? { restated: true } : {}),
           reason: `part of the ${p.host.toLowerCase()} assembly (${d.qty ?? 'n'} per ${p.host.toLowerCase()}) — priced with it, not as a separate ${d.text.toLowerCase()}` });
         continue;
       }

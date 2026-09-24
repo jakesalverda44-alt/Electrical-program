@@ -554,7 +554,7 @@ describe('Fix round S13 — a 5-10% spot-check sample of a high auto-accepted co
 });
 
 describe('next round A6 — legend items assigned by G.C. / another trade (Kissimmee strings)', () => {
-  it('G.C. items are APT targets (counted, blocking at zero); the HVAC-installed fan at zero is information only', async () => {
+  it('G.C. items are APT targets (counted, blocking at zero); the HVAC-installed fan at zero blocks too (its connection is APT\'s)', async () => {
     const { buildCountTargets } = await import('./countTargets');
     const { mergeCountsIntoTakeoff } = await import('./countMerge');
     const { buildReviewItems, reviewStatus } = await import('./reviewItems');
@@ -576,11 +576,12 @@ describe('next round A6 — legend items assigned by G.C. / another trade (Kissi
     const cr = { version: 2, ran: true, model: 'm', targets, targetNotes: [], sheets: [], skippedSheets: [], types: merged.types, loadCheck: merged.loadCheck, removedRows: [], flags: [], marks: [] };
     const items = buildReviewItems(cr as never);
     const ef = items.find(i => i.id === 'count:EF')!;
-    expect(ef.blocking).toBe(false);
-    expect(ef.detail).toContain('installed by HVAC; APT wires / connects it — listed for information, not blocking');
+    // Review fix S11 (real-run round) — the connection is APT's labour: a
+    // zero there is blocking, never information (only aptScope 'none' is).
+    expect(ef.blocking).toBeUndefined();
+    expect(ef.detail).toContain("installed by HVAC; APT wires / connects it — the connection is APT's to price");
     expect(items.find(i => i.id === 'count:S')!.blocking).toBeUndefined();
-    // Only the fan open: clear. With S open too: needs review.
-    expect(reviewStatus([ef])).toBe('clear');
+    expect(reviewStatus([ef])).toBe('needs_review');
     expect(reviewStatus(items)).toBe('needs_review');
   });
 });

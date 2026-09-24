@@ -563,6 +563,12 @@ export function computeLoadCheck(types: TypeCountResult[], panelCircuits: unknow
 export function countedRowItem(t: CountTarget): string {
   const desc = t.description || t.type;
   if (t.source === 'legend') return normalizeTypeKey(t.description) === t.key ? desc : `${desc} (${t.type})`;
+  // Review fix N2 — pipes / sleeves / conduit listed with the equipment
+  // (PP#5, "two 3in PVC pipes labeled DATA and SECURITY") are raceway, never
+  // a power connection.
+  if (t.category === 'equipment' && /\b(pipes?|conduits?|sleeves?|raceways?|chases?)\b/i.test(desc) && !/\b(power|receptacles?|outlets?|duplex|simplex|circuits?|ckts?|volts?|amps?)\b/i.test(desc)) {
+    return `${t.type} — ${desc} (conduit / raceway — no power connection)`;
+  }
   return t.category === 'equipment' ? `${t.type} — ${desc} (connection)` : `Type ${t.type} — ${desc}`;
 }
 
@@ -969,7 +975,12 @@ export function mergeCountsIntoTakeoff(
       // foundation row (its first clause) is an accessory, as before.
       const headClause = String(row.item ?? '').split(/,|;|\s[-–—]\s/)[0];
       const siteTotal = siteTypes.reduce((n, t) => n + t.count, 0);
-      if (sitePolesCounted && /\b(?:steel|alum(?:inum|\.)?|square|round|tapered|\d+\s*['’]|\d+\s*(?:ft|feet))\b[^,;]*\bpoles?\b/i.test(headClause)
+      // Review fix S10 — only a LIGHT pole: its own words say light /
+      // luminaire / site lighting, or it comes from the photometric sheet;
+      // a flag, camera, CCTV, banner or sign pole never.
+      const lightPole = /\b(light(?:ing)?|luminaire|lamp|photometric)\b/i.test(`${String(row.item ?? '')} ${String(row.spec ?? '')}`) || /^PH/i.test(String(row.sourceSheet ?? '').trim());
+      const notLight = /\b(flag|camera|cctv|security|banner|sign|antenna|bollard|power\s+pole)\b/i.test(`${String(row.item ?? '')} ${String(row.spec ?? '')}`);
+      if (sitePolesCounted && lightPole && !notLight && /\b(?:steel|alum(?:inum|\.)?|square|round|tapered|\d+\s*['’]|\d+\s*(?:ft|feet))\b[^,;]*\bpoles?\b/i.test(headClause)
         && !ACCESSORY.test(headClause) && Number(row.qty) === siteTotal) {
         removedRows.push({ row, reason: `the site light poles (${Number(row.qty)} — the counted ${sitePolesCounted}, site family), never stacked`, replacedByType: null });
         continue;

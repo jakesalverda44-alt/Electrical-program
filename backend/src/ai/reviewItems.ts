@@ -230,13 +230,16 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     if (t.status !== 'counted') {
       const tgt = targetByKey.get(t.key);
       // Decision 4 — a type another trade / the Owner / a vendor installs:
-      // a zero count is information, not a block.
-      const info = outsideAptInstall(tgt?.assignment);
+      // a zero count is information, not a block. Review fix S11 — only when
+      // NOTHING of it is APT's: a type APT connects ("HVAC install, EC wire",
+      // "by GC", owner-furnished) at zero is missing connection labour.
+      const info = tgt?.assignment?.aptScope === 'none';
+      const connects = !info && outsideAptInstall(tgt?.assignment);
       items.push({
         id: `count:${t.key}`,
         kind: 'count',
         title,
-        detail: `${t.status === 'zero' ? `Counted 0: ${t.reason}.` : `Could not be counted: ${t.reason}.`}${info ? ` Its schedule says ${describeAssignment(tgt!.assignment!)} — listed for information, not blocking.` : ''}`,
+        detail: `${t.status === 'zero' ? `Counted 0: ${t.reason}.` : `Could not be counted: ${t.reason}.`}${info ? ` Its schedule says ${describeAssignment(tgt!.assignment!)} — listed for information, not blocking.` : connects ? ` Its schedule says ${describeAssignment(tgt!.assignment!)} — the connection is APT's to price.` : ''}`,
         actions: ['count', 'markers', 'not_on_job'],
         ...(info ? { blocking: false } : {}),
         ...base,
@@ -443,18 +446,40 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   // when every counted site type has its heads from the schedule.
   const siteCounted = (countResult?.types ?? []).filter(t => t.category === 'site_lighting' && t.status === 'counted' && t.count > 0);
   const siteHeadsKnown = siteCounted.length > 0 && siteCounted.every(t => t.heads != null);
+  // Review fix N5 — a notes line that names an assembly's own device again
+  // is never swallowed silently: information.
+  for (const e of ev?.expansions ?? []) {
+    if (!e.restated) continue;
+    items.push({
+      id: `typicalnote:${e.packageId}:${e.deviceKey}`,
+      kind: 'confirm',
+      blocking: false,
+      title: `Note at the ${e.host.toLowerCase()}: ${e.deviceText.toLowerCase()} — read as part of its assembly`,
+      detail: `${e.viewportLabel || 'A notes block'}: "${e.quote.slice(0, 160)}". It names no quantity and the same device is already part of the ${e.host.toLowerCase()} assembly, so it adds nothing; check the note if it means an additional device.`,
+      actions: ['confirm'],
+      fingerprint: `typicalnote|${e.deviceKey}`,
+    });
+  }
   for (const [i, u] of (ev?.unmappedTypical ?? []).entries()) {
     if (siteHeadsKnown && /\b(site|parking|area)\b[^.]*\bpoles?\b|\bpoles?\b[^.]*\b(site|parking|area)\b/i.test(u.host)
       && /\b(fixtures?|luminaires?|heads?|lights?|\d+\s*W)\b/i.test(u.text)) {
       const heads = siteCounted.reduce((n, t) => n + (t.heads ?? 0), 0);
+      const poles = siteCounted.reduce((n, t) => n + t.count, 0);
+      // Review fix S11 — the note restates the schedule only when its
+      // per-pole number IS every site type's heads per pole; otherwise the
+      // two disagree (2 per pole x 3 = 6 vs the schedule's 4) — blocking.
+      const agrees = siteCounted.every(t => t.count > 0 && (t.heads ?? 0) / t.count === u.qty);
+      const perType = siteCounted.map(t => `${t.type} ${t.count} pole${t.count === 1 ? '' : 's'}, ${t.heads} head${t.heads === 1 ? '' : 's'}`).join('; ');
       items.push({
         id: `typicalheads:${slug(`${u.host} ${u.text}`)}`,
         kind: 'confirm',
-        blocking: false,
-        title: `Note: ${u.qty} × ${u.text} per ${u.host.toLowerCase()} — the fixture schedule's heads are used`,
-        detail: `"${u.quote.slice(0, 160)}" — a general note. The fixture schedule states the heads per pole for each site type (${siteCounted.map(t => `${t.type} ${t.count} pole${t.count === 1 ? '' : 's'}, ${t.heads} head${t.heads === 1 ? '' : 's'}`).join('; ')} = ${heads} heads), and that is what the takeoff carries. Check the site plan if the note should override it.`,
+        ...(agrees ? { blocking: false } : {}),
+        title: agrees
+          ? `Note: ${u.qty} × ${u.text} per ${u.host.toLowerCase()} — the same as the fixture schedule`
+          : `Site light heads: a note says ${u.qty} per pole (${u.qty * poles}), the fixture schedule ${heads}`,
+        detail: `"${u.quote.slice(0, 160)}". The fixture schedule: ${perType} = ${heads} heads.${agrees ? ' The note says the same.' : ` The note's ${u.qty} per pole × ${poles} poles = ${u.qty * poles}. The takeoff carries the schedule's ${heads} for now — confirm that (with a reason), or correct the heads on the site-light lines.`}`,
         actions: ['confirm'],
-        fingerprint: `typicalheads|${u.qty}|${heads}`,
+        fingerprint: `typicalheads|${u.qty}|${heads}|${poles}`,
       });
       continue;
     }
