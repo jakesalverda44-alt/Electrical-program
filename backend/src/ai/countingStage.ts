@@ -14,7 +14,7 @@ import { buildCountTargets, type CountTarget } from './countTargets';
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
 import { readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry } from './countRender';
 import { runCounter, type SheetCountResult } from './counter';
-import { mergeCountsIntoTakeoff, type CountMergeResult } from './countMerge';
+import { mergeCountsIntoTakeoff, isSiteFixtureCategory, type CountMergeResult } from './countMerge';
 import { logger } from '../utils/logger';
 
 export const COUNT_RESULT_VERSION = 2;
@@ -155,6 +155,14 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
   }
 
   const selection = selectCountSheets(input.inventory);
+  // Next round A3 — a photometric sheet is only worth a counter call when
+  // there are site / exterior fixture types to look for.
+  if (!targets.some(t => isSiteFixtureCategory(t.category))) {
+    for (const s of selection.counted.filter(c => c.photometric)) {
+      selection.skipped.push({ file: s.file, page: s.page, label: s.label, reason: 'photometric sheet — no site fixture types to count' });
+    }
+    selection.counted = selection.counted.filter(c => !c.photometric);
+  }
   if (selection.counted.length === 0) {
     const { agent1, countResult } = finish(input, targets, targetNotes, [], selection.skipped, false,
       'no electrical plan sheets were found in the upload to count on');

@@ -38,6 +38,9 @@ import CostsTab from './CostsTab';
 import IntelTab from './IntelTab';
 import ImportPanel, { ImportPanelProps } from './ImportPanel';
 import { rerunPlan, RerunConfirmBody, type AnalyzeStartResponse, type RerunResetSummary, type StopKind } from './rerunReset';
+import { useSheetCheck } from './useSheetCheck';
+import SheetCheckPanel from './SheetCheckPanel';
+import { checkAIPermission } from '../../../hooks/useAppSettings';
 // Task 7/8/9 (estimating redesign) — the new shell replaces StepTracker+
 // TabStrip's chrome; LaborPricingStep+useEstimatingBid replace PricingTab
 // (still present, unrendered — see the estimating report for why it wasn't
@@ -339,6 +342,28 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   });
   useEffect(() => { if (projectDocsData) setProjectDocs(projectDocsData); }, [projectDocsData]);
 
+  // Next round A3 — the sheet check runs by itself whenever the analysis
+  // inputs change (uploads added / removed, Project Files ticked).
+  const canRunAnalysis = !settings || !userRole || checkAIPermission('run_analysis', userRole, settings);
+  const sheetInputKey = [
+    ...ws.files.map(f => f.id),
+    ...[...selectedDocIds].sort(),
+  ].join('|');
+  const sheetCheck = useSheetCheck({
+    bidId: bid.id,
+    inputKey: fileObjectsRef.current.length || selectedDocIds.size ? sheetInputKey : '',
+    canRun: canRunAnalysis,
+    buildForm: () => {
+      if (!fileObjectsRef.current.length && !selectedDocIds.size) return null;
+      const fd = new FormData();
+      fileObjectsRef.current.forEach(f => fd.append('files', f));
+      selectedDocIds.forEach(id => fd.append('document_ids', id));
+      return fd;
+    },
+  });
+  const sheetCheckRef = useRef(sheetCheck);
+  sheetCheckRef.current = sheetCheck;
+
   // Re-run defaults to the last run's inputs: once per analysis run, when
   // nothing is picked or uploaded yet, pre-tick the documents that run read
   // (takeoff_results.input_document_ids) in "From Project Files". Still just
@@ -495,6 +520,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       return null;
     }
     const totalCount = fileObjectsRef.current.length + selectedDocIds.size;
+    // Next round A3 — "Run without N sheets": the missing referenced sheets
+    // nobody skipped are recorded as not provided (proposal clarifications).
+    const unskipped = sheetCheckRef.current.data?.unskippedMissing ?? 0;
+    if (unskipped > 0) await sheetCheckRef.current.update({ action: 'skip_all_missing' });
     set({ aiRunning: true, aiLog: [`Sending ${totalCount} file(s) (${elecCount} electrical sheet${elecCount !== 1 ? 's' : ''} identified)…`] });
     try {
       const formData = new FormData();
@@ -1057,6 +1086,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const onRunAI = useStableFn(() => { void (aiResults?.run_id || aiResults?.status ? rerunAI() : runAI()); });
   const onResumeAI = useStableFn(() => { void resumeAI(); });
   const onRerunAI = useStableFn(() => { void rerunAI(); });
+  const onRecheckSheets = useStableFn(() => { void sheetCheck.run(); });
+  const onUploadMissing = useStableFn(() => { fileInputRef.current?.click(); });
   const onCopyToClipboard = useStableFn(copyToClipboard);
   const onConfirmService = useStableFn(handleConfirmService);
   const onAddRfi = useStableFn(addRfi);
@@ -1338,6 +1369,16 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               viewProjectDoc={onViewProjectDoc}
               onGoFiles={onGoFiles}
             />
+            <SheetCheckPanel
+              data={sheetCheck.data}
+              error={sheetCheck.error}
+              canRun={canRunAnalysis}
+              onUpdate={sheetCheck.update}
+              onRecheck={onRecheckSheets}
+              onUpload={onUploadMissing}
+              onRunAnalysis={onRunAI}
+              analysisRunning={ws.aiRunning}
+            />
             <PreBidTab bidId={bid.id} onSectionsLoaded={setPrebidSections}/>
             {/* Fix round 1 / S4 — Workspace Notes and Import Finished Bid
                 (the Accubid breakdown upload calibration.ts depends on) lived
@@ -1374,6 +1415,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               runAI={onRunAI}
               resumeAI={onResumeAI}
               rerunAI={onRerunAI}
+              missingSheets={sheetCheck.data?.unskippedMissing ?? 0}
               settings={settings}
               userRole={userRole}
               progress={progress}

@@ -14,6 +14,8 @@ export interface InventoryPage {
   discipline: string;
   cls: string;
   included: boolean;
+  /** Next round A1/A3 — the sheet check's role for this page. */
+  role?: string;
 }
 
 export type SheetRole = 'site' | 'building' | 'enlarged';
@@ -38,6 +40,10 @@ export interface CountSheet {
   area?: string;
   /** Title says PARTIAL (a partition of a level; not an enlarged detail). */
   partial?: boolean;
+  /** Next round A3 — a photometric / site-lighting sheet: counted for site
+   *  and building-exterior fixture types only, and used only when the
+   *  electrical plans show none of that type (never stacked on them). */
+  photometric?: boolean;
 }
 
 export interface SheetSelection {
@@ -120,11 +126,26 @@ export function selectCountSheets(inventory: InventoryPage[]): SheetSelection {
     const looksLikeElectricalPlan = !photometric && /\bPLANS?\b/i.test(p.title) && !/\bSCHEDULES?\b|\bDETAILS?\b|\bRISER\b|\bONE[\s-]LINE\b|\bLEGEND\b/i.test(p.title)
       && (COUNTABLE_DISCIPLINES.has(p.discipline) || /^(E|EL|F|FP)[-\s.]?\d/i.test(p.sheetNo.trim()));
     if (!p.included) { skip('not selected for analysis'); continue; }
+    // Next round A3 — a photometric SITE PLAN (often classified civil, sent
+    // as a reference page) is where site fixtures like W1/W2/S1/S2 may be the
+    // only place they are drawn. Counted for site / exterior types only, as a
+    // fallback (countMerge). Calculation-only sheets are still never counted.
+    if (photometric) {
+      if (/\bPLANS?\b|\bLAYOUT\b/i.test(p.title) && !/\bCALC|\bSCHEDULE|\bDETAIL|\bSTATISTIC/i.test(p.title)) {
+        counted.push({
+          key: `${p.file}#${p.page}`, file: p.file, page: p.page, sheetNo: p.sheetNo.trim(), title: p.title.trim(), label,
+          role: 'site', focus: 'lighting', level: '', area: '', partial: false, photometric: true,
+        });
+      } else {
+        skip('photometric / lighting-calculation sheet — never counted');
+      }
+      continue;
+    }
+    if (p.role === 'reference') { skip('reference page — context only, not counted'); continue; }
     if (!COUNTABLE_DISCIPLINES.has(p.discipline)) {
       skip(`not an electrical sheet (${p.discipline || 'unclassified'})`, looksLikeElectricalPlan);
       continue;
     }
-    if (photometric) { skip('photometric / lighting-calculation sheet — never counted'); continue; }
     if (p.cls !== 'plan') { skip(`${p.cls || 'unclassified'} sheet — only plan sheets are counted`, looksLikeElectricalPlan); continue; }
     counted.push({
       key: `${p.file}#${p.page}`,

@@ -25,8 +25,8 @@ beforeAll(async () => {
   ok = await dbAvailable();
   have = await isPdftoppmAvailable();
   if (!have) return;
-  const geo = await readPageGeometry(PDF, [2, 3]);
-  for (const p of [2, 3]) rendered[p] = await renderCountTiles(PDF, p, geo.get(p)!);
+  const geo = await readPageGeometry(PDF, [2, 3, 4]);
+  for (const p of [2, 3, 4]) rendered[p] = await renderCountTiles(PDF, p, geo.get(p)!);
 }, 120_000);
 
 async function makeBid(): Promise<string> {
@@ -74,6 +74,8 @@ function responder() {
   const counter = perfectCounter({
     'E-3 "LIGHTING PLAN"': { rendered: rendered[2], symbols: MINI_P2_SYMBOLS },
     'E-1 "ELECTRICAL SITE PLAN"': { rendered: rendered[3], symbols: MINI_P3_SYMBOLS },
+    // Next round A3 — the photometric site plan shows the same poles.
+    'PH0.1 "PHOTOMETRIC SITE PLAN"': { rendered: rendered[4], symbols: MINI_P3_SYMBOLS },
   });
   return (req: FakeRequest) => {
     const sys = systemText(req);
@@ -90,7 +92,7 @@ function responder() {
 }
 
 describe('runPipeline — counting stage on kissimmee-mini.pdf', () => {
-  it('counts every plan sheet, never the photometric one, and replaces Agent 1\'s numbers before Agent 2', async (ctx) => {
+  it('counts every plan sheet (the photometric one for site types only, never stacked) and replaces Agent 1\'s numbers before Agent 2', async (ctx) => {
     if (!ok || !have) return ctx.skip();
     const bidId = await makeBid();
     const { client, calls } = fakeAnthropic(responder());
@@ -103,17 +105,23 @@ describe('runPipeline — counting stage on kissimmee-mini.pdf', () => {
     expect(rows[0].model_counter).toBe(config.modelCounter);
 
     const counterCalls = calls.filter(c => systemText(c).includes('counting symbols on ONE electrical plan sheet'));
-    expect(counterCalls.map(c => /SHEET: (.*)\n/.exec(userText(c))![1]).sort()).toEqual(['E-1 "ELECTRICAL SITE PLAN"', 'E-3 "LIGHTING PLAN"']);
+    expect(counterCalls.map(c => /SHEET: (.*)\n/.exec(userText(c))![1]).sort()).toEqual(['E-1 "ELECTRICAL SITE PLAN"', 'E-3 "LIGHTING PLAN"', 'PH0.1 "PHOTOMETRIC SITE PLAN"']);
+    // Next round A3 — the photometric sheet is asked about site / exterior types only.
+    const phCall = userText(counterCalls.find(c => userText(c).includes('SHEET: PH0.1'))!);
+    expect(phCall).toContain('S1');
+    expect(phCall).not.toContain('4 ft LED linear wraparound');
 
     const cr = rows[0].count_result as CountResult;
     expect(cr.ran).toBe(true);
     expect(cr.skippedSheets.map(s => [s.label.split(' ')[0], s.reason])).toEqual([
       ['E-0.1', 'schedule sheet — only plan sheets are counted'],
-      ['PH0.1', 'photometric / lighting-calculation sheet — never counted'],
     ]);
+    // S1 x2 + S2 x1 on BOTH E-1 and PH0.1: the site plan's count, never stacked.
+    const s1 = cr.types.find(t => t.key === 'S1')!;
+    expect(s1.sheets.find(x => x.label.startsWith('PH0.1'))).toMatchObject({ count: 2, used: false, ignoredReason: expect.stringContaining('never stacked') });
     const counts = Object.fromEntries(cr.types.map(t => [t.key, [t.count, t.status]]));
     expect(counts).toEqual({ A: [6, 'counted'], B: [3, 'counted'], D: [3, 'counted'], G: [0, 'zero'], S1: [2, 'counted'], S2: [1, 'counted'] });
-    expect(cr.marks).toHaveLength(6 + 3 + 3 + 2 + 1);
+    expect(cr.marks).toHaveLength(6 + 3 + 3 + 2 + 1 + 3 /* PH0.1's own marks, not used */);
 
     const a1 = JSON.parse(rows[0].agent1_output);
     const q = a1.quantities as Array<Record<string, unknown>>;
@@ -172,6 +180,7 @@ describe('runPipeline — counting stage on kissimmee-mini.pdf', () => {
     expect(cr.sheets.map(s => [s.label.split(' ')[0], s.status, s.error ?? null])).toEqual([
       ['E-3', 'counted', null],
       ['E-1', 'counted', null],
+      ['PH0.1', 'counted', null],
     ]);
     expect(Object.fromEntries(cr.types.map(t => [t.key, t.count]))).toMatchObject({ A: 6, B: 3, D: 3, S1: 2, S2: 1 });
     expect(shared.byteLength).toBe(PDF.length); // still intact after the whole run
@@ -188,7 +197,7 @@ describe('runPipeline — counting stage on kissimmee-mini.pdf', () => {
     await runPipeline(bidId, [file], client, config);
     const { rows } = await pool.query('SELECT status, agent1_output FROM takeoff_results WHERE bid_id=$1', [bidId]);
     expect(rows[0].status).toBe('error');
-    expect(rows[0].agent1_output).toMatch(/^Counter \(Agent 1C\) on E-[13] "[A-Z ]+" ran out of room — raise its Max Tokens/);
+    expect(rows[0].agent1_output).toMatch(/^Counter \(Agent 1C\) on (E-[13]|PH0\.1) "[A-Z ]+" ran out of room — raise its Max Tokens/);
     expect(calls.some(c => systemText(c).includes('Senior Electrical Estimator'))).toBe(false);
   }, 120_000);
 });

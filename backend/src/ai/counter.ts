@@ -22,6 +22,7 @@ import { assertNotTruncated, AgentTruncatedError, isAgentTruncatedError } from '
 import { parseAIJSON } from './json';
 import { normalizeTypeKey, type CountTarget } from './countTargets';
 import type { CountSheet } from './countSheets';
+import { isSiteFixtureCategory } from './countMerge';
 import { groupTilesForCalls, tileToPdfPoint, type CountTile, type PageGeometry, type RenderedCountPage } from './countRender';
 import { runWithConcurrencyLimit } from '../utils/concurrencyLimit';
 import { logger } from '../utils/logger';
@@ -340,8 +341,13 @@ function extractText(resp: Anthropic.Message): string {
   return resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n');
 }
 
+/** Next round A3 — a photometric sheet is asked only about site and
+ *  building-exterior fixture types (countMerge uses it only as a fallback). */
+export function targetsForSheet(sheet: CountSheet, targets: CountTarget[]): CountTarget[] {
+  return sheet.photometric ? targets.filter(t => isSiteFixtureCategory(t.category)) : targets;
+}
+
 export async function runCounter(input: CounterRunInput): Promise<CounterRunResult> {
-  const targetKeys = new Set(input.targets.map(t => t.key));
   const usage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
   const results: SheetCountResult[] = input.sheets.map(({ sheet, rendered, renderError }) => ({
     sheet,
@@ -401,7 +407,8 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
   async function countOne(w: { si: number; tiles: CountTile[]; index: number; of: number }): Promise<void> {
     const r = results[w.si];
     if (r.status === 'failed') return;
-    const content = buildCounterContent(r.sheet, input.targets, w.tiles, { index: w.index, of: w.of });
+    const targets = targetsForSheet(r.sheet, input.targets);
+    const content = buildCounterContent(r.sheet, targets, w.tiles, { index: w.index, of: w.of });
     try {
       const resp = await callWithRetry(() => input.client.messages.stream({
         model: input.model,
@@ -417,7 +424,7 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
       usage.cache_read_input_tokens += resp.usage?.cache_read_input_tokens ?? 0;
       if (resp.stop_reason === 'refusal') throw new Error('the model declined to count this sheet');
       assertNotTruncated(resp, `Counter (Agent 1C) on ${r.sheet.label}`, input.maxTokens);
-      const parsed = parseCounterResponse(extractText(resp), targetKeys, new Set(w.tiles.map(t => t.id)));
+      const parsed = parseCounterResponse(extractText(resp), new Set(targets.map(t => t.key)), new Set(w.tiles.map(t => t.id)));
       if (!parsed) throw new Error('the counter reply was not in the expected shape (a JSON object with a "marks" array)');
       if (parsed.marks.length === 0 && parsed.rejected.length > 0) {
         throw new Error(`every mark the counter returned was rejected (${[...new Set(parsed.rejected.map(x => x.reason))].join('; ')})`);

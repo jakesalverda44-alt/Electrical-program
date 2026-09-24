@@ -28,6 +28,9 @@ export interface ComposeProposalInput {
   overrides: NonElectricalOverride[];
   countResult: CountResult | null;
   reviewItems: ReviewItem[] | null;
+  /** Next round A3 — referenced sheets the estimator skipped ("Mechanical
+   *  schedules not provided at time of bid."): Exclusions & Clarifications. */
+  clarifications?: string[];
 }
 
 export interface ComposeFailure { check: string; detail: string; category?: string; line?: string; /** The override flag that keeps/picks this line. */ flag?: string }
@@ -53,6 +56,13 @@ export function composeProposal(input: ComposeProposalInput): ComposeProposalOut
   if (addExclusions.length) {
     enforced.output.exclusions = [...(enforced.output.exclusions ?? []), ...addExclusions];
     corrections.push(...addExclusions.map(b => `Exclusion added from the estimator's scope list: "${b}"`));
+  }
+  // Next round A3 — skipped (not provided) sheets, deterministically, once.
+  const have = (enforced.output.exclusions ?? []).map(b => (typeof b === 'string' ? b : `${(b as { b: string }).b} ${(b as { t: string }).t}`).toLowerCase());
+  const addClar = (input.clarifications ?? []).filter(c => !have.some(h => h.includes(c.replace(/\.$/, '').toLowerCase())));
+  if (addClar.length) {
+    enforced.output.exclusions = [...(enforced.output.exclusions ?? []), ...addClar];
+    corrections.push(...addClar.map(c => `Clarification added from the sheet check: "${c}"`));
   }
   const { data, jobNumberGenerated, ambiguousQtyKeys } = composeBidData(input.bidRow, enforced.output, input.price, {
     savedLineItems: input.savedLineItems ?? [],

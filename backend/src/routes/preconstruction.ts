@@ -62,7 +62,7 @@ import { BidData } from '../bidstd/bidData';
 import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
 import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
 import { resetForRerun, type RerunResetSummary } from '../services/rerunReset';
-import { planSheetsForRun, type FileSheetPlan } from '../services/sheetCheck';
+import { planSheetsForRun, loadSheetCheck, skippedClarifications, type FileSheetPlan } from '../services/sheetCheck';
 import { registerRun, abortableClient, abortRuns, isCancellationError, RunCancelledError, runSignalOf } from '../ai/runControl';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
@@ -2828,6 +2828,9 @@ export async function composeCurrentBidData(
   const scopeList = await getBidScopeList(bidId);
   const verifyOptions: VerifyOptions = accountSnap ? verifyOptionsFor(accountSnap, accountResolved) : {};
   let accountCorrections: string[] = [];
+  // Next round A3 — referenced sheets skipped in the sheet check.
+  const sheetRow = await loadSheetCheck(bidId);
+  const clarifications = sheetRow ? skippedClarifications(sheetRow.result, sheetRow.skips ?? {}) : [];
 
   // agent4_price NUMERIC(12,2) is the authoritative, DB-validated price (see
   // run-agent4's parseMoney gate) — format it here rather than trusting whatever
@@ -2880,6 +2883,7 @@ export async function composeCurrentBidData(
       agent4: parsed as Agent4Output, bidRow, price: formattedPrice ?? '', savedLineItems,
       accountSnap, accountResolved, scopeItems: scopeList.items, overrides: scopeList.overrides,
       countResult: trRows[0].count_result as CountResult | null, reviewItems: trRows[0].review_items as ReviewItem[] | null,
+      clarifications,
     });
     const { data, jobNumberGenerated } = composed;
     ambiguousQtyKeys = composed.ambiguousQtyKeys;
@@ -2976,7 +2980,7 @@ export async function composeCurrentBidData(
   const inputsHash = composeInputsHash({
     runId, source: useDraft ? 'draft' : 'final', composed: raw, price: rawPrice,
     countResult: trRows[0].count_result, reviewItems: trRows[0].review_items, accountTerms: accountSnap,
-    scopeList, bid: bid ?? null,
+    scopeList, bid: bid ?? null, clarifications,
   });
   return { ok: true, bidData, bidName, asciiName, ambiguousQtyKeys, accountCorrections, verifyOptions, hygieneWarnings, runId, inputsHash };
 }
@@ -2985,6 +2989,9 @@ export async function composeCurrentBidData(
 export function composeInputsHash(x: {
   runId: string | null; source: 'draft' | 'final'; composed: string; price: unknown; countResult: unknown; reviewItems: unknown;
   accountTerms: unknown; scopeList: { items: unknown[]; overrides: unknown[] }; bid: Record<string, unknown> | null;
+  /** Next round A3 — only hashed when present, so documents filed before
+   *  the sheet check existed keep their hash. */
+  clarifications?: string[];
 }): string {
   const sha = (v: unknown) => crypto.createHash('sha256').update(typeof v === 'string' ? v : JSON.stringify(v ?? null)).digest('hex');
   const resolutions = ((x.reviewItems ?? []) as ReviewItem[]).map(i => [i.id, i.resolution ? [i.resolution.action, i.resolution.qty ?? null, i.resolution.answer ?? null, i.resolution.furnishBy ?? null, i.resolution.installBy ?? null] : null]);
@@ -2992,6 +2999,7 @@ export function composeInputsHash(x: {
     x.runId, x.source, sha(x.composed ?? ''), x.price == null ? null : Number(x.price), sha(x.countResult ?? null), resolutions,
     sha(x.accountTerms ?? null), sha(x.scopeList.items), sha(x.scopeList.overrides),
     x.bid ? [x.bid.name, x.bid.loc, x.bid.gc, x.bid.contact, x.bid.job_number, x.bid.brand, x.bid.sq_ft ?? null] : null,
+    ...(x.clarifications?.length ? [x.clarifications] : []),
   ]);
 }
 

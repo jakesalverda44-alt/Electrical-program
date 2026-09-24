@@ -30,3 +30,28 @@ describe('S-R2-6 — a conflicting named region blocks the GC documents (with an
     expect(compose('Generator scope applies to Texas stores only.', kept).lineFailures).toHaveLength(1);
   });
 });
+
+describe('next round A3 — skipped sheets become Exclusions & Clarifications', () => {
+  const run = (clarifications: string[], extra = '') => {
+    const a4 = coworkKissimmeeAgent4();
+    if (extra) a4.exclusions = [...(a4.exclusions ?? []), extra];
+    const snap = resolveAccountTerms(AUTOZONE_SEED, 'brand', [], false);
+    return composeProposal({
+      agent4: a4,
+      bidRow: { name: 'AutoZone Store #10077', loc: '2860 N Old Lake Wilson Rd, Kissimmee, FL 34747', gc: 'Summit General Contractors', brand: 'AutoZone' },
+      price: '$81,485.60', accountSnap: snap,
+      accountResolved: applyScopeAnswers(snap, { 'scope:power_poles:furnish': 'APT', 'scope:power_poles:install': 'APT' }),
+      scopeItems: [], overrides: [], countResult: null, reviewItems: [], clarifications,
+    });
+  };
+  it('one bullet per skipped sheet, recorded as a correction, document still valid', () => {
+    const r = run(['Mechanical schedules not provided at time of bid.', 'Sheet C-3.1 not provided at time of bid.']);
+    expect(r.data.exclusions).toEqual(expect.arrayContaining(['Mechanical schedules not provided at time of bid.', 'Sheet C-3.1 not provided at time of bid.']));
+    expect(r.corrections).toContain('Clarification added from the sheet check: "Mechanical schedules not provided at time of bid."');
+    expect(r.dataProblems).toEqual([]);
+  });
+  it('never twice (Agent 4 already wrote it)', () => {
+    const r = run(['Mechanical schedules not provided at time of bid.'], 'Mechanical schedules not provided at time of bid');
+    expect(r.data.exclusions.filter(b => typeof b === 'string' && /Mechanical schedules not provided/.test(b))).toHaveLength(1);
+  });
+});
