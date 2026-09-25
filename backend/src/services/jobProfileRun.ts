@@ -37,6 +37,7 @@ import {
   DEFAULT_JOB_PROFILE_MODEL, type InventoryPage, type JobProfile, type PromptPage, type SelectedPage,
 } from '../ai/jobProfile';
 import { mergeBrands } from '../ai/jobProfileValidators';
+import { friendlyAnthropicError, sanitizeStoredError } from '../ai/friendlyError';
 import {
   computeCardUpdates, reconcileFills, mergeSuggestions,
   type CurrentBidFields, type FillRecord, type StoredSuggestion,
@@ -213,6 +214,73 @@ export async function resumeAfterSheetCheck(bidId: string): Promise<void> {
   await requestJobProfile(bidId, null, actor).catch(err => logger.warn({ err, bidId }, '[jobProfile] re-run after plans changed failed'));
 }
 
+/** Plans-panel fix round, Task 1 (review eb39943, S3/S4 fix) — after a plan
+ *  file is removed, replaced, or restored, the job profile (and, when it's
+ *  safe, the shared sheet check) refreshes for the bid's remaining current
+ *  plan set.
+ *
+ *  The review's B1-round version called `claimSheetCheck` unconditionally,
+ *  which overwrites `bid_sheet_check` even when it belongs to Estimating's
+ *  own, different ticked selection (S3). Simply delegating to
+ *  `requestJobProfile`'s own R2-S6 rule instead avoids that, but
+ *  UNDER-fixes S4: R2-S6's `ours` check compares against the row's CURRENT
+ *  content-hash key, and a remove/restore always changes that key relative
+ *  to whatever the row already says — so it would never reclaim the row
+ *  again after the FIRST plan-file change, even in the common case where
+ *  nothing but this bid's own Overview panel has ever touched it.
+ *
+ *  So this checks a sharper signal: was the shared row's content key
+ *  exactly what OUR OWN last successful profile run left it as
+ *  (`bid_job_profile.content_key`)? If so, nothing else (no Estimating
+ *  selection, no other process) has touched it since, and it is safe to
+ *  claim/update for the new set. If the row exists and its key matches
+ *  neither the new set NOR our own last-known key, something else owns it
+ *  now and it is left completely untouched (S3) — the job profile still
+ *  reads the new set fine, from the shared content-hash classification
+ *  cache, via `requestJobProfile`'s existing fallback.
+ *
+ *  This never touches the takeoff's own results (ai_results / run
+ *  history) — only bid_sheet_check and bid_job_profile — so it can never
+ *  reset a takeoff already run. */
+export async function refreshAfterPlanFilesChanged(bidId: string, actor: AuditActor): Promise<void> {
+  const docs = await eligiblePlanDocs(bidId, null);
+  if (docs.length) {
+    const { files } = await gatherAnalysisInputs(bidId, [], docs.map(d => d.id));
+    if (files.length) {
+      const newInputKey = inputKeyOf(files);
+      const [{ rows: jp }, sc] = await Promise.all([
+        pool.query('SELECT content_key FROM bid_job_profile WHERE bid_id=$1', [bidId]),
+        loadSheetCheck(bidId),
+      ]);
+      const lastOwnedKey: string | null = jp[0]?.content_key ?? null;
+      const safeToClaim = !sc || sc.input_key === newInputKey || (lastOwnedKey !== null && sc.input_key === lastOwnedKey);
+      if (safeToClaim) {
+        const client = await anthropicClient();
+        const config = await loadAIConfig();
+        const token = await claimSheetCheck(bidId, newInputKey);
+        await runSheetCheck(bidId, token, files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as { documentId?: string }).documentId, uploadedAt: (f as { uploadedAt?: string | null }).uploadedAt ?? null })), {
+          client, classifierModel: config.modelClassifier, visionModel: config.modelRefVision, aiRefs: true,
+        });
+      }
+    }
+  }
+  try {
+    await requestJobProfile(bidId, null, actor);
+  } catch (err) {
+    if (err instanceof JobProfileError && err.status === 400) {
+      // No plan files left on the bid at all — nothing to check. Never
+      // touch bid_sheet_check here either: it may belong to Estimating's
+      // own, unrelated selection (review S3). Only the job profile's own
+      // bookkeeping is reset so the panel's "Detected from plans" /
+      // suggestions sections (gated client-side on there being plan files)
+      // don't hold onto a run tied to a plan set that no longer exists.
+      await pool.query(`UPDATE bid_job_profile SET status='idle', updated_at=now() WHERE bid_id=$1`, [bidId]).catch(() => {});
+      return;
+    }
+    throw err;
+  }
+}
+
 /** R2-S2 — the same plan set and model: the stored profile is applied again
  *  (a cleared fill is recorded as a rejection, a new card value becomes a
  *  suggestion) without a model call. */
@@ -349,9 +417,12 @@ export async function runJobProfileNow(bidId: string, token: string): Promise<Ru
     await applyProfile(bidId, token, profile, { docIds, model, usage, costCents, actor, contentKey: files.length ? inputKeyOf(files) : null });
     return { status: profile.status };
   } catch (err) {
-    const message = err instanceof Error ? err.message.slice(0, 500) : String(err);
+    // Task 2 — the raw error (an Anthropic APIError's JSON body included)
+    // stays in the server log only; the panel only ever sees the friendly
+    // text below.
     logger.error({ err, bidId }, '[jobProfile] run failed');
-    await pool.query(`UPDATE bid_job_profile SET status='error', error=$3, updated_at=now() WHERE bid_id=$1 AND run_token=$2`, [bidId, token, message]).catch(() => {});
+    const message = err instanceof JobProfileError ? err.message : friendlyAnthropicError(err);
+    await pool.query(`UPDATE bid_job_profile SET status='error', error=$3, updated_at=now() WHERE bid_id=$1 AND run_token=$2`, [bidId, token, message.slice(0, 500)]).catch(() => {});
     return { status: 'error', error: message };
   }
 }
@@ -431,14 +502,24 @@ async function applyProfile(bidId: string, token: string, profile: JobProfile, m
 
 // ── Read ────────────────────────────────────────────────────────────────────
 
-export function sheetSummaryOf(sc: SheetCheckRow | null): { status: string; total: number; electrical: number; missingRefs: number } | null {
+/** Task 3 (plans-panel fix round) — "142 sheets in set · 23 electrical" used
+ *  to count every page of every uploaded PDF, including a bound spec book's
+ *  pages. Review B1 fix: this is never the classifier's own discipline (a
+ *  "spec" discipline was tried and reverted — it took pages out of
+ *  analysis). `specBookPage` (ai/specBookPages.ts) is a separate,
+ *  deterministic, text-only annotation that this function is the ONLY
+ *  reader of: {total, electrical} describe the plan set only; `specPages`
+ *  is reported alongside it (0 when there is no spec book in the upload). */
+export function sheetSummaryOf(sc: SheetCheckRow | null): { status: string; total: number; electrical: number; missingRefs: number; specPages: number } | null {
   if (!sc) return null;
-  if (!sc.result) return sc.status === 'running' ? { status: 'running', total: 0, electrical: 0, missingRefs: 0 } : null;
+  if (!sc.result) return sc.status === 'running' ? { status: 'running', total: 0, electrical: 0, missingRefs: 0, specPages: 0 } : null;
+  const planPages = sc.result.pages.filter(p => !p.specBookPage);
   return {
     status: sc.status,
-    total: sc.result.pages.length,
-    electrical: sc.result.pages.filter(p => p.role === 'analysis').length,
+    total: planPages.length,
+    electrical: planPages.filter(p => p.role === 'analysis').length,
     missingRefs: sc.result.refs.filter(r => r.status === 'missing').length,
+    specPages: sc.result.pages.length - planPages.length,
   };
 }
 
@@ -475,6 +556,9 @@ export async function loadJobProfile(bidId: string) {
   const { rows: bid } = await pool.query('SELECT * FROM bids WHERE id=$1', [bidId]);
   return {
     ...(rows[0] ?? { status: 'idle', profile: {}, suggestions: {}, systems: null }),
+    // N2 (review eb39943) — a row written before the friendly-error mapping
+    // existed can still hold raw JSON; sanitize on every read.
+    ...(rows[0] ? { error: sanitizeStoredError(rows[0].error) } : {}),
     sheet_summary: sheetSummaryOf(sc),
     // Round 3 R3-B1 — likely plan revisions to answer on Overview.
     revision_proposals: sc?.result?.revisionProposals ?? [],

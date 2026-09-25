@@ -25,6 +25,7 @@ import {
 import { isRealReason } from '../ai/reviewItems';
 import { resumeAfterSheetCheck } from '../services/jobProfileRun';
 import { logger } from '../utils/logger';
+import { sanitizeStoredError } from '../ai/friendlyError';
 
 const router = Router();
 
@@ -44,7 +45,9 @@ export function sheetCheckPayload(row: SheetCheckRow | null) {
     otherFiles: row.result?.otherFiles ?? [],
     overrides: row.overrides ?? {},
     skips: row.skips ?? {},
-    error: row.error,
+    // N2 (review eb39943) — a row written before the friendly-error mapping
+    // existed can still hold raw JSON; sanitize on every read.
+    error: sanitizeStoredError(row.error),
     checkedAt: row.result?.checkedAt ?? null,
     inputKey: row.input_key,
     /** Round 3 R3-B1 — likely revisions (answered or not) and same-number

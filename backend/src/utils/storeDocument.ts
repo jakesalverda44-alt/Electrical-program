@@ -69,6 +69,11 @@ export interface StoreDocumentInput {
    * reach a GC.
    */
   gatePassed?: boolean;
+  /** Plans-panel fix round, Task 1 — skip the dedupe check below even for a
+   *  category='plans' upload. Only the "Replace plan set" flow sets this: it
+   *  may legitimately re-upload bytes identical to a file it is about to
+   *  soft-delete. */
+  skipDedupe?: boolean;
   /** Takeoff accuracy fix round 1 / B5 — the analysis run a generated GC /
    *  pre-bid document was composed from; only a document from the CURRENT
    *  run is ever attached to an email. */
@@ -124,6 +129,25 @@ export async function storeDocument(input: StoreDocumentInput) {
   // from the filename extension instead (audit: Security #6, High).
   const safeMimeType = mimeTypeForFilename(file.originalname);
 
+  // Plans-panel fix round, Task 1 — dedupe on upload: the same bytes already
+  // filed as a non-deleted plan file on this bid are never stored twice.
+  // Checked here, before any Drive/Cloud upload, so a duplicate costs
+  // nothing. Scoped to category='plans' (the reported bug: re-uploading the
+  // same plan set from the Overview panel) rather than every document type,
+  // so an intentional re-upload of, say, a signed contract is unaffected.
+  const contentSha256 = file.buffer ? crypto.createHash('sha256').update(file.buffer).digest('hex') : null;
+  if (category === 'plans' && linkedId && contentSha256 && !input.skipDedupe) {
+    const { rows: dupe } = await pool.query(
+      `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size,
+              file_type, storage_url, uploaded_by, created_at, gate_passed, generated, page_count
+         FROM documents
+        WHERE linked_id=$1 AND category='plans' AND deleted_at IS NULL AND generated = false AND content_sha256=$2
+        ORDER BY created_at DESC LIMIT 1`,
+      [linkedId, contentSha256]
+    );
+    if (dupe.length) return { ...dupe[0], duplicate: true };
+  }
+
   const driveFolderId = !cloudMuted && linkedId ? await resolveDriveFolder(linkedId, div, category) : null;
 
   // Bid Overview plans upload + job profile — the Documents step's read-only
@@ -175,7 +199,6 @@ export async function storeDocument(input: StoreDocumentInput) {
 
   const generated = input.generated
     ?? (!!input.gatePassed || !!input.takeoffRunId || !!input.composeInputsHash || category === 'bid_data');
-  const contentSha256 = file.buffer ? crypto.createHash('sha256').update(file.buffer).digest('hex') : null;
   const { rows } = await pool.query(
     `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category,
                             file_size, file_type, uploaded_by, storage_url, file_data, gate_passed, takeoff_run_id, compose_inputs_hash,

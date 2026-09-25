@@ -45,6 +45,8 @@ import { runSignalOf, isCancellationError } from '../ai/runControl';
 import { assertNotTruncated, isAgentTruncatedError } from '../ai/stopReason';
 import { SHEET_REFS_TEXT_SYSTEM, SHEET_REFS_VISION_SYSTEM, PAGE_CLASSIFIER_SYSTEM } from '../ai/prompts';
 import { sanitizeForPrompt } from '../ai/sanitizeForPrompt';
+import { friendlyAnthropicError } from '../ai/friendlyError';
+import { computeSpecBookPages } from '../ai/specBookPages';
 
 const execFileP = promisify(execFile);
 
@@ -92,6 +94,13 @@ export interface CheckedPage {
   classified: boolean;
   /** References found on this page (regex + cached AI). */
   refs: SheetRef[];
+  /** Plans-panel fix round, B1 fix (review eb39943) — a deterministic,
+   *  text-only annotation for the sheet SUMMARY only: this page belongs to a
+   *  bound spec book / project manual (computeSpecBookPages, ai/specBookPages.ts).
+   *  Never read by applySelection, /analyze's own page selection, or the
+   *  classifier — a page's discipline and role are exactly what main would
+   *  produce regardless of this flag. */
+  specBookPage?: boolean;
   // ── selection (applySelection) ──
   role: PageRole;
   reason: string;
@@ -576,6 +585,14 @@ export async function buildInventory(files: CheckInputFile[], opts: BuildOptions
     }
   }
 
+  // Plans-panel fix round, B1 fix — a deterministic, text-only annotation
+  // for the sheet summary only (never read by applySelection or /analyze;
+  // see specBookPages.ts). Computed from the classifier's own sheetNo (a
+  // page with one is never a spec-book page) and the text layer, not from
+  // the classifier's discipline output.
+  const specKeys = computeSpecBookPages(pages.map(p => ({ key: p.key, sha: p.sha, sheetNo: p.sheetNo, text: pageTexts.get(p.sha)?.[p.page - 1] ?? '' })));
+  for (const p of pages) if (specKeys.has(p.key)) p.specBookPage = true;
+
   // Regex references on every page with text (cheap; kept per page so an
   // override that forces a page in can use its notes without a re-check).
   // B1 — the set's own sheet-number shape and ids: a referenced id that is
@@ -772,10 +789,13 @@ export async function runSheetCheck(bidId: string, token: string, files: CheckIn
         WHERE bid_id=$1 AND run_token=$4`,
       [bidId, JSON.stringify(result), JSON.stringify(built.usage), token]);
   } catch (err) {
+    // Task 2 — the raw error (an Anthropic APIError's JSON body included)
+    // stays in the server log only; the Documents step and the Overview
+    // panel only ever see the friendly text below.
     logger.error({ err, bidId }, '[sheetCheck] check failed');
     await pool.query(
       `UPDATE bid_sheet_check SET status='error', error=$2, finished_at=now(), updated_at=now() WHERE bid_id=$1 AND run_token=$3`,
-      [bidId, err instanceof Error ? err.message.slice(0, 500) : String(err), token]).catch(() => {});
+      [bidId, friendlyAnthropicError(err).slice(0, 500), token]).catch(() => {});
   }
 }
 

@@ -3,6 +3,7 @@ import React from 'react';
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import PlansJobProfilePanel from './PlansJobProfilePanel';
+import { ConfirmProvider } from '../../components/ConfirmDialog';
 import { Bid } from '../../types';
 
 afterEach(cleanup);
@@ -10,17 +11,23 @@ afterEach(cleanup);
 const get = vi.fn();
 const post = vi.fn();
 const put = vi.fn();
+const del = vi.fn();
 vi.mock('../../api/client', () => ({
   default: {
     get: (...a: unknown[]) => get(...a),
     post: (...a: unknown[]) => post(...a),
     put: (...a: unknown[]) => put(...a),
+    delete: (...a: unknown[]) => del(...a),
   },
 }));
 
+// A stable spy (not a fresh vi.fn() per call) so a test can inspect the
+// toast a mutation fired — in particular, invoke its Undo action.onClick
+// the same way a person clicking the toast would.
+const toastSpy = vi.fn();
 vi.mock('../../contexts/AppContext', () => ({
-  useOptionalShowToast: () => vi.fn(),
-  useShowToast: () => vi.fn(),
+  useOptionalShowToast: () => toastSpy,
+  useShowToast: () => toastSpy,
 }));
 
 const bid: Bid = {
@@ -72,6 +79,8 @@ beforeEach(() => {
   get.mockReset();
   post.mockReset();
   put.mockReset();
+  del.mockReset();
+  toastSpy.mockReset();
 });
 
 describe('PlansJobProfilePanel', () => {
@@ -91,10 +100,25 @@ describe('PlansJobProfilePanel', () => {
 
     await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
     expect(screen.getByText('55 pg')).toBeTruthy();
-    expect(screen.getByTestId('sheet-summary-line').textContent).toMatch(/55 sheets in set.*6 electrical.*1 missing ref/);
+    expect(screen.getByTestId('sheet-summary-line').textContent).toMatch(/55 plan sheets.*6 electrical.*1 missing ref/);
     expect(screen.getByTestId('detected-profile').textContent).toContain('AutoZone');
     expect(screen.getByTestId('detected-profile').textContent).toContain('10077');
     expect(screen.getByTestId('detected-profile').textContent).toContain('7,381 SF');
+  });
+
+  it('shows the spec book\'s page count separately from the plan sheets (Task 3)', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/documents') return Promise.resolve({ data: [PLAN_DOC] });
+      if (url === `/preconstruction/${bid.id}/job-profile`) {
+        return Promise.resolve({ data: { ...PROFILE_RESPONSE, sheet_summary: { status: 'complete', total: 55, electrical: 7, missingRefs: 0, specPages: 142 } } });
+      }
+      return Promise.resolve({ data: null });
+    });
+    post.mockResolvedValue({ data: {} });
+    put.mockResolvedValue({ data: { bid } });
+    render(<PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>);
+    await waitFor(() => expect(screen.getByTestId('sheet-summary-line')).toBeTruthy());
+    expect(screen.getByTestId('sheet-summary-line').textContent).toMatch(/55 plan sheets.*7 electrical.*spec book 142 pages/);
   });
 
   it('renders a pending suggestion chip and Accept applies it (and never sends a client-side value)', async () => {
@@ -269,5 +293,170 @@ describe('PlansJobProfilePanel', () => {
     fireEvent.click(screen.getByTestId('revision-keep-a>b'));
     await waitFor(() => expect(put).toHaveBeenCalledWith(`/preconstruction/${bid.id}/plan-revisions`, { id: 'a>b', decision: 'keep_both' }));
     await waitFor(() => expect(screen.getByTestId('plan-revision-a>b').textContent).toContain('Kept both — Jake'));
+  });
+});
+
+// ── Task 1: remove ("x"), Undo, "Replace plan set", dedupe ──────────────────
+
+describe('PlansJobProfilePanel — remove / replace / dedupe (Task 1)', () => {
+  it('removing a plan file asks for confirmation, then soft-deletes and refreshes', async () => {
+    mockDefaultApi();
+    del.mockResolvedValue({ data: { status: 'complete', profile: {}, suggestions: {} } });
+    render(
+      <ConfirmProvider>
+        <PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>
+      </ConfirmProvider>
+    );
+    await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId(`remove-plan-file-${PLAN_DOC.id}`));
+    await screen.findByText(/Remove "plans.pdf" from this bid's plan set/i);
+    expect(del).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(del).toHaveBeenCalledWith(`/preconstruction/${bid.id}/plan-files/${PLAN_DOC.id}`));
+    // Removal refreshes the docs list (Estimating's plan list) without a
+    // separate "re-run analysis" call.
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/documents', expect.anything()));
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Plan file removed',
+      action: expect.objectContaining({ label: 'Undo' }),
+    })));
+  });
+
+  it('cancelling the confirm dialog removes nothing', async () => {
+    mockDefaultApi();
+    render(
+      <ConfirmProvider>
+        <PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>
+      </ConfirmProvider>
+    );
+    await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
+    fireEvent.click(screen.getByTestId(`remove-plan-file-${PLAN_DOC.id}`));
+    await screen.findByText(/Remove "plans.pdf"/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it('Undo restores the removed file through the scoped restore route, which refreshes in the same round trip (review S4)', async () => {
+    mockDefaultApi();
+    del.mockResolvedValue({ data: { status: 'complete', profile: {}, suggestions: {} } });
+    post.mockResolvedValue({ data: { status: 'complete', profile: {}, suggestions: {} } });
+    render(
+      <ConfirmProvider>
+        <PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>
+      </ConfirmProvider>
+    );
+    await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
+    fireEvent.click(screen.getByTestId(`remove-plan-file-${PLAN_DOC.id}`));
+    await screen.findByText(/Remove "plans.pdf"/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(toastSpy).toHaveBeenCalled());
+
+    const call = toastSpy.mock.calls.find(c => c[0]?.title === 'Plan file removed');
+    expect(call).toBeTruthy();
+    await call![0].action.onClick();
+    // ONE round trip: the scoped restore route itself refreshes server-side —
+    // no separate manual job-profile/run call from the client.
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/plan-files/${PLAN_DOC.id}/restore`));
+    expect(post).not.toHaveBeenCalledWith(`/documents/${PLAN_DOC.id}/restore`);
+  });
+
+  it('"Replace plan set" confirms with the current files listed, then sends ONE atomic request (review S1/S2)', async () => {
+    mockDefaultApi();
+    post.mockImplementation((url: string) => {
+      if (url === `/preconstruction/${bid.id}/plan-files/replace`) {
+        return Promise.resolve({ data: { status: 'complete', profile: {}, suggestions: {}, uploaded: [{ id: 'doc-new', name: 'replacement.pdf' }], removed: [{ id: PLAN_DOC.id, name: 'plans.pdf' }], failedRemovals: [], replaceOpId: 'op-1' } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    render(
+      <ConfirmProvider>
+        <PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>
+      </ConfirmProvider>
+    );
+    await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
+
+    const file = new File(['%PDF-1.4'], 'replacement.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByTestId('replace-plan-set-input'), { target: { files: [file] } });
+    await screen.findByText(/Replace the current plan set/i);
+    expect(screen.getByText('plans.pdf', { selector: 'li' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Replace' }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/plan-files/replace`, expect.anything(), expect.anything()));
+    const fd = post.mock.calls.find(c => c[0] === `/preconstruction/${bid.id}/plan-files/replace`)![1] as FormData;
+    expect(fd.getAll('files')).toHaveLength(1);
+    // No separate per-file DELETE or /documents upload — one request did it all.
+    expect(del).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalledWith('/documents', expect.anything(), expect.anything());
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Plan set replaced' })));
+  });
+
+  it('"Replace plan set" Undo sends the opId the server returned, never free-form document ids (addendum PB1)', async () => {
+    mockDefaultApi();
+    post.mockImplementation((url: string) => {
+      if (url === `/preconstruction/${bid.id}/plan-files/replace`) {
+        return Promise.resolve({ data: { status: 'complete', profile: {}, suggestions: {}, uploaded: [{ id: 'doc-new', name: 'replacement.pdf' }], removed: [{ id: PLAN_DOC.id, name: 'plans.pdf' }], failedRemovals: [], replaceOpId: 'op-42' } });
+      }
+      if (url === `/preconstruction/${bid.id}/plan-files/replace/undo`) {
+        return Promise.resolve({ data: { status: 'complete', profile: {}, suggestions: {} } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    render(
+      <ConfirmProvider>
+        <PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>
+      </ConfirmProvider>
+    );
+    await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
+    const file = new File(['%PDF-1.4'], 'replacement.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByTestId('replace-plan-set-input'), { target: { files: [file] } });
+    await screen.findByText(/Replace the current plan set/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Replace' }));
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Plan set replaced' })));
+
+    const call = toastSpy.mock.calls.find(c => c[0]?.title === 'Plan set replaced');
+    await call![0].action.onClick();
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/plan-files/replace/undo`, { opId: 'op-42' }));
+  });
+
+  it('"Replace plan set" surfaces a partial-upload failure by name, never silently (review S2)', async () => {
+    mockDefaultApi();
+    post.mockImplementation((url: string) => {
+      if (url === `/preconstruction/${bid.id}/plan-files/replace`) {
+        const err = new Error('upload failed') as Error & { response: { status: number; data: { error: string } } };
+        err.response = { status: 400, data: { error: 'Could not upload "bad.pdf" — the plan set was not changed.' } };
+        return Promise.reject(err);
+      }
+      return Promise.resolve({ data: {} });
+    });
+    render(
+      <ConfirmProvider>
+        <PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>
+      </ConfirmProvider>
+    );
+    await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
+    const file = new File(['%PDF-1.4'], 'bad.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByTestId('replace-plan-set-input'), { target: { files: [file] } });
+    await screen.findByText(/Replace the current plan set/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Replace' }));
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error', sub: 'Could not upload "bad.pdf" — the plan set was not changed.' })));
+  });
+
+  it('dedupe: a re-uploaded file the server recognizes as already-uploaded shows a toast instead of a new row', async () => {
+    mockDefaultApi();
+    post.mockImplementation((url: string) => {
+      if (url === '/documents') return Promise.resolve({ data: { id: PLAN_DOC.id, duplicate: true } });
+      if (url === `/preconstruction/${bid.id}/job-profile/run`) return Promise.resolve({ data: { ...PROFILE_RESPONSE, bid } });
+      return Promise.resolve({ data: {} });
+    });
+    render(<PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>);
+    await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
+
+    const file = new File(['%PDF-1.4'], 'plans.pdf', { type: 'application/pdf' });
+    const dropzone = screen.getByText(/drop plan sheets here/i).closest('div') as HTMLElement;
+    fireEvent.drop(dropzone!, { dataTransfer: { files: [file] } });
+
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Already uploaded', sub: 'plans.pdf' })));
   });
 });

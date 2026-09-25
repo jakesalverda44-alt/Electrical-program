@@ -3,6 +3,8 @@ import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
+import { useConfirm } from '../../components/ConfirmDialog';
+import { useShowToast } from '../../contexts/AppContext';
 import { Bid } from '../../types';
 import { ProjectDoc, isCurrentPlanDoc } from '../preconstruction/PcWorkspace/shared';
 import { PROJECT_TYPES } from '../preconstruction/constants';
@@ -21,7 +23,7 @@ type Confidence = 'high' | 'medium' | 'low';
 interface FieldEvidence { value: unknown; sheet: string | null; quote: string | null; confidence: Confidence; validated?: boolean; notes?: string[]; label?: string }
 interface StoredSuggestion { value: unknown; sheet: string | null; quote: string | null; status: 'pending' | 'accepted' | 'ignored' | 'overridden'; confidence?: string; notes?: string[] }
 interface SystemEvidence { value: boolean | null; sheet: string | null; quote: string | null }
-interface SheetSummary { status?: string; total: number; electrical: number; missingRefs: number }
+interface SheetSummary { status?: string; total: number; electrical: number; missingRefs: number; specPages?: number }
 interface FillRecord { value: unknown; status: 'filled' | 'rejected' | 'edited' }
 interface RejectedValue { field: string; value: unknown; sheet: string | null; reason: string }
 export interface JobProfileGet {
@@ -90,6 +92,9 @@ interface Props {
 export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating }: Props) {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
+  const confirm = useConfirm();
+  const showToast = useShowToast();
 
   const { data: docsData, reload: reloadDocs } = useApi<ProjectDoc[]>('/documents', { params: { linked_id: bid.id } });
   const planDocs = useMemo(() => (docsData ?? []).filter(isCurrentPlanDoc), [docsData]);
@@ -151,18 +156,26 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
     },
   );
 
+/** One file's upload post — `skipDedupe` for "Replace plan set", whose new
+   *  bytes may legitimately match a file it's about to remove. */
+  const uploadOne = async (f: File, opts: { skipDedupe?: boolean } = {}) => {
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('linked_id', bid.id);
+    fd.append('linked_name', bid.name);
+    fd.append('div', 'elec');
+    fd.append('category', 'plans');
+    fd.append('display_name', f.name);
+    if (opts.skipDedupe) fd.append('skip_dedupe', 'true');
+    const { data } = await api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+    return { file: f, duplicate: !!(data as { duplicate?: boolean }).duplicate };
+  };
+
   const { run: runUpload, saving: uploading } = useMutation(
     async (files: File[]) => {
-      for (const f of files) {
-        const fd = new FormData();
-        fd.append('file', f);
-        fd.append('linked_id', bid.id);
-        fd.append('linked_name', bid.name);
-        fd.append('div', 'elec');
-        fd.append('category', 'plans');
-        fd.append('display_name', f.name);
-        await api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      }
+      const results: Array<{ file: File; duplicate: boolean }> = [];
+      for (const f of files) results.push(await uploadOne(f));
+      return results;
     },
     {
       onSuccess: async () => {
@@ -171,7 +184,99 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
         // generated files) and waits for its sheet check.
         await readPlans({});
       },
+      // Task 1 (dedupe) — a re-upload whose content hash already matches a
+      // plan file on this bid stores nothing new; tell the user instead of
+      // silently doing nothing.
+      successToast: (results) => {
+        const dupes = results.filter(r => r.duplicate);
+        return dupes.length
+          ? { title: dupes.length === 1 ? 'Already uploaded' : `${dupes.length} files already uploaded`, sub: dupes.map(d => d.file.name).join(', '), variant: 'info' }
+          : null;
+      },
       errorTitle: 'Upload failed',
+    },
+  );
+
+  // Fix round, review S4 — Undo restores through the scoped route, which
+  // refreshes in the same round trip (never the generic /documents restore
+  // plus a separate job-profile/run — that left the sheet summary stale).
+  const undoRemove = async (doc: ProjectDoc) => {
+    try {
+      const { data } = await api.post(`/preconstruction/${bid.id}/plan-files/${doc.id}/restore`);
+      reloadDocs();
+      settle(data as JobProfileGet);
+      showToast({ title: 'Plan file restored', sub: doc.display_name || doc.name });
+    } catch {
+      showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore it from Settings → Trash instead.' });
+    }
+  };
+
+  // Task 1 — remove ("x"): soft-deletes to Trash (the existing documents
+  // path), then refreshes the job profile from the response in one round
+  // trip. Undo restores it and re-syncs.
+  const { run: runRemoveFile } = useMutation(
+    async (doc: ProjectDoc) => {
+      const { data } = await api.delete(`/preconstruction/${bid.id}/plan-files/${doc.id}`);
+      return { doc, data: data as JobProfileGet };
+    },
+    {
+      onSuccess: ({ data }) => { reloadDocs(); settle(data); },
+      successToast: ({ doc }) => ({
+        title: 'Plan file removed', sub: doc.display_name || doc.name,
+        action: { label: 'Undo', onClick: () => undoRemove(doc) },
+      }),
+      errorTitle: 'Could not remove the plan file',
+    },
+  );
+
+  // Addendum PB1/PS1 — Undo for a replace takes the opId the replace itself
+  // returned (never free-form document ids — the server refuses to trash
+  // anything a client merely names), and is all-or-nothing: a 409 means
+  // nothing changed, and the message says so.
+  const undoReplace = async (replaceOpId: string, fileCount: number) => {
+    try {
+      const { data } = await api.post(`/preconstruction/${bid.id}/plan-files/replace/undo`, { opId: replaceOpId });
+      reloadDocs();
+      settle(data as JobProfileGet);
+      showToast({ title: fileCount === 1 ? 'Plan file restored' : 'Plan set restored' });
+    } catch (err) {
+      const status = (err as { response?: { status?: number } } | null)?.response?.status;
+      showToast({ variant: 'error', title: 'Could not undo',
+        sub: status === 409 ? "Can't undo — restore the old files from Trash instead." : 'Restore the files from Settings → Trash instead.' });
+    }
+  };
+
+  // Fix round, review S1/S2 — "Replace plan set" is ONE server-side,
+  // all-or-nothing request: the server stores every new file, rolls back on
+  // any failure (the old set is untouched), then trashes the old files and
+  // refreshes exactly once. This replaces the old client-side loop of one
+  // upload + one DELETE per file, which made one billed job-profile call
+  // per old file and read a mixed old+new set in between.
+  const { run: runReplace } = useMutation(
+    async (files: File[]) => {
+      const fd = new FormData();
+      for (const f of files) fd.append('files', f);
+      const { data } = await api.post(`/preconstruction/${bid.id}/plan-files/replace`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      return data as JobProfileGet & { uploaded: Array<{ id: string; name: string }>; removed: Array<{ id: string; name: string }>; failedRemovals: string[]; replaceOpId: string };
+    },
+    {
+      onSuccess: (result) => { reloadDocs(); settle(result); },
+      // Review S2 — removal failures are surfaced, never silently dropped.
+      successToast: (result) => {
+        const { removed, failedRemovals, replaceOpId } = result;
+        const sub = [
+          removed.length ? `${removed.length} file${removed.length === 1 ? '' : 's'} moved to Trash` : null,
+          failedRemovals.length ? `could not remove: ${failedRemovals.join(', ')}` : null,
+        ].filter(Boolean).join(' — ');
+        return {
+          title: 'Plan set replaced', sub: sub || undefined, variant: failedRemovals.length ? 'error' : 'success',
+          ...(removed.length ? { action: { label: 'Undo', onClick: () => undoReplace(replaceOpId, removed.length) } } : {}),
+        };
+      },
+      // Review S1/S2 — a partial-upload failure names the file and leaves
+      // the old set untouched (the server already rolled back what did
+      // upload); the default error toast surfaces that message as-is.
+      errorTitle: 'Could not replace the plan set',
     },
   );
 
@@ -180,6 +285,34 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
   const handleFiles = (files: FileList | File[]) => {
     const arr = Array.from(files).filter(f => /\.(pdf|jpe?g|png|zip)$/i.test(f.name));
     if (arr.length) runUpload(arr);
+  };
+
+  const handleRemove = async (doc: ProjectDoc) => {
+    if (!(await confirm({
+      title: `Remove "${doc.display_name || doc.name}" from this bid's plan set?`,
+      body: 'It moves to Trash — Undo restores it.',
+      confirmLabel: 'Remove',
+    }))) return;
+    runRemoveFile(doc);
+  };
+
+  const handleReplaceFiles = async (files: FileList | File[]) => {
+    const arr = Array.from(files).filter(f => /\.(pdf|jpe?g|png|zip)$/i.test(f.name));
+    if (!arr.length) return;
+    const oldDocs = planDocs;
+    if (!(await confirm({
+      title: 'Replace the current plan set?',
+      body: (
+        <>
+          This uploads the new file{arr.length === 1 ? '' : 's'} and moves the current plan file{oldDocs.length === 1 ? '' : 's'} to Trash:
+          <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+            {oldDocs.map(d => <li key={d.id}>{d.display_name || d.name}</li>)}
+          </ul>
+        </>
+      ),
+      confirmLabel: 'Replace',
+    }))) return;
+    runReplace(arr);
   };
 
   const { run: runSuggestion } = useMutation(
@@ -266,19 +399,35 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
 
         {planDocs.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <input ref={replaceInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.zip" style={{ display: 'none' }}
+              onChange={e => { handleReplaceFiles(e.target.files ?? []); if (replaceInputRef.current) replaceInputRef.current.value = ''; }}
+              data-testid="replace-plan-set-input"
+            />
             {planDocs.map(d => (
               <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--text2)', padding: '3px 0', minWidth: 0 }}>
                 <Icon name="file" size={12} stroke={1.8}/>
                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.display_name || d.name}</span>
                 {d.page_count != null && <span style={{ color: 'var(--text3)' }}>{d.page_count} pg</span>}
+                <button type="button" title="Remove this plan file" aria-label={`Remove ${d.display_name || d.name}`}
+                  data-testid={`remove-plan-file-${d.id}`} onClick={() => handleRemove(d)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', fontSize: 14, lineHeight: 1, padding: '0 2px' }}>
+                  ×
+                </button>
               </div>
             ))}
             {!uploading && !starting && (
-              <button type="button" className="btn ghost" data-testid="read-plans"
-                onClick={() => readPlans(status === 'idle' ? {} : { force: true })}
-                style={{ alignSelf: 'flex-start', height: 26, fontSize: 11, padding: '0 8px', marginTop: 4 }}>
-                {status === 'idle' ? 'Read the plans' : 'Read the plans again'}
-              </button>
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button type="button" className="btn ghost" data-testid="read-plans"
+                  onClick={() => readPlans(status === 'idle' ? {} : { force: true })}
+                  style={{ height: 26, fontSize: 11, padding: '0 8px' }}>
+                  {status === 'idle' ? 'Read the plans' : 'Read the plans again'}
+                </button>
+                <button type="button" className="btn ghost" data-testid="replace-plan-set"
+                  onClick={() => replaceInputRef.current?.click()}
+                  style={{ height: 26, fontSize: 11, padding: '0 8px' }}>
+                  Replace plan set
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -331,11 +480,12 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
           </div>
         )}
 
-        {summary && (
+        {summary && planDocs.length > 0 && (
           <div style={{ fontSize: 12.5, color: 'var(--text3)', fontWeight: 600 }} data-testid="sheet-summary-line">
             {summary.status === 'running' && !summary.total
               ? 'Sheet check running…'
-              : <>{summary.total} sheet{summary.total !== 1 ? 's' : ''} in set · {summary.electrical} electrical
+              : <>{summary.total} plan sheet{summary.total !== 1 ? 's' : ''} · {summary.electrical} electrical
+                {!!summary.specPages && ` · spec book ${summary.specPages} page${summary.specPages !== 1 ? 's' : ''}`}
                 {summary.missingRefs > 0 ? ` · ${summary.missingRefs} missing ref${summary.missingRefs !== 1 ? 's' : ''}` : ''}</>}
           </div>
         )}
