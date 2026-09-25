@@ -37,6 +37,7 @@ import {
   DEFAULT_JOB_PROFILE_MODEL, type InventoryPage, type JobProfile, type PromptPage, type SelectedPage,
 } from '../ai/jobProfile';
 import { mergeBrands } from '../ai/jobProfileValidators';
+import { friendlyAnthropicError } from '../ai/friendlyError';
 import {
   computeCardUpdates, reconcileFills, mergeSuggestions,
   type CurrentBidFields, type FillRecord, type StoredSuggestion,
@@ -349,9 +350,12 @@ export async function runJobProfileNow(bidId: string, token: string): Promise<Ru
     await applyProfile(bidId, token, profile, { docIds, model, usage, costCents, actor, contentKey: files.length ? inputKeyOf(files) : null });
     return { status: profile.status };
   } catch (err) {
-    const message = err instanceof Error ? err.message.slice(0, 500) : String(err);
+    // Task 2 — the raw error (an Anthropic APIError's JSON body included)
+    // stays in the server log only; the panel only ever sees the friendly
+    // text below.
     logger.error({ err, bidId }, '[jobProfile] run failed');
-    await pool.query(`UPDATE bid_job_profile SET status='error', error=$3, updated_at=now() WHERE bid_id=$1 AND run_token=$2`, [bidId, token, message]).catch(() => {});
+    const message = err instanceof JobProfileError ? err.message : friendlyAnthropicError(err);
+    await pool.query(`UPDATE bid_job_profile SET status='error', error=$3, updated_at=now() WHERE bid_id=$1 AND run_token=$2`, [bidId, token, message.slice(0, 500)]).catch(() => {});
     return { status: 'error', error: message };
   }
 }

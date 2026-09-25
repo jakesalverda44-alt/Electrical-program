@@ -45,6 +45,7 @@ import { runSignalOf, isCancellationError } from '../ai/runControl';
 import { assertNotTruncated, isAgentTruncatedError } from '../ai/stopReason';
 import { SHEET_REFS_TEXT_SYSTEM, SHEET_REFS_VISION_SYSTEM, PAGE_CLASSIFIER_SYSTEM } from '../ai/prompts';
 import { sanitizeForPrompt } from '../ai/sanitizeForPrompt';
+import { friendlyAnthropicError } from '../ai/friendlyError';
 
 const execFileP = promisify(execFile);
 
@@ -772,10 +773,13 @@ export async function runSheetCheck(bidId: string, token: string, files: CheckIn
         WHERE bid_id=$1 AND run_token=$4`,
       [bidId, JSON.stringify(result), JSON.stringify(built.usage), token]);
   } catch (err) {
+    // Task 2 — the raw error (an Anthropic APIError's JSON body included)
+    // stays in the server log only; the Documents step and the Overview
+    // panel only ever see the friendly text below.
     logger.error({ err, bidId }, '[sheetCheck] check failed');
     await pool.query(
       `UPDATE bid_sheet_check SET status='error', error=$2, finished_at=now(), updated_at=now() WHERE bid_id=$1 AND run_token=$3`,
-      [bidId, err instanceof Error ? err.message.slice(0, 500) : String(err), token]).catch(() => {});
+      [bidId, friendlyAnthropicError(err).slice(0, 500), token]).catch(() => {});
   }
 }
 
