@@ -197,11 +197,13 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
     },
   );
 
+  // Fix round, review S4 — Undo restores through the scoped route, which
+  // refreshes in the same round trip (never the generic /documents restore
+  // plus a separate job-profile/run — that left the sheet summary stale).
   const undoRemove = async (doc: ProjectDoc) => {
     try {
-      await api.post(`/documents/${doc.id}/restore`);
+      const { data } = await api.post(`/preconstruction/${bid.id}/plan-files/${doc.id}/restore`);
       reloadDocs();
-      const { data } = await api.post(`/preconstruction/${bid.id}/job-profile/run`, {});
       settle(data as JobProfileGet);
       showToast({ title: 'Plan file restored', sub: doc.display_name || doc.name });
     } catch {
@@ -210,8 +212,8 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
   };
 
   // Task 1 — remove ("x"): soft-deletes to Trash (the existing documents
-  // path), then refreshes the sheet check / job profile from the response
-  // in one round trip. Undo restores it and re-syncs.
+  // path), then refreshes the job profile from the response in one round
+  // trip. Undo restores it and re-syncs.
   const { run: runRemoveFile } = useMutation(
     async (doc: ProjectDoc) => {
       const { data } = await api.delete(`/preconstruction/${bid.id}/plan-files/${doc.id}`);
@@ -227,41 +229,50 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
     },
   );
 
-  const undoReplace = async (removed: ProjectDoc[]) => {
+  // Fix round, review S2 — Undo for a replace is ONE server-side action:
+  // restores the old files AND trashes the replacement files, then one
+  // refresh (never two separate loops of per-file calls).
+  const undoReplace = async (removedIds: string[], uploadedIds: string[]) => {
     try {
-      await Promise.all(removed.map(d => api.post(`/documents/${d.id}/restore`)));
+      const { data } = await api.post(`/preconstruction/${bid.id}/plan-files/replace/undo`, { removedIds, uploadedIds });
       reloadDocs();
-      const { data } = await api.post(`/preconstruction/${bid.id}/job-profile/run`, {});
       settle(data as JobProfileGet);
-      showToast({ title: removed.length === 1 ? 'Plan file restored' : 'Plan set restored' });
+      showToast({ title: removedIds.length === 1 ? 'Plan file restored' : 'Plan set restored' });
     } catch {
       showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore the files from Settings → Trash instead.' });
     }
   };
 
-  // Task 1 — "Replace plan set": upload the new files, then (only on
-  // success) soft-delete the files that were current before this replace.
-  // Undo restores exactly those.
+  // Fix round, review S1/S2 — "Replace plan set" is ONE server-side,
+  // all-or-nothing request: the server stores every new file, rolls back on
+  // any failure (the old set is untouched), then trashes the old files and
+  // refreshes exactly once. This replaces the old client-side loop of one
+  // upload + one DELETE per file, which made one billed job-profile call
+  // per old file and read a mixed old+new set in between.
   const { run: runReplace } = useMutation(
-    async ({ files, oldDocs }: { files: File[]; oldDocs: ProjectDoc[] }) => {
-      for (const f of files) await uploadOne(f, { skipDedupe: true });
-      const removed: ProjectDoc[] = [];
-      for (const d of oldDocs) {
-        try { await api.delete(`/preconstruction/${bid.id}/plan-files/${d.id}`); removed.push(d); }
-        catch { /* the new files are still filed; leaving an old one behind isn't fatal */ }
-      }
-      return removed;
+    async (files: File[]) => {
+      const fd = new FormData();
+      for (const f of files) fd.append('files', f);
+      const { data } = await api.post(`/preconstruction/${bid.id}/plan-files/replace`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      return data as JobProfileGet & { uploaded: Array<{ id: string; name: string }>; removed: Array<{ id: string; name: string }>; failedRemovals: string[] };
     },
     {
-      onSuccess: async () => {
-        reloadDocs();
-        const { data } = await api.get(`/preconstruction/${bid.id}/job-profile`);
-        settle(data as JobProfileGet);
+      onSuccess: (result) => { reloadDocs(); settle(result); },
+      // Review S2 — removal failures are surfaced, never silently dropped.
+      successToast: (result) => {
+        const { removed, failedRemovals } = result;
+        const sub = [
+          removed.length ? `${removed.length} file${removed.length === 1 ? '' : 's'} moved to Trash` : null,
+          failedRemovals.length ? `could not remove: ${failedRemovals.join(', ')}` : null,
+        ].filter(Boolean).join(' — ');
+        return {
+          title: 'Plan set replaced', sub: sub || undefined, variant: failedRemovals.length ? 'error' : 'success',
+          ...(removed.length ? { action: { label: 'Undo', onClick: () => undoReplace(removed.map(r => r.id), result.uploaded.map(u => u.id)) } } : {}),
+        };
       },
-      successToast: (removed) => removed.length ? {
-        title: 'Plan set replaced', sub: `${removed.length} file${removed.length === 1 ? '' : 's'} moved to Trash`,
-        action: { label: 'Undo', onClick: () => undoReplace(removed) },
-      } : { title: 'Plan set replaced' },
+      // Review S1/S2 — a partial-upload failure names the file and leaves
+      // the old set untouched (the server already rolled back what did
+      // upload); the default error toast surfaces that message as-is.
       errorTitle: 'Could not replace the plan set',
     },
   );
@@ -298,7 +309,7 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
       ),
       confirmLabel: 'Replace',
     }))) return;
-    runReplace({ files: arr, oldDocs });
+    runReplace(arr);
   };
 
   const { run: runSuggestion } = useMutation(
@@ -466,7 +477,7 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
           </div>
         )}
 
-        {summary && (
+        {summary && planDocs.length > 0 && (
           <div style={{ fontSize: 12.5, color: 'var(--text3)', fontWeight: 600 }} data-testid="sheet-summary-line">
             {summary.status === 'running' && !summary.total
               ? 'Sheet check running…'

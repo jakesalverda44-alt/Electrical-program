@@ -45,8 +45,10 @@ export function friendlyAnthropicError(err: unknown): string {
   const status = typeof e.status === 'number' ? e.status : undefined;
   const type = errorType(e);
   // Every scrap of text an Anthropic error might carry, just for the
-  // substring check below — never surfaced verbatim.
-  const text = `${errorBodyText(e)} ${e.message ?? ''}`;
+  // substring check below — never surfaced verbatim. Includes a plain
+  // string `err` too (sanitizeStoredError passes one): `e` is `{}` in that
+  // case, so `e.message` alone would miss it.
+  const text = `${errorBodyText(e)} ${e.message ?? ''} ${typeof err === 'string' ? err : ''}`;
 
   if (/credit balance is too low/i.test(text)) return CREDIT_BALANCE_MESSAGE;
 
@@ -84,4 +86,31 @@ export function friendlyAnthropicError(err: unknown): string {
   const looksRaw = /^\s*\{|"type"\s*:\s*"error"/.test(msg);
   if (msg && !looksRaw && msg.length <= 300) return msg;
   return "Couldn't reach Anthropic to read the plans — wait a moment, " + TRY_AGAIN;
+}
+
+/** N2 (review eb39943) — a row written before this mapping existed (or
+ *  before a bug in it was fixed) can still hold a raw Anthropic JSON body in
+ *  bid_job_profile.error / bid_sheet_check.error. Every READ of either
+ *  column runs the stored text through this, so an old row is never shown
+ *  raw just because the mapping that would have caught it wasn't there yet
+ *  when it was written. Idempotent: an already-friendly message (including
+ *  one this function itself already produced) passes through unchanged.
+ *
+ *  The SDK's own `APIError.message` is always `"${status} ${json}"` (or
+ *  just the json/status alone) — this recovers that structure and runs it
+ *  through the SAME mapping `friendlyAnthropicError` uses live, so an old
+ *  row gets the SPECIFIC message (credit balance, rate limit, overloaded,
+ *  …), not just a generic one, whenever the raw text is still parseable. */
+export function sanitizeStoredError(raw: string | null | undefined): string | null {
+  if (!raw) return raw ?? null;
+  const looksRaw = /^\s*\{|"type"\s*:\s*"error"|^\d{3}\s*\{/.test(raw);
+  if (!looksRaw) return raw;
+  const m = /^(\d{3})?\s*(\{[\s\S]*\})\s*$/.exec(raw.trim());
+  if (m) {
+    try {
+      const parsed = JSON.parse(m[2]);
+      return friendlyAnthropicError({ status: m[1] ? Number(m[1]) : undefined, error: parsed });
+    } catch { /* not actually parseable JSON — fall through to the generic message below */ }
+  }
+  return friendlyAnthropicError(raw); // still catches "credit balance is too low" by substring, else generic
 }

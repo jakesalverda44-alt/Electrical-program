@@ -141,7 +141,7 @@ export async function storeDocument(input: StoreDocumentInput) {
       `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size,
               file_type, storage_url, uploaded_by, created_at, gate_passed, generated, page_count
          FROM documents
-        WHERE linked_id=$1 AND category='plans' AND deleted_at IS NULL AND content_sha256=$2
+        WHERE linked_id=$1 AND category='plans' AND deleted_at IS NULL AND generated = false AND content_sha256=$2
         ORDER BY created_at DESC LIMIT 1`,
       [linkedId, contentSha256]
     );

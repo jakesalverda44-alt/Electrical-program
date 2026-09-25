@@ -4,7 +4,7 @@
 // against friendlyAnthropicError(); jobProfileErrorMapping.test.ts covers it
 // wired into the real error-storing paths.
 import { describe, it, expect } from 'vitest';
-import { friendlyAnthropicError, CREDIT_BALANCE_MESSAGE } from '../ai/friendlyError';
+import { friendlyAnthropicError, sanitizeStoredError, CREDIT_BALANCE_MESSAGE } from '../ai/friendlyError';
 
 /** Shaped like a real `Anthropic.APIError` thrown by the SDK. */
 function apiError(status: number, type: string, message: string) {
@@ -85,5 +85,34 @@ describe('friendlyAnthropicError', () => {
     expect(() => friendlyAnthropicError('just a string')).not.toThrow();
     expect(() => friendlyAnthropicError(undefined)).not.toThrow();
     expect(() => friendlyAnthropicError(null)).not.toThrow();
+  });
+});
+
+describe('sanitizeStoredError — N2 (review eb39943): a stored raw JSON error is mapped on read', () => {
+  it('recovers the SPECIFIC mapping from a stored "${status} ${json}" string (the SDK\'s own APIError.message shape)', () => {
+    const raw = '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}';
+    expect(sanitizeStoredError(raw)).toMatch(/API key is missing or invalid/);
+    expect(sanitizeStoredError(raw)).not.toMatch(/\{|"type"|invalid x-api-key/);
+  });
+
+  it('recovers the overloaded mapping from a bare JSON body with no status prefix', () => {
+    const raw = '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
+    expect(sanitizeStoredError(raw)).toMatch(/temporarily overloaded/i);
+  });
+
+  it('still catches "credit balance is too low" by substring even when the embedded body fails to parse as JSON', () => {
+    const raw = '400 {not valid json but still says credit balance is too low}';
+    expect(sanitizeStoredError(raw)).toBe(CREDIT_BALANCE_MESSAGE);
+  });
+
+  it('leaves an already-friendly message unchanged (idempotent)', () => {
+    expect(sanitizeStoredError(CREDIT_BALANCE_MESSAGE)).toBe(CREDIT_BALANCE_MESSAGE);
+    expect(sanitizeStoredError('The plans took too long to read — read them again.')).toBe('The plans took too long to read — read them again.');
+  });
+
+  it('passes null/empty through unchanged', () => {
+    expect(sanitizeStoredError(null)).toBeNull();
+    expect(sanitizeStoredError(undefined)).toBeNull();
+    expect(sanitizeStoredError('')).toBe('');
   });
 });

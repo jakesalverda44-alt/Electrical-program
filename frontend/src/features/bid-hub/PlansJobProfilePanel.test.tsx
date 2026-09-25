@@ -338,10 +338,10 @@ describe('PlansJobProfilePanel — remove / replace / dedupe (Task 1)', () => {
     expect(del).not.toHaveBeenCalled();
   });
 
-  it('Undo restores the removed file and re-syncs the job profile', async () => {
+  it('Undo restores the removed file through the scoped restore route, which refreshes in the same round trip (review S4)', async () => {
     mockDefaultApi();
     del.mockResolvedValue({ data: { status: 'complete', profile: {}, suggestions: {} } });
-    post.mockResolvedValue({ data: {} });
+    post.mockResolvedValue({ data: { status: 'complete', profile: {}, suggestions: {} } });
     render(
       <ConfirmProvider>
         <PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>
@@ -356,17 +356,20 @@ describe('PlansJobProfilePanel — remove / replace / dedupe (Task 1)', () => {
     const call = toastSpy.mock.calls.find(c => c[0]?.title === 'Plan file removed');
     expect(call).toBeTruthy();
     await call![0].action.onClick();
-    await waitFor(() => expect(post).toHaveBeenCalledWith(`/documents/${PLAN_DOC.id}/restore`));
-    await waitFor(() => expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/job-profile/run`, {}));
+    // ONE round trip: the scoped restore route itself refreshes server-side —
+    // no separate manual job-profile/run call from the client.
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/plan-files/${PLAN_DOC.id}/restore`));
+    expect(post).not.toHaveBeenCalledWith(`/documents/${PLAN_DOC.id}/restore`);
   });
 
-  it('"Replace plan set" confirms with the current files listed, uploads the new one, then removes the old ones', async () => {
+  it('"Replace plan set" confirms with the current files listed, then sends ONE atomic request (review S1/S2)', async () => {
     mockDefaultApi();
     post.mockImplementation((url: string) => {
-      if (url === '/documents') return Promise.resolve({ data: { id: 'doc-new', duplicate: false } });
+      if (url === `/preconstruction/${bid.id}/plan-files/replace`) {
+        return Promise.resolve({ data: { status: 'complete', profile: {}, suggestions: {}, uploaded: [{ id: 'doc-new', name: 'replacement.pdf' }], removed: [{ id: PLAN_DOC.id, name: 'plans.pdf' }], failedRemovals: [] } });
+      }
       return Promise.resolve({ data: {} });
     });
-    del.mockResolvedValue({ data: { ok: true } });
     render(
       <ConfirmProvider>
         <PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>
@@ -380,11 +383,36 @@ describe('PlansJobProfilePanel — remove / replace / dedupe (Task 1)', () => {
     expect(screen.getByText('plans.pdf', { selector: 'li' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Replace' }));
-    await waitFor(() => expect(post).toHaveBeenCalledWith('/documents', expect.anything(), expect.anything()));
-    const fd = post.mock.calls.find(c => c[0] === '/documents')![1] as FormData;
-    expect(fd.get('skip_dedupe')).toBe('true');
-    await waitFor(() => expect(del).toHaveBeenCalledWith(`/preconstruction/${bid.id}/plan-files/${PLAN_DOC.id}`));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/plan-files/replace`, expect.anything(), expect.anything()));
+    const fd = post.mock.calls.find(c => c[0] === `/preconstruction/${bid.id}/plan-files/replace`)![1] as FormData;
+    expect(fd.getAll('files')).toHaveLength(1);
+    // No separate per-file DELETE or /documents upload — one request did it all.
+    expect(del).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalledWith('/documents', expect.anything(), expect.anything());
     await waitFor(() => expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Plan set replaced' })));
+  });
+
+  it('"Replace plan set" surfaces a partial-upload failure by name, never silently (review S2)', async () => {
+    mockDefaultApi();
+    post.mockImplementation((url: string) => {
+      if (url === `/preconstruction/${bid.id}/plan-files/replace`) {
+        const err = new Error('upload failed') as Error & { response: { status: number; data: { error: string } } };
+        err.response = { status: 400, data: { error: 'Could not upload "bad.pdf" — the plan set was not changed.' } };
+        return Promise.reject(err);
+      }
+      return Promise.resolve({ data: {} });
+    });
+    render(
+      <ConfirmProvider>
+        <PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>
+      </ConfirmProvider>
+    );
+    await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
+    const file = new File(['%PDF-1.4'], 'bad.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByTestId('replace-plan-set-input'), { target: { files: [file] } });
+    await screen.findByText(/Replace the current plan set/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Replace' }));
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error', sub: 'Could not upload "bad.pdf" — the plan set was not changed.' })));
   });
 
   it('dedupe: a re-uploaded file the server recognizes as already-uploaded shows a toast instead of a new row', async () => {
