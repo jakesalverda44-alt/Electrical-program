@@ -472,6 +472,21 @@ export function checkEngineer(f: ModelField, sources: ProfileSource[]): Checked<
   if (!looksLikeNameOrFirm(f.value)) return { ok: false, hard: true, notes: [`"${f.value}" does not look like a name or firm`] };
   if (g.src!.why !== 'electrical') return { ok: false, hard: true, notes: ['the engineer of record is read from the electrical title block only'] };
   if (planRoomStamp(f.value, f.quote)) return { ok: false, hard: true, notes: ['a plan-room / bidding-service stamp, not the engineer'] };
+  // Round 3 R3-S1 — the EOR is the ELECTRICAL engineer: a name whose own
+  // line or nearest label names another discipline is rejected, P.E. or not.
+  if (OTHER_ENGINEER_RE.test(segmentWith(f.quote, f.value)) && !/ELECTRICAL/i.test(segmentWith(f.quote, f.value))) {
+    return { ok: false, hard: true, notes: ['another discipline\'s engineer, not the electrical engineer of record'] };
+  }
+  for (const x of sources) {
+    for (const o of occurrences(x.text, f.value)) {
+      const own = ownSegment(o);
+      const heading = columnNeighbors(o, 3, 0).above.find(w => PARTY_HEADING_RE.test(w));
+      const context = [own, heading ?? ''].join(' | ');
+      if (OTHER_ENGINEER_RE.test(context) && !/ELECTRICAL/i.test(own)) {
+        return { ok: false, hard: true, notes: [`printed as another discipline's engineer on ${x.sheet}`] };
+      }
+    }
+  }
   // R2-B1 — only next to an engineer label (ENGINEER / ENGINEER OF RECORD /
   // ELECTRICAL ENGINEER), or with P.E. on the name itself. A name on every
   // title block with no label is boilerplate: a suggestion at most.
@@ -488,6 +503,9 @@ export function checkEngineer(f: ModelField, sources: ProfileSource[]): Checked<
   }
   return { ok: true, value: f.value.trim(), cap: 'high', notes: g.notes };
 }
+
+/** Round 3 R3-S1 — disciplines whose engineer is never the electrical EOR. */
+const OTHER_ENGINEER_RE = /STRUCTURAL|MECHANICAL|PLUMBING|FIRE\s+PROTECTION|SPRINKLER|\bCIVIL\b|LANDSCAPE|SURVEY|GEOTECH|ARCHITECT|\bM\s*[\/&]\s*P\b|\bMEP\b/i;
 
 const OTHER_DISCIPLINE_RE = /LANDSCAPE|\bCIVIL\b|STRUCTURAL|SURVEY|\bMEP\b|MECHANICAL|PLUMBING|IRRIGATION|GEOTECH|INTERIOR\s+DESIGN/i;
 
@@ -592,8 +610,11 @@ function titleCase(s: string): string {
 
 export interface ModelAddress { street: string; city: string; state: string; zip: string; sheet: string; quote: string; confidence: ModelConfidence }
 
-const STRONG_OFFICE_RE = /\bOWNER\b(?!\s+REVIEW)|DEVELOPER|\b\d+(ST|ND|RD|TH)\s+FLOOR\b|\bFLOOR\b|MAILING|CORPORATE|HEADQUARTERS|\bHQ\b|\bATTN\b/i;
-const ADDRESS_LABEL_RE = /PROJECT\s+ADDRESS|SITE\s+ADDRESS|PROJECT\s+LOCATION|SITE\s+LOCATION|\bSITE\b|\bLOCATION\b|PLANS\s+FOR|PROJECT\s*:|\bSTORE\s*(#|NO\.?|NUMBER)/i;
+const STRONG_OFFICE_RE = /\bOWNER\b(?!\s+REVIEW)|DEVELOPER|\bCLIENT\b|\b\d+(ST|ND|RD|TH)\s+FLOOR\b|\bFLOOR\b|MAILING|CORPORATE|HEADQUARTERS|\bHQ\b|\bOFFICES?\b|\bATTN\b/i;
+/** Round 3 R3-S2 — only an explicit site / project address label; a bare
+ *  SITE or LOCATION heading is not enough. */
+const ADDRESS_LABEL_RE = /PROJECT\s+ADDRESS|SITE\s+ADDRESS|PROJECT\s+LOCATION|JOB\s*SITE|\bSITE\s*:/i;
+const OWNER_BLOCK_RE = /\bOWNER\b(?!\s+REVIEW)|\bCLIENT\b|DEVELOPER/i;
 
 export function checkAddress(a: ModelAddress, sources: ProfileSource[]): Checked<{ loc: string; city: string; state: string }> {
   const f: ModelField = { value: a.street, sheet: a.sheet, quote: a.quote, confidence: a.confidence };
@@ -622,8 +643,12 @@ export function checkAddress(a: ModelAddress, sources: ProfileSource[]): Checked
   // R2-B1 — anchored: under a project / site label or the project name
   // (STORE) line on a cover or title block. Otherwise a suggestion.
   const anchored = occ.some(o => {
-    const n = columnNeighbors(o, 2, 0);
-    return ADDRESS_LABEL_RE.test(ownSegment(o).replace(a.street, '')) || n.above.some(w => ADDRESS_LABEL_RE.test(w));
+    if (ADDRESS_LABEL_RE.test(ownSegment(o).replace(a.street, ''))) return true;
+    const n = columnNeighbors(o, 5, 0);
+    if (n.above.slice(0, 2).some(w => ADDRESS_LABEL_RE.test(w))) return true;
+    // Round 3 R3-S2 — or the line DIRECTLY under the project (STORE) line,
+    // when that line is not itself in an owner / client block.
+    return !!n.above[0] && PROJECT_LINE_RE.test(n.above[0]) && !n.above.slice(1).some(w => OWNER_BLOCK_RE.test(w));
   });
   const notes = [...g.notes];
   let cap: Confidence = 'high';

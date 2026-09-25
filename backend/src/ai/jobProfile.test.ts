@@ -570,3 +570,52 @@ describe('N-R2-3 — an older upload\'s cover is not read beside the new one', (
     expect(selectProfilePages(inv, () => 'x'.repeat(100)).filter(p => p.why === 'cover').map(p => p.sheetNo).sort()).toEqual(['C0.1', 'T-1']);
   });
 });
+
+describe('round 3 — R3-S1: the EOR is the electrical engineer', () => {
+  const tbs = (line: string) => ['E-1', 'E-2', 'E-3'].map(sh => src(sh, 'electrical', `${line}          AUTOZONE STORE NO. 1234\n${sh}    09/22/2025`));
+  it('"STRUCTURAL: JOHN SMITH P.E." is rejected even with P.E. on the name', () => {
+    const p = profileOf(tbs('STRUCTURAL: JOHN SMITH P.E.'), reply({ engineer: { value: 'JOHN SMITH P.E.', sheet: 'E-1', quote: 'STRUCTURAL: JOHN SMITH P.E.', confidence: 'high' } }));
+    expect(p.fields.engineer).toBeUndefined();
+    const cut = profileOf(tbs('STRUCTURAL: JOHN SMITH P.E.'), reply({ engineer: { value: 'JOHN SMITH P.E.', sheet: 'E-1', quote: 'JOHN SMITH P.E.', confidence: 'high' } }));
+    expect(cut.fields.engineer).toBeUndefined();
+  });
+  it('"MECHANICAL ENGINEER: ACME MEP, INC." is rejected; so is a plumbing / fire-protection engineer under a heading', () => {
+    const p = profileOf(tbs('MECHANICAL ENGINEER: ACME MEP, INC.'), reply({ engineer: { value: 'ACME MEP, INC.', sheet: 'E-1', quote: 'MECHANICAL ENGINEER: ACME MEP, INC.', confidence: 'high' } }));
+    expect(p.fields.engineer).toBeUndefined();
+    const stacked = ['E-1', 'E-2'].map(sh => src(sh, 'electrical', `FIRE PROTECTION ENGINEER\nJANE DOE, P.E.\n${sh}`));
+    expect(profileOf(stacked, reply({ engineer: { value: 'JANE DOE, P.E.', sheet: 'E-1', quote: 'JANE DOE, P.E.', confidence: 'high' } })).fields.engineer).toBeUndefined();
+  });
+  it('the electrical engineer still fills', () => {
+    const ok = ['E-1', 'E-2'].map(sh => src(sh, 'electrical', `ELECTRICAL ENGINEER: JANE DOE, P.E.\n${sh}`));
+    expect(profileOf(ok, reply({ engineer: { value: 'JANE DOE, P.E.', sheet: 'E-1', quote: 'ELECTRICAL ENGINEER: JANE DOE, P.E.', confidence: 'high' } })).fields.engineer)
+      .toMatchObject({ validated: true, confidence: 'high' });
+  });
+});
+
+describe('round 3 — R3-S2: the address label must be the site / project address', () => {
+  const addr = (sheet: string, why: ProfileSource['why'], text: string, street: string, city: string, st: string, zip: string, quote: string) =>
+    profileOf([src(sheet, why, text)], reply({ site_address: { street, city, state: st, zip, sheet, quote, confidence: 'high' } }));
+  const fillable = (p: JobProfile) => !!p.fields.loc && p.fields.loc.validated && p.fields.loc.confidence === 'high';
+
+  it('a consultant office under a bare LOCATION heading is not filled', () => {
+    const p = addr('T-1', 'cover', 'LOCATION\n500 WEST FULTON STREET, SANFORD, FL 32771', '500 WEST FULTON STREET', 'SANFORD', 'FL', '32771', '500 WEST FULTON STREET, SANFORD, FL 32771');
+    expect(fillable(p)).toBe(false);
+  });
+
+  it('a client headquarters under a STORE line inside a client / owner block is not filled', () => {
+    for (const heading of ['CLIENT', 'OWNER']) {
+      const text = `${heading}\nACME STORE #123\n100 MAIN ST, DALLAS, TX 75201`;
+      const p = addr('T-1', 'cover', text, '100 MAIN ST', 'DALLAS', 'TX', '75201', '100 MAIN ST, DALLAS, TX 75201');
+      expect(fillable(p), heading).toBe(false);
+    }
+    const hq = addr('T-1', 'cover', 'ACME STORE #123\nCORPORATE OFFICE\n100 MAIN ST, DALLAS, TX 75201', '100 MAIN ST', 'DALLAS', 'TX', '75201', '100 MAIN ST, DALLAS, TX 75201');
+    expect(fillable(hq)).toBe(false);
+  });
+
+  it('PROJECT ADDRESS / SITE ADDRESS / JOBSITE, or the line right under the store line, still fill', () => {
+    for (const label of ['PROJECT ADDRESS:', 'SITE ADDRESS', 'JOBSITE:', 'ACME STORE #123']) {
+      const p = addr('T-1', 'cover', `${label}\n4410 GULF BLVD, TAMPA, FL 33606`, '4410 GULF BLVD', 'TAMPA', 'FL', '33606', '4410 GULF BLVD, TAMPA, FL 33606');
+      expect(fillable(p), label).toBe(true);
+    }
+  });
+});
