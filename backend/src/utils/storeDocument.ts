@@ -11,6 +11,7 @@ import { logger } from './logger';
 import { uploadFile, ensureSubfolder } from '../services/googleDrive';
 import { uploadToCloud, isCloudStorageConfigured } from './cloudStorage';
 import { mimeTypeForFilename } from './upload';
+import { openPdfDocument } from '../estimating/pdfjsLoader';
 
 export const CATEGORY_TO_FOLDER: Record<string, string> = {
   plans:          'drive_plans_folder_id',
@@ -125,6 +126,21 @@ export async function storeDocument(input: StoreDocumentInput) {
 
   const driveFolderId = !cloudMuted && linkedId ? await resolveDriveFolder(linkedId, div, category) : null;
 
+  // Bid Overview plans upload + job profile — the Documents step's read-only
+  // plan list shows a page count per file (no second PDF parse there). Best
+  // effort: a corrupt/encrypted PDF just leaves this null, never blocks the
+  // upload itself.
+  let pageCount: number | null = null;
+  if (safeMimeType === 'application/pdf') {
+    try {
+      const doc = await openPdfDocument(file.buffer);
+      pageCount = doc.numPages;
+      await doc.destroy();
+    } catch (err) {
+      logger.warn({ err }, '[storeDocument] could not read PDF page count (non-fatal)');
+    }
+  }
+
   let storageUrl: string | null = null;
   if (!cloudMuted && isCloudStorageConfigured()) {
     try {
@@ -165,13 +181,13 @@ export async function storeDocument(input: StoreDocumentInput) {
   const { rows } = await pool.query(
     `INSERT INTO documents (linked_id, linked_name, div, name, display_name, category,
                             file_size, file_type, uploaded_by, storage_url, file_data, gate_passed, takeoff_run_id, compose_inputs_hash,
-                            generated, content_sha256)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+                            generated, content_sha256, page_count)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
      RETURNING id, linked_id, linked_name, div, name, display_name, category, file_size,
-               file_type, storage_url, uploaded_by, created_at, gate_passed, generated`,
+               file_type, storage_url, uploaded_by, created_at, gate_passed, generated, page_count`,
     [linkedId || null, linkedName || null, div, file.originalname, displayName, category,
      file.size, safeMimeType, uploadedBy, storageUrl || null, fileData, !!input.gatePassed, input.takeoffRunId ?? null, input.composeInputsHash ?? null,
-     generated, contentSha256]
+     generated, contentSha256, pageCount]
   );
   return rows[0];
 }

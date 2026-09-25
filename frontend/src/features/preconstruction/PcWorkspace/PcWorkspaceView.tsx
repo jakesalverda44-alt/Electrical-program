@@ -83,9 +83,13 @@ interface Props {
    *  navigates to the hub's Files tab — the place to view/download every project
    *  file, not just the PDFs/images this panel offers to the AI pipeline. */
   onGoFiles?: () => void;
+  /** Coordinator override (2026-09-24) — the Documents tab's plan list links
+   *  back to the hub's Overview tab, where uploading/replacing plans lives
+   *  now ("Plans & Job Profile" panel). */
+  onGoOverview?: () => void;
 }
 
-export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings, embedded, onGoFiles }: Props) {
+export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings, embedded, onGoFiles, onGoOverview }: Props) {
   const confirm = useConfirm();
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
@@ -95,7 +99,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [aiResults, setAiResults] = useState<Record<string, unknown> | null>(null);
   const [analysisTab, setAnalysisTab] = useState<'agent1'|'agent2'|'agent3'|'raw'>('agent1');
   const [copied, setCopied] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState(false);
   const [expandedCostRow, setExpandedCostRow] = useState<number | null>(null);
   const [costTypeFilter, setCostTypeFilter] = useState<string>('all');
   const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
@@ -1016,31 +1019,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     message => showToast({ variant: 'error', title: 'Preview failed', sub: message }),
   );
 
-  const removeFile = (id: string, name: string) => {
-    let removed = false;
-    fileObjectsRef.current = fileObjectsRef.current.filter(f => {
-      if (!removed && f.name === name) {
-        removed = true;
-        return false;
-      }
-      return true;
-    });
-    set({ files: ws.files.filter(f => f.id !== id) });
-  };
-
-  const clearFiles = () => {
-    fileObjectsRef.current = [];
-    set({ files: [] });
-  };
-
+  // Coordinator override (2026-09-24) — the Documents tab's own dropzone
+  // (and the removeFile/clearFiles/handleDrop it drove) is gone; plans are
+  // uploaded on the Overview tab now. handleFileUpload stays: it's still the
+  // hidden input's onChange, which SheetCheckPanel's per-sheet "Upload" (a
+  // missing referenced sheet) still opens via fileInputRef/onUploadMissing.
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     addFiles(Array.from(e.target.files ?? []));
     if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault(); setDragOver(false);
-    addFiles(Array.from(e.dataTransfer.files));
   };
 
   // Import a finished bid doc (.docx/.pdf) + its takeoff spreadsheet (.xlsx), uploaded
@@ -1160,10 +1146,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const onImportRfis = useStableFn(importRfisFromAnalysis);
   const onEditRfi = useStableFn(editRfi);
   const onSubmitOpenRfis = useStableFn(() => { void submitOpenRfis(); });
-  const onRemoveFile = useStableFn(removeFile);
-  const onClearFiles = useStableFn(clearFiles);
   const onFileUpload = useStableFn(handleFileUpload);
-  const onDrop = useStableFn(handleDrop);
   const onViewProjectDoc = useStableFn(viewProjectDoc);
   const onRunAgent4 = useStableFn(() => { void runAgent4Proposal(); });
   const onDownloadDocx = useStableFn(downloadDocx);
@@ -1396,7 +1379,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     && Math.abs(propPriceNumeric - estimatingBid.recap.totals.grandTotal) > 0.005;
 
   const doneByStep = deriveStepStatus({
-    hasFiles: ws.files.length > 0,
+    // Coordinator override (2026-09-24) — plans now upload on Overview, not
+    // through this workspace's own dropzone, so ws.files (a leftover upload
+    // never persisted here) is no longer the only signal that files exist.
+    hasFiles: ws.files.length > 0 || projectDocs.length > 0,
     hasTakeoffOutput: !!aiResults?.agent1_output,
     takeoffConfirmed: !!ws.confirmedService?.confirmed,
     hasSavedPricingLines: !estimatingBid.proposed && estimatingBid.lines.length > 0,
@@ -1420,20 +1406,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         return (
           <>
             <FilesTab
-              ws={ws}
               fileInputRef={fileInputRef}
-              fileObjectsRef={fileObjectsRef}
-              dragOver={dragOver}
-              setDragOver={setDragOver}
+              handleFileUpload={onFileUpload}
               projectDocs={projectDocs}
               selectedDocIds={selectedDocIds}
               setSelectedDocIds={setSelectedDocIds}
-              removeFile={onRemoveFile}
-              clearFiles={onClearFiles}
-              handleFileUpload={onFileUpload}
-              handleDrop={onDrop}
               viewProjectDoc={onViewProjectDoc}
               onGoFiles={onGoFiles}
+              onGoOverview={onGoOverview}
             />
             <SheetCheckPanel
               data={sheetCheck.data}

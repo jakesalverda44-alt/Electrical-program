@@ -50,7 +50,7 @@ const bid: Bid = {
   sheets: 0, contact: '', stage: 'due', salesperson_name: '',
 };
 
-function renderFilesTab() {
+function renderFilesTab(extra?: { onGoOverview?: () => void }) {
   const ws = { ...blankWorkspace('b1', 'Test Job', 0), activeTab: 'files' as const };
   render(
     <PcWorkspaceView
@@ -62,6 +62,7 @@ function renderFilesTab() {
       onBidUpdated={() => {}}
       showToast={() => {}}
       embedded
+      onGoOverview={extra?.onGoOverview}
     />,
   );
 }
@@ -106,5 +107,38 @@ describe('PcWorkspace Documents step — fix round 2 / S3: S4 render check (Impo
     await waitFor(() => expect(screen.getByText('takeoff.xlsx')).toBeTruthy());
     expect(screen.getByTestId('documents-workspace-notes')).toBeTruthy();
     expect(screen.getByText('Import Finished Bid')).toBeTruthy();
+  });
+});
+
+describe('PcWorkspace Documents step — coordinator override (2026-09-24): no plan dropzone, link to Overview', () => {
+  it('has no upload dropzone and no "Clear All" — the plan list is read-only', async () => {
+    mockApi();
+    renderFilesTab();
+    await waitFor(() => expect(screen.getByText('takeoff.xlsx')).toBeTruthy());
+
+    expect(screen.queryByText(/drop plan sheets here/i)).toBeNull();
+    expect(screen.queryByText(/clear all/i)).toBeNull();
+    expect(screen.queryByText(/uploaded plan files/i)).toBeNull();
+  });
+
+  it('shows a page count next to a plan file and a link that navigates to Overview', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/documents') {
+        return Promise.resolve({
+          data: [{ id: 'doc-2', name: 'plans.pdf', display_name: 'plans.pdf', category: 'plans', file_type: 'application/pdf', page_count: 55 }],
+        });
+      }
+      return Promise.resolve({ data: null });
+    });
+    post.mockResolvedValue({ data: {} });
+
+    const onGoOverview = vi.fn();
+    renderFilesTab({ onGoOverview });
+
+    await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
+    expect(screen.getByText('55 pg')).toBeTruthy();
+
+    fireEvent.click(screen.getByText(/add or replace plans on the bid overview/i));
+    expect(onGoOverview).toHaveBeenCalledTimes(1);
   });
 });

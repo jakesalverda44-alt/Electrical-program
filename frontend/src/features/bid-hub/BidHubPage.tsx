@@ -158,6 +158,7 @@ export default function BidHubPage({ bidId, bids, setBids, wonJobs, setWonJobs, 
               userRole={user.role}
               settings={settings}
               onGoFiles={() => setTab('files')}
+              onGoOverview={() => setTab('overview')}
             />
           </div>
         ) : tab === 'estimating' && (

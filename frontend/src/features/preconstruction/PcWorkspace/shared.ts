@@ -26,6 +26,9 @@ export interface ProjectDoc {
   generated?: boolean;
   /** Re-run reset — a later analysis run superseded this generated file. */
   superseded_at?: string | null;
+  /** Bid Overview plans upload + job profile — a PDF's page count, computed
+   *  once at upload time. Null for a non-PDF or a pre-existing row. */
+  page_count?: number | null;
 }
 
 /** A CRM-generated file (never an analysis input; the server refuses it
