@@ -322,3 +322,74 @@ All of these were reproduced on the real Kissimmee sources, or with small synthe
 - **N-R2-2.** The `Tommy's` alias maps any "TOMMY'S …" in a project context to Tommy's Express / car wash. Prefer `Tommy's Express` / `Tommy's Car Wash` only.
 - **N-R2-3.** `currentSetPages` removes duplicates by sheet number only. An older upload whose cover has a different id (for example `CS` vs `T-1`) is still read alongside the new cover (up to 3 covers).
 - **N-R2-4.** The report's "real Kissimmee output" table comes from a mocked model reply. Only the text path and validators are real. The report says so, but the headline should too.
+
+---
+
+## Round 3 — fix range `44610fb..2016d86` (migration 144)
+
+**Verdict: NOT READY. One regression blocks it.** Every Round 2 repro is fixed. The new "a newer file replaces an older one" rule (R2-S3) now drops sheets it shouldn't.
+
+### How this was checked
+- **Real text:** in a temporary worktree at `2016d86` (since removed), I read the real Kissimmee PDF live and ran it through the production page selection, the validators and the card rules. I fed in my Round 2 hostile high-confidence replies plus new bypass attempts.
+- **Replacement rule:** I tested `markReplacedSheets` directly.
+- **Route test:** a scratch DB test (the author's mocks) against `electrical_crm_test` covered the double claim, dedupe, a stale check, roles and PATCH.
+- **Suites:** 100 targeted backend tests and 232 frontend tests pass, and `tsc` is clean for both. I did not re-run the full suite.
+
+### Round 2 repros, re-run (all fixed)
+- **R2-B1, real Kissimmee sources:**
+  - 123 South Front Street → rejected. The city, state and ZIP must be in the quote.
+  - The Orlando swap → rejected.
+  - Dodge Data as engineer or owner → rejected as a plan-room stamp.
+  - CPH as owner → suggestion (medium). CPH as architect → rejected.
+  - AUTOZONE, INC. as architect → suggestion (medium), because A-0 names a different designer of record.
+  - Baseline still fills the correct brand, project type, store #, location, SF, plan date, owner and engineer.
+- **R2-B2:** a check left `running` for 3 days is re-run and the profile reaches `complete`. A profile left `running` for an hour reads back as `error` on GET. "Read the plans again" is always offered.
+- **R2-S1:** two concurrent runs → 1 model call. Two concurrent resumes → 1 call. Two unforced runs on the same set → 0 new calls (dedupe).
+- **R2-S2:** `read_only`, technician and accounting get 403. A project manager gets 200. A salesperson who doesn't own the bid gets 403 through the existing ownership check.
+- **R2-S4:** a revision row with the label on the right, and a "No. / Date" table, are both rejected. A "MARK / DATE" table header stays low (suggestion only).
+- **R2-S5:** Wawa plus "SHARED DRIVE WITH AUTOZONE" → rejected. "PYLON SIGN RELOCATED FOR AUTOZONE" → low suggestion.
+- **R2-S7:** 2025-02-31, 2025-2-3, 201 characters and `build_type: "shell"` all return 400. An empty string or blanks clears the field (200).
+
+### Blocker
+
+**R3-B1. The replacement rule matches only on sheet number, and upload time always differs, so unrelated files replace each other.**
+- Where: `services/sheetCheck.ts markReplacedSheets`, plus the Estimating auto-untick in `PcWorkspaceView`.
+- Reproduced:
+  - `Building A.pdf` and `Building B.pdf` dropped together (uploads are sequential, 400 ms apart), both with E-1 and E-2: **every page of Building A is excluded** ("replaced by Building B.pdf"). Every numbered page is replaced, so Estimating unticks Building A entirely. One building's takeoff is silently lost; the only signal is an amber notice.
+  - `Site Rev 3.pdf` against `Building Rev 1.pdf`, two different packages that both have an E-1: the building's E-1 is excluded because 3 > 1.
+  - A multi-building storage or car-wash job, where every building shares prototype sheet numbers, loses all but the last file uploaded.
+- The report says "with no evidence either way both stay". That never happens, because `created_at` differs by milliseconds.
+- Correct cases: an addendum that carries only E-2 replaces only the full set's E-2, and E-1/E-3 stay. A sheet that exists only in the older file is never excluded.
+- Fix:
+  1. Treat upload time as evidence only across **separate upload batches** (for example more than 10 minutes apart, like `COVER_BATCH_MS`).
+  2. Compare revision numbers only when the file names share a stem (`AZ Elec Rev 1` vs `AZ Elec Rev 2`).
+  3. Also require the replaced page's sheet **title** to match the winner's (same `normalizeSheetId` and a similar title).
+  4. Preferably, **propose** the replacement ("Rev 2 looks like it replaces Rev 1 — use only Rev 2?") instead of excluding and unticking automatically. A wrong automatic exclusion costs a building's worth of scope.
+
+### Should-fix (not blocking)
+
+**R3-S1. Engineer label proximity can still be bypassed** (synthetic; the model must misread at high).
+- `STRUCTURAL: JOHN SMITH P.E.` on the E title blocks was **filled** as the engineer of record. A P.E. on the name counts as the anchor, and the discipline check is skipped.
+- `MECHANICAL ENGINEER: ACME MEP, INC.` was **filled**, because the reject list lacks MECHANICAL, PLUMBING and FIRE PROTECTION.
+- Fix: apply the discipline reject to the name's own segment even when it carries P.E., and add those disciplines.
+
+**R3-S2. The address "project / site" label is too broad** (synthetic).
+- `ADDRESS_LABEL_RE` accepts a bare `\bSITE\b` or `\bLOCATION\b` anywhere within 2 non-blank lines above in a 12-column window. A consultant office printed under a "LOCATION" heading was **filled**. A client headquarters printed on the line under a `STORE #` line on a title block was also **filled**.
+- CLIENT isn't in `STRONG_OFFICE_RE` either.
+- Fix: require `SITE ADDRESS`, `PROJECT ADDRESS`, `PROJECT LOCATION` or `SITE:`, or the line **directly** under the STORE / project line. Add CLIENT to the office markers.
+
+**R3-S3 (nit).** A forced re-read clears the page-classification cache and starts a fresh sheet check. With the 10-second model-call limit, a user can re-trigger the Haiku classifier and the reference-vision work every 11 seconds. Consider limiting the forced sheet-check restart too.
+
+### Question 2: is the relaxed address rule (Kissimmee C0.1) safe enough?
+- **Acceptable as a rule; tighten what counts as corroboration.**
+- The C0.1 quote itself has no label. It fills because (a) the quote carries the city, state and ZIP, which must match, and (b) the same street is printed directly under the `AutoZone Store No. 10077` line on A-0 and E-1. That is strong, independent evidence: the project's own title block repeats the site address under the store line. Nothing extra needs to be required beyond that.
+- **Can an owner-office address with a full city, state and ZIP be corroborated?** Yes, but only through the loose labels in R3-S2.
+  - An occurrence within 3 lines of OWNER, DEVELOPER, FLOOR, ATTN or CORPORATE is rejected outright.
+  - But an office under CLIENT, or under a heading that happens to contain SITE or LOCATION, or printed directly beneath a STORE line, is corroborated.
+- With R3-S2's narrowing (explicit site/project address labels, or the line immediately under the STORE line, plus CLIENT as an office marker), the remaining risk is a title block that prints the owner's headquarters as the first line under the store line. I'd accept that residual risk, since the model would also have to pick it at high.
+
+### Question 3: is R2-S6 (partly done) acceptable as a follow-up?
+**Yes.** The harmful part is fixed: the profile no longer claims or overwrites the shared `bid_sheet_check` row, and the author's test confirms Estimating's check row is left untouched. It now reads the full set from the content-hash classification cache. What's left is an architecture tidy-up (Estimating using one full-set check filtered by its selection). It isn't a correctness problem, so a follow-up is fine.
+
+### Migration 144
+Additive and idempotent (`ADD COLUMN IF NOT EXISTS` ×2).
