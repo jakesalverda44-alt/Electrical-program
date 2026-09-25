@@ -310,3 +310,71 @@ The location's own C0.1 quote has no label next to it. It fills because the same
 | Backend `npm test` | 2269 tests: **2261 passed, 4 failed, 4 not run** (210 files). All failures are the known load-sensitive intake / integration tests: `intakeSimilarCache` ×2 and two lead follow-up tests in `integration.test.ts` (30 s timeouts), plus the usual worker crash. This round touched none of those files. |
 | Frontend `npx vitest run` | **1338 / 1338 passed** (130 files). |
 | `tsc --noEmit` | clean / clean |
+
+---
+
+## Fix round 3 (review `ff7a6aa`, "Round 3")
+
+**Range:** `ff7a6aa..HEAD` (6 commits including this report). **Migration:** 145 (`bid_sheet_check.revision_decisions`, `bid_job_profile.forced_at`).
+
+As in round 2, the Kissimmee checks use the real text path and validators with a **mocked** model reply. The Kissimmee result is unchanged from round 2:
+- **Filled:** brand, project type, store #, location, SF, plan date, owner and engineer.
+- **Suggested:** prototype, architect and name.
+
+### R3-B1: a newer plan file is only proposed as a revision, never applied automatically
+- **What was wrong:** the round-2 rule excluded a page whenever a later upload carried the same sheet number. Upload times always differ by milliseconds, so Building A lost to Building B, and a Site package lost its E-1 to a Building package.
+- **What happens now:** `detectPlanRevisions` (in `services/sheetCheck.ts`) only proposes. A proposal needs:
+  1. The same file-name stem, **or** at least 70% of the newer file's sheets matching by number **and** title.
+  2. **And** evidence the file is newer: a higher revision on the same stem, a later date in the file name, or a separate upload batch more than 10 minutes later.
+- **Never proposed:**
+  - Different buildings (BLDG A / BLDG B), phases or packages (SITE vs BUILDING, CANOPY, SHELL …).
+  - A sheet number printed with **different titles**. Both copies are kept, and the file is listed as a duplicate note.
+- **Answering a proposal:**
+  - **Replace:** only this answer excludes the older file's **matching** sheets. Sheets that only the older file has always stay.
+  - **Keep both:** both files stay in the analysis.
+  - Answers are stored per file pair (`bid_sheet_check.revision_decisions`) and audited, through `PUT /preconstruction/:bidId/plan-revisions` (same role gate as reading the plans).
+- **Until every proposal is answered:**
+  - `/analyze` returns **409 "Resolve plan revisions first"**. The check runs before the previous run is reset, and the pipeline refuses too.
+  - Estimating keeps both files ticked, lists the proposal, and blocks Run AI with a link to the Overview.
+  - The Overview panel shows "Rev 2 appears to replace Rev 1 (N matching sheets) — Replace / Keep both", plus the duplicate-sheet notes.
+- **Tests:**
+  - Building A/B, both dropped together and uploaded on different days.
+  - Site Rev 3 vs Building Rev 1.
+  - A multi-building prototype job.
+  - A same-number sheet with a different title.
+  - Rev 1 → Rev 2 proposed, then Replace vs Keep both.
+  - A partial addendum (only E-2 is replaced).
+  - Sheets that only the older file has.
+  - Two files with no evidence of which is newer.
+  - The route: 409, answer, audit and role gate.
+  - The panel and Estimating UI.
+
+### R3-S1: the engineer of record is the electrical engineer
+A name is rejected, even with P.E. on it, if its own line or the nearest heading above it names STRUCTURAL, MECHANICAL, PLUMBING, FIRE PROTECTION / SPRINKLER, CIVIL, LANDSCAPE, SURVEY, GEOTECH, ARCHITECT or an M/P / MEP firm.
+- **Tests:** "STRUCTURAL: JOHN SMITH P.E." (whole quote and quote cut down to the name), "MECHANICAL ENGINEER: ACME MEP, INC.", and a stacked FIRE PROTECTION heading. "ELECTRICAL ENGINEER: …" still fills.
+
+### R3-S2: the address anchor must be a site / project label
+- **Accepted anchors:**
+  - PROJECT ADDRESS, SITE ADDRESS, PROJECT LOCATION, JOBSITE, or SITE:.
+  - The line **directly** under the store / project line, unless that line sits in an owner / client block.
+- **No longer an anchor:** a bare SITE or LOCATION heading.
+- **Office markers:** CLIENT and OFFICE(S) were added (HQ, HEADQUARTERS and CORPORATE were already there).
+- **Tests:**
+  - Not filled: a consultant office under LOCATION, a CLIENT / OWNER-block headquarters under a STORE line, and a CORPORATE OFFICE line.
+  - Still filled: the real labels and the store-line case, and Kissimmee is unchanged.
+
+### R3-S3: forced re-reads
+- A forced re-read no longer clears the page-classification cache. The cache is keyed by file content, so changed files are classified anyway.
+- Forced re-reads are limited to **one per 2 minutes per bid** (429 otherwise), in addition to the 10-second model-call limit, and each one is audited.
+- **Test:** a second forced re-read gets 429, a cache row survives, and there is one audit entry.
+
+### Suites (once, at the end)
+| Suite | Result |
+|---|---|
+| Backend `npm test` | 2284 tests: **2277 passed, 3 failed, 4 not run** (210 files). The failures are the known load flakes: `intakeSimilarCache` ×2 and the `integration` lead-backfill timeout, plus the usual worker crash. |
+| Frontend `npx vitest run` | 1340 tests: **1339 passed, 1 failed**. The failure is the known `SurveyMarkupEditor` load flake (gen-pipeline, untouched; it passes when run alone). |
+| `tsc --noEmit` | clean / clean |
+
+**How the backend count was reached:** the first full backend run also failed `sheetCheck.test.ts` "no second classifier call" and `estimatingSheetsRoutes` (ECONNRESET under load).
+- The `sheetCheck` failure was caused by this round's boot-reset test. It reset every running sheet check in the shared test DB, including other files' checks running in parallel.
+- It's now scoped to its own bid (`d531d71`), and the backend suite was run again for the numbers above.
